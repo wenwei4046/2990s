@@ -253,6 +253,53 @@ async function writePurchaseReturnMovements(sb: any, prId: string, returnNumber:
   }
 }
 
+/* ── writePrLineDeltaMovement (Commander 2026-06-01, audit fix #5) ───────────
+   The create path writes the inventory OUT for every initial line, but line
+   CRUD after create (add / edit qty / delete) used to touch only
+   grn_items.returned_qty and the money rollup — never the physical inventory.
+   So editing a PR line's qty (10→2) or deleting it left the original OUT
+   standing and desynced stock from returned_qty permanently. This writes the
+   single-line delta movement so add/increase = more OUT, reduce/delete =
+   compensating IN. deltaQty>0 → OUT (more goods leave to supplier); deltaQty<0
+   → IN (goods come back). Resolves the line's source-GRN warehouse exactly
+   like the create path. Best-effort: never throws (mirrors writeMovements). */
+async function writePrLineDeltaMovement(
+  sb: any,
+  args: {
+    prId: string; returnNumber: string; headerGrnId: string | null; userId: string;
+    line: { id: string; grn_item_id?: string | null; material_code: string;
+            material_name: string | null; item_group?: string | null; variants?: VariantAttrs | null };
+    deltaQty: number;
+  },
+) {
+  if (!args.deltaQty) return;
+  try {
+    const lineWh = await resolvePrLineWarehouses(
+      sb, [{ id: args.line.id, grn_item_id: args.line.grn_item_id ?? null }], args.headerGrnId,
+    );
+    const warehouseId = lineWh.get(args.line.id) ?? null;
+    if (!warehouseId) return;
+    const isOut = args.deltaQty > 0;
+    await writeMovements(sb, [{
+      movement_type: isOut ? 'OUT' : 'IN',
+      warehouse_id: warehouseId,
+      product_code: args.line.material_code,
+      variant_key: computeVariantKey(args.line.item_group, args.line.variants ?? null),
+      product_name: args.line.material_name,
+      qty: Math.abs(args.deltaQty),
+      source_doc_type: 'PURCHASE_RETURN' as const,
+      source_doc_id: args.prId,
+      source_doc_no: args.returnNumber,
+      performed_by: args.userId,
+      notes: isOut ? 'PR line added/increased' : 'PR line reduced/removed — reversing return',
+    }]);
+    try {
+      const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+      await recomputeSoStockAllocation(sb);
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-pr-line-delta failed:', e); }
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[pr-line-delta] movement failed:', e); }
+}
+
 purchaseReturns.post('/', async (c) => {
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
@@ -264,14 +311,34 @@ purchaseReturns.post('/', async (c) => {
   const sb = c.get('supabase'); const user = c.get('user');
   const returnNumber = await nextNum(sb);
 
+  /* Audit fix #3 — clamp each GRN-linked line to its remaining
+     (qty_accepted - returned_qty) so a bare create can't over-return (the
+     /from-grns path already clamps; this one didn't). Manual lines uncapped. */
+  const preGrnItemIds = [...new Set(items
+    .map((it) => (it.grnItemId as string | undefined) ?? null)
+    .filter((x): x is string => !!x))];
+  const remainingByGrnItem = new Map<string, number>();
+  if (preGrnItemIds.length > 0) {
+    const { data: giRows } = await sb.from('grn_items')
+      .select('id, qty_accepted, returned_qty').in('id', preGrnItemIds);
+    for (const r of (giRows ?? []) as Array<{ id: string; qty_accepted: number; returned_qty: number }>) {
+      remainingByGrnItem.set(r.id, Math.max(0, (r.qty_accepted ?? 0) - (r.returned_qty ?? 0)));
+    }
+  }
+
   let totalRefund = 0;
   const itemRows = items.map((it) => {
-    const qty = Number(it.qtyReturned ?? 0);
+    const grnItemId = (it.grnItemId as string | undefined) ?? null;
+    let qty = Number(it.qtyReturned ?? 0);
+    if (grnItemId && remainingByGrnItem.has(grnItemId)) {
+      qty = Math.min(qty, remainingByGrnItem.get(grnItemId) as number);
+    }
     const unit = Number(it.unitPriceCenti ?? 0);
-    const lineRefund = Number(it.lineRefundCenti ?? (qty * unit));
+    // After clamping, refund follows the clamped qty (a return has no discount).
+    const lineRefund = qty * unit;
     totalRefund += lineRefund;
     return {
-      grn_item_id: (it.grnItemId as string | undefined) ?? null,
+      grn_item_id: grnItemId,
       material_kind: it.materialKind,
       material_code: it.materialCode,
       material_name: it.materialName,
@@ -286,7 +353,11 @@ purchaseReturns.post('/', async (c) => {
       item_group: (it.itemGroup as string | null | undefined) ?? null,
       variants: (it.variants as Record<string, unknown> | null | undefined) ?? null,
     };
-  });
+  }).filter((r) => Number(r.qty_returned) > 0);
+
+  if (itemRows.length === 0) {
+    return c.json({ error: 'no_returnable_qty', message: 'Every line is already fully returned (nothing left to return).' }, 400);
+  }
 
   /* PR-DRAFT-removal — PR is created POSTED, inventory OUT written inline. */
   const grnId = (body.grnId as string | undefined) ?? null;
@@ -314,6 +385,15 @@ purchaseReturns.post('/', async (c) => {
   }
 
   await writePurchaseReturnMovements(sb, h.id, h.return_number, grnId, user.id);
+
+  /* Audit fix #3 — consume each GRN-linked line's returned_qty (0106). The
+     bare-create path never did this, so a PR raised here didn't net down the
+     source GRN line / PO received_qty — only /from-grns and /from-grn did.
+     Now parity: every GRN-linked line increments returned_qty by its (clamped)
+     returned qty. Manual lines (no grn_item_id) are skipped. */
+  for (const r of itemRows) {
+    if (r.grn_item_id) await adjustGrnReturnedQty(sb, r.grn_item_id, Number(r.qty_returned));
+  }
 
   return c.json({ id: h.id, returnNumber: h.return_number }, 201);
 });
@@ -765,6 +845,32 @@ purchaseReturns.post('/:id/items', async (c) => {
   // nothing). Increment returned_qty by the new line's qty.
   if (grnItemId) await adjustGrnReturnedQty(sb, grnItemId, qtyReturned);
   await recomputePrTotals(sb, prId);
+
+  /* Audit fix #5 — write the inventory OUT for the newly added line. Without
+     this, adding a line to a POSTED PR touched returned_qty + money but never
+     the physical stock, leaving inventory permanently over the books. */
+  if (qtyReturned > 0) {
+    const { data: hdr } = await sb.from('purchase_returns')
+      .select('return_number, grn_id').eq('id', prId).maybeSingle();
+    const inserted = data as unknown as { id: string } | null;
+    if (hdr && inserted?.id) {
+      await writePrLineDeltaMovement(sb, {
+        prId,
+        returnNumber: (hdr as { return_number: string }).return_number,
+        headerGrnId: (hdr as { grn_id: string | null }).grn_id ?? null,
+        userId: c.get('user').id,
+        line: {
+          id: inserted.id,
+          grn_item_id: grnItemId,
+          material_code: String(it.materialCode),
+          material_name: (it.materialName as string | null) ?? null,
+          item_group: (it.itemGroup as string | null) ?? null,
+          variants: (it.variants as VariantAttrs | null) ?? null,
+        },
+        deltaQty: qtyReturned,
+      });
+    }
+  }
   return c.json({ item: data }, 201);
 });
 
@@ -776,7 +882,7 @@ purchaseReturns.patch('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase');
 
   const { data: prev } = await sb.from('purchase_return_items')
-    .select('qty_returned, unit_price_centi, item_group, variants, grn_item_id')
+    .select('qty_returned, unit_price_centi, item_group, variants, grn_item_id, material_code, material_name')
     .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
@@ -831,6 +937,33 @@ purchaseReturns.patch('/:id/items/:itemId', async (c) => {
   // [0, qty_accepted]).
   if (grnItemId && delta !== 0) await adjustGrnReturnedQty(sb, grnItemId, delta);
   await recomputePrTotals(sb, prId);
+
+  /* Audit fix #5 — write the compensating inventory movement for the qty
+     change. delta>0 → more goods leave (OUT); delta<0 → goods come back (IN).
+     Uses the effective (possibly edited) material identity. */
+  if (delta !== 0) {
+    const { data: hdr } = await sb.from('purchase_returns')
+      .select('return_number, grn_id').eq('id', prId).maybeSingle();
+    if (hdr) {
+      const effGroup = (it.itemGroup ?? (prev as { item_group?: string | null }).item_group) as string | null | undefined;
+      const effVariants = (it.variants ?? (prev as { variants?: unknown }).variants) as VariantAttrs | null | undefined;
+      await writePrLineDeltaMovement(sb, {
+        prId,
+        returnNumber: (hdr as { return_number: string }).return_number,
+        headerGrnId: (hdr as { grn_id: string | null }).grn_id ?? null,
+        userId: c.get('user').id,
+        line: {
+          id: itemId,
+          grn_item_id: grnItemId,
+          material_code: String((it.materialCode ?? (prev as { material_code: string }).material_code)),
+          material_name: ((it.materialName ?? (prev as { material_name: string | null }).material_name) as string | null) ?? null,
+          item_group: effGroup ?? null,
+          variants: effVariants ?? null,
+        },
+        deltaQty: delta,
+      });
+    }
+  }
   return c.json({ ok: true });
 });
 
@@ -840,13 +973,39 @@ purchaseReturns.delete('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase');
   // Read the line first so we can release its GRN-line consumption on delete.
   const { data: line } = await sb.from('purchase_return_items')
-    .select('qty_returned, grn_item_id').eq('id', itemId).maybeSingle();
+    .select('qty_returned, grn_item_id, material_code, material_name, item_group, variants').eq('id', itemId).maybeSingle();
   const { error } = await sb.from('purchase_return_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   if (line) {
-    const l = line as { qty_returned: number; grn_item_id: string | null };
+    const l = line as { qty_returned: number; grn_item_id: string | null; material_code: string; material_name: string | null; item_group: string | null; variants: VariantAttrs | null };
     // Release: decrement returned_qty by the deleted line's qty (helper clamps ≥0).
     if (l.grn_item_id) await adjustGrnReturnedQty(sb, l.grn_item_id, -(l.qty_returned ?? 0));
+
+    /* Audit fix #5 — deleting a line reverses its return: bring the goods back
+       IN (deltaQty negative). Without this the OUT written at create/add stayed
+       standing and stock drifted below the books permanently. */
+    const qty = Number(l.qty_returned ?? 0);
+    if (qty > 0) {
+      const { data: hdr } = await sb.from('purchase_returns')
+        .select('return_number, grn_id').eq('id', prId).maybeSingle();
+      if (hdr) {
+        await writePrLineDeltaMovement(sb, {
+          prId,
+          returnNumber: (hdr as { return_number: string }).return_number,
+          headerGrnId: (hdr as { grn_id: string | null }).grn_id ?? null,
+          userId: c.get('user').id,
+          line: {
+            id: itemId,
+            grn_item_id: l.grn_item_id,
+            material_code: l.material_code,
+            material_name: l.material_name,
+            item_group: l.item_group,
+            variants: l.variants,
+          },
+          deltaQty: -qty,
+        });
+      }
+    }
   }
   await recomputePrTotals(sb, prId);
   return c.body(null, 204);
