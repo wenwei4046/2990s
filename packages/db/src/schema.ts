@@ -1848,12 +1848,11 @@ export const pwpRules = pgTable('pwp_rules', {
   createdAt:               timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:               timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy:               uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
-}, (t) => ({
-  // At most one active rule per (trigger, reward) category pair (A5).
-  uniqActivePair: uniqueIndex('pwp_rules_one_active_per_pair')
-    .on(t.triggerCategory, t.rewardCategory)
-    .where(sql`active`),
-}));
+});
+// NOTE: multiple rules per (trigger, reward) category pair are allowed (Chairman
+// 2026-06-02) — e.g. two MATTRESS→BEDFRAME rules differentiated by model lists
+// (Mattress A → Aria; Mattress B → Orient). The old one-active-per-pair unique
+// index was dropped in migration 0129.
 
 /* ─────────────────────────── sofa_quick_picks ──────────────────────────
    Phase 5 (Chairman 2026-05-31) — global Quick Pick LAYOUTS. A Quick Pick is

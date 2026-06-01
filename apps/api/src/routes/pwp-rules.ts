@@ -104,7 +104,6 @@ pwpRules.post('/', async (c) => {
     .select(SELECT)
     .single();
   if (error) {
-    if (error.code === '23505') return c.json({ error: 'duplicate_active_pair', reason: 'An active rule already exists for this trigger → reward category pair.' }, 409);
     return c.json({ error: 'create_failed', reason: error.message }, 500);
   }
   return c.json({ rule: toApi(data as RuleRow) }, 201);
@@ -134,7 +133,6 @@ pwpRules.patch('/:id', async (c) => {
   const supabase = c.get('supabase');
   const { data, error } = await supabase.from('pwp_rules').update(patch).eq('id', id).select(SELECT).maybeSingle();
   if (error) {
-    if (error.code === '23505') return c.json({ error: 'duplicate_active_pair', reason: 'An active rule already exists for this trigger → reward category pair.' }, 409);
     return c.json({ error: 'update_failed', reason: error.message }, 500);
   }
   if (!data) return c.json({ error: 'not_found' }, 404);
