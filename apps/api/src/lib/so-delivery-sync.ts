@@ -134,6 +134,39 @@ export async function syncSoDeliveredFromDo(
 
       const fullyCovered = isSoFullyCovered(soLines, doLines, returnLines);
 
+      // Line-level READY flip (Wei Siang 2026-06-01): a single SO line that has
+      // been fully shipped out — NET delivered (Σ DO − Σ DR) ≥ its ordered qty —
+      // must read READY, never stay stuck at PENDING. This is the "grab" case:
+      // a DO is force-opened to push stock out before the line was ever marked
+      // READY, so without this the line latches at PENDING forever even though
+      // the goods have left the building.
+      //
+      // Why HERE and not in recomputeSoStockAllocation: recompute deliberately
+      // SKIPS fully-shipped lines (deliverable_remaining ≤ 0 → `continue`), so it
+      // never owns a shipped line's status. This reconciler is the sole writer
+      // that lands shipped lines on READY. recompute always runs just BEFORE this
+      // on every DO/DR mutation, so a line that a return drops back UNDER qty
+      // leaves this jurisdiction (net < qty here → untouched) and recompute
+      // re-derives its READY/PENDING from on-hand. Bidirectional + idempotent
+      // (the `.neq` guard makes a re-run a no-op). 'READY' is already an allowed
+      // stock_status value — no schema/constraint change.
+      const netByLine = new Map<string, number>();
+      for (const d of doLines) {
+        if (!d.soItemId) continue;
+        netByLine.set(d.soItemId, (netByLine.get(d.soItemId) ?? 0) + (d.qty ?? 0));
+      }
+      for (const r of returnLines) {
+        if (!r.soItemId) continue;
+        netByLine.set(r.soItemId, (netByLine.get(r.soItemId) ?? 0) - (r.qty ?? 0));
+      }
+      const shippedLines = soLines.filter((l) => (netByLine.get(l.id) ?? 0) >= l.qty);
+      for (const l of shippedLines) {
+        await sb.from('mfg_sales_order_items')
+          .update({ stock_status: 'READY', stock_qty_ready: l.qty })
+          .eq('id', l.id)
+          .neq('stock_status', 'READY');
+      }
+
       // Decide the reconciled status. No-op when it already matches (idempotent).
       let target: string | null = null;
       if (fullyCovered && canAdvance) target = 'DELIVERED';

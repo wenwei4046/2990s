@@ -4,6 +4,85 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-01-009 — A "grab" Delivery Order left its SO line stuck at PENDING after the goods had shipped
+
+**Symptom:** Normally a line goes READY (stock allocated/frozen) before a Delivery
+Order ships it. But when the operator force-opens a DO to *grab* stock that wasn't
+allocated yet (negative-balance grab), the line jumped straight out the door and its
+stock line stayed showing PENDING forever — even though the goods had physically
+left the building. The status looked permanently stuck.
+
+**Root cause:** The stock-line reconciler (`recomputeSoStockAllocation`) deliberately
+SKIPS any line that is already fully shipped (`deliverable_remaining ≤ 0 → continue`),
+so it never owns a shipped line's status — it just leaves whatever was there (PENDING).
+Nothing else ever flipped a shipped line to READY, so a grabbed line had no path off
+PENDING.
+
+**Fix:** (branch `fix/sofa-batch-readiness-view`)
+- `syncSoDeliveredFromDo` (`so-delivery-sync.ts`) now, after computing per-line
+  coverage, flips any SO line whose NET delivered (Σ DO − Σ DR) ≥ its ordered qty to
+  `stock_status = 'READY'` (and `stock_qty_ready = qty`). Reuses the existing READY
+  value — no DB constraint change.
+- This reconciler is the SOLE writer for fully-shipped lines; recompute (which always
+  runs just before it on every DO/DR mutation) owns every not-yet-shipped line. A
+  later Delivery Return drops the line back under qty → it leaves this jurisdiction
+  (net < qty here, untouched) and recompute re-derives its READY/PENDING from on-hand.
+  Bidirectional + idempotent (a `.neq('stock_status','READY')` guard makes re-runs a
+  no-op).
+
+**Design decision (Wei Siang, 2026-06-01):** Reuse READY rather than add a new
+"Shipped" status — keeps the change minimal and avoids touching the stock_status
+constraint. The shipped line simply reads READY instead of stuck PENDING.
+
+**Caught by:** Owner walkthrough of the grab-DO lifecycle ("开个 DO 抢货，by right 它
+就是会被分配货，这个 DO 是要变成 ready，然后再 freeze 掉的，它也是要补回去这个流程").
+
+---
+
+## BUG-2026-06-01-008 — Sofa Sales Orders never went READY even when their batch was in stock
+
+**Symptom:** A sofa Sales Order whose procurement batch had actually been received
+(stock physically on hand under the module SKUs, e.g. BOOQIT-1A(LHF)/(RHF) from
+GRN-2606-001) stayed stuck at PENDING / CONFIRMED and never advanced to
+READY_TO_SHIP. Looked like "the SKU shows stock yet the order never turns ready."
+
+**Root cause:** Two gaps, both around the sofa batch-readiness path:
+1. The readiness check (`so-stock-allocation.ts`) reads `v_inventory_lots_open.batch_no`
+   to match each sofa line against its bound PO batch, but the view (last defined in
+   migration 0095, before batch_no existed) never carried the column. The SELECT
+   errored, the on-hand rows came back empty, and EVERY sofa set was forced PENDING.
+2. Migration 0120's receive-time stamp (`inventory_lots.batch_no` / movements) wasn't
+   live when the historical GRNs were received, so existing lots had `batch_no = NULL`.
+   Even after the view was fixed, the batch-to-batch match found nothing.
+
+**Important non-bug found while diagnosing:** SO-2605-006 (the order the owner
+flagged) is *correctly* PENDING. Its own PO (PO-2606-005) is still SUBMITTED / not
+received. The on-hand BOOQIT stock belongs to a *different* order's batch —
+SO-2605-007's PO-2606-006, which IS received. The batch-bound rule (a sofa set only
+counts its OWN dye-lot batch, never another order's stock) was working as designed;
+forcing SO-2605-006 ready would have violated it.
+
+**Fix:**
+- Migration 0122 (`0122_lots_open_batch_no.sql`) rebuilds `v_inventory_lots_open`
+  byte-for-byte from 0095, adding the single column `l.batch_no`. Additive, idempotent.
+- Applied 0120 + 0121 + 0122 to prod (they had never been applied).
+- Backfilled `inventory_lots.batch_no` (and matching IN `inventory_movements.batch_no`)
+  from the unambiguous GRN→PO chain (only lots mapping to exactly one PO; the
+  2-PO JAGER lots were left untouched, never guessed).
+- Ran POST `/mfg-sales-orders/recompute-allocation` to re-walk every SO line.
+
+**Result (verified live + DB):** SO-2605-007 → both sofa lines READY, header
+READY_TO_SHIP (its batch PO-2606-006 has on-hand 1+1). SO-2605-006 stays PENDING
+(its batch PO-2606-005 has 0 on hand — correct). Whole-system sofa sweep: every
+READY sofa line genuinely has its own bound batch in stock; none grabbed another
+order's stock.
+
+**Caught by:** Owner report ("SKU has stock but the SO never turns ready"), plus his
+hard rule that the SO header must follow the SKU stock line's READY and that batch
+allocation must hit the correct line, never an arbitrary one.
+
+---
+
 ## BUG-2026-06-01-007 — A Delivery Return left its Sales Order stuck at "Delivered"
 
 **Symptom:** When goods came back on a Delivery Return, the original Sales Order
