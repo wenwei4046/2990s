@@ -17,6 +17,13 @@ const SOFA_ARM = '#B89972';
 const SOFA_INK = '#2C2C2A';
 const ART_BODY_UNITS = 70; // module-SVG body height; all insets scale to it.
 
+/** 1B / 2B are the WIDE-ARM ("bench") variants: instead of a hard armrest they
+ *  have a wide soft rounded bench cushion (band colour, ~20/70 of the depth,
+ *  full length) on the hand side, with the backrest only over the seat. Keep
+ *  that bench when the piece joins a corner so the connected sofa matches the
+ *  separate per-module art (Chairman 2026-06-02). */
+export const isBenchModule = (id: string): boolean => /^[12]B-/.test(id);
+
 /** Natural-frame (un-rotated) L geometry in cm: corner + long arm across the
  *  top, chaise dropping down on the `orientation` side. Callers size the SVG
  *  (and CSS-rotate it for a rotated group); the SVG fills its box. */
@@ -28,6 +35,10 @@ export interface CornerGeo {
   twoW: number;
   twoCushions: number;
   orientation: 'left' | 'right';
+  /** Long arm (2-seater) is a 2B → draw a bench at its far end, not an arm. */
+  longArmBench: boolean;
+  /** Chaise (1-seater) is a 1B → draw a bench at its foot, not an arm. */
+  chaiseBench: boolean;
 }
 
 /** Un-rotate a screen-frame vector back to the sofa's natural frame for a group
@@ -85,19 +96,31 @@ export const cornerCompositeFromCells = (
     twoW,
     twoCushions: Math.max(1, twoM.cushions),
     orientation: armN.x > 0 ? 'left' : 'right',
+    longArmBench: isBenchModule(two.moduleId),
+    chaiseBench: isBenchModule(one.moduleId),
   };
   return { geo, bb, rot: groupRot };
 };
 
 export const renderCornerSofa = (geo: CornerGeo): ReactElement => {
-  const { W, H, T, cornerW, twoCushions, orientation } = geo;
+  const { W, H, T, cornerW, twoCushions, orientation, longArmBench, chaiseBench } = geo;
   const u = T / ART_BODY_UNITS;
   const armW = 11 * u, bandH = 11 * u, rx = 3 * u;
+  const benchThick = 20 * u, benchInset = 2 * u, benchRx = 5 * u; // 1B/2B wide bench
   const swOuter = 1.4 * u, swInner = 0.8 * u, swDash = 0.5 * u;
   const dash = `${2 * u},${2 * u}`;
   const colW = cornerW;       // uniform corner/chaise column
   const twoW = W - cornerW;
   const left = orientation === 'left';
+  // A piece's end is either a hard arm (1A/2A) or a wide soft bench (1B/2B): an
+  // inset rounded band-coloured cushion. The bench is the band colour so it
+  // overlays the backrest band seamlessly (backrest stays "behind" the seat,
+  // hidden under the bench at the foot/far end — matches the per-module art).
+  const endEl = (x: number, y: number, w: number, h: number, bench: boolean) => (bench
+    ? <rect x={x + benchInset} y={y + benchInset} width={w - 2 * benchInset} height={h - 2 * benchInset} rx={benchRx} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />
+    : <rect x={x} y={y} width={w} height={h} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />);
+  const laThick = longArmBench ? benchThick : armW; // long-arm far end
+  const chThick = chaiseBench ? benchThick : armW;  // chaise foot
   // L outline — rounded convex outer corners, sharp inner (concave) bend.
   const path = left
     ? `M ${rx} 0 L ${W - rx} 0 Q ${W} 0 ${W} ${rx} L ${W} ${T - rx} Q ${W} ${T} ${W - rx} ${T} L ${colW} ${T} L ${colW} ${H - rx} Q ${colW} ${H} ${colW - rx} ${H} L ${rx} ${H} Q 0 ${H} 0 ${H - rx} L 0 ${rx} Q 0 0 ${rx} 0 Z`
@@ -112,16 +135,17 @@ export const renderCornerSofa = (geo: CornerGeo): ReactElement => {
       {left
         ? <rect x={0} y={0} width={bandH} height={H} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />
         : <rect x={W - bandH} y={0} width={bandH} height={H} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />}
-      {/* Arms: long-arm far end + chaise foot. */}
+      {/* Ends: long-arm far end + chaise foot — a hard arm (1A/2A) or a wide
+          rounded bench (1B/2B), so a joined corner keeps the 1B/2B bench. */}
       {left ? (
         <>
-          <rect x={W - armW} y={0} width={armW} height={T} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />
-          <rect x={0} y={H - armW} width={colW} height={armW} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />
+          {endEl(W - laThick, 0, laThick, T, longArmBench)}
+          {endEl(0, H - chThick, colW, chThick, chaiseBench)}
         </>
       ) : (
         <>
-          <rect x={0} y={0} width={armW} height={T} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />
-          <rect x={W - colW} y={H - armW} width={colW} height={armW} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />
+          {endEl(0, 0, laThick, T, longArmBench)}
+          {endEl(W - colW, H - chThick, colW, chThick, chaiseBench)}
         </>
       )}
       {/* Module boundaries (solid): corner|long-arm + corner|chaise. */}
