@@ -206,7 +206,7 @@ const SOFA_INK = '#2C2C2A';
 // run is dimensionally identical to the rasterised art.
 const ART_BODY_UNITS = 70;
 
-interface SeamlessSlot { len: number; cushions: number; kind: 'sofa' | 'console' }
+interface SeamlessSlot { len: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean }
 interface SeamlessRun { totalLen: number; thickness: number; slots: SeamlessSlot[] }
 
 /** One seamless-overlay descriptor: either the rasterised bundle PNG, or a
@@ -216,10 +216,11 @@ type ActiveComposite =
   | { kind: 'generic'; key: number; bb: Bbox; rot: Rot; run: SeamlessRun; ids: Set<string> };
 
 /** Analyse a group of cells (sofa modules + any consoles, free stools
- *  excluded) into a straight run, or null if it isn't one. Seats AND
- *  interior consoles become slots; a sofa module must sit at each end so
- *  the arms land on seats. Layout only — arm/closure validity is the
- *  caller's job (seatsClosedIgnoringConsoles). */
+ *  excluded) into a contiguous straight run, or null if it isn't one
+ *  (overlap, gap, two rows, or a corner/L/stool present). Seats AND consoles
+ *  become slots; each sofa slot records its arm sides so the renderer draws
+ *  arms ONLY where a module actually has one — open / half-built ends stay
+ *  open. Modules link on ADJACENCY; the run need NOT be a complete sofa. */
 const buildSeamlessRun = (cells: Cell[], depth: Depth, rot: Rot): SeamlessRun | null => {
   if (cells.length < 2) return null;
   const horiz = rot % 180 === 0;
@@ -262,44 +263,25 @@ const buildSeamlessRun = (cells: Cell[], depth: Depth, rot: Rot): SeamlessRun | 
     if (rot === 90) return A.b.y - B.b.y;
     return B.b.y - A.b.y;
   });
-  const slots: SeamlessSlot[] = natural.map(({ m, b }) => ({
-    len: axisLen(b),
-    cushions: m.id === 'Console' ? 0 : Math.max(1, m.cushions),
-    kind: m.id === 'Console' ? 'console' : 'sofa',
-  }));
-  // Arms are drawn at the two ends, so both ends must be sofa modules (a
-  // console hanging off an end isn't a clean centre-console sofa).
-  if (slots[0]!.kind !== 'sofa' || slots[slots.length - 1]!.kind !== 'sofa') return null;
+  const slots: SeamlessSlot[] = natural.map(({ m, b }) => {
+    const isConsole = m.id === 'Console';
+    // Arm side is intrinsic to the moduleId (LHF→left, RHF→right,
+    // 1S/2S/3S→both arms, NA/console→none). The group's rotation is applied
+    // to the whole drawing afterwards (CSS rotate), so in this natural frame
+    // each module's arm sits on its intrinsic side regardless of rot.
+    const bothArms = /^[123]S$/.test(m.id);
+    return {
+      len: axisLen(b),
+      cushions: isConsole ? 0 : Math.max(1, m.cushions),
+      kind: isConsole ? 'console' : 'sofa',
+      armLeft: !isConsole && (bothArms || /-LHF$/.test(m.id)),
+      armRight: !isConsole && (bothArms || /-RHF$/.test(m.id)),
+    };
+  });
+  // Need at least one real sofa module (don't draw a run of only consoles).
   if (!slots.some((s) => s.kind === 'sofa')) return null;
   const totalLen = slots.reduce((s, x) => s + x.len, 0);
   return { totalLen, thickness: t0, slots };
-};
-
-/** True when the SEAT modules (consoles removed) form a closed sofa once the
- *  console gaps are squeezed out — i.e. arms at both ends, no interior arm
- *  conflict. Reuses analyzeSofa (the authoritative closure logic) by sliding
- *  the seats together, so the seamless console path doesn't re-derive arm
- *  rules. A single seat is closed by definition (matches the PNG path). */
-const seatsClosedIgnoringConsoles = (sofaCells: Cell[], depth: Depth, rot: Rot): boolean => {
-  if (sofaCells.length === 0) return false;
-  if (sofaCells.length === 1) return true;
-  const horiz = rot % 180 === 0;
-  const axisPos = (b: Bbox) => (horiz ? b.x : b.y);
-  const axisLen = (b: Bbox) => (horiz ? b.w : b.h);
-  const withBox: { c: Cell; b: Bbox }[] = [];
-  for (const c of sofaCells) {
-    const b = cellBbox(c, depth);
-    if (!b) return false;
-    withBox.push({ c, b });
-  }
-  withBox.sort((A, B) => axisPos(A.b) - axisPos(B.b));
-  let cursor = axisPos(withBox[0]!.b);
-  const compacted = withBox.map(({ c, b }) => {
-    const next: Cell = horiz ? { ...c, x: cursor } : { ...c, y: cursor };
-    cursor += axisLen(b);
-    return next;
-  });
-  return analyzeSofa(compacted, depth).closed;
 };
 
 /** Render a SeamlessRun as an SVG sofa sized to fill w×h px (the overlay's
@@ -316,10 +298,10 @@ const renderSeamlessSofa = (run: SeamlessRun, w: number, h: number) => {
   const swDash = 0.5 * u;
   const dash = `${2 * u},${2 * u}`;
   // Resolve each slot to an [start, end] range along the run axis.
-  const ranges: { start: number; end: number; cushions: number; kind: 'sofa' | 'console' }[] = [];
+  const ranges: { start: number; end: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean }[] = [];
   let acc = 0;
   for (const s of slots) {
-    ranges.push({ start: acc, end: acc + s.len, cushions: s.cushions, kind: s.kind });
+    ranges.push({ start: acc, end: acc + s.len, cushions: s.cushions, kind: s.kind, armLeft: s.armLeft, armRight: s.armRight });
     acc += s.len;
   }
   // Solid lines at interior module boundaries.
@@ -354,8 +336,14 @@ const renderSeamlessSofa = (run: SeamlessRun, w: number, h: number) => {
           </Fragment>
         );
       })}
-      <rect x={0} y={0} width={armW} height={T} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />
-      <rect x={L - armW} y={0} width={armW} height={T} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />
+      {/* Arms — drawn only where a module actually has one (honest). An open /
+          half-built end therefore stays open instead of growing a phantom arm. */}
+      {ranges.map((r, i) => (r.kind !== 'sofa' || (!r.armLeft && !r.armRight) ? null : (
+        <Fragment key={`arm${i}`}>
+          {r.armLeft && <rect x={r.start} y={0} width={armW} height={T} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />}
+          {r.armRight && <rect x={r.end - armW} y={0} width={armW} height={T} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />}
+        </Fragment>
+      )))}
       {bounds.map((x, i) => (
         <line key={`b${i}`} x1={x} y1={0} x2={x} y2={T} stroke={SOFA_INK} strokeWidth={swInner} />
       ))}
@@ -1069,15 +1057,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       }
     }
     // 2) No dedicated art → draw the WHOLE run (seats + interior consoles) as
-    //    ONE seamless sofa from the shared module primitives. Fires when the
-    //    seats (console gaps squeezed out) form a closed sofa, covering both
-    //    the 4-seater (1A + 2NA + 1A) and centre-console (1A + Console + 1A)
-    //    cases instead of falling back to separate boxes.
-    if (seatsClosedIgnoringConsoles(sofaCells, depth, rot)) {
-      const run = buildSeamlessRun(displayCells.filter((c) => c.id != null && runIds.has(c.id)), depth, rot);
-      const bbRun = cellsBbox(displayCells.filter((c) => c.id != null && runIds.has(c.id)), depth);
-      if (run && bbRun) return [{ kind: 'generic' as const, key: i, bb: bbRun, rot, run, ids: runIds }];
-    }
+    //    ONE seamless sofa from the shared module primitives. Fires for ANY
+    //    contiguous straight run — modules link on ADJACENCY, not only when the
+    //    sofa is "complete". Arms render only where modules actually have them,
+    //    so a half-built / open run still links with open ends. Covers the
+    //    4-seater (1A + 2NA + 1A), centre-console (1A + Console + 1A), and the
+    //    in-progress (1A + Console, 1A + 1NA, …) cases.
+    const run = buildSeamlessRun(displayCells.filter((c) => c.id != null && runIds.has(c.id)), depth, rot);
+    const bbRun = cellsBbox(displayCells.filter((c) => c.id != null && runIds.has(c.id)), depth);
+    if (run && bbRun) return [{ kind: 'generic' as const, key: i, bb: bbRun, rot, run, ids: runIds }];
     return [];
   });
   const compositeCoveredIds = new Set<string>(
