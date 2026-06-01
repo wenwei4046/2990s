@@ -1058,9 +1058,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       const allDragging = Array.from(runIds).every((id) => draftDelta.ids.includes(id));
       if (someDragging && !allDragging) return [];
     }
-    // Per-seat recliner overlays need the individual module cells, so a sofa
-    // with any recliner upgrade keeps its per-module rendering.
-    if (sofaCells.some((c) => (c.recliners ?? []).length > 0)) return [];
+    // NOTE: a sofa with per-seat recliner/power upgrades STILL goes seamless.
+    // The composite hides each covered cell's module art but NOT its per-seat
+    // overlays (wash / "P" badge / footrest), which render on top of the
+    // seamless body because recliner cells get a higher z-index than the
+    // composite (styles.cellRecliner). So power sofas link like any other run
+    // instead of falling back to separate boxes.
     // Closed groups rotate as a whole (rotateGroup keeps every cell's rot in
     // sync). Bail to per-module art on the off chance the rots are mixed.
     const rot = sofaCells[0]!.rot;
@@ -1418,7 +1421,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             return (
               <div
                 key={c.id}
-                className={`${styles.cell} ${isSelected ? styles.cellSelected : ''} ${inViolation ? styles.cellViolation : ''}`}
+                className={`${styles.cell} ${isSelected ? styles.cellSelected : ''} ${inViolation ? styles.cellViolation : ''} ${(c.recliners ?? []).length > 0 ? styles.cellRecliner : ''}`}
                 style={{ left: px, top: py, width: w, height: h }}
                 onPointerDown={(e) => onCellPointerDown(c.id!, e)}
                 onPointerMove={onCellPointerMove}
