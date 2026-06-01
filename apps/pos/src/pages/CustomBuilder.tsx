@@ -1136,19 +1136,16 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     //    4-seater (1A + 2NA + 1A), centre-console (1A + Console + 1A), and the
     //    in-progress (1A + Console, 1A + 1NA, …) cases.
     //
-    //    A LONE functional seat (power/recliner/leg) also takes this path: its
-    //    per-module art bakes the footrest into a taller silhouette, so fitting
-    //    that to the cell squished the seat ("power compartment too small").
-    //    Drawn here, the seat fills the cell and the footrest extends below —
-    //    same size as a plain seat + identical to the linked version. Plain
-    //    single modules keep their (correct) per-module art.
-    const singleFunctional = sofaCells.length === 1 && isFunctionalSeat(sofaCells[0]!.moduleId);
-    if (sofaCells.length >= 2 || singleFunctional) {
-      const runFilter = displayCells.filter((c) => c.id != null && runIds.has(c.id));
-      const run = buildSeamlessRun(runFilter, depth, rot);
-      const bbRun = cellsBbox(runFilter, depth);
-      if (run && bbRun) return [{ kind: 'generic' as const, key: i, bb: bbRun, rot, run, ids: runIds }];
-    }
+    //    EVERY straight run — INCLUDING a single module — takes this path, so
+    //    all compartments fill the cell identically. Per-module art crops to
+    //    each silhouette and uses a wider (width-scaled) arm, so seats looked
+    //    smaller / inconsistent next to the code-drawn ones (Chairman: "1S/1A
+    //    not full"). buildSeamlessRun returns null for non-linear shapes
+    //    (corner / L / free stool), which keep their per-module art.
+    const runFilter = displayCells.filter((c) => c.id != null && runIds.has(c.id));
+    const run = buildSeamlessRun(runFilter, depth, rot);
+    const bbRun = cellsBbox(runFilter, depth);
+    if (run && bbRun) return [{ kind: 'generic' as const, key: i, bb: bbRun, rot, run, ids: runIds }];
     return [];
   });
   const compositeCoveredIds = new Set<string>(
