@@ -19,9 +19,11 @@ import {
   loadFabricSellingTiers,
   loadFabricTierAddonConfig,
   loadModelSofaModulePrices,
+  loadPwpRules,
   type MfgItemForRecompute,
   type RecomputedLine,
 } from '../lib/mfg-pricing-recompute';
+import { resolvePwp, type PwpLineInput } from '@2990s/shared/pwp';
 /* PR #216 — per-Model variant chip enforcement (Commander 2026-05-27
    follow-up to PR #205). Reject POST/PATCH SO line items that carry a
    variant excluded by the Model's allowed_options. Empty pool = no
@@ -928,11 +930,37 @@ mfgSalesOrders.post('/', async (c) => {
   }
   const cachedCombos = await loadActiveSofaCombos(sb);  // Phase 4b — sofa selling recompute
   const cachedFabricAddonConfig = await loadFabricTierAddonConfig(sb);  // migration 0124 — fabric-tier Δ
-  const recomputes: Array<RecomputedLine | null> = await Promise.all(items.map(async (it) => {
+
+  /* PWP (换购, migration 0128) — order-level resolution. Pre-load each line's
+     product ONCE (shared by the PWP check + the recompute below), then the
+     shared `resolvePwp` decides which reward lines earn the per-SKU PWP price.
+     allowance = qty_per_trigger × eligible trigger units in THIS order. A forged
+     claim (no qualifying trigger / ineligible model / over allowance) is simply
+     not granted → that line reprices at full sell_price_sen → drift → 400 for a
+     POS-tablet caller. Default data (no active rules) → granted set empty → no
+     change. NOTE: applied on the create path; backend per-line PATCH/override
+     re-prices at full sell price (no order context) — re-create to re-apply. */
+  const cachedPwpRules = await loadPwpRules(sb);
+  const lineProducts = await Promise.all(
+    items.map((it) => loadProductByCode(sb, String(it.itemCode ?? ''))),
+  );
+  const pwpLineInputs: PwpLineInput[] = items.map((it, idx) => {
+    const p = lineProducts[idx];
+    return {
+      idx,
+      category:     String(p?.category ?? it.itemGroup ?? '').toUpperCase(),
+      modelId:      p?.model_id ?? null,
+      qty:          Number(it.qty ?? 1),
+      pwpRequested: (it.variants as { pwp?: boolean } | null)?.pwp === true,
+    };
+  });
+  const pwpGranted = new Set(resolvePwp(cachedPwpRules, pwpLineInputs).map((g) => g.idx));
+
+  const recomputes: Array<RecomputedLine | null> = await Promise.all(items.map(async (it, idx) => {
     const itemCode = String(it.itemCode ?? '');
     if (!itemCode) return null;
-    const [product, fabric, sellingTiers] = await Promise.all([
-      loadProductByCode(sb, itemCode),
+    const product = lineProducts[idx] ?? null;
+    const [fabric, sellingTiers] = await Promise.all([
       loadFabricByCode(sb, (it.variants as { fabricCode?: string } | null)?.fabricCode ?? null),
       loadFabricSellingTiers(sb, (it.variants as { fabricId?: string } | null)?.fabricId ?? null),
     ]);
@@ -953,7 +981,9 @@ mfgSalesOrders.post('/', async (c) => {
       unitPriceCenti: Number(it.unitPriceCenti ?? 0),
       variants:       (it.variants as MfgItemForRecompute['variants']) ?? null,
     };
-    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig);
+    // PWP base for this line when granted (else null → normal selling base).
+    const pwpBaseSen = pwpGranted.has(idx) ? (product?.pwp_price_sen ?? null) : null;
+    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, pwpBaseSen);
   }));
   /* Commander 2026-05-29 (system-wide) — the SELLING unit price is now
      operator-authored on every SO line. The product price tables are COST,

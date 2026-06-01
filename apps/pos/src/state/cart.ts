@@ -39,6 +39,10 @@ export interface SizeConfigSnapshot {
   productId: string;
   productName: string;
   sizeId: string;
+  // Identity for PWP (换购) matching (0128) — a mattress line is a PWP trigger.
+  // Optional: only the configurator populates them; legacy/restored lines omit.
+  modelId?: string | null;  // product_models.id
+  category?: string;        // UPPERCASE mfg category, e.g. 'MATTRESS'
   total: number;
   summary: string;       // e.g. "Queen"
   /** Paid-extra add-ons attached to this configured line (e.g. extra pillows
@@ -80,6 +84,15 @@ export interface BedframeConfigSnapshot {
   divanHeightId?: string;
   totalHeightId?: string;
   specialIds?: string[];
+  // Identity for PWP (换购) matching (0128) — a bedframe line is a PWP reward.
+  modelId?: string | null;  // product_models.id
+  category?: string;        // UPPERCASE mfg category, e.g. 'BEDFRAME'
+  // PWP (换购, 0128) — this bedframe is redeemed at its PWP price against a
+  // qualifying mattress in the same cart. `total` already reflects the PWP base
+  // (+ fabric Δ). pwpTriggerLabel = the mattress it's bound to, for the invoice
+  // sub-line "PWP price · 换购自 <Mattress>". Server re-validates the price.
+  pwp?: boolean;
+  pwpTriggerLabel?: string | null;
   // Display-label snapshots (parallel to the *Id fields) so the cart, printed
   // Sales Order, and Backend detail render the spec without a join.
   gapLabel?: string | null;

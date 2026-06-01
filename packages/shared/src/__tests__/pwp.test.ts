@@ -1,0 +1,133 @@
+import { describe, it, expect } from 'vitest';
+import { resolvePwp, type PwpRule, type PwpLineInput } from '../pwp';
+
+// Standard rule: buy an eligible Mattress model → redeem an eligible Bed Frame
+// model at PWP price, 1 per mattress unit.
+const RULE: PwpRule = {
+  triggerCategory: 'MATTRESS',
+  triggerEligibleModelIds: ['m-ok'],
+  rewardCategory: 'BEDFRAME',
+  eligibleRewardModelIds: ['b-ok'],
+  qtyPerTrigger: 1,
+};
+
+type LineOpts = { qty?: number; name?: string; code?: string; pwp?: boolean };
+const line = (idx: number, category: string, modelId: string | null, o: LineOpts = {}): PwpLineInput => ({
+  idx,
+  category,
+  modelId,
+  qty: o.qty ?? 1,
+  productName: o.name,
+  productCode: o.code,
+  pwpRequested: o.pwp ?? false,
+});
+
+const grantedIdx = (rules: PwpRule[], lines: PwpLineInput[]): number[] =>
+  resolvePwp(rules, lines).map((g) => g.idx).sort((a, b) => a - b);
+
+describe('resolvePwp', () => {
+  it('grants each requested reward up to allowance (3 mattress → 3 bedframes)', () => {
+    const lines = [
+      line(0, 'MATTRESS', 'm-ok'),
+      line(1, 'MATTRESS', 'm-ok'),
+      line(2, 'MATTRESS', 'm-ok'),
+      line(3, 'BEDFRAME', 'b-ok', { pwp: true }),
+      line(4, 'BEDFRAME', 'b-ok', { pwp: true }),
+      line(5, 'BEDFRAME', 'b-ok', { pwp: true }),
+    ];
+    expect(grantedIdx([RULE], lines)).toEqual([3, 4, 5]);
+  });
+
+  it('the 4th bedframe is NOT granted when only 3 mattresses bought (over allowance)', () => {
+    const lines = [
+      line(0, 'MATTRESS', 'm-ok'),
+      line(1, 'MATTRESS', 'm-ok'),
+      line(2, 'MATTRESS', 'm-ok'),
+      line(3, 'BEDFRAME', 'b-ok', { pwp: true }),
+      line(4, 'BEDFRAME', 'b-ok', { pwp: true }),
+      line(5, 'BEDFRAME', 'b-ok', { pwp: true }),
+      line(6, 'BEDFRAME', 'b-ok', { pwp: true }),
+    ];
+    expect(grantedIdx([RULE], lines)).toEqual([3, 4, 5]); // idx 6 dropped
+  });
+
+  it('no qualifying trigger → no grants', () => {
+    const lines = [line(0, 'BEDFRAME', 'b-ok', { pwp: true })];
+    expect(grantedIdx([RULE], lines)).toEqual([]);
+  });
+
+  it('trigger model NOT in the eligible list does not unlock', () => {
+    const lines = [
+      line(0, 'MATTRESS', 'm-other'), // not 'm-ok'
+      line(1, 'BEDFRAME', 'b-ok', { pwp: true }),
+    ];
+    expect(grantedIdx([RULE], lines)).toEqual([]);
+  });
+
+  it('reward model NOT in the eligible list is not granted', () => {
+    const lines = [
+      line(0, 'MATTRESS', 'm-ok'),
+      line(1, 'BEDFRAME', 'b-other', { pwp: true }), // not 'b-ok'
+    ];
+    expect(grantedIdx([RULE], lines)).toEqual([]);
+  });
+
+  it('does not grant a reward line that was not toggled (pwpRequested=false)', () => {
+    const lines = [
+      line(0, 'MATTRESS', 'm-ok'),
+      line(1, 'BEDFRAME', 'b-ok', { pwp: false }),
+    ];
+    expect(grantedIdx([RULE], lines)).toEqual([]);
+  });
+
+  it('qtyPerTrigger scales the allowance (1 mattress → 2 bedframes)', () => {
+    const rule: PwpRule = { ...RULE, qtyPerTrigger: 2 };
+    const lines = [
+      line(0, 'MATTRESS', 'm-ok'),
+      line(1, 'BEDFRAME', 'b-ok', { pwp: true }),
+      line(2, 'BEDFRAME', 'b-ok', { pwp: true }),
+      line(3, 'BEDFRAME', 'b-ok', { pwp: true }),
+    ];
+    expect(grantedIdx([rule], lines)).toEqual([1, 2]); // 3rd over allowance
+  });
+
+  it('empty eligible lists mean the whole category qualifies', () => {
+    const rule: PwpRule = { ...RULE, triggerEligibleModelIds: [], eligibleRewardModelIds: [] };
+    const lines = [
+      line(0, 'MATTRESS', 'anything'),
+      line(1, 'BEDFRAME', 'whatever', { pwp: true }),
+    ];
+    expect(grantedIdx([rule], lines)).toEqual([1]);
+  });
+
+  it('binds each granted reward to a specific trigger unit (greedy by order)', () => {
+    const lines = [
+      line(0, 'MATTRESS', 'm-ok', { name: 'Sealy Posture', code: 'SLY-Q' }),
+      line(1, 'MATTRESS', 'm-ok', { name: 'King Koil', code: 'KK-Q' }),
+      line(2, 'BEDFRAME', 'b-ok', { pwp: true }),
+      line(3, 'BEDFRAME', 'b-ok', { pwp: true }),
+    ];
+    const grants = resolvePwp([RULE], lines);
+    expect(grants.find((g) => g.idx === 2)?.triggerRef).toEqual({ name: 'Sealy Posture', code: 'SLY-Q' });
+    expect(grants.find((g) => g.idx === 3)?.triggerRef).toEqual({ name: 'King Koil', code: 'KK-Q' });
+  });
+
+  it('a multi-qty reward line is all-or-nothing against the allowance', () => {
+    // allowance 3; line A qty2 (granted, consumes 2), line B qty2 (needs 2, only 1 left → dropped)
+    const lines = [
+      line(0, 'MATTRESS', 'm-ok', { qty: 3 }),
+      line(1, 'BEDFRAME', 'b-ok', { pwp: true, qty: 2 }),
+      line(2, 'BEDFRAME', 'b-ok', { pwp: true, qty: 2 }),
+    ];
+    expect(grantedIdx([RULE], lines)).toEqual([1]);
+  });
+
+  it('a legacy line with null modelId never matches a non-empty model list', () => {
+    const lines = [
+      line(0, 'MATTRESS', null), // null can't be in ['m-ok']
+      line(1, 'BEDFRAME', 'b-ok', { pwp: true }),
+    ];
+    expect(grantedIdx([RULE], lines)).toEqual([]);
+  });
+});
+

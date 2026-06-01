@@ -72,7 +72,7 @@ export const useCatalogRealtime = () => {
 
 export interface ProductBundleRow { bundleId: string; active: boolean; price: number }
 export interface ProductCompartmentRow { compartmentId: string; active: boolean; price: number }
-export interface ProductSizeRow { sizeId: string; active: boolean; price: number }
+export interface ProductSizeRow { sizeId: string; active: boolean; price: number; pwpPrice: number | null }
 
 export const useProduct = (productId: string | undefined) =>
   useQuery({
@@ -134,7 +134,7 @@ export const useProduct = (productId: string | undefined) =>
       const { data: mfgData, error: mfgErr } = await supabase
         .from('mfg_products')
         .select(
-          'id, code, name, category, description, branding, size_label, base_price_sen, sell_price_sen, included_addons, base_model',
+          'id, code, name, category, description, branding, size_label, base_price_sen, sell_price_sen, included_addons, base_model, model_id',
         )
         .eq('id', productId)
         .maybeSingle();
@@ -153,6 +153,7 @@ export const useProduct = (productId: string | undefined) =>
         sell_price_sen: number | null;
         included_addons: { addonId: string; qty: number }[] | null;
         base_model: string | null;
+        model_id: string | null;
       };
 
       const pricingKind: 'sofa_build' | 'bedframe_build' | 'size_variants' | 'flat' =
@@ -191,6 +192,9 @@ export const useProduct = (productId: string | undefined) =>
         /* base_model is needed by Configurator so it can pass it to
            useSofaCombos() and filter Quick Pick combos to this Model. */
         base_model: mfg.base_model,
+        /* model_id (product_models.id) — used by the PWP (换购) eligibility check
+           to match this product against a rule's eligible model lists (0128). */
+        model_id: mfg.model_id,
         series_id: null,
         included_addons: mfg.included_addons ?? [],
         updated_at: new Date().toISOString(),
@@ -515,7 +519,7 @@ export const useProductSizes = (productId: string | undefined) =>
       if (productId.startsWith('mfg-')) {
         const { data: mfgRow, error: mfgErr } = await supabase
           .from('mfg_products')
-          .select('retail_product_id, model_id, size_code, base_price_sen, sell_price_sen, base_model, category, product_models:model_id ( allowed_options )')
+          .select('retail_product_id, model_id, size_code, base_price_sen, sell_price_sen, pwp_price_sen, base_model, category, product_models:model_id ( allowed_options )')
           .eq('id', productId)
           .maybeSingle();
         if (mfgErr) throw mfgErr;
@@ -543,7 +547,8 @@ export const useProductSizes = (productId: string | undefined) =>
             .eq('product_id', mfgRow.retail_product_id);
           if (error) throw error;
           if (data && data.length > 0) {
-            return data.map((r) => ({ sizeId: r.size_id, active: r.active, price: r.price }));
+            // Legacy retail variants carry no PWP price (it lives on mfg_products).
+            return data.map((r) => ({ sizeId: r.size_id, active: r.active, price: r.price, pwpPrice: null }));
           }
           // Fall through to mfg siblings if the retail link exists but has no variants yet.
         }
@@ -554,7 +559,7 @@ export const useProductSizes = (productId: string | undefined) =>
         // pos_active (the "Visible" flag the catalog also honors). A kept size's
         // `active` still follows `status` so a cost-discontinued one greys out.
         // Case-insensitive size_code lookup guards older lowercase imports.
-        const sibsToRows = (sibs: Array<{ size_code: string | null; base_price_sen: number | null; sell_price_sen: number | null; status: string; pos_active: boolean | null }>) =>
+        const sibsToRows = (sibs: Array<{ size_code: string | null; base_price_sen: number | null; sell_price_sen: number | null; pwp_price_sen: number | null; status: string; pos_active: boolean | null }>) =>
           sibs
             .filter((s) => {
               const sc = (s.size_code ?? '').toUpperCase();
@@ -569,6 +574,8 @@ export const useProductSizes = (productId: string | undefined) =>
               active: (s.status as string) === 'ACTIVE',
               // SELLING price (0109 cost/sell split): sell_price_sen ?? base_price_sen.
               price: (s.sell_price_sen ?? s.base_price_sen) != null ? Math.round((s.sell_price_sen ?? s.base_price_sen)! / 100) : 0,
+              // PWP (换购, 0128) base price per size, whole MYR. 0 / null = not set.
+              pwpPrice: s.pwp_price_sen ? Math.round(s.pwp_price_sen / 100) : null,
             }));
 
         // 2b — derive sizes from mfg_products siblings (same model_id — set by
@@ -577,7 +584,7 @@ export const useProductSizes = (productId: string | undefined) =>
         if (mfgRow.model_id) {
           const { data: siblings, error: sibErr } = await supabase
             .from('mfg_products')
-            .select('size_code, base_price_sen, sell_price_sen, status, pos_active')
+            .select('size_code, base_price_sen, sell_price_sen, pwp_price_sen, status, pos_active')
             .eq('model_id', mfgRow.model_id);
           if (sibErr) throw sibErr;
           const rows = sibsToRows(siblings ?? []);
@@ -590,7 +597,7 @@ export const useProductSizes = (productId: string | undefined) =>
         if (mfgRow.base_model && mfgRow.category) {
           const { data: siblings, error: sibErr } = await supabase
             .from('mfg_products')
-            .select('size_code, base_price_sen, sell_price_sen, status, pos_active')
+            .select('size_code, base_price_sen, sell_price_sen, pwp_price_sen, status, pos_active')
             .eq('base_model', mfgRow.base_model)
             .eq('category', mfgRow.category);
           if (sibErr) throw sibErr;
@@ -606,6 +613,7 @@ export const useProductSizes = (productId: string | undefined) =>
             sizeId: MFG_SIZE_CODE_TO_LIB[ownCode] as string,
             active: true,
             price: (mfgRow.sell_price_sen ?? mfgRow.base_price_sen) != null ? Math.round((mfgRow.sell_price_sen ?? mfgRow.base_price_sen)! / 100) : 0,
+            pwpPrice: mfgRow.pwp_price_sen ? Math.round(mfgRow.pwp_price_sen / 100) : null,
           }];
         }
 
@@ -622,6 +630,7 @@ export const useProductSizes = (productId: string | undefined) =>
         sizeId: r.size_id,
         active: r.active,
         price: r.price,
+        pwpPrice: null, // legacy retail variants carry no PWP price
       }));
     },
   });

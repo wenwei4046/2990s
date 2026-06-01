@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2, FlipHorizontal2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
+import { resolvePwp, type PwpLineInput } from '@2990s/shared/pwp';
+import { usePwpRules } from '../lib/products/pwp-queries';
 import {
   useProduct,
   useProductBundles,
@@ -54,6 +56,7 @@ interface SizeRow {
   widthCm: number;
   lengthCm: number;
   price: number | null;
+  pwpPrice: number | null;   // PWP (换购, 0128) base price for this size, whole MYR. null = not set.
   active: boolean;
 }
 
@@ -365,6 +368,43 @@ export const Configurator = () => {
   const bedframeColours = useBedframeColours(productId);
   const bedframeOptions = useBedframeOptions();
 
+  // ── PWP (换购, 0128) — can the CURRENT product be redeemed at its PWP price? ──
+  // Active rules + the cart decide it, via the SAME pure resolvePwp the server
+  // uses, so the toggle + price the salesperson sees match what the server will
+  // lock (no surprise 400 at checkout). The toggle disappears once the allowance
+  // is used up (Chairman 2026-06-02). triggerLabel = the mattress this reward
+  // binds to → shown on the invoice sub-line.
+  const pwpRulesQ = usePwpRules();
+  const [usePwp, setUsePwp] = useState(false);
+  useEffect(() => { setUsePwp(false); }, [productId]); // never leak the toggle across products
+  const pwpEval = useMemo(() => {
+    const rules = pwpRulesQ.data ?? [];
+    const candCategory = String((product.data as { category_id?: string | null } | null)?.category_id ?? '').toUpperCase();
+    const candModelId = (product.data as { model_id?: string | null } | null)?.model_id ?? null;
+    if (rules.length === 0 || !candCategory) return { available: false, triggerLabel: null as string | null };
+    // Existing cart lines → PwpLineInput[] (exclude the line being edited so it
+    // isn't counted against its own allowance).
+    const others = cartLines.filter((l) => !(editKey && l.key === editKey));
+    const baseInputs: PwpLineInput[] = others.map((l, i) => {
+      const c = l.config as { kind: string; category?: string; modelId?: string | null; productName?: string; pwp?: boolean };
+      return {
+        idx: i,
+        category: String(c.category ?? '').toUpperCase(),
+        modelId: c.modelId ?? null,
+        qty: l.qty,
+        productName: c.productName,
+        pwpRequested: c.kind === 'bedframe' ? c.pwp === true : false,
+      };
+    });
+    const candidateIdx = baseInputs.length;
+    const candidate: PwpLineInput = {
+      idx: candidateIdx, category: candCategory, modelId: candModelId, qty: 1,
+      productName: product.data?.name, pwpRequested: true,
+    };
+    const grant = resolvePwp(rules, [...baseInputs, candidate]).find((g) => g.idx === candidateIdx);
+    return { available: !!grant, triggerLabel: grant?.triggerRef?.name ?? null };
+  }, [pwpRulesQ.data, product.data, cartLines, editKey]);
+
   // Fabric availability for the sofa configurator.
   // • mfg-{12hex} products: derive from sofaCustomizer.fabricIds (allowed_options)
   //   joined against the global fabric_library. Only active entries pass.
@@ -435,6 +475,8 @@ export const Configurator = () => {
           sofaTier: libRow?.sofaTier ?? null, bedframeTier: libRow?.bedframeTier ?? null,
         });
       }
+      // PWP (换购, 0128) — re-arm the toggle if this line was redeemed at PWP.
+      setUsePwp(cfg.pwp === true);
       hydratedRef.current = true;
     } else if (cfg.kind === 'sofa') {
       // Wait for fabric data to be ready — for mfg products this means both
@@ -616,6 +658,7 @@ export const Configurator = () => {
           widthCm: l.widthCm,
           lengthCm: l.lengthCm,
           price: variant.price ?? null,
+          pwpPrice: variant.pwpPrice ?? null,
           active: variant.active,
         };
       })
@@ -695,7 +738,15 @@ export const Configurator = () => {
   const bedframeFabricDelta = fabricSel && addonCfgQ.data
     ? fabricTierAddon('BEDFRAME', fabricSel.bedframeTier as FabricTier | null, addonCfgQ.data)
     : 0;
-  const bedframeTotal = sizeBase + bedframeSurcharge(bfSel) + bedframeFabricDelta;
+  // PWP (换购, 0128) — when toggled on and available, the bedframe's base is its
+  // per-size PWP price instead of the normal selling price; fabric Δ + option
+  // surcharges still stack (the server recompute adds the same on top of the PWP
+  // base). pwpAvailable gates the toggle's visibility (hidden once unavailable).
+  const pwpUnitPrice = pickedSize?.pwpPrice ?? null;
+  const pwpAvailable = isBedframe && pwpEval.available && pwpUnitPrice != null && pwpUnitPrice > 0;
+  const pwpActive = usePwp && pwpAvailable;
+  const bedframeBase = pwpActive ? (pwpUnitPrice as number) : sizeBase;
+  const bedframeTotal = bedframeBase + bedframeSurcharge(bfSel) + bedframeFabricDelta;
   // Required: size (active+priced) + colour + leg always; gap/divan/total also
   // for non-DIVAN. Specials are optional. Mirrors the server recompute's
   // required-ness so a gated Add-to-Cart never produces a 400.
@@ -725,6 +776,11 @@ export const Configurator = () => {
       fabricId: fabricSel.fabricId,
       fabricLabel: fabricSel.fabricLabel,
       fabricTierDelta: bedframeFabricDelta,
+      // PWP (换购, 0128) identity + grant. modelId/category let the cart re-resolve
+      // PWP across lines; pwp/pwpTriggerLabel record the redemption for the invoice.
+      modelId: (p as { model_id?: string | null }).model_id ?? null,
+      category: String(p.category_id ?? '').toUpperCase(),
+      ...(pwpActive ? { pwp: true, pwpTriggerLabel: pwpEval.triggerLabel } : {}),
       ...(bfSel.gapId ? { gapId: bfSel.gapId, gapLabel: bfSel.gapLabel } : {}),
       legHeightId: bfSel.legId,
       legHeightLabel: bfSel.legLabel,
@@ -752,6 +808,10 @@ export const Configurator = () => {
       productId: p.id,
       productName: p.name,
       sizeId: pickedSize.id,
+      // PWP (换购, 0128) identity — a mattress line is a PWP trigger; these let the
+      // bedframe configurator detect a qualifying trigger in the cart.
+      modelId: (p as { model_id?: string | null }).model_id ?? null,
+      category: String(p.category_id ?? '').toUpperCase(),
       total: sizeTotal,
       summary: `${pickedSize.label}${extraSummary}`,
       addonExtras: extrasArr.length > 0 ? extrasArr : undefined,
@@ -1312,6 +1372,32 @@ export const Configurator = () => {
                 />
               </label>
             </RailSection>
+
+            {/* PWP (换购, 0128) — appears only when a qualifying mattress is in the
+                cart, this bed frame's Model is eligible, and allowance remains.
+                Toggling on prices the bed frame at its PWP base (+ fabric Δ). */}
+            {pwpAvailable && (
+              <RailSection title="PWP 换购优惠">
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)', cursor: 'pointer', padding: 'var(--space-2) 0' }}>
+                  <input
+                    type="checkbox"
+                    checked={usePwp}
+                    onChange={(e) => setUsePwp(e.target.checked)}
+                    style={{ marginTop: 3 }}
+                  />
+                  <span>
+                    <span style={{ fontWeight: 600 }}>
+                      Use PWP price{pwpUnitPrice != null ? ` · RM ${pwpUnitPrice.toLocaleString('en-MY')}` : ''}
+                    </span>
+                    {pwpEval.triggerLabel && (
+                      <span style={{ display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                        换购自 {pwpEval.triggerLabel}
+                      </span>
+                    )}
+                  </span>
+                </label>
+              </RailSection>
+            )}
 
             <RailSection title="Build">
               <BedframeOptions

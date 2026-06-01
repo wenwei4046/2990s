@@ -98,6 +98,7 @@ import {
 } from '../lib/products/product-models-queries';
 import { FabricsTable } from '../components/products/FabricsTable';
 import { SofaComboTab } from '../components/products/SofaComboTab';
+import { PwpRulesTab } from '../components/products/PwpRulesTab';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/products/size-info';
 import { useStaff } from '../lib/staff';
 import { useQueryClient } from '@tanstack/react-query';
@@ -217,7 +218,7 @@ const resolveModelPhotoUrl = (raw: string | null | undefined): string | null => 
   return raw.startsWith('/') ? `${API_URL}${raw}` : `${API_URL}/${raw}`;
 };
 
-type TopTab = 'sku' | 'modular' | 'maintenance' | 'combos' | 'delivery';
+type TopTab = 'sku' | 'modular' | 'maintenance' | 'combos' | 'delivery' | 'pwp';
 
 
 export const Products = () => {
@@ -326,6 +327,17 @@ export const Products = () => {
             >
               Delivery fee
             </button>
+            {/* Purchase-with-purchase (换购优惠) — Chairman 2026-06-02. Global
+                rules: buy a mattress → redeem a bed frame at its PWP price. */}
+            <button
+              type="button"
+              role="tab"
+              data-active={topTab === 'pwp'}
+              className={styles.tabSwitchBtn}
+              onClick={() => setTopTab('pwp')}
+            >
+              PWP
+            </button>
           </div>
         </div>
       </header>
@@ -335,6 +347,7 @@ export const Products = () => {
       {topTab === 'maintenance' && <MaintenanceTab mode={mode} />}
       {topTab === 'combos' && <SofaComboTab mode={mode} />}
       {topTab === 'delivery' && <DeliveryFeeTab mode={mode} />}
+      {topTab === 'pwp' && <PwpRulesTab mode={mode} />}
     </div>
   );
 };
@@ -1347,8 +1360,8 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   const colCount = (canEdit ? 1 : 0) + (isSofaView
     ? 3 + sofaSizes.length + 1
     : isMattressView
-      ? 6
-      : 6);   // Price 1 / price1_sen column removed — global fabric Δ replaces it (0124)
+      ? 7    // + PWP Price column (0128)
+      : 7);  // Price 1 removed (0124); + PWP Price column (0128)
 
   return (
     <>
@@ -1491,12 +1504,14 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
                   <th>Branding</th>
                   <th>Size</th>
                   <th style={{ textAlign: 'right' }}>Price</th>
+                  <th style={{ textAlign: 'right' }}>PWP Price</th>
                 </>
               ) : (
                 <>
                   <th>Category</th>
                   <th>Size</th>
                   <th style={{ textAlign: 'right' }}>Base Price</th>
+                  <th style={{ textAlign: 'right' }}>PWP Price</th>
                 </>
               )}
               <th style={{ textAlign: 'right' }}>Unit (m³)</th>
@@ -1605,6 +1620,7 @@ const ProductRow = ({
   // committing on blur. Reset whenever the row's data changes upstream.
   const [draftSeat, setDraftSeat] = useState<SeatHeightPrice[] | null>(null);
   const [draftSell, setDraftSell] = useState<number | null>(null);
+  const [draftPwp, setDraftPwp] = useState<number | null>(null);
   const [draftBranding, setDraftBranding] = useState<string | null>(null);
   const update = useUpdateMfgProductPrices();
 
@@ -1623,6 +1639,12 @@ const ProductRow = ({
   // base_price_sen / price1_sen are COST and not editable from the POS side.
   const flushSellPrice = (val: number | null) => {
     update.mutate({ id: row.id, sellPriceSen: val });
+  };
+
+  // PWP (换购) SELLING base price (0128). Parallel to sell price; mattress +
+  // bedframe only (sofa column reserved/unused). NOT NULL column → cleared = 0.
+  const flushPwpPrice = (val: number | null) => {
+    update.mutate({ id: row.id, pwpPriceSen: val ?? 0 });
   };
 
   return (
@@ -1785,6 +1807,21 @@ const ProductRow = ({
               fmtRm(row.sell_price_sen ?? row.base_price_sen)
             )}
           </td>
+          {/* PWP (换购) price — selling-side, parallel to the price above.
+              0 = not set → shows "—". NOT NULL column so cleared commits 0. */}
+          <td className={(draftPwp ?? row.pwp_price_sen) ? styles.price : styles.priceEmpty}>
+            {editMode ? (
+              <PriceInput
+                valueSen={draftPwp ?? (row.pwp_price_sen || null)}
+                onCommit={(v) => {
+                  setDraftPwp(v);
+                  flushPwpPrice(v);
+                }}
+              />
+            ) : (
+              row.pwp_price_sen ? fmtRm(row.pwp_price_sen) : '—'
+            )}
+          </td>
         </>
       ) : (
         <>
@@ -1804,6 +1841,21 @@ const ProductRow = ({
               />
             ) : (
               fmtRm(row.sell_price_sen ?? row.base_price_sen)
+            )}
+          </td>
+          {/* PWP (换购) price — selling-side, parallel to Base Price. 0 = not
+              set → shows "—". NOT NULL column so cleared commits 0. */}
+          <td className={(draftPwp ?? row.pwp_price_sen) ? styles.price : styles.priceEmpty}>
+            {editMode ? (
+              <PriceInput
+                valueSen={draftPwp ?? (row.pwp_price_sen || null)}
+                onCommit={(v) => {
+                  setDraftPwp(v);
+                  flushPwpPrice(v);
+                }}
+              />
+            ) : (
+              row.pwp_price_sen ? fmtRm(row.pwp_price_sen) : '—'
             )}
           </td>
         </>

@@ -174,6 +174,13 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     };
     if (config.fabricId)              v.fabricId = config.fabricId;
     if (config.fabricLabel)           v.fabricLabel = config.fabricLabel;
+    // PWP (换购, 0128) — the salesperson redeemed this bed frame at its PWP price.
+    // The server re-validates eligibility (shared resolvePwp) before locking the
+    // PWP base; pwpTriggerLabel is a display snapshot for the SO / invoice.
+    if (config.pwp) {
+      v.pwp = true;
+      if (config.pwpTriggerLabel)     v.pwpTriggerLabel = config.pwpTriggerLabel;
+    }
     // colourId is the fabric colour code (fabric_colours.colour_id) now that
     // bedframe picks fabric → colour. Mirror it to fabricCode for the server's
     // cost lookup + required-fabricCode rule + allowed-fabric gate.
