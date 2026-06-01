@@ -4,6 +4,30 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-01-002 — Columns / filter dropdowns closed when you tried to scroll their own list
+
+**Symptom:** Opening the DataGrid "Columns" picker (e.g. "COLUMNS (21/42)") and
+trying to scroll its checkbox list made the menu flicker and immediately close,
+so you could never reach the columns lower in the list. The per-column filter
+dropdown had the same problem.
+
+**Root cause:** Both menus install a close-on-scroll handler with
+`window.addEventListener('scroll', close, true)` — the `true` is capture phase,
+which fires for *any* scrolling element on the page, including the menu's own
+`overflow-y:auto` list. So scrolling inside the menu triggered its own close.
+
+**Fix:** (commit `084b3cc`, on `main`) Added an inside-scroll guard to both close
+effects in `DataGrid.tsx`: gave each popover a ref (`columnsMenuRef`,
+`filterMenuRef`) and the scroll handler now ignores the event when
+`menuRef.current.contains(e.target)`. Scrolls that originate outside the popover
+still close it (preserving the click-away-on-scroll behavior); scrolls inside the
+list no longer do.
+
+**Caught by:** Owner report — "scroll 不下，一直闪退跳出去" (the list won't scroll,
+the menu keeps closing). Verified live on a list page.
+
+---
+
 ## BUG-2026-06-01-001 — Editing/deleting a posted downstream document left stale effects (4 reverse-logic gaps)
 
 **Symptom:** When a downstream document was edited or deleted AFTER it had already
