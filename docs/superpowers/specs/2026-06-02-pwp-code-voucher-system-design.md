@@ -184,7 +184,12 @@ At the handover customer-entry step (`apps/pos/src/pages/Handover.tsx`, the "Nex
 ## 7. Phase split
 
 - **Phase 1 — Mattress ↔ Bed Frame, full code lifecycle.** migration 0130 + `pwp_codes` + reserve/free/validate/consume endpoints + cart reserve/free integration + reward configurator (Apply auto-fill toggle + Insert-code field) + SO display + anti-tamper. Keep the toggle. Mattress as trigger, Bed Frame as reward (and Bed Frame trigger → Mattress reward, symmetric, since both are wired).
-- **Phase 2 — Sofa.** (a) Sofa **Combo** as a trigger: the `pwp_rules` trigger for a SOFA-category rule references **combo ids** (not model ids) — extend the rule model + the reserve step to recognise a sofa build that matches a combo and reserve codes then. (b) Sofa / Mattress as **reward**: wire sofa `pwp_price_sen` into the recompute (today `recomputeFromSnapshot` excludes `category === 'SOFA'` from the authoritative selling branch — needs a sofa PWP path). Cross-order is the natural flow (sofa is its own cart).
+- **Phase 2 — Sofa (trigger AND reward; selected by COMBO; Chairman 2026-06-02).** Sofa is identified by **Combo**, never by model (sofas are modular — no fixed "model" to pick).
+  - **(a) Sofa as TRIGGER:** a SOFA-category `pwp_rules` trigger references **combo ids**. The reserve step (5a) recognises a sofa build/line that matches one of those combos → reserve codes then.
+  - **(b) Sofa as REWARD:** the reward references **combo ids**. When redeemed, the sofa is charged its **combo PWP price** (e.g. Combo A normally RM X → PWP price = X − RM 500, whatever Master Admin sets).
+  - **(c) Where the sofa PWP price lives — NOT per-SKU.** Add a **selling-side PWP price to `sofa_combo_pricing`** (e.g. a parallel `pwp_prices_by_height` jsonb next to `selling_prices_by_height`). Surface it as a new **"PWP Price" column in the POS Combo Pricing tab** (`apps/pos/src/components/products/SofaComboTab.tsx`). **POS / selling-side ONLY — do NOT add a PWP column to the Backend cost side**: cost is identical regardless of selling price (same physical product), so the PWP figure is purely a selling number, visible only in POS.
+  - **(d) Recompute:** the sofa selling path (`computeSofaSellingSen` / the sofa branch of `recomputeFromSnapshot`, which today is EXCLUDED from the `pwpBaseSen` branch) must, when a valid PWP code applies to a sofa-reward line whose build matches the combo, charge the combo's **PWP** price-by-height instead of its normal selling price-by-height.
+  - Cross-order is the natural flow for sofa (a sofa is its own cart, so the trigger sofa order and the reward order are always separate, linked by the code). Same-cart sofa-reward only happens within an all-sofa cart.
 
 ---
 
@@ -193,7 +198,7 @@ At the handover customer-entry step (`apps/pos/src/pages/Handover.tsx`, the "Nex
 2. **Trigger removed after a reward applied its code (same cart):** freeing the trigger's RESERVED codes must NOT free a code already earmarked by a reward line in the same cart — or, simpler, re-validate at Confirm (the reward line's code must still be valid; if the trigger was removed, the reserved code was deleted → reward reprices full → 400 / toggle clears). Decide: on trigger removal, also clear any same-cart reward line that auto-applied one of its codes (re-run the toggle eval). Recommend: re-evaluate reward lines when cart changes (the `pwpEval` already reacts to `cartLines`).
 3. **qty changes** on a trigger line → reserve/free the delta.
 4. **Quote save/restore:** reserved codes persist with the quote (owner_staff_id). Restoring a quote must re-attach the codes (they're keyed by cart_line_key / owner). Deleting a quote frees its RESERVED codes.
-5. **Abandoned carts:** RESERVED codes with no SO linger. Add a reaper (cron) OR free them when the cart is cleared. (Phase 1: free on cart clear + on logout; a TTL reaper can come later — `log()` the policy.)
+5. **Releasing RESERVED codes (LOCKED — Chairman 2026-06-02):** free a trigger line's RESERVED codes when **(a)** the trigger is removed from the cart, **(b)** the cart is cleared, OR **(c)** a **saved Quote is deleted** (deleting the quote frees its reserved codes). **No TTL reaper** — release is event-driven on those three. (A reaper can be added later if dead codes accumulate; not Phase 1.) Note: saving a cart to a Quote KEEPS the codes reserved (the number stays occupied while the quote lives); only deleting the quote frees them.
 6. **Reward `pwp_price_sen = 0`** → code can't apply (no PWP price) → Apply Failed / toggle hidden.
 7. **Rule deleted/deactivated after codes generated:** the code snapshotted `reward_category` + `eligible_reward_model_ids`, so it still redeems (Chairman can decide if deactivating a rule should also invalidate outstanding codes — default: outstanding codes honour their snapshot).
 8. **Customer binding (LOCKED — Chairman 2026-06-02):** a cross-order (AVAILABLE) code is bound to the customer who earned it. `customer_id` is set when the code turns AVAILABLE at the trigger SO Confirm (customer is known by then). Redemption flow:
@@ -225,10 +230,10 @@ At the handover customer-entry step (`apps/pos/src/pages/Handover.tsx`, the "Nex
 - Branch so far: `feat/pwp-multi-rules` (multi-rule shipped via #424). The new session should branch fresh off latest `origin/main` (which already has all shipped PWP). Worktree: `C:\Users\User\2990s\.claude\worktrees\pwp`.
 
 ## 11. Open questions for the implementer / Chairman
-1. **Abandoned RESERVED codes** — free on cart-clear/logout only (Phase 1), or add a TTL reaper cron? (Recommend: free on clear/logout now; reaper later.)
+1. ✅ **RESOLVED (Chairman 2026-06-02)** — release RESERVED codes on (a) trigger removed from cart, (b) cart cleared, (c) saved Quote deleted. **No reaper.** Saving to a Quote keeps codes reserved. See §8.5.
 2. ✅ **RESOLVED (Chairman 2026-06-02) — customer-bound.** See §8.8 + §6e: code binds to the earning customer at the trigger SO; cross-order redemption is validated at the handover "Next" step (mismatch → error + revert price to full). `pwp_codes.customer_id` added. Apply still works pre-customer (optimistic); the gate fires when the customer is entered.
-3. **Sofa Combo trigger (Phase 2)** — confirm the rule's sofa trigger references combo ids; confirm sofa-as-reward needs `pwp_price_sen` wired into the recompute's selling path.
-4. **One trigger matching multiple rules** — generate codes per matching rule (could over-issue). Acceptable, or restrict a trigger to one rule?
+3. ✅ **RESOLVED (Chairman 2026-06-02)** — Sofa is Phase 2, selected by **Combo** (trigger AND reward). Sofa reward PWP price = a new selling-side **"PWP Price" column on `sofa_combo_pricing` / the POS Combo Pricing tab** (POS-only; Backend cost side gets NO such column — cost is identical regardless of selling price). See §7 Phase 2.
+4. **One trigger matching multiple rules** — generate codes per matching rule (could over-issue). Acceptable, or restrict a trigger to one rule? (Remaining open — recommend: per matching rule; revisit if it over-issues.)
 
 ---
 
