@@ -25,7 +25,7 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import { Plus, Pencil, Trash2, History, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { SOFA_MODULES, normalizeCompartmentCode, buildComboLabel } from '@2990s/shared';
+import { SOFA_MODULES, normalizeCompartmentCode, buildComboLabel, findDuplicateCombo } from '@2990s/shared';
 import {
   useSofaCombos,
   useCreateSofaCombo,
@@ -359,6 +359,9 @@ function ComposerModal({
 }) {
   const create = useCreateSofaCombo();
   const update = useUpdateSofaCombo();
+  // All active combos (every Model) — used to block adding a duplicate (same
+  // base model + same module-set) on the create path.
+  const existingCombosQ = useSofaCombos({ customerId: null });
 
   // Module chips come from the Maintenance Sofa Compartments pool (single source
   // of truth — Chairman 2026-06-01) so adding/removing a compartment in
@@ -430,6 +433,13 @@ function ComposerModal({
           notes: notes || null,
         });
       } else {
+        // Block duplicates (Chairman 2026-06-02): the table is append-only, so
+        // re-adding the same module-set silently makes a new version. Warn +
+        // stop, and point the user to edit the existing combo instead.
+        const dup = findDuplicateCombo(baseModel, orderedModules, existingCombosQ.data ?? []);
+        if (dup) {
+          return alert(`A combo for these modules already exists on ${baseModel}. Edit that combo instead of adding a duplicate.`);
+        }
         await create.mutateAsync({
           baseModel,
           modules: orderedModules,

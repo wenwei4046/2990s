@@ -182,6 +182,39 @@ function slotsEqual(
 }
 
 /**
+ * Find an existing combo whose (baseModel, slot-set) matches `slots`, ignoring
+ * slot + intra-slot order (comboSlotsKey). Soft-deleted rows are skipped.
+ *
+ * Used by BOTH POS create paths (Combo Pricing "New combo" + the in-configurator
+ * "Create Combo") to BLOCK adding a duplicate: the combo table is append-only, so
+ * re-adding the same module-set silently makes a new effective ROW (a version),
+ * which reads as a confusing "duplicate". This lets the UI warn + stop instead,
+ * and steer the user to edit the existing combo. Returns the first match or null.
+ *
+ * Tier is intentionally NOT part of the identity here — every combo runs at the
+ * single base tier (Chairman 2026-06-02), so (baseModel, slots) is the key.
+ */
+export function findDuplicateCombo<
+  T extends {
+    baseModel: string;
+    modules: readonly (string | readonly string[])[];
+    deletedAt?: string | null;
+  },
+>(
+  baseModel: string,
+  slots: readonly (string | readonly string[])[],
+  existing: readonly T[],
+): T | null {
+  const target = comboSlotsKey(slots);
+  for (const c of existing) {
+    if (c.deletedAt) continue;
+    if (c.baseModel !== baseModel) continue;
+    if (comboSlotsKey(c.modules) === target) return c;
+  }
+  return null;
+}
+
+/**
  * SUBSET / group-coverage match (HOOKKA `findComboSubset` 1:1): can every
  * combo SLOT be covered by a DISTINCT built module whose code is in that
  * slot's OR-set?

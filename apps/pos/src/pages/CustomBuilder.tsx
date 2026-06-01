@@ -17,6 +17,7 @@ import {
   reclinerEligible,
   isAccessoryModule,
   summarizeSofaCells,
+  findDuplicateCombo,
   type Bbox,
   type Cell,
   type Depth,
@@ -25,7 +26,7 @@ import {
   type SofaProductPricing,
 } from '@2990s/shared';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
-import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useCreateSofaCombo, useCreateSofaQuickPick, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
+import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useCreateSofaCombo, useCreateSofaQuickPick, useSofaCombos, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
 import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
@@ -1986,6 +1987,9 @@ function CreateComboModal({
   onSaved: () => void;
 }) {
   const create = useCreateSofaCombo();
+  // Active combos for this Model — used to block adding a duplicate (same
+  // module-set) on this create path (Chairman 2026-06-02).
+  const existingCombosQ = useSofaCombos(baseModel);
   // Seat-height columns mirror the live Maintenance pool (Products → Maintenance
   // → Sofa → Sizes; key `sofaSizes`) — the SAME source the Backend Combo Pricing
   // "New Combo" panel uses, so this dialog offers every size that panel does.
@@ -1999,6 +2003,13 @@ function CreateComboModal({
   }));
 
   const submit = async () => {
+    // Block duplicates: re-adding the same module-set silently makes a new
+    // version (append-only table). Warn + stop, and steer to editing instead.
+    const dup = findDuplicateCombo(baseModel, modules.map((m) => [m]), existingCombosQ.data ?? []);
+    if (dup) {
+      alert(`This combo already exists for ${baseModel}. Edit it in Backend → Combo Pricing instead of adding a duplicate.`);
+      return;
+    }
     const sellingPricesByHeight: Record<string, number | null> = {};
     let any = false;
     for (const h of heights) {
