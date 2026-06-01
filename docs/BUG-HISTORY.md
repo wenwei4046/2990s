@@ -4,6 +4,50 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-01-008 — Sofa Sales Orders never went READY even when their batch was in stock
+
+**Symptom:** A sofa Sales Order whose procurement batch had actually been received
+(stock physically on hand under the module SKUs, e.g. BOOQIT-1A(LHF)/(RHF) from
+GRN-2606-001) stayed stuck at PENDING / CONFIRMED and never advanced to
+READY_TO_SHIP. Looked like "the SKU shows stock yet the order never turns ready."
+
+**Root cause:** Two gaps, both around the sofa batch-readiness path:
+1. The readiness check (`so-stock-allocation.ts`) reads `v_inventory_lots_open.batch_no`
+   to match each sofa line against its bound PO batch, but the view (last defined in
+   migration 0095, before batch_no existed) never carried the column. The SELECT
+   errored, the on-hand rows came back empty, and EVERY sofa set was forced PENDING.
+2. Migration 0120's receive-time stamp (`inventory_lots.batch_no` / movements) wasn't
+   live when the historical GRNs were received, so existing lots had `batch_no = NULL`.
+   Even after the view was fixed, the batch-to-batch match found nothing.
+
+**Important non-bug found while diagnosing:** SO-2605-006 (the order the owner
+flagged) is *correctly* PENDING. Its own PO (PO-2606-005) is still SUBMITTED / not
+received. The on-hand BOOQIT stock belongs to a *different* order's batch —
+SO-2605-007's PO-2606-006, which IS received. The batch-bound rule (a sofa set only
+counts its OWN dye-lot batch, never another order's stock) was working as designed;
+forcing SO-2605-006 ready would have violated it.
+
+**Fix:**
+- Migration 0122 (`0122_lots_open_batch_no.sql`) rebuilds `v_inventory_lots_open`
+  byte-for-byte from 0095, adding the single column `l.batch_no`. Additive, idempotent.
+- Applied 0120 + 0121 + 0122 to prod (they had never been applied).
+- Backfilled `inventory_lots.batch_no` (and matching IN `inventory_movements.batch_no`)
+  from the unambiguous GRN→PO chain (only lots mapping to exactly one PO; the
+  2-PO JAGER lots were left untouched, never guessed).
+- Ran POST `/mfg-sales-orders/recompute-allocation` to re-walk every SO line.
+
+**Result (verified live + DB):** SO-2605-007 → both sofa lines READY, header
+READY_TO_SHIP (its batch PO-2606-006 has on-hand 1+1). SO-2605-006 stays PENDING
+(its batch PO-2606-005 has 0 on hand — correct). Whole-system sofa sweep: every
+READY sofa line genuinely has its own bound batch in stock; none grabbed another
+order's stock.
+
+**Caught by:** Owner report ("SKU has stock but the SO never turns ready"), plus his
+hard rule that the SO header must follow the SKU stock line's READY and that batch
+allocation must hit the correct line, never an arbitrary one.
+
+---
+
 ## BUG-2026-06-01-007 — A Delivery Return left its Sales Order stuck at "Delivered"
 
 **Symptom:** When goods came back on a Delivery Return, the original Sales Order
