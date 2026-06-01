@@ -231,7 +231,10 @@ type ActiveComposite =
  *  arms ONLY where a module actually has one — open / half-built ends stay
  *  open. Modules link on ADJACENCY; the run need NOT be a complete sofa. */
 const buildSeamlessRun = (cells: Cell[], depth: Depth, rot: Rot): SeamlessRun | null => {
-  if (cells.length < 2) return null;
+  // Caller decides when a single-cell run is wanted (e.g. a lone power seat,
+  // so its footrest draws below instead of squishing the seat); ≥2 is the
+  // normal seamless case.
+  if (cells.length < 1) return null;
   const horiz = rot % 180 === 0;
   const boxes: { c: Cell; m: SofaModuleSpec; b: Bbox }[] = [];
   for (const c of cells) {
@@ -1132,9 +1135,20 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     //    so a half-built / open run still links with open ends. Covers the
     //    4-seater (1A + 2NA + 1A), centre-console (1A + Console + 1A), and the
     //    in-progress (1A + Console, 1A + 1NA, …) cases.
-    const run = buildSeamlessRun(displayCells.filter((c) => c.id != null && runIds.has(c.id)), depth, rot);
-    const bbRun = cellsBbox(displayCells.filter((c) => c.id != null && runIds.has(c.id)), depth);
-    if (run && bbRun) return [{ kind: 'generic' as const, key: i, bb: bbRun, rot, run, ids: runIds }];
+    //
+    //    A LONE functional seat (power/recliner/leg) also takes this path: its
+    //    per-module art bakes the footrest into a taller silhouette, so fitting
+    //    that to the cell squished the seat ("power compartment too small").
+    //    Drawn here, the seat fills the cell and the footrest extends below —
+    //    same size as a plain seat + identical to the linked version. Plain
+    //    single modules keep their (correct) per-module art.
+    const singleFunctional = sofaCells.length === 1 && isFunctionalSeat(sofaCells[0]!.moduleId);
+    if (sofaCells.length >= 2 || singleFunctional) {
+      const runFilter = displayCells.filter((c) => c.id != null && runIds.has(c.id));
+      const run = buildSeamlessRun(runFilter, depth, rot);
+      const bbRun = cellsBbox(runFilter, depth);
+      if (run && bbRun) return [{ kind: 'generic' as const, key: i, bb: bbRun, rot, run, ids: runIds }];
+    }
     return [];
   });
   const compositeCoveredIds = new Set<string>(
