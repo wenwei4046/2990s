@@ -163,6 +163,9 @@ export function useUpdateProductModel() {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['product-models'] });
       qc.invalidateQueries({ queryKey: ['product-models', vars.id] });
+      // Activating a sofa compartment may auto-create its SKU server-side
+      // (Chairman 2026-06-02) — refresh SKU Master so the new SKU shows up.
+      qc.invalidateQueries({ queryKey: ['mfg-products'] });
     },
   });
 }
