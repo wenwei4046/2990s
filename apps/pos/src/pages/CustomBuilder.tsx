@@ -206,7 +206,7 @@ const SOFA_INK = '#2C2C2A';
 // run is dimensionally identical to the rasterised art.
 const ART_BODY_UNITS = 70;
 
-interface SeamlessSlot { len: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean }
+interface SeamlessSlot { moduleId: string; len: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean }
 interface SeamlessRun { totalLen: number; thickness: number; slots: SeamlessSlot[] }
 
 /** One seamless-overlay descriptor: either the rasterised bundle PNG, or a
@@ -271,6 +271,7 @@ const buildSeamlessRun = (cells: Cell[], depth: Depth, rot: Rot): SeamlessRun | 
     // each module's arm sits on its intrinsic side regardless of rot.
     const bothArms = /^[123]S$/.test(m.id);
     return {
+      moduleId: m.id,
       len: axisLen(b),
       cushions: isConsole ? 0 : Math.max(1, m.cushions),
       kind: isConsole ? 'console' : 'sofa',
@@ -286,8 +287,10 @@ const buildSeamlessRun = (cells: Cell[], depth: Depth, rot: Rot): SeamlessRun | 
 
 /** Render a SeamlessRun as an SVG sofa sized to fill w×h px (the overlay's
  *  natural, pre-rotation box). viewBox is the run's cm footprint so strokes
- *  + insets scale with the sofa. */
-const renderSeamlessSofa = (run: SeamlessRun, w: number, h: number) => {
+ *  + insets scale with the sofa. `resolveArt` maps a moduleId → its art src so
+ *  a console keeps its REAL detailed artwork (same image the lone console
+ *  cell uses), not a simplified block. */
+const renderSeamlessSofa = (run: SeamlessRun, w: number, h: number, resolveArt: (id: string) => string) => {
   const { totalLen: L, thickness: T, slots } = run;
   const u = T / ART_BODY_UNITS; // art-unit → cm
   const armW = 11 * u; // arm panel (matches 2S/3S art)
@@ -298,10 +301,10 @@ const renderSeamlessSofa = (run: SeamlessRun, w: number, h: number) => {
   const swDash = 0.5 * u;
   const dash = `${2 * u},${2 * u}`;
   // Resolve each slot to an [start, end] range along the run axis.
-  const ranges: { start: number; end: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean }[] = [];
+  const ranges: { moduleId: string; start: number; end: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean }[] = [];
   let acc = 0;
   for (const s of slots) {
-    ranges.push({ start: acc, end: acc + s.len, cushions: s.cushions, kind: s.kind, armLeft: s.armLeft, armRight: s.armRight });
+    ranges.push({ moduleId: s.moduleId, start: acc, end: acc + s.len, cushions: s.cushions, kind: s.kind, armLeft: s.armLeft, armRight: s.armRight });
     acc += s.len;
   }
   // Solid lines at interior module boundaries.
@@ -323,17 +326,40 @@ const renderSeamlessSofa = (run: SeamlessRun, w: number, h: number) => {
     >
       <rect x={0} y={0} width={L} height={T} rx={rx} fill={SOFA_SEAT} stroke={SOFA_INK} strokeWidth={swOuter} />
       <rect x={0} y={0} width={L} height={bandH} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />
-      {/* Interior consoles: full-height upholstered block (covers the band in
-          its slot) with two cup-holders near the front. */}
+      {/* Interior consoles: draw the module's REAL art (cropped to its
+          silhouette so it fills the slot), identical to how the lone console
+          cell renders — keeps the wood-lid / seams / cup-holder detail and its
+          own top, so it neither degrades to a flat block nor interrupts the
+          backrest band. Falls back to a plain upholstered block only if the
+          art's bbox hasn't been measured yet. */}
       {consoles.map((r, i) => {
+        const src = resolveArt(r.moduleId);
+        const bbox = bboxCache.get(src);
         const cw = r.end - r.start;
-        const cr = Math.min(cw, T) * 0.06;
+        if (!bbox) {
+          const cr = Math.min(cw, T) * 0.06;
+          return (
+            <Fragment key={`con${i}`}>
+              <rect x={r.start} y={0} width={cw} height={T} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />
+              <circle cx={r.start + cw / 3} cy={T * 0.82} r={cr} fill={SOFA_CUP} stroke={SOFA_INK} strokeWidth={swDash} />
+              <circle cx={r.start + (cw * 2) / 3} cy={T * 0.82} r={cr} fill={SOFA_CUP} stroke={SOFA_INK} strokeWidth={swDash} />
+            </Fragment>
+          );
+        }
+        const bw = bbox.r - bbox.l;
+        const bh = bbox.b - bbox.t;
+        const iw = cw / bw;
+        const ih = T / bh;
         return (
-          <Fragment key={`con${i}`}>
-            <rect x={r.start} y={0} width={cw} height={T} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />
-            <circle cx={r.start + cw / 3} cy={T * 0.82} r={cr} fill={SOFA_CUP} stroke={SOFA_INK} strokeWidth={swDash} />
-            <circle cx={r.start + (cw * 2) / 3} cy={T * 0.82} r={cr} fill={SOFA_CUP} stroke={SOFA_INK} strokeWidth={swDash} />
-          </Fragment>
+          <image
+            key={`con${i}`}
+            href={src}
+            x={r.start - bbox.l * iw}
+            y={0 - bbox.t * ih}
+            width={iw}
+            height={ih}
+            preserveAspectRatio="none"
+          />
         );
       })}
       {/* Arms — drawn only where a module actually has one (honest). An open /
@@ -1645,7 +1671,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                         }}
                       />
                     );
-                  })() : renderSeamlessSofa(comp.run, natW, natH)}
+                  })() : renderSeamlessSofa(comp.run, natW, natH, resolveModuleArtSrc)}
                 </div>
               </div>
             );
