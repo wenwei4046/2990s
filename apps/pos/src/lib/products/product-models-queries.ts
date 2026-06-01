@@ -68,6 +68,10 @@ export type AllowedOptions = {
   gaps?:                  string[];   // BEDFRAME
   leg_heights?:           string[];
   specials?:              string[];
+  /** SOFA + BEDFRAME — enabled fabric COLOUR codes (fabric_colours.colour_id,
+   *  e.g. 'CG-002'). Ticked per-Model in the Modular drawer; the single ON/OFF
+   *  authority for which fabrics this Model offers. */
+  fabrics?:               string[];
   /** MATTRESS only — drives the (WxLx{thickness}CM) substitution in the
       auto-generated SKU name. Set at New Model time or edited later via
       the Model detail page. */

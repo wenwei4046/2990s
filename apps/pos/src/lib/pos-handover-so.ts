@@ -158,6 +158,12 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     if (config.colourId)        v.colourId = config.colourId;
     if (config.colourLabel)     v.colourLabel = config.colourLabel;
     if (config.colourHex)       v.colourHex = config.colourHex;
+    // The colour code IS the procurement fabric_code (fabric_colours.colour_id =
+    // fabric_trackings.fabric_code, e.g. "CG-002"). Send it as fabricCode so the
+    // server resolves the cost row, satisfies the required-fabricCode variant
+    // rule, and enforces the Model's allowed fabric pool. fabricId stays the
+    // series ('CG') that drives the SELLING tier add-on.
+    if (config.colourId)        v.fabricCode = config.colourId;
     if (config.summary)         v.summary = config.summary;
     return Object.keys(v).length > 0 ? v : null;
   }
@@ -168,6 +174,10 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     };
     if (config.fabricId)              v.fabricId = config.fabricId;
     if (config.fabricLabel)           v.fabricLabel = config.fabricLabel;
+    // colourId is the fabric colour code (fabric_colours.colour_id) now that
+    // bedframe picks fabric → colour. Mirror it to fabricCode for the server's
+    // cost lookup + required-fabricCode rule + allowed-fabric gate.
+    if (config.colourId)              v.fabricCode = config.colourId;
     if (config.sizeOther)             v.sizeOther = config.sizeOther;
     if (config.colourLabel != null)   v.colourLabel = config.colourLabel;
     if (config.colourHex)              v.colourHex = config.colourHex;

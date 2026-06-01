@@ -12,6 +12,8 @@ import {
   useProductPricingRealtime,
   useProductFabrics,
   useFabricLibrary,
+  useFabricColours,
+  useModelAllowedFabricCodes,
   useFabricTierAddonConfig,
   useAddons,
   useBedframeColours,
@@ -219,12 +221,31 @@ export const Configurator = () => {
   // products whose fabric list comes from sofaCustomizer.fabricIds rather than
   // the product_fabrics UUID-FK table.
   const fabricLib = useFabricLibrary();
+  const fabricColours = useFabricColours();
   const addonCfgQ = useFabricTierAddonConfig();  // migration 0124 — fabric-tier Δ amounts
-  // Bedframe fabric list (migration 0124): all active fabric_library fabrics
-  // (no per-Model gating) shaped as ProductFabricRow for the FabricColourPicker.
+
+  // Fabrics are a SERIES (fabric_library) / COLOUR (fabric_colours) library
+  // synced from the Backend Fabric Converter (migration 0127). A Model offers a
+  // set of COLOUR codes (allowed_options.fabrics, ticked in the Modular drawer);
+  // the picker shows the series that own ≥1 enabled colour, then those colours.
+  // This helper turns an enabled colour-code list → the series rows the picker takes.
+  const buildFabricSeriesRows = useCallback((codes: string[]): ProductFabricRow[] => {
+    const enabled = new Set(codes);
+    const seriesWithColour = new Set(
+      (fabricColours.data ?? []).filter((c) => enabled.has(c.colourId)).map((c) => c.fabricId),
+    );
+    return (fabricLib.data ?? [])
+      .filter((f) => seriesWithColour.has(f.id))
+      .map((f) => ({ fabricId: f.id, active: f.active, surcharge: f.defaultSurcharge }));
+  }, [fabricColours.data, fabricLib.data]);
+
+  // Bedframe enabled fabric colour codes = the Model's allowed_options.fabrics
+  // (per-Model, set in the Modular drawer). Empty → "No fabrics enabled".
+  const bedframeAllowedFabricsQ = useModelAllowedFabricCodes(productId);
+  const bedframeFabricCodes = useMemo(() => bedframeAllowedFabricsQ.data ?? [], [bedframeAllowedFabricsQ.data]);
   const bedframeFabricRows = useMemo<ProductFabricRow[]>(
-    () => (fabricLib.data ?? []).map((f) => ({ fabricId: f.id, active: f.active, surcharge: f.defaultSurcharge })),
-    [fabricLib.data],
+    () => buildFabricSeriesRows(bedframeFabricCodes),
+    [buildFabricSeriesRows, bedframeFabricCodes],
   );
   useProductPricingRealtime(productId);
   /* PR — Commander 2026-05-28: Sofa Customize wires to Model.allowed_options.
@@ -351,18 +372,17 @@ export const Configurator = () => {
   // • Legacy UUID products: use useProductFabrics as before (product_fabrics rows).
   // Declared here (before the edit-hydration useEffect) so it's in scope for both
   // the hydration logic and the FabricColourPicker render below.
+  // Sofa enabled fabric colour codes: mfg → the Model's allowed_options.fabrics
+  // (via sofaCustomizer); legacy UUID products keep their product_fabrics rows
+  // (no colour gate). Empty → "No fabrics enabled".
+  const sofaFabricCodes = useMemo<string[]>(
+    () => (productId?.startsWith('mfg-') ? (sofaCustomizer.data?.fabricIds ?? []) : []),
+    [productId, sofaCustomizer.data],
+  );
   const derivedFabricRows = useMemo<ProductFabricRow[]>(() => {
     if (!productId?.startsWith('mfg-')) return productFabrics.data ?? [];
-    const ids = sofaCustomizer.data?.fabricIds ?? [];
-    const byId = new Map((fabricLib.data ?? []).map((f) => [f.id, f]));
-    return ids
-      .filter((id) => byId.has(id) && byId.get(id)!.active)
-      .map((id) => ({
-        fabricId: id,
-        active: true,
-        surcharge: byId.get(id)!.defaultSurcharge,
-      }));
-  }, [productId, productFabrics.data, sofaCustomizer.data, fabricLib.data]);
+    return buildFabricSeriesRows(sofaFabricCodes);
+  }, [productId, productFabrics.data, sofaFabricCodes, buildFabricSeriesRows]);
 
   // One-shot hydration from the edited cart line. Waits for the per-kind query
   // data so re-derived surcharges/labels are accurate, not stale 0s.
@@ -1135,6 +1155,7 @@ export const Configurator = () => {
                 onChange={setFabricSel}
                 category="SOFA"
                 addonConfig={addonCfgQ.data ?? null}
+                enabledColourIds={productId?.startsWith('mfg-') ? sofaFabricCodes : null}
               />
             }
           />
@@ -1302,6 +1323,7 @@ export const Configurator = () => {
                     onChange={setFabricSel}
                     category="BEDFRAME"
                     addonConfig={addonCfgQ.data ?? null}
+                    enabledColourIds={bedframeFabricCodes}
                   />
                 }
               />
