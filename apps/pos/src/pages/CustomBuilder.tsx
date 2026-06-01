@@ -245,6 +245,11 @@ const buildSeamlessRun = (cells: Cell[], depth: Depth, rot: Rot): SeamlessRun | 
     // slot, but any other accessory (free stool) breaks the straight run.
     if (m.group === 'Corner' || m.group === 'L-Shape') return null;
     if (m.accessory && m.id !== 'Console') return null;
+    // 1B / 2B are the WIDE-ARM variants — their distinct wide armrest is part
+    // of their art and the code-drawn renderer only knows the standard arm, so
+    // keep these on their own per-module art (Chairman: 1B/2B must stay as the
+    // original). A run containing one falls back to per-module rendering.
+    if (/^[12]B-/.test(m.id)) return null;
     const b = cellBbox(c, depth);
     if (!b) return null;
     boxes.push({ c, m, b });
