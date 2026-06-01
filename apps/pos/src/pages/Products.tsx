@@ -839,6 +839,17 @@ const ModelAllowedOptionsDrawer = ({
       return next;
     });
   };
+  // Bulk on/off for the FABRICS section (All on / All off).
+  const setFabricsBulk = (codes: string[], on: boolean) => {
+    setDraft((prev) => {
+      const next: AllowedOptions = JSON.parse(JSON.stringify(prev ?? {}));
+      const cur = new Set((next.fabrics as string[] | undefined) ?? []);
+      if (on) codes.forEach((c) => cur.add(c));
+      else codes.forEach((c) => cur.delete(c));
+      next.fabrics = [...cur];
+      return next;
+    });
+  };
 
   const onSave = () => {
     if (!draft) return;
@@ -892,6 +903,7 @@ const ModelAllowedOptionsDrawer = ({
           coloursBySeries={coloursBySeries}
           isTicked={(code) => isTicked('fabrics', code)}
           onToggle={(code) => toggle('fabrics', code)}
+          onSetAll={setFabricsBulk}
         />
       )}
 
@@ -1026,20 +1038,43 @@ const FabricAllowedSection = ({
   coloursBySeries,
   isTicked,
   onToggle,
+  onSetAll,
 }: {
   series: { id: string; label: string }[];
   coloursBySeries: Map<string, { colourId: string; label: string }[]>;
   isTicked: (code: string) => boolean;
   onToggle: (code: string) => void;
+  onSetAll: (codes: string[], on: boolean) => void;
 }) => {
   const withColours = series.filter((s) => (coloursBySeries.get(s.id) ?? []).length > 0);
+  const allCodes = withColours.flatMap((s) => (coloursBySeries.get(s.id) ?? []).map((c) => c.colourId));
+  const bulkBtn = (label: string, on: boolean) => (
+    <button
+      type="button"
+      onClick={() => onSetAll(allCodes, on)}
+      style={{
+        padding: '2px 10px', borderRadius: 999, border: '1px solid var(--line)',
+        background: 'transparent', color: 'var(--c-ink)', cursor: 'pointer',
+        fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
+      }}
+    >{label}</button>
+  );
   return (
     <div style={{ marginBottom: 'var(--space-4)' }}>
       <div style={{
-        fontFamily: 'var(--font-button)', fontSize: 'var(--fs-12)', fontWeight: 600,
-        letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--fg-muted)',
-        marginBottom: 'var(--space-2)',
-      }}>Fabrics</div>
+        display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-2)',
+      }}>
+        <span style={{
+          fontFamily: 'var(--font-button)', fontSize: 'var(--fs-12)', fontWeight: 600,
+          letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--fg-muted)',
+        }}>Fabrics</span>
+        {allCodes.length > 0 && (
+          <span style={{ display: 'inline-flex', gap: 'var(--space-1)', marginLeft: 'auto' }}>
+            {bulkBtn('All on', true)}
+            {bulkBtn('All off', false)}
+          </span>
+        )}
+      </div>
       {withColours.length === 0 ? (
         <div style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
           No fabrics yet — add them in the Backend Fabric Converter.
