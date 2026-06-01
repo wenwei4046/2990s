@@ -278,6 +278,13 @@
   border-color: var(--c-burnt);
   z-index: 5;
 }
+/* A cell carrying a per-seat recliner/power upgrade sits ABOVE the seamless
+   composite overlay (z-index 1) so its wash / "P" badge / footrest stay
+   visible once the sofa goes seamless — the composite still hides the cell's
+   module art, so only the upgrade overlays show on top of the seamless body. */
+.cellRecliner {
+  z-index: 3;
+}
 /* .cellViolation removed per Loo 2026-05-12 — the red dashed border + red
    tinted background read as "error here" but the conditions (arms colliding,
    open-end) already surface through the "Resolve ..." button copy + Provisional
