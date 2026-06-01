@@ -1039,12 +1039,19 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     // sync). Bail to per-module art on the off chance the rots are mixed.
     const rot = sofaCells[0]!.rot;
     if (runCells.some((c) => c.rot !== rot)) return [];
-    // 1) A recognised bundle SHAPE with dedicated artwork (2S / 3S / L-shapes),
-    //    and the SEATS are contiguous-closed → use the rasterised PNG over the
-    //    sofa cells; any console renders its own piece beside it. If the bbox
-    //    isn't measured yet, wait one frame rather than code-drawing a shape
-    //    that has art.
-    if (sofaCells.length === 1 || analyzeSofa(sofaCells, depth).closed) {
+    // 1) A recognised MULTI-module bundle SHAPE with dedicated artwork
+    //    (2S / 3S / L-shapes), seats contiguous-closed → use the rasterised PNG
+    //    over the sofa cells; any console renders its own piece beside it. If
+    //    the bbox isn't measured yet, wait one frame rather than code-drawing a
+    //    shape that has art.
+    //
+    //    Must be ≥ 2 sofa modules: a SINGLE one-arm module (1A-LHF, 2A-LHF, …)
+    //    shares a bundle signature with the both-arm preset (1A→1S, 2A→2S), so
+    //    firing this for length 1 painted the both-arm 1S/2S art over a
+    //    one-arm seat (the "single 1A shows two arms" bug). A lone module
+    //    always renders correctly from its own per-module art instead, and a
+    //    1A + Console run now reaches the code-drawn path below so it links.
+    if (sofaCells.length >= 2 && analyzeSofa(sofaCells, depth).closed) {
       const bundle = g.bundle ?? detectBundle(sofaCells.map((c) => c.moduleId));
       const bbSofa = cellsBbox(displayCells.filter((c) => c.id != null && sofaIds.has(c.id)), depth);
       if (bundle && bbSofa) {
