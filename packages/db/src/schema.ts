@@ -1749,6 +1749,7 @@ export const mfgProducts = pgTable('mfg_products', {
   basePriceSen:           integer('base_price_sen'),              // PRICE 2 (default) — COST (computeMfgLineCost)
   price1Sen:              integer('price1_sen'),                  // PRICE 1 (cheaper tier) — COST
   sellPriceSen:           integer('sell_price_sen'),              // SELLING price (POS customer-facing). 0109; backfilled = base_price_sen. Master Account edits this (Phase 2).
+  pwpPriceSen:            integer('pwp_price_sen').notNull().default(0), // PWP (换购) SELLING base price — migration 0128. Used INSTEAD of sell_price_sen when this line is a valid PWP reward (fabric Δ still stacks on top). 0 = no PWP price set. Sofa column reserved/unused. Cost path never reads it.
   posActive:              boolean('pos_active').notNull().default(true), // 0111 (D5): selling-only POS catalog visibility. Master Account writes; POS catalog read filters. SEPARATE from `status` (cost/PO).
   includedAddons:         jsonb('included_addons').notNull().default([]), // 0113 (D7): permanent free gifts ({addonId, qty}[]). Master Account sets; Configurator renders "× N INCLUDED". DISPLAY-ONLY — no inventory/cost deduction.
   productionTimeMinutes:  integer('production_time_minutes').notNull().default(0),
@@ -1819,6 +1820,39 @@ export const sofaComboPricing = pgTable('sofa_combo_pricing', {
     .on(t.baseModel, t.tier, t.customerId, t.supplierId, t.effectiveFrom, t.createdAt),
   idxSupplier: index('idx_sofa_combo_pricing_supplier')
     .on(t.supplierId),
+}));
+
+/* ─────────────────────────── pwp_rules ─────────────────────────────────
+   Purchase-with-purchase (换购优惠), migration 0128 (Chairman 2026-06-02).
+   A global, top-level rule: buying a TRIGGER (a specified Mattress model)
+   unlocks buying a REWARD (a specified Bed Frame model) at its PWP price.
+   allowance = qty_per_trigger × (units of eligible trigger lines in the
+   order). The pure `resolvePwp` (packages/shared/src/pwp.ts), shared by POS +
+   server, decides which reward lines get the PWP price; the server then uses
+   mfg_products.pwp_price_sen as that line's selling base (fabric Δ still
+   stacks on top) and drift-rejects a forged claim. POS-SELLING only — cost
+   untouched. Model id arrays hold product_models.id (uuid as text); [] = the
+   whole category. Generic Category→Category; only MATTRESS→BEDFRAME at launch.
+   No effective-dating: rules carry only an `active` flag (the PWP price is
+   snapshotted on the order line). See migration 0128 for RLS + CHECKs.
+   ──────────────────────────────────────────────────────────────────────── */
+
+export const pwpRules = pgTable('pwp_rules', {
+  id:                      uuid('id').primaryKey().defaultRandom(),
+  triggerCategory:         mfgProductCategory('trigger_category').notNull(),
+  triggerEligibleModelIds: jsonb('trigger_eligible_model_ids').$type<string[]>().notNull().default([]), // product_models.id[]; [] = all trigger-category models
+  rewardCategory:          mfgProductCategory('reward_category').notNull(),
+  eligibleRewardModelIds:  jsonb('eligible_reward_model_ids').$type<string[]>().notNull().default([]),  // product_models.id[]; [] = all reward-category models
+  qtyPerTrigger:           integer('qty_per_trigger').notNull().default(1),
+  active:                  boolean('active').notNull().default(true),
+  createdAt:               timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:               timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:               uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+}, (t) => ({
+  // At most one active rule per (trigger, reward) category pair (A5).
+  uniqActivePair: uniqueIndex('pwp_rules_one_active_per_pair')
+    .on(t.triggerCategory, t.rewardCategory)
+    .where(sql`active`),
 }));
 
 /* ─────────────────────────── sofa_quick_picks ──────────────────────────

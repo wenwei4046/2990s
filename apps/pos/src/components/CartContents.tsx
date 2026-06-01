@@ -192,6 +192,11 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit }: {
     <div className={styles.lineMain}>
       <div className={styles.lineName}>{line.config.productName}</div>
       <div className={styles.lineSummary}>{cartSummary(line.config)}</div>
+      {'pwp' in line.config && line.config.pwp && (
+        <div className={styles.lineSummary}>
+          PWP price{'pwpTriggerLabel' in line.config && line.config.pwpTriggerLabel ? ` · 换购自 ${line.config.pwpTriggerLabel}` : ''}
+        </div>
+      )}
     </div>
     <div className={styles.qtyBox}>
       <button

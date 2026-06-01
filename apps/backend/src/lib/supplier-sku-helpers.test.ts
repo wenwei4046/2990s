@@ -12,6 +12,7 @@ const sku = (over: Partial<MfgProductRow> & Pick<MfgProductRow, 'code' | 'catego
   size_label: null,
   base_price_sen: null,
   price1_sen: null,
+  pwp_price_sen: null,
   unit_m3_milli: 0,
   status: 'ACTIVE',
   sku_code: null,

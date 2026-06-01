@@ -42,6 +42,7 @@ import {
   type FabricTier,
   type FabricTierAddonConfig,
 } from '@2990s/shared/fabric-tier-addon';
+import { type PwpRule } from '@2990s/shared/pwp';
 
 export type MfgItemVariants = {
   fabricCode?:    string | null;
@@ -58,6 +59,10 @@ export type MfgItemVariants = {
   specials?:      string[] | string | null;
   /** Aliases (some POS clients send `special` instead). */
   special?:       string[] | string | null;
+  /** PWP (换购, migration 0128) — the salesperson toggled "use PWP price" on this
+   *  reward line. The route's order-level resolvePwp validates it; only a granted
+   *  line actually gets the PWP base. */
+  pwp?:           boolean | null;
 };
 
 export type MfgItemForRecompute = {
@@ -117,6 +122,14 @@ export type ProductRowLite = {
    *  backfilled = base_price_sen). The authoritative customer-facing price the
    *  D4 drift gate validates a client submission against (non-sofa lines). */
   sell_price_sen:     number | null;
+  /** PWP (换购) selling base price (migration 0128). When the order-level PWP
+   *  resolution grants this line (passed in as `pwpBaseSen`), its selling base
+   *  is this instead of sell_price_sen — fabric Δ still stacks on top. Optional:
+   *  the loader always selects it; legacy/test snapshots may omit it. */
+  pwp_price_sen?:     number | null;
+  /** product_models.id — the route's resolvePwp matches this against a rule's
+   *  eligible model lists. Optional for the same reason as pwp_price_sen. */
+  model_id?:          string | null;
 };
 
 const toMfgCategory = (group: string, productCategory: string): MfgPricingProduct['category'] => {
@@ -161,6 +174,10 @@ export function recomputeFromSnapshot(
   sofaModulePrices: SofaModulePriceSen | null = null,
   sellingFabricTiers: { sofaTier: FabricTier | null; bedframeTier: FabricTier | null } | null = null,
   fabricAddonConfig: FabricTierAddonConfig | null = null,
+  /** PWP (换购) base price (sen) for this line when the order-level resolution
+   *  (shared resolvePwp, in the route) granted it. null/0 → normal selling base
+   *  (no change). Non-sofa only; fabric Δ still stacks on top. Migration 0128. */
+  pwpBaseSen: number | null = null,
 ): RecomputedLine {
   const category = toMfgCategory(item.itemGroup, product?.category ?? '');
   const variants = item.variants ?? {};
@@ -257,8 +274,19 @@ export function recomputeFromSnapshot(
          couldn't resolve it client-side) → fill the authoritative price, no
          drift (driftThresholdExceeded returns false for client 0 vs server>0). */
   const sellBaseSen = Math.max(0, Math.round(Number(product?.sell_price_sen ?? 0)));
-  const authoritativeSellingSen = sellBaseSen + breakdown.unitPriceSen;
-  const hasAuthoritativeSelling = category !== 'SOFA' && sellBaseSen > 0;
+  /* PWP (换购, migration 0128) — when the route's order-level resolution granted
+     this line, charge the per-SKU pwp_price_sen instead of sell_price_sen. The
+     route only passes pwpBaseSen for a validated reward line (qualifying trigger
+     present, eligible model, within allowance), so a forged claim never reaches
+     here as a real grant → the line reprices at full sell_price_sen → drift. Sofa
+     is excluded (it prices via the module path below). Selling-only; cost path
+     untouched. Default data (no grant / pwp 0) → effectiveBaseSen = sellBaseSen. */
+  const pwpBase = (pwpBaseSen != null && pwpBaseSen > 0 && category !== 'SOFA')
+    ? Math.round(pwpBaseSen)
+    : null;
+  const effectiveBaseSen = pwpBase ?? sellBaseSen;
+  const authoritativeSellingSen = effectiveBaseSen + breakdown.unitPriceSen;
+  const hasAuthoritativeSelling = category !== 'SOFA' && effectiveBaseSen > 0;
 
   /* SOFA-SELLING-PLAN (Chairman 2026-05-31) — a configurator sofa arrives as
      ONE line carrying variants.cells + variants.depth. Recompute its
@@ -350,7 +378,7 @@ export async function loadProductByCode(sb: any, code: string): Promise<ProductR
   if (!code) return null;
   const { data } = await sb
     .from('mfg_products')
-    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, base_model')
+    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, pwp_price_sen, model_id, base_model')
     .eq('code', code)
     .maybeSingle();
   if (!data) return null;
@@ -477,6 +505,24 @@ export async function loadFabricTierAddonConfig(sb: any): Promise<FabricTierAddo
     bedframeTier2Delta: d?.bedframe_tier2_delta ?? 0,
     bedframeTier3Delta: d?.bedframe_tier3_delta ?? 0,
   };
+}
+
+/** Load the active PWP (换购) rules (migration 0128). Missing / none → []. The
+ *  route feeds these + the order's lines to the shared `resolvePwp` to decide
+ *  which reward lines get the PWP price. */
+export async function loadPwpRules(sb: any): Promise<PwpRule[]> {
+  const { data } = await sb
+    .from('pwp_rules')
+    .select('trigger_category, trigger_eligible_model_ids, reward_category, eligible_reward_model_ids, qty_per_trigger')
+    .eq('active', true);
+  if (!data) return [];
+  return (data as Array<Record<string, unknown>>).map((r) => ({
+    triggerCategory:         String(r.trigger_category ?? ''),
+    triggerEligibleModelIds: Array.isArray(r.trigger_eligible_model_ids) ? (r.trigger_eligible_model_ids as unknown[]).map(String) : [],
+    rewardCategory:          String(r.reward_category ?? ''),
+    eligibleRewardModelIds:  Array.isArray(r.eligible_reward_model_ids) ? (r.eligible_reward_model_ids as unknown[]).map(String) : [],
+    qtyPerTrigger:           Number(r.qty_per_trigger) || 1,
+  }));
 }
 
 /** End-to-end: given an item draft, load product + fabric + config and

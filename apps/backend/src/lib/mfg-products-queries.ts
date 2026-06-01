@@ -82,6 +82,7 @@ export type MfgProductRow = {
   size_label: string | null;
   base_price_sen: number | null;
   price1_sen: number | null;
+  pwp_price_sen: number | null;    // PWP (换购) SELLING base price (0128)
   unit_m3_milli: number;
   status: 'ACTIVE' | 'INACTIVE';
   sku_code: string | null;

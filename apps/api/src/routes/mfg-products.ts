@@ -48,7 +48,7 @@ async function requireRole(c: AppContext, allowed: Set<string>): Promise<{ ok: t
 }
 
 // Allowed values for the `field` column on master_price_history.
-const PRICE_FIELDS = new Set(['base_price_sen', 'price1_sen', 'cost_price_sen', 'sell_price_sen']);
+const PRICE_FIELDS = new Set(['base_price_sen', 'price1_sen', 'cost_price_sen', 'sell_price_sen', 'pwp_price_sen']);
 
 // ── GET / ──────────────────────────────────────────────────────────────
 mfgProducts.get('/', async (c) => {
@@ -63,7 +63,7 @@ mfgProducts.get('/', async (c) => {
   let q = supabase
     .from('mfg_products')
     .select(
-      'id, code, name, category, description, base_model, size_code, size_label, base_price_sen, price1_sen, sell_price_sen, ' +
+      'id, code, name, category, description, base_model, size_code, size_label, base_price_sen, price1_sen, sell_price_sen, pwp_price_sen, ' +
         'unit_m3_milli, status, pos_active, included_addons, sku_code, model_id, ' +
         'branding, sub_assemblies, pieces, seat_height_prices, default_variants, updated_at, ' +
         // Commander 2026-05-29 — surface the Model's allowed_options so the SO
@@ -303,6 +303,8 @@ mfgProducts.patch('/:id', async (c) => {
     price1Sen?: number | null;
     costPriceSen?: number | null;
     sellPriceSen?: number | null;
+    /** PWP (换购) SELLING base price (migration 0128). Selling-side, like sellPriceSen. */
+    pwpPriceSen?: number | null;
     notes?: string;
     defaultVariants?: unknown;
     subAssemblies?: unknown;
@@ -336,7 +338,7 @@ mfgProducts.patch('/:id', async (c) => {
 
   const { data: current, error: loadErr } = await supabase
     .from('mfg_products')
-    .select('code, base_price_sen, price1_sen, cost_price_sen, sell_price_sen, default_variants, seat_height_prices')
+    .select('code, base_price_sen, price1_sen, cost_price_sen, sell_price_sen, pwp_price_sen, default_variants, seat_height_prices')
     .eq('id', id)
     .maybeSingle();
   if (loadErr) return c.json({ error: 'load_failed', reason: loadErr.message }, 500);
@@ -356,6 +358,11 @@ mfgProducts.patch('/:id', async (c) => {
   if (body.sellPriceSen !== undefined && body.sellPriceSen !== current.sell_price_sen) {
     updates.sell_price_sen = body.sellPriceSen;
     priceChanges.push({ field: 'sell_price_sen', oldValueSen: current.sell_price_sen, newValueSen: body.sellPriceSen });
+  }
+  // PWP (换购) selling base price (migration 0128) — selling-side, audited like the others.
+  if (body.pwpPriceSen !== undefined && body.pwpPriceSen !== current.pwp_price_sen) {
+    updates.pwp_price_sen = body.pwpPriceSen;
+    priceChanges.push({ field: 'pwp_price_sen', oldValueSen: current.pwp_price_sen, newValueSen: body.pwpPriceSen });
   }
   if (body.costPriceSen !== undefined && body.costPriceSen !== current.cost_price_sen) {
     updates.cost_price_sen = body.costPriceSen;

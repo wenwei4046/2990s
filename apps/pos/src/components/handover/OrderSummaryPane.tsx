@@ -79,6 +79,11 @@ const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: For
               {'fabricTierDelta' in l.config && (l.config.fabricTierDelta ?? 0) > 0 && (
                 <div className={styles.itemDetail}>Fabric upgrade · +{fmtRM((l.config.fabricTierDelta ?? 0) * l.qty)}</div>
               )}
+              {'pwp' in l.config && l.config.pwp && (
+                <div className={styles.itemDetail}>
+                  PWP price{'pwpTriggerLabel' in l.config && l.config.pwpTriggerLabel ? ` · 换购自 ${l.config.pwpTriggerLabel}` : ''}
+                </div>
+              )}
             </div>
             <div className={styles.itemPrice}>
               <span className={styles.itemPriceUnit}>RM</span>
