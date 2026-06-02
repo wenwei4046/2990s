@@ -150,7 +150,15 @@ pos.post('/verify-pin', supabaseAuth, async (c) => {
   if (error) {
     return c.json({ error: 'fetch_failed', detail: error.message }, 500);
   }
-  const verifiable = staff && staff.active && staff.role === 'sales' && staff.pin_hash;
+  /* The My Orders gate just re-confirms the CURRENTLY logged-in staff (any role)
+     before revealing customer details on a shared tablet — so it is role-
+     agnostic: any active staff with a PIN set can re-verify. (Owner 2026-06-03 —
+     admins log in by email+password but also carry a PIN now, so they were
+     wrongly blocked here with `staff_not_verifiable` while sales passed.) This
+     is intentionally NOT the same rule as `/pin-login` above, which stays
+     sales-only because it ISSUES a session — admins must still use email +
+     password to sign in, never a PIN. */
+  const verifiable = staff && staff.active && staff.pin_hash;
   if (!verifiable) {
     return c.json({ error: 'staff_not_verifiable' }, 401);
   }
