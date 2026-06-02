@@ -18,6 +18,8 @@ import {
   isAccessoryModule,
   summarizeSofaCells,
   findDuplicateCombo,
+  matchComboSubset,
+  comboChargedPrices,
   type Bbox,
   type Cell,
   type Depth,
@@ -25,6 +27,7 @@ import {
   type SofaModuleSpec,
   type SofaProductPricing,
 } from '@2990s/shared';
+import { validatePwpCode, useMyReservedPwpCodes } from '../lib/products/pwp-queries';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
 import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useCreateSofaCombo, useCreateSofaQuickPick, useSofaCombos, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
 import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
@@ -814,7 +817,83 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     () => groups.map((g) => ({ group: g, ...analyzeSofa(g, depth) })),
     [groups, depth],
   );
-  const priceResult = useMemo(() => computeSofaPrice(cells, depth, pricing), [cells, depth, pricing]);
+  /* PWP Code Voucher (Phase 2) — cross-order sofa redemption. The salesperson
+     enters a voucher code earned on a prior order; if the current build matches
+     one of that code's reward combos, the matched combo is charged its PWP price
+     (server re-validates + marks the code USED at Confirm). Gated: with no code
+     applied, effectivePricing === pricing → zero change to the normal builder. */
+  const [pwpInput, setPwpInput] = useState('');
+  const [pwpCode, setPwpCode] = useState<string | null>(null);
+  const [pwpComboIds, setPwpComboIds] = useState<string[]>([]);
+  const [pwpErr, setPwpErr] = useState<string | null>(null);
+  const [pwpChecking, setPwpChecking] = useState(false);
+  const [useSameCartPwp, setUseSameCartPwp] = useState(false);
+  const cartLines = useCart((s) => s.lines);
+  const reservedPwpQ = useMyReservedPwpCodes();
+  const builtModuleCodes = useMemo(() => cells.map((c) => c.moduleId).filter(Boolean), [cells]);
+  const builtSig = builtModuleCodes.join(',');
+  // A build change invalidates any applied grant + the same-cart toggle.
+  useEffect(() => { setPwpCode(null); setPwpComboIds([]); setPwpErr(null); setUseSameCartPwp(false); }, [builtSig]);
+
+  // Combo ids the current build matches — the reward a sofa code must name.
+  const matchedComboIds = useMemo(
+    () => (pricing.combos ?? []).filter((c) => matchComboSubset(builtModuleCodes, c.modules) != null).map((c) => c.id),
+    [pricing.combos, builtModuleCodes],
+  );
+  // Same-cart: a RESERVED sofa code in THIS cart eligible for one of the build's
+  // matched combos, not already applied to another line. Auto-applied by the toggle.
+  const sameCartSofa = useMemo(() => {
+    const codes = reservedPwpQ.data ?? [];
+    const applied = new Set(
+      cartLines
+        .filter((l) => !(editingKey && l.key === editingKey))
+        .flatMap((l) => { const c = l.config as { pwpCode?: string }; return c.pwpCode ? [c.pwpCode] : []; }),
+    );
+    const matchedSet = new Set(matchedComboIds);
+    for (const rc of codes) {
+      if (!rc.cartLineKey || String(rc.rewardCategory).toUpperCase() !== 'SOFA' || applied.has(rc.code)) continue;
+      const comboId = (rc.rewardComboIds ?? []).find((id) => matchedSet.has(id));
+      if (comboId) return { code: rc.code, comboId };
+    }
+    return null;
+  }, [reservedPwpQ.data, cartLines, editingKey, matchedComboIds]);
+
+  const onToggleSameCartPwp = (on: boolean) => {
+    setUseSameCartPwp(on);
+    if (on && sameCartSofa) { setPwpCode(sameCartSofa.code); setPwpComboIds([sameCartSofa.comboId]); setPwpErr(null); setPwpInput(''); }
+    else { setPwpCode(null); setPwpComboIds([]); }
+  };
+
+  const applyPwpCode = async () => {
+    const code = pwpInput.trim().toUpperCase();
+    if (!code) return;
+    setPwpChecking(true); setPwpErr(null);
+    try {
+      const matched = (pricing.combos ?? []).filter((c) => matchComboSubset(builtModuleCodes, c.modules) != null);
+      if (matched.length === 0) { setPwpCode(null); setPwpComboIds([]); setPwpErr('This build does not match any sofa combo.'); return; }
+      let okCombo: string | null = null;
+      for (const c of matched) {
+        const res = await validatePwpCode({ code, rewardCategory: 'SOFA', rewardComboId: c.id });
+        if (res.valid) { okCombo = c.id; break; }
+      }
+      if (okCombo) { setPwpCode(code); setPwpComboIds([okCombo]); }
+      else { setPwpCode(null); setPwpComboIds([]); setPwpErr('This PWP code cannot be applied to this build.'); }
+    } catch { setPwpCode(null); setPwpComboIds([]); setPwpErr('Could not validate the code.'); }
+    finally { setPwpChecking(false); }
+  };
+
+  const effectivePricing = useMemo<SofaProductPricing>(() => {
+    if (pwpComboIds.length === 0) return pricing;
+    const set = new Set(pwpComboIds);
+    return {
+      ...pricing,
+      combos: (pricing.combos ?? []).map((c) =>
+        set.has(c.id) ? { ...c, pricesByHeight: comboChargedPrices(c.pwpPricesByHeight, c.pricesByHeight) } : c,
+      ),
+    };
+  }, [pricing, pwpComboIds]);
+
+  const priceResult = useMemo(() => computeSofaPrice(cells, depth, effectivePricing), [cells, depth, effectivePricing]);
 
   // Eagerly load bbox for any matched-bundle composite PNG so the overlay
   // image scales correctly the moment it appears (avoids a fall-back-to-cells
@@ -1041,6 +1120,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // rule here propagates to existing cart items too.
       const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}` : '';
       const summary = summarizeSofaCells(groupCells, depth, pricing.seatUpgradeLabel) + fabricSuffix;
+      // PWP (换购, Phase 2) — flag the line whose build matches the applied reward
+      // combo; its `total` already reflects the combo's PWP price (effectivePricing).
+      const pwpCombo = pwpCode ? (pricing.combos ?? []).find((c) => pwpComboIds.includes(c.id)) : undefined;
+      const isPwpGroup = !!pwpCombo && matchComboSubset(groupCells.map((c) => c.moduleId), pwpCombo.modules) != null;
       const snapshot: SofaConfigSnapshot = {
         kind: 'sofa',
         productId,
@@ -1056,6 +1139,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         colourLabel: fabricSel?.colourLabel,
         colourHex: fabricSel?.colourHex ?? undefined,
         fabricTierDelta: sofaFabricDelta,
+        ...(isPwpGroup && pwpCode ? { pwp: true, pwpCode } : {}),
         total: g.finalPrice + sofaFabricDelta,
         summary,
       };
@@ -1807,6 +1891,38 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 </span>
               );
             })()}
+            {/* PWP (换购, Phase 2). Same-cart: a reserved sofa code in this cart →
+                a toggle. Cross-order: enter a voucher earned on a prior order. */}
+            {cells.length > 0 && allClosed && (
+              pwpCode ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 4, fontSize: 'var(--fs-12)' }}>
+                  <span style={{ fontWeight: 600 }}>PWP code {pwpCode} applied</span>
+                  <button type="button" onClick={() => { setPwpCode(null); setPwpComboIds([]); setPwpInput(''); setPwpErr(null); setUseSameCartPwp(false); }}
+                    style={{ background: 'transparent', border: 'none', textDecoration: 'underline', cursor: 'pointer', color: 'var(--fg-muted)' }}>
+                    remove
+                  </button>
+                </span>
+              ) : sameCartSofa ? (
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 'var(--fs-12)', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={useSameCartPwp} onChange={(e) => onToggleSameCartPwp(e.target.checked)} />
+                  <span style={{ fontWeight: 600 }}>Use PWP price (换购)</span>
+                </label>
+              ) : (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                  <input
+                    type="text"
+                    value={pwpInput}
+                    onChange={(e) => { setPwpInput(e.target.value); setPwpErr(null); }}
+                    placeholder="Insert PWP Code"
+                    style={{ width: 150, textTransform: 'uppercase', fontSize: 'var(--fs-12)', padding: '4px 8px', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)' }}
+                  />
+                  <Button variant="ghost" onClick={() => void applyPwpCode()} disabled={pwpChecking || !pwpInput.trim()}>
+                    {pwpChecking ? 'Checking…' : 'Apply'}
+                  </Button>
+                  {pwpErr && <span style={{ fontSize: 'var(--fs-12)', color: 'var(--c-danger, #B4321A)' }}>{pwpErr}</span>}
+                </span>
+              )
+            )}
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {/* Commander 2026-05-28: save the current layout as a Quick Pick

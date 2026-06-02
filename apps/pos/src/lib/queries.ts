@@ -1438,6 +1438,9 @@ export interface SofaComboRow {
   /** SELLING prices per height (Master Admin). The engine charges these merged
    *  over cost via comboChargedPrices — `pricesByHeight` above is the COST side. */
   sellingPricesByHeight: Record<string, number | null>;
+  /** PWP (换购) selling price per height (Phase 2). Charged instead of selling
+   *  when a sofa-reward line redeems a valid PWP code. {} = unset. POS-only. */
+  pwpPricesByHeight?: Record<string, number | null>;
   label: string | null;
   effectiveFrom: string;
   deletedAt: string | null;
@@ -1504,6 +1507,8 @@ export const useCreateSofaCombo = () => {
       pricesByHeight?: Record<string, number | null>;  // centi (COST)
       /** SELLING per height (centi) — what the customer pays (Master Admin). */
       sellingPricesByHeight?: Record<string, number | null>;  // centi (SELLING)
+      /** PWP (换购) selling per height (centi) — Phase 2. {} = unset. */
+      pwpPricesByHeight?: Record<string, number | null>;
       label?: string | null;
       effectiveFrom: string;   // 'YYYY-MM-DD'
       notes?: string | null;
@@ -1526,6 +1531,7 @@ export const useCreateSofaCombo = () => {
           // Omit pricesByHeight when not set so the server auto-detects COST.
           ...(body.pricesByHeight !== undefined ? { pricesByHeight: body.pricesByHeight } : {}),
           ...(body.sellingPricesByHeight !== undefined ? { sellingPricesByHeight: body.sellingPricesByHeight } : {}),
+          ...(body.pwpPricesByHeight !== undefined ? { pwpPricesByHeight: body.pwpPricesByHeight } : {}),
           label: body.label ?? null,
           effectiveFrom: body.effectiveFrom,
           notes: body.notes ?? null,

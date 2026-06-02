@@ -31,6 +31,7 @@ import {
 } from '@2990s/shared/mfg-pricing';
 import {
   computeSofaSellingSen,
+  comboChargedPrices,
   sofaModulePricesFromSkus,
   sofaModuleSellingPricesFromSkus,
   type Cell,
@@ -178,6 +179,11 @@ export function recomputeFromSnapshot(
    *  (shared resolvePwp, in the route) granted it. null/0 → normal selling base
    *  (no change). Non-sofa only; fabric Δ still stacks on top. Migration 0128. */
   pwpBaseSen: number | null = null,
+  /** PWP (换购) SOFA grant (Phase 2). The order-level consume validated this
+   *  sofa-reward line's code and passes the code's reward combo ids; the sofa
+   *  branch then charges ONLY those combos' pwp_prices_by_height (others stay at
+   *  the normal selling price). null/[] → no change. SOFA only. */
+  pwpSofaComboIds: string[] | null = null,
 ): RecomputedLine {
   const category = toMfgCategory(item.itemGroup, product?.category ?? '');
   const variants = item.variants ?? {};
@@ -327,7 +333,19 @@ export function recomputeFromSnapshot(
     const lineCombos = (sofaCombos ?? []).filter(
       (c) => !product?.base_model || c.baseModel === product.base_model,
     );
-    const sofaSellingSen = computeSofaSellingSen(sofaCells as Cell[], sofaDepth, sofaModulePrices, lineCombos);
+    /* PWP (换购) SOFA reward (Phase 2) — when the order-level consume granted this
+       sofa line, charge ONLY the code's reward combos at pwp_prices_by_height
+       (merged over their normal selling-charged price, so a height without a PWP
+       price falls back to selling). Same matching engine + cheaper-guard, so a
+       PWP price that beats à-la-carte applies; default {} → no override. Combos
+       NOT in the grant list keep their normal selling price. */
+    const pwpComboSet = pwpSofaComboIds && pwpSofaComboIds.length > 0 ? new Set(pwpSofaComboIds) : null;
+    const effectiveCombos = pwpComboSet
+      ? lineCombos.map((c) => (pwpComboSet.has(c.id)
+          ? { ...c, pricesByHeight: comboChargedPrices(c.pwpPricesByHeight, c.pricesByHeight) }
+          : c))
+      : lineCombos;
+    const sofaSellingSen = computeSofaSellingSen(sofaCells as Cell[], sofaDepth, sofaModulePrices, effectiveCombos);
     if (sofaSellingSen > 0) {
       // Server has authoritative per-Model module SELLING prices for this build,
       // + the SELLING fabric-tier Δ (migration 0124); the POS adds the same Δ so

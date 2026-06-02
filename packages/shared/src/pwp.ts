@@ -28,6 +28,12 @@ export interface PwpRule {
   eligibleRewardModelIds: string[];
   /** Reward units unlocked per qualifying trigger unit (≥ 1). */
   qtyPerTrigger: number;
+  /** SOFA trigger: sofa_combo_pricing.id[] whose build qualifies as a trigger
+   *  (Phase 2). Sofa is modular (no Model) so it's matched by Combo. Mattress /
+   *  bedframe rules leave this empty and use the model-id lists above. */
+  triggerComboIds?: string[];
+  /** SOFA reward: sofa_combo_pricing.id[] redeemable at the combo PWP price. */
+  rewardComboIds?: string[];
 }
 
 export interface PwpLineInput {

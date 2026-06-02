@@ -21,8 +21,10 @@ const CATEGORY = z.enum(['SOFA', 'BEDFRAME', 'ACCESSORY', 'MATTRESS', 'SERVICE']
 const createSchema = z.object({
   triggerCategory:         CATEGORY,
   triggerEligibleModelIds: z.array(z.string()).default([]),
+  triggerComboIds:         z.array(z.string()).default([]),  // SOFA trigger (Phase 2)
   rewardCategory:          CATEGORY,
   eligibleRewardModelIds:  z.array(z.string()).default([]),
+  rewardComboIds:          z.array(z.string()).default([]),  // SOFA reward (Phase 2)
   qtyPerTrigger:           z.number().int().min(1).default(1),
   active:                  z.boolean().default(true),
 });
@@ -32,8 +34,10 @@ type RuleRow = {
   id: string;
   trigger_category: string;
   trigger_eligible_model_ids: string[] | null;
+  trigger_combo_ids: string[] | null;
   reward_category: string;
   eligible_reward_model_ids: string[] | null;
+  reward_combo_ids: string[] | null;
   qty_per_trigger: number;
   active: boolean;
   created_at: string;
@@ -44,8 +48,10 @@ const toApi = (r: RuleRow) => ({
   id:                      r.id,
   triggerCategory:         r.trigger_category,
   triggerEligibleModelIds: r.trigger_eligible_model_ids ?? [],
+  triggerComboIds:         r.trigger_combo_ids ?? [],
   rewardCategory:          r.reward_category,
   eligibleRewardModelIds:  r.eligible_reward_model_ids ?? [],
+  rewardComboIds:          r.reward_combo_ids ?? [],
   qtyPerTrigger:           r.qty_per_trigger,
   active:                  r.active,
   createdAt:               r.created_at,
@@ -53,7 +59,7 @@ const toApi = (r: RuleRow) => ({
 });
 
 const SELECT =
-  'id, trigger_category, trigger_eligible_model_ids, reward_category, eligible_reward_model_ids, qty_per_trigger, active, created_at, updated_at';
+  'id, trigger_category, trigger_eligible_model_ids, trigger_combo_ids, reward_category, eligible_reward_model_ids, reward_combo_ids, qty_per_trigger, active, created_at, updated_at';
 
 // Editors-only guard (server check; RLS is defence-in-depth, migration 0128).
 async function requireWrite(c: AppCtx) {
@@ -95,8 +101,10 @@ pwpRules.post('/', async (c) => {
     .insert({
       trigger_category:           parsed.data.triggerCategory,
       trigger_eligible_model_ids: parsed.data.triggerEligibleModelIds,
+      trigger_combo_ids:          parsed.data.triggerComboIds,
       reward_category:            parsed.data.rewardCategory,
       eligible_reward_model_ids:  parsed.data.eligibleRewardModelIds,
+      reward_combo_ids:           parsed.data.rewardComboIds,
       qty_per_trigger:            parsed.data.qtyPerTrigger,
       active:                     parsed.data.active,
       created_by:                 gate.userId,
@@ -125,8 +133,10 @@ pwpRules.patch('/:id', async (c) => {
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (parsed.data.triggerCategory         !== undefined) patch.trigger_category           = parsed.data.triggerCategory;
   if (parsed.data.triggerEligibleModelIds !== undefined) patch.trigger_eligible_model_ids = parsed.data.triggerEligibleModelIds;
+  if (parsed.data.triggerComboIds         !== undefined) patch.trigger_combo_ids          = parsed.data.triggerComboIds;
   if (parsed.data.rewardCategory          !== undefined) patch.reward_category            = parsed.data.rewardCategory;
   if (parsed.data.eligibleRewardModelIds  !== undefined) patch.eligible_reward_model_ids  = parsed.data.eligibleRewardModelIds;
+  if (parsed.data.rewardComboIds          !== undefined) patch.reward_combo_ids           = parsed.data.rewardComboIds;
   if (parsed.data.qtyPerTrigger           !== undefined) patch.qty_per_trigger            = parsed.data.qtyPerTrigger;
   if (parsed.data.active                  !== undefined) patch.active                     = parsed.data.active;
 

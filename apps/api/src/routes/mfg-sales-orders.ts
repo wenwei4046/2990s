@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { normalizePhone } from '@2990s/shared/phone';
 import {
   pickComboMatch, spreadComboTotal, splitSofaCode, sofaHeightKey,
-  buildVariantSummary, comboChargedPrices, type SofaComboRow, type SofaPriceTier,
+  buildVariantSummary, comboChargedPrices, matchComboSubset, type SofaComboRow, type SofaPriceTier,
 } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
@@ -115,7 +115,7 @@ async function isPosTabletCaller(sb: any, userId: string | null | undefined): Pr
 async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
   const { data } = await sb
     .from('sofa_combo_pricing')
-    .select('id, base_model, modules, tier, customer_id, prices_by_height, selling_prices_by_height, label, effective_from, deleted_at')
+    .select('id, base_model, modules, tier, customer_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, effective_from, deleted_at')
     .is('deleted_at', null)
     .is('customer_id', null)   // 2990 B2C — default-scope rows only
     .is('supplier_id', null);  // sales-side only — never auto-price a SO from a supplier's purchasing combos
@@ -123,12 +123,16 @@ async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
     id: string; base_model: string; modules: string[][]; tier: SofaPriceTier | null;
     customer_id: string | null; prices_by_height: Record<string, number | null>;
     selling_prices_by_height: Record<string, number | null>;
+    pwp_prices_by_height: Record<string, number | null> | null;
     label: string | null; effective_from: string; deleted_at: string | null;
   }>).map((r) => ({
     id: r.id, baseModel: r.base_model, modules: r.modules ?? [],
     tier: r.tier, customerId: r.customer_id,
     // Combo cost/sell split — the engine charges SELLING merged over cost.
     pricesByHeight: comboChargedPrices(r.selling_prices_by_height, r.prices_by_height),
+    // PWP (换购) selling price per height (Phase 2) — used INSTEAD of the above
+    // only when a sofa-reward line redeems a valid PWP code (see recompute).
+    pwpPricesByHeight: r.pwp_prices_by_height ?? {},
     label: r.label, effectiveFrom: r.effective_from, deletedAt: r.deleted_at,
   }));
 }
@@ -947,7 +951,8 @@ mfgSalesOrders.post('/', async (c) => {
      change. NOTE: applied on the create path; backend per-line PATCH/override
      re-prices at full sell price (no order context) — re-create to re-apply. */
   const orderCustomerId = (body.customerId as string | null | undefined) ?? null;
-  const pwpBaseByIdx = new Map<number, number>();
+  const pwpBaseByIdx = new Map<number, number>();            // non-sofa idx → pwp_price_sen
+  const pwpSofaByIdx = new Map<number, string[]>();          // sofa idx → granted reward combo ids
   const claimedPwpCodes: Array<{ code: string; prevStatus: string }> = [];
   for (let idx = 0; idx < items.length; idx++) {
     const it = items[idx];
@@ -955,22 +960,44 @@ mfgSalesOrders.post('/', async (c) => {
     if (!code) continue;
     const product = lineProducts[idx];
     if (!product) continue;
-    const pwpPrice = Math.round(Number(product.pwp_price_sen ?? 0));
-    if (!(pwpPrice > 0)) continue;
     const { data: cRow } = await sb
       .from('pwp_codes')
-      .select('status, owner_staff_id, reward_category, eligible_reward_model_ids, customer_id, source_doc_no')
+      .select('status, owner_staff_id, reward_category, eligible_reward_model_ids, reward_combo_ids, customer_id, source_doc_no')
       .eq('code', code)
       .maybeSingle();
     if (!cRow) continue;
     const redeemable = cRow.status === 'AVAILABLE' || (cRow.status === 'RESERVED' && cRow.owner_staff_id === user.id);
     if (!redeemable) continue;
-    if (String(product.category ?? '').toUpperCase() !== String(cRow.reward_category).toUpperCase()) continue;
-    const elig = (cRow.eligible_reward_model_ids as string[] | null) ?? [];
-    const modelOk = elig.length === 0 || (product.model_id != null && elig.includes(product.model_id));
-    if (!modelOk) continue;
+    const prodCat = String(product.category ?? '').toUpperCase();
+    if (prodCat !== String(cRow.reward_category).toUpperCase()) continue;
     // Customer binding — an AVAILABLE voucher only redeems for its earner.
     if (cRow.status === 'AVAILABLE' && cRow.customer_id && orderCustomerId && cRow.customer_id !== orderCustomerId) continue;
+
+    // Eligibility — SOFA is matched by Combo (Phase 2); other categories by the
+    // reward Model + a per-SKU PWP price. A miss → not granted → the line keeps
+    // its full price → a claimed-PWP tamper drifts → 400 (the code is NOT burned).
+    let grantSofaComboIds: string[] | null = null;
+    let grantPwpPrice = 0;
+    if (prodCat === 'SOFA') {
+      const rewardComboIds = (cRow.reward_combo_ids as string[] | null) ?? [];
+      if (rewardComboIds.length === 0) continue;
+      const sofaArgs = extractSofaComboLookupArgs(String(it?.itemGroup ?? 'sofa'), (it?.variants as Record<string, unknown> | null) ?? null);
+      const built = sofaArgs?.modules ?? [];
+      if (built.length === 0) continue;
+      const candidate = cachedCombos.filter(
+        (c) => rewardComboIds.includes(c.id) && (!product.base_model || c.baseModel === product.base_model),
+      );
+      if (!candidate.some((c) => matchComboSubset(built, c.modules) != null)) continue;
+      grantSofaComboIds = rewardComboIds;
+    } else {
+      const pwpPrice = Math.round(Number(product.pwp_price_sen ?? 0));
+      if (!(pwpPrice > 0)) continue;
+      const elig = (cRow.eligible_reward_model_ids as string[] | null) ?? [];
+      const modelOk = elig.length === 0 || (product.model_id != null && elig.includes(product.model_id));
+      if (!modelOk) continue;
+      grantPwpPrice = pwpPrice;
+    }
+
     // Atomic claim — USED only if still redeemable. Preserve the original
     // source_doc_no (earning SO) for a cross-order voucher; stamp it for a
     // same-cart one.
@@ -989,7 +1016,8 @@ mfgSalesOrders.post('/', async (c) => {
       .maybeSingle();
     if (!claimed) continue;  // lost the race / already used → not granted
     claimedPwpCodes.push({ code, prevStatus: cRow.status });
-    pwpBaseByIdx.set(idx, pwpPrice);
+    if (grantSofaComboIds) pwpSofaByIdx.set(idx, grantSofaComboIds);
+    else pwpBaseByIdx.set(idx, grantPwpPrice);
   }
   /* Restore claimed codes to their prior state when the request is rejected
      after the claim (drift 400 / insert failure) so a failed order never
@@ -1030,9 +1058,11 @@ mfgSalesOrders.post('/', async (c) => {
       unitPriceCenti: Number(it.unitPriceCenti ?? 0),
       variants:       (it.variants as MfgItemForRecompute['variants']) ?? null,
     };
-    // PWP base for this line when its code was claimed (else null → normal base).
+    // PWP grant for this line when its code was claimed: a per-SKU base (non-
+    // sofa) or the reward combo ids (sofa). Else null → normal base / price.
     const pwpBaseSen = pwpBaseByIdx.get(idx) ?? null;
-    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, pwpBaseSen);
+    const pwpSofaComboIds = pwpSofaByIdx.get(idx) ?? null;
+    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, pwpBaseSen, pwpSofaComboIds);
   }));
   /* Commander 2026-05-29 (system-wide) — the SELLING unit price is now
      operator-authored on every SO line. The product price tables are COST,

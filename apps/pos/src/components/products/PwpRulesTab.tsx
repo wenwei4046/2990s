@@ -17,7 +17,9 @@
 import { useMemo, useState } from 'react';
 import { Plus, Pencil, Trash2, ArrowRight } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { buildComboLabel } from '@2990s/shared';
 import { useProductModels, type ProductModelRow } from '../../lib/products/product-models-queries';
+import { useSofaCombos, type SofaComboRule } from '../../lib/products/sofa-combos-queries';
 import {
   usePwpRules,
   useCreatePwpRule,
@@ -27,20 +29,25 @@ import {
 } from '../../lib/products/pwp-queries';
 
 type Mode = 'view' | 'add-only' | 'full';
-type Cat = 'MATTRESS' | 'BEDFRAME';
+// SOFA is matched by Combo (Phase 2); Mattress/Bedframe by Model.
+type Cat = 'MATTRESS' | 'BEDFRAME' | 'SOFA';
 
 const CATEGORIES: { value: Cat; label: string }[] = [
   { value: 'MATTRESS', label: 'Mattress' },
   { value: 'BEDFRAME', label: 'Bed Frame' },
+  { value: 'SOFA', label: 'Sofa (by Combo)' },
 ];
 
 const modelLabel = (m: ProductModelRow): string =>
   [m.branding, m.name].filter(Boolean).join(' ') || m.model_code;
 
+const comboLabel = (c: SofaComboRule): string =>
+  [c.baseModel, c.label || buildComboLabel(c.modules)].filter(Boolean).join(' · ');
+
 interface Draft {
   id?: string;
   triggerCategory: Cat;
-  triggerModelIds: string[];
+  triggerModelIds: string[];   // models (mattress/bedframe) OR combo ids (sofa)
   rewardCategory: Cat;
   rewardModelIds: string[];
   qty: number;
@@ -76,6 +83,7 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
   const rulesQ = usePwpRules();
   const mattressQ = useProductModels({ category: 'MATTRESS' });
   const bedframeQ = useProductModels({ category: 'BEDFRAME' });
+  const combosQ = useSofaCombos({ customerId: null });
   const create = useCreatePwpRule();
   const update = useUpdatePwpRule();
   const del = useDeletePwpRule();
@@ -83,20 +91,25 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const modelsFor = (cat: Cat): ProductModelRow[] =>
-    (cat === 'MATTRESS' ? mattressQ.data : bedframeQ.data) ?? [];
+  // Selectable items for a category: {id,label}. SOFA → combos; else → models.
+  const itemsFor = (cat: Cat): { id: string; label: string }[] => {
+    if (cat === 'SOFA') return (combosQ.data ?? []).map((c) => ({ id: c.id, label: comboLabel(c) }));
+    const rows = (cat === 'MATTRESS' ? mattressQ.data : bedframeQ.data) ?? [];
+    return rows.map((m) => ({ id: m.id, label: modelLabel(m) }));
+  };
   const loadingFor = (cat: Cat): boolean =>
-    cat === 'MATTRESS' ? mattressQ.isLoading : bedframeQ.isLoading;
+    cat === 'SOFA' ? combosQ.isLoading : cat === 'MATTRESS' ? mattressQ.isLoading : bedframeQ.isLoading;
 
-  // id → label across both categories, for the rule cards.
+  // id → label across models + combos, for the rule cards.
   const labelById = useMemo(() => {
     const m = new Map<string, string>();
     for (const row of [...(mattressQ.data ?? []), ...(bedframeQ.data ?? [])]) m.set(row.id, modelLabel(row));
+    for (const c of combosQ.data ?? []) m.set(c.id, comboLabel(c));
     return m;
-  }, [mattressQ.data, bedframeQ.data]);
+  }, [mattressQ.data, bedframeQ.data, combosQ.data]);
 
   const catLabel = (c: string) => CATEGORIES.find((x) => x.value === c)?.label ?? c;
-  const modelsSummary = (ids: string[], cat: string) =>
+  const itemSummary = (ids: string[], cat: string) =>
     ids.length === 0 ? `Any ${catLabel(cat)}` : ids.map((id) => labelById.get(id) ?? id).join(', ');
 
   const busy = create.isPending || update.isPending || del.isPending;
@@ -104,12 +117,15 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
   const openNew = () => { setError(null); setDraft(emptyDraft()); };
   const openEdit = (r: PwpRuleRow) => {
     setError(null);
+    const tCat = (r.triggerCategory as Cat) ?? 'MATTRESS';
+    const rCat = (r.rewardCategory as Cat) ?? 'BEDFRAME';
     setDraft({
       id: r.id,
-      triggerCategory: (r.triggerCategory as Cat) ?? 'MATTRESS',
-      triggerModelIds: r.triggerEligibleModelIds,
-      rewardCategory: (r.rewardCategory as Cat) ?? 'BEDFRAME',
-      rewardModelIds: r.eligibleRewardModelIds,
+      triggerCategory: tCat,
+      // SOFA stores combo ids; other categories store model ids.
+      triggerModelIds: tCat === 'SOFA' ? r.triggerComboIds : r.triggerEligibleModelIds,
+      rewardCategory: rCat,
+      rewardModelIds: rCat === 'SOFA' ? r.rewardComboIds : r.eligibleRewardModelIds,
       qty: r.qtyPerTrigger,
       active: r.active,
     });
@@ -122,11 +138,24 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
       setError('Ratio must unlock at least 1 reward (1 : N, N ≥ 1).');
       return;
     }
+    // A sofa side is matched by Combo — "any sofa" has no meaning (no Model), so
+    // at least one combo must be picked.
+    if (draft.triggerCategory === 'SOFA' && draft.triggerModelIds.length === 0) {
+      setError('Pick at least one trigger combo for a sofa trigger.');
+      return;
+    }
+    if (draft.rewardCategory === 'SOFA' && draft.rewardModelIds.length === 0) {
+      setError('Pick at least one reward combo for a sofa reward.');
+      return;
+    }
+    // Route the selected ids to model-vs-combo fields by category (SOFA → combos).
     const body = {
       triggerCategory: draft.triggerCategory,
-      triggerEligibleModelIds: draft.triggerModelIds,
+      triggerEligibleModelIds: draft.triggerCategory === 'SOFA' ? [] : draft.triggerModelIds,
+      triggerComboIds: draft.triggerCategory === 'SOFA' ? draft.triggerModelIds : [],
       rewardCategory: draft.rewardCategory,
-      eligibleRewardModelIds: draft.rewardModelIds,
+      eligibleRewardModelIds: draft.rewardCategory === 'SOFA' ? [] : draft.rewardModelIds,
+      rewardComboIds: draft.rewardCategory === 'SOFA' ? draft.rewardModelIds : [],
       qtyPerTrigger: draft.qty,
       active: draft.active,
     };
@@ -156,21 +185,24 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
   // ── Editor (create / edit one rule) ───────────────────────────────────────
   if (draft) {
     const ChipRow = ({ cat, selected, onToggle }: { cat: Cat; selected: string[]; onToggle: (id: string) => void }) => {
-      const models = modelsFor(cat);
-      if (loadingFor(cat)) return <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>Loading models…</div>;
-      if (models.length === 0) return <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>No {catLabel(cat)} models yet.</div>;
+      const items = itemsFor(cat);
+      const noun = cat === 'SOFA' ? 'combos' : 'models';
+      if (loadingFor(cat)) return <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>Loading {noun}…</div>;
+      if (items.length === 0) return <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>No {catLabel(cat)} {noun} yet.</div>;
       return (
         <>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-            {models.map((m) => (
-              <button key={m.id} type="button" disabled={!canEdit} onClick={() => onToggle(m.id)} style={chipStyle(selected.includes(m.id), !canEdit)}>
-                {modelLabel(m)}
+            {items.map((it) => (
+              <button key={it.id} type="button" disabled={!canEdit} onClick={() => onToggle(it.id)} style={chipStyle(selected.includes(it.id), !canEdit)}>
+                {it.label}
               </button>
             ))}
           </div>
           {selected.length === 0 && (
             <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-2)' }}>
-              Nothing selected → every {catLabel(cat)} qualifies.
+              {cat === 'SOFA'
+                ? 'Pick at least one combo — a sofa rule needs explicit combos.'
+                : `Nothing selected → every ${catLabel(cat)} qualifies.`}
             </div>
           )}
         </>
@@ -184,9 +216,6 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
             {c.label}
           </button>
         ))}
-        <span title="A sofa is its own order (can't share a cart) and sofa PWP pricing isn't wired yet." style={{ ...chipStyle(false, true), cursor: 'help', opacity: 0.5 }}>
-          Sofa (reserved)
-        </span>
       </div>
     );
 
@@ -279,10 +308,10 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
             <div key={r.id} style={{ border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', padding: 'var(--space-4)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-4)', opacity: r.active ? 1 : 0.55 }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap', fontSize: 'var(--fs-14)' }}>
-                <span style={{ fontWeight: 600 }}>{modelsSummary(r.triggerEligibleModelIds, r.triggerCategory)}</span>
+                <span style={{ fontWeight: 600 }}>{itemSummary(r.triggerCategory === 'SOFA' ? r.triggerComboIds : r.triggerEligibleModelIds, r.triggerCategory)}</span>
                 <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>({catLabel(r.triggerCategory)})</span>
                 <ArrowRight {...ICON} />
-                <span style={{ fontWeight: 600 }}>{modelsSummary(r.eligibleRewardModelIds, r.rewardCategory)}</span>
+                <span style={{ fontWeight: 600 }}>{itemSummary(r.rewardCategory === 'SOFA' ? r.rewardComboIds : r.eligibleRewardModelIds, r.rewardCategory)}</span>
                 <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>({catLabel(r.rewardCategory)})</span>
               </div>
               <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-1)' }}>

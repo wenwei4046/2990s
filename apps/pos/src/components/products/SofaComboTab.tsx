@@ -388,6 +388,16 @@ function ComposerModal({
     }
     return seed;
   });
+  // PWP (换购) selling price per height (Phase 2). Blank = no PWP price → the
+  // engine never overrides the normal price for that height.
+  const [pwpPrices, setPwpPrices] = useState<Record<string, string>>(() => {
+    const seed: Record<string, string> = {};
+    for (const h of heights) {
+      const v = editing?.pwpPricesByHeight?.[h];
+      seed[h] = v == null ? '' : (v / 100).toFixed(2);
+    }
+    return seed;
+  });
   const [notes, setNotes] = useState(editing?.notes ?? '');
 
   // Ordered positional slots (Hookka-style), each an OR-set of codes. A slot
@@ -423,11 +433,24 @@ function ComposerModal({
       }
     }
 
+    // PWP (换购) selling price per height (Phase 2). Blank → null (no PWP override).
+    const pwpPricesByHeight: Record<string, number | null> = {};
+    for (const h of heights) {
+      const raw = (pwpPrices[h] ?? '').trim();
+      if (!raw) pwpPricesByHeight[h] = null;
+      else {
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n < 0) return alert(`Bad PWP price at ${h}".`);
+        pwpPricesByHeight[h] = Math.round(n * 100);
+      }
+    }
+
     try {
       if (editing) {
         await update.mutateAsync({
           id: editing.id,
           pricesByHeight,
+          pwpPricesByHeight,
           label: label || null,
           effectiveFrom,
           notes: notes || null,
@@ -446,6 +469,7 @@ function ComposerModal({
           tier: COMBO_TIER,  // base tier — fabric tier is a separate flat add-on
           customerId: null,  // B2C: always null = applies to all customers
           pricesByHeight,
+          pwpPricesByHeight,
           label: label || null,
           effectiveFrom,
           notes: notes || null,
@@ -562,6 +586,27 @@ function ComposerModal({
                   min="0"
                   value={prices[h] ?? ''}
                   onChange={(e) => setPrices((cur) => ({ ...cur, [h]: e.target.value }))}
+                  placeholder="—"
+                  style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+            ))}
+          </div>
+        </Field>
+
+        {/* PWP (换购) price per height — Phase 2. Blank = no PWP price for that
+            height → the engine charges the normal price. POS / selling-side only. */}
+        <Field label="PWP 换购 price by seat height (RM) — blank = no PWP">
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
+            {heights.map((h) => (
+              <div key={h}>
+                <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textAlign: 'center' }}>{h}{/^\d/.test(h) ? '"' : ''}</div>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={pwpPrices[h] ?? ''}
+                  onChange={(e) => setPwpPrices((cur) => ({ ...cur, [h]: e.target.value }))}
                   placeholder="—"
                   style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
                 />

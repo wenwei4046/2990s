@@ -41,6 +41,8 @@ export type SofaComboRule = {
   tier: SofaPriceTier | null;
   customerId: string | null;
   pricesByHeight: Record<string, number | null>;
+  /** PWP (换购) selling price per height (Phase 2). {} = unset. POS-only. */
+  pwpPricesByHeight?: Record<string, number | null>;
   label: string | null;
   effectiveFrom: string;
   deletedAt: string | null;
@@ -57,6 +59,7 @@ export type NewSofaCombo = {
   tier: SofaPriceTier | null;
   customerId: string | null;
   pricesByHeight: Record<string, number | null>;
+  pwpPricesByHeight?: Record<string, number | null>;
   label?: string | null;
   effectiveFrom: string;
   notes?: string | null;
@@ -128,17 +131,21 @@ export function useUpdateSofaCombo() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
-      id, pricesByHeight, label, effectiveFrom, notes,
+      id, pricesByHeight, pwpPricesByHeight, label, effectiveFrom, notes,
     }: {
       id: string;
       pricesByHeight: Record<string, number | null>;
+      pwpPricesByHeight?: Record<string, number | null>;
       label?: string | null;
       effectiveFrom: string;
       notes?: string | null;
     }) =>
       authedFetch<SofaComboRule>(`/sofa-combos/${id}`, {
         method: 'PUT',
-        body: JSON.stringify({ pricesByHeight, label, effectiveFrom, notes }),
+        body: JSON.stringify({
+          pricesByHeight, label, effectiveFrom, notes,
+          ...(pwpPricesByHeight !== undefined ? { pwpPricesByHeight } : {}),
+        }),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sofa-combos'] });

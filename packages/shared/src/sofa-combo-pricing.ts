@@ -49,6 +49,10 @@ export interface SofaComboRow {
   tier: SofaPriceTier | null;
   customerId: string | null;
   pricesByHeight: Record<string, number | null>;
+  /** PWP (换购) selling price per height (Phase 2). When a build matches this
+   *  combo AND the line redeems a valid PWP code, the engine charges this
+   *  instead of `pricesByHeight`. Optional: only the selling path carries it. */
+  pwpPricesByHeight?: Record<string, number | null>;
   label?: string | null;
   effectiveFrom: string;        // ISO date 'YYYY-MM-DD'
   deletedAt?: string | null;
