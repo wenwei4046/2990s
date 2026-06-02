@@ -8,6 +8,7 @@ import {
   pickComboMatch, spreadComboTotal, splitSofaCode, sofaHeightKey,
   buildVariantSummary, comboChargedPrices, matchComboSubset, type SofaComboRow, type SofaPriceTier,
 } from '@2990s/shared';
+import { computeSoDeliveryFee } from '@2990s/shared/pricing';
 import { supabaseAuth } from '../middleware/auth';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
 import { signSoItemPhotoUrl, soItemPhotoBindings, presign, type SlipMime } from '../lib/r2';
@@ -184,6 +185,8 @@ const HEADER =
   'emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, target_date, ' +
   /* PR #143 + #150 + #157 — Payment (migrations 0068 + 0069 + 0070) */
   'payment_method, installment_months, merchant_provider, approval_code, payment_date, deposit_centi, paid_centi, ' +
+  /* Delivery fee snapshot (migration 0133) — folded into local_total/revenue/margin. */
+  'delivery_fee_centi, ' +
   'created_at, created_by, updated_at';
 const ITEM =
   'id, doc_no, line_date, debtor_code, debtor_name, agent, item_group, item_code, description, description2, ' +
@@ -1254,6 +1257,107 @@ mfgSalesOrders.post('/', async (c) => {
   const margin = total - totalCost;
   const marginPctBasis = total > 0 ? Math.round((margin / total) * 10000) : 0;
 
+  /* ── Delivery fee (migration 0133) — POS handover path only ──────────────
+     Activates the dormant delivery fee on the LIVE SO. Gated on the explicit
+     applyDeliveryFee flag the POS handover sends, so backend-authored SOs are
+     untouched (delivery_fee_centi stays 0). Fully server-recomputed via the
+     pure computeSoDeliveryFee — the only client value trusted is the free-form
+     additionalDeliveryFee (clamped >= 0). Categories are the cart's distinct
+     DELIVERABLE item_groups (sofa/mattress/bedframe); accessories/others don't
+     trip cross-category. delivery_fee_config is whole-MYR, the SO ledger is
+     sen, so the config is scaled ×100 before the pure call. The result folds
+     into the grand totals + margin like the fabric-tier add-on; the per-
+     category revenue buckets stay goods-only. (Phase 1 special-model fees +
+     Phase 2 cross-order follow-up plug into the same call.) */
+  let deliveryFeeCenti = 0;
+  let crossCategorySourceDocNo: string | null = null;
+  if (body.applyDeliveryFee) {
+    const { data: dcfg } = await sb
+      .from('delivery_fee_config')
+      .select('base_fee, cross_category_fee')
+      .eq('id', 1)
+      .single();
+    const DELIVERABLE = new Set(['sofa', 'mattress', 'bedframe']);
+    const categoryIds = items
+      .map((it) => String((it as { itemGroup?: string }).itemGroup ?? '').toLowerCase())
+      .filter((g) => DELIVERABLE.has(g));
+    const additionalSen = Math.max(0, Math.round(Number(body.additionalDeliveryFee ?? 0) * 100));
+    // delivery_fee_config + special fees are whole-MYR; the SO ledger is sen → ×100.
+    const cfgSen = {
+      baseFee:          Number((dcfg as { base_fee?: number } | null)?.base_fee ?? 0) * 100,
+      crossCategoryFee: Number((dcfg as { cross_category_fee?: number } | null)?.cross_category_fee ?? 0) * 100,
+    };
+
+    /* Phase 1 — special-model fees. Any cart line whose Model is tagged in
+       model_special_delivery_fees contributes a special fee; the highest
+       standalone fee overrides the base, and on a follow-up the special
+       cross fee applies. lineProducts (loaded above) carries each line's
+       model_id. */
+    const specialModels: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
+    const lineModelIds = [...new Set(
+      lineProducts
+        .map((p) => (p as { model_id?: string | null } | null)?.model_id)
+        .filter((m): m is string => Boolean(m)),
+    )];
+    if (lineModelIds.length > 0) {
+      const { data: specialRows } = await sb
+        .from('model_special_delivery_fees')
+        .select('model_id, standalone_fee, cross_cat_followup_fee')
+        .in('model_id', lineModelIds);
+      for (const r of (specialRows ?? []) as Array<{ standalone_fee?: number; cross_cat_followup_fee?: number }>) {
+        specialModels.push({
+          standaloneFee:            Number(r.standalone_fee ?? 0) * 100,
+          crossCategoryFollowupFee: Number(r.cross_cat_followup_fee ?? 0) * 100,
+        });
+      }
+    }
+
+    /* Phase 2 — cross-order link. Sales typed the earlier SO's doc_no at
+       handover. Validate it (exists, not cancelled, same customer by phone
+       when both have one, not already used), then this SO charges only the
+       reduced cross / special-cross rate. A 400 here rolls back any PWP claim
+       so a voucher isn't burned on a rejected order. The unique index on
+       cross_category_source_doc_no is the hard anti-double-dip backstop. */
+    let isCrossCategoryFollowup = false;
+    const rawLink = String((body.crossCategorySourceDocNo as string | undefined) ?? '').trim();
+    if (rawLink) {
+      const { data: srcRow } = await sb
+        .from('mfg_sales_orders')
+        .select('doc_no, status, phone')
+        .eq('doc_no', rawLink)
+        .maybeSingle();
+      const src = srcRow as { doc_no: string; status: string; phone: string | null } | null;
+      const reject = async (reason: string) => {
+        await rollbackPwpClaims();
+        return c.json({ error: 'cross_category_link_invalid', reason }, 400);
+      };
+      if (!src)                       return reject(`Linked order ${rawLink} was not found.`);
+      if (src.status === 'CANCELLED') return reject(`Linked order ${rawLink} is cancelled.`);
+      const newPhone = typeof body.phone === 'string' ? (normalizePhone(body.phone) ?? null) : null;
+      const srcPhone = src.phone ? (normalizePhone(src.phone) ?? src.phone) : null;
+      if (newPhone && srcPhone && newPhone !== srcPhone) {
+        return reject(`Linked order ${rawLink} belongs to a different customer.`);
+      }
+      const { count: usedCount } = await sb
+        .from('mfg_sales_orders')
+        .select('doc_no', { count: 'exact', head: true })
+        .eq('cross_category_source_doc_no', rawLink);
+      if ((usedCount ?? 0) > 0) {
+        return reject(`Linked order ${rawLink} was already used for a cross-category delivery discount.`);
+      }
+      crossCategorySourceDocNo = rawLink;
+      isCrossCategoryFollowup = true;
+    }
+
+    deliveryFeeCenti = computeSoDeliveryFee(
+      { categoryIds, specialModels, isCrossCategoryFollowup, additionalFee: additionalSen },
+      cfgSen,
+    ).total;
+  }
+  const grandTotal          = total + deliveryFeeCenti;
+  const grandMargin         = margin + deliveryFeeCenti;
+  const grandMarginPctBasis = grandTotal > 0 ? Math.round((grandMargin / grandTotal) * 10000) : 0;
+
   /* Task #121 — derive country from the picked customer_state via the
      localities lookup. Stays null when the state is unknown so we don't
      forge a country the locality table never declared. */
@@ -1326,12 +1430,17 @@ mfgSalesOrders.post('/', async (c) => {
     bedframe_cost_centi:      bedframeCost,
     accessories_cost_centi:   accessoriesCost,
     others_cost_centi:        othersCost,
-    local_total_centi: total,
-    balance_centi: total,
+    local_total_centi: grandTotal,
+    balance_centi: grandTotal,
     total_cost_centi: totalCost,
-    total_revenue_centi: total,
-    total_margin_centi: margin,
-    margin_pct_basis: marginPctBasis,
+    total_revenue_centi: grandTotal,
+    total_margin_centi: grandMargin,
+    margin_pct_basis: grandMarginPctBasis,
+    // Delivery fee snapshot (migration 0133) — recomputeTotals reads it back.
+    delivery_fee_centi: deliveryFeeCenti,
+    // Cross-category follow-up link (migration 0141) — null unless sales linked
+    // this SO back to an earlier one for the reduced delivery rate.
+    cross_category_source_doc_no: crossCategorySourceDocNo,
     line_count: items.length,
     currency: ((body.currency as string) ?? 'MYR').toUpperCase(),
     note: (body.note as string) ?? null,
@@ -1989,7 +2098,18 @@ async function recomputeTotals(sb: any, docNo: string) {
       othersCost += lineCost;
     }
   }
-  const margin = total - totalCost;
+  // Delivery fee (migration 0133) — lives on the header, not the lines, so the
+  // lines-only roll-up above would erase it. Read the snapshot back and fold it
+  // into the grand totals + margin so re-rolls (line edits, combo re-spread)
+  // preserve it. 0 for backend-authored SOs.
+  const { data: hdrFee } = await sb
+    .from('mfg_sales_orders')
+    .select('delivery_fee_centi')
+    .eq('doc_no', docNo)
+    .maybeSingle();
+  const deliveryCenti = Number((hdrFee as { delivery_fee_centi?: number } | null)?.delivery_fee_centi ?? 0);
+  const grandTotal  = total + deliveryCenti;
+  const grandMargin = grandTotal - totalCost;
   await sb.from('mfg_sales_orders').update({
     mattress_sofa_centi: mattressSofa,
     bedframe_centi: bedframe,
@@ -2000,12 +2120,12 @@ async function recomputeTotals(sb: any, docNo: string) {
     bedframe_cost_centi:      bedframeCost,
     accessories_cost_centi:   accessoriesCost,
     others_cost_centi:        othersCost,
-    local_total_centi: total,
-    balance_centi: total,
+    local_total_centi: grandTotal,
+    balance_centi: grandTotal,
     total_cost_centi: totalCost,
-    total_revenue_centi: total,
-    total_margin_centi: margin,
-    margin_pct_basis: total > 0 ? Math.round((margin / total) * 10000) : 0,
+    total_revenue_centi: grandTotal,
+    total_margin_centi: grandMargin,
+    margin_pct_basis: grandTotal > 0 ? Math.round((grandMargin / grandTotal) * 10000) : 0,
     line_count: (items ?? []).length,
     updated_at: new Date().toISOString(),
   }).eq('doc_no', docNo);

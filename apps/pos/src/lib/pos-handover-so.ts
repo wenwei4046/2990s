@@ -98,6 +98,19 @@ export interface PosHandoffPayload {
   /** Deposit / amount collected at handover in centi-MYR (sen). */
   depositCenti?: number;
 
+  /* Delivery fee (migration 0133). POS handover opts the SO into the
+   *  server-recomputed delivery fee (base + cross-category + special-model +
+   *  additional). Without this flag the SO charges no delivery — backend-
+   *  authored SOs stay unaffected. */
+  applyDeliveryFee?: boolean;
+  /** Free-form delivery fee keyed by sales at handover, whole MYR. Server
+   *  clamps negatives to 0 and scales to sen. */
+  additionalDeliveryFee?: number;
+  /** Cross-category follow-up: the earlier SO's doc_no sales typed at handover.
+   *  The server validates it and charges this SO the reduced cross / special-
+   *  cross delivery rate. Migration 0141. */
+  crossCategorySourceDocNo?: string;
+
   /* Items. */
   items: PosHandoffItem[];
 }
@@ -148,7 +161,7 @@ export class PosHandoffApiError extends Error {
  *  off the catalog row — kind === 'size' covers both mattresses and
  *  size-priced sofas/bedframes, so the category lookup is required to
  *  disambiguate. Defaults to 'others' if we can't classify confidently. */
-const inferItemGroup = (
+export const inferItemGroup = (
   config: CartConfig,
   product: CatalogProduct | undefined,
 ): PosHandoffItem['itemGroup'] => {

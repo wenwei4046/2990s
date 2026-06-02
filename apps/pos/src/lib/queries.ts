@@ -22,6 +22,9 @@ export interface CatalogProduct {
   visible: boolean;
   category: { id: string; label: string; icon: string; tbc: boolean } | null;
   series: { id: string; label: string; active: boolean } | null;
+  /** product_models.id for mfg-backed catalog rows (null for legacy retail
+   *  rows). Drives the PWP eligibility check + the special-delivery-fee lookup. */
+  model_id?: string | null;
 }
 
 interface ProductsResponse {
@@ -242,6 +245,88 @@ export const useAddons = () =>
       }));
     },
   });
+
+/* ─── Order Add-ons admin (migration 0022/0023; editor moved to POS 2026-06-02)
+ * The Order Add-ons (Dispose / Lift access …) editor — reads ALL addons (the
+ * `useAddons` above is enabled-only for the handover screen) + writes direct to
+ * the `addons` table (RLS: SELECT all staff, write is_admin = admin/super_admin,
+ * migration 0002). One-time order-level fees, distinct from the per-Model
+ * `special_addons` (Product Add-ons). Used by the Order Add-ons section of the
+ * POS Special Add-ons tab; the Backend Add-ons page is retired. */
+export interface AdminAddonRow {
+  id: string;
+  label: string;
+  description: string | null;
+  icon: string;
+  kind: 'qty' | 'floors_items' | 'flat';
+  category: string | null;
+  price: number;
+  perFloorItem: number | null;
+  unit: string | null;
+  defaultQty: number;
+  stock: number | null;
+  enabled: boolean;
+  sortOrder: number;
+}
+
+export const useAllAddons = () =>
+  useQuery({
+    queryKey: ['addons-all'],
+    staleTime: 60_000,
+    queryFn: async (): Promise<AdminAddonRow[]> => {
+      const { data, error } = await supabase
+        .from('addons')
+        .select('id, label, description, icon, kind, category, price, per_floor_item, unit, default_qty, stock, enabled, sort_order')
+        .order('sort_order');
+      if (error) throw error;
+      return (data ?? []).map((r: any) => ({
+        id: r.id, label: r.label, description: r.description, icon: r.icon, kind: r.kind,
+        category: r.category, price: r.price, perFloorItem: r.per_floor_item, unit: r.unit,
+        defaultQty: r.default_qty, stock: r.stock, enabled: r.enabled, sortOrder: r.sort_order,
+      }));
+    },
+  });
+
+const invalidateAddons = (qc: ReturnType<typeof useQueryClient>) => {
+  void qc.invalidateQueries({ queryKey: ['addons'] });       // handover (enabled-only)
+  void qc.invalidateQueries({ queryKey: ['addons-all'] });   // admin editor
+};
+
+export const useUpdateAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, patch }: { id: string; patch: { price?: number; perFloorItem?: number | null; enabled?: boolean } }) => {
+      const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (patch.price !== undefined)        update.price = patch.price;
+      if (patch.perFloorItem !== undefined) update.per_floor_item = patch.perFloorItem;
+      if (patch.enabled !== undefined)      update.enabled = patch.enabled;
+      const { error } = await supabase.from('addons').update(update).eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => invalidateAddons(qc),
+  });
+};
+
+export const useCreateAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (row: {
+      id: string; label: string; description: string | null; icon: string;
+      kind: 'qty' | 'floors_items' | 'flat'; category: string | null;
+      price: number; perFloorItem: number | null; unit: string | null;
+      stock: number | null; enabled: boolean; sortOrder: number;
+    }) => {
+      const { error } = await supabase.from('addons').insert({
+        id: row.id, label: row.label, description: row.description, icon: row.icon,
+        kind: row.kind, category: row.category, price: row.price,
+        per_floor_item: row.perFloorItem, unit: row.unit, stock: row.stock,
+        enabled: row.enabled, sort_order: row.sortOrder,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => invalidateAddons(qc),
+  });
+};
 
 export const useProductBundles = (productId: string | undefined) =>
   useQuery({
@@ -1312,6 +1397,80 @@ export const useUpdateDeliveryFeeConfig = () => {
   });
 };
 
+/* ─── Per-Model special delivery fees (migration 0140) ─── */
+
+export interface SpecialDeliveryFeeRow {
+  modelId:             string;
+  modelName:           string;
+  modelCode:           string | null;
+  category:            string | null;
+  standaloneFee:       number;   // whole MYR
+  crossCatFollowupFee: number;   // whole MYR
+}
+
+/** List the Models tagged with a special delivery fee. Read by the Master
+ *  editor AND the Handover summary (so the shown fee matches what the server
+ *  charges when a special model is in the cart). */
+export const useSpecialDeliveryFees = () =>
+  useQuery({
+    queryKey: ['special-delivery-fees'],
+    queryFn: async (): Promise<SpecialDeliveryFeeRow[]> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/delivery-fees/special`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`GET /delivery-fees/special failed (${res.status})`);
+      return (await res.json()) as SpecialDeliveryFeeRow[];
+    },
+    staleTime: 60_000,
+  });
+
+export const useUpsertSpecialDeliveryFee = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (row: { modelId: string; standaloneFee: number; crossCatFollowupFee: number }) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/delivery-fees/special`, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(row),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `PUT /delivery-fees/special failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-delivery-fees'] }); },
+  });
+};
+
+export const useDeleteSpecialDeliveryFee = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (modelId: string) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/delivery-fees/special/${encodeURIComponent(modelId)}`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `DELETE /delivery-fees/special failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-delivery-fees'] }); },
+  });
+};
+
 /** Master Admin — writes the 4 fabric-tier Δ amounts (PATCH /fabric-tier-addon).
  *  Gated by the fabric_tier_addon_config UPDATE RLS + API WRITE_ROLES (0124). */
 export const useUpdateFabricTierAddonConfig = () => {
@@ -1357,6 +1516,117 @@ export const useUpdateFabricLibraryTier = () => {
       }
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['fabric-library'] }); },
+  });
+};
+
+/* ─── Special add-ons (migration 0133) — Product Add-ons CRUD ──────────
+ *
+ * The grown-up "Specials": per-Model product add-on (selling surcharge +
+ * 0..N follow-up choice groups) shown as an SO line description, not a SKU.
+ * Read by any staff; writes go through /special-addons (admin-set role gate +
+ * RLS). selling/cost may be NEGATIVE (a deduction). `code` is the stable key
+ * reused by allowed_options.specials + variants.specials. */
+export interface SpecialAddonChoice { label: string; extraSen: number; }
+export interface SpecialAddonGroup { label: string; required: boolean; choices: SpecialAddonChoice[]; }
+export interface SpecialAddonRow {
+  id: string;
+  code: string;
+  label: string;
+  soDescription: string;
+  categories: string[];
+  sellingPriceSen: number;
+  costPriceSen: number;
+  optionGroups: SpecialAddonGroup[];
+  active: boolean;
+  sortOrder: number;
+}
+export interface SpecialAddonInput {
+  code: string;
+  label: string;
+  soDescription: string;
+  categories: string[];
+  sellingPriceSen: number;
+  costPriceSen: number;
+  optionGroups: SpecialAddonGroup[];
+  active: boolean;
+  sortOrder: number;
+}
+
+async function authToken(): Promise<string> {
+  const session = await supabase.auth.getSession();
+  const token = session.data.session?.access_token;
+  if (!token) throw new Error('not_authenticated');
+  return token;
+}
+
+export const useSpecialAddons = () =>
+  useQuery({
+    queryKey: ['special-addons'],
+    staleTime: 60_000,
+    queryFn: async (): Promise<SpecialAddonRow[]> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const res = await fetch(`${API_URL}/special-addons`, {
+        headers: { authorization: `Bearer ${await authToken()}` },
+      });
+      if (!res.ok) throw new Error(`GET /special-addons failed (${res.status})`);
+      const body = (await res.json()) as { addons: SpecialAddonRow[] };
+      return body.addons ?? [];
+    },
+  });
+
+export const useCreateSpecialAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: SpecialAddonInput) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const res = await fetch(`${API_URL}/special-addons`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${await authToken()}`, 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `POST /special-addons failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-addons'] }); },
+  });
+};
+
+export const useUpdateSpecialAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, patch }: { id: string; patch: Partial<SpecialAddonInput> }) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const res = await fetch(`${API_URL}/special-addons/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${await authToken()}`, 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `PATCH /special-addons failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-addons'] }); },
+  });
+};
+
+export const useDeleteSpecialAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const res = await fetch(`${API_URL}/special-addons/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${await authToken()}` },
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `DELETE /special-addons failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-addons'] }); },
   });
 };
 
