@@ -301,7 +301,7 @@ function ComboCard({
       {/* Height tiers */}
       <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 4 }}>
         {heights.map((h) => {
-          const v = rule.pricesByHeight?.[h];
+          const v = rule.sellingPricesByHeight?.[h];
           return (
             <div key={h} style={{
               padding: '4px 6px',
@@ -380,10 +380,12 @@ function ComposerModal({
   const [modules, setModules] = useState<string[][]>(editing?.modules ?? []);
   const [label, setLabel] = useState(editing?.label ?? '');
   const [effectiveFrom, setEffectiveFrom] = useState(editing?.effectiveFrom ?? todayIso());
+  // The base grid on this page is the SELLING price (Chairman 2026-06-02 — show
+  // 卖家 base, not cost). Seeded from the combo's sellingPricesByHeight.
   const [prices, setPrices] = useState<Record<string, string>>(() => {
     const seed: Record<string, string> = {};
     for (const h of heights) {
-      const v = editing?.pricesByHeight?.[h];
+      const v = editing?.sellingPricesByHeight?.[h];
       seed[h] = v == null ? '' : (v / 100).toFixed(2);
     }
     return seed;
@@ -422,14 +424,17 @@ function ComposerModal({
       .filter((slot) => slot.length > 0);
     if (orderedModules.length === 0) return alert('Add at least one module slot.');
 
-    const pricesByHeight: Record<string, number | null> = {};
+    // The base grid IS the SELLING price (Chairman 2026-06-02). Cost is never
+    // entered here — the server auto-detects it (Σ module SKU costs) on create,
+    // and an edit preserves the existing cost unchanged.
+    const sellingPricesByHeight: Record<string, number | null> = {};
     for (const h of heights) {
       const raw = (prices[h] ?? '').trim();
-      if (!raw) pricesByHeight[h] = null;
+      if (!raw) sellingPricesByHeight[h] = null;
       else {
         const n = Number(raw);
         if (!Number.isFinite(n) || n < 0) return alert(`Bad price at ${h}".`);
-        pricesByHeight[h] = Math.round(n * 100);
+        sellingPricesByHeight[h] = Math.round(n * 100);
       }
     }
 
@@ -449,7 +454,10 @@ function ComposerModal({
       if (editing) {
         await update.mutateAsync({
           id: editing.id,
-          pricesByHeight,
+          // Preserve the existing COST untouched (a backend/PO concept — not
+          // linked to selling); only update the SELLING + PWP prices.
+          pricesByHeight: editing.pricesByHeight ?? {},
+          sellingPricesByHeight,
           pwpPricesByHeight,
           label: label || null,
           effectiveFrom,
@@ -468,7 +476,9 @@ function ComposerModal({
           modules: orderedModules,
           tier: COMBO_TIER,  // base tier — fabric tier is a separate flat add-on
           customerId: null,  // B2C: always null = applies to all customers
-          pricesByHeight,
+          // Send SELLING only; omitting pricesByHeight makes the server
+          // auto-detect COST from module SKUs, so selling and cost stay decoupled.
+          sellingPricesByHeight,
           pwpPricesByHeight,
           label: label || null,
           effectiveFrom,
@@ -575,7 +585,7 @@ function ComposerModal({
           )}
         </Field>
 
-        <Field label="Prices by seat height (RM)">
+        <Field label="Selling price by seat height (RM)">
           <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
             {heights.map((h) => (
               <div key={h}>
@@ -685,7 +695,7 @@ function HistoryModal({ rule, heights, onClose }: { rule: SofaComboRule; heights
                   <div key={h} style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{h}</div>
                     <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>
-                      {fmtRm(r.pricesByHeight?.[h] ?? null)}
+                      {fmtRm(r.sellingPricesByHeight?.[h] ?? null)}
                     </div>
                   </div>
                 ))}
