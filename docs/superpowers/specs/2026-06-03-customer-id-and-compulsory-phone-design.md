@@ -12,12 +12,18 @@
 
 > "Do a customer id, at the same time make sure all SO need to fill up the
 > phone number, so that compulsory got number."
+>
+> (clarified 2026-06-03) "all customer will only match with one customer id, it
+> follow by **name and phone number**."
 
 Two things:
 1. **Compulsory phone** — every Sales Order MUST have a phone number.
 2. **Real customer identity** — give each customer a stable `customer_id` and
-   link every SO to it, so "this customer's orders" and "is this the same
-   customer" stop relying on fuzzy name text.
+   link every SO to it. **The identity key is `name + phone` (BOTH).** One
+   `customer_id` per distinct (name, phone) pair, so "this customer's orders" and
+   "same customer" stop relying on fuzzy name text alone. (A shared phone with
+   different names = separate customers; a returning person must match both
+   fields to reuse their id.)
 
 **Why it matters (business):** today there is no real customer record — every
 SO just carries a *copy* of the name + phone. "Same customer" is guessed (the
@@ -77,29 +83,34 @@ that can't be bypassed (the API), not just the POS UI.
   on day 1. Enforce at the API first; consider a `NOT NULL` (or CHECK) only
   after a backfill pass confirms 100 % coverage. **Decision needed (D1).**
 
-### 3.2 Customer master — find-or-create by phone, set `customer_id`
+### 3.2 Customer master — find-or-create by NAME + PHONE, set `customer_id`
 
-On `POST /mfg-sales-orders` (after phone is validated + normalised), resolve the
-customer and stamp `customer_id` on the SO header:
+**Chairman 2026-06-03: the customer identity key is `name + phone` (BOTH), not
+phone alone.** Match on a NORMALISED form of each so case / spacing / phone-format
+differences don't fork the customer: `lower(trim(name))` + `normalizePhone(phone)`.
+(Trade-off the Chairman accepted: a typo'd name with the same phone makes a NEW
+customer — name + phone is intentionally stricter than phone-only so a shared
+phone keeps different people separate.)
+
+On `POST /mfg-sales-orders` (after phone is validated + normalised):
 
 ```
 normPhone = normalizePhone(body.phone)            // required, validated above
-customerId = upsert_customer_by_phone(normPhone, name, email, address…)
+nameKey   = lower(trim(body.debtorName))
+customerId = upsert_customer_by_name_phone(nameKey, normPhone, name, email, address…)
 … insert SO with customer_id = customerId, phone = normPhone …
 ```
 
-`upsert_customer_by_phone`:
-- Look up `customers` by `phone = normPhone`.
-- **Found** → use its `id`; bump `last_seen_at = now()`. (Name/email: **keep the
-  existing** customer name; do NOT overwrite from a later order — **Decision D2**:
-  keep-first vs update-to-latest.)
+`upsert_customer_by_name_phone`:
+- Look up `customers` WHERE normalised name = `nameKey` AND `phone = normPhone`.
+- **Found** → use its `id`; bump `last_seen_at = now()`. (Don't overwrite the
+  stored display name/email — the SO still snapshots its own `debtor_name`.)
 - **Not found** → INSERT a new `customers` row (name, phone, email, address from
   the order) → use the new `id`.
-- **Concurrency:** two SOs for a brand-new phone at the same instant must not
-  create two customers. Use an atomic upsert: `INSERT … ON CONFLICT (phone) DO
-  UPDATE SET last_seen_at = now() RETURNING id`. This needs a **UNIQUE** index on
-  `customers.phone` (see migration). Doing this server-side as one statement (or
-  a `SECURITY DEFINER` RPC) avoids the read-then-write race.
+- **Concurrency:** atomic upsert `INSERT … ON CONFLICT (<name,phone key>) DO
+  UPDATE SET last_seen_at = now() RETURNING id`, backed by a **composite UNIQUE
+  index** on normalised (name, phone) — see migration. One server statement (or a
+  `SECURITY DEFINER` RPC) avoids the read-then-write race.
 
 Then `mfg_sales_orders.customer_id = customerId` in the existing header insert.
 
@@ -117,9 +128,10 @@ Then `mfg_sales_orders.customer_id = customerId` in the existing header insert.
 `packages/db/migrations/0XXX_customer_id_compulsory_phone.sql` (pick the next
 free number — **check `list_migrations` on prod + the migrations dir; multiple
 concurrent branches are grabbing numbers, expect to renumber**):
-- `CREATE UNIQUE INDEX IF NOT EXISTS customers_phone_unique ON customers(phone) WHERE phone IS NOT NULL;`
-  (the table is effectively empty today, so no dedupe needed — but verify.)
-- (Optional) a `SECURITY DEFINER` function `upsert_customer_by_phone(...)` if the
+- `CREATE UNIQUE INDEX IF NOT EXISTS customers_name_phone_unique ON customers (lower(trim(name)), phone) WHERE phone IS NOT NULL;`
+  — composite on normalised (name, phone). (Table is effectively empty today, so
+  no dedupe needed — but verify.)
+- (Optional) a `SECURITY DEFINER` function `upsert_customer_by_name_phone(...)` if the
   upsert is done in SQL rather than the route. Check `customers` RLS: the order
   POST runs as the authenticated staff client, so staff need INSERT/UPDATE/SELECT
   on `customers` (add policies, or do the upsert via the service-role/RPC).
@@ -137,7 +149,7 @@ Lets historical orders connect. Recommended but not blocking.
 
 | Purpose | File |
 |---|---|
-| Unique index on `customers.phone` (+ optional upsert RPC) | new migration + `packages/db/src/schema.ts` |
+| Composite UNIQUE index on normalised `customers (name, phone)` (+ optional upsert RPC) | new migration + `packages/db/src/schema.ts` |
 | Phone-required guard + customer find-or-create + set `customer_id`; cross-cat match by `customer_id` | `apps/api/src/routes/mfg-sales-orders.ts` (POST handler + `checkCrossCategorySource`) |
 | Customer resolve helper (shared) | new `apps/api/src/lib/resolve-customer.ts` (or inline) |
 | POS phone already required — confirm + error copy | `apps/pos/src/lib/handover-helpers.ts` (`validateCustomer`) |
@@ -152,10 +164,12 @@ Lets historical orders connect. Recommended but not blocking.
 - **D1 — DB NOT NULL on phone?** Recommend: enforce at API now; add `NOT NULL`
   only after a backfill confirms coverage. (Hard NOT NULL day-1 risks breaking
   legacy/edge create paths.)
-- **D2 — When the same phone returns with a different name/email**, keep the
-  first customer name or update to the latest? Recommend **keep-first** (the
-  customer record is the canonical name; the SO still snapshots its own
-  `debtor_name`). Always bump `last_seen_at`.
+- **D2 — Identity = name + phone (Chairman-confirmed).** Same (name, phone) →
+  same customer; a different name OR a different phone → a different customer.
+  Implication to confirm: a **typo'd name** on the same phone makes a NEW
+  customer (the Chairman accepted this stricter key). The stored customer name
+  is keep-first; the SO always snapshots its own `debtor_name`; bump
+  `last_seen_at` on every match.
 - **D3 — Backfill existing SOs?** Recommend yes (Phase 2) so history connects.
 - **Walk-in who won't give a phone:** compulsory means the order is **blocked**.
   Confirm the policy — is there ANY exception (a "no-phone" placeholder)? Default
@@ -163,8 +177,9 @@ Lets historical orders connect. Recommended but not blocking.
 - **Foreign / unparseable numbers:** `normalizePhone` may return null. Decide:
   accept the raw string as the key, or require a parseable MY number. Recommend
   accept raw (don't block a real foreign customer) but store consistently.
-- **Two people sharing one phone (family/company):** merged into one customer.
-  Accepted limitation (matches the cross-category design).
+- **Two people sharing one phone (family/company):** with the name + phone key
+  they stay SEPARATE customers (different names) — which is the point of adding
+  name to the key.
 - **RLS:** verify staff can INSERT/UPDATE/SELECT `customers` (or route the upsert
   through a `SECURITY DEFINER` RPC). The POS order POST uses the *authenticated
   staff* Supabase client.
@@ -175,9 +190,10 @@ Lets historical orders connect. Recommended but not blocking.
 
 1. Creating an SO without a valid phone is **rejected** — POS blocks it (already)
    AND the server returns `400 phone_required` (Backend New SO + direct API too).
-2. Two SOs placed with the **same** (normalised) phone resolve to the **same
-   `customer_id`**; a new phone creates exactly one new `customers` row (no race
-   duplicates).
+2. Two SOs with the **same normalised (name, phone)** resolve to the **same
+   `customer_id`**; a different name OR a different phone → a **different**
+   customer; a brand-new (name, phone) creates exactly one new `customers` row
+   (no race duplicates).
 3. Every newly created SO has a non-null `customer_id`.
 4. The cross-category delivery link matches "same customer" by `customer_id`
    (exact), no longer by lenient phone-or-skip.
