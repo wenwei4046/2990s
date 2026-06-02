@@ -8,6 +8,7 @@
 
 import { pickComboMatch, type SofaComboRow, type SofaPriceTier } from './sofa-combo-pricing';
 export type { SofaComboRow } from './sofa-combo-pricing';
+export { comboChargedPrices } from './sofa-combo-pricing';
 // One-way edge: mfg-pricing.ts imports nothing (fully self-contained), so this
 // does NOT create a cycle. resolveSeatHeightSelling powers the SELLING assembly
 // helper below; MfgSeatHeightPrice is the per-(height,tier) entry shape.
@@ -191,6 +192,10 @@ export const SOFA_MODULES: readonly SofaModuleSpec[] = [
   { id: '1NA-P', group: '1-seater', label: '1NA · Power · No arms',    w: 75, d: 95, cushions: 1 },
   { id: '1NA-R', group: '1-seater', label: '1NA · Recliner · No arms', w: 75, d: 95, cushions: 1 },
   { id: '1NA-L', group: '1-seater', label: '1NA · Power leg · No arms', w: 75, d: 95, cushions: 1 },
+  // 1-Seater (both arms) functional variants — 1S body + forward footrest.
+  { id: '1S-P', group: '1-seater', label: '1S · Power · Both arms',     w: 115, d: 95, cushions: 1 },
+  { id: '1S-R', group: '1-seater', label: '1S · Recliner · Both arms',  w: 115, d: 95, cushions: 1 },
+  { id: '1S-L', group: '1-seater', label: '1S · Power leg · Both arms', w: 115, d: 95, cushions: 1 },
 ];
 
 const MODULE_BY_ID = new Map<string, SofaModuleSpec>(SOFA_MODULES.map((m) => [m.id, m]));
@@ -684,6 +689,10 @@ const MODULE_EDGES_BASE: Record<string, [EdgeType, EdgeType, EdgeType, EdgeType]
   '1NA-P': ['open', 'back', 'open', 'front'],
   '1NA-R': ['open', 'back', 'open', 'front'],
   '1NA-L': ['open', 'back', 'open', 'front'],
+  // 1S functional variants carry both end arms, same as the plain 1S preset.
+  '1S-P': ['arm', 'back', 'arm', 'front'],
+  '1S-R': ['arm', 'back', 'arm', 'front'],
+  '1S-L': ['arm', 'back', 'arm', 'front'],
 };
 
 /** Clockwise 90° shifts [W,N,E,S] → [S,W,N,E]. */
