@@ -49,6 +49,12 @@ import {
   addonSurchargeRM,
   type BedframeSelection,
 } from '../components/BedframeOptions';
+import {
+  SpecialAddonsPicker,
+  specialSelsSurcharge,
+  specialSelSurchargeRM,
+  type SpecialSel,
+} from '../components/SpecialAddonsPicker';
 import { SofaCellsPreview } from '../components/SofaCellsPreview';
 import { Topbar } from '../components/Topbar';
 import styles from './Configurator.module.css';
@@ -322,6 +328,10 @@ export const Configurator = () => {
   // TOTAL render without another lookup.
   const [bfSel, setBfSel] = useState<BedframeSelection>(emptyBedframeSelection);
   const [bfSizeOther, setBfSizeOther] = useState('');
+  // Special Add-ons (migration 0134) selections for sofa + mattress (bedframe
+  // uses bfSel.specials). Lifted here so sofa survives Quick⇄Customize toggles.
+  const [sofaSpecialSel, setSofaSpecialSel] = useState<SpecialSel[]>([]);
+  const [mattressSpecialSel, setMattressSpecialSel] = useState<SpecialSel[]>([]);
 
   const sizes = useProductSizes(productId);
   const sizeLib = useSizeLibrary();
@@ -407,6 +417,19 @@ export const Configurator = () => {
     const allowed = new Set(bedframeAllowedSpecialsQ.data ?? []);
     return (allSpecialAddonsQ.data ?? []).filter(
       (a) => a.active && a.categories.includes('BEDFRAME') && allowed.has(a.code),
+    );
+  }, [allSpecialAddonsQ.data, bedframeAllowedSpecialsQ.data]);
+  // Same allowed-codes query (per-Model) re-filtered per category for sofa + mattress.
+  const sofaSpecialAddons = useMemo(() => {
+    const allowed = new Set(bedframeAllowedSpecialsQ.data ?? []);
+    return (allSpecialAddonsQ.data ?? []).filter(
+      (a) => a.active && a.categories.includes('SOFA') && allowed.has(a.code),
+    );
+  }, [allSpecialAddonsQ.data, bedframeAllowedSpecialsQ.data]);
+  const mattressSpecialAddons = useMemo(() => {
+    const allowed = new Set(bedframeAllowedSpecialsQ.data ?? []);
+    return (allSpecialAddonsQ.data ?? []).filter(
+      (a) => a.active && a.categories.includes('MATTRESS') && allowed.has(a.code),
     );
   }, [allSpecialAddonsQ.data, bedframeAllowedSpecialsQ.data]);
 
@@ -545,6 +568,11 @@ export const Configurator = () => {
       const next: Record<string, number> = {};
       for (const e of cfg.addonExtras ?? []) next[e.addonId] = e.qty;
       setPillowExtras(next);
+      setMattressSpecialSel((cfg.specialIds ?? []).map((code, i) => {
+        const addon = mattressSpecialAddons.find((a) => a.code === code);
+        const choices = cfg.specialChoices?.[code] ?? [];
+        return { id: code, label: addon?.label ?? cfg.specialLabels?.[i] ?? code, surcharge: addon ? specialSelSurchargeRM(addon, choices) : 0, choices };
+      }));
       hydratedRef.current = true;
     } else if (cfg.kind === 'bedframe') {
       if (bedframeColours.data == null || bedframeOptions.data == null || fabricLib.data == null) return;
@@ -647,6 +675,11 @@ export const Configurator = () => {
         if (cfg.summary?.includes('L-facing')) setQuickFlip('L');
         else if (cfg.summary?.includes('R-facing')) setQuickFlip('R');
       }
+      setSofaSpecialSel((cfg.specialIds ?? []).map((code, i) => {
+        const addon = sofaSpecialAddons.find((a) => a.code === code);
+        const choices = cfg.specialChoices?.[code] ?? [];
+        return { id: code, label: addon?.label ?? cfg.specialLabels?.[i] ?? code, surcharge: addon ? specialSelSurchargeRM(addon, choices) : 0, choices };
+      }));
       hydratedRef.current = true;
     }
   }, [isEditing, editingLine, bedframeColours.data, bedframeOptions.data,
@@ -985,7 +1018,8 @@ export const Configurator = () => {
   const bedframeBase = pwpActive ? (pwpUnitPrice as number) : sizeBase;
   const bedframeTotal = bedframeBase + bedframeSurcharge(bfSel) + bedframeFabricDelta;
   // Mattress (size) line total — PWP base when redeemed, else the size price.
-  const sizeTotal = (pwpActive ? (pwpUnitPrice as number) : sizeBase) + extrasTotal;
+  const sizeTotal = (pwpActive ? (pwpUnitPrice as number) : sizeBase) + extrasTotal
+    + specialSelsSurcharge(mattressSpecialSel);
 
   /* PWP Code Voucher (0130/0132) — shared section for the bed frame + mattress
      reward configurators (discoverability, Chairman 2026-06-02). Always shown so
@@ -1134,6 +1168,11 @@ export const Configurator = () => {
       total: sizeTotal,
       summary: `${pickedSize.label}${extraSummary}`,
       addonExtras: extrasArr.length > 0 ? extrasArr : undefined,
+      ...(mattressSpecialSel.length > 0 ? {
+        specialIds: mattressSpecialSel.map((s) => s.id),
+        specialLabels: mattressSpecialSel.map((s) => s.label),
+        specialChoices: Object.fromEntries(mattressSpecialSel.map((s) => [s.id, s.choices ?? []])),
+      } : {}),
     };
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
     navigate(isEditing ? '/cart' : '/catalog');
@@ -1177,9 +1216,10 @@ export const Configurator = () => {
   const sofaFabricDelta = fabricSel && addonCfgQ.data
     ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data)
     : 0;
-  const sofaTotal = pickedQP
+  const sofaSpecialDelta = specialSelsSurcharge(sofaSpecialSel);
+  const sofaTotal = (pickedQP
     ? qpPickPrice + sofaFabricDelta
-    : (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? sofaFabricDelta : 0);
+    : (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? sofaFabricDelta : 0)) + sofaSpecialDelta;
 
   // Sofas require a fabric + colour before Add-to-Cart (G6).
   const canAddSofa =
@@ -1209,7 +1249,12 @@ export const Configurator = () => {
       colourLabel: fabricSel.colourLabel,
       colourHex: fabricSel.colourHex ?? undefined,
       fabricTierDelta: sofaFabricDelta,
-      total: pickedSofaRow.price + sofaFabricDelta,
+      ...(sofaSpecialSel.length > 0 ? {
+        specialIds: sofaSpecialSel.map((s) => s.id),
+        specialLabels: sofaSpecialSel.map((s) => s.label),
+        specialChoices: Object.fromEntries(sofaSpecialSel.map((s) => [s.id, s.choices ?? []])),
+      } : {}),
+      total: pickedSofaRow.price + sofaFabricDelta + sofaSpecialDelta,
       summary: lShape
         ? `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${quickFlip}-facing · ${activeDepth}"${fabricSuffix}`
         : `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${activeDepth}"${fabricSuffix}`,
@@ -1246,7 +1291,12 @@ export const Configurator = () => {
       colourHex: fabricSel.colourHex ?? undefined,
       fabricTierDelta: sofaFabricDelta,
       ...(isPwp && sofaPwpCode ? { pwp: true, pwpCode: sofaPwpCode } : {}),
-      total: qpPickPrice + sofaFabricDelta,
+      ...(sofaSpecialSel.length > 0 ? {
+        specialIds: sofaSpecialSel.map((s) => s.id),
+        specialLabels: sofaSpecialSel.map((s) => s.label),
+        specialChoices: Object.fromEntries(sofaSpecialSel.map((s) => [s.id, s.choices ?? []])),
+      } : {}),
+      total: qpPickPrice + sofaFabricDelta + sofaSpecialDelta,
       summary: `${label} · ${activeDepth}"${fabricSuffix}`,
     };
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
@@ -1584,6 +1634,9 @@ export const Configurator = () => {
                 enabledColourIds={productId?.startsWith('mfg-') ? sofaFabricCodes : null}
               />
             }
+            specialAddonsBlock={
+              <SpecialAddonsPicker addons={sofaSpecialAddons} value={sofaSpecialSel} onChange={setSofaSpecialSel} />
+            }
           />
         ) : (
           <CustomBuilder
@@ -1623,6 +1676,13 @@ export const Configurator = () => {
             <RailSection title="Size" sub={pickedSize ? `${pickedSize.label} · ${pickedSize.widthCm}×${pickedSize.lengthCm} cm` : undefined}>
               <SizeGrid rows={sizeRows} pickedId={pickedSizeId} onPick={setPickedSizeId} />
             </RailSection>
+
+            {/* Special Add-ons (migration 0134) — mattress add-ons (per-Model). */}
+            {mattressSpecialAddons.length > 0 && (
+              <RailSection title="Add-ons">
+                <SpecialAddonsPicker addons={mattressSpecialAddons} value={mattressSpecialSel} onChange={setMattressSpecialSel} />
+              </RailSection>
+            )}
 
             {/* PWP redeem — shared bed frame + mattress section. Shown once a size
                 is picked (it prices off the size's PWP price). */}
@@ -2073,6 +2133,8 @@ interface SofaQuickPickProps {
   maxDepth: Depth;
   /** Fabric + Colour picker, rendered in the rail below the layout grid. */
   fabricBlock?: React.ReactNode;
+  /** Special Add-ons picker (migration 0134), rendered in the rail below fabric. */
+  specialAddonsBlock?: React.ReactNode;
   /** Global Quick Picks (Master-Admin-curated, shared). */
   globalQuickPicks?: QuickPickItem[];
   /** This salesperson's personal Quick Picks ("Yours", per-device). */
@@ -2206,7 +2268,7 @@ const heroAnchorStyle = (
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
-const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
+const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, specialAddonsBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
   // Hide bundles not activated for this Model. The productSchema refine
   // guarantees ≥1 active+priced bundle exists for every sofa SKU.
   const activeRows = useMemo(
@@ -2410,6 +2472,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
           </Fragment>
         ))}
         {fabricBlock}
+        {specialAddonsBlock}
       </aside>
 
       <section className={styles.qpHero}>

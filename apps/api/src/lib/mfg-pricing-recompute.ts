@@ -284,7 +284,7 @@ export function recomputeFromSnapshot(
   const specialsPool =
     category === 'SOFA'
       ? effectiveConfig?.sofaSpecials ?? []
-      : category === 'BEDFRAME'
+      : (category === 'BEDFRAME' || category === 'MATTRESS')
         ? effectiveConfig?.specials ?? []
         : [];
   const customSpecials = specials.length

@@ -391,6 +391,11 @@ export function computeMfgLinePrice(
     // No divan / total height on sofa. sofaLegHeight is the sofa-side pool.
     legSurchargeSen      = lookupSelling(maintenanceConfig.sofaLegHeights, input.sofaLegHeight ?? input.legHeight);
     specialsSurchargeSen = sumSpecialsSelling(maintenanceConfig.sofaSpecials, input.specials);
+  } else if (maintenanceConfig && product.category === 'MATTRESS') {
+    // Special Add-ons (migration 0134) can target MATTRESS too. No height/leg
+    // surcharges for mattress — only the special add-ons. The server patches
+    // maintenanceConfig.specials with this line's special_addons pool, so read it.
+    specialsSurchargeSen = sumSpecialsSelling(maintenanceConfig.specials, input.specials);
   }
 
   const unitPriceSen = sum(
@@ -485,6 +490,8 @@ export function computeMfgLineCost(
   } else if (maintenanceConfig && product.category === 'SOFA') {
     legSurchargeSen      = lookupCost(maintenanceConfig.sofaLegHeights, input.sofaLegHeight ?? input.legHeight);
     specialsSurchargeSen = sumSpecialsCost(maintenanceConfig.sofaSpecials, input.specials);
+  } else if (maintenanceConfig && product.category === 'MATTRESS') {
+    specialsSurchargeSen = sumSpecialsCost(maintenanceConfig.specials, input.specials);
   }
 
   const unitCostSen = sum(
