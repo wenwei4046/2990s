@@ -72,10 +72,10 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
         .map((s) => (typeof s === 'string' ? s.trim() : ''))
         .filter(Boolean);
 
-      // Sold by: the SO's own venue if recorded, else the company. The SO header
-      // doesn't store the showroom street address, so use the registered selling
-      // venue from legal.ts (single showroom at MVP).
-      const soldByName = (so.venue || so.hub_name || so.sales_location || COMPANY_LEGAL.name) as string;
+      // Sold by: the showroom venue name + its street address (single showroom
+      // at MVP — "PJ Showroom" per Loo). When a 2nd showroom opens this becomes
+      // a per-SO lookup; for now both come from legal.ts.
+      const soldByName = COMPANY_LEGAL.showroomName;
 
       const total = centiToMyr(so.total_revenue_centi);
       const paid = centiToMyr(so.paid_centi ?? so.deposit_centi);

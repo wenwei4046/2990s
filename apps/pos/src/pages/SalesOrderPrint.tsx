@@ -82,7 +82,6 @@ const Header = ({ order }: { order: PrintableSO }) => (
       <div className={styles.docTitle}>SALES ORDER</div>
       <div className={styles.docId}>{order.id}</div>
       <div className={styles.docMeta}>Date: {fmtIsoDate(order.date)}</div>
-      <div className={styles.docMeta}>Order: {order.id}</div>
     </div>
   </header>
 );

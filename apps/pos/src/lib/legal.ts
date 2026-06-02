@@ -11,6 +11,7 @@ export const COMPANY_LEGAL = {
     'No. 2, Jalan Kerinchi, Gerbang Kerinchi Lestari,',
     '59200 Kuala Lumpur, Wilayah Persekutuan KL',
   ],
+  showroomName: 'PJ Showroom',
   showroomLine: '51, Jln Utara, PJS 12, 46200 Petaling Jaya, Selangor',
   portalLabel:  "2990's Portal",
 } as const;

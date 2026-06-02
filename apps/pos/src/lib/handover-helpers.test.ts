@@ -32,6 +32,7 @@ const baseForm: HandoverForm = {
   installmentMonths: null,
   merchantProvider: null,
   signed: false,
+  acknowledgedTerms: false,
 };
 
 describe('validateCustomer', () => {
@@ -146,9 +147,11 @@ describe('validateConfirmPayment', () => {
 });
 
 describe('validateSign', () => {
-  it('requires signed=true', () => {
+  it('requires signed=true AND terms acknowledged', () => {
     expect(validateSign(baseForm)).toBe(false);
-    expect(validateSign({ ...baseForm, signed: true })).toBe(true);
+    expect(validateSign({ ...baseForm, signed: true })).toBe(false);
+    expect(validateSign({ ...baseForm, acknowledgedTerms: true })).toBe(false);
+    expect(validateSign({ ...baseForm, signed: true, acknowledgedTerms: true })).toBe(true);
   });
 });
 
