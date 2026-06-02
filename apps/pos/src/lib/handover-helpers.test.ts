@@ -25,7 +25,7 @@ const baseForm: HandoverForm = {
   deliveryDate: '', deliveryDateLater: false, deliveryAsap: false,
   specialInstructions: '',
   addons: {}, paymentMethod: '',
-  amountPaid: 0, additionalDeliveryFee: 0,
+  amountPaid: 0, additionalDeliveryFee: 0, crossCategorySourceSo: '',
   paymentPreset: 'full', approvalCode: '',
   slipUploadSessionId: null, paymentRecorded: false,
   installmentMonths: null,

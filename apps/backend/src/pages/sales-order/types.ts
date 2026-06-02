@@ -51,6 +51,8 @@ export type SoHeader = {
   total_margin_centi: number;
   margin_pct_basis: number;
   line_count: number;
+  // Delivery fee in sen, included in local_total_centi (migration 0133).
+  delivery_fee_centi?: number;
   currency: string;
   note: string | null;
   customer_id: string | null;

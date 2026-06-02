@@ -80,6 +80,31 @@ export const AddonsPaymentStep = ({
         Whole RM, no sen.
       </p>
 
+      <h3 className="subTitle">Cross-category — link previous order (optional)</h3>
+      <p className={styles.stepLead}>
+        If this customer already placed an earlier order for a different category
+        (e.g. a mattress) that can&apos;t share this sales order, enter that order&apos;s
+        SO number. Delivery here is then charged the reduced cross-category rate
+        (or the special model&apos;s cross-category price) instead of a fresh full fee.
+      </p>
+
+      <Field label="Previous SO number">
+        <input
+          type="text"
+          value={form.crossCategorySourceSo}
+          onChange={(e) => update('crossCategorySourceSo', e.target.value)}
+          placeholder="e.g. SO-2605"
+          autoCapitalize="characters"
+          autoCorrect="off"
+          spellCheck={false}
+        />
+      </Field>
+      <p className={styles.signCaption}>
+        Leave blank for a standalone order. The SO number is verified when you
+        complete the order — an unknown, cancelled, different-customer, or
+        already-used order is rejected.
+      </p>
+
       <h3 className="subTitle">Payment method</h3>
       <div className="fieldRow">
         <MethodButton

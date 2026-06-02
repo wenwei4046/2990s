@@ -22,6 +22,9 @@ export interface CatalogProduct {
   visible: boolean;
   category: { id: string; label: string; icon: string; tbc: boolean } | null;
   series: { id: string; label: string; active: boolean } | null;
+  /** product_models.id for mfg-backed catalog rows (null for legacy retail
+   *  rows). Drives the PWP eligibility check + the special-delivery-fee lookup. */
+  model_id?: string | null;
 }
 
 interface ProductsResponse {
@@ -1309,6 +1312,80 @@ export const useUpdateDeliveryFeeConfig = () => {
       }
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['delivery-fee-config'] }); },
+  });
+};
+
+/* ─── Per-Model special delivery fees (migration 0140) ─── */
+
+export interface SpecialDeliveryFeeRow {
+  modelId:             string;
+  modelName:           string;
+  modelCode:           string | null;
+  category:            string | null;
+  standaloneFee:       number;   // whole MYR
+  crossCatFollowupFee: number;   // whole MYR
+}
+
+/** List the Models tagged with a special delivery fee. Read by the Master
+ *  editor AND the Handover summary (so the shown fee matches what the server
+ *  charges when a special model is in the cart). */
+export const useSpecialDeliveryFees = () =>
+  useQuery({
+    queryKey: ['special-delivery-fees'],
+    queryFn: async (): Promise<SpecialDeliveryFeeRow[]> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/delivery-fees/special`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`GET /delivery-fees/special failed (${res.status})`);
+      return (await res.json()) as SpecialDeliveryFeeRow[];
+    },
+    staleTime: 60_000,
+  });
+
+export const useUpsertSpecialDeliveryFee = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (row: { modelId: string; standaloneFee: number; crossCatFollowupFee: number }) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/delivery-fees/special`, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(row),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `PUT /delivery-fees/special failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-delivery-fees'] }); },
+  });
+};
+
+export const useDeleteSpecialDeliveryFee = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (modelId: string) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/delivery-fees/special/${encodeURIComponent(modelId)}`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `DELETE /delivery-fees/special failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-delivery-fees'] }); },
   });
 };
 
