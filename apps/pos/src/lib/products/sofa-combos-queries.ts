@@ -40,7 +40,12 @@ export type SofaComboRule = {
   modules: string[][];
   tier: SofaPriceTier | null;
   customerId: string | null;
+  /** COST per height (backend / PO benchmark). NOT shown or edited on this page. */
   pricesByHeight: Record<string, number | null>;
+  /** SELLING price per height — what the customer pays. This page shows + edits
+   *  THIS (Chairman 2026-06-02: show 卖家 base + PWP; cost stays a backend word,
+   *  kept separate / not linked). The API returns it via rowToWire. */
+  sellingPricesByHeight: Record<string, number | null>;
   /** PWP (换购) selling price per height (Phase 2). {} = unset. POS-only. */
   pwpPricesByHeight?: Record<string, number | null>;
   label: string | null;
@@ -58,7 +63,12 @@ export type NewSofaCombo = {
   modules: string[][];
   tier: SofaPriceTier | null;
   customerId: string | null;
-  pricesByHeight: Record<string, number | null>;
+  /** SELLING price per height. The page sends this; the server auto-detects COST
+   *  (Σ module SKU costs) when pricesByHeight is omitted, so selling and cost stay
+   *  decoupled (Chairman 2026-06-02). */
+  sellingPricesByHeight: Record<string, number | null>;
+  /** Optional COST override — normally omitted so the server auto-detects it. */
+  pricesByHeight?: Record<string, number | null>;
   pwpPricesByHeight?: Record<string, number | null>;
   label?: string | null;
   effectiveFrom: string;
@@ -131,10 +141,13 @@ export function useUpdateSofaCombo() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
-      id, pricesByHeight, pwpPricesByHeight, label, effectiveFrom, notes,
+      id, pricesByHeight, sellingPricesByHeight, pwpPricesByHeight, label, effectiveFrom, notes,
     }: {
       id: string;
+      /** Existing COST, passed back UNCHANGED (the PUT requires the field) so an
+       *  edit of the selling price never touches cost — they stay decoupled. */
       pricesByHeight: Record<string, number | null>;
+      sellingPricesByHeight?: Record<string, number | null>;
       pwpPricesByHeight?: Record<string, number | null>;
       label?: string | null;
       effectiveFrom: string;
@@ -144,6 +157,7 @@ export function useUpdateSofaCombo() {
         method: 'PUT',
         body: JSON.stringify({
           pricesByHeight, label, effectiveFrom, notes,
+          ...(sellingPricesByHeight !== undefined ? { sellingPricesByHeight } : {}),
           ...(pwpPricesByHeight !== undefined ? { pwpPricesByHeight } : {}),
         }),
       }),
