@@ -48,6 +48,11 @@ export interface SizeConfigSnapshot {
   // Optional: only the configurator populates them; legacy/restored lines omit.
   modelId?: string | null;  // product_models.id
   category?: string;        // UPPERCASE mfg category, e.g. 'MATTRESS'
+  // PWP Code Voucher (0130) — a mattress redeemed at its PWP price via a voucher.
+  // `total` already reflects the PWP base. Server re-validates + marks USED.
+  pwp?: boolean;
+  pwpCode?: string;
+  pwpTriggerLabel?: string | null;
   total: number;
   summary: string;       // e.g. "Queen"
   /** Paid-extra add-ons attached to this configured line (e.g. extra pillows
