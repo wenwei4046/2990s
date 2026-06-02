@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import { useCart, cartSubtotal } from '../state/cart';
@@ -12,7 +12,7 @@ import {
   type PosHandoffPayload,
 } from '../lib/pos-handover-so';
 import { useDeleteQuote } from '../lib/quotes';
-import { useAddons, useLocalities, useDeliveryFeeConfig, useSpecialDeliveryFees, useCatalog } from '../lib/queries';
+import { useAddons, useLocalities, useDeliveryFeeConfig, useSpecialDeliveryFees, useCrossCategoryEligibility, useCatalog } from '../lib/queries';
 import { useAuth } from '../lib/auth';
 import { computeSoDeliveryFee, type SpecialModelDeliveryFee } from '@2990s/shared/pricing';
 import {
@@ -114,6 +114,16 @@ export const Handover = () => {
   const deliveryCfgQuery = useDeliveryFeeConfig();
   const specialFeesQuery = useSpecialDeliveryFees();
 
+  // Cross-category link — debounce the typed SO number, then server-validate it
+  // so the discount only applies for a REAL eligible order (no more "type
+  // anything"). 350ms after typing stops, the check runs.
+  const [debouncedSo, setDebouncedSo] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSo(form.crossCategorySourceSo.trim()), 350);
+    return () => clearTimeout(t);
+  }, [form.crossCategorySourceSo]);
+  const linkCheck = useCrossCategoryEligibility(debouncedSo, form.phone.trim());
+
   const update = <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
@@ -172,10 +182,15 @@ export const Handover = () => {
       return sf ? { standaloneFee: sf.standaloneFee, crossCategoryFollowupFee: sf.crossCatFollowupFee } : null;
     })
     .filter((s): s is SpecialModelDeliveryFee => s !== null);
-  // Cross-category follow-up: optimistic from the SO number sales typed. The
-  // server re-validates the link; an invalid number is rejected at submit so
-  // this preview never silently mismatches the charge.
-  const isCrossCategoryFollowup = Boolean(form.crossCategorySourceSo.trim());
+  // Cross-category follow-up — only when the typed SO number is server-validated
+  // as eligible (exists / not cancelled / same customer / not already used). The
+  // `debouncedSo === current` guard means a stale check result never applies the
+  // discount while the field is mid-edit.
+  const soTyped = form.crossCategorySourceSo.trim();
+  const linkSettled = soTyped.length > 0 && debouncedSo === soTyped && !linkCheck.isFetching;
+  const linkEligible = linkSettled && linkCheck.data?.eligible === true;
+  const linkInvalid = linkSettled && linkCheck.data?.eligible === false;
+  const isCrossCategoryFollowup = linkEligible;
   const deliveryFee = computeSoDeliveryFee(
     {
       categoryIds: cartCategoryIds,
@@ -192,7 +207,9 @@ export const Handover = () => {
     address:   validateAddress(form),
     emergency: validateEmergency(form),
     target:    validateTargetDate(form),
-    addons:    validateAddonsPayment(form),
+    // Block this step when a linked SO number was typed but is invalid — the
+    // server would reject the order, so catch it here with a clear message.
+    addons:    validateAddonsPayment(form) && !linkInvalid,
     confirm:   validateConfirmPayment(form, subtotal, addonTotal),
     sign:      validateSign(form),
   };
@@ -420,7 +437,20 @@ export const Handover = () => {
             {current.key === 'address'   && <AddressStep   form={form} update={update} localities={localities.data ?? []} />}
             {current.key === 'emergency' && <EmergencyStep form={form} update={update} />}
             {current.key === 'target'    && <TargetDateStep form={form} update={update} />}
-            {current.key === 'addons'    && <AddonsPaymentStep form={form} update={update} addons={addons.data ?? []} />}
+            {current.key === 'addons'    && (
+              <AddonsPaymentStep
+                form={form}
+                update={update}
+                addons={addons.data ?? []}
+                linkStatus={{
+                  show: soTyped.length > 0,
+                  checking: soTyped.length > 0 && (debouncedSo !== soTyped || linkCheck.isFetching),
+                  eligible: linkEligible,
+                  message: linkInvalid ? (linkCheck.data?.message ?? 'Invalid order number.') : null,
+                  debtorName: linkEligible ? (linkCheck.data?.debtorName ?? null) : null,
+                }}
+              />
+            )}
             {current.key === 'confirm'   && <ConfirmPaymentStep form={form} update={update} subtotal={subtotal} addonTotal={addonTotal} />}
             {current.key === 'sign'      && <SignConfirmStep   form={form} update={update} signatureRef={signatureRef} />}
 

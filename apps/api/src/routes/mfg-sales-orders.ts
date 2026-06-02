@@ -693,6 +693,66 @@ mfgSalesOrders.get('/:docNo/slip-url', async (c) => {
   });
 });
 
+/* Cross-category delivery link (migration 0141) — shared eligibility check used
+   by BOTH the live handover preview (GET /cross-category-eligibility) and the
+   order POST, so the fee shown equals the fee charged. A non-empty SO number is
+   eligible only when it exists, isn't cancelled, belongs to the same customer
+   (by normalized phone, when both have one), and hasn't already backed another
+   follow-up (the unique index is the hard backstop). */
+type CrossCatEligibility = {
+  eligible: boolean;
+  reason?: 'not_found' | 'cancelled' | 'different_customer' | 'already_used';
+  debtorName?: string | null;
+};
+
+async function checkCrossCategorySource(
+  sb: any,
+  docNo: string,
+  newPhoneRaw: string | null,
+): Promise<CrossCatEligibility> {
+  const { data: srcRow } = await sb
+    .from('mfg_sales_orders')
+    .select('doc_no, status, phone, debtor_name')
+    .eq('doc_no', docNo)
+    .maybeSingle();
+  const src = srcRow as { doc_no: string; status: string; phone: string | null; debtor_name: string | null } | null;
+  if (!src) return { eligible: false, reason: 'not_found' };
+  if (src.status === 'CANCELLED') return { eligible: false, reason: 'cancelled' };
+  const newPhone = newPhoneRaw ? (normalizePhone(newPhoneRaw) ?? null) : null;
+  const srcPhone = src.phone ? (normalizePhone(src.phone) ?? src.phone) : null;
+  if (newPhone && srcPhone && newPhone !== srcPhone) return { eligible: false, reason: 'different_customer' };
+  const { count } = await sb
+    .from('mfg_sales_orders')
+    .select('doc_no', { count: 'exact', head: true })
+    .eq('cross_category_source_doc_no', docNo);
+  if ((count ?? 0) > 0) return { eligible: false, reason: 'already_used' };
+  return { eligible: true, debtorName: src.debtor_name ?? null };
+}
+
+const crossCatReasonText = (docNo: string, reason?: string): string =>
+  reason === 'not_found'         ? `Order ${docNo} was not found.`
+  : reason === 'cancelled'         ? `Order ${docNo} is cancelled.`
+  : reason === 'different_customer'? `Order ${docNo} belongs to a different customer.`
+  : reason === 'already_used'      ? `Order ${docNo} was already used for a cross-category discount.`
+  :                                  `Order ${docNo} is not a valid linked order.`;
+
+// GET /cross-category-eligibility?docNo&phone — live check for the handover
+// preview so the cross-category delivery discount only applies for a real,
+// eligible SO (sales can no longer "type anything" and get the reduced rate).
+// Static path is registered before /:docNo so it isn't captured as a docNo.
+mfgSalesOrders.get('/cross-category-eligibility', async (c) => {
+  const sb = c.get('supabase');
+  const docNo = (c.req.query('docNo') ?? '').trim();
+  const phone = (c.req.query('phone') ?? '').trim();
+  if (!docNo) return c.json({ eligible: false });
+  const result = await checkCrossCategorySource(sb, docNo, phone || null);
+  return c.json({
+    eligible:  result.eligible,
+    debtorName: result.debtorName ?? null,
+    message:   result.eligible ? null : crossCatReasonText(docNo, result.reason),
+  });
+});
+
 mfgSalesOrders.get('/:docNo', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo');
   const [h, i] = await Promise.all([
@@ -1321,29 +1381,12 @@ mfgSalesOrders.post('/', async (c) => {
     let isCrossCategoryFollowup = false;
     const rawLink = String((body.crossCategorySourceDocNo as string | undefined) ?? '').trim();
     if (rawLink) {
-      const { data: srcRow } = await sb
-        .from('mfg_sales_orders')
-        .select('doc_no, status, phone')
-        .eq('doc_no', rawLink)
-        .maybeSingle();
-      const src = srcRow as { doc_no: string; status: string; phone: string | null } | null;
-      const reject = async (reason: string) => {
-        await rollbackPwpClaims();
-        return c.json({ error: 'cross_category_link_invalid', reason }, 400);
-      };
-      if (!src)                       return reject(`Linked order ${rawLink} was not found.`);
-      if (src.status === 'CANCELLED') return reject(`Linked order ${rawLink} is cancelled.`);
-      const newPhone = typeof body.phone === 'string' ? (normalizePhone(body.phone) ?? null) : null;
-      const srcPhone = src.phone ? (normalizePhone(src.phone) ?? src.phone) : null;
-      if (newPhone && srcPhone && newPhone !== srcPhone) {
-        return reject(`Linked order ${rawLink} belongs to a different customer.`);
-      }
-      const { count: usedCount } = await sb
-        .from('mfg_sales_orders')
-        .select('doc_no', { count: 'exact', head: true })
-        .eq('cross_category_source_doc_no', rawLink);
-      if ((usedCount ?? 0) > 0) {
-        return reject(`Linked order ${rawLink} was already used for a cross-category delivery discount.`);
+      const elig = await checkCrossCategorySource(
+        sb, rawLink, typeof body.phone === 'string' ? body.phone : null,
+      );
+      if (!elig.eligible) {
+        await rollbackPwpClaims();  // don't burn a voucher on a rejected order
+        return c.json({ error: 'cross_category_link_invalid', reason: crossCatReasonText(rawLink, elig.reason) }, 400);
       }
       crossCategorySourceDocNo = rawLink;
       isCrossCategoryFollowup = true;

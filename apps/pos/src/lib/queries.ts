@@ -1471,6 +1471,40 @@ export const useDeleteSpecialDeliveryFee = () => {
   });
 };
 
+/* ─── Cross-category link eligibility (migration 0141) ─── */
+
+export interface CrossCategoryEligibility {
+  eligible:   boolean;
+  debtorName: string | null;
+  /** Human reason when not eligible (e.g. "Order SO-2605 was not found."). */
+  message:    string | null;
+}
+
+/** Live-validate a "Previous SO number" so the handover only applies the
+ *  cross-category delivery discount for a REAL, eligible SO. Same checks as the
+ *  order POST (exists / not cancelled / same customer / not already used) — so
+ *  typing a random value no longer shows the reduced rate. Pass a DEBOUNCED
+ *  docNo; the query only runs when it's non-empty. */
+export const useCrossCategoryEligibility = (docNo: string, phone: string) =>
+  useQuery({
+    queryKey: ['cross-cat-eligibility', docNo, phone],
+    enabled: docNo.trim().length > 0,
+    retry: 0,
+    staleTime: 10_000,
+    queryFn: async (): Promise<CrossCategoryEligibility> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const qs = new URLSearchParams({ docNo: docNo.trim(), phone: phone.trim() });
+      const res = await fetch(`${API_URL}/mfg-sales-orders/cross-category-eligibility?${qs.toString()}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`eligibility check failed (${res.status})`);
+      return (await res.json()) as CrossCategoryEligibility;
+    },
+  });
+
 /** Master Admin — writes the 4 fabric-tier Δ amounts (PATCH /fabric-tier-addon).
  *  Gated by the fabric_tier_addon_config UPDATE RLS + API WRITE_ROLES (0124). */
 export const useUpdateFabricTierAddonConfig = () => {
