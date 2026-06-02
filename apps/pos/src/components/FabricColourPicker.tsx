@@ -62,12 +62,17 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
     [colours.data, fabricId, enabledSet],
   );
 
+  // Show the fabric CODE + colour name, e.g. "CG-015 Mint" (Chairman 2026-06-03).
+  // BF colours carry no name (label === code) → just the code "BF-01", no double-up.
+  const colourText = (c: { colourId: string; label: string }) =>
+    c.label && c.label !== c.colourId ? `${c.colourId} ${c.label}` : c.colourId;
+
   const pick = (fId: string, cId: string) => {
     const f = fabrics.find((x) => x.id === fId);
     const c = (colours.data ?? []).find((x) => x.fabricId === fId && x.colourId === cId);
     if (!f || !c) return;
     onChange({
-      fabricId: fId, colourId: cId, fabricLabel: f.label, colourLabel: c.label,
+      fabricId: fId, colourId: cId, fabricLabel: f.label, colourLabel: colourText(c),
       colourHex: c.swatchHex, surcharge: f.surcharge,
       sofaTier: f.sofaTier ?? null, bedframeTier: f.bedframeTier ?? null,
     });
@@ -127,14 +132,14 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
                 <button
                   type="button"
                   aria-pressed={on}
-                  aria-label={c.label}
-                  title={c.label}
+                  aria-label={colourText(c)}
+                  title={colourText(c)}
                   className={`${styles.swatch} ${on ? styles.swatchOn : ''}`}
                   style={{ background: c.swatchHex ?? '#ccc' }}
                   onClick={() => fabricId && pick(fabricId, c.colourId)}
                 />
                 <span style={{ fontSize: 'var(--fs-12)', lineHeight: 1.15, textAlign: 'center', color: on ? 'var(--c-ink)' : 'var(--fg-muted)' }}>
-                  {c.label}
+                  {colourText(c)}
                 </span>
               </span>
             );
