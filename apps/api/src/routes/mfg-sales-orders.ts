@@ -1126,7 +1126,7 @@ mfgSalesOrders.post('/', async (c) => {
     if (!product) continue;
     const { data: cRow } = await sb
       .from('pwp_codes')
-      .select('status, owner_staff_id, reward_category, eligible_reward_model_ids, reward_combo_ids, customer_id, source_doc_no')
+      .select('status, owner_staff_id, reward_category, eligible_reward_model_ids, reward_combo_ids, customer_id, source_doc_no, type')
       .eq('code', code)
       .maybeSingle();
     if (!cRow) continue;
@@ -1155,7 +1155,10 @@ mfgSalesOrders.post('/', async (c) => {
       grantSofaComboIds = rewardComboIds;
     } else {
       const pwpPrice = Math.round(Number(product.pwp_price_sen ?? 0));
-      if (!(pwpPrice > 0)) continue;
+      // A 'promo' code prices a 0 reward as FREE; a 'pwp' code still needs a set
+      // price (> 0), where 0 means "no PWP price". (migration 0145)
+      const isPromo = String(cRow.type ?? 'pwp') === 'promo';
+      if (!isPromo && !(pwpPrice > 0)) continue;
       const elig = (cRow.eligible_reward_model_ids as string[] | null) ?? [];
       const modelOk = elig.length === 0 || (product.model_id != null && elig.includes(product.model_id));
       if (!modelOk) continue;

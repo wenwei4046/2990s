@@ -26,6 +26,7 @@ const createSchema = z.object({
   eligibleRewardModelIds:  z.array(z.string()).default([]),
   rewardComboIds:          z.array(z.string()).default([]),  // SOFA reward (Phase 2)
   qtyPerTrigger:           z.number().int().min(1).default(1),
+  type:                    z.enum(['pwp', 'promo']).default('pwp'),  // promo lets a 0 reward redeem free (migration 0145)
   active:                  z.boolean().default(true),
 });
 const patchSchema = createSchema.partial();
@@ -39,6 +40,7 @@ type RuleRow = {
   eligible_reward_model_ids: string[] | null;
   reward_combo_ids: string[] | null;
   qty_per_trigger: number;
+  type: string | null;
   active: boolean;
   created_at: string;
   updated_at: string;
@@ -53,13 +55,14 @@ const toApi = (r: RuleRow) => ({
   eligibleRewardModelIds:  r.eligible_reward_model_ids ?? [],
   rewardComboIds:          r.reward_combo_ids ?? [],
   qtyPerTrigger:           r.qty_per_trigger,
+  type:                    (r.type ?? 'pwp') as 'pwp' | 'promo',
   active:                  r.active,
   createdAt:               r.created_at,
   updatedAt:               r.updated_at,
 });
 
 const SELECT =
-  'id, trigger_category, trigger_eligible_model_ids, trigger_combo_ids, reward_category, eligible_reward_model_ids, reward_combo_ids, qty_per_trigger, active, created_at, updated_at';
+  'id, trigger_category, trigger_eligible_model_ids, trigger_combo_ids, reward_category, eligible_reward_model_ids, reward_combo_ids, qty_per_trigger, type, active, created_at, updated_at';
 
 // Editors-only guard (server check; RLS is defence-in-depth, migration 0128).
 async function requireWrite(c: AppCtx) {
@@ -106,6 +109,7 @@ pwpRules.post('/', async (c) => {
       eligible_reward_model_ids:  parsed.data.eligibleRewardModelIds,
       reward_combo_ids:           parsed.data.rewardComboIds,
       qty_per_trigger:            parsed.data.qtyPerTrigger,
+      type:                       parsed.data.type,
       active:                     parsed.data.active,
       created_by:                 gate.userId,
     })
@@ -138,6 +142,7 @@ pwpRules.patch('/:id', async (c) => {
   if (parsed.data.eligibleRewardModelIds  !== undefined) patch.eligible_reward_model_ids  = parsed.data.eligibleRewardModelIds;
   if (parsed.data.rewardComboIds          !== undefined) patch.reward_combo_ids           = parsed.data.rewardComboIds;
   if (parsed.data.qtyPerTrigger           !== undefined) patch.qty_per_trigger            = parsed.data.qtyPerTrigger;
+  if (parsed.data.type                    !== undefined) patch.type                       = parsed.data.type;
   if (parsed.data.active                  !== undefined) patch.active                     = parsed.data.active;
 
   const supabase = c.get('supabase');

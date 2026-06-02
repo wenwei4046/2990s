@@ -445,6 +445,8 @@ export const Configurator = () => {
   // the edit-hydrate effect below, which re-applies a saved code).
   const [insertCodeInput, setInsertCodeInput] = useState('');
   const [insertedCode, setInsertedCode] = useState<string | null>(null);
+  // 'promo' lets the inserted code redeem this reward free even with no PWP price (migration 0145).
+  const [insertedCodeType, setInsertedCodeType] = useState<'pwp' | 'promo'>('pwp');
   const [insertErr, setInsertErr] = useState<string | null>(null);
   const [insertChecking, setInsertChecking] = useState(false);
   // Sofa PWP voucher state — lifted here (2026-06-02) so the redeem control can
@@ -457,7 +459,7 @@ export const Configurator = () => {
   const [sofaPwpChecking, setSofaPwpChecking] = useState(false);
   useEffect(() => { // never leak the toggle / code across products
     setUsePwp(false);
-    setInsertCodeInput(''); setInsertedCode(null); setInsertErr(null);
+    setInsertCodeInput(''); setInsertedCode(null); setInsertedCodeType('pwp'); setInsertErr(null);
     setSofaPwpInput(''); setSofaPwpCode(null); setSofaPwpComboIds([]); setSofaPwpErr(null);
   }, [productId]);
   const pwpEval = useMemo(() => {
@@ -498,7 +500,7 @@ export const Configurator = () => {
   // "Auto Fill" button drops it into the Insert PWP Code field. The salesperson
   // can't otherwise see same-cart codes (they're server-generated, invisible
   // until the trigger SO confirms).
-  const sameCartCode = useMemo(() => {
+  const sameCartPick = useMemo(() => {
     const codes = reservedCodesQ.data ?? [];
     const lineOrder = new Map(cartLines.map((l, i) => [l.key, i]));
     const applied = new Set(
@@ -516,24 +518,29 @@ export const Configurator = () => {
     // Order by the trigger line's cart position (first-added trigger first).
     eligible.sort((a, b) =>
       (lineOrder.get(a.cartLineKey ?? '') ?? 1e9) - (lineOrder.get(b.cartLineKey ?? '') ?? 1e9));
-    return eligible[0]?.code ?? null;
+    return eligible[0] ?? null;
   }, [reservedCodesQ.data, cartLines, editKey, pwpRewardCategory, pwpRewardModelId]);
+  const sameCartCode = sameCartPick?.code ?? null;
+  // A promo code redeems this reward free even when the size has no PWP price set.
+  const sameCartIsPromo = sameCartPick?.type === 'promo';
 
   const applyInsertedCode = async (codeArg?: string) => {
     const code = (codeArg ?? insertCodeInput).trim().toUpperCase();
     if (!code) return;
     setInsertCodeInput(code);
-    // A reward can only be priced PWP if this size has a PWP price set.
-    if (!(pickedSize?.pwpPrice != null && pickedSize.pwpPrice > 0)) {
-      setInsertedCode(null);
-      setInsertErr('This size has no PWP price set — set it in SKU Master first.');
-      return;
-    }
     setInsertChecking(true); setInsertErr(null);
     try {
       const res = await validatePwpCode({ code, rewardCategory: pwpRewardCategory, rewardModelId: pwpRewardModelId });
-      if (res.valid) { setInsertedCode(code); }
-      else { setInsertedCode(null); setInsertErr(pwpReasonText(res.reason)); }
+      if (!res.valid) { setInsertedCode(null); setInsertErr(pwpReasonText(res.reason)); return; }
+      // A 'pwp' code still needs a set PWP price; a 'promo' code may redeem free.
+      const isPromo = res.type === 'promo';
+      if (!isPromo && !(pickedSize?.pwpPrice != null && pickedSize.pwpPrice > 0)) {
+        setInsertedCode(null);
+        setInsertErr('This size has no PWP price set — set it in SKU Master first.');
+        return;
+      }
+      setInsertedCode(code);
+      setInsertedCodeType(isPromo ? 'promo' : 'pwp');
     } catch { setInsertedCode(null); setInsertErr('Could not validate the code.'); }
     finally { setInsertChecking(false); }
   };
@@ -626,7 +633,14 @@ export const Configurator = () => {
       // exact saved code via the cross-order path so editing never loses or
       // re-rolls the voucher (server re-validates it at Confirm).
       setUsePwp(cfg.pwp === true);
-      if (cfg.pwp && cfg.pwpCode) { setInsertedCode(cfg.pwpCode); setInsertCodeInput(cfg.pwpCode); }
+      if (cfg.pwp && cfg.pwpCode) {
+        setInsertedCode(cfg.pwpCode); setInsertCodeInput(cfg.pwpCode);
+        // Recover the code's type so a promo (free) reward re-prices to RM0 on the
+        // client too — otherwise it'd show full price and drift-reject at Confirm.
+        void validatePwpCode({ code: cfg.pwpCode, rewardCategory: pwpRewardCategory, rewardModelId: pwpRewardModelId })
+          .then((res) => { if (res.valid && res.type) setInsertedCodeType(res.type); })
+          .catch(() => { /* keep 'pwp' default; server stays authoritative */ });
+      }
       hydratedRef.current = true;
     } else if (cfg.kind === 'sofa') {
       // Wait for fabric data to be ready — for mfg products this means both
@@ -1009,16 +1023,24 @@ export const Configurator = () => {
   // PWP applies to a bed frame OR a mattress (both reward categories). The picked
   // size's pwpPrice is the base; same-cart toggle or cross-order Insert PWP Code.
   const pwpUnitPrice = pickedSize?.pwpPrice ?? null;
-  const pwpPriceOk = (isBedframe || isSize) && pwpUnitPrice != null && pwpUnitPrice > 0;
-  const pwpToggleAvailable = pwpPriceOk && pwpEval.available && sameCartCode != null;
+  const isRewardCat = isBedframe || isSize;
+  const hasPwpPrice = isRewardCat && pwpUnitPrice != null && pwpUnitPrice > 0;
+  // A 'promo' code (migration 0145) redeems this reward FREE even with no PWP
+  // price set; a 'pwp' code still needs a price > 0. Same-cart learns the type
+  // from the reserved code; cross-order from the validate response.
+  const sameCartOk = isRewardCat && (hasPwpPrice || sameCartIsPromo);
+  const crossOk = isRewardCat && (hasPwpPrice || insertedCodeType === 'promo');
+  const pwpToggleAvailable = sameCartOk && pwpEval.available && sameCartCode != null;
   const sameCartPwpActive = pwpToggleAvailable && usePwp;
-  const crossPwpActive = pwpPriceOk && insertedCode != null;
+  const crossPwpActive = crossOk && insertedCode != null;
   const pwpActive = sameCartPwpActive || crossPwpActive;
   const appliedPwpCode = crossPwpActive ? insertedCode : (sameCartPwpActive ? sameCartCode : null);
-  const bedframeBase = pwpActive ? (pwpUnitPrice as number) : sizeBase;
+  // Redeemed unit price: a promo with no set price is free (0); else the size's PWP price.
+  const redeemedUnitPrice = pwpUnitPrice ?? 0;
+  const bedframeBase = pwpActive ? redeemedUnitPrice : sizeBase;
   const bedframeTotal = bedframeBase + bedframeSurcharge(bfSel) + bedframeFabricDelta;
   // Mattress (size) line total — PWP base when redeemed, else the size price.
-  const sizeTotal = (pwpActive ? (pwpUnitPrice as number) : sizeBase) + extrasTotal
+  const sizeTotal = (pwpActive ? redeemedUnitPrice : sizeBase) + extrasTotal
     + specialSelsSurcharge(mattressSpecialSel);
 
   /* PWP Code Voucher (0130/0132) — shared section for the bed frame + mattress
@@ -1028,7 +1050,7 @@ export const Configurator = () => {
      the cart; "Insert PWP Code" redeems a cross-order voucher. */
   const pwpRailSection = (
     <RailSection title="PWP 换购优惠">
-      {!pwpPriceOk && (
+      {!hasPwpPrice && !sameCartIsPromo && insertedCodeType !== 'promo' && (
         <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
           This size has no PWP (换购) price yet. Set it in SKU Master → PWP Price to enable redemption.
         </p>
@@ -1038,10 +1060,10 @@ export const Configurator = () => {
           <span style={{ fontSize: 'var(--fs-12)' }}>
             <span style={{ fontWeight: 600 }}>PWP code {insertedCode}</span>
             <span style={{ display: 'block', color: 'var(--fg-muted)' }}>
-              Applied · RM {pwpUnitPrice?.toLocaleString('en-MY')}
+              Applied · RM {redeemedUnitPrice.toLocaleString('en-MY')}
             </span>
           </span>
-          <Button variant="ghost" onClick={() => { setInsertedCode(null); setInsertCodeInput(''); setInsertErr(null); }}>
+          <Button variant="ghost" onClick={() => { setInsertedCode(null); setInsertedCodeType('pwp'); setInsertCodeInput(''); setInsertErr(null); }}>
             Remove
           </Button>
         </div>
@@ -1050,7 +1072,7 @@ export const Configurator = () => {
           <label style={{ display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-1)' }}>
             Insert PWP Code
           </label>
-          {sameCartCode && pwpPriceOk && (
+          {sameCartCode && sameCartOk && (
             <p style={{ margin: '0 0 var(--space-1)', fontSize: 'var(--fs-12)', color: 'var(--c-burnt, #A6471E)' }}>
               A PWP code from this cart is ready{pwpEval.triggerLabel ? ` (换购自 ${pwpEval.triggerLabel})` : ''} — tap Auto Fill.
             </p>
@@ -1063,7 +1085,7 @@ export const Configurator = () => {
               placeholder="PWP-1234ABCD"
               style={{ flex: 1, textTransform: 'uppercase' }}
             />
-            {sameCartCode && pwpPriceOk && (
+            {sameCartCode && sameCartOk && (
               <Button
                 variant="primary"
                 onClick={() => void applyInsertedCode(sameCartCode)}

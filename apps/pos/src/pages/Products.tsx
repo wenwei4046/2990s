@@ -350,8 +350,9 @@ export const Products = () => {
             >
               Delivery fee
             </button>
-            {/* Purchase-with-purchase (换购优惠) — Chairman 2026-06-02. Global
-                rules: buy a mattress → redeem a bed frame at its PWP price. */}
+            {/* Purchase-with-purchase + Promo (换购优惠) — Chairman 2026-06-02/03.
+                Global rules: buy a trigger → redeem a reward at its PWP price, or
+                free for a Promo rule (migration 0145). */}
             <button
               type="button"
               role="tab"
@@ -359,7 +360,7 @@ export const Products = () => {
               className={styles.tabSwitchBtn}
               onClick={() => setTopTab('pwp')}
             >
-              PWP
+              PWP &amp; Promo
             </button>
           </div>
         </div>

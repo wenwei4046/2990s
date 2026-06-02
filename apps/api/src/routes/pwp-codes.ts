@@ -53,11 +53,12 @@ type CodeRow = {
   redeemed_doc_no: string | null;
   redeemed_item_code: string | null;
   customer_id: string | null;
+  type: string | null;
 };
 
 const SELECT =
   'code, rule_id, reward_category, eligible_reward_model_ids, reward_combo_ids, status, owner_staff_id, ' +
-  'cart_line_key, trigger_item_code, source_doc_no, redeemed_doc_no, redeemed_item_code, customer_id';
+  'cart_line_key, trigger_item_code, source_doc_no, redeemed_doc_no, redeemed_item_code, customer_id, type';
 
 const toApi = (r: CodeRow) => ({
   code:                    r.code,
@@ -65,6 +66,7 @@ const toApi = (r: CodeRow) => ({
   rewardCategory:          r.reward_category,
   eligibleRewardModelIds:  r.eligible_reward_model_ids ?? [],
   rewardComboIds:          r.reward_combo_ids ?? [],
+  type:                    (r.type ?? 'pwp') as 'pwp' | 'promo',
   status:                  r.status,
   cartLineKey:             r.cart_line_key,
   triggerItemCode:         r.trigger_item_code,
@@ -124,12 +126,13 @@ pwpCodes.post('/reserve', async (c) => {
   // 2. Active rules.
   const { data: ruleRows } = await supabase
     .from('pwp_rules')
-    .select('id, trigger_category, trigger_eligible_model_ids, trigger_combo_ids, reward_category, eligible_reward_model_ids, reward_combo_ids, qty_per_trigger')
+    .select('id, trigger_category, trigger_eligible_model_ids, trigger_combo_ids, reward_category, eligible_reward_model_ids, reward_combo_ids, qty_per_trigger, type')
     .eq('active', true);
   const rules = (ruleRows ?? []) as Array<{
     id: string; trigger_category: string; trigger_eligible_model_ids: string[] | null;
     trigger_combo_ids: string[] | null; reward_category: string;
     eligible_reward_model_ids: string[] | null; reward_combo_ids: string[] | null; qty_per_trigger: number;
+    type: string | null;
   }>;
 
   // 2b. Rules whose trigger matches this line. SOFA → match the build against the
@@ -182,6 +185,7 @@ pwpCodes.post('/reserve', async (c) => {
             reward_category:           rule.reward_category,
             eligible_reward_model_ids: rule.eligible_reward_model_ids ?? [],
             reward_combo_ids:          rule.reward_combo_ids ?? [],
+            type:                      rule.type ?? 'pwp',
             status:                    'RESERVED',
             owner_staff_id:            userId,
             cart_line_key:             cartLineKey,
@@ -285,5 +289,5 @@ pwpCodes.get('/:code', async (c) => {
     customerMatches = customerId !== '' ? customerId === r.customer_id : true;
   }
 
-  return c.json({ valid: true, rewardCategory: r.reward_category, customerMatches, status: r.status });
+  return c.json({ valid: true, rewardCategory: r.reward_category, customerMatches, status: r.status, type: (r.type ?? 'pwp') as 'pwp' | 'promo' });
 });
