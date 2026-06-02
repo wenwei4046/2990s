@@ -61,7 +61,7 @@ describe('revertPwp — restore price when a same-cart trigger leaves', () => {
   it('strips the voucher and restores the original total', () => {
     const key = useCart.getState().addConfigured(rewardCfg());
     useCart.getState().revertPwp(key);
-    const c = useCart.getState().lines[0].config as Record<string, unknown>;
+    const c = useCart.getState().lines[0]!.config as unknown as Record<string, unknown>;
     expect(c.total).toBe(2990);          // RM0 → original
     expect(c.pwp).toBeUndefined();
     expect(c.pwpCode).toBeUndefined();
@@ -73,7 +73,7 @@ describe('revertPwp — restore price when a same-cart trigger leaves', () => {
       { kind: 'size', productId: 'm', productName: 'M', sizeId: 's', total: 1990, summary: 'Q' } as unknown as CartConfig,
     );
     useCart.getState().revertPwp(key);
-    expect((useCart.getState().lines[0].config as { total: number }).total).toBe(1990);
+    expect((useCart.getState().lines[0]!.config as { total: number }).total).toBe(1990);
   });
 });
 
