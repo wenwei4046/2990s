@@ -478,6 +478,9 @@ export const customers = pgTable('customers', {
   name:         text('name').notNull(),
   phone:        text('phone'),                    // normalized intl format
   email:        text('email'),
+  // Human-readable shareable code '2990S-XXXXXXXX' (migration 0146), minted on
+  // first create. The refer/recognition handle; customer_id (uuid) stays the FK.
+  customerCode: text('customer_code'),
   address:      text('address'),
   addressLine2: text('address_line2'),
   postcode:     text('postcode'),
@@ -494,6 +497,10 @@ export const customers = pgTable('customers', {
   namePhoneUnique: uniqueIndex('customers_name_phone_unique')
     .on(sql`lower(trim(${t.name}))`, t.phone)
     .where(sql`${t.phone} IS NOT NULL`),
+  /* Shareable customer code unique (migration 0146). */
+  customerCodeUnique: uniqueIndex('customers_customer_code_unique')
+    .on(t.customerCode)
+    .where(sql`${t.customerCode} IS NOT NULL`),
 }));
 
 /* ─────────────────────────── My-Localities (postcode cascade) ───────── */
@@ -1919,6 +1926,8 @@ export const pwpRules = pgTable('pwp_rules', {
   triggerComboIds:         jsonb('trigger_combo_ids').$type<string[]>().notNull().default([]),
   rewardComboIds:          jsonb('reward_combo_ids').$type<string[]>().notNull().default([]),
   qtyPerTrigger:           integer('qty_per_trigger').notNull().default(1),
+  // 'pwp' (reward needs pwp_price_sen > 0) | 'promo' (reward may redeem free; 0 = free, not unset). Migration 0145.
+  type:                    text('type').notNull().default('pwp'),
   active:                  boolean('active').notNull().default(true),
   createdAt:               timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:               timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -1943,6 +1952,7 @@ export const pwpCodes = pgTable('pwp_codes', {
   rewardCategory:           mfgProductCategory('reward_category').notNull(),                       // snapshot from the rule
   eligibleRewardModelIds:   jsonb('eligible_reward_model_ids').$type<string[]>().notNull().default([]), // snapshot; [] = whole reward category
   rewardComboIds:           jsonb('reward_combo_ids').$type<string[]>().notNull().default([]),     // snapshot of rule.reward_combo_ids (SOFA rewards); migration 0132
+  type:                     text('type').notNull().default('pwp'),                                 // snapshot of rule.type; 'promo' prices a 0 reward as free. Migration 0145
   status:                   text('status').notNull().default('RESERVED'),                         // RESERVED | USED | AVAILABLE
   ownerStaffId:             uuid('owner_staff_id').references(() => staff.id, { onDelete: 'set null' }),
   cartLineKey:              text('cart_line_key'),                                                 // the trigger cart line that owns it

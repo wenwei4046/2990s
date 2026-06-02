@@ -46,6 +46,7 @@ export type PwpRuleRow = {
   eligibleRewardModelIds: string[];
   rewardComboIds: string[];    // SOFA reward (Phase 2)
   qtyPerTrigger: number;
+  type: 'pwp' | 'promo';       // promo lets a 0 reward redeem free (migration 0145)
   active: boolean;
   createdAt: string;
   updatedAt: string;
@@ -59,6 +60,7 @@ export type PwpRuleInput = {
   eligibleRewardModelIds: string[];
   rewardComboIds?: string[];
   qtyPerTrigger: number;
+  type: 'pwp' | 'promo';
   active: boolean;
 };
 
@@ -112,6 +114,7 @@ export type PwpReservedCode = {
   rewardCategory: MfgCategory;
   eligibleRewardModelIds: string[];
   rewardComboIds: string[];    // SOFA reward (Phase 2)
+  type: 'pwp' | 'promo';       // promo reward may redeem free (migration 0145)
   status: string;
   cartLineKey: string | null;
   triggerItemCode: string | null;
@@ -126,6 +129,7 @@ export type PwpCodeValidation = {
   rewardCategory?: MfgCategory;
   customerMatches?: boolean;
   status?: string;
+  type?: 'pwp' | 'promo';
 };
 
 /** The caller's RESERVED codes (keyed client-side by cartLineKey). */

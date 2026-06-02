@@ -44,8 +44,11 @@ const modelLabel = (m: ProductModelRow): string =>
 const comboLabel = (c: SofaComboRule): string =>
   [c.baseModel, c.label || buildComboLabel(c.modules)].filter(Boolean).join(' · ');
 
+type RuleType = 'pwp' | 'promo';
+
 interface Draft {
   id?: string;
+  type: RuleType;
   triggerCategory: Cat;
   triggerModelIds: string[];   // models (mattress/bedframe) OR combo ids (sofa)
   rewardCategory: Cat;
@@ -54,10 +57,11 @@ interface Draft {
   active: boolean;
 }
 
-const emptyDraft = (): Draft => ({
+const emptyDraft = (type: RuleType = 'pwp'): Draft => ({
+  type,
   triggerCategory: 'MATTRESS',
   triggerModelIds: [],
-  rewardCategory: 'BEDFRAME',
+  rewardCategory: type === 'promo' ? 'MATTRESS' : 'BEDFRAME',
   rewardModelIds: [],
   qty: 1,
   active: true,
@@ -114,13 +118,14 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
 
   const busy = create.isPending || update.isPending || del.isPending;
 
-  const openNew = () => { setError(null); setDraft(emptyDraft()); };
+  const openNew = (type: RuleType = 'pwp') => { setError(null); setDraft(emptyDraft(type)); };
   const openEdit = (r: PwpRuleRow) => {
     setError(null);
     const tCat = (r.triggerCategory as Cat) ?? 'MATTRESS';
     const rCat = (r.rewardCategory as Cat) ?? 'BEDFRAME';
     setDraft({
       id: r.id,
+      type: (r.type as RuleType) ?? 'pwp',
       triggerCategory: tCat,
       // SOFA stores combo ids; other categories store model ids.
       triggerModelIds: tCat === 'SOFA' ? r.triggerComboIds : r.triggerEligibleModelIds,
@@ -157,6 +162,7 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
       eligibleRewardModelIds: draft.rewardCategory === 'SOFA' ? [] : draft.rewardModelIds,
       rewardComboIds: draft.rewardCategory === 'SOFA' ? draft.rewardModelIds : [],
       qtyPerTrigger: draft.qty,
+      type: draft.type,
       active: draft.active,
     };
     try {
@@ -221,11 +227,26 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
 
     return (
       <div style={{ padding: 'var(--space-5)', maxWidth: 760 }}>
-        <h2 style={{ fontSize: 'var(--fs-18)', marginBottom: 'var(--space-1)' }}>{draft.id ? 'Edit PWP rule' : 'New PWP rule'}</h2>
+        <h2 style={{ fontSize: 'var(--fs-18)', marginBottom: 'var(--space-1)' }}>
+          {draft.id ? 'Edit' : 'New'} {draft.type === 'promo' ? 'Promo' : 'PWP'} rule
+        </h2>
         <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-5)' }}>
-          Choose what the customer must buy (Trigger), what they can then redeem at PWP price (Reward),
-          and the ratio. Set each reward’s PWP price in the SKU Master “PWP Price” column.
+          Choose what the customer must buy (Trigger), what they can then redeem (Reward), and the ratio.
+          Set each reward’s price in the SKU Master “PWP Price” column.{draft.type === 'promo'
+            ? ' For a Promo, leaving that price at RM 0 redeems the reward free.'
+            : ' A PWP reward needs a price greater than 0.'}
         </p>
+
+        <div style={{ marginBottom: 'var(--space-5)' }}>
+          <span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-2)' }}>Kind</span>
+          <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
+            {([['pwp', 'PWP — redeem at a set price'], ['promo', 'Promo — may redeem free (RM 0)']] as [RuleType, string][]).map(([v, lbl]) => (
+              <button key={v} type="button" disabled={!canEdit} onClick={() => setDraft({ ...draft, type: v })} style={chipStyle(draft.type === v, !canEdit)}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div style={{ marginBottom: 'var(--space-5)' }}>
           <span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-2)' }}>1 · Trigger — what unlocks the offer</span>
@@ -286,51 +307,64 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
     <div style={{ padding: 'var(--space-5)', maxWidth: 880 }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 'var(--space-4)', marginBottom: 'var(--space-4)' }}>
         <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', margin: 0, maxWidth: 620 }}>
-          Each rule lets a customer who buys a qualifying <b>Trigger</b> redeem a <b>Reward</b> at its PWP
-          price (set in the SKU Master “PWP Price” column), at the chosen ratio. Add as many rules as you
-          need — e.g. one mattress unlocks one bed frame, another unlocks a different one. Changes apply to
-          new orders only.
+          Each rule lets a customer who buys a qualifying <b>Trigger</b> redeem a <b>Reward</b>, at the chosen
+          ratio. A <b>PWP</b> redeems at the reward’s PWP price (set in the SKU Master “PWP Price” column); a
+          <b> Promo</b> works the same but may redeem free (RM 0). Changes apply to new orders only.
         </p>
         {canEdit && (
-          <Button variant="primary" onClick={openNew}>
-            <Plus {...ICON} /> New rule
-          </Button>
+          <div style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
+            <Button variant="primary" onClick={() => openNew('pwp')}><Plus {...ICON} /> New PWP</Button>
+            <Button variant="secondary" onClick={() => openNew('promo')}><Plus {...ICON} /> New Promo</Button>
+          </div>
         )}
       </div>
 
       {rules.length === 0 ? (
         <div style={{ padding: 'var(--space-7)', textAlign: 'center', color: 'var(--fg-muted)', border: '1px dashed var(--line-strong)', borderRadius: 'var(--radius-md)' }}>
-          No PWP rules yet.{canEdit ? ' Click “New rule” to create one.' : ''}
+          No PWP or Promo rules yet.{canEdit ? ' Click “New PWP” or “New Promo” to create one.' : ''}
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-          {rules.map((r) => (
-            <div key={r.id} style={{ border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', padding: 'var(--space-4)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-4)', opacity: r.active ? 1 : 0.55 }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap', fontSize: 'var(--fs-14)' }}>
-                <span style={{ fontWeight: 600 }}>{itemSummary(r.triggerCategory === 'SOFA' ? r.triggerComboIds : r.triggerEligibleModelIds, r.triggerCategory)}</span>
-                <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>({catLabel(r.triggerCategory)})</span>
-                <ArrowRight {...ICON} />
-                <span style={{ fontWeight: 600 }}>{itemSummary(r.rewardCategory === 'SOFA' ? r.rewardComboIds : r.eligibleRewardModelIds, r.rewardCategory)}</span>
-                <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>({catLabel(r.rewardCategory)})</span>
+        <>
+          {(['pwp', 'promo'] as RuleType[]).map((kind) => {
+            const group = rules.filter((r) => ((r.type as RuleType) ?? 'pwp') === kind);
+            if (group.length === 0) return null;
+            return (
+              <div key={kind} style={{ marginBottom: 'var(--space-5)' }}>
+                <h3 style={{ fontSize: 'var(--fs-13)', fontWeight: 600, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 'var(--space-3)' }}>
+                  {kind === 'promo' ? 'Promo — may redeem free' : 'PWP — redeem at a set price'}
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                  {group.map((r) => (
+                    <div key={r.id} style={{ border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', padding: 'var(--space-4)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-4)', opacity: r.active ? 1 : 0.55 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap', fontSize: 'var(--fs-14)' }}>
+                          <span style={{ fontWeight: 600 }}>{itemSummary(r.triggerCategory === 'SOFA' ? r.triggerComboIds : r.triggerEligibleModelIds, r.triggerCategory)}</span>
+                          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>({catLabel(r.triggerCategory)})</span>
+                          <ArrowRight {...ICON} />
+                          <span style={{ fontWeight: 600 }}>{itemSummary(r.rewardCategory === 'SOFA' ? r.rewardComboIds : r.eligibleRewardModelIds, r.rewardCategory)}</span>
+                          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>({catLabel(r.rewardCategory)})</span>
+                        </div>
+                        <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-1)' }}>
+                          Ratio 1 : {r.qtyPerTrigger}{r.active ? '' : ' · inactive'}
+                        </div>
+                      </div>
+                      {canEdit && (
+                        <div style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
+                          <button type="button" aria-label="Edit rule" title="Edit" onClick={() => openEdit(r)} style={{ background: 'transparent', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', cursor: 'pointer', color: 'var(--c-ink)' }}>
+                            <Pencil {...ICON} />
+                          </button>
+                          <button type="button" aria-label="Delete rule" title="Delete" disabled={busy} onClick={() => void onDelete(r.id)} style={{ background: 'transparent', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', cursor: 'pointer', color: 'var(--c-burnt, #A6471E)' }}>
+                            <Trash2 {...ICON} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-1)' }}>
-                Ratio 1 : {r.qtyPerTrigger}{r.active ? '' : ' · inactive'}
-              </div>
-            </div>
-            {canEdit && (
-              <div style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
-                <button type="button" aria-label="Edit rule" title="Edit" onClick={() => openEdit(r)} style={{ background: 'transparent', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', cursor: 'pointer', color: 'var(--c-ink)' }}>
-                  <Pencil {...ICON} />
-                </button>
-                <button type="button" aria-label="Delete rule" title="Delete" disabled={busy} onClick={() => void onDelete(r.id)} style={{ background: 'transparent', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', cursor: 'pointer', color: 'var(--c-burnt, #A6471E)' }}>
-                  <Trash2 {...ICON} />
-                </button>
-              </div>
-            )}
-            </div>
-          ))}
-        </div>
+            );
+          })}
+        </>
       )}
 
       {error && <div style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginTop: 'var(--space-3)' }} role="alert">{error}</div>}
