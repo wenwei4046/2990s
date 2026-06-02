@@ -125,6 +125,41 @@ describe('cartLineToSoItem', () => {
     expect((items[0]!.variants as any).cells).toHaveLength(2);
   });
 
+  it('sofa description = Model name + compartment codes, ordered left-to-right', () => {
+    const sofa = product({ id: 'sofa-1', name: 'Lyyar' });
+    const line: CartLine = {
+      key: 'cfg-codes',
+      qty: 1,
+      config: {
+        kind: 'sofa',
+        productId: 'sofa-1',
+        productName: 'Lyyar',
+        // intentionally out of order — must sort by x (then y)
+        cells: [
+          { moduleId: '2A-RHF', x: 2, y: 0, rot: 0 } as any,
+          { moduleId: '1A-LHF', x: 0, y: 0, rot: 0 } as any,
+          { moduleId: '1NA', x: 1, y: 0, rot: 0 } as any,
+        ],
+        depth: '24',
+        total: 5980,
+        summary: '',
+      },
+    };
+    const item = cartLineToSoItem(line, new Map([['sofa-1', sofa]]));
+    expect(item.description).toBe('Lyyar · 1A-LHF + 1NA + 2A-RHF');
+  });
+
+  it('sofa with no cells (bundle preset) keeps just the Model name', () => {
+    const sofa = product({ id: 'sofa-2', name: 'Annsa' });
+    const line: CartLine = {
+      key: 'cfg-bundle',
+      qty: 1,
+      config: { kind: 'sofa', productId: 'sofa-2', productName: 'Annsa', bundleId: 'b-3L', total: 4990, summary: '3+L' },
+    };
+    const item = cartLineToSoItem(line, new Map([['sofa-2', sofa]]));
+    expect(item.description).toBe('Annsa');
+  });
+
   it('maps a bedframe line — all variant labels snapshot', () => {
     const bedframeProduct = product({
       id: 'prod-bf',

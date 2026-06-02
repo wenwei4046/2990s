@@ -412,10 +412,23 @@ export const cartLineToSoItem = (
   // Whole-MYR → sen. POS uses INTEGER ringgit (db/schema.ts §Money), the
   // Backend SO ledger is sen — multiply at the boundary.
   const unitPriceCenti = Math.round(line.config.total * 100);
+  // Sales Order line description (Chairman 2026-06-03): a sofa lists the Model
+  // name followed by every compartment code of the build, left-to-right —
+  // "Lyyar · 1A-LHF + 1NA + 2A-RHF". Other categories keep the Model/product
+  // name. A bundle-only sofa (no cells) falls back to the Model name.
+  const modelName = product?.name ?? line.config.productName ?? itemCode;
+  let description = modelName;
+  if (line.config.kind === 'sofa' && line.config.cells && line.config.cells.length > 0) {
+    const codes = [...line.config.cells]
+      .sort((a, b) => a.x - b.x || a.y - b.y)
+      .map((c) => c.moduleId)
+      .filter(Boolean);
+    if (codes.length > 0) description = `${modelName} · ${codes.join(' + ')}`;
+  }
   return {
     itemCode,
     itemGroup,
-    description: product?.name ?? line.config.productName ?? itemCode,
+    description,
     qty: line.qty,
     unitPriceCenti,
     discountCenti: 0,
