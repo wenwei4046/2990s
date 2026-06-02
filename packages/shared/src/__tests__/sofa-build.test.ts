@@ -636,8 +636,38 @@ describe('analyzeSofa closure', () => {
     expect(r.closed).toBe(false);
   });
 
-  it('reports "Console needs a sofa next to it" for accessory-only group', () => {
+  it('reports "Console needs a sofa next to it" for a console-only group', () => {
     const r = analyzeSofa([{ id: 'a', moduleId: 'Console', x: 0, y: 0, rot: 0 }], '24');
+    expect(r.closed).toBe(false);
+    expect(r.reason).toBe('Console needs a sofa next to it');
+  });
+
+  it('a free-standing STOOL is a closed, complete piece on its own', () => {
+    const r = analyzeSofa([{ id: 'a', moduleId: 'STOOL', x: 0, y: 0, rot: 0 }], '24');
+    expect(r.closed).toBe(true);
+    expect(r.reason).toBeNull();
+  });
+
+  it('a stool-only group stays closed even with multiple stools', () => {
+    const r = analyzeSofa(
+      [
+        { id: 'a', moduleId: 'STOOL', x: 0,  y: 0, rot: 0 },
+        { id: 'b', moduleId: 'STOOL', x: 80, y: 0, rot: 0 },
+      ],
+      '24',
+    );
+    expect(r.closed).toBe(true);
+    expect(r.reason).toBeNull();
+  });
+
+  it('a stool wedged with a console still needs a sofa (console rule wins)', () => {
+    const r = analyzeSofa(
+      [
+        { id: 'a', moduleId: 'STOOL',   x: 0,  y: 0, rot: 0 },
+        { id: 'b', moduleId: 'Console', x: 80, y: 0, rot: 0 },
+      ],
+      '24',
+    );
     expect(r.closed).toBe(false);
     expect(r.reason).toBe('Console needs a sofa next to it');
   });

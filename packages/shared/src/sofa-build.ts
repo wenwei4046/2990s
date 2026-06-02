@@ -1272,8 +1272,12 @@ export const analyzeSofa = (group: Cell[], depth: Depth): SofaAnalysis => {
 
   const allAccessories = group.length > 0 && group.every((c) => isAccessoryModule(c.moduleId));
   if (allAccessories) {
-    closed = false;
-    reason = 'Console needs a sofa next to it';
+    // A stool / ottoman is free-standing — a stool-only group is a complete,
+    // sellable piece on its own. The wood Console must slot beside a sofa, so
+    // an accessory-only group that includes one is not a closed sofa.
+    const everyPieceStandsAlone = group.every((c) => c.moduleId === 'STOOL');
+    closed = everyPieceStandsAlone;
+    reason = everyPieceStandsAlone ? null : 'Console needs a sofa next to it';
   }
 
   return { violations, closed, reason, leftArm: headArm, rightArm: tailArm };
