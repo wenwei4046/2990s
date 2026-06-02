@@ -734,6 +734,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // (cellsToPoSkus) already splits accessories onto their own lines, so the
       // canvas safely keeps the user's modules exactly as laid out.
       if (groupCells.some((c) => isAccessoryModule(c.moduleId))) return;
+      // Likewise never rewrite a group containing a FUNCTIONAL seat (power /
+      // recliner / leg — 1A-P, 1NA-P, 1S-P/R/L, …). The canonical breakdown
+      // collapses the mechanism suffix (1NA-P → 1NA), so 1A-LHF + 1NA-P + 1A-RHF
+      // signs as 1A+1A+1NA → the plain 3S [1A,2A], and the rewrite would
+      // silently DELETE the power seat the user deliberately placed — the
+      // layout "jumps" to a standard sofa. Keep the user's exact modules; PO
+      // SKU translation happens in the order layer (cellsToPoSkus).
+      if (groupCells.some((c) => isFunctionalSeat(c.moduleId))) return;
       const groupIds = new Set(
         groupCells.map((c) => c.id).filter((x): x is string => x != null),
       );
