@@ -66,6 +66,37 @@ describe('cartLineToSoItem', () => {
     });
   });
 
+  // Delivery-fee fix (2026-06-03): a mattress size line must classify as
+  // 'mattress' from its own config.category even when the catalog is empty
+  // (production `products` is empty + the size SKU id isn't a catalog card).
+  // Previously it fell to 'others' → 0 delivery fee + wrong revenue bucket.
+  it('classifies a mattress size line from config.category with an empty catalog', () => {
+    const line: CartLine = {
+      key: 'cfg-matt',
+      qty: 1,
+      config: {
+        kind: 'size',
+        productId: 'mfg-akka-k',
+        productName: '2990 AKKA-FIRM MATTRESS (King)',
+        sizeId: 'king',
+        modelId: 'model-akka',
+        category: 'MATTRESS',
+        total: 2990,
+        summary: 'King',
+      },
+    };
+    expect(cartLinesToSoItems([line], [])[0]!.itemGroup).toBe('mattress');
+  });
+
+  it('defaults an unclassifiable size line to mattress', () => {
+    const line: CartLine = {
+      key: 'cfg-size-bare',
+      qty: 1,
+      config: { kind: 'size', productId: 'x', productName: 'X', sizeId: 'queen', total: 1000, summary: 'Queen' },
+    };
+    expect(cartLinesToSoItems([line], [])[0]!.itemGroup).toBe('mattress');
+  });
+
   it('maps a sofa Custom Build (cells) line — cells + depth survive', () => {
     const line: CartLine = {
       key: 'cfg-cells',

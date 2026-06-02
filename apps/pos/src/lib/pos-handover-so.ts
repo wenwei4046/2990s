@@ -156,22 +156,31 @@ export class PosHandoffApiError extends Error {
 
 /** Map a POS cart line's CartConfig.kind → SO item_group. The Backend's
  *  SoLineCard / SalesOrderDetail switches on this string to decide which
- *  variants grid to render (sofa vs bedframe vs mattress). For mattress
- *  size-variants and flat-priced products we read the product's category
- *  off the catalog row — kind === 'size' covers both mattresses and
- *  size-priced sofas/bedframes, so the category lookup is required to
- *  disambiguate. Defaults to 'others' if we can't classify confidently. */
+ *  variants grid to render (sofa vs bedframe vs mattress). It also drives the
+ *  delivery-fee deliverable-category set (sofa/mattress/bedframe) + revenue
+ *  bucketing.
+ *
+ *  The cart line itself carries the mfg `category` (set by the configurator on
+ *  size + bedframe lines for PWP), so we trust THAT first — the catalog lookup
+ *  (`product.category`) misses for size-variant SKUs in production (`products`
+ *  is empty; the SKU id isn't a catalog card), which used to bucket every
+ *  mattress as 'others' → 0 delivery fee + wrong revenue split. A `size` line
+ *  with no resolvable category is almost always a mattress. */
 export const inferItemGroup = (
   config: CartConfig,
   product: CatalogProduct | undefined,
 ): PosHandoffItem['itemGroup'] => {
   if (config.kind === 'sofa') return 'sofa';
   if (config.kind === 'bedframe') return 'bedframe';
-  const categoryId = product?.category?.id?.toLowerCase() ?? '';
+  const fromConfig = 'category' in config && config.category ? String(config.category).toLowerCase() : '';
+  const categoryId = fromConfig || (product?.category?.id?.toLowerCase() ?? '');
   if (categoryId.includes('mattress')) return 'mattress';
   if (categoryId.includes('sofa')) return 'sofa';
   if (categoryId.includes('bedframe')) return 'bedframe';
   if (categoryId.includes('accessor') || categoryId.includes('addon')) return 'accessory';
+  // A size-priced line we couldn't classify is a mattress (sofas/bedframes have
+  // their own kinds). Keeps delivery + revenue correct when the catalog is empty.
+  if (config.kind === 'size') return 'mattress';
   return 'others';
 };
 

@@ -161,7 +161,13 @@ export const Handover = () => {
   );
   const cartSpecialModels: SpecialModelDeliveryFee[] = lines
     .map((l) => {
-      const modelId = productById.get(l.config.productId)?.model_id ?? null;
+      // The cart line carries its own product_models.id (configurator-set on
+      // size + bedframe lines); fall back to the catalog only for older lines.
+      // The catalog lookup misses size-variant SKUs, so config.modelId is what
+      // makes the special fee actually match (e.g. AKKA-FIRM mattress → RM 500).
+      const modelId = ('modelId' in l.config && l.config.modelId)
+        ? l.config.modelId
+        : (productById.get(l.config.productId)?.model_id ?? null);
       const sf = modelId ? specialFeeByModel.get(modelId) : undefined;
       return sf ? { standaloneFee: sf.standaloneFee, crossCategoryFollowupFee: sf.crossCatFollowupFee } : null;
     })
