@@ -478,6 +478,9 @@ export const customers = pgTable('customers', {
   name:         text('name').notNull(),
   phone:        text('phone'),                    // normalized intl format
   email:        text('email'),
+  // Human-readable shareable code '2990S-XXXXXXXX' (migration 0146), minted on
+  // first create. The refer/recognition handle; customer_id (uuid) stays the FK.
+  customerCode: text('customer_code'),
   address:      text('address'),
   addressLine2: text('address_line2'),
   postcode:     text('postcode'),
@@ -494,6 +497,10 @@ export const customers = pgTable('customers', {
   namePhoneUnique: uniqueIndex('customers_name_phone_unique')
     .on(sql`lower(trim(${t.name}))`, t.phone)
     .where(sql`${t.phone} IS NOT NULL`),
+  /* Shareable customer code unique (migration 0146). */
+  customerCodeUnique: uniqueIndex('customers_customer_code_unique')
+    .on(t.customerCode)
+    .where(sql`${t.customerCode} IS NOT NULL`),
 }));
 
 /* ─────────────────────────── My-Localities (postcode cascade) ───────── */
