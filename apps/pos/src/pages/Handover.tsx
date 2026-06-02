@@ -7,13 +7,14 @@ import {
   usePosHandoffToSo,
   cartLinesToSoItems,
   fetchItemCodeMap,
+  inferItemGroup,
   PosHandoffApiError,
   type PosHandoffPayload,
 } from '../lib/pos-handover-so';
 import { useDeleteQuote } from '../lib/quotes';
-import { useAddons, useLocalities, useDeliveryFeeConfig, useCatalog } from '../lib/queries';
+import { useAddons, useLocalities, useDeliveryFeeConfig, useSpecialDeliveryFees, useCatalog } from '../lib/queries';
 import { useAuth } from '../lib/auth';
-import { computeDeliveryFee } from '@2990s/shared/pricing';
+import { computeSoDeliveryFee, type SpecialModelDeliveryFee } from '@2990s/shared/pricing';
 import {
   validateCustomer, validateAddress, validateEmergency, validateTargetDate,
   validateAddonsPayment, validateConfirmPayment, validateSign,
@@ -64,6 +65,7 @@ const empty: HandoverForm = {
   addons: {}, paymentMethod: '',
   amountPaid: 0,
   additionalDeliveryFee: 0,
+  crossCategorySourceSo: '',
   paymentPreset: 'full', approvalCode: '',
   slipUploadSessionId: null, paymentRecorded: false,
   signed: false,
@@ -109,6 +111,7 @@ export const Handover = () => {
   const localities = useLocalities();
   const catalog = useCatalog();
   const deliveryCfgQuery = useDeliveryFeeConfig();
+  const specialFeesQuery = useSpecialDeliveryFees();
 
   const update = <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -137,20 +140,43 @@ export const Handover = () => {
   );
   const addonTotal = computeAddonTotal(form.addons, addonInfos);
 
-  // Delivery fee (migration 0029) — Backend Settings → Delivery sets the base
-  // + cross-category rates; POS adds an optional additional fee at handover.
-  const categoryIdByProductId = new Map<string, string>();
-  for (const p of catalog.data ?? []) {
-    if (p.category?.id) categoryIdByProductId.set(p.id, p.category.id);
-  }
+  // Delivery fee (migrations 0029 + 0133) — Backend sets base + cross-category
+  // rates; POS adds an optional additional fee at handover. Categories are the
+  // cart's distinct DELIVERABLE groups (sofa/mattress/bedframe) via the SAME
+  // inferItemGroup the SO handover sends as item_group — so the fee shown here
+  // equals the fee the server charges. (The old legacy-catalog category lookup
+  // resolved to nothing in production, where `products` is empty, and silently
+  // showed RM 0.)
+  const productById = new Map((catalog.data ?? []).map((p) => [p.id, p]));
+  const DELIVERABLE_GROUPS = new Set(['sofa', 'mattress', 'bedframe']);
   const cartCategoryIds = lines
-    .map((l) => categoryIdByProductId.get(l.config.productId) ?? '')
-    .filter(Boolean);
+    .map((l) => inferItemGroup(l.config, productById.get(l.config.productId)))
+    .filter((g) => DELIVERABLE_GROUPS.has(g));
   const deliveryCfg = deliveryCfgQuery.data ?? { baseFee: 0, crossCategoryFee: 0 };
-  const deliveryFee = computeDeliveryFee(
-    cartCategoryIds,
+  // Special-model fees (migration 0140) — map model_id → fee, then collect the
+  // specials present in this cart so the shown fee matches the server charge.
+  const specialFeeByModel = new Map(
+    (specialFeesQuery.data ?? []).map((s) => [s.modelId, s]),
+  );
+  const cartSpecialModels: SpecialModelDeliveryFee[] = lines
+    .map((l) => {
+      const modelId = productById.get(l.config.productId)?.model_id ?? null;
+      const sf = modelId ? specialFeeByModel.get(modelId) : undefined;
+      return sf ? { standaloneFee: sf.standaloneFee, crossCategoryFollowupFee: sf.crossCatFollowupFee } : null;
+    })
+    .filter((s): s is SpecialModelDeliveryFee => s !== null);
+  // Cross-category follow-up: optimistic from the SO number sales typed. The
+  // server re-validates the link; an invalid number is rejected at submit so
+  // this preview never silently mismatches the charge.
+  const isCrossCategoryFollowup = Boolean(form.crossCategorySourceSo.trim());
+  const deliveryFee = computeSoDeliveryFee(
+    {
+      categoryIds: cartCategoryIds,
+      specialModels: cartSpecialModels,
+      isCrossCategoryFollowup,
+      additionalFee: form.additionalDeliveryFee,
+    },
     { baseFee: deliveryCfg.baseFee, crossCategoryFee: deliveryCfg.crossCategoryFee },
-    form.additionalDeliveryFee,
   );
   const total = subtotal + addonTotal + deliveryFee.total;
 
@@ -243,6 +269,14 @@ export const Handover = () => {
         ...(form.approvalCode.trim() ? { approvalCode: form.approvalCode.trim() } : {}),
         // Whole-MYR → sen.
         depositCenti: Math.round(form.amountPaid * 100),
+        // Delivery fee (migration 0133) — opt this SO into the server-recomputed
+        // delivery fee + forward the optional additional fee sales keyed in.
+        applyDeliveryFee: true,
+        additionalDeliveryFee: form.additionalDeliveryFee,
+        // Cross-category follow-up link (migration 0141) — the earlier SO number.
+        ...(form.crossCategorySourceSo.trim()
+          ? { crossCategorySourceDocNo: form.crossCategorySourceSo.trim() }
+          : {}),
         items,
       };
 
