@@ -23,6 +23,21 @@ export async function fetchSlipUrl(orderId: string): Promise<SlipUrlResponse> {
   return res.json() as Promise<SlipUrlResponse>;
 }
 
+/** Presigned GET URL for a manufacturing Sales Order's payment slip (P1,
+ *  migration 0143). Mirrors fetchSlipUrl but hits the SO route keyed by docNo. */
+export async function fetchSoSlipUrl(docNo: string): Promise<SlipUrlResponse> {
+  if (!API_URL) throw new Error('VITE_API_URL is not set');
+  const token = await getToken();
+  const res = await fetch(`${API_URL}/mfg-sales-orders/${encodeURIComponent(docNo)}/slip-url`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '<no body>');
+    throw new Error(`slip-url failed (${res.status}): ${text}`);
+  }
+  return res.json() as Promise<SlipUrlResponse>;
+}
+
 export async function patchOrderLane(orderId: string, lane: string): Promise<void> {
   if (!API_URL) throw new Error('VITE_API_URL is not set');
   const token = await getToken();

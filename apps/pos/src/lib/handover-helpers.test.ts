@@ -23,6 +23,7 @@ const baseForm: HandoverForm = {
   billingPostcode: '', billingCity: '', billingState: '',
   emergencyName: '', emergencyRelation: '', emergencyPhone: '',
   deliveryDate: '', deliveryDateLater: false, deliveryAsap: false,
+  processDate: '',
   specialInstructions: '',
   addons: {}, paymentMethod: '',
   amountPaid: 0, additionalDeliveryFee: 0, crossCategorySourceSo: '',
@@ -74,12 +75,21 @@ describe('validateEmergency', () => {
 });
 
 describe('validateTargetDate', () => {
-  it('passes if addressLater (no date needed)', () => {
-    expect(validateTargetDate({ ...baseForm, addressLater: true })).toBe(true);
+  it('passes when "For further notice" (UFN) — both dates left open', () => {
+    expect(validateTargetDate({ ...baseForm, deliveryDateLater: true })).toBe(true);
   });
-  it('requires a date otherwise', () => {
+  it('fails with no dates at all', () => {
     expect(validateTargetDate(baseForm)).toBe(false);
-    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04' })).toBe(true);
+  });
+  it('requires a Process Date once a delivery date is committed', () => {
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04' })).toBe(false);
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04', processDate: '2026-06-01' })).toBe(true);
+  });
+  it('rejects a Process Date later than the delivery date', () => {
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04', processDate: '2026-06-10' })).toBe(false);
+  });
+  it('allows Process Date equal to the delivery date', () => {
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04', processDate: '2026-06-04' })).toBe(true);
   });
 });
 

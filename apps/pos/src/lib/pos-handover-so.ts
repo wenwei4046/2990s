@@ -10,7 +10,8 @@
 //   debtorName, email, customerType, salespersonId, phone,
 //   address1, address2, city, postcode, customerState, buildingType,
 //   emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
-//   targetDate, customerDeliveryDate, paymentMethod, items: [...]
+//   targetDate, customerDeliveryDate, internalExpectedDd, paymentMethod,
+//   items: [...]
 //
 // On success the server returns { docNo: 'SO-NNNNNN' } and the caller
 // navigates to the handover thank-you screen with that docNo. On failure the
@@ -51,6 +52,10 @@ export interface PosHandoffPayload {
   postcode?: string;
   customerState?: string;
   buildingType?: 'condo' | 'landed' | 'apartment' | 'office' | 'shop' | 'other';
+  /** Billing address as a single line, sent ONLY when it differs from the
+   *  delivery address. Maps to the SO's existing `bill_to_address` column (the
+   *  coordinator sees it on the SO detail page). Omitted when billing == delivery. */
+  billToAddress?: string;
 
   /* Emergency contact. */
   emergencyContactName?: string;
@@ -65,6 +70,25 @@ export interface PosHandoffPayload {
    *  We send both because target_date is the POS handover field; coordinators
    *  edit customer_delivery_date downstream as the operational date. */
   customerDeliveryDate?: string;
+  /** Factory start ("Process Date") — when production should begin, so a far-out
+   *  delivery doesn't pull stock too early. ISO YYYY-MM-DD. Maps to the SO's
+   *  internal_expected_dd column. The API requires this and customerDeliveryDate
+   *  to be sent together (or both omitted) and Process ≤ Delivery. */
+  internalExpectedDd?: string;
+
+  /** Free-text special instructions captured at handover (lift available, leave
+   *  at concierge, etc.). Maps to the SO's existing `note` column — the
+   *  coordinator reads + edits it on the SO detail page. */
+  note?: string;
+  /** Customer signature captured on the handover pad, as a data URL
+   *  (image/png;base64,…). Maps to the SO's signature_b64 column (migration
+   *  0142). Omitted when unsigned. */
+  signatureB64?: string;
+  /** R2 upload-session id for the payment slip (from /slips/init + confirm). The
+   *  server resolves it to the committed R2 key and attaches it to the SO
+   *  (slip_key, migration 0143) so the coordinator sees the payment proof.
+   *  Omitted when no slip was uploaded. */
+  uploadSessionId?: string;
 
   /* Payment. */
   paymentMethod?: 'merchant' | 'transfer' | 'installment' | 'cash';

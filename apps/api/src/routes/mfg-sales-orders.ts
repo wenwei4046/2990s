@@ -11,7 +11,8 @@ import {
 import { computeSoDeliveryFee } from '@2990s/shared/pricing';
 import { supabaseAuth } from '../middleware/auth';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
-import { signSoItemPhotoUrl, soItemPhotoBindings } from '../lib/r2';
+import { signSoItemPhotoUrl, soItemPhotoBindings, presign, type SlipMime } from '../lib/r2';
+import { slipBindings } from '../lib/slip';
 import {
   loadMaintenanceConfig,
   recomputeFromSnapshot,
@@ -646,6 +647,52 @@ mfgSalesOrders.get('/mine', async (c) => {
   return c.json({ salesOrders });
 });
 
+/* P1 (Owner 2026-06-03, migration 0143) — presign a short-lived GET URL for an
+   SO's payment slip so the Backend SO detail page can display the proof. Mirrors
+   the legacy /orders/:id/slip-url route. Auth is router-level (same as the SO
+   detail GET); RLS governs which SOs the caller can read. */
+function mimeFromKey(key: string): SlipMime {
+  const ext = key.split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'jpg': case 'jpeg': return 'image/jpeg';
+    case 'png': return 'image/png';
+    case 'webp': return 'image/webp';
+    case 'pdf': return 'application/pdf';
+    default: throw new Error(`unknown slip extension: ${key}`);
+  }
+}
+
+mfgSalesOrders.get('/:docNo/slip-url', async (c) => {
+  const sb = c.get('supabase');
+  const docNo = c.req.param('docNo');
+  const { data: row, error } = await sb
+    .from('mfg_sales_orders')
+    .select('slip_key')
+    .eq('doc_no', docNo)
+    .maybeSingle();
+  if (error) return c.json({ error: 'db_fetch_failed', detail: error.message }, 500);
+  if (!row) return c.json({ error: 'not_found' }, 404);
+  const slipKey = (row as { slip_key?: string | null }).slip_key ?? null;
+  if (!slipKey) return c.json({ error: 'no_slip_attached' }, 400);
+
+  const bindings = slipBindings(c.env);
+  const url = await presign({
+    bucket: bindings.bucketName,
+    region: 'auto',
+    accessKeyId: bindings.accessKeyId,
+    secretAccessKey: bindings.secretAccessKey,
+    endpoint: bindings.endpoint,
+    key: slipKey,
+    method: 'GET',
+    expiresInSeconds: 5 * 60,
+  });
+  return c.json({
+    url,
+    contentType: mimeFromKey(slipKey),
+    expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+  });
+});
+
 mfgSalesOrders.get('/:docNo', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo');
   const [h, i] = await Promise.all([
@@ -654,7 +701,7 @@ mfgSalesOrders.get('/:docNo', async (c) => {
        (LIST_COLS = HEADER + …) reads. Keeping it out of the shared HEADER and
        appending it only here means the detail page still gets the Proceed Date
        while the list view query stays valid. */
-    sb.from('mfg_sales_orders').select(`${HEADER}, proceeded_at`).eq('doc_no', docNo).maybeSingle(),
+    sb.from('mfg_sales_orders').select(`${HEADER}, proceeded_at, signature_b64, slip_key, slip_state`).eq('doc_no', docNo).maybeSingle(),
     sb.from('mfg_sales_order_items').select(ITEM).eq('doc_no', docNo).order('created_at'),
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
@@ -788,6 +835,15 @@ mfgSalesOrders.post('/', async (c) => {
       return c.json({
         error: 'processing_delivery_must_pair',
         reason: 'Processing Date and Delivery Date must be set together (or both left empty).',
+      }, 400);
+    }
+    /* Owner 2026-06-03 — Process Date is the factory start; it cannot fall after
+       the Delivery Date (you can't start building after the day you promised to
+       deliver). Both are plain ISO YYYY-MM-DD, so a string compare is correct. */
+    if (procDate && delivDate && procDate > delivDate) {
+      return c.json({
+        error: 'processing_after_delivery',
+        reason: 'Processing Date cannot be later than the Delivery Date.',
       }, 400);
     }
     /* Commander 2026-05-29 — a Processing Date means "ready to build", so every
@@ -1321,6 +1377,26 @@ mfgSalesOrders.post('/', async (c) => {
       (body.customerState as string | null | undefined) ?? null,
     ));
 
+  /* P1 (Owner 2026-06-03, migration 0143) — resolve the POS handover payment
+     slip. The POS uploads the slip to R2 first (via /slips/init + confirm) and
+     sends us the uploadSessionId; we look up its committed R2 key and attach it
+     to the SO so the coordinator can see the payment proof. Best-effort: a
+     missing / un-uploaded session just leaves the SO slip-less (slip_state stays
+     'none') rather than blocking the order. */
+  let slipKey: string | null = null;
+  const uploadSessionId = (body.uploadSessionId as string | null | undefined) ?? null;
+  if (uploadSessionId) {
+    const { data: slipRow } = await sb
+      .from('pending_slip_uploads')
+      .select('r2_key, status')
+      .eq('upload_session_id', uploadSessionId)
+      .maybeSingle();
+    const sr = slipRow as { r2_key?: string; status?: string } | null;
+    if (sr?.r2_key && (sr.status === 'uploaded' || sr.status === 'promoted')) {
+      slipKey = sr.r2_key;
+    }
+  }
+
   const { error: hErr } = await sb.from('mfg_sales_orders').insert({
     doc_no: docNo,
     transfer_to: (body.transferTo as string) ?? null,
@@ -1398,6 +1474,18 @@ mfgSalesOrders.post('/', async (c) => {
     customer_po: (body.customerPo as string) ?? null,
     hub_id: (body.hubId as string) ?? null,
     hub_name: (body.hubName as string) ?? null,
+    /* P1 (Owner 2026-06-03) — billing address from the POS handover, sent only
+       when it differs from the delivery address. Single text column (already
+       persisted on PATCH + shown on the SO detail page); just wire it on create
+       so a POS order's separate billing address isn't lost. */
+    bill_to_address: (body.billToAddress as string) ?? null,
+    /* P1 (Owner 2026-06-03, migration 0142) — POS handover signature data URL. */
+    signature_b64: (body.signatureB64 as string) ?? null,
+    /* P1 (Owner 2026-06-03, migration 0143) — POS handover payment slip (R2 key
+       resolved above). slip_state → 'pending' (coordinator to check) when a slip
+       is attached; left at the column default 'none' otherwise. */
+    slip_key: slipKey,
+    slip_state: slipKey ? 'pending' : 'none',
     /* PR #148 + #150 — Payment fields on create (mirror PATCH handler).
        Lets commander set payment_method + deposit_centi straight from the
        New SO form, including approval_code for merchant transactions. */
@@ -1417,6 +1505,16 @@ mfgSalesOrders.post('/', async (c) => {
     created_by: user.id,
   });
   if (hErr) { await rollbackPwpClaims(); return c.json({ error: 'insert_failed', reason: hErr.message }, 500); }
+
+  /* P1 (migration 0143) — the slip is now owned by this SO, so promote its
+     pending row. 'promoted' rows are excluded from the reaper that deletes the
+     R2 object for expired 'pending'/'uploaded' uploads (schema.ts slipUpload-
+     Status comment). Best-effort — a failed promote never blocks the order. */
+  if (slipKey && uploadSessionId) {
+    await sb.from('pending_slip_uploads')
+      .update({ status: 'promoted', promoted_at: new Date().toISOString() })
+      .eq('upload_session_id', uploadSessionId);
+  }
 
   if (itemRows.length > 0) {
     const rowsWithDoc = itemRows.map((r) => ({ ...r, doc_no: docNo }));
@@ -1817,6 +1915,15 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     }
     if (typeof deliv === 'string' && deliv && deliv < todayMY && deliv !== origDeliv) {
       return c.json({ error: 'delivery_date_past', reason: 'Delivery Date cannot be in the past — today or a future date only.' }, 400);
+    }
+    /* Owner 2026-06-03 — Process Date ≤ Delivery Date (factory start can't be
+       after the promised delivery). Use the EFFECTIVE values: the patch value
+       when this request sets the key, else the stored value — so editing only
+       one date still validates against the other already on the row. */
+    const effProc  = typeof proc  === 'string' ? (proc  || null) : origProc;
+    const effDeliv = typeof deliv === 'string' ? (deliv || null) : origDeliv;
+    if (effProc && effDeliv && effProc > effDeliv) {
+      return c.json({ error: 'processing_after_delivery', reason: 'Processing Date cannot be later than the Delivery Date.' }, 400);
     }
   }
 

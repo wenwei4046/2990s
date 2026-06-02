@@ -1280,6 +1280,16 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   emergencyContactPhone:          text('emergency_contact_phone'),
   emergencyContactRelationship:   text('emergency_contact_relationship'),
   targetDate:                     date('target_date'),
+  /* P1 (Owner 2026-06-03, migration 0142) — POS handover customer signature as
+     a data URL (image/png base64). Mirrors customer_po_image_b64's base64-in-
+     text pattern. NULL for non-POS / unsigned SOs. */
+  signatureB64:                   text('signature_b64'),
+  /* P1 (Owner 2026-06-03, migration 0143) — POS handover payment slip. slip_key
+     = R2 object key (resolved from pending_slip_uploads at create); slip_state
+     tracks coordinator review (none|pending|verified|flagged). Finance verify
+     flow stays Phase 4. */
+  slipKey:                        text('slip_key'),
+  slipState:                      slipState('slip_state').notNull().default('none'),
 
   /* PR #143 — Payment fields mirrored from POS handover (migration 0068).
      Commander 2026-05-26: "你把 POS system 的 payment 那个地方也放进来 Sales
