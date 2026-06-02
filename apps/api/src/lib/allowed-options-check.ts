@@ -188,11 +188,17 @@ export function checkAllowedOptions(
     };
   }
 
-  // Specials — multi-pick. Reject on the first unmatched pick.
+  // Specials — multi-pick. Reject on the first unmatched pick. Compare
+  // trim-normalised on BOTH sides: `toSpecialsArray` already trims each pick,
+  // but a Model's pool value (and the special_addons.code it mirrors) can carry
+  // a trailing space from data entry (e.g. "Hydraulic "). Trimming only the
+  // pick made the picker send a value that round-trips fine in the UI but 400s
+  // here as variant_not_allowed.
   if (hasRestriction(opts.specials)) {
+    const allowedTrimmed = new Set(opts.specials.map((s) => String(s).trim()));
     const picks = toSpecialsArray(v.specials ?? v.special);
     for (const p of picks) {
-      if (!opts.specials.includes(p)) {
+      if (!allowedTrimmed.has(p)) {
         return {
           error: 'variant_not_allowed',
           field: 'specials',
