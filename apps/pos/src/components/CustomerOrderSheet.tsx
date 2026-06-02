@@ -15,6 +15,7 @@ import {
 import { useCart, cartItemCount, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
 import { useCatalog, type CatalogProduct } from '../lib/queries';
 import { useSaveQuote, useUpdateQuote } from '../lib/quotes';
+import { useFreePwpCodes } from '../lib/products/pwp-queries';
 import styles from './CustomerOrderSheet.module.css';
 
 interface Props {
@@ -47,6 +48,14 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
 
   const saveQuote = useSaveQuote();
   const updateQuote = useUpdateQuote();
+  const freePwp = useFreePwpCodes();
+
+  // Abandon — free the cart's RESERVED PWP codes, then clear. Quote-save /
+  // order-place KEEP / consume them, so they don't use this path.
+  const clearAndFreePwp = () => {
+    for (const l of lines) freePwp.mutate(l.key);
+    clear();
+  };
   const [savingQuote, setSavingQuote] = useState(false);
   const [quoteName, setQuoteName] = useState('');
   const [quotePhone, setQuotePhone] = useState('');
@@ -254,7 +263,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
             </div>
             {saveErr && !savingQuote && <p className={styles.quoteErr}>{saveErr}</p>}
             <div className={styles.cta}>
-              <button type="button" className={styles.ghost} onClick={clear}>
+              <button type="button" className={styles.ghost} onClick={clearAndFreePwp}>
                 <Trash2 size={14} strokeWidth={1.75} />
                 Clear
               </button>

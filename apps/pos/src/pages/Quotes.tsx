@@ -10,6 +10,7 @@ import {
 import { Button, IconButton } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
 import { useQuotes, useDeleteQuote, type QuoteRow } from '../lib/quotes';
+import { useFreePwpCodes } from '../lib/products/pwp-queries';
 import { useCart, cartSummary } from '../state/cart';
 import { Topbar } from '../components/Topbar';
 import styles from './Quotes.module.css';
@@ -26,6 +27,7 @@ export const Quotes = () => {
   const navigate = useNavigate();
   const list = useQuotes();
   const del = useDeleteQuote();
+  const freePwp = useFreePwpCodes();
   const restore = useCart((s) => s.restore);
 
   const loadQuote = (q: QuoteRow) => {
@@ -116,6 +118,9 @@ export const Quotes = () => {
                   className={`${styles.actionBtn} ${styles.actionBtnGhost}`}
                   onClick={() => {
                     if (!confirm(`Delete quote for ${q.customer_name}?`)) return;
+                    // Free any RESERVED PWP codes this quote's trigger lines held
+                    // (§8.5c) — deleting a quote releases the occupied numbers.
+                    for (const l of q.cart ?? []) freePwp.mutate(l.key);
                     del.mutate(q.id);
                   }}
                   disabled={del.isPending}

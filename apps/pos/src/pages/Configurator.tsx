@@ -4,7 +4,7 @@ import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2, FlipHo
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
 import { resolvePwp, type PwpLineInput } from '@2990s/shared/pwp';
-import { usePwpRules } from '../lib/products/pwp-queries';
+import { usePwpRules, useMyReservedPwpCodes, validatePwpCode } from '../lib/products/pwp-queries';
 import {
   useProduct,
   useProductBundles,
@@ -49,6 +49,18 @@ import {
 import { SofaCellsPreview } from '../components/SofaCellsPreview';
 import { Topbar } from '../components/Topbar';
 import styles from './Configurator.module.css';
+
+// Friendly text for a /pwp-codes validation failure (shown under Insert PWP Code).
+function pwpReasonText(reason?: string): string {
+  switch (reason) {
+    case 'not_found':                return 'No such PWP code.';
+    case 'already_used':             return 'This PWP code was already used.';
+    case 'not_redeemable':           return 'This PWP code is not redeemable.';
+    case 'reward_category_mismatch': return 'This code is for a different product type.';
+    case 'reward_model_ineligible':  return 'This code cannot be used on this Model.';
+    default:                         return 'This PWP code cannot be applied.';
+  }
+}
 
 interface SizeRow {
   id: string;
@@ -391,7 +403,16 @@ export const Configurator = () => {
   // binds to → shown on the invoice sub-line.
   const pwpRulesQ = usePwpRules();
   const [usePwp, setUsePwp] = useState(false);
-  useEffect(() => { setUsePwp(false); }, [productId]); // never leak the toggle across products
+  // Cross-order "Insert PWP Code" state (declared early so its reset runs BEFORE
+  // the edit-hydrate effect below, which re-applies a saved code).
+  const [insertCodeInput, setInsertCodeInput] = useState('');
+  const [insertedCode, setInsertedCode] = useState<string | null>(null);
+  const [insertErr, setInsertErr] = useState<string | null>(null);
+  const [insertChecking, setInsertChecking] = useState(false);
+  useEffect(() => { // never leak the toggle / code across products
+    setUsePwp(false);
+    setInsertCodeInput(''); setInsertedCode(null); setInsertErr(null);
+  }, [productId]);
   const pwpEval = useMemo(() => {
     const rules = pwpRulesQ.data ?? [];
     const candCategory = String((product.data as { category_id?: string | null } | null)?.category_id ?? '').toUpperCase();
@@ -419,6 +440,40 @@ export const Configurator = () => {
     const grant = resolvePwp(rules, [...baseInputs, candidate]).find((g) => g.idx === candidateIdx);
     return { available: !!grant, triggerLabel: grant?.triggerRef?.name ?? null };
   }, [pwpRulesQ.data, product.data, cartLines, editKey]);
+
+  // ── PWP Code Voucher (0130) — the reward this product would redeem against. ──
+  const reservedCodesQ = useMyReservedPwpCodes();
+  const pwpRewardCategory = String((product.data as { category_id?: string | null } | null)?.category_id ?? '').toUpperCase();
+  const pwpRewardModelId = (product.data as { model_id?: string | null } | null)?.model_id ?? null;
+  // A RESERVED code in THIS cart eligible for this reward model, not already
+  // applied to another line → auto-consumed when the same-cart toggle is on.
+  const sameCartCode = useMemo(() => {
+    const codes = reservedCodesQ.data ?? [];
+    const applied = new Set(
+      cartLines
+        .filter((l) => !(editKey && l.key === editKey))
+        .flatMap((l) => { const c = l.config as { pwpCode?: string }; return c.pwpCode ? [c.pwpCode] : []; }),
+    );
+    return codes.find((rc) =>
+      rc.cartLineKey &&
+      String(rc.rewardCategory).toUpperCase() === pwpRewardCategory &&
+      (rc.eligibleRewardModelIds.length === 0 ||
+        (pwpRewardModelId != null && rc.eligibleRewardModelIds.includes(pwpRewardModelId))) &&
+      !applied.has(rc.code),
+    )?.code ?? null;
+  }, [reservedCodesQ.data, cartLines, editKey, pwpRewardCategory, pwpRewardModelId]);
+
+  const applyInsertedCode = async () => {
+    const code = insertCodeInput.trim().toUpperCase();
+    if (!code) return;
+    setInsertChecking(true); setInsertErr(null);
+    try {
+      const res = await validatePwpCode({ code, rewardCategory: pwpRewardCategory, rewardModelId: pwpRewardModelId });
+      if (res.valid) { setInsertedCode(code); }
+      else { setInsertedCode(null); setInsertErr(pwpReasonText(res.reason)); }
+    } catch { setInsertedCode(null); setInsertErr('Could not validate the code.'); }
+    finally { setInsertChecking(false); }
+  };
 
   // Fabric availability for the sofa configurator.
   // • mfg-{12hex} products: derive from sofaCustomizer.fabricIds (allowed_options)
@@ -490,8 +545,11 @@ export const Configurator = () => {
           sofaTier: libRow?.sofaTier ?? null, bedframeTier: libRow?.bedframeTier ?? null,
         });
       }
-      // PWP (换购, 0128) — re-arm the toggle if this line was redeemed at PWP.
+      // PWP (换购) — re-arm the redemption if this line had it. We re-apply the
+      // exact saved code via the cross-order path so editing never loses or
+      // re-rolls the voucher (server re-validates it at Confirm).
       setUsePwp(cfg.pwp === true);
+      if (cfg.pwp && cfg.pwpCode) { setInsertedCode(cfg.pwpCode); setInsertCodeInput(cfg.pwpCode); }
       hydratedRef.current = true;
     } else if (cfg.kind === 'sofa') {
       // Wait for fabric data to be ready — for mfg products this means both
@@ -753,13 +811,18 @@ export const Configurator = () => {
   const bedframeFabricDelta = fabricSel && addonCfgQ.data
     ? fabricTierAddon('BEDFRAME', fabricSel.bedframeTier as FabricTier | null, addonCfgQ.data)
     : 0;
-  // PWP (换购, 0128) — when toggled on and available, the bedframe's base is its
-  // per-size PWP price instead of the normal selling price; fabric Δ + option
-  // surcharges still stack (the server recompute adds the same on top of the PWP
-  // base). pwpAvailable gates the toggle's visibility (hidden once unavailable).
+  // PWP Code Voucher (0130) — the bedframe's base becomes its per-size PWP price
+  // (fabric Δ + option surcharges still stack; server adds the same on the PWP
+  // base). Two ways in: (a) same-cart toggle (a qualifying trigger is in the
+  // cart + a RESERVED code to consume); (b) a validated cross-order "Insert PWP
+  // Code". Both gate on the picked size actually having a PWP price.
   const pwpUnitPrice = pickedSize?.pwpPrice ?? null;
-  const pwpAvailable = isBedframe && pwpEval.available && pwpUnitPrice != null && pwpUnitPrice > 0;
-  const pwpActive = usePwp && pwpAvailable;
+  const pwpPriceOk = isBedframe && pwpUnitPrice != null && pwpUnitPrice > 0;
+  const pwpToggleAvailable = pwpPriceOk && pwpEval.available && sameCartCode != null;
+  const sameCartPwpActive = pwpToggleAvailable && usePwp;
+  const crossPwpActive = pwpPriceOk && insertedCode != null;
+  const pwpActive = sameCartPwpActive || crossPwpActive;
+  const appliedPwpCode = crossPwpActive ? insertedCode : (sameCartPwpActive ? sameCartCode : null);
   const bedframeBase = pwpActive ? (pwpUnitPrice as number) : sizeBase;
   const bedframeTotal = bedframeBase + bedframeSurcharge(bfSel) + bedframeFabricDelta;
   // Required: size (active+priced) + colour + leg always; gap/divan/total also
@@ -795,7 +858,9 @@ export const Configurator = () => {
       // PWP across lines; pwp/pwpTriggerLabel record the redemption for the invoice.
       modelId: (p as { model_id?: string | null }).model_id ?? null,
       category: String(p.category_id ?? '').toUpperCase(),
-      ...(pwpActive ? { pwp: true, pwpTriggerLabel: pwpEval.triggerLabel } : {}),
+      ...(pwpActive && appliedPwpCode
+        ? { pwp: true, pwpCode: appliedPwpCode, pwpTriggerLabel: crossPwpActive ? null : pwpEval.triggerLabel }
+        : {}),
       ...(bfSel.gapId ? { gapId: bfSel.gapId, gapLabel: bfSel.gapLabel } : {}),
       legHeightId: bfSel.legId,
       legHeightLabel: bfSel.legLabel,
@@ -1388,29 +1453,73 @@ export const Configurator = () => {
               </label>
             </RailSection>
 
-            {/* PWP (换购, 0128) — appears only when a qualifying mattress is in the
-                cart, this bed frame's Model is eligible, and allowance remains.
-                Toggling on prices the bed frame at its PWP base (+ fabric Δ). */}
-            {pwpAvailable && (
+            {/* PWP Code Voucher (0130). Shows for a bed frame whose picked size
+                has a PWP price. The same-cart toggle appears when a qualifying
+                trigger is in the cart + a code is reserved; the "Insert PWP
+                Code" field redeems a voucher earned on a previous order. */}
+            {pwpPriceOk && (
               <RailSection title="PWP 换购优惠">
-                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)', cursor: 'pointer', padding: 'var(--space-2) 0' }}>
-                  <input
-                    type="checkbox"
-                    checked={usePwp}
-                    onChange={(e) => setUsePwp(e.target.checked)}
-                    style={{ marginTop: 3 }}
-                  />
-                  <span>
-                    <span style={{ fontWeight: 600 }}>
-                      Use PWP price{pwpUnitPrice != null ? ` · RM ${pwpUnitPrice.toLocaleString('en-MY')}` : ''}
-                    </span>
-                    {pwpEval.triggerLabel && (
-                      <span style={{ display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-                        换购自 {pwpEval.triggerLabel}
+                {pwpToggleAvailable && (
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)', cursor: 'pointer', padding: 'var(--space-2) 0' }}>
+                    <input
+                      type="checkbox"
+                      checked={usePwp}
+                      disabled={crossPwpActive}
+                      onChange={(e) => setUsePwp(e.target.checked)}
+                      style={{ marginTop: 3 }}
+                    />
+                    <span>
+                      <span style={{ fontWeight: 600 }}>
+                        Use PWP price{pwpUnitPrice != null ? ` · RM ${pwpUnitPrice.toLocaleString('en-MY')}` : ''}
                       </span>
+                      {pwpEval.triggerLabel && (
+                        <span style={{ display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                          换购自 {pwpEval.triggerLabel}
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                )}
+
+                {/* Cross-order redemption — enter a voucher code from a prior SO. */}
+                {insertedCode ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)', padding: 'var(--space-2) 0' }}>
+                    <span style={{ fontSize: 'var(--fs-12)' }}>
+                      <span style={{ fontWeight: 600 }}>PWP code {insertedCode}</span>
+                      <span style={{ display: 'block', color: 'var(--fg-muted)' }}>
+                        Applied · RM {pwpUnitPrice?.toLocaleString('en-MY')}
+                      </span>
+                    </span>
+                    <Button variant="ghost" onClick={() => { setInsertedCode(null); setInsertCodeInput(''); setInsertErr(null); }}>
+                      Remove
+                    </Button>
+                  </div>
+                ) : (
+                  <div style={{ paddingTop: 'var(--space-2)' }}>
+                    <label style={{ display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-1)' }}>
+                      Insert PWP Code
+                    </label>
+                    <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                      <input
+                        type="text"
+                        value={insertCodeInput}
+                        onChange={(e) => { setInsertCodeInput(e.target.value); setInsertErr(null); }}
+                        placeholder="PWP-1234ABCD"
+                        style={{ flex: 1, textTransform: 'uppercase' }}
+                      />
+                      <Button
+                        variant="secondary"
+                        onClick={applyInsertedCode}
+                        disabled={insertChecking || !insertCodeInput.trim()}
+                      >
+                        {insertChecking ? 'Checking…' : 'Apply'}
+                      </Button>
+                    </div>
+                    {insertErr && (
+                      <p style={{ margin: 'var(--space-1) 0 0', fontSize: 'var(--fs-12)', color: 'var(--c-danger, #B4321A)' }}>{insertErr}</p>
                     )}
-                  </span>
-                </label>
+                  </div>
+                )}
               </RailSection>
             )}
 

@@ -93,6 +93,11 @@ export interface BedframeConfigSnapshot {
   // sub-line "PWP price · 换购自 <Mattress>". Server re-validates the price.
   pwp?: boolean;
   pwpTriggerLabel?: string | null;
+  // PWP Code Voucher (migration 0130) — the voucher code this reward redeems.
+  // Same-cart: one of the cart's RESERVED codes (auto-picked when the toggle is
+  // on). Cross-order: an AVAILABLE code entered in "Insert PWP Code". The server
+  // marks it USED at order Confirm; printed on the SO.
+  pwpCode?: string;
   // Display-label snapshots (parallel to the *Id fields) so the cart, printed
   // Sales Order, and Backend detail render the spec without a join.
   gapLabel?: string | null;

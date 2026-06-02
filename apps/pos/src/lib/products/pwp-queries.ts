@@ -94,3 +94,83 @@ export function useDeletePwpRule() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['pwp-rules'] }); },
   });
 }
+
+// ----------------------------------------------------------------------------
+// PWP Code Voucher (/pwp-codes, migration 0130). A trigger in the cart RESERVES
+// codes; the reward configurator applies one (same-cart) or a cross-order
+// AVAILABLE code is entered manually. The DB is the source of truth — the POS
+// reads its own RESERVED codes via useMyReservedPwpCodes and reconciles.
+// ----------------------------------------------------------------------------
+
+export type PwpReservedCode = {
+  code: string;
+  ruleId: string | null;
+  rewardCategory: MfgCategory;
+  eligibleRewardModelIds: string[];
+  status: string;
+  cartLineKey: string | null;
+  triggerItemCode: string | null;
+  sourceDocNo: string | null;
+  customerId: string | null;
+};
+
+export type PwpCodeValidation = {
+  valid: boolean;
+  reason?: string;
+  pwpPriceSen?: number;
+  rewardCategory?: MfgCategory;
+  customerMatches?: boolean;
+  status?: string;
+};
+
+/** The caller's RESERVED codes (keyed client-side by cartLineKey). */
+export function useMyReservedPwpCodes() {
+  return useQuery({
+    queryKey: ['pwp-codes-mine'],
+    queryFn: async () => (await authedFetch<{ codes: PwpReservedCode[] }>('/pwp-codes/mine')).codes,
+    staleTime: 5_000,
+    retry: 1,
+  });
+}
+
+/** The PWP codes a Sales Order earned (AVAILABLE) / spent (USED), for the
+ *  confirmation + printed receipt. */
+export function usePwpCodesForSo(docNo: string | undefined) {
+  return useQuery({
+    queryKey: ['pwp-codes-by-so', docNo],
+    enabled: !!docNo,
+    queryFn: async () => (await authedFetch<{ codes: PwpReservedCode[] }>(`/pwp-codes/by-so/${encodeURIComponent(docNo!)}`)).codes,
+    staleTime: 10_000,
+  });
+}
+
+export function useReservePwpCodes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { cartLineKey: string; productId: string; qty: number }) =>
+      authedFetch<{ codes: PwpReservedCode[] }>('/pwp-codes/reserve', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['pwp-codes-mine'] }); },
+  });
+}
+
+export function useFreePwpCodes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (cartLineKey: string) =>
+      authedFetch<{ ok: boolean }>(`/pwp-codes/reserve?cartLineKey=${encodeURIComponent(cartLineKey)}`, { method: 'DELETE' }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['pwp-codes-mine'] }); },
+  });
+}
+
+/** Validate a code against a reward (category + model) + optional customer (the
+ *  cross-order binding check). Used by the "Insert PWP Code" field and the
+ *  handover customer-match gate. The per-SKU price authority stays at order
+ *  Confirm — the client uses the size's own pwpPrice for display. */
+export async function validatePwpCode(args: {
+  code: string; rewardCategory: string; rewardModelId?: string | null; customerId?: string | null;
+}): Promise<PwpCodeValidation> {
+  const qs = new URLSearchParams({ rewardCategory: args.rewardCategory });
+  if (args.rewardModelId) qs.set('rewardModelId', args.rewardModelId);
+  if (args.customerId) qs.set('customerId', args.customerId);
+  return authedFetch<PwpCodeValidation>(`/pwp-codes/${encodeURIComponent(args.code)}?${qs.toString()}`);
+}
