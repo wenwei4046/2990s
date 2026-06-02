@@ -219,9 +219,13 @@ pos.patch('/my-pin', supabaseAuth, async (c) => {
 });
 
 // GET /pos/sales-stats — current-calendar-month aggregates for the logged-in
-// sales user. Counts every order placed at the user's showroom + their own
-// orders, excluding cancellations. Service-role bypass needed because RLS
-// scopes sales to own orders only — showroom-wide totals would be 0 otherwise.
+// sales user, sourced from mfg_sales_orders (the live SO board). The legacy
+// retail `orders` table this used to read is no longer written — every POS sale
+// now lands in mfg_sales_orders — so the old query returned nothing (the cards
+// spun / showed 0). Personal = the viewer's own SOs; Showroom = every SO placed
+// this month by salespeople in the viewer's showroom, or the whole house when
+// the viewer has no showroom_id (admin / owner / coordinator who oversees all).
+// Service-role bypass needed because RLS scopes sales to own orders only.
 pos.get('/sales-stats', supabaseAuth, async (c) => {
   const user = c.get('user');
   const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
@@ -247,31 +251,47 @@ pos.get('/sales-stats', supabaseAuth, async (c) => {
   const monthStartUtc = new Date(Date.UTC(y, m, 1, 0, 0, 0) - 8 * 60 * 60 * 1000).toISOString();
   const monthEndUtc   = new Date(Date.UTC(y, m + 1, 1, 0, 0, 0) - 8 * 60 * 60 * 1000).toISOString();
 
-  let showroomTotal = 0;
-  let showroomCount = 0;
+  // Resolve which salespeople count toward the "Showroom" card. A viewer with a
+  // showroom_id → that showroom's staff; a viewer with none (admin / owner /
+  // coordinator) → null = the whole house (every salesperson).
+  let showroomStaffIds: string[] | null = null;
   if (staff.showroom_id) {
-    const { data, error } = await adminClient
-      .from('orders')
-      .select('total')
-      .eq('showroom_id', staff.showroom_id)
-      .neq('lane', 'cancelled')
-      .gte('placed_at', monthStartUtc)
-      .lt('placed_at', monthEndUtc);
-    if (error) return c.json({ error: 'fetch_failed', detail: error.message }, 500);
-    showroomCount = data?.length ?? 0;
-    showroomTotal = (data ?? []).reduce((s, r) => s + (r.total ?? 0), 0);
+    const { data: mates, error: matesErr } = await adminClient
+      .from('staff')
+      .select('id')
+      .eq('showroom_id', staff.showroom_id);
+    if (matesErr) return c.json({ error: 'fetch_failed', detail: matesErr.message }, 500);
+    showroomStaffIds = (mates ?? []).map((s) => s.id as string);
   }
 
+  // SO money lives in centi (1/100 MYR) — sum then divide once. CANCELLED +
+  // ON_HOLD are excluded (mirrors GET /mfg-sales-orders/mine). created_at is the
+  // placement instant, so the month window means "placed this month".
+  const sumCentiToMyr = (rows: Array<{ total_revenue_centi: number | null }> | null): number =>
+    Math.round((rows ?? []).reduce((s, r) => s + (r.total_revenue_centi ?? 0), 0) / 100);
+
+  let showroomQuery = adminClient
+    .from('mfg_sales_orders')
+    .select('total_revenue_centi')
+    .not('status', 'in', '("CANCELLED","ON_HOLD")')
+    .gte('created_at', monthStartUtc)
+    .lt('created_at', monthEndUtc);
+  if (showroomStaffIds) showroomQuery = showroomQuery.in('salesperson_id', showroomStaffIds);
+  const { data: showroomRows, error: showroomErr } = await showroomQuery;
+  if (showroomErr) return c.json({ error: 'fetch_failed', detail: showroomErr.message }, 500);
+  const showroomCount = showroomRows?.length ?? 0;
+  const showroomTotal = sumCentiToMyr(showroomRows as Array<{ total_revenue_centi: number | null }> | null);
+
   const { data: personalRows, error: personalErr } = await adminClient
-    .from('orders')
-    .select('total')
-    .eq('staff_id', user.id)
-    .neq('lane', 'cancelled')
-    .gte('placed_at', monthStartUtc)
-    .lt('placed_at', monthEndUtc);
+    .from('mfg_sales_orders')
+    .select('total_revenue_centi')
+    .eq('salesperson_id', user.id)
+    .not('status', 'in', '("CANCELLED","ON_HOLD")')
+    .gte('created_at', monthStartUtc)
+    .lt('created_at', monthEndUtc);
   if (personalErr) return c.json({ error: 'fetch_failed', detail: personalErr.message }, 500);
   const personalCount = personalRows?.length ?? 0;
-  const personalTotal = (personalRows ?? []).reduce((s, r) => s + (r.total ?? 0), 0);
+  const personalTotal = sumCentiToMyr(personalRows as Array<{ total_revenue_centi: number | null }> | null);
 
   const monthLabel = new Intl.DateTimeFormat('en-MY', {
     month: 'long',
