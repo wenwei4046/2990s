@@ -466,6 +466,12 @@ export const Configurator = () => {
   const applyInsertedCode = async () => {
     const code = insertCodeInput.trim().toUpperCase();
     if (!code) return;
+    // A reward can only be priced PWP if this size has a PWP price set.
+    if (!(pickedSize?.pwpPrice != null && pickedSize.pwpPrice > 0)) {
+      setInsertedCode(null);
+      setInsertErr('This size has no PWP price set — set it in SKU Master first.');
+      return;
+    }
     setInsertChecking(true); setInsertErr(null);
     try {
       const res = await validatePwpCode({ code, rewardCategory: pwpRewardCategory, rewardModelId: pwpRewardModelId });
@@ -1453,12 +1459,19 @@ export const Configurator = () => {
               </label>
             </RailSection>
 
-            {/* PWP Code Voucher (0130). Shows for a bed frame whose picked size
-                has a PWP price. The same-cart toggle appears when a qualifying
+            {/* PWP Code Voucher (0130). Always visible on a bed frame so a
+                salesperson can redeem a voucher (discoverability — Chairman
+                2026-06-02). The same-cart toggle appears when a qualifying
                 trigger is in the cart + a code is reserved; the "Insert PWP
-                Code" field redeems a voucher earned on a previous order. */}
-            {pwpPriceOk && (
+                Code" field redeems a voucher earned on a previous order. When
+                this size has no PWP price set, a note explains it. */}
+            {isBedframe && (
               <RailSection title="PWP 换购优惠">
+                {!pwpPriceOk && (
+                  <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                    This size has no PWP (换购) price yet. Set it in SKU Master → PWP Price to enable redemption.
+                  </p>
+                )}
                 {pwpToggleAvailable && (
                   <label style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)', cursor: 'pointer', padding: 'var(--space-2) 0' }}>
                     <input
