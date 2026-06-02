@@ -165,6 +165,42 @@ export function canonicalizeComboModulesForStorage(
 }
 
 /**
+ * Like `canonicalizeComboModulesForStorage`, but PRESERVES slot ORDER.
+ *
+ * A Quick Pick is a spatial LAYOUT — the slot order IS the left-to-right
+ * on-screen position the staff built, and the client re-lays it in that order
+ * (`cellsFromComboModules`). The combo form alphabetically SORTS the slots (fine
+ * for a Combo, whose matching is order-independent), which would move e.g. a
+ * middle Console to the end — so the saved pick renders differently from what
+ * was built. Same validation + flat→slot wrap + per-slot trim/de-dupe as the
+ * combo form; just no slot sort.
+ */
+export function canonicalizeLayoutModulesForStorage(
+  input: unknown,
+): ComboSlots | null {
+  if (!Array.isArray(input)) return null;
+  const groups: unknown[] =
+    input.length > 0 && typeof input[0] === 'string'
+      ? input.map((v) => [v])
+      : input;
+  const cleaned: ComboSlots = [];
+  for (const g of groups) {
+    if (!Array.isArray(g)) return null;
+    const inner: string[] = [];
+    for (const v of g) {
+      if (typeof v !== 'string') return null;
+      const t = v.trim();
+      if (!t) continue;
+      if (!inner.includes(t)) inner.push(t);
+    }
+    if (inner.length === 0) continue;
+    cleaned.push(inner);
+  }
+  if (cleaned.length === 0) return null;
+  return cleaned; // ← no slot sort: slot order = built layout position
+}
+
+/**
  * Order-independent canonical key for a combo's slot-set. Sorts the codes in
  * each slot, then sorts the slots themselves, then JSON-stringifies. Two
  * combos with the same slots in any order produce the same key — used to
