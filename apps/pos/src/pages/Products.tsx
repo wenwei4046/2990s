@@ -44,7 +44,7 @@
 //   [Combo Pricing]   — sofa combo deals (per-customer override prices)
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
 import {
   Download,
   Upload,
@@ -387,6 +387,29 @@ export const Products = () => {
    catalog — so changing this number does not yet change what live orders are
    charged. That charging fix is tracked separately.
    ════════════════════════════════════════════════════════════════════════ */
+// Brand-consistent field styling for the Delivery tab. White inputs on the
+// cream page (the old cream-on-cream inputs were invisible); ink text, a clear
+// strong border, brand radius.
+const DF_INPUT: CSSProperties = {
+  width: '100%', padding: '10px 12px', fontSize: 'var(--fs-14)', fontFamily: 'var(--font-sans)',
+  border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)',
+  background: '#fff', color: 'var(--c-ink)', outline: 'none',
+};
+const DF_INPUT_DISABLED: CSSProperties = { ...DF_INPUT, background: 'rgba(34,31,32,0.04)', color: 'var(--fg-muted)' };
+const DF_LABEL: CSSProperties = {
+  display: 'block', fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', fontWeight: 600,
+  letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--fg-soft)', marginBottom: '6px',
+};
+const DF_HINT: CSSProperties = { display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: '6px' };
+const DF_CARD: CSSProperties = {
+  background: 'var(--c-paper)', border: '1px solid var(--line)', borderRadius: 'var(--radius-lg)',
+  boxShadow: 'var(--shadow-2)', padding: 'var(--space-5)',
+};
+const DF_SECTION_TITLE: CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: '8px',
+  fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-16)', fontWeight: 800, color: 'var(--c-ink)', margin: 0,
+};
+
 const DeliveryFeeTab = ({ mode }: { mode: ProductsMode }) => {
   const canEdit = mode === 'full';
   const cfg = useDeliveryFeeConfig();
@@ -450,10 +473,8 @@ const DeliveryFeeTab = ({ mode }: { mode: ProductsMode }) => {
     value: number | '',
     setValue: (v: number | '') => void,
   ) => (
-    <div style={{ marginBottom: 'var(--space-4)', maxWidth: 440 }}>
-      <label htmlFor={id} style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>
-        {label}
-      </label>
+    <div>
+      <label htmlFor={id} style={DF_LABEL}>{label}</label>
       <input
         id={id}
         type="number"
@@ -462,43 +483,45 @@ const DeliveryFeeTab = ({ mode }: { mode: ProductsMode }) => {
         value={value}
         disabled={!canEdit}
         onChange={(e) => setValue(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
-        style={{
-          width: '100%',
-          padding: '8px 10px',
-          fontSize: 'var(--fs-14)',
-          border: '1px solid var(--line-strong)',
-          borderRadius: 'var(--radius-md)',
-          background: canEdit ? 'var(--c-cream)' : 'rgba(34, 31, 32, 0.04)',
-        }}
+        style={canEdit ? DF_INPUT : DF_INPUT_DISABLED}
       />
-      <span style={{ display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-1)' }}>
-        {hint}
-      </span>
+      <span style={DF_HINT}>{hint}</span>
     </div>
   );
 
   return (
-    <div style={{ padding: 'var(--space-5)', maxWidth: 560 }}>
-      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-4)' }}>
-        Every order is charged the base fee. Orders mixing ≥2 product categories
-        (e.g. sofa + mattress) also pay the cross-category surcharge — flat, once.
-        Lead times set the minimum days before a delivery date can be picked.
-        Changes apply to NEW orders only.
-      </p>
+    <div style={{ padding: 'var(--space-5)', maxWidth: 760, display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+      {/* ── Base fees card ── */}
+      <section style={DF_CARD}>
+        <h2 style={{ ...DF_SECTION_TITLE, marginBottom: 'var(--space-2)' }}>
+          <Truck size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
+          Delivery fees
+        </h2>
+        <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', margin: '0 0 var(--space-5)', maxWidth: 560, lineHeight: 1.5 }}>
+          Every order is charged the base fee. Orders mixing ≥2 product categories
+          (e.g. sofa + mattress) also pay the cross-category surcharge — flat, once.
+          Lead times set the minimum days before a delivery date can be picked.
+          Changes apply to NEW orders only.
+        </p>
 
-      {numberField('df-base', 'Base fee (RM)', 'Charged on every order. Whole RM (no sen).', baseFee, setBaseFee)}
-      {numberField('df-cross', 'Cross-category surcharge (RM)', 'Added once, flat, when an order has ≥2 distinct product categories.', crossCategoryFee, setCrossCategoryFee)}
-      {numberField('df-mattress', 'Mattress + bed frame lead time (days)', 'Minimum days before a delivery date when the cart has a mattress or bed frame.', mattressDays, setMattressDays)}
-      {numberField('df-sofa', 'Sofa lead time (days)', 'Minimum days when the cart has a sofa. Mixed carts use the larger lead time.', sofaDays, setSofaDays)}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(220px, 1fr))', gap: 'var(--space-5)' }}>
+          {numberField('df-base', 'Base fee (RM)', 'Charged on every order. Whole RM (no sen).', baseFee, setBaseFee)}
+          {numberField('df-cross', 'Cross-category surcharge (RM)', 'Added once, flat, when an order has ≥2 distinct product categories.', crossCategoryFee, setCrossCategoryFee)}
+          {numberField('df-mattress', 'Mattress + bed frame lead time (days)', 'Min days before a delivery date when the cart has a mattress or bed frame.', mattressDays, setMattressDays)}
+          {numberField('df-sofa', 'Sofa lead time (days)', 'Min days when the cart has a sofa. Mixed carts use the larger lead time.', sofaDays, setSofaDays)}
+        </div>
 
-      {error && <div style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }} role="alert">{error}</div>}
-      {success && <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }}>Saved.</div>}
+        {error && <div style={{ color: 'var(--c-festive-b)', fontSize: 'var(--fs-13)', marginTop: 'var(--space-4)' }} role="alert">{error}</div>}
+        {success && <div style={{ color: 'var(--c-secondary-a)', fontSize: 'var(--fs-13)', fontWeight: 600, marginTop: 'var(--space-4)' }}>Saved.</div>}
 
-      {canEdit && (
-        <Button variant="primary" onClick={() => void onSave()} disabled={update.isPending}>
-          {update.isPending ? 'Saving…' : 'Save'}
-        </Button>
-      )}
+        {canEdit && (
+          <div style={{ marginTop: 'var(--space-5)' }}>
+            <Button variant="primary" onClick={() => void onSave()} disabled={update.isPending}>
+              {update.isPending ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
+        )}
+      </section>
 
       <SpecialDeliveryFeesSection canEdit={canEdit} />
     </div>
@@ -538,86 +561,101 @@ const SpecialDeliveryFeesSection = ({ canEdit }: { canEdit: boolean }) => {
   const rows = list.data ?? [];
 
   return (
-    <div style={{ marginTop: 'var(--space-6)', paddingTop: 'var(--space-5)', borderTop: '1px solid var(--line)' }}>
-      <h3 style={{ fontSize: 'var(--fs-15)', fontWeight: 700, marginBottom: 'var(--space-1)' }}>
+    <section style={DF_CARD}>
+      <h2 style={{ ...DF_SECTION_TITLE, marginBottom: 'var(--space-2)' }}>
+        <Star size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
         Special-model delivery fees
-      </h3>
-      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-4)' }}>
+      </h2>
+      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', margin: '0 0 var(--space-5)', maxWidth: 560, lineHeight: 1.5 }}>
         Pick a Model that costs more to transport (e.g. a full-latex mattress).
         Its standalone fee replaces the base fee. The cross-category price is
         charged instead when this Model is bought as a linked follow-up to an
         earlier order. Whole RM.
       </p>
 
-      {list.isLoading
-        ? <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>Loading…</div>
-        : rows.length === 0
-          ? <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }}>No special models yet.</div>
-          : (
-            <div style={{ marginBottom: 'var(--space-4)' }}>
-              {rows.map((r) => (
-                <div key={r.modelId} style={{
-                  display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr auto', gap: 'var(--space-3)',
-                  alignItems: 'center', padding: 'var(--space-2) 0', borderBottom: '1px solid var(--line)',
-                  fontSize: 'var(--fs-13)',
-                }}>
-                  <div>
-                    <strong>{r.modelName}</strong>
-                    <span style={{ color: 'var(--fg-muted)' }}>{r.modelCode ? ` · ${r.modelCode}` : ''}{r.category ? ` · ${r.category}` : ''}</span>
-                  </div>
-                  <div>Standalone RM {r.standaloneFee}</div>
-                  <div>Cross-cat RM {r.crossCatFollowupFee}</div>
-                  {canEdit && (
+      <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+        <table className={styles.table}>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th style={{ textAlign: 'right' }}>Standalone (RM)</th>
+              <th style={{ textAlign: 'right' }}>Cross-category (RM)</th>
+              {canEdit && <th style={{ width: 56 }} aria-label="Actions" />}
+            </tr>
+          </thead>
+          <tbody>
+            {list.isLoading ? (
+              <tr><td colSpan={canEdit ? 4 : 3} style={{ color: 'var(--fg-muted)' }}>Loading…</td></tr>
+            ) : rows.length === 0 ? (
+              <tr><td colSpan={canEdit ? 4 : 3} style={{ color: 'var(--fg-muted)' }}>No special models yet. Add one below.</td></tr>
+            ) : rows.map((r) => (
+              <tr key={r.modelId}>
+                <td>
+                  <div style={{ fontWeight: 700, color: 'var(--c-ink)' }}>{r.modelName}</div>
+                  {(r.modelCode || r.category) && (
+                    <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 2 }}>
+                      {[r.modelCode, r.category].filter(Boolean).join(' · ')}
+                    </div>
+                  )}
+                </td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-ink)', fontWeight: 600 }}>RM {r.standaloneFee}</td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-ink)', fontWeight: 600 }}>RM {r.crossCatFollowupFee}</td>
+                {canEdit && (
+                  <td style={{ textAlign: 'right' }}>
                     <button
                       type="button"
+                      title="Remove"
+                      aria-label={`Remove ${r.modelName}`}
                       onClick={() => void del.mutate(r.modelId)}
-                      style={{ background: 'none', border: 'none', color: 'var(--c-burnt, #A6471E)', cursor: 'pointer', fontSize: 'var(--fs-13)' }}
+                      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', background: '#fff', color: 'var(--c-festive-b)', cursor: 'pointer' }}
                     >
-                      Remove
+                      <Trash2 size={16} strokeWidth={1.75} />
                     </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       {canEdit && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr auto', gap: 'var(--space-3)', alignItems: 'end', maxWidth: 560 }}>
-          <div>
-            <label style={{ display: 'block', fontSize: 'var(--fs-12)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>Model</label>
-            <select
-              value={modelId}
-              onChange={(e) => setModelId(e.target.value)}
-              style={{ width: '100%', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' }}
-            >
-              <option value="">Pick a Model…</option>
-              {(models.data ?? []).map((m) => (
-                <option key={m.id} value={m.id}>{m.name} ({m.category})</option>
-              ))}
-            </select>
+        <div style={{ marginTop: 'var(--space-5)', paddingTop: 'var(--space-5)', borderTop: '1px solid var(--line)' }}>
+          <div style={{ ...DF_LABEL, marginBottom: 'var(--space-3)' }}>Add a special model</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 2fr) 1fr 1fr auto', gap: 'var(--space-3)', alignItems: 'end' }}>
+            <div>
+              <label style={DF_LABEL}>Model</label>
+              <select value={modelId} onChange={(e) => setModelId(e.target.value)} style={DF_INPUT}>
+                <option value="">Pick a Model…</option>
+                {(models.data ?? []).map((m) => (
+                  <option key={m.id} value={m.id}>{m.name} ({m.category})</option>
+                ))}
+              </select>
+            </div>
+            {numberInputCell('Standalone (RM)', standalone, setStandalone)}
+            {numberInputCell('Cross-category (RM)', crossFee, setCrossFee)}
+            <Button variant="primary" onClick={() => void onAdd()} disabled={upsert.isPending}>
+              <Plus size={16} strokeWidth={1.75} />
+              {upsert.isPending ? 'Saving…' : 'Add'}
+            </Button>
           </div>
-          {numberInputCell('Standalone (RM)', standalone, setStandalone)}
-          {numberInputCell('Cross-cat (RM)', crossFee, setCrossFee)}
-          <Button variant="primary" onClick={() => void onAdd()} disabled={upsert.isPending}>
-            {upsert.isPending ? 'Saving…' : 'Save'}
-          </Button>
+          {err && <div style={{ color: 'var(--c-festive-b)', fontSize: 'var(--fs-13)', marginTop: 'var(--space-3)' }} role="alert">{err}</div>}
         </div>
       )}
-      {err && <div style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginTop: 'var(--space-2)' }} role="alert">{err}</div>}
-    </div>
+    </section>
   );
 };
 
 const numberInputCell = (label: string, value: number | '', setValue: (v: number | '') => void) => (
   <div>
-    <label style={{ display: 'block', fontSize: 'var(--fs-12)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>{label}</label>
+    <label style={DF_LABEL}>{label}</label>
     <input
       type="number"
       min={0}
       step={1}
       value={value}
       onChange={(e) => setValue(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
-      style={{ width: '100%', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' }}
+      style={DF_INPUT}
     />
   </div>
 );
