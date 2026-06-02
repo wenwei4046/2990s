@@ -33,12 +33,18 @@ const formatVariantValue = (v: unknown): string => {
   return String(v);
 };
 
+// A variant value is renderable only if it's a primitive (or an array of
+// primitives). Nested objects / arrays-of-objects — e.g. a sofa's `cells` —
+// would stringify to "[object Object]", so they're skipped (the sofa's
+// compartment codes now show in the line description instead).
+const isPrimitive = (x: unknown): boolean => x == null || typeof x !== 'object';
+
 export const VariantsPills = memo(({ variants }: { variants: Record<string, unknown> | null }) => {
   if (!variants || typeof variants !== 'object') return null;
   const entries = Object.entries(variants).filter(([, v]) => {
     if (v == null || v === '') return false;
-    if (Array.isArray(v) && v.length === 0) return false;
-    return true;
+    if (Array.isArray(v)) return v.length > 0 && v.every(isPrimitive);
+    return isPrimitive(v);
   });
   if (entries.length === 0) return null;
   return (
