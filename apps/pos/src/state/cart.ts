@@ -58,6 +58,9 @@ export interface SizeConfigSnapshot {
   pwp?: boolean;
   pwpCode?: string;
   pwpTriggerLabel?: string | null;
+  // Original (non-PWP) total — so the cart can auto-revert the price if the
+  // same-cart trigger is removed and this line's reserved code is freed.
+  pwpOriginalTotal?: number;
   total: number;
   summary: string;       // e.g. "Queen"
   /** Paid-extra add-ons attached to this configured line (e.g. extra pillows
@@ -123,6 +126,9 @@ export interface BedframeConfigSnapshot {
   // on). Cross-order: an AVAILABLE code entered in "Insert PWP Code". The server
   // marks it USED at order Confirm; printed on the SO.
   pwpCode?: string;
+  // Original (non-PWP) total — auto-revert source when the same-cart trigger
+  // (and its reserved code) is removed from the cart.
+  pwpOriginalTotal?: number;
   // Display-label snapshots (parallel to the *Id fields) so the cart, printed
   // Sales Order, and Backend detail render the spec without a join.
   gapLabel?: string | null;
@@ -155,6 +161,10 @@ interface CartState {
   addConfigured: (config: CartConfig, opts?: { editingKey?: string }) => string;
   setQty: (key: string, qty: number) => void;
   remove: (key: string) => void;
+  /** Strip a redeemed PWP/Promo voucher from a line and restore its original
+   *  price. Called when the same-cart trigger leaves the cart (its reserved
+   *  code is freed) so a reward never lingers at the PWP price with a dead code. */
+  revertPwp: (key: string) => void;
   clear: () => void;
   restore: (lines: CartLine[], sourceQuoteId?: string | null) => void;
 }
@@ -227,6 +237,25 @@ export const useCart = create<CartState>()((set, get) => ({
 
   remove(key) {
     set({ lines: get().lines.filter((l) => l.key !== key) });
+  },
+
+  revertPwp(key) {
+    set({
+      lines: get().lines.map((l) => {
+        if (l.key !== key) return l;
+        const c = l.config as CartConfig & {
+          pwp?: boolean; pwpCode?: string; pwpTriggerLabel?: string | null; pwpOriginalTotal?: number;
+        };
+        if (!c.pwp && !c.pwpCode) return l;
+        const next = { ...c };
+        if (typeof c.pwpOriginalTotal === 'number') next.total = c.pwpOriginalTotal;
+        delete next.pwp;
+        delete next.pwpCode;
+        delete next.pwpTriggerLabel;
+        delete next.pwpOriginalTotal;
+        return { ...l, config: next as CartConfig };
+      }),
+    });
   },
 
   clear() {

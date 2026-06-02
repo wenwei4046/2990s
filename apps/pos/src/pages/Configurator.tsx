@@ -1049,12 +1049,7 @@ export const Configurator = () => {
      The same-cart toggle appears when a qualifying trigger + reserved code are in
      the cart; "Insert PWP Code" redeems a cross-order voucher. */
   const pwpRailSection = (
-    <RailSection title="PWP 换购优惠">
-      {!hasPwpPrice && !sameCartIsPromo && insertedCodeType !== 'promo' && (
-        <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-          This size has no PWP (换购) price yet. Set it in SKU Master → PWP Price to enable redemption.
-        </p>
-      )}
+    <RailSection title="PWP & Promo Voucher">
       {insertedCode ? (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)', padding: 'var(--space-2) 0' }}>
           <span style={{ fontSize: 'var(--fs-12)' }}>
@@ -1143,7 +1138,8 @@ export const Configurator = () => {
       modelId: (p as { model_id?: string | null }).model_id ?? null,
       category: String(p.category_id ?? '').toUpperCase(),
       ...(pwpActive && appliedPwpCode
-        ? { pwp: true, pwpCode: appliedPwpCode, pwpTriggerLabel: crossPwpActive ? null : pwpEval.triggerLabel }
+        ? { pwp: true, pwpCode: appliedPwpCode, pwpTriggerLabel: crossPwpActive ? null : pwpEval.triggerLabel,
+            pwpOriginalTotal: sizeBase + bedframeSurcharge(bfSel) + bedframeFabricDelta }
         : {}),
       ...(bfSel.gapId ? { gapId: bfSel.gapId, gapLabel: bfSel.gapLabel } : {}),
       legHeightId: bfSel.legId,
@@ -1185,7 +1181,8 @@ export const Configurator = () => {
       // PWP Code Voucher (0130) — a mattress redeemed at its PWP price. sizeTotal
       // already reflects the PWP base; the server re-validates the code at Confirm.
       ...(pwpActive && appliedPwpCode
-        ? { pwp: true, pwpCode: appliedPwpCode, pwpTriggerLabel: crossPwpActive ? null : pwpEval.triggerLabel }
+        ? { pwp: true, pwpCode: appliedPwpCode, pwpTriggerLabel: crossPwpActive ? null : pwpEval.triggerLabel,
+            pwpOriginalTotal: sizeBase + extrasTotal + specialSelsSurcharge(mattressSpecialSel) }
         : {}),
       total: sizeTotal,
       summary: `${pickedSize.label}${extraSummary}`,
