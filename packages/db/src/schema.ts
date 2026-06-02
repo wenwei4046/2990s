@@ -488,6 +488,12 @@ export const customers = pgTable('customers', {
   lastSeenAt:   timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   phoneIdx: index('idx_customers_phone').on(t.phone),
+  /* Identity key (Chairman 2026-06-03, migration 0144): one customer per
+     normalised (name, phone). Partial so legacy phone-less rows don't collide
+     on a NULL phone. Backs the atomic upsert_customer_by_name_phone() RPC. */
+  namePhoneUnique: uniqueIndex('customers_name_phone_unique')
+    .on(sql`lower(trim(${t.name}))`, t.phone)
+    .where(sql`${t.phone} IS NOT NULL`),
 }));
 
 /* ─────────────────────────── My-Localities (postcode cascade) ───────── */

@@ -710,18 +710,27 @@ async function checkCrossCategorySource(
   sb: any,
   docNo: string,
   newPhoneRaw: string | null,
+  newCustomerId: string | null = null,
 ): Promise<CrossCatEligibility> {
   const { data: srcRow } = await sb
     .from('mfg_sales_orders')
-    .select('doc_no, status, phone, debtor_name')
+    .select('doc_no, status, phone, debtor_name, customer_id')
     .eq('doc_no', docNo)
     .maybeSingle();
-  const src = srcRow as { doc_no: string; status: string; phone: string | null; debtor_name: string | null } | null;
+  const src = srcRow as { doc_no: string; status: string; phone: string | null; debtor_name: string | null; customer_id: string | null } | null;
   if (!src) return { eligible: false, reason: 'not_found' };
   if (src.status === 'CANCELLED') return { eligible: false, reason: 'cancelled' };
-  const newPhone = newPhoneRaw ? (normalizePhone(newPhoneRaw) ?? null) : null;
-  const srcPhone = src.phone ? (normalizePhone(src.phone) ?? src.phone) : null;
-  if (newPhone && srcPhone && newPhone !== srcPhone) return { eligible: false, reason: 'different_customer' };
+  /* "Same customer" — prefer the real customer_id link (exact) now that every
+     new SO resolves one (migration 0144). Fall back to normalised phone only
+     when the SOURCE is a legacy row with no customer_id; the NEW order always
+     carries both a compulsory phone and a resolved customer_id. */
+  if (src.customer_id && newCustomerId) {
+    if (src.customer_id !== newCustomerId) return { eligible: false, reason: 'different_customer' };
+  } else {
+    const newPhone = newPhoneRaw ? (normalizePhone(newPhoneRaw) ?? newPhoneRaw) : null;
+    const srcPhone = src.phone ? (normalizePhone(src.phone) ?? src.phone) : null;
+    if (newPhone && srcPhone && newPhone !== srcPhone) return { eligible: false, reason: 'different_customer' };
+  }
   const { count } = await sb
     .from('mfg_sales_orders')
     .select('doc_no', { count: 'exact', head: true })
@@ -861,6 +870,18 @@ mfgSalesOrders.post('/', async (c) => {
      Commander 2026-05-26: "Debtor Name 其实可以换成 Customer Name". */
   const customerName = (body.debtorName ?? body.customerName) as string | undefined;
   if (!customerName) return c.json({ error: 'customer_name_required' }, 400);
+  /* Owner 2026-06-03 (migration 0144) — phone is COMPULSORY on every SO,
+     enforced server-side: the POS already client-gates it (validateCustomer)
+     and the Backend New SO form gates it too, but the server is the layer a
+     tampered or direct API caller can't bypass. Normalise ONCE here and reuse
+     for both the SO snapshot (phone column) and the customer identity key. A
+     non-MY / unparseable number keeps its raw form (normalizePhone → null)
+     rather than being rejected — only an empty phone is blocked. */
+  const rawPhone = typeof body.phone === 'string' ? body.phone.trim() : '';
+  if (!rawPhone) {
+    return c.json({ error: 'phone_required', reason: 'A phone number is required on every sales order.' }, 400);
+  }
+  const normPhone = normalizePhone(rawPhone) ?? rawPhone;
   /* PR #46 — Items optional. POS handover may create the SO header first,
      then add items via POST /:docNo/items. Matches PR #41 PO blank-draft
      pattern. Only B2B-bulk path requires items at create. */
@@ -1073,7 +1094,27 @@ mfgSalesOrders.post('/', async (c) => {
      (carried-forward voucher). Default data (no codes) → nothing granted → no
      change. NOTE: applied on the create path; backend per-line PATCH/override
      re-prices at full sell price (no order context) — re-create to re-apply. */
-  const orderCustomerId = (body.customerId as string | null | undefined) ?? null;
+  /* Owner 2026-06-03 (migration 0144) — resolve the REAL customer identity
+     (find-or-create by name + phone) and stamp it on the SO. Phone is validated
+     above so the key is always complete. Best-effort: an unexpected RPC error
+     must not block a paying customer at the counter, so we log it and fall back
+     to null (a Phase 2 backfill can repair it). The resolved id flows into the
+     SO header (customer_id), the cross-category "same customer" match, and the
+     PWP voucher binding below — all of which previously saw a permanently-null
+     customer_id (the POS never sent one). */
+  let orderCustomerId: string | null = null;
+  {
+    const { data: resolvedCustomerId, error: customerErr } = await sb.rpc('upsert_customer_by_name_phone', {
+      p_name:  customerName,
+      p_phone: normPhone,
+      p_email: typeof body.email === 'string' && body.email.trim() ? body.email.trim() : null,
+    });
+    if (customerErr) {
+      console.error('[mfg-so] customer resolve failed:', customerErr.message ?? customerErr);
+    } else {
+      orderCustomerId = (resolvedCustomerId as string | null) ?? null;
+    }
+  }
   const pwpBaseByIdx = new Map<number, number>();            // non-sofa idx → pwp_price_sen
   const pwpSofaByIdx = new Map<number, string[]>();          // sofa idx → granted reward combo ids
   const claimedPwpCodes: Array<{ code: string; prevStatus: string }> = [];
@@ -1386,7 +1427,7 @@ mfgSalesOrders.post('/', async (c) => {
     const rawLink = String((body.crossCategorySourceDocNo as string | undefined) ?? '').trim();
     if (rawLink) {
       const elig = await checkCrossCategorySource(
-        sb, rawLink, typeof body.phone === 'string' ? body.phone : null,
+        sb, rawLink, typeof body.phone === 'string' ? body.phone : null, orderCustomerId,
       );
       if (!elig.eligible) {
         await rollbackPwpClaims();  // don't burn a voucher on a rejected order
@@ -1467,7 +1508,7 @@ mfgSalesOrders.post('/', async (c) => {
        raw "+60 12 345 6789" — normalize once on the server so the DB never
        holds a half-typed format. Falls back to the raw value if normalize
        returns null (e.g. non-MY international numbers we don't recognise). */
-    phone: typeof body.phone === 'string' ? (normalizePhone(body.phone) ?? body.phone) : null,
+    phone: normPhone,
     mattress_sofa_centi: mattressSofa,
     bedframe_centi: bedframe,
     accessories_centi: accessories,
@@ -1505,7 +1546,7 @@ mfgSalesOrders.post('/', async (c) => {
       : null,
     emergency_contact_relationship: (body.emergencyContactRelationship as string) ?? null,
     target_date: (body.targetDate as string) ?? null,
-    customer_id: (body.customerId as string) ?? null,
+    customer_id: orderCustomerId,
     customer_state: (body.customerState as string) ?? null,
     /* Task #121 — country snapshot auto-derived above. */
     customer_country: customerCountrySnapshot,
