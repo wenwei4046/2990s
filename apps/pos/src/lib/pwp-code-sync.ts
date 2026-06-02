@@ -99,12 +99,31 @@ export function usePwpCodeSync(): void {
         if (quotes) {
           const liveKeys = new Set<string>(cartKeys);
           for (const q of quotes) for (const l of q.cart ?? []) liveKeys.add(l.key);
-          const orphanKeys = Array.from(new Set(
+          const orphanSet = new Set(
             reserved
               .filter((rc) => rc.cartLineKey && !liveKeys.has(rc.cartLineKey))
               .map((rc) => rc.cartLineKey as string),
-          ));
+          );
+          const orphanKeys = Array.from(orphanSet);
+          // Codes about to be freed (their owning TRIGGER line left the cart). Any
+          // reward line that redeemed one of these same-cart codes must revert to
+          // its original price — else it lingers at the PWP price (often RM 0) with
+          // a dead code and would drift-reject at Confirm. Cross-order vouchers
+          // (AVAILABLE, never in `reserved`) are untouched.
+          const freedCodes = new Set(
+            reserved
+              .filter((rc) => rc.cartLineKey && orphanSet.has(rc.cartLineKey))
+              .map((rc) => rc.code),
+          );
           for (const k of orphanKeys) await free.mutateAsync(k);
+          if (freedCodes.size > 0) {
+            for (const l of useCart.getState().lines) {
+              const c = l.config as { pwp?: boolean; pwpCode?: string };
+              if (c.pwp && c.pwpCode && freedCodes.has(c.pwpCode)) {
+                useCart.getState().revertPwp(l.key);
+              }
+            }
+          }
         }
       } catch {
         // Transient — the next cart change retries.
