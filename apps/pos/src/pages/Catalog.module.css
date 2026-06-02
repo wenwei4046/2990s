@@ -73,8 +73,9 @@
   gap: 4px;
   position: sticky;
   /* Clear the sticky topbar (~60px) so the category rail parks just below it
-     instead of tucking underneath. */
-  top: 76px;
+     instead of tucking underneath. On iPad the topbar grows by the top
+     safe-area inset (see Topbar.module.css), so add the same inset here. */
+  top: calc(76px + env(safe-area-inset-top, 0px));
   /* White panel + subtle shadow lifts the rail off the cream page so categories
      read as a distinct card instead of blending in (matches Order summary +
      Quotes card treatment). */

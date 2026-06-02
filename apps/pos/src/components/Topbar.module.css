@@ -7,6 +7,13 @@
   align-items: center;
   gap: 24px;
   padding: 12px 24px;
+  /* iPad / installed-PWA: index.html opts into viewport-fit=cover +
+     black-translucent status bar, so the page draws *behind* the iOS status
+     bar (clock, wifi, battery). Reserve that strip via the top safe-area
+     inset so the wordmark / stepper / staff chip sit below it instead of
+     colliding with it. The white background fills the inset, so the system
+     glyphs land on a clean white strip. Desktop has no inset → plain 12px. */
+  padding-top: calc(12px + env(safe-area-inset-top, 0px));
   background: #fff;
   border-bottom: 1px solid var(--line);
   /* Stick to the top while the page scrolls so the step nav, Quotes/My orders,
@@ -207,6 +214,7 @@
   .topbar {
     gap: 14px;
     padding: 10px 16px;
+    padding-top: calc(10px + env(safe-area-inset-top, 0px));
   }
   .crumb {
     display: none;
