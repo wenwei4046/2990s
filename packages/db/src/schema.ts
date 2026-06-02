@@ -422,6 +422,30 @@ export const addons = pgTable('addons', {
   updatedAt:    timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/* ───────────────────── Special add-ons (migration 0133) ──────────────────
+   The grown-up version of the flat maintenance_config `specials` pools: a
+   per-Model product add-on (selling surcharge + 0..N follow-up choice groups)
+   that prints as an SO line description, not a SKU. `code` = the same string in
+   product_models.allowed_options.specials + variants.specials (zero migration).
+   POS-selling only; cost path never reads these. selling/cost may be NEGATIVE
+   (a deduction, e.g. "No Side Panel" −RM40). option_groups shape:
+     [{ label, required, choices: [{ label, extraSen }] }]                     */
+export const specialAddons = pgTable('special_addons', {
+  id:              uuid('id').primaryKey().defaultRandom(),
+  code:            text('code').notNull().unique(),
+  label:           text('label').notNull(),
+  soDescription:   text('so_description').notNull().default(''),
+  categories:      text('categories').array().notNull().default(sql`'{}'::text[]`),
+  sellingPriceSen: integer('selling_price_sen').notNull().default(0),
+  costPriceSen:    integer('cost_price_sen').notNull().default(0),
+  optionGroups:    jsonb('option_groups').notNull().default(sql`'[]'::jsonb`),
+  active:          boolean('active').notNull().default(true),
+  sortOrder:       integer('sort_order').notNull().default(0),
+  createdAt:       timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:       timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:       uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+});
+
 /* ─────────────────────────── Drivers + Customers ────────────────────── */
 
 export const drivers = pgTable('drivers', {

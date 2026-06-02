@@ -1189,10 +1189,10 @@ const MAINTENANCE_TABS: {
   { key: 'sofaSizes', label: 'Sizes', description: 'Available sofa seat height sizes (inches)', priced: false, section: 'Sofa' },
   { key: 'sofaLegHeights', label: 'Leg Heights', description: 'Sofa leg height options with surcharge pricing', priced: true, section: 'Sofa' },
   { key: 'sofaSpecials', label: 'Specials', description: 'Sofa special order options with surcharge pricing', priced: true, section: 'Sofa' },
-  // PR (Commander 2026-05-28) — Quick Presets: module-composition shortcuts
-  // (e.g. "1-Seater" = 1A-LHF + 1A-RHF). Drives the New Combo dialog's
-  // quick-pick chip rail + the POS Configurator's Quick Pick screen.
-  { key: 'sofaQuickPresets', label: 'Quick Presets', description: 'Module-composition shortcuts (e.g. 1-Seater = 1A-LHF + 1A-RHF). Used by the New Combo dialog and POS Quick Pick.', priced: false, section: 'Sofa' },
+  // Quick Presets editor entry retired (Chairman 2026-06-02) — removed from the
+  // Maintenance rail in both apps. The sofaQuickPresets DATA + the shared
+  // DEFAULT_SOFA_QUICK_PRESETS fallback are kept (Sofa Combos reference preset
+  // ids; POS Quick Pick reads sofa_quick_picks, a different table).
 
   // ── Common (cross-category single pool) ─────────────────────────────────
   { key: 'fabrics', label: 'Fabrics', description: 'Fabric price tier assignment — drives Price 1 / Price 2', priced: false, section: 'Common' },
