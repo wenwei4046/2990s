@@ -1854,6 +1854,35 @@ export const pwpRules = pgTable('pwp_rules', {
 // (Mattress A → Aria; Mattress B → Orient). The old one-active-per-pair unique
 // index was dropped in migration 0129.
 
+/* ──────────────────────────────── pwp_codes ─────────────────────────────────
+   PWP Code Voucher System (Chairman 2026-06-02, migration 0130). Adding a
+   TRIGGER to a cart RESERVES N = rule.qty_per_trigger × qty codes (each = one
+   reward redemption). `code` is the PK = the occupy-the-number guarantee. At
+   order Confirm an applied code → USED, an un-applied reserved code → AVAILABLE
+   (printed on the SO, redeemable cross-order). reward_category +
+   eligibleRewardModelIds are snapshotted from the rule so a later rule edit /
+   delete never breaks an outstanding code. POS-selling only. */
+export const pwpCodes = pgTable('pwp_codes', {
+  code:                     text('code').primaryKey(),                                            // 'PWP-1234ABCD'
+  ruleId:                   uuid('rule_id').references(() => pwpRules.id, { onDelete: 'set null' }),
+  rewardCategory:           mfgProductCategory('reward_category').notNull(),                       // snapshot from the rule
+  eligibleRewardModelIds:   jsonb('eligible_reward_model_ids').$type<string[]>().notNull().default([]), // snapshot; [] = whole reward category
+  status:                   text('status').notNull().default('RESERVED'),                         // RESERVED | USED | AVAILABLE
+  ownerStaffId:             uuid('owner_staff_id').references(() => staff.id, { onDelete: 'set null' }),
+  cartLineKey:              text('cart_line_key'),                                                 // the trigger cart line that owns it
+  triggerItemCode:          text('trigger_item_code'),                                            // the trigger SKU code (audit)
+  sourceDocNo:              text('source_doc_no'),                                                 // trigger SO (set at Confirm)
+  redeemedDocNo:            text('redeemed_doc_no'),                                               // reward SO that consumed it
+  redeemedItemCode:         text('redeemed_item_code'),                                            // the reward SKU it paid for (audit)
+  customerId:               uuid('customer_id').references(() => customers.id, { onDelete: 'set null' }), // bound when AVAILABLE at trigger SO
+  createdAt:                timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:                timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxOwnerStatus: index('idx_pwp_codes_owner_status').on(t.ownerStaffId, t.status),
+  idxCartLine:    index('idx_pwp_codes_cart_line').on(t.cartLineKey),
+  idxSourceDoc:   index('idx_pwp_codes_source_doc').on(t.sourceDocNo),
+}));
+
 /* ─────────────────────────── sofa_quick_picks ──────────────────────────
    Phase 5 (Chairman 2026-05-31) — global Quick Pick LAYOUTS. A Quick Pick is
    a VISIBLE saved sofa layout for easy selection (it may be unpriced); the

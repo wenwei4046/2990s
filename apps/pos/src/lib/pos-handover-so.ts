@@ -91,6 +91,10 @@ export interface PosHandoffItem {
    *  size/colour/leg-height/gap/etc. Coordinator-side SoLineCard renders this
    *  into the bedframe / sofa variants grid (see apps/backend SoLineCard). */
   variants: Record<string, unknown> | null;
+  /** PWP Code Voucher (migration 0130) — the cart line's stable key. NOT
+   *  persisted on the SO line; the server uses it at Confirm to flip this
+   *  order's un-applied RESERVED codes (keyed by cart_line_key) to AVAILABLE. */
+  cartLineKey?: string;
 }
 
 export interface PosHandoffError {
@@ -174,11 +178,13 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     };
     if (config.fabricId)              v.fabricId = config.fabricId;
     if (config.fabricLabel)           v.fabricLabel = config.fabricLabel;
-    // PWP (换购, 0128) — the salesperson redeemed this bed frame at its PWP price.
-    // The server re-validates eligibility (shared resolvePwp) before locking the
-    // PWP base; pwpTriggerLabel is a display snapshot for the SO / invoice.
+    // PWP (换购) — the salesperson redeemed this bed frame at its PWP price via a
+    // voucher code (migration 0130). The server re-validates the code + marks it
+    // USED at Confirm before locking the PWP base; pwpTriggerLabel is a display
+    // snapshot, pwpCode is the voucher (persisted → printed on the SO).
     if (config.pwp) {
       v.pwp = true;
+      if (config.pwpCode)             v.pwpCode = config.pwpCode;
       if (config.pwpTriggerLabel)     v.pwpTriggerLabel = config.pwpTriggerLabel;
     }
     // colourId is the fabric colour code (fabric_colours.colour_id) now that
@@ -331,6 +337,7 @@ export const cartLineToSoItem = (
     unitPriceCenti,
     discountCenti: 0,
     variants: buildVariants(line.config),
+    cartLineKey: line.key,
   };
 };
 

@@ -19,11 +19,9 @@ import {
   loadFabricSellingTiers,
   loadFabricTierAddonConfig,
   loadModelSofaModulePrices,
-  loadPwpRules,
   type MfgItemForRecompute,
   type RecomputedLine,
 } from '../lib/mfg-pricing-recompute';
-import { resolvePwp, type PwpLineInput } from '@2990s/shared/pwp';
 /* PR #216 — per-Model variant chip enforcement (Commander 2026-05-27
    follow-up to PR #205). Reject POST/PATCH SO line items that carry a
    variant excluded by the Model's allowed_options. Empty pool = no
@@ -931,30 +929,81 @@ mfgSalesOrders.post('/', async (c) => {
   const cachedCombos = await loadActiveSofaCombos(sb);  // Phase 4b — sofa selling recompute
   const cachedFabricAddonConfig = await loadFabricTierAddonConfig(sb);  // migration 0124 — fabric-tier Δ
 
-  /* PWP (换购, migration 0128) — order-level resolution. Pre-load each line's
-     product ONCE (shared by the PWP check + the recompute below), then the
-     shared `resolvePwp` decides which reward lines earn the per-SKU PWP price.
-     allowance = qty_per_trigger × eligible trigger units in THIS order. A forged
-     claim (no qualifying trigger / ineligible model / over allowance) is simply
-     not granted → that line reprices at full sell_price_sen → drift → 400 for a
-     POS-tablet caller. Default data (no active rules) → granted set empty → no
-     change. NOTE: applied on the create path; backend per-line PATCH/override
-     re-prices at full sell price (no order context) — re-create to re-apply. */
-  const cachedPwpRules = await loadPwpRules(sb);
   const lineProducts = await Promise.all(
     items.map((it) => loadProductByCode(sb, String(it.itemCode ?? ''))),
   );
-  const pwpLineInputs: PwpLineInput[] = items.map((it, idx) => {
-    const p = lineProducts[idx];
-    return {
-      idx,
-      category:     String(p?.category ?? it.itemGroup ?? '').toUpperCase(),
-      modelId:      p?.model_id ?? null,
-      qty:          Number(it.qty ?? 1),
-      pwpRequested: (it.variants as { pwp?: boolean } | null)?.pwp === true,
-    };
-  });
-  const pwpGranted = new Set(resolvePwp(cachedPwpRules, pwpLineInputs).map((g) => g.idx));
+  /* PWP Code Voucher (migration 0130) — code-driven grant + atomic claim. A
+     reward line earns its per-SKU pwp_price_sen ONLY if it carries a valid
+     `variants.pwpCode`: the code exists, is redeemable (AVAILABLE, or RESERVED
+     owned by the caller), its snapshot reward_category + eligible model list
+     match the reward product, the reward SKU has pwp_price_sen > 0, and — for an
+     AVAILABLE cross-order voucher — the order's customer matches the code's bound
+     customer (§8.8). Each valid code is CLAIMED atomically (conditional UPDATE →
+     USED) so two orders can't double-spend one; a lost race / forged / used /
+     ineligible code is simply not granted → that line reprices at full
+     sell_price_sen → drift → 400 for a POS-tablet caller. Un-applied reserved
+     codes owned by this order's triggers are flipped to AVAILABLE after insert
+     (carried-forward voucher). Default data (no codes) → nothing granted → no
+     change. NOTE: applied on the create path; backend per-line PATCH/override
+     re-prices at full sell price (no order context) — re-create to re-apply. */
+  const orderCustomerId = (body.customerId as string | null | undefined) ?? null;
+  const pwpBaseByIdx = new Map<number, number>();
+  const claimedPwpCodes: Array<{ code: string; prevStatus: string }> = [];
+  for (let idx = 0; idx < items.length; idx++) {
+    const it = items[idx];
+    const code = String((it?.variants as { pwpCode?: string | null } | null)?.pwpCode ?? '').trim();
+    if (!code) continue;
+    const product = lineProducts[idx];
+    if (!product) continue;
+    const pwpPrice = Math.round(Number(product.pwp_price_sen ?? 0));
+    if (!(pwpPrice > 0)) continue;
+    const { data: cRow } = await sb
+      .from('pwp_codes')
+      .select('status, owner_staff_id, reward_category, eligible_reward_model_ids, customer_id, source_doc_no')
+      .eq('code', code)
+      .maybeSingle();
+    if (!cRow) continue;
+    const redeemable = cRow.status === 'AVAILABLE' || (cRow.status === 'RESERVED' && cRow.owner_staff_id === user.id);
+    if (!redeemable) continue;
+    if (String(product.category ?? '').toUpperCase() !== String(cRow.reward_category).toUpperCase()) continue;
+    const elig = (cRow.eligible_reward_model_ids as string[] | null) ?? [];
+    const modelOk = elig.length === 0 || (product.model_id != null && elig.includes(product.model_id));
+    if (!modelOk) continue;
+    // Customer binding — an AVAILABLE voucher only redeems for its earner.
+    if (cRow.status === 'AVAILABLE' && cRow.customer_id && orderCustomerId && cRow.customer_id !== orderCustomerId) continue;
+    // Atomic claim — USED only if still redeemable. Preserve the original
+    // source_doc_no (earning SO) for a cross-order voucher; stamp it for a
+    // same-cart one.
+    const { data: claimed } = await sb
+      .from('pwp_codes')
+      .update({
+        status:             'USED',
+        source_doc_no:      cRow.source_doc_no ?? docNo,
+        redeemed_doc_no:    docNo,
+        redeemed_item_code: product.code,
+        updated_at:         new Date().toISOString(),
+      })
+      .eq('code', code)
+      .in('status', ['RESERVED', 'AVAILABLE'])
+      .select('code')
+      .maybeSingle();
+    if (!claimed) continue;  // lost the race / already used → not granted
+    claimedPwpCodes.push({ code, prevStatus: cRow.status });
+    pwpBaseByIdx.set(idx, pwpPrice);
+  }
+  /* Restore claimed codes to their prior state when the request is rejected
+     after the claim (drift 400 / insert failure) so a failed order never
+     silently burns a voucher. */
+  const rollbackPwpClaims = async () => {
+    for (const { code, prevStatus } of claimedPwpCodes) {
+      const patch: Record<string, unknown> = {
+        status: prevStatus, redeemed_doc_no: null, redeemed_item_code: null,
+        updated_at: new Date().toISOString(),
+      };
+      if (prevStatus === 'RESERVED') patch.source_doc_no = null;  // we stamped it on claim
+      await sb.from('pwp_codes').update(patch).eq('code', code).eq('status', 'USED');
+    }
+  };
 
   const recomputes: Array<RecomputedLine | null> = await Promise.all(items.map(async (it, idx) => {
     const itemCode = String(it.itemCode ?? '');
@@ -981,8 +1030,8 @@ mfgSalesOrders.post('/', async (c) => {
       unitPriceCenti: Number(it.unitPriceCenti ?? 0),
       variants:       (it.variants as MfgItemForRecompute['variants']) ?? null,
     };
-    // PWP base for this line when granted (else null → normal selling base).
-    const pwpBaseSen = pwpGranted.has(idx) ? (product?.pwp_price_sen ?? null) : null;
+    // PWP base for this line when its code was claimed (else null → normal base).
+    const pwpBaseSen = pwpBaseByIdx.get(idx) ?? null;
     return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, pwpBaseSen);
   }));
   /* Commander 2026-05-29 (system-wide) — the SELLING unit price is now
@@ -1009,6 +1058,7 @@ mfgSalesOrders.post('/', async (c) => {
     for (let i = 0; i < recomputes.length; i++) {
       const r = recomputes[i];
       if (r && r.drift) {
+        await rollbackPwpClaims();  // don't burn a voucher on a rejected order
         return c.json({
           error:    'pricing_drift',
           reason:   'Client unitPriceCenti differs >0.5% from server compute.',
@@ -1227,17 +1277,32 @@ mfgSalesOrders.post('/', async (c) => {
     status: 'CONFIRMED',
     created_by: user.id,
   });
-  if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
+  if (hErr) { await rollbackPwpClaims(); return c.json({ error: 'insert_failed', reason: hErr.message }, 500); }
 
   if (itemRows.length > 0) {
     const rowsWithDoc = itemRows.map((r) => ({ ...r, doc_no: docNo }));
     const { error: iErr } = await sb.from('mfg_sales_order_items').insert(rowsWithDoc);
-    if (iErr) { await sb.from('mfg_sales_orders').delete().eq('doc_no', docNo); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+    if (iErr) { await rollbackPwpClaims(); await sb.from('mfg_sales_orders').delete().eq('doc_no', docNo); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
     /* Commander 2026-05-29 — re-roll the header through recomputeTotals so a
        matched sofa SET picks up its MASTER combo cost (spread across the lines).
        The inline rollup above set per-module costs; this corrects them + the
        header totals to the combo. No-op for non-sofa / non-matching SOs. */
     await recomputeTotals(sb, docNo);
+  }
+
+  /* PWP Code Voucher (migration 0130) — carry forward the un-applied reserved
+     codes. Any code still RESERVED against one of THIS order's cart lines (the
+     applied ones already flipped to USED in the claim pass above) becomes an
+     AVAILABLE voucher bound to this order's customer: printed on the SO and
+     redeemable in a future order. Keyed by the trigger line's cart_line_key,
+     which the POS threads on each line as `cartLineKey`. */
+  const pwpCartLineKeys = Array.from(new Set(
+    items.map((it) => String((it as { cartLineKey?: string } | null)?.cartLineKey ?? '')).filter(Boolean),
+  ));
+  if (pwpCartLineKeys.length > 0) {
+    await sb.from('pwp_codes').update({
+      status: 'AVAILABLE', source_doc_no: docNo, customer_id: orderCustomerId, updated_at: new Date().toISOString(),
+    }).eq('owner_staff_id', user.id).eq('status', 'RESERVED').in('cart_line_key', pwpCartLineKeys);
   }
 
   // PR-D — audit row. Emit one CREATE entry with every non-null field the
