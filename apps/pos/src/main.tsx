@@ -7,6 +7,7 @@ import './main.css';
 import { AuthProvider } from './lib/auth';
 import { CartSync } from './lib/cart-sync';
 import { PwpCodeSync } from './lib/pwp-code-sync';
+import { UpdatePrompt } from './components/UpdatePrompt';
 import { router } from './router';
 
 const queryClient = new QueryClient({
@@ -31,6 +32,9 @@ createRoot(rootEl).render(
         {/* PWP voucher reconciler: reserve codes for trigger lines, free on
             trigger-remove. Beside CartSync so it survives navigation. */}
         <PwpCodeSync />
+        {/* "A new version is ready · Refresh" toast on deploy (PWA prompt
+            mode). Beside the syncs so it survives navigation. */}
+        <UpdatePrompt />
         <RouterProvider router={router} />
       </AuthProvider>
     </QueryClientProvider>

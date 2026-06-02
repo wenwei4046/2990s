@@ -9,7 +9,11 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt' (not 'autoUpdate'): a new deploy waits behind a "A new version
+      // is ready · Refresh" toast (src/components/UpdatePrompt.tsx) instead of
+      // silently reloading. Sales staff stay in control mid-order, and they no
+      // longer have to swipe-kill + relaunch the iPad PWA to pick up a fix.
+      registerType: 'prompt',
       manifest: {
         name: "2990's POS",
         short_name: '2990 POS',
