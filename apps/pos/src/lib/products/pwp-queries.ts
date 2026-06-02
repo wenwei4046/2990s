@@ -41,8 +41,10 @@ export type PwpRuleRow = {
   id: string;
   triggerCategory: MfgCategory;
   triggerEligibleModelIds: string[];
+  triggerComboIds: string[];   // SOFA trigger (Phase 2)
   rewardCategory: MfgCategory;
   eligibleRewardModelIds: string[];
+  rewardComboIds: string[];    // SOFA reward (Phase 2)
   qtyPerTrigger: number;
   active: boolean;
   createdAt: string;
@@ -52,8 +54,10 @@ export type PwpRuleRow = {
 export type PwpRuleInput = {
   triggerCategory: MfgCategory;
   triggerEligibleModelIds: string[];
+  triggerComboIds?: string[];
   rewardCategory: MfgCategory;
   eligibleRewardModelIds: string[];
+  rewardComboIds?: string[];
   qtyPerTrigger: number;
   active: boolean;
 };
@@ -107,6 +111,7 @@ export type PwpReservedCode = {
   ruleId: string | null;
   rewardCategory: MfgCategory;
   eligibleRewardModelIds: string[];
+  rewardComboIds: string[];    // SOFA reward (Phase 2)
   status: string;
   cartLineKey: string | null;
   triggerItemCode: string | null;
@@ -147,7 +152,8 @@ export function usePwpCodesForSo(docNo: string | undefined) {
 export function useReservePwpCodes() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (body: { cartLineKey: string; productId: string; qty: number }) =>
+    // sofaModules (cell.moduleId[]) lets the server match a SOFA trigger by combo.
+    mutationFn: async (body: { cartLineKey: string; productId: string; qty: number; sofaModules?: string[] }) =>
       authedFetch<{ codes: PwpReservedCode[] }>('/pwp-codes/reserve', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['pwp-codes-mine'] }); },
   });
@@ -167,10 +173,13 @@ export function useFreePwpCodes() {
  *  handover customer-match gate. The per-SKU price authority stays at order
  *  Confirm — the client uses the size's own pwpPrice for display. */
 export async function validatePwpCode(args: {
-  code: string; rewardCategory: string; rewardModelId?: string | null; customerId?: string | null;
+  code: string; rewardCategory: string; rewardModelId?: string | null;
+  rewardComboId?: string | null;   // SOFA reward (Phase 2)
+  customerId?: string | null;
 }): Promise<PwpCodeValidation> {
   const qs = new URLSearchParams({ rewardCategory: args.rewardCategory });
   if (args.rewardModelId) qs.set('rewardModelId', args.rewardModelId);
+  if (args.rewardComboId) qs.set('rewardComboId', args.rewardComboId);
   if (args.customerId) qs.set('customerId', args.customerId);
   return authedFetch<PwpCodeValidation>(`/pwp-codes/${encodeURIComponent(args.code)}?${qs.toString()}`);
 }

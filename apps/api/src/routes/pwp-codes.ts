@@ -11,6 +11,7 @@
 // AVAILABLE code. RLS (migration 0130) is defence-in-depth.
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
+import { matchComboSubset } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
@@ -43,6 +44,7 @@ type CodeRow = {
   rule_id: string | null;
   reward_category: string;
   eligible_reward_model_ids: string[] | null;
+  reward_combo_ids: string[] | null;
   status: string;
   owner_staff_id: string | null;
   cart_line_key: string | null;
@@ -54,7 +56,7 @@ type CodeRow = {
 };
 
 const SELECT =
-  'code, rule_id, reward_category, eligible_reward_model_ids, status, owner_staff_id, ' +
+  'code, rule_id, reward_category, eligible_reward_model_ids, reward_combo_ids, status, owner_staff_id, ' +
   'cart_line_key, trigger_item_code, source_doc_no, redeemed_doc_no, redeemed_item_code, customer_id';
 
 const toApi = (r: CodeRow) => ({
@@ -62,6 +64,7 @@ const toApi = (r: CodeRow) => ({
   ruleId:                  r.rule_id,
   rewardCategory:          r.reward_category,
   eligibleRewardModelIds:  r.eligible_reward_model_ids ?? [],
+  rewardComboIds:          r.reward_combo_ids ?? [],
   status:                  r.status,
   cartLineKey:             r.cart_line_key,
   triggerItemCode:         r.trigger_item_code,
@@ -88,6 +91,9 @@ const reserveSchema = z.object({
   cartLineKey: z.string().min(1),
   productId:   z.string().min(1),  // mfg_products.id of the trigger SKU
   qty:         z.number().int().min(1).default(1),
+  // SOFA trigger (Phase 2) — the build's module codes (cell.moduleId). Matched
+  // server-side against a SOFA rule's trigger_combo_ids. Omitted for non-sofa.
+  sofaModules: z.array(z.string()).optional(),
 });
 
 /* ── POST /reserve — reserve codes for a trigger cart line. Idempotent per
@@ -106,26 +112,53 @@ pwpCodes.post('/reserve', async (c) => {
   }
   const { cartLineKey, productId, qty } = parsed.data;
 
-  // 1. The trigger product (category + model).
+  // 1. The trigger product (category + model + base_model for sofa combos).
   const { data: prod } = await supabase
     .from('mfg_products')
-    .select('code, category, model_id')
+    .select('code, category, model_id, base_model')
     .eq('id', productId)
     .maybeSingle();
   if (!prod) return c.json({ codes: [] });  // unknown product → nothing to reserve
+  const prodCat = String(prod.category).toUpperCase();
 
-  // 2. Active rules whose trigger matches this product.
+  // 2. Active rules.
   const { data: ruleRows } = await supabase
     .from('pwp_rules')
-    .select('id, trigger_category, trigger_eligible_model_ids, reward_category, eligible_reward_model_ids, qty_per_trigger')
+    .select('id, trigger_category, trigger_eligible_model_ids, trigger_combo_ids, reward_category, eligible_reward_model_ids, reward_combo_ids, qty_per_trigger')
     .eq('active', true);
-  const matching = ((ruleRows ?? []) as Array<{
+  const rules = (ruleRows ?? []) as Array<{
     id: string; trigger_category: string; trigger_eligible_model_ids: string[] | null;
-    reward_category: string; eligible_reward_model_ids: string[] | null; qty_per_trigger: number;
-  }>).filter((r) =>
-    r.trigger_category === String(prod.category).toUpperCase() &&
-    inList(prod.model_id ?? null, r.trigger_eligible_model_ids ?? []),
-  );
+    trigger_combo_ids: string[] | null; reward_category: string;
+    eligible_reward_model_ids: string[] | null; reward_combo_ids: string[] | null; qty_per_trigger: number;
+  }>;
+
+  // 2b. Rules whose trigger matches this line. SOFA → match the build against the
+  //     rule's trigger_combo_ids (Phase 2); other categories → model match.
+  let matching: typeof rules;
+  if (prodCat === 'SOFA') {
+    const sofaModules = (parsed.data.sofaModules ?? []).map((s) => s.trim()).filter(Boolean);
+    if (sofaModules.length === 0) return c.json({ codes: [] });
+    const sofaRules = rules.filter((r) => r.trigger_category === 'SOFA' && (r.trigger_combo_ids ?? []).length > 0);
+    const comboIds = [...new Set(sofaRules.flatMap((r) => r.trigger_combo_ids ?? []))];
+    const combosById = new Map<string, { base_model: string; modules: string[][] }>();
+    if (comboIds.length > 0) {
+      const { data: comboRows } = await supabase
+        .from('sofa_combo_pricing')
+        .select('id, base_model, modules, deleted_at')
+        .in('id', comboIds);
+      for (const cr of (comboRows ?? []) as Array<{ id: string; base_model: string; modules: string[][]; deleted_at: string | null }>) {
+        if (!cr.deleted_at) combosById.set(cr.id, { base_model: cr.base_model, modules: cr.modules ?? [] });
+      }
+    }
+    matching = sofaRules.filter((r) => (r.trigger_combo_ids ?? []).some((cid) => {
+      const combo = combosById.get(cid);
+      return !!combo && (!prod.base_model || combo.base_model === prod.base_model) && matchComboSubset(sofaModules, combo.modules) != null;
+    }));
+  } else {
+    matching = rules.filter((r) =>
+      r.trigger_category === prodCat && inList(prod.model_id ?? null, r.trigger_eligible_model_ids ?? []),
+    );
+  }
 
   // 3. Existing RESERVED codes for this cart line, grouped by rule.
   const { data: existingRows } = await supabase
@@ -148,6 +181,7 @@ pwpCodes.post('/reserve', async (c) => {
             rule_id:                   rule.id,
             reward_category:           rule.reward_category,
             eligible_reward_model_ids: rule.eligible_reward_model_ids ?? [],
+            reward_combo_ids:          rule.reward_combo_ids ?? [],
             status:                    'RESERVED',
             owner_staff_id:            userId,
             cart_line_key:             cartLineKey,
@@ -218,6 +252,7 @@ pwpCodes.get('/:code', async (c) => {
   const code = c.req.param('code');
   const rewardCategory = (c.req.query('rewardCategory') ?? '').toUpperCase();
   const rewardModelId = c.req.query('rewardModelId') ?? '';
+  const rewardComboId = c.req.query('rewardComboId') ?? '';  // SOFA reward (Phase 2)
   const customerId = c.req.query('customerId') ?? '';
 
   const { data: row } = await supabase.from('pwp_codes').select(SELECT).eq('code', code).maybeSingle();
@@ -232,7 +267,13 @@ pwpCodes.get('/:code', async (c) => {
   if (rewardCategory && rewardCategory !== String(r.reward_category).toUpperCase()) {
     return c.json({ valid: false, reason: 'reward_category_mismatch' });
   }
-  if (!inList(rewardModelId || null, r.eligible_reward_model_ids ?? [])) {
+  // Eligibility — SOFA matches by combo id (Phase 2); other categories by model.
+  if (String(r.reward_category).toUpperCase() === 'SOFA') {
+    const combos = r.reward_combo_ids ?? [];
+    if (!rewardComboId || !combos.includes(rewardComboId)) {
+      return c.json({ valid: false, reason: 'reward_combo_ineligible' });
+    }
+  } else if (!inList(rewardModelId || null, r.eligible_reward_model_ids ?? [])) {
     return c.json({ valid: false, reason: 'reward_model_ineligible' });
   }
 

@@ -36,8 +36,9 @@ export function usePwpCodeSync(): void {
   const reserve = useReservePwpCodes();
   const free = useFreePwpCodes();
   const busyRef = useRef(false);
-  // cartLineKey → the qty we last reserved for it (prevents re-reserve loops).
-  const lastQtyRef = useRef<Map<string, number>>(new Map());
+  // cartLineKey → the signature we last reserved for it (qty + sofa build),
+  // preventing re-reserve loops while still re-reserving on a real change.
+  const lastQtyRef = useRef<Map<string, string>>(new Map());
 
   const userId = user?.id ?? null;
   const rules = rulesQ.data;
@@ -61,18 +62,35 @@ export function usePwpCodeSync(): void {
         // Drop bookkeeping for lines that left the cart.
         for (const k of [...last.keys()]) if (!cartKeys.has(k)) last.delete(k);
 
-        // 1. Reserve trigger lines (once per (key, qty)).
+        // 1. Reserve trigger lines (once per (key, signature)). SOFA triggers are
+        //    matched server-side by Combo (Phase 2) — we send the build's module
+        //    codes; non-sofa triggers match by category + model client-side.
         for (const l of cart) {
-          const c = l.config as { productId?: string; category?: string; modelId?: string | null };
+          const c = l.config as {
+            kind?: string; productId?: string; category?: string; modelId?: string | null;
+            cells?: Array<{ moduleId?: string }>;
+          };
           if (!c.productId) continue;
-          const cat = String(c.category ?? '').toUpperCase();
-          const isTrigger = rules.some(
-            (r) => r.triggerCategory === cat && inList(c.modelId ?? null, r.triggerEligibleModelIds),
-          );
+          let sofaModules: string[] | undefined;
+          let isTrigger = false;
+          if (c.kind === 'sofa') {
+            const hasSofaTriggerRule = rules.some((r) => r.triggerCategory === 'SOFA' && (r.triggerComboIds?.length ?? 0) > 0);
+            if (!hasSofaTriggerRule) continue;
+            sofaModules = (c.cells ?? []).map((cell) => String(cell.moduleId ?? '')).filter(Boolean);
+            if (sofaModules.length === 0) continue;
+            isTrigger = true;  // the server decides the actual combo match
+          } else {
+            const cat = String(c.category ?? '').toUpperCase();
+            isTrigger = rules.some((r) => r.triggerCategory === cat && inList(c.modelId ?? null, r.triggerEligibleModelIds));
+          }
           if (!isTrigger) continue;
-          if (last.get(l.key) === l.qty) continue;
-          await reserve.mutateAsync({ cartLineKey: l.key, productId: c.productId, qty: l.qty });
-          last.set(l.key, l.qty);
+          const sig = `${l.qty}:${sofaModules ? sofaModules.join(',') : ''}`;
+          if (last.get(l.key) === sig) continue;
+          await reserve.mutateAsync({
+            cartLineKey: l.key, productId: c.productId, qty: l.qty,
+            ...(sofaModules ? { sofaModules } : {}),
+          });
+          last.set(l.key, sig);
         }
 
         // 2. Free orphans — RESERVED codes whose owning cart line is gone AND not

@@ -30,6 +30,11 @@ export interface SofaConfigSnapshot {
   /** Per-item fabric-tier SELLING add-on (whole MYR, migration 0124) already
    *  folded into `total`. Stored so the cart/handover can show it as a sub-line. */
   fabricTierDelta?: number;
+  // PWP Code Voucher (Phase 2) — this sofa is redeemed at its combo PWP price via
+  // a voucher code. `total` already reflects the PWP price. The server re-matches
+  // the build against the code's reward combos + marks the code USED at Confirm.
+  pwp?: boolean;
+  pwpCode?: string;
   total: number;
   summary: string;       // e.g. "3+L · Bundle · Velvet/Sand"
 }

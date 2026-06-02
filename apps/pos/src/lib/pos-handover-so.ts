@@ -168,6 +168,12 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     // rule, and enforces the Model's allowed fabric pool. fabricId stays the
     // series ('CG') that drives the SELLING tier add-on.
     if (config.colourId)        v.fabricCode = config.colourId;
+    // PWP Code Voucher (Phase 2) — sofa redeemed at its combo PWP price. The
+    // server re-matches the build vs the code's reward combos + marks it USED.
+    if (config.pwp) {
+      v.pwp = true;
+      if (config.pwpCode) v.pwpCode = config.pwpCode;
+    }
     if (config.summary)         v.summary = config.summary;
     return Object.keys(v).length > 0 ? v : null;
   }

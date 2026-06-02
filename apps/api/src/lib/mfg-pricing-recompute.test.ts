@@ -17,6 +17,7 @@
 //     authoritative price, no drift.
 
 import { describe, it, expect } from 'vitest';
+import type { SofaComboRow } from '@2990s/shared';
 import { recomputeFromSnapshot, type ProductRowLite } from './mfg-pricing-recompute';
 
 const mattress = (sell: number | null): ProductRowLite => ({
@@ -207,6 +208,52 @@ describe('recomputeFromSnapshot — configured sofa selling drift (per-Model mod
     );
     expect(r.drift).toBe(false);
     expect(r.unit_price_sen).toBe(248000);
+  });
+});
+
+/* ── PWP Code Voucher — SOFA reward (Phase 2) ─────────────────────────────────
+   A sofa-reward line redeems a voucher whose reward combos include the combo
+   this build matches → the engine charges that combo's pwp_prices_by_height
+   instead of its normal selling price. The grant (pwpSofaComboIds, 10th arg) is
+   decided by the route's consume step after validating + claiming the code. */
+describe('recomputeFromSnapshot — sofa PWP combo price (Phase 2)', () => {
+  // A single-module build + single-slot combo so the combo deterministically
+  // matches the lone group. pricesByHeight = à-la-carte RM1500; PWP = RM1000.
+  const oneCell = { cells: [{ id: 'a', moduleId: '1A-LHF', x: 0, y: 0, rot: 0 }], depth: '24' } as unknown as null;
+  const MODULE_PRICE = { '1A-LHF': 150000 };
+  const comboRow: SofaComboRow = {
+    id: 'combo-1', baseModel: 'Booqit',
+    modules: [['1A-LHF']],
+    tier: null, customerId: null,
+    pricesByHeight: { '24': 150000 },
+    pwpPricesByHeight: { '24': 100000 },
+    effectiveFrom: '2020-01-01', deletedAt: null,
+  };
+
+  it('no code → normal price (RM1500)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-1A', itemGroup: 'sofa', qty: 1, unitPriceCenti: 150000, variants: oneCell },
+      sofaProduct, null, null, [comboRow], MODULE_PRICE,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(150000);
+  });
+
+  it('granted (pwpSofaComboIds matches) → charges the combo PWP price (RM1000)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-1A', itemGroup: 'sofa', qty: 1, unitPriceCenti: 100000, variants: oneCell },
+      sofaProduct, null, null, [comboRow], MODULE_PRICE, null, null, null, ['combo-1'],
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(100000);
+  });
+
+  it('granted combo id ≠ the matched build combo → no override → tampered low price drifts', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-1A', itemGroup: 'sofa', qty: 1, unitPriceCenti: 100000, variants: oneCell },
+      sofaProduct, null, null, [comboRow], MODULE_PRICE, null, null, null, ['other-combo'],
+    );
+    expect(r.drift).toBe(true);  // full RM1500 stands → client RM1000 drifts → 400
   });
 });
 

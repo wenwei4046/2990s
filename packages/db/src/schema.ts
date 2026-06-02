@@ -1806,6 +1806,12 @@ export const sofaComboPricing = pgTable('sofa_combo_pricing', {
   supplierId:      uuid('supplier_id').references(() => suppliers.id, { onDelete: 'cascade' }),
   pricesByHeight:  jsonb('prices_by_height').notNull().default({}),       // { "<inch>": centi|null } — COST benchmark (Backend / PO side)
   sellingPricesByHeight: jsonb('selling_prices_by_height').notNull().default({}),  // SELLING (Master Admin, POS) — what the app charges
+  // PWP (换购) selling price per height (migration 0131, Phase 2). When a sofa
+  // build matches this combo AND the line redeems a valid PWP code, the engine
+  // charges THIS instead of selling_prices_by_height. POS/selling-side ONLY —
+  // the Backend cost side gets no such column (cost is identical regardless of
+  // selling price). {} = no PWP price set → never overrides → zero price change.
+  pwpPricesByHeight: jsonb('pwp_prices_by_height').notNull().default({}),  // { "<inch>": centi|null } — PWP SELLING (POS)
   label:           text('label'),                                         // null = auto-build from modules
   effectiveFrom:   date('effective_from').notNull(),
   deletedAt:       timestamp('deleted_at', { withTimezone: true }),
@@ -1843,6 +1849,10 @@ export const pwpRules = pgTable('pwp_rules', {
   triggerEligibleModelIds: jsonb('trigger_eligible_model_ids').$type<string[]>().notNull().default([]), // product_models.id[]; [] = all trigger-category models
   rewardCategory:          mfgProductCategory('reward_category').notNull(),
   eligibleRewardModelIds:  jsonb('eligible_reward_model_ids').$type<string[]>().notNull().default([]),  // product_models.id[]; [] = all reward-category models
+  // SOFA combo references (migration 0132, Phase 2). sofa_combo_pricing.id[].
+  // Sofa rules use these; mattress/bedframe rules use the *_model_ids above.
+  triggerComboIds:         jsonb('trigger_combo_ids').$type<string[]>().notNull().default([]),
+  rewardComboIds:          jsonb('reward_combo_ids').$type<string[]>().notNull().default([]),
   qtyPerTrigger:           integer('qty_per_trigger').notNull().default(1),
   active:                  boolean('active').notNull().default(true),
   createdAt:               timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -1867,6 +1877,7 @@ export const pwpCodes = pgTable('pwp_codes', {
   ruleId:                   uuid('rule_id').references(() => pwpRules.id, { onDelete: 'set null' }),
   rewardCategory:           mfgProductCategory('reward_category').notNull(),                       // snapshot from the rule
   eligibleRewardModelIds:   jsonb('eligible_reward_model_ids').$type<string[]>().notNull().default([]), // snapshot; [] = whole reward category
+  rewardComboIds:           jsonb('reward_combo_ids').$type<string[]>().notNull().default([]),     // snapshot of rule.reward_combo_ids (SOFA rewards); migration 0132
   status:                   text('status').notNull().default('RESERVED'),                         // RESERVED | USED | AVAILABLE
   ownerStaffId:             uuid('owner_staff_id').references(() => staff.id, { onDelete: 'set null' }),
   cartLineKey:              text('cart_line_key'),                                                 // the trigger cart line that owns it
