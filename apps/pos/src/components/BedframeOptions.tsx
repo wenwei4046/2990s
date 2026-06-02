@@ -209,7 +209,7 @@ export const BedframeOptions = ({ productId, isDivan, value, onChange, fabricBlo
                 const addon = specialAddons.find((a) => a.code === sel.id);
                 if (!addon || addon.optionGroups.length === 0) return null;
                 return addon.optionGroups.map((g, gi) => (
-                  <div className={styles.row} key={`${sel.id}-${gi}`} style={{ marginTop: 'var(--space-2)' }}>
+                  <div className={`${styles.row} ${styles.specialChoiceRow}`} key={`${sel.id}-${gi}`} style={{ marginTop: 'var(--space-2)' }}>
                     <span className={styles.rowLabel}>
                       {addon.label} · {g.label} {g.required && <span className={styles.req}>Required</span>}
                     </span>
