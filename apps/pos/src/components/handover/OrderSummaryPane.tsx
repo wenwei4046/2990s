@@ -125,6 +125,9 @@ const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: For
           : form.deliveryDate
             ? <p className={styles.rowValue}>{formatDate(form.deliveryDate)}</p>
             : <p className={styles.placeholder}>Pending</p>}
+        {!form.deliveryDateLater && form.deliveryDate && form.processDate && (
+          <Row label="Process date" value={formatDate(form.processDate)} />
+        )}
       </Section>
 
       <Section heading="Payment">

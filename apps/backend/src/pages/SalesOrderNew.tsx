@@ -541,6 +541,12 @@ export const SalesOrderNew = () => {
       window.alert('Delivery Date cannot be in the past — pick today or a future date.');
       return;
     }
+    // Owner 2026-06-03 — Process Date is the factory start; it cannot fall after
+    // the Delivery Date.
+    if (processingDate && deliveryDate && processingDate > deliveryDate) {
+      window.alert('Processing Date cannot be later than the Delivery Date.');
+      return;
+    }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
       window.alert('Add at least one item via "+ Add Line Item".');

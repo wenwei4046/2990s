@@ -48,6 +48,8 @@ import {
 import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
 import { PaymentsTable } from '../components/PaymentsTable';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { SlipSection } from '../components/SlipSection';
+import { fetchSoSlipUrl } from '../lib/slip';
 import {
   useLocalities,
   distinctStates,
@@ -237,6 +239,13 @@ type SoHeader = {
   emergency_contact_phone: string | null;
   emergency_contact_relationship: string | null;
   target_date: string | null;
+  /* P1 (migration 0142) — POS handover customer signature (data URL). Read-only
+     here; rendered as an image so the coordinator can see the signed proof. */
+  signature_b64: string | null;
+  /* P1 (migration 0143) — POS handover payment slip. slip_key = R2 object key
+     (display via the /slip-url presign route); slip_state = review state. */
+  slip_key: string | null;
+  slip_state: 'none' | 'pending' | 'verified' | 'flagged' | null;
   /* PR #143 + #150 — Payment. Installment is a sub-type of merchant
      (not its own top-level method). approval_code captured for the
      terminal auth slip. */
@@ -1582,6 +1591,11 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     if (form.customerDeliveryDate && form.customerDeliveryDate < today && form.customerDeliveryDate !== originalDelivery) {
       return 'Delivery Date cannot be in the past — pick today or a future date.';
     }
+    /* Owner 2026-06-03 — Process Date is the factory start; it cannot fall after
+       the Delivery Date (parity with the New SO form + the server gate). */
+    if (form.processingDate && form.customerDeliveryDate && form.processingDate > form.customerDeliveryDate) {
+      return 'Processing Date cannot be later than the Delivery Date.';
+    }
     return null;
   };
 
@@ -1880,6 +1894,34 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
               />
             </label>
           </div>
+        </div>
+      </section>
+
+      {/* ── CUSTOMER SIGNATURE (P1, migration 0142) ─────────────────
+          Read-only proof captured on the POS handover pad. Only shown when the
+          SO carries one (POS orders); B2B / legacy SOs simply omit the card. */}
+      {header.signature_b64 && (
+        <section className={styles.card}>
+          <header className={styles.cardHeader}>
+            <h2 className={styles.cardTitle}>Customer Signature</h2>
+          </header>
+          <div className={styles.cardBody}>
+            <img
+              src={header.signature_b64}
+              alt="Customer signature captured at handover"
+              style={{ maxWidth: 360, width: '100%', height: 'auto', border: '1px solid var(--c-line, #E5E1DC)', borderRadius: 8, background: '#fff' }}
+            />
+          </div>
+        </section>
+      )}
+
+      {/* ── PAYMENT SLIP (P1, migration 0143) ───────────────────────
+          POS handover payment proof, read-only. Reuses the legacy SlipSection
+          viewer with the SO-keyed fetcher; renders its own "No slip uploaded"
+          empty state, so it's always shown. */}
+      <section className={styles.card}>
+        <div className={styles.cardBody}>
+          <SlipSection orderId={header.doc_no} slipKey={header.slip_key} fetcher={fetchSoSlipUrl} />
         </div>
       </section>
 

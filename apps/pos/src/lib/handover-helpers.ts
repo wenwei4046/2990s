@@ -35,6 +35,11 @@ export interface HandoverForm {
   emergencyName: string; emergencyRelation: string; emergencyPhone: string;
 
   deliveryDate: string; deliveryDateLater: boolean; deliveryAsap: boolean;
+  /** Factory start date ("Process Date") — when production should begin so we
+   *  don't pull stock too early for a far-out delivery. Must be today-or-future
+   *  and on/before deliveryDate. Empty when "For further notice" (UFN). Maps to
+   *  the SO's internal_expected_dd column; the API pairs it with deliveryDate. */
+  processDate: string;
   specialInstructions: string;
 
   addons: Record<string, AddonSelection>;
@@ -87,8 +92,15 @@ export const validateEmergency = (f: HandoverForm): boolean => {
   return filledCount === 0 || filledCount === 3;
 };
 
-export const validateTargetDate = (f: HandoverForm): boolean =>
-  f.deliveryDateLater || f.deliveryAsap || f.deliveryDate.length > 0;
+export const validateTargetDate = (f: HandoverForm): boolean => {
+  // "For further notice" (UFN) — no dates committed yet; allowed.
+  if (f.deliveryDateLater) return true;
+  // Any other path commits a delivery date, so a Process Date must accompany it
+  // (the SO API pairs them), and Process Date may not be later than delivery.
+  if (f.deliveryDate.length === 0) return false;
+  if (f.processDate.length === 0) return false;
+  return f.processDate <= f.deliveryDate;
+};
 
 export const validateAddonsPayment = (f: HandoverForm): boolean => {
   if (f.paymentMethod === '') return false;
@@ -150,9 +162,15 @@ const emergencyBlockers = (f: HandoverForm): string[] => {
 };
 
 const targetDateBlockers = (f: HandoverForm): string[] => {
-  if (f.deliveryDateLater || f.deliveryAsap) return [];
-  if (!f.deliveryDate) return ['Pick a delivery date, or check "As fast as possible" / "For further notice"'];
-  return [];
+  if (f.deliveryDateLater) return [];  // UFN — both dates left open
+  const b: string[] = [];
+  if (!f.deliveryDate) {
+    b.push('Pick a delivery date, or check "As fast as possible" / "For further notice"');
+    return b;
+  }
+  if (!f.processDate) b.push('Pick a process (factory start) date');
+  else if (f.processDate > f.deliveryDate) b.push('Process date cannot be later than the delivery date');
+  return b;
 };
 
 const addonsPaymentBlockers = (f: HandoverForm): string[] => {

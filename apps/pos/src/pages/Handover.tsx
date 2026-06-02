@@ -60,6 +60,7 @@ const empty: HandoverForm = {
   billingPostcode: '', billingCity: '', billingState: '',
   emergencyName: '', emergencyRelation: '', emergencyPhone: '',
   deliveryDate: '', deliveryDateLater: false, deliveryAsap: false,
+  processDate: '',
   specialInstructions: '',
   addons: {}, paymentMethod: '',
   amountPaid: 0,
@@ -216,6 +217,20 @@ export const Handover = () => {
         ? undefined
         : form.paymentMethod;
       const targetDate = form.deliveryDate || undefined;
+      const processDate = form.processDate || undefined;
+      // Customer signature (data URL) captured on the pad — the same ink the
+      // legacy path sent; now also carried onto the SO (signature_b64).
+      const signatureData = signatureRef.current?.getDataUrl() || undefined;
+      // Billing address — only when it differs from the delivery address. Flatten
+      // the structured billing fields into the SO's single bill_to_address line.
+      const billToAddress = form.billingSame
+        ? undefined
+        : [
+            form.billingAddress,
+            form.billingAddressLine2,
+            [form.billingPostcode, form.billingCity].map((s) => s.trim()).filter(Boolean).join(' '),
+            form.billingState,
+          ].map((s) => s.trim()).filter(Boolean).join(', ') || undefined;
 
       const payload: PosHandoffPayload = {
         debtorName: form.name.trim(),
@@ -229,14 +244,23 @@ export const Handover = () => {
         ...(form.postcode.trim() ? { postcode: form.postcode.trim() } : {}),
         ...(form.state.trim() ? { customerState: form.state.trim() } : {}),
         ...(form.buildingType ? { buildingType: form.buildingType } : {}),
+        ...(billToAddress ? { billToAddress } : {}),
         ...(form.emergencyName.trim() ? { emergencyContactName: form.emergencyName.trim() } : {}),
         ...(form.emergencyPhone.trim() ? { emergencyContactPhone: form.emergencyPhone.trim() } : {}),
         ...(form.emergencyRelation.trim()
           ? { emergencyContactRelationship: form.emergencyRelation.trim() }
           : {}),
         // target_date = customer's preference; customer_delivery_date is the
-        // operational follower the Backend cascades to every line.
-        ...(targetDate ? { targetDate, customerDeliveryDate: targetDate } : {}),
+        // operational follower the Backend cascades to every line; internal_-
+        // expected_dd = the factory start (Process Date). The SO API requires
+        // Process + Delivery to arrive together (or neither), so we only send the
+        // date trio when BOTH are present — "For further notice" sends neither.
+        ...(targetDate && processDate
+          ? { targetDate, customerDeliveryDate: targetDate, internalExpectedDd: processDate }
+          : {}),
+        ...(form.specialInstructions.trim() ? { note: form.specialInstructions.trim() } : {}),
+        ...(signatureData ? { signatureB64: signatureData } : {}),
+        ...(form.slipUploadSessionId ? { uploadSessionId: form.slipUploadSessionId } : {}),
         ...(paymentMethod ? { paymentMethod } : {}),
         ...(form.installmentMonths ? { installmentMonths: form.installmentMonths } : {}),
         ...(form.merchantProvider ? { merchantProvider: form.merchantProvider } : {}),

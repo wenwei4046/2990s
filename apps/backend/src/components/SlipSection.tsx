@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { fetchSlipUrl } from '../lib/slip';
+import type { SlipUrlResponse } from '@2990s/shared/schemas';
 import styles from './SlipSection.module.css';
 
 export type SlipState = 'none' | 'pending' | 'verified' | 'flagged';
@@ -7,6 +8,10 @@ export type SlipState = 'none' | 'pending' | 'verified' | 'flagged';
 interface Props {
   orderId: string;
   slipKey: string | null;
+  /** How to fetch the presigned slip URL for `orderId`. Defaults to the legacy
+   *  /orders route; the Sales Order detail page passes fetchSoSlipUrl so the
+   *  same viewer works for an SO docNo (P1, migration 0143). */
+  fetcher?: (id: string) => Promise<SlipUrlResponse>;
   // Other slip-* props kept on the type for backwards-compat with OrderDrawer's
   // call site, but no longer rendered. Drop after we cleanup the call site.
   slipState?: SlipState;
@@ -16,7 +21,7 @@ interface Props {
   onUpdated?: () => void;
 }
 
-export function SlipSection({ orderId, slipKey }: Props) {
+export function SlipSection({ orderId, slipKey, fetcher = fetchSlipUrl }: Props) {
   const [slipUrl, setSlipUrl] = useState<string | null>(null);
   const [contentType, setContentType] = useState<string>('image/jpeg');
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -28,7 +33,7 @@ export function SlipSection({ orderId, slipKey }: Props) {
     setSlipUrl(null);
     (async () => {
       try {
-        const r = await fetchSlipUrl(orderId);
+        const r = await fetcher(orderId);
         if (cancelled) return;
         setSlipUrl(r.url);
         setContentType(r.contentType);
@@ -37,7 +42,7 @@ export function SlipSection({ orderId, slipKey }: Props) {
       }
     })();
     return () => { cancelled = true; };
-  }, [orderId, slipKey]);
+  }, [orderId, slipKey, fetcher]);
 
   if (!slipKey) {
     return (
