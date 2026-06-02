@@ -445,27 +445,37 @@ export const Configurator = () => {
   const reservedCodesQ = useMyReservedPwpCodes();
   const pwpRewardCategory = String((product.data as { category_id?: string | null } | null)?.category_id ?? '').toUpperCase();
   const pwpRewardModelId = (product.data as { model_id?: string | null } | null)?.model_id ?? null;
-  // A RESERVED code in THIS cart eligible for this reward model, not already
-  // applied to another line → auto-consumed when the same-cart toggle is on.
+  // The next RESERVED code in THIS cart eligible for this reward, not already
+  // applied to another line — consumed in the ORDER the trigger lines were added
+  // (Chairman 2026-06-02: 3 mattresses → their codes used first-added-first). The
+  // "Auto Fill" button drops it into the Insert PWP Code field. The salesperson
+  // can't otherwise see same-cart codes (they're server-generated, invisible
+  // until the trigger SO confirms).
   const sameCartCode = useMemo(() => {
     const codes = reservedCodesQ.data ?? [];
+    const lineOrder = new Map(cartLines.map((l, i) => [l.key, i]));
     const applied = new Set(
       cartLines
         .filter((l) => !(editKey && l.key === editKey))
         .flatMap((l) => { const c = l.config as { pwpCode?: string }; return c.pwpCode ? [c.pwpCode] : []; }),
     );
-    return codes.find((rc) =>
+    const eligible = codes.filter((rc) =>
       rc.cartLineKey &&
       String(rc.rewardCategory).toUpperCase() === pwpRewardCategory &&
       (rc.eligibleRewardModelIds.length === 0 ||
         (pwpRewardModelId != null && rc.eligibleRewardModelIds.includes(pwpRewardModelId))) &&
       !applied.has(rc.code),
-    )?.code ?? null;
+    );
+    // Order by the trigger line's cart position (first-added trigger first).
+    eligible.sort((a, b) =>
+      (lineOrder.get(a.cartLineKey ?? '') ?? 1e9) - (lineOrder.get(b.cartLineKey ?? '') ?? 1e9));
+    return eligible[0]?.code ?? null;
   }, [reservedCodesQ.data, cartLines, editKey, pwpRewardCategory, pwpRewardModelId]);
 
-  const applyInsertedCode = async () => {
-    const code = insertCodeInput.trim().toUpperCase();
+  const applyInsertedCode = async (codeArg?: string) => {
+    const code = (codeArg ?? insertCodeInput).trim().toUpperCase();
     if (!code) return;
+    setInsertCodeInput(code);
     // A reward can only be priced PWP if this size has a PWP price set.
     if (!(pickedSize?.pwpPrice != null && pickedSize.pwpPrice > 0)) {
       setInsertedCode(null);
@@ -846,28 +856,6 @@ export const Configurator = () => {
           This size has no PWP (换购) price yet. Set it in SKU Master → PWP Price to enable redemption.
         </p>
       )}
-      {pwpToggleAvailable && (
-        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)', cursor: 'pointer', padding: 'var(--space-2) 0' }}>
-          <input
-            type="checkbox"
-            checked={usePwp}
-            disabled={crossPwpActive}
-            onChange={(e) => setUsePwp(e.target.checked)}
-            style={{ marginTop: 3 }}
-          />
-          <span>
-            <span style={{ fontWeight: 600 }}>
-              Use PWP price{pwpUnitPrice != null ? ` · RM ${pwpUnitPrice.toLocaleString('en-MY')}` : ''}
-            </span>
-            {pwpEval.triggerLabel && (
-              <span style={{ display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-                换购自 {pwpEval.triggerLabel}
-              </span>
-            )}
-          </span>
-        </label>
-      )}
-
       {insertedCode ? (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)', padding: 'var(--space-2) 0' }}>
           <span style={{ fontSize: 'var(--fs-12)' }}>
@@ -885,6 +873,11 @@ export const Configurator = () => {
           <label style={{ display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-1)' }}>
             Insert PWP Code
           </label>
+          {sameCartCode && pwpPriceOk && (
+            <p style={{ margin: '0 0 var(--space-1)', fontSize: 'var(--fs-12)', color: 'var(--c-burnt, #A6471E)' }}>
+              A PWP code from this cart is ready{pwpEval.triggerLabel ? ` (换购自 ${pwpEval.triggerLabel})` : ''} — tap Auto Fill.
+            </p>
+          )}
           <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
             <input
               type="text"
@@ -893,9 +886,18 @@ export const Configurator = () => {
               placeholder="PWP-1234ABCD"
               style={{ flex: 1, textTransform: 'uppercase' }}
             />
+            {sameCartCode && pwpPriceOk && (
+              <Button
+                variant="primary"
+                onClick={() => void applyInsertedCode(sameCartCode)}
+                disabled={insertChecking}
+              >
+                Auto Fill
+              </Button>
+            )}
             <Button
               variant="secondary"
-              onClick={applyInsertedCode}
+              onClick={() => void applyInsertedCode()}
               disabled={insertChecking || !insertCodeInput.trim()}
             >
               {insertChecking ? 'Checking…' : 'Apply'}
