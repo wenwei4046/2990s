@@ -1,4 +1,4 @@
-import { Banknote, CreditCard, Clock, Wallet } from 'lucide-react';
+import { Banknote, CreditCard, Clock, Wallet, CheckCircle2, AlertCircle } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { HandoverForm, AddonSelection } from '../../lib/handover-helpers';
 import type { AddonRow } from '../../lib/queries';
@@ -8,12 +8,22 @@ import styles from '../../pages/Handover.module.css';
 
 const HANDOVER_ADDON_IDS = ['dispose-mattress', 'dispose-bedframe', 'lift', 'assemble'];
 
+/** Live status of the typed "Previous SO number" (server-validated). */
+export interface CrossCategoryLinkStatus {
+  show:       boolean;   // an SO number has been typed
+  checking:   boolean;   // validation in flight / debouncing
+  eligible:   boolean;   // valid + eligible → discount applies
+  message:    string | null;  // reason when invalid
+  debtorName: string | null;  // matched customer name when eligible
+}
+
 export const AddonsPaymentStep = ({
-  form, update, addons,
+  form, update, addons, linkStatus,
 }: {
   form: HandoverForm;
   update: <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) => void;
   addons: AddonRow[];
+  linkStatus: CrossCategoryLinkStatus;
 }) => {
   const handoverAddons = addons.filter(
     (a) => HANDOVER_ADDON_IDS.includes(a.id) && a.enabled,
@@ -99,11 +109,23 @@ export const AddonsPaymentStep = ({
           spellCheck={false}
         />
       </Field>
-      <p className={styles.signCaption}>
-        Leave blank for a standalone order. The SO number is verified when you
-        complete the order — an unknown, cancelled, different-customer, or
-        already-used order is rejected.
-      </p>
+      {!linkStatus.show ? (
+        <p className={styles.signCaption}>
+          Leave blank for a standalone order. The SO number is checked live as you type.
+        </p>
+      ) : linkStatus.checking ? (
+        <p className={styles.signCaption}>Checking order number…</p>
+      ) : linkStatus.eligible ? (
+        <p style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 'var(--fs-13)', fontWeight: 600, color: 'var(--c-festive-a)' }}>
+          <CheckCircle2 size={16} strokeWidth={1.75} />
+          Linked{linkStatus.debtorName ? ` to ${linkStatus.debtorName}` : ''} — cross-category rate applies.
+        </p>
+      ) : (
+        <p style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 'var(--fs-13)', fontWeight: 600, color: 'var(--c-festive-b)' }}>
+          <AlertCircle size={16} strokeWidth={1.75} />
+          {linkStatus.message ?? 'This order number is not valid.'}
+        </p>
+      )}
 
       <h3 className="subTitle">Payment method</h3>
       <div className="fieldRow">
