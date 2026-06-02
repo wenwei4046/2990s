@@ -221,6 +221,13 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
   if (config.kind === 'size') {
     const v: Record<string, unknown> = { sizeId: config.sizeId };
     if (config.addonExtras && config.addonExtras.length > 0) v.addonExtras = config.addonExtras;
+    // PWP (换购) — a mattress redeemed at its PWP price via a voucher code. The
+    // server re-validates the code + marks it USED at Confirm.
+    if (config.pwp) {
+      v.pwp = true;
+      if (config.pwpCode) v.pwpCode = config.pwpCode;
+      if (config.pwpTriggerLabel) v.pwpTriggerLabel = config.pwpTriggerLabel;
+    }
     if (config.summary)               v.summary = config.summary;
     return v;
   }
