@@ -127,7 +127,7 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
             return (
               <span
                 key={c.colourId}
-                style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 4, width: 64 }}
+                style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 4, width: 80 }}
               >
                 <button
                   type="button"
