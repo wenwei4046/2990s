@@ -220,6 +220,14 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
       v.pwp = true;
       if (config.pwpCode) v.pwpCode = config.pwpCode;
     }
+    // Special Add-ons (migration 0134) — codes → variants.specials (server prices
+    // from special_addons + gates) + chosen option-group labels for the 追问.
+    if (config.specialIds && config.specialIds.length > 0) {
+      v.specials = config.specialIds;
+      v.specialIds = config.specialIds;
+    }
+    if (config.specialLabels && config.specialLabels.length > 0) v.specialLabels = config.specialLabels;
+    if (config.specialChoices && Object.keys(config.specialChoices).length > 0) v.specialChoices = config.specialChoices;
     if (config.summary)         v.summary = config.summary;
     return Object.keys(v).length > 0 ? v : null;
   }
@@ -282,6 +290,14 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
       if (config.pwpCode) v.pwpCode = config.pwpCode;
       if (config.pwpTriggerLabel) v.pwpTriggerLabel = config.pwpTriggerLabel;
     }
+    // Special Add-ons (migration 0134) — mattress add-ons (engine now prices
+    // MATTRESS specials). codes → variants.specials + chosen choices.
+    if (config.specialIds && config.specialIds.length > 0) {
+      v.specials = config.specialIds;
+      v.specialIds = config.specialIds;
+    }
+    if (config.specialLabels && config.specialLabels.length > 0) v.specialLabels = config.specialLabels;
+    if (config.specialChoices && Object.keys(config.specialChoices).length > 0) v.specialChoices = config.specialChoices;
     if (config.summary)               v.summary = config.summary;
     return v;
   }

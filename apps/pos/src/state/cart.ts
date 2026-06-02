@@ -30,6 +30,11 @@ export interface SofaConfigSnapshot {
   /** Per-item fabric-tier SELLING add-on (whole MYR, migration 0124) already
    *  folded into `total`. Stored so the cart/handover can show it as a sub-line. */
   fabricTierDelta?: number;
+  // Special Add-ons (migration 0134): codes (sent as variants.specials → server
+  // prices from special_addons + gates) + chosen option-group labels + display.
+  specialIds?: string[];
+  specialLabels?: string[];
+  specialChoices?: Record<string, string[]>;
   // PWP Code Voucher (Phase 2) — this sofa is redeemed at its combo PWP price via
   // a voucher code. `total` already reflects the PWP price. The server re-matches
   // the build against the code's reward combos + marks the code USED at Confirm.
@@ -59,6 +64,11 @@ export interface SizeConfigSnapshot {
    *  beyond the included free ones). NOT included_addons — those are derived
    *  from product.included_addons server-side and don't add to the price. */
   addonExtras?: { addonId: string; qty: number }[];
+  // Special Add-ons (migration 0134): codes (sent as variants.specials → server
+  // prices from special_addons + gates) + chosen option-group labels + display.
+  specialIds?: string[];
+  specialLabels?: string[];
+  specialChoices?: Record<string, string[]>;
 }
 
 // Flat-priced products (single price per product — mattresses, bedframes, sofas
