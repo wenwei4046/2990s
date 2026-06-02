@@ -19,6 +19,7 @@ import {
   Receipt,
   Store,
   Loader2,
+  FileText,
 } from 'lucide-react';
 import { Button, IconButton } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
@@ -1177,9 +1178,15 @@ const OrderDetail = ({ order, onClose }: {
         </div>
 
         <footer className={styles.detailFoot}>
-          {/* TODO: re-add a "Generate Sales Order" print action once a print
-              route resolves an SO doc_no. The old /print/sales-order/:id route
-              reads the legacy retail `orders` table and can't render an SO. */}
+          {/* Customer-facing Sales Order — always available (incl. locked /
+              delivered orders) so the salesperson can pull it up to show or
+              hand the customer a PDF. Reads the live mfg_sales_orders model. */}
+          <div className={styles.detailFootActions}>
+            <Link to={`/print/sales-order/${order.id}`} className={styles.detailPrintBtn}>
+              <FileText size={14} strokeWidth={1.75} />
+              View SO / PDF
+            </Link>
+          </div>
           {editable && (
             <>
               <div className={styles.detailChecklist}>

@@ -5,12 +5,13 @@
 
 export const COMPANY_LEGAL = {
   name:    '2990 HOME SDN. BHD.',
-  ssm:     '02501060667',
+  ssm:     '202501060667',
   hqLines: [
     'E-28-02 & E-28-03, Menara SUEZCAP 2, KL Gateway,',
     'No. 2, Jalan Kerinchi, Gerbang Kerinchi Lestari,',
     '59200 Kuala Lumpur, Wilayah Persekutuan KL',
   ],
+  showroomName: 'PJ Showroom',
   showroomLine: '51, Jln Utara, PJS 12, 46200 Petaling Jaya, Selangor',
   portalLabel:  "2990's Portal",
 } as const;

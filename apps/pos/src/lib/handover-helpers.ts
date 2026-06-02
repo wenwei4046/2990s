@@ -61,6 +61,9 @@ export interface HandoverForm {
   paymentRecorded: boolean;
 
   signed: boolean;
+  /** Customer ticked "has read and agrees to the terms and conditions" in the
+   *  Sign & confirm step. Required alongside the signature to place the order. */
+  acknowledgedTerms: boolean;
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -123,7 +126,7 @@ export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonT
   return true;
 };
 
-export const validateSign = (f: HandoverForm): boolean => f.signed;
+export const validateSign = (f: HandoverForm): boolean => f.signed && f.acknowledgedTerms;
 
 // ─── Step blockers — human-friendly "why is Continue disabled" reasons ──────
 // Each function returns a list of short sentences (≤ 60 chars). UI renders
@@ -201,8 +204,10 @@ const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: n
 };
 
 const signBlockers = (f: HandoverForm): string[] => {
-  if (f.signed) return [];
-  return ['Customer must sign on the pad below to confirm'];
+  const b: string[] = [];
+  if (!f.signed) b.push('Customer must sign on the pad below to confirm');
+  if (!f.acknowledgedTerms) b.push('Tick the box to acknowledge the terms and conditions');
+  return b;
 };
 
 export const getStepBlockers = (

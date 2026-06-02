@@ -10,7 +10,7 @@
 
 import { useEffect } from 'react';
 import { Link, useParams } from 'react-router';
-import { Printer, ShoppingBag, Ticket } from 'lucide-react';
+import { FileText, ShoppingBag, Ticket } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { Topbar } from '../components/Topbar';
 import { usePwpCodesForSo } from '../lib/products/pwp-queries';
@@ -67,9 +67,11 @@ export const HandoverConfirmed = () => {
               <ShoppingBag size={16} strokeWidth={1.75} />&nbsp;New order
             </Button>
           </Link>
-          <Button variant="ghost" onClick={() => window.print()}>
-            <Printer size={16} strokeWidth={1.75} />&nbsp;Print receipt
-          </Button>
+          <Link to={`/print/sales-order/${docNo}`}>
+            <Button variant="ghost">
+              <FileText size={16} strokeWidth={1.75} />&nbsp;View SO / PDF
+            </Button>
+          </Link>
         </div>
       </main>
     </>

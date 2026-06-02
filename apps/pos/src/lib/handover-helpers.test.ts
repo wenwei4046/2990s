@@ -32,14 +32,17 @@ const baseForm: HandoverForm = {
   installmentMonths: null,
   merchantProvider: null,
   signed: false,
+  acknowledgedTerms: false,
 };
 
 describe('validateCustomer', () => {
-  it('requires name and valid email', () => {
+  it('requires name, phone, and valid email', () => {
     expect(validateCustomer(baseForm)).toBe(false);
     expect(validateCustomer({ ...baseForm, name: 'Loo' })).toBe(false);
-    expect(validateCustomer({ ...baseForm, name: 'Loo', email: 'invalid' })).toBe(false);
-    expect(validateCustomer({ ...baseForm, name: 'Loo', email: 'a@b.com' })).toBe(true);
+    // Phone is mandatory (compulsory-phone, PR #457) — name + email alone is not enough.
+    expect(validateCustomer({ ...baseForm, name: 'Loo', email: 'a@b.com' })).toBe(false);
+    expect(validateCustomer({ ...baseForm, name: 'Loo', phone: '0123456789', email: 'invalid' })).toBe(false);
+    expect(validateCustomer({ ...baseForm, name: 'Loo', phone: '0123456789', email: 'a@b.com' })).toBe(true);
   });
 });
 
@@ -146,9 +149,11 @@ describe('validateConfirmPayment', () => {
 });
 
 describe('validateSign', () => {
-  it('requires signed=true', () => {
+  it('requires signed=true AND terms acknowledged', () => {
     expect(validateSign(baseForm)).toBe(false);
-    expect(validateSign({ ...baseForm, signed: true })).toBe(true);
+    expect(validateSign({ ...baseForm, signed: true })).toBe(false);
+    expect(validateSign({ ...baseForm, acknowledgedTerms: true })).toBe(false);
+    expect(validateSign({ ...baseForm, signed: true, acknowledgedTerms: true })).toBe(true);
   });
 });
 

@@ -70,6 +70,7 @@ const empty: HandoverForm = {
   paymentPreset: 'full', approvalCode: '',
   slipUploadSessionId: null, paymentRecorded: false,
   signed: false,
+  acknowledgedTerms: false,
   installmentMonths: null,
   merchantProvider: null,
 };
