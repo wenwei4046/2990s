@@ -392,7 +392,10 @@ export const SalesOrderNew = () => {
     return v?.name ?? '';
   }, [resolvedVenueId, venuesQ.data]);
 
-  const canSave = debtorName.trim().length > 0;
+  /* Owner 2026-06-03 — phone is compulsory on every SO. The server enforces it
+     (400 phone_required); mirror it here for parity with the POS so Save is
+     blocked before the round-trip. */
+  const canSave = debtorName.trim().length > 0 && phone.trim().length > 0;
 
   /* Mirror Detail's XOR rule (PR #156): Processing Date and Delivery Date
      must both be filled in or both empty. */
@@ -520,8 +523,12 @@ export const SalesOrderNew = () => {
   };
 
   const onSave = () => {
-    if (!canSave) {
+    if (!debtorName.trim()) {
       window.alert('Customer name is required.');
+      return;
+    }
+    if (!phone.trim()) {
+      window.alert('Phone number is required — every sales order must have a contact number.');
       return;
     }
     if (datesXor) {
