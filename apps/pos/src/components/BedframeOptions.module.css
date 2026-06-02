@@ -20,6 +20,23 @@
   padding-top: 4px;
 }
 
+/* Special add-on follow-up question: the prompt can be a full sentence (e.g.
+   "Pick the thickness, it should match the divan thickness"), so stack it above
+   a full-width dropdown rather than the side-by-side dimension layout. The
+   .rowLabel's flex:0 0 auto would otherwise refuse to wrap and shove the
+   <select> off-screen (horizontal overflow). */
+.specialChoiceRow {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.specialChoiceRow .rowLabel {
+  flex: 1 1 auto;
+}
+.specialChoiceRow .selectWrap {
+  max-width: none;
+}
+
 .rowLabel {
   flex: 0 0 auto;
   font-family: var(--font-sans);
