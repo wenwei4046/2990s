@@ -6,6 +6,7 @@ import {
   spreadComboTotal,
   normalizeComboModules,
   canonicalizeComboModulesForStorage,
+  canonicalizeLayoutModulesForStorage,
   comboSlotsKey,
   buildComboLabel,
   comboChargedPrices,
@@ -74,6 +75,32 @@ describe('canonicalizeComboModulesForStorage (HOOKKA canonicalSizes 1:1)', () =>
     const a = canonicalizeComboModulesForStorage([['2A-RHF', '2A-LHF'], ['L-RHF', 'L-LHF']]);
     const b = canonicalizeComboModulesForStorage([['L-LHF', 'L-RHF'], ['2A-LHF', '2A-RHF']]);
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});
+
+describe('canonicalizeLayoutModulesForStorage (Quick Pick — preserves order)', () => {
+  it('keeps a middle Console in the middle (combo form sorts it to the end)', () => {
+    const built = [['1A-LHF'], ['Console'], ['1A-RHF']];
+    // The combo canonicalizer alphabetically sorts the slots → Console last.
+    expect(canonicalizeComboModulesForStorage(built)).toEqual([
+      ['1A-LHF'], ['1A-RHF'], ['Console'],
+    ]);
+    // The layout canonicalizer PRESERVES the built left-to-right order.
+    expect(canonicalizeLayoutModulesForStorage(built)).toEqual([
+      ['1A-LHF'], ['Console'], ['1A-RHF'],
+    ]);
+  });
+
+  it('wraps a legacy flat list, trims, and drops empties — order intact', () => {
+    expect(canonicalizeLayoutModulesForStorage([' 1A-RHF ', '1NA', '1A-LHF']))
+      .toEqual([['1A-RHF'], ['1NA'], ['1A-LHF']]);
+  });
+
+  it('rejects malformed payloads like the combo form', () => {
+    expect(canonicalizeLayoutModulesForStorage('nope')).toBeNull();
+    expect(canonicalizeLayoutModulesForStorage([])).toBeNull();
+    expect(canonicalizeLayoutModulesForStorage([[], ['']])).toBeNull();
+    expect(canonicalizeLayoutModulesForStorage([[1, 2]])).toBeNull();
   });
 });
 
