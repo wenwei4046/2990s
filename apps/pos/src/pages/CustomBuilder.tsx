@@ -855,11 +855,19 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     type ConvertOp = { removeIds: Set<string>; addCells: Cell[] };
     const ops: ConvertOp[] = [];
     priceResult.groups.forEach((g, i) => {
-      if (!g.bundle) return;
       const analysis = analyses[i];
       if (!analysis?.closed) return;
       const groupCells = analysis.group;
       if (groupCells.length === 0) return;
+      // Auto-convert applies to any recognised bundle SHAPE, priced or not. mfg
+      // sofas have no product_bundles rows, so groupPrice never sets g.bundle for
+      // them; fall back to detectBundle (the same source the seamless-overlay
+      // effect uses) so a hand-built 1A+1A+L still normalises to the canonical
+      // 2A+L. Without this, a Combo defined on 2A could never match a custom
+      // build assembled from single seaters — it priced à-la-carte while the
+      // identical Quick Pick layout (which emits canonical cells) got the Combo.
+      const bundle = g.bundle ?? detectBundle(groupCells.map((c) => c.moduleId));
+      if (!bundle) return;
       // Never rewrite a group that includes an accessory (console / stool) to
       // its canonical seat-only SKUs — that would delete the accessory cell
       // entirely (e.g. 1A + WC-45 + 2A matches the 3S signature, whose canonical
@@ -874,8 +882,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       if (editingGroupIds && Array.from(groupIds).every((id) => editingGroupIds.has(id))) return;
 
       const flip: 'L' | 'R' = groupCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
-      const hasL = g.bundle.canonicalModules.includes('L');
-      const armedIdxs = g.bundle.canonicalModules
+      const hasL = bundle.canonicalModules.includes('L');
+      const armedIdxs = bundle.canonicalModules
         .map((f, idx) => (f === '1A' || f === '2A' ? idx : -1))
         .filter((x) => x >= 0);
       const resolveSku = (fam: string, idx: number): string => {
@@ -896,8 +904,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       };
       const orderedFams =
         hasL && flip === 'L'
-          ? [...g.bundle.canonicalModules].reverse()
-          : g.bundle.canonicalModules;
+          ? [...bundle.canonicalModules].reverse()
+          : bundle.canonicalModules;
       const canonicalSkus = orderedFams.map((f, idx) => resolveSku(f, idx));
 
       // Already canonical? Compare sorted multisets — order on canvas might
