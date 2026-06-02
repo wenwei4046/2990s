@@ -69,8 +69,22 @@ export function buildVariantSummary(
 
   // Special orders always appended last, labelled so they read clearly in the
   // combined "Description 2" string (Commander 2026-05-28: "还要加 special order").
+  // Special Add-ons (migration 0134): when the line carries variants.specialChoices
+  // ({ code: [chosen option-group labels] }), append the picked choices after each
+  // code — e.g. "SPECIAL: Right Drawer (10") + Back Cover". Read straight off
+  // `variants` so no caller signature changes; missing → codes-only (old orders).
   const specials = specialsList(variants.specials ?? variants.special);
-  if (specials.length) segments.push(`SPECIAL: ${specials.join(' + ')}`);
+  if (specials.length) {
+    const choicesMap =
+      variants.specialChoices && typeof variants.specialChoices === 'object'
+        ? (variants.specialChoices as Record<string, unknown>)
+        : null;
+    const rendered = specials.map((code) => {
+      const picked = choicesMap ? specialsList(choicesMap[code]) : [];
+      return picked.length ? `${code} (${picked.join(', ')})` : code;
+    });
+    segments.push(`SPECIAL: ${rendered.join(' + ')}`);
+  }
 
   return segments.filter(Boolean).join(' / ');
 }

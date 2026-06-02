@@ -259,8 +259,16 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     if (config.divanHeightLabel != null) v.divanHeightLabel = config.divanHeightLabel;
     if (config.totalHeightId)         v.totalHeight = config.totalHeightLabel ?? config.totalHeightId;
     if (config.totalHeightLabel != null) v.totalHeightLabel = config.totalHeightLabel;
-    if (config.specialIds && config.specialIds.length > 0) v.specialIds = config.specialIds;
+    // Special Add-ons (migration 0134): specialIds holds special_addons CODES.
+    // Send them ALSO as variants.specials — the field the server prices from
+    // (special_addons pool) + the allowed-options gate validates. specialChoices
+    // carries the chosen option-group labels for the 追问 surcharge + SO description.
+    if (config.specialIds && config.specialIds.length > 0) {
+      v.specialIds = config.specialIds;
+      v.specials = config.specialIds;
+    }
     if (config.specialLabels && config.specialLabels.length > 0) v.specialLabels = config.specialLabels;
+    if (config.specialChoices && Object.keys(config.specialChoices).length > 0) v.specialChoices = config.specialChoices;
     if (config.summary)               v.summary = config.summary;
     return v;
   }

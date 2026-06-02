@@ -93,7 +93,12 @@ export interface BedframeConfigSnapshot {
   legHeightId: string;
   divanHeightId?: string;
   totalHeightId?: string;
+  // Special Add-ons (migration 0134): specialIds now holds special_addons CODES
+  // (sent as variants.specials → server prices from special_addons + gates).
+  // specialChoices = { code: [chosen option-group labels] } for the 追问 surcharge
+  // + SO description. specialLabels stays for display.
   specialIds?: string[];
+  specialChoices?: Record<string, string[]>;
   // Identity for PWP (换购) matching (0128) — a bedframe line is a PWP reward.
   modelId?: string | null;  // product_models.id
   category?: string;        // UPPERCASE mfg category, e.g. 'BEDFRAME'

@@ -16,6 +16,8 @@ import {
   useFabricLibrary,
   useFabricColours,
   useModelAllowedFabricCodes,
+  useModelAllowedSpecials,
+  useSpecialAddons,
   useFabricTierAddonConfig,
   useAddons,
   useBedframeColours,
@@ -44,6 +46,7 @@ import {
   BedframeOptions,
   emptyBedframeSelection,
   bedframeSurcharge,
+  addonSurchargeRM,
   type BedframeSelection,
 } from '../components/BedframeOptions';
 import { SofaCellsPreview } from '../components/SofaCellsPreview';
@@ -394,6 +397,18 @@ export const Configurator = () => {
   // when editing a bedframe line.
   const bedframeColours = useBedframeColours(productId);
   const bedframeOptions = useBedframeOptions();
+  // Special Add-ons (migration 0134) — the Model's allowed codes ∩ the active
+  // BEDFRAME add-ons. Drives the BedframeOptions picker + edit-hydration. These
+  // hooks MUST stay above the `if (product.isLoading) return` guard below
+  // (hooks order — a hook after it crashes with "Rendered more hooks").
+  const allSpecialAddonsQ = useSpecialAddons();
+  const bedframeAllowedSpecialsQ = useModelAllowedSpecials(productId);
+  const bedframeSpecialAddons = useMemo(() => {
+    const allowed = new Set(bedframeAllowedSpecialsQ.data ?? []);
+    return (allSpecialAddonsQ.data ?? []).filter(
+      (a) => a.active && a.categories.includes('BEDFRAME') && allowed.has(a.code),
+    );
+  }, [allSpecialAddonsQ.data, bedframeAllowedSpecialsQ.data]);
 
   // ── PWP (换购, 0128) — can the CURRENT product be redeemed at its PWP price? ──
   // Active rules + the cart decide it, via the SAME pure resolvePwp the server
@@ -554,9 +569,18 @@ export const Configurator = () => {
         divanId: cfg.divanHeightId ?? null,
         divanLabel: divan?.value ?? cfg.divanHeightLabel ?? null,
         divanSurcharge: divan?.surcharge ?? 0,
-        specials: (cfg.specialIds ?? []).map((id, i) => {
-          const o = optById.get(id);
-          return { id, label: o?.value ?? cfg.specialLabels?.[i] ?? '', surcharge: o?.surcharge ?? 0 };
+        // Special Add-ons (migration 0134): cfg.specialIds holds codes; rebuild
+        // from special_addons + saved specialChoices. Falls back to the saved
+        // label when the code no longer exists in the live add-on list.
+        specials: (cfg.specialIds ?? []).map((code, i) => {
+          const addon = bedframeSpecialAddons.find((a) => a.code === code);
+          const choices = cfg.specialChoices?.[code] ?? [];
+          return {
+            id: code,
+            label: addon?.label ?? cfg.specialLabels?.[i] ?? code,
+            surcharge: addon ? addonSurchargeRM(addon, choices) : 0,
+            choices,
+          };
         }),
       });
       // Bedframe colour now comes from the chosen fabric (migration 0124) —
@@ -1070,7 +1094,13 @@ export const Configurator = () => {
       legHeightLabel: bfSel.legLabel,
       ...(bfSel.divanId ? { divanHeightId: bfSel.divanId, divanHeightLabel: bfSel.divanLabel } : {}),
       ...(bfSel.specials.length > 0
-        ? { specialIds: bfSel.specials.map((s) => s.id), specialLabels: bfSel.specials.map((s) => s.label) }
+        ? {
+            specialIds: bfSel.specials.map((s) => s.id),            // = special_addons codes
+            specialLabels: bfSel.specials.map((s) => s.label),
+            specialChoices: Object.fromEntries(
+              bfSel.specials.map((s) => [s.id, s.choices ?? []]),
+            ),
+          }
         : {}),
       total: bedframeTotal,
       summary: parts.join(' · '),
@@ -1731,6 +1761,7 @@ export const Configurator = () => {
                     enabledColourIds={bedframeFabricCodes}
                   />
                 }
+                specialAddons={bedframeSpecialAddons}
               />
             </RailSection>
           </aside>

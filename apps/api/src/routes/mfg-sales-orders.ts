@@ -15,6 +15,7 @@ import { signSoItemPhotoUrl, soItemPhotoBindings, presign, type SlipMime } from 
 import { slipBindings } from '../lib/slip';
 import {
   loadMaintenanceConfig,
+  loadSpecialAddons,
   recomputeFromSnapshot,
   loadProductByCode,
   loadFabricByCode,
@@ -969,6 +970,9 @@ mfgSalesOrders.post('/', async (c) => {
      the request with HTTP 400. Manual override path (mfgSoPriceOverrides)
      stays intact at PATCH /:docNo/items/:itemId/override. */
   const cachedConfig = await loadMaintenanceConfig(sb);
+  // Special Add-ons (migration 0134) — fetched once; each line's specials pool is
+  // built from these so POS add-ons price from special_addons, not the legacy pool.
+  const cachedSpecialAddons = await loadSpecialAddons(sb);
   /* PR #216 — allowed_options pre-flight. Run BEFORE the pricing recompute
      so a disallowed variant returns the precise field/value/allowed
      payload instead of getting silently re-priced. Loads (product,model)
@@ -1121,7 +1125,7 @@ mfgSalesOrders.post('/', async (c) => {
     // sofa) or the reward combo ids (sofa). Else null → normal base / price.
     const pwpBaseSen = pwpBaseByIdx.get(idx) ?? null;
     const pwpSofaComboIds = pwpSofaByIdx.get(idx) ?? null;
-    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, pwpBaseSen, pwpSofaComboIds);
+    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, pwpBaseSen, pwpSofaComboIds, cachedSpecialAddons);
   }));
   /* Commander 2026-05-29 (system-wide) — the SELLING unit price is now
      operator-authored on every SO line. The product price tables are COST,
@@ -2174,13 +2178,14 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     );
     if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeStr }, 400);
   }
-  const [cachedConfig, productLite, fabricLite, sofaCombosLite, sellingTiersLite, fabricAddonConfigLite] = await Promise.all([
+  const [cachedConfig, productLite, fabricLite, sofaCombosLite, sellingTiersLite, fabricAddonConfigLite, specialAddonsLite] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadProductByCode(sb, itemCodeStr),
     loadFabricByCode(sb, variantsObj?.fabricCode ?? null),
     loadActiveSofaCombos(sb),
     loadFabricSellingTiers(sb, (variantsObj as { fabricId?: string } | null)?.fabricId ?? null),
     loadFabricTierAddonConfig(sb),
+    loadSpecialAddons(sb),
   ]);
   // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
   const sofaModulePricesLite = productLite?.category === 'SOFA'
@@ -2205,6 +2210,9 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     sofaModulePricesLite,
     sellingTiersLite,
     fabricAddonConfigLite,
+    null,                // pwpBaseSen (resolved elsewhere for this single-item path)
+    null,                // pwpSofaComboIds
+    specialAddonsLite,
   );
   /* Pricing trust boundary (Owner 2026-05-31, see isPosTabletCaller). POS tablet
      roles are drift-rejected + take the server price; Backend / office authors
@@ -2360,13 +2368,14 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeAfter }, 400);
   }
   if (shouldRecompute && itemCodeAfter) {
-    const [cfg, prodLite, fabLite, sofaCombosPatch, sellingTiersPatch, fabricAddonConfigPatch] = await Promise.all([
+    const [cfg, prodLite, fabLite, sofaCombosPatch, sellingTiersPatch, fabricAddonConfigPatch, specialAddonsPatch] = await Promise.all([
       loadMaintenanceConfig(sb),
       loadProductByCode(sb, itemCodeAfter),
       loadFabricByCode(sb, variantsAfter?.fabricCode ?? null),
       loadActiveSofaCombos(sb),
       loadFabricSellingTiers(sb, (variantsAfter as { fabricId?: string } | null)?.fabricId ?? null),
       loadFabricTierAddonConfig(sb),
+      loadSpecialAddons(sb),
     ]);
     // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
     const sofaModulePricesPatch = prodLite?.category === 'SOFA'
@@ -2391,6 +2400,9 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       sofaModulePricesPatch,
       sellingTiersPatch,
       fabricAddonConfigPatch,
+      null,                // pwpBaseSen
+      null,                // pwpSofaComboIds
+      specialAddonsPatch,
     );
     if (posTablet && recomputedPatch.drift) {
       return c.json({

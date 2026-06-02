@@ -22,12 +22,14 @@
 import {
   computeMfgLinePrice,
   computeMfgLineCost,
+  buildSpecialsPoolFromAddons,
   type MaintenanceConfig,
   type MfgPricingProduct,
   type MfgPricingFabric,
   type MfgPricingBreakdown,
   type MfgFabricTier,
   type MfgSeatHeightPrice,
+  type SpecialAddonDef,
 } from '@2990s/shared/mfg-pricing';
 import {
   computeSofaSellingSen,
@@ -60,6 +62,11 @@ export type MfgItemVariants = {
   specials?:      string[] | string | null;
   /** Aliases (some POS clients send `special` instead). */
   special?:       string[] | string | null;
+  /** Special Add-ons (migration 0134) — chosen option-group labels per code,
+   *  e.g. { 'Right Drawer': ['10"'] }. Selling extras are summed into the
+   *  per-line pool (buildSpecialsPoolFromAddons); buildVariantSummary renders
+   *  them. Absent on legacy / no-choice lines. */
+  specialChoices?: Record<string, string[]> | null;
   /** PWP (换购, migration 0128) — the salesperson toggled "use PWP price" on this
    *  reward line. The route's order-level resolvePwp validates it; only a granted
    *  line actually gets the PWP base. */
@@ -184,10 +191,33 @@ export function recomputeFromSnapshot(
    *  branch then charges ONLY those combos' pwp_prices_by_height (others stay at
    *  the normal selling price). null/[] → no change. SOFA only. */
   pwpSofaComboIds: string[] | null = null,
+  /** Special Add-ons (migration 0134) defs (active rows, all categories — the
+   *  builder only matches the line's picked codes). When provided, this line's
+   *  specials pool is built from these (base + chosen-choice extras) and
+   *  REPLACES config.specials/.sofaSpecials — so POS add-ons price from the
+   *  special_addons table, not the legacy maintenance pool. null → legacy. */
+  specialAddons: SpecialAddonDef[] | null = null,
 ): RecomputedLine {
   const category = toMfgCategory(item.itemGroup, product?.category ?? '');
   const variants = item.variants ?? {};
   const specials = normalizeSpecials(variants.specials ?? variants.special);
+
+  // Special Add-ons (migration 0134): build THIS line's specials pool from the
+  // special_addons defs (base sellingPriceSen + Σ chosen-choice extraSen) and use
+  // a config whose .specials/.sofaSpecials IS that pool — the pure engine then
+  // prices it unchanged. Falls back to the legacy maintenance config when no defs
+  // are passed (backward-compatible). cost path reads the pool's priceSen too.
+  const specialChoices =
+    variants.specialChoices && typeof variants.specialChoices === 'object'
+      ? (variants.specialChoices as Record<string, string[]>)
+      : null;
+  const specialsAddonPool = specialAddons
+    ? buildSpecialsPoolFromAddons(specialAddons, specials, specialChoices)
+    : null;
+  const effectiveConfig: MaintenanceConfig | null =
+    specialsAddonPool && config
+      ? { ...config, specials: specialsAddonPool, sofaSpecials: specialsAddonPool }
+      : config;
 
   // Resolve fabric tier per-context (sofa_price_tier vs bedframe_price_tier).
   let fabricTier: MfgFabricTier | null = null;
@@ -230,7 +260,7 @@ export function recomputeFromSnapshot(
      against — clobbering the manual price with the computed 0 would be wrong).
      `breakdown` is still computed so the surcharge component columns
      (divan/leg/special) reflect any director-set SELLING surcharges. */
-  const breakdown = computeMfgLinePrice(pricingInput, config);
+  const breakdown = computeMfgLinePrice(pricingInput, effectiveConfig);
   const manualUnitSelling = Math.max(0, Math.round(Number(item.unitPriceCenti ?? 0)));
   const safeQty = Math.max(0, Math.floor(item.qty || 0));
 
@@ -240,7 +270,7 @@ export function recomputeFromSnapshot(
      SEPARATE cost path — UNCHANGED — and is what drives unit_cost_centi /
      line_cost_centi / line_margin_centi. Never drift-checked (cost is a
      server-only snapshot). Margin = manual selling − computed cost. */
-  const costBreakdown = computeMfgLineCost(pricingInput, config);
+  const costBreakdown = computeMfgLineCost(pricingInput, effectiveConfig);
 
   // Project specials → custom_specials column. Each pick keeps its label
   // for the SO print; surchargeSen comes from the maintenance config.
@@ -253,9 +283,9 @@ export function recomputeFromSnapshot(
   // HOOKKA's tolerant behaviour.
   const specialsPool =
     category === 'SOFA'
-      ? config?.sofaSpecials ?? []
+      ? effectiveConfig?.sofaSpecials ?? []
       : category === 'BEDFRAME'
-        ? config?.specials ?? []
+        ? effectiveConfig?.specials ?? []
         : [];
   const customSpecials = specials.length
     ? specials.map((s) => {
@@ -401,6 +431,24 @@ export async function loadProductByCode(sb: any, code: string): Promise<ProductR
     .maybeSingle();
   if (!data) return null;
   return data as ProductRowLite;
+}
+
+/** Load active Special Add-ons (migration 0134) as pricing defs. The SO recompute
+ *  builds each line's specials pool from these (base sellingPriceSen + Σ chosen
+ *  option-group extraSen) instead of the legacy maintenance_config.specials pool.
+ *  Returns [] on empty/error (recompute then prices any picked codes at 0 — no
+ *  crash, no reject). */
+export async function loadSpecialAddons(sb: any): Promise<SpecialAddonDef[]> {
+  const { data } = await sb
+    .from('special_addons')
+    .select('code, selling_price_sen, cost_price_sen, option_groups')
+    .eq('active', true);
+  return ((data as any[]) ?? []).map((r) => ({
+    code:            r.code,
+    sellingPriceSen: r.selling_price_sen ?? 0,
+    costPriceSen:    r.cost_price_sen ?? 0,
+    optionGroups:    Array.isArray(r.option_groups) ? r.option_groups : [],
+  }));
 }
 
 /** Load a Model's sofa module SELLING prices (per-Model module→sen map) from

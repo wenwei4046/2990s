@@ -459,6 +459,29 @@ export const useModelAllowedFabricCodes = (productId: string | undefined) =>
     },
   });
 
+// Enabled Special Add-on CODES for a Model (allowed_options.specials — the codes
+// ticked in the Modular drawer). The configurator filters its Special Add-ons to
+// these so a picked code is always allowed (the server gate validates the same
+// list). Returns [] for legacy UUID products (no Model link) → no add-ons shown.
+export const useModelAllowedSpecials = (productId: string | undefined) =>
+  useQuery({
+    enabled: !!productId,
+    queryKey: ['model-allowed-specials', productId],
+    staleTime: 60_000,
+    queryFn: async (): Promise<string[]> => {
+      if (!productId || !productId.startsWith('mfg-')) return [];
+      const { data, error } = await supabase
+        .from('mfg_products')
+        .select('product_models:model_id ( allowed_options )')
+        .eq('id', productId)
+        .maybeSingle();
+      if (error) throw error;
+      const modelRel = (data as { product_models?: { allowed_options?: { specials?: string[] } } | null } | null)
+        ?.product_models;
+      return modelRel?.allowed_options?.specials ?? [];
+    },
+  });
+
 // Per-Model fabric availability + surcharge.
 // mfg-{12hex} products have no rows in product_fabrics (UUID FK). Their
 // fabrics are configured via product_models.allowed_options.fabrics and

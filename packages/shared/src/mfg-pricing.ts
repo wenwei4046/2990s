@@ -219,6 +219,61 @@ const sumSpecialsCost = (
   return total;
 };
 
+/* ─── Special Add-ons (migration 0134) — shared pool builder ──────────────
+ * The POS configurator price preview AND the server recompute both build the
+ * per-SO-line specials pool from the special_addons table via the SAME pure
+ * function below, so client and server always agree (no drift). The existing
+ * computeMfgLinePrice/Cost engine is UNCHANGED — it reads maintenanceConfig
+ * .specials / .sofaSpecials as before; callers just pass a pool built here
+ * (each entry's sellingPriceSen already bakes in base + chosen-choice extras). */
+export type SpecialAddonChoiceDef = { label: string; extraSen: number };
+export type SpecialAddonGroupDef = { label: string; required?: boolean; choices: SpecialAddonChoiceDef[] };
+export type SpecialAddonDef = {
+  code: string;
+  sellingPriceSen: number;
+  costPriceSen?: number;
+  optionGroups?: SpecialAddonGroupDef[];
+};
+
+/** Build the per-line specials pool (MfgPricedOption[]) from special_addons defs
+ *  + the line's picked codes + chosen choice labels (code → [labels]). Each
+ *  entry's `sellingPriceSen` = base + Σ matched choice `extraSen`; `priceSen`
+ *  (cost) = the add-on's cost base (choices are selling-only). Picks with no
+ *  matching def resolve to 0 (tolerant — mirrors the engine's lookup). Feed the
+ *  result in as maintenanceConfig.specials / .sofaSpecials for that line. */
+export function buildSpecialsPoolFromAddons(
+  defs: SpecialAddonDef[] | null | undefined,
+  picks: string[] | null | undefined,
+  choices: Record<string, string[]> | null | undefined,
+): MfgPricedOption[] {
+  if (!picks || picks.length === 0) return [];
+  const byCode = new Map((defs ?? []).map((d) => [d.code, d]));
+  return picks.map((code) => {
+    const def = byCode.get(code);
+    if (!def) return { value: code, priceSen: 0, sellingPriceSen: 0 };
+    let selling = def.sellingPriceSen;
+    for (const label of choices?.[code] ?? []) {
+      for (const g of def.optionGroups ?? []) {
+        const hit = g.choices.find((c) => c.label === label);
+        if (hit) { selling += hit.extraSen; break; }
+      }
+    }
+    return { value: code, priceSen: def.costPriceSen ?? 0, sellingPriceSen: selling };
+  });
+}
+
+/** Client preview convenience: total SELLING surcharge (sen) for the picked
+ *  add-ons + choices — Σ of the pool's sellingPriceSen. The POS configurator
+ *  adds this to the line's live total so it matches the server recompute. */
+export function specialAddonsSurchargeSen(
+  defs: SpecialAddonDef[] | null | undefined,
+  picks: string[] | null | undefined,
+  choices: Record<string, string[]> | null | undefined,
+): number {
+  return buildSpecialsPoolFromAddons(defs, picks, choices)
+    .reduce((acc, o) => acc + (o.sellingPriceSen ?? 0), 0);
+}
+
 /** Resolve the seat-height price for the picked (size, tier). Falls back
  *  to the PRICE_2 entry, then to the first entry. Returns `{ priceSen,
  *  matchedTier }` so the caller can label `source` accurately even on a
