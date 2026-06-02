@@ -527,3 +527,97 @@ export const computeDeliveryFee = (
     total: base + crossCategory + additional,
   };
 };
+
+/* ─── SO delivery fee — special models + cross-order link (2026-06-02) ─────
+ *
+ * Supersedes `computeDeliveryFee` on the LIVE `/mfg-sales-orders` path. Adds
+ * two Chairman rules on top of base + cross-category:
+ *   1. SPECIAL MODELS — a model flagged with a special transport fee (e.g. a
+ *      full-latex mattress at RM 500) OVERRIDES the normal base. Highest
+ *      standalone fee wins; two latex still bill ONE base (max, never summed).
+ *   2. CROSS-ORDER LINK — when sales links THIS SO back to the customer's
+ *      earlier SO (mattress + sofa must split into 2 SOs), the customer already
+ *      paid a full base on SO #1, so this SO owes only the reduced cross rate
+ *      (175), or the special model's "cross-category follow-up fee" (e.g. 300).
+ *
+ * Pure (honest-pricing red line): the server gathers the inputs and calls this;
+ * no client-sent fee total is ever trusted. See the design doc
+ * docs/superpowers/specs/2026-06-02-delivery-fee-special-and-crossorder-design.md
+ */
+
+export interface SpecialModelDeliveryFee {
+  /** Standalone special transport fee (e.g. RM 500). Replaces the normal base
+   *  when any special model is in the cart; highest wins. */
+  standaloneFee: number;
+  /** Reduced fee when THIS SO is a cross-category follow-up linked to an earlier
+   *  SO (e.g. RM 300). Falls back to config.crossCategoryFee when 0/unset. */
+  crossCategoryFollowupFee: number;
+}
+
+export interface SoDeliveryFeeInput {
+  /** Distinct DELIVERABLE category keys in the cart (sofa / mattress / bedframe).
+   *  Duplicates + empties ignored. The caller excludes accessories / others —
+   *  they don't trip cross-category delivery. */
+  categoryIds: string[];
+  /** One entry per SPECIAL model present in the cart. Empty when none. */
+  specialModels: SpecialModelDeliveryFee[];
+  /** True when sales linked THIS SO to the customer's earlier SO as a
+   *  cross-category follow-up (base already paid on the first SO). */
+  isCrossCategoryFollowup: boolean;
+  /** Free-form fee keyed by POS sales at handover. Negative clamped to 0. */
+  additionalFee: number;
+}
+
+export interface SoDeliveryFeeResult {
+  /** The (possibly special / possibly follow-up) base portion. */
+  base:          number;
+  /** In-order cross-category surcharge (0 on a follow-up SO — the link IS the
+   *  cross). */
+  crossCategory: number;
+  /** Free-form operator fee. */
+  additional:    number;
+  /** base + crossCategory + additional. */
+  total:         number;
+  /** A special model drove the base (for display / audit). */
+  isSpecial:     boolean;
+  /** The cross-order follow-up rate applied. */
+  isFollowup:    boolean;
+}
+
+export const computeSoDeliveryFee = (
+  input:  SoDeliveryFeeInput,
+  config: DeliveryFeeConfig,
+): SoDeliveryFeeResult => {
+  const categories = new Set(input.categoryIds.filter((id): id is string => Boolean(id)));
+  const additional = Math.max(0, input.additionalFee);
+  const specials   = input.specialModels ?? [];
+  const hasSpecial = specials.length > 0;
+
+  // Empty cart with no special model → only the free-form fee, if any.
+  if (categories.size === 0 && !hasSpecial) {
+    return { base: 0, crossCategory: 0, additional, total: additional, isSpecial: false, isFollowup: false };
+  }
+
+  if (input.isCrossCategoryFollowup) {
+    // Linked 2nd SO — full base already paid on SO #1. Charge only the cross
+    // portion: the special follow-up fee (highest) if a special model is here
+    // and one is configured, else the normal cross-category rate.
+    let base = config.crossCategoryFee;
+    if (hasSpecial) {
+      const specialFollowup = Math.max(...specials.map((s) => Math.max(0, s.crossCategoryFollowupFee)));
+      if (specialFollowup > 0) base = specialFollowup;
+    }
+    return { base, crossCategory: 0, additional, total: base + additional, isSpecial: hasSpecial, isFollowup: true };
+  }
+
+  // Standalone / first SO. Special standalone fee (highest) overrides the normal
+  // base; the in-order cross-category surcharge stacks when ≥2 deliverable
+  // categories share this cart.
+  let base = config.baseFee;
+  if (hasSpecial) {
+    const specialStandalone = Math.max(...specials.map((s) => Math.max(0, s.standaloneFee)));
+    if (specialStandalone > 0) base = specialStandalone;
+  }
+  const crossCategory = categories.size >= 2 ? config.crossCategoryFee : 0;
+  return { base, crossCategory, additional, total: base + crossCategory + additional, isSpecial: hasSpecial, isFollowup: false };
+};

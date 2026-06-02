@@ -89,7 +89,7 @@ import {
   type ProductSupplierRow,
 } from '../lib/products/mfg-products-queries';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
-import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useAddons, type AddonRow, type FabricLibraryRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, useAllAddons, useUpdateAddon, useCreateAddon, type AdminAddonRow } from '../lib/queries';
+import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useAddons, type AddonRow, type FabricLibraryRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, useAllAddons, useUpdateAddon, useCreateAddon, type AdminAddonRow } from '../lib/queries';
 import {
   useProductModels,
   useProductModel,
@@ -499,9 +499,128 @@ const DeliveryFeeTab = ({ mode }: { mode: ProductsMode }) => {
           {update.isPending ? 'Saving…' : 'Save'}
         </Button>
       )}
+
+      <SpecialDeliveryFeesSection canEdit={canEdit} />
     </div>
   );
 };
+
+/* ════════════════════════════════════════════════════════════════════════
+   Special-model delivery fees (migration 0140). Some Models cost more to
+   transport (e.g. full-latex mattresses, a special sofa). A Model listed here
+   has its standalone fee OVERRIDE the base; when its SO is a cross-category
+   follow-up linked to an earlier SO, the cross-category price applies instead.
+   There is no auto "latex" signal — a row here IS the manual tag. Fees whole RM.
+   ════════════════════════════════════════════════════════════════════════ */
+const SpecialDeliveryFeesSection = ({ canEdit }: { canEdit: boolean }) => {
+  const list   = useSpecialDeliveryFees();
+  const upsert = useUpsertSpecialDeliveryFee();
+  const del    = useDeleteSpecialDeliveryFee();
+  const models = useProductModels();
+
+  const [modelId, setModelId]     = useState('');
+  const [standalone, setStandalone] = useState<number | ''>('');
+  const [crossFee, setCrossFee]   = useState<number | ''>('');
+  const [err, setErr]             = useState<string | null>(null);
+
+  const onAdd = async () => {
+    setErr(null);
+    if (!modelId) { setErr('Pick a Model.'); return; }
+    if (typeof standalone !== 'number' || typeof crossFee !== 'number') {
+      setErr('Enter both fees as whole-RM numbers.'); return;
+    }
+    try {
+      await upsert.mutateAsync({ modelId, standaloneFee: standalone, crossCatFollowupFee: crossFee });
+      setModelId(''); setStandalone(''); setCrossFee('');
+    } catch (e) { setErr(String((e as Error).message ?? e)); }
+  };
+
+  const rows = list.data ?? [];
+
+  return (
+    <div style={{ marginTop: 'var(--space-6)', paddingTop: 'var(--space-5)', borderTop: '1px solid var(--line)' }}>
+      <h3 style={{ fontSize: 'var(--fs-15)', fontWeight: 700, marginBottom: 'var(--space-1)' }}>
+        Special-model delivery fees
+      </h3>
+      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-4)' }}>
+        Pick a Model that costs more to transport (e.g. a full-latex mattress).
+        Its standalone fee replaces the base fee. The cross-category price is
+        charged instead when this Model is bought as a linked follow-up to an
+        earlier order. Whole RM.
+      </p>
+
+      {list.isLoading
+        ? <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>Loading…</div>
+        : rows.length === 0
+          ? <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }}>No special models yet.</div>
+          : (
+            <div style={{ marginBottom: 'var(--space-4)' }}>
+              {rows.map((r) => (
+                <div key={r.modelId} style={{
+                  display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr auto', gap: 'var(--space-3)',
+                  alignItems: 'center', padding: 'var(--space-2) 0', borderBottom: '1px solid var(--line)',
+                  fontSize: 'var(--fs-13)',
+                }}>
+                  <div>
+                    <strong>{r.modelName}</strong>
+                    <span style={{ color: 'var(--fg-muted)' }}>{r.modelCode ? ` · ${r.modelCode}` : ''}{r.category ? ` · ${r.category}` : ''}</span>
+                  </div>
+                  <div>Standalone RM {r.standaloneFee}</div>
+                  <div>Cross-cat RM {r.crossCatFollowupFee}</div>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={() => void del.mutate(r.modelId)}
+                      style={{ background: 'none', border: 'none', color: 'var(--c-burnt, #A6471E)', cursor: 'pointer', fontSize: 'var(--fs-13)' }}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+      {canEdit && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr auto', gap: 'var(--space-3)', alignItems: 'end', maxWidth: 560 }}>
+          <div>
+            <label style={{ display: 'block', fontSize: 'var(--fs-12)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>Model</label>
+            <select
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+              style={{ width: '100%', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' }}
+            >
+              <option value="">Pick a Model…</option>
+              {(models.data ?? []).map((m) => (
+                <option key={m.id} value={m.id}>{m.name} ({m.category})</option>
+              ))}
+            </select>
+          </div>
+          {numberInputCell('Standalone (RM)', standalone, setStandalone)}
+          {numberInputCell('Cross-cat (RM)', crossFee, setCrossFee)}
+          <Button variant="primary" onClick={() => void onAdd()} disabled={upsert.isPending}>
+            {upsert.isPending ? 'Saving…' : 'Save'}
+          </Button>
+        </div>
+      )}
+      {err && <div style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginTop: 'var(--space-2)' }} role="alert">{err}</div>}
+    </div>
+  );
+};
+
+const numberInputCell = (label: string, value: number | '', setValue: (v: number | '') => void) => (
+  <div>
+    <label style={{ display: 'block', fontSize: 'var(--fs-12)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>{label}</label>
+    <input
+      type="number"
+      min={0}
+      step={1}
+      value={value}
+      onChange={(e) => setValue(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
+      style={{ width: '100%', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' }}
+    />
+  </div>
+);
 
 /* ════════════════════════════════════════════════════════════════════════
    Modular tab — POS list of Models.

@@ -129,6 +129,20 @@ export const deliveryFeeConfig = pgTable('delivery_fee_config', {
   updatedBy:                uuid('updated_by'),                        // references staff(id)
 });
 
+/* ─────────────────── Per-Model special delivery fees ────────────────── */
+// Migration 0140. A row tags a Model as "special": standalone_fee (whole MYR)
+// overrides the base delivery fee; cross_cat_followup_fee applies when the
+// model's SO is a cross-category follow-up linked to an earlier SO. Per-Model
+// (not per-SKU) — set once for all of a model's size variants. RLS: read for
+// any authenticated staff; write for fee-editor roles.
+export const modelSpecialDeliveryFees = pgTable('model_special_delivery_fees', {
+  modelId:             uuid('model_id').primaryKey().references(() => productModels.id, { onDelete: 'cascade' }),
+  standaloneFee:       integer('standalone_fee').notNull().default(0),
+  crossCatFollowupFee: integer('cross_cat_followup_fee').notNull().default(0),
+  updatedAt:           timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:           uuid('updated_by'),                            // references staff(id)
+});
+
 /* ─────────────────────────── Venues ─────────────────────────────────── */
 // Migration 0086 (2026-05-27). Parallel concept to showrooms — venues are
 // where the sales force (sales / sales_executive / outlet_manager) actually
@@ -1192,6 +1206,17 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   // Fabric-tier SELLING add-on total for the order (migration 0124). Reporting
   // snapshot; the Δ also folds into each sofa/bedframe line's total_centi.
   fabricTierAddonCenti: integer('fabric_tier_addon_centi').notNull().default(0),
+  // Delivery fee in sen (migration 0133). Server-recomputed at create on the
+  // POS handover path (base + cross-category + special-model + additional),
+  // folded into local_total/total_revenue/balance/margin like the fabric
+  // add-on. recomputeTotals reads it back so re-rolls don't erase it. 0 for
+  // backend-authored SOs.
+  deliveryFeeCenti:  integer('delivery_fee_centi').notNull().default(0),
+  // Cross-category delivery link (migration 0141). The earlier SO this SO was
+  // linked back to (sales typed its doc_no at handover) — when set, this SO was
+  // charged the reduced cross / special-cross delivery rate. Unique among
+  // non-null values (one follow-up per source SO).
+  crossCategorySourceDocNo: text('cross_category_source_doc_no'),
 
   currency:          currencyCode('currency').notNull().default('MYR'),
   status:            mfgSoStatus('status').notNull().default('CONFIRMED'),

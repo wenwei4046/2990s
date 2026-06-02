@@ -68,6 +68,12 @@ export const TotalsCard = memo(({ header }: { header: SoHeader }) => {
           </div>
         </div>
 
+        {(header.delivery_fee_centi ?? 0) > 0 && (
+          <div className={styles.totalLabel} style={{ marginBottom: 'var(--space-2)', textTransform: 'none', letterSpacing: 0 }}>
+            Includes delivery fee {fmtRm(header.delivery_fee_centi ?? 0, header.currency)}
+          </div>
+        )}
+
         <div className={styles.totalLabel} style={{ marginBottom: 'var(--space-2)' }}>
           By Category
         </div>

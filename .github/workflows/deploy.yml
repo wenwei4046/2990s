@@ -47,14 +47,18 @@ jobs:
 
       - name: Deploy POS to Pages
         working-directory: apps/api
-        run: pnpm exec wrangler pages deploy ../pos/dist --project-name=2990s-pos --branch=main --commit-dirty=true
+        # --commit-message=<sha>: wrangler otherwise derives it from the git HEAD
+        # message, and Cloudflare's Pages deployment API rejects non-ASCII commit
+        # messages (em-dash / emoji) with "Invalid commit message ... [8000111]".
+        # The commit SHA is always valid ASCII, so this can never break a deploy.
+        run: pnpm exec wrangler pages deploy ../pos/dist --project-name=2990s-pos --branch=main --commit-dirty=true --commit-message="${{ github.sha }}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Deploy Backend to Pages
         working-directory: apps/api
-        run: pnpm exec wrangler pages deploy ../backend/dist --project-name=2990s-backend --branch=main --commit-dirty=true
+        run: pnpm exec wrangler pages deploy ../backend/dist --project-name=2990s-backend --branch=main --commit-dirty=true --commit-message="${{ github.sha }}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
