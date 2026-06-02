@@ -12,7 +12,7 @@ import {
   type PosHandoffPayload,
 } from '../lib/pos-handover-so';
 import { useDeleteQuote } from '../lib/quotes';
-import { useAddons, useLocalities, useDeliveryFeeConfig, useSpecialDeliveryFees, useCrossCategoryEligibility, useCatalog } from '../lib/queries';
+import { useAddons, useLocalities, useDeliveryFeeConfig, useSpecialDeliveryFees, useCrossCategoryEligibility, useCrossCategoryAutoMatch, useCatalog } from '../lib/queries';
 import { useAuth } from '../lib/auth';
 import { computeSoDeliveryFee, type SpecialModelDeliveryFee } from '@2990s/shared/pricing';
 import {
@@ -123,6 +123,27 @@ export const Handover = () => {
     return () => clearTimeout(t);
   }, [form.crossCategorySourceSo]);
   const linkCheck = useCrossCategoryEligibility(debouncedSo, form.phone.trim());
+
+  // "Auto-match" button — scan the customer's earlier SOs and fill in the most
+  // recent linkable one. notFound shows only after a press that found nothing;
+  // it's cleared when a new scan starts or the SO field is edited by hand.
+  const autoMatchMut = useCrossCategoryAutoMatch();
+  const [autoMatchNotFound, setAutoMatchNotFound] = useState(false);
+  // The not-found caption is about a specific customer — drop it if the customer
+  // identity is edited on a prior step, so it can't mislabel a different customer.
+  useEffect(() => setAutoMatchNotFound(false), [form.name, form.phone]);
+  const runAutoMatch = () => {
+    setAutoMatchNotFound(false);
+    autoMatchMut.mutate(
+      { name: form.name.trim(), phone: form.phone.trim() },
+      {
+        onSuccess: (r) => {
+          if (r.found && r.docNo) setForm((f) => ({ ...f, crossCategorySourceSo: r.docNo! }));
+          else setAutoMatchNotFound(true);
+        },
+      },
+    );
+  };
 
   const update = <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -448,6 +469,13 @@ export const Handover = () => {
                   eligible: linkEligible,
                   message: linkInvalid ? (linkCheck.data?.message ?? 'Invalid order number.') : null,
                   debtorName: linkEligible ? (linkCheck.data?.debtorName ?? null) : null,
+                }}
+                autoMatch={{
+                  canRun: form.name.trim().length > 0 && form.phone.trim().length > 0,
+                  loading: autoMatchMut.isPending,
+                  notFound: autoMatchNotFound,
+                  run: runAutoMatch,
+                  clear: () => setAutoMatchNotFound(false),
                 }}
               />
             )}

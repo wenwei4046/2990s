@@ -35,6 +35,7 @@ import {
 } from '../lib/allowed-options-check';
 import { findIncompleteVariantLines } from '../lib/so-variant-check';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
+import { pickCrossCategoryMatch, type AutoMatchCandidate } from '../lib/cross-category-match';
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
 import { creditFromCancelledSo, getCustomerCreditBalance } from '../lib/customer-credits';
 import { summariseReadiness } from '../lib/so-readiness';
@@ -761,6 +762,52 @@ mfgSalesOrders.get('/cross-category-eligibility', async (c) => {
     debtorName: result.debtorName ?? null,
     message:   result.eligible ? null : crossCatReasonText(docNo, result.reason),
   });
+});
+
+// GET /cross-category-match?name&phone — the Confirm-screen "Auto-match" button.
+// Scans THIS customer's earlier sales orders and returns the most recent one
+// that can still back a cross-category follow-up, so sales don't have to recall
+// the SO number. "Same customer" = the (name, phone) identity key (migration
+// 0144) — a shared phone with a different name is a different customer. The SO
+// must not be cancelled and must not already be linked-from by another order
+// (single-use; the unique index on cross_category_source_doc_no is the hard
+// gate, this just keeps the button from offering a burnt SO). Read-only: it
+// never mints a customer row (unlike the order POST). Registered before /:docNo
+// so the static path isn't captured as a docNo.
+mfgSalesOrders.get('/cross-category-match', async (c) => {
+  const sb = c.get('supabase');
+  const name = (c.req.query('name') ?? '').trim();
+  const phoneRaw = (c.req.query('phone') ?? '').trim();
+  const normPhone = phoneRaw ? (normalizePhone(phoneRaw) ?? phoneRaw) : null;
+  // Both halves of the identity key are required to find a customer's orders.
+  if (!name || !normPhone) return c.json({ found: false });
+
+  // Candidate earlier SOs for this phone, newest first. Name is matched in the
+  // pure helper with the same lower(trim) rule as the customers unique index.
+  const { data: rows } = await sb
+    .from('mfg_sales_orders')
+    .select('doc_no, debtor_name, created_at')
+    .eq('phone', normPhone)
+    .neq('status', 'CANCELLED')
+    .order('created_at', { ascending: false })
+    .limit(50);
+  const candidates: AutoMatchCandidate[] = ((rows ?? []) as Array<{ doc_no: string; debtor_name: string | null }>)
+    .map((r) => ({ docNo: r.doc_no, debtorName: r.debtor_name }));
+  if (candidates.length === 0) return c.json({ found: false });
+
+  // Which of those candidate SOs are already linked-from by another order.
+  const { data: usedRows } = await sb
+    .from('mfg_sales_orders')
+    .select('cross_category_source_doc_no')
+    .in('cross_category_source_doc_no', candidates.map((c2) => c2.docNo));
+  const used = ((usedRows ?? []) as Array<{ cross_category_source_doc_no: string | null }>)
+    .map((r) => r.cross_category_source_doc_no)
+    .filter((v): v is string => !!v);
+
+  const match = pickCrossCategoryMatch(candidates, name, used);
+  return match
+    ? c.json({ found: true, docNo: match.docNo, debtorName: match.debtorName })
+    : c.json({ found: false });
 });
 
 mfgSalesOrders.get('/:docNo', async (c) => {

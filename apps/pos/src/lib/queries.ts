@@ -1528,6 +1528,33 @@ export const useCrossCategoryEligibility = (docNo: string, phone: string) =>
     },
   });
 
+export interface CrossCategoryMatchResult {
+  found:       boolean;
+  docNo?:      string;
+  debtorName?: string | null;
+}
+
+/** "Auto-match" button on the Confirm screen — scans the customer's earlier SOs
+ *  (by the name + phone identity) and returns the most recent one that can still
+ *  back a cross-category follow-up. A mutation, not a query, so it fires only on
+ *  the button press. The caller fills the returned docNo into the SO field; the
+ *  live eligibility check above then confirms it. */
+export const useCrossCategoryAutoMatch = () =>
+  useMutation({
+    mutationFn: async ({ name, phone }: { name: string; phone: string }): Promise<CrossCategoryMatchResult> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const qs = new URLSearchParams({ name: name.trim(), phone: phone.trim() });
+      const res = await fetch(`${API_URL}/mfg-sales-orders/cross-category-match?${qs.toString()}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`auto-match failed (${res.status})`);
+      return (await res.json()) as CrossCategoryMatchResult;
+    },
+  });
+
 /** Master Admin — writes the 4 fabric-tier Δ amounts (PATCH /fabric-tier-addon).
  *  Gated by the fabric_tier_addon_config UPDATE RLS + API WRITE_ROLES (0124). */
 export const useUpdateFabricTierAddonConfig = () => {

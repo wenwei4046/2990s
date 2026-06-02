@@ -336,6 +336,35 @@
   margin: var(--space-3) 0;
 }
 
+/* "Previous SO number" + its Auto-match button (Confirm screen). */
+.soMatchRow {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.soMatchRow input {
+  flex: 1;
+  min-width: 0;
+}
+.soMatchBtn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  border: 1px solid var(--c-orange);
+  border-radius: var(--radius-sm);
+  background: var(--c-orange);
+  color: var(--c-cream);
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: var(--w-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.soMatchBtn:hover { background: var(--c-burnt); border-color: var(--c-burnt); }
+.soMatchBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .installmentTerm {
   display: flex;
   align-items: center;
