@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
-import { useParams } from 'react-router';
-import { useOrderById, type OrderDetail } from '../lib/orders-by-id';
+import { Link, useParams } from 'react-router';
+import { ArrowLeft, Printer } from 'lucide-react';
+import { useSalesOrderDoc, type PrintableSO } from '../lib/so-doc';
 import { COMPANY_LEGAL, RECEIPT_TERMS } from '../lib/legal';
 import styles from './SalesOrderPrint.module.css';
 
@@ -23,53 +23,34 @@ const fmtIsoDate = (iso: string | null | undefined): string => {
   return `${y}-${m}-${dd}`;
 };
 
-// A4 printable Sales Order — layout mirrors the reference template Loo shared
-// (2026-05-22). Only the customer signature line is preserved; the
-// "Authorised by" side is dropped per Loo. Signature image (PNG data URL) is
-// inlined when orders.signature_data is present.
+// A4 customer-facing Sales Order — layout mirrors the reference template Loo
+// shared. Sourced from the LIVE order model (mfg_sales_orders) via
+// useSalesOrderDoc. Shown on-screen for the customer to view on the tablet;
+// the "Print / Save as PDF" button (hidden in print) hands them a PDF.
 export const SalesOrderPrint = () => {
+  // Route param is the SO docNo (SO-NNNNNN).
   const { orderId } = useParams<{ orderId: string }>();
-  const { data, isLoading, error } = useOrderById(orderId);
-
-  useEffect(() => {
-    if (isLoading || !data) return;
-    // Don't print until the customer signature image has decoded — otherwise
-    // window.print() can snapshot the page before the <img> paints and the
-    // e-signature is missing from the PDF. We preload the same data URL the
-    // SignatureBlock <img> uses; once it loads (cached, so the DOM img is
-    // painted too) we print. Fallback timer covers no-signature orders and
-    // any decode failure so the print never hangs.
-    let printed = false;
-    const doPrint = () => {
-      if (printed) return;
-      printed = true;
-      // Two rAFs guarantee the frame holding the signature <img> has painted
-      // before the (blocking) print snapshot.
-      requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
-    };
-    if (data.signature_data) {
-      const img = new Image();
-      img.onload = doPrint;
-      img.onerror = doPrint;
-      img.src = data.signature_data;
-      const fallback = window.setTimeout(doPrint, 1500);
-      return () => { printed = true; window.clearTimeout(fallback); };
-    }
-    const t = window.setTimeout(doPrint, 250);
-    return () => { printed = true; window.clearTimeout(t); };
-  }, [isLoading, data]);
+  const { data, isLoading, error } = useSalesOrderDoc(orderId);
 
   if (isLoading) return <main className={styles.shell}>Loading…</main>;
   if (error || !data) {
     return (
       <main className={styles.shell}>
-        Could not load order: {String(error ?? 'not found')}
+        Could not load order: {String((error as Error)?.message ?? 'not found')}
       </main>
     );
   }
 
   return (
     <main className={styles.shell}>
+      <div className={styles.toolbar}>
+        <Link to="/my-orders" className={styles.toolbarBack}>
+          <ArrowLeft size={18} strokeWidth={1.75} /> Back
+        </Link>
+        <button type="button" className={styles.toolbarPrint} onClick={() => window.print()}>
+          <Printer size={16} strokeWidth={1.75} /> Print / Save as PDF
+        </button>
+      </div>
       <article className={`${styles.page} sales-order-page`}>
         <Header order={data} />
         <MetaRow order={data} />
@@ -86,7 +67,7 @@ export const SalesOrderPrint = () => {
   );
 };
 
-const Header = ({ order }: { order: OrderDetail }) => (
+const Header = ({ order }: { order: PrintableSO }) => (
   <header className={styles.header}>
     <div className={styles.headerLeft}>
       <div className={styles.companyName}>{COMPANY_LEGAL.name}</div>
@@ -100,73 +81,54 @@ const Header = ({ order }: { order: OrderDetail }) => (
     <div className={styles.headerRight}>
       <div className={styles.docTitle}>SALES ORDER</div>
       <div className={styles.docId}>{order.id}</div>
-      <div className={styles.docMeta}>Date: {fmtIsoDate(order.placed_at)}</div>
+      <div className={styles.docMeta}>Date: {fmtIsoDate(order.date)}</div>
       <div className={styles.docMeta}>Order: {order.id}</div>
     </div>
   </header>
 );
 
-const MetaRow = ({ order }: { order: OrderDetail }) => (
+const MetaRow = ({ order }: { order: PrintableSO }) => (
   <div className={styles.metaRow}>
     <div className={styles.metaBox}>
       <div className={styles.metaLabel}>Order reference</div>
       <div className={styles.metaValue}>{order.id}</div>
-      <div className={styles.metaSub}>Placed {fmtIsoDate(order.placed_at)}</div>
+      <div className={styles.metaSub}>Placed {fmtIsoDate(order.date)}</div>
     </div>
     <div className={styles.metaBox}>
-      <div className={styles.metaLabel}>Delivery</div>
+      <div className={styles.metaLabel}>Delivery Estimate Date</div>
       <div className={styles.metaValue}>
-        {order.delivery_date ? fmtIsoDate(order.delivery_date) : 'For further notice'}
+        {order.deliveryDate ? fmtIsoDate(order.deliveryDate) : 'To be confirmed'}
       </div>
       <div className={styles.metaSub}>
-        Method: {PAYMENT_LABEL[order.payment_method] ?? order.payment_method}
+        Method: {order.paymentMethod ? PAYMENT_LABEL[order.paymentMethod] ?? order.paymentMethod : '—'}
       </div>
     </div>
   </div>
 );
 
-const PartiesRow = ({ order }: { order: OrderDetail }) => {
-  const customerAddrLines = [
-    order.customer_address,
-    [order.customer_postcode, order.customer_city, order.customer_state]
-      .filter(Boolean)
-      .join(' '),
-  ].filter(Boolean) as string[];
-
-  // Showroom address → 2 lines: street, then "postcode city state". The address
-  // is one string, so split at the 5-digit Malaysian postcode rather than at
-  // every comma (which would stack 5 short lines).
-  const showroomAddr = order.showroom?.address || COMPANY_LEGAL.showroomLine;
-  const showroomParts = showroomAddr.split(',').map((p) => p.trim()).filter(Boolean);
-  const pcIdx = showroomParts.findIndex((p) => /^\d{5}\b/.test(p));
-  const showroomAddrLines = pcIdx > 0
-    ? [showroomParts.slice(0, pcIdx).join(', '), showroomParts.slice(pcIdx).join(', ')]
-    : [showroomAddr];
-
-  return (
-    <div className={styles.partiesRow}>
-      <div className={styles.partyBox}>
-        <div className={styles.partyLabel}>Bill to</div>
-        <div className={styles.partyName}>{order.customer_name || '—'}</div>
-        {customerAddrLines.map((line) => (
-          <div key={line} className={styles.partyLine}>{line}</div>
-        ))}
-        {order.customer_phone && (
-          <div className={styles.partyLine}>{order.customer_phone}</div>
-        )}
-      </div>
-      <div className={styles.partyBox}>
-        <div className={styles.partyLabel}>Sold by</div>
-        <div className={styles.partyName}>{order.showroom?.name ?? 'Showroom'}</div>
-        {showroomAddrLines.map((line, i) => (
-          <div key={i} className={styles.partyLine}>{line}</div>
-        ))}
-      </div>
+const PartiesRow = ({ order }: { order: PrintableSO }) => (
+  <div className={styles.partiesRow}>
+    <div className={styles.partyBox}>
+      <div className={styles.partyLabel}>Bill to</div>
+      <div className={styles.partyName}>{order.customerName || '—'}</div>
+      {order.customerAddressLines.map((line) => (
+        <div key={line} className={styles.partyLine}>{line}</div>
+      ))}
+      {order.customerPhone && (
+        <div className={styles.partyLine}>{order.customerPhone}</div>
+      )}
     </div>
-  );
-};
+    <div className={styles.partyBox}>
+      <div className={styles.partyLabel}>Sold by</div>
+      <div className={styles.partyName}>{order.soldByName}</div>
+      {order.soldByAddressLines.map((line, i) => (
+        <div key={i} className={styles.partyLine}>{line}</div>
+      ))}
+    </div>
+  </div>
+);
 
-const ItemsTable = ({ order }: { order: OrderDetail }) => (
+const ItemsTable = ({ order }: { order: PrintableSO }) => (
   <table className={styles.items}>
     <thead>
       <tr>
@@ -180,52 +142,46 @@ const ItemsTable = ({ order }: { order: OrderDetail }) => (
     <tbody>
       {order.lines.map((l, i) => (
         <tr key={i}>
-          <td className={styles.colSku}>{l.product_sku ?? '—'}</td>
-          <td className={styles.colDesc}>
-            {l.product_model_code ? `${l.product_model_code} · ${l.product_name}` : l.product_name}
-            {l.description && <span className={styles.lineDesc}>{l.description}</span>}
-          </td>
+          <td className={styles.colSku}>{l.sku}</td>
+          <td className={styles.colDesc}>{l.description}</td>
           <td className={styles.colQty}>{l.qty}</td>
-          <td className={styles.colMoney}>{fmtMoney(l.unit_price)}</td>
-          <td className={styles.colMoney}>{fmtMoney(l.line_total)}</td>
+          <td className={styles.colMoney}>{fmtMoney(l.unitPrice)}</td>
+          <td className={styles.colMoney}>{fmtMoney(l.lineTotal)}</td>
         </tr>
       ))}
     </tbody>
   </table>
 );
 
-const TotalsBlock = ({ order }: { order: OrderDetail }) => {
-  const balanceDue = Math.max(0, order.total - order.paid);
-  return (
-    <div className={styles.totalsWrap}>
-      <div className={styles.totals}>
-        <div className={styles.totalRow}>
-          <span className={styles.totalLabel}>Subtotal</span>
-          <span className={styles.totalValue}>{fmtMoney(order.subtotal)}</span>
-        </div>
-        <div className={styles.totalRow}>
-          <span className={styles.totalLabel}>Deposit paid</span>
-          <span className={styles.totalValue}>{fmtMoney(order.paid)}</span>
-        </div>
-        <div className={styles.totalRow}>
-          <span className={styles.totalLabel}>Total</span>
-          <span className={styles.totalValue}>{fmtMoney(order.total)}</span>
-        </div>
-        <div className={`${styles.totalRow} ${styles.balanceRow}`}>
-          <span className={styles.totalLabel}>Balance due</span>
-          <span className={styles.totalValue}>{fmtMoney(balanceDue)}</span>
-        </div>
+const TotalsBlock = ({ order }: { order: PrintableSO }) => (
+  <div className={styles.totalsWrap}>
+    <div className={styles.totals}>
+      <div className={styles.totalRow}>
+        <span className={styles.totalLabel}>Subtotal</span>
+        <span className={styles.totalValue}>{fmtMoney(order.subtotal)}</span>
+      </div>
+      <div className={styles.totalRow}>
+        <span className={styles.totalLabel}>Deposit paid</span>
+        <span className={styles.totalValue}>{fmtMoney(order.paid)}</span>
+      </div>
+      <div className={styles.totalRow}>
+        <span className={styles.totalLabel}>Total</span>
+        <span className={styles.totalValue}>{fmtMoney(order.total)}</span>
+      </div>
+      <div className={`${styles.totalRow} ${styles.balanceRow}`}>
+        <span className={styles.totalLabel}>Balance due</span>
+        <span className={styles.totalValue}>{fmtMoney(order.balance)}</span>
       </div>
     </div>
-  );
-};
+  </div>
+);
 
-const SignatureBlock = ({ order }: { order: OrderDetail }) => (
+const SignatureBlock = ({ order }: { order: PrintableSO }) => (
   <div className={styles.signatureBox}>
     <div className={styles.signatureCanvas}>
-      {order.signature_data && (
+      {order.signature && (
         <img
-          src={order.signature_data}
+          src={order.signature}
           alt="Customer signature"
           className={styles.signatureImg}
         />
@@ -233,8 +189,8 @@ const SignatureBlock = ({ order }: { order: OrderDetail }) => (
     </div>
     <div className={styles.signatureLabel}>Customer signature</div>
     <div className={styles.signatureSub}>
-      {order.customer_name}
-      {order.customer_phone ? ` · ${order.customer_phone}` : ''}
+      {order.customerName}
+      {order.customerPhone ? ` · ${order.customerPhone}` : ''}
     </div>
   </div>
 );
@@ -247,9 +203,9 @@ const TermsBlock = () => (
   </ol>
 );
 
-const Footer = ({ order }: { order: OrderDetail }) => (
+const Footer = ({ order }: { order: PrintableSO }) => (
   <footer className={styles.docFooter}>
     <span>{order.id}</span>
-    <span>{COMPANY_LEGAL.portalLabel} · {fmtIsoDate(order.placed_at)}</span>
+    <span>{COMPANY_LEGAL.portalLabel} · {fmtIsoDate(order.date)}</span>
   </footer>
 );
