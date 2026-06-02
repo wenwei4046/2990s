@@ -60,7 +60,7 @@ const empty: HandoverForm = {
   billingAddress: '', billingAddressLine2: '',
   billingPostcode: '', billingCity: '', billingState: '',
   emergencyName: '', emergencyRelation: '', emergencyPhone: '',
-  deliveryDate: '', deliveryDateLater: false, deliveryAsap: false,
+  deliveryDate: '', deliveryDateLater: false,
   processDate: '',
   specialInstructions: '',
   addons: {}, paymentMethod: '',

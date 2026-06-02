@@ -34,7 +34,7 @@ export interface HandoverForm {
 
   emergencyName: string; emergencyRelation: string; emergencyPhone: string;
 
-  deliveryDate: string; deliveryDateLater: boolean; deliveryAsap: boolean;
+  deliveryDate: string; deliveryDateLater: boolean;
   /** Factory start date ("Process Date") — when production should begin so we
    *  don't pull stock too early for a far-out delivery. Must be today-or-future
    *  and on/before deliveryDate. Empty when "For further notice" (UFN). Maps to

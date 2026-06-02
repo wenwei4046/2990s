@@ -101,7 +101,6 @@ export const MonthCalendar = ({
       <div className={styles.legend}>
         <span className={styles.legendDot} aria-hidden="true" />
         <span>Selected</span>
-        <span className={styles.legendNote}>3–5 working days standard</span>
       </div>
     </div>
   );
