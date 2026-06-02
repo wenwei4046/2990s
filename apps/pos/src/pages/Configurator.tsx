@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2, FlipHorizontal2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, matchComboSubset, comboChargedPrices, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
 import { resolvePwp, type PwpLineInput } from '@2990s/shared/pwp';
 import { usePwpRules, useMyReservedPwpCodes, validatePwpCode } from '../lib/products/pwp-queries';
 import {
@@ -409,9 +409,18 @@ export const Configurator = () => {
   const [insertedCode, setInsertedCode] = useState<string | null>(null);
   const [insertErr, setInsertErr] = useState<string | null>(null);
   const [insertChecking, setInsertChecking] = useState(false);
+  // Sofa PWP voucher state — lifted here (2026-06-02) so the redeem control can
+  // live in the shared Quick Pick / Customize top bar (sofaCenterSlot) and price
+  // BOTH modes. Was inside CustomBuilder (Customize-only). Server logic unchanged.
+  const [sofaPwpInput, setSofaPwpInput] = useState('');
+  const [sofaPwpCode, setSofaPwpCode] = useState<string | null>(null);
+  const [sofaPwpComboIds, setSofaPwpComboIds] = useState<string[]>([]);
+  const [sofaPwpErr, setSofaPwpErr] = useState<string | null>(null);
+  const [sofaPwpChecking, setSofaPwpChecking] = useState(false);
   useEffect(() => { // never leak the toggle / code across products
     setUsePwp(false);
     setInsertCodeInput(''); setInsertedCode(null); setInsertErr(null);
+    setSofaPwpInput(''); setSofaPwpCode(null); setSofaPwpComboIds([]); setSofaPwpErr(null);
   }, [productId]);
   const pwpEval = useMemo(() => {
     const rules = pwpRulesQ.data ?? [];
@@ -575,6 +584,9 @@ export const Configurator = () => {
         ? sofaCustomizer.data != null && fabricLib.data != null
         : productFabrics.data != null;
       if (!fabricsReady) return;
+      // PWP edit (2026-06-02) — re-deriving the matched reward combo needs the
+      // combos loaded; defer the one-shot hydrate until they arrive.
+      if (cfg.pwp && cfg.pwpCode && sofaCombosQ.data == null) return;
       setActiveDepth(cfg.depth ?? '24');
       if (cfg.fabricId && cfg.colourId) {
         const pf = derivedFabricRows.find((f) => f.fabricId === cfg.fabricId);
@@ -593,6 +605,18 @@ export const Configurator = () => {
       if (cfg.cells && cfg.cells.length > 0) {
         setMode('custom');
         setSofaCells(cfg.cells);
+        // PWP (换购) — re-arm the saved voucher via the cross-order path. Match
+        // the saved build against the loaded combos so the live total + chip
+        // reflect the PWP price; the server re-validates + locks it at Confirm.
+        if (cfg.pwp && cfg.pwpCode) {
+          const builtMods = cfg.cells.map((c) => c.moduleId).filter(Boolean);
+          const matched = (sofaCombosQ.data ?? [])
+            .filter((c) => matchComboSubset(builtMods, c.modules) != null)
+            .map((c) => c.id);
+          setSofaPwpCode(cfg.pwpCode);
+          setSofaPwpInput(cfg.pwpCode);
+          setSofaPwpComboIds(matched.length > 0 ? [matched[0]!] : []);
+        }
       } else if (cfg.bundleId) {
         setMode('quick');
         setPicked(cfg.bundleId);
@@ -602,7 +626,8 @@ export const Configurator = () => {
       hydratedRef.current = true;
     }
   }, [isEditing, editingLine, bedframeColours.data, bedframeOptions.data,
-      productFabrics.data, sofaCustomizer.data, fabricLib.data, productId, derivedFabricRows]);
+      productFabrics.data, sofaCustomizer.data, fabricLib.data, productId, derivedFabricRows,
+      sofaCombosQ.data]);
 
   // Depth-aware per-Model module SELLING map (sen) at the current seat depth,
   // tier P1 (SOFA-SELLING Phase B; Chairman 2026-06-01: run at P1 — the default
@@ -689,6 +714,22 @@ export const Configurator = () => {
     activeDepth,
   ]);
 
+  // PWP-effective sofa pricing — when a sofa PWP voucher is applied, the matched
+  // reward combo is charged its PWP price (selling-over-cost merge). Feeds BOTH
+  // the Quick Pick price (priceForLayout) and the Customize builder. GATED: with
+  // no code applied it returns sofaPricing UNCHANGED (same reference) → zero
+  // price change to the normal sofa flow (verify this no-op first).
+  const effectiveSofaPricing = useMemo<SofaProductPricing>(() => {
+    if (sofaPwpComboIds.length === 0) return sofaPricing;
+    const set = new Set(sofaPwpComboIds);
+    return {
+      ...sofaPricing,
+      combos: (sofaPricing.combos ?? []).map((c) =>
+        set.has(c.id) ? { ...c, pricesByHeight: comboChargedPrices(c.pwpPricesByHeight, c.pricesByHeight) } : c,
+      ),
+    };
+  }, [sofaPricing, sofaPwpComboIds]);
+
   // Price a Quick Pick LAYOUT (Chairman 2026-05-31): run its modules through the
   // SAME engine the build uses — à-la-carte module sum, or the Combo price when
   // the layout matches a Combo. One price source (the engine); the QP table
@@ -696,9 +737,87 @@ export const Configurator = () => {
   const priceForLayout = useCallback((modules: string[][]): number | null => {
     const cells = cellsFromComboModules(modules, activeDepth);
     if (cells.length === 0) return null;
-    const total = computeSofaPrice(cells, activeDepth, sofaPricing).total;
+    const total = computeSofaPrice(cells, activeDepth, effectiveSofaPricing).total;
     return total > 0 ? Math.round(total) : null;
-  }, [activeDepth, sofaPricing]);
+  }, [activeDepth, effectiveSofaPricing]);
+
+  // ── Sofa PWP voucher (2026-06-02) — redeem control lifted to the shared top
+  // bar so BOTH Quick Pick + Customize can apply a code. PWP applies only to
+  // ENGINE-priced, cells-carrying builds: a saved Quick Pick (pickedQP) or a
+  // Customize build. A fixed-price bundle preset has no cells, so the server
+  // can't combo-recompute it (mfg-sales-orders.extractSofaComboLookupArgs needs
+  // cells) — it never participates in PWP (sofaBuiltModules stays empty there).
+  // NOTE: these hooks MUST stay above the early-return guard below (Rules of
+  // Hooks) — the Configurator bails early while the product query is loading.
+  const sofaBuiltModules = useMemo<string[]>(() => {
+    if (mode === 'custom') return sofaCells.map((c) => c.moduleId).filter(Boolean);
+    if (pickedQP) {
+      const qpModules = qpMirror ? mirrorModules(pickedQP.modules) : pickedQP.modules;
+      return qpModules.map((slot) => slot[0] ?? '').filter(Boolean);
+    }
+    return [];
+  }, [mode, sofaCells, pickedQP, qpMirror]);
+
+  // Combo ids the current build matches — the reward a sofa code must name.
+  const sofaMatchedComboIds = useMemo(
+    () => (sofaPricing.combos ?? []).filter((c) => matchComboSubset(sofaBuiltModules, c.modules) != null).map((c) => c.id),
+    [sofaPricing.combos, sofaBuiltModules],
+  );
+
+  // Same-cart: the next RESERVED sofa code in THIS cart whose reward matches the
+  // build, not already applied to another line — FIFO by cart position (mirrors
+  // sameCartCode). "Auto Fill" drops it into the field + applies it.
+  const sameCartSofa = useMemo(() => {
+    const codes = reservedCodesQ.data ?? [];
+    const lineOrder = new Map(cartLines.map((l, i) => [l.key, i]));
+    const applied = new Set(
+      cartLines
+        .filter((l) => !(editKey && l.key === editKey))
+        .flatMap((l) => { const c = l.config as { pwpCode?: string }; return c.pwpCode ? [c.pwpCode] : []; }),
+    );
+    const matchedSet = new Set(sofaMatchedComboIds);
+    const eligible = codes.filter((rc) =>
+      rc.cartLineKey &&
+      String(rc.rewardCategory).toUpperCase() === 'SOFA' &&
+      !applied.has(rc.code) &&
+      (rc.rewardComboIds ?? []).some((id) => matchedSet.has(id)),
+    );
+    eligible.sort((a, b) =>
+      (lineOrder.get(a.cartLineKey ?? '') ?? 1e9) - (lineOrder.get(b.cartLineKey ?? '') ?? 1e9));
+    const top = eligible[0];
+    if (!top) return null;
+    const comboId = (top.rewardComboIds ?? []).find((id) => matchedSet.has(id));
+    return comboId ? { code: top.code, comboId } : null;
+  }, [reservedCodesQ.data, cartLines, editKey, sofaMatchedComboIds]);
+
+  // Validate + apply a sofa PWP code against the build's matched combos (plain
+  // fn, not a hook). Mirrors CustomBuilder's old applyPwpCode; codeArg lets Auto
+  // Fill apply a same-cart code.
+  const applySofaPwp = async (codeArg?: string) => {
+    const code = (codeArg ?? sofaPwpInput).trim().toUpperCase();
+    if (!code) return;
+    setSofaPwpInput(code);
+    setSofaPwpChecking(true); setSofaPwpErr(null);
+    try {
+      const matched = (sofaPricing.combos ?? []).filter((c) => matchComboSubset(sofaBuiltModules, c.modules) != null);
+      if (matched.length === 0) { setSofaPwpCode(null); setSofaPwpComboIds([]); setSofaPwpErr('This build does not match any sofa combo.'); return; }
+      let okCombo: string | null = null;
+      for (const c of matched) {
+        const res = await validatePwpCode({ code, rewardCategory: 'SOFA', rewardComboId: c.id });
+        if (res.valid) { okCombo = c.id; break; }
+      }
+      if (okCombo) { setSofaPwpCode(code); setSofaPwpComboIds([okCombo]); }
+      else { setSofaPwpCode(null); setSofaPwpComboIds([]); setSofaPwpErr('This PWP code cannot be applied to this build.'); }
+    } catch { setSofaPwpCode(null); setSofaPwpComboIds([]); setSofaPwpErr('Could not validate the code.'); }
+    finally { setSofaPwpChecking(false); }
+  };
+
+  // The applied grant is "live" only while the current build still matches it (a
+  // plain derived value, not a hook). A build change auto-degrades the chip
+  // without a reset effect (the engine also won't apply a non-matching combo, so
+  // the price stays correct); the code is cleared outright only on a product
+  // switch (the productId reset above).
+  const sofaPwpApplied = sofaPwpCode != null && sofaPwpComboIds.some((id) => sofaMatchedComboIds.includes(id));
 
   // F5: per-Model seat depths ('24,30' → ['24','30']). Fallback ['24'] so the
   // toggle always has a value (only rendered for sofas, which always seed it).
@@ -1077,6 +1196,11 @@ export const Configurator = () => {
     const cells = cellsFromComboModules(effectiveQPModules, activeDepth);
     const label = qpDisplayLabel;
     const fabricSuffix = ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}`;
+    // PWP (换购) — stamp the line when this layout matches the applied reward
+    // combo; total already reflects the PWP price (effectiveSofaPricing). The
+    // server re-validates the code + locks the combo PWP price at Confirm.
+    const pwpCombo = sofaPwpCode ? (sofaPricing.combos ?? []).find((c) => sofaPwpComboIds.includes(c.id)) : undefined;
+    const isPwp = !!pwpCombo && matchComboSubset(cells.map((c) => c.moduleId).filter(Boolean), pwpCombo.modules) != null;
     const snapshot: SofaConfigSnapshot = {
       kind: 'sofa',
       productId: p.id,
@@ -1091,6 +1215,7 @@ export const Configurator = () => {
       colourLabel: fabricSel.colourLabel,
       colourHex: fabricSel.colourHex ?? undefined,
       fabricTierDelta: sofaFabricDelta,
+      ...(isPwp && sofaPwpCode ? { pwp: true, pwpCode: sofaPwpCode } : {}),
       total: qpPickPrice + sofaFabricDelta,
       summary: `${label} · ${activeDepth}"${fabricSuffix}`,
     };
@@ -1288,6 +1413,43 @@ export const Configurator = () => {
           Customize
         </button>
       </span>
+      {/* PWP 换购 voucher — shared across Quick Pick + Customize (Chairman
+          2026-06-02: moved here from the Customize footer so BOTH modes can
+          redeem). Compact single-line control; mirrors the bed frame
+          pwpRailSection (Insert PWP Code + Auto Fill same-cart + Apply). */}
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+        {sofaPwpApplied ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-12)' }}>
+            <span style={{ fontWeight: 600 }}>PWP {sofaPwpCode} ✓</span>
+            <button
+              type="button"
+              onClick={() => { setSofaPwpCode(null); setSofaPwpComboIds([]); setSofaPwpInput(''); setSofaPwpErr(null); }}
+              style={{ background: 'transparent', border: 'none', textDecoration: 'underline', cursor: 'pointer', color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}
+            >
+              remove
+            </button>
+          </span>
+        ) : (
+          <>
+            <input
+              type="text"
+              value={sofaPwpInput}
+              onChange={(e) => { setSofaPwpInput(e.target.value); setSofaPwpErr(null); }}
+              placeholder="Insert PWP Code"
+              style={{ width: 132, textTransform: 'uppercase', fontSize: 'var(--fs-12)', padding: '5px 8px', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)' }}
+            />
+            {sameCartSofa && (
+              <Button variant="primary" onClick={() => void applySofaPwp(sameCartSofa.code)} disabled={sofaPwpChecking}>
+                Auto Fill
+              </Button>
+            )}
+            <Button variant="ghost" onClick={() => void applySofaPwp()} disabled={sofaPwpChecking || !sofaPwpInput.trim()}>
+              {sofaPwpChecking ? 'Checking…' : 'Apply'}
+            </Button>
+            {sofaPwpErr && <span style={{ fontSize: 'var(--fs-12)', color: 'var(--c-danger, #B4321A)' }}>{sofaPwpErr}</span>}
+          </>
+        )}
+      </span>
     </>
   ) : undefined;
 
@@ -1397,7 +1559,9 @@ export const Configurator = () => {
           <CustomBuilder
             productId={p.id}
             productName={p.name}
-            pricing={sofaPricing}
+            pricing={effectiveSofaPricing}
+            pwpCode={sofaPwpCode}
+            pwpComboIds={sofaPwpComboIds}
             depth={activeDepth}
             cells={sofaCells}
             setCells={setSofaCells}
