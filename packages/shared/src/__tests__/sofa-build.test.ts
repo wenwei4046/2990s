@@ -10,6 +10,7 @@ import {
   findModule,
   classifySofaCompartment,
   isAccessoryModule,
+  isWideArmSeat,
   computeSofaPrice,
   analyzeSofa,
   hasArmConflict,
@@ -1037,5 +1038,34 @@ describe('sofaModuleSellingPricesFromSkus (2026-06-01)', () => {
     ];
     const map = sofaModuleSellingPricesFromSkus(rows, 'Ommbuc', '24', 'PRICE_2');
     expect(map['1A-LHF']).toBe(70000); // flat sell, NOT the 50000 cost
+  });
+});
+
+describe('isWideArmSeat (B-variant auto-convert guard, Loo 2026-06-03)', () => {
+  // detectBundle collapses 1B->1A / 2B->2A for matching, but the canonical SKU
+  // breakdown only emits A/NA families. The CustomBuilder auto-convert must skip
+  // any group containing a B-variant seat, or it silently swaps the customer's
+  // 1B/2B for a 1A/2A — showing a different compartment than they picked.
+  it('flags 1B / 2B (wide-arm) seats', () => {
+    expect(isWideArmSeat('1B-LHF')).toBe(true);
+    expect(isWideArmSeat('1B-RHF')).toBe(true);
+    expect(isWideArmSeat('2B-LHF')).toBe(true);
+    expect(isWideArmSeat('2B-RHF')).toBe(true);
+  });
+
+  it('does NOT flag A / NA / L / accessory families', () => {
+    expect(isWideArmSeat('1A-LHF')).toBe(false);
+    expect(isWideArmSeat('2A-RHF')).toBe(false);
+    expect(isWideArmSeat('1NA')).toBe(false);
+    expect(isWideArmSeat('L-LHF')).toBe(false);
+    expect(isWideArmSeat('CNR')).toBe(false);
+    expect(isWideArmSeat('Console')).toBe(false);
+  });
+
+  it('2A-LHF + 1B-RHF still detects as 3S (pricing preserved) AND trips the guard', () => {
+    // The bug repro: this build matches a bundle (so it prices right), but it
+    // carries a 1B the auto-convert would otherwise overwrite. The guard must fire.
+    expect(detectBundle(['2A-LHF', '1B-RHF'])?.id).toBe('3S');
+    expect(['2A-LHF', '1B-RHF'].some(isWideArmSeat)).toBe(true);
   });
 });
