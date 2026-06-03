@@ -26,6 +26,9 @@ export type AllowedOptionsLite = {
   compartments?:          string[] | null;
   divan_heights?:         string[] | null;
   total_heights?:         string[] | null;
+  /** BEDFRAME — gap (mattress-gap) inches pool. No price contribution, but
+   *  per-Model on/off-able like divan/leg (ticked in the Modular drawer). */
+  gaps?:                  string[] | null;
   leg_heights?:           string[] | null;
   specials?:              string[] | null;
   /** SOFA + BEDFRAME — enabled fabric COLOUR codes (fabric_colours.colour_id,
@@ -56,6 +59,7 @@ export type VariantsLite = {
   divanHeight?:   string | null;
   legHeight?:     string | null;
   totalHeight?:   string | null;
+  gap?:           string | null;
   seatHeight?:    string | null;
   sofaLegHeight?: string | null;
   specials?:      string[] | string | null;
@@ -159,6 +163,17 @@ export function checkAllowedOptions(
       field: 'total_height',
       value: v.totalHeight,
       allowed: opts.total_heights,
+    };
+  }
+
+  // gap (BEDFRAME) — no price contribution, but on/off-able per Model.
+  if (v.gap && hasRestriction(opts.gaps)
+      && !opts.gaps.includes(v.gap)) {
+    return {
+      error: 'variant_not_allowed',
+      field: 'gap',
+      value: v.gap,
+      allowed: opts.gaps,
     };
   }
 

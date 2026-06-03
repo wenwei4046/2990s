@@ -21,9 +21,10 @@ const specialsList = (v: unknown): string[] => {
  * Build a one-line human summary of a line's variants.
  *
  * Format rules (see task spec, Commander 2026-05-28):
- *  - Fabric segment: [fabricCode, colorCode] (non-empty) joined with a space.
- *  - BEDFRAME (itemGroup includes 'bedframe'): `DIVAN {divanHeight} + {LEGHEIGHT}`,
- *    then `GAP {gap}`, then `T.Heights {totalHeight}`.
+ *  - Fabric segment: [fabricCode, colorCode] (non-empty) joined with a space;
+ *    BEDFRAME also appends the chosen colour name (colourLabel) → "BF-01 Sand".
+ *  - BEDFRAME (itemGroup includes 'bedframe'): `DIVAN {divanHeight} + LEG {legHeight}`
+ *    (bare "NO LEG" when no leg), then `GAP {gap}`, then `T.Heights {totalHeight}`.
  *  - SOFA (otherwise, when seat data present): `SEAT {seatHeight} {LEGHEIGHT}`.
  *  - Specials appended last, joined with ` + `.
  *  - All present segments joined with ` / `. Empty segments omitted.
@@ -37,21 +38,30 @@ export function buildVariantSummary(
 
   const segments: string[] = [];
 
-  // Fabric segment — fabricCode + colorCode joined by a space.
-  const fabric = [str(variants.fabricCode), str(variants.colorCode)]
-    .filter(Boolean)
-    .join(' ');
+  const group = (itemGroup ?? '').toLowerCase();
+  const isBedframe = group.includes('bedframe');
+
+  // Fabric segment — fabricCode + colorCode joined by a space. BEDFRAME also
+  // appends the chosen colour NAME (variants.colourLabel, e.g. "BF-01 Sand") so
+  // the SO line shows the picked colour, not just the fabric code (Loo,
+  // 2026-06-03 — "all option selections must show in the SO description").
+  const fabricParts = [str(variants.fabricCode), str(variants.colorCode)];
+  if (isBedframe) fabricParts.push(str(variants.colourLabel));
+  const fabric = fabricParts.filter(Boolean).join(' ');
   if (fabric) segments.push(fabric);
 
-  const group = (itemGroup ?? '').toLowerCase();
   const leg = str(variants.legHeight).toUpperCase();
 
-  if (group.includes('bedframe')) {
-    // BEDFRAME: DIVAN {divan} + {LEG} / GAP {gap} / T.Heights {total}
+  if (isBedframe) {
+    // BEDFRAME: DIVAN {divan} + LEG {leg} / GAP {gap} / T.Heights {total}.
+    // The leg carries an explicit "LEG" label so it isn't misread as part of
+    // the divan figure (was "DIVAN 10\" + 1\"" → now "DIVAN 10\" + LEG 1\"");
+    // "No Leg" reads as-is without the redundant prefix (Loo, 2026-06-03).
     const divan = str(variants.divanHeight);
-    if (divan || leg) {
+    const legLabel = leg ? (/^NO\s*LEG$/.test(leg) ? leg : `LEG ${leg}`) : '';
+    if (divan || legLabel) {
       const divanPart = divan ? `DIVAN ${divan}` : '';
-      segments.push([divanPart, leg].filter(Boolean).join(' + '));
+      segments.push([divanPart, legLabel].filter(Boolean).join(' + '));
     }
     const gap = str(variants.gap);
     if (gap) segments.push(`GAP ${gap}`);
