@@ -27,7 +27,7 @@ import {
   type SofaModuleSpec,
   type SofaProductPricing,
 } from '@2990s/shared';
-import { buildSeamlessRun, renderSeamlessSofa, isFunctionalSeat, type SeamlessRun } from '../lib/sofa-seamless';
+import { buildSeamlessRun, renderSeamlessSofa, renderSeamlessGroup, isFunctionalSeat, type SeamlessRun } from '../lib/sofa-seamless';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
 import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useCreateSofaCombo, useCreateSofaQuickPick, useSofaCombos, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
 import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
@@ -191,7 +191,12 @@ const seatRectsCm = (m: SofaModuleSpec, depth: Depth): SeatRect[] => {
 type ActiveComposite =
   | { kind: 'png'; key: number; src: string; bb: Bbox; rot: Rot; compBbox: ArtBbox; ids: Set<string> }
   | { kind: 'generic'; key: number; bb: Bbox; rot: Rot; run: SeamlessRun; ids: Set<string> }
-  | { kind: 'corner'; key: number; bb: Bbox; rot: Rot; geo: CornerGeo; ids: Set<string> };
+  | { kind: 'corner'; key: number; bb: Bbox; rot: Rot; geo: CornerGeo; ids: Set<string> }
+  // Universal gap-free renderer for ANY other contiguous arrangement (L from
+  // straight modules, mixed rotation, 2-row, non-canonical CNR group). rot is
+  // always 0 — renderSeamlessGroup bakes each cell's rotation, so the overlay
+  // is NOT CSS-rotated.
+  | { kind: 'group'; key: number; bb: Bbox; rot: Rot; cells: Cell[]; ids: Set<string> };
 
 /** Analyse a group of cells (sofa modules + any consoles, free stools
  *  excluded) into a contiguous straight run, or null if it isn't one
@@ -943,59 +948,56 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     const cornerCells = displayCells.filter((c) => c.id != null && runIds.has(c.id));
     const cornerComp = cornerCompositeFromCells(cornerCells, depth);
     if (cornerComp) return [{ kind: 'corner' as const, key: i, ...cornerComp, ids: runIds }];
-    // Closed groups rotate as a whole (rotateGroup keeps every cell's rot in
-    // sync). Bail to per-module art on the off chance the rots are mixed.
-    const rot = sofaCells[0]!.rot;
-    if (runCells.some((c) => c.rot !== rot)) return [];
-    // 1) A recognised MULTI-module bundle SHAPE with dedicated artwork
-    //    (2S / 3S / L-shapes), seats contiguous-closed → use the rasterised PNG
-    //    over the sofa cells; any console renders its own piece beside it. If
-    //    the bbox isn't measured yet, wait one frame rather than code-drawing a
-    //    shape that has art.
-    //
-    //    Must be ≥ 2 sofa modules: a SINGLE one-arm module (1A-LHF, 2A-LHF, …)
-    //    shares a bundle signature with the both-arm preset (1A→1S, 2A→2S), so
-    //    firing this for length 1 painted the both-arm 1S/2S art over a
-    //    one-arm seat (the "single 1A shows two arms" bug). A lone module
-    //    always renders correctly from its own per-module art instead, and a
-    //    1A + Console run now reaches the code-drawn path below so it links.
-    //
-    //    Also skip the PNG when ANY seat is a functional variant (power "P" /
-    //    recliner "R" / leg "L"): those share a signature with the plain preset
-    //    (1A(P)→1S, 2×1A(P)→2S), so the PNG would paint the generic non-power
-    //    art and DROP the badge. They go to the code-drawn path, which re-draws
-    //    the badge + footrest on the seamless body.
-    const runHasFunctional = sofaCells.some((c) => isFunctionalSeat(c.moduleId));
-    if (sofaCells.length >= 2 && !runHasFunctional && analyzeSofa(sofaCells, depth).closed) {
-      const bundle = g.bundle ?? detectBundle(sofaCells.map((c) => c.moduleId));
-      const bbSofa = cellsBbox(displayCells.filter((c) => c.id != null && sofaIds.has(c.id)), depth);
-      if (bundle && bbSofa) {
-        const flip: 'L' | 'R' = sofaCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
-        const isLShape = bundle.id === '2+L' || bundle.id === '3+L';
-        const src = `${ASSET_BASE}/${bundle.id}${isLShape ? `-${flip}` : ''}.png`;
-        const compBbox = bboxCache.get(src);
-        if (compBbox) return [{ kind: 'png' as const, key: i, src, bb: bbSofa, rot, compBbox, ids: sofaIds }];
-        return [];
-      }
-    }
-    // 2) No dedicated art → draw the WHOLE run (seats + interior consoles) as
-    //    ONE seamless sofa from the shared module primitives. Fires for ANY
-    //    contiguous straight run — modules link on ADJACENCY, not only when the
-    //    sofa is "complete". Arms render only where modules actually have them,
-    //    so a half-built / open run still links with open ends. Covers the
-    //    4-seater (1A + 2NA + 1A), centre-console (1A + Console + 1A), and the
-    //    in-progress (1A + Console, 1A + 1NA, …) cases.
-    //
-    //    EVERY straight run — INCLUDING a single module — takes this path, so
-    //    all compartments fill the cell identically. Per-module art crops to
-    //    each silhouette and uses a wider (width-scaled) arm, so seats looked
-    //    smaller / inconsistent next to the code-drawn ones (Chairman: "1S/1A
-    //    not full"). buildSeamlessRun returns null for non-linear shapes
-    //    (corner / L / free stool), which keep their per-module art.
     const runFilter = displayCells.filter((c) => c.id != null && runIds.has(c.id));
-    const run = buildSeamlessRun(runFilter, depth, rot);
-    const bbRun = cellsBbox(runFilter, depth);
-    if (run && bbRun) return [{ kind: 'generic' as const, key: i, bb: bbRun, rot, run, ids: runIds }];
+    // The PNG (gate 1) and single-row seamless (gate 2) paths assume ONE uniform
+    // rotation. A mixed-rotation arrangement — an L built from straight modules
+    // (the chaise turned 90°), a rotated leg — skips them and goes straight to
+    // the universal group renderer (gate 3) below.
+    const rot = sofaCells[0]!.rot;
+    const uniformRot = !runCells.some((c) => c.rot !== rot);
+    if (uniformRot) {
+      // 1) A recognised CLOSED bundle SHAPE with dedicated artwork (2S/3S/2+L/3+L)
+      //    → rasterised PNG (Loo's tuned art). Skipped for functional (power/
+      //    recliner) and wide-arm 1B/2B seats — the bundle PNG would paint generic
+      //    art and drop the badge / wide bench; those fall through to code-drawn.
+      const runHasFunctional = sofaCells.some((c) => isFunctionalSeat(c.moduleId));
+      const runHasWideArm = sofaCells.some((c) => isWideArmSeat(c.moduleId));
+      if (sofaCells.length >= 2 && !runHasFunctional && !runHasWideArm && analyzeSofa(sofaCells, depth).closed) {
+        const bundle = g.bundle ?? detectBundle(sofaCells.map((c) => c.moduleId));
+        const bbSofa = cellsBbox(displayCells.filter((c) => c.id != null && sofaIds.has(c.id)), depth);
+        if (bundle && bbSofa) {
+          const flip: 'L' | 'R' = sofaCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
+          const isLShape = bundle.id === '2+L' || bundle.id === '3+L';
+          const src = `${ASSET_BASE}/${bundle.id}${isLShape ? `-${flip}` : ''}.png`;
+          const compBbox = bboxCache.get(src);
+          if (compBbox) return [{ kind: 'png' as const, key: i, src, bb: bbSofa, rot, compBbox, ids: sofaIds }];
+          return []; // art not measured yet — wait one frame, don't code-draw a shape that has art
+        }
+      }
+      // 2) A single straight ROW (incl. interior console, wide-arm 1B/2B, power
+      //    seats) → one continuous code-drawn sofa via buildSeamlessRun.
+      const run = buildSeamlessRun(runFilter, depth, rot);
+      const bbRun = cellsBbox(runFilter, depth);
+      if (run && bbRun) return [{ kind: 'generic' as const, key: i, bb: bbRun, rot, run, ids: runIds }];
+    }
+    // 3) UNIVERSAL gap-free fallback for ANY OTHER contiguous arrangement built
+    //    from PLAIN seats (+ interior console): L from straight modules, mixed
+    //    rotation, 2-row, etc. Replaces the old per-module tiling that left gaps
+    //    at the seams (Loo 2026-06-04). renderSeamlessGroup bakes each cell's
+    //    rotation, so rot:0 (the overlay isn't CSS-rotated).
+    //    EXCLUDE any group containing a Corner (CNR) or L-Shape chaise: their
+    //    backrest/arm can't be derived from cellEdges (CNR has arms on its inner
+    //    bend + no 'back' edge → it would draw a wrong 3-sided band; an L-chaise
+    //    has no 'arm' edge for its foot). Those keep their real per-module art
+    //    (the canonical CNR+2/3+1 corner already renders via renderCornerSofa).
+    const bbGroup = cellsBbox(runFilter, depth);
+    const hasCornerOrL = runCells.some((c) => {
+      const grp = findModule(c.moduleId)?.group;
+      return grp === 'Corner' || grp === 'L-Shape';
+    });
+    if (runCells.length >= 2 && bbGroup && !hasCornerOrL) {
+      return [{ kind: 'group' as const, key: i, bb: bbGroup, rot: 0 as Rot, cells: runFilter, ids: runIds }];
+    }
     return [];
   });
   const compositeCoveredIds = new Set<string>(
@@ -1573,6 +1575,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                       />
                     );
                   })() : comp.kind === 'corner' ? renderCornerSofa(comp.geo)
+                    : comp.kind === 'group' ? renderSeamlessGroup(comp.cells, depth, comp.bb, resolveModuleArtSrc, (src) => bboxCache.get(src))
                     : renderSeamlessSofa(comp.run, natW, natH, resolveModuleArtSrc, (src) => bboxCache.get(src))}
                 </div>
               </div>
