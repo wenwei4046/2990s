@@ -326,7 +326,7 @@ mfgSalesOrders.get('/', async (c) => {
      Balance column is live (= local_total − sum(payments)). Header column
      `balance_centi` is still in the SELECT for backward compat (the grid
      falls back to it if the view's `balance_centi_live` is absent). */
-  const LIST_COLS = `${HEADER}, paid_total_centi, balance_centi_live`;
+  const LIST_COLS = `${HEADER}, proceeded_at, paid_total_centi, balance_centi_live`;
   let q = sb.from('mfg_sales_orders_with_payment_totals').select(LIST_COLS).order('so_date', { ascending: false }).limit(500);
   const status = c.req.query('status'); if (status) q = q.eq('status', status);
   const debtor = c.req.query('debtor'); if (debtor) q = q.ilike('debtor_name', `%${debtor}%`);
