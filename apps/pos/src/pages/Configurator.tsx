@@ -1254,9 +1254,13 @@ export const Configurator = () => {
     id: o.value, kind: 'leg_height', value: o.value, surcharge: o.surcharge, sortOrder: i,
   }));
   const sofaLegSurcharge = sofaLegRows.find((o) => o.value === sofaLegValue)?.surcharge ?? 0;
-  const sofaLegBlock = sofaLegRows.length > 0 ? (
+  // Leg height is COMPULSORY when the Model offers any (Loo 2026-06-03) — staff
+  // must pick one before Add-to-Cart, like fabric + colour.
+  const sofaLegRequired = sofaLegRows.length > 0;
+  const sofaLegBlock = sofaLegRequired ? (
     <OptionSelect
       label="Leg height"
+      required
       opts={sofaLegRows}
       selectedId={sofaLegValue}
       onPick={(o) => setSofaLegValue(o.value)}
@@ -1266,9 +1270,11 @@ export const Configurator = () => {
     ? qpPickPrice + sofaFabricDelta
     : (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? sofaFabricDelta : 0)) + sofaSpecialDelta + sofaLegSurcharge;
 
-  // Sofas require a fabric + colour before Add-to-Cart (G6).
+  // Sofas require a fabric + colour (G6) and — when offered — a leg height before
+  // Add-to-Cart.
   const canAddSofa =
     fabricSel != null &&
+    (!sofaLegRequired || sofaLegValue != null) &&
     ((pickedSofaRow != null && pickedSofaRow.active && pickedSofaRow.price != null) ||
      (pickedQP != null && qpPickPrice > 0));
 
@@ -1703,6 +1709,7 @@ export const Configurator = () => {
             legBlock={sofaLegBlock}
             legHeight={sofaLegValue}
             legSurchargeRm={sofaLegSurcharge}
+            legRequired={sofaLegRequired}
             onAdded={() => navigate(isEditing ? '/cart' : '/catalog')}
           />
         )

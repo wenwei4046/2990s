@@ -252,6 +252,9 @@ interface CustomBuilderProps {
   legBlock?: ReactNode;
   legHeight?: string | null;
   legSurchargeRm?: number;
+  /** When true (the Model offers leg heights), a leg pick is compulsory before
+   *  Add-to-Cart (Loo 2026-06-03). */
+  legRequired?: boolean;
 }
 
 // Cell ids must survive HMR (which resets module locals) and a future cells-
@@ -275,7 +278,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, legBlock, legHeight = null, legSurchargeRm = 0, pwpCode = null, pwpComboIds = [] }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, legBlock, legHeight = null, legSurchargeRm = 0, legRequired = false, pwpCode = null, pwpComboIds = [] }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -819,7 +822,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   const sofaFabricDelta = fabricSel && addonCfgQ.data
     ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data)
     : 0;
-  const canAdd = cells.length > 0 && allClosed && fabricSel != null;
+  const canAdd = cells.length > 0 && allClosed && fabricSel != null && (!legRequired || legHeight != null);
 
   // Per-seat upgrade (F3) — this Model offers one named upgrade or none.
   // offersUpgrade gates the per-seat add button; footrest distinguishes
