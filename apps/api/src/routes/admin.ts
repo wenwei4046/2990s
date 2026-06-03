@@ -51,6 +51,26 @@ const POS_PIN_ROLES = new Set<string>(['sales']);
 const STAFF_WRITE_ROLES = new Set<string>(['admin', 'super_admin', 'sales_director']);
 const STAFF_LIST_ROLES  = new Set<string>(['admin', 'super_admin', 'sales_director', 'coordinator']);
 
+/* Roles that are is_coordinator_or_above() in RLS — they legitimately carry a
+   NULL showroom ("oversee all showrooms" per CLAUDE.md) and are NOT showroom-
+   bound. Keep in lock-step with the public.is_coordinator_or_above() SQL helper. */
+const COORDINATOR_OR_ABOVE_ROLES = new Set<string>(['coordinator', 'finance', 'admin', 'super_admin']);
+
+/* Every other role SELLS through the POS and therefore MUST belong to a showroom:
+   orders_sales_insert / quotes_sales_insert RLS and the create_order_with_items
+   RPC all gate on `showroom_id = current_staff_showroom()`, and POST /slips/init
+   stamps pending_slip_uploads.showroom_id (NOT NULL) from staff.showroom_id. A
+   NULL showroom silently breaks order placement AND payment-slip upload —
+   surfaced as `staff_showroom_missing` 400 on "Confirm payment" (BUG-2026-06-03:
+   4 of 5 sales staff had been onboarded with NULL showroom). Derived as the
+   complement of COORDINATOR_OR_ABOVE_ROLES so it can't drift as roles are added.
+   Per Loo (2026-06-03) this includes sales_director + master_account — with one
+   live showroom that is a no-op; revisit if a director must oversee 2+ showrooms
+   (then promote it into is_coordinator_or_above() instead of pinning a showroom). */
+const SHOWROOM_SCOPED_ROLES = new Set<string>(
+  STAFF_ROLES.filter((r) => !COORDINATOR_OR_ABOVE_ROLES.has(r)),
+);
+
 /* Email is REQUIRED for every role (the account is keyed by it; for sales the
    PIN-login mints the session via a magic-link token on this email). Venue is
    required for the POS-side roles only; admin / coordinator / finance /
@@ -71,7 +91,11 @@ const CreateStaffBodySchema = z.object({
   password:   z.string().min(8).max(72).optional(),
 })
   .refine((d) => d.role !== 'sales' || !!d.pin, { message: 'pin_required_for_sales', path: ['pin'] })
-  .refine((d) => d.role === 'sales' || !!d.password, { message: 'password_required_for_non_sales', path: ['password'] });
+  .refine((d) => d.role === 'sales' || !!d.password, { message: 'password_required_for_non_sales', path: ['password'] })
+  /* A POS-selling role (SHOWROOM_SCOPED_ROLES) cannot be onboarded without a
+     showroom — see the set comment above. This is the upstream guard that stops
+     the staff_showroom_missing class of bug at the source. */
+  .refine((d) => !SHOWROOM_SCOPED_ROLES.has(d.role) || !!d.showroomId, { message: 'showroom_required_for_pos_role', path: ['showroomId'] });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function loadStaffRole(c: any): Promise<string | null> {
@@ -276,6 +300,25 @@ admin.patch('/staff/:id', async (c) => {
   if (input.active     !== undefined) updates.active   = input.active;
 
   if (Object.keys(updates).length === 0) return c.json({ error: 'no_changes' }, 400);
+
+  /* Guard: a POS-selling role (SHOWROOM_SCOPED_ROLES) must keep a non-null
+     showroom. Validate the RESULTING state — role and showroomId can each be
+     changed independently, so this catches both "promote a NULL-showroom
+     coordinator into 'sales'" and "clear a sales rep's showroom to NULL". */
+  if (input.role !== undefined || input.showroomId !== undefined) {
+    const userScoped = c.get('supabase');
+    const { data: current } = await userScoped
+      .from('staff')
+      .select('role, showroom_id')
+      .eq('id', id)
+      .maybeSingle();
+    if (!current) return c.json({ error: 'staff_not_found' }, 404);
+    const nextRole = input.role ?? current.role;
+    const nextShowroom = input.showroomId !== undefined ? input.showroomId : current.showroom_id;
+    if (SHOWROOM_SCOPED_ROLES.has(nextRole) && !nextShowroom) {
+      return c.json({ error: 'showroom_required_for_pos_role', role: nextRole }, 400);
+    }
+  }
 
   const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },

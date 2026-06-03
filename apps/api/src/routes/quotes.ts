@@ -60,8 +60,8 @@ quotes.post('/', async (c) => {
   // Resolve the showroom this quote belongs to.
   //
   // Sales / showroom_lead: their own staff.showroom_id (RLS enforces match).
-  // Admin / coordinator / finance: staff.showroom_id is NULL by design (per
-  // CLAUDE.md "coordinators with NULL oversee all showrooms"), but
+  // Coordinator / finance / admin / super_admin: staff.showroom_id is NULL by
+  // design (per CLAUDE.md "coordinators with NULL oversee all showrooms"), but
   // quotes.showroom_id is NOT NULL. Fall back to the first active showroom by
   // sort_order so elevated roles can still save quotes when dogfooding the POS.
   // The RLS policy already allows is_coordinator_or_above() to insert with any
@@ -75,7 +75,9 @@ quotes.post('/', async (c) => {
     return c.json({ error: 'db_fetch_failed', detail: staffErr.message }, 500);
   }
   let showroomId: string | null = staffRow?.showroom_id ?? null;
-  const elevatedRoles = new Set(['admin', 'coordinator', 'finance']);
+  // Must mirror is_coordinator_or_above() — super_admin was previously missing,
+  // so a NULL-showroom owner hit a spurious staff_showroom_missing 400.
+  const elevatedRoles = new Set(['admin', 'coordinator', 'finance', 'super_admin']);
   if (!showroomId && staffRow?.role && elevatedRoles.has(staffRow.role)) {
     const { data: defaultRoom } = await supabase
       .from('showrooms')
