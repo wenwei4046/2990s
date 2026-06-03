@@ -1,11 +1,9 @@
 import { useMemo } from 'react';
-import { useNavigate } from 'react-router';
 import {
   Sparkles,
   Banknote,
   TrendingUp,
   CircleDot,
-  ArrowRight,
   Inbox,
   ArrowRightCircle,
   CheckCircle2,
@@ -15,21 +13,17 @@ import { useMfgSalesOrders } from '../lib/flow-queries';
 import styles from './Dashboard.module.css';
 
 /* Phase C2 — Dashboard reads Sales Orders (mfg_sales_orders), not the legacy
-   retail `orders` board. The SO status enum buckets into 3 lifecycle stages:
-     · "Order placed" = CONFIRMED
-     · "Proceed"      = IN_PRODUCTION, READY_TO_SHIP, SHIPPED
-     · "Delivered"    = DELIVERED, INVOICED, CLOSED
-   ON_HOLD + CANCELLED are excluded from every count/aggregate. */
+   retail `orders` board. SOs bucket into 3 lifecycle stages. "Proceed" is the
+   SALES marker (proceeded_at) — matching the POS board, NOT a production status
+   (Owner 2026-06-03): a CONFIRMED order stays "placed" until the salesperson
+   marks it proceeded. Production/terminal statuses the backend sets still bucket
+   under Proceed/Delivered. ON_HOLD + CANCELLED are excluded from every count. */
 type SoBucket = 'placed' | 'proceed' | 'delivered';
-const SO_BUCKET: Record<string, SoBucket> = {
-  CONFIRMED:     'placed',
-  IN_PRODUCTION: 'proceed',
-  READY_TO_SHIP: 'proceed',
-  SHIPPED:       'proceed',
-  DELIVERED:     'delivered',
-  INVOICED:      'delivered',
-  CLOSED:        'delivered',
-  // ON_HOLD + CANCELLED intentionally absent — excluded from all counts.
+const bucketFor = (o: { status: string; proceeded_at: string | null }): SoBucket | null => {
+  if (o.status === 'DELIVERED' || o.status === 'INVOICED' || o.status === 'CLOSED') return 'delivered';
+  if (o.status === 'IN_PRODUCTION' || o.status === 'READY_TO_SHIP' || o.status === 'SHIPPED') return 'proceed';
+  if (o.status === 'CONFIRMED') return o.proceeded_at ? 'proceed' : 'placed';
+  return null; // ON_HOLD / CANCELLED — excluded from all counts
 };
 
 /* Minimal row shape off useMfgSalesOrders (full row typed in
@@ -37,6 +31,7 @@ const SO_BUCKET: Record<string, SoBucket> = {
 type SoRow = {
   doc_no: string;
   status: string;
+  proceeded_at: string | null;
   local_total_centi: number;
   created_at: string | null;
   so_date: string | null;
@@ -68,7 +63,6 @@ const isToday = (iso: string | null | undefined): boolean => {
 
 export const Dashboard = () => {
   const { staff } = useAuth();
-  const navigate = useNavigate();
   const salesOrders = useMfgSalesOrders(undefined);
 
   const list = useMemo<ReadonlyArray<SoRow>>(
@@ -79,7 +73,7 @@ export const Dashboard = () => {
   const counts = useMemo(() => {
     const c = { placed: 0, proceed: 0, delivered: 0 };
     for (const o of list) {
-      const bucket = SO_BUCKET[o.status];
+      const bucket = bucketFor(o);
       if (bucket) c[bucket]++;
     }
     return c;
@@ -98,8 +92,6 @@ export const Dashboard = () => {
   const openOrders = counts.placed + counts.proceed;
 
   const needsAttention = counts.placed;
-
-  const goToSalesOrders = () => navigate('/mfg-sales-orders');
 
   return (
     <div className={styles.page}>
@@ -134,7 +126,7 @@ export const Dashboard = () => {
             <div className={styles.kpiHead}><ArrowRightCircle size={16} strokeWidth={1.75} />Awaiting proceed</div>
             <div className={styles.kpiNum}>{awaitingProceed}</div>
             <div className={styles.kpiDelta}>
-              <CircleDot size={12} strokeWidth={1.75} />Confirmed, not yet in production
+              <CircleDot size={12} strokeWidth={1.75} />Confirmed, not yet proceeded
             </div>
           </div>
           <div className={styles.kpi}>
@@ -146,46 +138,6 @@ export const Dashboard = () => {
           </div>
         </div>
       </section>
-
-      <div className={styles.sectionTitle}>
-        <div>
-          <h2 className={styles.sectionH2}>Order pipeline</h2>
-          <span className={styles.sectionSub}>Click a stage to open Sales Orders</span>
-        </div>
-        <button type="button" className={styles.ghostBtn} onClick={goToSalesOrders}>
-          Open board <ArrowRight size={14} strokeWidth={1.75} />
-        </button>
-      </div>
-
-      <div className={styles.lanesStrip}>
-        <button type="button" className={styles.laneTile} onClick={goToSalesOrders}>
-          <div className={styles.laneTileIcon}><Inbox size={18} strokeWidth={1.75} /></div>
-          <div className={styles.laneTileNum}>01</div>
-          <div className={styles.laneTileTitle}>Order placed</div>
-          <div className={styles.laneTileCount}>
-            <span className={styles.laneTileNumBig}>{counts.placed}</span>
-            <span className={styles.laneTileLbl}>{counts.placed === 1 ? 'order' : 'orders'}</span>
-          </div>
-        </button>
-        <button type="button" className={styles.laneTile} onClick={goToSalesOrders}>
-          <div className={styles.laneTileIcon}><ArrowRightCircle size={18} strokeWidth={1.75} /></div>
-          <div className={styles.laneTileNum}>02</div>
-          <div className={styles.laneTileTitle}>Proceed</div>
-          <div className={styles.laneTileCount}>
-            <span className={styles.laneTileNumBig}>{counts.proceed}</span>
-            <span className={styles.laneTileLbl}>{counts.proceed === 1 ? 'order' : 'orders'}</span>
-          </div>
-        </button>
-        <button type="button" className={styles.laneTile} onClick={goToSalesOrders}>
-          <div className={styles.laneTileIcon}><CheckCircle2 size={18} strokeWidth={1.75} /></div>
-          <div className={styles.laneTileNum}>03</div>
-          <div className={styles.laneTileTitle}>Delivered</div>
-          <div className={styles.laneTileCount}>
-            <span className={styles.laneTileNumBig}>{counts.delivered}</span>
-            <span className={styles.laneTileLbl}>{counts.delivered === 1 ? 'order' : 'orders'}</span>
-          </div>
-        </button>
-      </div>
 
     </div>
   );

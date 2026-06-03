@@ -326,7 +326,7 @@ mfgSalesOrders.get('/', async (c) => {
      Balance column is live (= local_total − sum(payments)). Header column
      `balance_centi` is still in the SELECT for backward compat (the grid
      falls back to it if the view's `balance_centi_live` is absent). */
-  const LIST_COLS = `${HEADER}, paid_total_centi, balance_centi_live`;
+  const LIST_COLS = `${HEADER}, proceeded_at, paid_total_centi, balance_centi_live`;
   let q = sb.from('mfg_sales_orders_with_payment_totals').select(LIST_COLS).order('so_date', { ascending: false }).limit(500);
   const status = c.req.query('status'); if (status) q = q.eq('status', status);
   const debtor = c.req.query('debtor'); if (debtor) q = q.ilike('debtor_name', `%${debtor}%`);
@@ -587,7 +587,7 @@ mfgSalesOrders.get('/mine', async (c) => {
     .from('mfg_sales_orders')
     .select(
       'doc_no, debtor_name, phone, email, address1, address2, city, postcode, customer_state, ' +
-      'customer_delivery_date, status, payment_method, approval_code, note, so_date, created_at, ' +
+      'customer_delivery_date, internal_expected_dd, status, payment_method, approval_code, note, so_date, created_at, ' +
       'proceeded_at, total_revenue_centi, line_count, deposit_centi',
     )
     .eq('salesperson_id', user.id)
@@ -1951,6 +1951,8 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     ['hubId', 'hub_id'], ['hubName', 'hub_name'],
     ['customerDeliveryDate', 'customer_delivery_date'],
     ['internalExpectedDd', 'internal_expected_dd'],
+    /* POS "Proceed" — sales-side done marker; stamp-once guard below. */
+    ['proceededAt', 'proceeded_at'],
     ['linkedDoDocNo', 'linked_do_doc_no'],
     ['shipToAddress', 'ship_to_address'], ['billToAddress', 'bill_to_address'],
     ['installToAddress', 'install_to_address'],
@@ -2044,6 +2046,14 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   // in the audit log. Only fields actually in the patch body are compared.
   const beforeCols = map.map(([, snake]) => snake).concat(['status']).join(', ');
   const { data: before } = await sb.from('mfg_sales_orders').select(beforeCols).eq('doc_no', docNo).maybeSingle();
+
+  /* proceeded_at is stamp-once (the POS "Proceed" marker). If the row already
+     has a value, drop any incoming proceeded_at so a later header edit / repeat
+     proceed never overwrites the original sales-side timestamp. */
+  if (updates['proceeded_at'] !== undefined && before
+      && (before as unknown as Record<string, unknown>)['proceeded_at']) {
+    delete updates['proceeded_at'];
+  }
 
   /* Commander 2026-05-28 / Owner 2026-06-01 — Processing & Delivery Date may
      only be today or a future date, BUT an already-past value the edit does NOT

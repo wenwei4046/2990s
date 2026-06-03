@@ -74,6 +74,7 @@ interface MyOrderRow {
   status: SoStatus;
   proceededAt: string | null;
   deliveryDate: string | null;
+  processingDate: string | null;
   deliverySlot: string | null;
   paymentMethod: string | null;
   approvalCode: string | null;
@@ -97,6 +98,7 @@ interface MineSoRow {
   postcode: string | null;
   customer_state: string | null;
   customer_delivery_date: string | null;
+  internal_expected_dd: string | null;
   status: SoStatus;
   payment_method: string | null;
   approval_code: string | null;
@@ -161,6 +163,7 @@ const useMyOrders = () =>
           status: r.status,
           proceededAt: r.proceeded_at ?? null,
           deliveryDate: r.customer_delivery_date ?? null,
+          processingDate: r.internal_expected_dd ?? null,
           deliverySlot: null,
           paymentMethod: r.payment_method ?? null,
           approvalCode: r.approval_code ?? null,
@@ -446,6 +449,18 @@ const LANES: ReadonlyArray<LaneDef> = [
   },
 ];
 
+/* Lane bucketing — "Proceed" is a SALES marker driven by proceeded_at, NOT a
+   production status (Owner 2026-06-03). A CONFIRMED order moves Place→Proceed
+   the moment the salesperson marks it proceeded; the backend status stays
+   CONFIRMED (the coordinator drives the real production status from the SO
+   detail). Any production status the backend itself sets still buckets under
+   Proceed; terminal statuses bucket under Delivered. */
+const laneIdFor = (o: MyOrderRow): LaneDef['id'] => {
+  if (LANES[2]?.matches.includes(o.status)) return 'delivered';
+  if (o.status === 'CONFIRMED') return o.proceededAt ? 'proceed' : 'place';
+  return 'proceed';
+};
+
 const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
   const orders = useMyOrders();
   const stats = useSalesStats();
@@ -470,12 +485,7 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
       delivered: [],
     };
     for (const o of list) {
-      for (const lane of LANES) {
-        if (lane.matches.includes(o.status)) {
-          map[lane.id].push(o);
-          break;
-        }
-      }
+      map[laneIdFor(o)].push(o);
     }
     return map;
   }, [list]);
@@ -716,7 +726,7 @@ const OrderDetail = ({ order, onClose }: {
 }) => {
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  const editable = order.status === 'CONFIRMED';
+  const editable = order.status === 'CONFIRMED' && !order.proceededAt;
 
   // Local edit state. Resync ONLY when switching orders, not on background
   // refetches of the same order — otherwise typing would get blown away.
@@ -744,6 +754,12 @@ const OrderDetail = ({ order, onClose }: {
     const d = String(placedAt.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   }, [order.placedAt]);
+
+  // Processing Date floor = today (Malaysia, UTC+8) — mirrors the API's
+  // processing_date_past guard, which rejects a NEW past Processing Date.
+  const todayMY = useMemo(() => {
+    return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  }, []);
 
   // Cascading dropdowns (state → city → postcode) sourced from my_localities.
   const localities = useLocalities();
@@ -784,7 +800,7 @@ const OrderDetail = ({ order, onClose }: {
   const dateOk = !!edited.deliveryDate;
   // Gate on the live ledger (paidSoFar), the recorded source of truth.
   const paidOk = order.total > 0 && paidSoFar / order.total >= 0.5;
-  const allOk = customerInfoOk && addressOk && paidOk;
+  const allOk = customerInfoOk && addressOk && dateOk && paidOk;
 
   // Dirty check: any of the editable header fields changed. (Payment is now
   // recorded via its own action against the SO ledger, not folded into Save.)
@@ -797,10 +813,10 @@ const OrderDetail = ({ order, onClose }: {
     edited.customerPostcode !== order.customerPostcode ||
     edited.customerCity !== order.customerCity ||
     edited.customerState !== order.customerState ||
-    edited.deliveryDate !== order.deliveryDate;
+    edited.deliveryDate !== order.deliveryDate ||
+    edited.processingDate !== order.processingDate;
 
-  // SO header PATCH body — camelCase keys per the API contract. We deliberately
-  // DON'T send internalExpectedDd / processingDate (they trip the pairing guard).
+  // SO header PATCH body — camelCase keys per the API contract.
   const buildPatch = (): Record<string, unknown> => {
     const patch: Record<string, unknown> = {
       debtorName: edited.customerName.trim() || null,
@@ -812,10 +828,16 @@ const OrderDetail = ({ order, onClose }: {
       postcode: edited.customerPostcode?.trim() || null,
       customerState: edited.customerState?.trim() || null,
     };
-    // Only send the delivery date when it actually changed — re-sending an
-    // unchanged PAST date would trip the API's delivery_date_past guard.
+    // Only send a date when it actually changed — re-sending an unchanged PAST
+    // value would trip the API's delivery_date_past / processing_date_past guard
+    // (it grandfathers an unchanged elapsed date only if we don't re-send it).
+    // The Processing Date also triggers the backend's variant-completeness and
+    // Processing ≤ Delivery checks, surfaced via the Save error line.
     if (edited.deliveryDate !== order.deliveryDate) {
       patch.customerDeliveryDate = edited.deliveryDate || null;
+    }
+    if (edited.processingDate !== order.processingDate) {
+      patch.internalExpectedDd = edited.processingDate || null;
     }
     return patch;
   };
@@ -889,12 +911,18 @@ const OrderDetail = ({ order, onClose }: {
     },
   });
 
-  // Proceed → flip status to IN_PRODUCTION (server auto-stamps proceeded_at).
+  // Proceed = a SALES tracking marker, NOT a production hand-off. It (1) saves
+  // the salesperson-entered info into the backend SO detail and (2) stamps
+  // proceeded_at as the "done" marker. We deliberately do NOT change the
+  // production status — it stays CONFIRMED; the backend coordinator drives the
+  // real status from the SO detail. One PATCH carries both the header edits and
+  // the proceeded_at stamp (the API stamps it once, never overwriting an earlier
+  // value).
   const proceedMutation = useMutation({
     mutationFn: async () => {
-      await authedFetch(`/mfg-sales-orders/${order.id}/status`, {
+      await authedFetch(`/mfg-sales-orders/${order.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ status: 'IN_PRODUCTION', notes: 'Proceed from POS' }),
+        body: JSON.stringify({ ...buildPatch(), proceededAt: new Date().toISOString() }),
       });
     },
     onSuccess: () => {
@@ -925,7 +953,7 @@ const OrderDetail = ({ order, onClose }: {
       <aside className={styles.detail} onClick={(e) => e.stopPropagation()}>
         <header className={styles.detailHead}>
           <div>
-            <div className={styles.detailEyebrow}>Order · {LANE_LABEL[order.status]}</div>
+            <div className={styles.detailEyebrow}>Order · {order.status === 'CONFIRMED' && order.proceededAt ? 'Proceed' : LANE_LABEL[order.status]}</div>
             <h2 className={styles.detailTitle}>{order.id}</h2>
             <div className={styles.detailSub}>
               {order.customerName} · placed {fmtTimeAgo(order.placedAt)} by {order.staffName ?? '—'}
@@ -1088,6 +1116,16 @@ const OrderDetail = ({ order, onClose }: {
                   </option>
                   {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
+              </DetailField>
+              <DetailField label="Processing date" disabled={!editable}>
+                <input
+                  type="date"
+                  value={edited.processingDate ?? ''}
+                  onChange={(e) => set('processingDate', e.target.value || null)}
+                  disabled={!editable}
+                  min={todayMY}
+                  max={edited.deliveryDate ?? undefined}
+                />
               </DetailField>
               <DetailField label="Delivery date" disabled={!editable}>
                 <input
