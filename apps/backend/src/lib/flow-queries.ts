@@ -35,6 +35,28 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
     }
   }
 
+  /* Sofa whole-set HARD block (Wei Siang 2026-06-03) — a sofa set must ship as a
+     complete set from ONE production batch (one dye lot). If no single batch on
+     hand covers the whole set, it must NOT ship (it would split a dye lot or
+     strand an orphan half-set). Unlike short_stock there is NO "ship anyway"
+     retry. Surface the server's plain-English reason here at the single
+     chokepoint so every ship path (New DO, from-sos, Add-Line, MRP grab) shows
+     the same message instead of dumping the raw 409 JSON. */
+  if (res.status === 409) {
+    const text = await res.clone().text();
+    if (text.includes('"sofa_no_batch"')) {
+      let msg = "This sofa set can't ship yet — no single production batch on hand covers the whole set. Wait until one complete batch is received.";
+      try { const b = JSON.parse(text) as { message?: string }; if (b?.message) msg = b.message; } catch { /* keep fallback */ }
+      throw new Error(msg);
+    }
+    /* Type B — partial sofa set: must ship the whole set together. Hard block. */
+    if (text.includes('"sofa_partial_set"')) {
+      let msg = "A sofa set must ship whole from one batch — this delivery leaves part of the set behind. Include the rest of the set, or ship none of it.";
+      try { const b = JSON.parse(text) as { message?: string }; if (b?.message) msg = b.message; } catch { /* keep fallback */ }
+      throw new Error(msg);
+    }
+  }
+
   if (!res.ok) {
     let detail = '';
     try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }

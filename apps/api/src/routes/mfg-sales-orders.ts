@@ -702,6 +702,16 @@ mfgSalesOrders.get('/:docNo', async (c) => {
     const deliveredQty = deliveries.reduce((s, d) => s + d.qty, 0);
     const cov = coverageMap.get(it.id);
     const covered = cov?.source === 'po';
+    /* SOFA stock-coverage is decided by the batch-aware allocator (stock_status),
+       NOT the MRP SKU-pool: MRP doesn't know about dye-lot batches, so it would
+       wrongly report a sofa set as "stock" whenever same-SKU units exist in ANY
+       batch — even one that can't cover the whole set. For sofa, trust
+       stock_status (READY only when ONE batch covers the set); keep MRP's PO/ETA
+       if an outstanding PO is on the way. (Wei Siang 2026-06-03) */
+    const isSofaLine = String((it as { item_group?: string | null }).item_group ?? '').toUpperCase().includes('SOFA');
+    const stockState = isSofaLine
+      ? (it.stock_status === 'READY' ? 'stock' : (cov?.source === 'po' ? 'po' : 'shortage'))
+      : (cov?.source ?? null);
     return {
       ...it,
       deliveries,
@@ -710,7 +720,7 @@ mfgSalesOrders.get('/:docNo', async (c) => {
       /* Incoming-stock coverage (Wei Siang 2026-05-31) — stock_state is the
          allocation outcome (stock / po / shortage). coverage_po + eta are only
          set when an outstanding PO covers the line, so the UI shows PO·ETA. */
-      stock_state: cov?.source ?? null,
+      stock_state: stockState,
       coverage_po: covered ? cov?.po ?? null : null,
       coverage_eta: covered ? cov?.eta ?? null : null,
     };

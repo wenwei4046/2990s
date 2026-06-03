@@ -4,6 +4,64 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-03-002 — Sofa "in stock" / allocation was tied to the PO that created it, not to actual SKU+batch availability
+
+**Symptom:** A sofa SO (SO-2606-005, 2× BOOQIT-1A cg-004) showed a green **STOCK**
+badge in the SO drill-down even though its lines were really PENDING with no batch
+and no PO. Meanwhile a matching batch (PO-2606-006, exactly 2× the same SKUs) sat in
+stock but the system would not allocate it to that SO. Two engines disagreed: the
+batch-aware readiness said PENDING (correct), the MRP-pooled "Stock" column said
+STOCK (wrong).
+
+**Root cause:** The original sofa model RESERVED each batch to the specific SO whose
+PO created it (so-stock-allocation read `purchase_order_items.so_item_id →
+purchase_orders.po_number` and only matched a line to *its own* PO's batch). That is
+not the real rule. The owner's actual rule: sofa allocates like any other product by
+**SKU + variant**; a batch is only a "ship the whole set from one dye lot" grouping,
+NOT an SO reservation. Separately, the MRP "Stock" column pooled sofa stock by SKU
+with no batch awareness, so it reported STOCK whenever same-SKU units existed in ANY
+batch.
+
+**Fix:** (branch `feat/sofa-set-allocation`) New shared helper `sofa-set-coverage.ts`
+is the single source of truth for "is there ONE batch that covers the whole sofa
+set?". 
+- `so-stock-allocation` now finds a single covering batch by SKU+variant (no PO
+  link), binds it as `allocated_batch_no`, walks sets in delivery-date→doc-no
+  priority so two SOs can't double-claim; no covering batch → PENDING.
+- The ship-gate (`sofa-batch-guard`) changed from "block if no PO" to "block if no
+  single covering batch" (Type A) and added "block a partial-set DO that strands an
+  orphan" (Type B), wired into all 3 DO-create routes + the frontend chokepoint.
+- The SO drill-down "Stock" column now trusts the batch-aware `stock_status` for
+  sofa instead of the MRP SKU-pool.
+- NOT done (deferred, owner aware): a DB-trigger hard backstop that aborts an
+  under-covered sofa OUT.
+
+**Caught by:** Owner inspecting SO-2606-005 ("库存有这两个东西…为什么它不会 allocate
+给这张 Sales Order"), which exposed the wrong PO-reservation model.
+
+---
+
+## BUG-2026-06-03-001 — Sales Orders list 500'd: stale view missing `delivery_fee_centi`
+
+**Symptom:** The Sales Orders list page failed to load with
+`column mfg_sales_orders_with_payment_totals.delivery_fee_centi does not exist`
+(500), showing 0 orders.
+
+**Root cause:** The view `mfg_sales_orders_with_payment_totals` is defined as
+`SELECT so.*`, which Postgres freezes at create time. `delivery_fee_centi` was added
+to `mfg_sales_orders` after the view's last rebuild (migrations 0080/0082/0086), so
+the view never exposed it; the deployed list query selecting it errored. Same class
+of bug those three migrations already fixed — a recurring `so.*` footgun.
+
+**Fix:** Rebuilt the view (DROP + CREATE, same definition) in the prod SQL editor so
+`so.*` re-expands to include `delivery_fee_centi` and any other columns added since.
+Read-only view rebuild, no data touched. (A migration to capture this in-repo is a
+follow-up.)
+
+**Caught by:** Owner hit the 500 on the SO list during go-live data cleanup.
+
+---
+
 ## BUG-2026-06-01-009 — A "grab" Delivery Order left its SO line stuck at PENDING after the goods had shipped
 
 **Symptom:** Normally a line goes READY (stock allocated/frozen) before a Delivery
