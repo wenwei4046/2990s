@@ -30,6 +30,14 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // clientsClaim so the NEW worker takes control of the already-open page
+        // the instant it skip-waits (when the user taps "Refresh"). Without it
+        // the generated SW never calls clients.claim(), so after SKIP_WAITING the
+        // `controlling`/controllerchange event never fires and vite-plugin-pwa's
+        // prompt-mode auto-reload (UpdatePrompt.tsx) silently does nothing — the
+        // Refresh button looks dead. skipWaiting stays false: we skip on demand
+        // via the message the toast sends, not automatically.
+        clientsClaim: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         // PR #131 fix — raise precache size limit. PR #118 added 2.11 MB
         // bedframe hero photos which blew past the workbox default of 2 MB
