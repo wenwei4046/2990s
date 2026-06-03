@@ -16,6 +16,7 @@ import {
   hasArmConflict,
   reclinerEligible,
   isAccessoryModule,
+  isWideArmSeat,
   summarizeSofaCells,
   findDuplicateCombo,
   matchComboSubset,
@@ -684,6 +685,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // layout "jumps" to a standard sofa. Keep the user's exact modules; PO
       // SKU translation happens in the order layer (cellsToPoSkus).
       if (groupCells.some((c) => isFunctionalSeat(c.moduleId))) return;
+      // Likewise never rewrite a group containing a B-variant (wide-arm) seat —
+      // 1B / 2B. detectBundle COLLAPSES 1B→1A / 2B→2A so the build still matches
+      // a bundle (good: it prices/combos as the bundle), but the canonical SKU
+      // breakdown (resolveSku below) only emits A/NA/L families and can't express
+      // a B. Converting would silently swap the customer's deliberate 1B/2B for a
+      // 1A/2A — showing a different compartment than they picked (Loo 2026-06-03).
+      // Keep the user's exact modules; cellsToPoSkus handles SKU translation.
+      if (groupCells.some((c) => isWideArmSeat(c.moduleId))) return;
       const groupIds = new Set(
         groupCells.map((c) => c.id).filter((x): x is string => x != null),
       );

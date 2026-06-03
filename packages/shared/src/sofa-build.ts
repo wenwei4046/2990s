@@ -459,6 +459,18 @@ const bundleSignature = (modIds: string[]): string =>
     .sort()
     .join('+');
 
+/** A "wide-arm" B-variant seat (1B / 2B) — i.e. a family that BUNDLE_FAMILY_COLLAPSE
+ *  folds into an A family for DETECTION. detectBundle deliberately collapses these
+ *  so a build containing them still MATCHES a bundle (and so prices/combos work),
+ *  but the canonical SKU breakdown (resolveSku in the configurator's auto-convert)
+ *  only emits A/NA/L families and cannot express a B variant. The auto-convert must
+ *  therefore SKIP any group containing one, exactly like it skips accessories and
+ *  functional seats — otherwise it silently rewrites the customer's deliberate
+ *  1B/2B into a 1A/2A, showing a different compartment than they picked
+ *  (Loo 2026-06-03 bug). Single source of truth = BUNDLE_FAMILY_COLLAPSE. */
+export const isWideArmSeat = (id: string): boolean =>
+  Object.prototype.hasOwnProperty.call(BUNDLE_FAMILY_COLLAPSE, moduleFamily(id));
+
 // Canonical SKU composition per bundle. These are the line items the factory
 // orders against — same physical sofa as the customer's drag-out, but
 // expressed as the SKUs the supplier stocks. e.g. a customer who built a
