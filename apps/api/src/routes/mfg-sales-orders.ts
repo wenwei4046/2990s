@@ -1951,6 +1951,8 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     ['hubId', 'hub_id'], ['hubName', 'hub_name'],
     ['customerDeliveryDate', 'customer_delivery_date'],
     ['internalExpectedDd', 'internal_expected_dd'],
+    /* POS "Proceed" — sales-side done marker; stamp-once guard below. */
+    ['proceededAt', 'proceeded_at'],
     ['linkedDoDocNo', 'linked_do_doc_no'],
     ['shipToAddress', 'ship_to_address'], ['billToAddress', 'bill_to_address'],
     ['installToAddress', 'install_to_address'],
@@ -2044,6 +2046,14 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   // in the audit log. Only fields actually in the patch body are compared.
   const beforeCols = map.map(([, snake]) => snake).concat(['status']).join(', ');
   const { data: before } = await sb.from('mfg_sales_orders').select(beforeCols).eq('doc_no', docNo).maybeSingle();
+
+  /* proceeded_at is stamp-once (the POS "Proceed" marker). If the row already
+     has a value, drop any incoming proceeded_at so a later header edit / repeat
+     proceed never overwrites the original sales-side timestamp. */
+  if (updates['proceeded_at'] !== undefined && before
+      && (before as unknown as Record<string, unknown>)['proceeded_at']) {
+    delete updates['proceeded_at'];
+  }
 
   /* Commander 2026-05-28 / Owner 2026-06-01 — Processing & Delivery Date may
      only be today or a future date, BUT an already-past value the edit does NOT

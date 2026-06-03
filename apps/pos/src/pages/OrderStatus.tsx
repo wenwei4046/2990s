@@ -449,6 +449,18 @@ const LANES: ReadonlyArray<LaneDef> = [
   },
 ];
 
+/* Lane bucketing — "Proceed" is a SALES marker driven by proceeded_at, NOT a
+   production status (Owner 2026-06-03). A CONFIRMED order moves Place→Proceed
+   the moment the salesperson marks it proceeded; the backend status stays
+   CONFIRMED (the coordinator drives the real production status from the SO
+   detail). Any production status the backend itself sets still buckets under
+   Proceed; terminal statuses bucket under Delivered. */
+const laneIdFor = (o: MyOrderRow): LaneDef['id'] => {
+  if (LANES[2]?.matches.includes(o.status)) return 'delivered';
+  if (o.status === 'CONFIRMED') return o.proceededAt ? 'proceed' : 'place';
+  return 'proceed';
+};
+
 const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
   const orders = useMyOrders();
   const stats = useSalesStats();
@@ -473,12 +485,7 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
       delivered: [],
     };
     for (const o of list) {
-      for (const lane of LANES) {
-        if (lane.matches.includes(o.status)) {
-          map[lane.id].push(o);
-          break;
-        }
-      }
+      map[laneIdFor(o)].push(o);
     }
     return map;
   }, [list]);
@@ -719,7 +726,7 @@ const OrderDetail = ({ order, onClose }: {
 }) => {
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  const editable = order.status === 'CONFIRMED';
+  const editable = order.status === 'CONFIRMED' && !order.proceededAt;
 
   // Local edit state. Resync ONLY when switching orders, not on background
   // refetches of the same order — otherwise typing would get blown away.
@@ -904,12 +911,18 @@ const OrderDetail = ({ order, onClose }: {
     },
   });
 
-  // Proceed → flip status to IN_PRODUCTION (server auto-stamps proceeded_at).
+  // Proceed = a SALES tracking marker, NOT a production hand-off. It (1) saves
+  // the salesperson-entered info into the backend SO detail and (2) stamps
+  // proceeded_at as the "done" marker. We deliberately do NOT change the
+  // production status — it stays CONFIRMED; the backend coordinator drives the
+  // real status from the SO detail. One PATCH carries both the header edits and
+  // the proceeded_at stamp (the API stamps it once, never overwriting an earlier
+  // value).
   const proceedMutation = useMutation({
     mutationFn: async () => {
-      await authedFetch(`/mfg-sales-orders/${order.id}/status`, {
+      await authedFetch(`/mfg-sales-orders/${order.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ status: 'IN_PRODUCTION', notes: 'Proceed from POS' }),
+        body: JSON.stringify({ ...buildPatch(), proceededAt: new Date().toISOString() }),
       });
     },
     onSuccess: () => {
@@ -940,7 +953,7 @@ const OrderDetail = ({ order, onClose }: {
       <aside className={styles.detail} onClick={(e) => e.stopPropagation()}>
         <header className={styles.detailHead}>
           <div>
-            <div className={styles.detailEyebrow}>Order · {LANE_LABEL[order.status]}</div>
+            <div className={styles.detailEyebrow}>Order · {order.status === 'CONFIRMED' && order.proceededAt ? 'Proceed' : LANE_LABEL[order.status]}</div>
             <h2 className={styles.detailTitle}>{order.id}</h2>
             <div className={styles.detailSub}>
               {order.customerName} · placed {fmtTimeAgo(order.placedAt)} by {order.staffName ?? '—'}
