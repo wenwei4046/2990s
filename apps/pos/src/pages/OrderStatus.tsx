@@ -74,6 +74,7 @@ interface MyOrderRow {
   status: SoStatus;
   proceededAt: string | null;
   deliveryDate: string | null;
+  processingDate: string | null;
   deliverySlot: string | null;
   paymentMethod: string | null;
   approvalCode: string | null;
@@ -97,6 +98,7 @@ interface MineSoRow {
   postcode: string | null;
   customer_state: string | null;
   customer_delivery_date: string | null;
+  internal_expected_dd: string | null;
   status: SoStatus;
   payment_method: string | null;
   approval_code: string | null;
@@ -161,6 +163,7 @@ const useMyOrders = () =>
           status: r.status,
           proceededAt: r.proceeded_at ?? null,
           deliveryDate: r.customer_delivery_date ?? null,
+          processingDate: r.internal_expected_dd ?? null,
           deliverySlot: null,
           paymentMethod: r.payment_method ?? null,
           approvalCode: r.approval_code ?? null,
@@ -745,6 +748,12 @@ const OrderDetail = ({ order, onClose }: {
     return `${y}-${m}-${d}`;
   }, [order.placedAt]);
 
+  // Processing Date floor = today (Malaysia, UTC+8) — mirrors the API's
+  // processing_date_past guard, which rejects a NEW past Processing Date.
+  const todayMY = useMemo(() => {
+    return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  }, []);
+
   // Cascading dropdowns (state → city → postcode) sourced from my_localities.
   const localities = useLocalities();
   const states = useMemo(() => {
@@ -784,7 +793,7 @@ const OrderDetail = ({ order, onClose }: {
   const dateOk = !!edited.deliveryDate;
   // Gate on the live ledger (paidSoFar), the recorded source of truth.
   const paidOk = order.total > 0 && paidSoFar / order.total >= 0.5;
-  const allOk = customerInfoOk && addressOk && paidOk;
+  const allOk = customerInfoOk && addressOk && dateOk && paidOk;
 
   // Dirty check: any of the editable header fields changed. (Payment is now
   // recorded via its own action against the SO ledger, not folded into Save.)
@@ -797,10 +806,10 @@ const OrderDetail = ({ order, onClose }: {
     edited.customerPostcode !== order.customerPostcode ||
     edited.customerCity !== order.customerCity ||
     edited.customerState !== order.customerState ||
-    edited.deliveryDate !== order.deliveryDate;
+    edited.deliveryDate !== order.deliveryDate ||
+    edited.processingDate !== order.processingDate;
 
-  // SO header PATCH body — camelCase keys per the API contract. We deliberately
-  // DON'T send internalExpectedDd / processingDate (they trip the pairing guard).
+  // SO header PATCH body — camelCase keys per the API contract.
   const buildPatch = (): Record<string, unknown> => {
     const patch: Record<string, unknown> = {
       debtorName: edited.customerName.trim() || null,
@@ -812,10 +821,16 @@ const OrderDetail = ({ order, onClose }: {
       postcode: edited.customerPostcode?.trim() || null,
       customerState: edited.customerState?.trim() || null,
     };
-    // Only send the delivery date when it actually changed — re-sending an
-    // unchanged PAST date would trip the API's delivery_date_past guard.
+    // Only send a date when it actually changed — re-sending an unchanged PAST
+    // value would trip the API's delivery_date_past / processing_date_past guard
+    // (it grandfathers an unchanged elapsed date only if we don't re-send it).
+    // The Processing Date also triggers the backend's variant-completeness and
+    // Processing ≤ Delivery checks, surfaced via the Save error line.
     if (edited.deliveryDate !== order.deliveryDate) {
       patch.customerDeliveryDate = edited.deliveryDate || null;
+    }
+    if (edited.processingDate !== order.processingDate) {
+      patch.internalExpectedDd = edited.processingDate || null;
     }
     return patch;
   };
@@ -1088,6 +1103,16 @@ const OrderDetail = ({ order, onClose }: {
                   </option>
                   {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
+              </DetailField>
+              <DetailField label="Processing date" disabled={!editable}>
+                <input
+                  type="date"
+                  value={edited.processingDate ?? ''}
+                  onChange={(e) => set('processingDate', e.target.value || null)}
+                  disabled={!editable}
+                  min={todayMY}
+                  max={edited.deliveryDate ?? undefined}
+                />
               </DetailField>
               <DetailField label="Delivery date" disabled={!editable}>
                 <input

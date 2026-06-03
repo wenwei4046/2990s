@@ -587,7 +587,7 @@ mfgSalesOrders.get('/mine', async (c) => {
     .from('mfg_sales_orders')
     .select(
       'doc_no, debtor_name, phone, email, address1, address2, city, postcode, customer_state, ' +
-      'customer_delivery_date, status, payment_method, approval_code, note, so_date, created_at, ' +
+      'customer_delivery_date, internal_expected_dd, status, payment_method, approval_code, note, so_date, created_at, ' +
       'proceeded_at, total_revenue_centi, line_count, deposit_centi',
     )
     .eq('salesperson_id', user.id)
