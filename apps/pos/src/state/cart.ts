@@ -30,6 +30,16 @@ export interface SofaConfigSnapshot {
   /** Per-item fabric-tier SELLING add-on (whole MYR, migration 0124) already
    *  folded into `total`. Stored so the cart/handover can show it as a sub-line. */
   fabricTierDelta?: number;
+  // Special Add-ons (migration 0134): codes (sent as variants.specials → server
+  // prices from special_addons + gates) + chosen option-group labels + display.
+  specialIds?: string[];
+  specialLabels?: string[];
+  specialChoices?: Record<string, string[]>;
+  // PWP Code Voucher (Phase 2) — this sofa is redeemed at its combo PWP price via
+  // a voucher code. `total` already reflects the PWP price. The server re-matches
+  // the build against the code's reward combos + marks the code USED at Confirm.
+  pwp?: boolean;
+  pwpCode?: string;
   total: number;
   summary: string;       // e.g. "3+L · Bundle · Velvet/Sand"
 }
@@ -39,12 +49,29 @@ export interface SizeConfigSnapshot {
   productId: string;
   productName: string;
   sizeId: string;
+  // Identity for PWP (换购) matching (0128) — a mattress line is a PWP trigger.
+  // Optional: only the configurator populates them; legacy/restored lines omit.
+  modelId?: string | null;  // product_models.id
+  category?: string;        // UPPERCASE mfg category, e.g. 'MATTRESS'
+  // PWP Code Voucher (0130) — a mattress redeemed at its PWP price via a voucher.
+  // `total` already reflects the PWP base. Server re-validates + marks USED.
+  pwp?: boolean;
+  pwpCode?: string;
+  pwpTriggerLabel?: string | null;
+  // Original (non-PWP) total — so the cart can auto-revert the price if the
+  // same-cart trigger is removed and this line's reserved code is freed.
+  pwpOriginalTotal?: number;
   total: number;
   summary: string;       // e.g. "Queen"
   /** Paid-extra add-ons attached to this configured line (e.g. extra pillows
    *  beyond the included free ones). NOT included_addons — those are derived
    *  from product.included_addons server-side and don't add to the price. */
   addonExtras?: { addonId: string; qty: number }[];
+  // Special Add-ons (migration 0134): codes (sent as variants.specials → server
+  // prices from special_addons + gates) + chosen option-group labels + display.
+  specialIds?: string[];
+  specialLabels?: string[];
+  specialChoices?: Record<string, string[]>;
 }
 
 // Flat-priced products (single price per product — mattresses, bedframes, sofas
@@ -79,7 +106,29 @@ export interface BedframeConfigSnapshot {
   legHeightId: string;
   divanHeightId?: string;
   totalHeightId?: string;
+  // Special Add-ons (migration 0134): specialIds now holds special_addons CODES
+  // (sent as variants.specials → server prices from special_addons + gates).
+  // specialChoices = { code: [chosen option-group labels] } for the 追问 surcharge
+  // + SO description. specialLabels stays for display.
   specialIds?: string[];
+  specialChoices?: Record<string, string[]>;
+  // Identity for PWP (换购) matching (0128) — a bedframe line is a PWP reward.
+  modelId?: string | null;  // product_models.id
+  category?: string;        // UPPERCASE mfg category, e.g. 'BEDFRAME'
+  // PWP (换购, 0128) — this bedframe is redeemed at its PWP price against a
+  // qualifying mattress in the same cart. `total` already reflects the PWP base
+  // (+ fabric Δ). pwpTriggerLabel = the mattress it's bound to, for the invoice
+  // sub-line "PWP price · 换购自 <Mattress>". Server re-validates the price.
+  pwp?: boolean;
+  pwpTriggerLabel?: string | null;
+  // PWP Code Voucher (migration 0130) — the voucher code this reward redeems.
+  // Same-cart: one of the cart's RESERVED codes (auto-picked when the toggle is
+  // on). Cross-order: an AVAILABLE code entered in "Insert PWP Code". The server
+  // marks it USED at order Confirm; printed on the SO.
+  pwpCode?: string;
+  // Original (non-PWP) total — auto-revert source when the same-cart trigger
+  // (and its reserved code) is removed from the cart.
+  pwpOriginalTotal?: number;
   // Display-label snapshots (parallel to the *Id fields) so the cart, printed
   // Sales Order, and Backend detail render the spec without a join.
   gapLabel?: string | null;
@@ -112,6 +161,10 @@ interface CartState {
   addConfigured: (config: CartConfig, opts?: { editingKey?: string }) => string;
   setQty: (key: string, qty: number) => void;
   remove: (key: string) => void;
+  /** Strip a redeemed PWP/Promo voucher from a line and restore its original
+   *  price. Called when the same-cart trigger leaves the cart (its reserved
+   *  code is freed) so a reward never lingers at the PWP price with a dead code. */
+  revertPwp: (key: string) => void;
   clear: () => void;
   restore: (lines: CartLine[], sourceQuoteId?: string | null) => void;
 }
@@ -184,6 +237,25 @@ export const useCart = create<CartState>()((set, get) => ({
 
   remove(key) {
     set({ lines: get().lines.filter((l) => l.key !== key) });
+  },
+
+  revertPwp(key) {
+    set({
+      lines: get().lines.map((l) => {
+        if (l.key !== key) return l;
+        const c = l.config as CartConfig & {
+          pwp?: boolean; pwpCode?: string; pwpTriggerLabel?: string | null; pwpOriginalTotal?: number;
+        };
+        if (!c.pwp && !c.pwpCode) return l;
+        const next = { ...c };
+        if (typeof c.pwpOriginalTotal === 'number') next.total = c.pwpOriginalTotal;
+        delete next.pwp;
+        delete next.pwpCode;
+        delete next.pwpTriggerLabel;
+        delete next.pwpOriginalTotal;
+        return { ...l, config: next as CartConfig };
+      }),
+    });
   },
 
   clear() {

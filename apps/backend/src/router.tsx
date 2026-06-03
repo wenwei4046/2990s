@@ -41,7 +41,9 @@ function lazyRetry<T extends ComponentType<any>>(factory: () => Promise<{ defaul
 // export" contract.
 
 const AuditLog = lazyRetry(() => import('./pages/AuditLog').then(m => ({ default: m.AuditLog })));
-const Addons = lazyRetry(() => import('./pages/Addons').then(m => ({ default: m.Addons })));
+// Add-ons (Dispose/Lift) editor moved to the POS "Special Add-ons" tab → Order
+// Add-ons (Chairman 2026-06-02, decision B). Backend route retired; the
+// Addons.tsx / NewAddonModal.tsx files are left in place as dead code.
 const Settings = lazyRetry(() => import('./pages/Settings').then(m => ({ default: m.Settings })));
 const Customers = lazyRetry(() => import('./pages/Customers').then(m => ({ default: m.Customers })));
 const Products = lazyRetry(() => import('./pages/Products').then(m => ({ default: m.Products })));
@@ -209,7 +211,6 @@ export const router = createBrowserRouter([
       { path: 'reports/sales-invoice-detail-listing', element: <SalesInvoiceDetailListing /> },
       { path: 'reports/delivery-return-detail-listing', element: <DeliveryReturnDetailListing /> },
       { path: 'audit-log', element: <AuditLog /> },
-      { path: 'addons', element: <Addons /> },
       { path: 'customers', element: <Customers /> },
       { path: 'settings', element: <Settings /> },
       // Migration 0086 — Users management (invite + edit + deactivate).

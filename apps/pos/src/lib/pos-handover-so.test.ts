@@ -66,6 +66,37 @@ describe('cartLineToSoItem', () => {
     });
   });
 
+  // Delivery-fee fix (2026-06-03): a mattress size line must classify as
+  // 'mattress' from its own config.category even when the catalog is empty
+  // (production `products` is empty + the size SKU id isn't a catalog card).
+  // Previously it fell to 'others' → 0 delivery fee + wrong revenue bucket.
+  it('classifies a mattress size line from config.category with an empty catalog', () => {
+    const line: CartLine = {
+      key: 'cfg-matt',
+      qty: 1,
+      config: {
+        kind: 'size',
+        productId: 'mfg-akka-k',
+        productName: '2990 AKKA-FIRM MATTRESS (King)',
+        sizeId: 'king',
+        modelId: 'model-akka',
+        category: 'MATTRESS',
+        total: 2990,
+        summary: 'King',
+      },
+    };
+    expect(cartLinesToSoItems([line], [])[0]!.itemGroup).toBe('mattress');
+  });
+
+  it('defaults an unclassifiable size line to mattress', () => {
+    const line: CartLine = {
+      key: 'cfg-size-bare',
+      qty: 1,
+      config: { kind: 'size', productId: 'x', productName: 'X', sizeId: 'queen', total: 1000, summary: 'Queen' },
+    };
+    expect(cartLinesToSoItems([line], [])[0]!.itemGroup).toBe('mattress');
+  });
+
   it('maps a sofa Custom Build (cells) line — cells + depth survive', () => {
     const line: CartLine = {
       key: 'cfg-cells',
@@ -92,6 +123,41 @@ describe('cartLineToSoItem', () => {
       seatUpgradeFootrest: true,
     });
     expect((items[0]!.variants as any).cells).toHaveLength(2);
+  });
+
+  it('sofa description = Model name + compartment codes, ordered left-to-right', () => {
+    const sofa = product({ id: 'sofa-1', name: 'Lyyar' });
+    const line: CartLine = {
+      key: 'cfg-codes',
+      qty: 1,
+      config: {
+        kind: 'sofa',
+        productId: 'sofa-1',
+        productName: 'Lyyar',
+        // intentionally out of order — must sort by x (then y)
+        cells: [
+          { moduleId: '2A-RHF', x: 2, y: 0, rot: 0 } as any,
+          { moduleId: '1A-LHF', x: 0, y: 0, rot: 0 } as any,
+          { moduleId: '1NA', x: 1, y: 0, rot: 0 } as any,
+        ],
+        depth: '24',
+        total: 5980,
+        summary: '',
+      },
+    };
+    const item = cartLineToSoItem(line, new Map([['sofa-1', sofa]]));
+    expect(item.description).toBe('Lyyar · 1A-LHF + 1NA + 2A-RHF');
+  });
+
+  it('sofa with no cells (bundle preset) keeps just the Model name', () => {
+    const sofa = product({ id: 'sofa-2', name: 'Annsa' });
+    const line: CartLine = {
+      key: 'cfg-bundle',
+      qty: 1,
+      config: { kind: 'sofa', productId: 'sofa-2', productName: 'Annsa', bundleId: 'b-3L', total: 4990, summary: '3+L' },
+    };
+    const item = cartLineToSoItem(line, new Map([['sofa-2', sofa]]));
+    expect(item.description).toBe('Annsa');
   });
 
   it('maps a bedframe line — all variant labels snapshot', () => {

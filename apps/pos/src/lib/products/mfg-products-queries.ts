@@ -90,6 +90,7 @@ export type MfgProductRow = {
   base_price_sen: number | null;   // COST (Price 2) — 0109 cost/sell split
   price1_sen: number | null;       // COST (Price 1, cheaper tier)
   sell_price_sen: number | null;   // SELLING (POS customer-facing). Master Account edits this.
+  pwp_price_sen: number | null;    // PWP (换购) SELLING base price (0128). Used instead of sell_price_sen on a valid PWP reward line.
   unit_m3_milli: number;
   status: 'ACTIVE' | 'INACTIVE';   // COST/PO side — NOT showroom visibility (use pos_active)
   pos_active: boolean;             // D5 — selling-only POS catalog visibility (Master Account writes)
@@ -276,6 +277,7 @@ export function useUpdateMfgProductPrices() {
       price1Sen?: number | null;
       costPriceSen?: number | null;
       sellPriceSen?: number | null;
+      pwpPriceSen?: number | null;
       seatHeightPrices?: SeatHeightPrice[];
       branding?: string | null;
       subAssemblies?: string[];

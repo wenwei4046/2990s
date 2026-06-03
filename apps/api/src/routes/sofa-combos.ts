@@ -71,6 +71,7 @@ type Row = {
   supplier_id: string | null;
   prices_by_height: Record<string, number | null>;
   selling_prices_by_height: Record<string, number | null>;
+  pwp_prices_by_height: Record<string, number | null> | null;
   label: string | null;
   effective_from: string;
   deleted_at: string | null;
@@ -90,6 +91,7 @@ function rowToWire(r: Row) {
     supplierId: r.supplier_id,
     pricesByHeight: r.prices_by_height ?? {},
     sellingPricesByHeight: r.selling_prices_by_height ?? {},
+    pwpPricesByHeight: r.pwp_prices_by_height ?? {},
     label: r.label,
     effectiveFrom: r.effective_from,
     deletedAt: r.deleted_at,
@@ -168,7 +170,7 @@ sofaCombos.get('/', async (c) => {
   let q = supabase
     .from('sofa_combo_pricing')
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .order('base_model', { ascending: true })
@@ -258,7 +260,7 @@ sofaCombos.get('/history', async (c) => {
   let q = supabase
     .from('sofa_combo_pricing')
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .eq('base_model', baseModel)
@@ -314,6 +316,7 @@ sofaCombos.post('/', async (c) => {
     supplierId?: string | null;
     pricesByHeight?: unknown;
     sellingPricesByHeight?: unknown;
+    pwpPricesByHeight?: unknown;
     label?: string | null;
     effectiveFrom?: string;
     notes?: string | null;
@@ -357,6 +360,12 @@ sofaCombos.post('/', async (c) => {
   const sellingProvided = body.sellingPricesByHeight !== undefined;
   const selling = sellingProvided ? validatePricesByHeight(body.sellingPricesByHeight) : null;
   if (sellingProvided && !selling) return c.json({ error: 'selling_prices_by_height_invalid' }, 400);
+
+  // PWP (换购) SELLING price per height (Phase 2). POS-only; {} when unset → the
+  // engine never overrides the normal selling price. Validated like selling.
+  const pwpProvided = body.pwpPricesByHeight !== undefined;
+  const pwpPrices = pwpProvided ? validatePricesByHeight(body.pwpPricesByHeight) : null;
+  if (pwpProvided && !pwpPrices) return c.json({ error: 'pwp_prices_by_height_invalid' }, 400);
 
   // COST prices (Backend / PO benchmark). Three cases (Chairman 2026-05-31):
   //   1. client sends pricesByHeight        → use it (Backend keys / overrides).
@@ -406,13 +415,14 @@ sofaCombos.post('/', async (c) => {
       supplier_id: supplierId,
       prices_by_height: prices,
       selling_prices_by_height: sellingPrices,
+      pwp_prices_by_height: pwpPrices ?? {},
       label: body.label ?? null,
       effective_from: effectiveFrom,
       notes: body.notes ?? null,
       created_by: user.id,
     })
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .single();
@@ -440,7 +450,7 @@ sofaCombos.put('/:id', async (c) => {
 
   const { data: orig, error: findErr } = await supabase
     .from('sofa_combo_pricing')
-    .select('base_model, modules, tier, customer_id, supplier_id')
+    .select('base_model, modules, tier, customer_id, supplier_id, pwp_prices_by_height')
     .eq('id', id)
     .maybeSingle();
   if (findErr) return c.json({ error: 'load_failed', reason: findErr.message }, 500);
@@ -449,6 +459,7 @@ sofaCombos.put('/:id', async (c) => {
   let body: {
     pricesByHeight?: unknown;
     sellingPricesByHeight?: unknown;
+    pwpPricesByHeight?: unknown;
     label?: string | null;
     effectiveFrom?: string;
     notes?: string | null;
@@ -470,6 +481,14 @@ sofaCombos.put('/:id', async (c) => {
     ? prices
     : validatePricesByHeight(body.sellingPricesByHeight);
   if (!sellingPrices) return c.json({ error: 'selling_prices_by_height_invalid' }, 400);
+
+  // PWP (换购) selling price (Phase 2). Append-only edit: carry the existing PWP
+  // prices forward unless the body sets new ones, so editing the selling price
+  // never wipes the combo's PWP price.
+  const pwpPrices = body.pwpPricesByHeight === undefined
+    ? ((orig as { pwp_prices_by_height: Record<string, number | null> | null }).pwp_prices_by_height ?? {})
+    : validatePricesByHeight(body.pwpPricesByHeight);
+  if (!pwpPrices) return c.json({ error: 'pwp_prices_by_height_invalid' }, 400);
 
   const effectiveFrom = (body.effectiveFrom ?? '').trim();
   if (!ISO_DATE.test(effectiveFrom)) {
@@ -497,13 +516,14 @@ sofaCombos.put('/:id', async (c) => {
       supplier_id: supplierId,
       prices_by_height: prices,
       selling_prices_by_height: sellingPrices,
+      pwp_prices_by_height: pwpPrices,
       label: body.label ?? null,
       effective_from: effectiveFrom,
       notes: body.notes ?? null,
       created_by: user.id,
     })
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .single();

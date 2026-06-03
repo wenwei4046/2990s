@@ -9,6 +9,7 @@
     "./mfg-pricing": "./src/mfg-pricing.ts",
     "./sofa-build": "./src/sofa-build.ts",
     "./fabric-tier-addon": "./src/fabric-tier-addon.ts",
+    "./pwp": "./src/pwp.ts",
     "./order-rules": "./src/order-rules.ts",
     "./format": "./src/format.ts",
     "./phone": "./src/phone.ts",

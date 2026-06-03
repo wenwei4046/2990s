@@ -44,7 +44,7 @@
 //   [Combo Pricing]   — sofa combo deals (per-customer override prices)
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
 import {
   Download,
   Upload,
@@ -89,7 +89,7 @@ import {
   type ProductSupplierRow,
 } from '../lib/products/mfg-products-queries';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
-import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useFabricLibrary, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useAddons, type AddonRow, type FabricLibraryRow } from '../lib/queries';
+import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useAddons, type AddonRow, type FabricLibraryRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, useAllAddons, useUpdateAddon, useCreateAddon, type AdminAddonRow } from '../lib/queries';
 import {
   useProductModels,
   useProductModel,
@@ -98,6 +98,7 @@ import {
 } from '../lib/products/product-models-queries';
 import { FabricsTable } from '../components/products/FabricsTable';
 import { SofaComboTab } from '../components/products/SofaComboTab';
+import { PwpRulesTab } from '../components/products/PwpRulesTab';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/products/size-info';
 import { useStaff } from '../lib/staff';
 import { useQueryClient } from '@tanstack/react-query';
@@ -217,7 +218,7 @@ const resolveModelPhotoUrl = (raw: string | null | undefined): string | null => 
   return raw.startsWith('/') ? `${API_URL}${raw}` : `${API_URL}/${raw}`;
 };
 
-type TopTab = 'sku' | 'modular' | 'maintenance' | 'combos' | 'delivery';
+type TopTab = 'sku' | 'modular' | 'specialAddons' | 'fabrics' | 'maintenance' | 'combos' | 'delivery' | 'pwp';
 
 
 export const Products = () => {
@@ -294,6 +295,29 @@ export const Products = () => {
             >
               Modular
             </button>
+            {/* Special Add-ons (Chairman 2026-06-02) — the 加钱 home: bedframe +
+                sofa surcharge pools + the new per-Model Product Add-ons (Right
+                Drawer etc.). Order Add-ons (Dispose/Lift) join here in PR-2b. */}
+            <button
+              type="button"
+              role="tab"
+              data-active={topTab === 'specialAddons'}
+              className={styles.tabSwitchBtn}
+              onClick={() => setTopTab('specialAddons')}
+            >
+              Special Add-ons
+            </button>
+            {/* Fabrics (Chairman 2026-06-02) — the former Maintenance "Common"
+                section (Fabrics + Fabric Pricing) lifted to its own top tab. */}
+            <button
+              type="button"
+              role="tab"
+              data-active={topTab === 'fabrics'}
+              className={styles.tabSwitchBtn}
+              onClick={() => setTopTab('fabrics')}
+            >
+              Fabrics
+            </button>
             <button
               type="button"
               role="tab"
@@ -326,15 +350,30 @@ export const Products = () => {
             >
               Delivery fee
             </button>
+            {/* Purchase-with-purchase + Promo (换购优惠) — Chairman 2026-06-02/03.
+                Global rules: buy a trigger → redeem a reward at its PWP price, or
+                free for a Promo rule (migration 0145). */}
+            <button
+              type="button"
+              role="tab"
+              data-active={topTab === 'pwp'}
+              className={styles.tabSwitchBtn}
+              onClick={() => setTopTab('pwp')}
+            >
+              PWP &amp; Promo
+            </button>
           </div>
         </div>
       </header>
 
       {topTab === 'sku' && <SkuMasterTab mode={mode} />}
       {topTab === 'modular' && <ProductModelsReadonlyList mode={mode} />}
-      {topTab === 'maintenance' && <MaintenanceTab mode={mode} />}
+      {topTab === 'specialAddons' && <MaintenanceTab mode={mode} sectionFilter={['Bedframe', 'Sofa', 'Product Add-ons', 'Order Add-ons']} />}
+      {topTab === 'fabrics' && <MaintenanceTab mode={mode} sectionFilter={['Common']} />}
+      {topTab === 'maintenance' && <MaintenanceTab mode={mode} sectionFilter={['Products Maintenance']} />}
       {topTab === 'combos' && <SofaComboTab mode={mode} />}
       {topTab === 'delivery' && <DeliveryFeeTab mode={mode} />}
+      {topTab === 'pwp' && <PwpRulesTab mode={mode} />}
     </div>
   );
 };
@@ -349,6 +388,29 @@ export const Products = () => {
    catalog — so changing this number does not yet change what live orders are
    charged. That charging fix is tracked separately.
    ════════════════════════════════════════════════════════════════════════ */
+// Brand-consistent field styling for the Delivery tab. White inputs on the
+// cream page (the old cream-on-cream inputs were invisible); ink text, a clear
+// strong border, brand radius.
+const DF_INPUT: CSSProperties = {
+  width: '100%', padding: '10px 12px', fontSize: 'var(--fs-14)', fontFamily: 'var(--font-sans)',
+  border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)',
+  background: '#fff', color: 'var(--c-ink)', outline: 'none',
+};
+const DF_INPUT_DISABLED: CSSProperties = { ...DF_INPUT, background: 'rgba(34,31,32,0.04)', color: 'var(--fg-muted)' };
+const DF_LABEL: CSSProperties = {
+  display: 'block', fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', fontWeight: 600,
+  letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--fg-soft)', marginBottom: '6px',
+};
+const DF_HINT: CSSProperties = { display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: '6px' };
+const DF_CARD: CSSProperties = {
+  background: 'var(--c-paper)', border: '1px solid var(--line)', borderRadius: 'var(--radius-lg)',
+  boxShadow: 'var(--shadow-2)', padding: 'var(--space-5)',
+};
+const DF_SECTION_TITLE: CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: '8px',
+  fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-16)', fontWeight: 800, color: 'var(--c-ink)', margin: 0,
+};
+
 const DeliveryFeeTab = ({ mode }: { mode: ProductsMode }) => {
   const canEdit = mode === 'full';
   const cfg = useDeliveryFeeConfig();
@@ -412,10 +474,8 @@ const DeliveryFeeTab = ({ mode }: { mode: ProductsMode }) => {
     value: number | '',
     setValue: (v: number | '') => void,
   ) => (
-    <div style={{ marginBottom: 'var(--space-4)', maxWidth: 440 }}>
-      <label htmlFor={id} style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>
-        {label}
-      </label>
+    <div>
+      <label htmlFor={id} style={DF_LABEL}>{label}</label>
       <input
         id={id}
         type="number"
@@ -424,46 +484,182 @@ const DeliveryFeeTab = ({ mode }: { mode: ProductsMode }) => {
         value={value}
         disabled={!canEdit}
         onChange={(e) => setValue(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
-        style={{
-          width: '100%',
-          padding: '8px 10px',
-          fontSize: 'var(--fs-14)',
-          border: '1px solid var(--line-strong)',
-          borderRadius: 'var(--radius-md)',
-          background: canEdit ? 'var(--c-cream)' : 'rgba(34, 31, 32, 0.04)',
-        }}
+        style={canEdit ? DF_INPUT : DF_INPUT_DISABLED}
       />
-      <span style={{ display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-1)' }}>
-        {hint}
-      </span>
+      <span style={DF_HINT}>{hint}</span>
     </div>
   );
 
   return (
-    <div style={{ padding: 'var(--space-5)', maxWidth: 560 }}>
-      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-4)' }}>
-        Every order is charged the base fee. Orders mixing ≥2 product categories
-        (e.g. sofa + mattress) also pay the cross-category surcharge — flat, once.
-        Lead times set the minimum days before a delivery date can be picked.
-        Changes apply to NEW orders only.
-      </p>
+    <div style={{ padding: 'var(--space-5)', maxWidth: 760, display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
+      {/* ── Base fees card ── */}
+      <section style={DF_CARD}>
+        <h2 style={{ ...DF_SECTION_TITLE, marginBottom: 'var(--space-2)' }}>
+          <Truck size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
+          Delivery fees
+        </h2>
+        <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', margin: '0 0 var(--space-5)', maxWidth: 560, lineHeight: 1.5 }}>
+          Every order is charged the base fee. Orders mixing ≥2 product categories
+          (e.g. sofa + mattress) also pay the cross-category surcharge — flat, once.
+          Lead times set the minimum days before a delivery date can be picked.
+          Changes apply to NEW orders only.
+        </p>
 
-      {numberField('df-base', 'Base fee (RM)', 'Charged on every order. Whole RM (no sen).', baseFee, setBaseFee)}
-      {numberField('df-cross', 'Cross-category surcharge (RM)', 'Added once, flat, when an order has ≥2 distinct product categories.', crossCategoryFee, setCrossCategoryFee)}
-      {numberField('df-mattress', 'Mattress + bed frame lead time (days)', 'Minimum days before a delivery date when the cart has a mattress or bed frame.', mattressDays, setMattressDays)}
-      {numberField('df-sofa', 'Sofa lead time (days)', 'Minimum days when the cart has a sofa. Mixed carts use the larger lead time.', sofaDays, setSofaDays)}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(220px, 1fr))', gap: 'var(--space-5)' }}>
+          {numberField('df-base', 'Base fee (RM)', 'Charged on every order. Whole RM (no sen).', baseFee, setBaseFee)}
+          {numberField('df-cross', 'Cross-category surcharge (RM)', 'Added once, flat, when an order has ≥2 distinct product categories.', crossCategoryFee, setCrossCategoryFee)}
+          {numberField('df-mattress', 'Mattress + bed frame lead time (days)', 'Min days before a delivery date when the cart has a mattress or bed frame.', mattressDays, setMattressDays)}
+          {numberField('df-sofa', 'Sofa lead time (days)', 'Min days when the cart has a sofa. Mixed carts use the larger lead time.', sofaDays, setSofaDays)}
+        </div>
 
-      {error && <div style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }} role="alert">{error}</div>}
-      {success && <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }}>Saved.</div>}
+        {error && <div style={{ color: 'var(--c-festive-b)', fontSize: 'var(--fs-13)', marginTop: 'var(--space-4)' }} role="alert">{error}</div>}
+        {success && <div style={{ color: 'var(--c-secondary-a)', fontSize: 'var(--fs-13)', fontWeight: 600, marginTop: 'var(--space-4)' }}>Saved.</div>}
 
-      {canEdit && (
-        <Button variant="primary" onClick={() => void onSave()} disabled={update.isPending}>
-          {update.isPending ? 'Saving…' : 'Save'}
-        </Button>
-      )}
+        {canEdit && (
+          <div style={{ marginTop: 'var(--space-5)' }}>
+            <Button variant="primary" onClick={() => void onSave()} disabled={update.isPending}>
+              {update.isPending ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
+        )}
+      </section>
+
+      <SpecialDeliveryFeesSection canEdit={canEdit} />
     </div>
   );
 };
+
+/* ════════════════════════════════════════════════════════════════════════
+   Special-model delivery fees (migration 0140). Some Models cost more to
+   transport (e.g. full-latex mattresses, a special sofa). A Model listed here
+   has its standalone fee OVERRIDE the base; when its SO is a cross-category
+   follow-up linked to an earlier SO, the cross-category price applies instead.
+   There is no auto "latex" signal — a row here IS the manual tag. Fees whole RM.
+   ════════════════════════════════════════════════════════════════════════ */
+const SpecialDeliveryFeesSection = ({ canEdit }: { canEdit: boolean }) => {
+  const list   = useSpecialDeliveryFees();
+  const upsert = useUpsertSpecialDeliveryFee();
+  const del    = useDeleteSpecialDeliveryFee();
+  const models = useProductModels();
+
+  const [modelId, setModelId]     = useState('');
+  const [standalone, setStandalone] = useState<number | ''>('');
+  const [crossFee, setCrossFee]   = useState<number | ''>('');
+  const [err, setErr]             = useState<string | null>(null);
+
+  const onAdd = async () => {
+    setErr(null);
+    if (!modelId) { setErr('Pick a Model.'); return; }
+    if (typeof standalone !== 'number' || typeof crossFee !== 'number') {
+      setErr('Enter both fees as whole-RM numbers.'); return;
+    }
+    try {
+      await upsert.mutateAsync({ modelId, standaloneFee: standalone, crossCatFollowupFee: crossFee });
+      setModelId(''); setStandalone(''); setCrossFee('');
+    } catch (e) { setErr(String((e as Error).message ?? e)); }
+  };
+
+  const rows = list.data ?? [];
+
+  return (
+    <section style={DF_CARD}>
+      <h2 style={{ ...DF_SECTION_TITLE, marginBottom: 'var(--space-2)' }}>
+        <Star size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
+        Special-model delivery fees
+      </h2>
+      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', margin: '0 0 var(--space-5)', maxWidth: 560, lineHeight: 1.5 }}>
+        Pick a Model that costs more to transport (e.g. a full-latex mattress).
+        Its standalone fee replaces the base fee. The cross-category price is
+        charged instead when this Model is bought as a linked follow-up to an
+        earlier order. Whole RM.
+      </p>
+
+      <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+        <table className={styles.table}>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th style={{ textAlign: 'right' }}>Standalone (RM)</th>
+              <th style={{ textAlign: 'right' }}>Cross-category (RM)</th>
+              {canEdit && <th style={{ width: 56 }} aria-label="Actions" />}
+            </tr>
+          </thead>
+          <tbody>
+            {list.isLoading ? (
+              <tr><td colSpan={canEdit ? 4 : 3} style={{ color: 'var(--fg-muted)' }}>Loading…</td></tr>
+            ) : rows.length === 0 ? (
+              <tr><td colSpan={canEdit ? 4 : 3} style={{ color: 'var(--fg-muted)' }}>No special models yet. Add one below.</td></tr>
+            ) : rows.map((r) => (
+              <tr key={r.modelId}>
+                <td>
+                  <div style={{ fontWeight: 700, color: 'var(--c-ink)' }}>{r.modelName}</div>
+                  {(r.modelCode || r.category) && (
+                    <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 2 }}>
+                      {[r.modelCode, r.category].filter(Boolean).join(' · ')}
+                    </div>
+                  )}
+                </td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-ink)', fontWeight: 600 }}>RM {r.standaloneFee}</td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-ink)', fontWeight: 600 }}>RM {r.crossCatFollowupFee}</td>
+                {canEdit && (
+                  <td style={{ textAlign: 'right' }}>
+                    <button
+                      type="button"
+                      title="Remove"
+                      aria-label={`Remove ${r.modelName}`}
+                      onClick={() => void del.mutate(r.modelId)}
+                      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', background: '#fff', color: 'var(--c-festive-b)', cursor: 'pointer' }}
+                    >
+                      <Trash2 size={16} strokeWidth={1.75} />
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {canEdit && (
+        <div style={{ marginTop: 'var(--space-5)', paddingTop: 'var(--space-5)', borderTop: '1px solid var(--line)' }}>
+          <div style={{ ...DF_LABEL, marginBottom: 'var(--space-3)' }}>Add a special model</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 2fr) 1fr 1fr auto', gap: 'var(--space-3)', alignItems: 'end' }}>
+            <div>
+              <label style={DF_LABEL}>Model</label>
+              <select value={modelId} onChange={(e) => setModelId(e.target.value)} style={DF_INPUT}>
+                <option value="">Pick a Model…</option>
+                {(models.data ?? []).map((m) => (
+                  <option key={m.id} value={m.id}>{m.name} ({m.category})</option>
+                ))}
+              </select>
+            </div>
+            {numberInputCell('Standalone (RM)', standalone, setStandalone)}
+            {numberInputCell('Cross-category (RM)', crossFee, setCrossFee)}
+            <Button variant="primary" onClick={() => void onAdd()} disabled={upsert.isPending}>
+              <Plus size={16} strokeWidth={1.75} />
+              {upsert.isPending ? 'Saving…' : 'Add'}
+            </Button>
+          </div>
+          {err && <div style={{ color: 'var(--c-festive-b)', fontSize: 'var(--fs-13)', marginTop: 'var(--space-3)' }} role="alert">{err}</div>}
+        </div>
+      )}
+    </section>
+  );
+};
+
+const numberInputCell = (label: string, value: number | '', setValue: (v: number | '') => void) => (
+  <div>
+    <label style={DF_LABEL}>{label}</label>
+    <input
+      type="number"
+      min={0}
+      step={1}
+      value={value}
+      onChange={(e) => setValue(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
+      style={DF_INPUT}
+    />
+  </div>
+);
 
 /* ════════════════════════════════════════════════════════════════════════
    Modular tab — POS list of Models.
@@ -752,6 +948,25 @@ const ModelAllowedOptionsDrawer = ({
   const model = useProductModel(modelId);
   const updateModel = useUpdateProductModel();
   const masterCfg = useMaintenanceConfig('master');
+  // Fabric pool for the FABRICS section (sofa + bedframe). Synced from the
+  // Backend Fabric Converter (migration 0127): series = fabric_library, colours
+  // = fabric_colours. On/off is per colour, stored as allowed_options.fabrics.
+  const fabricLib = useFabricLibrary();
+  const fabricColours = useFabricColours();
+  // Special Add-ons pool for the per-Model on/off section (migration 0134).
+  // MUST stay above the early-return guards below (hooks order — a hook placed
+  // after `if (model.isLoading) return` causes a "Rendered more hooks" crash
+  // that tsc/vite don't catch).
+  const specialAddons = useSpecialAddons();
+  const coloursBySeries = useMemo(() => {
+    const mp = new Map<string, { colourId: string; label: string }[]>();
+    for (const c of (fabricColours.data ?? [])) {
+      const arr = mp.get(c.fabricId) ?? [];
+      arr.push({ colourId: c.colourId, label: c.label });
+      mp.set(c.fabricId, arr);
+    }
+    return mp;
+  }, [fabricColours.data]);
 
   /* Draft of the allowed_options under edit. Initialised once when the row
      resolves; the chip toggles mutate this draft, Save writes it back. */
@@ -803,11 +1018,15 @@ const ModelAllowedOptionsDrawer = ({
     : isBedframe
       ? pricedValues(cfg.legHeights)
       : [];
-  const specialPool: string[]     = isSofa
-    ? pricedValues(cfg.sofaSpecials)
-    : isBedframe
-      ? pricedValues(cfg.specials)
-      : [];
+  // Special Add-ons (migration 0134) — per-Model on/off sources from the
+  // special_addons table filtered by this Model's category, replacing the old
+  // flat cfg.specials / cfg.sofaSpecials pools. Ticks still write
+  // allowed_options.specials by CODE (special_addons.code == the old value), so
+  // every Model's existing on/off is preserved and the server gate is unchanged.
+  // Now also works for MATTRESS Models (the old pools were bedframe/sofa only).
+  const specialAddonPool: string[] = (specialAddons.data ?? [])
+    .filter((a) => a.active && a.categories.includes(m.category))
+    .map((a) => a.code);
 
   const d = draft ?? {};
   const isTicked = (pool: keyof AllowedOptions, v: string): boolean => {
@@ -822,6 +1041,17 @@ const ModelAllowedOptionsDrawer = ({
       if (idx >= 0) arr.splice(idx, 1);
       else arr.push(v);
       (next as Record<string, unknown>)[pool] = arr;
+      return next;
+    });
+  };
+  // Bulk on/off for the FABRICS section (All on / All off).
+  const setFabricsBulk = (codes: string[], on: boolean) => {
+    setDraft((prev) => {
+      const next: AllowedOptions = JSON.parse(JSON.stringify(prev ?? {}));
+      const cur = new Set((next.fabrics as string[] | undefined) ?? []);
+      if (on) codes.forEach((c) => cur.add(c));
+      else codes.forEach((c) => cur.delete(c));
+      next.fabrics = [...cur];
       return next;
     });
   };
@@ -863,12 +1093,22 @@ const ModelAllowedOptionsDrawer = ({
           onToggle={(v) => toggle('leg_heights', v)}
         />
       )}
-      {specialPool.length > 0 && (
+      {specialAddonPool.length > 0 && (
         <AllowedOptionsSection
-          label="Specials"
-          pool={specialPool}
+          label="Special Add-ons"
+          pool={specialAddonPool}
           isTicked={(v) => isTicked('specials', v)}
           onToggle={(v) => toggle('specials', v)}
+        />
+      )}
+
+      {(isSofa || isBedframe) && (
+        <FabricAllowedSection
+          series={(fabricLib.data ?? []).map((f) => ({ id: f.id, label: f.label }))}
+          coloursBySeries={coloursBySeries}
+          isTicked={(code) => isTicked('fabrics', code)}
+          onToggle={(code) => toggle('fabrics', code)}
+          onSetAll={setFabricsBulk}
         />
       )}
 
@@ -993,6 +1233,86 @@ const AllowedOptionsSection = ({
     </div>
   </div>
 );
+
+/* FABRICS section for the Modular drawer (Chairman 2026-06-01). On/off is per
+   COLOUR (the single authority), grouped under its SERIES header. The chip text
+   is the colour NAME (e.g. "Sand"); the toggle value is the colour CODE
+   (fabric_colours.colour_id, e.g. "CG-002") stored in allowed_options.fabrics. */
+const FabricAllowedSection = ({
+  series,
+  coloursBySeries,
+  isTicked,
+  onToggle,
+  onSetAll,
+}: {
+  series: { id: string; label: string }[];
+  coloursBySeries: Map<string, { colourId: string; label: string }[]>;
+  isTicked: (code: string) => boolean;
+  onToggle: (code: string) => void;
+  onSetAll: (codes: string[], on: boolean) => void;
+}) => {
+  const withColours = series.filter((s) => (coloursBySeries.get(s.id) ?? []).length > 0);
+  // Per-series "All on / All off" — bulk-toggle just that series' colour codes.
+  const bulkBtn = (codes: string[], label: string, on: boolean) => (
+    <button
+      type="button"
+      onClick={() => onSetAll(codes, on)}
+      style={{
+        padding: '2px 10px', borderRadius: 999, border: '1px solid var(--line)',
+        background: 'transparent', color: 'var(--c-ink)', cursor: 'pointer',
+        fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
+      }}
+    >{label}</button>
+  );
+  return (
+    <div style={{ marginBottom: 'var(--space-4)' }}>
+      <div style={{
+        fontFamily: 'var(--font-button)', fontSize: 'var(--fs-12)', fontWeight: 600,
+        letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--fg-muted)',
+        marginBottom: 'var(--space-2)',
+      }}>Fabrics</div>
+      {withColours.length === 0 ? (
+        <div style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
+          No fabrics yet — add them in the Backend Fabric Converter.
+        </div>
+      ) : withColours.map((s) => (
+        <div key={s.id} style={{ marginBottom: 'var(--space-3)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-1)' }}>
+            <span style={{ fontSize: 'var(--fs-12)', fontWeight: 600, color: 'var(--c-ink)' }}>{s.label}</span>
+            <span style={{ display: 'inline-flex', gap: 'var(--space-1)', marginLeft: 'auto' }}>
+              {bulkBtn((coloursBySeries.get(s.id) ?? []).map((c) => c.colourId), 'All on', true)}
+              {bulkBtn((coloursBySeries.get(s.id) ?? []).map((c) => c.colourId), 'All off', false)}
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+            {(coloursBySeries.get(s.id) ?? []).map((c) => {
+              const on = isTicked(c.colourId);
+              return (
+                <button
+                  key={c.colourId}
+                  type="button"
+                  onClick={() => onToggle(c.colourId)}
+                  title={c.colourId}
+                  style={{
+                    padding: '4px 12px', borderRadius: 999,
+                    border: `1px solid ${on ? 'var(--c-orange)' : 'var(--line)'}`,
+                    background: on ? 'var(--c-orange)' : 'var(--c-cream)',
+                    color: on ? 'var(--c-paper)' : 'var(--c-ink)',
+                    fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'background 120ms ease, color 120ms ease, border-color 120ms ease',
+                  }}
+                >
+                  {c.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
 
 /* ════════════════════════════════════════════════════════════════════════
    SKU Master tab
@@ -1232,8 +1552,8 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   const colCount = (canEdit ? 1 : 0) + (isSofaView
     ? 3 + sofaSizes.length + 1
     : isMattressView
-      ? 6
-      : 6);   // Price 1 / price1_sen column removed — global fabric Δ replaces it (0124)
+      ? 7    // + PWP Price column (0128)
+      : 7);  // Price 1 removed (0124); + PWP Price column (0128)
 
   return (
     <>
@@ -1376,12 +1696,14 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
                   <th>Branding</th>
                   <th>Size</th>
                   <th style={{ textAlign: 'right' }}>Price</th>
+                  <th style={{ textAlign: 'right' }}>PWP Price</th>
                 </>
               ) : (
                 <>
                   <th>Category</th>
                   <th>Size</th>
                   <th style={{ textAlign: 'right' }}>Base Price</th>
+                  <th style={{ textAlign: 'right' }}>PWP Price</th>
                 </>
               )}
               <th style={{ textAlign: 'right' }}>Unit (m³)</th>
@@ -1490,6 +1812,7 @@ const ProductRow = ({
   // committing on blur. Reset whenever the row's data changes upstream.
   const [draftSeat, setDraftSeat] = useState<SeatHeightPrice[] | null>(null);
   const [draftSell, setDraftSell] = useState<number | null>(null);
+  const [draftPwp, setDraftPwp] = useState<number | null>(null);
   const [draftBranding, setDraftBranding] = useState<string | null>(null);
   const update = useUpdateMfgProductPrices();
 
@@ -1508,6 +1831,12 @@ const ProductRow = ({
   // base_price_sen / price1_sen are COST and not editable from the POS side.
   const flushSellPrice = (val: number | null) => {
     update.mutate({ id: row.id, sellPriceSen: val });
+  };
+
+  // PWP (换购) SELLING base price (0128). Parallel to sell price; mattress +
+  // bedframe only (sofa column reserved/unused). NOT NULL column → cleared = 0.
+  const flushPwpPrice = (val: number | null) => {
+    update.mutate({ id: row.id, pwpPriceSen: val ?? 0 });
   };
 
   return (
@@ -1670,6 +1999,21 @@ const ProductRow = ({
               fmtRm(row.sell_price_sen ?? row.base_price_sen)
             )}
           </td>
+          {/* PWP (换购) price — selling-side, parallel to the price above.
+              0 = not set → shows "—". NOT NULL column so cleared commits 0. */}
+          <td className={(draftPwp ?? row.pwp_price_sen) ? styles.price : styles.priceEmpty}>
+            {editMode ? (
+              <PriceInput
+                valueSen={draftPwp ?? (row.pwp_price_sen || null)}
+                onCommit={(v) => {
+                  setDraftPwp(v);
+                  flushPwpPrice(v);
+                }}
+              />
+            ) : (
+              row.pwp_price_sen ? fmtRm(row.pwp_price_sen) : '—'
+            )}
+          </td>
         </>
       ) : (
         <>
@@ -1689,6 +2033,21 @@ const ProductRow = ({
               />
             ) : (
               fmtRm(row.sell_price_sen ?? row.base_price_sen)
+            )}
+          </td>
+          {/* PWP (换购) price — selling-side, parallel to Base Price. 0 = not
+              set → shows "—". NOT NULL column so cleared commits 0. */}
+          <td className={(draftPwp ?? row.pwp_price_sen) ? styles.price : styles.priceEmpty}>
+            {editMode ? (
+              <PriceInput
+                valueSen={draftPwp ?? (row.pwp_price_sen || null)}
+                onCommit={(v) => {
+                  setDraftPwp(v);
+                  flushPwpPrice(v);
+                }}
+              />
+            ) : (
+              row.pwp_price_sen ? fmtRm(row.pwp_price_sen) : '—'
             )}
           </td>
         </>
@@ -2048,11 +2407,13 @@ type MaintenanceListKey =
   | 'sofaQuickPresets' // PR (Commander 2026-05-28) — module-composition presets
   | 'mattressSizes'    // PR #50 — Mattress size pool (K/Q/S/SS)
   | 'fabrics'
-  | 'fabricPricing';   // migration 0124 — POS selling fabric-tier add-on editor
+  | 'fabricPricing'    // migration 0124 — POS selling fabric-tier add-on editor
+  | 'productAddons'    // migration 0134 — Special Add-ons (Product) manager
+  | 'orderAddons';     // order-level add-ons (Dispose/Lift) — editor moved from Backend
 
 // PR #208 — exported so SupplierDetail can pass a `sectionFilter` prop to
 // the reused MaintenanceTab.
-export type MaintenanceSection = 'Bedframe' | 'Sofa' | 'Common' | 'Products Maintenance';
+export type MaintenanceSection = 'Bedframe' | 'Sofa' | 'Common' | 'Products Maintenance' | 'Product Add-ons' | 'Order Add-ons';
 
 const MAINTENANCE_TABS: {
   key: MaintenanceListKey;
@@ -2066,18 +2427,28 @@ const MAINTENANCE_TABS: {
   { key: 'totalHeights', label: 'Total Heights', description: 'Total height (Divan + Gap + Leg) surcharge pricing', priced: true, section: 'Bedframe' },
   { key: 'gaps', label: 'Gaps', description: 'Bedframe gap height options (inches)', priced: false, section: 'Bedframe' },
   { key: 'legHeights', label: 'Leg Heights', description: 'Bedframe leg height options with surcharge pricing', priced: true, section: 'Bedframe' },
-  { key: 'specials', label: 'Specials', description: 'Bedframe special order options with surcharge pricing', priced: true, section: 'Bedframe' },
+  // NOTE (Special Add-ons reorg, 2026-06-02): the old flat 'specials' /
+  // 'sofaSpecials' editor entries + 'sofaQuickPresets' are intentionally NOT
+  // listed here anymore. Bedframe/Sofa specials are taken over by the new
+  // Product Add-ons manager (section below, migration 0134); Quick Presets was
+  // retired (Chairman). Their MaintenanceListKey union members + the underlying
+  // maintenance_config data are kept so the Modular allowed-options drawer and
+  // the server price source keep working until PR-3 switches the source.
 
   // ── Sofa (commander-edited variant pools) ───────────────────────────────
   { key: 'sofaSizes', label: 'Sizes', description: 'Available sofa seat height sizes (inches)', priced: false, section: 'Sofa' },
   { key: 'sofaLegHeights', label: 'Leg Heights', description: 'Sofa leg height options with surcharge pricing', priced: true, section: 'Sofa' },
-  { key: 'sofaSpecials', label: 'Specials', description: 'Sofa special order options with surcharge pricing', priced: true, section: 'Sofa' },
-  // PR (Commander 2026-05-28) — Quick Presets: module-composition shortcuts
-  // (e.g. "1-Seater" = 1A-LHF + 1A-RHF). Drives the New Combo dialog's
-  // quick-pick chip rail + the POS Configurator's Quick Pick screen. POS
-  // sales_director can ADD presets here but only admin can edit/delete
-  // (matches the role gate on other POS Maintenance sub-tabs).
-  { key: 'sofaQuickPresets', label: 'Quick Presets', description: 'Module-composition shortcuts (e.g. 1-Seater = 1A-LHF + 1A-RHF). Used by the New Combo dialog and POS Quick Pick.', priced: false, section: 'Sofa' },
+
+  // ── Product Add-ons (Special Add-ons tab, migration 0134) ───────────────
+  // The grown-up "Specials": per-Model product add-on with a selling surcharge
+  // + 0..N follow-up choice groups, shown as an SO line description (not a SKU).
+  // Edits the special_addons table via /special-addons (own panel below).
+  { key: 'productAddons', label: 'Product Add-ons', description: 'Per-Model add-ons (e.g. Right Drawer → 10″/8″) priced on top of the product, shown as an SO description. Not a SKU.', priced: false, section: 'Product Add-ons' },
+
+  // ── Order Add-ons (whole-order one-time fees; editor moved from Backend) ──
+  // Dispose old mattress/bedframe, Lift access. Picked at checkout (handover),
+  // not bound to a Model. Edits the `addons` table directly (RLS admin write).
+  { key: 'orderAddons', label: 'Order Add-ons', description: 'Whole-order one-time fees (Dispose old mattress/bedframe, Lift access). Picked at checkout, not bound to a Model.', priced: false, section: 'Order Add-ons' },
 
   // ── Common (cross-category single pool) ─────────────────────────────────
   { key: 'fabrics', label: 'Fabrics', description: 'Procurement fabric tiers (cost side, read-only reference).', priced: false, section: 'Common' },
@@ -2146,7 +2517,7 @@ export const MaintenanceTab = ({
   // PR #208 — sectionFilter restricts which sections show on the left rail.
   // BEDFRAME-only supplier hides Sofa sub-tabs entirely so commander only
   // edits surcharges that actually apply to what this supplier supplies.
-  const allSections: MaintenanceSection[] = ['Bedframe', 'Sofa', 'Common', 'Products Maintenance'];
+  const allSections: MaintenanceSection[] = ['Bedframe', 'Sofa', 'Product Add-ons', 'Order Add-ons', 'Common', 'Products Maintenance'];
   const sections: MaintenanceSection[] = sectionFilter ?? allSections;
   const visibleTabs = useMemo(
     () => MAINTENANCE_TABS.filter((t) => sections.includes(t.section)),
@@ -2291,7 +2662,12 @@ export const MaintenanceTab = ({
           <div key={section}>
             <div className={styles.maintSection}>{section}</div>
             {MAINTENANCE_TABS.filter((t) => t.section === section).map((t) => {
-              const count = t.key === 'fabrics' ? fabricsCount : countItems(config, t.key);
+              // productAddons is backed by the special_addons table, not the
+              // maintenance_config JSON, so countItems can't see it — skip the
+              // badge rather than show a misleading "(0)".
+              const count = t.key === 'fabrics' ? fabricsCount
+                : (t.key === 'productAddons' || t.key === 'orderAddons') ? null
+                : countItems(config, t.key);
               return (
                 <button
                   key={t.key}
@@ -2301,7 +2677,7 @@ export const MaintenanceTab = ({
                   onClick={() => setActiveKey(t.key)}
                 >
                   <span>{t.label}</span>
-                  <span className={styles.maintCount}>({count})</span>
+                  {count !== null && <span className={styles.maintCount}>({count})</span>}
                 </button>
               );
             })}
@@ -3482,6 +3858,14 @@ const MaintenanceList = ({
     return <FabricPricingPanel />;
   }
 
+  if (listKey === 'productAddons') {
+    return <SpecialAddonsManager />;
+  }
+
+  if (listKey === 'orderAddons') {
+    return <OrderAddonsManager />;
+  }
+
   // PR #74 — Code Format tab removed (Commander 2026-05-26: preset only).
   // The CodeFormatPanel component is kept in the file dead-code below in
   // case we ever want to re-expose it; the API's hardcoded templates take
@@ -4242,6 +4626,390 @@ const FabricPricingPanel = () => {
                 <td style={{ padding: '6px 8px' }}>{tierBtn(row, 'bedframeTier')}</td>
               </tr>
             ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+};
+
+/* ─── Product Add-ons manager (migration 0134) ────────────────────────────
+   The grown-up "Specials": per-Model product add-on with a selling surcharge
+   + 0..N follow-up choice groups (e.g. Right Drawer → Thickness 10″/8″), shown
+   as an SO line description, not a SKU. Edits the special_addons table via
+   /special-addons. Self-contained (own queries + role gate), mounted by the
+   MaintenanceList dispatch under the Special Add-ons tab. */
+const SA_CATEGORIES = ['BEDFRAME', 'MATTRESS', 'SOFA'] as const;
+const senToRm = (sen: number): number => Math.round(sen) / 100;
+const rmToSen = (rm: number): number => Math.round(rm * 100);
+
+const emptySpecialAddon = (): SpecialAddonInput => ({
+  code: '', label: '', soDescription: '', categories: [],
+  sellingPriceSen: 0, costPriceSen: 0, optionGroups: [], active: true, sortOrder: 0,
+});
+
+const SpecialAddonsManager = () => {
+  const canEdit = useProductsMode() === 'full';
+  const list    = useSpecialAddons();
+  const create  = useCreateSpecialAddon();
+  const update  = useUpdateSpecialAddon();
+  const del     = useDeleteSpecialAddon();
+
+  const [editing, setEditing] = useState<{ id: string | null; draft: SpecialAddonInput } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const startNew = () => { setError(null); setEditing({ id: null, draft: emptySpecialAddon() }); };
+  const startEdit = (row: SpecialAddonRow) => {
+    setError(null);
+    setEditing({ id: row.id, draft: {
+      code: row.code, label: row.label, soDescription: row.soDescription,
+      categories: [...row.categories], sellingPriceSen: row.sellingPriceSen,
+      costPriceSen: row.costPriceSen, optionGroups: JSON.parse(JSON.stringify(row.optionGroups)),
+      active: row.active, sortOrder: row.sortOrder,
+    } });
+  };
+
+  const patch = (p: Partial<SpecialAddonInput>) =>
+    setEditing((e) => (e ? { ...e, draft: { ...e.draft, ...p } } : e));
+
+  const toggleCat = (cat: string) => {
+    if (!editing) return;
+    const has = editing.draft.categories.includes(cat);
+    patch({ categories: has ? editing.draft.categories.filter((c) => c !== cat) : [...editing.draft.categories, cat] });
+  };
+
+  // ── option_groups (追问) editing ────────────────────────────────────────
+  const setGroups = (groups: SpecialAddonGroup[]) => patch({ optionGroups: groups });
+  const addGroup = () => editing && setGroups([...editing.draft.optionGroups, { label: '', required: true, choices: [{ label: '', extraSen: 0 }] }]);
+  const removeGroup = (gi: number) => editing && setGroups(editing.draft.optionGroups.filter((_, i) => i !== gi));
+  const patchGroup = (gi: number, p: Partial<SpecialAddonGroup>) =>
+    editing && setGroups(editing.draft.optionGroups.map((g, i) => (i === gi ? { ...g, ...p } : g)));
+  const addChoice = (gi: number) =>
+    editing && patchGroup(gi, { choices: [...editing.draft.optionGroups[gi]!.choices, { label: '', extraSen: 0 }] });
+  const patchChoice = (gi: number, ci: number, p: Partial<{ label: string; extraSen: number }>) =>
+    editing && patchGroup(gi, { choices: editing.draft.optionGroups[gi]!.choices.map((c, i) => (i === ci ? { ...c, ...p } : c)) });
+  const removeChoice = (gi: number, ci: number) =>
+    editing && patchGroup(gi, { choices: editing.draft.optionGroups[gi]!.choices.filter((_, i) => i !== ci) });
+
+  const save = async () => {
+    if (!editing) return;
+    setError(null);
+    const d = editing.draft;
+    if (!d.code.trim() || !d.label.trim()) { setError('Code and label are required.'); return; }
+    if (d.categories.length === 0) { setError('Pick at least one category.'); return; }
+    for (const g of d.optionGroups) {
+      if (!g.label.trim()) { setError('Every follow-up question needs a label.'); return; }
+      if (g.choices.length === 0 || g.choices.some((c) => !c.label.trim())) { setError(`"${g.label || 'question'}" needs at least one named choice.`); return; }
+    }
+    try {
+      if (editing.id) await update.mutateAsync({ id: editing.id, patch: d });
+      else await create.mutateAsync(d);
+      setEditing(null);
+    } catch (err) { setError(String((err as Error).message ?? err)); }
+  };
+
+  const remove = async (row: SpecialAddonRow) => {
+    if (!window.confirm(`Delete "${row.label}"? This removes the add-on definition (existing orders keep their saved text).`)) return;
+    setError(null);
+    try { await del.mutateAsync(row.id); if (editing?.id === row.id) setEditing(null); }
+    catch (err) { setError(String((err as Error).message ?? err)); }
+  };
+
+  const rm = (sen: number) => `${sen < 0 ? '−' : '+'}RM ${Math.abs(senToRm(sen)).toLocaleString('en-MY')}`;
+  const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' };
+
+  return (
+    <div style={{ padding: 'var(--space-5)', maxWidth: 860 }}>
+      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-4)' }}>
+        每个 add-on = 名字 + SO 描述 + 适用 Category + 加价（可为负 = 减价）+ 0~多个追问（如 Right Drawer → 10″/8″，每个选项可各带价）。
+        勾哪个 Model 用，在 <strong>Modular</strong> tab 决定。只动 POS 卖价，不开新 SKU、不动成本。
+      </p>
+
+      {canEdit && !editing && (
+        <Button variant="primary" size="sm" onClick={startNew}>+ New add-on</Button>
+      )}
+      {error && <div style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', margin: 'var(--space-3) 0' }} role="alert">{error}</div>}
+
+      {/* ── Editor ── */}
+      {editing && (
+        <div style={{ border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-4)', margin: 'var(--space-3) 0', background: 'var(--c-paper, #fff)' }}>
+          <h3 style={{ fontSize: 'var(--fs-15)', fontWeight: 600, marginBottom: 'var(--space-3)' }}>
+            {editing.id ? `Edit · ${editing.draft.label || editing.draft.code}` : 'New special add-on'}
+          </h3>
+          <div style={{ display: 'flex', gap: 'var(--space-4)', flexWrap: 'wrap', marginBottom: 'var(--space-3)' }}>
+            <label style={{ flex: '1 1 220px' }}>
+              <span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>Code (stable key)</span>
+              <input style={inputStyle} value={editing.draft.code} disabled={!!editing.id}
+                onChange={(e) => patch({ code: e.target.value })} placeholder="Right Drawer" />
+              {editing.id && <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>Code can't change after creation (it's the Model/order key).</span>}
+            </label>
+            <label style={{ flex: '1 1 220px' }}>
+              <span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>Label</span>
+              <input style={inputStyle} value={editing.draft.label} onChange={(e) => patch({ label: e.target.value })} placeholder="Right Drawer" />
+            </label>
+          </div>
+          <label style={{ display: 'block', marginBottom: 'var(--space-3)' }}>
+            <span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>SO description (prints under the product)</span>
+            <input style={inputStyle} value={editing.draft.soDescription} onChange={(e) => patch({ soDescription: e.target.value })} placeholder="Right pull-out drawer" />
+          </label>
+
+          <div style={{ display: 'flex', gap: 'var(--space-5)', flexWrap: 'wrap', marginBottom: 'var(--space-3)' }}>
+            <div>
+              <span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>Categories</span>
+              <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
+                {SA_CATEGORIES.map((cat) => (
+                  <label key={cat} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 'var(--fs-13)' }}>
+                    <input type="checkbox" checked={editing.draft.categories.includes(cat)} onChange={() => toggleCat(cat)} />
+                    {cat}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <label>
+              <span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>Base price (RM, can be −)</span>
+              <input type="number" step={1} style={{ ...inputStyle, width: 140 }}
+                value={senToRm(editing.draft.sellingPriceSen)}
+                onChange={(e) => patch({ sellingPriceSen: rmToSen(Number(e.target.value) || 0) })} />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'flex-end', gap: 6, fontSize: 'var(--fs-13)' }}>
+              <input type="checkbox" checked={editing.draft.active} onChange={(e) => patch({ active: e.target.checked })} />
+              Active
+            </label>
+          </div>
+
+          {/* option_groups */}
+          <div style={{ borderTop: '1px solid var(--line)', paddingTop: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
+            <span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 6 }}>Follow-up questions (optional)</span>
+            {editing.draft.optionGroups.map((g, gi) => (
+              <div key={gi} style={{ border: '1px solid var(--line)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', marginBottom: 'var(--space-2)' }}>
+                <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginBottom: 6 }}>
+                  <input style={{ ...inputStyle, flex: '1 1 160px' }} placeholder="Question (e.g. Thickness)" value={g.label} onChange={(e) => patchGroup(gi, { label: e.target.value })} />
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 'var(--fs-12)' }}>
+                    <input type="checkbox" checked={g.required} onChange={(e) => patchGroup(gi, { required: e.target.checked })} /> required
+                  </label>
+                  <button type="button" onClick={() => removeGroup(gi)} style={{ fontSize: 'var(--fs-12)', color: 'var(--c-burnt, #A6471E)', background: 'none', border: 'none', cursor: 'pointer' }}>remove ✕</button>
+                </div>
+                {g.choices.map((c, ci) => (
+                  <div key={ci} style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 4, paddingLeft: 'var(--space-3)' }}>
+                    <input style={{ ...inputStyle, flex: '1 1 120px' }} placeholder={'Choice (e.g. 10")'} value={c.label} onChange={(e) => patchChoice(gi, ci, { label: e.target.value })} />
+                    <input type="number" step={1} style={{ ...inputStyle, width: 120 }} title="Extra RM (can be −)" value={senToRm(c.extraSen)} onChange={(e) => patchChoice(gi, ci, { extraSen: rmToSen(Number(e.target.value) || 0) })} />
+                    <button type="button" onClick={() => removeChoice(gi, ci)} style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', background: 'none', border: 'none', cursor: 'pointer' }}>✕</button>
+                  </div>
+                ))}
+                <button type="button" onClick={() => addChoice(gi)} style={{ fontSize: 'var(--fs-12)', marginLeft: 'var(--space-3)', background: 'none', border: '1px dashed var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '2px 8px', cursor: 'pointer' }}>+ choice</button>
+              </div>
+            ))}
+            <button type="button" onClick={addGroup} style={{ fontSize: 'var(--fs-13)', background: 'none', border: '1px dashed var(--line-strong)', borderRadius: 'var(--radius-md)', padding: '4px 10px', cursor: 'pointer' }}>+ Add question</button>
+          </div>
+
+          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+            <Button variant="primary" size="sm" onClick={() => void save()} disabled={create.isPending || update.isPending}>
+              {create.isPending || update.isPending ? 'Saving…' : 'Save'}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => { setEditing(null); setError(null); }}>Cancel</Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── List ── */}
+      {list.isLoading ? (
+        <div style={{ color: 'var(--fg-muted)', marginTop: 'var(--space-3)' }}>Loading add-ons…</div>
+      ) : list.error ? (
+        <div style={{ color: 'var(--c-burnt, #A6471E)', marginTop: 'var(--space-3)' }}>Failed to load: {String(list.error)}</div>
+      ) : (list.data ?? []).length === 0 ? (
+        <div style={{ color: 'var(--fg-muted)', marginTop: 'var(--space-3)' }}>No special add-ons yet.</div>
+      ) : (
+        <table style={{ borderCollapse: 'collapse', width: '100%', marginTop: 'var(--space-3)' }}>
+          <thead>
+            <tr style={{ textAlign: 'left', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+              <th style={{ padding: '6px 8px' }}>Add-on</th>
+              <th style={{ padding: '6px 8px' }}>Categories</th>
+              <th style={{ padding: '6px 8px' }}>Base</th>
+              <th style={{ padding: '6px 8px' }}>Follow-up</th>
+              <th style={{ padding: '6px 8px' }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {(list.data ?? []).map((row) => (
+              <tr key={row.id} style={{ borderTop: '1px solid var(--line)', opacity: row.active ? 1 : 0.5 }}>
+                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>
+                  <div style={{ fontWeight: 600 }}>{row.label}</div>
+                  <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{row.soDescription || row.code}</div>
+                </td>
+                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-12)' }}>{row.categories.join(', ') || '—'}</td>
+                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-13)', fontWeight: 600, whiteSpace: 'nowrap' }}>{rm(row.sellingPriceSen)}</td>
+                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                  {row.optionGroups.length === 0 ? '—' : row.optionGroups.map((g) => `${g.label} (${g.choices.length})`).join(' · ')}
+                </td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {canEdit && (
+                    <>
+                      <button type="button" onClick={() => startEdit(row)} style={{ fontSize: 'var(--fs-12)', background: 'none', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', padding: '3px 10px', cursor: 'pointer', marginRight: 6 }}>Edit</button>
+                      <button type="button" onClick={() => void remove(row)} style={{ fontSize: 'var(--fs-12)', background: 'none', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', padding: '3px 10px', cursor: 'pointer', color: 'var(--c-burnt, #A6471E)' }}>Delete</button>
+                    </>
+                  )}
+                  {!row.active && <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginLeft: 6 }}>off</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+};
+
+/* ─── Order Add-ons manager (editor moved from Backend, 2026-06-02) ────────
+   Whole-order one-time fees (Dispose old mattress/bedframe, Lift access).
+   Picked at checkout (handover), not bound to a Model. Edits the `addons`
+   table directly (RLS write = is_admin). Ported from the retired Backend
+   Add-ons page; same fields (kind / per-floor / stock). */
+const OA_ICONS = ['recycle', 'arrow-up-from-line', 'wrench', 'package', 'sparkles'];
+const OA_KINDS: { value: 'qty' | 'flat' | 'floors_items'; label: string }[] = [
+  { value: 'qty', label: 'Per piece (RM × qty)' },
+  { value: 'flat', label: 'Flat fee (one-shot)' },
+  { value: 'floors_items', label: 'Per floor · item (lift)' },
+];
+const oaSlugify = (s: string): string =>
+  s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50);
+
+const OrderAddonsManager = () => {
+  const canEdit = useProductsMode() === 'full';
+  const list    = useAllAddons();
+  const update  = useUpdateAddon();
+  const create  = useCreateAddon();
+
+  const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState({
+    label: '', id: '', description: '', icon: 'package',
+    kind: 'qty' as 'qty' | 'flat' | 'floors_items', category: '',
+    price: '', perFloorItem: '', unit: '', enabled: true,
+  });
+  const setD = (p: Partial<typeof draft>) => setDraft((d) => ({ ...d, ...p }));
+
+  const commitField = (row: AdminAddonRow, patch: { price?: number; perFloorItem?: number | null; enabled?: boolean }) => {
+    setError(null);
+    update.mutate({ id: row.id, patch }, { onError: (e) => setError(String((e as Error).message ?? e)) });
+  };
+
+  const submitNew = async () => {
+    setError(null);
+    const id = (draft.id || oaSlugify(draft.label)).trim();
+    if (!draft.label.trim()) { setError('Label is required.'); return; }
+    if (!/^[a-z0-9-]+$/.test(id)) { setError('ID must be lowercase letters, digits, dashes.'); return; }
+    if ((list.data ?? []).some((a) => a.id === id)) { setError(`ID "${id}" already exists.`); return; }
+    const isFloors = draft.kind === 'floors_items';
+    const rate = Math.round(Number(isFloors ? draft.perFloorItem : draft.price) || 0);
+    if (rate < 0) { setError('Price must be ≥ 0.'); return; }
+    const maxSort = (list.data ?? []).reduce((m, a) => Math.max(m, a.sortOrder), 0);
+    try {
+      await create.mutateAsync({
+        id, label: draft.label.trim(), description: draft.description.trim() || null,
+        icon: draft.icon, kind: draft.kind, category: draft.category.trim() || null,
+        price: isFloors ? 0 : rate, perFloorItem: isFloors ? rate : null,
+        unit: draft.unit.trim() || null, stock: null, enabled: draft.enabled, sortOrder: maxSort + 1,
+      });
+      setCreating(false);
+      setDraft({ label: '', id: '', description: '', icon: 'package', kind: 'qty', category: '', price: '', perFloorItem: '', unit: '', enabled: true });
+    } catch (e) { setError(String((e as Error).message ?? e)); }
+  };
+
+  const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' };
+
+  return (
+    <div style={{ padding: 'var(--space-5)', maxWidth: 820 }}>
+      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-4)' }}>
+        整单一次性费用（处理旧床垫/床架、Lift 上楼）。结账时选，不绑 Model。这里设价钱 / 开关 / 新增。
+        （从 Backend 的 Add-ons 页搬过来；编辑限 Master Admin。）
+      </p>
+
+      {canEdit && !creating && <Button variant="primary" size="sm" onClick={() => { setError(null); setCreating(true); }}>+ New order add-on</Button>}
+      {error && <div style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', margin: 'var(--space-3) 0' }} role="alert">{error}</div>}
+
+      {creating && (
+        <div style={{ border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-4)', margin: 'var(--space-3) 0' }}>
+          <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', marginBottom: 'var(--space-3)' }}>
+            <label style={{ flex: '1 1 200px' }}><span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>Label</span>
+              <input style={inputStyle} value={draft.label} onChange={(e) => setD({ label: e.target.value, id: oaSlugify(e.target.value) })} placeholder="Dispose old wardrobe" /></label>
+            <label style={{ flex: '1 1 160px' }}><span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>ID slug</span>
+              <input style={inputStyle} value={draft.id} onChange={(e) => setD({ id: e.target.value })} placeholder="auto from label" /></label>
+          </div>
+          <label style={{ display: 'block', marginBottom: 'var(--space-3)' }}><span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>Description</span>
+            <input style={inputStyle} value={draft.description} onChange={(e) => setD({ description: e.target.value })} placeholder="Short tagline (optional)" /></label>
+          <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', marginBottom: 'var(--space-3)' }}>
+            <label><span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>Kind</span>
+              <select style={{ ...inputStyle, width: 200 }} value={draft.kind} onChange={(e) => setD({ kind: e.target.value as typeof draft.kind })}>
+                {OA_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
+              </select></label>
+            <label><span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>{draft.kind === 'floors_items' ? 'Per floor·item (RM)' : 'Price (RM)'}</span>
+              <input type="number" min={0} step={1} style={{ ...inputStyle, width: 140 }}
+                value={draft.kind === 'floors_items' ? draft.perFloorItem : draft.price}
+                onChange={(e) => draft.kind === 'floors_items' ? setD({ perFloorItem: e.target.value }) : setD({ price: e.target.value })} /></label>
+            <label><span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>Unit</span>
+              <input style={{ ...inputStyle, width: 120 }} value={draft.unit} onChange={(e) => setD({ unit: e.target.value })} placeholder="piece" /></label>
+            <label><span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>Icon</span>
+              <select style={{ ...inputStyle, width: 160 }} value={draft.icon} onChange={(e) => setD({ icon: e.target.value })}>
+                {OA_ICONS.map((i) => <option key={i} value={i}>{i}</option>)}
+              </select></label>
+          </div>
+          <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+            <Button variant="primary" size="sm" onClick={() => void submitNew()} disabled={create.isPending}>{create.isPending ? 'Creating…' : 'Create'}</Button>
+            <Button variant="ghost" size="sm" onClick={() => { setCreating(false); setError(null); }}>Cancel</Button>
+          </div>
+        </div>
+      )}
+
+      {list.isLoading ? (
+        <div style={{ color: 'var(--fg-muted)', marginTop: 'var(--space-3)' }}>Loading…</div>
+      ) : list.error ? (
+        <div style={{ color: 'var(--c-burnt, #A6471E)', marginTop: 'var(--space-3)' }}>Failed to load: {String(list.error)}</div>
+      ) : (list.data ?? []).length === 0 ? (
+        <div style={{ color: 'var(--fg-muted)', marginTop: 'var(--space-3)' }}>No order add-ons yet.</div>
+      ) : (
+        <table style={{ borderCollapse: 'collapse', width: '100%', marginTop: 'var(--space-3)' }}>
+          <thead>
+            <tr style={{ textAlign: 'left', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+              <th style={{ padding: '6px 8px' }}>Add-on</th>
+              <th style={{ padding: '6px 8px' }}>Kind</th>
+              <th style={{ padding: '6px 8px' }}>{'Price / rate (RM)'}</th>
+              <th style={{ padding: '6px 8px' }}>Enabled</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(list.data ?? []).map((row) => {
+              const isFloors = row.kind === 'floors_items';
+              return (
+                <tr key={row.id} style={{ borderTop: '1px solid var(--line)', opacity: row.enabled ? 1 : 0.55 }}>
+                  <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>
+                    <div style={{ fontWeight: 600 }}>{row.label}</div>
+                    <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{row.description || row.id}</div>
+                  </td>
+                  <td style={{ padding: '6px 8px', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{isFloors ? 'floor·item' : row.kind}</td>
+                  <td style={{ padding: '6px 8px' }}>
+                    {canEdit ? (
+                      <input type="number" min={0} step={1} style={{ width: 100, padding: '4px 8px', fontSize: 'var(--fs-13)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)' }}
+                        defaultValue={isFloors ? (row.perFloorItem ?? 0) : row.price}
+                        onBlur={(e) => {
+                          const n = Math.max(0, Math.round(Number(e.target.value) || 0));
+                          if (isFloors) { if (n !== (row.perFloorItem ?? 0)) commitField(row, { perFloorItem: n }); }
+                          else if (n !== row.price) commitField(row, { price: n });
+                        }} />
+                    ) : (
+                      <span style={{ fontSize: 'var(--fs-13)' }}>RM {(isFloors ? row.perFloorItem ?? 0 : row.price).toLocaleString('en-MY')}</span>
+                    )}
+                    <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginLeft: 6 }}>{isFloors ? `per floor·${row.unit ?? 'item'}` : `per ${row.unit ?? 'piece'}`}</span>
+                  </td>
+                  <td style={{ padding: '6px 8px' }}>
+                    <button type="button" role="switch" aria-checked={row.enabled} disabled={!canEdit}
+                      onClick={() => canEdit && commitField(row, { enabled: !row.enabled })}
+                      style={{ fontSize: 'var(--fs-12)', padding: '3px 10px', borderRadius: 999, border: '1px solid var(--line)', cursor: canEdit ? 'pointer' : 'default', background: row.enabled ? 'var(--c-cream)' : 'transparent', fontWeight: row.enabled ? 600 : 400 }}>
+                      {row.enabled ? 'On' : 'Off'}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

@@ -17,7 +17,7 @@
 import { Hono, type Context } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { canonicalizeComboModulesForStorage, type ComboSlots } from '@2990s/shared';
+import { canonicalizeLayoutModulesForStorage, type ComboSlots } from '@2990s/shared';
 
 type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
@@ -54,9 +54,10 @@ function rowToWire(r: Row) {
   };
 }
 
-/** Same validation/canonicalisation as sofa-combos: accept string[][] (OR-set
- *  slots) or a legacy flat string[] (each code → a singleton slot). Returns
- *  null on a malformed payload. */
+/** Accept string[][] (OR-set slots) or a legacy flat string[] (each code → a
+ *  singleton slot). Returns null on a malformed payload. A Quick Pick is a
+ *  LAYOUT, so PRESERVE the built left-to-right slot order (unlike combos, which
+ *  alphabetically sort — that moved a middle Console to the end on render). */
 function validateModules(v: unknown): ComboSlots | null {
   if (!Array.isArray(v) || v.length === 0) return null;
   for (const entry of v) {
@@ -66,7 +67,7 @@ function validateModules(v: unknown): ComboSlots | null {
       return null;
     }
   }
-  return canonicalizeComboModulesForStorage(v);
+  return canonicalizeLayoutModulesForStorage(v);
 }
 
 async function requireWriteRole(c: AppContext) {

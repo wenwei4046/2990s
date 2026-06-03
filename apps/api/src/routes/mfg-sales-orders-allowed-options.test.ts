@@ -169,6 +169,16 @@ describe('checkAllowedOptions', () => {
     });
   });
 
+  it('specials — pool value with a trailing space still matches the picked code', () => {
+    // Live regression: special_addons.code = "Hydraulic " (trailing space from
+    // data entry); allowed_options.specials mirrors it. The picker sends the
+    // code verbatim, but toSpecialsArray trims it. Must compare trim-to-trim.
+    const product = bedframeProd('K');
+    const m = model({ sizes: ['K'], specials: ['Hydraulic ', 'Right Drawer'] });
+    expect(checkAllowedOptions(product, m, { specials: ['Hydraulic '] })).toBeNull();
+    expect(checkAllowedOptions(product, m, { specials: ['Hydraulic'] })).toBeNull();
+  });
+
   it('specials accepts single string alias (HOOKKA compat)', () => {
     const product = bedframeProd('K');
     const m = model({ sizes: ['K'], specials: ['CARVED', 'TUFTED'] });

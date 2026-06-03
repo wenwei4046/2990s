@@ -18,7 +18,7 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { canonicalizeComboModulesForStorage, type ComboSlots } from '@2990s/shared';
+import { canonicalizeLayoutModulesForStorage, type ComboSlots } from '@2990s/shared';
 
 export const personalQuickPicks = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -61,7 +61,10 @@ function validateModules(v: unknown): ComboSlots | null {
       return null;
     }
   }
-  return canonicalizeComboModulesForStorage(v);
+  // A Quick Pick is a LAYOUT — preserve the built left-to-right slot order
+  // (the combo form alphabetically sorts, which moved a middle Console to the
+  // end on render).
+  return canonicalizeLayoutModulesForStorage(v);
 }
 
 // ── GET / ──────────────────────────────────────────────────────────────

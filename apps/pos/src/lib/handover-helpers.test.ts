@@ -22,23 +22,27 @@ const baseForm: HandoverForm = {
   billingAddress: '', billingAddressLine2: '',
   billingPostcode: '', billingCity: '', billingState: '',
   emergencyName: '', emergencyRelation: '', emergencyPhone: '',
-  deliveryDate: '', deliveryDateLater: false, deliveryAsap: false,
+  deliveryDate: '', deliveryDateLater: false,
+  processDate: '',
   specialInstructions: '',
   addons: {}, paymentMethod: '',
-  amountPaid: 0, additionalDeliveryFee: 0,
+  amountPaid: 0, additionalDeliveryFee: 0, crossCategorySourceSo: '',
   paymentPreset: 'full', approvalCode: '',
   slipUploadSessionId: null, paymentRecorded: false,
   installmentMonths: null,
   merchantProvider: null,
   signed: false,
+  acknowledgedTerms: false,
 };
 
 describe('validateCustomer', () => {
-  it('requires name and valid email', () => {
+  it('requires name, phone, and valid email', () => {
     expect(validateCustomer(baseForm)).toBe(false);
     expect(validateCustomer({ ...baseForm, name: 'Loo' })).toBe(false);
-    expect(validateCustomer({ ...baseForm, name: 'Loo', email: 'invalid' })).toBe(false);
-    expect(validateCustomer({ ...baseForm, name: 'Loo', email: 'a@b.com' })).toBe(true);
+    // Phone is mandatory (compulsory-phone, PR #457) — name + email alone is not enough.
+    expect(validateCustomer({ ...baseForm, name: 'Loo', email: 'a@b.com' })).toBe(false);
+    expect(validateCustomer({ ...baseForm, name: 'Loo', phone: '0123456789', email: 'invalid' })).toBe(false);
+    expect(validateCustomer({ ...baseForm, name: 'Loo', phone: '0123456789', email: 'a@b.com' })).toBe(true);
   });
 });
 
@@ -74,12 +78,21 @@ describe('validateEmergency', () => {
 });
 
 describe('validateTargetDate', () => {
-  it('passes if addressLater (no date needed)', () => {
-    expect(validateTargetDate({ ...baseForm, addressLater: true })).toBe(true);
+  it('passes when "For further notice" (UFN) — both dates left open', () => {
+    expect(validateTargetDate({ ...baseForm, deliveryDateLater: true })).toBe(true);
   });
-  it('requires a date otherwise', () => {
+  it('fails with no dates at all', () => {
     expect(validateTargetDate(baseForm)).toBe(false);
-    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04' })).toBe(true);
+  });
+  it('requires a Process Date once a delivery date is committed', () => {
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04' })).toBe(false);
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04', processDate: '2026-06-01' })).toBe(true);
+  });
+  it('rejects a Process Date later than the delivery date', () => {
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04', processDate: '2026-06-10' })).toBe(false);
+  });
+  it('allows Process Date equal to the delivery date', () => {
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04', processDate: '2026-06-04' })).toBe(true);
   });
 });
 
@@ -136,9 +149,11 @@ describe('validateConfirmPayment', () => {
 });
 
 describe('validateSign', () => {
-  it('requires signed=true', () => {
+  it('requires signed=true AND terms acknowledged', () => {
     expect(validateSign(baseForm)).toBe(false);
-    expect(validateSign({ ...baseForm, signed: true })).toBe(true);
+    expect(validateSign({ ...baseForm, signed: true })).toBe(false);
+    expect(validateSign({ ...baseForm, acknowledgedTerms: true })).toBe(false);
+    expect(validateSign({ ...baseForm, signed: true, acknowledgedTerms: true })).toBe(true);
   });
 });
 

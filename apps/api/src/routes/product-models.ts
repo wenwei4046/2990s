@@ -194,6 +194,13 @@ productModels.patch('/:id', async (c) => {
   }
 
   const supabase = c.get('supabase');
+  // Snapshot the pre-update compartments so we can tell which ones the admin
+  // just ACTIVATED (sofa auto-SKU rule below — Chairman 2026-06-02).
+  const { data: before } = await supabase
+    .from('product_models')
+    .select('allowed_options')
+    .eq('id', id)
+    .maybeSingle();
   const { data, error } = await supabase
     .from('product_models')
     .update(u)
@@ -234,7 +241,75 @@ productModels.patch('/:id', async (c) => {
     if (toOff.length) await supabase.from('mfg_products').update({ pos_active: false }).in('id', toOff);
   }
 
-  return c.json({ model: data });
+  // Chairman 2026-06-02: activating a SOFA compartment in Modular auto-creates
+  // its SKU in SKU Master when missing. SKU creation is a Backend-authority
+  // action, so it runs here server-side with the service-role client (the PATCH
+  // itself is already auth-gated); the POS SKU Master then shows it via sync.
+  // Format mirrors generate-skus: code `MODEL-<comp>`, name `SOFA <MODEL> <comp>`,
+  // NO prices (Master Admin sets the base price afterwards in SKU Master). Only
+  // NEWLY-activated compartments without an existing SKU are created; existing
+  // SKUs + deactivations are untouched. `comp` keeps its pool casing (e.g.
+  // "Console") — the engine matches case-sensitively, so the code suffix must
+  // equal the laid-out cell code.
+  const autoCreatedSkus: string[] = [];
+  if (cat === 'SOFA' && parsed.data.allowedOptions !== undefined) {
+    const oldComps = new Set(
+      Array.isArray((before?.allowed_options as { compartments?: unknown } | null)?.compartments)
+        ? ((before!.allowed_options as { compartments: unknown[] }).compartments).map((x) => String(x))
+        : [],
+    );
+    const newComps = Array.isArray((parsed.data.allowedOptions as { compartments?: unknown }).compartments)
+      ? ((parsed.data.allowedOptions as { compartments: unknown[] }).compartments).map((x) => String(x))
+      : [];
+    const added = [...new Set(newComps)].filter((comp) => comp && !oldComps.has(comp));
+    if (added.length > 0) {
+      const modelCode  = String((data as { model_code?: string }).model_code ?? '');
+      const codePrefix = modelCode.toUpperCase();
+      const modelName  = String((data as { name?: string }).name ?? '').trim();
+      const branding   = String((data as { branding?: string | null }).branding ?? '').trim();
+      const namePrefix = (branding ? `${branding} ` : '').toUpperCase();
+      const upperName  = (modelName || modelCode).toUpperCase();
+      // Backend-authority client (bypasses POS-role RLS for the system insert).
+      const admin = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const wantCodes = added.map((comp) => `${codePrefix}-${comp}`);
+      const { data: existing } = await admin
+        .from('mfg_products')
+        .select('code')
+        .in('code', wantCodes);
+      const have = new Set((existing ?? []).map((r) => (r as { code: string }).code));
+      const now = new Date().toISOString();
+      const rows = added
+        .filter((comp) => !have.has(`${codePrefix}-${comp}`))
+        .map((comp) => {
+          const rand = (typeof crypto !== 'undefined' && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+          return {
+            id:         `mfg-${rand.replace(/-/g, '').slice(0, 12)}`,
+            code:       `${codePrefix}-${comp}`,
+            name:       `${namePrefix}SOFA ${upperName} ${comp}`.trim(),
+            category:   'SOFA',
+            base_model: modelCode,
+            model_id:   id,
+            branding:   branding || null,
+            status:     'ACTIVE',
+            created_at: now,
+            updated_at: now,
+          };
+        });
+      if (rows.length > 0) {
+        // Best-effort: allowed_options already saved; don't fail the PATCH if the
+        // auto-create hiccups (Master Admin can still add via SKU Master). 23505
+        // = a concurrent create already made it — treat as success (idempotent).
+        const { error: insErr } = await admin.from('mfg_products').insert(rows);
+        if (!insErr || insErr.code === '23505') autoCreatedSkus.push(...rows.map((r) => r.code));
+      }
+    }
+  }
+
+  return c.json({ model: data, autoCreatedSkus });
 });
 
 // ── POST /:id/generate-skus ───────────────────────────────────────────────

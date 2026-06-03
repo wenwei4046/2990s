@@ -25,17 +25,27 @@ export interface FabricColourPickerProps {
   category?: 'SOFA' | 'BEDFRAME';
   /** The 4 Δ amounts; when present each chip shows its tier add-on. */
   addonConfig?: FabricTierAddonConfig | null;
+  /** Per-Model enabled colour codes (allowed_options.fabrics). When provided,
+   *  only these colours render under each series. null/undefined = no filter. */
+  enabledColourIds?: string[] | null;
 }
 
 // Fabric + Colour selection for a sofa. Fabric chips show a transparent
 // "+RM" surcharge (or "Included"); colour swatches belong to the chosen
 // fabric (spec 2026-05-24, G3). Controlled — the Configurator owns the state
 // so the topbar LIVE TOTAL + Add-to-Cart gate can read it.
-export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChange, category = 'SOFA', addonConfig = null }: FabricColourPickerProps) => {
+export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChange, category = 'SOFA', addonConfig = null, enabledColourIds = null }: FabricColourPickerProps) => {
   const lib = useFabricLibrary();
   const colours = useFabricColours();
 
-  // Active fabrics offered on this Model, joined to the library for label/tier.
+  // Per-Model colour gate (allowed_options.fabrics). null = no restriction.
+  const enabledSet = useMemo(
+    () => (enabledColourIds ? new Set(enabledColourIds) : null),
+    [enabledColourIds],
+  );
+
+  // Active fabrics (series) offered on this Model, joined to the library for
+  // label/tier. The parent only passes series that have ≥1 enabled colour.
   const fabrics = useMemo(() => {
     const byId = new Map((lib.data ?? []).map((f) => [f.id, f]));
     return productFabrics
@@ -44,17 +54,25 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
       .sort((a, b) => a.sortOrder - b.sortOrder);
   }, [productFabrics, lib.data]);
 
+  // Colours of the chosen series, gated to the Model's enabled set.
   const coloursForFabric = useMemo(
-    () => (colours.data ?? []).filter((c) => c.fabricId === fabricId).sort((a, b) => a.sortOrder - b.sortOrder),
-    [colours.data, fabricId],
+    () => (colours.data ?? [])
+      .filter((c) => c.fabricId === fabricId && (!enabledSet || enabledSet.has(c.colourId)))
+      .sort((a, b) => a.sortOrder - b.sortOrder),
+    [colours.data, fabricId, enabledSet],
   );
+
+  // Show the fabric CODE + colour name, e.g. "CG-015 Mint" (Chairman 2026-06-03).
+  // BF colours carry no name (label === code) → just the code "BF-01", no double-up.
+  const colourText = (c: { colourId: string; label: string }) =>
+    c.label && c.label !== c.colourId ? `${c.colourId} ${c.label}` : c.colourId;
 
   const pick = (fId: string, cId: string) => {
     const f = fabrics.find((x) => x.id === fId);
     const c = (colours.data ?? []).find((x) => x.fabricId === fId && x.colourId === cId);
     if (!f || !c) return;
     onChange({
-      fabricId: fId, colourId: cId, fabricLabel: f.label, colourLabel: c.label,
+      fabricId: fId, colourId: cId, fabricLabel: f.label, colourLabel: colourText(c),
       colourHex: c.swatchHex, surcharge: f.surcharge,
       sofaTier: f.sofaTier ?? null, bedframeTier: f.bedframeTier ?? null,
     });
@@ -81,9 +99,9 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
                 aria-pressed={on}
                 className={`${styles.fabricChip} ${on ? styles.fabricChipOn : ''}`}
                 onClick={() => {
-                  // Selecting a fabric snaps colour to that fabric's first colour.
+                  // Selecting a series snaps colour to its first ENABLED colour.
                   const first = (colours.data ?? [])
-                    .filter((c) => c.fabricId === f.id)
+                    .filter((c) => c.fabricId === f.id && (!enabledSet || enabledSet.has(c.colourId)))
                     .sort((a, b) => a.sortOrder - b.sortOrder)[0];
                   if (first) pick(f.id, first.colourId);
                 }}
@@ -103,17 +121,27 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
         <div className={styles.colourRow}>
           {coloursForFabric.map((c) => {
             const on = c.colourId === colourId;
+            // Swatch + visible name. Fabrics synced from the Fabric Converter
+            // have no swatch hex yet, so the name is what the customer reads
+            // (Chairman 2026-06-01 "先纯色块 + 名字"). Photos land later.
             return (
-              <button
+              <span
                 key={c.colourId}
-                type="button"
-                aria-pressed={on}
-                aria-label={c.label}
-                title={c.label}
-                className={`${styles.swatch} ${on ? styles.swatchOn : ''}`}
-                style={{ background: c.swatchHex ?? '#ccc' }}
-                onClick={() => fabricId && pick(fabricId, c.colourId)}
-              />
+                style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 4, width: 80 }}
+              >
+                <button
+                  type="button"
+                  aria-pressed={on}
+                  aria-label={colourText(c)}
+                  title={colourText(c)}
+                  className={`${styles.swatch} ${on ? styles.swatchOn : ''}`}
+                  style={{ background: c.swatchHex ?? '#ccc' }}
+                  onClick={() => fabricId && pick(fabricId, c.colourId)}
+                />
+                <span style={{ fontSize: 'var(--fs-12)', lineHeight: 1.15, textAlign: 'center', color: on ? 'var(--c-ink)' : 'var(--fg-muted)' }}>
+                  {colourText(c)}
+                </span>
+              </span>
             );
           })}
         </div>

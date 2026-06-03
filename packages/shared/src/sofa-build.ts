@@ -8,6 +8,7 @@
 
 import { pickComboMatch, type SofaComboRow, type SofaPriceTier } from './sofa-combo-pricing';
 export type { SofaComboRow } from './sofa-combo-pricing';
+export { comboChargedPrices } from './sofa-combo-pricing';
 // One-way edge: mfg-pricing.ts imports nothing (fully self-contained), so this
 // does NOT create a cycle. resolveSeatHeightSelling powers the SELLING assembly
 // helper below; MfgSeatHeightPrice is the per-(height,tier) entry shape.
@@ -191,6 +192,10 @@ export const SOFA_MODULES: readonly SofaModuleSpec[] = [
   { id: '1NA-P', group: '1-seater', label: '1NA · Power · No arms',    w: 75, d: 95, cushions: 1 },
   { id: '1NA-R', group: '1-seater', label: '1NA · Recliner · No arms', w: 75, d: 95, cushions: 1 },
   { id: '1NA-L', group: '1-seater', label: '1NA · Power leg · No arms', w: 75, d: 95, cushions: 1 },
+  // 1-Seater (both arms) functional variants — 1S body + forward footrest.
+  { id: '1S-P', group: '1-seater', label: '1S · Power · Both arms',     w: 115, d: 95, cushions: 1 },
+  { id: '1S-R', group: '1-seater', label: '1S · Recliner · Both arms',  w: 115, d: 95, cushions: 1 },
+  { id: '1S-L', group: '1-seater', label: '1S · Power leg · Both arms', w: 115, d: 95, cushions: 1 },
 ];
 
 const MODULE_BY_ID = new Map<string, SofaModuleSpec>(SOFA_MODULES.map((m) => [m.id, m]));
@@ -377,7 +382,13 @@ export const computeSofaSellingSen = (
     bundles: [],
     reclinerUpgradePrice: 0,
     combos,
-    fabricTier: 'PRICE_2',
+    // Match combos at PRICE_1 — the base tier the whole sofa runs at (Chairman
+    // 2026-06-01). Module seat prices load at PRICE_1 and every combo is
+    // authored at PRICE_1, so the POS (Configurator sofaPricing) and this
+    // server drift gate MUST agree on PRICE_1; querying PRICE_2 here would make
+    // the server price à-la-carte while the POS applied the combo → false drift
+    // reject on POST /orders.
+    fabricTier: 'PRICE_1',
     comboHeight: String(depth),
     baseModel: '',
   };
@@ -678,6 +689,10 @@ const MODULE_EDGES_BASE: Record<string, [EdgeType, EdgeType, EdgeType, EdgeType]
   '1NA-P': ['open', 'back', 'open', 'front'],
   '1NA-R': ['open', 'back', 'open', 'front'],
   '1NA-L': ['open', 'back', 'open', 'front'],
+  // 1S functional variants carry both end arms, same as the plain 1S preset.
+  '1S-P': ['arm', 'back', 'arm', 'front'],
+  '1S-R': ['arm', 'back', 'arm', 'front'],
+  '1S-L': ['arm', 'back', 'arm', 'front'],
 };
 
 /** Clockwise 90° shifts [W,N,E,S] → [S,W,N,E]. */
@@ -1257,8 +1272,12 @@ export const analyzeSofa = (group: Cell[], depth: Depth): SofaAnalysis => {
 
   const allAccessories = group.length > 0 && group.every((c) => isAccessoryModule(c.moduleId));
   if (allAccessories) {
-    closed = false;
-    reason = 'Console needs a sofa next to it';
+    // A stool / ottoman is free-standing — a stool-only group is a complete,
+    // sellable piece on its own. The wood Console must slot beside a sofa, so
+    // an accessory-only group that includes one is not a closed sofa.
+    const everyPieceStandsAlone = group.every((c) => c.moduleId === 'STOOL');
+    closed = everyPieceStandsAlone;
+    reason = everyPieceStandsAlone ? null : 'Console needs a sofa next to it';
   }
 
   return { violations, closed, reason, leftArm: headArm, rightArm: tailArm };

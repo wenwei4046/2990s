@@ -34,7 +34,12 @@ export interface HandoverForm {
 
   emergencyName: string; emergencyRelation: string; emergencyPhone: string;
 
-  deliveryDate: string; deliveryDateLater: boolean; deliveryAsap: boolean;
+  deliveryDate: string; deliveryDateLater: boolean;
+  /** Factory start date ("Process Date") — when production should begin so we
+   *  don't pull stock too early for a far-out delivery. Must be today-or-future
+   *  and on/before deliveryDate. Empty when "For further notice" (UFN). Maps to
+   *  the SO's internal_expected_dd column; the API pairs it with deliveryDate. */
+  processDate: string;
   specialInstructions: string;
 
   addons: Record<string, AddonSelection>;
@@ -47,12 +52,18 @@ export interface HandoverForm {
   amountPaid: number;
   /** Additional delivery fee keyed in by sales at handover. Whole RM, 0 if none. */
   additionalDeliveryFee: number;
+  /** Cross-category follow-up: the earlier SO's number sales types so delivery
+   *  is charged the reduced cross / special-cross rate. Empty = standalone order. */
+  crossCategorySourceSo: string;
   paymentPreset: PaymentPreset;
   approvalCode: string;
   slipUploadSessionId: string | null;
   paymentRecorded: boolean;
 
   signed: boolean;
+  /** Customer ticked "has read and agrees to the terms and conditions" in the
+   *  Sign & confirm step. Required alongside the signature to place the order. */
+  acknowledgedTerms: boolean;
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -87,8 +98,15 @@ export const validateEmergency = (f: HandoverForm): boolean => {
   return filledCount === 0 || filledCount === 3;
 };
 
-export const validateTargetDate = (f: HandoverForm): boolean =>
-  f.deliveryDateLater || f.deliveryAsap || f.deliveryDate.length > 0;
+export const validateTargetDate = (f: HandoverForm): boolean => {
+  // "For further notice" (UFN) — no dates committed yet; allowed.
+  if (f.deliveryDateLater) return true;
+  // Any other path commits a delivery date, so a Process Date must accompany it
+  // (the SO API pairs them), and Process Date may not be later than delivery.
+  if (f.deliveryDate.length === 0) return false;
+  if (f.processDate.length === 0) return false;
+  return f.processDate <= f.deliveryDate;
+};
 
 export const validateAddonsPayment = (f: HandoverForm): boolean => {
   if (f.paymentMethod === '') return false;
@@ -108,7 +126,7 @@ export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonT
   return true;
 };
 
-export const validateSign = (f: HandoverForm): boolean => f.signed;
+export const validateSign = (f: HandoverForm): boolean => f.signed && f.acknowledgedTerms;
 
 // ─── Step blockers — human-friendly "why is Continue disabled" reasons ──────
 // Each function returns a list of short sentences (≤ 60 chars). UI renders
@@ -150,9 +168,15 @@ const emergencyBlockers = (f: HandoverForm): string[] => {
 };
 
 const targetDateBlockers = (f: HandoverForm): string[] => {
-  if (f.deliveryDateLater || f.deliveryAsap) return [];
-  if (!f.deliveryDate) return ['Pick a delivery date, or check "As fast as possible" / "For further notice"'];
-  return [];
+  if (f.deliveryDateLater) return [];  // UFN — both dates left open
+  const b: string[] = [];
+  if (!f.deliveryDate) {
+    b.push('Pick a delivery date, or check "As fast as possible" / "For further notice"');
+    return b;
+  }
+  if (!f.processDate) b.push('Pick a process (factory start) date');
+  else if (f.processDate > f.deliveryDate) b.push('Process date cannot be later than the delivery date');
+  return b;
 };
 
 const addonsPaymentBlockers = (f: HandoverForm): string[] => {
@@ -180,8 +204,10 @@ const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: n
 };
 
 const signBlockers = (f: HandoverForm): string[] => {
-  if (f.signed) return [];
-  return ['Customer must sign on the pad below to confirm'];
+  const b: string[] = [];
+  if (!f.signed) b.push('Customer must sign on the pad below to confirm');
+  if (!f.acknowledgedTerms) b.push('Tick the box to acknowledge the terms and conditions');
+  return b;
 };
 
 export const getStepBlockers = (

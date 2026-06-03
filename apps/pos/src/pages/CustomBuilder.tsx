@@ -6,6 +6,7 @@ import {
   SOFA_MODULES,
   findModule,
   moduleFootprint,
+  cellBbox,
   cellsBbox,
   groupSofas,
   analyzeSofa,
@@ -16,17 +17,23 @@ import {
   reclinerEligible,
   isAccessoryModule,
   summarizeSofaCells,
+  findDuplicateCombo,
+  matchComboSubset,
+  type Bbox,
   type Cell,
   type Depth,
   type Rot,
   type SofaModuleSpec,
   type SofaProductPricing,
 } from '@2990s/shared';
+import { buildSeamlessRun, renderSeamlessSofa, isFunctionalSeat, type SeamlessRun } from '../lib/sofa-seamless';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
-import { useProductFabrics, useFabricTierAddonConfig, useCreateSofaCombo, useCreateSofaQuickPick, type SofaCustomizerData } from '../lib/queries';
+import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useCreateSofaCombo, useCreateSofaQuickPick, useSofaCombos, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
+import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
+import { renderCornerSofa, cornerCompositeFromCells, type CornerGeo } from '../lib/sofa-corner';
 import styles from './CustomBuilder.module.css';
 
 const ROOM_W_CM = 600;   // 6 m wide
@@ -177,6 +184,21 @@ const seatRectsCm = (m: SofaModuleSpec, depth: Depth): SeatRect[] => {
   return rects;
 };
 
+
+/** One seamless-overlay descriptor: either the rasterised bundle PNG, or a
+ *  code-drawn run for ad-hoc straight shapes with no dedicated art. */
+type ActiveComposite =
+  | { kind: 'png'; key: number; src: string; bb: Bbox; rot: Rot; compBbox: ArtBbox; ids: Set<string> }
+  | { kind: 'generic'; key: number; bb: Bbox; rot: Rot; run: SeamlessRun; ids: Set<string> }
+  | { kind: 'corner'; key: number; bb: Bbox; rot: Rot; geo: CornerGeo; ids: Set<string> };
+
+/** Analyse a group of cells (sofa modules + any consoles, free stools
+ *  excluded) into a contiguous straight run, or null if it isn't one
+ *  (overlap, gap, two rows, or a corner/L/stool present). Seats AND consoles
+ *  become slots; each sofa slot records its arm sides so the renderer draws
+ *  arms ONLY where a module actually has one — open / half-built ends stay
+ *  open. Modules link on ADJACENCY; the run need NOT be a complete sofa. */
+
 /** Mirror map for arm-side flips: LHF ↔ RHF for 1A/1B/2A/2B/L. CNR is single-SKU (no mirror). */
 const MIRROR_PAIR: Record<string, string> = {
   '1A-LHF': '1A-RHF',
@@ -202,6 +224,11 @@ interface CustomBuilderProps {
   cells: Cell[];
   setCells: Dispatch<SetStateAction<Cell[]>>;
   onAdded: () => void;
+  /** PWP voucher state — owned by the parent Configurator (2026-06-02) so the
+   *  redeem control lives in the shared top bar. `pricing` already arrives
+   *  PWP-effective; these only drive the per-group pwp/pwpCode stamp in handleAdd. */
+  pwpCode?: string | null;
+  pwpComboIds?: string[];
   /** Cart line key when editing an existing custom-sofa line. The first split
    *  group replaces this line in place; any extra groups append as new lines. */
   editingKey?: string;
@@ -242,7 +269,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, pwpCode = null, pwpComboIds = [] }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -573,6 +600,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     () => groups.map((g) => ({ group: g, ...analyzeSofa(g, depth) })),
     [groups, depth],
   );
+  // PWP Code Voucher (Phase 2) — the redeem control + voucher state now live in
+  // the parent Configurator's shared top bar (2026-06-02). `pricing` arrives
+  // already PWP-effective (the matched reward combo charged its PWP price), so
+  // the builder just prices off it; `pwpCode`/`pwpComboIds` (props) drive the
+  // per-group stamp in handleAdd. With no code applied the parent passes the
+  // plain pricing → zero change to the normal builder.
   const priceResult = useMemo(() => computeSofaPrice(cells, depth, pricing), [cells, depth, pricing]);
 
   // Eagerly load bbox for any matched-bundle composite PNG so the overlay
@@ -614,11 +647,19 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     type ConvertOp = { removeIds: Set<string>; addCells: Cell[] };
     const ops: ConvertOp[] = [];
     priceResult.groups.forEach((g, i) => {
-      if (!g.bundle) return;
       const analysis = analyses[i];
       if (!analysis?.closed) return;
       const groupCells = analysis.group;
       if (groupCells.length === 0) return;
+      // Auto-convert applies to any recognised bundle SHAPE, priced or not. mfg
+      // sofas have no product_bundles rows, so groupPrice never sets g.bundle for
+      // them; fall back to detectBundle (the same source the seamless-overlay
+      // effect uses) so a hand-built 1A+1A+L still normalises to the canonical
+      // 2A+L. Without this, a Combo defined on 2A could never match a custom
+      // build assembled from single seaters — it priced à-la-carte while the
+      // identical Quick Pick layout (which emits canonical cells) got the Combo.
+      const bundle = g.bundle ?? detectBundle(groupCells.map((c) => c.moduleId));
+      if (!bundle) return;
       // Never rewrite a group that includes an accessory (console / stool) to
       // its canonical seat-only SKUs — that would delete the accessory cell
       // entirely (e.g. 1A + WC-45 + 2A matches the 3S signature, whose canonical
@@ -626,6 +667,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // (cellsToPoSkus) already splits accessories onto their own lines, so the
       // canvas safely keeps the user's modules exactly as laid out.
       if (groupCells.some((c) => isAccessoryModule(c.moduleId))) return;
+      // Likewise never rewrite a group containing a FUNCTIONAL seat (power /
+      // recliner / leg — 1A-P, 1NA-P, 1S-P/R/L, …). The canonical breakdown
+      // collapses the mechanism suffix (1NA-P → 1NA), so 1A-LHF + 1NA-P + 1A-RHF
+      // signs as 1A+1A+1NA → the plain 3S [1A,2A], and the rewrite would
+      // silently DELETE the power seat the user deliberately placed — the
+      // layout "jumps" to a standard sofa. Keep the user's exact modules; PO
+      // SKU translation happens in the order layer (cellsToPoSkus).
+      if (groupCells.some((c) => isFunctionalSeat(c.moduleId))) return;
       const groupIds = new Set(
         groupCells.map((c) => c.id).filter((x): x is string => x != null),
       );
@@ -633,8 +682,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       if (editingGroupIds && Array.from(groupIds).every((id) => editingGroupIds.has(id))) return;
 
       const flip: 'L' | 'R' = groupCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
-      const hasL = g.bundle.canonicalModules.includes('L');
-      const armedIdxs = g.bundle.canonicalModules
+      const hasL = bundle.canonicalModules.includes('L');
+      const armedIdxs = bundle.canonicalModules
         .map((f, idx) => (f === '1A' || f === '2A' ? idx : -1))
         .filter((x) => x >= 0);
       const resolveSku = (fam: string, idx: number): string => {
@@ -655,8 +704,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       };
       const orderedFams =
         hasL && flip === 'L'
-          ? [...g.bundle.canonicalModules].reverse()
-          : g.bundle.canonicalModules;
+          ? [...bundle.canonicalModules].reverse()
+          : bundle.canonicalModules;
       const canonicalSkus = orderedFams.map((f, idx) => resolveSku(f, idx));
 
       // Already canonical? Compare sorted multisets — order on canvas might
@@ -715,10 +764,29 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   }, [analyses]);
 
   const allClosed = analyses.every((a) => a.closed);
-  // Fabric + colour (spec 2026-05-24) — required before Add-to-Cart, surcharge
-  // folds onto each sofa line.
+  // Fabric + colour — required before Add-to-Cart; the tier Δ folds onto each
+  // sofa line. Fabrics are a SERIES/COLOUR library synced from the Backend
+  // Fabric Converter (migration 0127). mfg sofas read the Model's enabled colour
+  // codes from modelCustomizer.fabricIds (allowed_options.fabrics); legacy UUID
+  // products keep their product_fabrics rows. Empty → "No fabrics enabled".
+  const fabricLib = useFabricLibrary();
+  const fabricColours = useFabricColours();
   const productFabrics = useProductFabrics(productId);
   const addonCfgQ = useFabricTierAddonConfig();  // migration 0124 — fabric-tier Δ
+  const fabricCodes = useMemo<string[]>(
+    () => (productId?.startsWith('mfg-') ? (modelCustomizer?.fabricIds ?? []) : []),
+    [productId, modelCustomizer],
+  );
+  const fabricSeriesRows = useMemo<ProductFabricRow[]>(() => {
+    if (!productId?.startsWith('mfg-')) return productFabrics.data ?? [];
+    const enabled = new Set(fabricCodes);
+    const seriesWithColour = new Set(
+      (fabricColours.data ?? []).filter((c) => enabled.has(c.colourId)).map((c) => c.fabricId),
+    );
+    return (fabricLib.data ?? [])
+      .filter((f) => seriesWithColour.has(f.id))
+      .map((f) => ({ fabricId: f.id, active: f.active, surcharge: f.defaultSurcharge }));
+  }, [productId, productFabrics.data, fabricCodes, fabricColours.data, fabricLib.data]);
   const [fabricSel, setFabricSel] = useState<FabricSelection | null>(null);
   /* Commander 2026-05-28 — "Save as Quick Pick" modal. Lets the staff
      persist the current cell composition as a new Sofa Combo Pricing row
@@ -781,6 +849,11 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // rule here propagates to existing cart items too.
       const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}` : '';
       const summary = summarizeSofaCells(groupCells, depth, pricing.seatUpgradeLabel) + fabricSuffix;
+      // PWP (换购, Phase 2) — flag the line whose build matches the applied reward
+      // combo; its `total` already reflects the combo's PWP price (the parent
+      // passes PWP-effective `pricing`). `pwpCode`/`pwpComboIds` are props.
+      const pwpCombo = pwpCode ? (pricing.combos ?? []).find((c) => pwpComboIds.includes(c.id)) : undefined;
+      const isPwpGroup = !!pwpCombo && matchComboSubset(groupCells.map((c) => c.moduleId), pwpCombo.modules) != null;
       const snapshot: SofaConfigSnapshot = {
         kind: 'sofa',
         productId,
@@ -796,6 +869,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         colourLabel: fabricSel?.colourLabel,
         colourHex: fabricSel?.colourHex ?? undefined,
         fabricTierDelta: sofaFabricDelta,
+        ...(isPwpGroup && pwpCode ? { pwp: true, pwpCode } : {}),
         total: g.finalPrice + sofaFabricDelta,
         summary,
       };
@@ -816,48 +890,94 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
      group is no longer skipped — the composite is rotated to match (mirroring
      how each module's cellArt rotates), so rotating a sofa keeps it whole
      instead of snapping back to separated module silhouettes. */
-  const activeComposites = priceResult.groups.flatMap((g, i) => {
+  const activeComposites = priceResult.groups.flatMap((g, i): ActiveComposite[] => {
     const groupCells = analyses[i]?.group;
     if (!groupCells || groupCells.length === 0) return [];
-    // Console / stool are standalone accessory pieces with no composite art —
-    // composite the SOFA-ONLY sub-group and let the accessory cells render as
-    // their own pieces beside it (Chairman 2026-06-01: a console next to a sofa
-    // must NOT stop the sofa itself from going seamless). detectBundle already
-    // ignores accessories; closure + covered-ids + bbox now run on the sofa
-    // cells only, so the composite art lands on the seat run, not over the
-    // console. A console BETWEEN two seats leaves the seat cells non-adjacent →
-    // analyzeSofa reports not-closed → we correctly fall back to raw modules.
     const sofaCells = groupCells.filter((c) => !isAccessoryModule(c.moduleId));
     if (sofaCells.length === 0) return [];
-    const bundle = g.bundle ?? detectBundle(sofaCells.map((c) => c.moduleId));
-    if (!bundle) return [];
-    if (!(sofaCells.length === 1 || analyzeSofa(sofaCells, depth).closed)) return [];
-    const ids = new Set(sofaCells.map((c) => c.id).filter((x): x is string => x != null));
-    if (editingGroupIds && Array.from(ids).every((id) => editingGroupIds.has(id))) return [];
+    // The seamless RUN spans seats + any interior consoles (a console between
+    // seats is part of a centre-console sofa). Free stools stay separate.
+    const runCells = groupCells.filter((c) => !isAccessoryModule(c.moduleId) || c.moduleId === 'Console');
+    const sofaIds = new Set(sofaCells.map((c) => c.id).filter((x): x is string => x != null));
+    const runIds = new Set(runCells.map((c) => c.id).filter((x): x is string => x != null));
+    // ── Gates shared by the PNG and the code-drawn paths ──
+    if (editingGroupIds && Array.from(runIds).every((id) => editingGroupIds.has(id))) return [];
     // During a drag, KEEP the seamless overlay (it tracks the group via
-    // displayCells) when the WHOLE group is being moved — Chairman 2026-06-01:
-    // the sofa should stay fixed/together while you drag it, not flicker back to
-    // separate modules. Only fall back to individual silhouettes for a PARTIAL
-    // drag (pulling one module out of the group), so the user can see the single
-    // piece they're repositioning.
+    // displayCells) when the WHOLE group is being moved; only fall back to
+    // individual silhouettes for a PARTIAL drag (pulling one module out).
     if (draftDelta != null) {
-      const someDragging = draftDelta.ids.some((id) => ids.has(id));
-      const allDragging = Array.from(ids).every((id) => draftDelta.ids.includes(id));
+      const someDragging = draftDelta.ids.some((id) => runIds.has(id));
+      const allDragging = Array.from(runIds).every((id) => draftDelta.ids.includes(id));
       if (someDragging && !allDragging) return [];
     }
-    if (sofaCells.some((c) => (c.recliners ?? []).length > 0)) return [];
+    // NOTE: a sofa with per-seat recliner/power upgrades STILL goes seamless.
+    // The composite hides each covered cell's module art but NOT its per-seat
+    // overlays (wash / "P" badge / footrest), which render on top of the
+    // seamless body because recliner cells get a higher z-index than the
+    // composite (styles.cellRecliner). So power sofas link like any other run
+    // instead of falling back to separate boxes.
+    // 0) A CORNER (Corner + 2/3-seater + 1-seater chaise) is an L with MIXED
+    //    cell rotations (the chaise turns 90°), so it must be handled before the
+    //    uniform-rot straight-run gate below. Draws the same connected L as the
+    //    Quick Pick preview so the canvas matches it. Uses the drag-aware
+    //    displayCells so the overlay tracks a whole-group drag.
+    const cornerCells = displayCells.filter((c) => c.id != null && runIds.has(c.id));
+    const cornerComp = cornerCompositeFromCells(cornerCells, depth);
+    if (cornerComp) return [{ kind: 'corner' as const, key: i, ...cornerComp, ids: runIds }];
     // Closed groups rotate as a whole (rotateGroup keeps every cell's rot in
     // sync). Bail to per-module art on the off chance the rots are mixed.
     const rot = sofaCells[0]!.rot;
-    if (sofaCells.some((c) => c.rot !== rot)) return [];
-    const flip: 'L' | 'R' = sofaCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
-    const isLShape = bundle.id === '2+L' || bundle.id === '3+L';
-    const src = `${ASSET_BASE}/${bundle.id}${isLShape ? `-${flip}` : ''}.png`;
-    const compBbox = bboxCache.get(src);
-    if (!compBbox) return [];
-    const bb = cellsBbox(displayCells.filter((c) => c.id != null && ids.has(c.id)), depth);
-    if (!bb) return [];
-    return [{ key: i, src, bb, rot, compBbox, ids }];
+    if (runCells.some((c) => c.rot !== rot)) return [];
+    // 1) A recognised MULTI-module bundle SHAPE with dedicated artwork
+    //    (2S / 3S / L-shapes), seats contiguous-closed → use the rasterised PNG
+    //    over the sofa cells; any console renders its own piece beside it. If
+    //    the bbox isn't measured yet, wait one frame rather than code-drawing a
+    //    shape that has art.
+    //
+    //    Must be ≥ 2 sofa modules: a SINGLE one-arm module (1A-LHF, 2A-LHF, …)
+    //    shares a bundle signature with the both-arm preset (1A→1S, 2A→2S), so
+    //    firing this for length 1 painted the both-arm 1S/2S art over a
+    //    one-arm seat (the "single 1A shows two arms" bug). A lone module
+    //    always renders correctly from its own per-module art instead, and a
+    //    1A + Console run now reaches the code-drawn path below so it links.
+    //
+    //    Also skip the PNG when ANY seat is a functional variant (power "P" /
+    //    recliner "R" / leg "L"): those share a signature with the plain preset
+    //    (1A(P)→1S, 2×1A(P)→2S), so the PNG would paint the generic non-power
+    //    art and DROP the badge. They go to the code-drawn path, which re-draws
+    //    the badge + footrest on the seamless body.
+    const runHasFunctional = sofaCells.some((c) => isFunctionalSeat(c.moduleId));
+    if (sofaCells.length >= 2 && !runHasFunctional && analyzeSofa(sofaCells, depth).closed) {
+      const bundle = g.bundle ?? detectBundle(sofaCells.map((c) => c.moduleId));
+      const bbSofa = cellsBbox(displayCells.filter((c) => c.id != null && sofaIds.has(c.id)), depth);
+      if (bundle && bbSofa) {
+        const flip: 'L' | 'R' = sofaCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
+        const isLShape = bundle.id === '2+L' || bundle.id === '3+L';
+        const src = `${ASSET_BASE}/${bundle.id}${isLShape ? `-${flip}` : ''}.png`;
+        const compBbox = bboxCache.get(src);
+        if (compBbox) return [{ kind: 'png' as const, key: i, src, bb: bbSofa, rot, compBbox, ids: sofaIds }];
+        return [];
+      }
+    }
+    // 2) No dedicated art → draw the WHOLE run (seats + interior consoles) as
+    //    ONE seamless sofa from the shared module primitives. Fires for ANY
+    //    contiguous straight run — modules link on ADJACENCY, not only when the
+    //    sofa is "complete". Arms render only where modules actually have them,
+    //    so a half-built / open run still links with open ends. Covers the
+    //    4-seater (1A + 2NA + 1A), centre-console (1A + Console + 1A), and the
+    //    in-progress (1A + Console, 1A + 1NA, …) cases.
+    //
+    //    EVERY straight run — INCLUDING a single module — takes this path, so
+    //    all compartments fill the cell identically. Per-module art crops to
+    //    each silhouette and uses a wider (width-scaled) arm, so seats looked
+    //    smaller / inconsistent next to the code-drawn ones (Chairman: "1S/1A
+    //    not full"). buildSeamlessRun returns null for non-linear shapes
+    //    (corner / L / free stool), which keep their per-module art.
+    const runFilter = displayCells.filter((c) => c.id != null && runIds.has(c.id));
+    const run = buildSeamlessRun(runFilter, depth, rot);
+    const bbRun = cellsBbox(runFilter, depth);
+    if (run && bbRun) return [{ kind: 'generic' as const, key: i, bb: bbRun, rot, run, ids: runIds }];
+    return [];
   });
   const compositeCoveredIds = new Set<string>(
     activeComposites.flatMap((c) => Array.from(c.ids)),
@@ -943,12 +1063,13 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           })()}
         </div>
         <FabricColourPicker
-          productFabrics={productFabrics.data ?? []}
+          productFabrics={fabricSeriesRows}
           fabricId={fabricSel?.fabricId ?? null}
           colourId={fabricSel?.colourId ?? null}
           onChange={setFabricSel}
           category="SOFA"
           addonConfig={addonCfgQ.data ?? null}
+          enabledColourIds={productId?.startsWith('mfg-') ? fabricCodes : null}
         />
       </aside>
 
@@ -1175,7 +1296,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             return (
               <div
                 key={c.id}
-                className={`${styles.cell} ${isSelected ? styles.cellSelected : ''} ${inViolation ? styles.cellViolation : ''}`}
+                className={`${styles.cell} ${isSelected ? styles.cellSelected : ''} ${inViolation ? styles.cellViolation : ''} ${(c.recliners ?? []).length > 0 ? styles.cellRecliner : ''}`}
                 style={{ left: px, top: py, width: w, height: h }}
                 onPointerDown={(e) => onCellPointerDown(c.id!, e)}
                 onPointerMove={onCellPointerMove}
@@ -1371,9 +1492,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
               in the cell render) so nothing ghosts past its edges, and the art
               rotates with the group — see activeComposites above for the gating.
               pointer-events:none lets drags fall through to the hidden cells. */}
-          {activeComposites.map(({ key, src, bb, rot, compBbox }) => {
-            const bw = compBbox.r - compBbox.l;
-            const bh = compBbox.b - compBbox.t;
+          {activeComposites.map((comp) => {
+            const { key, bb, rot } = comp;
             const boxW = bb.w * SCALE;
             const boxH = bb.h * SCALE;
             // The composite art is drawn for the sofa's natural (un-rotated)
@@ -1384,8 +1504,6 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             const sideways = rot === 90 || rot === 270;
             const natW = sideways ? boxH : boxW;
             const natH = sideways ? boxW : boxH;
-            const imgW = natW / bw;
-            const imgH = natH / bh;
             return (
               <div
                 key={`composite-${key}`}
@@ -1398,7 +1516,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                   height: boxH,
                   pointerEvents: 'none',
                   zIndex: 1,
-                  overflow: 'hidden',
+                  // PNG path crops its oversized img via overflow:hidden; the
+                  // code-drawn path lets a functional seat's footrest extend
+                  // past the sofa's front edge, so it must NOT clip.
+                  overflow: comp.kind === 'png' ? 'hidden' : 'visible',
                 }}
               >
                 <div
@@ -1409,21 +1530,30 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                     left: (boxW - natW) / 2,
                     top: (boxH - natH) / 2,
                     transform: `rotate(${rot}deg)`,
-                    overflow: 'hidden',
+                    overflow: comp.kind === 'png' ? 'hidden' : 'visible',
                   }}
                 >
-                  <img
-                    src={src}
-                    alt=""
-                    draggable={false}
-                    style={{
-                      position: 'absolute',
-                      left: -compBbox.l * imgW,
-                      top: -compBbox.t * imgH,
-                      width: imgW,
-                      height: imgH,
-                    }}
-                  />
+                  {comp.kind === 'png' ? (() => {
+                    const bw = comp.compBbox.r - comp.compBbox.l;
+                    const bh = comp.compBbox.b - comp.compBbox.t;
+                    const imgW = natW / bw;
+                    const imgH = natH / bh;
+                    return (
+                      <img
+                        src={comp.src}
+                        alt=""
+                        draggable={false}
+                        style={{
+                          position: 'absolute',
+                          left: -comp.compBbox.l * imgW,
+                          top: -comp.compBbox.t * imgH,
+                          width: imgW,
+                          height: imgH,
+                        }}
+                      />
+                    );
+                  })() : comp.kind === 'corner' ? renderCornerSofa(comp.geo)
+                    : renderSeamlessSofa(comp.run, natW, natH, resolveModuleArtSrc, (src) => bboxCache.get(src))}
                 </div>
               </div>
             );
@@ -1491,6 +1621,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 </span>
               );
             })()}
+            {/* PWP (换购) redeem moved to the shared top bar (Configurator's
+                sofaCenterSlot, 2026-06-02) so BOTH Quick Pick + Customize can
+                apply a code. The line still carries pwp/pwpCode via handleAdd's
+                per-group stamp (props from the parent). */}
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {/* Commander 2026-05-28: save the current layout as a Quick Pick
@@ -1663,10 +1797,13 @@ function SaveQuickPickModal({
 /* ─── CreateComboModal ───────────────────────────────────────────────────
    Master Admin only (Phase 5). Turns the current build into a priced Combo —
    the INVISIBLE selling-price logic that auto-applies whenever a future build
-   matches this module-set. The Master Admin keys the SELLING price for the
-   current seat depth; the server auto-detects the COST = Σ the constituent
-   module SKUs' costs (Backend-overridable later). Stored in sofa_combo_pricing,
-   so it also appears on the Backend for cost review. */
+   matches this module-set. The Master Admin keys the SELLING price for EACH
+   seat height (same grid as the Backend Combo Pricing "New Combo" panel, minus
+   the module picker — modules are already fixed by the build). A blank size = no
+   combo there → that size falls back to the base price. The server auto-detects
+   the COST = Σ the constituent module SKUs' costs (Backend-overridable later).
+   Stored in sofa_combo_pricing, so it also appears on the Backend for cost
+   review. */
 function CreateComboModal({
   modules, depth, currentPriceCenti, baseModel, onClose, onSaved,
 }: {
@@ -1679,22 +1816,50 @@ function CreateComboModal({
   onSaved: () => void;
 }) {
   const create = useCreateSofaCombo();
-  const [sellingRm, setSellingRm] = useState(String(Math.round(currentPriceCenti / 100)));
+  // Active combos for this Model — used to block adding a duplicate (same
+  // module-set) on this create path (Chairman 2026-06-02).
+  const existingCombosQ = useSofaCombos(baseModel);
+  // Seat-height columns mirror the live Maintenance pool (Products → Maintenance
+  // → Sofa → Sizes; key `sofaSizes`) — the SAME source the Backend Combo Pricing
+  // "New Combo" panel uses, so this dialog offers every size that panel does.
+  const heightsCfg = useMaintenanceConfig('master');
+  const heights = heightsCfg.data?.data?.sofaSizes ?? COMBO_HEIGHTS_FALLBACK;
+  // Seed the current seat depth with the live à-la-carte total (the price the
+  // Master Admin is looking at); every other size starts blank — a blank size
+  // means "no combo here" → that size uses the base price.
+  const [prices, setPrices] = useState<Record<string, string>>(() => ({
+    [String(depth)]: String(Math.round(currentPriceCenti / 100)),
+  }));
 
   const submit = async () => {
-    const selling = Math.max(0, Math.round(Number(sellingRm)));
-    if (!selling) { alert('Enter a selling price.'); return; }
+    // Block duplicates: re-adding the same module-set silently makes a new
+    // version (append-only table). Warn + stop, and steer to editing instead.
+    const dup = findDuplicateCombo(baseModel, modules.map((m) => [m]), existingCombosQ.data ?? []);
+    if (dup) {
+      alert(`This combo already exists for ${baseModel}. Edit it in Backend → Combo Pricing instead of adding a duplicate.`);
+      return;
+    }
+    const sellingPricesByHeight: Record<string, number | null> = {};
+    let any = false;
+    for (const h of heights) {
+      const raw = (prices[h] ?? '').trim();
+      if (!raw) { sellingPricesByHeight[h] = null; continue; }
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) { alert(`Bad price at ${h}".`); return; }
+      sellingPricesByHeight[h] = Math.round(n * 100);
+      any = true;
+    }
+    if (!any) { alert('Enter a price for at least one seat height.'); return; }
     const today = new Date().toISOString().slice(0, 10);
     try {
       await create.mutateAsync({
         baseModel,
         // Concrete build → each module is its own singleton OR-set slot.
         modules: modules.map((m) => [m]),
-        tier: null,   // wildcard — any fabric tier
-        // SELLING for the current seat depth (centi). COST is auto-detected
-        // server-side (Σ module SKU costs); pricesByHeight is intentionally
-        // omitted so the server fills it. Backend can add other heights later.
-        sellingPricesByHeight: { [String(depth)]: selling * 100 },
+        tier: 'PRICE_1',   // base tier — fabric tier is a separate flat add-on
+        // SELLING price per seat height (centi). COST is auto-detected
+        // server-side (Σ module SKU costs). Blank heights = null → base price.
+        sellingPricesByHeight,
         label: null,
         effectiveFrom: today,
         notes: 'Combo created from POS Customize',
@@ -1713,29 +1878,40 @@ function CreateComboModal({
     }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{
         background: 'var(--c-paper)', borderRadius: 'var(--radius-md)',
-        padding: 24, width: '100%', maxWidth: 480,
+        padding: 24, width: '100%', maxWidth: 600,
         display: 'flex', flexDirection: 'column', gap: 16,
       }}>
         <h3 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 'var(--fs-18)' }}>
           Create Combo
         </h3>
         <p style={{ margin: 0, fontSize: 'var(--fs-13)', color: 'var(--fg-soft)' }}>
-          Sets a fixed selling price for this {modules.length}-compartment set at {depth}&quot; seat.
-          It applies automatically whenever a build matches these modules. Cost is filled
+          Sets a fixed selling price for this {modules.length}-compartment set at each
+          seat height. It applies automatically whenever a build matches these modules.
+          Leave a size blank to fall back to the base price there. Cost is filled
           automatically from the module prices — adjust it on the Backend if needed.
         </p>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
-            Selling price (RM) · {depth}&quot; seat
+            Prices by seat height (RM)
           </span>
-          <input
-            autoFocus
-            inputMode="numeric"
-            value={sellingRm}
-            onChange={(e) => setSellingRm(e.target.value.replace(/[^0-9]/g, ''))}
-            onKeyDown={(e) => { if (e.key === 'Enter') { void submit(); } }}
-            style={inputStyle}
-          />
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
+            {heights.map((h) => (
+              <div key={h}>
+                <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textAlign: 'center' }}>
+                  {h}{/^\d/.test(h) ? '"' : ''}
+                </div>
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  value={prices[h] ?? ''}
+                  onChange={(e) => setPrices((cur) => ({ ...cur, [h]: e.target.value }))}
+                  placeholder="—"
+                  style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+            ))}
+          </div>
         </label>
         <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
           Modules: {modules.join(' · ')}
@@ -1750,6 +1926,10 @@ function CreateComboModal({
     </div>
   );
 }
+
+// Seat-height fallback if the Maintenance config fails to load (same default
+// the Backend Combo Pricing panel uses).
+const COMBO_HEIGHTS_FALLBACK = ['24', '26', '28', '30', '32', '35'];
 
 const inputStyle: CSSProperties = {
   fontFamily: 'var(--font-sans)',

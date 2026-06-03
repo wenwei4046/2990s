@@ -6,13 +6,16 @@ import { z } from 'zod';
 import { normalizePhone } from '@2990s/shared/phone';
 import {
   pickComboMatch, spreadComboTotal, splitSofaCode, sofaHeightKey,
-  buildVariantSummary, comboChargedPrices, type SofaComboRow, type SofaPriceTier,
+  buildVariantSummary, comboChargedPrices, matchComboSubset, type SofaComboRow, type SofaPriceTier,
 } from '@2990s/shared';
+import { computeSoDeliveryFee } from '@2990s/shared/pricing';
 import { supabaseAuth } from '../middleware/auth';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
-import { signSoItemPhotoUrl, soItemPhotoBindings } from '../lib/r2';
+import { signSoItemPhotoUrl, soItemPhotoBindings, presign, type SlipMime } from '../lib/r2';
+import { slipBindings } from '../lib/slip';
 import {
   loadMaintenanceConfig,
+  loadSpecialAddons,
   recomputeFromSnapshot,
   loadProductByCode,
   loadFabricByCode,
@@ -32,6 +35,7 @@ import {
 } from '../lib/allowed-options-check';
 import { findIncompleteVariantLines } from '../lib/so-variant-check';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
+import { pickCrossCategoryMatch, type AutoMatchCandidate } from '../lib/cross-category-match';
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
 import { creditFromCancelledSo, getCustomerCreditBalance } from '../lib/customer-credits';
 import { summariseReadiness } from '../lib/so-readiness';
@@ -115,7 +119,7 @@ async function isPosTabletCaller(sb: any, userId: string | null | undefined): Pr
 async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
   const { data } = await sb
     .from('sofa_combo_pricing')
-    .select('id, base_model, modules, tier, customer_id, prices_by_height, selling_prices_by_height, label, effective_from, deleted_at')
+    .select('id, base_model, modules, tier, customer_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, effective_from, deleted_at')
     .is('deleted_at', null)
     .is('customer_id', null)   // 2990 B2C — default-scope rows only
     .is('supplier_id', null);  // sales-side only — never auto-price a SO from a supplier's purchasing combos
@@ -123,12 +127,16 @@ async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
     id: string; base_model: string; modules: string[][]; tier: SofaPriceTier | null;
     customer_id: string | null; prices_by_height: Record<string, number | null>;
     selling_prices_by_height: Record<string, number | null>;
+    pwp_prices_by_height: Record<string, number | null> | null;
     label: string | null; effective_from: string; deleted_at: string | null;
   }>).map((r) => ({
     id: r.id, baseModel: r.base_model, modules: r.modules ?? [],
     tier: r.tier, customerId: r.customer_id,
     // Combo cost/sell split — the engine charges SELLING merged over cost.
     pricesByHeight: comboChargedPrices(r.selling_prices_by_height, r.prices_by_height),
+    // PWP (换购) selling price per height (Phase 2) — used INSTEAD of the above
+    // only when a sofa-reward line redeems a valid PWP code (see recompute).
+    pwpPricesByHeight: r.pwp_prices_by_height ?? {},
     label: r.label, effectiveFrom: r.effective_from, deletedAt: r.deleted_at,
   }));
 }
@@ -179,6 +187,8 @@ const HEADER =
   'emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, target_date, ' +
   /* PR #143 + #150 + #157 — Payment (migrations 0068 + 0069 + 0070) */
   'payment_method, installment_months, merchant_provider, approval_code, payment_date, deposit_centi, paid_centi, ' +
+  /* Delivery fee snapshot (migration 0133) — folded into local_total/revenue/margin. */
+  'delivery_fee_centi, ' +
   'created_at, created_by, updated_at';
 const ITEM =
   'id, doc_no, line_date, debtor_code, debtor_name, agent, item_group, item_code, description, description2, ' +
@@ -639,6 +649,167 @@ mfgSalesOrders.get('/mine', async (c) => {
   return c.json({ salesOrders });
 });
 
+/* P1 (Owner 2026-06-03, migration 0143) — presign a short-lived GET URL for an
+   SO's payment slip so the Backend SO detail page can display the proof. Mirrors
+   the legacy /orders/:id/slip-url route. Auth is router-level (same as the SO
+   detail GET); RLS governs which SOs the caller can read. */
+function mimeFromKey(key: string): SlipMime {
+  const ext = key.split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'jpg': case 'jpeg': return 'image/jpeg';
+    case 'png': return 'image/png';
+    case 'webp': return 'image/webp';
+    case 'pdf': return 'application/pdf';
+    default: throw new Error(`unknown slip extension: ${key}`);
+  }
+}
+
+mfgSalesOrders.get('/:docNo/slip-url', async (c) => {
+  const sb = c.get('supabase');
+  const docNo = c.req.param('docNo');
+  const { data: row, error } = await sb
+    .from('mfg_sales_orders')
+    .select('slip_key')
+    .eq('doc_no', docNo)
+    .maybeSingle();
+  if (error) return c.json({ error: 'db_fetch_failed', detail: error.message }, 500);
+  if (!row) return c.json({ error: 'not_found' }, 404);
+  const slipKey = (row as { slip_key?: string | null }).slip_key ?? null;
+  if (!slipKey) return c.json({ error: 'no_slip_attached' }, 400);
+
+  const bindings = slipBindings(c.env);
+  const url = await presign({
+    bucket: bindings.bucketName,
+    region: 'auto',
+    accessKeyId: bindings.accessKeyId,
+    secretAccessKey: bindings.secretAccessKey,
+    endpoint: bindings.endpoint,
+    key: slipKey,
+    method: 'GET',
+    expiresInSeconds: 5 * 60,
+  });
+  return c.json({
+    url,
+    contentType: mimeFromKey(slipKey),
+    expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+  });
+});
+
+/* Cross-category delivery link (migration 0141) — shared eligibility check used
+   by BOTH the live handover preview (GET /cross-category-eligibility) and the
+   order POST, so the fee shown equals the fee charged. A non-empty SO number is
+   eligible only when it exists, isn't cancelled, belongs to the same customer
+   (by normalized phone, when both have one), and hasn't already backed another
+   follow-up (the unique index is the hard backstop). */
+type CrossCatEligibility = {
+  eligible: boolean;
+  reason?: 'not_found' | 'cancelled' | 'different_customer' | 'already_used';
+  debtorName?: string | null;
+};
+
+async function checkCrossCategorySource(
+  sb: any,
+  docNo: string,
+  newPhoneRaw: string | null,
+  newCustomerId: string | null = null,
+): Promise<CrossCatEligibility> {
+  const { data: srcRow } = await sb
+    .from('mfg_sales_orders')
+    .select('doc_no, status, phone, debtor_name, customer_id')
+    .eq('doc_no', docNo)
+    .maybeSingle();
+  const src = srcRow as { doc_no: string; status: string; phone: string | null; debtor_name: string | null; customer_id: string | null } | null;
+  if (!src) return { eligible: false, reason: 'not_found' };
+  if (src.status === 'CANCELLED') return { eligible: false, reason: 'cancelled' };
+  /* "Same customer" — prefer the real customer_id link (exact) now that every
+     new SO resolves one (migration 0144). Fall back to normalised phone only
+     when the SOURCE is a legacy row with no customer_id; the NEW order always
+     carries both a compulsory phone and a resolved customer_id. */
+  if (src.customer_id && newCustomerId) {
+    if (src.customer_id !== newCustomerId) return { eligible: false, reason: 'different_customer' };
+  } else {
+    const newPhone = newPhoneRaw ? (normalizePhone(newPhoneRaw) ?? newPhoneRaw) : null;
+    const srcPhone = src.phone ? (normalizePhone(src.phone) ?? src.phone) : null;
+    if (newPhone && srcPhone && newPhone !== srcPhone) return { eligible: false, reason: 'different_customer' };
+  }
+  const { count } = await sb
+    .from('mfg_sales_orders')
+    .select('doc_no', { count: 'exact', head: true })
+    .eq('cross_category_source_doc_no', docNo);
+  if ((count ?? 0) > 0) return { eligible: false, reason: 'already_used' };
+  return { eligible: true, debtorName: src.debtor_name ?? null };
+}
+
+const crossCatReasonText = (docNo: string, reason?: string): string =>
+  reason === 'not_found'         ? `Order ${docNo} was not found.`
+  : reason === 'cancelled'         ? `Order ${docNo} is cancelled.`
+  : reason === 'different_customer'? `Order ${docNo} belongs to a different customer.`
+  : reason === 'already_used'      ? `Order ${docNo} was already used for a cross-category discount.`
+  :                                  `Order ${docNo} is not a valid linked order.`;
+
+// GET /cross-category-eligibility?docNo&phone — live check for the handover
+// preview so the cross-category delivery discount only applies for a real,
+// eligible SO (sales can no longer "type anything" and get the reduced rate).
+// Static path is registered before /:docNo so it isn't captured as a docNo.
+mfgSalesOrders.get('/cross-category-eligibility', async (c) => {
+  const sb = c.get('supabase');
+  const docNo = (c.req.query('docNo') ?? '').trim();
+  const phone = (c.req.query('phone') ?? '').trim();
+  if (!docNo) return c.json({ eligible: false });
+  const result = await checkCrossCategorySource(sb, docNo, phone || null);
+  return c.json({
+    eligible:  result.eligible,
+    debtorName: result.debtorName ?? null,
+    message:   result.eligible ? null : crossCatReasonText(docNo, result.reason),
+  });
+});
+
+// GET /cross-category-match?name&phone — the Confirm-screen "Auto-match" button.
+// Scans THIS customer's earlier sales orders and returns the most recent one
+// that can still back a cross-category follow-up, so sales don't have to recall
+// the SO number. "Same customer" = the (name, phone) identity key (migration
+// 0144) — a shared phone with a different name is a different customer. The SO
+// must not be cancelled and must not already be linked-from by another order
+// (single-use; the unique index on cross_category_source_doc_no is the hard
+// gate, this just keeps the button from offering a burnt SO). Read-only: it
+// never mints a customer row (unlike the order POST). Registered before /:docNo
+// so the static path isn't captured as a docNo.
+mfgSalesOrders.get('/cross-category-match', async (c) => {
+  const sb = c.get('supabase');
+  const name = (c.req.query('name') ?? '').trim();
+  const phoneRaw = (c.req.query('phone') ?? '').trim();
+  const normPhone = phoneRaw ? (normalizePhone(phoneRaw) ?? phoneRaw) : null;
+  // Both halves of the identity key are required to find a customer's orders.
+  if (!name || !normPhone) return c.json({ found: false });
+
+  // Candidate earlier SOs for this phone, newest first. Name is matched in the
+  // pure helper with the same lower(trim) rule as the customers unique index.
+  const { data: rows } = await sb
+    .from('mfg_sales_orders')
+    .select('doc_no, debtor_name, created_at')
+    .eq('phone', normPhone)
+    .neq('status', 'CANCELLED')
+    .order('created_at', { ascending: false })
+    .limit(50);
+  const candidates: AutoMatchCandidate[] = ((rows ?? []) as Array<{ doc_no: string; debtor_name: string | null }>)
+    .map((r) => ({ docNo: r.doc_no, debtorName: r.debtor_name }));
+  if (candidates.length === 0) return c.json({ found: false });
+
+  // Which of those candidate SOs are already linked-from by another order.
+  const { data: usedRows } = await sb
+    .from('mfg_sales_orders')
+    .select('cross_category_source_doc_no')
+    .in('cross_category_source_doc_no', candidates.map((c2) => c2.docNo));
+  const used = ((usedRows ?? []) as Array<{ cross_category_source_doc_no: string | null }>)
+    .map((r) => r.cross_category_source_doc_no)
+    .filter((v): v is string => !!v);
+
+  const match = pickCrossCategoryMatch(candidates, name, used);
+  return match
+    ? c.json({ found: true, docNo: match.docNo, debtorName: match.debtorName })
+    : c.json({ found: false });
+});
+
 mfgSalesOrders.get('/:docNo', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo');
   const [h, i] = await Promise.all([
@@ -647,7 +818,7 @@ mfgSalesOrders.get('/:docNo', async (c) => {
        (LIST_COLS = HEADER + …) reads. Keeping it out of the shared HEADER and
        appending it only here means the detail page still gets the Proceed Date
        while the list view query stays valid. */
-    sb.from('mfg_sales_orders').select(`${HEADER}, proceeded_at`).eq('doc_no', docNo).maybeSingle(),
+    sb.from('mfg_sales_orders').select(`${HEADER}, proceeded_at, signature_b64, slip_key, slip_state`).eq('doc_no', docNo).maybeSingle(),
     sb.from('mfg_sales_order_items').select(ITEM).eq('doc_no', docNo).order('created_at'),
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
@@ -756,6 +927,18 @@ mfgSalesOrders.post('/', async (c) => {
      Commander 2026-05-26: "Debtor Name 其实可以换成 Customer Name". */
   const customerName = (body.debtorName ?? body.customerName) as string | undefined;
   if (!customerName) return c.json({ error: 'customer_name_required' }, 400);
+  /* Owner 2026-06-03 (migration 0144) — phone is COMPULSORY on every SO,
+     enforced server-side: the POS already client-gates it (validateCustomer)
+     and the Backend New SO form gates it too, but the server is the layer a
+     tampered or direct API caller can't bypass. Normalise ONCE here and reuse
+     for both the SO snapshot (phone column) and the customer identity key. A
+     non-MY / unparseable number keeps its raw form (normalizePhone → null)
+     rather than being rejected — only an empty phone is blocked. */
+  const rawPhone = typeof body.phone === 'string' ? body.phone.trim() : '';
+  if (!rawPhone) {
+    return c.json({ error: 'phone_required', reason: 'A phone number is required on every sales order.' }, 400);
+  }
+  const normPhone = normalizePhone(rawPhone) ?? rawPhone;
   /* PR #46 — Items optional. POS handover may create the SO header first,
      then add items via POST /:docNo/items. Matches PR #41 PO blank-draft
      pattern. Only B2B-bulk path requires items at create. */
@@ -791,6 +974,15 @@ mfgSalesOrders.post('/', async (c) => {
       return c.json({
         error: 'processing_delivery_must_pair',
         reason: 'Processing Date and Delivery Date must be set together (or both left empty).',
+      }, 400);
+    }
+    /* Owner 2026-06-03 — Process Date is the factory start; it cannot fall after
+       the Delivery Date (you can't start building after the day you promised to
+       deliver). Both are plain ISO YYYY-MM-DD, so a string compare is correct. */
+    if (procDate && delivDate && procDate > delivDate) {
+      return c.json({
+        error: 'processing_after_delivery',
+        reason: 'Processing Date cannot be later than the Delivery Date.',
       }, 400);
     }
     /* Commander 2026-05-29 — a Processing Date means "ready to build", so every
@@ -916,6 +1108,9 @@ mfgSalesOrders.post('/', async (c) => {
      the request with HTTP 400. Manual override path (mfgSoPriceOverrides)
      stays intact at PATCH /:docNo/items/:itemId/override. */
   const cachedConfig = await loadMaintenanceConfig(sb);
+  // Special Add-ons (migration 0134) — fetched once; each line's specials pool is
+  // built from these so POS add-ons price from special_addons, not the legacy pool.
+  const cachedSpecialAddons = await loadSpecialAddons(sb);
   /* PR #216 — allowed_options pre-flight. Run BEFORE the pricing recompute
      so a disallowed variant returns the precise field/value/allowed
      payload instead of getting silently re-priced. Loads (product,model)
@@ -938,11 +1133,135 @@ mfgSalesOrders.post('/', async (c) => {
   }
   const cachedCombos = await loadActiveSofaCombos(sb);  // Phase 4b — sofa selling recompute
   const cachedFabricAddonConfig = await loadFabricTierAddonConfig(sb);  // migration 0124 — fabric-tier Δ
-  const recomputes: Array<RecomputedLine | null> = await Promise.all(items.map(async (it) => {
+
+  const lineProducts = await Promise.all(
+    items.map((it) => loadProductByCode(sb, String(it.itemCode ?? ''))),
+  );
+  /* PWP Code Voucher (migration 0130) — code-driven grant + atomic claim. A
+     reward line earns its per-SKU pwp_price_sen ONLY if it carries a valid
+     `variants.pwpCode`: the code exists, is redeemable (AVAILABLE, or RESERVED
+     owned by the caller), its snapshot reward_category + eligible model list
+     match the reward product, the reward SKU has pwp_price_sen > 0, and — for an
+     AVAILABLE cross-order voucher — the order's customer matches the code's bound
+     customer (§8.8). Each valid code is CLAIMED atomically (conditional UPDATE →
+     USED) so two orders can't double-spend one; a lost race / forged / used /
+     ineligible code is simply not granted → that line reprices at full
+     sell_price_sen → drift → 400 for a POS-tablet caller. Un-applied reserved
+     codes owned by this order's triggers are flipped to AVAILABLE after insert
+     (carried-forward voucher). Default data (no codes) → nothing granted → no
+     change. NOTE: applied on the create path; backend per-line PATCH/override
+     re-prices at full sell price (no order context) — re-create to re-apply. */
+  /* Owner 2026-06-03 (migration 0144) — resolve the REAL customer identity
+     (find-or-create by name + phone) and stamp it on the SO. Phone is validated
+     above so the key is always complete. Best-effort: an unexpected RPC error
+     must not block a paying customer at the counter, so we log it and fall back
+     to null (a Phase 2 backfill can repair it). The resolved id flows into the
+     SO header (customer_id), the cross-category "same customer" match, and the
+     PWP voucher binding below — all of which previously saw a permanently-null
+     customer_id (the POS never sent one). */
+  let orderCustomerId: string | null = null;
+  {
+    const { data: resolvedCustomerId, error: customerErr } = await sb.rpc('upsert_customer_by_name_phone', {
+      p_name:  customerName,
+      p_phone: normPhone,
+      p_email: typeof body.email === 'string' && body.email.trim() ? body.email.trim() : null,
+    });
+    if (customerErr) {
+      console.error('[mfg-so] customer resolve failed:', customerErr.message ?? customerErr);
+    } else {
+      orderCustomerId = (resolvedCustomerId as string | null) ?? null;
+    }
+  }
+  const pwpBaseByIdx = new Map<number, number>();            // non-sofa idx → pwp_price_sen
+  const pwpSofaByIdx = new Map<number, string[]>();          // sofa idx → granted reward combo ids
+  const claimedPwpCodes: Array<{ code: string; prevStatus: string }> = [];
+  for (let idx = 0; idx < items.length; idx++) {
+    const it = items[idx];
+    const code = String((it?.variants as { pwpCode?: string | null } | null)?.pwpCode ?? '').trim();
+    if (!code) continue;
+    const product = lineProducts[idx];
+    if (!product) continue;
+    const { data: cRow } = await sb
+      .from('pwp_codes')
+      .select('status, owner_staff_id, reward_category, eligible_reward_model_ids, reward_combo_ids, customer_id, source_doc_no, type')
+      .eq('code', code)
+      .maybeSingle();
+    if (!cRow) continue;
+    const redeemable = cRow.status === 'AVAILABLE' || (cRow.status === 'RESERVED' && cRow.owner_staff_id === user.id);
+    if (!redeemable) continue;
+    const prodCat = String(product.category ?? '').toUpperCase();
+    if (prodCat !== String(cRow.reward_category).toUpperCase()) continue;
+    // Customer binding — an AVAILABLE voucher only redeems for its earner.
+    if (cRow.status === 'AVAILABLE' && cRow.customer_id && orderCustomerId && cRow.customer_id !== orderCustomerId) continue;
+
+    // Eligibility — SOFA is matched by Combo (Phase 2); other categories by the
+    // reward Model + a per-SKU PWP price. A miss → not granted → the line keeps
+    // its full price → a claimed-PWP tamper drifts → 400 (the code is NOT burned).
+    let grantSofaComboIds: string[] | null = null;
+    let grantPwpPrice = 0;
+    if (prodCat === 'SOFA') {
+      const rewardComboIds = (cRow.reward_combo_ids as string[] | null) ?? [];
+      if (rewardComboIds.length === 0) continue;
+      const sofaArgs = extractSofaComboLookupArgs(String(it?.itemGroup ?? 'sofa'), (it?.variants as Record<string, unknown> | null) ?? null);
+      const built = sofaArgs?.modules ?? [];
+      if (built.length === 0) continue;
+      const candidate = cachedCombos.filter(
+        (c) => rewardComboIds.includes(c.id) && (!product.base_model || c.baseModel === product.base_model),
+      );
+      if (!candidate.some((c) => matchComboSubset(built, c.modules) != null)) continue;
+      grantSofaComboIds = rewardComboIds;
+    } else {
+      const pwpPrice = Math.round(Number(product.pwp_price_sen ?? 0));
+      // A 'promo' code prices a 0 reward as FREE; a 'pwp' code still needs a set
+      // price (> 0), where 0 means "no PWP price". (migration 0145)
+      const isPromo = String(cRow.type ?? 'pwp') === 'promo';
+      if (!isPromo && !(pwpPrice > 0)) continue;
+      const elig = (cRow.eligible_reward_model_ids as string[] | null) ?? [];
+      const modelOk = elig.length === 0 || (product.model_id != null && elig.includes(product.model_id));
+      if (!modelOk) continue;
+      grantPwpPrice = pwpPrice;
+    }
+
+    // Atomic claim — USED only if still redeemable. Preserve the original
+    // source_doc_no (earning SO) for a cross-order voucher; stamp it for a
+    // same-cart one.
+    const { data: claimed } = await sb
+      .from('pwp_codes')
+      .update({
+        status:             'USED',
+        source_doc_no:      cRow.source_doc_no ?? docNo,
+        redeemed_doc_no:    docNo,
+        redeemed_item_code: product.code,
+        updated_at:         new Date().toISOString(),
+      })
+      .eq('code', code)
+      .in('status', ['RESERVED', 'AVAILABLE'])
+      .select('code')
+      .maybeSingle();
+    if (!claimed) continue;  // lost the race / already used → not granted
+    claimedPwpCodes.push({ code, prevStatus: cRow.status });
+    if (grantSofaComboIds) pwpSofaByIdx.set(idx, grantSofaComboIds);
+    else pwpBaseByIdx.set(idx, grantPwpPrice);
+  }
+  /* Restore claimed codes to their prior state when the request is rejected
+     after the claim (drift 400 / insert failure) so a failed order never
+     silently burns a voucher. */
+  const rollbackPwpClaims = async () => {
+    for (const { code, prevStatus } of claimedPwpCodes) {
+      const patch: Record<string, unknown> = {
+        status: prevStatus, redeemed_doc_no: null, redeemed_item_code: null,
+        updated_at: new Date().toISOString(),
+      };
+      if (prevStatus === 'RESERVED') patch.source_doc_no = null;  // we stamped it on claim
+      await sb.from('pwp_codes').update(patch).eq('code', code).eq('status', 'USED');
+    }
+  };
+
+  const recomputes: Array<RecomputedLine | null> = await Promise.all(items.map(async (it, idx) => {
     const itemCode = String(it.itemCode ?? '');
     if (!itemCode) return null;
-    const [product, fabric, sellingTiers] = await Promise.all([
-      loadProductByCode(sb, itemCode),
+    const product = lineProducts[idx] ?? null;
+    const [fabric, sellingTiers] = await Promise.all([
       loadFabricByCode(sb, (it.variants as { fabricCode?: string } | null)?.fabricCode ?? null),
       loadFabricSellingTiers(sb, (it.variants as { fabricId?: string } | null)?.fabricId ?? null),
     ]);
@@ -963,7 +1282,11 @@ mfgSalesOrders.post('/', async (c) => {
       unitPriceCenti: Number(it.unitPriceCenti ?? 0),
       variants:       (it.variants as MfgItemForRecompute['variants']) ?? null,
     };
-    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig);
+    // PWP grant for this line when its code was claimed: a per-SKU base (non-
+    // sofa) or the reward combo ids (sofa). Else null → normal base / price.
+    const pwpBaseSen = pwpBaseByIdx.get(idx) ?? null;
+    const pwpSofaComboIds = pwpSofaByIdx.get(idx) ?? null;
+    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, pwpBaseSen, pwpSofaComboIds, cachedSpecialAddons);
   }));
   /* Commander 2026-05-29 (system-wide) — the SELLING unit price is now
      operator-authored on every SO line. The product price tables are COST,
@@ -989,6 +1312,7 @@ mfgSalesOrders.post('/', async (c) => {
     for (let i = 0; i < recomputes.length; i++) {
       const r = recomputes[i];
       if (r && r.drift) {
+        await rollbackPwpClaims();  // don't burn a voucher on a rejected order
         return c.json({
           error:    'pricing_drift',
           reason:   'Client unitPriceCenti differs >0.5% from server compute.',
@@ -1098,6 +1422,90 @@ mfgSalesOrders.post('/', async (c) => {
   const margin = total - totalCost;
   const marginPctBasis = total > 0 ? Math.round((margin / total) * 10000) : 0;
 
+  /* ── Delivery fee (migration 0133) — POS handover path only ──────────────
+     Activates the dormant delivery fee on the LIVE SO. Gated on the explicit
+     applyDeliveryFee flag the POS handover sends, so backend-authored SOs are
+     untouched (delivery_fee_centi stays 0). Fully server-recomputed via the
+     pure computeSoDeliveryFee — the only client value trusted is the free-form
+     additionalDeliveryFee (clamped >= 0). Categories are the cart's distinct
+     DELIVERABLE item_groups (sofa/mattress/bedframe); accessories/others don't
+     trip cross-category. delivery_fee_config is whole-MYR, the SO ledger is
+     sen, so the config is scaled ×100 before the pure call. The result folds
+     into the grand totals + margin like the fabric-tier add-on; the per-
+     category revenue buckets stay goods-only. (Phase 1 special-model fees +
+     Phase 2 cross-order follow-up plug into the same call.) */
+  let deliveryFeeCenti = 0;
+  let crossCategorySourceDocNo: string | null = null;
+  if (body.applyDeliveryFee) {
+    const { data: dcfg } = await sb
+      .from('delivery_fee_config')
+      .select('base_fee, cross_category_fee')
+      .eq('id', 1)
+      .single();
+    const DELIVERABLE = new Set(['sofa', 'mattress', 'bedframe']);
+    const categoryIds = items
+      .map((it) => String((it as { itemGroup?: string }).itemGroup ?? '').toLowerCase())
+      .filter((g) => DELIVERABLE.has(g));
+    const additionalSen = Math.max(0, Math.round(Number(body.additionalDeliveryFee ?? 0) * 100));
+    // delivery_fee_config + special fees are whole-MYR; the SO ledger is sen → ×100.
+    const cfgSen = {
+      baseFee:          Number((dcfg as { base_fee?: number } | null)?.base_fee ?? 0) * 100,
+      crossCategoryFee: Number((dcfg as { cross_category_fee?: number } | null)?.cross_category_fee ?? 0) * 100,
+    };
+
+    /* Phase 1 — special-model fees. Any cart line whose Model is tagged in
+       model_special_delivery_fees contributes a special fee; the highest
+       standalone fee overrides the base, and on a follow-up the special
+       cross fee applies. lineProducts (loaded above) carries each line's
+       model_id. */
+    const specialModels: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
+    const lineModelIds = [...new Set(
+      lineProducts
+        .map((p) => (p as { model_id?: string | null } | null)?.model_id)
+        .filter((m): m is string => Boolean(m)),
+    )];
+    if (lineModelIds.length > 0) {
+      const { data: specialRows } = await sb
+        .from('model_special_delivery_fees')
+        .select('model_id, standalone_fee, cross_cat_followup_fee')
+        .in('model_id', lineModelIds);
+      for (const r of (specialRows ?? []) as Array<{ standalone_fee?: number; cross_cat_followup_fee?: number }>) {
+        specialModels.push({
+          standaloneFee:            Number(r.standalone_fee ?? 0) * 100,
+          crossCategoryFollowupFee: Number(r.cross_cat_followup_fee ?? 0) * 100,
+        });
+      }
+    }
+
+    /* Phase 2 — cross-order link. Sales typed the earlier SO's doc_no at
+       handover. Validate it (exists, not cancelled, same customer by phone
+       when both have one, not already used), then this SO charges only the
+       reduced cross / special-cross rate. A 400 here rolls back any PWP claim
+       so a voucher isn't burned on a rejected order. The unique index on
+       cross_category_source_doc_no is the hard anti-double-dip backstop. */
+    let isCrossCategoryFollowup = false;
+    const rawLink = String((body.crossCategorySourceDocNo as string | undefined) ?? '').trim();
+    if (rawLink) {
+      const elig = await checkCrossCategorySource(
+        sb, rawLink, typeof body.phone === 'string' ? body.phone : null, orderCustomerId,
+      );
+      if (!elig.eligible) {
+        await rollbackPwpClaims();  // don't burn a voucher on a rejected order
+        return c.json({ error: 'cross_category_link_invalid', reason: crossCatReasonText(rawLink, elig.reason) }, 400);
+      }
+      crossCategorySourceDocNo = rawLink;
+      isCrossCategoryFollowup = true;
+    }
+
+    deliveryFeeCenti = computeSoDeliveryFee(
+      { categoryIds, specialModels, isCrossCategoryFollowup, additionalFee: additionalSen },
+      cfgSen,
+    ).total;
+  }
+  const grandTotal          = total + deliveryFeeCenti;
+  const grandMargin         = margin + deliveryFeeCenti;
+  const grandMarginPctBasis = grandTotal > 0 ? Math.round((grandMargin / grandTotal) * 10000) : 0;
+
   /* Task #121 — derive country from the picked customer_state via the
      localities lookup. Stays null when the state is unknown so we don't
      forge a country the locality table never declared. */
@@ -1116,6 +1524,26 @@ mfgSalesOrders.post('/', async (c) => {
       sb,
       (body.customerState as string | null | undefined) ?? null,
     ));
+
+  /* P1 (Owner 2026-06-03, migration 0143) — resolve the POS handover payment
+     slip. The POS uploads the slip to R2 first (via /slips/init + confirm) and
+     sends us the uploadSessionId; we look up its committed R2 key and attach it
+     to the SO so the coordinator can see the payment proof. Best-effort: a
+     missing / un-uploaded session just leaves the SO slip-less (slip_state stays
+     'none') rather than blocking the order. */
+  let slipKey: string | null = null;
+  const uploadSessionId = (body.uploadSessionId as string | null | undefined) ?? null;
+  if (uploadSessionId) {
+    const { data: slipRow } = await sb
+      .from('pending_slip_uploads')
+      .select('r2_key, status')
+      .eq('upload_session_id', uploadSessionId)
+      .maybeSingle();
+    const sr = slipRow as { r2_key?: string; status?: string } | null;
+    if (sr?.r2_key && (sr.status === 'uploaded' || sr.status === 'promoted')) {
+      slipKey = sr.r2_key;
+    }
+  }
 
   const { error: hErr } = await sb.from('mfg_sales_orders').insert({
     doc_no: docNo,
@@ -1140,7 +1568,7 @@ mfgSalesOrders.post('/', async (c) => {
        raw "+60 12 345 6789" — normalize once on the server so the DB never
        holds a half-typed format. Falls back to the raw value if normalize
        returns null (e.g. non-MY international numbers we don't recognise). */
-    phone: typeof body.phone === 'string' ? (normalizePhone(body.phone) ?? body.phone) : null,
+    phone: normPhone,
     mattress_sofa_centi: mattressSofa,
     bedframe_centi: bedframe,
     accessories_centi: accessories,
@@ -1150,12 +1578,17 @@ mfgSalesOrders.post('/', async (c) => {
     bedframe_cost_centi:      bedframeCost,
     accessories_cost_centi:   accessoriesCost,
     others_cost_centi:        othersCost,
-    local_total_centi: total,
-    balance_centi: total,
+    local_total_centi: grandTotal,
+    balance_centi: grandTotal,
     total_cost_centi: totalCost,
-    total_revenue_centi: total,
-    total_margin_centi: margin,
-    margin_pct_basis: marginPctBasis,
+    total_revenue_centi: grandTotal,
+    total_margin_centi: grandMargin,
+    margin_pct_basis: grandMarginPctBasis,
+    // Delivery fee snapshot (migration 0133) — recomputeTotals reads it back.
+    delivery_fee_centi: deliveryFeeCenti,
+    // Cross-category follow-up link (migration 0141) — null unless sales linked
+    // this SO back to an earlier one for the reduced delivery rate.
+    cross_category_source_doc_no: crossCategorySourceDocNo,
     line_count: items.length,
     currency: ((body.currency as string) ?? 'MYR').toUpperCase(),
     note: (body.note as string) ?? null,
@@ -1173,7 +1606,7 @@ mfgSalesOrders.post('/', async (c) => {
       : null,
     emergency_contact_relationship: (body.emergencyContactRelationship as string) ?? null,
     target_date: (body.targetDate as string) ?? null,
-    customer_id: (body.customerId as string) ?? null,
+    customer_id: orderCustomerId,
     customer_state: (body.customerState as string) ?? null,
     /* Task #121 — country snapshot auto-derived above. */
     customer_country: customerCountrySnapshot,
@@ -1189,6 +1622,18 @@ mfgSalesOrders.post('/', async (c) => {
     customer_po: (body.customerPo as string) ?? null,
     hub_id: (body.hubId as string) ?? null,
     hub_name: (body.hubName as string) ?? null,
+    /* P1 (Owner 2026-06-03) — billing address from the POS handover, sent only
+       when it differs from the delivery address. Single text column (already
+       persisted on PATCH + shown on the SO detail page); just wire it on create
+       so a POS order's separate billing address isn't lost. */
+    bill_to_address: (body.billToAddress as string) ?? null,
+    /* P1 (Owner 2026-06-03, migration 0142) — POS handover signature data URL. */
+    signature_b64: (body.signatureB64 as string) ?? null,
+    /* P1 (Owner 2026-06-03, migration 0143) — POS handover payment slip (R2 key
+       resolved above). slip_state → 'pending' (coordinator to check) when a slip
+       is attached; left at the column default 'none' otherwise. */
+    slip_key: slipKey,
+    slip_state: slipKey ? 'pending' : 'none',
     /* PR #148 + #150 — Payment fields on create (mirror PATCH handler).
        Lets commander set payment_method + deposit_centi straight from the
        New SO form, including approval_code for merchant transactions. */
@@ -1207,17 +1652,42 @@ mfgSalesOrders.post('/', async (c) => {
     status: 'CONFIRMED',
     created_by: user.id,
   });
-  if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
+  if (hErr) { await rollbackPwpClaims(); return c.json({ error: 'insert_failed', reason: hErr.message }, 500); }
+
+  /* P1 (migration 0143) — the slip is now owned by this SO, so promote its
+     pending row. 'promoted' rows are excluded from the reaper that deletes the
+     R2 object for expired 'pending'/'uploaded' uploads (schema.ts slipUpload-
+     Status comment). Best-effort — a failed promote never blocks the order. */
+  if (slipKey && uploadSessionId) {
+    await sb.from('pending_slip_uploads')
+      .update({ status: 'promoted', promoted_at: new Date().toISOString() })
+      .eq('upload_session_id', uploadSessionId);
+  }
 
   if (itemRows.length > 0) {
     const rowsWithDoc = itemRows.map((r) => ({ ...r, doc_no: docNo }));
     const { error: iErr } = await sb.from('mfg_sales_order_items').insert(rowsWithDoc);
-    if (iErr) { await sb.from('mfg_sales_orders').delete().eq('doc_no', docNo); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+    if (iErr) { await rollbackPwpClaims(); await sb.from('mfg_sales_orders').delete().eq('doc_no', docNo); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
     /* Commander 2026-05-29 — re-roll the header through recomputeTotals so a
        matched sofa SET picks up its MASTER combo cost (spread across the lines).
        The inline rollup above set per-module costs; this corrects them + the
        header totals to the combo. No-op for non-sofa / non-matching SOs. */
     await recomputeTotals(sb, docNo);
+  }
+
+  /* PWP Code Voucher (migration 0130) — carry forward the un-applied reserved
+     codes. Any code still RESERVED against one of THIS order's cart lines (the
+     applied ones already flipped to USED in the claim pass above) becomes an
+     AVAILABLE voucher bound to this order's customer: printed on the SO and
+     redeemable in a future order. Keyed by the trigger line's cart_line_key,
+     which the POS threads on each line as `cartLineKey`. */
+  const pwpCartLineKeys = Array.from(new Set(
+    items.map((it) => String((it as { cartLineKey?: string } | null)?.cartLineKey ?? '')).filter(Boolean),
+  ));
+  if (pwpCartLineKeys.length > 0) {
+    await sb.from('pwp_codes').update({
+      status: 'AVAILABLE', source_doc_no: docNo, customer_id: orderCustomerId, updated_at: new Date().toISOString(),
+    }).eq('owner_staff_id', user.id).eq('status', 'RESERVED').in('cart_line_key', pwpCartLineKeys);
   }
 
   // PR-D — audit row. Emit one CREATE entry with every non-null field the
@@ -1594,6 +2064,15 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     if (typeof deliv === 'string' && deliv && deliv < todayMY && deliv !== origDeliv) {
       return c.json({ error: 'delivery_date_past', reason: 'Delivery Date cannot be in the past — today or a future date only.' }, 400);
     }
+    /* Owner 2026-06-03 — Process Date ≤ Delivery Date (factory start can't be
+       after the promised delivery). Use the EFFECTIVE values: the patch value
+       when this request sets the key, else the stored value — so editing only
+       one date still validates against the other already on the row. */
+    const effProc  = typeof proc  === 'string' ? (proc  || null) : origProc;
+    const effDeliv = typeof deliv === 'string' ? (deliv || null) : origDeliv;
+    if (effProc && effDeliv && effProc > effDeliv) {
+      return c.json({ error: 'processing_after_delivery', reason: 'Processing Date cannot be later than the Delivery Date.' }, 400);
+    }
   }
 
   /* Owner 2026-05-31 — Partial header lock. Once a non-cancelled DO / SI exists,
@@ -1767,7 +2246,18 @@ async function recomputeTotals(sb: any, docNo: string) {
       othersCost += lineCost;
     }
   }
-  const margin = total - totalCost;
+  // Delivery fee (migration 0133) — lives on the header, not the lines, so the
+  // lines-only roll-up above would erase it. Read the snapshot back and fold it
+  // into the grand totals + margin so re-rolls (line edits, combo re-spread)
+  // preserve it. 0 for backend-authored SOs.
+  const { data: hdrFee } = await sb
+    .from('mfg_sales_orders')
+    .select('delivery_fee_centi')
+    .eq('doc_no', docNo)
+    .maybeSingle();
+  const deliveryCenti = Number((hdrFee as { delivery_fee_centi?: number } | null)?.delivery_fee_centi ?? 0);
+  const grandTotal  = total + deliveryCenti;
+  const grandMargin = grandTotal - totalCost;
   await sb.from('mfg_sales_orders').update({
     mattress_sofa_centi: mattressSofa,
     bedframe_centi: bedframe,
@@ -1778,12 +2268,12 @@ async function recomputeTotals(sb: any, docNo: string) {
     bedframe_cost_centi:      bedframeCost,
     accessories_cost_centi:   accessoriesCost,
     others_cost_centi:        othersCost,
-    local_total_centi: total,
-    balance_centi: total,
+    local_total_centi: grandTotal,
+    balance_centi: grandTotal,
     total_cost_centi: totalCost,
-    total_revenue_centi: total,
-    total_margin_centi: margin,
-    margin_pct_basis: total > 0 ? Math.round((margin / total) * 10000) : 0,
+    total_revenue_centi: grandTotal,
+    total_margin_centi: grandMargin,
+    margin_pct_basis: grandTotal > 0 ? Math.round((grandMargin / grandTotal) * 10000) : 0,
     line_count: (items ?? []).length,
     updated_at: new Date().toISOString(),
   }).eq('doc_no', docNo);
@@ -1832,13 +2322,14 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     );
     if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeStr }, 400);
   }
-  const [cachedConfig, productLite, fabricLite, sofaCombosLite, sellingTiersLite, fabricAddonConfigLite] = await Promise.all([
+  const [cachedConfig, productLite, fabricLite, sofaCombosLite, sellingTiersLite, fabricAddonConfigLite, specialAddonsLite] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadProductByCode(sb, itemCodeStr),
     loadFabricByCode(sb, variantsObj?.fabricCode ?? null),
     loadActiveSofaCombos(sb),
     loadFabricSellingTiers(sb, (variantsObj as { fabricId?: string } | null)?.fabricId ?? null),
     loadFabricTierAddonConfig(sb),
+    loadSpecialAddons(sb),
   ]);
   // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
   const sofaModulePricesLite = productLite?.category === 'SOFA'
@@ -1863,6 +2354,9 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     sofaModulePricesLite,
     sellingTiersLite,
     fabricAddonConfigLite,
+    null,                // pwpBaseSen (resolved elsewhere for this single-item path)
+    null,                // pwpSofaComboIds
+    specialAddonsLite,
   );
   /* Pricing trust boundary (Owner 2026-05-31, see isPosTabletCaller). POS tablet
      roles are drift-rejected + take the server price; Backend / office authors
@@ -2018,13 +2512,14 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeAfter }, 400);
   }
   if (shouldRecompute && itemCodeAfter) {
-    const [cfg, prodLite, fabLite, sofaCombosPatch, sellingTiersPatch, fabricAddonConfigPatch] = await Promise.all([
+    const [cfg, prodLite, fabLite, sofaCombosPatch, sellingTiersPatch, fabricAddonConfigPatch, specialAddonsPatch] = await Promise.all([
       loadMaintenanceConfig(sb),
       loadProductByCode(sb, itemCodeAfter),
       loadFabricByCode(sb, variantsAfter?.fabricCode ?? null),
       loadActiveSofaCombos(sb),
       loadFabricSellingTiers(sb, (variantsAfter as { fabricId?: string } | null)?.fabricId ?? null),
       loadFabricTierAddonConfig(sb),
+      loadSpecialAddons(sb),
     ]);
     // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
     const sofaModulePricesPatch = prodLite?.category === 'SOFA'
@@ -2049,6 +2544,9 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       sofaModulePricesPatch,
       sellingTiersPatch,
       fabricAddonConfigPatch,
+      null,                // pwpBaseSen
+      null,                // pwpSofaComboIds
+      specialAddonsPatch,
     );
     if (posTablet && recomputedPatch.drift) {
       return c.json({

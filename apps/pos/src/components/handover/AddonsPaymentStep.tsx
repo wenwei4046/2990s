@@ -1,4 +1,4 @@
-import { Banknote, CreditCard, Clock, Wallet } from 'lucide-react';
+import { Banknote, CreditCard, Clock, Wallet, CheckCircle2, AlertCircle, Search } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { HandoverForm, AddonSelection } from '../../lib/handover-helpers';
 import type { AddonRow } from '../../lib/queries';
@@ -8,12 +8,32 @@ import styles from '../../pages/Handover.module.css';
 
 const HANDOVER_ADDON_IDS = ['dispose-mattress', 'dispose-bedframe', 'lift', 'assemble'];
 
+/** Live status of the typed "Previous SO number" (server-validated). */
+export interface CrossCategoryLinkStatus {
+  show:       boolean;   // an SO number has been typed
+  checking:   boolean;   // validation in flight / debouncing
+  eligible:   boolean;   // valid + eligible → discount applies
+  message:    string | null;  // reason when invalid
+  debtorName: string | null;  // matched customer name when eligible
+}
+
+/** Controls for the "Auto-match" button (scan the customer's earlier SOs). */
+export interface AutoMatchControls {
+  canRun:   boolean;       // customer name + phone are both present
+  loading:  boolean;       // a scan is in flight
+  notFound: boolean;       // the last scan found no linkable earlier SO
+  run:      () => void;    // start a scan
+  clear:    () => void;    // reset notFound (when the SO field is edited by hand)
+}
+
 export const AddonsPaymentStep = ({
-  form, update, addons,
+  form, update, addons, linkStatus, autoMatch,
 }: {
   form: HandoverForm;
   update: <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) => void;
   addons: AddonRow[];
+  linkStatus: CrossCategoryLinkStatus;
+  autoMatch: AutoMatchControls;
 }) => {
   const handoverAddons = addons.filter(
     (a) => HANDOVER_ADDON_IDS.includes(a.id) && a.enabled,
@@ -79,6 +99,67 @@ export const AddonsPaymentStep = ({
         Adds on top of the base fee and any cross-category surcharge.
         Whole RM, no sen.
       </p>
+
+      <h3 className="subTitle">Cross-category — link previous order (optional)</h3>
+      <p className={styles.stepLead}>
+        If this customer already placed an earlier order for a different category
+        (e.g. a mattress) that can&apos;t share this sales order, enter that order&apos;s
+        SO number. Delivery here is then charged the reduced cross-category rate
+        (or the special model&apos;s cross-category price) instead of a fresh full fee.
+      </p>
+
+      {/* Manual <div className="field"> (not <Field>, which renders a <label>) so
+          the Auto-match <button> beside the input isn't captured by the label. */}
+      <div className="field">
+        <span className="fieldLabel">Previous SO number</span>
+        <div className={styles.soMatchRow}>
+          <input
+            type="text"
+            value={form.crossCategorySourceSo}
+            onChange={(e) => { update('crossCategorySourceSo', e.target.value); autoMatch.clear(); }}
+            placeholder="e.g. SO-2605"
+            autoCapitalize="characters"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+          <button
+            type="button"
+            className={styles.soMatchBtn}
+            onClick={autoMatch.run}
+            disabled={!autoMatch.canRun || autoMatch.loading}
+          >
+            <Search size={16} strokeWidth={1.75} />
+            {autoMatch.loading ? 'Scanning…' : 'Auto-match'}
+          </button>
+        </div>
+      </div>
+      {linkStatus.show ? (
+        linkStatus.checking ? (
+          <p className={styles.signCaption}>Checking order number…</p>
+        ) : linkStatus.eligible ? (
+          <p style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 'var(--fs-13)', fontWeight: 600, color: 'var(--c-festive-a)' }}>
+            <CheckCircle2 size={16} strokeWidth={1.75} />
+            Linked{linkStatus.debtorName ? ` to ${linkStatus.debtorName}` : ''} — cross-category rate applies.
+          </p>
+        ) : (
+          <p style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 'var(--fs-13)', fontWeight: 600, color: 'var(--c-festive-b)' }}>
+            <AlertCircle size={16} strokeWidth={1.75} />
+            {linkStatus.message ?? 'This order number is not valid.'}
+          </p>
+        )
+      ) : autoMatch.loading ? (
+        <p className={styles.signCaption}>Scanning this customer&apos;s earlier orders…</p>
+      ) : autoMatch.notFound ? (
+        <p style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 'var(--fs-13)', fontWeight: 600, color: 'var(--c-festive-b)' }}>
+          <AlertCircle size={16} strokeWidth={1.75} />
+          No earlier order found for this customer.
+        </p>
+      ) : (
+        <p className={styles.signCaption}>
+          Leave blank for a standalone order. Tap Auto-match to fill it from this
+          customer&apos;s earlier orders, or type it — the SO number is checked live.
+        </p>
+      )}
 
       <h3 className="subTitle">Payment method</h3>
       <div className="fieldRow">

@@ -10,7 +10,8 @@
 //   debtorName, email, customerType, salespersonId, phone,
 //   address1, address2, city, postcode, customerState, buildingType,
 //   emergencyContactName, emergencyContactPhone, emergencyContactRelationship,
-//   targetDate, customerDeliveryDate, paymentMethod, items: [...]
+//   targetDate, customerDeliveryDate, internalExpectedDd, paymentMethod,
+//   items: [...]
 //
 // On success the server returns { docNo: 'SO-NNNNNN' } and the caller
 // navigates to the handover thank-you screen with that docNo. On failure the
@@ -51,6 +52,10 @@ export interface PosHandoffPayload {
   postcode?: string;
   customerState?: string;
   buildingType?: 'condo' | 'landed' | 'apartment' | 'office' | 'shop' | 'other';
+  /** Billing address as a single line, sent ONLY when it differs from the
+   *  delivery address. Maps to the SO's existing `bill_to_address` column (the
+   *  coordinator sees it on the SO detail page). Omitted when billing == delivery. */
+  billToAddress?: string;
 
   /* Emergency contact. */
   emergencyContactName?: string;
@@ -65,6 +70,25 @@ export interface PosHandoffPayload {
    *  We send both because target_date is the POS handover field; coordinators
    *  edit customer_delivery_date downstream as the operational date. */
   customerDeliveryDate?: string;
+  /** Factory start ("Process Date") — when production should begin, so a far-out
+   *  delivery doesn't pull stock too early. ISO YYYY-MM-DD. Maps to the SO's
+   *  internal_expected_dd column. The API requires this and customerDeliveryDate
+   *  to be sent together (or both omitted) and Process ≤ Delivery. */
+  internalExpectedDd?: string;
+
+  /** Free-text special instructions captured at handover (lift available, leave
+   *  at concierge, etc.). Maps to the SO's existing `note` column — the
+   *  coordinator reads + edits it on the SO detail page. */
+  note?: string;
+  /** Customer signature captured on the handover pad, as a data URL
+   *  (image/png;base64,…). Maps to the SO's signature_b64 column (migration
+   *  0142). Omitted when unsigned. */
+  signatureB64?: string;
+  /** R2 upload-session id for the payment slip (from /slips/init + confirm). The
+   *  server resolves it to the committed R2 key and attaches it to the SO
+   *  (slip_key, migration 0143) so the coordinator sees the payment proof.
+   *  Omitted when no slip was uploaded. */
+  uploadSessionId?: string;
 
   /* Payment. */
   paymentMethod?: 'merchant' | 'transfer' | 'installment' | 'cash';
@@ -73,6 +97,19 @@ export interface PosHandoffPayload {
   approvalCode?: string;
   /** Deposit / amount collected at handover in centi-MYR (sen). */
   depositCenti?: number;
+
+  /* Delivery fee (migration 0133). POS handover opts the SO into the
+   *  server-recomputed delivery fee (base + cross-category + special-model +
+   *  additional). Without this flag the SO charges no delivery — backend-
+   *  authored SOs stay unaffected. */
+  applyDeliveryFee?: boolean;
+  /** Free-form delivery fee keyed by sales at handover, whole MYR. Server
+   *  clamps negatives to 0 and scales to sen. */
+  additionalDeliveryFee?: number;
+  /** Cross-category follow-up: the earlier SO's doc_no sales typed at handover.
+   *  The server validates it and charges this SO the reduced cross / special-
+   *  cross delivery rate. Migration 0141. */
+  crossCategorySourceDocNo?: string;
 
   /* Items. */
   items: PosHandoffItem[];
@@ -91,6 +128,10 @@ export interface PosHandoffItem {
    *  size/colour/leg-height/gap/etc. Coordinator-side SoLineCard renders this
    *  into the bedframe / sofa variants grid (see apps/backend SoLineCard). */
   variants: Record<string, unknown> | null;
+  /** PWP Code Voucher (migration 0130) — the cart line's stable key. NOT
+   *  persisted on the SO line; the server uses it at Confirm to flip this
+   *  order's un-applied RESERVED codes (keyed by cart_line_key) to AVAILABLE. */
+  cartLineKey?: string;
 }
 
 export interface PosHandoffError {
@@ -115,22 +156,31 @@ export class PosHandoffApiError extends Error {
 
 /** Map a POS cart line's CartConfig.kind → SO item_group. The Backend's
  *  SoLineCard / SalesOrderDetail switches on this string to decide which
- *  variants grid to render (sofa vs bedframe vs mattress). For mattress
- *  size-variants and flat-priced products we read the product's category
- *  off the catalog row — kind === 'size' covers both mattresses and
- *  size-priced sofas/bedframes, so the category lookup is required to
- *  disambiguate. Defaults to 'others' if we can't classify confidently. */
-const inferItemGroup = (
+ *  variants grid to render (sofa vs bedframe vs mattress). It also drives the
+ *  delivery-fee deliverable-category set (sofa/mattress/bedframe) + revenue
+ *  bucketing.
+ *
+ *  The cart line itself carries the mfg `category` (set by the configurator on
+ *  size + bedframe lines for PWP), so we trust THAT first — the catalog lookup
+ *  (`product.category`) misses for size-variant SKUs in production (`products`
+ *  is empty; the SKU id isn't a catalog card), which used to bucket every
+ *  mattress as 'others' → 0 delivery fee + wrong revenue split. A `size` line
+ *  with no resolvable category is almost always a mattress. */
+export const inferItemGroup = (
   config: CartConfig,
   product: CatalogProduct | undefined,
 ): PosHandoffItem['itemGroup'] => {
   if (config.kind === 'sofa') return 'sofa';
   if (config.kind === 'bedframe') return 'bedframe';
-  const categoryId = product?.category?.id?.toLowerCase() ?? '';
+  const fromConfig = 'category' in config && config.category ? String(config.category).toLowerCase() : '';
+  const categoryId = fromConfig || (product?.category?.id?.toLowerCase() ?? '');
   if (categoryId.includes('mattress')) return 'mattress';
   if (categoryId.includes('sofa')) return 'sofa';
   if (categoryId.includes('bedframe')) return 'bedframe';
   if (categoryId.includes('accessor') || categoryId.includes('addon')) return 'accessory';
+  // A size-priced line we couldn't classify is a mattress (sofas/bedframes have
+  // their own kinds). Keeps delivery + revenue correct when the catalog is empty.
+  if (config.kind === 'size') return 'mattress';
   return 'others';
 };
 
@@ -158,6 +208,26 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     if (config.colourId)        v.colourId = config.colourId;
     if (config.colourLabel)     v.colourLabel = config.colourLabel;
     if (config.colourHex)       v.colourHex = config.colourHex;
+    // The colour code IS the procurement fabric_code (fabric_colours.colour_id =
+    // fabric_trackings.fabric_code, e.g. "CG-002"). Send it as fabricCode so the
+    // server resolves the cost row, satisfies the required-fabricCode variant
+    // rule, and enforces the Model's allowed fabric pool. fabricId stays the
+    // series ('CG') that drives the SELLING tier add-on.
+    if (config.colourId)        v.fabricCode = config.colourId;
+    // PWP Code Voucher (Phase 2) — sofa redeemed at its combo PWP price. The
+    // server re-matches the build vs the code's reward combos + marks it USED.
+    if (config.pwp) {
+      v.pwp = true;
+      if (config.pwpCode) v.pwpCode = config.pwpCode;
+    }
+    // Special Add-ons (migration 0134) — codes → variants.specials (server prices
+    // from special_addons + gates) + chosen option-group labels for the 追问.
+    if (config.specialIds && config.specialIds.length > 0) {
+      v.specials = config.specialIds;
+      v.specialIds = config.specialIds;
+    }
+    if (config.specialLabels && config.specialLabels.length > 0) v.specialLabels = config.specialLabels;
+    if (config.specialChoices && Object.keys(config.specialChoices).length > 0) v.specialChoices = config.specialChoices;
     if (config.summary)         v.summary = config.summary;
     return Object.keys(v).length > 0 ? v : null;
   }
@@ -168,6 +238,19 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     };
     if (config.fabricId)              v.fabricId = config.fabricId;
     if (config.fabricLabel)           v.fabricLabel = config.fabricLabel;
+    // PWP (换购) — the salesperson redeemed this bed frame at its PWP price via a
+    // voucher code (migration 0130). The server re-validates the code + marks it
+    // USED at Confirm before locking the PWP base; pwpTriggerLabel is a display
+    // snapshot, pwpCode is the voucher (persisted → printed on the SO).
+    if (config.pwp) {
+      v.pwp = true;
+      if (config.pwpCode)             v.pwpCode = config.pwpCode;
+      if (config.pwpTriggerLabel)     v.pwpTriggerLabel = config.pwpTriggerLabel;
+    }
+    // colourId is the fabric colour code (fabric_colours.colour_id) now that
+    // bedframe picks fabric → colour. Mirror it to fabricCode for the server's
+    // cost lookup + required-fabricCode rule + allowed-fabric gate.
+    if (config.colourId)              v.fabricCode = config.colourId;
     if (config.sizeOther)             v.sizeOther = config.sizeOther;
     if (config.colourLabel != null)   v.colourLabel = config.colourLabel;
     if (config.colourHex)              v.colourHex = config.colourHex;
@@ -184,14 +267,37 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     if (config.divanHeightLabel != null) v.divanHeightLabel = config.divanHeightLabel;
     if (config.totalHeightId)         v.totalHeight = config.totalHeightLabel ?? config.totalHeightId;
     if (config.totalHeightLabel != null) v.totalHeightLabel = config.totalHeightLabel;
-    if (config.specialIds && config.specialIds.length > 0) v.specialIds = config.specialIds;
+    // Special Add-ons (migration 0134): specialIds holds special_addons CODES.
+    // Send them ALSO as variants.specials — the field the server prices from
+    // (special_addons pool) + the allowed-options gate validates. specialChoices
+    // carries the chosen option-group labels for the 追问 surcharge + SO description.
+    if (config.specialIds && config.specialIds.length > 0) {
+      v.specialIds = config.specialIds;
+      v.specials = config.specialIds;
+    }
     if (config.specialLabels && config.specialLabels.length > 0) v.specialLabels = config.specialLabels;
+    if (config.specialChoices && Object.keys(config.specialChoices).length > 0) v.specialChoices = config.specialChoices;
     if (config.summary)               v.summary = config.summary;
     return v;
   }
   if (config.kind === 'size') {
     const v: Record<string, unknown> = { sizeId: config.sizeId };
     if (config.addonExtras && config.addonExtras.length > 0) v.addonExtras = config.addonExtras;
+    // PWP (换购) — a mattress redeemed at its PWP price via a voucher code. The
+    // server re-validates the code + marks it USED at Confirm.
+    if (config.pwp) {
+      v.pwp = true;
+      if (config.pwpCode) v.pwpCode = config.pwpCode;
+      if (config.pwpTriggerLabel) v.pwpTriggerLabel = config.pwpTriggerLabel;
+    }
+    // Special Add-ons (migration 0134) — mattress add-ons (engine now prices
+    // MATTRESS specials). codes → variants.specials + chosen choices.
+    if (config.specialIds && config.specialIds.length > 0) {
+      v.specials = config.specialIds;
+      v.specialIds = config.specialIds;
+    }
+    if (config.specialLabels && config.specialLabels.length > 0) v.specialLabels = config.specialLabels;
+    if (config.specialChoices && Object.keys(config.specialChoices).length > 0) v.specialChoices = config.specialChoices;
     if (config.summary)               v.summary = config.summary;
     return v;
   }
@@ -306,14 +412,28 @@ export const cartLineToSoItem = (
   // Whole-MYR → sen. POS uses INTEGER ringgit (db/schema.ts §Money), the
   // Backend SO ledger is sen — multiply at the boundary.
   const unitPriceCenti = Math.round(line.config.total * 100);
+  // Sales Order line description (Chairman 2026-06-03): a sofa lists the Model
+  // name followed by every compartment code of the build, left-to-right —
+  // "Lyyar · 1A-LHF + 1NA + 2A-RHF". Other categories keep the Model/product
+  // name. A bundle-only sofa (no cells) falls back to the Model name.
+  const modelName = product?.name ?? line.config.productName ?? itemCode;
+  let description = modelName;
+  if (line.config.kind === 'sofa' && line.config.cells && line.config.cells.length > 0) {
+    const codes = [...line.config.cells]
+      .sort((a, b) => a.x - b.x || a.y - b.y)
+      .map((c) => c.moduleId)
+      .filter(Boolean);
+    if (codes.length > 0) description = `${modelName} · ${codes.join(' + ')}`;
+  }
   return {
     itemCode,
     itemGroup,
-    description: product?.name ?? line.config.productName ?? itemCode,
+    description,
     qty: line.qty,
     unitPriceCenti,
     discountCenti: 0,
     variants: buildVariants(line.config),
+    cartLineKey: line.key,
   };
 };
 

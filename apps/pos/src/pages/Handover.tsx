@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import { useCart, cartSubtotal } from '../state/cart';
@@ -7,13 +7,14 @@ import {
   usePosHandoffToSo,
   cartLinesToSoItems,
   fetchItemCodeMap,
+  inferItemGroup,
   PosHandoffApiError,
   type PosHandoffPayload,
 } from '../lib/pos-handover-so';
 import { useDeleteQuote } from '../lib/quotes';
-import { useAddons, useLocalities, useDeliveryFeeConfig, useCatalog } from '../lib/queries';
+import { useAddons, useLocalities, useDeliveryFeeConfig, useSpecialDeliveryFees, useCrossCategoryEligibility, useCrossCategoryAutoMatch, useCatalog } from '../lib/queries';
 import { useAuth } from '../lib/auth';
-import { computeDeliveryFee } from '@2990s/shared/pricing';
+import { computeSoDeliveryFee, type SpecialModelDeliveryFee } from '@2990s/shared/pricing';
 import {
   validateCustomer, validateAddress, validateEmergency, validateTargetDate,
   validateAddonsPayment, validateConfirmPayment, validateSign,
@@ -59,14 +60,17 @@ const empty: HandoverForm = {
   billingAddress: '', billingAddressLine2: '',
   billingPostcode: '', billingCity: '', billingState: '',
   emergencyName: '', emergencyRelation: '', emergencyPhone: '',
-  deliveryDate: '', deliveryDateLater: false, deliveryAsap: false,
+  deliveryDate: '', deliveryDateLater: false,
+  processDate: '',
   specialInstructions: '',
   addons: {}, paymentMethod: '',
   amountPaid: 0,
   additionalDeliveryFee: 0,
+  crossCategorySourceSo: '',
   paymentPreset: 'full', approvalCode: '',
   slipUploadSessionId: null, paymentRecorded: false,
   signed: false,
+  acknowledgedTerms: false,
   installmentMonths: null,
   merchantProvider: null,
 };
@@ -109,6 +113,38 @@ export const Handover = () => {
   const localities = useLocalities();
   const catalog = useCatalog();
   const deliveryCfgQuery = useDeliveryFeeConfig();
+  const specialFeesQuery = useSpecialDeliveryFees();
+
+  // Cross-category link — debounce the typed SO number, then server-validate it
+  // so the discount only applies for a REAL eligible order (no more "type
+  // anything"). 350ms after typing stops, the check runs.
+  const [debouncedSo, setDebouncedSo] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSo(form.crossCategorySourceSo.trim()), 350);
+    return () => clearTimeout(t);
+  }, [form.crossCategorySourceSo]);
+  const linkCheck = useCrossCategoryEligibility(debouncedSo, form.phone.trim());
+
+  // "Auto-match" button — scan the customer's earlier SOs and fill in the most
+  // recent linkable one. notFound shows only after a press that found nothing;
+  // it's cleared when a new scan starts or the SO field is edited by hand.
+  const autoMatchMut = useCrossCategoryAutoMatch();
+  const [autoMatchNotFound, setAutoMatchNotFound] = useState(false);
+  // The not-found caption is about a specific customer — drop it if the customer
+  // identity is edited on a prior step, so it can't mislabel a different customer.
+  useEffect(() => setAutoMatchNotFound(false), [form.name, form.phone]);
+  const runAutoMatch = () => {
+    setAutoMatchNotFound(false);
+    autoMatchMut.mutate(
+      { name: form.name.trim(), phone: form.phone.trim() },
+      {
+        onSuccess: (r) => {
+          if (r.found && r.docNo) setForm((f) => ({ ...f, crossCategorySourceSo: r.docNo! }));
+          else setAutoMatchNotFound(true);
+        },
+      },
+    );
+  };
 
   const update = <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -137,20 +173,54 @@ export const Handover = () => {
   );
   const addonTotal = computeAddonTotal(form.addons, addonInfos);
 
-  // Delivery fee (migration 0029) — Backend Settings → Delivery sets the base
-  // + cross-category rates; POS adds an optional additional fee at handover.
-  const categoryIdByProductId = new Map<string, string>();
-  for (const p of catalog.data ?? []) {
-    if (p.category?.id) categoryIdByProductId.set(p.id, p.category.id);
-  }
+  // Delivery fee (migrations 0029 + 0133) — Backend sets base + cross-category
+  // rates; POS adds an optional additional fee at handover. Categories are the
+  // cart's distinct DELIVERABLE groups (sofa/mattress/bedframe) via the SAME
+  // inferItemGroup the SO handover sends as item_group — so the fee shown here
+  // equals the fee the server charges. (The old legacy-catalog category lookup
+  // resolved to nothing in production, where `products` is empty, and silently
+  // showed RM 0.)
+  const productById = new Map((catalog.data ?? []).map((p) => [p.id, p]));
+  const DELIVERABLE_GROUPS = new Set(['sofa', 'mattress', 'bedframe']);
   const cartCategoryIds = lines
-    .map((l) => categoryIdByProductId.get(l.config.productId) ?? '')
-    .filter(Boolean);
+    .map((l) => inferItemGroup(l.config, productById.get(l.config.productId)))
+    .filter((g) => DELIVERABLE_GROUPS.has(g));
   const deliveryCfg = deliveryCfgQuery.data ?? { baseFee: 0, crossCategoryFee: 0 };
-  const deliveryFee = computeDeliveryFee(
-    cartCategoryIds,
+  // Special-model fees (migration 0140) — map model_id → fee, then collect the
+  // specials present in this cart so the shown fee matches the server charge.
+  const specialFeeByModel = new Map(
+    (specialFeesQuery.data ?? []).map((s) => [s.modelId, s]),
+  );
+  const cartSpecialModels: SpecialModelDeliveryFee[] = lines
+    .map((l) => {
+      // The cart line carries its own product_models.id (configurator-set on
+      // size + bedframe lines); fall back to the catalog only for older lines.
+      // The catalog lookup misses size-variant SKUs, so config.modelId is what
+      // makes the special fee actually match (e.g. AKKA-FIRM mattress → RM 500).
+      const modelId = ('modelId' in l.config && l.config.modelId)
+        ? l.config.modelId
+        : (productById.get(l.config.productId)?.model_id ?? null);
+      const sf = modelId ? specialFeeByModel.get(modelId) : undefined;
+      return sf ? { standaloneFee: sf.standaloneFee, crossCategoryFollowupFee: sf.crossCatFollowupFee } : null;
+    })
+    .filter((s): s is SpecialModelDeliveryFee => s !== null);
+  // Cross-category follow-up — only when the typed SO number is server-validated
+  // as eligible (exists / not cancelled / same customer / not already used). The
+  // `debouncedSo === current` guard means a stale check result never applies the
+  // discount while the field is mid-edit.
+  const soTyped = form.crossCategorySourceSo.trim();
+  const linkSettled = soTyped.length > 0 && debouncedSo === soTyped && !linkCheck.isFetching;
+  const linkEligible = linkSettled && linkCheck.data?.eligible === true;
+  const linkInvalid = linkSettled && linkCheck.data?.eligible === false;
+  const isCrossCategoryFollowup = linkEligible;
+  const deliveryFee = computeSoDeliveryFee(
+    {
+      categoryIds: cartCategoryIds,
+      specialModels: cartSpecialModels,
+      isCrossCategoryFollowup,
+      additionalFee: form.additionalDeliveryFee,
+    },
     { baseFee: deliveryCfg.baseFee, crossCategoryFee: deliveryCfg.crossCategoryFee },
-    form.additionalDeliveryFee,
   );
   const total = subtotal + addonTotal + deliveryFee.total;
 
@@ -159,7 +229,9 @@ export const Handover = () => {
     address:   validateAddress(form),
     emergency: validateEmergency(form),
     target:    validateTargetDate(form),
-    addons:    validateAddonsPayment(form),
+    // Block this step when a linked SO number was typed but is invalid — the
+    // server would reject the order, so catch it here with a clear message.
+    addons:    validateAddonsPayment(form) && !linkInvalid,
     confirm:   validateConfirmPayment(form, subtotal, addonTotal),
     sign:      validateSign(form),
   };
@@ -216,6 +288,20 @@ export const Handover = () => {
         ? undefined
         : form.paymentMethod;
       const targetDate = form.deliveryDate || undefined;
+      const processDate = form.processDate || undefined;
+      // Customer signature (data URL) captured on the pad — the same ink the
+      // legacy path sent; now also carried onto the SO (signature_b64).
+      const signatureData = signatureRef.current?.getDataUrl() || undefined;
+      // Billing address — only when it differs from the delivery address. Flatten
+      // the structured billing fields into the SO's single bill_to_address line.
+      const billToAddress = form.billingSame
+        ? undefined
+        : [
+            form.billingAddress,
+            form.billingAddressLine2,
+            [form.billingPostcode, form.billingCity].map((s) => s.trim()).filter(Boolean).join(' '),
+            form.billingState,
+          ].map((s) => s.trim()).filter(Boolean).join(', ') || undefined;
 
       const payload: PosHandoffPayload = {
         debtorName: form.name.trim(),
@@ -229,20 +315,37 @@ export const Handover = () => {
         ...(form.postcode.trim() ? { postcode: form.postcode.trim() } : {}),
         ...(form.state.trim() ? { customerState: form.state.trim() } : {}),
         ...(form.buildingType ? { buildingType: form.buildingType } : {}),
+        ...(billToAddress ? { billToAddress } : {}),
         ...(form.emergencyName.trim() ? { emergencyContactName: form.emergencyName.trim() } : {}),
         ...(form.emergencyPhone.trim() ? { emergencyContactPhone: form.emergencyPhone.trim() } : {}),
         ...(form.emergencyRelation.trim()
           ? { emergencyContactRelationship: form.emergencyRelation.trim() }
           : {}),
         // target_date = customer's preference; customer_delivery_date is the
-        // operational follower the Backend cascades to every line.
-        ...(targetDate ? { targetDate, customerDeliveryDate: targetDate } : {}),
+        // operational follower the Backend cascades to every line; internal_-
+        // expected_dd = the factory start (Process Date). The SO API requires
+        // Process + Delivery to arrive together (or neither), so we only send the
+        // date trio when BOTH are present — "For further notice" sends neither.
+        ...(targetDate && processDate
+          ? { targetDate, customerDeliveryDate: targetDate, internalExpectedDd: processDate }
+          : {}),
+        ...(form.specialInstructions.trim() ? { note: form.specialInstructions.trim() } : {}),
+        ...(signatureData ? { signatureB64: signatureData } : {}),
+        ...(form.slipUploadSessionId ? { uploadSessionId: form.slipUploadSessionId } : {}),
         ...(paymentMethod ? { paymentMethod } : {}),
         ...(form.installmentMonths ? { installmentMonths: form.installmentMonths } : {}),
         ...(form.merchantProvider ? { merchantProvider: form.merchantProvider } : {}),
         ...(form.approvalCode.trim() ? { approvalCode: form.approvalCode.trim() } : {}),
         // Whole-MYR → sen.
         depositCenti: Math.round(form.amountPaid * 100),
+        // Delivery fee (migration 0133) — opt this SO into the server-recomputed
+        // delivery fee + forward the optional additional fee sales keyed in.
+        applyDeliveryFee: true,
+        additionalDeliveryFee: form.additionalDeliveryFee,
+        // Cross-category follow-up link (migration 0141) — the earlier SO number.
+        ...(form.crossCategorySourceSo.trim()
+          ? { crossCategorySourceDocNo: form.crossCategorySourceSo.trim() }
+          : {}),
         items,
       };
 
@@ -356,7 +459,27 @@ export const Handover = () => {
             {current.key === 'address'   && <AddressStep   form={form} update={update} localities={localities.data ?? []} />}
             {current.key === 'emergency' && <EmergencyStep form={form} update={update} />}
             {current.key === 'target'    && <TargetDateStep form={form} update={update} />}
-            {current.key === 'addons'    && <AddonsPaymentStep form={form} update={update} addons={addons.data ?? []} />}
+            {current.key === 'addons'    && (
+              <AddonsPaymentStep
+                form={form}
+                update={update}
+                addons={addons.data ?? []}
+                linkStatus={{
+                  show: soTyped.length > 0,
+                  checking: soTyped.length > 0 && (debouncedSo !== soTyped || linkCheck.isFetching),
+                  eligible: linkEligible,
+                  message: linkInvalid ? (linkCheck.data?.message ?? 'Invalid order number.') : null,
+                  debtorName: linkEligible ? (linkCheck.data?.debtorName ?? null) : null,
+                }}
+                autoMatch={{
+                  canRun: form.name.trim().length > 0 && form.phone.trim().length > 0,
+                  loading: autoMatchMut.isPending,
+                  notFound: autoMatchNotFound,
+                  run: runAutoMatch,
+                  clear: () => setAutoMatchNotFound(false),
+                }}
+              />
+            )}
             {current.key === 'confirm'   && <ConfirmPaymentStep form={form} update={update} subtotal={subtotal} addonTotal={addonTotal} />}
             {current.key === 'sign'      && <SignConfirmStep   form={form} update={update} signatureRef={signatureRef} />}
 

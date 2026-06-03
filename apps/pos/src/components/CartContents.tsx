@@ -5,6 +5,7 @@ import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
 import { useCart, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
 import { useSaveQuote } from '../lib/quotes';
+import { useFreePwpCodes } from '../lib/products/pwp-queries';
 import { ProductThumb } from './ProductThumb';
 import styles from './CartContents.module.css';
 
@@ -24,6 +25,15 @@ export const CartContents = ({ variant, onContinue }: Props) => {
   const sourceQuoteId = useCart((s) => s.sourceQuoteId);
   const subtotal = cartSubtotal(lines);
   const saveQuote = useSaveQuote();
+  const freePwp = useFreePwpCodes();
+
+  // Abandon — free any RESERVED PWP codes the cart's trigger lines hold, then
+  // clear. (A quote-save / order-place KEEPS / consumes them, so those paths
+  // do NOT call this.) Freeing a key with no codes is a harmless no-op.
+  const clearAndFreePwp = () => {
+    for (const l of lines) freePwp.mutate(l.key);
+    clear();
+  };
 
   const [savingQuote, setSavingQuote] = useState(false);
   const [quoteName, setQuoteName] = useState('');
@@ -147,7 +157,7 @@ export const CartContents = ({ variant, onContinue }: Props) => {
           <PriceTag amount={subtotal} size={variant === 'rail' ? 'md' : 'lg'} />
         </div>
         <div className={styles.actions}>
-          <Button variant="secondary" onClick={clear}>Clear</Button>
+          <Button variant="secondary" onClick={clearAndFreePwp}>Clear</Button>
           {!savingQuote && variant === 'page' && (
             sourceQuoteId ? (
               // Loaded from a quote: keep the cart and go back to the catalog
@@ -192,6 +202,11 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit }: {
     <div className={styles.lineMain}>
       <div className={styles.lineName}>{line.config.productName}</div>
       <div className={styles.lineSummary}>{cartSummary(line.config)}</div>
+      {'pwp' in line.config && line.config.pwp && (
+        <div className={styles.lineSummary}>
+          PWP price{'pwpTriggerLabel' in line.config && line.config.pwpTriggerLabel ? ` · 换购自 ${line.config.pwpTriggerLabel}` : ''}
+        </div>
+      )}
     </div>
     <div className={styles.qtyBox}>
       <button

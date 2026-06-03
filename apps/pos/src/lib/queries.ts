@@ -22,6 +22,9 @@ export interface CatalogProduct {
   visible: boolean;
   category: { id: string; label: string; icon: string; tbc: boolean } | null;
   series: { id: string; label: string; active: boolean } | null;
+  /** product_models.id for mfg-backed catalog rows (null for legacy retail
+   *  rows). Drives the PWP eligibility check + the special-delivery-fee lookup. */
+  model_id?: string | null;
 }
 
 interface ProductsResponse {
@@ -72,7 +75,7 @@ export const useCatalogRealtime = () => {
 
 export interface ProductBundleRow { bundleId: string; active: boolean; price: number }
 export interface ProductCompartmentRow { compartmentId: string; active: boolean; price: number }
-export interface ProductSizeRow { sizeId: string; active: boolean; price: number }
+export interface ProductSizeRow { sizeId: string; active: boolean; price: number; pwpPrice: number | null }
 
 export const useProduct = (productId: string | undefined) =>
   useQuery({
@@ -134,7 +137,7 @@ export const useProduct = (productId: string | undefined) =>
       const { data: mfgData, error: mfgErr } = await supabase
         .from('mfg_products')
         .select(
-          'id, code, name, category, description, branding, size_label, base_price_sen, sell_price_sen, included_addons, base_model',
+          'id, code, name, category, description, branding, size_label, base_price_sen, sell_price_sen, included_addons, base_model, model_id',
         )
         .eq('id', productId)
         .maybeSingle();
@@ -153,6 +156,7 @@ export const useProduct = (productId: string | undefined) =>
         sell_price_sen: number | null;
         included_addons: { addonId: string; qty: number }[] | null;
         base_model: string | null;
+        model_id: string | null;
       };
 
       const pricingKind: 'sofa_build' | 'bedframe_build' | 'size_variants' | 'flat' =
@@ -191,6 +195,9 @@ export const useProduct = (productId: string | undefined) =>
         /* base_model is needed by Configurator so it can pass it to
            useSofaCombos() and filter Quick Pick combos to this Model. */
         base_model: mfg.base_model,
+        /* model_id (product_models.id) — used by the PWP (换购) eligibility check
+           to match this product against a rule's eligible model lists (0128). */
+        model_id: mfg.model_id,
         series_id: null,
         included_addons: mfg.included_addons ?? [],
         updated_at: new Date().toISOString(),
@@ -238,6 +245,88 @@ export const useAddons = () =>
       }));
     },
   });
+
+/* ─── Order Add-ons admin (migration 0022/0023; editor moved to POS 2026-06-02)
+ * The Order Add-ons (Dispose / Lift access …) editor — reads ALL addons (the
+ * `useAddons` above is enabled-only for the handover screen) + writes direct to
+ * the `addons` table (RLS: SELECT all staff, write is_admin = admin/super_admin,
+ * migration 0002). One-time order-level fees, distinct from the per-Model
+ * `special_addons` (Product Add-ons). Used by the Order Add-ons section of the
+ * POS Special Add-ons tab; the Backend Add-ons page is retired. */
+export interface AdminAddonRow {
+  id: string;
+  label: string;
+  description: string | null;
+  icon: string;
+  kind: 'qty' | 'floors_items' | 'flat';
+  category: string | null;
+  price: number;
+  perFloorItem: number | null;
+  unit: string | null;
+  defaultQty: number;
+  stock: number | null;
+  enabled: boolean;
+  sortOrder: number;
+}
+
+export const useAllAddons = () =>
+  useQuery({
+    queryKey: ['addons-all'],
+    staleTime: 60_000,
+    queryFn: async (): Promise<AdminAddonRow[]> => {
+      const { data, error } = await supabase
+        .from('addons')
+        .select('id, label, description, icon, kind, category, price, per_floor_item, unit, default_qty, stock, enabled, sort_order')
+        .order('sort_order');
+      if (error) throw error;
+      return (data ?? []).map((r: any) => ({
+        id: r.id, label: r.label, description: r.description, icon: r.icon, kind: r.kind,
+        category: r.category, price: r.price, perFloorItem: r.per_floor_item, unit: r.unit,
+        defaultQty: r.default_qty, stock: r.stock, enabled: r.enabled, sortOrder: r.sort_order,
+      }));
+    },
+  });
+
+const invalidateAddons = (qc: ReturnType<typeof useQueryClient>) => {
+  void qc.invalidateQueries({ queryKey: ['addons'] });       // handover (enabled-only)
+  void qc.invalidateQueries({ queryKey: ['addons-all'] });   // admin editor
+};
+
+export const useUpdateAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, patch }: { id: string; patch: { price?: number; perFloorItem?: number | null; enabled?: boolean } }) => {
+      const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (patch.price !== undefined)        update.price = patch.price;
+      if (patch.perFloorItem !== undefined) update.per_floor_item = patch.perFloorItem;
+      if (patch.enabled !== undefined)      update.enabled = patch.enabled;
+      const { error } = await supabase.from('addons').update(update).eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => invalidateAddons(qc),
+  });
+};
+
+export const useCreateAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (row: {
+      id: string; label: string; description: string | null; icon: string;
+      kind: 'qty' | 'floors_items' | 'flat'; category: string | null;
+      price: number; perFloorItem: number | null; unit: string | null;
+      stock: number | null; enabled: boolean; sortOrder: number;
+    }) => {
+      const { error } = await supabase.from('addons').insert({
+        id: row.id, label: row.label, description: row.description, icon: row.icon,
+        kind: row.kind, category: row.category, price: row.price,
+        per_floor_item: row.perFloorItem, unit: row.unit, stock: row.stock,
+        enabled: row.enabled, sort_order: row.sortOrder,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => invalidateAddons(qc),
+  });
+};
 
 export const useProductBundles = (productId: string | undefined) =>
   useQuery({
@@ -345,6 +434,51 @@ export const useFabricColours = () =>
         fabricId: r.fabric_id, colourId: r.colour_id, label: r.label,
         swatchHex: r.swatch_hex, active: r.active, sortOrder: r.sort_order,
       }));
+    },
+  });
+
+// Enabled fabric COLOUR codes for a Model (allowed_options.fabrics — the codes
+// ticked in the Modular drawer). Sofa reads them off useSofaCustomizerData;
+// this hook is the bedframe (and any-category) equivalent, joining mfg_products
+// → product_models. Returns [] for legacy UUID products (no Model link).
+export const useModelAllowedFabricCodes = (productId: string | undefined) =>
+  useQuery({
+    enabled: !!productId,
+    queryKey: ['model-allowed-fabrics', productId],
+    queryFn: async (): Promise<string[]> => {
+      if (!productId || !productId.startsWith('mfg-')) return [];
+      const { data, error } = await supabase
+        .from('mfg_products')
+        .select('product_models:model_id ( allowed_options )')
+        .eq('id', productId)
+        .maybeSingle();
+      if (error) throw error;
+      const modelRel = (data as { product_models?: { allowed_options?: { fabrics?: string[] } } | null } | null)
+        ?.product_models;
+      return modelRel?.allowed_options?.fabrics ?? [];
+    },
+  });
+
+// Enabled Special Add-on CODES for a Model (allowed_options.specials — the codes
+// ticked in the Modular drawer). The configurator filters its Special Add-ons to
+// these so a picked code is always allowed (the server gate validates the same
+// list). Returns [] for legacy UUID products (no Model link) → no add-ons shown.
+export const useModelAllowedSpecials = (productId: string | undefined) =>
+  useQuery({
+    enabled: !!productId,
+    queryKey: ['model-allowed-specials', productId],
+    staleTime: 60_000,
+    queryFn: async (): Promise<string[]> => {
+      if (!productId || !productId.startsWith('mfg-')) return [];
+      const { data, error } = await supabase
+        .from('mfg_products')
+        .select('product_models:model_id ( allowed_options )')
+        .eq('id', productId)
+        .maybeSingle();
+      if (error) throw error;
+      const modelRel = (data as { product_models?: { allowed_options?: { specials?: string[] } } | null } | null)
+        ?.product_models;
+      return modelRel?.allowed_options?.specials ?? [];
     },
   });
 
@@ -493,7 +627,7 @@ export const useProductSizes = (productId: string | undefined) =>
       if (productId.startsWith('mfg-')) {
         const { data: mfgRow, error: mfgErr } = await supabase
           .from('mfg_products')
-          .select('retail_product_id, model_id, size_code, base_price_sen, sell_price_sen, base_model, category, product_models:model_id ( allowed_options )')
+          .select('retail_product_id, model_id, size_code, base_price_sen, sell_price_sen, pwp_price_sen, base_model, category, product_models:model_id ( allowed_options )')
           .eq('id', productId)
           .maybeSingle();
         if (mfgErr) throw mfgErr;
@@ -521,7 +655,8 @@ export const useProductSizes = (productId: string | undefined) =>
             .eq('product_id', mfgRow.retail_product_id);
           if (error) throw error;
           if (data && data.length > 0) {
-            return data.map((r) => ({ sizeId: r.size_id, active: r.active, price: r.price }));
+            // Legacy retail variants carry no PWP price (it lives on mfg_products).
+            return data.map((r) => ({ sizeId: r.size_id, active: r.active, price: r.price, pwpPrice: null }));
           }
           // Fall through to mfg siblings if the retail link exists but has no variants yet.
         }
@@ -532,7 +667,7 @@ export const useProductSizes = (productId: string | undefined) =>
         // pos_active (the "Visible" flag the catalog also honors). A kept size's
         // `active` still follows `status` so a cost-discontinued one greys out.
         // Case-insensitive size_code lookup guards older lowercase imports.
-        const sibsToRows = (sibs: Array<{ size_code: string | null; base_price_sen: number | null; sell_price_sen: number | null; status: string; pos_active: boolean | null }>) =>
+        const sibsToRows = (sibs: Array<{ size_code: string | null; base_price_sen: number | null; sell_price_sen: number | null; pwp_price_sen: number | null; status: string; pos_active: boolean | null }>) =>
           sibs
             .filter((s) => {
               const sc = (s.size_code ?? '').toUpperCase();
@@ -547,6 +682,8 @@ export const useProductSizes = (productId: string | undefined) =>
               active: (s.status as string) === 'ACTIVE',
               // SELLING price (0109 cost/sell split): sell_price_sen ?? base_price_sen.
               price: (s.sell_price_sen ?? s.base_price_sen) != null ? Math.round((s.sell_price_sen ?? s.base_price_sen)! / 100) : 0,
+              // PWP (换购, 0128) base price per size, whole MYR. 0 / null = not set.
+              pwpPrice: s.pwp_price_sen ? Math.round(s.pwp_price_sen / 100) : null,
             }));
 
         // 2b — derive sizes from mfg_products siblings (same model_id — set by
@@ -555,7 +692,7 @@ export const useProductSizes = (productId: string | undefined) =>
         if (mfgRow.model_id) {
           const { data: siblings, error: sibErr } = await supabase
             .from('mfg_products')
-            .select('size_code, base_price_sen, sell_price_sen, status, pos_active')
+            .select('size_code, base_price_sen, sell_price_sen, pwp_price_sen, status, pos_active')
             .eq('model_id', mfgRow.model_id);
           if (sibErr) throw sibErr;
           const rows = sibsToRows(siblings ?? []);
@@ -568,7 +705,7 @@ export const useProductSizes = (productId: string | undefined) =>
         if (mfgRow.base_model && mfgRow.category) {
           const { data: siblings, error: sibErr } = await supabase
             .from('mfg_products')
-            .select('size_code, base_price_sen, sell_price_sen, status, pos_active')
+            .select('size_code, base_price_sen, sell_price_sen, pwp_price_sen, status, pos_active')
             .eq('base_model', mfgRow.base_model)
             .eq('category', mfgRow.category);
           if (sibErr) throw sibErr;
@@ -584,6 +721,7 @@ export const useProductSizes = (productId: string | undefined) =>
             sizeId: MFG_SIZE_CODE_TO_LIB[ownCode] as string,
             active: true,
             price: (mfgRow.sell_price_sen ?? mfgRow.base_price_sen) != null ? Math.round((mfgRow.sell_price_sen ?? mfgRow.base_price_sen)! / 100) : 0,
+            pwpPrice: mfgRow.pwp_price_sen ? Math.round(mfgRow.pwp_price_sen / 100) : null,
           }];
         }
 
@@ -600,6 +738,7 @@ export const useProductSizes = (productId: string | undefined) =>
         sizeId: r.size_id,
         active: r.active,
         price: r.price,
+        pwpPrice: null, // legacy retail variants carry no PWP price
       }));
     },
   });
@@ -866,9 +1005,10 @@ export interface SofaCustomizerData {
   legHeights:   string[];
   /** Special options ticked. */
   specials:     string[];
-  /** Fabric IDs commander ticked on this Model (from allowed_options.fabrics).
-   *  Empty = no fabrics configured → POS hides the fabric picker. Caller
-   *  joins against useFabricLibrary() to resolve label + surcharge. */
+  /** Fabric COLOUR codes ticked on this Model (allowed_options.fabrics, e.g.
+   *  'CG-002'). Empty = no fabrics enabled → picker shows "No fabrics enabled".
+   *  The Configurator maps these → their series via fabric_colours, then filters
+   *  the colour swatches to this set. */
   fabricIds:    string[];
   /** The Model row that resolved (so caller can show Model name / branding). */
   modelId:      string;
@@ -1280,6 +1420,141 @@ export const useUpdateDeliveryFeeConfig = () => {
   });
 };
 
+/* ─── Per-Model special delivery fees (migration 0140) ─── */
+
+export interface SpecialDeliveryFeeRow {
+  modelId:             string;
+  modelName:           string;
+  modelCode:           string | null;
+  category:            string | null;
+  standaloneFee:       number;   // whole MYR
+  crossCatFollowupFee: number;   // whole MYR
+}
+
+/** List the Models tagged with a special delivery fee. Read by the Master
+ *  editor AND the Handover summary (so the shown fee matches what the server
+ *  charges when a special model is in the cart). */
+export const useSpecialDeliveryFees = () =>
+  useQuery({
+    queryKey: ['special-delivery-fees'],
+    queryFn: async (): Promise<SpecialDeliveryFeeRow[]> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/delivery-fees/special`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`GET /delivery-fees/special failed (${res.status})`);
+      return (await res.json()) as SpecialDeliveryFeeRow[];
+    },
+    staleTime: 60_000,
+  });
+
+export const useUpsertSpecialDeliveryFee = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (row: { modelId: string; standaloneFee: number; crossCatFollowupFee: number }) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/delivery-fees/special`, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(row),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `PUT /delivery-fees/special failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-delivery-fees'] }); },
+  });
+};
+
+export const useDeleteSpecialDeliveryFee = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (modelId: string) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/delivery-fees/special/${encodeURIComponent(modelId)}`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `DELETE /delivery-fees/special failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-delivery-fees'] }); },
+  });
+};
+
+/* ─── Cross-category link eligibility (migration 0141) ─── */
+
+export interface CrossCategoryEligibility {
+  eligible:   boolean;
+  debtorName: string | null;
+  /** Human reason when not eligible (e.g. "Order SO-2605 was not found."). */
+  message:    string | null;
+}
+
+/** Live-validate a "Previous SO number" so the handover only applies the
+ *  cross-category delivery discount for a REAL, eligible SO. Same checks as the
+ *  order POST (exists / not cancelled / same customer / not already used) — so
+ *  typing a random value no longer shows the reduced rate. Pass a DEBOUNCED
+ *  docNo; the query only runs when it's non-empty. */
+export const useCrossCategoryEligibility = (docNo: string, phone: string) =>
+  useQuery({
+    queryKey: ['cross-cat-eligibility', docNo, phone],
+    enabled: docNo.trim().length > 0,
+    retry: 0,
+    staleTime: 10_000,
+    queryFn: async (): Promise<CrossCategoryEligibility> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const qs = new URLSearchParams({ docNo: docNo.trim(), phone: phone.trim() });
+      const res = await fetch(`${API_URL}/mfg-sales-orders/cross-category-eligibility?${qs.toString()}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`eligibility check failed (${res.status})`);
+      return (await res.json()) as CrossCategoryEligibility;
+    },
+  });
+
+export interface CrossCategoryMatchResult {
+  found:       boolean;
+  docNo?:      string;
+  debtorName?: string | null;
+}
+
+/** "Auto-match" button on the Confirm screen — scans the customer's earlier SOs
+ *  (by the name + phone identity) and returns the most recent one that can still
+ *  back a cross-category follow-up. A mutation, not a query, so it fires only on
+ *  the button press. The caller fills the returned docNo into the SO field; the
+ *  live eligibility check above then confirms it. */
+export const useCrossCategoryAutoMatch = () =>
+  useMutation({
+    mutationFn: async ({ name, phone }: { name: string; phone: string }): Promise<CrossCategoryMatchResult> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const qs = new URLSearchParams({ name: name.trim(), phone: phone.trim() });
+      const res = await fetch(`${API_URL}/mfg-sales-orders/cross-category-match?${qs.toString()}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`auto-match failed (${res.status})`);
+      return (await res.json()) as CrossCategoryMatchResult;
+    },
+  });
+
 /** Master Admin — writes the 4 fabric-tier Δ amounts (PATCH /fabric-tier-addon).
  *  Gated by the fabric_tier_addon_config UPDATE RLS + API WRITE_ROLES (0124). */
 export const useUpdateFabricTierAddonConfig = () => {
@@ -1325,6 +1600,117 @@ export const useUpdateFabricLibraryTier = () => {
       }
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['fabric-library'] }); },
+  });
+};
+
+/* ─── Special add-ons (migration 0133) — Product Add-ons CRUD ──────────
+ *
+ * The grown-up "Specials": per-Model product add-on (selling surcharge +
+ * 0..N follow-up choice groups) shown as an SO line description, not a SKU.
+ * Read by any staff; writes go through /special-addons (admin-set role gate +
+ * RLS). selling/cost may be NEGATIVE (a deduction). `code` is the stable key
+ * reused by allowed_options.specials + variants.specials. */
+export interface SpecialAddonChoice { label: string; extraSen: number; }
+export interface SpecialAddonGroup { label: string; required: boolean; choices: SpecialAddonChoice[]; }
+export interface SpecialAddonRow {
+  id: string;
+  code: string;
+  label: string;
+  soDescription: string;
+  categories: string[];
+  sellingPriceSen: number;
+  costPriceSen: number;
+  optionGroups: SpecialAddonGroup[];
+  active: boolean;
+  sortOrder: number;
+}
+export interface SpecialAddonInput {
+  code: string;
+  label: string;
+  soDescription: string;
+  categories: string[];
+  sellingPriceSen: number;
+  costPriceSen: number;
+  optionGroups: SpecialAddonGroup[];
+  active: boolean;
+  sortOrder: number;
+}
+
+async function authToken(): Promise<string> {
+  const session = await supabase.auth.getSession();
+  const token = session.data.session?.access_token;
+  if (!token) throw new Error('not_authenticated');
+  return token;
+}
+
+export const useSpecialAddons = () =>
+  useQuery({
+    queryKey: ['special-addons'],
+    staleTime: 60_000,
+    queryFn: async (): Promise<SpecialAddonRow[]> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const res = await fetch(`${API_URL}/special-addons`, {
+        headers: { authorization: `Bearer ${await authToken()}` },
+      });
+      if (!res.ok) throw new Error(`GET /special-addons failed (${res.status})`);
+      const body = (await res.json()) as { addons: SpecialAddonRow[] };
+      return body.addons ?? [];
+    },
+  });
+
+export const useCreateSpecialAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: SpecialAddonInput) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const res = await fetch(`${API_URL}/special-addons`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${await authToken()}`, 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `POST /special-addons failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-addons'] }); },
+  });
+};
+
+export const useUpdateSpecialAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, patch }: { id: string; patch: Partial<SpecialAddonInput> }) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const res = await fetch(`${API_URL}/special-addons/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${await authToken()}`, 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `PATCH /special-addons failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-addons'] }); },
+  });
+};
+
+export const useDeleteSpecialAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const res = await fetch(`${API_URL}/special-addons/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${await authToken()}` },
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `DELETE /special-addons failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-addons'] }); },
   });
 };
 
@@ -1406,6 +1792,9 @@ export interface SofaComboRow {
   /** SELLING prices per height (Master Admin). The engine charges these merged
    *  over cost via comboChargedPrices — `pricesByHeight` above is the COST side. */
   sellingPricesByHeight: Record<string, number | null>;
+  /** PWP (换购) selling price per height (Phase 2). Charged instead of selling
+   *  when a sofa-reward line redeems a valid PWP code. {} = unset. POS-only. */
+  pwpPricesByHeight?: Record<string, number | null>;
   label: string | null;
   effectiveFrom: string;
   deletedAt: string | null;
@@ -1472,6 +1861,8 @@ export const useCreateSofaCombo = () => {
       pricesByHeight?: Record<string, number | null>;  // centi (COST)
       /** SELLING per height (centi) — what the customer pays (Master Admin). */
       sellingPricesByHeight?: Record<string, number | null>;  // centi (SELLING)
+      /** PWP (换购) selling per height (centi) — Phase 2. {} = unset. */
+      pwpPricesByHeight?: Record<string, number | null>;
       label?: string | null;
       effectiveFrom: string;   // 'YYYY-MM-DD'
       notes?: string | null;
@@ -1494,6 +1885,7 @@ export const useCreateSofaCombo = () => {
           // Omit pricesByHeight when not set so the server auto-detects COST.
           ...(body.pricesByHeight !== undefined ? { pricesByHeight: body.pricesByHeight } : {}),
           ...(body.sellingPricesByHeight !== undefined ? { sellingPricesByHeight: body.sellingPricesByHeight } : {}),
+          ...(body.pwpPricesByHeight !== undefined ? { pwpPricesByHeight: body.pwpPricesByHeight } : {}),
           label: body.label ?? null,
           effectiveFrom: body.effectiveFrom,
           notes: body.notes ?? null,

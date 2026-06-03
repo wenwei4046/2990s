@@ -49,6 +49,10 @@ export interface SofaComboRow {
   tier: SofaPriceTier | null;
   customerId: string | null;
   pricesByHeight: Record<string, number | null>;
+  /** PWP (换购) selling price per height (Phase 2). When a build matches this
+   *  combo AND the line redeems a valid PWP code, the engine charges this
+   *  instead of `pricesByHeight`. Optional: only the selling path carries it. */
+  pwpPricesByHeight?: Record<string, number | null>;
   label?: string | null;
   effectiveFrom: string;        // ISO date 'YYYY-MM-DD'
   deletedAt?: string | null;
@@ -161,6 +165,42 @@ export function canonicalizeComboModulesForStorage(
 }
 
 /**
+ * Like `canonicalizeComboModulesForStorage`, but PRESERVES slot ORDER.
+ *
+ * A Quick Pick is a spatial LAYOUT — the slot order IS the left-to-right
+ * on-screen position the staff built, and the client re-lays it in that order
+ * (`cellsFromComboModules`). The combo form alphabetically SORTS the slots (fine
+ * for a Combo, whose matching is order-independent), which would move e.g. a
+ * middle Console to the end — so the saved pick renders differently from what
+ * was built. Same validation + flat→slot wrap + per-slot trim/de-dupe as the
+ * combo form; just no slot sort.
+ */
+export function canonicalizeLayoutModulesForStorage(
+  input: unknown,
+): ComboSlots | null {
+  if (!Array.isArray(input)) return null;
+  const groups: unknown[] =
+    input.length > 0 && typeof input[0] === 'string'
+      ? input.map((v) => [v])
+      : input;
+  const cleaned: ComboSlots = [];
+  for (const g of groups) {
+    if (!Array.isArray(g)) return null;
+    const inner: string[] = [];
+    for (const v of g) {
+      if (typeof v !== 'string') return null;
+      const t = v.trim();
+      if (!t) continue;
+      if (!inner.includes(t)) inner.push(t);
+    }
+    if (inner.length === 0) continue;
+    cleaned.push(inner);
+  }
+  if (cleaned.length === 0) return null;
+  return cleaned; // ← no slot sort: slot order = built layout position
+}
+
+/**
  * Order-independent canonical key for a combo's slot-set. Sorts the codes in
  * each slot, then sorts the slots themselves, then JSON-stringifies. Two
  * combos with the same slots in any order produce the same key — used to
@@ -179,6 +219,39 @@ function slotsEqual(
   b: readonly (string | readonly string[])[],
 ): boolean {
   return comboSlotsKey(a) === comboSlotsKey(b);
+}
+
+/**
+ * Find an existing combo whose (baseModel, slot-set) matches `slots`, ignoring
+ * slot + intra-slot order (comboSlotsKey). Soft-deleted rows are skipped.
+ *
+ * Used by BOTH POS create paths (Combo Pricing "New combo" + the in-configurator
+ * "Create Combo") to BLOCK adding a duplicate: the combo table is append-only, so
+ * re-adding the same module-set silently makes a new effective ROW (a version),
+ * which reads as a confusing "duplicate". This lets the UI warn + stop instead,
+ * and steer the user to edit the existing combo. Returns the first match or null.
+ *
+ * Tier is intentionally NOT part of the identity here — every combo runs at the
+ * single base tier (Chairman 2026-06-02), so (baseModel, slots) is the key.
+ */
+export function findDuplicateCombo<
+  T extends {
+    baseModel: string;
+    modules: readonly (string | readonly string[])[];
+    deletedAt?: string | null;
+  },
+>(
+  baseModel: string,
+  slots: readonly (string | readonly string[])[],
+  existing: readonly T[],
+): T | null {
+  const target = comboSlotsKey(slots);
+  for (const c of existing) {
+    if (c.deletedAt) continue;
+    if (c.baseModel !== baseModel) continue;
+    if (comboSlotsKey(c.modules) === target) return c;
+  }
+  return null;
 }
 
 /**

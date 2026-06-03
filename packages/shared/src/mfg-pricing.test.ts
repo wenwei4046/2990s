@@ -133,7 +133,6 @@ describe('computeMfgLinePrice — mattress', () => {
         qty:         2,
         fabric:      { tier: 'PRICE_1' },     // mattress ignores fabric
         divanHeight: '14"',                    // ignored
-        specials:    ['Left Drawer'],          // ignored
       },
       config,
     );
@@ -142,11 +141,23 @@ describe('computeMfgLinePrice — mattress', () => {
     expect(r.divanSurchargeSen).toBe(0);
     expect(r.legSurchargeSen).toBe(0);
     expect(r.totalHeightSurchargeSen).toBe(0);
-    expect(r.specialsSurchargeSen).toBe(0);
+    expect(r.specialsSurchargeSen).toBe(0);   // no specials picked here
     expect(r.fabricSurchargeSen).toBe(0);
     expect(r.unitPriceSen).toBe(0);
     expect(r.lineTotalSen).toBe(0);
     expect(r.source).toBe('BASE_ONLY');
+  });
+
+  it('prices special add-ons (migration 0134 — mattress now sums specials)', () => {
+    const r = computeMfgLinePrice(
+      { product: mattress, qty: 2, specials: ['Left Drawer'] },
+      config,
+    );
+    // Base stays 0 (operator-authored selling base), but the special's
+    // sellingPriceSen IS now summed for MATTRESS (was ignored pre-0134), ×qty.
+    expect(r.specialsSurchargeSen).toBe(15000);
+    expect(r.unitPriceSen).toBe(15000);
+    expect(r.lineTotalSen).toBe(30000);
   });
 });
 
@@ -498,12 +509,12 @@ describe('computeMfgLineCost — base + priceSen surcharges', () => {
 
   it('mattress cost = base priceSen, no surcharges', () => {
     const r = computeMfgLineCost(
-      { product: mattress, qty: 1, divanHeight: '10"', specials: ['Left Drawer'] },
+      { product: mattress, qty: 1, divanHeight: '10"' },
       config,
     );
     expect(r.basePriceSen).toBe(89000);
     expect(r.divanSurchargeSen).toBe(0);
-    expect(r.specialsSurchargeSen).toBe(0);
+    expect(r.specialsSurchargeSen).toBe(0);   // no specials picked here
     expect(r.unitPriceSen).toBe(89000);
   });
 

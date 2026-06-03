@@ -14,8 +14,49 @@
   background: var(--bg-alt);
   padding: var(--space-6) var(--space-5);
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
 }
+
+/* On-screen-only toolbar (Back + Print/Save as PDF). Sits above the A4 page,
+   width-matched to it. Hidden when printing so it never lands on the PDF. */
+.toolbar {
+  width: 100%;
+  max-width: 794px;
+  margin-bottom: var(--space-4);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.toolbarBack {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-button);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-decoration: none;
+}
+.toolbarBack:hover { color: var(--c-burnt); }
+
+.toolbarPrint {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border: none;
+  border-radius: 999px;
+  background: var(--c-orange);
+  color: #fff;
+  font-family: var(--font-button);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.toolbarPrint:hover { background: var(--c-burnt); }
 
 .page {
   background: #fff;
@@ -344,6 +385,9 @@
 
 /* ───── Print overrides ───── */
 @media print {
+  .toolbar {
+    display: none;
+  }
   .shell {
     background: #fff;
     padding: 0;

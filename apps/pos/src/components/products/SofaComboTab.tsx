@@ -25,7 +25,7 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import { Plus, Pencil, Trash2, History, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { SOFA_MODULES, normalizeCompartmentCode, type SofaPriceTier, buildComboLabel } from '@2990s/shared';
+import { SOFA_MODULES, normalizeCompartmentCode, buildComboLabel, findDuplicateCombo } from '@2990s/shared';
 import {
   useSofaCombos,
   useCreateSofaCombo,
@@ -40,7 +40,10 @@ import { useMfgProducts, useMaintenanceConfig } from '../../lib/products/mfg-pro
 // → Sofa → Sizes; config key `sofaSizes`). This fallback only shows if that
 // config fails to load — same default the rest of the app uses.
 const HEIGHTS_FALLBACK = ['24', '26', '28', '30', '32', '35'];
-const TIERS: SofaPriceTier[] = ['PRICE_1', 'PRICE_2', 'PRICE_3'];
+// Combos always run at the base tier (PRICE_1). Chairman 2026-06-02: the sofa
+// has ONE base price; the fabric Price 1/2/3 difference is a separate flat
+// add-on, NOT a combo-base switch — so the combo carries no tier choice.
+const COMBO_TIER = 'PRICE_1' as const;
 
 const ICON_PROPS = { size: 14, strokeWidth: 1.75 } as const;
 
@@ -142,9 +145,9 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
             margin: '4px 0 0',
             maxWidth: 720,
           }}>
-            Module-set combo deals with optional same-fabric-tier discount.
-            Append-only history; edits = a new row with a fresher effective date.
-            All combos apply to every customer (2990 B2C model).
+            Module-set combo deals — a fixed price for a module set, at each seat
+            height. Append-only history; edits = a new row with a fresher effective
+            date. All combos apply to every customer (2990 B2C model).
           </p>
         </div>
         {canAdd && (
@@ -283,7 +286,6 @@ function ComboCard({
         }}>
           {label}
         </span>
-        {rule.tier && <span style={chipStyleSoft}>{rule.tier}</span>}
         {canEdit && (
           <button
             type="button"
@@ -299,7 +301,7 @@ function ComboCard({
       {/* Height tiers */}
       <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 4 }}>
         {heights.map((h) => {
-          const v = rule.pricesByHeight?.[h];
+          const v = rule.sellingPricesByHeight?.[h];
           return (
             <div key={h} style={{
               padding: '4px 6px',
@@ -357,6 +359,9 @@ function ComposerModal({
 }) {
   const create = useCreateSofaCombo();
   const update = useUpdateSofaCombo();
+  // All active combos (every Model) — used to block adding a duplicate (same
+  // base model + same module-set) on the create path.
+  const existingCombosQ = useSofaCombos({ customerId: null });
 
   // Module chips come from the Maintenance Sofa Compartments pool (single source
   // of truth — Chairman 2026-06-01) so adding/removing a compartment in
@@ -373,13 +378,24 @@ function ComposerModal({
   // OR-set per slot (PR combo-or-per-slot): ordered slots, each a SET of
   // alternative codes joined by OR. e.g. [['2A-LHF','2A-RHF'],['L-LHF','L-RHF']].
   const [modules, setModules] = useState<string[][]>(editing?.modules ?? []);
-  const [tier, setTier] = useState<SofaPriceTier | ''>(editing?.tier ?? 'PRICE_2');
   const [label, setLabel] = useState(editing?.label ?? '');
   const [effectiveFrom, setEffectiveFrom] = useState(editing?.effectiveFrom ?? todayIso());
+  // The base grid on this page is the SELLING price (Chairman 2026-06-02 — show
+  // 卖家 base, not cost). Seeded from the combo's sellingPricesByHeight.
   const [prices, setPrices] = useState<Record<string, string>>(() => {
     const seed: Record<string, string> = {};
     for (const h of heights) {
-      const v = editing?.pricesByHeight?.[h];
+      const v = editing?.sellingPricesByHeight?.[h];
+      seed[h] = v == null ? '' : (v / 100).toFixed(2);
+    }
+    return seed;
+  });
+  // PWP (换购) selling price per height (Phase 2). Blank = no PWP price → the
+  // engine never overrides the normal price for that height.
+  const [pwpPrices, setPwpPrices] = useState<Record<string, string>>(() => {
+    const seed: Record<string, string> = {};
+    for (const h of heights) {
+      const v = editing?.pwpPricesByHeight?.[h];
       seed[h] = v == null ? '' : (v / 100).toFixed(2);
     }
     return seed;
@@ -408,14 +424,29 @@ function ComposerModal({
       .filter((slot) => slot.length > 0);
     if (orderedModules.length === 0) return alert('Add at least one module slot.');
 
-    const pricesByHeight: Record<string, number | null> = {};
+    // The base grid IS the SELLING price (Chairman 2026-06-02). Cost is never
+    // entered here — the server auto-detects it (Σ module SKU costs) on create,
+    // and an edit preserves the existing cost unchanged.
+    const sellingPricesByHeight: Record<string, number | null> = {};
     for (const h of heights) {
       const raw = (prices[h] ?? '').trim();
-      if (!raw) pricesByHeight[h] = null;
+      if (!raw) sellingPricesByHeight[h] = null;
       else {
         const n = Number(raw);
         if (!Number.isFinite(n) || n < 0) return alert(`Bad price at ${h}".`);
-        pricesByHeight[h] = Math.round(n * 100);
+        sellingPricesByHeight[h] = Math.round(n * 100);
+      }
+    }
+
+    // PWP (换购) selling price per height (Phase 2). Blank → null (no PWP override).
+    const pwpPricesByHeight: Record<string, number | null> = {};
+    for (const h of heights) {
+      const raw = (pwpPrices[h] ?? '').trim();
+      if (!raw) pwpPricesByHeight[h] = null;
+      else {
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n < 0) return alert(`Bad PWP price at ${h}".`);
+        pwpPricesByHeight[h] = Math.round(n * 100);
       }
     }
 
@@ -423,18 +454,32 @@ function ComposerModal({
       if (editing) {
         await update.mutateAsync({
           id: editing.id,
-          pricesByHeight,
+          // Preserve the existing COST untouched (a backend/PO concept — not
+          // linked to selling); only update the SELLING + PWP prices.
+          pricesByHeight: editing.pricesByHeight ?? {},
+          sellingPricesByHeight,
+          pwpPricesByHeight,
           label: label || null,
           effectiveFrom,
           notes: notes || null,
         });
       } else {
+        // Block duplicates (Chairman 2026-06-02): the table is append-only, so
+        // re-adding the same module-set silently makes a new version. Warn +
+        // stop, and point the user to edit the existing combo instead.
+        const dup = findDuplicateCombo(baseModel, orderedModules, existingCombosQ.data ?? []);
+        if (dup) {
+          return alert(`A combo for these modules already exists on ${baseModel}. Edit that combo instead of adding a duplicate.`);
+        }
         await create.mutateAsync({
           baseModel,
           modules: orderedModules,
-          tier: tier || null,
+          tier: COMBO_TIER,  // base tier — fabric tier is a separate flat add-on
           customerId: null,  // B2C: always null = applies to all customers
-          pricesByHeight,
+          // Send SELLING only; omitting pricesByHeight makes the server
+          // auto-detect COST from module SKUs, so selling and cost stay decoupled.
+          sellingPricesByHeight,
+          pwpPricesByHeight,
           label: label || null,
           effectiveFrom,
           notes: notes || null,
@@ -540,19 +585,7 @@ function ComposerModal({
           )}
         </Field>
 
-        <Field label="Tier">
-          <select
-            value={tier}
-            onChange={(e) => setTier(e.target.value as SofaPriceTier | '')}
-            style={selectStyle}
-            disabled={!!editing}
-          >
-            <option value="">— Any —</option>
-            {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </Field>
-
-        <Field label="Prices by seat height (RM)">
+        <Field label="Selling price by seat height (RM)">
           <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
             {heights.map((h) => (
               <div key={h}>
@@ -563,6 +596,27 @@ function ComposerModal({
                   min="0"
                   value={prices[h] ?? ''}
                   onChange={(e) => setPrices((cur) => ({ ...cur, [h]: e.target.value }))}
+                  placeholder="—"
+                  style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+            ))}
+          </div>
+        </Field>
+
+        {/* PWP (换购) price per height — Phase 2. Blank = no PWP price for that
+            height → the engine charges the normal price. POS / selling-side only. */}
+        <Field label="PWP 换购 price by seat height (RM) — blank = no PWP">
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
+            {heights.map((h) => (
+              <div key={h}>
+                <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textAlign: 'center' }}>{h}{/^\d/.test(h) ? '"' : ''}</div>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={pwpPrices[h] ?? ''}
+                  onChange={(e) => setPwpPrices((cur) => ({ ...cur, [h]: e.target.value }))}
                   placeholder="—"
                   style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
                 />
@@ -641,7 +695,7 @@ function HistoryModal({ rule, heights, onClose }: { rule: SofaComboRule; heights
                   <div key={h} style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{h}</div>
                     <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>
-                      {fmtRm(r.pricesByHeight?.[h] ?? null)}
+                      {fmtRm(r.sellingPricesByHeight?.[h] ?? null)}
                     </div>
                   </div>
                 ))}
@@ -747,16 +801,6 @@ const chipStyleStrong: CSSProperties = {
   padding: '2px 8px',
   borderRadius: 'var(--radius-sm)',
   border: '1px solid var(--line-strong)',
-};
-
-const chipStyleSoft: CSSProperties = {
-  fontFamily: 'var(--font-sans)',
-  fontSize: 'var(--fs-11)',
-  background: 'var(--c-cream)',
-  color: 'var(--fg-soft)',
-  padding: '2px 6px',
-  borderRadius: 'var(--radius-sm)',
-  border: '1px solid var(--line)',
 };
 
 const statusPillActive: CSSProperties = {

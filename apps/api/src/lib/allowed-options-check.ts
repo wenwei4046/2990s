@@ -28,6 +28,10 @@ export type AllowedOptionsLite = {
   total_heights?:         string[] | null;
   leg_heights?:           string[] | null;
   specials?:              string[] | null;
+  /** SOFA + BEDFRAME — enabled fabric COLOUR codes (fabric_colours.colour_id,
+   *  e.g. 'CG-002'). The single ON/OFF authority for which fabrics a Model
+   *  offers (Chairman 2026-06-01 "一切 on/off 以 Modular 为准"). */
+  fabrics?:               string[] | null;
 };
 
 /** Subset of mfg_products columns needed to validate. `model_id = null`
@@ -56,6 +60,10 @@ export type VariantsLite = {
   sofaLegHeight?: string | null;
   specials?:      string[] | string | null;
   special?:       string[] | string | null;
+  /** The chosen fabric colour code — fabricCode is the canonical field; colourId
+   *  carries the same code from the POS picker. Validated against opts.fabrics. */
+  fabricCode?:    string | null;
+  colourId?:      string | null;
 } | null | undefined;
 
 export type AllowedCheckError = {
@@ -180,11 +188,17 @@ export function checkAllowedOptions(
     };
   }
 
-  // Specials — multi-pick. Reject on the first unmatched pick.
+  // Specials — multi-pick. Reject on the first unmatched pick. Compare
+  // trim-normalised on BOTH sides: `toSpecialsArray` already trims each pick,
+  // but a Model's pool value (and the special_addons.code it mirrors) can carry
+  // a trailing space from data entry (e.g. "Hydraulic "). Trimming only the
+  // pick made the picker send a value that round-trips fine in the UI but 400s
+  // here as variant_not_allowed.
   if (hasRestriction(opts.specials)) {
+    const allowedTrimmed = new Set(opts.specials.map((s) => String(s).trim()));
     const picks = toSpecialsArray(v.specials ?? v.special);
     for (const p of picks) {
-      if (!opts.specials.includes(p)) {
+      if (!allowedTrimmed.has(p)) {
         return {
           error: 'variant_not_allowed',
           field: 'specials',
@@ -193,6 +207,19 @@ export function checkAllowedOptions(
         };
       }
     }
+  }
+
+  // Fabric (SOFA + BEDFRAME) — the chosen colour code must be enabled on this
+  // Model. opts.fabrics holds fabric_colours.colour_id values; the line carries
+  // it as fabricCode (canonical) or colourId (POS picker). Empty pool = no gate.
+  const fabricPick = v.fabricCode ?? v.colourId ?? null;
+  if (fabricPick && hasRestriction(opts.fabrics) && !opts.fabrics.includes(fabricPick)) {
+    return {
+      error: 'variant_not_allowed',
+      field: 'fabric',
+      value: fabricPick,
+      allowed: opts.fabrics,
+    };
   }
 
   return null;

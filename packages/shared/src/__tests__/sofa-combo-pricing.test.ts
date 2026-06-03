@@ -6,9 +6,11 @@ import {
   spreadComboTotal,
   normalizeComboModules,
   canonicalizeComboModulesForStorage,
+  canonicalizeLayoutModulesForStorage,
   comboSlotsKey,
   buildComboLabel,
   comboChargedPrices,
+  findDuplicateCombo,
   type SofaComboRow,
 } from '../sofa-combo-pricing';
 
@@ -73,6 +75,32 @@ describe('canonicalizeComboModulesForStorage (HOOKKA canonicalSizes 1:1)', () =>
     const a = canonicalizeComboModulesForStorage([['2A-RHF', '2A-LHF'], ['L-RHF', 'L-LHF']]);
     const b = canonicalizeComboModulesForStorage([['L-LHF', 'L-RHF'], ['2A-LHF', '2A-RHF']]);
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});
+
+describe('canonicalizeLayoutModulesForStorage (Quick Pick — preserves order)', () => {
+  it('keeps a middle Console in the middle (combo form sorts it to the end)', () => {
+    const built = [['1A-LHF'], ['Console'], ['1A-RHF']];
+    // The combo canonicalizer alphabetically sorts the slots → Console last.
+    expect(canonicalizeComboModulesForStorage(built)).toEqual([
+      ['1A-LHF'], ['1A-RHF'], ['Console'],
+    ]);
+    // The layout canonicalizer PRESERVES the built left-to-right order.
+    expect(canonicalizeLayoutModulesForStorage(built)).toEqual([
+      ['1A-LHF'], ['Console'], ['1A-RHF'],
+    ]);
+  });
+
+  it('wraps a legacy flat list, trims, and drops empties — order intact', () => {
+    expect(canonicalizeLayoutModulesForStorage([' 1A-RHF ', '1NA', '1A-LHF']))
+      .toEqual([['1A-RHF'], ['1NA'], ['1A-LHF']]);
+  });
+
+  it('rejects malformed payloads like the combo form', () => {
+    expect(canonicalizeLayoutModulesForStorage('nope')).toBeNull();
+    expect(canonicalizeLayoutModulesForStorage([])).toBeNull();
+    expect(canonicalizeLayoutModulesForStorage([[], ['']])).toBeNull();
+    expect(canonicalizeLayoutModulesForStorage([[1, 2]])).toBeNull();
   });
 });
 
@@ -354,5 +382,43 @@ describe('comboChargedPrices', () => {
   });
   it('null / undefined cost → just the set selling entries', () => {
     expect(comboChargedPrices({ '24': 380000 }, null)).toEqual({ '24': 380000 });
+  });
+});
+
+describe('findDuplicateCombo (combo dup guard)', () => {
+  const mk = (over: Partial<SofaComboRow>): SofaComboRow => ({
+    id: 'x', baseModel: 'Annsa', modules: [['1A-LHF', '1A-RHF'], ['1A-LHF', '1A-RHF']],
+    tier: 'PRICE_1', customerId: null, pricesByHeight: {}, label: null,
+    effectiveFrom: '2026-01-01', deletedAt: null, ...over,
+  });
+
+  it('matches an identical slot-set ignoring slot + intra-slot order', () => {
+    const existing = [mk({ id: 'a', modules: [['1A-RHF', '1A-LHF'], ['1A-LHF', '1A-RHF']] })];
+    const hit = findDuplicateCombo('Annsa', [['1A-LHF', '1A-RHF'], ['1A-LHF', '1A-RHF']], existing);
+    expect(hit?.id).toBe('a');
+  });
+
+  it('singleton build re-add is caught (the in-configurator path)', () => {
+    const existing = [mk({ id: 'b', modules: [['1A-LHF'], ['1A-RHF']] })];
+    expect(findDuplicateCombo('Annsa', [['1A-RHF'], ['1A-LHF']], existing)?.id).toBe('b');
+  });
+
+  it('different base model → no match', () => {
+    const existing = [mk({ id: 'c', baseModel: 'Lotti' })];
+    expect(findDuplicateCombo('Annsa', [['1A-LHF', '1A-RHF'], ['1A-LHF', '1A-RHF']], existing)).toBeNull();
+  });
+
+  it('different module-set → no match', () => {
+    const existing = [mk({ id: 'd', modules: [['2S']] })];
+    expect(findDuplicateCombo('Annsa', [['1S']], existing)).toBeNull();
+  });
+
+  it('soft-deleted rows are ignored', () => {
+    const existing = [mk({ id: 'e', deletedAt: '2026-02-01' })];
+    expect(findDuplicateCombo('Annsa', [['1A-LHF', '1A-RHF'], ['1A-LHF', '1A-RHF']], existing)).toBeNull();
+  });
+
+  it('empty list → null', () => {
+    expect(findDuplicateCombo('Annsa', [['1S']], [])).toBeNull();
   });
 });

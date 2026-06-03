@@ -129,6 +129,20 @@ export const deliveryFeeConfig = pgTable('delivery_fee_config', {
   updatedBy:                uuid('updated_by'),                        // references staff(id)
 });
 
+/* ─────────────────── Per-Model special delivery fees ────────────────── */
+// Migration 0140. A row tags a Model as "special": standalone_fee (whole MYR)
+// overrides the base delivery fee; cross_cat_followup_fee applies when the
+// model's SO is a cross-category follow-up linked to an earlier SO. Per-Model
+// (not per-SKU) — set once for all of a model's size variants. RLS: read for
+// any authenticated staff; write for fee-editor roles.
+export const modelSpecialDeliveryFees = pgTable('model_special_delivery_fees', {
+  modelId:             uuid('model_id').primaryKey().references(() => productModels.id, { onDelete: 'cascade' }),
+  standaloneFee:       integer('standalone_fee').notNull().default(0),
+  crossCatFollowupFee: integer('cross_cat_followup_fee').notNull().default(0),
+  updatedAt:           timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:           uuid('updated_by'),                            // references staff(id)
+});
+
 /* ─────────────────────────── Venues ─────────────────────────────────── */
 // Migration 0086 (2026-05-27). Parallel concept to showrooms — venues are
 // where the sales force (sales / sales_executive / outlet_manager) actually
@@ -422,6 +436,30 @@ export const addons = pgTable('addons', {
   updatedAt:    timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/* ───────────────────── Special add-ons (migration 0133) ──────────────────
+   The grown-up version of the flat maintenance_config `specials` pools: a
+   per-Model product add-on (selling surcharge + 0..N follow-up choice groups)
+   that prints as an SO line description, not a SKU. `code` = the same string in
+   product_models.allowed_options.specials + variants.specials (zero migration).
+   POS-selling only; cost path never reads these. selling/cost may be NEGATIVE
+   (a deduction, e.g. "No Side Panel" −RM40). option_groups shape:
+     [{ label, required, choices: [{ label, extraSen }] }]                     */
+export const specialAddons = pgTable('special_addons', {
+  id:              uuid('id').primaryKey().defaultRandom(),
+  code:            text('code').notNull().unique(),
+  label:           text('label').notNull(),
+  soDescription:   text('so_description').notNull().default(''),
+  categories:      text('categories').array().notNull().default(sql`'{}'::text[]`),
+  sellingPriceSen: integer('selling_price_sen').notNull().default(0),
+  costPriceSen:    integer('cost_price_sen').notNull().default(0),
+  optionGroups:    jsonb('option_groups').notNull().default(sql`'[]'::jsonb`),
+  active:          boolean('active').notNull().default(true),
+  sortOrder:       integer('sort_order').notNull().default(0),
+  createdAt:       timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:       timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:       uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+});
+
 /* ─────────────────────────── Drivers + Customers ────────────────────── */
 
 export const drivers = pgTable('drivers', {
@@ -440,6 +478,9 @@ export const customers = pgTable('customers', {
   name:         text('name').notNull(),
   phone:        text('phone'),                    // normalized intl format
   email:        text('email'),
+  // Human-readable shareable code '2990S-XXXXXXXX' (migration 0146), minted on
+  // first create. The refer/recognition handle; customer_id (uuid) stays the FK.
+  customerCode: text('customer_code'),
   address:      text('address'),
   addressLine2: text('address_line2'),
   postcode:     text('postcode'),
@@ -450,6 +491,16 @@ export const customers = pgTable('customers', {
   lastSeenAt:   timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   phoneIdx: index('idx_customers_phone').on(t.phone),
+  /* Identity key (Chairman 2026-06-03, migration 0144): one customer per
+     normalised (name, phone). Partial so legacy phone-less rows don't collide
+     on a NULL phone. Backs the atomic upsert_customer_by_name_phone() RPC. */
+  namePhoneUnique: uniqueIndex('customers_name_phone_unique')
+    .on(sql`lower(trim(${t.name}))`, t.phone)
+    .where(sql`${t.phone} IS NOT NULL`),
+  /* Shareable customer code unique (migration 0146). */
+  customerCodeUnique: uniqueIndex('customers_customer_code_unique')
+    .on(t.customerCode)
+    .where(sql`${t.customerCode} IS NOT NULL`),
 }));
 
 /* ─────────────────────────── My-Localities (postcode cascade) ───────── */
@@ -1168,6 +1219,17 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   // Fabric-tier SELLING add-on total for the order (migration 0124). Reporting
   // snapshot; the Δ also folds into each sofa/bedframe line's total_centi.
   fabricTierAddonCenti: integer('fabric_tier_addon_centi').notNull().default(0),
+  // Delivery fee in sen (migration 0133). Server-recomputed at create on the
+  // POS handover path (base + cross-category + special-model + additional),
+  // folded into local_total/total_revenue/balance/margin like the fabric
+  // add-on. recomputeTotals reads it back so re-rolls don't erase it. 0 for
+  // backend-authored SOs.
+  deliveryFeeCenti:  integer('delivery_fee_centi').notNull().default(0),
+  // Cross-category delivery link (migration 0141). The earlier SO this SO was
+  // linked back to (sales typed its doc_no at handover) — when set, this SO was
+  // charged the reduced cross / special-cross delivery rate. Unique among
+  // non-null values (one follow-up per source SO).
+  crossCategorySourceDocNo: text('cross_category_source_doc_no'),
 
   currency:          currencyCode('currency').notNull().default('MYR'),
   status:            mfgSoStatus('status').notNull().default('CONFIRMED'),
@@ -1231,6 +1293,16 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   emergencyContactPhone:          text('emergency_contact_phone'),
   emergencyContactRelationship:   text('emergency_contact_relationship'),
   targetDate:                     date('target_date'),
+  /* P1 (Owner 2026-06-03, migration 0142) — POS handover customer signature as
+     a data URL (image/png base64). Mirrors customer_po_image_b64's base64-in-
+     text pattern. NULL for non-POS / unsigned SOs. */
+  signatureB64:                   text('signature_b64'),
+  /* P1 (Owner 2026-06-03, migration 0143) — POS handover payment slip. slip_key
+     = R2 object key (resolved from pending_slip_uploads at create); slip_state
+     tracks coordinator review (none|pending|verified|flagged). Finance verify
+     flow stays Phase 4. */
+  slipKey:                        text('slip_key'),
+  slipState:                      slipState('slip_state').notNull().default('none'),
 
   /* PR #143 — Payment fields mirrored from POS handover (migration 0068).
      Commander 2026-05-26: "你把 POS system 的 payment 那个地方也放进来 Sales
@@ -1749,6 +1821,7 @@ export const mfgProducts = pgTable('mfg_products', {
   basePriceSen:           integer('base_price_sen'),              // PRICE 2 (default) — COST (computeMfgLineCost)
   price1Sen:              integer('price1_sen'),                  // PRICE 1 (cheaper tier) — COST
   sellPriceSen:           integer('sell_price_sen'),              // SELLING price (POS customer-facing). 0109; backfilled = base_price_sen. Master Account edits this (Phase 2).
+  pwpPriceSen:            integer('pwp_price_sen').notNull().default(0), // PWP (换购) SELLING base price — migration 0128. Used INSTEAD of sell_price_sen when this line is a valid PWP reward (fabric Δ still stacks on top). 0 = no PWP price set. Sofa column reserved/unused. Cost path never reads it.
   posActive:              boolean('pos_active').notNull().default(true), // 0111 (D5): selling-only POS catalog visibility. Master Account writes; POS catalog read filters. SEPARATE from `status` (cost/PO).
   includedAddons:         jsonb('included_addons').notNull().default([]), // 0113 (D7): permanent free gifts ({addonId, qty}[]). Master Account sets; Configurator renders "× N INCLUDED". DISPLAY-ONLY — no inventory/cost deduction.
   productionTimeMinutes:  integer('production_time_minutes').notNull().default(0),
@@ -1805,6 +1878,12 @@ export const sofaComboPricing = pgTable('sofa_combo_pricing', {
   supplierId:      uuid('supplier_id').references(() => suppliers.id, { onDelete: 'cascade' }),
   pricesByHeight:  jsonb('prices_by_height').notNull().default({}),       // { "<inch>": centi|null } — COST benchmark (Backend / PO side)
   sellingPricesByHeight: jsonb('selling_prices_by_height').notNull().default({}),  // SELLING (Master Admin, POS) — what the app charges
+  // PWP (换购) selling price per height (migration 0131, Phase 2). When a sofa
+  // build matches this combo AND the line redeems a valid PWP code, the engine
+  // charges THIS instead of selling_prices_by_height. POS/selling-side ONLY —
+  // the Backend cost side gets no such column (cost is identical regardless of
+  // selling price). {} = no PWP price set → never overrides → zero price change.
+  pwpPricesByHeight: jsonb('pwp_prices_by_height').notNull().default({}),  // { "<inch>": centi|null } — PWP SELLING (POS)
   label:           text('label'),                                         // null = auto-build from modules
   effectiveFrom:   date('effective_from').notNull(),
   deletedAt:       timestamp('deleted_at', { withTimezone: true }),
@@ -1819,6 +1898,75 @@ export const sofaComboPricing = pgTable('sofa_combo_pricing', {
     .on(t.baseModel, t.tier, t.customerId, t.supplierId, t.effectiveFrom, t.createdAt),
   idxSupplier: index('idx_sofa_combo_pricing_supplier')
     .on(t.supplierId),
+}));
+
+/* ─────────────────────────── pwp_rules ─────────────────────────────────
+   Purchase-with-purchase (换购优惠), migration 0128 (Chairman 2026-06-02).
+   A global, top-level rule: buying a TRIGGER (a specified Mattress model)
+   unlocks buying a REWARD (a specified Bed Frame model) at its PWP price.
+   allowance = qty_per_trigger × (units of eligible trigger lines in the
+   order). The pure `resolvePwp` (packages/shared/src/pwp.ts), shared by POS +
+   server, decides which reward lines get the PWP price; the server then uses
+   mfg_products.pwp_price_sen as that line's selling base (fabric Δ still
+   stacks on top) and drift-rejects a forged claim. POS-SELLING only — cost
+   untouched. Model id arrays hold product_models.id (uuid as text); [] = the
+   whole category. Generic Category→Category; only MATTRESS→BEDFRAME at launch.
+   No effective-dating: rules carry only an `active` flag (the PWP price is
+   snapshotted on the order line). See migration 0128 for RLS + CHECKs.
+   ──────────────────────────────────────────────────────────────────────── */
+
+export const pwpRules = pgTable('pwp_rules', {
+  id:                      uuid('id').primaryKey().defaultRandom(),
+  triggerCategory:         mfgProductCategory('trigger_category').notNull(),
+  triggerEligibleModelIds: jsonb('trigger_eligible_model_ids').$type<string[]>().notNull().default([]), // product_models.id[]; [] = all trigger-category models
+  rewardCategory:          mfgProductCategory('reward_category').notNull(),
+  eligibleRewardModelIds:  jsonb('eligible_reward_model_ids').$type<string[]>().notNull().default([]),  // product_models.id[]; [] = all reward-category models
+  // SOFA combo references (migration 0132, Phase 2). sofa_combo_pricing.id[].
+  // Sofa rules use these; mattress/bedframe rules use the *_model_ids above.
+  triggerComboIds:         jsonb('trigger_combo_ids').$type<string[]>().notNull().default([]),
+  rewardComboIds:          jsonb('reward_combo_ids').$type<string[]>().notNull().default([]),
+  qtyPerTrigger:           integer('qty_per_trigger').notNull().default(1),
+  // 'pwp' (reward needs pwp_price_sen > 0) | 'promo' (reward may redeem free; 0 = free, not unset). Migration 0145.
+  type:                    text('type').notNull().default('pwp'),
+  active:                  boolean('active').notNull().default(true),
+  createdAt:               timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:               timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:               uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+});
+// NOTE: multiple rules per (trigger, reward) category pair are allowed (Chairman
+// 2026-06-02) — e.g. two MATTRESS→BEDFRAME rules differentiated by model lists
+// (Mattress A → Aria; Mattress B → Orient). The old one-active-per-pair unique
+// index was dropped in migration 0129.
+
+/* ──────────────────────────────── pwp_codes ─────────────────────────────────
+   PWP Code Voucher System (Chairman 2026-06-02, migration 0130). Adding a
+   TRIGGER to a cart RESERVES N = rule.qty_per_trigger × qty codes (each = one
+   reward redemption). `code` is the PK = the occupy-the-number guarantee. At
+   order Confirm an applied code → USED, an un-applied reserved code → AVAILABLE
+   (printed on the SO, redeemable cross-order). reward_category +
+   eligibleRewardModelIds are snapshotted from the rule so a later rule edit /
+   delete never breaks an outstanding code. POS-selling only. */
+export const pwpCodes = pgTable('pwp_codes', {
+  code:                     text('code').primaryKey(),                                            // 'PWP-1234ABCD'
+  ruleId:                   uuid('rule_id').references(() => pwpRules.id, { onDelete: 'set null' }),
+  rewardCategory:           mfgProductCategory('reward_category').notNull(),                       // snapshot from the rule
+  eligibleRewardModelIds:   jsonb('eligible_reward_model_ids').$type<string[]>().notNull().default([]), // snapshot; [] = whole reward category
+  rewardComboIds:           jsonb('reward_combo_ids').$type<string[]>().notNull().default([]),     // snapshot of rule.reward_combo_ids (SOFA rewards); migration 0132
+  type:                     text('type').notNull().default('pwp'),                                 // snapshot of rule.type; 'promo' prices a 0 reward as free. Migration 0145
+  status:                   text('status').notNull().default('RESERVED'),                         // RESERVED | USED | AVAILABLE
+  ownerStaffId:             uuid('owner_staff_id').references(() => staff.id, { onDelete: 'set null' }),
+  cartLineKey:              text('cart_line_key'),                                                 // the trigger cart line that owns it
+  triggerItemCode:          text('trigger_item_code'),                                            // the trigger SKU code (audit)
+  sourceDocNo:              text('source_doc_no'),                                                 // trigger SO (set at Confirm)
+  redeemedDocNo:            text('redeemed_doc_no'),                                               // reward SO that consumed it
+  redeemedItemCode:         text('redeemed_item_code'),                                            // the reward SKU it paid for (audit)
+  customerId:               uuid('customer_id').references(() => customers.id, { onDelete: 'set null' }), // bound when AVAILABLE at trigger SO
+  createdAt:                timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:                timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxOwnerStatus: index('idx_pwp_codes_owner_status').on(t.ownerStaffId, t.status),
+  idxCartLine:    index('idx_pwp_codes_cart_line').on(t.cartLineKey),
+  idxSourceDoc:   index('idx_pwp_codes_source_doc').on(t.sourceDocNo),
 }));
 
 /* ─────────────────────────── sofa_quick_picks ──────────────────────────

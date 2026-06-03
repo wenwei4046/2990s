@@ -39,6 +39,45 @@ const TIER_FIELD_TO_COL: Record<string, string> = {
   bedframePriceTier: 'bedframe_price_tier',
 };
 
+/* Chairman 2026-06-01 — the POS SELLING fabric library (fabric_library +
+   fabric_colours) is a SERIES / COLOUR projection of this cost ledger:
+     • series  = the fabric_code prefix before the first '-'  (BF-01 → 'BF')
+     • colour  = the fabric_code itself, labelled with the colour name after the
+                 code in the description ("CG-002 Sand" → "Sand"), else the code.
+   So a Backend-added (or imported) fabric is immediately pickable on POS.
+
+   INSERT-only (ignoreDuplicates): RLS (migration 0125) lets the editor set
+   INSERT fabric_library/fabric_colours but not UPDATE/DELETE — so we never
+   clobber a Master-Admin selling-tier edit, and re-syncing an existing fabric
+   is a no-op instead of a 403/permission error. Selling tiers stay POS-only. */
+const seriesOf = (code: string): string => code.split('-')[0] || code;
+const colourLabelOf = (code: string, description: string | null): string => {
+  const desc = (description ?? '').trim();
+  const sp = desc.indexOf(' ');
+  return sp > 0 ? desc.slice(sp + 1).trim() : code;
+};
+
+async function syncFabricToSellingLibrary(
+  sb: any,
+  fabricCode: string,
+  description: string | null,
+): Promise<string | null> {
+  const code = fabricCode.trim();
+  if (!code) return null;
+  const series = seriesOf(code);
+  const { error: serErr } = await sb.from('fabric_library').upsert(
+    { id: series, label: series, tier: 'standard', default_surcharge: 0, active: true, sort_order: 0 },
+    { onConflict: 'id', ignoreDuplicates: true },
+  );
+  if (serErr) return `fabric_library: ${serErr.message}`;
+  const { error: colErr } = await sb.from('fabric_colours').upsert(
+    { fabric_id: series, colour_id: code, label: colourLabelOf(code, description), swatch_hex: null, active: true, sort_order: 0 },
+    { onConflict: 'fabric_id,colour_id', ignoreDuplicates: true },
+  );
+  if (colErr) return `fabric_colours: ${colErr.message}`;
+  return null;
+}
+
 /* PR #43 — Create new fabric. Commander 2026-05-26: Fabric Converter
    was missing the "+ New Fabric" capability. */
 fabricTracking.post('/', async (c) => {
@@ -76,35 +115,13 @@ fabricTracking.post('/', async (c) => {
     if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message }, 403);
     return c.json({ error: 'insert_failed', reason: error.message }, 500);
   }
-  // Migration 0124/0125 — also create the customer-pickable fabric_library entry
-  // (+ colours) so a Backend-added fabric is immediately pickable + coloured on
-  // POS. The procurement row above is already created; surface any library/colour
-  // failure as a warning so the operator can retry without losing the fabric.
-  const libLabel = String(body.label ?? body.fabricDescription ?? fabricCode).trim();
-  const libId = fabricCode.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || id.toLowerCase();
-  let libraryWarning: string | null = null;
-  const { error: libErr } = await sb.from('fabric_library').upsert({
-    id: libId, label: libLabel, tier: 'standard', default_surcharge: 0,
-    active: true, sort_order: 0, fabric_code: fabricCode,
-  }, { onConflict: 'id' });
-  if (libErr) {
-    libraryWarning = `fabric_library: ${libErr.message}`;
-  } else if (Array.isArray(body.colours)) {
-    const colourRows = (body.colours as Array<Record<string, unknown>>)
-      .map((col, i) => {
-        const label = String(col.label ?? '').trim();
-        if (!label) return null;
-        const colourId = String(col.colourId ?? label).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || `c${i}`;
-        return { fabric_id: libId, colour_id: colourId, label, swatch_hex: (col.swatchHex as string) ?? null, active: true, sort_order: i };
-      })
-      .filter((r): r is NonNullable<typeof r> => r != null);
-    if (colourRows.length > 0) {
-      const { error: colErr } = await sb.from('fabric_colours').upsert(colourRows, { onConflict: 'fabric_id,colour_id' });
-      if (colErr) libraryWarning = `fabric_colours: ${colErr.message}`;
-    }
-  }
+  // Mirror into the customer-pickable selling library (series + colour) so the
+  // new fabric is immediately pickable on POS. The procurement row above is
+  // already saved; surface any library failure as a warning so the operator can
+  // retry without losing the fabric.
+  const libraryWarning = await syncFabricToSellingLibrary(sb, fabricCode, (body.fabricDescription as string) ?? null);
 
-  return c.json({ fabric: data, fabricLibraryId: libId, libraryWarning }, 201);
+  return c.json({ fabric: data, fabricSeries: seriesOf(fabricCode), libraryWarning }, 201);
 });
 
 /* Commander 2026-05-26 — Bulk upsert from CSV import. One Postgres upsert
@@ -185,6 +202,24 @@ fabricTracking.post('/bulk-upsert', async (c) => {
     if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message, errors }, 403);
     return c.json({ error: 'bulk_upsert_failed', reason: error.message, errors }, 500);
   }
+
+  // Mirror the imported cost fabrics into the SELLING library (series + colour),
+  // batched + INSERT-only (RLS-safe, never clobbers a Master-Admin tier edit).
+  // Best-effort: the procurement upsert already succeeded, so a library hiccup
+  // must not fail the import.
+  const seriesRows = [...new Set(dbRows.map((r) => seriesOf(String(r.fabric_code))))]
+    .map((s, i) => ({ id: s, label: s, tier: 'standard', default_surcharge: 0, active: true, sort_order: (i + 1) * 10 }));
+  const colourRows = dbRows.map((r) => {
+    const code = String(r.fabric_code);
+    return {
+      fabric_id: seriesOf(code), colour_id: code,
+      label: colourLabelOf(code, typeof r.fabric_description === 'string' ? r.fabric_description : null),
+      swatch_hex: null, active: true, sort_order: 0,
+    };
+  });
+  await sb.from('fabric_library').upsert(seriesRows, { onConflict: 'id', ignoreDuplicates: true });
+  await sb.from('fabric_colours').upsert(colourRows, { onConflict: 'fabric_id,colour_id', ignoreDuplicates: true });
+
   return c.json({ upserted: dbRows.length, errors });
 });
 

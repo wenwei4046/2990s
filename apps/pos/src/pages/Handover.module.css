@@ -336,6 +336,72 @@
   margin: var(--space-3) 0;
 }
 
+/* Terms acknowledgement block in the Sign & confirm step. The list mirrors the
+   terms printed on the Sales Order; the checkbox gates order placement. */
+.termsBox {
+  margin: var(--space-3) 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md, 10px);
+  background: var(--bg-alt);
+}
+.termsList {
+  margin: 0 0 var(--space-3);
+  padding-left: 18px;
+  font-size: var(--fs-12);
+  color: var(--fg-soft);
+  line-height: 1.5;
+}
+.termsList li {
+  margin-bottom: 4px;
+}
+.termsAck {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: var(--fs-13);
+  font-weight: var(--w-medium);
+  color: var(--fg);
+  cursor: pointer;
+}
+.termsAck input {
+  margin-top: 2px;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: var(--c-orange);
+  cursor: pointer;
+}
+
+/* "Previous SO number" + its Auto-match button (Confirm screen). */
+.soMatchRow {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.soMatchRow input {
+  flex: 1;
+  min-width: 0;
+}
+.soMatchBtn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  border: 1px solid var(--c-orange);
+  border-radius: var(--radius-sm);
+  background: var(--c-orange);
+  color: var(--c-cream);
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: var(--w-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.soMatchBtn:hover { background: var(--c-burnt); border-color: var(--c-burnt); }
+.soMatchBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .installmentTerm {
   display: flex;
   align-items: center;

@@ -22,15 +22,18 @@
 import {
   computeMfgLinePrice,
   computeMfgLineCost,
+  buildSpecialsPoolFromAddons,
   type MaintenanceConfig,
   type MfgPricingProduct,
   type MfgPricingFabric,
   type MfgPricingBreakdown,
   type MfgFabricTier,
   type MfgSeatHeightPrice,
+  type SpecialAddonDef,
 } from '@2990s/shared/mfg-pricing';
 import {
   computeSofaSellingSen,
+  comboChargedPrices,
   sofaModulePricesFromSkus,
   sofaModuleSellingPricesFromSkus,
   type Cell,
@@ -42,6 +45,7 @@ import {
   type FabricTier,
   type FabricTierAddonConfig,
 } from '@2990s/shared/fabric-tier-addon';
+import { type PwpRule } from '@2990s/shared/pwp';
 
 export type MfgItemVariants = {
   fabricCode?:    string | null;
@@ -58,6 +62,15 @@ export type MfgItemVariants = {
   specials?:      string[] | string | null;
   /** Aliases (some POS clients send `special` instead). */
   special?:       string[] | string | null;
+  /** Special Add-ons (migration 0134) — chosen option-group labels per code,
+   *  e.g. { 'Right Drawer': ['10"'] }. Selling extras are summed into the
+   *  per-line pool (buildSpecialsPoolFromAddons); buildVariantSummary renders
+   *  them. Absent on legacy / no-choice lines. */
+  specialChoices?: Record<string, string[]> | null;
+  /** PWP (换购, migration 0128) — the salesperson toggled "use PWP price" on this
+   *  reward line. The route's order-level resolvePwp validates it; only a granted
+   *  line actually gets the PWP base. */
+  pwp?:           boolean | null;
 };
 
 export type MfgItemForRecompute = {
@@ -117,6 +130,14 @@ export type ProductRowLite = {
    *  backfilled = base_price_sen). The authoritative customer-facing price the
    *  D4 drift gate validates a client submission against (non-sofa lines). */
   sell_price_sen:     number | null;
+  /** PWP (换购) selling base price (migration 0128). When the order-level PWP
+   *  resolution grants this line (passed in as `pwpBaseSen`), its selling base
+   *  is this instead of sell_price_sen — fabric Δ still stacks on top. Optional:
+   *  the loader always selects it; legacy/test snapshots may omit it. */
+  pwp_price_sen?:     number | null;
+  /** product_models.id — the route's resolvePwp matches this against a rule's
+   *  eligible model lists. Optional for the same reason as pwp_price_sen. */
+  model_id?:          string | null;
 };
 
 const toMfgCategory = (group: string, productCategory: string): MfgPricingProduct['category'] => {
@@ -161,10 +182,42 @@ export function recomputeFromSnapshot(
   sofaModulePrices: SofaModulePriceSen | null = null,
   sellingFabricTiers: { sofaTier: FabricTier | null; bedframeTier: FabricTier | null } | null = null,
   fabricAddonConfig: FabricTierAddonConfig | null = null,
+  /** PWP (换购) base price (sen) for this line when the order-level resolution
+   *  (shared resolvePwp, in the route) granted it. null/0 → normal selling base
+   *  (no change). Non-sofa only; fabric Δ still stacks on top. Migration 0128. */
+  pwpBaseSen: number | null = null,
+  /** PWP (换购) SOFA grant (Phase 2). The order-level consume validated this
+   *  sofa-reward line's code and passes the code's reward combo ids; the sofa
+   *  branch then charges ONLY those combos' pwp_prices_by_height (others stay at
+   *  the normal selling price). null/[] → no change. SOFA only. */
+  pwpSofaComboIds: string[] | null = null,
+  /** Special Add-ons (migration 0134) defs (active rows, all categories — the
+   *  builder only matches the line's picked codes). When provided, this line's
+   *  specials pool is built from these (base + chosen-choice extras) and
+   *  REPLACES config.specials/.sofaSpecials — so POS add-ons price from the
+   *  special_addons table, not the legacy maintenance pool. null → legacy. */
+  specialAddons: SpecialAddonDef[] | null = null,
 ): RecomputedLine {
   const category = toMfgCategory(item.itemGroup, product?.category ?? '');
   const variants = item.variants ?? {};
   const specials = normalizeSpecials(variants.specials ?? variants.special);
+
+  // Special Add-ons (migration 0134): build THIS line's specials pool from the
+  // special_addons defs (base sellingPriceSen + Σ chosen-choice extraSen) and use
+  // a config whose .specials/.sofaSpecials IS that pool — the pure engine then
+  // prices it unchanged. Falls back to the legacy maintenance config when no defs
+  // are passed (backward-compatible). cost path reads the pool's priceSen too.
+  const specialChoices =
+    variants.specialChoices && typeof variants.specialChoices === 'object'
+      ? (variants.specialChoices as Record<string, string[]>)
+      : null;
+  const specialsAddonPool = specialAddons
+    ? buildSpecialsPoolFromAddons(specialAddons, specials, specialChoices)
+    : null;
+  const effectiveConfig: MaintenanceConfig | null =
+    specialsAddonPool && config
+      ? { ...config, specials: specialsAddonPool, sofaSpecials: specialsAddonPool }
+      : config;
 
   // Resolve fabric tier per-context (sofa_price_tier vs bedframe_price_tier).
   let fabricTier: MfgFabricTier | null = null;
@@ -207,7 +260,7 @@ export function recomputeFromSnapshot(
      against — clobbering the manual price with the computed 0 would be wrong).
      `breakdown` is still computed so the surcharge component columns
      (divan/leg/special) reflect any director-set SELLING surcharges. */
-  const breakdown = computeMfgLinePrice(pricingInput, config);
+  const breakdown = computeMfgLinePrice(pricingInput, effectiveConfig);
   const manualUnitSelling = Math.max(0, Math.round(Number(item.unitPriceCenti ?? 0)));
   const safeQty = Math.max(0, Math.floor(item.qty || 0));
 
@@ -217,7 +270,7 @@ export function recomputeFromSnapshot(
      SEPARATE cost path — UNCHANGED — and is what drives unit_cost_centi /
      line_cost_centi / line_margin_centi. Never drift-checked (cost is a
      server-only snapshot). Margin = manual selling − computed cost. */
-  const costBreakdown = computeMfgLineCost(pricingInput, config);
+  const costBreakdown = computeMfgLineCost(pricingInput, effectiveConfig);
 
   // Project specials → custom_specials column. Each pick keeps its label
   // for the SO print; surchargeSen comes from the maintenance config.
@@ -230,9 +283,9 @@ export function recomputeFromSnapshot(
   // HOOKKA's tolerant behaviour.
   const specialsPool =
     category === 'SOFA'
-      ? config?.sofaSpecials ?? []
-      : category === 'BEDFRAME'
-        ? config?.specials ?? []
+      ? effectiveConfig?.sofaSpecials ?? []
+      : (category === 'BEDFRAME' || category === 'MATTRESS')
+        ? effectiveConfig?.specials ?? []
         : [];
   const customSpecials = specials.length
     ? specials.map((s) => {
@@ -257,8 +310,19 @@ export function recomputeFromSnapshot(
          couldn't resolve it client-side) → fill the authoritative price, no
          drift (driftThresholdExceeded returns false for client 0 vs server>0). */
   const sellBaseSen = Math.max(0, Math.round(Number(product?.sell_price_sen ?? 0)));
-  const authoritativeSellingSen = sellBaseSen + breakdown.unitPriceSen;
-  const hasAuthoritativeSelling = category !== 'SOFA' && sellBaseSen > 0;
+  /* PWP (换购, migration 0128) — when the route's order-level resolution granted
+     this line, charge the per-SKU pwp_price_sen instead of sell_price_sen. The
+     route only passes pwpBaseSen for a validated reward line (qualifying trigger
+     present, eligible model, within allowance), so a forged claim never reaches
+     here as a real grant → the line reprices at full sell_price_sen → drift. Sofa
+     is excluded (it prices via the module path below). Selling-only; cost path
+     untouched. Default data (no grant / pwp 0) → effectiveBaseSen = sellBaseSen. */
+  const pwpBase = (pwpBaseSen != null && pwpBaseSen > 0 && category !== 'SOFA')
+    ? Math.round(pwpBaseSen)
+    : null;
+  const effectiveBaseSen = pwpBase ?? sellBaseSen;
+  const authoritativeSellingSen = effectiveBaseSen + breakdown.unitPriceSen;
+  const hasAuthoritativeSelling = category !== 'SOFA' && effectiveBaseSen > 0;
 
   /* SOFA-SELLING-PLAN (Chairman 2026-05-31) — a configurator sofa arrives as
      ONE line carrying variants.cells + variants.depth. Recompute its
@@ -299,7 +363,19 @@ export function recomputeFromSnapshot(
     const lineCombos = (sofaCombos ?? []).filter(
       (c) => !product?.base_model || c.baseModel === product.base_model,
     );
-    const sofaSellingSen = computeSofaSellingSen(sofaCells as Cell[], sofaDepth, sofaModulePrices, lineCombos);
+    /* PWP (换购) SOFA reward (Phase 2) — when the order-level consume granted this
+       sofa line, charge ONLY the code's reward combos at pwp_prices_by_height
+       (merged over their normal selling-charged price, so a height without a PWP
+       price falls back to selling). Same matching engine + cheaper-guard, so a
+       PWP price that beats à-la-carte applies; default {} → no override. Combos
+       NOT in the grant list keep their normal selling price. */
+    const pwpComboSet = pwpSofaComboIds && pwpSofaComboIds.length > 0 ? new Set(pwpSofaComboIds) : null;
+    const effectiveCombos = pwpComboSet
+      ? lineCombos.map((c) => (pwpComboSet.has(c.id)
+          ? { ...c, pricesByHeight: comboChargedPrices(c.pwpPricesByHeight, c.pricesByHeight) }
+          : c))
+      : lineCombos;
+    const sofaSellingSen = computeSofaSellingSen(sofaCells as Cell[], sofaDepth, sofaModulePrices, effectiveCombos);
     if (sofaSellingSen > 0) {
       // Server has authoritative per-Model module SELLING prices for this build,
       // + the SELLING fabric-tier Δ (migration 0124); the POS adds the same Δ so
@@ -350,11 +426,29 @@ export async function loadProductByCode(sb: any, code: string): Promise<ProductR
   if (!code) return null;
   const { data } = await sb
     .from('mfg_products')
-    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, base_model')
+    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, pwp_price_sen, model_id, base_model')
     .eq('code', code)
     .maybeSingle();
   if (!data) return null;
   return data as ProductRowLite;
+}
+
+/** Load active Special Add-ons (migration 0134) as pricing defs. The SO recompute
+ *  builds each line's specials pool from these (base sellingPriceSen + Σ chosen
+ *  option-group extraSen) instead of the legacy maintenance_config.specials pool.
+ *  Returns [] on empty/error (recompute then prices any picked codes at 0 — no
+ *  crash, no reject). */
+export async function loadSpecialAddons(sb: any): Promise<SpecialAddonDef[]> {
+  const { data } = await sb
+    .from('special_addons')
+    .select('code, selling_price_sen, cost_price_sen, option_groups')
+    .eq('active', true);
+  return ((data as any[]) ?? []).map((r) => ({
+    code:            r.code,
+    sellingPriceSen: r.selling_price_sen ?? 0,
+    costPriceSen:    r.cost_price_sen ?? 0,
+    optionGroups:    Array.isArray(r.option_groups) ? r.option_groups : [],
+  }));
 }
 
 /** Load a Model's sofa module SELLING prices (per-Model module→sen map) from
@@ -477,6 +571,24 @@ export async function loadFabricTierAddonConfig(sb: any): Promise<FabricTierAddo
     bedframeTier2Delta: d?.bedframe_tier2_delta ?? 0,
     bedframeTier3Delta: d?.bedframe_tier3_delta ?? 0,
   };
+}
+
+/** Load the active PWP (换购) rules (migration 0128). Missing / none → []. The
+ *  route feeds these + the order's lines to the shared `resolvePwp` to decide
+ *  which reward lines get the PWP price. */
+export async function loadPwpRules(sb: any): Promise<PwpRule[]> {
+  const { data } = await sb
+    .from('pwp_rules')
+    .select('trigger_category, trigger_eligible_model_ids, reward_category, eligible_reward_model_ids, qty_per_trigger')
+    .eq('active', true);
+  if (!data) return [];
+  return (data as Array<Record<string, unknown>>).map((r) => ({
+    triggerCategory:         String(r.trigger_category ?? ''),
+    triggerEligibleModelIds: Array.isArray(r.trigger_eligible_model_ids) ? (r.trigger_eligible_model_ids as unknown[]).map(String) : [],
+    rewardCategory:          String(r.reward_category ?? ''),
+    eligibleRewardModelIds:  Array.isArray(r.eligible_reward_model_ids) ? (r.eligible_reward_model_ids as unknown[]).map(String) : [],
+    qtyPerTrigger:           Number(r.qty_per_trigger) || 1,
+  }));
 }
 
 /** End-to-end: given an item draft, load product + fabric + config and

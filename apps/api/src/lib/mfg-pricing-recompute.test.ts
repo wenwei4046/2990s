@@ -17,6 +17,7 @@
 //     authoritative price, no drift.
 
 import { describe, it, expect } from 'vitest';
+import type { SofaComboRow } from '@2990s/shared';
 import { recomputeFromSnapshot, type ProductRowLite } from './mfg-pricing-recompute';
 
 const mattress = (sell: number | null): ProductRowLite => ({
@@ -210,6 +211,52 @@ describe('recomputeFromSnapshot — configured sofa selling drift (per-Model mod
   });
 });
 
+/* ── PWP Code Voucher — SOFA reward (Phase 2) ─────────────────────────────────
+   A sofa-reward line redeems a voucher whose reward combos include the combo
+   this build matches → the engine charges that combo's pwp_prices_by_height
+   instead of its normal selling price. The grant (pwpSofaComboIds, 10th arg) is
+   decided by the route's consume step after validating + claiming the code. */
+describe('recomputeFromSnapshot — sofa PWP combo price (Phase 2)', () => {
+  // A single-module build + single-slot combo so the combo deterministically
+  // matches the lone group. pricesByHeight = à-la-carte RM1500; PWP = RM1000.
+  const oneCell = { cells: [{ id: 'a', moduleId: '1A-LHF', x: 0, y: 0, rot: 0 }], depth: '24' } as unknown as null;
+  const MODULE_PRICE = { '1A-LHF': 150000 };
+  const comboRow: SofaComboRow = {
+    id: 'combo-1', baseModel: 'Booqit',
+    modules: [['1A-LHF']],
+    tier: null, customerId: null,
+    pricesByHeight: { '24': 150000 },
+    pwpPricesByHeight: { '24': 100000 },
+    effectiveFrom: '2020-01-01', deletedAt: null,
+  };
+
+  it('no code → normal price (RM1500)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-1A', itemGroup: 'sofa', qty: 1, unitPriceCenti: 150000, variants: oneCell },
+      sofaProduct, null, null, [comboRow], MODULE_PRICE,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(150000);
+  });
+
+  it('granted (pwpSofaComboIds matches) → charges the combo PWP price (RM1000)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-1A', itemGroup: 'sofa', qty: 1, unitPriceCenti: 100000, variants: oneCell },
+      sofaProduct, null, null, [comboRow], MODULE_PRICE, null, null, null, ['combo-1'],
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(100000);
+  });
+
+  it('granted combo id ≠ the matched build combo → no override → tampered low price drifts', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-1A', itemGroup: 'sofa', qty: 1, unitPriceCenti: 100000, variants: oneCell },
+      sofaProduct, null, null, [comboRow], MODULE_PRICE, null, null, null, ['other-combo'],
+    );
+    expect(r.drift).toBe(true);  // full RM1500 stands → client RM1000 drifts → 400
+  });
+});
+
 describe('recomputeFromSnapshot — fabric-tier SELLING add-on (migration 0124)', () => {
   const ADDON_CFG = { sofaTier2Delta: 150, sofaTier3Delta: 250, bedframeTier2Delta: 200, bedframeTier3Delta: 300 };
 
@@ -277,6 +324,91 @@ describe('recomputeFromSnapshot — fabric-tier SELLING add-on (migration 0124)'
   });
 });
 
+/* ── PWP (换购, migration 0128) ──────────────────────────────────────────────
+   When the route's order-level resolvePwp grants a bedframe reward line, it
+   passes the per-SKU pwp_price_sen as the 9th arg (pwpBaseSen). The recompute
+   then charges that base instead of sell_price_sen; the fabric Δ still stacks on
+   top. A non-granted line (pwpBaseSen null) is unchanged. */
+describe('recomputeFromSnapshot — PWP reward base (migration 0128)', () => {
+  const ADDON_CFG = { sofaTier2Delta: 150, sofaTier3Delta: 250, bedframeTier2Delta: 200, bedframeTier3Delta: 300 };
+  const bedframe = (sell: number, pwp: number | null): ProductRowLite => ({
+    code: 'HILTON-Q', category: 'BEDFRAME', base_price_sen: 0, price1_sen: null,
+    cost_price_sen: 0, seat_height_prices: null, base_model: 'Hilton',
+    sell_price_sen: sell, pwp_price_sen: pwp, model_id: 'mdl-hilton',
+  });
+
+  it('granted PWP line charges pwp_price_sen instead of sell_price_sen', () => {
+    // sell RM2490 (249000), pwp RM1490 (149000). Client submits the PWP price.
+    const r = recomputeFromSnapshot(
+      { itemCode: 'HILTON-Q', itemGroup: 'bedframe', qty: 1, unitPriceCenti: 149000, variants: { pwp: true } },
+      bedframe(249000, 149000), null, null, [], null,
+      { sofaTier: null, bedframeTier: null }, ADDON_CFG,
+      149000, // pwpBaseSen — granted by the route's resolvePwp
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(149000);
+  });
+
+  it('PWP base + fabric Δ stack (RM1490 + RM300 P3 = RM1790)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'HILTON-Q', itemGroup: 'bedframe', qty: 1, unitPriceCenti: 179000, variants: { pwp: true } },
+      bedframe(249000, 149000), null, null, [], null,
+      { sofaTier: null, bedframeTier: 'PRICE_3' }, ADDON_CFG,
+      149000,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(179000); // 149000 pwp + 30000 fabric Δ
+  });
+
+  it('Δ + base are per-item: total_centi = (pwp + Δ) × qty', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'HILTON-Q', itemGroup: 'bedframe', qty: 2, unitPriceCenti: 149000, variants: { pwp: true } },
+      bedframe(249000, 149000), null, null, [], null,
+      { sofaTier: null, bedframeTier: null }, ADDON_CFG,
+      149000,
+    );
+    expect(r.unit_price_sen).toBe(149000);
+    expect(r.total_centi).toBe(298000); // × qty 2
+  });
+
+  it('not granted (pwpBaseSen null) → charges full sell_price_sen, no change', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'HILTON-Q', itemGroup: 'bedframe', qty: 1, unitPriceCenti: 249000, variants: { pwp: true } },
+      bedframe(249000, 149000), null, null, [], null,
+      { sofaTier: null, bedframeTier: null }, ADDON_CFG,
+      null, // route did NOT grant (e.g. no qualifying mattress in the order)
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(249000);
+  });
+
+  it('anti-tamper: client claims the PWP price but the line was NOT granted → drift', () => {
+    // POS forges pwp:true with no qualifying trigger → route passes pwpBaseSen
+    // null → server prices at full RM2490; client sent RM1490 → >0.5% drift.
+    const r = recomputeFromSnapshot(
+      { itemCode: 'HILTON-Q', itemGroup: 'bedframe', qty: 1, unitPriceCenti: 149000, variants: { pwp: true } },
+      bedframe(249000, 149000), null, null, [], null,
+      { sofaTier: null, bedframeTier: null }, ADDON_CFG,
+      null,
+    );
+    expect(r.drift).toBe(true);
+  });
+
+  it('pwpBaseSen on a SOFA line is ignored (sofa excluded from PWP)', () => {
+    const sofa: ProductRowLite = {
+      code: 'NOOR-2A', category: 'SOFA', base_price_sen: 50000, price1_sen: null,
+      cost_price_sen: 40000, seat_height_prices: null, base_model: 'NOOR', sell_price_sen: 60000,
+    };
+    const r = recomputeFromSnapshot(
+      { itemCode: 'NOOR-2A', itemGroup: 'sofa', qty: 1, unitPriceCenti: 60000 },
+      sofa, null, null, [], null, null, null,
+      10000, // pwpBaseSen — must be ignored for sofa
+    );
+    // Sofa keeps the operator price (no module map → trust operator), NOT 10000.
+    expect(r.unit_price_sen).toBe(60000);
+  });
+});
+
 /* Combo cost/sell split (Phase 5, Part 1). The combos the gate receives carry
    the SELLING price in pricesByHeight (loadActiveSofaCombos merges
    selling_prices_by_height over cost via comboChargedPrices). This pins the
@@ -294,8 +426,10 @@ describe('recomputeFromSnapshot — combo charges SELLING, not cost', () => {
   };
   // What loadActiveSofaCombos supplies = SELLING merged over cost: RM 3800.
   const combo = {
+    // PRICE_1 — the base tier the sofa runs at (Chairman 2026-06-01); the gate's
+    // computeSofaSellingSen queries combos at PRICE_1, matching production.
     id: 'cmb', baseModel: 'Booqit', modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
-    tier: 'PRICE_2' as const, customerId: null,
+    tier: 'PRICE_1' as const, customerId: null,
     pricesByHeight: { '24': 380000 }, // SELLING
     label: null, effectiveFrom: '2026-01-01', deletedAt: null,
   };

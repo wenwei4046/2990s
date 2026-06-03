@@ -96,8 +96,13 @@
   border-radius: var(--radius-xs);
 }
 .paletteArt img {
-  width: 100%;
-  height: 100%;
+  /* Pixel caps, not `height: 100%`: inside the centered grid box a percentage
+     block-size resolves to `auto` (grid item with align-self: center), so the
+     art kept its natural aspect at 56px wide and tall modules (console, L,
+     1-armed seats) overflowed downward into the FABRIC section. Absolute caps
+     fit any aspect within the 56px tile without relying on % resolution. */
+  max-width: 56px;
+  max-height: 56px;
   object-fit: contain;
 }
 
@@ -277,6 +282,13 @@
 .cellSelected {
   border-color: var(--c-burnt);
   z-index: 5;
+}
+/* A cell carrying a per-seat recliner/power upgrade sits ABOVE the seamless
+   composite overlay (z-index 1) so its wash / "P" badge / footrest stay
+   visible once the sofa goes seamless — the composite still hides the cell's
+   module art, so only the upgrade overlays show on top of the seamless body. */
+.cellRecliner {
+  z-index: 3;
 }
 /* .cellViolation removed per Loo 2026-05-12 — the red dashed border + red
    tinted background read as "error here" but the conditions (arms colliding,

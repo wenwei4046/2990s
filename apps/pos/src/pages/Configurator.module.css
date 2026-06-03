@@ -216,8 +216,10 @@
   flex-direction: column;
   gap: var(--space-4);
   position: sticky;
-  /* Clear the now-sticky topbar so the rail parks just below it when scrolling. */
-  top: 76px;
+  /* Clear the now-sticky topbar so the rail parks just below it when scrolling.
+     On iPad the topbar grows by the top safe-area inset (see Topbar.module.css),
+     so add the same inset here. */
+  top: calc(76px + env(safe-area-inset-top, 0px));
 }
 
 .railSection {

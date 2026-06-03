@@ -11,52 +11,48 @@ export const TargetDateStep = ({
   form: HandoverForm;
   update: <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) => void;
 }) => {
-  const { days: leadDays, reasonLabel } = useCartLeadDays();
+  const { days: leadDays } = useCartLeadDays();
 
   // Cart-aware minimum delivery date. Sofa carts get the longer lead time;
   // mattress/bed-frame-only carts use the shorter one; mixed carts use the
   // larger of the two. Both numbers are admin-configurable (Backend Settings
-  // → Delivery). Matches the "As fast as possible" default below.
+  // → Delivery).
   const earliestDate = useMemo(() => {
     const t = new Date();
     t.setDate(t.getDate() + leadDays);
     t.setHours(0, 0, 0, 0);
     return t;
   }, [leadDays]);
-  const asapIso = useMemo(() => {
+
+  // Today (Malaysia local) as ISO — the earliest a factory start (Process Date)
+  // can be, and the default we seed once a delivery date exists.
+  const todayIso = useMemo(() => {
     const t = new Date();
-    t.setDate(t.getDate() + leadDays);
     const y = t.getFullYear();
     const m = String(t.getMonth() + 1).padStart(2, '0');
     const d = String(t.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
-  }, [leadDays]);
-  const fmtAsap = useMemo(() =>
-    new Date(asapIso + 'T00:00:00').toLocaleDateString('en-MY', {
-      day: 'numeric', month: 'short', year: 'numeric',
-    }),
-    [asapIso],
-  );
+  }, []);
 
-  // Mutual exclusion: ticking either bypass option unticks the other and
-  // clears any manually-picked date so the form has one source of truth.
+  // "For further notice" (UFN) — customer hasn't committed a date yet. Ticking
+  // it clears the picked delivery + process dates so the SO API's "both dates or
+  // neither" pairing rule is always satisfied.
   const setLater = (checked: boolean) => {
     if (checked) {
       update('deliveryDateLater', true);
-      update('deliveryAsap', false);
       update('deliveryDate', '');
+      update('processDate', '');
     } else {
       update('deliveryDateLater', false);
     }
   };
-  const setAsap = (checked: boolean) => {
-    if (checked) {
-      update('deliveryAsap', true);
-      update('deliveryDateLater', false);
-      update('deliveryDate', asapIso);
-    } else {
-      update('deliveryAsap', false);
-      update('deliveryDate', '');
+  // A specific delivery date is picked from the calendar. Seed the Process Date
+  // to today when unset, and never let an existing Process Date sit after the
+  // delivery date.
+  const onPickDelivery = (date: string) => {
+    update('deliveryDate', date);
+    if (!form.processDate || form.processDate > date) {
+      update('processDate', todayIso <= date ? todayIso : date);
     }
   };
 
@@ -65,23 +61,6 @@ export const TargetDateStep = ({
       <h3 className="subTitle">Delivery target date</h3>
 
       <div className="fieldRow">
-        <label className={`highlightCard ${form.deliveryAsap ? 'highlightCardActive' : ''}`}>
-          <input
-            type="checkbox"
-            checked={form.deliveryAsap}
-            onChange={(e) => setAsap(e.target.checked)}
-          />
-          <div>
-            <strong>As fast as possible</strong>
-            <p>
-              Earliest standard slot — {leadDays} days from order date ({fmtAsap}).
-              {reasonLabel !== 'standard' && (
-                <> Driven by <strong>{reasonLabel}</strong>.</>
-              )}
-            </p>
-          </div>
-        </label>
-
         <label className={`highlightCard ${form.deliveryDateLater ? 'highlightCardActive' : ''}`}>
           <input
             type="checkbox"
@@ -95,12 +74,32 @@ export const TargetDateStep = ({
         </label>
       </div>
 
-      {!form.deliveryDateLater && !form.deliveryAsap && (
+      {!form.deliveryDateLater && (
         <MonthCalendar
           value={form.deliveryDate}
-          onChange={(date) => update('deliveryDate', date)}
+          onChange={onPickDelivery}
           minDate={earliestDate}
         />
+      )}
+
+      {/* Process Date (factory start) — shown once a delivery date is picked.
+          Hidden for "For further notice", where both dates stay open.
+          Bounded today..deliveryDate. */}
+      {form.deliveryDate && !form.deliveryDateLater && (
+        <Field label="Process date (factory start)">
+          <input
+            type="date"
+            value={form.processDate}
+            min={todayIso}
+            max={form.deliveryDate}
+            onChange={(e) => update('processDate', e.target.value)}
+          />
+          <p className={styles.methodHint}>
+            When production should start. Defaults to today — set it later (e.g. a
+            month before delivery) so we don't pull stock too early for a far-out
+            delivery date. Cannot be after the delivery date.
+          </p>
+        </Field>
       )}
 
       <Field label="Special instructions (optional)">
