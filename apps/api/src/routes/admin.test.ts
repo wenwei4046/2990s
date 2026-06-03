@@ -377,6 +377,20 @@ describe('staff showroom guard (create + patch)', () => {
     expect(createUserMock).not.toHaveBeenCalled();
   });
 
+  it('create sales_director without showroomId → 400 (Loo 2026-06-03: gate it too)', async () => {
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffCode: 'SD', name: 'Sales Dir', role: 'sales_director',
+        email: 'sd@2990s.my', initials: 'SD', color: '#2F5D4F', password: 'sup3rsecret',
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain('showroom_required_for_pos_role');
+    expect(createUserMock).not.toHaveBeenCalled();
+  });
+
   it('create coordinator without showroomId → 201 (elevated roles may oversee all)', async () => {
     createUserMock.mockResolvedValue({ data: { user: { id: 'u-co' } }, error: null });
     adminFromMock.mockImplementation((table: string) => ({

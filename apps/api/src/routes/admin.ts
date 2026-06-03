@@ -51,20 +51,25 @@ const POS_PIN_ROLES = new Set<string>(['sales']);
 const STAFF_WRITE_ROLES = new Set<string>(['admin', 'super_admin', 'sales_director']);
 const STAFF_LIST_ROLES  = new Set<string>(['admin', 'super_admin', 'sales_director', 'coordinator']);
 
-/* Roles that SELL through the POS and are NOT coordinator-or-above. These MUST
-   belong to a showroom: orders_sales_insert / quotes_sales_insert RLS and the
-   create_order_with_items RPC all gate on `showroom_id = current_staff_showroom()`,
-   and POST /slips/init stamps pending_slip_uploads.showroom_id (NOT NULL) from
-   staff.showroom_id. A NULL showroom silently breaks order placement AND payment-
-   slip upload — surfaced as `staff_showroom_missing` 400 on "Confirm payment"
-   (BUG-2026-06-03: 4 of 5 sales staff had been onboarded with NULL showroom).
-   Coordinator / finance / admin / super_admin are is_coordinator_or_above() and
-   legitimately keep NULL ("oversee all showrooms"). sales_director / master_account
-   are intentionally NOT gated here pending a product call on whether they are
-   cross-venue (oversee-all) or showroom-bound — see PR description. */
-const SHOWROOM_SCOPED_ROLES = new Set<string>([
-  'sales', 'showroom_lead', 'sales_executive', 'outlet_manager',
-]);
+/* Roles that are is_coordinator_or_above() in RLS — they legitimately carry a
+   NULL showroom ("oversee all showrooms" per CLAUDE.md) and are NOT showroom-
+   bound. Keep in lock-step with the public.is_coordinator_or_above() SQL helper. */
+const COORDINATOR_OR_ABOVE_ROLES = new Set<string>(['coordinator', 'finance', 'admin', 'super_admin']);
+
+/* Every other role SELLS through the POS and therefore MUST belong to a showroom:
+   orders_sales_insert / quotes_sales_insert RLS and the create_order_with_items
+   RPC all gate on `showroom_id = current_staff_showroom()`, and POST /slips/init
+   stamps pending_slip_uploads.showroom_id (NOT NULL) from staff.showroom_id. A
+   NULL showroom silently breaks order placement AND payment-slip upload —
+   surfaced as `staff_showroom_missing` 400 on "Confirm payment" (BUG-2026-06-03:
+   4 of 5 sales staff had been onboarded with NULL showroom). Derived as the
+   complement of COORDINATOR_OR_ABOVE_ROLES so it can't drift as roles are added.
+   Per Loo (2026-06-03) this includes sales_director + master_account — with one
+   live showroom that is a no-op; revisit if a director must oversee 2+ showrooms
+   (then promote it into is_coordinator_or_above() instead of pinning a showroom). */
+const SHOWROOM_SCOPED_ROLES = new Set<string>(
+  STAFF_ROLES.filter((r) => !COORDINATOR_OR_ABOVE_ROLES.has(r)),
+);
 
 /* Email is REQUIRED for every role (the account is keyed by it; for sales the
    PIN-login mints the session via a magic-link token on this email). Venue is
