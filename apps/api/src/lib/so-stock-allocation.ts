@@ -32,6 +32,7 @@
 
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { summariseReadiness } from './so-readiness';
+import { loadSofaBatchStock, findCoveringBatch, claimSofaBatch } from './sofa-set-coverage';
 
 export type AllocationResult = {
   ok: boolean;
@@ -289,86 +290,48 @@ export async function recomputeSoStockAllocation(
       }
     }
 
-    /* 7b. SOFA batch binding (Stage 3, Commander 2026-05-31 — corrected model).
-           A sofa set's batch is NOT auto-matched by quantity; it is FIXED at
-           procurement time. The PO raised from the sofa SO line carries
-           po_number = batch_no (the PO line ties back via so_item_id). So we
-           read the bound batch straight off the procurement chain
-           (SO line → purchase_order_items.so_item_id → purchase_orders.po_number)
-           and lock it on the line — exactly the same number GRN stamps onto the
-           lot. Readiness is then checked against THAT batch's lots only, strictly
-           per-warehouse. Sofa is all-or-nothing: the whole set is READY only when
-           every module line's bound batch has enough on hand; otherwise the set
-           stays PENDING (never PARTIAL). allocated_batch_no is stamped whenever a
-           PO exists — even while PENDING — because the batch is decided at PO
-           time and outbound must consume from it. */
+    /* 7b. SOFA — whole-set, all-or-nothing batch coverage (Wei Siang 2026-06-03,
+           replaces the old "batch belongs to the PO's SO" model). A sofa SET =
+           all the sofa module lines of one SO at one warehouse (e.g. LHF + RHF,
+           same fabric). The set is READY only when ONE single production batch
+           (batch_no = a PO's dye lot) holds enough of EVERY module; that batch is
+           then locked onto every line as allocated_batch_no so the DO consumes
+           the whole set from one dye lot. No single covering batch → PENDING
+           (never PARTIAL, never split across two batches, never strand a half-set).
+           Eligibility is plain SKU + variant — NOT the SO's own PO link; ANY SO
+           whose set a batch fully covers may claim it. Sets are walked in the
+           SAME priority order as non-sofa needs (delivery date → SO doc number)
+           and each claimed batch is decremented, so two SOs can't double-claim the
+           same units. */
     const batchTargetByLine = new Map<string, string | null>();
     if (sofaLineRecs.length > 0) {
-      const sofaIds = sofaLineRecs.map((s) => s.id);
-      // SO line → its live PO's batch number. One sofa set = one PO; each module
-      // line points at it via so_item_id. Two-step (no embed) to mirror grns.ts
-      // resolvePoBatchByItem and dodge supabase nested-array typing. Skip
-      // cancelled POs (cancelled_at set).
-      const batchBySoLine = new Map<string, string>();
-      const { data: poiRows } = await sb
-        .from('purchase_order_items')
-        .select('so_item_id, purchase_order_id')
-        .in('so_item_id', sofaIds);
-      const poiTyped = (poiRows ?? []) as Array<{ so_item_id: string | null; purchase_order_id: string | null }>;
-      const poIds = [...new Set(poiTyped.map((r) => r.purchase_order_id).filter((x): x is string => !!x))];
-      const poNoById = new Map<string, string>();
-      if (poIds.length > 0) {
-        const { data: poRows } = await sb
-          .from('purchase_orders')
-          .select('id, po_number, cancelled_at')
-          .in('id', poIds);
-        for (const p of (poRows ?? []) as Array<{ id: string; po_number: string; cancelled_at: string | null }>) {
-          if (p.cancelled_at) continue; // cancelled PO no longer binds its batch
-          poNoById.set(p.id, p.po_number);
-        }
-      }
-      for (const r of poiTyped) {
-        if (!r.so_item_id || !r.purchase_order_id) continue;
-        const no = poNoById.get(r.purchase_order_id);
-        if (no && !batchBySoLine.has(r.so_item_id)) batchBySoLine.set(r.so_item_id, no);
-      }
+      const sofaStock = await loadSofaBatchStock(sb, sofaLineRecs.map((s) => s.item_code));
 
-      // Live on-hand within each bound batch, keyed (wh|batch|code|variant).
-      const boundBatches = [...new Set(batchBySoLine.values())];
-      const stockByKey = new Map<string, number>();
-      if (boundBatches.length > 0) {
-        const { data: lotRows } = await sb
-          .from('v_inventory_lots_open')
-          .select('warehouse_id, product_code, variant_key, batch_no, qty_remaining')
-          .in('batch_no', boundBatches)
-          .gt('qty_remaining', 0);
-        for (const r of (lotRows ?? []) as Array<{ warehouse_id: string; product_code: string; variant_key: string | null; batch_no: string; qty_remaining: number }>) {
-          const k = `${r.warehouse_id}|${r.batch_no}|${r.product_code}|${r.variant_key ?? ''}`;
-          stockByKey.set(k, (stockByKey.get(k) ?? 0) + Number(r.qty_remaining ?? 0));
-        }
-      }
-
-      // Group sofa lines per SO set (within a warehouse) for the all-or-nothing
-      // readiness decision; a set is one PO = one batch.
+      // Group sofa lines into per-SO sets (within a warehouse).
       const setLines = new Map<string, SofaLineRec[]>(); // key = `${wh}|${docNo}`
       for (const s of sofaLineRecs) {
         const key = `${s.whId ?? WH_NONE}|${s.doc_no}`;
         const arr = setLines.get(key) ?? [];
         arr.push(s); setLines.set(key, arr);
       }
-      for (const group of setLines.values()) {
-        // READY only when every line has a bound batch + a warehouse + enough of
-        // its own module on hand in that batch.
-        let ready = true;
+      // Walk sets in allocation priority so a single covering batch goes to the
+      // highest-priority SO first, then is decremented before lower-priority sets.
+      const orderedSets = [...setLines.values()].sort((ga, gb) => {
+        const a = ga[0]!; const b = gb[0]!;
+        const A = orderByDoc.get(a.doc_no); const B = orderByDoc.get(b.doc_no);
+        const ad = A?.customer_delivery_date ?? FAR_FUTURE;
+        const bd = B?.customer_delivery_date ?? FAR_FUTURE;
+        if (ad !== bd) return ad.localeCompare(bd);
+        return a.doc_no.localeCompare(b.doc_no);
+      });
+      for (const group of orderedSets) {
+        const whId = group[0]!.whId;
+        const lines = group.map((s) => ({ itemCode: s.item_code, variantKey: s.variant_key, need: s.need }));
+        const batch = findCoveringBatch(whId, lines, sofaStock);
+        if (batch && whId) claimSofaBatch(whId, batch, lines, sofaStock);
         for (const s of group) {
-          const batch = batchBySoLine.get(s.id) ?? null;
-          if (!batch || s.whId == null) { ready = false; continue; }
-          const have = stockByKey.get(`${s.whId}|${batch}|${s.item_code}|${s.variant_key}`) ?? 0;
-          if (have < s.need) ready = false;
-        }
-        for (const s of group) {
-          batchTargetByLine.set(s.id, batchBySoLine.get(s.id) ?? null);
-          targetById.set(s.id, ready ? { status: 'READY', qtyReady: s.need } : { status: 'PENDING', qtyReady: 0 });
+          batchTargetByLine.set(s.id, batch);
+          targetById.set(s.id, batch ? { status: 'READY', qtyReady: s.need } : { status: 'PENDING', qtyReady: 0 });
         }
       }
     }

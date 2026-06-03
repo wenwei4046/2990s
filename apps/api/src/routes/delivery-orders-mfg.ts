@@ -21,6 +21,7 @@ import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { syncSoDeliveredFromDo } from '../lib/so-delivery-sync';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { checkStockAvailability, shortStockResponse } from '../lib/check-stock-availability';
+import { findSofaLinesWithoutCompleteBatch, sofaNoCompleteBatchResponse, findIncompleteSofaSets, sofaIncompleteSetResponse } from '../lib/sofa-batch-guard';
 import { currentDocNoByKey, type CurrentEvent } from '../lib/current-doc';
 
 export const deliveryOrdersMfg = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -1368,6 +1369,23 @@ deliveryOrdersMfg.post('/', async (c) => {
     }
   }
 
+  /* Sofa batch guard (Wei Siang 2026-06-01) — a sofa set with NO production PO
+     has no dye-lot batch; shipping it would pull another order's colour lot.
+     Block here (applies even to a force-grab: confirmShortStock waives the soft
+     stock check, NOT the no-batch rule). Non-sofa lines pass untouched. */
+  if (items.length > 0) {
+    const sofaOffenders = await findSofaLinesWithoutCompleteBatch(sb, items.map((it) => ({
+      itemCode: String(it.itemCode ?? ''),
+      itemGroup: (it.itemGroup as string | null) ?? null,
+      soItemId: (it.soItemId as string | null) ?? null,
+    })));
+    if (sofaOffenders.length > 0) return c.json(sofaNoCompleteBatchResponse(sofaOffenders), 409);
+    /* Type B — a sofa set must ship WHOLE from one batch. Block a DO that takes
+       only part of an SO's sofa set and leaves the rest behind (orphan dye lot). */
+    const partial = await findIncompleteSofaSets(sb, items.map((it) => (it.soItemId as string | null) ?? null));
+    if (partial.length > 0) return c.json(sofaIncompleteSetResponse(partial), 409);
+  }
+
   const doNumber = await nextNum(sb);
 
   const phoneRaw = (body.phone as string | undefined) ?? null;
@@ -1571,6 +1589,21 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
     .map((id) => remainingMap.get(id)!)
     .sort((a, b) => a.docNo.localeCompare(b.docNo) || a.soItemId.localeCompare(b.soItemId));
   const firstSoDocNo = sortedPicks[0]!.docNo;
+
+  /* Sofa batch guard — block any picked sofa line with no production PO (no
+     dye-lot batch ⇒ would steal another order's colour lot). Applies even to a
+     force-grab (confirmShortStock waives soft stock, NOT the no-batch rule). */
+  {
+    const sofaOffenders = await findSofaLinesWithoutCompleteBatch(sb, sortedPicks.map((line) => ({
+      itemCode: line.itemCode,
+      itemGroup: line.itemGroup ?? null,
+      soItemId: line.soItemId,
+    })));
+    if (sofaOffenders.length > 0) return c.json(sofaNoCompleteBatchResponse(sofaOffenders), 409);
+    /* Type B — whole sofa set must ship together (no partial set / orphan). */
+    const partial = await findIncompleteSofaSets(sb, sortedPicks.map((line) => line.soItemId));
+    if (partial.length > 0) return c.json(sofaIncompleteSetResponse(partial), 409);
+  }
 
   // Edge #1+#2 — soft stock check at the target warehouse, gated by
   // confirmShortStock. Returns 409 short_stock with cross-warehouse alternatives
@@ -1831,6 +1864,27 @@ deliveryOrdersMfg.post('/:id/items', async (c) => {
         }, 409);
       }
     }
+  }
+
+  /* Sofa batch guard — a sofa line with no production PO has no dye-lot batch
+     and must not ship (would pull another order's colour lot). */
+  {
+    const sofaOffenders = await findSofaLinesWithoutCompleteBatch(sb, [{
+      itemCode: String(it.itemCode ?? ''),
+      itemGroup: (it.itemGroup as string | null) ?? null,
+      soItemId: (it.soItemId as string | null) ?? null,
+    }]);
+    if (sofaOffenders.length > 0) return c.json(sofaNoCompleteBatchResponse(sofaOffenders), 409);
+    /* Type B — after this add, the DO must hold the SO's WHOLE sofa set, not a
+       partial one. Combine the DO's existing SO links with the new line. */
+    const { data: existingDoLines } = await sb
+      .from('delivery_order_items').select('so_item_id').eq('delivery_order_id', id);
+    const soIds = [
+      ...((existingDoLines ?? []) as Array<{ so_item_id: string | null }>).map((r) => r.so_item_id),
+      (it.soItemId as string | null) ?? null,
+    ];
+    const partial = await findIncompleteSofaSets(sb, soIds);
+    if (partial.length > 0) return c.json(sofaIncompleteSetResponse(partial), 409);
   }
 
   const row = buildItemRow(id, it);
