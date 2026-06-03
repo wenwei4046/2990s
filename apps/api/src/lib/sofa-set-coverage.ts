@@ -52,20 +52,25 @@ export async function loadSofaBatchStock(
   const remaining = new Map<string, number>();
   const receivedAt = new Map<string, string>();
   const batches = new Set<string>();
-  const uniq = [...new Set(codes.filter(Boolean))];
-  if (uniq.length === 0) return { remaining, receivedAt, batches };
+  const wanted = new Set(codes.filter(Boolean));
+  if (wanted.size === 0) return { remaining, receivedAt, batches };
 
-  const { data: lots } = await sb
+  // Only sofa lots carry a batch_no, so "batched + open" is already the small
+  // sofa-only slice. We deliberately do NOT filter product_code via .in() here:
+  // sofa codes contain parentheses (e.g. BOOQIT-1A(LHF)) which break PostgREST's
+  // in.(...) list syntax and silently return zero rows. Filter codes in JS.
+  const { data: lots, error } = await sb
     .from('v_inventory_lots_open')
     .select('warehouse_id, product_code, variant_key, batch_no, qty_remaining, received_at')
-    .in('product_code', uniq)
     .not('batch_no', 'is', null)
     .gt('qty_remaining', 0);
+  if (error) return { remaining, receivedAt, batches };
 
   for (const r of (lots ?? []) as Array<{
     warehouse_id: string; product_code: string; variant_key: string | null;
     batch_no: string; qty_remaining: number; received_at: string | null;
   }>) {
+    if (!wanted.has(r.product_code)) continue;
     const v = r.variant_key ?? '';
     const k = sofaStockKey(r.warehouse_id, r.batch_no, r.product_code, v);
     remaining.set(k, (remaining.get(k) ?? 0) + Number(r.qty_remaining ?? 0));
