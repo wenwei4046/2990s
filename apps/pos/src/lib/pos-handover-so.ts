@@ -214,6 +214,9 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     // rule, and enforces the Model's allowed fabric pool. fabricId stays the
     // series ('CG') that drives the SELLING tier add-on.
     if (config.colourId)        v.fabricCode = config.colourId;
+    // Sofa leg height (Loo 2026-06-03) — server prices it from the sofaLegHeights
+    // SELLING pool + gates it against the Model's leg_heights (allowed_options).
+    if (config.sofaLegHeight)   v.sofaLegHeight = config.sofaLegHeight;
     // PWP Code Voucher (Phase 2) — sofa redeemed at its combo PWP price. The
     // server re-matches the build vs the code's reward combos + marks it USED.
     if (config.pwp) {

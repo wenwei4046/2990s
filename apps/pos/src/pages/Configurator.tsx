@@ -21,15 +21,17 @@ import {
   useFabricTierAddonConfig,
   useAddons,
   useBedframeColours,
-  useBedframeOptions,
+  useBedframeCustomizerData,
   useSofaCustomizerData,
   useSofaCustomizerRealtime,
+  useSofaLegHeights,
   useSofaCombos,
   useSofaQuickPicks,
   useSofaQuickPicksRealtime,
   useDeleteSofaQuickPick,
   type AddonRow,
   type ProductFabricRow,
+  type BedframeOptionRow,
 } from '../lib/queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useMyQuickPicks, useDeletePersonalQuickPick } from '../lib/personal-quick-picks';
@@ -44,6 +46,7 @@ import { CustomBuilder } from './CustomBuilder';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import {
   BedframeOptions,
+  OptionSelect,
   emptyBedframeSelection,
   bedframeSurcharge,
   addonSurchargeRM,
@@ -294,6 +297,12 @@ export const Configurator = () => {
    * Backend edits without a refresh. */
   const sofaCustomizer = useSofaCustomizerData(productId);
   useSofaCustomizerRealtime(productId);
+  // Sofa leg height (Loo 2026-06-03) — options + SELLING price from the master
+  // sofaLegHeights pool ∩ this Model's allowed_options.leg_heights. Lifted here
+  // so it survives the Quick Pick ⇄ Customize toggle (like sofaSpecialSel) and
+  // both modes' rails + all three add paths read one source.
+  const sofaLegOpts = useSofaLegHeights(productId);
+  const [sofaLegValue, setSofaLegValue] = useState<string | null>(null);
 
   const [picked, setPicked] = useState<string | null>(null);
   // Saved Quick Pick selection — mutually exclusive with `picked` (bundle).
@@ -406,7 +415,7 @@ export const Configurator = () => {
   // Query dedupes). The parent needs them to rebuild bfSel labels + surcharges
   // when editing a bedframe line.
   const bedframeColours = useBedframeColours(productId);
-  const bedframeOptions = useBedframeOptions();
+  const bedframeOptions = useBedframeCustomizerData(productId);
   // Special Add-ons (migration 0134) — the Model's allowed codes ∩ the active
   // BEDFRAME add-ons. Drives the BedframeOptions picker + edit-hydration. These
   // hooks MUST stay above the `if (product.isLoading) return` guard below
@@ -461,6 +470,7 @@ export const Configurator = () => {
     setUsePwp(false);
     setInsertCodeInput(''); setInsertedCode(null); setInsertedCodeType('pwp'); setInsertErr(null);
     setSofaPwpInput(''); setSofaPwpCode(null); setSofaPwpComboIds([]); setSofaPwpErr(null);
+    setSofaLegValue(null);
   }, [productId]);
   const pwpEval = useMemo(() => {
     const rules = pwpRulesQ.data ?? [];
@@ -694,6 +704,7 @@ export const Configurator = () => {
         const choices = cfg.specialChoices?.[code] ?? [];
         return { id: code, label: addon?.label ?? cfg.specialLabels?.[i] ?? code, surcharge: addon ? specialSelSurchargeRM(addon, choices) : 0, choices };
       }));
+      setSofaLegValue(cfg.sofaLegHeight ?? null);
       hydratedRef.current = true;
     }
   }, [isEditing, editingLine, bedframeColours.data, bedframeOptions.data,
@@ -1236,9 +1247,24 @@ export const Configurator = () => {
     ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data)
     : 0;
   const sofaSpecialDelta = specialSelsSurcharge(sofaSpecialSel);
+  // Sofa leg height — reuse the bedframe OptionSelect (same look). Options come
+  // from the allowed ∩ priced pool; the chosen value's surcharge folds into the
+  // live total + each cart line; the server reprices it from sofaLegHeights.
+  const sofaLegRows: BedframeOptionRow[] = (sofaLegOpts.data ?? []).map((o, i) => ({
+    id: o.value, kind: 'leg_height', value: o.value, surcharge: o.surcharge, sortOrder: i,
+  }));
+  const sofaLegSurcharge = sofaLegRows.find((o) => o.value === sofaLegValue)?.surcharge ?? 0;
+  const sofaLegBlock = sofaLegRows.length > 0 ? (
+    <OptionSelect
+      label="Leg height"
+      opts={sofaLegRows}
+      selectedId={sofaLegValue}
+      onPick={(o) => setSofaLegValue(o.value)}
+    />
+  ) : null;
   const sofaTotal = (pickedQP
     ? qpPickPrice + sofaFabricDelta
-    : (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? sofaFabricDelta : 0)) + sofaSpecialDelta;
+    : (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? sofaFabricDelta : 0)) + sofaSpecialDelta + sofaLegSurcharge;
 
   // Sofas require a fabric + colour before Add-to-Cart (G6).
   const canAddSofa =
@@ -1273,7 +1299,8 @@ export const Configurator = () => {
         specialLabels: sofaSpecialSel.map((s) => s.label),
         specialChoices: Object.fromEntries(sofaSpecialSel.map((s) => [s.id, s.choices ?? []])),
       } : {}),
-      total: pickedSofaRow.price + sofaFabricDelta + sofaSpecialDelta,
+      ...(sofaLegValue ? { sofaLegHeight: sofaLegValue } : {}),
+      total: pickedSofaRow.price + sofaFabricDelta + sofaSpecialDelta + sofaLegSurcharge,
       summary: lShape
         ? `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${quickFlip}-facing · ${activeDepth}"${fabricSuffix}`
         : `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${activeDepth}"${fabricSuffix}`,
@@ -1315,7 +1342,8 @@ export const Configurator = () => {
         specialLabels: sofaSpecialSel.map((s) => s.label),
         specialChoices: Object.fromEntries(sofaSpecialSel.map((s) => [s.id, s.choices ?? []])),
       } : {}),
-      total: qpPickPrice + sofaFabricDelta + sofaSpecialDelta,
+      ...(sofaLegValue ? { sofaLegHeight: sofaLegValue } : {}),
+      total: qpPickPrice + sofaFabricDelta + sofaSpecialDelta + sofaLegSurcharge,
       summary: `${label} · ${activeDepth}"${fabricSuffix}`,
     };
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
@@ -1656,6 +1684,7 @@ export const Configurator = () => {
             specialAddonsBlock={
               <SpecialAddonsPicker addons={sofaSpecialAddons} value={sofaSpecialSel} onChange={setSofaSpecialSel} />
             }
+            legBlock={sofaLegBlock}
           />
         ) : (
           <CustomBuilder
@@ -1671,6 +1700,9 @@ export const Configurator = () => {
             initialFabric={isEditing ? fabricSel : null}
             modelCustomizer={modelCustomizerForDepth}
             baseModel={p.base_model ?? undefined}
+            legBlock={sofaLegBlock}
+            legHeight={sofaLegValue}
+            legSurchargeRm={sofaLegSurcharge}
             onAdded={() => navigate(isEditing ? '/cart' : '/catalog')}
           />
         )
@@ -2154,6 +2186,8 @@ interface SofaQuickPickProps {
   fabricBlock?: React.ReactNode;
   /** Special Add-ons picker (migration 0134), rendered in the rail below fabric. */
   specialAddonsBlock?: React.ReactNode;
+  /** Sofa leg-height picker (Loo 2026-06-03), rendered in the rail under fabric. */
+  legBlock?: React.ReactNode;
   /** Global Quick Picks (Master-Admin-curated, shared). */
   globalQuickPicks?: QuickPickItem[];
   /** This salesperson's personal Quick Picks ("Yours", per-device). */
@@ -2287,7 +2321,7 @@ const heroAnchorStyle = (
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
-const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, specialAddonsBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
+const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, specialAddonsBlock, legBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
   // Hide bundles not activated for this Model. The productSchema refine
   // guarantees ≥1 active+priced bundle exists for every sofa SKU.
   const activeRows = useMemo(
@@ -2492,6 +2526,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
         ))}
         {fabricBlock}
         {specialAddonsBlock}
+        {legBlock}
       </aside>
 
       <section className={styles.qpHero}>

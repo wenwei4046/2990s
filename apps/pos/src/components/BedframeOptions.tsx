@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
-import { useBedframeColours, useBedframeOptions, type BedframeOptionRow, type SpecialAddonRow } from '../lib/queries';
+import { useBedframeColours, useBedframeCustomizerData, type BedframeOptionRow, type SpecialAddonRow } from '../lib/queries';
 import styles from './BedframeOptions.module.css';
 
 // Special Add-ons price in SEN; bedframe surcharges are RM. base + Σ chosen
@@ -78,7 +78,9 @@ export interface BedframeOptionsProps {
 // specials remain a multi-select chip row.
 export const BedframeOptions = ({ productId, isDivan, value, onChange, fabricBlock, specialAddons = [] }: BedframeOptionsProps) => {
   const colours = useBedframeColours(productId);
-  const options = useBedframeOptions();
+  // Gap/leg/divan pool = master maintenance config ∩ this Model's allowed_options
+  // (Modular ON/OFF ticks), priced from the POS Master-Admin selling surcharge.
+  const options = useBedframeCustomizerData(productId);
 
   const byKind = useMemo(() => {
     const m: Record<string, BedframeOptionRow[]> = {
@@ -249,7 +251,9 @@ interface OptionSelectProps {
 }
 
 // Single-select dropdown for one dimension option kind (gap / leg / divan).
-const OptionSelect = ({ label, required, opts, selectedId, onPick }: OptionSelectProps) => (
+// Exported so the sofa configurator can reuse the IDENTICAL control for its
+// leg-height picker (Loo 2026-06-03) — same look, no new CSS.
+export const OptionSelect = ({ label, required, opts, selectedId, onPick }: OptionSelectProps) => (
   <div className={styles.row}>
     <span className={styles.rowLabel}>
       {label} {required && <span className={styles.req}>Required</span>}

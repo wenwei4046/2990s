@@ -592,6 +592,147 @@ export const useBedframeOptions = () =>
     },
   });
 
+/* Bedframe option pool for the configurator — UNIFIED on the master
+ * maintenance config (the POS Master-Admin "Special Add-ons" pool) ∩ the
+ * Model's allowed_options (the Modular drawer ON/OFF ticks). Replaces the old
+ * global `bedframe_options` table read so that:
+ *   • turning an option off in Modular actually removes it from the picker, and
+ *   • the SELLING surcharge comes from the SAME source the server prices from
+ *     (maintenance_config option `sellingPriceSen` → computeMfgLinePrice), so
+ *     POS live total == server authoritative selling (no drift 400).
+ * Mirrors useSofaCustomizerData. gaps carry NO price (string pool); leg/divan
+ * surcharge (RM) = sellingPriceSen / 100. Backend-owned `priceSen` is COST and
+ * is never read here (it never reaches the buyer). Empty allowed pool = no
+ * restriction (show every master option) — matches the server's allowed-options
+ * rule. Returns the SAME BedframeOptionRow[] shape as useBedframeOptions with
+ * `id = value` so the configurator's byKind grouping + edit-hydration are
+ * unchanged. Legacy (non-mfg) products have no Model link → no restriction. */
+type CfgPricedOption = { value: string; priceSen?: number; sellingPriceSen?: number };
+
+export const useBedframeCustomizerData = (productId: string | undefined) =>
+  useQuery({
+    enabled: !!productId,
+    queryKey: ['bedframe-customizer-data', productId],
+    staleTime: 30_000,
+    queryFn: async (): Promise<BedframeOptionRow[]> => {
+      if (!productId) return [];
+
+      // Per-Model allowed_options (mfg products only; legacy UUID products have
+      // no Model link → empty = no restriction, same as the old global pool).
+      let allowed: { gaps?: string[]; leg_heights?: string[]; divan_heights?: string[] } = {};
+      if (productId.startsWith('mfg-')) {
+        const { data, error } = await supabase
+          .from('mfg_products')
+          .select('product_models:model_id ( allowed_options )')
+          .eq('id', productId)
+          .maybeSingle();
+        if (error) throw error;
+        const modelRel = (data as { product_models?: { allowed_options?: typeof allowed } | null } | null)
+          ?.product_models;
+        allowed = modelRel?.allowed_options ?? {};
+      }
+
+      // Master maintenance config = the POS Master-Admin Special Add-ons pool.
+      const { data: cfgRow, error: cfgErr } = await supabase
+        .from('maintenance_config_history')
+        .select('config')
+        .eq('scope', 'master')
+        .lte('effective_from', new Date().toISOString().slice(0, 10))
+        .order('effective_from', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (cfgErr) throw cfgErr;
+      const cfg = (cfgRow?.config ?? {}) as {
+        gaps?: Array<string | CfgPricedOption>;
+        legHeights?: CfgPricedOption[];
+        divanHeights?: CfgPricedOption[];
+      };
+
+      const rows: BedframeOptionRow[] = [];
+      let order = 0;
+      const gate = (pool: string[] | undefined) =>
+        (pool?.length ?? 0) > 0 ? new Set(pool) : null;
+
+      // gaps — plain strings, NO surcharge (gap has no price contribution).
+      const gapAllow = gate(allowed.gaps);
+      for (const g of cfg.gaps ?? []) {
+        const value = typeof g === 'string' ? g : g?.value;
+        if (!value || (gapAllow && !gapAllow.has(value))) continue;
+        rows.push({ id: value, kind: 'gap', value, surcharge: 0, sortOrder: order++ });
+      }
+
+      // leg_height / divan_height — surcharge (RM) = sellingPriceSen / 100.
+      const pushPriced = (
+        list: CfgPricedOption[] | undefined,
+        kind: 'leg_height' | 'divan_height',
+        pool: string[] | undefined,
+      ) => {
+        const allow = gate(pool);
+        for (const o of list ?? []) {
+          if (!o?.value || (allow && !allow.has(o.value))) continue;
+          rows.push({
+            id: o.value, kind, value: o.value,
+            surcharge: Math.round(o.sellingPriceSen ?? 0) / 100,
+            sortOrder: order++,
+          });
+        }
+      };
+      pushPriced(cfg.legHeights, 'leg_height', allowed.leg_heights);
+      pushPriced(cfg.divanHeights, 'divan_height', allowed.divan_heights);
+
+      return rows;
+    },
+  });
+
+export interface SofaLegOption { value: string; surcharge: number }
+
+/* Sofa leg-height options for the configurator — the master maintenance
+ * `sofaLegHeights` pool (set + priced in POS Master-Admin → Special Add-ons,
+ * sellingPriceSen) ∩ the Model's `allowed_options.leg_heights` (Modular ON/OFF
+ * ticks). Mirrors the bedframe customizer; the server prices the SAME pool via
+ * computeMfgLinePrice(sofaLegHeights) + gates sofaLegHeight against leg_heights,
+ * so POS and server stay in lockstep. surcharge (RM) = sellingPriceSen / 100.
+ * Empty allowed pool = no restriction; legacy (non-mfg) = no restriction. */
+export const useSofaLegHeights = (productId: string | undefined) =>
+  useQuery({
+    enabled: !!productId,
+    queryKey: ['sofa-leg-heights', productId],
+    staleTime: 30_000,
+    queryFn: async (): Promise<SofaLegOption[]> => {
+      if (!productId) return [];
+
+      let allowedLegs: string[] | null = null;
+      if (productId.startsWith('mfg-')) {
+        const { data, error } = await supabase
+          .from('mfg_products')
+          .select('product_models:model_id ( allowed_options )')
+          .eq('id', productId)
+          .maybeSingle();
+        if (error) throw error;
+        const pool = (data as { product_models?: { allowed_options?: { leg_heights?: string[] } } | null } | null)
+          ?.product_models?.allowed_options?.leg_heights;
+        allowedLegs = (pool?.length ?? 0) > 0 ? pool! : null;
+      }
+
+      const { data: cfgRow, error: cfgErr } = await supabase
+        .from('maintenance_config_history')
+        .select('config')
+        .eq('scope', 'master')
+        .lte('effective_from', new Date().toISOString().slice(0, 10))
+        .order('effective_from', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (cfgErr) throw cfgErr;
+      const list = ((cfgRow?.config ?? {}) as { sofaLegHeights?: CfgPricedOption[] }).sofaLegHeights ?? [];
+      const gate = allowedLegs ? new Set(allowedLegs) : null;
+      return list
+        .filter((o) => o?.value && (!gate || gate.has(o.value)))
+        .map((o) => ({ value: o.value, surcharge: Math.round(o.sellingPriceSen ?? 0) / 100 }));
+    },
+  });
+
 /** Maps HOOKKA mfg_products.size_code → size_library.id (seeded in seed-libraries.sql).
  *  Only the 4 standard bed sizes have library entries at MVP; SK/SP/7FT etc. are ignored
  *  until size_library is extended to include them. */

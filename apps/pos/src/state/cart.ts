@@ -30,6 +30,10 @@ export interface SofaConfigSnapshot {
   /** Per-item fabric-tier SELLING add-on (whole MYR, migration 0124) already
    *  folded into `total`. Stored so the cart/handover can show it as a sub-line. */
   fabricTierDelta?: number;
+  /** Chosen sofa leg height (the option VALUE, e.g. '6"'/'No Leg'; Loo 2026-06-03).
+   *  Sent as variants.sofaLegHeight → server prices it from sofaLegHeights selling
+   *  + gates it against the Model's leg_heights. Any surcharge is folded into `total`. */
+  sofaLegHeight?: string | null;
   // Special Add-ons (migration 0134): codes (sent as variants.specials → server
   // prices from special_addons + gates) + chosen option-group labels + display.
   specialIds?: string[];

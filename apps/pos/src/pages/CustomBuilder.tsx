@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type CSSProperties, type Dispatch, type PointerEvent, type SetStateAction } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type CSSProperties, type Dispatch, type PointerEvent, type ReactNode, type SetStateAction } from 'react';
 import { Trash2, RotateCw, Eraser, Maximize2, Minimize2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, fabricTierAddon, type FabricTier } from '@2990s/shared';
@@ -246,6 +246,12 @@ interface CustomBuilderProps {
    *  it only appears in Quick Pick for this exact sofa Model. Empty/absent
    *  = wildcard (shows for all models). */
   baseModel?: string;
+  /** Sofa leg-height (Loo 2026-06-03): the parent owns the state so the SAME
+   *  picker shows in Quick Pick + Customize. `legBlock` is rendered in this
+   *  rail; `legHeight`/`legSurchargeRm` feed each split group's snapshot + total. */
+  legBlock?: ReactNode;
+  legHeight?: string | null;
+  legSurchargeRm?: number;
 }
 
 // Cell ids must survive HMR (which resets module locals) and a future cells-
@@ -269,7 +275,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, pwpCode = null, pwpComboIds = [] }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, legBlock, legHeight = null, legSurchargeRm = 0, pwpCode = null, pwpComboIds = [] }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -870,7 +876,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         colourHex: fabricSel?.colourHex ?? undefined,
         fabricTierDelta: sofaFabricDelta,
         ...(isPwpGroup && pwpCode ? { pwp: true, pwpCode } : {}),
-        total: g.finalPrice + sofaFabricDelta,
+        ...(legHeight ? { sofaLegHeight: legHeight } : {}),
+        total: g.finalPrice + sofaFabricDelta + legSurchargeRm,
         summary,
       };
       addConfigured(snapshot, !usedEditKey && editingKey ? { editingKey } : undefined);
@@ -1071,6 +1078,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           addonConfig={addonCfgQ.data ?? null}
           enabledColourIds={productId?.startsWith('mfg-') ? fabricCodes : null}
         />
+        {legBlock}
       </aside>
 
       <section className={styles.canvasCol}>
@@ -1597,7 +1605,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         <footer className={styles.priceBar}>
           <div>
             <span className="t-eyebrow">{allClosed && cells.length > 0 ? 'Total' : 'Provisional'}</span>
-            <PriceTag amount={priceResult.total + sofaFabricDelta * priceResult.groups.length} size="lg" />
+            <PriceTag amount={priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length} size="lg" />
             {/* Combo cue (HOOKKA parity) — when any group priced via a combo,
                 show the savings the combo gave over the matched subset's own
                 à-la-carte sum. Extra modules outside the combo subset stay at
