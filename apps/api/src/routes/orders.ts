@@ -107,7 +107,13 @@ orders.post('/', async (c) => {
   type EmptyResult<T> = { data: T[]; error: null };
   const emptyResult = <T>(): EmptyResult<T> => ({ data: [] as T[], error: null });
 
-  const [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes, fabricsRes, fabricColoursRes, bedframeColoursRes, productBedframeColoursRes, bedframeOptionsRes] = await Promise.all([
+  // NOTE: the product_bundles fetch was removed 2026-06-04 — the table was
+  // emptied when the legacy retail sofa layer was retired (live sofa pricing
+  // is mfg module SKUs + sofa_combo_pricing; see the mfg branch below, which
+  // maps combos into ServerProductInfo.sofa.bundles). Legacy sofa lines now
+  // always price without a bundle substitute, and a legacy bundleId line
+  // rejects as inactive_bundle — identical to reading the empty table.
+  const [productsRes, compartmentsRes, sizesRes, addonsRes, deliveryCfgRes, fabricsRes, fabricColoursRes, bedframeColoursRes, productBedframeColoursRes, bedframeOptionsRes] = await Promise.all([
     legacyProductIds.length > 0
       ? supabase
           .from('products')
@@ -120,12 +126,6 @@ orders.post('/', async (c) => {
           .select('product_id, compartment_id, active, price')
           .in('product_id', legacyProductIds)
       : Promise.resolve(emptyResult<{ product_id: string; compartment_id: string; active: boolean; price: number }>()),
-    legacyProductIds.length > 0
-      ? supabase
-          .from('product_bundles')
-          .select('product_id, bundle_id, active, price')
-          .in('product_id', legacyProductIds)
-      : Promise.resolve(emptyResult<{ product_id: string; bundle_id: string; active: boolean; price: number }>()),
     legacyProductIds.length > 0
       ? supabase
           .from('product_size_variants')
@@ -183,7 +183,7 @@ orders.post('/', async (c) => {
       .select('id, surcharge, active'),
   ]);
 
-  for (const r of [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes, fabricsRes, fabricColoursRes, bedframeColoursRes, productBedframeColoursRes, bedframeOptionsRes]) {
+  for (const r of [productsRes, compartmentsRes, sizesRes, addonsRes, deliveryCfgRes, fabricsRes, fabricColoursRes, bedframeColoursRes, productBedframeColoursRes, bedframeOptionsRes]) {
     if (r.error) return c.json({ error: 'pricing_fetch_failed', reason: r.error.message }, 500);
   }
 
@@ -231,7 +231,6 @@ orders.post('/', async (c) => {
     }
   }
   const compartments = compartmentsRes.data ?? [];
-  const bundles = bundlesRes.data ?? [];
   // Per-Model fabric rows + a fabric→active-colour-ids map for the recompute.
   const productFabrics = fabricsRes.data ?? [];
   const activeColourIdsByFabric = new Map<string, string[]>();
@@ -294,9 +293,8 @@ orders.post('/', async (c) => {
         compartments: compartments
           .filter((r) => r.product_id === p.id)
           .map((r) => ({ compartmentId: r.compartment_id, active: r.active, price: r.price })),
-        bundles: bundles
-          .filter((r) => r.product_id === p.id)
-          .map((r) => ({ bundleId: r.bundle_id, active: r.active, price: r.price })),
+        bundles: [],  // legacy whole-unit bundles retired 2026-06-04
+
         fabrics: productFabrics
           .filter((r) => r.product_id === p.id)
           .map((r) => ({
