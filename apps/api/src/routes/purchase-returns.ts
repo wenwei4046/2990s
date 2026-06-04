@@ -826,6 +826,18 @@ purchaseReturns.patch('/:id', async (c) => {
 });
 
 /* ── POST /:id/items — add one purchase_return_item. qty → qty_returned. ── */
+/* A CANCELLED / COMPLETED purchase return is terminal — its line CRUD now moves
+   real inventory (writePrLineDeltaMovement), so editing a reversed PR would
+   re-corrupt stock against an already-released returned_qty. Lock line edits to
+   ACTIVE returns. */
+async function prLineLock(sb: any, prId: string): Promise<{ error: string; message: string } | null> {
+  const { data } = await sb.from('purchase_returns').select('status').eq('id', prId).maybeSingle();
+  const st = (data as { status: string } | null)?.status;
+  if (st === 'CANCELLED') return { error: 'pr_cancelled', message: 'This purchase return is cancelled — its lines can no longer be changed.' };
+  if (st === 'COMPLETED') return { error: 'pr_completed', message: 'This purchase return is completed — its lines can no longer be changed.' };
+  return null;
+}
+
 purchaseReturns.post('/:id/items', async (c) => {
   const prId = c.req.param('id');
   let it: Record<string, unknown>;
@@ -834,6 +846,7 @@ purchaseReturns.post('/:id/items', async (c) => {
   if (!it.materialName) return c.json({ error: 'material_name_required' }, 400);
 
   const sb = c.get('supabase');
+  { const lock = await prLineLock(sb, prId); if (lock) return c.json(lock, 409); }
   const qtyReturned = Number(it.qty ?? 1);
   const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
   const lineRefund = qtyReturned * unitPriceCenti;
@@ -951,6 +964,7 @@ purchaseReturns.patch('/:id/items/:itemId', async (c) => {
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const sb = c.get('supabase');
+  { const lock = await prLineLock(sb, prId); if (lock) return c.json(lock, 409); }
 
   const { data: prev } = await sb.from('purchase_return_items')
     .select('qty_returned, unit_price_centi, item_group, variants, grn_item_id, material_code, material_name')
@@ -1042,6 +1056,7 @@ purchaseReturns.patch('/:id/items/:itemId', async (c) => {
 purchaseReturns.delete('/:id/items/:itemId', async (c) => {
   const prId = c.req.param('id'); const itemId = c.req.param('itemId');
   const sb = c.get('supabase');
+  { const lock = await prLineLock(sb, prId); if (lock) return c.json(lock, 409); }
   // Read the line first so we can release its GRN-line consumption on delete.
   const { data: line } = await sb.from('purchase_return_items')
     .select('qty_returned, grn_item_id, material_code, material_name, item_group, variants').eq('id', itemId).maybeSingle();
