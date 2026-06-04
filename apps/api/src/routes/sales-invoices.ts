@@ -25,7 +25,7 @@ import type { Env, Variables } from '../env';
 import { postSiRevenue, reverseSiRevenue, resyncSiRevenue } from '../lib/post-si-revenue';
 import { doLineRemaining, doRemainingByItemId, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
-import { applyCustomerCreditToSi, creditFromCancelledSi, getCustomerCreditBalance, reconcileSiOverpay } from '../lib/customer-credits';
+import { applyCustomerCreditToSi, creditFromCancelledSi, reverseCancelledSiCredit, getCustomerCreditBalance, reconcileSiOverpay } from '../lib/customer-credits';
 
 export const salesInvoices = new Hono<{ Bindings: Env; Variables: Variables }>();
 salesInvoices.use('*', supabaseAuth);
@@ -687,8 +687,13 @@ salesInvoices.post('/:id/items', async (c) => {
     if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
   }
 
-  const { data: header } = await sb.from('sales_invoices').select('id, invoice_number').eq('id', id).maybeSingle();
+  const { data: header } = await sb.from('sales_invoices').select('id, invoice_number, status').eq('id', id).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
+  /* A cancelled invoice is closed — adding a line would (via resync) re-post
+     phantom revenue onto the GL. Reject. (Wei Siang 2026-06-03) */
+  if (((header as { status: string }).status ?? '').toUpperCase() === 'CANCELLED') {
+    return c.json({ error: 'invoice_cancelled', message: 'This invoice is cancelled — reopen it before adding lines.' }, 409);
+  }
 
   /* Remaining-to-invoice guard for a DO-linked line. */
   {
@@ -714,6 +719,14 @@ salesInvoices.patch('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  /* Cancelled invoice is closed — editing a line would re-post phantom revenue. */
+  {
+    const { data: hd } = await sb.from('sales_invoices').select('status').eq('id', id).maybeSingle();
+    if (hd && ((hd as { status: string }).status ?? '').toUpperCase() === 'CANCELLED') {
+      return c.json({ error: 'invoice_cancelled', message: 'This invoice is cancelled — reopen it before editing lines.' }, 409);
+    }
+  }
 
   /* Edge #4 — itemCode catalog guard (only when caller is changing it). */
   if (it.itemCode !== undefined) {
@@ -775,6 +788,13 @@ salesInvoices.patch('/:id/items/:itemId', async (c) => {
 
 salesInvoices.delete('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
+  /* Cancelled invoice is closed — mutating lines would desync the reversed GL. */
+  {
+    const { data: hd } = await sb.from('sales_invoices').select('status').eq('id', id).maybeSingle();
+    if (hd && ((hd as { status: string }).status ?? '').toUpperCase() === 'CANCELLED') {
+      return c.json({ error: 'invoice_cancelled', message: 'This invoice is cancelled — reopen it before deleting lines.' }, 409);
+    }
+  }
   const { error } = await sb.from('sales_invoice_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
@@ -1024,6 +1044,34 @@ salesInvoices.patch('/:id/status', async (c) => {
         // eslint-disable-next-line no-console
         console.error(`[customer-credit] credit-from-cancel failed for ${d.invoice_number}:`, e);
       }
+    }
+  }
+
+  /* Reverse the cancel on REOPEN (CANCELLED → SENT). Cancel reversed the revenue
+     JE and handed the paid amount to the customer as a credit; reopen makes the
+     invoice live + payable again (payments ledger restores paid_centi), so we must
+     (1) re-post the revenue JE, and (2) claw back the cancel-refund credit — else
+     the GL shows zero revenue on a live invoice AND the customer is credited
+     twice. Best-effort + idempotent (mirrors the cancel path). (Wei Siang 2026-06-03) */
+  if (isReopen) {
+    const d = data as { invoice_number: string; debtor_code: string | null; debtor_name: string | null };
+    const post = await postSiRevenue(sb, d.invoice_number);
+    if (!post.ok) {
+      // eslint-disable-next-line no-console
+      console.error(`[si-revenue] re-post on reopen failed for ${d.invoice_number}:`, post.status, (post as { reason?: string }).reason);
+    }
+    try {
+      const user = c.get('user');
+      await reverseCancelledSiCredit(sb, {
+        siId: id,
+        siNumber: d.invoice_number,
+        debtorCode: d.debtor_code,
+        debtorName: d.debtor_name,
+        createdBy: user?.id,
+      });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(`[customer-credit] reopen credit-reversal failed for ${d.invoice_number}:`, e);
     }
   }
 

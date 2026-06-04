@@ -60,19 +60,41 @@ async function recomputePrTotals(sb: any, prId: string) {
    released back to a GRN line. base = qty_accepted (you can return up to what
    was accepted); remaining = qty_accepted - returned_qty. Mirrors
    adjustGrnInvoicedQty in purchase-invoices.ts. */
-async function adjustGrnReturnedQty(sb: any, grnItemId: string, delta: number) {
-  if (!grnItemId || delta === 0) return;
-  const { data: row } = await sb.from('grn_items')
-    .select('qty_accepted, returned_qty, purchase_order_item_id').eq('id', grnItemId).maybeSingle();
-  if (!row) return;
-  const accepted = (row as { qty_accepted: number }).qty_accepted ?? 0;
-  const cur = (row as { returned_qty: number }).returned_qty ?? 0;
-  // Clamp into [0, qty_accepted] — never over-return, never go negative.
-  const next = Math.min(accepted, Math.max(0, cur + delta));
+async function adjustGrnReturnedQty(sb: any, grnItemId: string, _delta?: number) {
+  if (!grnItemId) return;
+  /* RECOUNT-from-live (Wei Siang 2026-06-03 audit fix) — returned_qty is the SUM
+     of qty_returned across LIVE (non-cancelled) purchase_return_items for this GRN
+     line, clamped to [0, qty_accepted]. The old `cur + delta` arithmetic drifted
+     PERMANENTLY if any one adjust was dropped (best-effort swallow) or replayed —
+     it never reconverged, and it feeds two integrity gates (PO re-open + PI
+     over-bill headroom). A recount self-heals, exactly like recomputeGrnInvoiced /
+     recomputeGrnReceived. `_delta` is ignored (kept for call-site compatibility);
+     every caller already mutated the PR rows BEFORE calling, so the live sum is
+     authoritative. */
+  const { data: prLines } = await sb.from('purchase_return_items')
+    .select('qty_returned, purchase_return_id')
+    .eq('grn_item_id', grnItemId);
+  const rows = (prLines ?? []) as Array<{ qty_returned: number; purchase_return_id: string }>;
+  const prIds = [...new Set(rows.map((r) => r.purchase_return_id).filter(Boolean))];
+  const cancelled = new Set<string>();
+  if (prIds.length > 0) {
+    const { data: prs } = await sb.from('purchase_returns').select('id, status').in('id', prIds);
+    for (const p of (prs ?? []) as Array<{ id: string; status: string }>) {
+      if ((p.status ?? '').toUpperCase() === 'CANCELLED') cancelled.add(p.id);
+    }
+  }
+  let returned = 0;
+  for (const r of rows) if (!cancelled.has(r.purchase_return_id)) returned += Number(r.qty_returned ?? 0);
+
+  const { data: gi } = await sb.from('grn_items')
+    .select('qty_accepted, purchase_order_item_id').eq('id', grnItemId).maybeSingle();
+  if (!gi) return;
+  const accepted = (gi as { qty_accepted: number }).qty_accepted ?? 0;
+  const next = Math.min(accepted, Math.max(0, returned)); // clamp [0, accepted]
   await sb.from('grn_items').update({ returned_qty: next }).eq('id', grnItemId);
-  // Returning goods to the supplier nets down the parent PO line's received_qty
-  // (it re-opens for a replacement shipment). Recount it from live GRN lines.
-  const poItemId = (row as { purchase_order_item_id: string | null }).purchase_order_item_id;
+  // Returning goods nets down the parent PO line's received_qty (re-opens for a
+  // replacement shipment). Recount it from live GRN lines.
+  const poItemId = (gi as { purchase_order_item_id: string | null }).purchase_order_item_id;
   if (poItemId) await recomputePoReceived(sb, [poItemId]);
 }
 

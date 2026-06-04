@@ -4,6 +4,57 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-03-005 — Chinese text in operator-facing PO conversion dialogs
+
+**Symptom:** From-SO → PO conversion popups (supplier mismatch, accessory split, partial skip) showed Chinese to the operator. The product UI must be 100% English.
+
+**Root cause:** Four `setDialog({title, body})` calls were authored in Chinese (not comments).
+
+**Fix:** (branch `fix/ledger-audit-urgent`) Translated all four to English in `PurchaseOrderNew.tsx` (3) and `PurchaseOrderFromSo.tsx` (1).
+
+**Caught by:** Full-system audit (cross-cutting sweep).
+
+---
+
+## BUG-2026-06-03-004 — Stock-take of a variant-keyed product posts a false variance to the empty-variant bucket *(OPEN — fix in progress)*
+
+**Symptom:** Posting a stock take for any product that has variant-keyed stock (sofa fabric/seat/leg, etc.) permanently desyncs `inventory_balances` (variant-keyed) from `inventory_lots`, and mis-writes the loss.
+
+**Root cause:** The count sheet's `system_qty` is the SUM of on-hand across ALL variant_keys of a product_code (from `v_inventory_all_skus`), but the posted ADJUSTMENT carries no `variant_key`, so it lands in the `''` bucket — guaranteeing a variance and posting it to the wrong layer.
+
+**Status:** NOT YET FIXED — needs a schema migration (add `variant_key` to `stock_take_lines`), the count sheet rebuilt at `(product_code, variant_key)` grain from `inventory_balances`, the ADJUSTMENT carrying `variant_key`, and a frontend change so the operator counts each variant. Tracked as its own follow-up.
+
+**Caught by:** Full-system audit (inventory+cost core).
+
+---
+
+## BUG-2026-06-03-003 — Sales Invoice cancel/reopen corrupts the ledger (3 issues)
+
+**Symptom / root cause (3):**
+1. **Phantom revenue on a cancelled invoice** — the SI item routes (POST/PATCH/DELETE `/:id/items`) had no CANCELLED lock, and `resyncSiRevenue` posts fresh revenue when no live JE exists. Editing a cancelled invoice's line re-posted revenue + AR onto the GL.
+2. **Double customer credit on reopen** — cancel writes an `SI_CANCEL_REFUND` credit; reopen (CANCELLED→SENT) restored `paid_centi` from the untouched payments ledger but never reversed the credit → customer credited twice.
+3. **Revenue lost on reopen** — cancel reverses the revenue JE; reopen never re-posted it → a live, payable invoice contributed zero revenue to the trial balance.
+
+**Fix:** (branch `fix/ledger-audit-urgent`)
+- `resyncSiRevenue` now no-ops when the invoice is CANCELLED (robust single point); the 3 SI item routes also reject with `invoice_cancelled` (409).
+- The reopen branch now re-posts revenue (`postSiRevenue`) AND reverses the cancel credit via a new `reverseCancelledSiCredit` (writes an `SI_REOPEN_CONTRA` ledger row). `creditFromCancelledSi` idempotency is now net-based (`SI_CANCEL_REFUND` − `SI_REOPEN_CONTRA`), so cancel→reopen→cancel credits correctly each time.
+
+**Caught by:** Full-system audit (sales + returns segments).
+
+---
+
+## BUG-2026-06-03-006 — Purchase-return `returned_qty` used delta arithmetic, not recount → permanent drift
+
+**Symptom:** A dropped (best-effort-swallowed) or replayed return adjustment left `grn_items.returned_qty` permanently wrong — it never reconverged — corrupting PO re-open state and PI over-bill headroom (both subtract `returned_qty`).
+
+**Root cause:** `adjustGrnReturnedQty` did `next = clamp(cur + delta)` — the last counter in purchasing still on delta math while every sibling (`recomputeGrnInvoiced`/`recomputeGrnReceived`/`recomputeSoPicked`) had moved to recount-from-live. This is the replay-drift class flagged in MEMORY (`arch_wip_idempotency_gap`).
+
+**Fix:** (branch `fix/ledger-audit-urgent`) Rewrote `adjustGrnReturnedQty` to RECOUNT `returned_qty` = Σ `qty_returned` across live (non-cancelled) `purchase_return_items` for the GRN line, clamped to `[0, qty_accepted]` (mirrors `recomputeGrnInvoiced`). Idempotent + self-healing.
+
+**Caught by:** Full-system audit (purchasing segment).
+
+---
+
 ## BUG-2026-06-03-002 — Sofa "in stock" / allocation was tied to the PO that created it, not to actual SKU+batch availability
 
 **Symptom:** A sofa SO (SO-2606-005, 2× BOOQIT-1A cg-004) showed a green **STOCK**

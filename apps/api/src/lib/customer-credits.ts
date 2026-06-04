@@ -16,6 +16,7 @@
 
 export type CreditSourceType =
   | 'SI_CANCEL_REFUND'   // SI was cancelled with paid_centi > 0 → credit equal to paid_centi
+  | 'SI_REOPEN_CONTRA'   // a cancelled SI was reopened → reverse the SI_CANCEL_REFUND credit
   | 'SO_CANCEL_REFUND'   // SO was cancelled with paid deposit > 0 → credit equal to paid deposit
   | 'OVERPAY'            // payment recorded > remaining due → excess turned into credit
   | 'APPLIED_TO_SI'      // negative entry — credit applied to a new invoice
@@ -207,14 +208,19 @@ export async function creditFromCancelledSi(
   if (!args.debtorCode || !args.debtorCode.trim()) return { credited: 0, reason: 'no_debtor' };
   if (!(args.paidCenti > 0)) return { credited: 0, reason: 'no_paid' };
 
-  // Idempotency — already credited for this cancel?
-  const { data: existing } = await sb
+  // Idempotency — is a cancel-refund credit for this invoice STILL STANDING?
+  // We net SI_CANCEL_REFUND against any SI_REOPEN_CONTRA (written when the
+  // invoice was reopened): net > 0 means a live credit already exists → no-op.
+  // net ≤ 0 means it was never credited OR was reversed on a prior reopen, so a
+  // fresh cancel after reopen correctly credits again. (Wei Siang 2026-06-03)
+  const { data: priorRows } = await sb
     .from('customer_credits')
-    .select('id, amount_centi')
-    .eq('source_type', 'SI_CANCEL_REFUND')
+    .select('amount_centi')
     .eq('source_doc_no', args.siNumber)
-    .limit(1);
-  if (existing && existing.length > 0) {
+    .in('source_type', ['SI_CANCEL_REFUND', 'SI_REOPEN_CONTRA']);
+  const standing = ((priorRows ?? []) as Array<{ amount_centi: number }>)
+    .reduce((s, r) => s + Number(r.amount_centi ?? 0), 0);
+  if (standing > 0) {
     return { credited: 0, reason: 'already_credited' };
   }
 
@@ -229,6 +235,40 @@ export async function creditFromCancelledSi(
     createdBy: args.createdBy ?? null,
   });
   return r.ok ? { credited: args.paidCenti } : { credited: 0, reason: r.reason };
+}
+
+/**
+ * Reverse the SI_CANCEL_REFUND credit when a cancelled Sales Invoice is REOPENED.
+ * On reopen the invoice goes live again and its payments ledger restores
+ * paid_centi — so the credit handed out at cancel must be clawed back, or the
+ * customer is credited twice. Writes a NEGATIVE contra row (SI_REOPEN_CONTRA) of
+ * the net standing cancel-refund. Idempotent: once net ≤ 0, no-op. (2026-06-03)
+ */
+export async function reverseCancelledSiCredit(
+  sb: any,
+  args: { siId: string; siNumber: string; debtorCode: string | null; debtorName: string | null; createdBy?: string | null },
+): Promise<{ reversed: number; reason?: string }> {
+  if (!args.debtorCode || !args.debtorCode.trim()) return { reversed: 0, reason: 'no_debtor' };
+  const { data: rows } = await sb
+    .from('customer_credits')
+    .select('amount_centi')
+    .eq('source_doc_no', args.siNumber)
+    .in('source_type', ['SI_CANCEL_REFUND', 'SI_REOPEN_CONTRA']);
+  const standing = ((rows ?? []) as Array<{ amount_centi: number }>)
+    .reduce((s, r) => s + Number(r.amount_centi ?? 0), 0);
+  if (standing <= 0) return { reversed: 0, reason: 'nothing_to_reverse' };
+
+  const r = await addCustomerCredit(sb, {
+    debtorCode: args.debtorCode,
+    debtorName: args.debtorName ?? null,
+    amountCenti: -standing,
+    sourceType: 'SI_REOPEN_CONTRA',
+    sourceDocNo: args.siNumber,
+    sourceDocId: args.siId,
+    notes: `Reopened invoice ${args.siNumber} — cancel-refund credit (${standing / 100}) reversed.`,
+    createdBy: args.createdBy ?? null,
+  });
+  return r.ok ? { reversed: standing } : { reversed: 0, reason: r.reason };
 }
 
 /**
