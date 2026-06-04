@@ -17,6 +17,7 @@ import {
   reclinerEligible,
   isAccessoryModule,
   isWideArmSeat,
+  normalizeCompartmentCode,
   summarizeSofaCells,
   findDuplicateCombo,
   matchComboSubset,
@@ -207,16 +208,16 @@ type ActiveComposite =
 
 /** Mirror map for arm-side flips: LHF ↔ RHF for 1A/1B/2A/2B/L. CNR is single-SKU (no mirror). */
 const MIRROR_PAIR: Record<string, string> = {
-  '1A-LHF': '1A-RHF',
-  '1A-RHF': '1A-LHF',
-  '1B-LHF': '1B-RHF',
-  '1B-RHF': '1B-LHF',
-  '2A-LHF': '2A-RHF',
-  '2A-RHF': '2A-LHF',
-  '2B-LHF': '2B-RHF',
-  '2B-RHF': '2B-LHF',
-  'L-LHF':  'L-RHF',
-  'L-RHF':  'L-LHF',
+  '1A(LHF)': '1A(RHF)',
+  '1A(RHF)': '1A(LHF)',
+  '1B(LHF)': '1B(RHF)',
+  '1B(RHF)': '1B(LHF)',
+  '2A(LHF)': '2A(RHF)',
+  '2A(RHF)': '2A(LHF)',
+  '2B(LHF)': '2B(RHF)',
+  '2B(RHF)': '2B(LHF)',
+  'L(LHF)':  'L(RHF)',
+  'L(RHF)':  'L(LHF)',
 };
 
 interface CustomBuilderProps {
@@ -316,14 +317,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
    * legacy /sofa-modules/<id>.png path. Falls back to the bundled asset so
    * unconfigured Models and unmapped module ids still render.
    *
-   * Looks up by NORMALIZED code (1A-LHF) AND by the raw code (1A(LHF)) so
-   * commander's pool form doesn't have to match the POS shared lib form.
+   * Looks up by the canonical code (1A(LHF)) — module ids and the pool now
+   * share the ONE parens vocabulary; normalizedCode covers a stray legacy
+   * dash entry.
    *
    * Hoisted above the bbox-measuring effect so JS's TDZ doesn't blow up
    * the dependency array. */
   const resolveModuleArtSrc = useCallback((moduleId: string): string => {
     if (modelCustomizer) {
-      const norm = moduleId.trim().replace(/\(([^)]*)\)/g, '-$1').replace(/-+$/, '');
+      const norm = normalizeCompartmentCode(moduleId);
       const hit = modelCustomizer.compartments.find(
         (cc) => cc.code === moduleId || cc.normalizedCode === norm,
       );
@@ -419,7 +421,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
 
   // Rotate every cell in a group 90° clockwise around the group's bbox center.
   // Each cell's footprint may swap w/h after the rot change (1A's 95×95 stays;
-  // 2A-LHF's 190×95 → 95×190), so the new top-left re-derives from the
+  // 2A(LHF)'s 190×95 → 95×190), so the new top-left re-derives from the
   // post-rotation footprint and the new center to keep the group anchored at
   // its original centroid. Auto-convert (canonical SKU swap) intentionally
   // does NOT re-trigger on this — moduleIds don't change, only positions.
@@ -635,7 +637,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // group isn't priced as a bundle — same source the render path uses.
       const bundle = g.bundle ?? detectBundle(groupCells.map((c) => c.moduleId));
       if (!bundle) return;
-      const flip = groupCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
+      const flip = groupCells.find((c) => c.moduleId === 'L(LHF)') ? 'L' : 'R';
       const id = bundle.id;
       const isLShape = id === '2+L' || id === '3+L';
       const src = `${ASSET_BASE}/${id}${isLShape ? `-${flip}` : ''}.png`;
@@ -646,14 +648,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
 
   // Auto-convert to canonical bundle layout: when a closed group matches a
   // known bundle but the cells aren't in the canonical SKU breakdown (e.g.
-  // user dragged 1A-LHF + 2NA + L-RHF, but the 3+L canonical is 2A-LHF +
-  // 1NA + L-RHF), replace the user's cells with the canonical layout at the
+  // user dragged 1A(LHF) + 2NA + L(RHF), but the 3+L canonical is 2A(LHF) +
+  // 1NA + L(RHF)), replace the user's cells with the canonical layout at the
   // same anchor. Skipped during drag and during per-module edit mode — both
   // are explicit user-control moments where rewriting cells would feel like
   // the system is fighting the user.
   //
   // Module-ID resolution: for L-shape bundles, the arm faces opposite the
-  // chaise side (L on right → arm on left → -LHF variants). For non-L
+  // chaise side (L on right → arm on left → (LHF) variants). For non-L
   // bundles with multiple armed compartments, the first armed family in
   // canonicalModules gets LHF, the last gets RHF. Single-armed bundles
   // default LHF. NA families pass through unchanged.
@@ -683,8 +685,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // canvas safely keeps the user's modules exactly as laid out.
       if (groupCells.some((c) => isAccessoryModule(c.moduleId))) return;
       // Likewise never rewrite a group containing a FUNCTIONAL seat (power /
-      // recliner / leg — 1A-P, 1NA-P, 1S-P/R/L, …). The canonical breakdown
-      // collapses the mechanism suffix (1NA-P → 1NA), so 1A-LHF + 1NA-P + 1A-RHF
+      // recliner / leg — 1A(P), 1NA(P), 1S(P)/(R)/(L), …). The canonical breakdown
+      // collapses the mechanism suffix (1NA(P) → 1NA), so 1A(LHF) + 1NA(P) + 1A(RHF)
       // signs as 1A+1A+1NA → the plain 3S [1A,2A], and the rewrite would
       // silently DELETE the power seat the user deliberately placed — the
       // layout "jumps" to a standard sofa. Keep the user's exact modules; PO
@@ -704,14 +706,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // Skip groups currently in per-module edit mode.
       if (editingGroupIds && Array.from(groupIds).every((id) => editingGroupIds.has(id))) return;
 
-      const flip: 'L' | 'R' = groupCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
+      const flip: 'L' | 'R' = groupCells.find((c) => c.moduleId === 'L(LHF)') ? 'L' : 'R';
       const hasL = bundle.canonicalModules.includes('L');
       const armedIdxs = bundle.canonicalModules
         .map((f, idx) => (f === '1A' || f === '2A' ? idx : -1))
         .filter((x) => x >= 0);
       const resolveSku = (fam: string, idx: number): string => {
         if (fam === '1NA' || fam === '2NA') return fam;
-        if (fam === 'L') return `L-${flip}HF`;
+        if (fam === 'L') return `L(${flip}HF)`;
         if (fam === '1A' || fam === '2A') {
           let armSide: 'L' | 'R';
           if (hasL) {
@@ -721,7 +723,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           } else {
             armSide = 'L';
           }
-          return `${fam}-${armSide}HF`;
+          return `${fam}(${armSide}HF)`;
         }
         return fam;
       };
@@ -755,7 +757,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         x += fp.w;
       }
       // Guard: never auto-convert when the canonical SKU layout is itself NOT
-      // closed (e.g. 2S.canonicalModules = ['2A'] resolves to a single 2A-LHF
+      // closed (e.g. 2S.canonicalModules = ['2A'] resolves to a single 2A(LHF)
       // with right end open). Otherwise we'd silently strip the user's
       // closed sofa down to a half-open one — visually broken and triggering
       // the "Right end has no arm" warning on a layout the user just built
@@ -966,7 +968,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         const bundle = g.bundle ?? detectBundle(sofaCells.map((c) => c.moduleId));
         const bbSofa = cellsBbox(displayCells.filter((c) => c.id != null && sofaIds.has(c.id)), depth);
         if (bundle && bbSofa) {
-          const flip: 'L' | 'R' = sofaCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
+          const flip: 'L' | 'R' = sofaCells.find((c) => c.moduleId === 'L(LHF)') ? 'L' : 'R';
           const isLShape = bundle.id === '2+L' || bundle.id === '3+L';
           const src = `${ASSET_BASE}/${bundle.id}${isLShape ? `-${flip}` : ''}.png`;
           const compBbox = bboxCache.get(src);

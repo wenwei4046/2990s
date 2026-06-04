@@ -297,7 +297,7 @@ export const useOrders = () =>
         staffColor: r.staff?.color ?? '#999999',
         // PO line construction (Loo, 2026-05-16): for sofa_build products the
         // line-level SKU is the BUNDLE id when cells form a recognised bundle
-        // (e.g. 1A-LHF+1A-RHF → "2S"), otherwise each cell's moduleId is its
+        // (e.g. 1A(LHF)+1A(RHF) → "2S"), otherwise each cell's moduleId is its
         // own line. Quick-Pick orders carry config.bundleId directly. All other
         // pricing_kinds (size_variants, flat, tbc) still emit a single line
         // with the product's catalog SKU. This is what reaches the factory's

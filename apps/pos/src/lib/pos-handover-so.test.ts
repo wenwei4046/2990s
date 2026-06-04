@@ -106,14 +106,14 @@ describe('cartLineToSoItem', () => {
         productId: 'prod-1',
         productName: 'Tanah Modular Sofa',
         cells: [
-          { id: 'cell-1', label: '1A-LHF', x: 0, y: 0 } as any,
-          { id: 'cell-2', label: '2A-RHF', x: 1, y: 0 } as any,
+          { id: 'cell-1', label: '1A(LHF)', x: 0, y: 0 } as any,
+          { id: 'cell-2', label: '2A(RHF)', x: 1, y: 0 } as any,
         ],
         depth: '39',
         seatUpgradeLabel: 'Power recliner',
         seatUpgradeFootrest: true,
         total: 7980,
-        summary: '1A-LHF + 2A-RHF',
+        summary: '1A(LHF) + 2A(RHF)',
       },
     };
     const items = cartLinesToSoItems([line], [product()]);
@@ -136,8 +136,8 @@ describe('cartLineToSoItem', () => {
         productName: 'Lyyar',
         // intentionally out of order — must sort by x (then y)
         cells: [
-          { moduleId: '2A-RHF', x: 2, y: 0, rot: 0 } as any,
-          { moduleId: '1A-LHF', x: 0, y: 0, rot: 0 } as any,
+          { moduleId: '2A(RHF)', x: 2, y: 0, rot: 0 } as any,
+          { moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 } as any,
           { moduleId: '1NA', x: 1, y: 0, rot: 0 } as any,
         ],
         depth: '24',
@@ -146,7 +146,7 @@ describe('cartLineToSoItem', () => {
       },
     };
     const item = cartLineToSoItem(line, new Map([['sofa-1', sofa]]));
-    expect(item.description).toBe('Lyyar · 1A-LHF + 1NA + 2A-RHF');
+    expect(item.description).toBe('Lyyar · 1A(LHF) + 1NA + 2A(RHF)');
   });
 
   it('sofa with no cells (bundle preset) keeps just the Model name', () => {

@@ -10,7 +10,7 @@
 // OR-set per slot + SUBSET coverage (Commander 2026-05-28, Hookka-style 1:1):
 // A combo is an ORDERED list of SLOTS; each SLOT is a SET of alternative
 // module codes joined by OR. e.g. combo "2+L" =
-//   [ ['2A-LHF','2A-RHF'], ['L-LHF','L-RHF'] ]
+//   [ ['2A(LHF)','2A(RHF)'], ['L(LHF)','L(RHF)'] ]
 // A built sofa MATCHES the combo iff every SLOT can be COVERED by a DISTINCT
 // built module whose code is in that slot's OR-set (one built module consumed
 // per slot). The built module count may EXCEED the slot count — extra modules
@@ -425,16 +425,17 @@ export function pickComboPrice(
 
 /** Split a sofa product code into its base model + module size code. A
  *  sectional module's code is `<MODEL>-<MODULE>(<ORIENT>)`, e.g.
- *  `BOOQIT-1A(LHF)` → base `BOOQIT`, size `1A-LHF` (parens normalised to the
- *  hyphen form combos are stored in). A simple seat-count sofa like `BLATT-2S`
- *  → base `BLATT`, size `2S` (no orientation → never matches a combo slot).
+ *  `BOOQIT-1A(LHF)` → base `BOOQIT`, size `1A(LHF)` — the parens form IS the
+ *  one canonical compartment vocabulary combos are stored in (2026-06-04).
+ *  A simple seat-count sofa like `BLATT-2S` → base `BLATT`, size `2S` (no
+ *  orientation → never matches a combo slot).
  *  Shared by the PO cost path (mfg-purchase-orders) + the SO cost rollup. */
 export function splitSofaCode(itemCode: string): { baseModel: string; sizeCode: string } {
   const i = itemCode.indexOf('-');
   if (i < 0) return { baseModel: itemCode, sizeCode: '' };
   return {
     baseModel: itemCode.slice(0, i),
-    sizeCode: itemCode.slice(i + 1).replace(/\(([^)]+)\)/, '-$1'),
+    sizeCode: itemCode.slice(i + 1),
   };
 }
 
@@ -502,18 +503,13 @@ export function spreadComboTotal(
   return out;
 }
 
-/** Format a single module code with its LHF/RHF orientation in parens. */
-function fmtCode(raw: string): string {
-  const m = raw.match(/^(.+?)-(LHF|RHF)$/);
-  return m ? `${m[1]}(${m[2]})` : raw;
-}
-
 /**
  * Auto-build a human-readable combo label from a slot-set, matching HOOKKA's
  * renderer 1:1 (src/pages/maintenance/sofa-combos.tsx `renderComponentSizes`):
  * OR-alternatives within a slot are joined with `" / "`, slots are joined with
- * `" + "`. No parentheses — `" / "` reads as OR, `" + "` reads as AND. Example:
- *   [ ['2A-LHF','2A-RHF'], ['L-LHF','L-RHF'] ]
+ * `" + "`. Module codes render verbatim — they already ARE the canonical
+ * parens form. Example:
+ *   [ ['2A(LHF)','2A(RHF)'], ['L(LHF)','L(RHF)'] ]
  *   → "2A(LHF) / 2A(RHF) + L(LHF) / L(RHF)"
  * A singleton slot is just the bare code:
  *   [ ['2NA'] ] → "2NA"
@@ -525,6 +521,6 @@ export function buildComboLabel(
 ): string {
   const slots = normalizeComboModules(raw);
   return slots
-    .map((slot) => slot.map(fmtCode).join(' / '))
+    .map((slot) => slot.join(' / '))
     .join(' + ');
 }

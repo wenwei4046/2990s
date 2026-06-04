@@ -22,7 +22,7 @@ const ART_BODY_UNITS = 70; // module-SVG body height; all insets scale to it.
  *  full length) on the hand side, with the backrest only over the seat. Keep
  *  that bench when the piece joins a corner so the connected sofa matches the
  *  separate per-module art (Chairman 2026-06-02). */
-export const isBenchModule = (id: string): boolean => /^[12]B-/.test(id);
+export const isBenchModule = (id: string): boolean => /^[12]B\(/.test(id);
 
 /** Natural-frame (un-rotated) L geometry in cm: corner + long arm across the
  *  top, chaise dropping down on the `orientation` side. Callers size the SVG

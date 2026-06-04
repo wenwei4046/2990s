@@ -37,15 +37,15 @@ import {
 const pricing = (overrides: Partial<SofaProductPricing> = {}): SofaProductPricing => ({
   reclinerUpgradePrice: 200,
   compartments: [
-    { compartmentId: '1A-LHF',  active: true, price: 1500 },
-    { compartmentId: '1A-RHF',  active: true, price: 1500 },
+    { compartmentId: '1A(LHF)',  active: true, price: 1500 },
+    { compartmentId: '1A(RHF)',  active: true, price: 1500 },
     { compartmentId: '1NA',   active: true, price: 1200 },
-    { compartmentId: '2A-LHF',  active: true, price: 2400 },
-    { compartmentId: '2A-RHF',  active: true, price: 2400 },
+    { compartmentId: '2A(LHF)',  active: true, price: 2400 },
+    { compartmentId: '2A(RHF)',  active: true, price: 2400 },
     { compartmentId: '2NA',   active: true, price: 2200 },
     { compartmentId: 'CNR',   active: true, price: 1800 },
-    { compartmentId: 'L-RHF',   active: true, price: 1900 },
-    { compartmentId: 'L-LHF',   active: true, price: 1900 },
+    { compartmentId: 'L(RHF)',   active: true, price: 1900 },
+    { compartmentId: 'L(LHF)',   active: true, price: 1900 },
     { compartmentId: 'Console', active: true, price: 800  },
   ],
   bundles: [
@@ -61,13 +61,13 @@ const pricing = (overrides: Partial<SofaProductPricing> = {}): SofaProductPricin
 /* Case 1 — bundle auto-detect for the canonical 5 signatures. */
 describe('detectBundle', () => {
   it('matches 1A+2NA+L → 3+L', () => {
-    expect(detectBundle(['1A-LHF', '2NA', 'L-RHF'])?.id).toBe('3+L');
+    expect(detectBundle(['1A(LHF)', '2NA', 'L(RHF)'])?.id).toBe('3+L');
   });
   it('matches 1A → 1S, 2A → 2S, 1A+2A → 3S, 2A+L → 2+L', () => {
-    expect(detectBundle(['1A-LHF'])?.id).toBe('1S');
-    expect(detectBundle(['2A-RHF'])?.id).toBe('2S');
-    expect(detectBundle(['1A-LHF', '2A-RHF'])?.id).toBe('3S');
-    expect(detectBundle(['2A-LHF', 'L-LHF'])?.id).toBe('2+L');
+    expect(detectBundle(['1A(LHF)'])?.id).toBe('1S');
+    expect(detectBundle(['2A(RHF)'])?.id).toBe('2S');
+    expect(detectBundle(['1A(LHF)', '2A(RHF)'])?.id).toBe('3S');
+    expect(detectBundle(['2A(LHF)', 'L(LHF)'])?.id).toBe('2+L');
   });
   it('returns null when no signature matches', () => {
     expect(detectBundle(['1NA', '1NA'])).toBeNull();
@@ -81,9 +81,9 @@ describe('detectBundle', () => {
     expect(b?.label).toBe('2.5-Seater');
   });
   it('never auto-detects 2.5S from real modules', () => {
-    expect(detectBundle(['2A-LHF'])?.id).toBe('2S');           // wider-looking 2-seater still maps to 2S
-    expect(detectBundle(['2A-LHF', '2A-RHF'])?.id).not.toBe('2.5S');
-    expect(detectBundle(['1A-LHF', '1NA', '2A-RHF'])?.id).not.toBe('2.5S');
+    expect(detectBundle(['2A(LHF)'])?.id).toBe('2S');           // wider-looking 2-seater still maps to 2S
+    expect(detectBundle(['2A(LHF)', '2A(RHF)'])?.id).not.toBe('2.5S');
+    expect(detectBundle(['1A(LHF)', '1NA', '2A(RHF)'])?.id).not.toBe('2.5S');
   });
 });
 
@@ -93,20 +93,20 @@ describe('summarizeSofaCells upgrade suffix', () => {
     ({ id: 'c1', moduleId, x: 0, y: 0, rot: 0, recliners });
 
   it('appends "+ N <label>" when seats are upgraded and a label is given', () => {
-    const cells = [cell('2A-LHF', [{ seatIdx: 0, open: false }, { seatIdx: 1, open: true }])];
+    const cells = [cell('2A(LHF)', [{ seatIdx: 0, open: false }, { seatIdx: 1, open: true }])];
     expect(summarizeSofaCells(cells, '24', 'Power slide')).toBe('2-Seater + 2 Power slide');
   });
   it('omits the suffix when no label is passed (back-compat)', () => {
-    const cells = [cell('1A-LHF', [{ seatIdx: 0, open: false }])];
+    const cells = [cell('1A(LHF)', [{ seatIdx: 0, open: false }])];
     expect(summarizeSofaCells(cells, '24')).toBe('1-Seater');
   });
   it('omits the suffix when no seat is upgraded', () => {
-    const cells = [cell('1A-LHF', [])];
+    const cells = [cell('1A(LHF)', [])];
     expect(summarizeSofaCells(cells, '24', 'Headrest')).toBe('1-Seater');
   });
   it('drops accessories before signing', () => {
-    expect(familySignature(['1A-LHF', 'Console', '2A-RHF'])).toBe('1A+2A');
-    expect(detectBundle(['1A-LHF', 'Console', '2A-RHF'])?.id).toBe('3S');
+    expect(familySignature(['1A(LHF)', 'Console', '2A(RHF)'])).toBe('1A+2A');
+    expect(detectBundle(['1A(LHF)', 'Console', '2A(RHF)'])?.id).toBe('3S');
   });
 });
 
@@ -127,36 +127,36 @@ describe('describeSofaLine', () => {
   });
 
   it('quick-pick multi-piece bundles decompose to oriented module ids', () => {
-    expect(describeSofaLine({ bundleId: '3S' })).toBe('1A-LHF + 2A-RHF');
-    expect(describeSofaLine({ bundleId: '2+L' })).toBe('2A-LHF + L-RHF');
+    expect(describeSofaLine({ bundleId: '3S' })).toBe('1A(LHF) + 2A(RHF)');
+    expect(describeSofaLine({ bundleId: '2+L' })).toBe('2A(LHF) + L(RHF)');
   });
 
-  it('quick-pick console bundle (2WC) shows 1A-LHF + Console + 1A-RHF (F6)', () => {
-    expect(describeSofaLine({ bundleId: '2WC' })).toBe('1A-LHF + Console + 1A-RHF');
+  it('quick-pick console bundle (2WC) shows 1A(LHF) + Console + 1A(RHF) (F6)', () => {
+    expect(describeSofaLine({ bundleId: '2WC' })).toBe('1A(LHF) + Console + 1A(RHF)');
   });
 
   it('quick-pick power-slide combo (2PS) shows its bundle name (F7)', () => {
     expect(describeSofaLine({ bundleId: '2PS' })).toBe('2-Seater + 2 Power slide');
   });
 
-  it('quick-pick corner bundle (CORNER) shows 1A-LHF + CNR + 2A-RHF (F4)', () => {
-    expect(describeSofaLine({ bundleId: 'CORNER' })).toBe('1A-LHF + CNR + 2A-RHF');
+  it('quick-pick corner bundle (CORNER) shows 1A(LHF) + CNR + 2A(RHF) (F4)', () => {
+    expect(describeSofaLine({ bundleId: 'CORNER' })).toBe('1A(LHF) + CNR + 2A(RHF)');
   });
 
   it('custom single-piece keeps the name and appends "+ N <upgrade>"', () => {
-    const cells = [cell('2A-LHF', 0, [{ seatIdx: 0, open: false }, { seatIdx: 1, open: true }])];
+    const cells = [cell('2A(LHF)', 0, [{ seatIdx: 0, open: false }, { seatIdx: 1, open: true }])];
     expect(describeSofaLine({ cells, depth: '24', seatUpgradeLabel: 'Power slide' }))
       .toBe('2-Seater + 2 Power slide');
   });
 
   it('custom multi-piece lists its oriented cell ids left-to-right', () => {
-    const cells = [cell('2A-RHF', 95), cell('1A-LHF', 0)];
-    expect(describeSofaLine({ cells, depth: '24' })).toBe('1A-LHF + 2A-RHF');
+    const cells = [cell('2A(RHF)', 95), cell('1A(LHF)', 0)];
+    expect(describeSofaLine({ cells, depth: '24' })).toBe('1A(LHF) + 2A(RHF)');
   });
 
   it('custom with a console lists the accessory inline (not collapsed to a bundle)', () => {
-    const cells = [cell('1A-LHF', 0), cell('Console', 95), cell('1A-RHF', 140)];
-    expect(describeSofaLine({ cells, depth: '24' })).toBe('1A-LHF + Console + 1A-RHF');
+    const cells = [cell('1A(LHF)', 0), cell('Console', 95), cell('1A(RHF)', 140)];
+    expect(describeSofaLine({ cells, depth: '24' })).toBe('1A(LHF) + Console + 1A(RHF)');
   });
 
   it('falls back gracefully when neither bundleId nor cells are present', () => {
@@ -192,7 +192,7 @@ describe('STOOL accessory module', () => {
  * cushion, anchored on the existing 24″=base / 28″=+10cm/cushion behaviour. */
 describe('moduleFootprint depth scaling', () => {
   it('widens 2.5cm per inch per cushion (24 base, 28 +10, 30 +15, 32 +20)', () => {
-    const m = findModule('2A-LHF')!; // w 158cm, 2 cushions
+    const m = findModule('2A(LHF)')!; // w 158cm, 2 cushions
     expect(moduleFootprint(m, 0, '24').w).toBe(158);
     expect(moduleFootprint(m, 0, '28').w).toBe(178);
     expect(moduleFootprint(m, 0, '30').w).toBe(188);
@@ -204,10 +204,10 @@ describe('moduleFootprint depth scaling', () => {
 describe('groupSofas', () => {
   it('puts two distant sofas in separate groups', () => {
     const cells: Cell[] = [
-      { id: 'a', moduleId: '2A-LHF', x: 0,    y: 0, rot: 0 },
-      { id: 'b', moduleId: '2A-RHF', x: 158,  y: 0, rot: 0 },
-      { id: 'c', moduleId: '1A-LHF', x: 1000, y: 0, rot: 0 }, // far away
-      { id: 'd', moduleId: '1A-RHF', x: 1095, y: 0, rot: 0 },
+      { id: 'a', moduleId: '2A(LHF)', x: 0,    y: 0, rot: 0 },
+      { id: 'b', moduleId: '2A(RHF)', x: 158,  y: 0, rot: 0 },
+      { id: 'c', moduleId: '1A(LHF)', x: 1000, y: 0, rot: 0 }, // far away
+      { id: 'd', moduleId: '1A(RHF)', x: 1095, y: 0, rot: 0 },
     ];
     const groups = groupSofas(cells, '24');
     expect(groups).toHaveLength(2);
@@ -218,16 +218,16 @@ describe('groupSofas', () => {
 
   it('joins cells touching within 2cm tolerance', () => {
     const cells: Cell[] = [
-      { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
-      { id: 'b', moduleId: '2A-RHF', x: 159, y: 0, rot: 0 }, // 1cm gap, within tolerance
+      { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: '2A(RHF)', x: 159, y: 0, rot: 0 }, // 1cm gap, within tolerance
     ];
     expect(groupSofas(cells, '24')).toHaveLength(1);
   });
 
   it('does not join cells separated by more than 2cm', () => {
     const cells: Cell[] = [
-      { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
-      { id: 'b', moduleId: '2A-RHF', x: 165, y: 0, rot: 0 }, // 7cm gap
+      { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: '2A(RHF)', x: 165, y: 0, rot: 0 }, // 7cm gap
     ];
     expect(groupSofas(cells, '24')).toHaveLength(2);
   });
@@ -239,28 +239,28 @@ describe('cellEffectiveBbox footrest extension', () => {
   const closed = (): Cell['recliners'] => [{ seatIdx: 0, open: false }];
 
   it('rot=0 extends 35cm down (+h)', () => {
-    const cell: Cell = { moduleId: '1A-LHF', x: 100, y: 200, rot: 0, recliners: open() };
+    const cell: Cell = { moduleId: '1A(LHF)', x: 100, y: 200, rot: 0, recliners: open() };
     const b = cellEffectiveBbox(cell, '24')!;
     expect(b).toEqual({ x: 100, y: 200, w: 95, h: 95 + 35 });
   });
   it('rot=90 extends 35cm left (-x, +w)', () => {
-    const cell: Cell = { moduleId: '1A-LHF', x: 100, y: 200, rot: 90, recliners: open() };
+    const cell: Cell = { moduleId: '1A(LHF)', x: 100, y: 200, rot: 90, recliners: open() };
     // rotated footprint: w=95→h, h=95→w → still 95×95 here, but the 35cm extends in -x.
     const b = cellEffectiveBbox(cell, '24')!;
     expect(b).toEqual({ x: 100 - 35, y: 200, w: 95 + 35, h: 95 });
   });
   it('rot=180 extends 35cm up (-y, +h)', () => {
-    const cell: Cell = { moduleId: '1A-LHF', x: 100, y: 200, rot: 180, recliners: open() };
+    const cell: Cell = { moduleId: '1A(LHF)', x: 100, y: 200, rot: 180, recliners: open() };
     const b = cellEffectiveBbox(cell, '24')!;
     expect(b).toEqual({ x: 100, y: 200 - 35, w: 95, h: 95 + 35 });
   });
   it('rot=270 extends 35cm right (+w)', () => {
-    const cell: Cell = { moduleId: '1A-LHF', x: 100, y: 200, rot: 270, recliners: open() };
+    const cell: Cell = { moduleId: '1A(LHF)', x: 100, y: 200, rot: 270, recliners: open() };
     const b = cellEffectiveBbox(cell, '24')!;
     expect(b).toEqual({ x: 100, y: 200, w: 95 + 35, h: 95 });
   });
   it('does not extend when no recliner is open', () => {
-    const cell: Cell = { moduleId: '1A-LHF', x: 100, y: 200, rot: 0, recliners: closed() };
+    const cell: Cell = { moduleId: '1A(LHF)', x: 100, y: 200, rot: 0, recliners: closed() };
     const b = cellEffectiveBbox(cell, '24')!;
     expect(b.h).toBe(95);
   });
@@ -272,9 +272,9 @@ describe('computeSofaPrice basis selection', () => {
   it('uses bundle price when shape matches an active bundle', () => {
     // 3+L à la carte: 1500 + 2200 + 1900 = 5600; bundle 4500 wins regardless.
     const cells: Cell[] = [
-      { moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
+      { moduleId: '1A(LHF)', x: 0,   y: 0, rot: 0 },
       { moduleId: '2NA',  x: 95,  y: 0, rot: 0 },
-      { moduleId: 'L-RHF',  x: 237, y: 0, rot: 0 },
+      { moduleId: 'L(RHF)',  x: 237, y: 0, rot: 0 },
     ];
     const result = computeSofaPrice(cells, '24', pricing());
     expect(result.groups).toHaveLength(1);
@@ -302,9 +302,9 @@ describe('computeSofaPrice basis selection', () => {
       ],
     });
     const cells: Cell[] = [
-      { moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
+      { moduleId: '1A(LHF)', x: 0,   y: 0, rot: 0 },
       { moduleId: '2NA',  x: 95,  y: 0, rot: 0 },
-      { moduleId: 'L-RHF',  x: 237, y: 0, rot: 0 },
+      { moduleId: 'L(RHF)',  x: 237, y: 0, rot: 0 },
     ];
     const g = computeSofaPrice(cells, '24', p).groups[0]!;
     expect(g.basis).toBe('bundle');
@@ -324,9 +324,9 @@ describe('computeSofaPrice basis selection', () => {
       ],
     });
     const cells: Cell[] = [
-      { moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
+      { moduleId: '1A(LHF)', x: 0,   y: 0, rot: 0 },
       { moduleId: '2NA',  x: 95,  y: 0, rot: 0 },
-      { moduleId: 'L-RHF',  x: 237, y: 0, rot: 0 },
+      { moduleId: 'L(RHF)',  x: 237, y: 0, rot: 0 },
     ];
     const g = computeSofaPrice(cells, '24', p).groups[0]!;
     expect(g.basis).toBe('a_la_carte');
@@ -343,7 +343,7 @@ describe('computeSofaPrice basis selection', () => {
    POS pricing object divides base_price_sen by 100). groupPrice converts the
    combo centi → whole-MYR before the cheaper-only guard and before adding
    extras, so every `comboPrice` / `finalPrice` assertion below is whole-MYR.
-   Combo "2+L" = [{2A-LHF,2A-RHF},{L-LHF,L-RHF}]. Subset à-la-carte for a
+   Combo "2+L" = [{2A(LHF),2A(RHF)},{L(LHF),L(RHF)}]. Subset à-la-carte for a
    2A + L pair = 2400 + 1900 = 4300 MYR; combo 380000 centi = RM 3800
    (< 4300 → applies). */
 describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
@@ -356,7 +356,7 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
         {
           id: 'cmb',
           baseModel: '',
-          modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
+          modules: [['2A(LHF)', '2A(RHF)'], ['L(LHF)', 'L(RHF)']],
           tier: 'PRICE_2',
           customerId: null,
           pricesByHeight: { '24': 380000 }, // CENTI — RM 3800
@@ -373,8 +373,8 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
     // extra 1NA (1200) sits apart so it forms its OWN group at à-la-carte —
     // proving extras never ride the combo. The combo group base = RM 3800.
     const cells: Cell[] = [
-      { id: 'a', moduleId: '2A-LHF', x: 0,    y: 0, rot: 0 },
-      { id: 'b', moduleId: 'L-RHF',  x: 158,  y: 0, rot: 0 },
+      { id: 'a', moduleId: '2A(LHF)', x: 0,    y: 0, rot: 0 },
+      { id: 'b', moduleId: 'L(RHF)',  x: 158,  y: 0, rot: 0 },
       // far-away standalone extra (separate group)
       { id: 'c', moduleId: '1NA',    x: 2000, y: 0, rot: 0 },
     ];
@@ -395,7 +395,7 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
      RM 990 + RM 990 (whole-MYR); combo pricesByHeight['24'] = 180000 centi
      (= RM 1800). subsetSum = 1980 MYR; 1980 − 1800 = 180 > 0 → combo applies.
      basePrice must be RM 1800 — never 180000 (raw centi) or 18 (double-÷100).
-     Uses the same 2A-LHF + L-RHF geometry at height '24' the other combo cases
+     Uses the same 2A(LHF) + L(RHF) geometry at height '24' the other combo cases
      prove forms one connected group. */
   it('converts combo centi → whole-MYR (RM 990 + RM 990 vs RM 1800 combo)', () => {
     const p = pricing({
@@ -403,10 +403,10 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
       fabricTier: 'PRICE_2',
       comboHeight: '24',
       compartments: [
-        { compartmentId: '2A-LHF', active: true, price: 990 },
-        { compartmentId: '2A-RHF', active: true, price: 990 },
-        { compartmentId: 'L-LHF',  active: true, price: 990 },
-        { compartmentId: 'L-RHF',  active: true, price: 990 },
+        { compartmentId: '2A(LHF)', active: true, price: 990 },
+        { compartmentId: '2A(RHF)', active: true, price: 990 },
+        { compartmentId: 'L(LHF)',  active: true, price: 990 },
+        { compartmentId: 'L(RHF)',  active: true, price: 990 },
       ],
       // Drop bundles so the test isolates the combo vs à-la-carte unit path
       // (a 2+L bundle would otherwise compete for basis selection).
@@ -415,7 +415,7 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
         {
           id: 'cmb-990',
           baseModel: '',
-          modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
+          modules: [['2A(LHF)', '2A(RHF)'], ['L(LHF)', 'L(RHF)']],
           tier: 'PRICE_2',
           customerId: null,
           pricesByHeight: { '24': 180000 }, // CENTI — RM 1800
@@ -427,8 +427,8 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
     });
     const g = computeSofaPrice(
       [
-        { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
-        { id: 'b', moduleId: 'L-RHF',  x: 158, y: 0, rot: 0 },
+        { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
+        { id: 'b', moduleId: 'L(RHF)',  x: 158, y: 0, rot: 0 },
       ],
       '24',
       p,
@@ -443,9 +443,9 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
     // 2A + L + a touching 1NA all in ONE group. Combo covers {2A, L}; the 1NA
     // is an extra inside the group → group base = combo 3800 + 1NA full 1200.
     const cells: Cell[] = [
-      { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
       { id: 'b', moduleId: '1NA',    x: 158, y: 0, rot: 0 },
-      { id: 'c', moduleId: 'L-RHF',  x: 233, y: 0, rot: 0 },
+      { id: 'c', moduleId: 'L(RHF)',  x: 233, y: 0, rot: 0 },
     ];
     const g = computeSofaPrice(cells, '24', comboPricing()).groups[0]!;
     expect(g.basis).toBe('combo');
@@ -463,14 +463,14 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
     // subset, yet it still applies.
     const g = computeSofaPrice(
       [
-        { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
-        { id: 'b', moduleId: 'L-RHF',  x: 158, y: 0, rot: 0 },
+        { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
+        { id: 'b', moduleId: 'L(RHF)',  x: 158, y: 0, rot: 0 },
       ],
       '24',
       comboPricing({
         combos: [
           {
-            id: 'cmb', baseModel: '', modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
+            id: 'cmb', baseModel: '', modules: [['2A(LHF)', '2A(RHF)'], ['L(LHF)', 'L(RHF)']],
             tier: 'PRICE_2', customerId: null, pricesByHeight: { '24': 999900 }, // CENTI — RM 9999
             label: null, effectiveFrom: '2026-01-01', deletedAt: null,
           },
@@ -485,8 +485,8 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
   it('OR-alternative within a slot — RHF variant covers the slot too', () => {
     const g = computeSofaPrice(
       [
-        { id: 'a', moduleId: '2A-RHF', x: 0,   y: 0, rot: 0 },
-        { id: 'b', moduleId: 'L-LHF',  x: 158, y: 0, rot: 0 },
+        { id: 'a', moduleId: '2A(RHF)', x: 0,   y: 0, rot: 0 },
+        { id: 'b', moduleId: 'L(LHF)',  x: 158, y: 0, rot: 0 },
       ],
       '24',
       comboPricing(),
@@ -500,11 +500,11 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
 describe('computeSofaPrice recliner extras', () => {
   it('adds reclinerUpgradePrice × seatCount on top of bundle base', () => {
     const cells: Cell[] = [
-      { id: 'a', moduleId: '1A-LHF', x: 0,   y: 0, rot: 0,
+      { id: 'a', moduleId: '1A(LHF)', x: 0,   y: 0, rot: 0,
         recliners: [{ seatIdx: 0, open: false }] },
       { id: 'b', moduleId: '2NA',  x: 95,  y: 0, rot: 0,
         recliners: [{ seatIdx: 0, open: true }, { seatIdx: 1, open: false }] },
-      { id: 'c', moduleId: 'L-RHF',  x: 237, y: 0, rot: 0 }, // L-Shape ineligible for recliner
+      { id: 'c', moduleId: 'L(RHF)',  x: 237, y: 0, rot: 0 }, // L-Shape ineligible for recliner
     ];
     const g = computeSofaPrice(cells, '24', pricing()).groups[0]!;
     expect(g.basis).toBe('bundle');
@@ -534,13 +534,13 @@ describe('computeSofaPrice multi-group + accessory', () => {
   it('sums independent groups in the total', () => {
     const cells: Cell[] = [
       // group 1: 2S → bundle 2300
-      { moduleId: '2A-LHF', x: 0,    y: 0, rot: 0 },
+      { moduleId: '2A(LHF)', x: 0,    y: 0, rot: 0 },
       // group 2: 1S → bundle 1400, 500cm away
-      { moduleId: '1A-LHF', x: 1000, y: 0, rot: 0 },
+      { moduleId: '1A(LHF)', x: 1000, y: 0, rot: 0 },
     ];
     const result = computeSofaPrice(cells, '24', pricing());
-    // 2A-LHF alone signature "2A" → 2S bundle (2300 < 2400 à la carte) wins.
-    // 1A-LHF alone signature "1A" → 1S bundle (1400 < 1500) wins.
+    // 2A(LHF) alone signature "2A" → 2S bundle (2300 < 2400 à la carte) wins.
+    // 1A(LHF) alone signature "1A" → 1S bundle (1400 < 1500) wins.
     // Non-touching, so groupSofas yields 2 groups summed into total.
     expect(result.groups).toHaveLength(2);
     expect(result.total).toBe(2300 + 1400);
@@ -548,13 +548,13 @@ describe('computeSofaPrice multi-group + accessory', () => {
 
   it('preserves prototype quirk: bundle replaces base, accessory contribution drops', () => {
     // 3+L group with a console wedged in. Signature ignores accessory, so bundle still detects.
-    // À la carte = 1500 (1A-LHF) + 2200 (2NA) + 1900 (L-RHF) + 800 (Console) = 6400.
+    // À la carte = 1500 (1A(LHF)) + 2200 (2NA) + 1900 (L(RHF)) + 800 (Console) = 6400.
     // Bundle 3+L price = 4500 → wins. Console's 800 is dropped under documented quirk.
     const cells: Cell[] = [
-      { moduleId: '1A-LHF', x: 0,    y: 0,  rot: 0 },
+      { moduleId: '1A(LHF)', x: 0,    y: 0,  rot: 0 },
       { moduleId: 'Console', x: 95,  y: 0,  rot: 0 },
       { moduleId: '2NA',  x: 140,  y: 0,  rot: 0 },
-      { moduleId: 'L-RHF',  x: 282,  y: 0,  rot: 0 },
+      { moduleId: 'L(RHF)',  x: 282,  y: 0,  rot: 0 },
     ];
     const g = computeSofaPrice(cells, '24', pricing()).groups[0]!;
     expect(g.basis).toBe('bundle');
@@ -564,10 +564,10 @@ describe('computeSofaPrice multi-group + accessory', () => {
 
 /* Case 7 — analyzeSofa: closed sofas + violation reasons. */
 describe('analyzeSofa closure', () => {
-  it('treats 2A-LHF + 2A-RHF back-to-back as a closed 2-seater', () => {
+  it('treats 2A(LHF) + 2A(RHF) back-to-back as a closed 2-seater', () => {
     const group: Cell[] = [
-      { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
-      { id: 'b', moduleId: '2A-RHF', x: 158, y: 0, rot: 0 },
+      { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: '2A(RHF)', x: 158, y: 0, rot: 0 },
     ];
     const r = analyzeSofa(group, '24');
     expect(r.violations).toEqual([]);
@@ -577,33 +577,33 @@ describe('analyzeSofa closure', () => {
     expect(r.rightArm).toBe(true);
   });
 
-  it('treats 1A-LHF + 1NA + 1A-RHF as a closed 3-seater', () => {
+  it('treats 1A(LHF) + 1NA + 1A(RHF) as a closed 3-seater', () => {
     const group: Cell[] = [
-      { id: 'a', moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'a', moduleId: '1A(LHF)', x: 0,   y: 0, rot: 0 },
       { id: 'b', moduleId: '1NA',  x: 95,  y: 0, rot: 0 },
-      { id: 'c', moduleId: '1A-RHF', x: 170, y: 0, rot: 0 },
+      { id: 'c', moduleId: '1A(RHF)', x: 170, y: 0, rot: 0 },
     ];
     const r = analyzeSofa(group, '24');
     expect(r.violations).toEqual([]);
     expect(r.closed).toBe(true);
   });
 
-  it('treats 1A-LHF + 2NA + L-RHF as a closed 3+L (L outer cap acts as arm)', () => {
+  it('treats 1A(LHF) + 2NA + L(RHF) as a closed 3+L (L outer cap acts as arm)', () => {
     const group: Cell[] = [
-      { id: 'a', moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'a', moduleId: '1A(LHF)', x: 0,   y: 0, rot: 0 },
       { id: 'b', moduleId: '2NA',  x: 95,  y: 0, rot: 0 },
-      { id: 'c', moduleId: 'L-RHF',  x: 237, y: 0, rot: 0 },
+      { id: 'c', moduleId: 'L(RHF)',  x: 237, y: 0, rot: 0 },
     ];
     const r = analyzeSofa(group, '24');
     expect(r.violations).toEqual([]);
     expect(r.closed).toBe(true);
-    expect(r.rightArm).toBe(true); // L-RHF's E edge counts as cap
+    expect(r.rightArm).toBe(true); // L(RHF)'s E edge counts as cap
   });
 
-  it('treats 2A-LHF + L-RHF as a closed 2+L', () => {
+  it('treats 2A(LHF) + L(RHF) as a closed 2+L', () => {
     const group: Cell[] = [
-      { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
-      { id: 'b', moduleId: 'L-RHF',  x: 158, y: 0, rot: 0 },
+      { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: 'L(RHF)',  x: 158, y: 0, rot: 0 },
     ];
     expect(analyzeSofa(group, '24').closed).toBe(true);
   });
@@ -615,10 +615,10 @@ describe('analyzeSofa closure', () => {
   });
 
   it('flags arm-to-arm collision', () => {
-    // 1A-RHF (arm E) at x=0 touches 1A-LHF (arm W) at x=95.
+    // 1A(RHF) (arm E) at x=0 touches 1A(LHF) (arm W) at x=95.
     const group: Cell[] = [
-      { id: 'a', moduleId: '1A-RHF', x: 0,  y: 0, rot: 0 },
-      { id: 'b', moduleId: '1A-LHF', x: 95, y: 0, rot: 0 },
+      { id: 'a', moduleId: '1A(RHF)', x: 0,  y: 0, rot: 0 },
+      { id: 'b', moduleId: '1A(LHF)', x: 95, y: 0, rot: 0 },
     ];
     const r = analyzeSofa(group, '24');
     expect(r.violations.some((v) => v.reason === 'Arm-to-arm')).toBe(true);
@@ -627,9 +627,9 @@ describe('analyzeSofa closure', () => {
   });
 
   it('flags arm-blocked-by-module when arm meets non-arm', () => {
-    // 1A-RHF (arm E) butted against 1NA (open W).
+    // 1A(RHF) (arm E) butted against 1NA (open W).
     const group: Cell[] = [
-      { id: 'a', moduleId: '1A-RHF', x: 0,  y: 0, rot: 0 },
+      { id: 'a', moduleId: '1A(RHF)', x: 0,  y: 0, rot: 0 },
       { id: 'b', moduleId: '1NA',  x: 95, y: 0, rot: 0 },
     ];
     const r = analyzeSofa(group, '24');
@@ -677,23 +677,23 @@ describe('analyzeSofa closure', () => {
 /* Case 8 — hasArmConflict: cheap pre-check used by drop-to-mirror UI. */
 describe('hasArmConflict', () => {
   it('returns true when arm meets arm', () => {
-    const a: Cell = { id: 'a', moduleId: '1A-RHF', x: 0, y: 0, rot: 0 };
-    const b: Cell = { id: 'b', moduleId: '1A-LHF', x: 95, y: 0, rot: 0 };
+    const a: Cell = { id: 'a', moduleId: '1A(RHF)', x: 0, y: 0, rot: 0 };
+    const b: Cell = { id: 'b', moduleId: '1A(LHF)', x: 95, y: 0, rot: 0 };
     expect(hasArmConflict(a, [a, b], '24')).toBe(true);
   });
   it('returns false when only opens touch', () => {
-    const a: Cell = { id: 'a', moduleId: '1A-LHF', x: 0,  y: 0, rot: 0 };
-    const b: Cell = { id: 'b', moduleId: '1A-RHF', x: 95, y: 0, rot: 0 };
+    const a: Cell = { id: 'a', moduleId: '1A(LHF)', x: 0,  y: 0, rot: 0 };
+    const b: Cell = { id: 'b', moduleId: '1A(RHF)', x: 95, y: 0, rot: 0 };
     expect(hasArmConflict(a, [a, b], '24')).toBe(false);
   });
 });
 
 /* Case 9 — findSnap: snaps within SNAP_CM, no further. */
 describe('findSnap threshold', () => {
-  const neighbour: Cell = { id: 'n', moduleId: '1A-LHF', x: 110, y: 0, rot: 0 };
+  const neighbour: Cell = { id: 'n', moduleId: '1A(LHF)', x: 110, y: 0, rot: 0 };
 
   it('snaps when gap is within SNAP_CM', () => {
-    const dragged = cellBbox({ moduleId: '1A-LHF', x: 0, y: 0, rot: 0 }, '24')!;
+    const dragged = cellBbox({ moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 }, '24')!;
     // dragged right edge = 95, neighbour left edge = 110 → dx = 15 (< 20)
     const s = findSnap(dragged, [neighbour], 'me', '24');
     expect(s.dx).toBe(15);
@@ -701,8 +701,8 @@ describe('findSnap threshold', () => {
   });
 
   it('does not snap when gap exceeds SNAP_CM', () => {
-    const farNeighbour: Cell = { id: 'n', moduleId: '1A-LHF', x: 130, y: 0, rot: 0 };
-    const dragged = cellBbox({ moduleId: '1A-LHF', x: 0, y: 0, rot: 0 }, '24')!;
+    const farNeighbour: Cell = { id: 'n', moduleId: '1A(LHF)', x: 130, y: 0, rot: 0 };
+    const dragged = cellBbox({ moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 }, '24')!;
     // dragged right edge = 95, neighbour left edge = 130 → dx = 35 (> 20)
     const s = findSnap(dragged, [farNeighbour], 'me', '24');
     expect(s.dx).toBe(0);
@@ -711,8 +711,8 @@ describe('findSnap threshold', () => {
 
   it('snaps to flush left-edge alignment for vertical stacking', () => {
     // Dragged at x=3, y=200; neighbour at x=0, y=0 (above). flush-left dx = -3.
-    const dragged = cellBbox({ moduleId: '1A-LHF', x: 3, y: 200, rot: 0 }, '24')!;
-    const above: Cell = { id: 'n', moduleId: '1A-LHF', x: 0, y: 0, rot: 0 };
+    const dragged = cellBbox({ moduleId: '1A(LHF)', x: 3, y: 200, rot: 0 }, '24')!;
+    const above: Cell = { id: 'n', moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 };
     const s = findSnap(dragged, [above], 'me', '24');
     // bottom-of-above at y=95, top-of-dragged at y=200 → dy = -105 (way > SNAP_CM).
     // But left-flush dx = 0 - 3 = -3 (within SNAP_CM only when xOverlap > -SNAP_CM).
@@ -729,20 +729,20 @@ describe('findSnap threshold', () => {
 
 /* Case 9b — analyzeSofa: outward-open-edge check (off-axis exposure).
  * Regression for the L-shape bug Loo found 2026-05-16: a CNR + 2NA top-row
- * with a rotated 2A-LHF descending from the corner has arms at the dominant
+ * with a rotated 2A(LHF) descending from the corner has arms at the dominant
  * (vertical) bbox extremes but leaves the 2NA's right cushion edge exposed
  * with no armrest. The old check only inspected head/tail of the dominant
  * axis and missed it. */
 describe('analyzeSofa off-axis open-edge closure', () => {
   it('flags an L-shape with an exposed right cushion edge as NOT closed', () => {
     // Top row: CNR (arm on W+N) + 2NA. 2NA's E is 'open' with no neighbour.
-    // Vertical drop: 2A-LHF rotated 270° hangs below CNR with arm on screen-S.
+    // Vertical drop: 2A(LHF) rotated 270° hangs below CNR with arm on screen-S.
     // Dominant axis: vertical (bbH 253 > bbW 237). Head (N) and tail (S)
     // both armed — but 2NA's E is uncovered. Must flag.
     const group: Cell[] = [
       { id: 'cnr', moduleId: 'CNR',    x: 0,  y: 0,  rot: 0   },
       { id: '2na', moduleId: '2NA',    x: 95, y: 0,  rot: 0   },
-      { id: '2a',  moduleId: '2A-LHF', x: 0,  y: 95, rot: 270 },
+      { id: '2a',  moduleId: '2A(LHF)', x: 0,  y: 95, rot: 270 },
     ];
     const r = analyzeSofa(group, '24');
     expect(r.closed).toBe(false);
@@ -750,11 +750,11 @@ describe('analyzeSofa off-axis open-edge closure', () => {
   });
 
   it('accepts an L-shape that does close every outward open edge', () => {
-    // 2A-LHF (W=arm) + L-RHF (L-cap on E). Standard 2+L bundle. No exposed
+    // 2A(LHF) (W=arm) + L(RHF) (L-cap on E). Standard 2+L bundle. No exposed
     // open edges anywhere.
     const group: Cell[] = [
-      { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
-      { id: 'b', moduleId: 'L-RHF',  x: 158, y: 0, rot: 0 },
+      { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: 'L(RHF)',  x: 158, y: 0, rot: 0 },
     ];
     const r = analyzeSofa(group, '24');
     expect(r.closed).toBe(true);
@@ -762,12 +762,12 @@ describe('analyzeSofa off-axis open-edge closure', () => {
   });
 
   it('accessory open edges do NOT fail closure', () => {
-    // 1A-LHF + Console + 1A-RHF — the console's N/S faces are 'open' by
+    // 1A(LHF) + Console + 1A(RHF) — the console's N/S faces are 'open' by
     // design. Closure must ignore them (else 3+L bundle pricing breaks).
     const group: Cell[] = [
-      { id: 'a', moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'a', moduleId: '1A(LHF)', x: 0,   y: 0, rot: 0 },
       { id: 'w', moduleId: 'Console',  x: 95,  y: 0, rot: 0 },
-      { id: 'b', moduleId: '1A-RHF', x: 140, y: 0, rot: 0 },
+      { id: 'b', moduleId: '1A(RHF)', x: 140, y: 0, rot: 0 },
     ];
     const r = analyzeSofa(group, '24');
     expect(r.closed).toBe(true);
@@ -777,8 +777,8 @@ describe('analyzeSofa off-axis open-edge closure', () => {
 
 describe('mirror helpers (Quick Pick L↔R flip)', () => {
   it('mirrorCode swaps LHF↔RHF for dash + parens forms, leaves no-hand codes', () => {
-    expect(mirrorCode('2A-LHF')).toBe('2A-RHF');
-    expect(mirrorCode('L-RHF')).toBe('L-LHF');
+    expect(mirrorCode('2A(LHF)')).toBe('2A(RHF)');
+    expect(mirrorCode('L(RHF)')).toBe('L(LHF)');
     expect(mirrorCode('1A(P)(LHF)')).toBe('1A(P)(RHF)');
     expect(mirrorCode('1NA')).toBe('1NA');
     expect(mirrorCode('WC-45')).toBe('WC-45');
@@ -786,16 +786,16 @@ describe('mirror helpers (Quick Pick L↔R flip)', () => {
   });
 
   it('mirrorModules reverses slot order and swaps each hand', () => {
-    expect(mirrorModules([['2A-LHF'], ['L-RHF']])).toEqual([['L-LHF'], ['2A-RHF']]);
-    expect(mirrorModules([['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']]))
-      .toEqual([['L-RHF', 'L-LHF'], ['2A-RHF', '2A-LHF']]);
+    expect(mirrorModules([['2A(LHF)'], ['L(RHF)']])).toEqual([['L(LHF)'], ['2A(RHF)']]);
+    expect(mirrorModules([['2A(LHF)', '2A(RHF)'], ['L(LHF)', 'L(RHF)']]))
+      .toEqual([['L(RHF)', 'L(LHF)'], ['2A(RHF)', '2A(LHF)']]);
   });
 
   it('canMirror is false for symmetric layouts, true for asymmetric', () => {
-    expect(canMirror([['2A-LHF'], ['2A-RHF']])).toBe(false);
-    expect(canMirror([['1A-LHF'], ['1A-RHF']])).toBe(false);
-    expect(canMirror([['2A-LHF'], ['L-RHF']])).toBe(true);
-    expect(canMirror([['1A-LHF'], ['2A-RHF']])).toBe(true);
+    expect(canMirror([['2A(LHF)'], ['2A(RHF)']])).toBe(false);
+    expect(canMirror([['1A(LHF)'], ['1A(RHF)']])).toBe(false);
+    expect(canMirror([['2A(LHF)'], ['L(RHF)']])).toBe(true);
+    expect(canMirror([['1A(LHF)'], ['2A(RHF)']])).toBe(true);
   });
 });
 
@@ -804,21 +804,21 @@ describe('mirror price-invariance (à-la-carte fallback)', () => {
     // Only the LHF hands carry a price; the RHF rows are absent.
     const oneHand = pricing({
       compartments: [
-        { compartmentId: '2A-LHF', active: true, price: 2400 },
-        { compartmentId: 'L-LHF',  active: true, price: 1900 },
+        { compartmentId: '2A(LHF)', active: true, price: 2400 },
+        { compartmentId: 'L(LHF)',  active: true, price: 1900 },
       ],
       bundles: [],
       combos: [],
     });
     // 2A(LHF) + L(RHF) laid out left→right.
     const cells: Cell[] = [
-      { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
-      { id: 'b', moduleId: 'L-RHF',  x: 188, y: 0, rot: 0 },
+      { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: 'L(RHF)',  x: 188, y: 0, rot: 0 },
     ];
     // Its mirror: L(LHF) + 2A(RHF).
     const mirrored: Cell[] = [
-      { id: 'a', moduleId: 'L-LHF',  x: 0,   y: 0, rot: 0 },
-      { id: 'b', moduleId: '2A-RHF', x: 188, y: 0, rot: 0 },
+      { id: 'a', moduleId: 'L(LHF)',  x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: '2A(RHF)', x: 188, y: 0, rot: 0 },
     ];
     const t1 = computeSofaPrice(cells, '24', oneHand).total;
     const t2 = computeSofaPrice(mirrored, '24', oneHand).total;
@@ -833,50 +833,50 @@ describe('cellsToPoSkus', () => {
     expect(cellsToPoSkus([], '24')).toEqual([]);
   });
 
-  it('1A-LHF + 1A-RHF closed pair → ONE line of 2S (bundle wins)', () => {
+  it('1A(LHF) + 1A(RHF) closed pair → ONE line of 2S (bundle wins)', () => {
     const cells: Cell[] = [
-      { id: 'a', moduleId: '1A-LHF', x: 0,  y: 0, rot: 0 },
-      { id: 'b', moduleId: '1A-RHF', x: 95, y: 0, rot: 0 },
+      { id: 'a', moduleId: '1A(LHF)', x: 0,  y: 0, rot: 0 },
+      { id: 'b', moduleId: '1A(RHF)', x: 95, y: 0, rot: 0 },
     ];
     const skus = cellsToPoSkus(cells, '24');
     expect(skus).toEqual([{ sku: '2S', label: '2-Seater', qty: 1 }]);
   });
 
-  it('1A-LHF alone → 1S bundle (single-cell still bundle-matched)', () => {
-    const cells: Cell[] = [{ id: 'a', moduleId: '1A-LHF', x: 0, y: 0, rot: 0 }];
+  it('1A(LHF) alone → 1S bundle (single-cell still bundle-matched)', () => {
+    const cells: Cell[] = [{ id: 'a', moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 }];
     expect(cellsToPoSkus(cells, '24')).toEqual([{ sku: '1S', label: '1-Seater', qty: 1 }]);
   });
 
   it('canonical 3+L cells → ONE line of 3+L', () => {
     const cells: Cell[] = [
-      { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
       { id: 'b', moduleId: '1NA',    x: 158, y: 0, rot: 0 },
-      { id: 'c', moduleId: 'L-RHF',  x: 233, y: 0, rot: 0 },
+      { id: 'c', moduleId: 'L(RHF)',  x: 233, y: 0, rot: 0 },
     ];
     expect(cellsToPoSkus(cells, '24')).toEqual([{ sku: '3+L', label: '3 + L', qty: 1 }]);
   });
 
-  it('1B-LHF + 2NA + 1A-RHF (ad-hoc, no bundle match) → 3 per-cell lines', () => {
+  it('1B(LHF) + 2NA + 1A(RHF) (ad-hoc, no bundle match) → 3 per-cell lines', () => {
     const cells: Cell[] = [
-      { id: 'a', moduleId: '1B-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'a', moduleId: '1B(LHF)', x: 0,   y: 0, rot: 0 },
       { id: 'b', moduleId: '2NA',    x: 105, y: 0, rot: 0 },
-      { id: 'c', moduleId: '1A-RHF', x: 247, y: 0, rot: 0 },
+      { id: 'c', moduleId: '1A(RHF)', x: 247, y: 0, rot: 0 },
     ];
     const skus = cellsToPoSkus(cells, '24');
     expect(skus).toEqual([
-      { sku: '1B-LHF', label: '1B · Left hand facing (wide arm)', qty: 1 },
+      { sku: '1B(LHF)', label: '1B · Left hand facing (wide arm)', qty: 1 },
       { sku: '2NA',    label: '2NA · No arms',                    qty: 1 },
-      { sku: '1A-RHF', label: '1A · Right hand facing',           qty: 1 },
+      { sku: '1A(RHF)', label: '1A · Right hand facing',           qty: 1 },
     ]);
   });
 
   it('two separated sofa groups → two bundle lines', () => {
     const cells: Cell[] = [
       // group A: 1A+1A → 2S, at origin
-      { id: 'a1', moduleId: '1A-LHF', x: 0,   y: 0,    rot: 0 },
-      { id: 'a2', moduleId: '1A-RHF', x: 95,  y: 0,    rot: 0 },
+      { id: 'a1', moduleId: '1A(LHF)', x: 0,   y: 0,    rot: 0 },
+      { id: 'a2', moduleId: '1A(RHF)', x: 95,  y: 0,    rot: 0 },
       // group B: 1A alone → 1S, 500cm away (no edge contact)
-      { id: 'b',  moduleId: '1A-LHF', x: 1000, y: 0,   rot: 0 },
+      { id: 'b',  moduleId: '1A(LHF)', x: 1000, y: 0,   rot: 0 },
     ];
     const skus = cellsToPoSkus(cells, '24');
     expect(skus).toEqual([
@@ -889,10 +889,10 @@ describe('cellsToPoSkus', () => {
     // 3+L canonical with a console wedged in — bundle still detects because
     // signature ignores accessories. PO must still mention the Console.
     const cells: Cell[] = [
-      { id: 'a', moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'a', moduleId: '1A(LHF)', x: 0,   y: 0, rot: 0 },
       { id: 'w', moduleId: 'Console',  x: 95,  y: 0, rot: 0 },
       { id: 'b', moduleId: '2NA',    x: 140, y: 0, rot: 0 },
-      { id: 'c', moduleId: 'L-RHF',  x: 282, y: 0, rot: 0 },
+      { id: 'c', moduleId: 'L(RHF)',  x: 282, y: 0, rot: 0 },
     ];
     const skus = cellsToPoSkus(cells, '24');
     // Order: accessories come out first (split-off pass), then the bundle line.
@@ -953,10 +953,10 @@ describe('pool-sourced modules (12 new) + Console rename', () => {
     expect(findModule('1S')).toMatchObject({ group: '1-seater', w: 115, d: 95, cushions: 1 });
     expect(findModule('2S')).toMatchObject({ group: '2-seater', w: 174, d: 95, cushions: 2 });
     expect(findModule('3S')).toMatchObject({ group: '3-seater', w: 220, d: 95, cushions: 3 });
-    for (const id of ['1A-P-LHF', '1A-P-RHF', '1A-R-LHF', '1A-R-RHF', '1A-L-LHF', '1A-L-RHF']) {
+    for (const id of ['1A(P)(LHF)', '1A(P)(RHF)', '1A(R)(LHF)', '1A(R)(RHF)', '1A(L)(LHF)', '1A(L)(RHF)']) {
       expect(findModule(id)).toMatchObject({ group: '1-seater', w: 95, d: 95, cushions: 1 });
     }
-    for (const id of ['1NA-P', '1NA-R', '1NA-L']) {
+    for (const id of ['1NA(P)', '1NA(R)', '1NA(L)']) {
       expect(findModule(id)).toMatchObject({ group: '1-seater', w: 75, d: 95, cushions: 1 });
     }
   });
@@ -1032,12 +1032,12 @@ describe('sofaModuleSellingPricesFromSkus (2026-06-01)', () => {
   });
   it('a cost-only seat row (no sellingPriceSen) falls back to flat sell, never leaks priceSen', () => {
     const rows = [
-      { code: 'OMMBUC-1A-LHF', sellPriceSen: 70000, seatHeightPrices: [
+      { code: 'OMMBUC-1A(LHF)', sellPriceSen: 70000, seatHeightPrices: [
         { height: '24', priceSen: 50000, tier: 'PRICE_2' as const }, // cost-only
       ]},
     ];
     const map = sofaModuleSellingPricesFromSkus(rows, 'Ommbuc', '24', 'PRICE_2');
-    expect(map['1A-LHF']).toBe(70000); // flat sell, NOT the 50000 cost
+    expect(map['1A(LHF)']).toBe(70000); // flat sell, NOT the 50000 cost
   });
 });
 
@@ -1047,25 +1047,25 @@ describe('isWideArmSeat (B-variant auto-convert guard, Loo 2026-06-03)', () => {
   // any group containing a B-variant seat, or it silently swaps the customer's
   // 1B/2B for a 1A/2A — showing a different compartment than they picked.
   it('flags 1B / 2B (wide-arm) seats', () => {
-    expect(isWideArmSeat('1B-LHF')).toBe(true);
-    expect(isWideArmSeat('1B-RHF')).toBe(true);
-    expect(isWideArmSeat('2B-LHF')).toBe(true);
-    expect(isWideArmSeat('2B-RHF')).toBe(true);
+    expect(isWideArmSeat('1B(LHF)')).toBe(true);
+    expect(isWideArmSeat('1B(RHF)')).toBe(true);
+    expect(isWideArmSeat('2B(LHF)')).toBe(true);
+    expect(isWideArmSeat('2B(RHF)')).toBe(true);
   });
 
   it('does NOT flag A / NA / L / accessory families', () => {
-    expect(isWideArmSeat('1A-LHF')).toBe(false);
-    expect(isWideArmSeat('2A-RHF')).toBe(false);
+    expect(isWideArmSeat('1A(LHF)')).toBe(false);
+    expect(isWideArmSeat('2A(RHF)')).toBe(false);
     expect(isWideArmSeat('1NA')).toBe(false);
-    expect(isWideArmSeat('L-LHF')).toBe(false);
+    expect(isWideArmSeat('L(LHF)')).toBe(false);
     expect(isWideArmSeat('CNR')).toBe(false);
     expect(isWideArmSeat('Console')).toBe(false);
   });
 
-  it('2A-LHF + 1B-RHF still detects as 3S (pricing preserved) AND trips the guard', () => {
+  it('2A(LHF) + 1B(RHF) still detects as 3S (pricing preserved) AND trips the guard', () => {
     // The bug repro: this build matches a bundle (so it prices right), but it
     // carries a 1B the auto-convert would otherwise overwrite. The guard must fire.
-    expect(detectBundle(['2A-LHF', '1B-RHF'])?.id).toBe('3S');
-    expect(['2A-LHF', '1B-RHF'].some(isWideArmSeat)).toBe(true);
+    expect(detectBundle(['2A(LHF)', '1B(RHF)'])?.id).toBe('3S');
+    expect(['2A(LHF)', '1B(RHF)'].some(isWideArmSeat)).toBe(true);
   });
 });

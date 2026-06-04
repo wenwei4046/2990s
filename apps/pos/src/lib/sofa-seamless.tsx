@@ -13,7 +13,7 @@ import type { ArtBbox } from './sofa-art';
  * buildSeamlessRun analyses such a run into ordered slots (seats AND any
  * interior consoles), and renderSeamlessSofa draws the whole run as ONE
  * continuous sofa using the EXACT primitives from the module SVG art
- * (2S.svg / 3S.svg / 1A-LHF.svg / Console.svg): one outer outline, a
+ * (2S.svg / 3S.svg / 1A(LHF).svg / Console.svg): one outer outline, a
  * backrest band, an arm at each end, an upholstered console block (with
  * cup-holders) for each interior console, SOLID lines at module
  * boundaries, DASHED lines at cushion seams. Colours + proportions are
@@ -44,8 +44,8 @@ const ART_BODY_UNITS = 70;
  *  otherwise paint the generic non-functional art and DROP the badge. We keep
  *  them off the PNG composite and re-draw the badge + footrest on the seamless
  *  body instead. */
-export const isFunctionalSeat = (id: string): boolean => /-[PRL](?:-|$)/.test(id);
-export const functionalBadge = (id: string): string => id.match(/-([PRL])(?:-|$)/)?.[1] ?? '';
+export const isFunctionalSeat = (id: string): boolean => /\([PRL]\)/.test(id);
+export const functionalBadge = (id: string): string => id.match(/\(([PRL])\)/)?.[1] ?? '';
 
 export interface SeamlessSlot { moduleId: string; len: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean; armWide: boolean }
 export interface SeamlessRun { totalLen: number; thickness: number; slots: SeamlessSlot[] }
@@ -74,7 +74,7 @@ export const buildSeamlessRun = (cells: Cell[], depth: Depth, rot: Rot): Seamles
     // bailed to per-module art): renderSeamlessSofa draws their armed end as a
     // wide soft "bench" (band-colour, inset, rounded) instead of a hard arm —
     // exactly the corner view's bench (sofa-corner.tsx isBenchModule). This lets
-    // e.g. 2A-LHF + 1B-RHF join into ONE continuous sofa with a wide right bench
+    // e.g. 2A(LHF) + 1B(RHF) join into ONE continuous sofa with a wide right bench
     // rather than two detached pieces (Loo 2026-06-04, supersedes the earlier
     // "1B/2B keep their own picture" rule now that the canvas is schematic).
     const b = cellBbox(c, depth);
@@ -115,18 +115,18 @@ export const buildSeamlessRun = (cells: Cell[], depth: Depth, rot: Rot): Seamles
     // to the whole drawing afterwards (CSS rotate), so in this natural frame
     // each module's arm sits on its intrinsic side regardless of rot.
     // The S-family is ALWAYS both-arm, including its functional variants
-    // (1S-P power / 1S-R recliner / 1S-L power-leg) — match the suffix too,
-    // else a lone power seat drew with NO arms + a full-width badge.
-    const bothArms = /^[123]S(-|$)/.test(m.id);
+    // (1S(P) power / 1S(R) recliner / 1S(L) power-leg) — match the variant
+    // form too, else a lone power seat drew with NO arms + a full-width badge.
+    const bothArms = /^[123]S(\(|$)/.test(m.id);
     return {
       moduleId: m.id,
       len: axisLen(b),
       cushions: isConsole ? 0 : Math.max(1, m.cushions),
       kind: isConsole ? 'console' : 'sofa',
-      armLeft: !isConsole && (bothArms || /-LHF$/.test(m.id)),
-      armRight: !isConsole && (bothArms || /-RHF$/.test(m.id)),
+      armLeft: !isConsole && (bothArms || /\(LHF\)$/.test(m.id)),
+      armRight: !isConsole && (bothArms || /\(RHF\)$/.test(m.id)),
       // 1B / 2B: the armed side is a WIDE bench, not a hard arm (drawn below).
-      armWide: !isConsole && /^[12]B-/.test(m.id),
+      armWide: !isConsole && /^[12]B\(/.test(m.id),
     };
   });
   // Need at least one real sofa module (don't draw a run of only consoles).

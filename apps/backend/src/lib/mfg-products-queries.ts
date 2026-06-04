@@ -143,7 +143,7 @@ export type MaintenanceConfig = {
   // "+ Add Code" wizard. Optional on the wire because old maintenance rows
   // don't have them; the UI seeds defaults on first read.
   bedframeSizes?:    string[];   // ['K','Q','S','SS','SK','SP'] — bedframe size codes
-  sofaCompartments?: string[];   // ['1A-LHF','1A-RHF','1NA',...] — sofa compartment codes
+  sofaCompartments?: string[];   // ['1A(LHF)','1A(RHF)','1NA',...] — sofa compartment codes
   mattressSizes?:    string[];   // ['K','Q','S','SS']
   // PR #220 (Commander 2026-05-27): per-compartment design metadata — POS
   // module designs (image + description + default price) brought into the
@@ -153,14 +153,14 @@ export type MaintenanceConfig = {
   // All fields optional; the UI auto-seeds defaults from SOFA_MODULES when
   // absent — commander overrides land here only on Save.
   sofaCompartmentMeta?: Record<string, {
-    imageKey?: string;          // 'sofa-modules/1A-LHF.png' — relative to /public
+    imageKey?: string;          // 'sofa-modules/1A(LHF).png' — relative to /public
     description?: string;       // free-text label commander may override
     defaultPriceCenti?: number; // cents (1 RM = 100). 0/absent = no default.
   }>;
   // PR (Commander 2026-05-28): commander-editable Quick Presets. Replaces
   // the hardcoded COMBO_PRESETS array in SofaComboTab.tsx and the
   // QUICK_PRESET_META mirror in POS Configurator. Each entry names a
-  // canonical module composition (e.g. "1-Seater" = 1A-LHF + 1A-RHF) so
+  // canonical module composition (e.g. "1-Seater" = 1A(LHF) + 1A(RHF)) so
   // operation can compose Sofa Combo Rules without manually toggling
   // compartments every time. When this field is absent, both readers
   // fall back to DEFAULT_SOFA_QUICK_PRESETS in @2990s/shared so existing
@@ -198,7 +198,7 @@ export type MaintenanceConfig = {
   //   {width}          width cm    (MATTRESS dim parts)
   //   {length}         length cm
   //   {thickness}      mattress thickness cm (from Model.allowed_options)
-  //   {compartment}    Sofa compartment code (1A-LHF, 1A-RHF, ...)
+  //   {compartment}    Sofa compartment code (1A(LHF), 1A(RHF), ...)
   bedframeCodeFormat?: string;   // default: '{model_code}-({size})'
   bedframeNameFormat?: string;   // default: '{branding} BEDFRAME ({size_label}) ({dimensions})'
   sofaCodeFormat?:     string;   // default: '{model_code}-{compartment}'

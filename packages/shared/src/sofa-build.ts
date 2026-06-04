@@ -153,24 +153,29 @@ export interface SofaPriceResult {
 /* ─── Module catalogue ─────────────────────────────────────────────── */
 // 24″ baseline. 28″ depth adds 10cm × cushions to the .w (length) axis only.
 
+// Module ids use the PARENS form — the ONE canonical compartment vocabulary
+// shared with the Maintenance master pool, Modular allowed-options, mfg SKU
+// suffixes ({MODEL}-1A(LHF)) and SO descriptions (Loo 2026-06-04: "one name
+// everywhere, no translating here and there"). The legacy dash form
+// (1A-LHF) survives only inside normalizeCompartmentCode for tolerance.
 export const SOFA_MODULES: readonly SofaModuleSpec[] = [
   // 1-seaters (LHF/RHF = left/right hand facing — supplier convention)
-  { id: '1A-LHF', group: '1-seater',  label: '1A · Left hand facing',  w: 95,  d: 95,  cushions: 1 },
-  { id: '1A-RHF', group: '1-seater',  label: '1A · Right hand facing', w: 95,  d: 95,  cushions: 1 },
-  { id: '1B-LHF', group: '1-seater',  label: '1B · Left hand facing (wide arm)',  w: 105, d: 95, cushions: 1 },
-  { id: '1B-RHF', group: '1-seater',  label: '1B · Right hand facing (wide arm)', w: 105, d: 95, cushions: 1 },
+  { id: '1A(LHF)', group: '1-seater',  label: '1A · Left hand facing',  w: 95,  d: 95,  cushions: 1 },
+  { id: '1A(RHF)', group: '1-seater',  label: '1A · Right hand facing', w: 95,  d: 95,  cushions: 1 },
+  { id: '1B(LHF)', group: '1-seater',  label: '1B · Left hand facing (wide arm)',  w: 105, d: 95, cushions: 1 },
+  { id: '1B(RHF)', group: '1-seater',  label: '1B · Right hand facing (wide arm)', w: 105, d: 95, cushions: 1 },
   { id: '1NA',    group: '1-seater',  label: '1NA · No arms',          w: 75,  d: 95,  cushions: 1 },
   // 2-seaters
-  { id: '2A-LHF', group: '2-seater',  label: '2A · Left hand facing',  w: 158, d: 95,  cushions: 2 },
-  { id: '2A-RHF', group: '2-seater',  label: '2A · Right hand facing', w: 158, d: 95,  cushions: 2 },
-  { id: '2B-LHF', group: '2-seater',  label: '2B · Left hand facing (wide arm)',  w: 170, d: 95, cushions: 2 },
-  { id: '2B-RHF', group: '2-seater',  label: '2B · Right hand facing (wide arm)', w: 170, d: 95, cushions: 2 },
+  { id: '2A(LHF)', group: '2-seater',  label: '2A · Left hand facing',  w: 158, d: 95,  cushions: 2 },
+  { id: '2A(RHF)', group: '2-seater',  label: '2A · Right hand facing', w: 158, d: 95,  cushions: 2 },
+  { id: '2B(LHF)', group: '2-seater',  label: '2B · Left hand facing (wide arm)',  w: 170, d: 95, cushions: 2 },
+  { id: '2B(RHF)', group: '2-seater',  label: '2B · Right hand facing (wide arm)', w: 170, d: 95, cushions: 2 },
   { id: '2NA',    group: '2-seater',  label: '2NA · No arms',          w: 142, d: 95,  cushions: 2 },
   // Corner — single SKU per supplier; canvas rotation orients NW/NE/SE/SW.
   { id: 'CNR',    group: 'Corner',    label: 'Corner piece',           w: 95,  d: 95,  cushions: 1 },
   // L-shape chaise
-  { id: 'L-LHF',  group: 'L-Shape',   label: 'L · Left hand facing chaise',  w: 95, d: 165, cushions: 1 },
-  { id: 'L-RHF',  group: 'L-Shape',   label: 'L · Right hand facing chaise', w: 95, d: 165, cushions: 1 },
+  { id: 'L(LHF)',  group: 'L-Shape',   label: 'L · Left hand facing chaise',  w: 95, d: 165, cushions: 1 },
+  { id: 'L(RHF)',  group: 'L-Shape',   label: 'L · Right hand facing chaise', w: 95, d: 165, cushions: 1 },
   // Accessory — 45cm wood console. Slots between sofa pieces; doesn't count
   // toward bundles or closure.
   { id: 'Console', group: 'Accessory', label: 'Wood console · 45cm',    w: 45,  d: 95,  cushions: 0, accessory: true },
@@ -183,19 +188,19 @@ export const SOFA_MODULES: readonly SofaModuleSpec[] = [
   { id: '1S', group: '1-seater', label: '1-Seater (both arms)', w: 115, d: 95, cushions: 1 },
   { id: '2S', group: '2-seater', label: '2-Seater (both arms)', w: 174, d: 95, cushions: 2 },
   { id: '3S', group: '3-seater', label: '3-Seater (both arms)', w: 220, d: 95, cushions: 3 },
-  { id: '1A-P-LHF', group: '1-seater', label: '1A · Power · Left hand facing',      w: 95, d: 95, cushions: 1 },
-  { id: '1A-P-RHF', group: '1-seater', label: '1A · Power · Right hand facing',     w: 95, d: 95, cushions: 1 },
-  { id: '1A-R-LHF', group: '1-seater', label: '1A · Recliner · Left hand facing',   w: 95, d: 95, cushions: 1 },
-  { id: '1A-R-RHF', group: '1-seater', label: '1A · Recliner · Right hand facing',  w: 95, d: 95, cushions: 1 },
-  { id: '1A-L-LHF', group: '1-seater', label: '1A · Power leg · Left hand facing',  w: 95, d: 95, cushions: 1 },
-  { id: '1A-L-RHF', group: '1-seater', label: '1A · Power leg · Right hand facing', w: 95, d: 95, cushions: 1 },
-  { id: '1NA-P', group: '1-seater', label: '1NA · Power · No arms',    w: 75, d: 95, cushions: 1 },
-  { id: '1NA-R', group: '1-seater', label: '1NA · Recliner · No arms', w: 75, d: 95, cushions: 1 },
-  { id: '1NA-L', group: '1-seater', label: '1NA · Power leg · No arms', w: 75, d: 95, cushions: 1 },
+  { id: '1A(P)(LHF)', group: '1-seater', label: '1A · Power · Left hand facing',      w: 95, d: 95, cushions: 1 },
+  { id: '1A(P)(RHF)', group: '1-seater', label: '1A · Power · Right hand facing',     w: 95, d: 95, cushions: 1 },
+  { id: '1A(R)(LHF)', group: '1-seater', label: '1A · Recliner · Left hand facing',   w: 95, d: 95, cushions: 1 },
+  { id: '1A(R)(RHF)', group: '1-seater', label: '1A · Recliner · Right hand facing',  w: 95, d: 95, cushions: 1 },
+  { id: '1A(L)(LHF)', group: '1-seater', label: '1A · Power leg · Left hand facing',  w: 95, d: 95, cushions: 1 },
+  { id: '1A(L)(RHF)', group: '1-seater', label: '1A · Power leg · Right hand facing', w: 95, d: 95, cushions: 1 },
+  { id: '1NA(P)', group: '1-seater', label: '1NA · Power · No arms',    w: 75, d: 95, cushions: 1 },
+  { id: '1NA(R)', group: '1-seater', label: '1NA · Recliner · No arms', w: 75, d: 95, cushions: 1 },
+  { id: '1NA(L)', group: '1-seater', label: '1NA · Power leg · No arms', w: 75, d: 95, cushions: 1 },
   // 1-Seater (both arms) functional variants — 1S body + forward footrest.
-  { id: '1S-P', group: '1-seater', label: '1S · Power · Both arms',     w: 115, d: 95, cushions: 1 },
-  { id: '1S-R', group: '1-seater', label: '1S · Recliner · Both arms',  w: 115, d: 95, cushions: 1 },
-  { id: '1S-L', group: '1-seater', label: '1S · Power leg · Both arms', w: 115, d: 95, cushions: 1 },
+  { id: '1S(P)', group: '1-seater', label: '1S · Power · Both arms',     w: 115, d: 95, cushions: 1 },
+  { id: '1S(R)', group: '1-seater', label: '1S · Recliner · Both arms',  w: 115, d: 95, cushions: 1 },
+  { id: '1S(L)', group: '1-seater', label: '1S · Power leg · Both arms', w: 115, d: 95, cushions: 1 },
 ];
 
 const MODULE_BY_ID = new Map<string, SofaModuleSpec>(SOFA_MODULES.map((m) => [m.id, m]));
@@ -204,25 +209,34 @@ export const findModule = (id: string): SofaModuleSpec | undefined => MODULE_BY_
 
 export const isAccessoryModule = (id: string): boolean => MODULE_BY_ID.get(id)?.accessory === true;
 
-/* ─── Maintenance compartment code helpers (PR — Commander 2026-05-28) ──
+/* ─── Compartment code canonicalizer (unified 2026-06-04) ──────────────
  *
- * Commander's Maintenance compartment pool stores codes in either dash form
- * (`1A-LHF`) or parens form (`1A(LHF)`). The POS shared lib expects the
- * dash form. `normalizeCompartmentCode` collapses both to the dash form so
- * lookups (findModule, palette filtering) hit regardless of which form
- * commander typed.
+ * The ONE compartment vocabulary is the PARENS form (`1A(LHF)`,
+ * `1A(P)(LHF)`) — same as the Maintenance master pool, Modular
+ * allowed-options, mfg SKU suffixes and SO descriptions.
+ * `normalizeCompartmentCode` canonicalizes any input to that form, so a
+ * stray legacy dash code (`1A-LHF` from a pre-migration snapshot or a
+ * free-typed Maintenance entry) still resolves to the same module. It is
+ * an input spell-checker at the boundary — NOT a display translation; the
+ * canonical form IS what renders everywhere.
  *
  * `classifySofaCompartment` groups a code into the POS palette buckets so
  * CustomBuilder can build "1-SEATER / 2-SEATER / CORNER / L-SHAPE / OTHER"
  * sections from the Model's allowed-options list. Mirrors SOFA_MODULES.group
- * for codes the shared lib already knows about; codes unique to the
- * Maintenance pool (recliner variants like `1A(P)(LHF)`, the `Console`
- * alias) fall back to a prefix heuristic so unknown commander codes still
- * show up under the right header.
+ * for codes the shared lib already knows about; unknown pool codes fall
+ * back to a prefix heuristic so they still show up under the right header.
  * ─────────────────────────────────────────────────────────────────────── */
 
-export const normalizeCompartmentCode = (raw: string): string =>
-  raw.trim().replace(/\(([^)]*)\)/g, '-$1').replace(/-+$/, '');
+export const normalizeCompartmentCode = (raw: string): string => {
+  // Collapse any parens/dash mix down to dash tokens first, then re-emit
+  // the canonical parens form: base token + each following token wrapped.
+  // '1A-LHF' → '1A(LHF)'; '1A(P)-LHF' → '1A(P)(LHF)'; '1NA' → '1NA';
+  // codes with no dash/parens structure ('Console', 'STOOL') pass through.
+  const dash = raw.trim().replace(/\(([^)]*)\)/g, '-$1').replace(/-+$/, '');
+  const parts = dash.split('-').filter(Boolean);
+  if (parts.length <= 1) return dash;
+  return (parts[0] ?? '') + parts.slice(1).map((p) => `(${p})`).join('');
+};
 
 export type SofaCompartmentGroup =
   | '1-seater'
@@ -417,7 +431,7 @@ export const sofaComboCostSen = (
 
 /* ─── Recliner eligibility ─────────────────────────────────────────── */
 
-const RECLINER_RE = /^(1[AB]-[LR]HF|1NA|2[AB]-[LR]HF|2NA)$/;
+const RECLINER_RE = /^(1[AB]\([LR]HF\)|1NA|2[AB]\([LR]HF\)|2NA)$/;
 export const reclinerEligible = (modId: string): boolean => RECLINER_RE.test(modId);
 export const seatCount = (modId: string): number => {
   if (!reclinerEligible(modId)) return 0;
@@ -425,12 +439,13 @@ export const seatCount = (modId: string): number => {
 };
 
 /* ─── Bundle catalogue + auto-detect ───────────────────────────────── */
-// Family = the part before the last "-" (1A-LHF → 1A). Used for the multiset
-// signature that bundles match against. Accessories drop out before signing.
+// Family = the base token before the first "(" (1A(LHF) → 1A). Used for the
+// multiset signature that bundles match against. Accessories drop out before
+// signing.
 
 export const moduleFamily = (id: string): string => {
-  const parts = id.split('-');
-  return parts.length === 1 ? id : (parts[0] ?? id);
+  const paren = id.indexOf('(');
+  return paren > 0 ? id.slice(0, paren) : id;
 };
 
 export const familySignature = (modIds: string[]): string =>
@@ -572,13 +587,13 @@ const SINGLE_PIECE_BUNDLES = new Set(['1S', '2S', '2.5S']);
 // (Loo 2026-05-24). Keyed by bundle id; single-piece bundles aren't listed here
 // (they render as their name).
 const BUNDLE_INVOICE_DECOMP: Record<string, string> = {
-  '3S':  '1A-LHF + 2A-RHF',
-  '2+L': '2A-LHF + L-RHF',
-  '3+L': '2A-LHF + 1NA + L-RHF',
+  '3S':  '1A(LHF) + 2A(RHF)',
+  '2+L': '2A(LHF) + L(RHF)',
+  '3+L': '2A(LHF) + 1NA + L(RHF)',
   // Console (F6): two single-arm 1-seaters flanking a wood console.
-  '2WC': '1A-LHF + Console + 1A-RHF',
+  '2WC': '1A(LHF) + Console + 1A(RHF)',
   // Corner package (F4, 5539): 1A + corner + 2A (1A is the chaise leg).
-  'CORNER': '1A-LHF + CNR + 2A-RHF',
+  'CORNER': '1A(LHF) + CNR + 2A(RHF)',
 };
 
 const bundleLabelById = (bundleId: string): string =>
@@ -612,7 +627,7 @@ export interface SofaLineDescriptor {
 /**
  * Human-readable description for a sofa order/invoice line (Track 2 §8.1):
  *   - single-piece bundle (1S/2S/2.5S) → bundle name ("2-Seater")
- *   - multi-piece bundle (3S/2+L/…)    → decomposed module ids ("1A-LHF + 2A-RHF")
+ *   - multi-piece bundle (3S/2+L/…)    → decomposed module ids ("1A(LHF) + 2A(RHF)")
  *   - Custom Build cells               → the cells' own oriented ids, left-to-right
  *     (a console / any accessory in the cells forces decomposition so it stays visible)
  *   - any seat upgrades                → "+ N <seatUpgradeLabel>" appended
@@ -670,20 +685,20 @@ export const EDGE_E: EdgeIdx = 2;
 export const EDGE_S: EdgeIdx = 3;
 
 const MODULE_EDGES_BASE: Record<string, [EdgeType, EdgeType, EdgeType, EdgeType]> = {
-  '1A-LHF': ['arm',  'back', 'open', 'front'],
-  '1A-RHF': ['open', 'back', 'arm',  'front'],
-  '1B-LHF': ['arm',  'back', 'open', 'front'],
-  '1B-RHF': ['open', 'back', 'arm',  'front'],
+  '1A(LHF)': ['arm',  'back', 'open', 'front'],
+  '1A(RHF)': ['open', 'back', 'arm',  'front'],
+  '1B(LHF)': ['arm',  'back', 'open', 'front'],
+  '1B(RHF)': ['open', 'back', 'arm',  'front'],
   '1NA':    ['open', 'back', 'open', 'front'],
-  '2A-LHF': ['arm',  'back', 'open', 'front'],
-  '2A-RHF': ['open', 'back', 'arm',  'front'],
-  '2B-LHF': ['arm',  'back', 'open', 'front'],
-  '2B-RHF': ['open', 'back', 'arm',  'front'],
+  '2A(LHF)': ['arm',  'back', 'open', 'front'],
+  '2A(RHF)': ['open', 'back', 'arm',  'front'],
+  '2B(LHF)': ['arm',  'back', 'open', 'front'],
+  '2B(RHF)': ['open', 'back', 'arm',  'front'],
   '2NA':    ['open', 'back', 'open', 'front'],
   // CNR base orientation = NW (arms on N+W). Other orientations come from canvas rot.
   'CNR':    ['arm',  'arm',  'open', 'open'],
-  'L-LHF':  ['open', 'back', 'open', 'front'],
-  'L-RHF':  ['open', 'back', 'open', 'front'],
+  'L(LHF)':  ['open', 'back', 'open', 'front'],
+  'L(RHF)':  ['open', 'back', 'open', 'front'],
   'Console':['open', 'open', 'open', 'open'],
   'STOOL':  ['open', 'open', 'open', 'open'],
   // Whole-unit presets — both end arms so a lone unit self-closes; two placed
@@ -691,20 +706,20 @@ const MODULE_EDGES_BASE: Record<string, [EdgeType, EdgeType, EdgeType, EdgeType]
   '1S': ['arm', 'back', 'arm', 'front'],
   '2S': ['arm', 'back', 'arm', 'front'],
   '3S': ['arm', 'back', 'arm', 'front'],
-  // Functional 1-seater variants mirror their base 1A-LHF / 1A-RHF arm side.
-  '1A-P-LHF': ['arm',  'back', 'open', 'front'],
-  '1A-P-RHF': ['open', 'back', 'arm',  'front'],
-  '1A-R-LHF': ['arm',  'back', 'open', 'front'],
-  '1A-R-RHF': ['open', 'back', 'arm',  'front'],
-  '1A-L-LHF': ['arm',  'back', 'open', 'front'],
-  '1A-L-RHF': ['open', 'back', 'arm',  'front'],
-  '1NA-P': ['open', 'back', 'open', 'front'],
-  '1NA-R': ['open', 'back', 'open', 'front'],
-  '1NA-L': ['open', 'back', 'open', 'front'],
+  // Functional 1-seater variants mirror their base 1A(LHF) / 1A(RHF) arm side.
+  '1A(P)(LHF)': ['arm',  'back', 'open', 'front'],
+  '1A(P)(RHF)': ['open', 'back', 'arm',  'front'],
+  '1A(R)(LHF)': ['arm',  'back', 'open', 'front'],
+  '1A(R)(RHF)': ['open', 'back', 'arm',  'front'],
+  '1A(L)(LHF)': ['arm',  'back', 'open', 'front'],
+  '1A(L)(RHF)': ['open', 'back', 'arm',  'front'],
+  '1NA(P)': ['open', 'back', 'open', 'front'],
+  '1NA(R)': ['open', 'back', 'open', 'front'],
+  '1NA(L)': ['open', 'back', 'open', 'front'],
   // 1S functional variants carry both end arms, same as the plain 1S preset.
-  '1S-P': ['arm', 'back', 'arm', 'front'],
-  '1S-R': ['arm', 'back', 'arm', 'front'],
-  '1S-L': ['arm', 'back', 'arm', 'front'],
+  '1S(P)': ['arm', 'back', 'arm', 'front'],
+  '1S(R)': ['arm', 'back', 'arm', 'front'],
+  '1S(L)': ['arm', 'back', 'arm', 'front'],
 };
 
 /** Clockwise 90° shifts [W,N,E,S] → [S,W,N,E]. */
@@ -911,7 +926,7 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
     // Multi-module bundles need a closed layout (proper arm at each end) so
     // a customer can't dodge into bundle pricing with a nonsense layout like
     // two LHF modules adjacent. Single-module bundles ARE the module — a
-    // 1A-LHF is a left-armed 1-seater product, closed by definition.
+    // 1A(LHF) is a left-armed 1-seater product, closed by definition.
     const closed = group.length === 1 || analyzeSofa(group, depth).closed;
     if (row && row.active && closed) {
       bundle = candidate;
@@ -1199,14 +1214,14 @@ export const analyzeSofa = (group: Cell[], depth: Depth): SofaAnalysis => {
     const id = ids[i]!;
     const edges = cellEdges(c);
     const myContacts = contactsByCell[id]!;
-    const isL = c.moduleId.startsWith('L-');
+    const isL = c.moduleId.startsWith('L(');
     const isAcc = isAccessoryModule(c.moduleId);
 
     let lCapEdge: EdgeIdx | -1 = -1;
     if (isL) {
-      // L-RHF mates on W → outer cap on E. L-LHF mates on E → outer cap on W.
+      // L(RHF) mates on W → outer cap on E. L(LHF) mates on E → outer cap on W.
       // CW rotation rotates the edge index by +1 mod 4 per 90°.
-      const baseCap: EdgeIdx = c.moduleId === 'L-RHF' ? EDGE_E : EDGE_W;
+      const baseCap: EdgeIdx = c.moduleId === 'L(RHF)' ? EDGE_E : EDGE_W;
       const r = ((c.rot % 360) + 360) % 360;
       const steps = r / 90;
       lCapEdge = ((baseCap + steps) % 4) as EdgeIdx;

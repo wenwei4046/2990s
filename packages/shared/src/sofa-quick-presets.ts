@@ -32,7 +32,7 @@ export type SofaQuickPreset = {
   /** User-facing label shown on the Quick Presets chip + Quick Pick card. */
   label: string;
   /** Canonical compartment codes in left-to-right order — e.g.
-      ['1A-LHF','2A-RHF']. Drives the New Combo composer prefill, the
+      ['1A(LHF)','2A(RHF)']. Drives the New Combo composer prefill, the
       POS Configurator Customize preview, and Combo Rule pricing. */
   modules: string[];
   /** Display order; ascending. Falls back to array index when missing. */
@@ -52,17 +52,17 @@ export type SofaQuickPreset = {
  *  read from this list when maintenance_config.sofaQuickPresets is absent,
  *  so existing deployments keep working until commander overrides it. */
 export const DEFAULT_SOFA_QUICK_PRESETS: SofaQuickPreset[] = [
-  { id: '1S',       label: '1-Seater',                modules: ['1A-LHF', '1A-RHF'] },
-  { id: '2S',       label: '2-Seater',                modules: ['2A-LHF', '2A-RHF'] },
-  { id: '3S-L',     label: '3-Seater (1+2)',          modules: ['1A-LHF', '2A-RHF'] },
-  { id: '3S-R',     label: '3-Seater (2+1)',          modules: ['2A-LHF', '1A-RHF'] },
-  { id: '2+L-L',    label: '2 + L (chaise left)',     modules: ['L-LHF', '2A-RHF'] },
-  { id: '2+L-R',    label: '2 + L (chaise right)',    modules: ['2A-LHF', 'L-RHF'] },
-  { id: '3+L-L',    label: '3 + L (chaise left)',     modules: ['L-LHF', '1NA', '2A-RHF'] },
-  { id: '3+L-R',    label: '3 + L (chaise right)',    modules: ['2A-LHF', '1NA', 'L-RHF'] },
-  { id: '2WC',      label: '2-Seater + Console',      modules: ['1A-LHF', 'Console', '1A-RHF'] },
-  { id: 'CORNER-L', label: 'Corner (LHF)',            modules: ['1A-LHF', 'CNR', '2A-RHF'] },
-  { id: 'CORNER-R', label: 'Corner (RHF)',            modules: ['2A-LHF', 'CNR', '1A-RHF'] },
+  { id: '1S',       label: '1-Seater',                modules: ['1A(LHF)', '1A(RHF)'] },
+  { id: '2S',       label: '2-Seater',                modules: ['2A(LHF)', '2A(RHF)'] },
+  { id: '3S-L',     label: '3-Seater (1+2)',          modules: ['1A(LHF)', '2A(RHF)'] },
+  { id: '3S-R',     label: '3-Seater (2+1)',          modules: ['2A(LHF)', '1A(RHF)'] },
+  { id: '2+L-L',    label: '2 + L (chaise left)',     modules: ['L(LHF)', '2A(RHF)'] },
+  { id: '2+L-R',    label: '2 + L (chaise right)',    modules: ['2A(LHF)', 'L(RHF)'] },
+  { id: '3+L-L',    label: '3 + L (chaise left)',     modules: ['L(LHF)', '1NA', '2A(RHF)'] },
+  { id: '3+L-R',    label: '3 + L (chaise right)',    modules: ['2A(LHF)', '1NA', 'L(RHF)'] },
+  { id: '2WC',      label: '2-Seater + Console',      modules: ['1A(LHF)', 'Console', '1A(RHF)'] },
+  { id: 'CORNER-L', label: 'Corner (LHF)',            modules: ['1A(LHF)', 'CNR', '2A(RHF)'] },
+  { id: 'CORNER-R', label: 'Corner (RHF)',            modules: ['2A(LHF)', 'CNR', '1A(RHF)'] },
 ];
 
 /** Resolve the effective Quick Presets list for a given maintenance

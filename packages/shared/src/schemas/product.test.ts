@@ -11,7 +11,7 @@ const base = {
   name: 'Test', detail: null, sizeDisplay: null, depthOptions: '24',
   imgKey: null, thumbKey: null, stock: 0, lowAt: 5, visible: true, includedAddons: [],
   reclinerUpgradePrice: 0,
-  compartments: [{ compartmentId: '1A-LHF', active: true, price: 100 }],
+  compartments: [{ compartmentId: '1A(LHF)', active: true, price: 100 }],
   bundles: [{ bundleId: '2S', active: true, price: 1990 }],
 };
 
