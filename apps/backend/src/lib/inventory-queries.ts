@@ -93,6 +93,7 @@ export type InventoryMovement = {
   source_doc_type: string | null;
   source_doc_id: string | null;
   source_doc_no: string | null;
+  reason_code: string | null;
   notes: string | null;
   performed_by: string | null;
   created_at: string;
@@ -186,6 +187,36 @@ export function useInventoryProductTotals(opts?: { search?: string; category?: s
       ).then((r) => r.products);
     },
     staleTime: 30_000,
+  });
+}
+
+/* ── Inventory analytics / KPI board ─────────────────────────────────── */
+export type InventoryAnalytics = {
+  asOf: string;
+  windowDays: number;
+  totalValueSen: number;
+  distinctSkus: number;
+  aging: { key: string; label: string; qty: number; valueSen: number }[];
+  turnover: { trailingCogsSen: number; annualizedTurns: number; daysOnHand: number | null };
+  deadStock: { product_code: string; product_name: string; qty: number; valueSen: number; lastSoldAt: string | null }[];
+  abc: {
+    items: { product_code: string; product_name: string; cogsSen: number; onHandValueSen: number; cumPct: number; class: 'A' | 'B' | 'C' }[];
+    summary: Record<'A' | 'B' | 'C', { count: number; valueSen: number }>;
+  };
+};
+
+export function useInventoryAnalytics(opts?: { days?: number; warehouseId?: string | null }) {
+  return useQuery({
+    queryKey: ['inventory', 'analytics', opts ?? {}],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (opts?.days) params.set('days', String(opts.days));
+      if (opts?.warehouseId) params.set('warehouseId', opts.warehouseId);
+      return authedFetch<InventoryAnalytics>(
+        `/inventory/analytics${params.toString() ? `?${params.toString()}` : ''}`,
+      );
+    },
+    staleTime: 60_000,
   });
 }
 
@@ -355,6 +386,7 @@ export function useStockAdjustment() {
       productCode: string;
       productName?: string;
       qtyDelta: number;
+      reasonCode: string;
       notes?: string;
     }) => authedFetch<{ movement: { id: string } }>(`/inventory/adjustments`, {
       method: 'POST', body: JSON.stringify(body),

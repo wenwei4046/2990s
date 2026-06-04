@@ -31,6 +31,7 @@ import {
   useInventoryLots,
   useInventoryBatches,
   useCogsEntries,
+  useInventoryAnalytics,
   useCreateWarehouse,
   useUpdateWarehouse,
   type CogsEntry,
@@ -61,7 +62,7 @@ import styles from './Inventory.module.css';
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 const ICON_MD = { size: 16, strokeWidth: 1.75 } as const;
 
-type Tab = 'balances' | 'batches' | 'warehouses';
+type Tab = 'balances' | 'batches' | 'warehouses' | 'analytics';
 type Category = 'all' | 'ACCESSORY' | 'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'SERVICE';
 
 const CATEGORIES: { value: Category; label: string }[] = [
@@ -113,6 +114,9 @@ export const Inventory = () => {
           <button type="button" className={styles.tab} data-active={tab === 'warehouses'} onClick={() => setTab('warehouses')}>
             Warehouses
           </button>
+          <button type="button" className={styles.tab} data-active={tab === 'analytics'} onClick={() => setTab('analytics')}>
+            Analytics
+          </button>
         </div>
       </div>
 
@@ -158,6 +162,9 @@ export const Inventory = () => {
       {tab === 'warehouses' && (
         <WarehousesTab />
       )}
+      {tab === 'analytics' && (
+        <AnalyticsTab warehouseId={warehouseId} />
+      )}
 
       {breakdownFor && (
         <ProductBreakdownDrawer
@@ -166,6 +173,135 @@ export const Inventory = () => {
           onClose={() => setBreakdownFor(null)}
         />
       )}
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   Analytics tab — read-only inventory KPI board: aging, turnover, dead stock,
+   ABC. Computed server-side from open lots + COGS stream (GET /inventory/
+   analytics). Wei Siang 2026-06-04.
+   ════════════════════════════════════════════════════════════════════════ */
+const WINDOWS = [30, 90, 180, 365];
+const fmtDay = (iso: string | null): string => {
+  if (!iso) return 'never';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
+const AnalyticsTab = ({ warehouseId }: { warehouseId: string | null }) => {
+  const [days, setDays] = useState(90);
+  const { data, isLoading, error } = useInventoryAnalytics({ days, warehouseId });
+
+  if (isLoading) return <div className={styles.emptyRow} style={{ padding: 'var(--space-6)' }}>Loading analytics…</div>;
+  if (error || !data) return <div className={styles.emptyRow} style={{ padding: 'var(--space-6)' }}>Could not load analytics.</div>;
+
+  const agingMax = Math.max(1, ...data.aging.map((b) => b.valueSen));
+  const turns = data.turnover.annualizedTurns;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+      {/* Window selector */}
+      <div className={styles.warehouseChips}>
+        {WINDOWS.map((w) => (
+          <button key={w} type="button" className={styles.chip}
+            data-active={days === w} onClick={() => setDays(w)}>
+            Last {w} days
+          </button>
+        ))}
+      </div>
+
+      {/* KPI cards */}
+      <div className={styles.statGrid}>
+        <div className={styles.statCard}>
+          <span className={styles.statLabel}>Inventory Value</span>
+          <span className={styles.statValue}>{fmtRm(data.totalValueSen)}</span>
+        </div>
+        <div className={styles.statCard}>
+          <span className={styles.statLabel}>Distinct SKUs in stock</span>
+          <span className={styles.statValue}>{data.distinctSkus.toLocaleString('en-MY')}</span>
+        </div>
+        <div className={styles.statCard}>
+          <span className={styles.statLabel}>Stock Turn (annualised)</span>
+          <span className={styles.statValue}>{turns > 0 ? `${turns.toFixed(1)}×` : '—'}</span>
+        </div>
+        <div className={styles.statCard}>
+          <span className={styles.statLabel}>Days of Stock on Hand</span>
+          <span className={styles.statValue}>{data.turnover.daysOnHand != null ? `${Math.round(data.turnover.daysOnHand)}d` : '—'}</span>
+        </div>
+      </div>
+
+      {/* Stock aging */}
+      <p className={styles.eyebrow}>Stock Aging — by date received</p>
+      <div className={styles.tableCard}>
+        <table className={styles.table}>
+          <thead>
+            <tr>
+              <th>Age Bucket</th>
+              <th style={{ textAlign: 'right' }}>Qty</th>
+              <th style={{ textAlign: 'right' }}>Value</th>
+              <th style={{ width: '34%' }}>Share of value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.aging.map((b) => (
+              <tr key={b.key}>
+                <td>{b.label}</td>
+                <td className={`${styles.numCell} ${b.qty > 0 ? styles.numCellPos : styles.numCellZero}`}>{b.qty.toLocaleString('en-MY')}</td>
+                <td className={styles.numCell} style={{ fontWeight: 700 }}>{b.valueSen > 0 ? fmtRm(b.valueSen) : '—'}</td>
+                <td>
+                  <div style={{ height: 10, borderRadius: 5, background: 'var(--c-paper)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${(b.valueSen / agingMax) * 100}%`, background: 'var(--c-burnt)' }} />
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* ABC classification */}
+      <p className={styles.eyebrow}>ABC Classification — by sales value over the window</p>
+      <div className={styles.statGrid}>
+        {(['A', 'B', 'C'] as const).map((cls) => (
+          <div key={cls} className={styles.statCard}>
+            <span className={styles.statLabel}>
+              Class {cls} {cls === 'A' ? '· top sellers' : cls === 'B' ? '· steady' : '· slow / idle'}
+            </span>
+            <span className={styles.statValue}>{data.abc.summary[cls].count}</span>
+            <span className={styles.statLabel}>{fmtRm(data.abc.summary[cls].valueSen)} on hand</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Dead stock */}
+      <p className={styles.eyebrow}>Dead Stock — has stock, no sale in {days} days</p>
+      <div className={styles.tableCard}>
+        <table className={styles.table}>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th style={{ textAlign: 'right' }}>Qty</th>
+              <th style={{ textAlign: 'right' }}>Value</th>
+              <th>Last Sold</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.deadStock.length === 0 && (
+              <tr><td colSpan={4} className={styles.emptyRow}>No dead stock — every SKU in stock sold within {days} days.</td></tr>
+            )}
+            {data.deadStock.map((d) => (
+              <tr key={d.product_code}>
+                <td><span className={styles.codeChip}>{d.product_code}</span> {d.product_name}</td>
+                <td className={`${styles.numCell} ${styles.numCellPos}`}>{d.qty.toLocaleString('en-MY')}</td>
+                <td className={styles.numCell} style={{ fontWeight: 700 }}>{fmtRm(d.valueSen)}</td>
+                <td className={styles.numCellZero}>{fmtDay(d.lastSoldAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 };

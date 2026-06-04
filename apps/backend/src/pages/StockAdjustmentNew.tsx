@@ -15,6 +15,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, Save, X, Minus, Plus, AlertTriangle } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { ADJUSTMENT_REASONS } from '@2990s/shared';
 import {
   useWarehouses,
   useStockAdjustment,
@@ -37,6 +38,7 @@ export const StockAdjustmentNew = () => {
   const [productName, setProductName] = useState<string>('');
   const [type, setType]               = useState<AdjustmentType>('decrease');
   const [qty, setQty]                 = useState<number>(1);
+  const [reasonCode, setReasonCode]   = useState<string>('');
   const [notes, setNotes]             = useState<string>('');
 
   // ── Data ───────────────────────────────────────────────────────────
@@ -67,7 +69,7 @@ export const StockAdjustmentNew = () => {
     warehouseId &&
     productCode.trim() &&
     qty > 0 &&
-    notes.trim(),
+    reasonCode,
   );
 
   // SKU picker — when commander types/picks a code that matches an mfg
@@ -80,7 +82,7 @@ export const StockAdjustmentNew = () => {
 
   const onSave = () => {
     if (!canSave) {
-      window.alert('Fill Warehouse, SKU, Qty, and Reason / Notes before saving.');
+      window.alert('Fill Warehouse, SKU, Qty, and pick a Reason before saving.');
       return;
     }
     if (willGoNegative) {
@@ -95,7 +97,8 @@ export const StockAdjustmentNew = () => {
         productCode: productCode.trim(),
         productName: productName.trim() || undefined,
         qtyDelta,
-        notes: notes.trim(),
+        reasonCode,
+        notes: notes.trim() || undefined,
       },
       {
         onSuccess: () => navigate('/inventory/adjustments'),
@@ -267,13 +270,28 @@ export const StockAdjustmentNew = () => {
               />
             </label>
 
-            {/* Notes — required for audit trail */}
+            {/* Reason — structured, required for audit trail */}
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Reason / Notes *</span>
+              <span className={styles.fieldLabel}>Reason *</span>
+              <select
+                value={reasonCode}
+                onChange={(e) => setReasonCode(e.target.value)}
+                className={styles.fieldInput}
+              >
+                <option value="">— Pick a reason —</option>
+                {ADJUSTMENT_REASONS.map((r) => (
+                  <option key={r.code} value={r.code}>{r.label}</option>
+                ))}
+              </select>
+            </label>
+
+            {/* Notes — optional free-text detail */}
+            <label className={`${styles.field} ${styles.fieldFull}`}>
+              <span className={styles.fieldLabel}>Notes (optional)</span>
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Why this adjustment? e.g. 'Damaged in transit, lot #4', 'Found 2 PCS during recount on 27/05'"
+                placeholder="Extra detail — e.g. 'Lot #4, water damage', 'Found 2 PCS during recount on 27/05'"
                 className={styles.fieldInput}
                 rows={3}
                 style={{ minHeight: 52, resize: 'vertical' }}
