@@ -22,7 +22,7 @@
 //                         draft to /:docNo/payments before navigating.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
@@ -128,6 +128,30 @@ export const SalesOrderNew = () => {
   /* PR-A on Detail exposed Customer SO Ref inside the Customer card —
      mirror that here so the two pages line up. */
   const [customerSoNo,  setCustomerSoNo]  = useState('');
+
+  /* Autofill rescue (Wei Siang 2026-06-03) — Chrome/Edge "paint" saved values
+     into the Customer Name / Phone / Email inputs WITHOUT firing React's
+     onChange, so state stays empty and the Create button is stuck disabled even
+     though the fields look filled. Right after mount we read the inputs straight
+     from the DOM and push any autofilled value into state (only when state is
+     still empty, so we never clobber what the operator typed). Two delayed reads
+     cover the browser's autofill timing. */
+  const custGridRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sync = () => {
+      const root = custGridRef.current;
+      if (!root) return;
+      const nameEl  = root.querySelector('input[required]') as HTMLInputElement | null;
+      const emailEl = root.querySelector('input[type="email"]') as HTMLInputElement | null;
+      const phoneEl = root.querySelector('input[type="tel"]') as HTMLInputElement | null;
+      if (nameEl?.value)  setDebtorName((prev) => prev || nameEl.value);
+      if (emailEl?.value) setEmail((prev) => prev || emailEl.value);
+      if (phoneEl?.value) setPhone((prev) => prev || phoneEl.value);
+    };
+    const t1 = setTimeout(sync, 250);
+    const t2 = setTimeout(sync, 800);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, []);
 
   // ── Order Info fields (Building Type / Venue / Dates / Note) ───────
   const [buildingType,   setBuildingType] = useState<string>('');
@@ -696,7 +720,7 @@ export const SalesOrderNew = () => {
           <h2 className={styles.cardTitle}>Customer</h2>
         </header>
         <div className={styles.cardBody}>
-          <div className={styles.formGrid4}>
+          <div className={styles.formGrid4} ref={custGridRef}>
             <label className={styles.field} style={{ gridColumn: 'span 3' }}>
               <span className={styles.fieldLabel}>Customer Name *</span>
               <input
