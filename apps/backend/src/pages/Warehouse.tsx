@@ -19,6 +19,7 @@ import { useMemo, useState } from 'react';
 import {
   Grid3x3, Package, MapPin, LayoutGrid, Warehouse as WarehouseIcon,
   ArrowRightLeft, History, ArrowDownToLine, ArrowUpFromLine, X, RefreshCw, Plus,
+  Pencil, Check,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -27,6 +28,7 @@ import {
   useStockIn,
   useStockOut,
   useCreateRack,
+  useUpdateRack,
   type Rack,
   type RackItem,
   type RackMovement,
@@ -181,6 +183,81 @@ const KpiTile = ({ label, value, icon }: { label: string; value: number | string
 );
 
 /* ════════════════════════════════════════════════════════════════════════
+   Shared rack-rename logic + inline editor
+   Used by both the Rack Overview grid tiles and the detail drawer so the
+   behaviour (Enter saves / Escape cancels, duplicate-name alert) stays in one
+   place.
+   ════════════════════════════════════════════════════════════════════════ */
+const useRackRename = (rack: Rack) => {
+  const updateRack = useUpdateRack();
+  const [editing, setEditing] = useState(false);
+  const [label, setLabel] = useState(rack.rack);
+
+  const trimmed = label.trim();
+  const canSave = trimmed.length > 0 && trimmed !== rack.rack && !updateRack.isPending;
+
+  const startEdit = () => { setLabel(rack.rack); setEditing(true); };
+  const cancelEdit = () => { setEditing(false); setLabel(rack.rack); };
+  const saveEdit = () => {
+    if (!canSave) return;
+    updateRack.mutate(
+      { id: rack.id, rack: trimmed },
+      {
+        onSuccess: () => setEditing(false),
+        onError: (err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          window.alert(
+            msg.includes('duplicate_rack')
+              ? `A rack named "${trimmed}" already exists in this warehouse.`
+              : msg,
+          );
+        },
+      },
+    );
+  };
+
+  return {
+    editing, label, setLabel,
+    canSave, isPending: updateRack.isPending,
+    startEdit, cancelEdit, saveEdit,
+  };
+};
+
+type RackRenameState = ReturnType<typeof useRackRename>;
+
+const RackRenameEditor = ({
+  rename, inputStyle, stopPropagation = false,
+}: {
+  rename: RackRenameState;
+  inputStyle?: React.CSSProperties;
+  stopPropagation?: boolean;
+}) => (
+  <div
+    style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flex: 1 }}
+    {...(stopPropagation ? { onClick: (e: React.MouseEvent) => e.stopPropagation() } : {})}
+  >
+    <input
+      className={styles.input}
+      style={inputStyle}
+      value={rename.label}
+      autoFocus
+      onChange={(e) => rename.setLabel(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') rename.saveEdit();
+        else if (e.key === 'Escape') rename.cancelEdit();
+      }}
+    />
+    <Button variant="primary" size="sm" disabled={!rename.canSave} onClick={rename.saveEdit}>
+      <Check {...ICON} />
+      <span>{rename.isPending ? 'Saving…' : 'Save'}</span>
+    </Button>
+    <Button variant="ghost" size="sm" disabled={rename.isPending} onClick={rename.cancelEdit}>
+      <span>Cancel</span>
+    </Button>
+  </div>
+);
+
+/* ════════════════════════════════════════════════════════════════════════
    Rack grid — flat tiles, 3 items visible + "+N more"
    ════════════════════════════════════════════════════════════════════════ */
 const RackGrid = ({
@@ -244,49 +321,93 @@ const RackGrid = ({
 
       {!loading && racks.length > 0 && (
         <div className={styles.rackGrid}>
-          {racks.map((rack) => {
-            const items = rack.items ?? [];
-            const visible = items.slice(0, VISIBLE);
-            const extra = Math.max(0, items.length - VISIBLE);
-            const tileClass =
-              rack.status === 'OCCUPIED' ? styles.rackTileOccupied
-              : rack.status === 'RESERVED' ? styles.rackTileReserved
-              : styles.rackTileEmpty;
-
-            return (
-              <div
-                key={rack.id}
-                className={`${styles.rackTile} ${tileClass}`}
-                onClick={() => {
-                  if (rack.status === 'OCCUPIED') onOpenOccupied(rack);
-                  else if (rack.status === 'EMPTY') onStockInEmpty(rack);
-                }}
-              >
-                <div className={styles.rackTileHead}>
-                  <span className={styles.rackName}>{rack.rack}</span>
-                  {rack.status === 'OCCUPIED' && (
-                    <span className={styles.rackCount}>
-                      {items.length} item{items.length === 1 ? '' : 's'}
-                    </span>
-                  )}
-                </div>
-                {rack.status === 'OCCUPIED' && (
-                  <div>
-                    {visible.map((it) => (
-                      <div key={it.id} className={styles.rackItemLine}>
-                        <div className={styles.rackItemCode}>{it.product_code}</div>
-                        {it.customer_name && <div className={styles.rackItemSub}>{it.customer_name}</div>}
-                      </div>
-                    ))}
-                    {extra > 0 && <div className={styles.rackMore}>+{extra} more</div>}
-                  </div>
-                )}
-                {rack.status === 'RESERVED' && <div className={styles.rackEmptyLabel}>Reserved</div>}
-                {rack.status === 'EMPTY' && <div className={styles.rackEmptyLabel}>Empty</div>}
-              </div>
-            );
-          })}
+          {racks.map((rack) => (
+            <RackTile
+              key={rack.id}
+              rack={rack}
+              visibleCount={VISIBLE}
+              onOpenOccupied={onOpenOccupied}
+              onStockInEmpty={onStockInEmpty}
+            />
+          ))}
         </div>
+      )}
+    </div>
+  );
+};
+
+/* ── Single rack tile (grid) — carries its own inline rename editor ──────── */
+const RackTile = ({
+  rack, visibleCount, onOpenOccupied, onStockInEmpty,
+}: {
+  rack: Rack;
+  visibleCount: number;
+  onOpenOccupied: (rack: Rack) => void;
+  onStockInEmpty: (rack: Rack) => void;
+}) => {
+  const rename = useRackRename(rack);
+  const items = rack.items ?? [];
+  const visible = items.slice(0, visibleCount);
+  const extra = Math.max(0, items.length - visibleCount);
+  const tileClass =
+    rack.status === 'OCCUPIED' ? styles.rackTileOccupied
+    : rack.status === 'RESERVED' ? styles.rackTileReserved
+    : styles.rackTileEmpty;
+
+  // While renaming, the tile must not react to its own click (Stock In / drawer).
+  const handleTileClick = () => {
+    if (rename.editing) return;
+    if (rack.status === 'OCCUPIED') onOpenOccupied(rack);
+    else if (rack.status === 'EMPTY') onStockInEmpty(rack);
+  };
+
+  return (
+    <div
+      className={`${styles.rackTile} ${tileClass}`}
+      style={rename.editing ? { cursor: 'default' } : undefined}
+      onClick={handleTileClick}
+    >
+      <div className={styles.rackTileHead}>
+        {rename.editing ? (
+          <RackRenameEditor rename={rename} stopPropagation />
+        ) : (
+          <>
+            <span className={styles.rackName}>{rack.rack}</span>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              {rack.status === 'OCCUPIED' && (
+                <span className={styles.rackCount}>
+                  {items.length} item{items.length === 1 ? '' : 's'}
+                </span>
+              )}
+              <button
+                type="button"
+                className={styles.rackRenameBtn}
+                title="Rename rack"
+                aria-label="Rename rack"
+                onClick={(e) => { e.stopPropagation(); rename.startEdit(); }}
+              >
+                <Pencil {...ICON} />
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+      {!rename.editing && (
+        <>
+          {rack.status === 'OCCUPIED' && (
+            <div>
+              {visible.map((it) => (
+                <div key={it.id} className={styles.rackItemLine}>
+                  <div className={styles.rackItemCode}>{it.product_code}</div>
+                  {it.customer_name && <div className={styles.rackItemSub}>{it.customer_name}</div>}
+                </div>
+              ))}
+              {extra > 0 && <div className={styles.rackMore}>+{extra} more</div>}
+            </div>
+          )}
+          {rack.status === 'RESERVED' && <div className={styles.rackEmptyLabel}>Reserved</div>}
+          {rack.status === 'EMPTY' && <div className={styles.rackEmptyLabel}>Empty</div>}
+        </>
       )}
     </div>
   );
@@ -578,11 +699,26 @@ const RackDetailDrawer = ({
   onStockOut: (itemId: string) => void;
 }) => {
   const items: RackItem[] = rack.items ?? [];
+  const rename = useRackRename(rack);
+
   return (
     <div className={styles.drawerScrim} onClick={onClose}>
       <div className={styles.drawer} onClick={(e) => e.stopPropagation()}>
         <div className={styles.headerRow}>
-          <h2 className={styles.title} style={{ fontSize: 'var(--fs-22)' }}>{rack.rack}</h2>
+          {rename.editing ? (
+            <RackRenameEditor
+              rename={rename}
+              inputStyle={{ fontSize: 'var(--fs-22)', fontWeight: 600 }}
+            />
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flex: 1 }}>
+              <h2 className={styles.title} style={{ fontSize: 'var(--fs-22)' }}>{rack.rack}</h2>
+              <Button variant="ghost" size="sm" onClick={rename.startEdit}>
+                <Pencil {...ICON} />
+                <span>Rename</span>
+              </Button>
+            </div>
+          )}
           <button type="button" className={styles.chip} onClick={onClose}>
             <X {...ICON} />
           </button>

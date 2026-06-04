@@ -209,7 +209,10 @@ warehouse.patch('/racks/:id', async (c) => {
   if (typeof body.reserved === 'boolean') updates.reserved = body.reserved;
 
   const { error } = await sb.from('warehouse_racks').update(updates).eq('id', id);
-  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  if (error) {
+    if (error.code === '23505') return c.json({ error: 'duplicate_rack' }, 409);
+    return c.json({ error: 'update_failed', reason: error.message }, 500);
+  }
 
   // reserved flag affects derived status — recompute.
   const status = await refreshRackStatus(sb, id);

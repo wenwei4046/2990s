@@ -100,6 +100,12 @@ async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise
       }));
     if (movements.length > 0) await writeMovements(sb, movements);
   }
+  /* Physical rack placement — lines that chose a rack on the GRN form get
+     placed onto that rack (separate ledger, migration 0151). Best-effort. */
+  try {
+    const { placeGrnLinesOnRacks } = await import('../lib/grn-rack-sync');
+    await placeGrnLinesOnRacks(sb, grnId, grnNo, userId);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[grn-rack] place failed:', e); }
   /* B2C SO auto-allocation — stock just came in, re-walk every PENDING SO line
      and flip to READY where the new inventory covers it. Best-effort. */
   try {
@@ -124,7 +130,9 @@ const ITEM =
   /* Migration 0101 — line money + per-line date + cost snapshot */
   'line_total_centi, delivery_date, unit_cost_centi, ' +
   /* Migration 0106 — GRN line consumption (downstream PI/PR draw) */
-  'invoiced_qty, returned_qty, created_at';
+  'invoiced_qty, returned_qty, created_at, ' +
+  /* Migration 0151 — physical rack placement */
+  'rack_id';
 
 const nextNumber = async (sb: ReturnType<Variables['supabase']['valueOf']> extends never ? never : any, prefix: string, table: string, col: string): Promise<string> => {
   const d = new Date();
@@ -757,6 +765,8 @@ grns.post('/', async (c) => {
       variants: it.variants ?? null,
       description: (it.description as string | undefined) ?? null,
       description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
+      /* Migration 0151 — physical rack this received line is placed onto. */
+      rack_id: (it.rackId as string | undefined) || null,
     };
   });
   const { error: iErr } = await sb.from('grn_items').insert(rows);
@@ -1238,6 +1248,13 @@ grns.patch('/:id/cancel', async (c) => {
       }
     }
   } catch { /* best-effort: never un-cancel on a movement failure */ }
+
+  // (a2) Physical rack reversal — pull every rack item this GRN placed +
+  //      log a STOCK_OUT, mirroring the inventory OUT above. Best-effort.
+  try {
+    const { reverseGrnRacks } = await import('../lib/grn-rack-sync');
+    await reverseGrnRacks(sb, id, head.grn_number, user.id);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[grn-rack] reverse failed:', e); }
 
   // (b) Recount received_qty on each linked PO item from live GRN lines — this
   //     cancelled GRN's lines now drop out, auto-releasing the PO + re-evaluating
