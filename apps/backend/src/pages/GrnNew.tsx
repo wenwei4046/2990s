@@ -516,7 +516,7 @@ export const GrnNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={saving || !canSave}>
+          <Button variant="primary" size="md" onClick={onSave} disabled={saving}>
             <Save {...ICON} />
             {saving ? 'Saving…' : 'Create Goods Receipt'}
           </Button>

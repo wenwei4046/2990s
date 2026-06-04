@@ -391,7 +391,7 @@ export const PurchaseInvoiceNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate(isManual ? '/purchase-invoices' : (grn ? `/grns/${grn.id}` : '/grns'))}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={saving || !canSave}>
+          <Button variant="primary" size="md" onClick={onSave} disabled={saving}>
             <Save {...ICON} />
             {saving ? 'Saving…' : 'Create Purchase Invoice'}
           </Button>

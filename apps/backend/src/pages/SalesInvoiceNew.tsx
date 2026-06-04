@@ -369,7 +369,7 @@ export const SalesInvoiceNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/sales-invoices')}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending || !canSave || loadingPrefill}>
+          <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending}>
             <Save {...ICON} />
             {create.isPending ? 'Saving…' : 'Create Sales Invoice'}
           </Button>

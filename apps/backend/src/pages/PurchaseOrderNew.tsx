@@ -659,7 +659,7 @@ export const PurchaseOrderNew = () => {
           <Button
             variant="primary" size="md"
             onClick={onSave}
-            disabled={create.isPending || !supplierId || !expectedAt || !purchaseLocationId}
+            disabled={create.isPending}
           >
             <Save {...ICON} />
             {/* PR #131 + 0078 — POST creates SUBMITTED; DRAFT removed entirely. */}

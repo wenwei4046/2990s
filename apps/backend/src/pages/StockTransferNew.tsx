@@ -110,8 +110,7 @@ export const StockTransferNew = () => {
     toWarehouseId &&
     !sameWarehouse &&
     transferDate &&
-    validLines.length > 0 &&
-    !create.isPending,
+    validLines.length > 0,
   );
 
   const onSave = () => {
@@ -160,7 +159,7 @@ export const StockTransferNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/inventory/transfers')}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={!canSave}>
+          <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending}>
             <Save {...ICON} />
             {create.isPending ? 'Saving…' : 'Save Draft'}
           </Button>

@@ -88,8 +88,7 @@ export const StockTakeNew = () => {
   const canCreate = Boolean(
     warehouseId &&
     takeDate &&
-    (!needsScopeValue || scopeValue.trim()) &&
-    !create.isPending,
+    (!needsScopeValue || scopeValue.trim()),
   );
 
   const onCreate = () => {
@@ -131,7 +130,7 @@ export const StockTakeNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/inventory/stock-takes')}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onCreate} disabled={!canCreate}>
+          <Button variant="primary" size="md" onClick={onCreate} disabled={create.isPending}>
             <Save {...ICON} />
             {create.isPending ? 'Snapshotting…' : 'Create Count Sheet'}
           </Button>

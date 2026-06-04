@@ -214,6 +214,7 @@ export const DeliveryReturnNew = () => {
   const canSave = debtorName.trim().length > 0;
 
   const onSave = () => {
+    if (loadingPrefill) { window.alert('Still loading the Delivery Order — please wait a moment.'); return; }
     if (!canSave) { window.alert('Customer name is required.'); return; }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {

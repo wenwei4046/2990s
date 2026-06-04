@@ -67,8 +67,7 @@ export const StockAdjustmentNew = () => {
     warehouseId &&
     productCode.trim() &&
     qty > 0 &&
-    notes.trim() &&
-    !adjust.isPending,
+    notes.trim(),
   );
 
   // SKU picker — when commander types/picks a code that matches an mfg
@@ -118,7 +117,7 @@ export const StockAdjustmentNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/inventory/adjustments')}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={!canSave}>
+          <Button variant="primary" size="md" onClick={onSave} disabled={adjust.isPending}>
             <Save {...ICON} />
             {adjust.isPending ? 'Saving…' : 'Save Adjustment'}
           </Button>

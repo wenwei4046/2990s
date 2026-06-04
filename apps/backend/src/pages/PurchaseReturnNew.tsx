@@ -303,7 +303,7 @@ export const PurchaseReturnNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-returns')}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={saving || !canSave}>
+          <Button variant="primary" size="md" onClick={onSave} disabled={saving}>
             <Save {...ICON} />
             {saving ? 'Saving…' : 'Create Purchase Return'}
           </Button>

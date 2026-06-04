@@ -276,6 +276,7 @@ export const DeliveryOrderNew = () => {
   };
 
   const onSave = () => {
+    if (loadingPrefill) { window.alert('Still loading the Sales Order — please wait a moment.'); return; }
     if (!canSave) { window.alert('Customer name is required.'); return; }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
@@ -372,7 +373,7 @@ export const DeliveryOrderNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/mfg-delivery-orders')}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending || !canSave || loadingPrefill}>
+          <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending}>
             <Save {...ICON} />
             {create.isPending ? 'Saving…' : 'Create Delivery Order'}
           </Button>
