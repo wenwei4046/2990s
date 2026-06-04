@@ -122,10 +122,13 @@ const DeliveryOrderDetailListing = lazyRetry(() => import('./pages/DeliveryOrder
 const SalesInvoiceDetailListing = lazyRetry(() => import('./pages/SalesInvoiceDetailListing').then(m => ({ default: m.SalesInvoiceDetailListing })));
 const DeliveryReturnDetailListing = lazyRetry(() => import('./pages/DeliveryReturnDetailListing').then(m => ({ default: m.DeliveryReturnDetailListing })));
 const DeliveryOrderDetail = lazyRetry(() => import('./pages/DeliveryOrderDetail').then(m => ({ default: m.DeliveryOrderDetail })));
-// Sales Consignment (Phase 1) — place our goods at a customer's branch to sell.
-const ConsignmentList = lazyRetry(() => import('./pages/ConsignmentList').then(m => ({ default: m.ConsignmentList })));
-const ConsignmentNew = lazyRetry(() => import('./pages/ConsignmentNew').then(m => ({ default: m.ConsignmentNew })));
-const ConsignmentDetail = lazyRetry(() => import('./pages/ConsignmentDetail').then(m => ({ default: m.ConsignmentDetail })));
+// Consignment Order (faithful SO-clone module). Supersedes the older simple
+// Consignment* pages — the /consignment routes below point at these new pages.
+// The old ConsignmentList/New/Detail files are left in place (to be removed
+// separately) but are no longer routed.
+const ConsignmentOrders = lazyRetry(() => import('./pages/ConsignmentOrders').then(m => ({ default: m.ConsignmentOrders })));
+const ConsignmentOrderNew = lazyRetry(() => import('./pages/ConsignmentOrderNew').then(m => ({ default: m.ConsignmentOrderNew })));
+const ConsignmentOrderDetail = lazyRetry(() => import('./pages/ConsignmentOrderDetail').then(m => ({ default: m.ConsignmentOrderDetail })));
 const SalesInvoiceDetail = lazyRetry(() => import('./pages/SalesInvoiceDetail').then(m => ({ default: m.SalesInvoiceDetail })));
 
 export const router = createBrowserRouter([
@@ -196,10 +199,11 @@ export const router = createBrowserRouter([
       { path: 'sales-invoices/new', element: <SalesInvoiceNew /> },
       { path: 'sales-invoices/from-do', element: <SalesInvoiceFromDo /> },
       { path: 'sales-invoices/:id', element: <SalesInvoiceDetail /> },
-      // Sales Consignment — /new is a STATIC path, must precede the :id route.
-      { path: 'consignment', element: <ConsignmentList /> },
-      { path: 'consignment/new', element: <ConsignmentNew /> },
-      { path: 'consignment/:id', element: <ConsignmentDetail /> },
+      // Consignment Order — new faithful SO-clone module supersedes the older
+      // simple Consignment pages. /new is STATIC, must precede the :docNo route.
+      { path: 'consignment', element: <ConsignmentOrders /> },
+      { path: 'consignment/new', element: <ConsignmentOrderNew /> },
+      { path: 'consignment/:docNo', element: <ConsignmentOrderDetail /> },
       { path: 'delivery-returns', element: <DeliveryReturnsList /> },
       // /new + /from-do must come BEFORE :id so they aren't caught as a DR id.
       { path: 'delivery-returns/new', element: <DeliveryReturnNew /> },

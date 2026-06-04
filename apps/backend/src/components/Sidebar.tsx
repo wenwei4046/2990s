@@ -126,7 +126,15 @@ export const Sidebar = () => {
         { to: '/mfg-delivery-orders', icon: <PackagePlus {...ICON_PROPS} />, label: 'Delivery Orders' },
         { to: '/sales-invoices', icon: <FileText {...ICON_PROPS} />, label: 'Sales Invoices' },
         { to: '/delivery-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Delivery Returns' },
-        { to: '/consignment', icon: <Handshake {...ICON_PROPS} />, label: 'Consignment' },
+      ],
+    },
+    {
+      // New top-level CONSIGNMENT group. One item for now; Consignment Note /
+      // Return / Purchase Consignment land here later.
+      id: 'consignment',
+      label: 'Consignment',
+      items: [
+        { to: '/consignment', icon: <Handshake {...ICON_PROPS} />, label: 'Consignment Order' },
       ],
     },
     {
