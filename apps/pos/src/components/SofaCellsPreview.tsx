@@ -89,15 +89,17 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
     && detectBundle(sofaOnly.map((c) => c.moduleId)) != null
     && analyzeSofa(sofaOnly, depth).closed;
 
-  // Any OTHER contiguous multi-cell layout that isn't a corner or a single-row
-  // seamless run (an L built from straight modules, mixed rotation, 2-row) →
-  // draw as ONE gap-free sofa via the universal group renderer instead of
-  // tiling per-module PNGs (which leave seam gaps). Single contiguous group
-  // only, so disjoint layouts still tile (Loo 2026-06-04, matches the canvas).
+  // Any OTHER contiguous multi-cell layout that isn't an exact-3 corner or a
+  // single-row seamless run (an L built from straight modules, mixed rotation,
+  // 2-row, a partial 2A+CNR corner, a 4+-piece corner) → draw as ONE gap-free
+  // sofa via the universal group renderer instead of tiling per-module PNGs
+  // (which leave seam gaps). renderSeamlessGroup draws CNR backed edges as
+  // wrapped band (Loo 2026-06-04, "should be link together"). Single
+  // contiguous group only, so disjoint layouts still tile (matches the canvas).
   const group = !corner && !seamless && !closedPlainBundle && cells.length >= 2 && groupSofas(cells, depth).length === 1
-    // Exclude Corner (CNR) / L-Shape chaise — the schematic group renderer can't
-    // express their backrest/arm; they keep real per-module art (matches canvas).
-    && !cells.some((c) => { const g = findModule(c.moduleId)?.group; return g === 'Corner' || g === 'L-Shape'; })
+    // Exclude only the L-Shape chaise — it has no 'arm' edge for its foot cap;
+    // groups containing one keep real per-module art (matches canvas).
+    && !cells.some((c) => findModule(c.moduleId)?.group === 'L-Shape')
     // Exclude any FREE accessory (STOOL — Console is the only accessory the
     // schematic renderer knows how to draw). A quick pick saved with a stool
     // keeps real per-module art; matches the canvas, where free stools are
