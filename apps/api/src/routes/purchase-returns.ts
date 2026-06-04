@@ -18,7 +18,7 @@ import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, reverseMovements, defaultWarehouseId } from '../lib/inventory-movements';
 import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
-import { recomputePoReceived } from './grns';
+import { recomputePoReceived, resolvePoBatchByItem } from './grns';
 
 export const purchaseReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseReturns.use('*', supabaseAuth);
@@ -350,28 +350,28 @@ async function writePrLineDeltaMovement(
     if (!warehouseId) return;
     const variantKey = computeVariantKey(args.line.item_group, args.line.variants ?? null);
     const isOut = args.deltaQty > 0;
-    // Carry the dye-lot batch + cost the original PR OUT stamped for this bucket so
-    // a reduce/delete re-enters the EXACT batch at the real cost (the old code
-    // dropped both → reversing IN landed as a zero-cost un-batched lot).
+    // Batch: resolve THIS line's OWN dye-lot deterministically from its source GRN
+    // line's PO (grn_item_id → purchase_order_item_id → PO number). Not a .limit(1)
+    // bucket lookup, which could grab a sibling line's batch when two lines of the
+    // same product/variant came from different POs.
     let batchNo: string | null = null;
+    if (args.line.grn_item_id) {
+      const { data: gi } = await sb.from('grn_items')
+        .select('purchase_order_item_id').eq('id', args.line.grn_item_id).maybeSingle();
+      const poItemId = (gi as { purchase_order_item_id: string | null } | null)?.purchase_order_item_id ?? null;
+      if (poItemId) batchNo = (await resolvePoBatchByItem(sb, [poItemId])).get(poItemId) ?? null;
+    }
+    // Cost (reversing IN only): the PR OUT's stamped cost for this bucket so stock
+    // re-enters at its real basis, not zero.
     let unitCostSen = 0;
-    {
-      let inRes = await sb.from('inventory_movements')
-        .select('batch_no, unit_cost_sen')
+    if (!isOut) {
+      const inRes = await sb.from('inventory_movements')
+        .select('unit_cost_sen')
         .eq('source_doc_type', 'PURCHASE_RETURN').eq('source_doc_id', args.prId)
         .eq('movement_type', 'OUT').eq('warehouse_id', warehouseId)
         .eq('product_code', args.line.material_code).eq('variant_key', variantKey)
         .limit(1);
-      if (inRes.error && (inRes.error.message ?? '').includes('batch_no')) {
-        inRes = await sb.from('inventory_movements')
-          .select('unit_cost_sen')
-          .eq('source_doc_type', 'PURCHASE_RETURN').eq('source_doc_id', args.prId)
-          .eq('movement_type', 'OUT').eq('warehouse_id', warehouseId)
-          .eq('product_code', args.line.material_code).eq('variant_key', variantKey)
-          .limit(1);
-      }
-      const row = ((inRes.data ?? []) as Array<{ batch_no?: string | null; unit_cost_sen?: number | null }>)[0];
-      batchNo = row?.batch_no ?? null;
+      const row = ((inRes.data ?? []) as Array<{ unit_cost_sen?: number | null }>)[0];
       unitCostSen = Number(row?.unit_cost_sen ?? 0);
     }
     await writeMovements(sb, [{

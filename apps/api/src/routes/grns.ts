@@ -17,7 +17,7 @@ grns.use('*', supabaseAuth);
    header. Lines with no PO link (free GRN) get no batch. The IN movement carries
    batch_no → the FIFO trigger stamps it on the lot, so a sofa set's components
    share a batch and Stage 3 can ship the whole set from one dye lot. */
-async function resolvePoBatchByItem(
+export async function resolvePoBatchByItem(
   sb: any,
   poItemIds: Array<string | null>,
 ): Promise<Map<string, string>> {
@@ -1749,21 +1749,15 @@ grns.delete('/:id/items/:itemId', async (c) => {
           ?? (await defaultWarehouseId(sb));
         if (warehouseId) {
           const variantKey = computeVariantKey(l.item_group, l.variants ?? null);
-          // Carry the original IN's batch_no so the reversing OUT depletes the EXACT
-          // dye-lot the receipt created. The whole-cancel reversal does this; the
-          // line-delete used to omit it → plain FIFO could deplete the wrong lot.
-          let batchNo: string | null = null;
-          {
-            const inRes = await sb.from('inventory_movements')
-              .select('batch_no')
-              .eq('source_doc_type', 'GRN').eq('source_doc_id', grnId)
-              .eq('movement_type', 'IN').eq('warehouse_id', warehouseId)
-              .eq('product_code', l.material_code).eq('variant_key', variantKey)
-              .limit(1);
-            if (!(inRes.error && (inRes.error.message ?? '').includes('batch_no'))) {
-              batchNo = (((inRes.data ?? []) as Array<{ batch_no?: string | null }>)[0]?.batch_no) ?? null;
-            }
-          }
+          // Carry THIS line's own dye-lot batch (= its source PO number) so the
+          // reversing OUT depletes the EXACT lot the receipt created. Resolved
+          // deterministically from the line's purchase_order_item_id — not a
+          // .limit(1) bucket lookup, which could grab a sibling line's batch when
+          // two lines of the same product/variant came from different POs.
+          const batchMap = await resolvePoBatchByItem(sb, [l.purchase_order_item_id]);
+          const batchNo: string | null = l.purchase_order_item_id
+            ? (batchMap.get(l.purchase_order_item_id) ?? null)
+            : null;
           await writeMovements(sb, [{
             movement_type: 'OUT' as const,
             warehouse_id: warehouseId,
