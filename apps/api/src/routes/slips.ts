@@ -44,7 +44,12 @@ slipRoutes.post('/init', async (c) => {
   }
 
   let showroomId: string | null = staffRow.showroom_id ?? null;
-  const elevatedRoles = new Set(['admin', 'coordinator', 'finance']);
+  // Must mirror is_coordinator_or_above() (coordinator/finance/admin/super_admin)
+  // — these roles legitimately carry NULL showroom_id ("oversee all"), and the
+  // pending_slip RLS only checks staff_id, so any showroom_id is accepted for
+  // them. super_admin was previously missing here, so a NULL-showroom owner got
+  // a spurious staff_showroom_missing 400 while dogfooding the POS.
+  const elevatedRoles = new Set(['admin', 'coordinator', 'finance', 'super_admin']);
   if (!showroomId && staffRow.role && elevatedRoles.has(staffRow.role)) {
     const { data: defaultRoom } = await supabase
       .from('showrooms')

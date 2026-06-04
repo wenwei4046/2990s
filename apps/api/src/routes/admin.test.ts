@@ -36,6 +36,7 @@ const baseEnv = {
 } as unknown as Env;
 
 const ADMIN_USER_ID = '00000000-0000-0000-0000-000000000001';
+const SHOWROOM_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 
 function buildApp(callerRole: string | null) {
   const userScopedFrom = (table: string) => ({
@@ -91,6 +92,7 @@ describe('POST /admin/staff — role-based admin-set credential (WS2 2026-05-31)
       body: JSON.stringify({
         staffCode: 'AW', name: 'Aisha Wong', role: 'sales',
         email: 'aisha@2990s.my', initials: 'AW', color: '#E86B3A', pin: '482917',
+        showroomId: SHOWROOM_ID,
       }),
     }, baseEnv);
 
@@ -186,6 +188,7 @@ describe('POST /admin/staff — role-based admin-set credential (WS2 2026-05-31)
       body: JSON.stringify({
         staffCode: 'AW', name: 'A', role: 'sales',
         email: 'a@b.co', initials: 'AW', color: '#E86B3A', pin: '482917',
+        showroomId: SHOWROOM_ID,
       }),
     }, baseEnv);
     expect(res.status).toBe(422);
@@ -209,6 +212,7 @@ describe('POST /admin/staff — role-based admin-set credential (WS2 2026-05-31)
       body: JSON.stringify({
         staffCode: 'AW', name: 'A', role: 'sales',
         email: 'a@b.co', initials: 'AW', color: '#E86B3A', pin: '482917',
+        showroomId: SHOWROOM_ID,
       }),
     }, baseEnv);
     expect(res.status).toBe(422);
@@ -336,5 +340,151 @@ describe('PATCH /admin/staff/:id/pin', () => {
       body: JSON.stringify({ pin: '123456' }),
     }, baseEnv);
     expect(res.status).toBe(400);
+  });
+});
+
+/* BUG-2026-06-03 — a POS-selling role (sales/showroom_lead/sales_executive/
+   outlet_manager) onboarded with a NULL showroom can't take payment
+   (staff_showroom_missing) or place an order (RLS). Guard it at the source. */
+describe('staff showroom guard (create + patch)', () => {
+  const TARGET_ID = '33333333-3333-3333-3333-333333333333';
+
+  it('create sales without showroomId → 400 showroom_required_for_pos_role, no auth user created', async () => {
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffCode: 'NB', name: 'No Booth', role: 'sales',
+        email: 'nb@2990s.my', initials: 'NB', color: '#E86B3A', pin: '482917',
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain('showroom_required_for_pos_role');
+    expect(createUserMock).not.toHaveBeenCalled();
+  });
+
+  it('create sales_executive without showroomId → 400 (set is broader than just sales)', async () => {
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffCode: 'SE', name: 'Sales Exec', role: 'sales_executive',
+        email: 'se@2990s.my', initials: 'SE', color: '#2F5D4F', password: 'sup3rsecret',
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain('showroom_required_for_pos_role');
+    expect(createUserMock).not.toHaveBeenCalled();
+  });
+
+  it('create sales_director without showroomId → 400 (Loo 2026-06-03: gate it too)', async () => {
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffCode: 'SD', name: 'Sales Dir', role: 'sales_director',
+        email: 'sd@2990s.my', initials: 'SD', color: '#2F5D4F', password: 'sup3rsecret',
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain('showroom_required_for_pos_role');
+    expect(createUserMock).not.toHaveBeenCalled();
+  });
+
+  it('create coordinator without showroomId → 201 (elevated roles may oversee all)', async () => {
+    createUserMock.mockResolvedValue({ data: { user: { id: 'u-co' } }, error: null });
+    adminFromMock.mockImplementation((table: string) => ({
+      insert: (row: any) => ({
+        select: () => ({ maybeSingle: async () => ({ data: { ...row, id: 'u-co' }, error: null }) }),
+      }),
+    }));
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffCode: 'CO', name: 'Coord', role: 'coordinator',
+        email: 'co@2990s.my', initials: 'CO', color: '#2F5D4F', password: 'sup3rsecret',
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(201);
+  });
+
+  // Differentiating builder: caller role for ADMIN_USER_ID, target row for TARGET_ID.
+  function buildAppForGuard(callerRole: string, target: { role: string; showroom_id: string | null }) {
+    const userScopedFrom = (table: string) => ({
+      select: () => ({
+        eq: (col: string, val: string) => ({
+          maybeSingle: async () => {
+            if (table === 'staff' && col === 'id' && val === ADMIN_USER_ID) {
+              return { data: { role: callerRole, active: true }, error: null };
+            }
+            if (table === 'staff' && col === 'id' && val === TARGET_ID) {
+              return { data: target, error: null };
+            }
+            return { data: null, error: null };
+          },
+        }),
+      }),
+    });
+    const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+    app.use('*', async (c, next) => {
+      c.set('user', { id: ADMIN_USER_ID } as any);
+      c.set('supabase', { from: userScopedFrom } as any);
+      await next();
+    });
+    app.route('/admin', admin);
+    return app;
+  }
+
+  function mockUpdateOk() {
+    adminFromMock.mockImplementation((table: string) => ({
+      update: (patch: any) => ({
+        eq: () => ({
+          select: () => ({
+            maybeSingle: async () => ({ data: { id: TARGET_ID, ...patch }, error: null }),
+          }),
+        }),
+      }),
+    }));
+  }
+
+  it('patch: clearing a sales rep\'s showroom to null → 400', async () => {
+    const app = buildAppForGuard('admin', { role: 'sales', showroom_id: SHOWROOM_ID });
+    const res = await app.request(`/admin/staff/${TARGET_ID}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ showroomId: null }),
+    }, baseEnv);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error?: string }).error).toBe('showroom_required_for_pos_role');
+  });
+
+  it('patch: promoting a NULL-showroom coordinator into sales without a showroom → 400', async () => {
+    const app = buildAppForGuard('admin', { role: 'coordinator', showroom_id: null });
+    const res = await app.request(`/admin/staff/${TARGET_ID}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ role: 'sales' }),
+    }, baseEnv);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error?: string }).error).toBe('showroom_required_for_pos_role');
+  });
+
+  it('patch: promoting into sales WITH a showroom in the same request → 200', async () => {
+    mockUpdateOk();
+    const app = buildAppForGuard('admin', { role: 'coordinator', showroom_id: null });
+    const res = await app.request(`/admin/staff/${TARGET_ID}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ role: 'sales', showroomId: SHOWROOM_ID }),
+    }, baseEnv);
+    expect(res.status).toBe(200);
+  });
+
+  it('patch: editing only the name of a sales rep does not trip the guard → 200', async () => {
+    mockUpdateOk();
+    const app = buildAppForGuard('admin', { role: 'sales', showroom_id: SHOWROOM_ID });
+    const res = await app.request(`/admin/staff/${TARGET_ID}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Renamed' }),
+    }, baseEnv);
+    expect(res.status).toBe(200);
   });
 });

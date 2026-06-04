@@ -27,15 +27,34 @@ describe('buildVariantSummary', () => {
     expect(summary).not.toContain('LEG');
   });
 
-  it('bedframe summary still renders DIVAN + LEG / GAP / T.Heights', () => {
+  it('bedframe summary labels the leg height and shows the chosen colour', () => {
+    // Loo 2026-06-03: leg height must read as a labelled "LEG x" token (not a
+    // bare number glued to the divan), and the picked colour must appear.
+    const summary = buildVariantSummary('bedframe', {
+      fabricCode: 'BF-01',
+      colourLabel: 'Sand',
+      divanHeight: '10"',
+      legHeight: '1"',
+      gap: '10"',
+      totalHeight: '21"',
+    });
+    expect(summary).toBe('BF-01 Sand / DIVAN 10" + LEG 1" / GAP 10" / T.Heights 21"');
+  });
+
+  it('bedframe leg height carries the LEG label even without a colour', () => {
     const summary = buildVariantSummary('bedframe', {
       divanHeight: '10"',
       legHeight: '2"',
       gap: '14"',
       totalHeight: '24"',
     });
-    expect(summary).toContain('DIVAN 10" + 2"');
+    expect(summary).toContain('DIVAN 10" + LEG 2"');
     expect(summary).toContain('GAP 14"');
     expect(summary).toContain('T.Heights 24"');
+  });
+
+  it('bedframe "No Leg" reads without a redundant LEG prefix', () => {
+    const summary = buildVariantSummary('bedframe', { divanHeight: '10"', legHeight: 'No Leg' });
+    expect(summary).toBe('DIVAN 10" + NO LEG');
   });
 });
