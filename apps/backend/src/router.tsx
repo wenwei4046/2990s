@@ -129,6 +129,14 @@ const DeliveryOrderDetail = lazyRetry(() => import('./pages/DeliveryOrderDetail'
 const ConsignmentOrders = lazyRetry(() => import('./pages/ConsignmentOrders').then(m => ({ default: m.ConsignmentOrders })));
 const ConsignmentOrderNew = lazyRetry(() => import('./pages/ConsignmentOrderNew').then(m => ({ default: m.ConsignmentOrderNew })));
 const ConsignmentOrderDetail = lazyRetry(() => import('./pages/ConsignmentOrderDetail').then(m => ({ default: m.ConsignmentOrderDetail })));
+// Consignment Note (faithful DO-clone module, /consignment-notes API).
+const ConsignmentNotes = lazyRetry(() => import('./pages/ConsignmentNotes').then(m => ({ default: m.ConsignmentNotes })));
+const ConsignmentNoteNew = lazyRetry(() => import('./pages/ConsignmentNoteNew').then(m => ({ default: m.ConsignmentNoteNew })));
+const ConsignmentNoteDetail = lazyRetry(() => import('./pages/ConsignmentNoteDetail').then(m => ({ default: m.ConsignmentNoteDetail })));
+// Consignment Return (faithful DR-clone module, /consignment-returns API).
+const ConsignmentReturns = lazyRetry(() => import('./pages/ConsignmentReturns').then(m => ({ default: m.ConsignmentReturns })));
+const ConsignmentReturnNew = lazyRetry(() => import('./pages/ConsignmentReturnNew').then(m => ({ default: m.ConsignmentReturnNew })));
+const ConsignmentReturnDetail = lazyRetry(() => import('./pages/ConsignmentReturnDetail').then(m => ({ default: m.ConsignmentReturnDetail })));
 const SalesInvoiceDetail = lazyRetry(() => import('./pages/SalesInvoiceDetail').then(m => ({ default: m.SalesInvoiceDetail })));
 
 export const router = createBrowserRouter([
@@ -204,6 +212,16 @@ export const router = createBrowserRouter([
       { path: 'consignment', element: <ConsignmentOrders /> },
       { path: 'consignment/new', element: <ConsignmentOrderNew /> },
       { path: 'consignment/:docNo', element: <ConsignmentOrderDetail /> },
+      // Consignment Note — DO-clone module (/consignment-notes API). /new is
+      // STATIC, must precede the :id route.
+      { path: 'consignment-note', element: <ConsignmentNotes /> },
+      { path: 'consignment-note/new', element: <ConsignmentNoteNew /> },
+      { path: 'consignment-note/:id', element: <ConsignmentNoteDetail /> },
+      // Consignment Return — DR-clone module (/consignment-returns API). /new is
+      // STATIC, must precede the :id route.
+      { path: 'consignment-return', element: <ConsignmentReturns /> },
+      { path: 'consignment-return/new', element: <ConsignmentReturnNew /> },
+      { path: 'consignment-return/:id', element: <ConsignmentReturnDetail /> },
       { path: 'delivery-returns', element: <DeliveryReturnsList /> },
       // /new + /from-do must come BEFORE :id so they aren't caught as a DR id.
       { path: 'delivery-returns/new', element: <DeliveryReturnNew /> },

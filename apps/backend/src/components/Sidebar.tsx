@@ -129,12 +129,14 @@ export const Sidebar = () => {
       ],
     },
     {
-      // New top-level CONSIGNMENT group. One item for now; Consignment Note /
-      // Return / Purchase Consignment land here later.
+      // New top-level CONSIGNMENT group. Order / Note / Return; Purchase
+      // Consignment lands here later.
       id: 'consignment',
       label: 'Consignment',
       items: [
         { to: '/consignment', icon: <Handshake {...ICON_PROPS} />, label: 'Consignment Order' },
+        { to: '/consignment-note', icon: <Truck {...ICON_PROPS} />, label: 'Consignment Note' },
+        { to: '/consignment-return', icon: <Undo2 {...ICON_PROPS} />, label: 'Consignment Return' },
       ],
     },
     {

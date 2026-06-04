@@ -32,7 +32,13 @@ type MovementInput = {
    *  for the manual one-off adjustment route. */
   source_doc_type:
     | 'GRN' | 'DO' | 'DR' | 'CONSIGNMENT_NOTE' | 'PURCHASE_CONSIGNMENT_NOTE'
-    | 'PURCHASE_RETURN' | 'STOCK_TRANSFER' | 'STOCK_TAKE' | 'ADJUSTMENT';
+    | 'PURCHASE_RETURN' | 'STOCK_TRANSFER' | 'STOCK_TAKE' | 'ADJUSTMENT'
+    /* Sales-consignment loaner movements (value-neutral warehouse transfer, NOT
+       COGS). CS_DO = a Consignment Note ships a loaner OUT to the consignment
+       warehouse; CS_DR = a Consignment Return brings it back. Their partial
+       UNIQUE indexes (uq_inv_mov_cs_do_source / uq_inv_mov_cs_dr_source,
+       migration 0153) are the per-doc idempotency backstop. */
+    | 'CS_DO' | 'CS_DR';
   source_doc_id?: string;
   source_doc_no?: string;
   /** Migration 0120 — production batch (source PO number). On IN rows the FIFO
