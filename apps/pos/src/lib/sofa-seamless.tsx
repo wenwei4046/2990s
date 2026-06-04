@@ -274,8 +274,9 @@ export const renderSeamlessSofa = (
 /* ─── Universal seamless GROUP renderer (any contiguous arrangement) ───────
  * renderSeamlessSofa handles a single uniform-rotation ROW; renderCornerSofa
  * handles the fixed 3-cell CNR L. This handles EVERYTHING ELSE a group can be —
- * an L built from straight modules (chaise turned 90°, NO corner piece), a
- * 2-row block, a U/T, mixed rotations — by drawing in the GROUP's screen-cm
+ * an L built from straight modules (chaise turned 90°), a partial or 4+-piece
+ * CORNER (2A + CNR mid-build, 2A + 1NA + CNR + 1B), a 2-row block, a U/T,
+ * mixed rotations — by drawing in the GROUP's screen-cm
  * frame (NO CSS rotation; each cell's rotation is baked in via cellEdges +
  * its screen rect). Gap-free BY CONSTRUCTION: every cell's FULL footprint is
  * filled (groupSofas already guarantees the rects touch within 2cm), so the
@@ -349,13 +350,18 @@ export const renderSeamlessGroup = (
     const swDash = 0.5 * u;
     const dash = `${2 * u},${2 * u}`;
     const isConsole = m.id === 'Console';
+    const isCorner = m.group === 'Corner';
     const wide = isWideArmSeat(m.id);
-    // NOTE: Corner (CNR) and L-Shape chaise are NOT handled here — their
-    // backrest/arm placement can't be derived from cellEdges (a CNR has arms on
-    // its INNER bend + no 'back' edge; an L-chaise has no 'arm' edge for its
-    // foot cap). Groups containing one are excluded upstream (CustomBuilder +
-    // SofaCellsPreview) and keep their real per-module art instead, so this
-    // renderer only ever sees plain seats + interior consoles.
+    // Corner (CNR): its two 'arm'-labelled edges are the corner BACKREST
+    // wrapping the bend (MODULE_EDGES_BASE tags the backed sides 'arm'), so
+    // they draw as BAND — matching renderCornerSofa's wrapped band — never as
+    // hard arm panels (the old "3-sided U-bracket" bug). This lets a CNR join
+    // ANY contiguous group: a partial corner-in-progress (2A + CNR awaiting
+    // its chaise) and 4-piece corners (2A + 1NA + CNR + 1B) that the exact-3
+    // corner composite can't represent (Loo 2026-06-04, video repro).
+    // NOTE: the L-Shape chaise is still NOT handled — it has no 'arm' edge for
+    // its foot cap, so groups containing one are excluded upstream and keep
+    // their real per-module art.
 
     if (isConsole) {
       // Interior console keeps its REAL art (cropped to its silhouette), same as
@@ -390,13 +396,13 @@ export const renderSeamlessGroup = (
       // together — the arms/backrest must stay visible instead of melting into
       // one seamless body ("arm and arm is not a complete sofa", Loo 2026-06-04).
       // `free` only picks the outline weight below (thick outer, thin seam).
-      const wantBand = !isConsole && edges[e] === 'back';
+      const wantBand = !isConsole && (edges[e] === 'back' || (isCorner && edges[e] === 'arm'));
       if (wantBand) {
         const s = strip(r, e, bandH);
         band.push(<rect key={`bd${i}-${e}`} x={s.x} y={s.y} width={s.w} height={s.h} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />);
       }
-      // ARM / wide BENCH on an arm edge.
-      if (!isConsole && edges[e] === 'arm') {
+      // ARM / wide BENCH on an arm edge (corner 'arm' edges are backrest — above).
+      if (!isConsole && !isCorner && edges[e] === 'arm') {
         if (wide) {
           const s = strip(r, e, benchW);
           arms.push(<rect key={`am${i}-${e}`} x={s.x + benchInset} y={s.y + benchInset} width={Math.max(0, s.w - 2 * benchInset)} height={Math.max(0, s.h - 2 * benchInset)} rx={benchRx} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />);
