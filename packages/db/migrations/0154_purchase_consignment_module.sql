@@ -276,7 +276,7 @@ CREATE TABLE IF NOT EXISTS purchase_consignment_returns (
   supplier_id       UUID NOT NULL REFERENCES suppliers(id) ON DELETE RESTRICT,
   return_date       DATE NOT NULL DEFAULT now(),
   reason            TEXT,
-  status            purchase_return_status NOT NULL DEFAULT 'DRAFT',
+  status            purchase_return_status NOT NULL DEFAULT 'POSTED',  -- 0078 dropped DRAFT
   posted_at         TIMESTAMPTZ,
   completed_at      TIMESTAMPTZ,
   credit_note_ref   TEXT,
