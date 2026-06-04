@@ -68,9 +68,15 @@ export const cornerCompositeFromCells = (
   const one = byGroup('1-seater');
   if (!cnr || !two || !one) return null;
   const cnrM = findModule(cnr.moduleId)!, twoM = findModule(two.moduleId)!, oneM = findModule(one.moduleId)!;
-  const groupRot = cnr.rot;
-  // Corner + long arm share the bar → same rotation; the chaise turns ±90°.
-  if (two.rot !== groupRot) return null;
+  // The LONG ARM defines the bar direction / natural frame. The CNR's own rot
+  // is deliberately IGNORED: it's a square piece whose rotation only orients
+  // its standalone art — users hand-rotate it to point the bend (e.g. arms
+  // N+E for a top-right corner), which used to fail the old
+  // `two.rot === cnr.rot` check and broke the whole composite back into
+  // per-module pieces (Loo's 2A + CNR(90°) + 1S build, 2026-06-04). The
+  // joined corner is redrawn from geometry by renderCornerSofa, so only the
+  // bar + chaise rotations matter.
+  const groupRot = two.rot;
   const chaiseRel = (((one.rot - groupRot) % 360) + 360) % 360;
   if (chaiseRel !== 90 && chaiseRel !== 270) return null;
   // Un-rotate the corner→arm / corner→chaise vectors to the natural frame so

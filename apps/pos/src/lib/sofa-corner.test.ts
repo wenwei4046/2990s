@@ -80,6 +80,32 @@ describe('cornerCompositeFromCells', () => {
     }
   });
 
+  it("hand-rotated CNR still joins (Loo's 2A + CNR(90°) + 1B build @28\")", () => {
+    // Exact prod repro 2026-06-04: bend pointed top-right by ROTATING the CNR
+    // 90° (arms N+E). Old code required two.rot === cnr.rot and broke the
+    // composite back into per-module pieces. CNR@28" is 105×95 → rot90 95×105.
+    const r = cornerCompositeFromCells([
+      { id: 'two', moduleId: '2A-LHF', x: 0, y: 0, rot: 0 },
+      { id: 'cnr', moduleId: 'CNR', x: 178, y: 0, rot: 90 },
+      { id: 'one', moduleId: '1B-RHF', x: 178, y: 105, rot: 90 },
+    ], D);
+    expect(r).not.toBeNull();
+    expect(r!.rot).toBe(0);                      // frame = the long arm's rot
+    expect(r!.geo.orientation).toBe('right');
+    expect(r!.geo.chaiseBench).toBe(true);       // 1B chaise keeps its bench
+    expect(r!.bb).toMatchObject({ w: 273, h: 220 });
+  });
+
+  it('rotated CNR joins on the chaise-left layout too', () => {
+    const r = cornerCompositeFromCells([
+      { id: 'cnr', moduleId: 'CNR', x: 0, y: 0, rot: 270 },  // arms point W+S… art-only
+      { id: 'two', moduleId: '2A-RHF', x: 95, y: 0, rot: 0 }, // CNR rot270 @28" is 95 wide
+      { id: 'one', moduleId: '1B-LHF', x: 0, y: 105, rot: 270 },
+    ], D);
+    expect(r).not.toBeNull();
+    expect(r!.geo.orientation).toBe('left');
+  });
+
   it('returns null for non-corner shapes', () => {
     // Straight 2A + L chaise (no Corner module).
     expect(cornerCompositeFromCells([
