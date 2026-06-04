@@ -32,12 +32,35 @@
   max-width: 60ch;
 }
 
+/* Toolbar reads as three clusters: [view toggle] · [utilities] · [primary CTA].
+   align-items:center keeps the segmented toggle, ghost group and CTA on one
+   baseline; the CTA is pushed to the far right by the trailing divider + the
+   header row's space-between. */
 .actions {
   display: flex;
+  align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
 }
 
+/* Cluster 2 — utilities kept tight together so they read as one group, set
+   apart from the view toggle and the primary CTA by the dividers around them. */
+.utilityGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* Thin vertical rule separating the three toolbar clusters. */
+.toolbarDivider {
+  width: 1px;
+  align-self: stretch;
+  min-height: 22px;
+  background: var(--line);
+}
+
+/* Secondary / ghost utilities — intentionally lighter than the CTA: subtle
+   outline on a transparent fill, muted label that only firms up on hover. */
 .ghostBtn {
   display: inline-flex;
   align-items: center;
@@ -48,13 +71,15 @@
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   border: 1px solid var(--line);
-  background: var(--c-paper);
-  color: var(--c-ink);
+  background: transparent;
+  color: var(--fg-muted);
   cursor: pointer;
 }
-.ghostBtn:hover { border-color: var(--line-strong); }
+.ghostBtn:hover { border-color: var(--line-strong); color: var(--c-ink); background: var(--c-paper); }
 .ghostBtn:disabled { opacity: 0.5; cursor: default; }
 
+/* Primary CTA — the strongest control: filled burnt orange, heavier weight and
+   a touch more horizontal padding so it clearly out-weights the ghost group. */
 .primaryBtn {
   display: inline-flex;
   align-items: center;
@@ -62,15 +87,16 @@
   font-family: var(--font-button);
   font-size: var(--fs-13);
   font-weight: 700;
-  padding: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-5);
   border-radius: var(--radius-md);
   border: 1px solid var(--c-orange);
   background: var(--c-orange);
   color: #fff;
+  box-shadow: 0 1px 2px rgba(166, 71, 30, 0.25);
   cursor: pointer;
 }
 .primaryBtn:hover:not(:disabled) { filter: brightness(0.95); }
-.primaryBtn:disabled { opacity: 0.4; cursor: default; }
+.primaryBtn:disabled { opacity: 0.4; cursor: default; box-shadow: none; }
 
 /* PO generation mode toggle */
 .modeToggle {

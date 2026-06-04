@@ -93,10 +93,25 @@
   gap: var(--space-4);
 }
 .cardTitle {
+  /* SECTION HEADER — bring into line with SalesOrderDetail so every detail
+     page's section header reads the same: brand emphasis colour, uppercase,
+     heavy weight. (Wei Siang 2026-06-04 — consistent visual hierarchy.)
+     This card has no separate header bar, so the recipe is applied to the
+     title text only; the surrounding .card / .cardHeadRow layout is unchanged. */
   margin: 0;
-  font-family: var(--font-sans);
-  font-size: var(--fs-17);
-  font-weight: 600;
+  font-family: var(--font-button);
+  font-size: var(--fs-13, 13px);
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--c-burnt);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cardTitle svg {
+  width: 15px;
+  height: 15px;
 }
 .cardHeadRow {
   display: flex;

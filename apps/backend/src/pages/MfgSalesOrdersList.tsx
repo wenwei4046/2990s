@@ -436,24 +436,23 @@ const buildDrilldownColumns = (paymentRefs: string): DataGridColumn<SoItem>[] =>
   {
     key: 'description', label: 'Description', width: 240, minWidth: 180,
     accessor: (it) => {
-      /* Manual Description 1 on top; live variant summary muted below (one
-         consistent " / " separator). Bare "—" only when neither exists — that
-         lone dash confused the operator ("那个 - 是什么"). */
+      /* Main description only — the variant summary now lives in its own
+         "Description 2" column. Bare "—" only when description is empty and
+         no variant exists to fall back on. */
       const manual = (it.description ?? '').trim();
+      if (manual) return <div>{manual}</div>;
       const summary = buildVariantSummary(it.item_group, it.variants);
-      if (manual) {
-        return (
-          <>
-            <div>{manual}</div>
-            {summary && (
-              <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-10)', lineHeight: 1.35 }}>{summary}</div>
-            )}
-          </>
-        );
-      }
       return summary ? <div>{summary}</div> : '—';
     },
     searchValue: (it) => `${it.description ?? ''} ${buildVariantSummary(it.item_group, it.variants)}`.trim(),
+  },
+  {
+    key: 'description2', label: 'Description 2', width: 220, minWidth: 160,
+    accessor: (it) => {
+      const summary = buildVariantSummary(it.item_group, it.variants);
+      return summary ? <div>{summary}</div> : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+    },
+    searchValue: (it) => buildVariantSummary(it.item_group, it.variants),
   },
   {
     key: 'uom', label: 'UOM', width: 70,

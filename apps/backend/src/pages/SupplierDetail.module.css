@@ -95,34 +95,39 @@
 }
 
 .cardHeader {
+  /* Section bar (Wei Siang 2026-06-04): a clear header so each section reads as
+     a section, with a brand-accent left rule. Matches SalesOrderDetail. */
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding: 6px var(--space-3);
+  padding: 8px var(--space-3);
   border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--c-burnt);
   background: var(--c-cream);
 }
 
 .cardTitle {
-  /* PR — Commander 2026-05-27: drop to fs-9 to match SO Detail eyebrows
-     (PR #231). Quieter section headers. */
+  /* SECTION HEADER — second level of the page hierarchy (under the doc title).
+     Larger + bolder + in the brand emphasis colour so it reads as a heading,
+     distinct from the small muted field labels below it. (Wei Siang 2026-06-04
+     — the prior fs-9 eyebrow had become indistinguishable from the field
+     labels; restore hierarchy to match SalesOrderDetail.) */
   font-family: var(--font-button);
-  font-size: var(--fs-9, 9px);
-  font-weight: 700;
-  letter-spacing: 0.12em;
+  font-size: var(--fs-13, 13px);
+  font-weight: 800;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--fg-muted);
+  color: var(--c-burnt);
   margin: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
-/* Section-header icons step to 12px to balance fs-9 cardTitle. */
 .cardTitle svg {
-  width: 12px;
-  height: 12px;
+  width: 15px;
+  height: 15px;
 }
 
 .cardTitleCount {
@@ -136,9 +141,9 @@
 }
 
 .cardBody {
-  /* PR — Commander 2026-05-27: trim from var(--space-4) → var(--space-2)
-     so cards stack tighter. */
-  padding: var(--space-2);
+  /* A little breathing room so fields don't crowd the section bar. Matches
+     SalesOrderDetail (Wei Siang 2026-06-04). */
+  padding: var(--space-3);
 }
 
 /* ── Supplier Info grid ──────────────────────────────────────────── */

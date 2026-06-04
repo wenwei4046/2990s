@@ -182,18 +182,19 @@ const buildDrDrilldownColumns = (): DataGridColumn<DrItem>[] => [
     key: 'description', label: 'Description', width: 240, minWidth: 180,
     accessor: (it) => {
       const manual = (it.description ?? '').trim();
+      if (manual) return <div>{manual}</div>;
       const summary = buildVariantSummary(it.item_group, it.variants);
-      if (manual) {
-        return (
-          <>
-            <div>{manual}</div>
-            {summary && <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-10)', lineHeight: 1.35 }}>{summary}</div>}
-          </>
-        );
-      }
       return summary ? <div>{summary}</div> : '—';
     },
     searchValue: (it) => `${it.description ?? ''} ${buildVariantSummary(it.item_group, it.variants)}`.trim(),
+  },
+  {
+    key: 'description2', label: 'Description 2', width: 220, minWidth: 160,
+    accessor: (it) => {
+      const summary = buildVariantSummary(it.item_group, it.variants);
+      return summary ? <div>{summary}</div> : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+    },
+    searchValue: (it) => buildVariantSummary(it.item_group, it.variants),
   },
   {
     key: 'condition', label: 'Condition', width: 90, groupable: true,

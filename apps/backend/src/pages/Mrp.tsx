@@ -511,18 +511,29 @@ export const Mrp = () => {
           <h1 className={styles.title}>MRP · Stock Status Report</h1>
         </div>
         <div className={styles.actions}>
-          {/* PO generation mode — same semantics as Create-PO-from-SO. */}
+          {/* Group 1 — VIEW SWITCH: segmented toggle, one connected control with
+              the active option highlighted (same semantics as Create-PO-from-SO). */}
           <div className={styles.modeToggle} role="group" aria-label="PO generation mode">
             <button type="button" className={styles.modeBtn} data-active={poMode === 'combined'}
               onClick={() => setPoMode('combined')} title="One PO per supplier">Combined</button>
             <button type="button" className={styles.modeBtn} data-active={poMode === 'per-so'}
               onClick={() => setPoMode('per-so')} title="One PO per SO (sofa / bedframe)">Per SO</button>
           </div>
-          <button type="button" className={styles.ghostBtn} onClick={collapseAll}>Collapse</button>
-          <button type="button" className={styles.ghostBtn} onClick={expandAll}>Expand</button>
-          <button type="button" className={styles.ghostBtn} onClick={() => void q.refetch()} disabled={q.isFetching}>
-            <RefreshCw {...ICON} className={q.isFetching ? styles.spin : undefined} /> Refresh
-          </button>
+
+          <span className={styles.toolbarDivider} aria-hidden="true" />
+
+          {/* Group 2 — UTILITIES: lighter, ghost/secondary buttons grouped together. */}
+          <div className={styles.utilityGroup} role="group" aria-label="Table utilities">
+            <button type="button" className={styles.ghostBtn} onClick={collapseAll}>Collapse</button>
+            <button type="button" className={styles.ghostBtn} onClick={expandAll}>Expand</button>
+            <button type="button" className={styles.ghostBtn} onClick={() => void q.refetch()} disabled={q.isFetching}>
+              <RefreshCw {...ICON} className={q.isFetching ? styles.spin : undefined} /> Refresh
+            </button>
+          </div>
+
+          <span className={styles.toolbarDivider} aria-hidden="true" />
+
+          {/* Group 3 — PRIMARY CTA: the strongest action, far right. */}
           <button
             type="button"
             className={styles.primaryBtn}

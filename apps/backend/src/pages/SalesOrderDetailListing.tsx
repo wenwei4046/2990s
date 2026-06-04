@@ -186,32 +186,36 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
     },
     /* 7 */ {
       key: 'description', label: 'Description', width: 220, sortable: true,
-      /* Commander 2026-05-28 — render the HOOKKA-style merged variant
-         summary as a muted second line beneath the product description.
-         `variants` rides along on the flattened row (Record<string,unknown>)
-         even though it isn't a typed field. */
+      /* Main description only — the variant summary now lives in its own
+         "Description 2" column. When there's no manual description, fall back
+         to the variant summary so the cell isn't a bare dash. */
+      accessor: (r) => {
+        const manual = (r.description ?? '').trim();
+        if (manual) return <div>{manual}</div>;
+        const variants = (r as Record<string, unknown>).variants as
+          Record<string, unknown> | null | undefined;
+        const summary = buildVariantSummary(r.item_group, variants);
+        return <div>{summary || '—'}</div>;
+      },
+      searchValue: (r) => r.description ?? '',
+    },
+    /* 7b */ {
+      key: 'description2', label: 'Description 2', width: 220, sortable: true,
+      /* Commander 2026-05-28 — the HOOKKA-style merged variant summary, now
+         its own toggleable column instead of a muted second line beneath the
+         description. `variants` rides along on the flattened row
+         (Record<string,unknown>) even though it isn't a typed field. */
       accessor: (r) => {
         const variants = (r as Record<string, unknown>).variants as
           Record<string, unknown> | null | undefined;
         const summary = buildVariantSummary(r.item_group, variants);
-        const manual = (r.description ?? '').trim();
-        /* Commander 2026-05-29 — when there's no manual Description 1, show the
-           variant summary as the cell text instead of a bare "—" above it (the
-           dash confused the operator). Manual text, when present, keeps the
-           summary muted below it. */
-        if (manual) {
-          return (
-            <div>
-              <div>{manual}</div>
-              {summary && (
-                <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div>
-              )}
-            </div>
-          );
-        }
-        return <div>{summary || '—'}</div>;
+        return summary ? <div>{summary}</div> : <span className={styles.muted}>—</span>;
       },
-      searchValue: (r) => r.description ?? '',
+      searchValue: (r) => {
+        const variants = (r as Record<string, unknown>).variants as
+          Record<string, unknown> | null | undefined;
+        return buildVariantSummary(r.item_group, variants);
+      },
     },
     /* 8 */ {
       key: 'location', label: 'Location', width: 80, sortable: true, groupable: true,

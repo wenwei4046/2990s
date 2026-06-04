@@ -99,29 +99,41 @@
 }
 
 .cardHeader {
+  /* Section bar (Wei Siang 2026-06-04): a clear header so each section reads as
+     a section, with a brand-accent left rule. Matches SalesOrderDetail. */
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
+  gap: var(--space-2);
+  padding: 8px var(--space-3);
   border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--c-burnt);
+  background: var(--c-cream);
 }
 
 .cardTitle {
+  /* SECTION HEADER — second level of the page hierarchy (under the doc title).
+     Larger + bolder + in the brand emphasis colour so it reads as a heading,
+     distinct from the small muted field labels below it. (Wei Siang 2026-06-04
+     — restore visual hierarchy to match SalesOrderDetail.) */
   font-family: var(--font-button);
-  font-size: var(--fs-12);
-  font-weight: 700;
-  letter-spacing: 0.18em;
+  font-size: var(--fs-13, 13px);
+  font-weight: 800;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--fg-muted);
+  color: var(--c-burnt);
   margin: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 8px;
+}
+.cardTitle svg {
+  width: 15px;
+  height: 15px;
 }
 
 .cardBody {
-  padding: var(--space-4);
+  padding: var(--space-3);
 }
 
 /* ── Info grid ──────────────────────────────────────────────────────── */

@@ -443,18 +443,19 @@ const buildPoDrilldownColumns = (
     key: 'description', label: 'Description', width: 240, minWidth: 180,
     accessor: (it) => {
       const manual = (it.description ?? '').trim();
+      if (manual) return <div>{manual}</div>;
       const summary = buildVariantSummary(it.item_group ?? null, it.variants ?? null);
-      if (manual) {
-        return (
-          <>
-            <div>{manual}</div>
-            {summary && <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-10)' }}>{summary}</div>}
-          </>
-        );
-      }
       return summary || it.material_name || '—';
     },
     searchValue: (it) => `${it.description ?? ''} ${buildVariantSummary(it.item_group ?? null, it.variants ?? null)} ${it.material_name ?? ''}`.trim(),
+  },
+  {
+    key: 'description2', label: 'Description 2', width: 220, minWidth: 160,
+    accessor: (it) => {
+      const summary = buildVariantSummary(it.item_group ?? null, it.variants ?? null);
+      return summary ? <div>{summary}</div> : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+    },
+    searchValue: (it) => buildVariantSummary(it.item_group ?? null, it.variants ?? null),
   },
   {
     key: 'uom', label: 'UOM', width: 70,
