@@ -3,12 +3,16 @@
    Density target: ~28px row height, fs-12 body, fs-10 uppercase header. */
 
 .root {
+  /* De-boxed (Wei Siang 2026-06-04): a flat, full-width table surface — NOT a
+     floating brochure card. Dropped the drop-shadow + big radius that made every
+     list look "boxed-in"; kept a hairline border + small radius just for edge
+     definition. Reads like a standard enterprise data grid. */
   display: flex;
   flex-direction: column;
   background: var(--c-paper);
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-2);
+  border-radius: var(--radius-sm, 6px);
+  box-shadow: none;
   overflow: hidden;
   font-family: var(--font-sans);
 }
