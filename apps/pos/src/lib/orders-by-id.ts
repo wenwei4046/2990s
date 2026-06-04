@@ -36,7 +36,7 @@ export interface OrderDetail {
     unit_price:   number;
     line_total:   number;
     /** Config-derived line description (e.g. "2-Seater + 2 Power slide",
-     *  "1A-LHF + 2A-RHF"). null when the product has no describable config. */
+     *  "1A(LHF) + 2A(RHF)"). null when the product has no describable config. */
     description:  string | null;
   }[];
 }

@@ -130,10 +130,10 @@ const sofaProduct: ProductRowLite = {
 };
 
 // Per-Model module SELLING prices in sen (what loadModelSofaModulePrices builds).
-const SOFA_MODULE_PRICES = { '1A-LHF': 150000, '1A-RHF': 150000 };
+const SOFA_MODULE_PRICES = { '1A(LHF)': 150000, '1A(RHF)': 150000 };
 const sofaCells = [
-  { id: 'a', moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
-  { id: 'b', moduleId: '1A-RHF', x: 400, y: 0, rot: 0 },
+  { id: 'a', moduleId: '1A(LHF)', x: 0,   y: 0, rot: 0 },
+  { id: 'b', moduleId: '1A(RHF)', x: 400, y: 0, rot: 0 },
 ];
 const sofaVariants = { cells: sofaCells, depth: '24' } as unknown as null;
 
@@ -219,11 +219,11 @@ describe('recomputeFromSnapshot — configured sofa selling drift (per-Model mod
 describe('recomputeFromSnapshot — sofa PWP combo price (Phase 2)', () => {
   // A single-module build + single-slot combo so the combo deterministically
   // matches the lone group. pricesByHeight = à-la-carte RM1500; PWP = RM1000.
-  const oneCell = { cells: [{ id: 'a', moduleId: '1A-LHF', x: 0, y: 0, rot: 0 }], depth: '24' } as unknown as null;
-  const MODULE_PRICE = { '1A-LHF': 150000 };
+  const oneCell = { cells: [{ id: 'a', moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 }], depth: '24' } as unknown as null;
+  const MODULE_PRICE = { '1A(LHF)': 150000 };
   const comboRow: SofaComboRow = {
     id: 'combo-1', baseModel: 'Booqit',
-    modules: [['1A-LHF']],
+    modules: [['1A(LHF)']],
     tier: null, customerId: null,
     pricesByHeight: { '24': 150000 },
     pwpPricesByHeight: { '24': 100000 },
@@ -414,10 +414,10 @@ describe('recomputeFromSnapshot — PWP reward base (migration 0128)', () => {
    selling_prices_by_height over cost via comboChargedPrices). This pins the
    contract: the gate charges SELLING, and the OLD cost figure now drifts. */
 describe('recomputeFromSnapshot — combo charges SELLING, not cost', () => {
-  // 2A-LHF + L-RHF adjacent → one group matching the combo at height 24.
+  // 2A(LHF) + L(RHF) adjacent → one group matching the combo at height 24.
   const cells = [
-    { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
-    { id: 'b', moduleId: 'L-RHF',  x: 158, y: 0, rot: 0 },
+    { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
+    { id: 'b', moduleId: 'L(RHF)',  x: 158, y: 0, rot: 0 },
   ];
   const variants = { cells, depth: '24' } as unknown as null;
   const product: ProductRowLite = {
@@ -428,12 +428,12 @@ describe('recomputeFromSnapshot — combo charges SELLING, not cost', () => {
   const combo = {
     // PRICE_1 — the base tier the sofa runs at (Chairman 2026-06-01); the gate's
     // computeSofaSellingSen queries combos at PRICE_1, matching production.
-    id: 'cmb', baseModel: 'Booqit', modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
+    id: 'cmb', baseModel: 'Booqit', modules: [['2A(LHF)', '2A(RHF)'], ['L(LHF)', 'L(RHF)']],
     tier: 'PRICE_1' as const, customerId: null,
     pricesByHeight: { '24': 380000 }, // SELLING
     label: null, effectiveFrom: '2026-01-01', deletedAt: null,
   };
-  const modulePrices = { '2A-LHF': 240000, 'L-RHF': 190000 }; // à-la-carte RM 4300
+  const modulePrices = { '2A(LHF)': 240000, 'L(RHF)': 190000 }; // à-la-carte RM 4300
 
   it('client pays the SELLING combo price → no drift', () => {
     const r = recomputeFromSnapshot(

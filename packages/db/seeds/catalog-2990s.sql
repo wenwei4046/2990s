@@ -113,7 +113,7 @@ BEGIN
     ('cccccccc-cccc-cccc-cccc-cccccccc0002','2S', true,1990),
     ('cccccccc-cccc-cccc-cccc-cccccccc0002','3S', true,2490),
     ('cccccccc-cccc-cccc-cccc-cccccccc0002','2+L',true,2990),
-    -- SF 9050 — only "2-seater + wood console" 2990 (2WC preset = 1A-LHF+WC-45+1A-RHF)
+    -- SF 9050 — only "2-seater + wood console" 2990 (2WC preset = 1A(LHF)+WC-45+1A(RHF))
     ('cccccccc-cccc-cccc-cccc-cccccccc0003','2WC', true,2990),
     -- AM 9053 — standard + power incliner (recliner_upgrade_price)
     ('cccccccc-cccc-cccc-cccc-cccccccc0004','1S', true,1490),
@@ -158,7 +158,7 @@ BEGIN
     ('cccccccc-cccc-cccc-cccc-cccccccc0014','2S', true,1990),
     ('cccccccc-cccc-cccc-cccc-cccccccc0014','3S', true,2490),
     ('cccccccc-cccc-cccc-cccc-cccccccc0014','2+L',true,2990),
-    -- 5539 — corner package preset (CORNER = 1B-LHF + CNR + 2A-RHF) @2990
+    -- 5539 — corner package preset (CORNER = 1B(LHF) + CNR + 2A(RHF)) @2990
     ('cccccccc-cccc-cccc-cccc-cccccccc0015','CORNER',true,2990)
   ON CONFLICT (product_id, bundle_id) DO UPDATE SET
     active = EXCLUDED.active, price = EXCLUDED.price;

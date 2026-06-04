@@ -7,13 +7,13 @@ const D: Depth = '28';
 // Booqit corner @28": CNR 105×95, 2A 178×95, 1B chaise leg 115 long.
 const chaiseLeft = (): Cell[] => [
   { id: 'cnr', moduleId: 'CNR', x: 0, y: 0, rot: 0 },
-  { id: 'two', moduleId: '2A-RHF', x: 105, y: 0, rot: 0 },
-  { id: 'one', moduleId: '1B-LHF', x: 0, y: 95, rot: 270 },
+  { id: 'two', moduleId: '2A(RHF)', x: 105, y: 0, rot: 0 },
+  { id: 'one', moduleId: '1B(LHF)', x: 0, y: 95, rot: 270 },
 ];
 const chaiseRight = (): Cell[] => [
-  { id: 'two', moduleId: '2A-LHF', x: 0, y: 0, rot: 0 },
+  { id: 'two', moduleId: '2A(LHF)', x: 0, y: 0, rot: 0 },
   { id: 'cnr', moduleId: 'CNR', x: 178, y: 0, rot: 0 },
-  { id: 'one', moduleId: '1B-RHF', x: 188, y: 95, rot: 90 },
+  { id: 'one', moduleId: '1B(RHF)', x: 188, y: 95, rot: 90 },
 ];
 
 // Replica of CustomBuilder's rotateGroup (90° CW about the group bbox centre).
@@ -52,8 +52,8 @@ describe('cornerCompositeFromCells', () => {
   it('1A chaise + 2B long arm → bench flags flip', () => {
     const r = cornerCompositeFromCells([
       { id: 'cnr', moduleId: 'CNR', x: 0, y: 0, rot: 0 },
-      { id: 'two', moduleId: '2B-RHF', x: 105, y: 0, rot: 0 },
-      { id: 'one', moduleId: '1A-LHF', x: 0, y: 95, rot: 270 },
+      { id: 'two', moduleId: '2B(RHF)', x: 105, y: 0, rot: 0 },
+      { id: 'one', moduleId: '1A(LHF)', x: 0, y: 95, rot: 270 },
     ], D);
     expect(r).not.toBeNull();
     expect(r!.geo.chaiseBench).toBe(false);
@@ -83,16 +83,16 @@ describe('cornerCompositeFromCells', () => {
   it('returns null for non-corner shapes', () => {
     // Straight 2A + L chaise (no Corner module).
     expect(cornerCompositeFromCells([
-      { id: 'a', moduleId: '2A-LHF', x: 0, y: 0, rot: 0 },
-      { id: 'b', moduleId: 'L-RHF', x: 178, y: 0, rot: 0 },
+      { id: 'a', moduleId: '2A(LHF)', x: 0, y: 0, rot: 0 },
+      { id: 'b', moduleId: 'L(RHF)', x: 178, y: 0, rot: 0 },
     ], D)).toBeNull();
     // Single module.
-    expect(cornerCompositeFromCells([{ id: 'a', moduleId: '1A-LHF', x: 0, y: 0, rot: 0 }], D)).toBeNull();
+    expect(cornerCompositeFromCells([{ id: 'a', moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 }], D)).toBeNull();
     // Corner + two 2-seaters (no 1-seater chaise).
     expect(cornerCompositeFromCells([
       { id: 'cnr', moduleId: 'CNR', x: 0, y: 0, rot: 0 },
-      { id: 't1', moduleId: '2A-RHF', x: 105, y: 0, rot: 0 },
-      { id: 't2', moduleId: '2A-LHF', x: 0, y: 95, rot: 0 },
+      { id: 't1', moduleId: '2A(RHF)', x: 105, y: 0, rot: 0 },
+      { id: 't2', moduleId: '2A(LHF)', x: 0, y: 95, rot: 0 },
     ], D)).toBeNull();
   });
 });

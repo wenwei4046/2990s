@@ -36,8 +36,8 @@ const dimUnit: CSSProperties = { fontWeight: 400, fontSize: 10, marginLeft: 2, o
 /**
  * Read-only composed preview of a sofa cell layout, built from the individual
  * module PNGs (silhouette-bbox-fitted so they tile tightly). For Quick-Pick
- * presets that have NO single composite PNG — the console (2WC = 1A-LHF + WC-45
- * + 1A-RHF) and the corner (5539 = 1B + CNR + 2A). Responsive: a relative box
+ * presets that have NO single composite PNG — the console (2WC = 1A(LHF) +
+ * Console + 1A(RHF)) and the corner (5539 = 1B + CNR + 2A). Responsive: a relative box
  * whose aspect-ratio is the layout's cm bbox; cells positioned in %; rotated
  * modules draw their native art centred then rotated (same math as the canvas).
  */
@@ -61,7 +61,7 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
 
   // Draw via the shared code-drawn renderer (so Quick Pick matches Custom build)
   // for any un-rotated straight run that contains EITHER:
-  //   - a functional/power seat (1A-P / 1NA-P / 1S-P/R/L …) — SVG-only art, the
+  //   - a functional/power seat (1A(P) / 1NA(P) / 1S(P)/(R)/(L) …) — SVG-only art, the
   //     tile path would render it blank; the renderer re-draws the P/R/L badge +
   //     footrest; OR
   //   - a wide-arm 1B / 2B — so the run JOINS into one continuous sofa with the
@@ -71,7 +71,7 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
   // keep the PNG tiling. Plain contiguous runs (2S, 1A+1A) hit neither case here
   // — they fall through to the GROUP gate below and render schematic too.
   const seamless = !corner && cells.every((c) => (c.rot ?? 0) % 360 === 0)
-    && cells.some((c) => isFunctionalSeat(c.moduleId) || /^[12]B-/.test(c.moduleId))
+    && cells.some((c) => isFunctionalSeat(c.moduleId) || /^[12]B\(/.test(c.moduleId))
     ? buildSeamlessRun(cells, depth, 0)
     : null;
 

@@ -2786,9 +2786,10 @@ const countItems = (cfg: MaintenanceConfig, key: MaintenanceListKey): number => 
    options, SKU generator) keep working untouched. Per-compartment meta
    lives in a parallel `sofaCompartmentMeta` map keyed by code.
 
-   Code-format note: SOFA_MODULES uses dash (`1A-LHF`); commander's pool
-   may use parens (`1A(LHF)`). normalizeCompartmentCode collapses both
-   to the dash form so the lookup hits regardless. */
+   Code-format note: SOFA_MODULES ids, the pool and the meta map all share
+   the ONE canonical parens vocabulary (`1A(LHF)`, 2026-06-04).
+   normalizeCompartmentCode canonicalizes a stray legacy dash entry so the
+   lookup still hits. */
 
 type CompartmentMeta = {
   imageKey?: string;
@@ -2796,8 +2797,14 @@ type CompartmentMeta = {
   defaultPriceCenti?: number;
 };
 
-const normalizeCompartmentCode = (raw: string): string =>
-  raw.trim().replace(/\(([^)]*)\)/g, '-$1').replace(/-+$/, '');
+// Canonicalize any compartment input to the parens form (mirror of the
+// shared normalizeCompartmentCode — kept local so this page stays light).
+const normalizeCompartmentCode = (raw: string): string => {
+  const dash = raw.trim().replace(/\(([^)]*)\)/g, '-$1').replace(/-+$/, '');
+  const parts = dash.split('-').filter(Boolean);
+  if (parts.length <= 1) return dash;
+  return (parts[0] ?? '') + parts.slice(1).map((p) => `(${p})`).join('');
+};
 
 const SOFA_MODULE_BY_NORM_ID = new Map(
   SOFA_MODULES.map((m) => [normalizeCompartmentCode(m.id), m]),
@@ -2809,54 +2816,43 @@ const SOFA_MODULE_BY_NORM_ID = new Map(
 //   nA  = N seats with arm on ONE side (LHF/RHF says which side has arm)
 //   nB  = N seats — the LHF/RHF side's "arm position" is a Seat Cushion
 //         (bench) instead of a real arm. Commander rule: "Left 就是左边是
-//         坐垫的意思" — 1B-LHF means LEFT is bench, RIGHT has the arm.
+//         坐垫的意思" — 1B(LHF) means LEFT is bench, RIGHT has the arm.
 //   nNA = N seats, NO arms
 //   (P) suffix = Power Recliner (electric)
 //   (R) suffix = Manual Recliner
 //   CNR = Corner piece (90° L-shape connector — NOT a console)
 //   WC-45 = Wood Console (45cm) — divider/storage between two seats
+// Keys are the canonical parens codes (lookups go through
+// normalizeCompartmentCode first, so a stray legacy dash entry still hits).
 const COMPARTMENT_DESCRIPTION_OVERRIDE: Record<string, string> = {
   // ── 1-Seaters ──────────────────────────────────────────────────────
   '1S':     '1 seat, arms on BOTH sides',
-  '1A-LHF': '1 seat, ONE arm (left)',
-  '1A-RHF': '1 seat, ONE arm (right)',
-  '1B-LHF': '1 seat — LEFT is Seat Cushion (bench), no arm on the right',
-  '1B-RHF': '1 seat — RIGHT is Seat Cushion (bench), no arm on the left',
+  '1A(LHF)': '1 seat, ONE arm (left)',
+  '1A(RHF)': '1 seat, ONE arm (right)',
+  '1B(LHF)': '1 seat — LEFT is Seat Cushion (bench), no arm on the right',
+  '1B(RHF)': '1 seat — RIGHT is Seat Cushion (bench), no arm on the left',
   '1NA':    '1 seat, NO arms',
 
   // ── 1-Seater Recliners ────────────────────────────────────────────
   // (P) = Power Recliner (electric) · (R) = Manual Recliner
-  // Commander pool stores these as double-parens (e.g. 1A(P)(LHF)); we
-  // also accept the dash-collapsed and single-parens forms.
   '1A(P)(LHF)': '1 seat + ONE arm (left) — Power Recliner (electric)',
   '1A(P)(RHF)': '1 seat + ONE arm (right) — Power Recliner (electric)',
   '1A(R)(LHF)': '1 seat + ONE arm (left) — Manual Recliner',
   '1A(R)(RHF)': '1 seat + ONE arm (right) — Manual Recliner',
-  '1A(P)-LHF':  '1 seat + ONE arm (left) — Power Recliner (electric)',
-  '1A(P)-RHF':  '1 seat + ONE arm (right) — Power Recliner (electric)',
-  '1A(R)-LHF':  '1 seat + ONE arm (left) — Manual Recliner',
-  '1A(R)-RHF':  '1 seat + ONE arm (right) — Manual Recliner',
-  '1A-P-LHF':   '1 seat + ONE arm (left) — Power Recliner (electric)',
-  '1A-P-RHF':   '1 seat + ONE arm (right) — Power Recliner (electric)',
-  '1A-R-LHF':   '1 seat + ONE arm (left) — Manual Recliner',
-  '1A-R-RHF':   '1 seat + ONE arm (right) — Manual Recliner',
   '1NA(P)':     '1 seat, NO arms — Power Recliner (electric)',
   '1NA(R)':     '1 seat, NO arms — Manual Recliner',
-  '1NA-P':      '1 seat, NO arms — Power Recliner (electric)',
-  '1NA-R':      '1 seat, NO arms — Manual Recliner',
   // ── Console variants ────────────────────────────────────────────────
   // Commander 2026-05-28: "console 包布的就叫 Console；上面是木的盖那个叫
   // Console/WC". Two distinct codes with different art.
   Console:         'Console — fabric-wrapped console with cup holders',
   'Console/WC':    'Console/WC — wood lid + fabric body, with cup holders',
-  'Console-WC':    'Console/WC — wood lid + fabric body, with cup holders',
 
   // ── 2-Seaters ──────────────────────────────────────────────────────
   '2S':     '2 seats, arms on BOTH sides',
-  '2A-LHF': '2 seats, ONE arm (left)',
-  '2A-RHF': '2 seats, ONE arm (right)',
-  '2B-LHF': '2 seats — LEFT is Seat Cushion (bench), no arm on the right',
-  '2B-RHF': '2 seats — RIGHT is Seat Cushion (bench), no arm on the left',
+  '2A(LHF)': '2 seats, ONE arm (left)',
+  '2A(RHF)': '2 seats, ONE arm (right)',
+  '2B(LHF)': '2 seats — LEFT is Seat Cushion (bench), no arm on the right',
+  '2B(RHF)': '2 seats — RIGHT is Seat Cushion (bench), no arm on the left',
   '2NA':    '2 seats, NO arms',
 
   // ── Corner + Accessories ──────────────────────────────────────────
@@ -2865,30 +2861,20 @@ const COMPARTMENT_DESCRIPTION_OVERRIDE: Record<string, string> = {
   STOOL:   'Ottoman / stool',
 };
 
-// Extra modules NOT in SOFA_MODULES (commander pool includes recliner
-// variants + a Console alias that the POS shared lib doesn't model
-// directly). Hand-mapped here so the Maintenance UI gets full coverage.
-// Keys are the NORMALIZED code (parens collapsed to dashes); the value
-// is the SVG filename stem under apps/backend/public/sofa-modules/.
+// Extra modules NOT in SOFA_MODULES (the Console/WC alias the POS shared
+// lib doesn't model directly). Hand-mapped here so the Maintenance UI gets
+// full coverage. Keys are the CANONICAL code (parens form); the value is
+// the SVG filename stem under public/sofa-modules/.
 const EXTRA_MODULE_IMAGE_BY_NORM: Record<string, string> = {
-  // 1-Seater / 2-Seater presets — both arms (live in BUNDLES, not SOFA_MODULES)
-  '1S':       '1S',
-  '2S':       '2S',
-  // Recliner variants
-  '1A-P-LHF': '1A-P-LHF',
-  '1A-P-RHF': '1A-P-RHF',
-  '1A-R-LHF': '1A-R-LHF',
-  '1A-R-RHF': '1A-R-RHF',
-  '1NA-P':    '1NA-P',
-  '1NA-R':    '1NA-R',
   // Console = fabric-wrapped (no wood lid). Console/WC = wood lid + fabric body.
   // Commander 2026-05-28 split the original "Console" into 2 codes — the
   // existing SVG (wood lid + fabric) reads as wood at a glance, so it moves
   // to Console-WC; a new fabric-only design lives at Console.
   Console:       'Console',
-  'Console-WC':  'Console-WC',
+  // Legacy dash input 'Console-WC' canonicalizes to 'Console(WC)'.
+  'Console(WC)': 'Console-WC',
   // normalizeCompartmentCode doesn't touch '/' so commander's raw "Console/WC"
-  // input falls through to this key directly (not via normalization).
+  // input falls through to this key directly (not via canonicalization).
   'Console/WC':  'Console-WC',
 };
 
@@ -2914,17 +2900,13 @@ const seedCompartmentMeta = (code: string): CompartmentMeta => {
       defaultPriceCenti: 0,
     };
   }
-  // Fallback for codes NOT in SOFA_MODULES (recliner variants, Console
-  // alias). These have bespoke SVGs hand-drawn to the same style.
-  const extraStem = EXTRA_MODULE_IMAGE_BY_NORM[norm];
+  // Fallback for codes NOT in SOFA_MODULES (the Console/WC alias). These
+  // have bespoke SVGs hand-drawn to the same style.
+  const extraStem = EXTRA_MODULE_IMAGE_BY_NORM[code.trim()] ?? EXTRA_MODULE_IMAGE_BY_NORM[norm];
   if (extraStem) {
-    // The COMPARTMENT_DESCRIPTION_OVERRIDE is keyed by the raw code
-    // commander typed (e.g. '1A(P)-LHF'). Look up via both the raw input
-    // and the normalized form to be tolerant.
     const desc =
       COMPARTMENT_DESCRIPTION_OVERRIDE[code] ??
       COMPARTMENT_DESCRIPTION_OVERRIDE[norm] ??
-      COMPARTMENT_DESCRIPTION_OVERRIDE[code.replace(/\)\(/g, ')-').replace(/[()]/g, '')] ??
       undefined;
     return {
       imageKey:    `sofa-modules/${extraStem}.svg`,
@@ -3225,7 +3207,7 @@ const SofaCompartmentsList = ({
                       outline: 'none',
                       width: 110,
                     }}
-                    title="Compartment code (e.g. 1A-LHF)"
+                    title="Compartment code (e.g. 1A(LHF))"
                   />
                   <input
                     type="text"
@@ -3340,7 +3322,7 @@ const SofaCompartmentsList = ({
           <span className={styles.maintRowIdx}>+</span>
           <input
             type="text"
-            placeholder="New compartment code (e.g. 1A-LHF)"
+            placeholder="New compartment code (e.g. 1A(LHF))"
             value={draftValue}
             onChange={(e) => setDraftValue(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') addItem(); }}

@@ -18,12 +18,12 @@
 --   - flat_price stays NULL (correct for sofa_build).
 --
 -- Naming convention — Hookka quotation codes mapped 1:1 into compartment_library:
---   1A-LHF / 1A-RHF — 1-seat with arm, left/right hand facing
---   1B-LHF / 1B-RHF — 1-seat with larger arm, L/R (5539 only)
---   2A-LHF / 2A-RHF — 2-seat with arm, L/R
---   2B-LHF / 2B-RHF — 2-seat with larger arm, L/R (5539 only)
+--   1A(LHF) / 1A(RHF) — 1-seat with arm, left/right hand facing
+--   1B(LHF) / 1B(RHF) — 1-seat with larger arm, L/R (5539 only)
+--   2A(LHF) / 2A(RHF) — 2-seat with arm, L/R
+--   2B(LHF) / 2B(RHF) — 2-seat with larger arm, L/R (5539 only)
 --   1NA / 2NA       — no-arm pieces (codes match prototype's existing entries; reused)
---   L-LHF / L-RHF   — chaise/L-shape, L/R
+--   L(LHF) / L(RHF)   — chaise/L-shape, L/R
 --   CNR             — generic corner
 --   STOOL           — ottoman/stool (accessory)
 --
@@ -51,20 +51,20 @@ INSERT INTO compartment_library
   (id, comp_group, label, width_cm, depth_cm, cushions, default_price, art_filename, is_accessory, sort_order)
 VALUES
   -- 1-seater with arm (A = standard arm)
-  ('1A-LHF', '1-seater', '1A · Left hand facing',  95, 95, 1, 0, NULL, false, 101),
-  ('1A-RHF', '1-seater', '1A · Right hand facing', 95, 95, 1, 0, NULL, false, 102),
+  ('1A(LHF)', '1-seater', '1A · Left hand facing',  95, 95, 1, 0, NULL, false, 101),
+  ('1A(RHF)', '1-seater', '1A · Right hand facing', 95, 95, 1, 0, NULL, false, 102),
   -- 1-seater with larger arm (B = wider arm; 5539 only)
-  ('1B-LHF', '1-seater', '1B · Left hand facing (wide arm)',  105, 95, 1, 0, NULL, false, 103),
-  ('1B-RHF', '1-seater', '1B · Right hand facing (wide arm)', 105, 95, 1, 0, NULL, false, 104),
+  ('1B(LHF)', '1-seater', '1B · Left hand facing (wide arm)',  105, 95, 1, 0, NULL, false, 103),
+  ('1B(RHF)', '1-seater', '1B · Right hand facing (wide arm)', 105, 95, 1, 0, NULL, false, 104),
   -- 2-seater with arm
-  ('2A-LHF', '2-seater', '2A · Left hand facing',  158, 95, 2, 0, NULL, false, 105),
-  ('2A-RHF', '2-seater', '2A · Right hand facing', 158, 95, 2, 0, NULL, false, 106),
+  ('2A(LHF)', '2-seater', '2A · Left hand facing',  158, 95, 2, 0, NULL, false, 105),
+  ('2A(RHF)', '2-seater', '2A · Right hand facing', 158, 95, 2, 0, NULL, false, 106),
   -- 2-seater with larger arm (5539 only)
-  ('2B-LHF', '2-seater', '2B · Left hand facing (wide arm)',  170, 95, 2, 0, NULL, false, 107),
-  ('2B-RHF', '2-seater', '2B · Right hand facing (wide arm)', 170, 95, 2, 0, NULL, false, 108),
+  ('2B(LHF)', '2-seater', '2B · Left hand facing (wide arm)',  170, 95, 2, 0, NULL, false, 107),
+  ('2B(RHF)', '2-seater', '2B · Right hand facing (wide arm)', 170, 95, 2, 0, NULL, false, 108),
   -- L-shape chaise (LHF/RHF naming)
-  ('L-LHF',  'L-Shape',  'L · Left hand facing chaise',  95, 165, 1, 0, NULL, false, 109),
-  ('L-RHF',  'L-Shape',  'L · Right hand facing chaise', 95, 165, 1, 0, NULL, false, 110),
+  ('L(LHF)',  'L-Shape',  'L · Left hand facing chaise',  95, 165, 1, 0, NULL, false, 109),
+  ('L(RHF)',  'L-Shape',  'L · Right hand facing chaise', 95, 165, 1, 0, NULL, false, 110),
   -- Generic corner (Hookka doesn't distinguish NW/NE/SE/SW)
   ('CNR',    'Corner',   'Corner piece', 95, 95, 1, 0, NULL, false, 111),
   -- Ottoman / stool
@@ -130,41 +130,41 @@ INSERT INTO product_compartments (product_id, compartment_id, price, active)
 SELECT product_id, comp_id, 0, true
 FROM (
   VALUES
-    ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, '1A-LHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, '1A-RHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, '2A-LHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, '2A-RHF'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, '1A(LHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, '1A(RHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, '2A(LHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, '2A(RHF)'),
     ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, '1NA'),
     ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, '2NA'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, 'L-LHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, 'L-RHF'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, 'L(LHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, 'L(RHF)'),
     ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, 'CNR'),
     ('ffffffff-ffff-ffff-ffff-ffffffff5531'::uuid, 'STOOL'),
 
-    ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, '1A-LHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, '1A-RHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, '2A-LHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, '2A-RHF'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, '1A(LHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, '1A(RHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, '2A(LHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, '2A(RHF)'),
     ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, '1NA'),
     ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, '2NA'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, 'L-LHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, 'L-RHF'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, 'L(LHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, 'L(RHF)'),
     ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, 'CNR'),
     ('ffffffff-ffff-ffff-ffff-ffffffff5535'::uuid, 'STOOL'),
 
     -- 5539: 10 base + 4 wide-arm variants (1B / 2B LHF/RHF) = 14 compartments
-    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '1A-LHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '1A-RHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '1B-LHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '1B-RHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '2A-LHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '2A-RHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '2B-LHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '2B-RHF'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '1A(LHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '1A(RHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '1B(LHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '1B(RHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '2A(LHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '2A(RHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '2B(LHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '2B(RHF)'),
     ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '1NA'),
     ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, '2NA'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, 'L-LHF'),
-    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, 'L-RHF'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, 'L(LHF)'),
+    ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, 'L(RHF)'),
     ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, 'CNR'),
     ('ffffffff-ffff-ffff-ffff-ffffffff5539'::uuid, 'STOOL')
 ) AS t(product_id, comp_id)

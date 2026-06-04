@@ -20,18 +20,31 @@ import {
 } from '../sofa-build';
 
 describe('normalizeCompartmentCode', () => {
-  it('collapses the SKU pool form (paren) to the shared dash form', () => {
-    expect(normalizeCompartmentCode('1A(LHF)')).toBe('1A-LHF');
-    expect(normalizeCompartmentCode('2A(RHF)')).toBe('2A-RHF');
-    expect(normalizeCompartmentCode('L(LHF)')).toBe('L-LHF');
+  it('keeps the canonical parens form unchanged', () => {
+    expect(normalizeCompartmentCode('1A(LHF)')).toBe('1A(LHF)');
+    expect(normalizeCompartmentCode('2A(RHF)')).toBe('2A(RHF)');
+    expect(normalizeCompartmentCode('L(LHF)')).toBe('L(LHF)');
+    expect(normalizeCompartmentCode('1A(P)(LHF)')).toBe('1A(P)(LHF)');
   });
-  it('leaves an already-dash / plain code unchanged', () => {
-    expect(normalizeCompartmentCode('1A-LHF')).toBe('1A-LHF');
+  it('canonicalizes a legacy dash code to the parens form', () => {
+    expect(normalizeCompartmentCode('1A-LHF')).toBe('1A(LHF)');
+    expect(normalizeCompartmentCode('1A-P-LHF')).toBe('1A(P)(LHF)');
+    expect(normalizeCompartmentCode('1NA-P')).toBe('1NA(P)');
+    expect(normalizeCompartmentCode('1S-L')).toBe('1S(L)');
+    expect(normalizeCompartmentCode('L-RHF')).toBe('L(RHF)');
+  });
+  it('canonicalizes a mixed parens/dash code', () => {
+    expect(normalizeCompartmentCode('1A(P)-LHF')).toBe('1A(P)(LHF)');
+  });
+  it('leaves plain codes unchanged', () => {
     expect(normalizeCompartmentCode('CNR')).toBe('CNR');
     expect(normalizeCompartmentCode('2NA')).toBe('2NA');
+    expect(normalizeCompartmentCode('Console')).toBe('Console');
+    expect(normalizeCompartmentCode('Console/WC')).toBe('Console/WC');
   });
   it('trims surrounding whitespace and trailing dashes', () => {
     expect(normalizeCompartmentCode('  2NA  ')).toBe('2NA');
+    expect(normalizeCompartmentCode('1A-LHF-')).toBe('1A(LHF)');
   });
 });
 
@@ -64,7 +77,7 @@ describe('sofaModulePricesFromSkus', () => {
       ],
       'Booqit',
     );
-    expect(map).toEqual({ '2A-LHF': 200000, '1NA': 99000, CNR: 59000 });
+    expect(map).toEqual({ '2A(LHF)': 200000, '1NA': 99000, CNR: 59000 });
   });
 
   it('skips SKUs with a null sell_price (unpriced → no entry)', () => {
@@ -93,9 +106,9 @@ describe('sofaModulePricesFromSkus', () => {
 
 describe('sofaCompartmentsFromModulePrices', () => {
   it('maps each module-price entry to a normalized compartmentId + whole-MYR price', () => {
-    const rows = sofaCompartmentsFromModulePrices({ '1A-LHF': 150000, '2A-RHF': 200000 });
-    expect(rows).toContainEqual({ compartmentId: '1A-LHF', active: true, price: 1500 });
-    expect(rows).toContainEqual({ compartmentId: '2A-RHF', active: true, price: 2000 });
+    const rows = sofaCompartmentsFromModulePrices({ '1A(LHF)': 150000, '2A(RHF)': 200000 });
+    expect(rows).toContainEqual({ compartmentId: '1A(LHF)', active: true, price: 1500 });
+    expect(rows).toContainEqual({ compartmentId: '2A(RHF)', active: true, price: 2000 });
   });
   it('null / undefined / empty map → []', () => {
     expect(sofaCompartmentsFromModulePrices(null)).toEqual([]);
@@ -106,25 +119,25 @@ describe('sofaCompartmentsFromModulePrices', () => {
 
 describe('computeSofaSellingSen', () => {
   // Per-Model module SELLING prices in sen.
-  const booqit = { '1A-LHF': 150000, '1A-RHF': 150000 }; // RM 1500 each
+  const booqit = { '1A(LHF)': 150000, '1A(RHF)': 150000 }; // RM 1500 each
 
   it('à-la-carte: sums per-module prices when no Combo matches (returns sen)', () => {
     // Two 1A modules laid out far apart → two separate groups, each priced
     // à-la-carte. 1500 + 1500 = RM 3000 = 300000 sen.
     const cells: Cell[] = [
-      { id: 'a', moduleId: '1A-LHF', x: 0, y: 0, rot: 0 },
-      { id: 'b', moduleId: '1A-RHF', x: 400, y: 0, rot: 0 },
+      { id: 'a', moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 },
+      { id: 'b', moduleId: '1A(RHF)', x: 400, y: 0, rot: 0 },
     ];
     expect(computeSofaSellingSen(cells, '24', booqit, [])).toBe(300000);
   });
 
   it('unpriced module (no map entry) contributes 0 — no phantom price', () => {
-    const cells: Cell[] = [{ id: 'a', moduleId: '1A-LHF', x: 0, y: 0, rot: 0 }];
+    const cells: Cell[] = [{ id: 'a', moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 }];
     expect(computeSofaSellingSen(cells, '24', {}, [])).toBe(0);
   });
 
   it('single priced module → its price in sen', () => {
-    const cells: Cell[] = [{ id: 'a', moduleId: '1A-LHF', x: 0, y: 0, rot: 0 }];
+    const cells: Cell[] = [{ id: 'a', moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 }];
     expect(computeSofaSellingSen(cells, '24', booqit, [])).toBe(150000);
   });
 
@@ -135,14 +148,14 @@ describe('computeSofaSellingSen', () => {
   });
 
   it('a matched Combo overrides the à-la-carte sum (Q2 always-combo)', () => {
-    // 2A-LHF + L-RHF form one connected group matching the combo's modules at
+    // 2A(LHF) + L(RHF) form one connected group matching the combo's modules at
     // height 24. Module map à-la-carte = RM 2400 + RM 1900 = RM 4300; the combo
     // price RM 3800 (380000 centi) overrides → 380000 sen.
-    const map = { '2A-LHF': 240000, 'L-RHF': 190000 };
+    const map = { '2A(LHF)': 240000, 'L(RHF)': 190000 };
     const combo: SofaComboRow = {
       id: 'cmb',
       baseModel: '',
-      modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
+      modules: [['2A(LHF)', '2A(RHF)'], ['L(LHF)', 'L(RHF)']],
       // PRICE_1 — the base tier the whole sofa runs at (Chairman 2026-06-01);
       // computeSofaSellingSen now queries combos at PRICE_1 to match production.
       tier: 'PRICE_1',
@@ -153,8 +166,8 @@ describe('computeSofaSellingSen', () => {
       deletedAt: null,
     };
     const cells: Cell[] = [
-      { id: 'a', moduleId: '2A-LHF', x: 0, y: 0, rot: 0 },
-      { id: 'b', moduleId: 'L-RHF', x: 158, y: 0, rot: 0 },
+      { id: 'a', moduleId: '2A(LHF)', x: 0, y: 0, rot: 0 },
+      { id: 'b', moduleId: 'L(RHF)', x: 158, y: 0, rot: 0 },
     ];
     expect(computeSofaSellingSen(cells, '24', map, [combo])).toBe(380000);
   });
@@ -171,7 +184,7 @@ describe('computeSofaSellingSen', () => {
   it('1A-only build: combo applies where priced, falls through to 0 where not', () => {
     const twoOneA: SofaComboRow = {
       id: 'annsa-2x1a', baseModel: '',
-      modules: [['1A-LHF', '1A-RHF'], ['1A-LHF', '1A-RHF']],
+      modules: [['1A(LHF)', '1A(RHF)'], ['1A(LHF)', '1A(RHF)']],
       tier: 'PRICE_1', customerId: null,
       pricesByHeight: { '24': 249000, '28': null, '37': 249000 }, // 28 unpriced
       label: null, effectiveFrom: '2026-01-01', deletedAt: null,
@@ -181,8 +194,8 @@ describe('computeSofaSellingSen', () => {
     // At 37" each 1A is 95 + (37-24)*2.5 = 127.5cm wide, so cell B sits at 127.5
     // to touch cell A → one connected group the 2-slot combo can cover.
     const cells: Cell[] = [
-      { id: 'a', moduleId: '1A-LHF', x: 0,     y: 0, rot: 0 },
-      { id: 'b', moduleId: '1A-RHF', x: 127.5, y: 0, rot: 0 },
+      { id: 'a', moduleId: '1A(LHF)', x: 0,     y: 0, rot: 0 },
+      { id: 'b', moduleId: '1A(RHF)', x: 127.5, y: 0, rot: 0 },
     ];
     expect(computeSofaSellingSen(cells, '37', annsaModules, [twoOneA])).toBe(249000); // combo applies
     // At 28" the modules are narrower (105cm) so the same cells leave a gap →
@@ -194,29 +207,29 @@ describe('computeSofaSellingSen', () => {
 
 describe('sofaComboCostSen (combo COST auto-detect)', () => {
   // Module COSTs (base_price_sen) keyed by normalized code.
-  const costs = { '2A-LHF': 180000, '1NA': 70000, CNR: 40000 };
+  const costs = { '2A(LHF)': 180000, '1NA': 70000, CNR: 40000 };
 
   it('sums the cost of each slot’s representative (first) module code', () => {
-    // Singleton slots (a POS-created combo): 2A-LHF + 1NA + CNR.
-    expect(sofaComboCostSen([['2A-LHF'], ['1NA'], ['CNR']], costs)).toBe(290000);
+    // Singleton slots (a POS-created combo): 2A(LHF) + 1NA + CNR.
+    expect(sofaComboCostSen([['2A(LHF)'], ['1NA'], ['CNR']], costs)).toBe(290000);
   });
 
   it('uses the FIRST code of an OR-set slot as the representative', () => {
-    // OR-set slot [2A-LHF | 2A-RHF] → priced off 2A-LHF (180000) + CNR (40000).
-    expect(sofaComboCostSen([['2A-LHF', '2A-RHF'], ['CNR']], costs)).toBe(220000);
+    // OR-set slot [2A(LHF) | 2A(RHF)] → priced off 2A(LHF) (180000) + CNR (40000).
+    expect(sofaComboCostSen([['2A(LHF)', '2A(RHF)'], ['CNR']], costs)).toBe(220000);
   });
 
   it('normalizes the slot code to the dash form before lookup', () => {
     // Paren-form code from the SKU pool still resolves.
-    expect(sofaComboCostSen([['1A(LHF)']], { '1A-LHF': 150000 })).toBe(150000);
+    expect(sofaComboCostSen([['1A(LHF)']], { '1A(LHF)': 150000 })).toBe(150000);
   });
 
   it('unpriced module contributes 0 (no phantom cost)', () => {
-    expect(sofaComboCostSen([['2A-LHF'], ['UNKNOWN']], costs)).toBe(180000);
+    expect(sofaComboCostSen([['2A(LHF)'], ['UNKNOWN']], costs)).toBe(180000);
   });
 
   it('null / empty cost map → 0', () => {
-    expect(sofaComboCostSen([['2A-LHF']], null)).toBe(0);
-    expect(sofaComboCostSen([['2A-LHF']], {})).toBe(0);
+    expect(sofaComboCostSen([['2A(LHF)']], null)).toBe(0);
+    expect(sofaComboCostSen([['2A(LHF)']], {})).toBe(0);
   });
 });

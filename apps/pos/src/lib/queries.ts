@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { sofaModulePricesFromSkus } from '@2990s/shared/sofa-build';
+import { sofaModulePricesFromSkus, normalizeCompartmentCode } from '@2990s/shared/sofa-build';
 import { comboChargedPrices, type MfgSeatHeightPrice } from '@2990s/shared';
 import { supabase } from './supabase';
 
@@ -1110,9 +1110,9 @@ export const useMfgCatalog = () =>
  * ─────────────────────────────────────────────────────────────────────── */
 
 export interface ResolvedSofaCompartment {
-  /** Raw code as commander typed it (e.g. '1A-LHF' or '1A(LHF)'). */
+  /** Raw code as commander typed it (canonical parens form, e.g. '1A(LHF)'). */
   code:        string;
-  /** Normalized code (collapsed to dash form) — matches shared SOFA_MODULES.id. */
+  /** Canonicalized code (parens form) — matches shared SOFA_MODULES.id. */
   normalizedCode: string;
   /** Free-text label for the palette card. */
   label:       string;
@@ -1179,10 +1179,10 @@ function resolveCompartmentPhoto(code: string, imageKey: string | undefined): st
 }
 
 /** Classify a compartment code into the POS palette group. Mirrors
- *  `classifySofaCompartment` from @2990s/shared so the hook stays usable
- *  without importing the heavy sofa-build module here. */
+ *  `classifySofaCompartment` from @2990s/shared. Works on the canonical
+ *  parens form (and tolerates a stray legacy dash code). */
 function classifyCompartmentCode(rawCode: string): ResolvedSofaCompartment['group'] {
-  const norm = rawCode.trim().replace(/\(([^)]*)\)/g, '-$1').replace(/-+$/, '');
+  const norm = rawCode.trim();
   if (/^L[-(]/i.test(norm) || /^L$/i.test(norm)) return 'L-Shape';
   if (/^CNR$/i.test(norm) || /^CORNER/i.test(norm)) return 'Corner';
   if (/^STOOL|^Console|^WC-/i.test(norm)) return 'Accessory';
@@ -1283,9 +1283,9 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
         // Legacy bundled SVG fallback — when commander hasn't uploaded a
         // photo yet, render the design-system's hand-drawn SVG so the
         // palette card isn't empty. Maintenance UI auto-seeds the imageKey
-        // (defaulting to `sofa-modules/<NORM_ID>.svg`) on read but stored
-        // overrides may omit it.
-        const norm = rawCode.trim().replace(/\(([^)]*)\)/g, '-$1').replace(/-+$/, '');
+        // (defaulting to `sofa-modules/<CANONICAL_ID>.svg`) on read but
+        // stored overrides may omit it.
+        const norm = normalizeCompartmentCode(rawCode);
         const imageKey = meta.imageKey ?? `sofa-modules/${norm}.svg`;
         return {
           code:           rawCode,

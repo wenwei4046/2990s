@@ -113,12 +113,12 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
   // which maps each baseModel → the distinct sizeCodes its SKUs carry. 2990's
   // sofa SKU encodes the compartment in its code suffix (commander's
   // sofaCodeFormat = '{model_code}-{compartment}'), so we slice the part after
-  // the first '-' (same extraction as allowed-options-check.ts:122-123) and
-  // normalize it to dash form ('1A(LHF)' → '1A-LHF') so the chips read the
-  // SAME code format the combo `modules` are stored/toggled in (SOFA_MODULES
-  // ids are dash-form). The New Combo dialog's slot picker offers exactly the
-  // compartments the chosen base model actually has in SKU master — no more,
-  // no less — instead of the global ALL_MODULE_CODES list.
+  // the first '-'. The suffix, the chips, the stored combo `modules` and
+  // SOFA_MODULES ids all share the ONE canonical parens vocabulary
+  // ('1A(LHF)', 2026-06-04) — normalizeCompartmentCode only spell-checks a
+  // stray legacy dash entry. The New Combo dialog's slot picker offers exactly
+  // the compartments the chosen base model actually has in SKU master — no
+  // more, no less — instead of the global ALL_MODULE_CODES list.
   const modulesByBaseModel = useMemo(() => {
     const m: Record<string, string[]> = {};
     for (const p of productsQ.data ?? []) {
@@ -453,7 +453,7 @@ function ComposerModal({
     [modulesByBaseModel],
   );
   // OR-set per slot (PR combo-or-per-slot): ordered slots, each a SET of
-  // alternative codes joined by OR. e.g. [['2A-LHF','2A-RHF'],['L-LHF','L-RHF']].
+  // alternative codes joined by OR. e.g. [['2A(LHF)','2A(RHF)'],['L(LHF)','L(RHF)']].
   const [modules, setModules] = useState<string[][]>(editing?.modules ?? []);
   const [tier, setTier] = useState<SofaPriceTier | ''>(editing?.tier ?? 'PRICE_2');
   const [label, setLabel] = useState(editing?.label ?? '');
@@ -573,7 +573,7 @@ function ComposerModal({
                 color: 'var(--fg-muted)', padding: '2px 0',
               }}>
                 Each slot is an OR-set — tick every module that may fill it
-                (e.g. <strong>1A-LHF</strong> OR <strong>1A-RHF</strong>). A built
+                (e.g. <strong>1A(LHF)</strong> OR <strong>1A(RHF)</strong>). A built
                 sofa matches when each piece fills a distinct slot and the piece
                 count equals the slot count.
               </div>

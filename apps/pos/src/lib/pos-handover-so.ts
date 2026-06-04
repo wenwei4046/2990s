@@ -417,7 +417,7 @@ export const cartLineToSoItem = (
   const unitPriceCenti = Math.round(line.config.total * 100);
   // Sales Order line description (Chairman 2026-06-03): a sofa lists the Model
   // name followed by every compartment code of the build, left-to-right —
-  // "Lyyar · 1A-LHF + 1NA + 2A-RHF". Other categories keep the Model/product
+  // "Lyyar · 1A(LHF) + 1NA + 2A(RHF)". Other categories keep the Model/product
   // name. A bundle-only sofa (no cells) falls back to the Model name.
   const modelName = product?.name ?? line.config.productName ?? itemCode;
   let description = modelName;

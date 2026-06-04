@@ -134,12 +134,12 @@ const buildPresetCells = (bundleId: string, depth: Depth): Cell[] | undefined =>
   let cells: Cell[] | undefined;
   if (bundleId === '2WC') {
     // 1A + wood console + 1A, left to right.
-    const a = wOf('1A-LHF');
+    const a = wOf('1A(LHF)');
     const c = wOf('Console');
     cells = [
-      { id: 'wc-l', moduleId: '1A-LHF', x: 0,     y: 0, rot: 0 },
+      { id: 'wc-l', moduleId: '1A(LHF)', x: 0,     y: 0, rot: 0 },
       { id: 'wc-c', moduleId: 'Console', x: a,     y: 0, rot: 0 },
-      { id: 'wc-r', moduleId: '1A-RHF', x: a + c, y: 0, rot: 0 },
+      { id: 'wc-r', moduleId: '1A(RHF)', x: a + c, y: 0, rot: 0 },
     ];
   } else if (bundleId === 'CORNER') {
     // L-shape: corner + 2-seater across the top; 1A chaise drops down the left
@@ -148,8 +148,8 @@ const buildPresetCells = (bundleId: string, depth: Depth): Cell[] | undefined =>
     const cnrW = wOf('CNR');
     cells = [
       { id: 'cn-cnr', moduleId: 'CNR',    x: 0,    y: 0,  rot: 0 },
-      { id: 'cn-2a',  moduleId: '2A-RHF', x: cnrW, y: 0,  rot: 0 },
-      { id: 'cn-1a',  moduleId: '1A-LHF', x: 0,    y: 95, rot: 270 },
+      { id: 'cn-2a',  moduleId: '2A(RHF)', x: cnrW, y: 0,  rot: 0 },
+      { id: 'cn-1a',  moduleId: '1A(LHF)', x: 0,    y: 95, rot: 270 },
     ];
   }
   if (cells) presetCellsCache.set(key, cells);
@@ -158,7 +158,7 @@ const buildPresetCells = (bundleId: string, depth: Depth): Cell[] | undefined =>
 
 /* Build cells from a Backend Sofa Combo's slot-set. Commander 2026-05-28 —
    placed left-to-right in slot order, all rot=0. Combos from the maintenance
-   UI are typically sequential (e.g. 1A-LHF + WC-45 + 1A-RHF), so a simple
+   UI are typically sequential (e.g. 1A(LHF) + Console + 1A(RHF)), so a simple
    linear lay-out matches commander's intent. For L-shape combos the
    user-saved order should already have the chaise at the appropriate end.
 

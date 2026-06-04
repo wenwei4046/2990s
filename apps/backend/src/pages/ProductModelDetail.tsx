@@ -52,10 +52,12 @@ const resolveModelPhotoUrl = (u: string | null | undefined): string | undefined 
 // pool keys yet (older deployments). Commander manages the real lists from
 // the Maintenance page → Bedframe Sizes / Sofa Compartments / Mattress Sizes
 // sub-tabs (PR #50). These constants exist so the UI never renders blank.
+// Canonical parens form — byte-identical to the codes the Maintenance master
+// pool stores (2026-06-04 unification: ONE compartment vocabulary everywhere).
 const FALLBACK_SOFA_COMPARTMENTS = [
-  '1A-LHF', '1A-RHF', '1B-LHF', '1B-RHF', '1NA',
-  '2A-LHF', '2A-RHF', '2B-LHF', '2B-RHF', '2NA', '2S',
-  '3S', 'CNR', 'L-LHF', 'L-RHF',
+  '1A(LHF)', '1A(RHF)', '1B(LHF)', '1B(RHF)', '1NA', '1S',
+  '2A(LHF)', '2A(RHF)', '2B(LHF)', '2B(RHF)', '2NA', '2S',
+  '3S', 'CNR', 'L(LHF)', 'L(RHF)', 'STOOL', 'Console',
 ];
 
 const FALLBACK_BEDFRAME_SIZES = ['K', 'Q', 'S', 'SS', 'SK', 'SP'];

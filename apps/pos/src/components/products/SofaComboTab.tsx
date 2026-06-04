@@ -365,9 +365,10 @@ function ComposerModal({
 
   // Module chips come from the Maintenance Sofa Compartments pool (single source
   // of truth — Chairman 2026-06-01) so adding/removing a compartment in
-  // Maintenance flows here with no code change. Normalized to dash form so a
-  // ticked code matches a laid-out cell + the stored combo slot. Falls back to
-  // SOFA_MODULES while the config query is loading.
+  // Maintenance flows here with no code change. The pool, the laid-out cells and
+  // the stored combo slots all share the ONE canonical parens vocabulary
+  // (2026-06-04); normalizeCompartmentCode only spell-checks a stray legacy
+  // entry. Falls back to SOFA_MODULES while the config query is loading.
   const maint = useMaintenanceConfig('master');
   const moduleCodes = useMemo(() => {
     const pool = (maint.data?.data?.sofaCompartments ?? []).map(normalizeCompartmentCode);
@@ -376,7 +377,7 @@ function ComposerModal({
 
   const [baseModel, setBaseModel] = useState(editing?.baseModel ?? '');
   // OR-set per slot (PR combo-or-per-slot): ordered slots, each a SET of
-  // alternative codes joined by OR. e.g. [['2A-LHF','2A-RHF'],['L-LHF','L-RHF']].
+  // alternative codes joined by OR. e.g. [['2A(LHF)','2A(RHF)'],['L(LHF)','L(RHF)']].
   const [modules, setModules] = useState<string[][]>(editing?.modules ?? []);
   const [label, setLabel] = useState(editing?.label ?? '');
   const [effectiveFrom, setEffectiveFrom] = useState(editing?.effectiveFrom ?? todayIso());
@@ -523,7 +524,7 @@ function ComposerModal({
                 color: 'var(--fg-muted)', padding: '2px 0',
               }}>
                 Each slot is an OR-set — tick every module that may fill it
-                (e.g. <strong>1A-LHF</strong> OR <strong>1A-RHF</strong>). A built
+                (e.g. <strong>1A(LHF)</strong> OR <strong>1A(RHF)</strong>). A built
                 sofa matches when each piece fills a distinct slot and the piece
                 count equals the slot count.
               </div>

@@ -1866,7 +1866,8 @@ export const sofaComboPricing = pgTable('sofa_combo_pricing', {
   baseModel:       text('base_model').notNull(),
   // OR-set per slot (PR combo-or-per-slot, Commander 2026-05-28 Hookka-style).
   // JSONB string[][] — ordered list of SLOTS; each slot = an OR-set of
-  // alternative module codes, e.g. [["2A-LHF","2A-RHF"],["L-LHF","L-RHF"]].
+  // alternative module codes, e.g. [["2A(LHF)","2A(RHF)"],["L(LHF)","L(RHF)"]].
+  // Codes use the canonical parens vocabulary (migration 0148, 2026-06-04).
   // Migration 0093 converted the old single-dim text[] `modules` column into
   // this JSONB column, wrapping each legacy code as a singleton slot.
   modules:         jsonb('modules').$type<string[][]>().notNull().default([]),

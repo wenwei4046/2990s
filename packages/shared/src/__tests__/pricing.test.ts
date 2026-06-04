@@ -19,10 +19,10 @@ const sofaInfo = (productId = 'sofa-1'): ServerProductInfo => ({
   sofa: {
     reclinerUpgradePrice: 200,
     compartments: [
-      { compartmentId: '1A-LHF', active: true, price: 1500 },
-      { compartmentId: '1A-RHF', active: true, price: 1500 },
+      { compartmentId: '1A(LHF)', active: true, price: 1500 },
+      { compartmentId: '1A(RHF)', active: true, price: 1500 },
       { compartmentId: '2NA',  active: true, price: 2200 },
-      { compartmentId: 'L-RHF',  active: true, price: 1900 },
+      { compartmentId: 'L(RHF)',  active: true, price: 1900 },
     ],
     bundles: [
       { bundleId: '1S',  active: true, price: 1400 },
@@ -185,9 +185,9 @@ describe('computeOrderTotal', () => {
       { qty: 1, config: {
         kind: 'sofa', productId: 'sofa-1', depth: '24',
         cells: [
-          { id: 'a', moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
+          { id: 'a', moduleId: '1A(LHF)', x: 0,   y: 0, rot: 0 },
           { id: 'b', moduleId: '2NA',  x: 95,  y: 0, rot: 0 },
-          { id: 'c', moduleId: 'L-RHF',  x: 237, y: 0, rot: 0 },
+          { id: 'c', moduleId: 'L(RHF)',  x: 237, y: 0, rot: 0 },
         ],
       }},
     ];
