@@ -156,44 +156,43 @@
 }
 
 .cardHeader {
+  /* Section bar (Wei Siang 2026-06-04): a clear header so each section reads as
+     a section, with a brand-accent left rule. */
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding: 6px var(--space-3);
+  padding: 8px var(--space-3);
   border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--c-burnt);
   background: var(--c-cream);
 }
 
 .cardTitle {
-  /* PR — commander 2026-05-27 followup: shrink section eyebrows further.
-     Was fs-10 / weight 700; commander wants them quieter — drop to fs-9 +
-     keep uppercase + tighten letter-spacing slightly. Applies to every
-     section header (CUSTOMER / ORDER INFO / EMERGENCY CONTACT / DELIVERY
-     ADDRESS / LINE ITEMS / TOTALS · MARGIN). Don't pick favorites. */
+  /* SECTION HEADER — the second level of the page hierarchy (under the doc
+     title). Clearly larger + bolder + in the brand "emphasis type" colour so it
+     reads as a heading, distinct from the small muted field labels below it.
+     (Wei Siang 2026-06-04 — restore visual hierarchy; the prior fs-9 eyebrow had
+     become indistinguishable from the fs-10 field labels.) */
   font-family: var(--font-button);
-  font-size: var(--fs-9, 9px);
-  font-weight: 700;
-  letter-spacing: 0.12em;
+  font-size: var(--fs-13, 13px);
+  font-weight: 800;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--fg-muted);
+  color: var(--c-burnt);
   margin: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
-/* PR — commander 2026-05-27 followup: scale section eyebrow icons down
-   from 16px to 12px so they balance the smaller fs-9 cardTitle text. */
 .cardTitle svg {
-  width: 12px;
-  height: 12px;
+  width: 15px;
+  height: 15px;
 }
 
 .cardBody {
-  /* PR — commander 2026-05-27: trim card internal padding so the page reads
-     denser. Cards stack tightly; each one used to feel like a brochure
-     section. */
-  padding: var(--space-2);
+  /* A little breathing room so fields don't crowd the section bar. */
+  padding: var(--space-3);
 }
 
 /* ── Customer info grid ─────────────────────────────────────────────── */
