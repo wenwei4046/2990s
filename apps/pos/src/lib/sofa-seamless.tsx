@@ -279,9 +279,12 @@ export const renderSeamlessSofa = (
  * frame (NO CSS rotation; each cell's rotation is baked in via cellEdges +
  * its screen rect). Gap-free BY CONSTRUCTION: every cell's FULL footprint is
  * filled (groupSofas already guarantees the rects touch within 2cm), so the
- * union has no holes; band/arm/bench are drawn ONLY on a cell's FREE (outer)
- * edges — never on a touching seam — so there are no interior walls or floating
- * backrests. Reuses the exact primitives/colours of the row + corner renderers
+ * union has no holes. Band/arm/bench draw from each edge's TYPE (back/arm),
+ * touching or not: legit joins only meet on open/front edges, so decorations
+ * never block a real join — while arm-to-arm / back-to-front contact stays
+ * honestly visible as two sofas pushed together (Loo 2026-06-04). Contact only
+ * downgrades the outline weight (thick outer → thin seam).
+ * Reuses the exact primitives/colours of the row + corner renderers
  * so the canvas + Quick-Pick preview match. Model-agnostic: reads only module
  * ids + cell geometry. (Loo 2026-06-04.) */
 export const renderSeamlessGroup = (
@@ -381,14 +384,19 @@ export const renderSeamlessGroup = (
 
     for (const e of EDGES) {
       const free = !contact.has(e);
-      // BAND on a free back edge.
-      const wantBand = !isConsole && free && edges[e] === 'back';
+      // BAND / ARM draw from the edge TYPE alone — even when the edge touches a
+      // neighbour. Legit joins only ever meet on open/front edges (nothing drawn
+      // there), so an arm-to-arm or back-to-front contact means TWO sofas pushed
+      // together — the arms/backrest must stay visible instead of melting into
+      // one seamless body ("arm and arm is not a complete sofa", Loo 2026-06-04).
+      // `free` only picks the outline weight below (thick outer, thin seam).
+      const wantBand = !isConsole && edges[e] === 'back';
       if (wantBand) {
         const s = strip(r, e, bandH);
         band.push(<rect key={`bd${i}-${e}`} x={s.x} y={s.y} width={s.w} height={s.h} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />);
       }
-      // ARM / wide BENCH on a free arm edge.
-      if (!isConsole && free && edges[e] === 'arm') {
+      // ARM / wide BENCH on an arm edge.
+      if (!isConsole && edges[e] === 'arm') {
         if (wide) {
           const s = strip(r, e, benchW);
           arms.push(<rect key={`am${i}-${e}`} x={s.x + benchInset} y={s.y + benchInset} width={Math.max(0, s.w - 2 * benchInset)} height={Math.max(0, s.h - 2 * benchInset)} rx={benchRx} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />);
