@@ -228,6 +228,31 @@
   font-size: var(--fs-11);
   opacity: 0.8;
 }
+.rackRenameBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.rackTile:hover .rackRenameBtn {
+  opacity: 0.7;
+}
+.rackRenameBtn:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.12);
+}
+.rackRenameBtn:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--c-burnt);
+  outline-offset: 1px;
+}
 .rackItemLine {
   margin-top: 4px;
   line-height: 1.25;

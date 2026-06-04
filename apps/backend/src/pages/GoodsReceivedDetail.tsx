@@ -24,7 +24,7 @@
 // CLOSED → "Closed" (locked). isLocked = CANCELLED or CLOSED.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown, ArrowRightLeft,
@@ -43,6 +43,7 @@ import {
   type SupplierRow,
 } from '../lib/suppliers-queries';
 import { useWarehouses } from '../lib/inventory-queries';
+import { useRacks } from '../lib/warehouse-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { MoneyInput } from '../components/MoneyInput';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
@@ -100,6 +101,9 @@ type GrnItemRow = Record<string, unknown> & {
   material_kind?: string | null;
   description?: string | null;
   variants?: Record<string, unknown> | null;
+  /* Commander 2026-06-04 — destination rack chosen at receiving time (nullable).
+     Resolved to its label via the GRN's warehouse racks for display. */
+  rack_id?: string | null;
   /* Bug #2 (2026-05-31) — server-resolved per-line source PO number + the GRN's
      receive date, so each line surfaces "received from which PO" + "receive date". */
   source_po_number?: string | null;
@@ -136,6 +140,16 @@ export const GoodsReceivedDetail = () => {
 
   const grn = detail.data?.grn ?? null;
   const items = (detail.data?.items ?? []) as GrnItemRow[];
+
+  /* Commander 2026-06-04 — resolve each line's rack_id to its label. Racks are
+     warehouse-scoped, so we load the racks of THIS GRN's receive-into warehouse
+     (grn.warehouse_id) and build an id → label map for the Rack column below. */
+  const racksQ = useRacks({ warehouseId: grn?.warehouse_id ?? undefined });
+  const rackLabelById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of racksQ.data?.racks ?? []) m.set(r.id, r.rack);
+    return m;
+  }, [racksQ.data?.racks]);
 
   /* View → Edit gate (mirror PO) — default read-only View; click Edit to flip
      into draft mode. The GRN list's right-click "Edit" lands here with ?edit=1. */
@@ -561,6 +575,19 @@ export const GoodsReceivedDetail = () => {
                           style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
                         />
                       )}
+                    </label>
+                    {/* Commander 2026-06-04 — destination Rack this line went to.
+                        Read-only: rack_id is set at receiving time (New GRN form).
+                        Resolved to its label via the GRN warehouse's racks; "—"
+                        when the line has no rack. */}
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Rack</span>
+                      <input
+                        type="text" readOnly
+                        value={it.rack_id ? (rackLabelById.get(it.rack_id) ?? '—') : '—'}
+                        className={styles.fieldInput}
+                        style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+                      />
                     </label>
                   </div>
                 </div>

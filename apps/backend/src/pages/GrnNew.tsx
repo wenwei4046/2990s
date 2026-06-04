@@ -29,6 +29,7 @@ import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
 import { usePurchaseOrderDetail, usePurchaseOrders, useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { useWarehouses } from '../lib/inventory-queries';
+import { useRacks } from '../lib/warehouse-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { MoneyInput } from '../components/MoneyInput';
@@ -97,6 +98,9 @@ type DraftLine = {
   qtyRejected:       number;
   unitPriceCenti:    number;
   notes:             string;
+  /* Commander 2026-06-04 — optional per-line destination Rack (warehouse-scoped).
+     Persists to grn_items.rack_id when the create payload forwards rackId. */
+  rackId:            string;
 };
 
 /* Stashed to sessionStorage before leaving for the From-PO-multi picker, so the
@@ -160,6 +164,11 @@ export const GrnNew = () => {
      the header so the inventory-IN movement lands there. */
   const [warehouseId, setWarehouseId]         = useState<string>('');
   const warehousesQ = useWarehouses();
+  /* Commander 2026-06-04 — racks of the chosen "Receive into" warehouse, for the
+     optional per-line Rack picker. Racks are warehouse-scoped, so this re-queries
+     whenever the header warehouse changes; gated until a warehouse is chosen. */
+  const racksQ = useRacks({ warehouseId: warehouseId || undefined });
+  const racks = useMemo(() => racksQ.data?.racks ?? [], [racksQ.data?.racks]);
   /* True once the on-mount From-PO picks restore has run (whether or not picks
      were found). The warehouse-default effect MUST wait for this — otherwise it
      races the async restore: on first render hasPicks is false simply because
@@ -229,6 +238,7 @@ export const GrnNew = () => {
         qtyRejected:         0,
         unitPriceCenti:      p.unitPriceCenti ?? 0,
         notes:               '',
+        rackId:              '',
       }));
     setLines([...baseLines, ...pickLines]);
 
@@ -267,6 +277,7 @@ export const GrnNew = () => {
         qtyRejected:         0,
         unitPriceCenti:      0,
         notes:               '',
+        rackId:              '',
       }]);
       return;
     }
@@ -288,6 +299,7 @@ export const GrnNew = () => {
           qtyRejected:       0,
           unitPriceCenti:    it.unit_price_centi ?? 0,
           notes:             '',
+          rackId:            '',
         };
       })
       .filter((l) => (l.outstanding ?? 0) > 0);
@@ -409,6 +421,7 @@ export const GrnNew = () => {
       qtyRejected:         0,
       unitPriceCenti:      0,
       notes:               '',
+      rackId:              '',
     }]);
   };
 
@@ -486,6 +499,9 @@ export const GrnNew = () => {
           // lines carry them through) so the GRN/inventory reflect WHAT was received.
           itemGroup:           l.itemGroup,
           variants:            l.variants,
+          // Commander 2026-06-04 — optional destination rack (warehouse-scoped).
+          // grns.ts reads it.rackId and writes grn_items.rack_id. Empty = no rack.
+          rackId:              l.rackId || undefined,
         })),
       });
       await post.mutateAsync(createRes.id);
@@ -972,6 +988,38 @@ export const GrnNew = () => {
                         className={styles.fieldInput}
                         style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
                       />
+                    </label>
+                    {/* Commander 2026-06-04 — optional destination Rack. Racks are
+                        warehouse-scoped, so the options come from the header
+                        "Receive into" warehouse. Disabled (with a hint) until a
+                        warehouse is chosen; shows "No racks…" when the warehouse
+                        has none. Empty value = "— No rack —". */}
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Rack</span>
+                      <span className={styles.selectWrap}>
+                        <select
+                          className={styles.fieldSelect}
+                          value={l.rackId}
+                          onChange={(e) => setLine(l.rid, { rackId: e.target.value })}
+                          disabled={!warehouseId || racksQ.isLoading}
+                        >
+                          {!warehouseId ? (
+                            <option value="">— Pick a warehouse first —</option>
+                          ) : racksQ.isLoading ? (
+                            <option value="">Loading racks…</option>
+                          ) : racks.length === 0 ? (
+                            <option value="">No racks in this warehouse</option>
+                          ) : (
+                            <>
+                              <option value="">— No rack —</option>
+                              {racks.map((r) => (
+                                <option key={r.id} value={r.id}>{r.rack}</option>
+                              ))}
+                            </>
+                          )}
+                        </select>
+                        <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+                      </span>
                     </label>
                   </div>
                 </div>
