@@ -416,10 +416,10 @@ export const SalesOrderNew = () => {
     return v?.name ?? '';
   }, [resolvedVenueId, venuesQ.data]);
 
-  /* Owner 2026-06-03 — phone is compulsory on every SO. The server enforces it
-     (400 phone_required); mirror it here for parity with the POS so Save is
-     blocked before the round-trip. */
-  const canSave = debtorName.trim().length > 0 && phone.trim().length > 0;
+  /* Phone is compulsory on every SO; name too. We no longer pre-disable the Save
+     button on these — onSave validates and tells the operator exactly what's
+     missing (a silently-greyed button left them guessing). The server also
+     enforces phone (400 phone_required). */
 
   /* Mirror Detail's XOR rule (PR #156): Processing Date and Delivery Date
      must both be filled in or both empty. */
@@ -702,7 +702,12 @@ export const SalesOrderNew = () => {
           <Button
             variant="primary" size="md"
             onClick={onSave}
-            disabled={create.isPending || !canSave || datesXor}
+            /* Keep the button CLICKABLE even when fields are missing (only block
+               while a save is in flight). onSave validates and tells the operator
+               EXACTLY what's missing (name / phone / dates / items / variants) —
+               a silently-greyed button left them guessing what was wrong.
+               (Wei Siang 2026-06-03) */
+            disabled={create.isPending}
           >
             <Save {...ICON} />
             {create.isPending ? 'Saving…' : 'Create Sales Order'}
