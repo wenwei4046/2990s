@@ -15,6 +15,12 @@ import {
   sofaCompartmentsFromModulePrices,
   computeSofaSellingSen,
   sofaComboCostSen,
+  parseCompartmentStructure,
+  findModule,
+  isAccessoryModule,
+  cellEdges,
+  reclinerEligible,
+  seatCount,
   type Cell,
   type SofaComboRow,
 } from '../sofa-build';
@@ -45,6 +51,49 @@ describe('normalizeCompartmentCode', () => {
   it('trims surrounding whitespace and trailing dashes', () => {
     expect(normalizeCompartmentCode('  2NA  ')).toBe('2NA');
     expect(normalizeCompartmentCode('1A-LHF-')).toBe('1A(LHF)');
+  });
+});
+
+describe('structural fallback (Maintenance-is-master rename, 2026-06-04)', () => {
+  it('parses base / orientation / mechanism from any parens code', () => {
+    expect(parseCompartmentStructure('1A(LHF)')).toEqual({ base: '1A', orientation: 'LHF', mechanism: null });
+    expect(parseCompartmentStructure('1A(P)(RHF)')).toEqual({ base: '1A', orientation: 'RHF', mechanism: 'P' });
+    expect(parseCompartmentStructure('1S(L)')).toEqual({ base: '1S', orientation: null, mechanism: 'L' });
+    expect(parseCompartmentStructure('Console')).toEqual({ base: 'CONSOLE', orientation: null, mechanism: null });
+    expect(parseCompartmentStructure('1A(LHF)(28)')).toEqual({ base: '1A', orientation: 'LHF', mechanism: null });
+  });
+  it('findModule synthesizes geometry for a renamed code that kept its structure', () => {
+    // e.g. commander renamed '1A(LHF)' to '1A(LHF)(28)' in Maintenance —
+    // the cascade renamed every stored copy; geometry must follow too.
+    const synth = findModule('1A(LHF)(28)');
+    const canon = findModule('1A(LHF)');
+    expect(synth).toBeDefined();
+    expect(synth!.w).toBe(canon!.w);
+    expect(synth!.d).toBe(canon!.d);
+    expect(synth!.group).toBe('1-seater');
+    expect(synth!.id).toBe('1A(LHF)(28)');
+    // Re-cased code resolves too.
+    expect(findModule('2a(rhf)')?.w).toBe(findModule('2A(RHF)')!.w);
+    // Accessory flag follows the family.
+    expect(isAccessoryModule('console(45)')).toBe(true);
+    // Unknown base stays unknown — new physical modules need dev work.
+    expect(findModule('XX(LHF)')).toBeUndefined();
+  });
+  it('cellEdges derives arm sides for a structurally-renamed code', () => {
+    const edges = cellEdges({ moduleId: '1A(LHF)(28)', x: 0, y: 0, rot: 0 });
+    expect(edges).toEqual(['arm', 'back', 'open', 'front']);
+    const edgesR = cellEdges({ moduleId: '2A(RHF)(WIDE)', x: 0, y: 0, rot: 0 });
+    expect(edgesR).toEqual(['open', 'back', 'arm', 'front']);
+  });
+  it('reclinerEligible / seatCount work structurally and exclude mechanism seats', () => {
+    expect(reclinerEligible('1A(LHF)')).toBe(true);
+    expect(reclinerEligible('1A(LHF)(28)')).toBe(true);
+    expect(reclinerEligible('1A(P)(LHF)')).toBe(false);
+    expect(reclinerEligible('1S')).toBe(false);
+    expect(reclinerEligible('STOOL')).toBe(false);
+    expect(seatCount('2B(RHF)')).toBe(2);
+    expect(seatCount('1NA')).toBe(1);
+    expect(seatCount('1NA(P)')).toBe(0);
   });
 });
 

@@ -48,6 +48,7 @@ import {
   useMaintenanceConfig,
   useMaintenanceConfigHistory,
   useSaveMaintenanceConfig,
+  useRenameSofaCompartment,
   useMfgProductSuppliers,
   useUploadSofaCompartmentPhoto,
   useDeleteSofaCompartmentPhoto,
@@ -1241,6 +1242,7 @@ export const MaintenanceTab = ({
   const resolved = useMaintenanceConfig(scope);
   const history = useMaintenanceConfigHistory(scope);
   const save = useSaveMaintenanceConfig();
+  const renameCompartment = useRenameSofaCompartment();
 
   // PR #208 — when the supplier scope has no row yet, fall through to the
   // master config so commander can see what's there before deciding to
@@ -1305,10 +1307,49 @@ export const MaintenanceTab = ({
     setEditMode(false);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!draft) return;
     const effectiveFrom = window.prompt('Effective from (YYYY-MM-DD)?', new Date().toISOString().slice(0, 10));
     if (!effectiveFrom) return;
+    // Maintenance-is-master cascade (Loo 2026-06-04: "what maintenance change
+    // all will follow"). Detect in-place compartment code RENAMES (same row,
+    // new text, old code gone from the list, new code not previously there)
+    // and run the atomic cascade BEFORE appending the new config row, so the
+    // SKU master, every doc snapshot, Modular ticks, combos and quick picks
+    // all carry the new name the moment the save lands. Master scope only —
+    // supplier scopes are surcharge overlays, never the code authority.
+    if (scope === 'master') {
+      const baseline =
+        resolved.data?.data?.sofaCompartments ?? masterFallback.data?.data?.sofaCompartments ?? [];
+      const next = draft.sofaCompartments ?? [];
+      const renames: Array<{ from: string; to: string }> = [];
+      const len = Math.min(baseline.length, next.length);
+      for (let i = 0; i < len; i++) {
+        const from = (baseline[i] ?? '').trim();
+        const to = (next[i] ?? '').trim();
+        if (!from || !to || from === to) continue;
+        if (!next.includes(from) && !baseline.includes(to)) renames.push({ from, to });
+      }
+      if (renames.length > 0) {
+        const summary = renames.map((r) => `${r.from} → ${r.to}`).join('\n');
+        // eslint-disable-next-line no-alert
+        const ok = confirm(
+          `Rename compartment code${renames.length > 1 ? 's' : ''}?\n\n${summary}\n\n` +
+          `This cascades EVERYWHERE: SKU codes + names, sales orders (incl. history), ` +
+          `delivery orders, invoices, GRN/PO lines, Modular ticks, Combos and Quick Picks.`,
+        );
+        if (!ok) return;
+        for (const r of renames) {
+          try {
+            await renameCompartment.mutateAsync(r);
+          } catch (e) {
+            // eslint-disable-next-line no-alert
+            alert(`Rename ${r.from} → ${r.to} failed: ${e instanceof Error ? e.message : String(e)}\nNothing was partially renamed for this pair; fix and retry.`);
+            return;
+          }
+        }
+      }
+    }
     // PR #208 — write back to the same scope this tab was mounted with.
     // Supplier scope (e.g. 'supplier:abc-123') gets its own append-only row;
     // master scope is unchanged for the SO / selling-price flow.
