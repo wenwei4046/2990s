@@ -1197,30 +1197,17 @@ grns.patch('/:id/cancel', async (c) => {
     if (warehouseId) {
       /* Migration 0120 — the original IN stamped batch_no = source PO number so a
          sofa set's components share a dye lot. The reversing OUT must consume that
-         EXACT batch, otherwise the FIFO trigger eats plain-FIFO across any lot and
-         desyncs the set's dye lots. Read this GRN's IN movements and carry their
-         batch_no onto the matching reversing OUT (match by warehouse+product+variant).
-         Mirrors reverseInventoryForDo's batch-preserving reversal. Forward-compat:
-         pre-0120 the column doesn't exist → retry without it (every batch stays null
-         → plain FIFO, identical to old behaviour). */
-      const batchByBucket = new Map<string, string>();
-      {
-        const inRes = await sb.from('inventory_movements')
-          .select('product_code, variant_key, warehouse_id, batch_no')
-          .eq('source_doc_type', 'GRN').eq('source_doc_id', id).eq('movement_type', 'IN');
-        const inData = (inRes.error && (inRes.error.message ?? '').includes('batch_no'))
-          ? []
-          : (inRes.data ?? []);
-        for (const m of inData as Array<{ product_code: string; variant_key: string | null; warehouse_id: string; batch_no?: string | null }>) {
-          if (m.batch_no == null) continue;
-          batchByBucket.set(`${m.warehouse_id}::${m.product_code}::${m.variant_key ?? ''}`, m.batch_no);
-        }
-      }
+         EXACT batch. Resolve EACH line's OWN batch from its source PO
+         (purchase_order_item_id → PO number) — deterministic per line, so two lines
+         of the same product/variant from different POs each reverse their own dye
+         lot, instead of a per-bucket collapse that kept only the last batch.
+         Manual lines (no PO link) stay un-batched → plain FIFO, as before. */
+      const batchByItem = await resolvePoBatchByItem(sb, lineList.map((it) => it.purchase_order_item_id));
       const movements = lineList
         .filter((it) => (it.qty_accepted ?? 0) > 0)
         .map((it) => {
           const variant_key = computeVariantKey(it.item_group, it.variants ?? null);
-          const batch_no = batchByBucket.get(`${warehouseId}::${it.material_code}::${variant_key}`) ?? null;
+          const batch_no = it.purchase_order_item_id ? (batchByItem.get(it.purchase_order_item_id) ?? null) : null;
           return {
             movement_type: 'OUT' as const,
             warehouse_id: warehouseId,
