@@ -4,6 +4,24 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-03-007 — Audit "IMPORTANT" batch (9 fixes)
+
+Full-system audit follow-ups (branch `fix/audit-important`). Each verified at file:line, typechecked.
+
+1. **Sofa duplicate-module over-allocation** — `findCoveringBatch` (sofa-set-coverage.ts) and the ship-guard (sofa-batch-guard.ts) checked each line's `need` independently; two lines of the SAME module+variant could both pass against a batch covering only one. Now they SUM `need` per `(itemCode, variantKey)` before comparing to batch stock.
+2. **DO line-edit bypassed the sofa batch guard** — `PATCH /:id/items/:itemId` (delivery-orders-mfg.ts) increased a shipped sofa line's qty with no batch check. Now a qty increase on a sofa line verifies the DELTA against the bound batch's live stock.
+3. **batch_no lost on reversals/transfers** — GRN cancel OUT, `reverseMovements` (inventory-movements.ts), stock-transfer OUT/IN, and purchase-return OUT all dropped `batch_no` → wrong dye-lot consumed / un-batched destination. All now resolve and carry `batch_no` (un-batched only when genuinely ambiguous, with a comment). *(Known remaining: `writePrLineDeltaMovement` PR line-edit deltas still un-batched — minor follow-up.)*
+4. **recost re-costed CANCELLED DOs** — `recostFromGrn` (recost.ts) now skips consumptions/movements whose source DO is CANCELLED and skips `restampDoActualCost` for them.
+5. **GRN list total ignored line discount** — list now returns the stored header `total_centi` (= qty·unit − discount) instead of an ad-hoc `qty·unit` sum.
+6. **Compulsory-phone bypassable on SO edit** — SO header PATCH now rejects a blanked phone (`phone_required`); SalesOrderDetail Edit mirrors the New-SO guard.
+7. **Search broke on parenthesized sofa codes** — new `escapeForOr` helper strips PostgREST `.or()` reserved chars `,(){}`; applied to all 6 search routes.
+8. **Over-receipt race on bulk GRN paths** — post-insert verification (rollback + 409) added to `POST /grns`, `/from-pos`, `/from-po-items` (mirrors the add-line guard).
+9. **Over-invoice race on bulk PI paths + over-return race on DR `/from-do`** — same post-insert verify-and-rollback added.
+
+**Caught by:** Full-system methodology audit (2026-06-03).
+
+---
+
 ## BUG-2026-06-03-005 — Chinese text in operator-facing PO conversion dialogs
 
 **Symptom:** From-SO → PO conversion popups (supplier mismatch, accessory split, partial skip) showed Chinese to the operator. The product UI must be 100% English.

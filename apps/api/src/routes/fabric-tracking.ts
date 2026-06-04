@@ -23,6 +23,7 @@
 
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
+import { escapeForOr } from '../lib/postgrest-search';
 import type { Env, Variables } from '../env';
 
 export const fabricTracking = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -256,7 +257,8 @@ fabricTracking.get('/', async (c) => {
     q = q.eq('fabric_category', category);
   }
   if (search) {
-    q = q.or(`fabric_code.ilike.%${search}%,fabric_description.ilike.%${search}%`);
+    const s = escapeForOr(search);
+    if (s) q = q.or(`fabric_code.ilike.%${s}%,fabric_description.ilike.%${s}%`);
   }
 
   const { data, error } = await q;

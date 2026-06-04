@@ -94,6 +94,55 @@ async function recomputeGrnInvoiced(sb: any, grnItemIds: Array<string | null | u
   }
 }
 
+/* ── verifyGrnLinesNotOverInvoiced (post-insert over-invoice race guard) ─────
+   The bulk PI create paths (POST /, /from-grn-items, /from-grn) only PRE-check
+   each GRN line's remaining before inserting — a read-then-write race: two
+   concurrent bulk creates against the same GRN line can each pass the pre-check
+   and both insert → the line is over-billed past (qty_accepted - returned_qty).
+   After committing THIS PI's lines, re-sum the LIVE invoiced qty (across ALL
+   non-cancelled PI lines) per GRN line; if any exceeds its cap, OUR insert broke
+   it → delete THIS PI's just-created lines and signal the caller to 409. Mirrors
+   the single add-line path (POST /:id/items). Returns the offending lines, or []
+   when every GRN line is within cap. */
+async function verifyGrnLinesNotOverInvoiced(
+  sb: any,
+  grnItemIds: Array<string | null | undefined>,
+): Promise<Array<{ grnItemId: string; invoiced: number; cap: number }>> {
+  const ids = [...new Set(grnItemIds.filter((x): x is string => Boolean(x)))];
+  if (ids.length === 0) return [];
+  // Cap per GRN line = qty_accepted - returned_qty.
+  const { data: giRows } = await sb.from('grn_items')
+    .select('id, qty_accepted, returned_qty').in('id', ids);
+  const capById = new Map<string, number>(
+    ((giRows ?? []) as Array<{ id: string; qty_accepted: number; returned_qty: number }>)
+      .map((g) => [g.id, (g.qty_accepted ?? 0) - (g.returned_qty ?? 0)]),
+  );
+  // Live invoiced per GRN line = sum(qty) across all non-cancelled PI lines.
+  const { data: sib } = await sb.from('purchase_invoice_items')
+    .select('grn_item_id, qty, purchase_invoice_id').in('grn_item_id', ids);
+  const sibRows = (sib ?? []) as Array<{ grn_item_id: string; qty: number; purchase_invoice_id: string }>;
+  const piIds = [...new Set(sibRows.map((r) => r.purchase_invoice_id).filter(Boolean))];
+  const cancelled = new Set<string>();
+  if (piIds.length > 0) {
+    const { data: pis } = await sb.from('purchase_invoices').select('id, status').in('id', piIds);
+    for (const p of (pis ?? []) as Array<{ id: string; status: string }>) {
+      if (p.status === 'CANCELLED') cancelled.add(p.id);
+    }
+  }
+  const liveByGrnItem = new Map<string, number>(ids.map((id) => [id, 0]));
+  for (const r of sibRows) {
+    if (cancelled.has(r.purchase_invoice_id)) continue;
+    liveByGrnItem.set(r.grn_item_id, (liveByGrnItem.get(r.grn_item_id) ?? 0) + Number(r.qty ?? 0));
+  }
+  const over: Array<{ grnItemId: string; invoiced: number; cap: number }> = [];
+  for (const id of ids) {
+    const invoiced = liveByGrnItem.get(id) ?? 0;
+    const cap = capById.get(id) ?? invoiced;
+    if (invoiced > cap) over.push({ grnItemId: id, invoiced, cap });
+  }
+  return over;
+}
+
 /* PI edit-lock guard: a PI with ANY payment recorded (paid_centi > 0) or that's
    CANCELLED is read-only. Returns the blocking JSON response, or null if the PI
    is editable. */
@@ -331,6 +380,18 @@ purchaseInvoices.post('/', async (c) => {
   const rowsWithId = itemRows.map((r) => ({ ...r, purchase_invoice_id: h.id }));
   const { error: iErr } = await sb.from('purchase_invoice_items').insert(rowsWithId);
   if (iErr) { await sb.from('purchase_invoices').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+
+  /* Post-insert over-invoice verification (race guard) — the pre-check above is
+     read-before-write; re-sum live invoiced per GRN line now that OUR lines are
+     committed. If any GRN line is over its cap, delete THIS PI (header cascades
+     its lines) + 409. Mirrors POST /:id/items. */
+  {
+    const over = await verifyGrnLinesNotOverInvoiced(sb, itemRows.map((r) => r.grn_item_id));
+    if (over.length > 0) {
+      await sb.from('purchase_invoices').delete().eq('id', h.id);
+      return c.json({ error: 'qty_exceeds_remaining', lines: over }, 409);
+    }
+  }
   // Self-heal the GRN invoiced counter so the just-billed lines drop out of the
   // outstanding picker (mirrors /from-grn-items line ~523 + /:id/items).
   await recomputeGrnInvoiced(sb, itemRows.map((r) => r.grn_item_id));
@@ -589,6 +650,17 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
       await sb.from('purchase_invoices').delete().eq('id', h.id);
       continue;
     }
+    /* Post-insert over-invoice verification (race guard) — the per-pick pre-check
+       above is read-before-write; re-sum live invoiced per GRN line now that this
+       bucket's lines are committed. On overshoot, delete THIS PI (cascades its
+       lines) and skip the bucket rather than over-bill the GRN line. */
+    {
+      const over = await verifyGrnLinesNotOverInvoiced(sb, bucket.lines.map(({ row }) => row.id));
+      if (over.length > 0) {
+        await sb.from('purchase_invoices').delete().eq('id', h.id);
+        continue;
+      }
+    }
     // Consume the GRN lines: recount invoiced_qty from live PI lines.
     await recomputeGrnInvoiced(sb, bucket.lines.map(({ row }) => row.id));
     // Costing B — push the billed price down to the GRN's lots / DO / SI.
@@ -693,6 +765,18 @@ purchaseInvoices.post('/from-grn', async (c) => {
   }));
   const { error: insErr } = await sb.from('purchase_invoice_items').insert(rows);
   if (insErr) { await sb.from('purchase_invoices').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: insErr.message }, 500); }
+
+  /* Post-insert over-invoice verification (race guard) — the remaining filter
+     above is read-before-write; re-sum live invoiced per GRN line now that this
+     PI's lines are committed. On overshoot, delete THIS PI (cascades its lines)
+     + 409. */
+  {
+    const over = await verifyGrnLinesNotOverInvoiced(sb, lines.map((it) => it.id));
+    if (over.length > 0) {
+      await sb.from('purchase_invoices').delete().eq('id', h.id);
+      return c.json({ error: 'qty_exceeds_remaining', lines: over }, 409);
+    }
+  }
 
   // Consume each GRN line: recount invoiced_qty from live PI lines.
   await recomputeGrnInvoiced(sb, lines.map((it) => it.id));

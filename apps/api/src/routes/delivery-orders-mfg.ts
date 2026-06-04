@@ -22,6 +22,7 @@ import { syncSoDeliveredFromDo } from '../lib/so-delivery-sync';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { checkStockAvailability, shortStockResponse } from '../lib/check-stock-availability';
 import { findSofaLinesWithoutCompleteBatch, sofaNoCompleteBatchResponse, findIncompleteSofaSets, sofaIncompleteSetResponse } from '../lib/sofa-batch-guard';
+import { loadSofaBatchStock, sofaStockKey } from '../lib/sofa-set-coverage';
 import { currentDocNoByKey, type CurrentEvent } from '../lib/current-doc';
 
 export const deliveryOrdersMfg = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -1933,6 +1934,34 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
         message: `New qty ${qty} exceeds the most this line can deliver (${cap}) for the linked Sales Order line.`,
         soItemId: prev.so_item_id, remaining: cap, requested: qty,
       }, 409);
+    }
+  }
+
+  /* Sofa whole-set guard on a qty INCREASE (Audit fix 2026-06-03). The three
+     DO-create paths enforce "a sofa set ships only from its ONE bound dye-lot
+     batch"; editing a shipped DO's sofa line up must not bypass that. The extra
+     units (the delta) must come from the SAME bound batch with live stock — else
+     the FIFO trigger would over-consume the batch (or pull another order's lot).
+     Checks the DELTA (not the full qty) since the prior qty is already consumed. */
+  if (it.qty !== undefined && qty > Number(prev.qty) && prev.so_item_id) {
+    const effGroup = (it.itemGroup ?? prev.item_group) as string | null;
+    const effCode = String((it.itemCode as string | undefined) ?? (prev.item_code as string) ?? '');
+    const isSofaLine = (effGroup ?? '').toUpperCase().includes('SOFA');
+    if (isSofaLine) {
+      const { data: soRow } = await sb.from('mfg_sales_order_items')
+        .select('warehouse_id, allocated_batch_no').eq('id', prev.so_item_id).maybeSingle();
+      const so = (soRow ?? null) as { warehouse_id: string | null; allocated_batch_no: string | null } | null;
+      const batch = so?.allocated_batch_no ?? null;
+      const variantKey = computeVariantKey(effGroup, (it.variants ?? prev.variants) as VariantAttrs | null);
+      const delta = qty - Number(prev.qty);
+      let have = 0;
+      if (batch && so?.warehouse_id) {
+        const sofaStock = await loadSofaBatchStock(sb, [effCode]);
+        have = sofaStock.remaining.get(sofaStockKey(so.warehouse_id, batch, effCode, variantKey)) ?? 0;
+      }
+      if (!batch || !so?.warehouse_id || have < delta) {
+        return c.json(sofaNoCompleteBatchResponse([{ itemCode: effCode, soItemId: prev.so_item_id as string }]), 409);
+      }
     }
   }
 

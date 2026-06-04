@@ -133,12 +133,50 @@ async function writeTransferMovements(
   const { data: lines } = await sb.from('stock_transfer_lines')
     .select('product_code, product_name, variant_key, qty')
     .eq('stock_transfer_id', header.id);
+  const lineList = (lines as Array<{ product_code: string; product_name: string | null; variant_key: string | null; qty: number }>) ?? [];
 
-  for (const ln of (lines as Array<{ product_code: string; product_name: string | null; variant_key: string | null; qty: number }>) ?? []) {
+  /* Resolve the dye-lot batch each line moves so a batched (sofa) lot keeps its
+     batch_no across the warehouse hop — otherwise the destination can't satisfy
+     a batch-scoped sofa ship. We read OPEN lots at the SOURCE warehouse and, for
+     each (product_code, variant_key) bucket, carry the batch ONLY when the source
+     stock sits in a single non-null batch. If the bucket spans multiple batches
+     (or is plain un-batched), we leave the line un-batched → plain FIFO, rather
+     than guess a wrong dye-lot. Forward-compat: pre-0120 the column/view is absent
+     → empty map → every line un-batched (old behaviour). */
+  const batchByBucket = new Map<string, string | null>(); // key `code::variant` → batch_no | null (ambiguous/none)
+  try {
+    const { data: lots, error: lotsErr } = await sb
+      .from('v_inventory_lots_open')
+      .select('warehouse_id, product_code, variant_key, batch_no, qty_remaining')
+      .eq('warehouse_id', header.from_warehouse_id)
+      .not('batch_no', 'is', null)
+      .gt('qty_remaining', 0);
+    if (!lotsErr) {
+      // Collect the distinct non-null batches per bucket; single → carry, else null.
+      const batchesByBucket = new Map<string, Set<string>>();
+      for (const r of (lots ?? []) as Array<{
+        product_code: string; variant_key: string | null; batch_no: string | null;
+      }>) {
+        if (!r.batch_no) continue;
+        const k = `${r.product_code}::${r.variant_key ?? ''}`;
+        const set = batchesByBucket.get(k) ?? new Set<string>();
+        set.add(r.batch_no);
+        batchesByBucket.set(k, set);
+      }
+      for (const [k, set] of batchesByBucket.entries()) {
+        batchByBucket.set(k, set.size === 1 ? [...set][0]! : null);
+      }
+    }
+  } catch { /* view/column absent pre-0120 — every line stays un-batched (plain FIFO) */ }
+
+  for (const ln of lineList) {
     if (ln.qty <= 0) continue;
     // Variant bucket the line moves; '' = unclassified/legacy. FIFO consumes
     // the OUT@from from THIS variant's oldest batch and re-opens it at IN@to.
     const variantKey = ln.variant_key ?? '';
+    // Carry the resolved batch only when the source bucket sits in ONE batch
+    // (unambiguous). null → leave un-batched (multi-batch ambiguity or plain stock).
+    const batchNo = batchByBucket.get(`${ln.product_code}::${variantKey}`) ?? null;
     const { data: outRow, error: outErr } = await sb.from('inventory_movements').insert({
       movement_type:  'OUT',
       warehouse_id:   header.from_warehouse_id,
@@ -149,6 +187,9 @@ async function writeTransferMovements(
       source_doc_type:'STOCK_TRANSFER',
       source_doc_id:  header.id,
       source_doc_no:  header.transfer_no,
+      // Stamp the source dye-lot on the OUT so the FIFO trigger consumes THAT
+      // batch (not any FIFO lot). Only when resolved to a single batch.
+      ...(batchNo ? { batch_no: batchNo } : {}),
       performed_by:   userId,
       notes:          `Transfer to warehouse ${header.to_warehouse_id}`,
     }).select('id, qty, unit_cost_sen, total_cost_sen').single();
@@ -170,6 +211,9 @@ async function writeTransferMovements(
       source_doc_type:'STOCK_TRANSFER',
       source_doc_id:  header.id,
       source_doc_no:  header.transfer_no,
+      // Mirror the OUT's batch onto the IN so the dye-lot survives the move
+      // (destination opens a lot tagged with the same batch).
+      ...(batchNo ? { batch_no: batchNo } : {}),
       performed_by:   userId,
       notes:          `Transfer from warehouse ${header.from_warehouse_id}`,
     }]);

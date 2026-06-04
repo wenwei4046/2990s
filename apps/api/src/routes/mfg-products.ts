@@ -17,6 +17,7 @@
 
 import { Hono, type Context } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
+import { escapeForOr } from '../lib/postgrest-search';
 import type { Env, Variables } from '../env';
 
 export const mfgProducts = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -75,7 +76,7 @@ mfgProducts.get('/', async (c) => {
     .order('code', { ascending: true });
 
   if (category) q = q.eq('category', category);
-  if (search) q = q.or(`code.ilike.%${search}%,name.ilike.%${search}%,description.ilike.%${search}%`);
+  if (search) { const s = escapeForOr(search); if (s) q = q.or(`code.ilike.%${s}%,name.ilike.%${s}%,description.ilike.%${s}%`); }
 
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);

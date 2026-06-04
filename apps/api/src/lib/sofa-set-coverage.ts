@@ -92,6 +92,19 @@ export function findCoveringBatch(
   stock: SofaBatchStock,
 ): string | null {
   if (!warehouseId || lines.length === 0) return null;
+  // Aggregate need per distinct (itemCode, variantKey). Two lines of the SAME
+  // module + variant (e.g. a symmetric sofa's two identical arms) must be SUMMED
+  // before comparing to the batch's on-hand — otherwise a batch holding qty 2
+  // would falsely "cover" two lines each needing 2 (it must hold 4). (Audit fix
+  // 2026-06-03)
+  const needByKey = new Map<string, { itemCode: string; variantKey: string; need: number }>();
+  for (const ln of lines) {
+    const k = `${ln.itemCode}|${ln.variantKey}`;
+    const e = needByKey.get(k) ?? { itemCode: ln.itemCode, variantKey: ln.variantKey, need: 0 };
+    e.need += ln.need;
+    needByKey.set(k, e);
+  }
+  const reqs = [...needByKey.values()];
   const candidates = [...stock.batches].sort((a, b) => {
     const ra = stock.receivedAt.get(a) ?? '';
     const rb = stock.receivedAt.get(b) ?? '';
@@ -99,9 +112,9 @@ export function findCoveringBatch(
   });
   for (const batch of candidates) {
     let coversAll = true;
-    for (const ln of lines) {
-      const have = stock.remaining.get(sofaStockKey(warehouseId, batch, ln.itemCode, ln.variantKey)) ?? 0;
-      if (have < ln.need) { coversAll = false; break; }
+    for (const r of reqs) {
+      const have = stock.remaining.get(sofaStockKey(warehouseId, batch, r.itemCode, r.variantKey)) ?? 0;
+      if (have < r.need) { coversAll = false; break; }
     }
     if (coversAll) return batch;
   }

@@ -24,6 +24,7 @@ import { Hono } from 'hono';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizePhone } from '@2990s/shared/phone';
 import { supabaseAuth } from '../middleware/auth';
+import { escapeForOr } from '../lib/postgrest-search';
 import type { Env, Variables } from '../env';
 
 /* Task #91 — small helper: normalize a body field to E.164 phone storage,
@@ -178,7 +179,7 @@ suppliers.get('/', async (c) => {
     .select(SUPPLIER_LIST_COLS)
     .order('name', { ascending: true });
   if (status && SUPPLIER_STATUSES.has(status)) q = q.eq('status', status);
-  if (search) q = q.or(`code.ilike.%${search}%,name.ilike.%${search}%,contact_person.ilike.%${search}%`);
+  if (search) { const s = escapeForOr(search); if (s) q = q.or(`code.ilike.%${s}%,name.ilike.%${s}%,contact_person.ilike.%${s}%`); }
 
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);

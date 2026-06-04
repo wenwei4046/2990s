@@ -137,11 +137,23 @@ export async function reverseMovements(
   performedBy: string | null,
 ): Promise<{ ok: boolean; reversed: number; skipped: number; failed: number; reason?: string }> {
   try {
-    const { data, error } = await sb
+    /* Select batch_no so a reversing row restores the EXACT dye-lot batch the
+       original movement consumed/created (FIFO trigger reverses per-batch, not
+       plain-FIFO). Forward-compat: pre-0120 the column doesn't exist → retry
+       without it and every reversing row stays un-batched (old behaviour). */
+    let movsRes = await sb
       .from('inventory_movements')
-      .select('movement_type, warehouse_id, product_code, variant_key, product_name, qty, unit_cost_sen, source_doc_no')
+      .select('movement_type, warehouse_id, product_code, variant_key, batch_no, product_name, qty, unit_cost_sen, source_doc_no')
       .eq('source_doc_type', sourceDocType)
       .eq('source_doc_id', sourceDocId);
+    if (movsRes.error && (movsRes.error.message ?? '').includes('batch_no')) {
+      movsRes = await sb
+        .from('inventory_movements')
+        .select('movement_type, warehouse_id, product_code, variant_key, product_name, qty, unit_cost_sen, source_doc_no')
+        .eq('source_doc_type', sourceDocType)
+        .eq('source_doc_id', sourceDocId);
+    }
+    const { data, error } = movsRes;
     if (error) return { ok: false, reversed: 0, skipped: 0, failed: 0, reason: error.message };
 
     type Row = {
@@ -149,6 +161,7 @@ export async function reverseMovements(
       warehouse_id: string;
       product_code: string;
       variant_key: string | null;
+      batch_no?: string | null;
       product_name: string | null;
       qty: number;
       unit_cost_sen: number | null;
@@ -160,7 +173,9 @@ export async function reverseMovements(
     // ── Idempotency: signed net per (product, variant, warehouse) bucket.
     // Buckets already at net 0 are fully reversed → we won't touch them.
     const netByBucket = new Map<string, number>();
-    const bucketKey = (r: Row) => `${r.warehouse_id}::${r.product_code}::${r.variant_key ?? ''}`;
+    // batch_no joins the bucket key so a batched (sofa) lot reverses against its
+    // own dye-lot, not a co-mingled plain-FIFO net. Non-batched rows segment '' .
+    const bucketKey = (r: Row) => `${r.warehouse_id}::${r.product_code}::${r.variant_key ?? ''}::${r.batch_no ?? ''}`;
     for (const r of rows) {
       if (r.movement_type !== 'IN' && r.movement_type !== 'OUT') continue;
       const signed = r.movement_type === 'IN' ? r.qty : -r.qty;
@@ -189,6 +204,9 @@ export async function reverseMovements(
         // A reversing IN must carry the lot cost so stock re-enters at its
         // original basis; a reversing OUT lets the FIFO trigger compute COGS.
         ...(opposite === 'IN' ? { unit_cost_sen: Number(r.unit_cost_sen ?? 0) } : {}),
+        // Carry the original row's batch (only when set) so the FIFO trigger
+        // reverses the EXACT dye-lot, not any plain-FIFO lot. Non-batched stays NULL.
+        ...(r.batch_no ? { batch_no: r.batch_no } : {}),
         source_doc_type: sourceDocType as MovementInput['source_doc_type'],
         source_doc_id: sourceDocId,
         source_doc_no: r.source_doc_no ?? undefined,

@@ -967,6 +967,28 @@ const convertDoLinesToReturn = async (c: any) => {
   if (iErr) { await sb.from('delivery_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
   await recomputeTotals(sb, h.id);
 
+  /* Bug #3/#11 — over-return race guard (mirrors the bulk POST / above). The
+     per-line qty check at step 2b is read-before-write, so two parallel converts
+     of the same DO line could each pass and over-return. After inserting (and
+     BEFORE writing any stock), re-derive the live remaining for the referenced DO
+     lines — now counting THIS DR — and ROLLBACK (delete the just-created DR) if any
+     picked line went negative. No inventory was written yet → clean rollback. */
+  {
+    const recheck = await doReturnableRemaining(sb, doIds);
+    const overReturned = pickedIds
+      .map((doItemId) => recheck.get(doItemId))
+      .filter((l): l is DoRemainingLine => l !== undefined && l.remaining < 0);
+    if (overReturned.length > 0) {
+      await sb.from('delivery_return_items').delete().eq('delivery_return_id', h.id);
+      await sb.from('delivery_returns').delete().eq('id', h.id);
+      return c.json({
+        error: 'race_conflict',
+        message: 'Another operator just returned overlapping qty from this Delivery Order. Refresh and try again.',
+        conflicts: overReturned.map((l) => ({ doNumber: l.doNumber, itemCode: l.itemCode, remaining: l.remaining })),
+      }, 409);
+    }
+  }
+
   // Goods received back → increase stock (idempotent).
   await increaseInventoryForReturn(sb, h.id, user.id);
 

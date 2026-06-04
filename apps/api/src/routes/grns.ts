@@ -149,6 +149,67 @@ async function recomputeGrnTotals(sb: any, grnId: string) {
   }).eq('id', grnId);
 }
 
+/* ── Post-insert over-receipt verification for BULK GRN creates ────────────
+   The bulk create paths (POST /, /from-pos, /from-po-items) only PRE-check
+   remaining qty before insert — a read-then-write race lets two concurrent
+   receives both pass and over-receive a PO line. This mirrors the add-line
+   path's POST-insert guard: after the GRN's lines are committed, re-sum the
+   LIVE qty_accepted across all non-cancelled GRN lines per affected PO line; if
+   any now exceeds the PO line's qty, THIS GRN broke the cap → delete the whole
+   GRN it just created and signal a 409. Best-effort consistent with the rest of
+   the file. Returns the over-receipt detail (same shape as the add-line 409) or
+   null when every affected PO line is within cap. */
+async function verifyGrnOverReceipt(
+  sb: any,
+  grnId: string,
+  poItemIds: Array<string | null | undefined>,
+): Promise<{ poItemId: string; requested: number; remaining: number } | null> {
+  const ids = [...new Set(poItemIds.filter((x): x is string => Boolean(x)))];
+  if (ids.length === 0) return null;
+  try {
+    // PO line caps.
+    const { data: poItems } = await sb.from('purchase_order_items')
+      .select('id, qty').in('id', ids);
+    const capById = new Map<string, number>(
+      ((poItems ?? []) as Array<{ id: string; qty: number }>).map((r) => [r.id, r.qty ?? 0]),
+    );
+    // Live accepted per PO line across all non-cancelled GRN lines.
+    const { data: sib } = await sb.from('grn_items')
+      .select('purchase_order_item_id, qty_accepted, grn_id')
+      .in('purchase_order_item_id', ids);
+    const sibRows = (sib ?? []) as Array<{ purchase_order_item_id: string; qty_accepted: number; grn_id: string }>;
+    const grnIds = [...new Set(sibRows.map((r) => r.grn_id).filter(Boolean))];
+    const cancelled = new Set<string>();
+    if (grnIds.length > 0) {
+      const { data: gs } = await sb.from('grns').select('id, status').in('id', grnIds);
+      for (const g of (gs ?? []) as Array<{ id: string; status: string }>) {
+        if (g.status === 'CANCELLED') cancelled.add(g.id);
+      }
+    }
+    // This GRN's own contribution per PO line — what we'd give back on rollback.
+    const liveByPoi = new Map<string, number>();
+    const thisGrnByPoi = new Map<string, number>();
+    for (const r of sibRows) {
+      if (cancelled.has(r.grn_id)) continue;
+      const q = Number(r.qty_accepted ?? 0);
+      liveByPoi.set(r.purchase_order_item_id, (liveByPoi.get(r.purchase_order_item_id) ?? 0) + q);
+      if (r.grn_id === grnId) thisGrnByPoi.set(r.purchase_order_item_id, (thisGrnByPoi.get(r.purchase_order_item_id) ?? 0) + q);
+    }
+    for (const poiId of ids) {
+      const cap = capById.get(poiId) ?? 0;
+      const live = liveByPoi.get(poiId) ?? 0;
+      if (live > cap) {
+        const mine = thisGrnByPoi.get(poiId) ?? 0;
+        return { poItemId: poiId, requested: mine, remaining: cap - (live - mine) };
+      }
+    }
+    return null;
+  } catch {
+    // Best-effort: a verification read failure must not block the receipt.
+    return null;
+  }
+}
+
 /* ── Self-heal PO receipt counter (live-count model, mirrors recomputeSoPicked
    in mfg-purchase-orders.ts) ────────────────────────────────────────────────
    For each given purchase_order_item, RECOUNT received_qty from scratch as the
@@ -313,25 +374,24 @@ grns.get('/', async (c) => {
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
 
   // Commander 2026-05-29 — the GRN list grid needs a money column (AutoCount's
-  // GRN list shows Sub-Total / Total). Compute total_centi per GRN = Σ over its
-  // grn_items of qty_accepted * unit_price_centi. ONE round trip: collect the
-  // listed GRN ids, pull just the three columns we need, reduce into a Map.
+  // GRN list shows Sub-Total / Total). The Total is the STORED header total_centi
+  // (recomputeGrnTotals = Σ line_total_centi = Σ qty*unit − discount), already
+  // selected by HEADER. The old per-line qty_accepted*unit_price sum here ignored
+  // discount_centi, so the list Total drifted from the detail Total — use the
+  // header value instead. We still fetch the lines (ONE round trip) to derive the
+  // convert-eligibility / lock flags (has_children / fully_invoiced /
+  // fully_returned).
   const rows = (data ?? []) as Array<{ id: string } & Record<string, unknown>>;
   const ids = rows.map((g) => g.id);
-  const totals = new Map<string, number>();
-  // Migration 0106 — also collect each GRN's lines so we can derive the
-  // convert-eligibility / lock flags (has_children / fully_invoiced /
-  // fully_returned) in the SAME one-extra-query pass that computes total_centi.
+  // Migration 0106 — collect each GRN's lines for the lock/convert flags.
   const linesByGrn = new Map<string, Array<{ qty_accepted: number | null; invoiced_qty: number | null; returned_qty: number | null }>>();
   if (ids.length > 0) {
     const { data: lineRows, error: lineErr } = await sb
       .from('grn_items')
-      .select('grn_id, qty_accepted, unit_price_centi, invoiced_qty, returned_qty')
+      .select('grn_id, qty_accepted, invoiced_qty, returned_qty')
       .in('grn_id', ids);
     if (lineErr) return c.json({ error: 'load_failed', reason: lineErr.message }, 500);
-    for (const li of (lineRows ?? []) as Array<{ grn_id: string; qty_accepted: number | null; unit_price_centi: number | null; invoiced_qty: number | null; returned_qty: number | null }>) {
-      const add = (li.qty_accepted ?? 0) * (li.unit_price_centi ?? 0);
-      totals.set(li.grn_id, (totals.get(li.grn_id) ?? 0) + add);
+    for (const li of (lineRows ?? []) as Array<{ grn_id: string; qty_accepted: number | null; invoiced_qty: number | null; returned_qty: number | null }>) {
       const arr = linesByGrn.get(li.grn_id) ?? [];
       arr.push({ qty_accepted: li.qty_accepted, invoiced_qty: li.invoiced_qty, returned_qty: li.returned_qty });
       linesByGrn.set(li.grn_id, arr);
@@ -339,7 +399,8 @@ grns.get('/', async (c) => {
   }
   const grns = rows.map((g) => ({
     ...g,
-    total_centi: totals.get(g.id) ?? 0,
+    // Stored header total (= Σ qty*unit − discount). Falls back to 0 if unset.
+    total_centi: (g.total_centi as number | null | undefined) ?? 0,
     ...computeGrnFlags(linesByGrn.get(g.id) ?? []),
   }));
   return c.json({ grns });
@@ -701,6 +762,18 @@ grns.post('/', async (c) => {
   const { error: iErr } = await sb.from('grn_items').insert(rows);
   if (iErr) { await sb.from('grns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
 
+  /* Post-insert over-receipt verification — the pre-check above is a read-then-
+     write race (two concurrent receives both pass). Re-sum live received per PO
+     line; if any now exceeds cap, THIS GRN broke it → delete it + 409. */
+  {
+    const over = await verifyGrnOverReceipt(sb, h.id, items.map((it) => (it.purchaseOrderItemId as string | undefined) ?? null));
+    if (over) {
+      await sb.from('grn_items').delete().eq('grn_id', h.id);
+      await sb.from('grns').delete().eq('id', h.id);
+      return c.json({ error: 'qty_exceeds_remaining', poItemId: over.poItemId, requested: over.requested, remaining: over.remaining }, 409);
+    }
+  }
+
   // Roll up qty_accepted to PO items + write inventory IN. Best-effort.
   await postGrnAndRollup(sb, h.id, user.id);
   // Migration 0101 — populate header money rollups from the inserted lines.
@@ -814,6 +887,18 @@ grns.post('/from-pos', async (c) => {
   });
   const { error: iErr } = await sb.from('grn_items').insert(rows);
   if (iErr) { await sb.from('grns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+
+  /* Post-insert over-receipt verification — the outstanding-qty prefill above is
+     a read-then-write race with concurrent receives. Re-sum live received per PO
+     line; if any now exceeds cap, THIS GRN broke it → delete it + 409. */
+  {
+    const over = await verifyGrnOverReceipt(sb, h.id, itemList.map((it) => it.id));
+    if (over) {
+      await sb.from('grn_items').delete().eq('grn_id', h.id);
+      await sb.from('grns').delete().eq('id', h.id);
+      return c.json({ error: 'qty_exceeds_remaining', poItemId: over.poItemId, requested: over.requested, remaining: over.remaining }, 409);
+    }
+  }
 
   /* PR-DRAFT-removal — auto-rollup + inventory IN after items insert. */
   await postGrnAndRollup(sb, h.id, user.id);
@@ -929,6 +1014,9 @@ grns.post('/from-po-items', async (c) => {
 
   const receivedAt = body.receivedDate ?? new Date().toISOString().slice(0, 10);
   const created: Array<{ id: string; grnNumber: string; purchaseOrderId: string; poNumber: string; lineCount: number }> = [];
+  // Track any bucket rolled back by the post-insert over-receipt verification so
+  // we can surface a 409 with the same error shape the add-line path uses.
+  let overReceipt: { poItemId: string; requested: number; remaining: number } | null = null;
 
   for (const bucket of buckets.values()) {
     counter += 1;
@@ -985,6 +1073,19 @@ grns.post('/from-po-items', async (c) => {
       await sb.from('grns').delete().eq('id', h.id);
       continue;
     }
+    /* Post-insert over-receipt verification — the per-pick pre-check above is a
+       read-then-write race with concurrent receives. Re-sum live received per PO
+       line; if THIS bucket's GRN broke a cap, roll it back (delete its lines +
+       header) and record the over-receipt so we 409 below. Must run BEFORE
+       postGrnAndRollup so no inventory IN / received_qty rollup is written for a
+       rejected receipt. */
+    const over = await verifyGrnOverReceipt(sb, h.id, bucket.lines.map(({ row }) => row.id));
+    if (over) {
+      await sb.from('grn_items').delete().eq('grn_id', h.id);
+      await sb.from('grns').delete().eq('id', h.id);
+      overReceipt = over;
+      continue;
+    }
     // Immediately post — rolls up received_qty, flips PO status, writes inventory.
     const postRes = await postGrnAndRollup(sb, h.id, user.id);
     // Migration 0101 — populate header money rollups from the inserted lines.
@@ -998,6 +1099,18 @@ grns.post('/from-po-items', async (c) => {
       purchaseOrderId: bucket.primaryPoId, poNumber: [...bucket.poNumbers].join(', '),
       lineCount: bucket.lines.length,
     });
+  }
+
+  // If any bucket over-received (race), surface a 409 with the add-line error
+  // shape. Buckets that received cleanly were already committed + reported.
+  if (overReceipt) {
+    return c.json({
+      error: 'qty_exceeds_remaining',
+      poItemId: overReceipt.poItemId,
+      requested: overReceipt.requested,
+      remaining: overReceipt.remaining,
+      created,
+    }, 409);
   }
 
   return c.json({ created, total: created.length }, 201);
@@ -1072,21 +1185,48 @@ grns.patch('/:id/cancel', async (c) => {
   try {
     const warehouseId = head.warehouse_id ?? (await defaultWarehouseId(sb));
     if (warehouseId) {
+      /* Migration 0120 — the original IN stamped batch_no = source PO number so a
+         sofa set's components share a dye lot. The reversing OUT must consume that
+         EXACT batch, otherwise the FIFO trigger eats plain-FIFO across any lot and
+         desyncs the set's dye lots. Read this GRN's IN movements and carry their
+         batch_no onto the matching reversing OUT (match by warehouse+product+variant).
+         Mirrors reverseInventoryForDo's batch-preserving reversal. Forward-compat:
+         pre-0120 the column doesn't exist → retry without it (every batch stays null
+         → plain FIFO, identical to old behaviour). */
+      const batchByBucket = new Map<string, string>();
+      {
+        const inRes = await sb.from('inventory_movements')
+          .select('product_code, variant_key, warehouse_id, batch_no')
+          .eq('source_doc_type', 'GRN').eq('source_doc_id', id).eq('movement_type', 'IN');
+        const inData = (inRes.error && (inRes.error.message ?? '').includes('batch_no'))
+          ? []
+          : (inRes.data ?? []);
+        for (const m of inData as Array<{ product_code: string; variant_key: string | null; warehouse_id: string; batch_no?: string | null }>) {
+          if (m.batch_no == null) continue;
+          batchByBucket.set(`${m.warehouse_id}::${m.product_code}::${m.variant_key ?? ''}`, m.batch_no);
+        }
+      }
       const movements = lineList
         .filter((it) => (it.qty_accepted ?? 0) > 0)
-        .map((it) => ({
-          movement_type: 'OUT' as const,
-          warehouse_id: warehouseId,
-          product_code: it.material_code,
-          variant_key: computeVariantKey(it.item_group, it.variants ?? null),
-          product_name: it.material_name,
-          qty: it.qty_accepted,
-          source_doc_type: 'GRN' as const,
-          source_doc_id: id,
-          source_doc_no: head.grn_number,
-          performed_by: user.id,
-          notes: 'GRN cancelled — reversing receipt',
-        }));
+        .map((it) => {
+          const variant_key = computeVariantKey(it.item_group, it.variants ?? null);
+          const batch_no = batchByBucket.get(`${warehouseId}::${it.material_code}::${variant_key}`) ?? null;
+          return {
+            movement_type: 'OUT' as const,
+            warehouse_id: warehouseId,
+            product_code: it.material_code,
+            variant_key,
+            product_name: it.material_name,
+            qty: it.qty_accepted,
+            source_doc_type: 'GRN' as const,
+            source_doc_id: id,
+            source_doc_no: head.grn_number,
+            performed_by: user.id,
+            // Only carry batch_no when the IN had one (omit → non-batched lines stay plain FIFO).
+            ...(batch_no != null ? { batch_no } : {}),
+            notes: 'GRN cancelled — reversing receipt',
+          };
+        });
       if (movements.length > 0) {
         await writeMovements(sb, movements);
         /* GRN cancel pulled stock back out → other READY SOs that relied on

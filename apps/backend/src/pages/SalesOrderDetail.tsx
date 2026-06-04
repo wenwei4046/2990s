@@ -405,6 +405,14 @@ export const SalesOrderDetail = () => {
     if (savingOrder) return;
     setSaveError(null);
 
+    /* Owner 2026-06-03 — phone is COMPULSORY on every SO. Mirror the New SO
+       guard so Edit can't blank it out (the backend PATCH now rejects an
+       empty phone too; this keeps the operator from a confusing 400). */
+    if (!handle.getPhone().trim()) {
+      window.alert('Phone number is required — every sales order must have a contact number.');
+      return;
+    }
+
     // Guard: an open add-draft must have a product picked before Save.
     if (addingDraft && !addingDraft.itemCode.trim()) {
       setSaveError('Pick a product for the new line, or remove it before saving.');
@@ -1281,6 +1289,10 @@ type CustomerCardHandle = {
   validate: () => string | null;
   save: (cb: { onSuccess: () => void; onError: (msg: string) => void }) => void;
   reset: () => void;
+  /** Owner 2026-06-03 — current (possibly edited) phone value, so the page
+      Save can enforce the compulsory-phone rule before any write, mirroring
+      the New SO guard. */
+  getPhone: () => string;
 };
 
 type CustomerCardProps = {
@@ -1617,6 +1629,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     validate: () => validateDates(),
     save: (cb) => trySave(cb),
     reset: () => setForm(initialFormFor(header)),
+    getPhone: () => form.phone ?? '',
   }));
 
   /* PR-A — Inputs are read-only when the page isn't in edit mode OR the
