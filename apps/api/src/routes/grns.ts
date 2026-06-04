@@ -1748,13 +1748,30 @@ grns.delete('/:id/items/:itemId', async (c) => {
         const warehouseId = (grnHeader as { warehouse_id: string | null } | null)?.warehouse_id
           ?? (await defaultWarehouseId(sb));
         if (warehouseId) {
+          const variantKey = computeVariantKey(l.item_group, l.variants ?? null);
+          // Carry the original IN's batch_no so the reversing OUT depletes the EXACT
+          // dye-lot the receipt created. The whole-cancel reversal does this; the
+          // line-delete used to omit it → plain FIFO could deplete the wrong lot.
+          let batchNo: string | null = null;
+          {
+            const inRes = await sb.from('inventory_movements')
+              .select('batch_no')
+              .eq('source_doc_type', 'GRN').eq('source_doc_id', grnId)
+              .eq('movement_type', 'IN').eq('warehouse_id', warehouseId)
+              .eq('product_code', l.material_code).eq('variant_key', variantKey)
+              .limit(1);
+            if (!(inRes.error && (inRes.error.message ?? '').includes('batch_no'))) {
+              batchNo = (((inRes.data ?? []) as Array<{ batch_no?: string | null }>)[0]?.batch_no) ?? null;
+            }
+          }
           await writeMovements(sb, [{
             movement_type: 'OUT' as const,
             warehouse_id: warehouseId,
             product_code: l.material_code,
-            variant_key: computeVariantKey(l.item_group, l.variants ?? null),
+            variant_key: variantKey,
             product_name: l.material_name,
             qty: l.qty_accepted,
+            ...(batchNo ? { batch_no: batchNo } : {}),
             source_doc_type: 'GRN' as const,
             source_doc_id: grnId,
             source_doc_no: (grnHeader as { grn_number: string } | null)?.grn_number ?? grnId,

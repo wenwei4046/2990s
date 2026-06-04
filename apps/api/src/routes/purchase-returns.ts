@@ -16,7 +16,7 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
+import { writeMovements, reverseMovements, defaultWarehouseId } from '../lib/inventory-movements';
 import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { recomputePoReceived } from './grns';
 
@@ -348,14 +348,41 @@ async function writePrLineDeltaMovement(
     );
     const warehouseId = lineWh.get(args.line.id) ?? null;
     if (!warehouseId) return;
+    const variantKey = computeVariantKey(args.line.item_group, args.line.variants ?? null);
     const isOut = args.deltaQty > 0;
+    // Carry the dye-lot batch + cost the original PR OUT stamped for this bucket so
+    // a reduce/delete re-enters the EXACT batch at the real cost (the old code
+    // dropped both → reversing IN landed as a zero-cost un-batched lot).
+    let batchNo: string | null = null;
+    let unitCostSen = 0;
+    {
+      let inRes = await sb.from('inventory_movements')
+        .select('batch_no, unit_cost_sen')
+        .eq('source_doc_type', 'PURCHASE_RETURN').eq('source_doc_id', args.prId)
+        .eq('movement_type', 'OUT').eq('warehouse_id', warehouseId)
+        .eq('product_code', args.line.material_code).eq('variant_key', variantKey)
+        .limit(1);
+      if (inRes.error && (inRes.error.message ?? '').includes('batch_no')) {
+        inRes = await sb.from('inventory_movements')
+          .select('unit_cost_sen')
+          .eq('source_doc_type', 'PURCHASE_RETURN').eq('source_doc_id', args.prId)
+          .eq('movement_type', 'OUT').eq('warehouse_id', warehouseId)
+          .eq('product_code', args.line.material_code).eq('variant_key', variantKey)
+          .limit(1);
+      }
+      const row = ((inRes.data ?? []) as Array<{ batch_no?: string | null; unit_cost_sen?: number | null }>)[0];
+      batchNo = row?.batch_no ?? null;
+      unitCostSen = Number(row?.unit_cost_sen ?? 0);
+    }
     await writeMovements(sb, [{
       movement_type: isOut ? 'OUT' : 'IN',
       warehouse_id: warehouseId,
       product_code: args.line.material_code,
-      variant_key: computeVariantKey(args.line.item_group, args.line.variants ?? null),
+      variant_key: variantKey,
       product_name: args.line.material_name,
       qty: Math.abs(args.deltaQty),
+      ...(isOut ? {} : { unit_cost_sen: unitCostSen }),
+      ...(batchNo ? { batch_no: batchNo } : {}),
       source_doc_type: 'PURCHASE_RETURN' as const,
       source_doc_id: args.prId,
       source_doc_no: args.returnNumber,
@@ -740,45 +767,20 @@ purchaseReturns.patch('/:id/cancel', async (c) => {
     return c.json({ error: 'cannot_cancel' }, 409);
   }
 
-  // Reverse the inventory OUT: write an IN per line for qty_returned. The create
-  // path debited each line's SOURCE GRN warehouse (else the primary GRN / the
-  // default) — credit back the SAME per-line warehouse so a batched PR spanning
-  // warehouses reverses correctly. Best-effort; never un-cancel on a movement
-  // failure.
+  // Reverse the inventory OUT via the shared helper: it reads THIS PR's own OUT
+  // movements and posts an opposite IN per bucket carrying the EXACT batch_no +
+  // unit_cost_sen the OUT stamped — so a sofa return re-enters its dye-lot at the
+  // real cost (not a zero-cost un-batched lot, the old bespoke bug). Idempotent
+  // (signed-net-per-bucket) + per-line-warehouse aware via the original rows.
+  // Best-effort; never un-cancel on a movement failure.
   try {
-    const { data: lines } = await sb.from('purchase_return_items')
-      .select('id, grn_item_id, material_code, material_name, qty_returned, item_group, variants')
-      .eq('purchase_return_id', id);
-    if (lines) {
-      const lineWh = await resolvePrLineWarehouses(sb, lines as Array<{ id: string; grn_item_id?: string | null }>, head.grn_id);
-      const movements = ((lines ?? []) as Array<{ id: string; material_code: string; material_name: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null }>)
-        .filter((it) => (it.qty_returned ?? 0) > 0)
-        .map((it) => {
-          const warehouseId = lineWh.get(it.id) ?? null;
-          if (!warehouseId) return null;
-          return {
-            movement_type: 'IN' as const,
-            warehouse_id: warehouseId,
-            product_code: it.material_code,
-            variant_key: computeVariantKey(it.item_group, it.variants ?? null),
-            product_name: it.material_name,
-            qty: it.qty_returned,
-            source_doc_type: 'PURCHASE_RETURN' as const,
-            source_doc_id: id,
-            source_doc_no: head.return_number,
-            performed_by: user.id,
-            notes: 'Purchase return cancelled — reversing return',
-          };
-        })
-        .filter((m): m is NonNullable<typeof m> => m !== null);
-      if (movements.length > 0) {
-        await writeMovements(sb, movements);
-        /* PR cancel reversed stock IN → may unlock PENDING SOs. Re-walk. */
-        try {
-          const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
-          await recomputeSoStockAllocation(sb);
-        } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-pr-cancel failed:', e); }
-      }
+    const rev = await reverseMovements(sb, 'PURCHASE_RETURN', id, user.id);
+    if (rev.reversed > 0) {
+      /* PR cancel reversed stock IN → may unlock PENDING SOs. Re-walk. */
+      try {
+        const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+        await recomputeSoStockAllocation(sb);
+      } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-pr-cancel failed:', e); }
     }
   } catch { /* best-effort: never un-cancel on a movement failure */ }
 
