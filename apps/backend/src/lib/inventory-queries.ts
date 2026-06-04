@@ -189,6 +189,36 @@ export function useInventoryProductTotals(opts?: { search?: string; category?: s
   });
 }
 
+/* ── Inventory analytics / KPI board ─────────────────────────────────── */
+export type InventoryAnalytics = {
+  asOf: string;
+  windowDays: number;
+  totalValueSen: number;
+  distinctSkus: number;
+  aging: { key: string; label: string; qty: number; valueSen: number }[];
+  turnover: { trailingCogsSen: number; annualizedTurns: number; daysOnHand: number | null };
+  deadStock: { product_code: string; product_name: string; qty: number; valueSen: number; lastSoldAt: string | null }[];
+  abc: {
+    items: { product_code: string; product_name: string; cogsSen: number; onHandValueSen: number; cumPct: number; class: 'A' | 'B' | 'C' }[];
+    summary: Record<'A' | 'B' | 'C', { count: number; valueSen: number }>;
+  };
+};
+
+export function useInventoryAnalytics(opts?: { days?: number; warehouseId?: string | null }) {
+  return useQuery({
+    queryKey: ['inventory', 'analytics', opts ?? {}],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (opts?.days) params.set('days', String(opts.days));
+      if (opts?.warehouseId) params.set('warehouseId', opts.warehouseId);
+      return authedFetch<InventoryAnalytics>(
+        `/inventory/analytics${params.toString() ? `?${params.toString()}` : ''}`,
+      );
+    },
+    staleTime: 60_000,
+  });
+}
+
 /* PR #38 — Per-warehouse breakdown for a single product (drilldown drawer) */
 export function useInventoryProductBreakdown(productCode: string | null) {
   return useQuery({

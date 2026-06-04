@@ -460,6 +460,126 @@ inventory.get('/value', async (c) => {
   return c.json({ value: data ?? [] });
 });
 
+/* ── Inventory analytics / KPI board ─────────────────────────────────────
+   Pure read-only reporting computed from open lots + COGS stream. No new
+   tables. Returns: stock aging buckets, dead-stock (has stock but no sale in
+   the window), turnover + days-on-hand, and an ABC classification by trailing
+   sales value. ?days=90 (window), ?warehouseId optional. */
+inventory.get('/analytics', async (c) => {
+  const sb = c.get('supabase');
+  const warehouseId = c.req.query('warehouseId');
+  const days = Math.max(1, Math.min(365, Math.round(Number(c.req.query('days') ?? 90)) || 90));
+  const nowMs = Date.now();
+  const cutoffIso = new Date(nowMs - days * 86_400_000).toISOString();
+
+  // Open lots → aging buckets + per-product on-hand value + names.
+  let lotsQ = sb.from('v_inventory_lots_open')
+    .select('product_code, product_name, qty_remaining, remaining_value_sen, received_at, warehouse_id')
+    .limit(50_000);
+  if (warehouseId) lotsQ = lotsQ.eq('warehouse_id', warehouseId);
+  const { data: lots, error: lotsErr } = await lotsQ;
+  if (lotsErr) return c.json({ error: 'load_failed', reason: lotsErr.message }, 500);
+
+  // Full COGS stream → trailing-window sales value per product + all-time last-sold date.
+  let cogsQ = sb.from('v_cogs_entries')
+    .select('product_code, total_cost_sen, consumed_at, warehouse_id')
+    .limit(100_000);
+  if (warehouseId) cogsQ = cogsQ.eq('warehouse_id', warehouseId);
+  const { data: cogs, error: cogsErr } = await cogsQ;
+  if (cogsErr) return c.json({ error: 'load_failed', reason: cogsErr.message }, 500);
+
+  const lotRows = lots ?? [];
+  const cogsRows = cogs ?? [];
+
+  // Aging buckets (days since lot received).
+  const BUCKETS = [
+    { key: '0-30', label: '0–30 days', max: 30 },
+    { key: '31-60', label: '31–60 days', max: 60 },
+    { key: '61-90', label: '61–90 days', max: 90 },
+    { key: '91-180', label: '91–180 days', max: 180 },
+    { key: '180+', label: '180+ days', max: Infinity },
+  ];
+  const aging = BUCKETS.map((b) => ({ key: b.key, label: b.label, qty: 0, valueSen: 0 }));
+  // Per-product current on-hand value + name.
+  const prod = new Map<string, { name: string; qty: number; valueSen: number }>();
+  let totalValueSen = 0;
+  for (const l of lotRows) {
+    const ageDays = (nowMs - new Date(l.received_at as string).getTime()) / 86_400_000;
+    const idx = BUCKETS.findIndex((b) => ageDays <= b.max);
+    const bucket = aging[idx < 0 ? aging.length - 1 : idx];
+    const qty = Number(l.qty_remaining ?? 0);
+    const val = Number(l.remaining_value_sen ?? 0);
+    if (bucket) { bucket.qty += qty; bucket.valueSen += val; }
+    totalValueSen += val;
+    const code = String(l.product_code ?? '');
+    const p = prod.get(code) ?? { name: String(l.product_name ?? code), qty: 0, valueSen: 0 };
+    p.qty += qty; p.valueSen += val;
+    prod.set(code, p);
+  }
+
+  // Trailing-window COGS per product + all-time last-sold.
+  const trailingCogs = new Map<string, number>();
+  const lastSold = new Map<string, string>();
+  let trailingCogsTotal = 0;
+  for (const e of cogsRows) {
+    const code = String(e.product_code ?? '');
+    const at = String(e.consumed_at ?? '');
+    const prev = lastSold.get(code);
+    if (!prev || at > prev) lastSold.set(code, at);
+    if (at >= cutoffIso) {
+      const v = Number(e.total_cost_sen ?? 0);
+      trailingCogs.set(code, (trailingCogs.get(code) ?? 0) + v);
+      trailingCogsTotal += v;
+    }
+  }
+
+  // Turnover + days-on-hand (current value as the average-inventory proxy).
+  const annualizedCogs = trailingCogsTotal * (365 / days);
+  const turns = totalValueSen > 0 ? annualizedCogs / totalValueSen : 0;
+  const daysOnHand = trailingCogsTotal > 0 ? (totalValueSen * days) / trailingCogsTotal : null;
+
+  // Dead stock — has on-hand value but no sale inside the window.
+  const deadStock = [...prod.entries()]
+    .filter(([code]) => !(trailingCogs.get(code) ?? 0))
+    .map(([code, p]) => ({
+      product_code: code, product_name: p.name, qty: p.qty, valueSen: p.valueSen,
+      lastSoldAt: lastSold.get(code) ?? null,
+    }))
+    .sort((a, b) => b.valueSen - a.valueSen);
+
+  // ABC — rank every product (stock or sales) by trailing sales value desc.
+  const codes = new Set<string>([...prod.keys(), ...trailingCogs.keys()]);
+  const ranked = [...codes]
+    .map((code) => ({
+      product_code: code,
+      product_name: prod.get(code)?.name ?? code,
+      cogsSen: trailingCogs.get(code) ?? 0,
+      onHandValueSen: prod.get(code)?.valueSen ?? 0,
+    }))
+    .sort((a, b) => b.cogsSen - a.cogsSen);
+  const summary = { A: { count: 0, valueSen: 0 }, B: { count: 0, valueSen: 0 }, C: { count: 0, valueSen: 0 } };
+  let cum = 0;
+  const abcItems = ranked.map((r) => {
+    cum += r.cogsSen;
+    const cumPct = trailingCogsTotal > 0 ? (cum / trailingCogsTotal) * 100 : 100;
+    const cls: 'A' | 'B' | 'C' = cumPct <= 80 ? 'A' : cumPct <= 95 ? 'B' : 'C';
+    summary[cls].count += 1;
+    summary[cls].valueSen += r.onHandValueSen;
+    return { ...r, cumPct, class: cls };
+  });
+
+  return c.json({
+    asOf: new Date(nowMs).toISOString(),
+    windowDays: days,
+    totalValueSen,
+    distinctSkus: prod.size,
+    aging,
+    turnover: { trailingCogsSen: trailingCogsTotal, annualizedTurns: turns, daysOnHand },
+    deadStock,
+    abc: { items: abcItems, summary },
+  });
+});
+
 /* ── Manual adjustment ───────────────────────────────────────────────── */
 inventory.post('/adjustments', async (c) => {
   const sb = c.get('supabase'); const user = c.get('user');
