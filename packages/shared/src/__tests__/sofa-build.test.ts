@@ -110,6 +110,52 @@ describe('summarizeSofaCells upgrade suffix', () => {
   });
 });
 
+/* Loo 2026-06-04 — every multi-module sofa line must surface its compartment
+ * make-up. A bundle-matched group used to collapse to the bare commercial
+ * label ("2 + L"), hiding WHAT the sofa is built from, while non-matching
+ * builds (e.g. Booqit's 1B+CNR+2A) showed "Custom (1B+2A+CNR)". The bundle
+ * label now carries the same parenthesised family signature. */
+describe('summarizeSofaCells compartment breakdown', () => {
+  it('appends the compartment make-up to a multi-module bundle match (2+L)', () => {
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: 'L(RHF)',  x: 158, y: 0, rot: 0 },
+    ];
+    expect(summarizeSofaCells(cells, '24')).toBe('2 + L (2A+L)');
+  });
+
+  it('appends the make-up to a closed 3-seater', () => {
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '1A(LHF)', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: '1NA',     x: 95,  y: 0, rot: 0 },
+      { id: 'c', moduleId: '1A(RHF)', x: 170, y: 0, rot: 0 },
+    ];
+    expect(summarizeSofaCells(cells, '24')).toBe('3-Seater (1A+1A+1NA)');
+  });
+
+  it('keeps the bare label for a single-module bundle (whole-piece 2-Seater)', () => {
+    const cells: Cell[] = [{ id: 'a', moduleId: '2A(LHF)', x: 0, y: 0, rot: 0 }];
+    expect(summarizeSofaCells(cells, '24')).toBe('2-Seater');
+  });
+
+  it('keeps the Custom fallback for non-matching builds (Booqit corner)', () => {
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '1B(LHF)', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: 'CNR',     x: 115, y: 0, rot: 0 },
+      { id: 'c', moduleId: '2A(RHF)', x: 220, y: 0, rot: 0 },
+    ];
+    expect(summarizeSofaCells(cells, '24')).toBe('Custom (1B+2A+CNR)');
+  });
+
+  it('upgrade suffix appends after the breakdown', () => {
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '2A(LHF)', x: 0, y: 0, rot: 0, recliners: [{ seatIdx: 0, open: false }] },
+      { id: 'b', moduleId: 'L(RHF)', x: 158, y: 0, rot: 0 },
+    ];
+    expect(summarizeSofaCells(cells, '24', 'Power slide')).toBe('2 + L (2A+L) + 1 Power slide');
+  });
+});
+
 /* Invoice/order line description (Track 2 §8.1 decomposition rule). Single-piece
  * bundles show the name; multi-piece decompose to oriented module ids. Reads the
  * stored order_items.config (bundleId for Quick-Pick, cells for Custom Build). */
