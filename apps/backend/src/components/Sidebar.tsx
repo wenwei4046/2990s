@@ -27,6 +27,7 @@ import {
   ChevronDown,
   ListTree,
   Activity,
+  Handshake,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import styles from './Sidebar.module.css';
@@ -125,6 +126,7 @@ export const Sidebar = () => {
         { to: '/mfg-delivery-orders', icon: <PackagePlus {...ICON_PROPS} />, label: 'Delivery Orders' },
         { to: '/sales-invoices', icon: <FileText {...ICON_PROPS} />, label: 'Sales Invoices' },
         { to: '/delivery-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Delivery Returns' },
+        { to: '/consignment', icon: <Handshake {...ICON_PROPS} />, label: 'Consignment' },
       ],
     },
     {
