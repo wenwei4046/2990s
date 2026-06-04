@@ -1,8 +1,8 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { cellsBbox, findModule, moduleFootprint, type Cell, type Depth } from '@2990s/shared';
+import { cellsBbox, findModule, moduleFootprint, groupSofas, isAccessoryModule, analyzeSofa, detectBundle, isWideArmSeat, type Cell, type Depth } from '@2990s/shared';
 import { measureArtBbox, getCachedArtBbox, ART_BBOX_FALLBACK } from '../lib/sofa-art';
 import { renderCornerSofa, cornerCompositeFromCells } from '../lib/sofa-corner';
-import { buildSeamlessRun, renderSeamlessSofa, isFunctionalSeat } from '../lib/sofa-seamless';
+import { buildSeamlessRun, renderSeamlessSofa, renderSeamlessGroup, isFunctionalSeat } from '../lib/sofa-seamless';
 
 const ASSET_BASE = '/sofa-modules';
 
@@ -59,16 +59,50 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
   // shared renderer as the canvas, so the two surfaces match (incl. 1B/2B bench).
   const corner = cornerCompositeFromCells(cells, depth);
 
-  // Functional/power seats (1A-P / 1NA-P / 1S-P/R/L …) ship art as SVG-only —
-  // there's NO matching PNG, so the tile path below renders them blank. Draw any
-  // un-rotated straight run that CONTAINS one via the same code-drawn renderer
-  // the canvas uses (arms + P/R/L badge + footrest), so Quick Pick matches
-  // Custom build. buildSeamlessRun returns null for non-straight / non-linear
-  // layouts → those keep the PNG tiling. Plain runs (2S, 1A+1A) have no
-  // functional seat, so they're untouched.
-  const seamless = !corner && cells.every((c) => (c.rot ?? 0) % 360 === 0) && cells.some((c) => isFunctionalSeat(c.moduleId))
+  // Draw via the shared code-drawn renderer (so Quick Pick matches Custom build)
+  // for any un-rotated straight run that contains EITHER:
+  //   - a functional/power seat (1A-P / 1NA-P / 1S-P/R/L …) — SVG-only art, the
+  //     tile path would render it blank; the renderer re-draws the P/R/L badge +
+  //     footrest; OR
+  //   - a wide-arm 1B / 2B — so the run JOINS into one continuous sofa with the
+  //     wide bench instead of tiling as detached pieces (Loo 2026-06-04, matches
+  //     the Custom build canvas).
+  // buildSeamlessRun returns null for non-straight / non-linear layouts → those
+  // keep the PNG tiling. Plain contiguous runs (2S, 1A+1A) hit neither case here
+  // — they fall through to the GROUP gate below and render schematic too.
+  const seamless = !corner && cells.every((c) => (c.rot ?? 0) % 360 === 0)
+    && cells.some((c) => isFunctionalSeat(c.moduleId) || /^[12]B-/.test(c.moduleId))
     ? buildSeamlessRun(cells, depth, 0)
     : null;
+
+  // Closed PLAIN bundle (1A+1A → 2S, 1A+2A → 3S, …) → KEEP the per-module PNG
+  // tiling (Loo 2026-06-04): the canvas shows the tuned bundle PNG for these,
+  // so the card keeps the real-art look instead of going schematic. Functional
+  // and wide-arm 1B/2B runs are excluded — detectBundle COLLAPSES 1B→1A /
+  // P-variants→plain, but those need the code-drawn bench / badge (and they hit
+  // the seamless gate above anyway when contiguous).
+  const sofaOnly = cells.filter((c) => !isAccessoryModule(c.moduleId));
+  const closedPlainBundle = !corner && !seamless
+    && cells.every((c) => (c.rot ?? 0) % 360 === 0)
+    && !cells.some((c) => isFunctionalSeat(c.moduleId) || isWideArmSeat(c.moduleId))
+    && sofaOnly.length >= 2
+    && detectBundle(sofaOnly.map((c) => c.moduleId)) != null
+    && analyzeSofa(sofaOnly, depth).closed;
+
+  // Any OTHER contiguous multi-cell layout that isn't a corner or a single-row
+  // seamless run (an L built from straight modules, mixed rotation, 2-row) →
+  // draw as ONE gap-free sofa via the universal group renderer instead of
+  // tiling per-module PNGs (which leave seam gaps). Single contiguous group
+  // only, so disjoint layouts still tile (Loo 2026-06-04, matches the canvas).
+  const group = !corner && !seamless && !closedPlainBundle && cells.length >= 2 && groupSofas(cells, depth).length === 1
+    // Exclude Corner (CNR) / L-Shape chaise — the schematic group renderer can't
+    // express their backrest/arm; they keep real per-module art (matches canvas).
+    && !cells.some((c) => { const g = findModule(c.moduleId)?.group; return g === 'Corner' || g === 'L-Shape'; })
+    // Exclude any FREE accessory (STOOL — Console is the only accessory the
+    // schematic renderer knows how to draw). A quick pick saved with a stool
+    // keeps real per-module art; matches the canvas, where free stools are
+    // split out of runCells (CustomBuilder) instead of joining the run.
+    && !cells.some((c) => isAccessoryModule(c.moduleId) && c.moduleId !== 'Console');
 
   return (
     <div
@@ -100,7 +134,12 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
           {renderSeamlessSofa(seamless, '100%', '100%', (id) => `${ASSET_BASE}/${id}.png`, getCachedArtBbox)}
         </div>
       )}
-      {!corner && !seamless && cells.map((c, i) => {
+      {group && (
+        <div style={{ position: 'absolute', inset: 0 }}>
+          {renderSeamlessGroup(cells, depth, bb, (id) => `${ASSET_BASE}/${id}.png`, getCachedArtBbox)}
+        </div>
+      )}
+      {!corner && !seamless && !group && cells.map((c, i) => {
         const m = findModule(c.moduleId);
         if (!m) return null;
         const fp = moduleFootprint(m, c.rot, depth);   // rotated footprint (cm)

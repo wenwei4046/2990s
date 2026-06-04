@@ -1,5 +1,9 @@
-import { Fragment } from 'react';
-import { findModule, cellBbox, type Cell, type Depth, type Rot, type Bbox, type SofaModuleSpec } from '@2990s/shared';
+import { Fragment, type ReactNode } from 'react';
+import {
+  findModule, cellBbox, cellEdges, edgeContacts, isWideArmSeat,
+  EDGE_W, EDGE_N, EDGE_E, EDGE_S,
+  type Cell, type Depth, type Rot, type Bbox, type SofaModuleSpec, type EdgeIdx,
+} from '@2990s/shared';
 import type { ArtBbox } from './sofa-art';
 
 /* ─── Code-drawn seamless sofa (generic composite) ───────────────────
@@ -43,7 +47,7 @@ const ART_BODY_UNITS = 70;
 export const isFunctionalSeat = (id: string): boolean => /-[PRL](?:-|$)/.test(id);
 export const functionalBadge = (id: string): string => id.match(/-([PRL])(?:-|$)/)?.[1] ?? '';
 
-export interface SeamlessSlot { moduleId: string; len: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean }
+export interface SeamlessSlot { moduleId: string; len: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean; armWide: boolean }
 export interface SeamlessRun { totalLen: number; thickness: number; slots: SeamlessSlot[] }
 
 /** Analyse a group of cells (sofa modules + any consoles, free stools
@@ -66,11 +70,13 @@ export const buildSeamlessRun = (cells: Cell[], depth: Depth, rot: Rot): Seamles
     // slot, but any other accessory (free stool) breaks the straight run.
     if (m.group === 'Corner' || m.group === 'L-Shape') return null;
     if (m.accessory && m.id !== 'Console') return null;
-    // 1B / 2B are the WIDE-ARM variants — their distinct wide armrest is part
-    // of their art and the code-drawn renderer only knows the standard arm, so
-    // keep these on their own per-module art (Chairman: 1B/2B must stay as the
-    // original). A run containing one falls back to per-module rendering.
-    if (/^[12]B-/.test(m.id)) return null;
+    // 1B / 2B are the WIDE-ARM variants. They now STAY in the run (previously
+    // bailed to per-module art): renderSeamlessSofa draws their armed end as a
+    // wide soft "bench" (band-colour, inset, rounded) instead of a hard arm —
+    // exactly the corner view's bench (sofa-corner.tsx isBenchModule). This lets
+    // e.g. 2A-LHF + 1B-RHF join into ONE continuous sofa with a wide right bench
+    // rather than two detached pieces (Loo 2026-06-04, supersedes the earlier
+    // "1B/2B keep their own picture" rule now that the canvas is schematic).
     const b = cellBbox(c, depth);
     if (!b) return null;
     boxes.push({ c, m, b });
@@ -119,6 +125,8 @@ export const buildSeamlessRun = (cells: Cell[], depth: Depth, rot: Rot): Seamles
       kind: isConsole ? 'console' : 'sofa',
       armLeft: !isConsole && (bothArms || /-LHF$/.test(m.id)),
       armRight: !isConsole && (bothArms || /-RHF$/.test(m.id)),
+      // 1B / 2B: the armed side is a WIDE bench, not a hard arm (drawn below).
+      armWide: !isConsole && /^[12]B-/.test(m.id),
     };
   });
   // Need at least one real sofa module (don't draw a run of only consoles).
@@ -150,11 +158,17 @@ export const renderSeamlessSofa = (
   const swInner = 0.8 * u;
   const swDash = 0.5 * u;
   const dash = `${2 * u},${2 * u}`;
+  // 1B / 2B wide "bench" arm — same primitives as the corner view
+  // (sofa-corner.tsx): a wide, band-colour, inset, rounded cushion instead of a
+  // hard arm, so a joined run keeps the wide-arm look and the two surfaces match.
+  const benchW = 20 * u;
+  const benchInset = 2 * u;
+  const benchRx = 5 * u;
   // Resolve each slot to an [start, end] range along the run axis.
-  const ranges: { moduleId: string; start: number; end: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean }[] = [];
+  const ranges: { moduleId: string; start: number; end: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean; armWide: boolean }[] = [];
   let acc = 0;
   for (const s of slots) {
-    ranges.push({ moduleId: s.moduleId, start: acc, end: acc + s.len, cushions: s.cushions, kind: s.kind, armLeft: s.armLeft, armRight: s.armRight });
+    ranges.push({ moduleId: s.moduleId, start: acc, end: acc + s.len, cushions: s.cushions, kind: s.kind, armLeft: s.armLeft, armRight: s.armRight, armWide: s.armWide });
     acc += s.len;
   }
   // Solid lines at interior module boundaries.
@@ -213,13 +227,23 @@ export const renderSeamlessSofa = (
         );
       })}
       {/* Arms — drawn only where a module actually has one (honest). An open /
-          half-built end therefore stays open instead of growing a phantom arm. */}
-      {ranges.map((r, i) => (r.kind !== 'sofa' || (!r.armLeft && !r.armRight) ? null : (
-        <Fragment key={`arm${i}`}>
-          {r.armLeft && <rect x={r.start} y={0} width={armW} height={T} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />}
-          {r.armRight && <rect x={r.end - armW} y={0} width={armW} height={T} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />}
-        </Fragment>
-      )))}
+          half-built end therefore stays open instead of growing a phantom arm.
+          1B / 2B draw a WIDE soft bench (band-colour, inset, rounded) at their
+          armed end instead of a hard arm — identical to the corner view, so a
+          joined 2A + 1B keeps the wide arm as one continuous sofa. */}
+      {ranges.map((r, i) => {
+        if (r.kind !== 'sofa' || (!r.armLeft && !r.armRight)) return null;
+        const w = r.armWide ? benchW : armW;
+        const endRect = (x: number) => (r.armWide
+          ? <rect x={x + benchInset} y={benchInset} width={w - 2 * benchInset} height={T - 2 * benchInset} rx={benchRx} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />
+          : <rect x={x} y={0} width={w} height={T} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />);
+        return (
+          <Fragment key={`arm${i}`}>
+            {r.armLeft && endRect(r.start)}
+            {r.armRight && endRect(r.end - w)}
+          </Fragment>
+        );
+      })}
       {bounds.map((x, i) => (
         <line key={`b${i}`} x1={x} y1={0} x2={x} y2={T} stroke={SOFA_INK} strokeWidth={swInner} />
       ))}
@@ -243,6 +267,191 @@ export const renderSeamlessSofa = (
           </Fragment>
         );
       })}
+    </svg>
+  );
+};
+
+/* ─── Universal seamless GROUP renderer (any contiguous arrangement) ───────
+ * renderSeamlessSofa handles a single uniform-rotation ROW; renderCornerSofa
+ * handles the fixed 3-cell CNR L. This handles EVERYTHING ELSE a group can be —
+ * an L built from straight modules (chaise turned 90°, NO corner piece), a
+ * 2-row block, a U/T, mixed rotations — by drawing in the GROUP's screen-cm
+ * frame (NO CSS rotation; each cell's rotation is baked in via cellEdges +
+ * its screen rect). Gap-free BY CONSTRUCTION: every cell's FULL footprint is
+ * filled (groupSofas already guarantees the rects touch within 2cm), so the
+ * union has no holes. Band/arm/bench draw from each edge's TYPE (back/arm),
+ * touching or not: legit joins only meet on open/front edges, so decorations
+ * never block a real join — while arm-to-arm / back-to-front contact stays
+ * honestly visible as two sofas pushed together (Loo 2026-06-04). Contact only
+ * downgrades the outline weight (thick outer → thin seam).
+ * Reuses the exact primitives/colours of the row + corner renderers
+ * so the canvas + Quick-Pick preview match. Model-agnostic: reads only module
+ * ids + cell geometry. (Loo 2026-06-04.) */
+export const renderSeamlessGroup = (
+  cells: Cell[],
+  depth: Depth,
+  bb: Bbox,
+  resolveArt: (id: string) => string,
+  getBbox: (src: string) => ArtBbox | undefined,
+): ReactNode => {
+  const W = bb.w;
+  const H = bb.h;
+  if (!(W > 0) || !(H > 0)) return null;
+
+  interface GItem { c: Cell; m: SofaModuleSpec; r: Bbox; edges: ReturnType<typeof cellEdges>; contact: Set<EdgeIdx> }
+  const items: GItem[] = [];
+  cells.forEach((c, i) => {
+    const m = findModule(c.moduleId);
+    const cbx = cellBbox(c, depth);
+    if (!m || !cbx) return;
+    const contact = new Set<EdgeIdx>();
+    cells.forEach((o, j) => {
+      if (i === j) return;
+      for (const { edgeA } of edgeContacts(c, o, depth)) contact.add(edgeA);
+    });
+    items.push({ c, m, r: { x: cbx.x - bb.x, y: cbx.y - bb.y, w: cbx.w, h: cbx.h }, edges: cellEdges(c), contact });
+  });
+  if (items.length === 0) return null;
+
+  const EDGES: EdgeIdx[] = [EDGE_W, EDGE_N, EDGE_E, EDGE_S];
+  // A strip `d` cm deep INTO the cell along the given edge, in group-local cm.
+  const strip = (r: Bbox, e: EdgeIdx, d: number): Bbox =>
+    e === EDGE_W ? { x: r.x, y: r.y, w: d, h: r.h }
+      : e === EDGE_N ? { x: r.x, y: r.y, w: r.w, h: d }
+        : e === EDGE_E ? { x: r.x + r.w - d, y: r.y, w: d, h: r.h }
+          : { x: r.x, y: r.y + r.h - d, w: r.w, h: d };
+  const edgeLine = (r: Bbox, e: EdgeIdx): [number, number, number, number] =>
+    e === EDGE_W ? [r.x, r.y, r.x, r.y + r.h]
+      : e === EDGE_N ? [r.x, r.y, r.x + r.w, r.y]
+        : e === EDGE_E ? [r.x + r.w, r.y, r.x + r.w, r.y + r.h]
+          : [r.x, r.y + r.h, r.x + r.w, r.y + r.h];
+
+  const seat: ReactNode[] = [];
+  const band: ReactNode[] = [];
+  const arms: ReactNode[] = [];
+  const cons: ReactNode[] = [];
+  const lines: ReactNode[] = [];
+  const seams: ReactNode[] = [];
+  const fns: ReactNode[] = [];
+
+  items.forEach((it, i) => {
+    const { m, r, edges, contact } = it;
+    // Scale the art units to THIS cell's own thickness (short side), so a deep
+    // 165cm L-chaise doesn't get an over-thick band like a 95cm seat would.
+    const u = Math.min(r.w, r.h) / ART_BODY_UNITS;
+    const bandH = 11 * u;
+    const armW = 11 * u;
+    const benchW = 20 * u;
+    const benchInset = 2 * u;
+    const benchRx = 5 * u;
+    const swOuter = 1.4 * u;
+    const swInner = 0.8 * u;
+    const swDash = 0.5 * u;
+    const dash = `${2 * u},${2 * u}`;
+    const isConsole = m.id === 'Console';
+    const wide = isWideArmSeat(m.id);
+    // NOTE: Corner (CNR) and L-Shape chaise are NOT handled here — their
+    // backrest/arm placement can't be derived from cellEdges (a CNR has arms on
+    // its INNER bend + no 'back' edge; an L-chaise has no 'arm' edge for its
+    // foot cap). Groups containing one are excluded upstream (CustomBuilder +
+    // SofaCellsPreview) and keep their real per-module art instead, so this
+    // renderer only ever sees plain seats + interior consoles.
+
+    if (isConsole) {
+      // Interior console keeps its REAL art (cropped to its silhouette), same as
+      // the row renderer; falls back to a plain block + cup-holders pre-measure.
+      const src = resolveArt(m.id);
+      const cb = getBbox(src);
+      if (cb) {
+        const bw = cb.r - cb.l;
+        const bh = cb.b - cb.t;
+        const iw = r.w / bw;
+        const ih = r.h / bh;
+        cons.push(<image key={`con${i}`} href={src} x={r.x - cb.l * iw} y={r.y - cb.t * ih} width={iw} height={ih} preserveAspectRatio="none" />);
+      } else {
+        const cr = Math.min(r.w, r.h) * 0.06;
+        cons.push(
+          <Fragment key={`con${i}`}>
+            <rect x={r.x} y={r.y} width={r.w} height={r.h} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />
+            <circle cx={r.x + r.w / 3} cy={r.y + r.h * 0.82} r={cr} fill={SOFA_CUP} stroke={SOFA_INK} strokeWidth={swDash} />
+            <circle cx={r.x + (r.w * 2) / 3} cy={r.y + r.h * 0.82} r={cr} fill={SOFA_CUP} stroke={SOFA_INK} strokeWidth={swDash} />
+          </Fragment>,
+        );
+      }
+    } else {
+      seat.push(<rect key={`seat${i}`} x={r.x} y={r.y} width={r.w} height={r.h} fill={SOFA_SEAT} />);
+    }
+
+    for (const e of EDGES) {
+      const free = !contact.has(e);
+      // BAND / ARM draw from the edge TYPE alone — even when the edge touches a
+      // neighbour. Legit joins only ever meet on open/front edges (nothing drawn
+      // there), so an arm-to-arm or back-to-front contact means TWO sofas pushed
+      // together — the arms/backrest must stay visible instead of melting into
+      // one seamless body ("arm and arm is not a complete sofa", Loo 2026-06-04).
+      // `free` only picks the outline weight below (thick outer, thin seam).
+      const wantBand = !isConsole && edges[e] === 'back';
+      if (wantBand) {
+        const s = strip(r, e, bandH);
+        band.push(<rect key={`bd${i}-${e}`} x={s.x} y={s.y} width={s.w} height={s.h} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />);
+      }
+      // ARM / wide BENCH on an arm edge.
+      if (!isConsole && edges[e] === 'arm') {
+        if (wide) {
+          const s = strip(r, e, benchW);
+          arms.push(<rect key={`am${i}-${e}`} x={s.x + benchInset} y={s.y + benchInset} width={Math.max(0, s.w - 2 * benchInset)} height={Math.max(0, s.h - 2 * benchInset)} rx={benchRx} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />);
+        } else {
+          const s = strip(r, e, armW);
+          arms.push(<rect key={`am${i}-${e}`} x={s.x} y={s.y} width={s.w} height={s.h} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />);
+        }
+      }
+      // OUTLINE on free (outer) edges (thick); module BOUNDARY on touching edges (thin).
+      const [x1, y1, x2, y2] = edgeLine(r, e);
+      lines.push(<line key={`ln${i}-${e}`} x1={x1} y1={y1} x2={x2} y2={y2} stroke={SOFA_INK} strokeWidth={free ? swOuter : swInner} strokeLinecap="round" />);
+    }
+
+    // Cushion seams (dashed), perpendicular to the cell's LENGTH axis.
+    const cushions = isConsole ? 0 : Math.max(1, m.cushions);
+    if (cushions >= 2) {
+      const lenX = r.w >= r.h;
+      for (let j = 1; j < cushions; j++) {
+        if (lenX) {
+          const x = r.x + (r.w * j) / cushions;
+          seams.push(<line key={`sm${i}-${j}`} x1={x} y1={r.y} x2={x} y2={r.y + r.h} stroke={SOFA_INK} strokeWidth={swDash} strokeDasharray={dash} />);
+        } else {
+          const y = r.y + (r.h * j) / cushions;
+          seams.push(<line key={`sm${i}-${j}`} x1={r.x} y1={y} x2={r.x + r.w} y2={y} stroke={SOFA_INK} strokeWidth={swDash} strokeDasharray={dash} />);
+        }
+      }
+    }
+
+    // Functional P/R/L: badge centred + footrest just past the cell's FRONT edge
+    // (oriented to whatever direction 'front' points after rotation).
+    if (!isConsole && isFunctionalSeat(m.id)) {
+      const fe = edges.indexOf('front') as EdgeIdx | -1;
+      const t = Math.min(r.w, r.h);
+      const cx = r.x + r.w / 2;
+      const cy = r.y + r.h / 2;
+      const span = (fe === EDGE_N || fe === EDGE_S) ? r.w : r.h;
+      const fw = span * 0.82;
+      const ft = t * 0.3;
+      let fr: Bbox | null = null;
+      if (fe === EDGE_S) fr = { x: cx - fw / 2, y: r.y + r.h + t * 0.02, w: fw, h: ft };
+      else if (fe === EDGE_N) fr = { x: cx - fw / 2, y: r.y - t * 0.02 - ft, w: fw, h: ft };
+      else if (fe === EDGE_E) fr = { x: r.x + r.w + t * 0.02, y: cy - fw / 2, w: ft, h: fw };
+      else if (fe === EDGE_W) fr = { x: r.x - t * 0.02 - ft, y: cy - fw / 2, w: ft, h: fw };
+      fns.push(
+        <Fragment key={`fn${i}`}>
+          {fr && <rect x={fr.x} y={fr.y} width={fr.w} height={fr.h} rx={t * 0.03} fill={SOFA_SEAT} stroke={SOFA_INK} strokeWidth={1.4 * u} />}
+          <text x={cx} y={cy + t * 0.12} fontSize={t * 0.32} fontWeight={800} fill={SOFA_INK} textAnchor="middle" fontFamily="system-ui, -apple-system, sans-serif">{functionalBadge(m.id)}</text>
+        </Fragment>,
+      );
+    }
+  });
+
+  return (
+    <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
+      {seat}{band}{arms}{cons}{lines}{seams}{fns}
     </svg>
   );
 };
