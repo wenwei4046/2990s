@@ -1,0 +1,715 @@
+// ----------------------------------------------------------------------------
+// /purchase-consignment-returns — we send consigned goods back to the supplier.
+//
+// Closes the consignment loop: PC Order → PC Receive → (defect / oversupply /
+// wrong item) → PC Return → supplier credit note.
+//
+// OFF-LEDGER: a Purchase Consignment Return records returning the SUPPLIER'S
+// consigned goods (never owned by us), so it writes ZERO inventory_movements. It
+// only records the return + rolls the returned qty onto the PC Receive line
+// (which in turn re-opens the PC Order received_qty via recomputePcoReceived).
+//
+// This is a clone of /purchase-returns (apps/api/src/routes/purchase-returns.ts)
+// with EVERY inventory side-effect removed:
+//   • DROPPED: writePurchaseReturnMovements (the OUT), writePrLineDeltaMovement
+//     (line-CRUD deltas), the cancel reversal reverseMovements, the dye-lot
+//     batch resolution, the per-line warehouse resolution, and
+//     recomputeSoStockAllocation. No inventory_movements are written or reversed.
+//   • KEPT: create (header + items), line CRUD, list, detail, status lifecycle
+//     (post/complete/cancel), the returned-qty rollup onto the PC RECEIVE
+//     (adjustPcReceiveReturnedQty, recount-from-live), and the over-return cap
+//     vs the PC Receive line.
+//
+// Tables: purchase_consignment_returns / purchase_consignment_return_items
+//   (migration 0154). FK renames: return→pc_receive_id / pc_order_id;
+//   return_items→pc_receive_item_id.
+// Numbering: PCT-YYMM-NNN.
+
+import { Hono } from 'hono';
+import { supabaseAuth } from '../middleware/auth';
+import type { Env, Variables } from '../env';
+import { buildVariantSummary } from '@2990s/shared';
+import { recomputePcoReceived } from './purchase-consignment-receives';
+
+export const purchaseConsignmentReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
+purchaseConsignmentReturns.use('*', supabaseAuth);
+
+const HEADER =
+  'id, return_number, pc_order_id, pc_receive_id, supplier_id, return_date, ' +
+  'reason, status, posted_at, completed_at, credit_note_ref, refund_centi, ' +
+  'notes, created_at, created_by, updated_at';
+const ITEM =
+  'id, purchase_consignment_return_id, pc_receive_item_id, material_kind, material_code, ' +
+  'material_name, qty_returned, unit_price_centi, line_refund_centi, reason, notes, created_at';
+
+const nextNum = async (sb: any): Promise<string> => {
+  const d = new Date();
+  const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const { count } = await sb.from('purchase_consignment_returns')
+    .select('id', { head: true, count: 'exact' })
+    .like('return_number', `PCT-${yymm}-%`);
+  return `PCT-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
+};
+
+/* ── Recompute PC Return header money rollup ───────────────────────────────
+   Sum line_refund_centi across return_items → write refund_centi on the header.
+   A return is qty × unit price (no tax/discount), so refund_centi is the total. */
+async function recomputePcReturnTotals(sb: any, prId: string) {
+  const { data: items } = await sb.from('purchase_consignment_return_items')
+    .select('line_refund_centi')
+    .eq('purchase_consignment_return_id', prId);
+  const refund = (items ?? []).reduce((s: number, r: any) => s + (r.line_refund_centi ?? 0), 0);
+  await sb.from('purchase_consignment_returns').update({
+    refund_centi: refund,
+    updated_at: new Date().toISOString(),
+  }).eq('id', prId);
+}
+
+/* ── PC-Receive→PC-Return consumption helper (recount-from-live) ─────────────
+   Track purchase_consignment_receive_items.returned_qty as PR lines are drawn
+   from / adjusted against / released back to a receive line. base = qty_accepted
+   (you can return up to what was accepted); remaining = qty_accepted -
+   returned_qty. returned_qty is the SUM of qty_returned across LIVE
+   (non-cancelled) PC return lines for this receive line, clamped to
+   [0, qty_accepted]. A recount self-heals (no `cur + delta` drift). Returning
+   goods then nets down the parent PC Order's received_qty via
+   recomputePcoReceived. NO inventory — off-ledger. */
+async function adjustPcReceiveReturnedQty(sb: any, receiveItemId: string, _delta?: number) {
+  if (!receiveItemId) return;
+  const { data: prLines } = await sb.from('purchase_consignment_return_items')
+    .select('qty_returned, purchase_consignment_return_id')
+    .eq('pc_receive_item_id', receiveItemId);
+  const rows = (prLines ?? []) as Array<{ qty_returned: number; purchase_consignment_return_id: string }>;
+  const prIds = [...new Set(rows.map((r) => r.purchase_consignment_return_id).filter(Boolean))];
+  const cancelled = new Set<string>();
+  if (prIds.length > 0) {
+    const { data: prs } = await sb.from('purchase_consignment_returns').select('id, status').in('id', prIds);
+    for (const p of (prs ?? []) as Array<{ id: string; status: string }>) {
+      if ((p.status ?? '').toUpperCase() === 'CANCELLED') cancelled.add(p.id);
+    }
+  }
+  let returned = 0;
+  for (const r of rows) if (!cancelled.has(r.purchase_consignment_return_id)) returned += Number(r.qty_returned ?? 0);
+
+  const { data: gi } = await sb.from('purchase_consignment_receive_items')
+    .select('qty_accepted, pc_order_item_id').eq('id', receiveItemId).maybeSingle();
+  if (!gi) return;
+  const accepted = (gi as { qty_accepted: number }).qty_accepted ?? 0;
+  const next = Math.min(accepted, Math.max(0, returned)); // clamp [0, accepted]
+  await sb.from('purchase_consignment_receive_items').update({ returned_qty: next }).eq('id', receiveItemId);
+  // Returning goods nets down the parent PC Order line's received_qty (re-opens
+  // for a replacement shipment). Recount it from live receive lines.
+  const pcoItemId = (gi as { pc_order_item_id: string | null }).pc_order_item_id;
+  if (pcoItemId) await recomputePcoReceived(sb, [pcoItemId]);
+}
+
+purchaseConsignmentReturns.get('/', async (c) => {
+  const sb = c.get('supabase');
+  let q = sb.from('purchase_consignment_returns')
+    .select(`${HEADER}, supplier:suppliers(id, code, name), purchase_consignment_order:purchase_consignment_orders(id, pc_number), pc_receive:purchase_consignment_receives(id, receive_number)`)
+    .order('return_date', { ascending: false })
+    .limit(300);
+  const status = c.req.query('status'); if (status) q = q.eq('status', status);
+  const supplierId = c.req.query('supplierId'); if (supplierId) q = q.eq('supplier_id', supplierId);
+  const { data, error } = await q;
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  return c.json({ purchaseConsignmentReturns: data ?? [] });
+});
+
+purchaseConsignmentReturns.get('/:id', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id');
+  const [h, i] = await Promise.all([
+    sb.from('purchase_consignment_returns')
+      .select(`${HEADER}, supplier:suppliers(id, code, name, contact_person, phone, email, address), purchase_consignment_order:purchase_consignment_orders(id, pc_number), pc_receive:purchase_consignment_receives(id, receive_number)`)
+      .eq('id', id).maybeSingle(),
+    sb.from('purchase_consignment_return_items').select(ITEM).eq('purchase_consignment_return_id', id).order('created_at'),
+  ]);
+  if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
+  if (!h.data) return c.json({ error: 'not_found' }, 404);
+  const items = (i.data ?? []) as unknown as Array<Record<string, unknown>>;
+  return c.json({ purchaseConsignmentReturn: h.data, items });
+});
+
+// ── Linked docs (Smart Buttons fan-out) ─────────────────────────────
+// For a PC Return: the parent PC Receive + parent PC Order (both nullable).
+purchaseConsignmentReturns.get('/:id/linked', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id');
+  const { data, error } = await sb
+    .from('purchase_consignment_returns')
+    .select(`
+      id,
+      pc_receive:purchase_consignment_receives(id, receive_number),
+      purchase_consignment_order:purchase_consignment_orders(id, pc_number)
+    `)
+    .eq('id', id)
+    .maybeSingle();
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  if (!data) return c.json({ error: 'not_found' }, 404);
+  const raw = data as unknown as {
+    pc_receive?: { id: string; receive_number: string } | Array<{ id: string; receive_number: string }> | null;
+    purchase_consignment_order?: { id: string; pc_number: string } | Array<{ id: string; pc_number: string }> | null;
+  };
+  const receive: { id: string; receive_number: string } | null =
+    Array.isArray(raw.pc_receive) ? (raw.pc_receive[0] ?? null) : (raw.pc_receive ?? null);
+  const pco: { id: string; pc_number: string } | null =
+    Array.isArray(raw.purchase_consignment_order) ? (raw.purchase_consignment_order[0] ?? null) : (raw.purchase_consignment_order ?? null);
+  return c.json({ pcReceive: receive, purchaseConsignmentOrder: pco });
+});
+
+purchaseConsignmentReturns.post('/', async (c) => {
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (body.status === 'DRAFT') return c.json({ error: 'draft_status_not_supported', message: 'Consignment returns post immediately on create.' }, 400);
+  if (!body.supplierId) return c.json({ error: 'supplier_required' }, 400);
+  const items = body.items as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(items) || !items.length) return c.json({ error: 'items_required' }, 400);
+
+  const sb = c.get('supabase'); const user = c.get('user');
+  const returnNumber = await nextNum(sb);
+
+  /* Clamp each PC-receive-linked line to its remaining
+     (qty_accepted - returned_qty) so a bare create can't over-return. Manual
+     lines (no pc_receive_item_id) are uncapped. */
+  const preReceiveItemIds = [...new Set(items
+    .map((it) => (it.pcReceiveItemId as string | undefined) ?? null)
+    .filter((x): x is string => !!x))];
+  const remainingByReceiveItem = new Map<string, number>();
+  if (preReceiveItemIds.length > 0) {
+    const { data: giRows } = await sb.from('purchase_consignment_receive_items')
+      .select('id, qty_accepted, returned_qty').in('id', preReceiveItemIds);
+    for (const r of (giRows ?? []) as Array<{ id: string; qty_accepted: number; returned_qty: number }>) {
+      remainingByReceiveItem.set(r.id, Math.max(0, (r.qty_accepted ?? 0) - (r.returned_qty ?? 0)));
+    }
+  }
+
+  let totalRefund = 0;
+  const itemRows = items.map((it) => {
+    const receiveItemId = (it.pcReceiveItemId as string | undefined) ?? null;
+    let qty = Number(it.qtyReturned ?? 0);
+    if (receiveItemId && remainingByReceiveItem.has(receiveItemId)) {
+      qty = Math.min(qty, remainingByReceiveItem.get(receiveItemId) as number);
+    }
+    const unit = Number(it.unitPriceCenti ?? 0);
+    const lineRefund = qty * unit;
+    totalRefund += lineRefund;
+    return {
+      pc_receive_item_id: receiveItemId,
+      material_kind: it.materialKind,
+      material_code: it.materialCode,
+      material_name: it.materialName,
+      qty_returned: qty,
+      unit_price_centi: unit,
+      line_refund_centi: lineRefund,
+      reason: (it.reason as string | undefined) ?? null,
+      notes: (it.notes as string | undefined) ?? null,
+      item_group: (it.itemGroup as string | null | undefined) ?? null,
+      variants: (it.variants as Record<string, unknown> | null | undefined) ?? null,
+    };
+  }).filter((r) => Number(r.qty_returned) > 0);
+
+  if (itemRows.length === 0) {
+    return c.json({ error: 'no_returnable_qty', message: 'Every line is already fully returned (nothing left to return).' }, 400);
+  }
+
+  // PC Return is created POSTED. NO inventory OUT is written.
+  const pcOrderId = (body.pcOrderId as string | undefined) ?? null;
+  const pcReceiveId = (body.pcReceiveId as string | undefined) ?? null;
+  const { data: header, error: hErr } = await sb.from('purchase_consignment_returns').insert({
+    return_number: returnNumber,
+    pc_order_id: pcOrderId,
+    pc_receive_id: pcReceiveId,
+    supplier_id: body.supplierId,
+    return_date: (body.returnDate as string) ?? new Date().toISOString().slice(0, 10),
+    reason: (body.reason as string | undefined) ?? null,
+    refund_centi: totalRefund,
+    notes: (body.notes as string | undefined) ?? null,
+    status: 'POSTED',
+    posted_at: new Date().toISOString(),
+    created_by: user.id,
+  }).select(HEADER).single();
+  if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
+  const h = header as unknown as { id: string; return_number: string };
+
+  const rowsWithId = itemRows.map((r) => ({ ...r, purchase_consignment_return_id: h.id }));
+  const { error: iErr } = await sb.from('purchase_consignment_return_items').insert(rowsWithId);
+  if (iErr) {
+    await sb.from('purchase_consignment_returns').delete().eq('id', h.id);
+    return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
+  }
+
+  /* Consume each PC-receive-linked line's returned_qty (recount-from-live), which
+     nets down the source receive line + PC Order received_qty. Manual lines (no
+     pc_receive_item_id) are skipped. NO inventory OUT. */
+  for (const r of itemRows) {
+    if (r.pc_receive_item_id) await adjustPcReceiveReturnedQty(sb, r.pc_receive_item_id, Number(r.qty_returned));
+  }
+
+  return c.json({ id: h.id, returnNumber: h.return_number }, 201);
+});
+
+// Batch-convert multiple POSTED PC Receives into ONE PC Return. Aggregates all
+// qty_rejected lines across the selected receives (must share a supplier).
+purchaseConsignmentReturns.post('/from-pc-receives', async (c) => {
+  const sb = c.get('supabase'); const user = c.get('user');
+  let body: { pcReceiveIds?: string[]; reason?: string; notes?: string };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const receiveIds = body.pcReceiveIds ?? [];
+  if (receiveIds.length === 0) return c.json({ error: 'pc_receive_ids_required' }, 400);
+
+  const { data: receives, error: recvErr } = await sb.from('purchase_consignment_receives')
+    .select('id, receive_number, supplier_id, purchase_consignment_order_id, status')
+    .in('id', receiveIds);
+  if (recvErr) return c.json({ error: 'load_failed', reason: recvErr.message }, 500);
+  const recvList = (receives ?? []) as Array<{ id: string; receive_number: string; supplier_id: string; purchase_consignment_order_id: string | null; status: string }>;
+  if (recvList.length === 0) return c.json({ error: 'pc_receives_not_found' }, 404);
+
+  const notPosted = recvList.filter((g) => g.status !== 'POSTED');
+  if (notPosted.length > 0) {
+    return c.json({ error: 'not_all_posted', message: `These receives are not POSTED: ${notPosted.map((g) => g.receive_number).join(', ')}` }, 400);
+  }
+  const supplierIds = new Set(recvList.map((g) => g.supplier_id));
+  if (supplierIds.size > 1) {
+    return c.json({ error: 'mixed_suppliers', message: 'All selected receives must be from the same supplier' }, 400);
+  }
+  const supplierId = [...supplierIds][0]!;
+
+  const { data: items } = await sb.from('purchase_consignment_receive_items')
+    .select('id, pc_receive_id, material_kind, material_code, material_name, qty_accepted, qty_rejected, returned_qty, rejection_reason, unit_price_centi, item_group, variants, description, description2, uom')
+    .in('pc_receive_id', receiveIds)
+    .gt('qty_rejected', 0);
+  // Cap each line's return at its remaining (qty_accepted - returned_qty) — a
+  // receive line can be returned across multiple PRs. Drop fully-returned lines.
+  const rejectedItems = ((items ?? []) as Array<{
+    id: string; pc_receive_id: string; material_kind: string; material_code: string; material_name: string;
+    qty_accepted: number; qty_rejected: number; returned_qty: number; rejection_reason: string | null; unit_price_centi: number;
+    item_group: string | null; variants: Record<string, unknown> | null; description: string | null; description2: string | null; uom: string | null;
+  }>)
+    .map((it) => {
+      const remaining = (it.qty_accepted ?? 0) - (it.returned_qty ?? 0);
+      return { ...it, _qty: Math.min(it.qty_rejected ?? 0, Math.max(0, remaining)) };
+    })
+    .filter((it) => it._qty > 0);
+  if (rejectedItems.length === 0) {
+    return c.json({ error: 'no_rejected_qty', message: 'None of the selected receives have remaining rejected qty to return' }, 400);
+  }
+
+  const returnNumber = await nextNum(sb);
+  const recvNumbersJoined = recvList.map((g) => g.receive_number).join(', ');
+  const totalRefund = rejectedItems.reduce((s, it) => s + (it._qty * it.unit_price_centi), 0);
+
+  const primaryReceiveId = recvList[0]!.id;
+  const { data: header, error: hErr } = await sb.from('purchase_consignment_returns').insert({
+    return_number: returnNumber,
+    pc_order_id: recvList[0]!.purchase_consignment_order_id,
+    pc_receive_id: primaryReceiveId,
+    supplier_id: supplierId,
+    return_date: new Date().toISOString().slice(0, 10),
+    reason: body.reason ?? `Batch from ${recvList.length} receives: ${recvNumbersJoined}`,
+    refund_centi: totalRefund,
+    notes: body.notes ?? null,
+    status: 'POSTED',
+    posted_at: new Date().toISOString(),
+    created_by: user.id,
+  }).select('id, return_number').single();
+  if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
+  const h = header as unknown as { id: string; return_number: string };
+
+  const rows = rejectedItems.map((it) => ({
+    purchase_consignment_return_id: h.id,
+    pc_receive_item_id: it.id,
+    material_kind: it.material_kind,
+    material_code: it.material_code,
+    material_name: it.material_name,
+    qty_returned: it._qty,
+    unit_price_centi: it.unit_price_centi,
+    line_refund_centi: it._qty * it.unit_price_centi,
+    reason: it.rejection_reason,
+    item_group: it.item_group,
+    variants: it.variants,
+    description: it.description,
+    description2: it.description2 ?? (buildVariantSummary(String(it.item_group ?? ''), it.variants ?? null) || null),
+    uom: it.uom ?? 'UNIT',
+  }));
+  const { error: iErr } = await sb.from('purchase_consignment_return_items').insert(rows);
+  if (iErr) { await sb.from('purchase_consignment_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+
+  // Consume each receive line: recount returned_qty from live (off-ledger).
+  for (const it of rejectedItems) {
+    await adjustPcReceiveReturnedQty(sb, it.id, it._qty);
+  }
+
+  return c.json({ id: h.id, returnNumber: h.return_number, pcReceiveCount: recvList.length, lineCount: rejectedItems.length }, 201);
+});
+
+/* ── POST /from-pc-receive ──────────────────────────────────────────────
+   Single-receive convert. Copies ALL of the receive's accepted lines (remaining
+   only) into a NEW PC Return so the user can trim qty in the draft. */
+purchaseConsignmentReturns.post('/from-pc-receive', async (c) => {
+  const sb = c.get('supabase'); const user = c.get('user');
+  let body: { pcReceiveId?: string; reason?: string; notes?: string };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const receiveId = body.pcReceiveId;
+  if (!receiveId) return c.json({ error: 'pc_receive_id_required' }, 400);
+
+  const { data: receive, error: recvErr } = await sb.from('purchase_consignment_receives')
+    .select('id, receive_number, supplier_id, purchase_consignment_order_id, status')
+    .eq('id', receiveId).maybeSingle();
+  if (recvErr) return c.json({ error: 'load_failed', reason: recvErr.message }, 500);
+  if (!receive) return c.json({ error: 'pc_receive_not_found' }, 404);
+  const g = receive as { id: string; receive_number: string; supplier_id: string; purchase_consignment_order_id: string | null; status: string };
+  if (g.status !== 'POSTED') return c.json({ error: 'pc_receive_not_posted', status: g.status }, 409);
+
+  const { data: items } = await sb.from('purchase_consignment_receive_items')
+    .select('id, material_kind, material_code, material_name, qty_accepted, qty_rejected, returned_qty, rejection_reason, unit_price_centi, item_group, variants, description, description2, uom')
+    .eq('pc_receive_id', receiveId)
+    .gt('qty_accepted', 0);
+  const allLines = ((items ?? []) as Array<{
+    id: string; material_kind: string; material_code: string; material_name: string;
+    qty_accepted: number; qty_rejected: number; returned_qty: number; rejection_reason: string | null; unit_price_centi: number;
+    item_group: string | null; variants: Record<string, unknown> | null; description: string | null; description2: string | null; uom: string | null;
+  }>);
+  const lines = allLines
+    .map((it) => ({ ...it, _remaining: (it.qty_accepted ?? 0) - (it.returned_qty ?? 0) }))
+    .filter((it) => it._remaining > 0);
+  if (lines.length === 0) return c.json({ error: 'nothing_to_return', message: 'Receive is fully returned' }, 400);
+
+  const returnNumber = await nextNum(sb);
+  const totalRefund = lines.reduce((s, it) => s + (it._remaining * it.unit_price_centi), 0);
+
+  const { data: header, error: hErr } = await sb.from('purchase_consignment_returns').insert({
+    return_number: returnNumber,
+    pc_order_id: g.purchase_consignment_order_id,
+    pc_receive_id: g.id,
+    supplier_id: g.supplier_id,
+    return_date: new Date().toISOString().slice(0, 10),
+    reason: body.reason ?? `From ${g.receive_number}`,
+    refund_centi: totalRefund,
+    notes: body.notes ?? null,
+    status: 'POSTED',
+    posted_at: new Date().toISOString(),
+    created_by: user.id,
+  }).select('id, return_number').single();
+  if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
+  const h = header as unknown as { id: string; return_number: string };
+
+  const rows = lines.map((it) => ({
+    purchase_consignment_return_id: h.id,
+    pc_receive_item_id: it.id,
+    material_kind: it.material_kind,
+    material_code: it.material_code,
+    material_name: it.material_name,
+    qty_returned: it._remaining,
+    unit_price_centi: it.unit_price_centi,
+    line_refund_centi: it._remaining * it.unit_price_centi,
+    reason: it.rejection_reason,
+    item_group: it.item_group,
+    variants: it.variants,
+    description: it.description,
+    description2: it.description2 ?? (buildVariantSummary(String(it.item_group ?? ''), it.variants ?? null) || null),
+    uom: it.uom ?? 'UNIT',
+  }));
+  const { error: iErr } = await sb.from('purchase_consignment_return_items').insert(rows);
+  if (iErr) { await sb.from('purchase_consignment_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+
+  for (const it of lines) {
+    await adjustPcReceiveReturnedQty(sb, it.id, it._remaining);
+  }
+
+  await recomputePcReturnTotals(sb, h.id);
+
+  return c.json({ id: h.id, returnNumber: h.return_number }, 201);
+});
+
+purchaseConsignmentReturns.patch('/:id/post', async (c) => {
+  // Kept for backward compat; idempotent. POST creates PRs as POSTED.
+  const sb = c.get('supabase'); const id = c.req.param('id');
+  const { data: cur } = await sb.from('purchase_consignment_returns').select('id, status, posted_at, return_number, pc_receive_id').eq('id', id).maybeSingle();
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  const row = cur as { id: string; status: string; posted_at: string | null; return_number: string; pc_receive_id: string | null };
+  if (row.status === 'POSTED' || row.status === 'COMPLETED') {
+    return c.json({ purchaseConsignmentReturn: row });
+  }
+  return c.json({ error: 'cannot_post', message: `Cannot post a ${row.status} return.` }, 409);
+});
+
+purchaseConsignmentReturns.patch('/:id/complete', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id');
+  let body: { creditNoteRef?: string };
+  try { body = (await c.req.json()) as typeof body; } catch { body = {}; }
+
+  const updates: Record<string, unknown> = {
+    status: 'COMPLETED',
+    completed_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (body.creditNoteRef) updates.credit_note_ref = body.creditNoteRef;
+
+  const { data, error } = await sb.from('purchase_consignment_returns').update(updates)
+    .eq('id', id).eq('status', 'POSTED').select('id, status, completed_at').single();
+  if (error) return c.json({ error: 'complete_failed', reason: error.message }, 500);
+  if (!data) return c.json({ error: 'not_posted' }, 409);
+  return c.json({ purchaseConsignmentReturn: data });
+});
+
+/* ── PATCH /:id/cancel — cancel a PC Return ─────────────────────────────────
+   OFF-LEDGER: cancelling a PC Return sets status='CANCELLED' and releases the
+   PC-receive-line consumption (recount returned_qty from live, which re-opens
+   the PC Order received_qty). There is NO inventory reversal — the return never
+   wrote an inventory_movement. A COMPLETED return cannot be cancelled. */
+purchaseConsignmentReturns.patch('/:id/cancel', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id');
+
+  const { data: cur, error: readErr } = await sb.from('purchase_consignment_returns')
+    .select('id, status, return_number, pc_receive_id')
+    .eq('id', id).maybeSingle();
+  if (readErr) return c.json({ error: 'load_failed', reason: readErr.message }, 500);
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  const head = cur as { id: string; status: string; return_number: string; pc_receive_id: string | null };
+  if (head.status === 'COMPLETED') return c.json({ error: 'cannot_cancel', message: 'Already completed' }, 409);
+  if (head.status === 'CANCELLED') return c.json({ purchaseConsignmentReturn: { id, status: 'CANCELLED' } });
+
+  /* ATOMIC single ACTIVE→CANCELLED transition — two concurrent cancels race and
+     only ONE flips it (the other gets no row back → idempotent no-op), so the
+     returned_qty release below runs exactly once. */
+  const { data: updRow, error: updErr } = await sb.from('purchase_consignment_returns').update({
+    status: 'CANCELLED', updated_at: new Date().toISOString(),
+  }).eq('id', id).neq('status', 'CANCELLED').neq('status', 'COMPLETED').select('id').maybeSingle();
+  if (updErr) return c.json({ error: 'cancel_failed', reason: updErr.message }, 500);
+  if (!updRow) {
+    const { data: now } = await sb.from('purchase_consignment_returns').select('id, status').eq('id', id).maybeSingle();
+    const st = (now as { status: string } | null)?.status;
+    if (st === 'CANCELLED') return c.json({ purchaseConsignmentReturn: { id, status: 'CANCELLED' } });
+    if (st === 'COMPLETED') return c.json({ error: 'cannot_cancel', message: 'Already completed' }, 409);
+    return c.json({ error: 'cannot_cancel' }, 409);
+  }
+
+  // Release the PC-receive-line consumption: recount returned_qty for every
+  // receive-linked line (the PR is now CANCELLED, so the recount excludes it).
+  // NO inventory reversal (off-ledger). Best-effort.
+  try {
+    const { data: relLines } = await sb.from('purchase_consignment_return_items')
+      .select('qty_returned, pc_receive_item_id').eq('purchase_consignment_return_id', id);
+    for (const l of (relLines ?? []) as Array<{ qty_returned: number; pc_receive_item_id: string | null }>) {
+      if (l.pc_receive_item_id) await adjustPcReceiveReturnedQty(sb, l.pc_receive_item_id, -(l.qty_returned ?? 0));
+    }
+  } catch { /* best-effort */ }
+
+  return c.json({ purchaseConsignmentReturn: { id, status: 'CANCELLED' } });
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+   PC Return CRUD (PATCH header + line add / edit / delete) — mirrors the PR
+   detail page editing. The editable line quantity is qty_returned;
+   line_refund_centi = qty_returned * unit_price_centi (no discount);
+   recomputePcReturnTotals rolls the header refund_centi. OFF-LEDGER: line CRUD
+   writes NO inventory — it only recounts returned_qty onto the PC Receive.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── PATCH /:id — header update ── */
+purchaseConsignmentReturns.patch('/:id', async (c) => {
+  const id = c.req.param('id');
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  for (const [from, to] of [
+    ['supplierId', 'supplier_id'], ['returnDate', 'return_date'],
+    ['reason', 'reason'], ['creditNoteRef', 'credit_note_ref'],
+    ['notes', 'notes'],
+  ] as const) {
+    if (body[from] !== undefined) updates[to] = body[from];
+  }
+  const sb = c.get('supabase');
+  const { data, error } = await sb.from('purchase_consignment_returns').update(updates).eq('id', id).select(HEADER).single();
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  return c.json({ purchaseConsignmentReturn: data });
+});
+
+/* A CANCELLED / COMPLETED return is terminal — lock line edits to ACTIVE
+   returns. (Off-ledger, but a reversed/completed PR's returned_qty has already
+   been released/settled — editing it would re-corrupt the recount gates.) */
+async function pcReturnLineLock(sb: any, prId: string): Promise<{ error: string; message: string } | null> {
+  const { data } = await sb.from('purchase_consignment_returns').select('status').eq('id', prId).maybeSingle();
+  const st = (data as { status: string } | null)?.status;
+  if (st === 'CANCELLED') return { error: 'pc_return_cancelled', message: 'This consignment return is cancelled — its lines can no longer be changed.' };
+  if (st === 'COMPLETED') return { error: 'pc_return_completed', message: 'This consignment return is completed — its lines can no longer be changed.' };
+  return null;
+}
+
+/* ── POST /:id/items — add one return_item. qty → qty_returned. ── */
+purchaseConsignmentReturns.post('/:id/items', async (c) => {
+  const prId = c.req.param('id');
+  let it: Record<string, unknown>;
+  try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (!it.materialCode) return c.json({ error: 'material_code_required' }, 400);
+  if (!it.materialName) return c.json({ error: 'material_name_required' }, 400);
+
+  const sb = c.get('supabase');
+  { const lock = await pcReturnLineLock(sb, prId); if (lock) return c.json(lock, 409); }
+  const qtyReturned = Number(it.qty ?? 1);
+  const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
+  const lineRefund = qtyReturned * unitPriceCenti;
+
+  // PC-receive-linked line: cap qty at that receive line's remaining.
+  const receiveItemId = (it.pcReceiveItemId as string) ?? null;
+  if (receiveItemId) {
+    const { data: gi } = await sb.from('purchase_consignment_receive_items')
+      .select('qty_accepted, returned_qty').eq('id', receiveItemId).maybeSingle();
+    if (gi) {
+      const remaining = ((gi as { qty_accepted: number }).qty_accepted ?? 0) - ((gi as { returned_qty: number }).returned_qty ?? 0);
+      if (qtyReturned > remaining) return c.json({ error: 'qty_exceeds_remaining', requested: qtyReturned, remaining }, 409);
+    }
+  }
+
+  const row: Record<string, unknown> = {
+    purchase_consignment_return_id: prId,
+    pc_receive_item_id: receiveItemId,
+    material_kind: (it.materialKind as string) ?? 'mfg_product',
+    material_code: it.materialCode,
+    material_name: it.materialName,
+    qty_returned: qtyReturned,
+    unit_price_centi: unitPriceCenti,
+    line_refund_centi: lineRefund,
+    reason: (it.reason as string) ?? null,
+    notes: (it.notes as string) ?? null,
+    gap_inches: (it.gapInches as number) ?? null,
+    divan_height_inches: (it.divanHeightInches as number) ?? null,
+    divan_price_sen: Number(it.divanPriceSen ?? 0),
+    leg_height_inches: (it.legHeightInches as number) ?? null,
+    leg_price_sen: Number(it.legPriceSen ?? 0),
+    custom_specials: (it.customSpecials as unknown) ?? null,
+    line_suffix: (it.lineSuffix as string) ?? null,
+    special_order_price_sen: Number(it.specialOrderPriceSen ?? 0),
+    variants: (it.variants as unknown) ?? null,
+    item_group: (it.itemGroup as string) ?? null,
+    description: (it.description as string) ?? null,
+    description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
+    uom: (it.uom as string) ?? 'UNIT',
+  };
+  const { data, error } = await sb.from('purchase_consignment_return_items').insert(row).select(ITEM).single();
+  if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+
+  /* POST-INSERT over-return verification — the pre-check is a read-then-write
+     race. After committing, re-read the receive line's accepted + the LIVE sum of
+     qty_returned across all non-cancelled PR lines for it; if returned now
+     exceeds accepted, OUR insert broke the cap → delete it + 409. */
+  if (receiveItemId) {
+    const inserted = data as unknown as { id: string } | null;
+    const { data: gi } = await sb.from('purchase_consignment_receive_items')
+      .select('qty_accepted').eq('id', receiveItemId).maybeSingle();
+    if (gi) {
+      const cap = (gi as { qty_accepted: number }).qty_accepted ?? 0;
+      const { data: sib } = await sb.from('purchase_consignment_return_items')
+        .select('qty_returned, purchase_consignment_return_id').eq('pc_receive_item_id', receiveItemId);
+      const sibRows = (sib ?? []) as Array<{ qty_returned: number; purchase_consignment_return_id: string }>;
+      const prIds = [...new Set(sibRows.map((r) => r.purchase_consignment_return_id))];
+      const cancelled = new Set<string>();
+      if (prIds.length > 0) {
+        const { data: prs } = await sb.from('purchase_consignment_returns').select('id, status').in('id', prIds);
+        for (const p of (prs ?? []) as Array<{ id: string; status: string }>) {
+          if (p.status === 'CANCELLED') cancelled.add(p.id);
+        }
+      }
+      const liveReturned = sibRows
+        .filter((r) => !cancelled.has(r.purchase_consignment_return_id))
+        .reduce((s, r) => s + Number(r.qty_returned ?? 0), 0);
+      if (liveReturned > cap && inserted?.id) {
+        await sb.from('purchase_consignment_return_items').delete().eq('id', inserted.id);
+        return c.json({ error: 'qty_exceeds_remaining', requested: qtyReturned, remaining: cap - (liveReturned - qtyReturned) }, 409);
+      }
+    }
+  }
+
+  // Consume the receive line if this PR line is receive-linked (recount-from-live,
+  // off-ledger). Manual lines consume nothing.
+  if (receiveItemId) await adjustPcReceiveReturnedQty(sb, receiveItemId, qtyReturned);
+  await recomputePcReturnTotals(sb, prId);
+
+  return c.json({ item: data }, 201);
+});
+
+/* ── PATCH /:id/items/:itemId — partial line update. qty → qty_returned. ── */
+purchaseConsignmentReturns.patch('/:id/items/:itemId', async (c) => {
+  const prId = c.req.param('id'); const itemId = c.req.param('itemId');
+  let it: Record<string, unknown>;
+  try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const sb = c.get('supabase');
+  { const lock = await pcReturnLineLock(sb, prId); if (lock) return c.json(lock, 409); }
+
+  const { data: prev } = await sb.from('purchase_consignment_return_items')
+    .select('qty_returned, unit_price_centi, item_group, variants, pc_receive_item_id, material_code, material_name')
+    .eq('id', itemId).maybeSingle();
+  if (!prev) return c.json({ error: 'not_found' }, 404);
+
+  const prevQty = (prev as { qty_returned: number }).qty_returned;
+  const receiveItemId = (prev as { pc_receive_item_id: string | null }).pc_receive_item_id ?? null;
+  const qtyReturned = it.qty !== undefined ? Number(it.qty) : prevQty;
+  const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : (prev as { unit_price_centi: number }).unit_price_centi;
+  const lineRefund = qtyReturned * unit;
+
+  const updates: Record<string, unknown> = {
+    qty_returned: qtyReturned,
+    unit_price_centi: unit,
+    line_refund_centi: lineRefund,
+  };
+  for (const [from, to] of [
+    ['materialCode', 'material_code'], ['materialName', 'material_name'],
+    ['itemGroup', 'item_group'], ['description', 'description'], ['uom', 'uom'],
+    ['reason', 'reason'], ['notes', 'notes'],
+    ['gapInches', 'gap_inches'], ['divanHeightInches', 'divan_height_inches'],
+    ['divanPriceSen', 'divan_price_sen'], ['legHeightInches', 'leg_height_inches'],
+    ['legPriceSen', 'leg_price_sen'], ['customSpecials', 'custom_specials'],
+    ['lineSuffix', 'line_suffix'], ['specialOrderPriceSen', 'special_order_price_sen'],
+    ['variants', 'variants'],
+  ] as const) {
+    if (it[from] !== undefined) updates[to] = it[from];
+  }
+  /* description2 is server-owned: recompute from effective itemGroup + variants. */
+  {
+    const effGroup = (it.itemGroup ?? (prev as { item_group?: string }).item_group) as string | null | undefined;
+    const effVariants = (it.variants ?? (prev as { variants?: unknown }).variants) as Record<string, unknown> | null | undefined;
+    updates['description2'] = buildVariantSummary(String(effGroup ?? ''), effVariants ?? null) || null;
+  }
+
+  // Receive-linked + qty changed: pre-check the delta won't push the receive line
+  // over its accepted. headroom for THIS line = accepted - (returned - prevQty).
+  const delta = qtyReturned - prevQty;
+  if (receiveItemId && delta !== 0) {
+    const { data: gi } = await sb.from('purchase_consignment_receive_items')
+      .select('qty_accepted, returned_qty').eq('id', receiveItemId).maybeSingle();
+    if (gi) {
+      const accepted = (gi as { qty_accepted: number }).qty_accepted ?? 0;
+      const returned = (gi as { returned_qty: number }).returned_qty ?? 0;
+      const headroom = accepted - (returned - prevQty);
+      if (qtyReturned > headroom) return c.json({ error: 'qty_exceeds_remaining', requested: qtyReturned, remaining: headroom }, 409);
+    }
+  }
+
+  const { error } = await sb.from('purchase_consignment_return_items').update(updates).eq('id', itemId);
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  // Apply the consumption delta to the source receive line (recount-from-live,
+  // off-ledger; helper clamps to [0, qty_accepted]).
+  if (receiveItemId && delta !== 0) await adjustPcReceiveReturnedQty(sb, receiveItemId, delta);
+  await recomputePcReturnTotals(sb, prId);
+
+  return c.json({ ok: true });
+});
+
+/* ── DELETE /:id/items/:itemId — remove a line + recompute header. ── */
+purchaseConsignmentReturns.delete('/:id/items/:itemId', async (c) => {
+  const prId = c.req.param('id'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase');
+  { const lock = await pcReturnLineLock(sb, prId); if (lock) return c.json(lock, 409); }
+  // Read the line first so we can release its receive-line consumption on delete.
+  const { data: line } = await sb.from('purchase_consignment_return_items')
+    .select('qty_returned, pc_receive_item_id').eq('id', itemId).maybeSingle();
+  const { error } = await sb.from('purchase_consignment_return_items').delete().eq('id', itemId);
+  if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  if (line) {
+    const l = line as { qty_returned: number; pc_receive_item_id: string | null };
+    // Release: recount returned_qty from live (the deleted line is gone), which
+    // nets the receive line + PC Order back up. NO inventory reversal (off-ledger).
+    if (l.pc_receive_item_id) await adjustPcReceiveReturnedQty(sb, l.pc_receive_item_id, -(l.qty_returned ?? 0));
+  }
+  await recomputePcReturnTotals(sb, prId);
+  return c.body(null, 204);
+});

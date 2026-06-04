@@ -27,6 +27,7 @@ import {
   ChevronDown,
   ListTree,
   Activity,
+  Handshake,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import styles from './Sidebar.module.css';
@@ -125,6 +126,20 @@ export const Sidebar = () => {
         { to: '/mfg-delivery-orders', icon: <PackagePlus {...ICON_PROPS} />, label: 'Delivery Orders' },
         { to: '/sales-invoices', icon: <FileText {...ICON_PROPS} />, label: 'Sales Invoices' },
         { to: '/delivery-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Delivery Returns' },
+      ],
+    },
+    {
+      // New top-level CONSIGNMENT group. Order / Note / Return; Purchase
+      // Consignment lands here later.
+      id: 'consignment',
+      label: 'Consignment',
+      items: [
+        { to: '/consignment', icon: <Handshake {...ICON_PROPS} />, label: 'Consignment Order' },
+        { to: '/consignment-note', icon: <Truck {...ICON_PROPS} />, label: 'Consignment Note' },
+        { to: '/consignment-return', icon: <Undo2 {...ICON_PROPS} />, label: 'Consignment Return' },
+        { to: '/purchase-consignment', icon: <ClipboardList {...ICON_PROPS} />, label: 'Purchase Consignment Order' },
+        { to: '/purchase-consignment-receive', icon: <PackageCheck {...ICON_PROPS} />, label: 'Purchase Consignment Receive' },
+        { to: '/purchase-consignment-return', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Consignment Return' },
       ],
     },
     {
