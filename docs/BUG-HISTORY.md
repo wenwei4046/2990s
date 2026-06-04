@@ -4,6 +4,22 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-04-001 — Reversal paths lose batch_no + unit_cost_sen (cost/valuation drift)
+
+Full supply-chain × inventory audit (3-agent code sweep). Branch `fix/inventory-reversal-integrity`. Each finding re-verified at file:line before fixing (the DO-cancel finding was DISMISSED on verification — see below).
+
+1. **Purchase Return cancel re-entered stock at cost 0 + dropped the dye-lot batch** — `purchase-returns.ts` `/:id/cancel` hand-rolled a reversing `IN` per line with no `batch_no` and no `unit_cost_sen`. Cancelling a sofa PR re-created an un-batched, **zero-cost** lot → inventory value understated + dye-lot identity lost. **Fix:** replaced the bespoke reversal with the shared `reverseMovements(sb, 'PURCHASE_RETURN', id, …)`, which reads the PR's own OUT movements and posts an opposite IN carrying the exact `batch_no` + `unit_cost_sen` (idempotent, per-line-warehouse aware).
+2. **PR line-edit/delete delta movement was un-batched + zero-cost** — `writePrLineDeltaMovement` (the known-remaining note from BUG-2026-06-03-007 #3). The reduce/delete reversing IN dropped `batch_no` + cost. **Fix:** it now reads the PR's original OUT movement for the bucket and carries `batch_no` (both directions) + `unit_cost_sen` (on the IN).
+3. **GRN line-delete reversal dropped batch_no** — `DELETE /grns/:id/items/:itemId` reversing OUT omitted `batch_no` (whole-cancel carries it), so deleting a posted sofa line consumed plain-FIFO across the variant instead of that PO's dye-lot. **Fix:** reads the GRN's original IN movement for the bucket and carries `batch_no` onto the reversing OUT.
+4. **(Verify-before-fix DISMISSAL) DO/DR cancel "restores qty but not lots"** — audit flagged the ADJUSTMENT-based reversal as value-lossy. On re-reading `reverseInventoryForDo` + migration 0126, this is **already correct**: the reversal carries `unit_cost_sen` (weighted-avg COGS) + `batch_no`, and 0126's ADJUSTMENT-positive branch re-creates the lot at that cost. No change made.
+5. **No ledger reconciliation for best-effort writes** — added read-only `GET /inventory/reconcile`: flags non-cancelled GRN/DO/PR/DR that should have moved stock but have ZERO movement rows (the silent best-effort-failure case).
+
+**Deferred:** DB UNIQUE idempotency guards on GRN/PR movements (like `uq_inv_mov_do_source`) — adding them conflicts with the now-`reverseMovements`-based PR cancel (same-key collision) and risks failing on existing prod data; deferred as a dedicated, data-checked follow-up. Forward paths remain procedurally idempotent.
+
+**Caught by:** Full supply-chain × inventory audit (2026-06-04).
+
+---
+
 ## BUG-2026-06-03-007 — Audit "IMPORTANT" batch (9 fixes)
 
 Full-system audit follow-ups (branch `fix/audit-important`). Each verified at file:line, typechecked.
