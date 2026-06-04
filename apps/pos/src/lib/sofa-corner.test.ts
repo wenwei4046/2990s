@@ -85,9 +85,9 @@ describe('cornerCompositeFromCells', () => {
     // 90° (arms N+E). Old code required two.rot === cnr.rot and broke the
     // composite back into per-module pieces. CNR@28" is 105×95 → rot90 95×105.
     const r = cornerCompositeFromCells([
-      { id: 'two', moduleId: '2A-LHF', x: 0, y: 0, rot: 0 },
+      { id: 'two', moduleId: '2A(LHF)', x: 0, y: 0, rot: 0 },
       { id: 'cnr', moduleId: 'CNR', x: 178, y: 0, rot: 90 },
-      { id: 'one', moduleId: '1B-RHF', x: 178, y: 105, rot: 90 },
+      { id: 'one', moduleId: '1B(RHF)', x: 178, y: 105, rot: 90 },
     ], D);
     expect(r).not.toBeNull();
     expect(r!.rot).toBe(0);                      // frame = the long arm's rot
@@ -99,8 +99,8 @@ describe('cornerCompositeFromCells', () => {
   it('rotated CNR joins on the chaise-left layout too', () => {
     const r = cornerCompositeFromCells([
       { id: 'cnr', moduleId: 'CNR', x: 0, y: 0, rot: 270 },  // arms point W+S… art-only
-      { id: 'two', moduleId: '2A-RHF', x: 95, y: 0, rot: 0 }, // CNR rot270 @28" is 95 wide
-      { id: 'one', moduleId: '1B-LHF', x: 0, y: 105, rot: 270 },
+      { id: 'two', moduleId: '2A(RHF)', x: 95, y: 0, rot: 0 }, // CNR rot270 @28" is 95 wide
+      { id: 'one', moduleId: '1B(LHF)', x: 0, y: 105, rot: 270 },
     ], D);
     expect(r).not.toBeNull();
     expect(r!.geo.orientation).toBe('left');
