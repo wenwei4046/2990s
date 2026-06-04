@@ -116,14 +116,19 @@
 }
 .searchInput:focus { border-color: var(--line-strong); background: var(--c-cream); }
 
+/* Section label — burnt left-accent title to match the system-wide
+   section hierarchy (SUPPLIER INFO / LINE ITEMS etc). Wei Siang 2026-06-04. */
 .eyebrow {
   font-family: var(--font-button);
-  font-size: var(--fs-11);
-  font-weight: 600;
-  letter-spacing: 0.18em;
+  font-size: var(--fs-13);
+  font-weight: 800;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--fg-muted);
+  color: var(--c-burnt);
   margin: 0;
+  padding-left: var(--space-2);
+  border-left: 3px solid var(--c-burnt);
+  line-height: 1.25;
 }
 
 .statGrid {
@@ -167,9 +172,10 @@
 .tableCard {
   background: var(--c-paper);
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-2);
+  border-radius: var(--radius-sm, 6px);
+  box-shadow: none;
   overflow: hidden;
+  margin-top: var(--space-2);
 }
 
 .table {

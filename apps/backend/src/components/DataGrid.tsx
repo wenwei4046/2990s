@@ -690,6 +690,23 @@ function DataGridInner<T>({
             />
           </div>
         )}
+        {/* Clear-all-filters — appears only when ≥1 column filter is active.
+            Per-column funnels already highlight orange; this is the one-click
+            reset for the whole grid. Wei Siang 2026-06-04. */}
+        {Object.values(filters).some((v) => v.length > 0) && (
+          <button
+            type="button"
+            className={styles.toolbarPill}
+            onClick={() => setFilters({})}
+            title="Clear all column filters"
+          >
+            <Filter size={14} strokeWidth={1.75} aria-hidden style={{ color: 'var(--c-orange)' }} />
+            <span>Clear filters</span>
+            <span className={styles.toolbarPillBadge}>
+              {Object.values(filters).filter((v) => v.length > 0).length}
+            </span>
+          </button>
+        )}
         <div className={styles.columnsAnchor}>
           <button
             ref={columnsBtnRef}
