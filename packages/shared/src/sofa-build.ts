@@ -205,9 +205,80 @@ export const SOFA_MODULES: readonly SofaModuleSpec[] = [
 
 const MODULE_BY_ID = new Map<string, SofaModuleSpec>(SOFA_MODULES.map((m) => [m.id, m]));
 
-export const findModule = (id: string): SofaModuleSpec | undefined => MODULE_BY_ID.get(id);
+/* ─── Structural fallback (Maintenance-is-master, Loo 2026-06-04) ───────
+ *
+ * A compartment code RENAMED on the Maintenance master pool cascades through
+ * every stored copy (rename_sofa_compartment, migration 0149) — but the
+ * canvas still needs to know the shape. As long as the rename keeps the
+ * STRUCTURE tokens — base family (1A/1B/2A/2B/1NA/2NA/1S/2S/3S/CNR/L/
+ * Console/STOOL), optional (LHF)/(RHF) orientation, optional (P)/(R)/(L)
+ * mechanism — `findModule` synthesizes a spec from the family's canonical
+ * geometry and `cellEdges` derives the arm sides the same way, so e.g.
+ * '1A(LHF)(28)' or a re-cased '1a(lhf)' keeps rendering, pricing and
+ * closing exactly like '1A(LHF)'. A base the structure parser doesn't know
+ * still returns undefined: a brand-new physical module needs real dims +
+ * art, which is dev work by design. */
 
-export const isAccessoryModule = (id: string): boolean => MODULE_BY_ID.get(id)?.accessory === true;
+export interface CompartmentStructure {
+  /** Upper-cased base family token, e.g. '1A', '2NA', 'CNR', 'CONSOLE'. */
+  base: string;
+  orientation: 'LHF' | 'RHF' | null;
+  mechanism: 'P' | 'R' | 'L' | null;
+}
+
+export const parseCompartmentStructure = (raw: string): CompartmentStructure | null => {
+  const code = raw.trim();
+  const m = code.match(/^([^()\s]+)\s*((?:\([^)]*\))*)$/);
+  if (!m) return null;
+  const base = (m[1] ?? '').toUpperCase();
+  if (!base) return null;
+  const tokens = Array.from((m[2] ?? '').matchAll(/\(([^)]*)\)/g)).map((t) => (t[1] ?? '').toUpperCase());
+  const orientation = tokens.find((t): t is 'LHF' | 'RHF' => t === 'LHF' || t === 'RHF') ?? null;
+  const mechanism = tokens.find((t): t is 'P' | 'R' | 'L' => t === 'P' || t === 'R' || t === 'L') ?? null;
+  return { base, orientation, mechanism };
+};
+
+/** Canonical representative id per structure — geometry + edges come from
+ *  this id's SOFA_MODULES / MODULE_EDGES_BASE entry. */
+const familyRepresentative = (s: CompartmentStructure): string | undefined => {
+  const o = s.orientation ?? 'LHF';
+  switch (s.base) {
+    case '1A': return `1A(${o})`;
+    case '1B': return `1B(${o})`;
+    case '2A': return `2A(${o})`;
+    case '2B': return `2B(${o})`;
+    case 'L':  return `L(${o})`;
+    case '1NA': return '1NA';
+    case '2NA': return '2NA';
+    case '1S': return '1S';
+    case '2S': return '2S';
+    case '3S': return '3S';
+    case 'CNR': return 'CNR';
+    case 'CONSOLE': return 'Console';
+    case 'STOOL': return 'STOOL';
+    default: return undefined;
+  }
+};
+
+const SYNTH_CACHE = new Map<string, SofaModuleSpec | undefined>();
+
+const synthesizeModule = (id: string): SofaModuleSpec | undefined => {
+  if (SYNTH_CACHE.has(id)) return SYNTH_CACHE.get(id);
+  let spec: SofaModuleSpec | undefined;
+  const s = parseCompartmentStructure(id);
+  const rep = s ? familyRepresentative(s) : undefined;
+  const repSpec = rep ? MODULE_BY_ID.get(rep) : undefined;
+  if (repSpec && rep !== id) {
+    spec = { ...repSpec, id, label: id };
+  }
+  SYNTH_CACHE.set(id, spec);
+  return spec;
+};
+
+export const findModule = (id: string): SofaModuleSpec | undefined =>
+  MODULE_BY_ID.get(id) ?? synthesizeModule(id);
+
+export const isAccessoryModule = (id: string): boolean => findModule(id)?.accessory === true;
 
 /* ─── Compartment code canonicalizer (unified 2026-06-04) ──────────────
  *
@@ -431,11 +502,20 @@ export const sofaComboCostSen = (
 
 /* ─── Recliner eligibility ─────────────────────────────────────────── */
 
-const RECLINER_RE = /^(1[AB]\([LR]HF\)|1NA|2[AB]\([LR]HF\)|2NA)$/;
-export const reclinerEligible = (modId: string): boolean => RECLINER_RE.test(modId);
+// Structure-based (Maintenance-is-master): a plain armed/armless seat is
+// recliner-upgradeable; whole-unit presets (1S/2S/3S), accessories, L-shape
+// and seats that ALREADY carry a (P)/(R)/(L) mechanism are not. Survives a
+// Maintenance rename that keeps the family + orientation tokens.
+const RECLINER_FAMILIES = new Set(['1A', '1B', '2A', '2B', '1NA', '2NA']);
+export const reclinerEligible = (modId: string): boolean => {
+  const s = parseCompartmentStructure(modId);
+  if (!s || s.mechanism) return false;
+  return RECLINER_FAMILIES.has(s.base);
+};
 export const seatCount = (modId: string): number => {
   if (!reclinerEligible(modId)) return 0;
-  return modId.startsWith('2') ? 2 : 1;
+  const s = parseCompartmentStructure(modId);
+  return s?.base.startsWith('2') ? 2 : 1;
 };
 
 /* ─── Bundle catalogue + auto-detect ───────────────────────────────── */
@@ -732,7 +812,14 @@ const rotateEdges = (edges: EdgeType[], rot: Rot): EdgeType[] => {
 };
 
 export const cellEdges = (cell: Cell): EdgeType[] => {
-  const base = MODULE_EDGES_BASE[cell.moduleId];
+  // Structural fallback: a Maintenance-renamed code that kept its family +
+  // orientation tokens derives its arm sides from the family representative.
+  let base = MODULE_EDGES_BASE[cell.moduleId];
+  if (!base) {
+    const s = parseCompartmentStructure(cell.moduleId);
+    const rep = s ? familyRepresentative(s) : undefined;
+    base = rep ? MODULE_EDGES_BASE[rep] : undefined;
+  }
   if (!base) return ['open', 'open', 'open', 'open'];
   return rotateEdges(base, cell.rot);
 };

@@ -198,6 +198,42 @@ maintenanceConfig.post('/changes', async (c) => {
   );
 });
 
+// ── POST /sofa-compartments/rename ─────────────────────────────────────
+// Maintenance-is-master cascade rename (Loo 2026-06-04: "what maintenance
+// change all will follow"). body: { from, to }. Delegates to the
+// rename_sofa_compartment() SECURITY DEFINER function (migration 0149),
+// which atomically renames the compartment code text across the SKU
+// master, every doc-line snapshot, Modular allowed-options, combos, quick
+// picks, in-flight carts and the maintenance config blobs themselves.
+// Admin-gated inside the function (is_admin()); 403 surfaces here.
+maintenanceConfig.post('/sofa-compartments/rename', async (c) => {
+  let body: { from?: string; to?: string };
+  try {
+    body = (await c.req.json()) as typeof body;
+  } catch {
+    return c.json({ error: 'invalid_json' }, 400);
+  }
+  const from = (body.from ?? '').trim();
+  const to = (body.to ?? '').trim();
+  if (!from || !to) return c.json({ error: 'from_and_to_required' }, 400);
+  if (from === to) return c.json({ error: 'same_code' }, 400);
+
+  const supabase = c.get('supabase');
+  const { data, error } = await supabase.rpc('rename_sofa_compartment', {
+    p_from: from,
+    p_to: to,
+  });
+  if (error) {
+    if (error.code === '42501' || /forbidden|permission denied/i.test(error.message)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    if (/code_exists/.test(error.message)) return c.json({ error: 'code_exists' }, 400);
+    if (/same_code|empty_code/.test(error.message)) return c.json({ error: 'invalid_code' }, 400);
+    return c.json({ error: 'rename_failed', reason: error.message }, 500);
+  }
+  return c.json({ ok: true, result: data });
+});
+
 // ── DELETE /changes/:id ────────────────────────────────────────────────
 // Remove a row (typically cancelling a pending future change). Note that
 // the table is "effectively" append-only in spirit, but we allow physical

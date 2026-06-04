@@ -460,6 +460,33 @@ export function useMaintenanceConfigHistory(scope = 'master') {
   });
 }
 
+/**
+ * Maintenance-is-master cascade rename (Loo 2026-06-04). Renames a sofa
+ * compartment code text ATOMICALLY across the whole stack: SKU master
+ * (code+name), every doc-line snapshot (SO/DO/SI/GRN/PO/PI/PR/consignment),
+ * Modular allowed_options, combos, quick picks, in-flight carts and the
+ * maintenance config blobs. Backed by the rename_sofa_compartment()
+ * SECURITY DEFINER function (migration 0149); admin only.
+ */
+export function useRenameSofaCompartment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: { from: string; to: string }) => {
+      return authedFetch<{ ok: boolean; result: unknown }>(
+        `/maintenance-config/sofa-compartments/rename`,
+        { method: 'POST', body: JSON.stringify(args) },
+      );
+    },
+    onSuccess: () => {
+      // The cascade touches SKUs, models, combos and the config itself.
+      qc.invalidateQueries({ queryKey: ['maintenance-config'] });
+      qc.invalidateQueries({ queryKey: ['mfg-products'] });
+      qc.invalidateQueries({ queryKey: ['product-models'] });
+      qc.invalidateQueries({ queryKey: ['sofa-combos'] });
+    },
+  });
+}
+
 export function useSaveMaintenanceConfig() {
   const qc = useQueryClient();
   return useMutation({
