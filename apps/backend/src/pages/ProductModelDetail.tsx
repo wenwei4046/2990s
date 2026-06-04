@@ -89,7 +89,7 @@ export const ProductModelDetail = ({
   const statusMut = useUpdateMfgProductStatus();
   const maintenance = useMaintenanceConfig('master');
   // Fabric library — pool of active fabric slugs displayed in the FABRICS
-  // option group for SOFA Models. TanStack Query dedupes with PricingEditor.
+  // option group for SOFA Models.
   const fabricLibQ = useFabricLibrary();
 
   const [branding, setBranding] = useState('');
