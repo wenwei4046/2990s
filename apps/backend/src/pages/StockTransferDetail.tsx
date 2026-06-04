@@ -13,6 +13,7 @@ import {
   ArrowLeft, ArrowRight, X, Ban,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   useWarehouses,
 } from '../lib/inventory-queries';
@@ -206,17 +207,36 @@ export const StockTransferDetail = () => {
               <tr>
                 <th style={{ width: '20%' }}>SKU</th>
                 <th>Description</th>
+                <th>Description 2</th>
                 <th style={{ width: 110, textAlign: 'right' }}>Qty</th>
               </tr>
             </thead>
             <tbody>
               {lines.length === 0 && (
-                <tr><td colSpan={3} className={styles.emptyRow}>No lines.</td></tr>
+                <tr><td colSpan={4} className={styles.emptyRow}>No lines.</td></tr>
               )}
               {lines.map((ln) => (
                 <tr key={ln._key}>
                   <td><span className={styles.codeCell}>{ln.productCode}</span></td>
                   <td>{ln.productName || <span className={styles.muted}>—</span>}</td>
+                  {/* "Description 2": variant/spec summary in its own column.
+                      Prefers a stored description2, falls back to the computed
+                      variant summary, then a muted em-dash when both are empty. */}
+                  <td>
+                    {(() => {
+                      const row = ln as unknown as {
+                        description2?: string | null;
+                        item_group?: string | null;
+                        variants?: Record<string, unknown> | null;
+                      };
+                      const desc2 = (row.description2 && row.description2.trim())
+                        ? row.description2
+                        : buildVariantSummary(row.item_group, row.variants);
+                      return desc2
+                        ? <span>{desc2}</span>
+                        : <span className={styles.muted}>—</span>;
+                    })()}
+                  </td>
                   <td className={styles.tableRight} style={{ fontFamily: 'var(--font-mono)' }}>
                     {ln.qty.toLocaleString('en-MY')}
                   </td>

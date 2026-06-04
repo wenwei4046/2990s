@@ -1060,6 +1060,7 @@ export const SalesOrderDetail = () => {
                   internal kind isn't useful in the table view. */}
               <tr>
                 <th>Item</th>
+                <th>Description 2</th>
                 <th className={styles.tableRight}>Qty</th>
                 <th>Transfer To</th>
                 <th className={styles.tableRight}>Unit</th>
@@ -1094,13 +1095,19 @@ export const SalesOrderDetail = () => {
                   <td>
                     <div className={styles.codeCell}>{it.item_code}</div>
                     {it.description && <div className={styles.muted}>{it.description}</div>}
-                    {/* Commander 2026-05-28 — "Description 2": the HOOKKA-style
-                        one-line variant summary beneath the description. This
-                        REPLACES the old per-variant pills (which duplicated the
-                        same info). */}
+                  </td>
+                  {/* Commander 2026-05-28 — "Description 2": the HOOKKA-style
+                      one-line variant/spec summary in its own column. Prefers the
+                      stored description2, falling back to the computed variant
+                      summary, then a muted em-dash when both are empty. */}
+                  <td>
                     {(() => {
-                      const summary = buildVariantSummary(it.item_group, it.variants);
-                      return summary ? <div className={styles.muted}>{summary}</div> : null;
+                      const desc2 = (it.description2 && it.description2.trim())
+                        ? it.description2
+                        : buildVariantSummary(it.item_group, it.variants);
+                      return desc2
+                        ? <span>{desc2}</span>
+                        : <span className={styles.muted}>—</span>;
                     })()}
                   </td>
                   <td className={styles.tableRight}>{it.qty}</td>

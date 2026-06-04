@@ -19,7 +19,7 @@ import {
   useGrnDetail,
 } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
-import { fmtDateOrDash } from '@2990s/shared';
+import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -125,6 +125,8 @@ type GrnItem = Record<string, unknown> & {
   material_code?: string | null;
   material_name?: string | null;
   description?: string | null;
+  item_group?: string | null;
+  variants?: Record<string, unknown> | null;
   qty?: number | null;
   qty_received?: number | null;
   unit_price_centi?: number | null;
@@ -153,6 +155,14 @@ const buildGrnDrilldownColumns = (currency: string): DataGridColumn<GrnItem>[] =
     key: 'description', label: 'Description', width: 260, minWidth: 180,
     accessor: (it) => (it.description ?? '').trim() || it.material_name || '—',
     searchValue: (it) => `${it.description ?? ''} ${it.material_name ?? ''}`.trim(),
+  },
+  {
+    key: 'description2', label: 'Description 2', width: 220, minWidth: 160,
+    accessor: (it) => {
+      const summary = buildVariantSummary(it.item_group, it.variants);
+      return summary ? <div>{summary}</div> : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+    },
+    searchValue: (it) => buildVariantSummary(it.item_group, it.variants),
   },
   {
     key: 'qty_received', label: 'Qty Received', width: 100, align: 'right',

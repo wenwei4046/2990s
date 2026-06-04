@@ -15,7 +15,7 @@ import {
   ArrowLeft, Save, X, Trash2, Send, Ban, AlertTriangle, Search, Wand2,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { fmtDateOrDash } from '@2990s/shared';
+import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   useStockTakeDetail,
   useUpdateStockTakeLines,
@@ -414,6 +414,7 @@ export const StockTakeDetail = () => {
               <tr>
                 <th style={{ width: '18%' }}>SKU</th>
                 <th>Name</th>
+                <th>Description 2</th>
                 <th style={{ width: 110, textAlign: 'right' }}>System Qty</th>
                 <th style={{ width: 130, textAlign: 'right' }}>Counted Qty</th>
                 <th style={{ width: 110, textAlign: 'right' }}>Variance</th>
@@ -422,7 +423,7 @@ export const StockTakeDetail = () => {
             </thead>
             <tbody>
               {filteredLines.length === 0 && (
-                <tr><td colSpan={isDraft ? 6 : 5} className={styles.emptyRow}>
+                <tr><td colSpan={isDraft ? 7 : 6} className={styles.emptyRow}>
                   {lines.length === 0 ? 'No lines on this stock take.' : 'No lines match the search.'}
                 </td></tr>
               )}
@@ -445,6 +446,24 @@ export const StockTakeDetail = () => {
                     </td>
                     <td style={{ fontSize: 'var(--fs-13)' }}>
                       {ln.productName || <span className={styles.muted}>—</span>}
+                    </td>
+                    {/* "Description 2": variant/spec summary in its own column.
+                        Prefers a stored description2, falls back to the computed
+                        variant summary, then a muted em-dash when both are empty. */}
+                    <td style={{ fontSize: 'var(--fs-13)' }}>
+                      {(() => {
+                        const row = ln as unknown as {
+                          description2?: string | null;
+                          item_group?: string | null;
+                          variants?: Record<string, unknown> | null;
+                        };
+                        const desc2 = (row.description2 && row.description2.trim())
+                          ? row.description2
+                          : buildVariantSummary(row.item_group, row.variants);
+                        return desc2
+                          ? <span>{desc2}</span>
+                          : <span className={styles.muted}>—</span>;
+                      })()}
                     </td>
                     <td className={styles.tableRight}
                         style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>

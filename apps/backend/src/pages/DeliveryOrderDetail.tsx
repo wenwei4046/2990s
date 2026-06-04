@@ -687,6 +687,7 @@ export const DeliveryOrderDetail = () => {
             <thead>
               <tr>
                 <th>Item</th>
+                <th>Description 2</th>
                 <th>Sales Location</th>
                 <th className={styles.tableRight}>Qty</th>
                 <th>Transfer To</th>
@@ -704,9 +705,18 @@ export const DeliveryOrderDetail = () => {
                   <td>
                     <div className={styles.codeCell}>{it.item_code}</div>
                     {it.description && <div className={styles.muted}>{it.description}</div>}
+                  </td>
+                  {/* "Description 2": variant/spec summary in its own column.
+                      Prefers the stored description2, falls back to the computed
+                      variant summary, then a muted em-dash when both are empty. */}
+                  <td>
                     {(() => {
-                      const summary = buildVariantSummary(it.item_group, it.variants);
-                      return summary ? <div className={styles.muted}>{summary}</div> : null;
+                      const desc2 = (it.description2 && it.description2.trim())
+                        ? it.description2
+                        : buildVariantSummary(it.item_group, it.variants);
+                      return desc2
+                        ? <span>{desc2}</span>
+                        : <span className={styles.muted}>—</span>;
                     })()}
                   </td>
                   <td><span className={styles.muted}>{it.warehouse_code ?? '—'}</span></td>

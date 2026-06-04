@@ -234,6 +234,7 @@ export const GrnDetail = () => {
           <table className={styles.table}>
             <thead><tr>
               <th>Item</th>
+              <th>Description 2</th>
               <th>Group</th>
               <th className={styles.tableRight}>Qty</th>
               <th className={styles.tableRight}>Unit</th>
@@ -241,16 +242,18 @@ export const GrnDetail = () => {
             </tr></thead>
             <tbody>
               {items.map((it) => {
-                const summary = buildVariantSummary(
+                const description = ((it.description as string | null) || it.material_name) ?? '';
+                const description2 = ((it.description2 as string | null)?.trim()) || buildVariantSummary(
                   (it.item_group as string | null) ?? null,
                   (it.variants as Record<string, unknown> | null) ?? null,
-                ) || it.material_name;
+                );
                 return (
                   <tr key={it.id as string}>
                     <td>
                       <div className={styles.codeCell}>{it.material_code}</div>
-                      {summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null}
+                      {description ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{description}</div> : null}
                     </td>
+                    <td className={styles.muted}>{description2 ? description2 : '—'}</td>
                     <td className={styles.muted}>{String(it.item_group ?? it.material_kind ?? '')}</td>
                     <td className={styles.tableRight}>{it.qty_received}</td>
                     <td className={styles.tableRight}>{fmtRm(it.unit_price_centi)}</td>
@@ -407,19 +410,27 @@ export const PurchaseInvoiceDetail = () => {
           <table className={styles.table}>
             <thead><tr>
               <th>Material</th>
+              <th>Description 2</th>
               <th className={styles.tableRight}>Qty</th>
               <th className={styles.tableRight}>Unit Price</th>
               <th className={styles.tableRight}>Line Total</th>
             </tr></thead>
             <tbody>
-              {items.map((it) => (
-                <tr key={it.id as string}>
-                  <td><div className={styles.codeCell}>{it.material_code}</div><div className={styles.muted}>{it.material_name}</div></td>
-                  <td className={styles.tableRight}>{it.qty}</td>
-                  <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, pi.currency)}</td>
-                  <td className={styles.priceCell}>{fmtRm(it.line_total_centi, pi.currency)}</td>
-                </tr>
-              ))}
+              {items.map((it) => {
+                const description2 = ((it.description2 as string | null)?.trim()) || buildVariantSummary(
+                  (it.item_group as string | null) ?? null,
+                  (it.variants as Record<string, unknown> | null) ?? null,
+                );
+                return (
+                  <tr key={it.id as string}>
+                    <td><div className={styles.codeCell}>{it.material_code}</div><div className={styles.muted}>{(it.description as string | null) || it.material_name}</div></td>
+                    <td className={styles.muted}>{description2 ? description2 : '—'}</td>
+                    <td className={styles.tableRight}>{it.qty}</td>
+                    <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, pi.currency)}</td>
+                    <td className={styles.priceCell}>{fmtRm(it.line_total_centi, pi.currency)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -582,19 +593,27 @@ export const SalesInvoiceDetail = () => {
           <table className={styles.table}>
             <thead><tr>
               <th>Item</th>
+              <th>Description 2</th>
               <th className={styles.tableRight}>Qty</th>
               <th className={styles.tableRight}>Unit Price</th>
               <th className={styles.tableRight}>Line Total</th>
             </tr></thead>
             <tbody>
-              {items.map((it) => (
-                <tr key={it.id as string}>
-                  <td><div className={styles.codeCell}>{it.item_code}</div><div className={styles.muted}>{it.description ?? '—'}</div></td>
-                  <td className={styles.tableRight}>{it.qty}</td>
-                  <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, si.currency)}</td>
-                  <td className={styles.priceCell}>{fmtRm(it.line_total_centi, si.currency)}</td>
-                </tr>
-              ))}
+              {items.map((it) => {
+                const description2 = ((it.description2 as string | null)?.trim()) || buildVariantSummary(
+                  (it.item_group as string | null) ?? null,
+                  (it.variants as Record<string, unknown> | null) ?? null,
+                );
+                return (
+                  <tr key={it.id as string}>
+                    <td><div className={styles.codeCell}>{it.item_code}</div><div className={styles.muted}>{it.description ?? '—'}</div></td>
+                    <td className={styles.muted}>{description2 ? description2 : '—'}</td>
+                    <td className={styles.tableRight}>{it.qty}</td>
+                    <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, si.currency)}</td>
+                    <td className={styles.priceCell}>{fmtRm(it.line_total_centi, si.currency)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -827,21 +846,29 @@ export const PurchaseReturnDetail = () => {
           <table className={styles.table}>
             <thead><tr>
               <th>Material</th>
+              <th>Description 2</th>
               <th className={styles.tableRight}>Qty</th>
               <th className={styles.tableRight}>Unit Price</th>
               <th className={styles.tableRight}>Refund</th>
               <th>Reason</th>
             </tr></thead>
             <tbody>
-              {items.map((it) => (
-                <tr key={it.id as string}>
-                  <td><div className={styles.codeCell}>{it.material_code}</div><div className={styles.muted}>{it.material_name}</div></td>
-                  <td className={styles.tableRight}>{it.qty_returned}</td>
-                  <td className={styles.tableRight}>{fmtRm(it.unit_price_centi)}</td>
-                  <td className={styles.priceCell}>{fmtRm(it.line_refund_centi)}</td>
-                  <td className={styles.muted}>{it.reason ?? '—'}</td>
-                </tr>
-              ))}
+              {items.map((it) => {
+                const description2 = ((it.description2 as string | null)?.trim()) || buildVariantSummary(
+                  (it.item_group as string | null) ?? null,
+                  (it.variants as Record<string, unknown> | null) ?? null,
+                );
+                return (
+                  <tr key={it.id as string}>
+                    <td><div className={styles.codeCell}>{it.material_code}</div><div className={styles.muted}>{(it.description as string | null) || it.material_name}</div></td>
+                    <td className={styles.muted}>{description2 ? description2 : '—'}</td>
+                    <td className={styles.tableRight}>{it.qty_returned}</td>
+                    <td className={styles.tableRight}>{fmtRm(it.unit_price_centi)}</td>
+                    <td className={styles.priceCell}>{fmtRm(it.line_refund_centi)}</td>
+                    <td className={styles.muted}>{it.reason ?? '—'}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
