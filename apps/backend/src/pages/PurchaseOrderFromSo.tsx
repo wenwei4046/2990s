@@ -234,8 +234,8 @@ export const PurchaseOrderFromSo = () => {
       if (turningOn && splitOff.length > 0) {
         const codes = [...new Set(splitOff.map((r) => `${r.itemCode} · ${r.mainSupplierName ?? r.mainSupplierCode}`))];
         setDialog({
-          title: 'Pillow 要另开一张 PO',
-          body: `这张 SO (${row.soDocNo}) 的这些 accessory 是别的 supplier，没办法跟 sofa 同一张 PO，请另外 convert 给它们的 supplier：\n` + codes.map((c) => `• ${c}`).join('\n'),
+          title: 'Accessories need their own PO',
+          body: `On SO ${row.soDocNo}, these accessories belong to a different supplier and can't share the sofa's PO. Convert them separately to their own supplier:\n` + codes.map((c) => `• ${c}`).join('\n'),
         });
       }
       return;

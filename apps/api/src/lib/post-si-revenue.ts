@@ -278,13 +278,20 @@ export async function resyncSiRevenue(sb: any, invoiceNumber: string): Promise<R
   const active = ((jeRows ?? []) as Array<{ id: string; total_debit_sen: number; reversed: boolean | null }>)
     .find((r) => !r.reversed);
 
-  // Current invoice total.
+  // Current invoice total + status.
   const { data: si } = await sb
     .from('sales_invoices')
-    .select('total_centi')
+    .select('total_centi, status')
     .eq('invoice_number', invoiceNumber)
     .maybeSingle();
   const newTotal = Number((si as { total_centi?: number } | null)?.total_centi ?? 0);
+
+  /* A CANCELLED invoice must never (re)post revenue. Its revenue JE was already
+     reversed on cancel; if a line is somehow mutated while cancelled, resync must
+     NOT resurrect revenue onto the GL. (Wei Siang 2026-06-03) */
+  if (((si as { status?: string } | null)?.status ?? '').toUpperCase() === 'CANCELLED') {
+    return { ok: true, status: 'not_posted' };
+  }
 
   if (!active) {
     // Never posted (or fully reversed). Post fresh only when there's value —

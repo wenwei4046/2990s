@@ -307,8 +307,8 @@ export const PurchaseOrderNew = () => {
     if (formSupplierCode && picksSupplierCode && picksSupplierCode !== formSupplierCode) {
       // Whole batch belongs to a different supplier — reject all, tell the user.
       setDialog({
-        title: '一张 PO 只能一个 supplier',
-        body: `这些 SO 行来自 ${picksSupplierCode}，但这张 PO 已经绑定 ${formSupplierCode}。请先清空这张 PO，或者另开一张新的 PO 来转换它们。`,
+        title: 'One supplier per PO',
+        body: `These Sales Order lines belong to supplier ${picksSupplierCode}, but this PO is already bound to ${formSupplierCode}. Clear this PO first, or start a new PO to convert them.`,
       });
       return;
     }
@@ -329,8 +329,8 @@ export const PurchaseOrderNew = () => {
 
     if (keep.length === 0) {
       setDialog({
-        title: '一张 PO 只能一个 supplier',
-        body: `没有匹配 ${formSupplierCode} 的行可以加入。其它 supplier 的行被略过了 — 请清空这张 PO 或另开一张。`,
+        title: 'One supplier per PO',
+        body: `No lines match supplier ${formSupplierCode}. Lines from other suppliers were skipped — clear this PO or start a new one.`,
       });
       return;
     }
@@ -372,8 +372,8 @@ export const PurchaseOrderNew = () => {
     // was skipped so the omission isn't silent.
     if (dropped > 0) {
       setDialog({
-        title: '部分行被略过',
-        body: `已加入 ${keep.length} 行（supplier ${formSupplierCode}）。另外 ${dropped} 行来自其它 supplier，被略过了 — 一张 PO 只能一个 supplier。`,
+        title: 'Some lines skipped',
+        body: `Added ${keep.length} line(s) for supplier ${formSupplierCode}. The other ${dropped} line(s) belong to different suppliers and were skipped — one supplier per PO.`,
       });
     }
   };
