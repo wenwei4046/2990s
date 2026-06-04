@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
-import { buildVariantSummary, fmtDateOrDash, fmtDateTime } from '@2990s/shared'; // Commander 2026-05-28
+import { buildVariantSummary, fmtDateOrDash, fmtDateTime, missingVariantAxes } from '@2990s/shared'; // Commander 2026-05-28
 import { PhoneInput } from '../components/PhoneInput';
 import {
   useMfgSalesOrderDetail,
@@ -119,12 +119,11 @@ const TOTALS_KPI_GRID_STYLE: CSSProperties = {
 const TOTALS_KPI_VALUE_STYLE: CSSProperties = { fontSize: 'var(--fs-15, 15px)' };
 const HISTORY_NOTE_STYLE: CSSProperties = { fontStyle: 'italic' };
 
-/* Fix 2 — Lifted out of the render-time IIFE so the object literal isn't
-   reallocated each render. Read-only category → required-variant-keys map. */
-const REQUIRED_BY_CATEGORY: Record<string, readonly string[]> = {
-  bedframe: ['divanHeight', 'legHeight', 'gap', 'fabricCode'],
-  sofa:     ['seatHeight',  'legHeight', 'fabricCode'],
-};
+/* 2026-06-04 — the required-variant rule lives in @2990s/shared
+   `so-variant-rule` (one source for the server 409 gate + every Backend
+   surface). Alias-aware: a POS-created sofa line satisfies the Seat / Leg
+   axes via depth / sofaLegHeight — the old hand-copied key list here flagged
+   those lines as incomplete. */
 const formatGroupRequirements = (g: string): string =>
   g === 'bedframe' ? 'Divan · Leg · Gap · Fabric' :
   g === 'sofa'     ? 'Seat · Leg · Fabric' : '';
@@ -326,23 +325,14 @@ export const SalesOrderDetail = () => {
   const header = (detail.data?.salesOrder as SoHeader | undefined) ?? null;
   const items = (detail.data?.items as SoItem[] | undefined) ?? [];
 
-  /* Fix 2 (micro-perf) — Variant-completeness check memoized. Was an inline
-     IIFE that re-ran (and re-allocated the REQUIRED_BY_CATEGORY object) on
-     every render. Now derives only when items or the processing-date toggle
-     changes. The REQUIRED_BY_CATEGORY map is hoisted to module scope. */
+  /* Fix 2 (micro-perf) — Variant-completeness check memoized; derives only
+     when items or the processing-date toggle changes. 2026-06-04: delegates
+     to the shared so-variant-rule (alias-aware, matches the server 409). */
   const requireVariants = !!header?.internal_expected_dd;
   const incompleteVariantLines = useMemo(() => {
     if (!requireVariants) return [];
     return items
-      .filter((it) => REQUIRED_BY_CATEGORY[(it.item_group ?? '').toLowerCase()])
-      .filter((it) => {
-        const keys = REQUIRED_BY_CATEGORY[(it.item_group ?? '').toLowerCase()] ?? [];
-        const v = (it.variants ?? {}) as Record<string, unknown>;
-        return keys.some((k) => {
-          const val = v[k];
-          return val === undefined || val === null || val === '';
-        });
-      })
+      .filter((it) => missingVariantAxes(it.item_group, it.variants as Record<string, unknown> | null).length > 0)
       .map((it) => ({ code: it.item_code, group: (it.item_group ?? '').toLowerCase() }));
   }, [items, requireVariants]);
 

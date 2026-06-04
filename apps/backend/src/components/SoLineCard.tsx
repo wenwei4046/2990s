@@ -31,6 +31,7 @@ import {
   type MfgPricingProduct,
   type MfgFabricTier,
 } from '@2990s/shared/mfg-pricing';
+import { missingVariantAxes } from '@2990s/shared/so-variant-rule';
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useFabricTrackings, type FabricTrackingRow } from '../lib/fabric-queries';
 import {
@@ -886,27 +887,18 @@ const VariantSelect = ({
    mandatory variants that are still empty. Only sofa / bedframe lines carry
    variants; everything else returns []. Callers (SO New + SO Detail Save)
    block the save when any line reports a non-empty list.
+
+   2026-06-04 — delegates to the shared so-variant-rule so the rule matches
+   the server 409 gate AND recognises the POS vocabulary: a POS-created sofa
+   line carries depth + sofaLegHeight for the same physical picks coordinators
+   key in as seatHeight + legHeight. The old hand-copied key list flagged
+   every POS sofa SO "missing Seat Height / Leg Height" and blocked Save.
    ────────────────────────────────────────────────────────────────────── */
 export function missingRequiredVariants(
   itemGroup: string | null | undefined,
   variants: Record<string, unknown> | null | undefined,
 ): string[] {
-  const g = (itemGroup ?? '').toLowerCase();
-  const v = variants ?? {};
-  // Commander 2026-05-28 — unify fabric/colour term → "Fabrics" in the
-  // user-facing "missing required" messages. Keys unchanged.
-  const need: Array<[string, string]> =
-    g === 'bedframe'
-      ? [['fabricCode', 'Fabrics'], ['gap', 'Gap'], ['divanHeight', 'Divan Height'], ['legHeight', 'Leg Height']]
-      : g === 'sofa'
-        ? [['fabricCode', 'Fabrics'], ['seatHeight', 'Seat Height'], ['legHeight', 'Leg Height']]
-        : [];
-  return need
-    .filter(([k]) => {
-      const val = (v as Record<string, unknown>)[k];
-      return val === undefined || val === null || String(val).trim() === '';
-    })
-    .map(([, lbl]) => lbl);
+  return missingVariantAxes(itemGroup, variants).map((a) => a.label);
 }
 
 /* ──────────────────────────────────────────────────────────────────────
