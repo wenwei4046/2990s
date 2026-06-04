@@ -534,7 +534,13 @@ describe('POST /orders — sofa fabric surcharge (spec 2026-05-24)', () => {
       approvalCode: 'TEST123',
       lines: [{
         qty: 1,
-        config: { kind: 'sofa' as const, productId: SOFA_ID, bundleId: '2S', depth: '24', fabricId, colourId },
+        // Cells-based line (à-la-carte) — the legacy whole-unit bundle layer
+        // (product_bundles) was retired 2026-06-04; a bundleId line now
+        // rejects as inactive_bundle.
+        config: {
+          kind: 'sofa' as const, productId: SOFA_ID, depth: '24', fabricId, colourId,
+          cells: [{ id: 'c1', moduleId: '2A(LHF)', x: 0, y: 0, rot: 0 }],
+        },
       }],
       clientTotal,
     };
@@ -543,8 +549,7 @@ describe('POST /orders — sofa fabric surcharge (spec 2026-05-24)', () => {
   const fabricHandlers = {
     staff: () => ({ data: salesStaffRow, error: null }),
     products: () => ({ data: [sofaRow], error: null }),
-    product_compartments: () => ({ data: [], error: null }),
-    product_bundles: () => ({ data: [{ product_id: SOFA_ID, bundle_id: '2S', active: true, price: 1990 }], error: null }),
+    product_compartments: () => ({ data: [{ product_id: SOFA_ID, compartment_id: '2A(LHF)', active: true, price: 1990 }], error: null }),
     product_size_variants: () => ({ data: [], error: null }),
     product_fabrics: () => ({ data: [{ product_id: SOFA_ID, fabric_id: 'velvet', active: true, surcharge: 300 }], error: null }),
     fabric_colours: () => ({ data: [{ fabric_id: 'velvet', colour_id: 'sand', active: true }], error: null }),
@@ -556,7 +561,7 @@ describe('POST /orders — sofa fabric surcharge (spec 2026-05-24)', () => {
     const rpcCapture: { last?: { name: string; args: any } } = {};
     const supabase = createMockSupabase(fabricHandlers, rpcCapture, { data: 'SO-2052', error: null });
     const app = buildApp(supabase);
-    // 1990 bundle + 300 velvet surcharge + 250 delivery base = 2540.
+    // 1990 à-la-carte 2A(LHF) + 300 velvet surcharge + 250 delivery base = 2540.
     const res = await app.request('/', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer test' },

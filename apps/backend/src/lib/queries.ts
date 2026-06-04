@@ -20,30 +20,11 @@ export interface Series {
   active: boolean;
 }
 
-export interface CompartmentLibrary {
-  id: string;
-  compGroup: '1-seater' | '2-seater' | 'Corner' | 'L-Shape' | 'Accessory';
-  label: string;
-  widthCm: number;
-  depthCm: number;
-  cushions: number;
-  defaultPrice: number;
-  artFilename: string | null;
-  isAccessory: boolean;
-  sortOrder: number;
-}
-
-export interface BundleLibrary {
-  id: string;
-  label: string;
-  sub: string;
-  signature: string;
-  baseWidthCm: number;
-  baseDepthCm: number;
-  cushions: number;
-  defaultPrice: number;
-  sortOrder: number;
-}
+// CompartmentLibrary / BundleLibrary / SizeLibrary hooks removed 2026-06-04 —
+// their sole consumer was the legacy-retail PricingEditor (sofa product_bundles
+// pricing UI), retired when product_bundles was emptied and the 15 legacy
+// sofa_build products were hidden. Live sofa pricing is the mfg layer
+// (mfg_products + sofa_combo_pricing).
 
 export interface FabricLibrary {
   id: string;
@@ -51,14 +32,6 @@ export interface FabricLibrary {
   tier: string;
   defaultSurcharge: number;
   active: boolean;
-  sortOrder: number;
-}
-
-export interface SizeLibrary {
-  id: string;
-  label: string;
-  widthCm: number;
-  lengthCm: number;
   sortOrder: number;
 }
 
@@ -98,60 +71,7 @@ export const useSeries = () =>
     ...LIBRARY_OPTS,
   });
 
-export const useCompartmentLibrary = () =>
-  useQuery({
-    queryKey: ['library', 'compartments'],
-    queryFn: async (): Promise<CompartmentLibrary[]> => {
-      const { data, error } = await supabase
-        .from('compartment_library')
-        .select(
-          'id, comp_group, label, width_cm, depth_cm, cushions, default_price, art_filename, is_accessory, sort_order',
-        )
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        id: r.id,
-        compGroup: r.comp_group,
-        label: r.label,
-        widthCm: r.width_cm,
-        depthCm: r.depth_cm,
-        cushions: r.cushions,
-        defaultPrice: r.default_price,
-        artFilename: r.art_filename,
-        isAccessory: r.is_accessory,
-        sortOrder: r.sort_order,
-      }));
-    },
-    ...LIBRARY_OPTS,
-  });
-
-export const useBundleLibrary = () =>
-  useQuery({
-    queryKey: ['library', 'bundles'],
-    queryFn: async (): Promise<BundleLibrary[]> => {
-      const { data, error } = await supabase
-        .from('bundle_library')
-        .select(
-          'id, label, sub, signature, base_width_cm, base_depth_cm, cushions, default_price, sort_order',
-        )
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        id: r.id,
-        label: r.label,
-        sub: r.sub,
-        signature: r.signature,
-        baseWidthCm: r.base_width_cm,
-        baseDepthCm: r.base_depth_cm,
-        cushions: r.cushions,
-        defaultPrice: r.default_price,
-        sortOrder: r.sort_order,
-      }));
-    },
-    ...LIBRARY_OPTS,
-  });
-
-// All fabrics (incl. inactive) so admin can re-enable; SofaEditor filters/labels.
+// All fabrics (incl. inactive) so admin can re-enable.
 export const useFabricLibrary = () =>
   useQuery({
     queryKey: ['library', 'fabrics'],
@@ -167,26 +87,6 @@ export const useFabricLibrary = () =>
         tier: r.tier,
         defaultSurcharge: r.default_surcharge,
         active: r.active,
-        sortOrder: r.sort_order,
-      }));
-    },
-    ...LIBRARY_OPTS,
-  });
-
-export const useSizeLibrary = () =>
-  useQuery({
-    queryKey: ['library', 'sizes'],
-    queryFn: async (): Promise<SizeLibrary[]> => {
-      const { data, error } = await supabase
-        .from('size_library')
-        .select('id, label, width_cm, length_cm, sort_order')
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        id: r.id,
-        label: r.label,
-        widthCm: r.width_cm,
-        lengthCm: r.length_cm,
         sortOrder: r.sort_order,
       }));
     },

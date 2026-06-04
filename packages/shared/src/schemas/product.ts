@@ -72,7 +72,10 @@ export const sofaProductSchema = productBase.extend({
   seatUpgradeLabel:     z.string().max(40).nullable().optional(),
   seatUpgradeFootrest:  z.boolean().optional(),
   compartments:         z.array(sofaPricingRow).min(1),
-  bundles:              z.array(sofaBundleRow).min(1),
+  // Whole-unit bundle pricing retired 2026-06-04 (product_bundles emptied;
+  // live sofa pricing = mfg module SKUs + sofa_combo_pricing). The field stays
+  // for payload compatibility but may be empty.
+  bundles:              z.array(sofaBundleRow),
   fabrics:              z.array(sofaFabricRow).min(1),
 });
 
@@ -111,9 +114,8 @@ export const tbcProductSchema = productBase.extend({
 // At least one row must be active AND have a price > RM 0. Applied at the
 // outer discriminated-union level so the rule reaches the SKU drawer (via
 // zodResolver) and POST /api/products on the server. Mattress / bedframe
-// SKUs require ≥1 priced size; sofa SKUs require ≥1 priced Quick-Pick bundle.
-// Compartments are intentionally NOT checked — Custom Build is a secondary
-// flow, Quick-Pick is the primary POS entry point for sofas.
+// SKUs require ≥1 priced size. The sofa "≥1 priced Quick-Pick bundle" rule
+// was retired 2026-06-04 with the rest of the legacy bundle layer.
 export const productSchema = z.discriminatedUnion('pricingKind', [
   sofaProductSchema,
   sizeProductSchema,
@@ -131,14 +133,6 @@ export const productSchema = z.discriminatedUnion('pricingKind', [
       });
     }
   } else if (val.pricingKind === 'sofa_build') {
-    const ok = val.bundles.some((b) => b.active && b.price > 0);
-    if (!ok) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['bundles'],
-        message: 'Activate at least one Quick-Pick bundle and fill in its price.',
-      });
-    }
     // Sofas require a fabric choice (spec 2026-05-24, G6) — at least one active.
     const fabricOk = val.fabrics.some((f) => f.active);
     if (!fabricOk) {
