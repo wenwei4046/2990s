@@ -85,17 +85,31 @@ export async function findSofaLinesWithoutCompleteBatch(
   //    (it may have been consumed by another DO since the last allocation run).
   const sofaStock = await loadSofaBatchStock(sb, [...new Set([...soInfo.values()].map((s) => s.itemCode))]);
 
-  // 4. Offenders: sofa line with no SO line / no bound batch / no warehouse, or
-  //    whose bound batch no longer has enough live stock for the line.
+  // 4. Offenders. A line with no SO line / no bound batch / no warehouse can't
+  //    ship — flag per line. The rest are grouped by (warehouse, batch, code,
+  //    variant) and checked with their qty SUMMED against live batch stock, so
+  //    two lines of the same module can't each pass against a batch that only
+  //    covers one. (Audit fix 2026-06-03)
   const offenders: SofaGuardOffender[] = [];
+  const coverable: Array<{ line: SofaGuardLine; info: SoInfo }> = [];
   for (const l of sofaLines) {
     const info = l.soItemId ? soInfo.get(l.soItemId) : undefined;
     if (!info || !info.batch || !info.whId) {
       offenders.push({ itemCode: l.itemCode, soItemId: l.soItemId ?? null });
-      continue;
+    } else {
+      coverable.push({ line: l, info });
     }
-    const have = sofaStock.remaining.get(sofaStockKey(info.whId, info.batch, info.itemCode, info.variantKey)) ?? 0;
-    if (have < info.qty) offenders.push({ itemCode: l.itemCode, soItemId: l.soItemId ?? null });
+  }
+  const groups = new Map<string, { have: number; need: number; lines: SofaGuardLine[] }>();
+  for (const { line, info } of coverable) {
+    const key = sofaStockKey(info.whId as string, info.batch as string, info.itemCode, info.variantKey);
+    const g = groups.get(key) ?? { have: sofaStock.remaining.get(key) ?? 0, need: 0, lines: [] };
+    g.need += info.qty;
+    g.lines.push(line);
+    groups.set(key, g);
+  }
+  for (const g of groups.values()) {
+    if (g.have < g.need) for (const l of g.lines) offenders.push({ itemCode: l.itemCode, soItemId: l.soItemId ?? null });
   }
   return offenders;
 }

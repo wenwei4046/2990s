@@ -245,21 +245,68 @@ async function writePurchaseReturnMovements(sb: any, prId: string, returnNumber:
   // Per-line warehouse — each line draws OUT of its source GRN line's warehouse,
   // not a single primary-GRN default (a batched PR can span warehouses).
   const lineWh = await resolvePrLineWarehouses(sb, items as Array<{ id: string; grn_item_id?: string | null }>, grnId);
-  const movements = ((items ?? []) as Array<{ id: string; material_code: string; material_name: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null }>)
+
+  /* Resolve the dye-lot batch each returned line drew in at GRN time so the
+     return OUT consumes the EXACT PO/dye-lot it came from — not plain FIFO across
+     a different lot. The source GRN's IN movement stamped batch_no = source PO
+     number (migration 0120, keyed by warehouse+product+variant). We map each PR
+     line → its source GRN (grn_item_id → grn_items.grn_id, else primary grnId),
+     read those GRNs' IN movements, and match the bucket. Only sofa/batched lines
+     resolve to a non-null batch; un-batched RM stays plain FIFO. Forward-compat:
+     pre-0120 the column is absent → retry without it → every line un-batched. */
+  const itemList = (items ?? []) as Array<{ id: string; grn_item_id?: string | null; material_code: string; material_name: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null }>;
+  // PR line id → source GRN id (its own GRN line's GRN, else the primary GRN).
+  const lineGrnId = new Map<string, string | null>();
+  {
+    const giIds = [...new Set(itemList.map((it) => it.grn_item_id ?? null).filter((x): x is string => !!x))];
+    const giToGrn = new Map<string, string | null>();
+    if (giIds.length > 0) {
+      const { data: giRows } = await sb.from('grn_items').select('id, grn_id').in('id', giIds);
+      for (const r of (giRows ?? []) as Array<{ id: string; grn_id: string | null }>) giToGrn.set(r.id, r.grn_id ?? null);
+    }
+    for (const it of itemList) {
+      lineGrnId.set(it.id, (it.grn_item_id ? giToGrn.get(it.grn_item_id) : null) ?? grnId ?? null);
+    }
+  }
+  // Read the IN movements of every source GRN, keyed `grnId::warehouse::code::variant` → batch_no.
+  const batchByBucket = new Map<string, string>();
+  {
+    const srcGrnIds = [...new Set([...lineGrnId.values()].filter((x): x is string => !!x))];
+    if (srcGrnIds.length > 0) {
+      let inRes = await sb.from('inventory_movements')
+        .select('source_doc_id, product_code, variant_key, warehouse_id, batch_no')
+        .eq('source_doc_type', 'GRN').eq('movement_type', 'IN').in('source_doc_id', srcGrnIds);
+      if (inRes.error && (inRes.error.message ?? '').includes('batch_no')) {
+        inRes = { data: [], error: null } as typeof inRes;
+      }
+      for (const m of (inRes.data ?? []) as Array<{ source_doc_id: string; product_code: string; variant_key: string | null; warehouse_id: string; batch_no?: string | null }>) {
+        if (m.batch_no == null) continue;
+        batchByBucket.set(`${m.source_doc_id}::${m.warehouse_id}::${m.product_code}::${m.variant_key ?? ''}`, m.batch_no);
+      }
+    }
+  }
+
+  const movements = itemList
     .filter((it) => it.qty_returned > 0)
     .map((it) => {
       const warehouseId = lineWh.get(it.id) ?? null;
       if (!warehouseId) return null;
+      const variantKey = computeVariantKey(it.item_group, it.variants ?? null);
+      const srcGrn = lineGrnId.get(it.id) ?? null;
+      const batchNo = srcGrn ? (batchByBucket.get(`${srcGrn}::${warehouseId}::${it.material_code}::${variantKey}`) ?? null) : null;
       return {
         movement_type: 'OUT' as const,
         warehouse_id: warehouseId,
         product_code: it.material_code,
-        variant_key: computeVariantKey(it.item_group, it.variants ?? null),
+        variant_key: variantKey,
         product_name: it.material_name,
         qty: it.qty_returned,
         source_doc_type: 'PURCHASE_RETURN' as const,
         source_doc_id: prId,
         source_doc_no: returnNumber,
+        // Stamp the source GRN line's dye-lot batch so the FIFO trigger depletes
+        // THAT PO/lot, not a different one. Only when the GRN IN had a batch.
+        ...(batchNo ? { batch_no: batchNo } : {}),
         performed_by: userId,
       };
     })

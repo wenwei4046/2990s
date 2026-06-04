@@ -197,7 +197,12 @@ export async function recostFromGrn(sb: any, grnId: string) {
       .eq('source_doc_type', 'GRN').eq('source_doc_id', grnId);
     if (!lots || lots.length === 0) return;
 
-    const affectedOutMovements = new Set<string>();
+    // Gather candidate consumptions per lot first (with the new cost), so we can
+    // resolve which OUT movements belong to CANCELLED DOs and skip them BEFORE
+    // re-stamping. A cancelled DO already reversed its stock at the cost booked
+    // at cancel time; recosting it here would double-correct the GL.
+    type ConsCand = { id: string; qty_consumed: number | null; movement_id: string | null; newCost: number };
+    const consCandidates: ConsCand[] = [];
     for (const lot of lots as Array<{ id: string; product_code: string; variant_key: string | null; qty_received: number | null; movement_id: string | null; unit_cost_sen: number | null }>) {
       const key = `${lot.product_code}::${lot.variant_key ?? ''}`;
       const newCost = costByBucket.get(key);
@@ -213,20 +218,54 @@ export async function recostFromGrn(sb: any, grnId: string) {
           total_cost_sen: Number(lot.qty_received ?? 0) * newCost,
         }).eq('id', lot.movement_id);
       }
-      // 4c. Every consumption drawing from this lot (real COGS rows).
+      // 4c. Collect every consumption drawing from this lot (real COGS rows).
       const { data: cons } = await sb.from('inventory_lot_consumptions')
         .select('id, qty_consumed, movement_id').eq('lot_id', lot.id);
       for (const ct of (cons ?? []) as Array<{ id: string; qty_consumed: number | null; movement_id: string | null }>) {
-        await sb.from('inventory_lot_consumptions').update({
-          unit_cost_sen: newCost,
-          total_cost_sen: Number(ct.qty_consumed ?? 0) * newCost,
-        }).eq('id', ct.id);
-        if (ct.movement_id) affectedOutMovements.add(ct.movement_id);
+        consCandidates.push({ id: ct.id, qty_consumed: ct.qty_consumed, movement_id: ct.movement_id, newCost });
       }
+    }
+
+    // Resolve, for every candidate OUT movement, whether its source DO is
+    // CANCELLED. A cancelled DO's OUT movements + consumptions + DO lines were
+    // already settled at cancel time — exclude them from the recost cascade.
+    const candidateMovIds = [...new Set(consCandidates.map((c) => c.movement_id).filter((x): x is string => !!x))];
+    const movToDo = new Map<string, string>(); // movement_id → DO id (only DO-sourced)
+    const cancelledMovIds = new Set<string>();
+    if (candidateMovIds.length > 0) {
+      const { data: movs } = await sb.from('inventory_movements')
+        .select('id, source_doc_type, source_doc_id').in('id', candidateMovIds);
+      const doIdSet = new Set<string>();
+      for (const m of (movs ?? []) as Array<{ id: string; source_doc_type: string | null; source_doc_id: string | null }>) {
+        if ((m.source_doc_type ?? '').toUpperCase() === 'DO' && m.source_doc_id) {
+          movToDo.set(m.id, m.source_doc_id);
+          doIdSet.add(m.source_doc_id);
+        }
+      }
+      if (doIdSet.size > 0) {
+        const { data: dos } = await sb.from('delivery_orders').select('id, status').in('id', [...doIdSet]);
+        const cancelledDoIds = new Set<string>();
+        for (const d of (dos ?? []) as Array<{ id: string; status: string | null }>) {
+          if ((d.status ?? '').toUpperCase() === 'CANCELLED') cancelledDoIds.add(d.id);
+        }
+        for (const [movId, doId] of movToDo) if (cancelledDoIds.has(doId)) cancelledMovIds.add(movId);
+      }
+    }
+
+    // 4c (apply). Re-stamp each consumption EXCEPT those on a cancelled DO's OUT.
+    const affectedOutMovements = new Set<string>();
+    for (const ct of consCandidates) {
+      if (ct.movement_id && cancelledMovIds.has(ct.movement_id)) continue; // cancelled DO — leave settled
+      await sb.from('inventory_lot_consumptions').update({
+        unit_cost_sen: ct.newCost,
+        total_cost_sen: Number(ct.qty_consumed ?? 0) * ct.newCost,
+      }).eq('id', ct.id);
+      if (ct.movement_id) affectedOutMovements.add(ct.movement_id);
     }
 
     // 5. Recompute each affected OUT movement's total/unit cost from the (now
     //    re-costed) sum of its consumptions, and collect the DOs they belong to.
+    //    Cancelled-DO movements were never added to affectedOutMovements above.
     const affectedDoIds = new Set<string>();
     for (const movId of affectedOutMovements) {
       const { data: mc } = await sb.from('inventory_lot_consumptions')

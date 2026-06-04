@@ -10,6 +10,7 @@ import {
 } from '@2990s/shared';
 import { computeSoDeliveryFee } from '@2990s/shared/pricing';
 import { supabaseAuth } from '../middleware/auth';
+import { escapeForOr } from '../lib/postgrest-search';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
 import { signSoItemPhotoUrl, soItemPhotoBindings, presign, type SlipMime } from '../lib/r2';
 import { slipBindings } from '../lib/slip';
@@ -1934,6 +1935,18 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
 
+  /* Owner 2026-06-03 (migration 0144) — phone is COMPULSORY on every SO. The
+     CREATE path blocks an empty phone (phone_required); the EDIT path must too,
+     or the compulsory-phone rule is bypassable by PATCHing phone to blank.
+     Only guard when phone is actually present in the body (a PATCH that doesn't
+     touch phone leaves the existing value untouched). */
+  if (body.phone !== undefined) {
+    const patchPhone = typeof body.phone === 'string' ? body.phone.trim() : '';
+    if (!patchPhone) {
+      return c.json({ error: 'phone_required', reason: 'A phone number is required on every sales order.' }, 400);
+    }
+  }
+
   const map: Array<[string, string]> = [
     ['debtorCode', 'debtor_code'], ['debtorName', 'debtor_name'], ['agent', 'agent'],
     ['salesLocation', 'sales_location'], ['ref', 'ref'], ['poDocNo', 'po_doc_no'],
@@ -3187,7 +3200,7 @@ mfgSalesOrders.delete('/:docNo/payments/:id', async (c) => {
 mfgSalesOrders.get('/debtors/search', async (c) => {
   const sb = c.get('supabase'); const q = c.req.query('q') ?? '';
   let query = sb.from('mfg_sales_orders').select('debtor_code, debtor_name, phone, address1, address2, address3, address4').order('updated_at', { ascending: false }).limit(200);
-  if (q.trim()) query = query.or(`debtor_name.ilike.%${q}%,debtor_code.ilike.%${q}%`);
+  { const s = escapeForOr(q); if (s) query = query.or(`debtor_name.ilike.%${s}%,debtor_code.ilike.%${s}%`); }
   const { data, error } = await query;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
 

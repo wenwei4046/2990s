@@ -23,6 +23,7 @@
 
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
+import { escapeForOr } from '../lib/postgrest-search';
 import type { Env, Variables } from '../env';
 
 export const inventory = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -123,7 +124,7 @@ inventory.get('/', async (c) => {
 
   let q = sb.from(tableName).select(cols);
   if (warehouseId) q = q.eq('warehouse_id', warehouseId);
-  if (search) q = q.or(`product_code.ilike.%${search}%,product_name.ilike.%${search}%`);
+  if (search) { const s = escapeForOr(search); if (s) q = q.or(`product_code.ilike.%${s}%,product_name.ilike.%${s}%`); }
   if (showAll && category && category !== 'all') q = q.eq('category', category);
 
   const { data, error } = await q.order('product_code');
@@ -148,7 +149,7 @@ inventory.get('/products', async (c) => {
   const category = c.req.query('category');
 
   let q = sb.from('v_inventory_product_totals').select('*');
-  if (search) q = q.or(`product_code.ilike.%${search}%,product_name.ilike.%${search}%`);
+  if (search) { const s = escapeForOr(search); if (s) q = q.or(`product_code.ilike.%${s}%,product_name.ilike.%${s}%`); }
   if (category && category !== 'all') q = q.eq('category', category);
 
   const { data, error } = await q.order('product_code');
