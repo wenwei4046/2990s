@@ -50,7 +50,11 @@ export function buildVariantSummary(
   const fabric = fabricParts.filter(Boolean).join(' ');
   if (fabric) segments.push(fabric);
 
-  const leg = str(variants.legHeight).toUpperCase();
+  // 2026-06-04 — POS handover sofa lines carry the leg pick as sofaLegHeight
+  // (PR #473) and the seat pick as depth; Backend-keyed lines use legHeight /
+  // seatHeight. Same axes, two vocabularies (see so-variant-rule) — read both
+  // so POS-created SO/GRN/PO lines show their SEAT / LEG segments too.
+  const leg = (str(variants.legHeight) || str(variants.sofaLegHeight)).toUpperCase();
 
   if (isBedframe) {
     // BEDFRAME: DIVAN {divan} + LEG {leg} / GAP {gap} / T.Heights {total}.
@@ -72,7 +76,7 @@ export function buildVariantSummary(
     // Commander 2026-05-29: use the SAME ` / ` delimiter as every other segment
     // so the summary reads with ONE consistent separator (was mixing ` / ` with
     // a ` · ` inside the seat·leg token → "BF-01 / SEAT 24 · LEG 6\"").
-    const seat = str(variants.seatHeight);
+    const seat = str(variants.seatHeight) || str(variants.depth);
     if (seat) segments.push(`SEAT ${seat}`);
     if (leg)  segments.push(`LEG ${leg}`);
   }

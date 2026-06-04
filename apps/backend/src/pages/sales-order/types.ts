@@ -12,6 +12,7 @@
 // ----------------------------------------------------------------------------
 
 import type { CSSProperties } from 'react';
+import { REQUIRED_VARIANT_AXES_BY_CATEGORY } from '@2990s/shared/so-variant-rule';
 
 // PR-DRAFT-removal — DRAFT dropped from mfg_so_status (migration 0078).
 export const STATUS_LIST = [
@@ -191,12 +192,18 @@ export const TOTALS_KPI_GRID_STYLE: CSSProperties = {
 export const TOTALS_KPI_VALUE_STYLE: CSSProperties = { fontSize: 'var(--fs-18)' };
 export const HISTORY_NOTE_STYLE: CSSProperties = { fontStyle: 'italic' };
 
-/* Variant-completeness reference map (lifted out of render to avoid object
-   reallocation each render). */
-export const REQUIRED_BY_CATEGORY: Record<string, readonly string[]> = {
-  bedframe: ['divanHeight', 'legHeight', 'gap', 'fabricCode'],
-  sofa:     ['seatHeight',  'legHeight', 'fabricCode'],
-};
+/* Variant-completeness reference map — derived from the shared
+   so-variant-rule (2026-06-04) so this copy can't drift from the server 409
+   gate again. Canonical (Backend-vocabulary) keys only; for checking a line,
+   use missingVariantAxes from @2990s/shared (alias-aware: POS sofa lines
+   carry depth / sofaLegHeight for the Seat / Leg axes). */
+export const REQUIRED_BY_CATEGORY: Record<string, readonly string[]> =
+  Object.fromEntries(
+    Object.entries(REQUIRED_VARIANT_AXES_BY_CATEGORY).map(([g, axes]) => [
+      g,
+      axes.map((a) => a.key),
+    ]),
+  );
 export const formatGroupRequirements = (g: string): string =>
   g === 'bedframe' ? 'Divan · Leg · Gap · Fabric' :
   g === 'sofa'     ? 'Seat · Leg · Fabric' : '';

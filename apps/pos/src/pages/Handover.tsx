@@ -9,6 +9,7 @@ import {
   fetchItemCodeMap,
   inferItemGroup,
   PosHandoffApiError,
+  describePosHandoffError,
   type PosHandoffPayload,
 } from '../lib/pos-handover-so';
 import { useDeleteQuote } from '../lib/quotes';
@@ -356,8 +357,10 @@ export const Handover = () => {
       navigate(`/handover-confirmed/${encodeURIComponent(result.docNo)}`, { replace: true });
     } catch (err) {
       if (err instanceof PosHandoffApiError) {
-        const reasonSuffix = err.payload.reason ? ` — ${err.payload.reason}` : '';
-        setServerError(`Order placement failed: ${err.payload.error}${reasonSuffix}`);
+        // describePosHandoffError folds in reason/message AND the per-line
+        // variants_incomplete offenders ("LOTTI-1A(LHF): missing legHeight")
+        // so the salesperson knows WHICH line to Edit, not just an error code.
+        setServerError(describePosHandoffError(err.payload));
         return;
       }
       setServerError(err instanceof Error ? err.message : 'Order submission failed');

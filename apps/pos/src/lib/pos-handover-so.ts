@@ -140,17 +140,37 @@ export interface PosHandoffError {
   error: string;
   /** Optional underlying reason — usually a Postgres / Supabase error message. */
   reason?: string;
+  /** Some 409s (e.g. variants_incomplete) explain themselves via `message`
+   *  instead of `reason` — surface either. */
+  message?: string;
+  /** variants_incomplete detail: which lines miss which variant axes. Keys are
+   *  the Backend canonical names (seatHeight / legHeight / gap / …). */
+  offenders?: Array<{ id?: string; itemCode: string; group: string; missing: string[] }>;
 }
 
 export class PosHandoffApiError extends Error {
   payload: PosHandoffError;
   status: number;
   constructor(status: number, payload: PosHandoffError) {
-    super(payload.reason ?? payload.error ?? `POST /mfg-sales-orders failed (${status})`);
+    super(payload.reason ?? payload.message ?? payload.error ?? `POST /mfg-sales-orders failed (${status})`);
     this.status = status;
     this.payload = payload;
   }
 }
+
+/** One human line for the StepFooter error strip. `variants_incomplete`
+ *  offenders read as "LOTTI-1A(LHF): missing seatHeight, legHeight" so sales
+ *  can fix the line (Edit in cart) instead of staring at a bare error code —
+ *  the 2026-06-04 handover failure showed only "variants_incomplete". */
+export const describePosHandoffError = (payload: PosHandoffError): string => {
+  const detail = payload.reason ?? payload.message;
+  const offenders = (payload.offenders ?? [])
+    .map((o) => `${o.itemCode}: missing ${o.missing.join(', ')}`)
+    .join('; ');
+  return `Order placement failed: ${payload.error}`
+    + (detail ? ` — ${detail}` : '')
+    + (offenders ? ` (${offenders})` : '');
+};
 
 /* ─── Item marshalling ──────────────────────────────────────────────── */
 
