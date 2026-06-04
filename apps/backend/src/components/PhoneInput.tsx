@@ -75,7 +75,22 @@ export const PhoneInput = ({
           try { e.target.setSelectionRange(len, len); } catch { /* noop */ }
         });
       }}
-      onChange={(e) => setBuffer(e.target.value)}
+      onChange={(e) => {
+        if (focused) {
+          setBuffer(e.target.value);
+          return;
+        }
+        // Not focused but the value changed → browser AUTOFILL painted a value
+        // in. The input is controlled to formatPhone(value), so without this the
+        // autofilled number is wiped on the next render and never reaches the
+        // parent (leaving Save buttons stuck disabled). Normalize it and push to
+        // the parent right away. (Wei Siang 2026-06-03)
+        const normalized = normalizePhone(e.target.value) ?? '';
+        if (normalized && normalized !== value) {
+          lastSyncedValue.current = normalized;
+          onChange(normalized);
+        }
+      }}
       onBlur={() => {
         setFocused(false);
         const normalized = normalizePhone(buffer);
