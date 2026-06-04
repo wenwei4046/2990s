@@ -137,6 +137,9 @@ export const Sidebar = () => {
         { to: '/consignment', icon: <Handshake {...ICON_PROPS} />, label: 'Consignment Order' },
         { to: '/consignment-note', icon: <Truck {...ICON_PROPS} />, label: 'Consignment Note' },
         { to: '/consignment-return', icon: <Undo2 {...ICON_PROPS} />, label: 'Consignment Return' },
+        { to: '/purchase-consignment', icon: <ClipboardList {...ICON_PROPS} />, label: 'Purchase Consignment Order' },
+        { to: '/purchase-consignment-receive', icon: <PackageCheck {...ICON_PROPS} />, label: 'Purchase Consignment Receive' },
+        { to: '/purchase-consignment-return', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Consignment Return' },
       ],
     },
     {

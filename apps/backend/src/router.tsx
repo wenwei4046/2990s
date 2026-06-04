@@ -137,6 +137,18 @@ const ConsignmentNoteDetail = lazyRetry(() => import('./pages/ConsignmentNoteDet
 const ConsignmentReturns = lazyRetry(() => import('./pages/ConsignmentReturns').then(m => ({ default: m.ConsignmentReturns })));
 const ConsignmentReturnNew = lazyRetry(() => import('./pages/ConsignmentReturnNew').then(m => ({ default: m.ConsignmentReturnNew })));
 const ConsignmentReturnDetail = lazyRetry(() => import('./pages/ConsignmentReturnDetail').then(m => ({ default: m.ConsignmentReturnDetail })));
+// Purchase Consignment Order (faithful PO-clone module, /purchase-consignment-orders API).
+const PurchaseConsignmentOrders = lazyRetry(() => import('./pages/PurchaseConsignmentOrders').then(m => ({ default: m.PurchaseConsignmentOrders })));
+const PurchaseConsignmentOrderNew = lazyRetry(() => import('./pages/PurchaseConsignmentOrderNew').then(m => ({ default: m.PurchaseConsignmentOrderNew })));
+const PurchaseConsignmentOrderDetail = lazyRetry(() => import('./pages/PurchaseConsignmentOrderDetail').then(m => ({ default: m.PurchaseConsignmentOrderDetail })));
+// Purchase Consignment Receive (faithful GRN-clone module, /purchase-consignment-receives API).
+const PurchaseConsignmentReceives = lazyRetry(() => import('./pages/PurchaseConsignmentReceives').then(m => ({ default: m.PurchaseConsignmentReceives })));
+const PurchaseConsignmentReceiveNew = lazyRetry(() => import('./pages/PurchaseConsignmentReceiveNew').then(m => ({ default: m.PurchaseConsignmentReceiveNew })));
+const PurchaseConsignmentReceiveDetail = lazyRetry(() => import('./pages/PurchaseConsignmentReceiveDetail').then(m => ({ default: m.PurchaseConsignmentReceiveDetail })));
+// Purchase Consignment Return (faithful PR-clone module, /purchase-consignment-returns API).
+const PurchaseConsignmentReturns = lazyRetry(() => import('./pages/PurchaseConsignmentReturns').then(m => ({ default: m.PurchaseConsignmentReturns })));
+const PurchaseConsignmentReturnNew = lazyRetry(() => import('./pages/PurchaseConsignmentReturnNew').then(m => ({ default: m.PurchaseConsignmentReturnNew })));
+const PurchaseConsignmentReturnDetail = lazyRetry(() => import('./pages/PurchaseConsignmentReturnDetail').then(m => ({ default: m.PurchaseConsignmentReturnDetail })));
 const SalesInvoiceDetail = lazyRetry(() => import('./pages/SalesInvoiceDetail').then(m => ({ default: m.SalesInvoiceDetail })));
 
 export const router = createBrowserRouter([
@@ -222,6 +234,21 @@ export const router = createBrowserRouter([
       { path: 'consignment-return', element: <ConsignmentReturns /> },
       { path: 'consignment-return/new', element: <ConsignmentReturnNew /> },
       { path: 'consignment-return/:id', element: <ConsignmentReturnDetail /> },
+      // Purchase Consignment Order — PO-clone module (/purchase-consignment-orders
+      // API). /new is STATIC, must precede the :id route.
+      { path: 'purchase-consignment', element: <PurchaseConsignmentOrders /> },
+      { path: 'purchase-consignment/new', element: <PurchaseConsignmentOrderNew /> },
+      { path: 'purchase-consignment/:id', element: <PurchaseConsignmentOrderDetail /> },
+      // Purchase Consignment Receive — GRN-clone module (/purchase-consignment-receives
+      // API). /new is STATIC, must precede the :id route.
+      { path: 'purchase-consignment-receive', element: <PurchaseConsignmentReceives /> },
+      { path: 'purchase-consignment-receive/new', element: <PurchaseConsignmentReceiveNew /> },
+      { path: 'purchase-consignment-receive/:id', element: <PurchaseConsignmentReceiveDetail /> },
+      // Purchase Consignment Return — PR-clone module (/purchase-consignment-returns
+      // API). /new is STATIC, must precede the :id route.
+      { path: 'purchase-consignment-return', element: <PurchaseConsignmentReturns /> },
+      { path: 'purchase-consignment-return/new', element: <PurchaseConsignmentReturnNew /> },
+      { path: 'purchase-consignment-return/:id', element: <PurchaseConsignmentReturnDetail /> },
       { path: 'delivery-returns', element: <DeliveryReturnsList /> },
       // /new + /from-do must come BEFORE :id so they aren't caught as a DR id.
       { path: 'delivery-returns/new', element: <DeliveryReturnNew /> },
