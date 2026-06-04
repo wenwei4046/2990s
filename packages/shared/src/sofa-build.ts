@@ -626,7 +626,11 @@ export const detectBundle = (modIds: string[]): BundleDef | null =>
  * but skipped the pricing-row.active check because callers may not have
  * pricing in hand (e.g., re-rendering a stored cart line).
  *
- * Bundle-matched closed group → commercial bundle label ("2-Seater", "3 + L").
+ * Bundle-matched closed group → commercial bundle label, with the compartment
+ * make-up appended for multi-module groups ("2 + L (2A+L)") so the cart line
+ * shows WHAT the sofa is built from (Loo 2026-06-04 — same parenthesised
+ * format as the Custom fallback; single-module bundles like a whole-piece
+ * 2-Seater stay bare).
  * Anything else → `Custom (<family-signature>)` so distinct custom builds in
  * the same cart stay distinguishable.
  */
@@ -642,8 +646,10 @@ export const summarizeSofaCells = (
   const modIds = cells.map((c) => c.moduleId);
   const candidate = detectBundle(modIds);
   let base: string;
-  if (candidate && (cells.length === 1 || analyzeSofa(cells, depth).closed)) {
+  if (candidate && cells.length === 1) {
     base = candidate.label;
+  } else if (candidate && analyzeSofa(cells, depth).closed) {
+    base = `${candidate.label} (${familySignature(modIds)})`;
   } else {
     base = `Custom (${familySignature(modIds)})`;
   }
