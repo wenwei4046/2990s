@@ -358,6 +358,7 @@ stockTakes.patch('/:id/post', async (c) => {
       source_doc_type: 'STOCK_TAKE',
       source_doc_id:   header.id,
       source_doc_no:   header.take_no,
+      reason_code:     'COUNT',                          // count correction
       notes:           `Stock take variance${ln.notes ? ` · ${ln.notes}` : ''}`,
       performed_by:    user.id,
     });

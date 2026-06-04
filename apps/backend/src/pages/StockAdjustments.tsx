@@ -19,6 +19,7 @@ import {
   useInventoryMovements,
   type InventoryMovement,
 } from '../lib/inventory-queries';
+import { adjustmentReasonLabel } from '@2990s/shared';
 import styles from './Inventory.module.css';
 
 const ICON    = { size: 14, strokeWidth: 1.75 } as const;
@@ -157,16 +158,17 @@ export const StockAdjustments = () => {
               <th>SKU</th>
               <th>Product Name</th>
               <th style={{ textAlign: 'right' }}>Qty Delta</th>
+              <th>Reason</th>
               <th>Notes</th>
               <th>Performed By</th>
             </tr>
           </thead>
           <tbody>
             {isLoading && (
-              <tr><td colSpan={7} className={styles.emptyRow}>Loading…</td></tr>
+              <tr><td colSpan={8} className={styles.emptyRow}>Loading…</td></tr>
             )}
             {!isLoading && rows.length === 0 && (
-              <tr><td colSpan={7} className={styles.emptyRow}>
+              <tr><td colSpan={8} className={styles.emptyRow}>
                 <div>No stock adjustments yet.</div>
                 <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
                   Click "+ New Adjustment" to create one.
@@ -186,6 +188,7 @@ export const StockAdjustments = () => {
                   <td className={`${styles.numCell} ${qtyClass}`}>
                     {sign}{m.qty.toLocaleString('en-MY')}
                   </td>
+                  <td>{m.reason_code ? adjustmentReasonLabel(m.reason_code) : '—'}</td>
                   <td className={styles.numCellZero}>{m.notes ?? '—'}</td>
                   <td className={styles.numCellZero} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-11)' }}>
                     {m.performed_by ? m.performed_by.slice(0, 8) : '—'}

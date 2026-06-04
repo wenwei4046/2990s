@@ -11,3 +11,4 @@ export * from './schemas';
 export * from './variant-summary'; // Commander 2026-05-28
 export * from './so-variant-rule'; // 2026-06-04 — POS/Backend variant vocabulary unified
 export * from './fabric-tier-addon';
+export * from './adjustment-reasons'; // 2026-06-04 — stock adjustment reason codes

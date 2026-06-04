@@ -93,6 +93,7 @@ export type InventoryMovement = {
   source_doc_type: string | null;
   source_doc_id: string | null;
   source_doc_no: string | null;
+  reason_code: string | null;
   notes: string | null;
   performed_by: string | null;
   created_at: string;
@@ -385,6 +386,7 @@ export function useStockAdjustment() {
       productCode: string;
       productName?: string;
       qtyDelta: number;
+      reasonCode: string;
       notes?: string;
     }) => authedFetch<{ movement: { id: string } }>(`/inventory/adjustments`, {
       method: 'POST', body: JSON.stringify(body),

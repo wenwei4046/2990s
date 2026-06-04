@@ -22,6 +22,7 @@
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
+import { isAdjustmentReasonCode } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
 import type { Env, Variables } from '../env';
@@ -294,7 +295,7 @@ inventory.get('/movements', async (c) => {
   const limit = Math.min(500, Number(c.req.query('limit') ?? 200));
 
   let q = sb.from('inventory_movements')
-    .select('id, movement_type, warehouse_id, product_code, product_name, qty, unit_cost_sen, total_cost_sen, source_doc_type, source_doc_id, source_doc_no, notes, performed_by, created_at')
+    .select('id, movement_type, warehouse_id, product_code, product_name, qty, unit_cost_sen, total_cost_sen, source_doc_type, source_doc_id, source_doc_no, reason_code, notes, performed_by, created_at')
     .order('created_at', { ascending: false })
     .limit(limit);
   if (warehouseId) q = q.eq('warehouse_id', warehouseId);
@@ -590,6 +591,12 @@ inventory.post('/adjustments', async (c) => {
   const qtyDelta = Number(body.qtyDelta ?? 0);
   if (!Number.isFinite(qtyDelta) || qtyDelta === 0) return c.json({ error: 'invalid_qty_delta' }, 400);
 
+  // Structured reason is mandatory on a manual adjustment (audit trail).
+  // Validated against the shared catalogue — single source of truth shared
+  // with the frontend dropdown.
+  const reasonCode = String(body.reasonCode ?? '');
+  if (!isAdjustmentReasonCode(reasonCode)) return c.json({ error: 'reason_required' }, 400);
+
   const { data, error } = await sb.from('inventory_movements').insert({
     movement_type: 'ADJUSTMENT',
     warehouse_id: body.warehouseId,
@@ -601,6 +608,7 @@ inventory.post('/adjustments', async (c) => {
     qty: qtyDelta,
     unit_cost_sen: Number(body.unitCostSen ?? 0),
     source_doc_type: 'ADJUSTMENT',
+    reason_code: reasonCode,
     notes: (body.notes as string) ?? null,
     performed_by: user.id,
   }).select('id').single();
