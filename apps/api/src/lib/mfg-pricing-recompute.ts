@@ -138,6 +138,10 @@ export type ProductRowLite = {
   /** product_models.id — the route's resolvePwp matches this against a rule's
    *  eligible model lists. Optional for the same reason as pwp_price_sen. */
   model_id?:          string | null;
+  /** SO-SKU spec P5 — free-text brand label (mainly MATTRESS SKUs). Snapshotted
+   *  onto each SO line at create so the Detail Listing's Branding column lights
+   *  per line. Optional: legacy/test snapshots may omit it. */
+  branding?:          string | null;
 };
 
 const toMfgCategory = (group: string, productCategory: string): MfgPricingProduct['category'] => {
@@ -426,7 +430,7 @@ export async function loadProductByCode(sb: any, code: string): Promise<ProductR
   if (!code) return null;
   const { data } = await sb
     .from('mfg_products')
-    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, pwp_price_sen, model_id, base_model')
+    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, pwp_price_sen, model_id, base_model, branding')
     .eq('code', code)
     .maybeSingle();
   if (!data) return null;

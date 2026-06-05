@@ -204,16 +204,36 @@ reports.get('/sales-order-detail-listing', async (c) => {
       flat.customer_delivery_date = h.customer_delivery_date ?? null;
       // Per-doc paid total from the payments ledger (replaces legacy paid_centi).
       flat.paid_total_centi = paidByDoc.get(r.doc_no) ?? 0;
-      // Task #63 — extract `fabricColor` from the variants jsonb so the
-      // Detail Listing's Fabric column has a typed string to render.
-      // Keep `divan_height` / `leg_height` aliases (without `_inches`) so
-      // the frontend reads them under the canonical column key.
+      /* SO-SKU spec P5 (§4.5) — light the Fabric / Divan / Leg columns from
+         what SO lines ACTUALLY carry. Task #63 read variants.fabricColor and
+         the *_inches real columns — neither is written by any SO path
+         (0/25 lines in prod), so the columns rendered dashes forever.
+         Fabric: three sources, most specific first — fabricColor (GRN
+         hand-keyed) ?? colourLabel (POS human label, e.g. 'EZ-001 Pearl')
+         ?? fabricCode (the shared code, e.g. 'CG-012').
+         Divan/Leg: real column (GRN paths) ?? the variants the SO paths DO
+         write — legHeight (Backend) / sofaLegHeight (POS) / divanHeight.
+         Values can be strings ('4\"', 'No Leg'): normalise to a NUMBER when
+         parseable (frontend renders n″ + numeric sort) else pass the raw
+         string through. */
       const variantsObj = (r.variants ?? null) as Record<string, unknown> | null;
-      flat.fabric        = variantsObj && typeof variantsObj.fabricColor === 'string'
-        ? (variantsObj.fabricColor as string)
-        : null;
-      flat.divan_height  = r.divan_height_inches ?? null;
-      flat.leg_height    = r.leg_height_inches  ?? null;
+      const vStr = (k: string): string | null => {
+        const v = variantsObj?.[k];
+        return typeof v === 'string' && v.trim() ? v.trim() : null;
+      };
+      flat.fabric = vStr('fabricColor') ?? vStr('colourLabel') ?? vStr('fabricCode');
+      const heightVal = (col: unknown, ...keys: string[]): number | string | null => {
+        if (col != null) return col as number;
+        for (const k of keys) {
+          const raw = vStr(k);
+          if (!raw) continue;
+          const m = raw.match(/^(-?\d+(?:\.\d+)?)\s*(?:"|”|inch(?:es)?)?$/i);
+          return m && m[1] ? Number(m[1]) : raw; // '4"' → 4; 'No Leg' → as-is
+        }
+        return null;
+      };
+      flat.divan_height = heightVal(r.divan_height_inches, 'divanHeight');
+      flat.leg_height   = heightVal(r.leg_height_inches, 'legHeight', 'sofaLegHeight');
       // Per-doc payment meta (last receipt only — Houzs surfaces the most
       // recent receipt's metadata, not an aggregate).
       const pm = paymentMetaByDoc.get(r.doc_no);
