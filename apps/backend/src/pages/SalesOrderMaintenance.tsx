@@ -18,7 +18,8 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router';
-import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronRight, MapPin, Clock } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronRight, MapPin, Clock, Lock } from 'lucide-react';
+import { isCorePaymentMethodRow } from '@2990s/shared/payment-methods';
 import { Button } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
 import { useToast } from '../components/Toast';
@@ -864,11 +865,11 @@ const DROPDOWN_CARDS: Array<{ category: SoDropdownCategory; title: string; help:
   {
     category: 'payment_method',
     title:    'Payment Method',
-    help: 'L1 of the 3-step Payments cascade. Tight scope: Merchant / Online / ' +
-          'Cash. Each label maps to the internal payment_method enum via the ' +
-          'PaymentsTable labelToApi() mapper (Merchant → merchant, Online → ' +
-          'transfer, Cash → cash); adding a new label here without updating ' +
-          'that mapper defaults to "cash".',
+    help: 'One list for everything — the POS handover cards and the Payments ' +
+          'cascade on New SO / SO Detail both read these four rows. Rename a ' +
+          'label or reorder anytime and every screen follows. The four are ' +
+          'wired to order logic, so they can\'t be removed, turned off, or ' +
+          'added to; the Value column is the fixed key each app maps on.',
   },
   /* Task #122 (cascade) — three L2 buckets that show up under Merchant
      and Online, edited the same way as the L1 list above. */
@@ -1077,6 +1078,14 @@ const DropdownCategoryCard = ({
               </thead>
               <tbody>
                 {rows.map((row) => {
+                  /* 2026-06-06 payment-method unify — the four core method
+                     rows are a locked set: label + order editable, value /
+                     active / delete blocked (the API mirrors this with a
+                     409). Controls stay visible so the reason is
+                     discoverable, not hidden. */
+                  const lockedRow = isCorePaymentMethodRow(category, row.value);
+                  const lockHint =
+                    'Core payment method — wired to order logic. Rename or reorder it; it can\'t be removed or turned off.';
                   const buf = edits[row.id] ?? {};
                   const curValue     = buf.value     ?? row.value;
                   const curLabel     = buf.label     ?? row.label;
@@ -1091,7 +1100,8 @@ const DropdownCategoryCard = ({
                         <input
                           className={styles.input}
                           value={curValue}
-                          disabled={!canEdit || updateOpt.isPending}
+                          disabled={!canEdit || updateOpt.isPending || lockedRow}
+                          title={lockedRow ? lockHint : undefined}
                           onChange={(e) => setEdits((s) => ({
                             ...s, [row.id]: { ...s[row.id], value: e.target.value },
                           }))}
@@ -1112,11 +1122,12 @@ const DropdownCategoryCard = ({
                         />
                       </td>
                       <td>
-                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                          title={lockedRow ? lockHint : undefined}>
                           <input
                             type="checkbox"
                             checked={row.active}
-                            disabled={!canEdit || updateOpt.isPending}
+                            disabled={!canEdit || updateOpt.isPending || lockedRow}
                             onChange={() => toggleActive(row)}
                           />
                           <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
@@ -1137,6 +1148,15 @@ const DropdownCategoryCard = ({
                               Save
                             </button>
                           )}
+                          {lockedRow ? (
+                            <span
+                              title={lockHint}
+                              aria-label={lockHint}
+                              style={{ display: 'inline-flex', padding: 4, color: 'var(--fg-muted)' }}
+                            >
+                              <Lock size={14} strokeWidth={1.75} />
+                            </span>
+                          ) : (
                           <button
                             type="button"
                             className={styles.editBtn}
@@ -1146,6 +1166,7 @@ const DropdownCategoryCard = ({
                           >
                             <Trash2 size={14} strokeWidth={1.75} />
                           </button>
+                          )}
                         </td>
                       )}
                     </tr>
@@ -1155,7 +1176,27 @@ const DropdownCategoryCard = ({
             </table>
           )}
 
-          {canEdit && (
+          {/* 2026-06-06 payment-method unify — no Add for the locked
+              category; a hint explains why instead of hiding silently. */}
+          {category === 'payment_method' && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: 'var(--space-3) var(--space-4)',
+              background: 'var(--bg-alt)',
+              borderTop: rows.length > 0 ? '1px solid var(--line)' : undefined,
+              fontSize: 'var(--fs-12)',
+              color: 'var(--fg-muted)',
+            }}>
+              <Lock size={14} strokeWidth={1.75} />
+              <span>
+                These four are core methods wired to order logic — rename or
+                reorder them anytime, but they can&apos;t be removed, turned
+                off, or added to. Banks, online types and installment plans
+                are managed in the cards below.
+              </span>
+            </div>
+          )}
+          {canEdit && category !== 'payment_method' && (
             <div style={{
               display: 'grid',
               /* Sort input removed — commander 2026-05-27. New rows auto-

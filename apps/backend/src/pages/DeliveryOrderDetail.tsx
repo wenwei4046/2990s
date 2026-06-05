@@ -40,7 +40,7 @@ import {
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
-  PaymentsTable, labelToApi, parseInstallmentMonths,
+  PaymentsTable, labelToApi, draftMethodFields,
   newPaymentDraft, type PaymentDraft,
 } from '../components/PaymentsTable';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
@@ -424,12 +424,7 @@ export const DeliveryOrderDetail = () => {
         approvalCode: d.approvalCode || null,
         collectedBy: d.collectedBy || null,
       };
-      if (method === 'merchant') {
-        body.merchantProvider = d.merchantProvider || null;
-        body.installmentMonths = parseInstallmentMonths(d.installmentMonthsLabel);
-      } else if (method === 'transfer') {
-        body.onlineType = d.onlineType || null;
-      }
+      Object.assign(body, draftMethodFields(method, d));
       await addPayment.mutateAsync(body);
     }
   };

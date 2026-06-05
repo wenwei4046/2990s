@@ -1,8 +1,12 @@
 /* customerType / buildingType / merchantProvider vocabularies now come from
    so_dropdown_options (the SO Maintenance page) at runtime — see
    useSoDropdownValues() — so these are plain strings, not literal unions.
-   PaymentMethod stays a closed union: the four methods drive branch logic
-   (merchant → bank chips, installment → term chips) and the deposit ledger. */
+   PaymentMethod stays a closed union of internal CODES: the four methods
+   drive branch logic (merchant → bank chips, installment → term chips) and
+   the deposit ledger. Since the 2026-06-06 unify the card labels + order
+   come live from the payment_method maintenance rows (locked to four, value
+   → code via @2990s/shared/payment-methods) — the union and the maintenance
+   list are the same four by construction. */
 export type CustomerType = string;
 export type BuildingType = string;
 export type PaymentMethod = '' | 'merchant' | 'transfer' | 'installment' | 'cash';

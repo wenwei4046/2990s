@@ -4,14 +4,8 @@ import { fmtRM } from '@2990s/shared';
 import { Field } from './Field';
 import { SlipUploadStep } from '../SlipUploadStep';
 import type { HandoverForm } from '../../lib/handover-helpers';
+import { usePaymentMethodLabels } from '../../lib/so-maintenance/so-dropdown-options-queries';
 import styles from '../../pages/Handover.module.css';
-
-const METHOD_LABEL: Record<string, string> = {
-  merchant: 'Merchant',
-  transfer: 'Bank transfer / DuitNow',
-  installment: 'Installment',
-  cash: 'Cash',
-};
 
 export const ConfirmPaymentStep = ({
   form, update, subtotal, addonTotal, deliveryFeeTotal,
@@ -53,7 +47,10 @@ export const ConfirmPaymentStep = ({
     return 'custom';
   };
 
-  const methodLabel = METHOD_LABEL[form.paymentMethod] ?? '—';
+  /* 2026-06-06 payment-method unify — label follows the live maintenance
+     row, so a rename in SO Maintenance shows here too. */
+  const methodLabels = usePaymentMethodLabels() as Record<string, string>;
+  const methodLabel = methodLabels[form.paymentMethod] ?? '—';
 
   return (
     <section className={styles.stepBody}>

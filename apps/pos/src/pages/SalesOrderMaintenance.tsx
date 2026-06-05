@@ -45,7 +45,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronRight, MapPin } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronRight, MapPin, Lock } from 'lucide-react';
+import { isCorePaymentMethodRow } from '@2990s/shared/payment-methods';
 import { Button } from '@2990s/design-system';
 import { useStaff } from '../lib/staff';
 import {
@@ -885,7 +886,10 @@ const DROPDOWN_CARDS: Array<{ category: SoDropdownCategory; title: string; help:
   {
     category: 'payment_method',
     title:    'Payment Method',
-    help: 'L1 of the 3-step Payments cascade. Merchant / Online / Cash.',
+    help: 'One list for everything — the POS handover cards and the Backend ' +
+          'Payments cascade both read these four rows. Rename a label or ' +
+          'reorder anytime; the four are wired to order logic, so they ' +
+          'can\'t be removed, turned off, or added to.',
   },
   {
     category: 'payment_merchant',
@@ -1081,6 +1085,14 @@ const DropdownCategoryCard = ({
                       </tr>
                     );
                   }
+                  /* 2026-06-06 payment-method unify — the four core method
+                     rows are a locked set: label + order editable, value /
+                     active / delete blocked (the API mirrors this with a
+                     409). Controls stay visible so the reason is
+                     discoverable, not hidden. */
+                  const lockedRow = isCorePaymentMethodRow(category, row.value);
+                  const lockHint =
+                    'Core payment method — wired to order logic. Rename or reorder it; it can\'t be removed or turned off.';
                   const buf = edits[row.id] ?? {};
                   const curValue     = buf.value     ?? row.value;
                   const curLabel     = buf.label     ?? row.label;
@@ -1095,7 +1107,8 @@ const DropdownCategoryCard = ({
                         <input
                           className={styles.input}
                           value={curValue}
-                          disabled={updateOpt.isPending}
+                          disabled={updateOpt.isPending || lockedRow}
+                          title={lockedRow ? lockHint : undefined}
                           onChange={(e) => setEdits((s) => ({
                             ...s, [row.id]: { ...s[row.id], value: e.target.value },
                           }))}
@@ -1116,11 +1129,12 @@ const DropdownCategoryCard = ({
                         />
                       </td>
                       <td>
-                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                          title={lockedRow ? lockHint : undefined}>
                           <input
                             type="checkbox"
                             checked={row.active}
-                            disabled={updateOpt.isPending}
+                            disabled={updateOpt.isPending || lockedRow}
                             onChange={() => toggleActive(row)}
                           />
                           <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
@@ -1140,15 +1154,25 @@ const DropdownCategoryCard = ({
                             Save
                           </button>
                         )}
-                        <button
-                          type="button"
-                          className={styles.editBtn}
-                          disabled={deleteOpt.isPending}
-                          onClick={() => removeRow(row)}
-                          aria-label="Delete option"
-                        >
-                          <Trash2 size={14} strokeWidth={1.75} />
-                        </button>
+                        {lockedRow ? (
+                          <span
+                            title={lockHint}
+                            aria-label={lockHint}
+                            style={{ display: 'inline-flex', padding: 4, color: 'var(--fg-muted)' }}
+                          >
+                            <Lock size={14} strokeWidth={1.75} />
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className={styles.editBtn}
+                            disabled={deleteOpt.isPending}
+                            onClick={() => removeRow(row)}
+                            aria-label="Delete option"
+                          >
+                            <Trash2 size={14} strokeWidth={1.75} />
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -1157,7 +1181,27 @@ const DropdownCategoryCard = ({
             </table>
           )}
 
-          {canAdd(mode) && (
+          {/* 2026-06-06 payment-method unify — no Add for the locked
+              category; a hint explains why instead of hiding silently. */}
+          {category === 'payment_method' && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: 'var(--space-3) var(--space-4)',
+              background: 'var(--bg-alt)',
+              borderTop: rows.length > 0 ? '1px solid var(--line)' : undefined,
+              fontSize: 'var(--fs-12)',
+              color: 'var(--fg-muted)',
+            }}>
+              <Lock size={14} strokeWidth={1.75} />
+              <span>
+                These four are core methods wired to order logic — rename or
+                reorder them anytime, but they can&apos;t be removed, turned
+                off, or added to. Banks, online types and installment plans
+                are managed in the cards below.
+              </span>
+            </div>
+          )}
+          {canAdd(mode) && category !== 'payment_method' && (
             <div style={{
               display: 'grid',
               gridTemplateColumns: '1fr 1.5fr auto',

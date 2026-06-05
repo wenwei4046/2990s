@@ -886,16 +886,15 @@ const OrderDetail = ({ order, onClose }: {
     },
   });
 
-  // Map the SO header payment_method → the ledger's 3-method enum. The SO can
-  // carry 'installment' (a merchant plan); the payments ledger only knows
-  // merchant / transfer / cash, so installment folds into 'merchant'. We don't
+  // Map the SO header payment_method → the ledger enum. 2026-06-06
+  // payment-method unify: 'installment' is now first-class on the payments
+  // route, so it passes through instead of folding into 'merchant'. We don't
   // forward an installmentMonths term here — the /mine payload doesn't carry
   // it, and the SO header already tracks the plan length. Anything
   // unrecognised defaults to cash.
-  const paymentMethodFor = (): { method: 'merchant' | 'transfer' | 'cash' } => {
+  const paymentMethodFor = (): { method: 'merchant' | 'transfer' | 'cash' | 'installment' } => {
     const m = (order.paymentMethod ?? '').toLowerCase();
-    if (m === 'installment') return { method: 'merchant' };
-    if (m === 'merchant' || m === 'transfer' || m === 'cash') return { method: m };
+    if (m === 'merchant' || m === 'transfer' || m === 'cash' || m === 'installment') return { method: m };
     return { method: 'cash' };
   };
 
