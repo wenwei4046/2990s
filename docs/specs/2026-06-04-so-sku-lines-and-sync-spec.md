@@ -192,7 +192,7 @@
 
 **已全部拍板(Loo,2026-06-05,实施会话逐个 AskUserQuestion 确认)**:
 - ✅ D1:**新建 `service_centi` 桶**(迁移 0155+;recomputeTotals SO/DO/SI 三处同步;0147 视图 DROP+CREATE 重建)。
-- ✅ D2:**执行类上 DO,运费类不上** —— dispose/lift 复制上 DO(司机要执行:收旧床垫、搬楼),`SVC-DELIVERY*` 运费行不上 DO;SI 照常含全部 SERVICE 行;DR 不含 SERVICE。
+- ✅ D2(2026-06-05 终版,Loo 二次拍板):**全部 SERVICE 行数据+打印全程跟单 SO→DO→SI,不做任何隐藏**。理由:SI 是从 DO 行生成的(`/sales-invoices/from-dos` 按 DO 行剩余可开票量复制),运费行不上 DO 就到不了发票(AR 漏收)且 SO 永远"没送完";SAP B1 同款做法。司机在 DO 打印件上看得到运费行(Loo 原话"打印也上")。DR(退货)仍**不含** SERVICE 行;DO 过账**不产生** SERVICE 行的库存 movement。〔推翻初版"运费类不上 DO"的拍板 —— 初版会断开发票链〕
 - ✅ D3:**按行卖价占比分摊**,四舍五入差额贴末行,保证 Σ行 = 整 build 报价;drift 门按 build 聚合校验。
 - ✅ D4:**锁死** —— Backend 卖价自动填自 POS SKU Master 后,operator 不可改,admin 以上才能改(需加权限门;推翻 2026-05-31 "可改"政策,Loo 明确选择更严)。
 - ✅ D5:**订金自动入 payments ledger** —— SO 创建时同步写一条 payment 记录(amount=deposit、method、approval_code、collected_by=salesperson、slip 关联)。与 Finance 现行 Excel 导出对账流程一致(slip 人工审核 5/22 已废除)。
