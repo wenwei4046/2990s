@@ -82,6 +82,9 @@ export type MfgProductRow = {
   size_label: string | null;
   base_price_sen: number | null;
   price1_sen: number | null;
+  /** Customer-facing SELLING price (POS Master / Main Account authored).
+      SO-SKU spec P4 (D4): the SO line editor defaults unit price from this. */
+  sell_price_sen: number | null;
   pwp_price_sen: number | null;    // PWP (换购) SELLING base price (0128)
   unit_m3_milli: number;
   status: 'ACTIVE' | 'INACTIVE';
