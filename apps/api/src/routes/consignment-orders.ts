@@ -387,6 +387,46 @@ consignmentOrders.get('/mine', async (c) => {
   return c.json({ salesOrders });
 });
 
+/* Per-CO-line delivery breakdown — which Consignment Note (=DO) shipped how
+   much against each order line. Mirrors the SO detail's per-line `deliveries`.
+   Cancelled notes are excluded. Read-only; powers the "Delivered" column. */
+type CoLineDelivery = { noNumber: string; qty: number; status: string };
+async function coLineDeliveries(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  sb: any,
+  soItemIds: string[],
+): Promise<Map<string, CoLineDelivery[]>> {
+  const out = new Map<string, CoLineDelivery[]>();
+  if (soItemIds.length === 0) return out;
+  const { data: doLines } = await sb
+    .from('consignment_delivery_order_items')
+    .select('consignment_so_item_id, qty, consignment_delivery_order_id')
+    .in('consignment_so_item_id', soItemIds);
+  const rows = (doLines ?? []) as Array<{
+    consignment_so_item_id: string | null; qty: number; consignment_delivery_order_id: string;
+  }>;
+  const doIds = [...new Set(rows.map((r) => r.consignment_delivery_order_id).filter(Boolean))];
+  if (doIds.length === 0) return out;
+  const { data: dos } = await sb.from('consignment_delivery_orders')
+    .select('id, do_number, status').in('id', doIds);
+  const doMeta = new Map<string, { noNumber: string; status: string }>();
+  for (const g of (dos ?? []) as Array<{ id: string; do_number: string | null; status: string | null }>) {
+    if ((g.status ?? '').toUpperCase() === 'CANCELLED') continue;
+    doMeta.set(g.id, { noNumber: g.do_number ?? '—', status: (g.status ?? '').toUpperCase() });
+  }
+  for (const r of rows) {
+    if (!r.consignment_so_item_id) continue;
+    const meta = doMeta.get(r.consignment_delivery_order_id);
+    if (!meta) continue;
+    const qty = Number(r.qty ?? 0);
+    if (qty <= 0) continue;
+    const arr = out.get(r.consignment_so_item_id) ?? [];
+    arr.push({ noNumber: meta.noNumber, qty, status: meta.status });
+    out.set(r.consignment_so_item_id, arr);
+  }
+  return out;
+}
+
 consignmentOrders.get('/:docNo', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo');
   const [h, i] = await Promise.all([
@@ -410,7 +450,9 @@ consignmentOrders.get('/:docNo', async (c) => {
     ...(h.data as unknown as Record<string, unknown>),
     has_children: (doCount ?? 0) > 0 || (siCount ?? 0) > 0,
   };
-  const items = (i.data ?? []) as unknown as Array<Record<string, unknown>>;
+  const itemRows = (i.data ?? []) as unknown as Array<Record<string, unknown> & { id: string }>;
+  const deliveriesMap = await coLineDeliveries(sb, itemRows.map((it) => it.id));
+  const items = itemRows.map((it) => ({ ...it, deliveries: deliveriesMap.get(it.id) ?? [] }));
   return c.json({ salesOrder, items });
 });
 

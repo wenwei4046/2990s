@@ -26,7 +26,7 @@ import {
   forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
   type CSSProperties,
 } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Plus, Save, X, ChevronDown,
 } from 'lucide-react';
@@ -159,6 +159,7 @@ const draftFromItem = (it: ConsignmentItem): SoLineDraft => ({
 
 export const ConsignmentOrderDetail = () => {
   const { docNo } = useParams<{ docNo: string }>();
+  const navigate = useNavigate();
   const detail = useConsignmentOrderDetail(docNo ?? null);
   const updateHeader = useUpdateConsignmentOrderHeader();
   const addItem = useAddConsignmentOrderItem();
@@ -168,6 +169,32 @@ export const ConsignmentOrderDetail = () => {
 
   const header = (detail.data?.salesOrder as ConsignmentHeader | undefined) ?? null;
   const items = (detail.data?.items as ConsignmentItem[] | undefined) ?? [];
+
+  /* Per-line "Delivered" drill-down — which Consignment Note shipped how much
+     (backend attaches `deliveries` per item via coLineDeliveries). */
+  const renderDelivered = (it: ConsignmentItem) => {
+    const deliveries = (it as ConsignmentItem & {
+      deliveries?: Array<{ noNumber: string; qty: number; status: string }>;
+    }).deliveries ?? [];
+    if (deliveries.length === 0) return <span className={styles.muted}>—</span>;
+    const shipped = deliveries.reduce((s, d) => s + d.qty, 0);
+    const remaining = Math.max(0, (it.qty ?? 0) - shipped);
+    return (
+      <div>
+        {deliveries.map((d, di) => (
+          <div key={di} style={{ fontWeight: 600, whiteSpace: 'nowrap', fontSize: 'var(--fs-12)' }}>
+            {d.noNumber} <span className={styles.muted} style={{ fontWeight: 400 }}>×{d.qty}</span>
+          </div>
+        ))}
+        <div style={{
+          fontSize: 'var(--fs-11)', marginTop: 1,
+          color: remaining > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
+        }}>
+          {remaining > 0 ? `Balance ${remaining}` : 'Fully delivered'}
+        </div>
+      </div>
+    );
+  };
 
   const [editingDrafts, setEditingDrafts] = useState<Record<string, SoLineDraft>>({});
   const [addingDraft, setAddingDraft] = useState<SoLineDraft | null>(null);
@@ -454,10 +481,17 @@ export const ConsignmentOrderDetail = () => {
             </span>
           </div>
           {!isEditing ? (
-            <Button variant="primary" size="md" onClick={enterEdit}>
-              <Pencil {...ICON} />
-              <span>Edit</span>
-            </Button>
+            <>
+              <Button variant="ghost" size="md"
+                onClick={() => navigate(`/consignment-note/new?fromConsignmentOrder=${encodeURIComponent(header.doc_no)}`)}>
+                <FileText {...ICON} />
+                <span>Create Consignment Note</span>
+              </Button>
+              <Button variant="primary" size="md" onClick={enterEdit}>
+                <Pencil {...ICON} />
+                <span>Edit</span>
+              </Button>
+            </>
           ) : (
             <>
               <Button variant="ghost" size="md"
@@ -553,6 +587,7 @@ export const ConsignmentOrderDetail = () => {
                 <th className={styles.tableRight}>Disc</th>
                 <th className={styles.tableRight}>Delivery</th>
                 <th className={styles.tableRight}>Total</th>
+                <th>Delivered</th>
               </tr>
             </thead>
             <tbody>
@@ -590,6 +625,7 @@ export const ConsignmentOrderDetail = () => {
                       ) : '—'}
                     </td>
                     <td className={styles.priceCell}>{fmtRm(it.total_centi, header.currency)}</td>
+                    <td>{renderDelivered(it)}</td>
                   </tr>
                 );
               })}

@@ -20,14 +20,15 @@
 // numbering is CN-YYMM-NNN.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import {
   useCreateConsignmentNote, useAddConsignmentNotePayment,
 } from '../lib/consignment-note-queries';
+import { useConsignmentOrderDetail } from '../lib/consignment-order-queries';
 import { useStaff } from '../lib/admin-queries';
 import { useDrivers } from '../lib/drivers-queries';
 import {
@@ -56,12 +57,17 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 
 export const ConsignmentNoteNew = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // Convert-from: a Consignment Order (=SO) this note ships against. Mirrors the
+  // DO's ?fromSo= prefill — seed header + lines from the order, free-edit after.
+  const fromConsignmentOrder = searchParams.get('fromConsignmentOrder');
 
   const create = useCreateConsignmentNote();
   const addPayment = useAddConsignmentNotePayment();
   const staffQ = useStaff();
   const driversQ = useDrivers();
   const loc = useLocalities();
+  const coDetail = useConsignmentOrderDetail(fromConsignmentOrder);
 
   const customerTypeOptsQ = useSoDropdownOptions('customer_type');
   const buildingTypeOptsQ = useSoDropdownOptions('building_type');
@@ -108,6 +114,60 @@ export const ConsignmentNoteNew = () => {
   // ── Items + payments ──
   const [lines, setLines] = useState<DraftLine[]>(() => [newLine()]);
   const [paymentDrafts, setPaymentDrafts] = useState<PaymentDraft[]>([]);
+
+  // ── Convert-from prefill (seed once when the source order arrives) ──
+  const [prefilled, setPrefilled] = useState(false);
+  useEffect(() => {
+    if (!fromConsignmentOrder || prefilled) return;
+    const co = coDetail.data?.salesOrder as Record<string, unknown> | undefined;
+    const coItems = (coDetail.data?.items as Array<Record<string, unknown>> | undefined) ?? [];
+    if (!co) return;
+
+    const str = (v: unknown): string => (v == null ? '' : String(v));
+    setDebtorCode(str(co.debtor_code));
+    setDebtorName(str(co.debtor_name));
+    setPhone(str(co.phone));
+    setEmail(str(co.email));
+    setSalespersonId(str(co.salesperson_id));
+    setCustomerType(str(co.customer_type));
+    setCustomerSoNo(str(co.customer_so_no));
+    setBuildingType(str(co.building_type));
+    setVenue(str(co.venue));
+    setVenueId(str(co.venue_id));
+    setExpectedDeliveryAt(str(co.customer_delivery_date));
+    setCustomerDeliveryDate(str(co.customer_delivery_date));
+    setNote(str(co.note));
+    setAddress1(str(co.address1));
+    setAddress2(str(co.address2));
+    setState(str(co.customer_state ?? co.state));
+    setCity(str(co.city));
+    setPostcode(str(co.postcode));
+    setSalesLocation(str(co.sales_location));
+    setBranding(str(co.branding));
+    setEmergencyName(str(co.emergency_contact_name));
+    setEmergencyRel(str(co.emergency_contact_relationship));
+    setEmergencyPhone(str(co.emergency_contact_phone));
+
+    if (coItems.length > 0) {
+      setLines(coItems.map((it, idx) => ({
+        ...newLine(),
+        rid: `l${Date.now()}-${idx}-${str(it.id).slice(0, 6)}`,
+        itemGroup: str(it.item_group) || 'others',
+        itemCode: str(it.item_code),
+        description: str(it.description),
+        uom: str(it.uom) || 'UNIT',
+        qty: Number(it.qty ?? 1),
+        unitPriceCenti: Number(it.unit_price_centi ?? 0),
+        discountCenti: Number(it.discount_centi ?? 0),
+        unitCostCenti: Number(it.unit_cost_centi ?? 0),
+        variants: (it.variants as Record<string, unknown>) ?? {},
+      })));
+    }
+
+    setPrefilled(true);
+  }, [fromConsignmentOrder, prefilled, coDetail.data]);
+
+  const loadingPrefill = Boolean(fromConsignmentOrder) && !prefilled && coDetail.isLoading;
 
   const staffList = useMemo(() => (staffQ.data ?? []).filter((s) => s.active), [staffQ.data]);
   const drivers = driversQ.data ?? [];
@@ -235,13 +295,20 @@ export const ConsignmentNoteNew = () => {
           <Link to="/consignment-note" className={styles.backBtn}>
             <ArrowLeft {...ICON} /> <span>Consignment Notes</span>
           </Link>
-          <h1 className={styles.title}>New Consignment Note</h1>
+          <h1 className={styles.title}>
+            New Consignment Note
+            {fromConsignmentOrder && (
+              <span style={{ fontSize: 'var(--fs-13)', fontWeight: 600, color: 'var(--fg-muted)', marginLeft: 8 }}>
+                {loadingPrefill ? `· loading ${fromConsignmentOrder}…` : `· from ${fromConsignmentOrder}`}
+              </span>
+            )}
+          </h1>
         </div>
         <div className={styles.actions}>
           <Button variant="ghost" size="md" onClick={() => navigate('/consignment-note')}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending}>
+          <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending || loadingPrefill}>
             <Save {...ICON} />
             {create.isPending ? 'Saving…' : 'Create Consignment Note'}
           </Button>

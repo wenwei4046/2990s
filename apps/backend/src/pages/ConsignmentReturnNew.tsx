@@ -20,12 +20,13 @@
 // CRN-YYMM-NNN.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import { useCreateConsignmentReturn } from '../lib/consignment-return-queries';
+import { useConsignmentNoteDetail } from '../lib/consignment-note-queries';
 import { useStaff } from '../lib/admin-queries';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
@@ -50,10 +51,15 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 
 export const ConsignmentReturnNew = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // Convert-from: a Consignment Note (=DO) this return collects back. Mirrors the
+  // DR's ?fromDo= prefill — seed header + lines from the note, free-edit after.
+  const fromConsignmentNote = searchParams.get('fromConsignmentNote');
 
   const create = useCreateConsignmentReturn();
   const staffQ = useStaff();
   const loc = useLocalities();
+  const cnDetail = useConsignmentNoteDetail(fromConsignmentNote);
 
   const customerTypeOptsQ = useSoDropdownOptions('customer_type');
   const buildingTypeOptsQ = useSoDropdownOptions('building_type');
@@ -95,6 +101,60 @@ export const ConsignmentReturnNew = () => {
 
   // ── Items ──
   const [lines, setLines] = useState<DraftLine[]>(() => [newLine()]);
+
+  // ── Convert-from prefill (seed once when the source note arrives) ──
+  const [prefilled, setPrefilled] = useState(false);
+  useEffect(() => {
+    if (!fromConsignmentNote || prefilled) return;
+    const cn = cnDetail.data?.deliveryOrder as Record<string, unknown> | undefined;
+    const cnItems = (cnDetail.data?.items as Array<Record<string, unknown>> | undefined) ?? [];
+    if (!cn) return;
+
+    const str = (v: unknown): string => (v == null ? '' : String(v));
+    setDebtorCode(str(cn.debtor_code));
+    setDebtorName(str(cn.debtor_name));
+    setPhone(str(cn.phone));
+    setEmail(str(cn.email));
+    setSalespersonId(str(cn.salesperson_id));
+    setCustomerType(str(cn.customer_type));
+    setCustomerSoNo(str(cn.customer_so_no));
+    setBuildingType(str(cn.building_type));
+    setVenue(str(cn.venue));
+    setVenueId(str(cn.venue_id));
+    setNote(str(cn.note));
+    setAddress1(str(cn.address1));
+    setAddress2(str(cn.address2));
+    setState(str(cn.customer_state ?? cn.state));
+    setCity(str(cn.city));
+    setPostcode(str(cn.postcode));
+    setSalesLocation(str(cn.sales_location));
+    setBranding(str(cn.branding));
+    setEmergencyName(str(cn.emergency_contact_name));
+    setEmergencyRel(str(cn.emergency_contact_relationship));
+    setEmergencyPhone(str(cn.emergency_contact_phone));
+    if (cn.do_number) setReason(`Return from ${str(cn.do_number)}`);
+
+    if (cnItems.length > 0) {
+      setLines(cnItems.map((it, idx) => ({
+        ...newLine(),
+        rid: `l${Date.now()}-${idx}-${str(it.id).slice(0, 6)}`,
+        itemGroup: str(it.item_group) || 'others',
+        itemCode: str(it.item_code),
+        description: str(it.description),
+        uom: str(it.uom) || 'UNIT',
+        qty: Number(it.qty ?? 1),
+        unitPriceCenti: Number(it.unit_price_centi ?? 0),
+        discountCenti: Number(it.discount_centi ?? 0),
+        unitCostCenti: Number(it.unit_cost_centi ?? 0),
+        variants: (it.variants as Record<string, unknown>) ?? {},
+        condition: 'NEW',
+      })));
+    }
+
+    setPrefilled(true);
+  }, [fromConsignmentNote, prefilled, cnDetail.data]);
+
+  const loadingPrefill = Boolean(fromConsignmentNote) && !prefilled && cnDetail.isLoading;
 
   const staffList = useMemo(() => (staffQ.data ?? []).filter((s) => s.active), [staffQ.data]);
 
@@ -178,13 +238,20 @@ export const ConsignmentReturnNew = () => {
           <Link to="/consignment-return" className={styles.backBtn}>
             <ArrowLeft {...ICON} /> <span>Consignment Returns</span>
           </Link>
-          <h1 className={styles.title}>New Consignment Return</h1>
+          <h1 className={styles.title}>
+            New Consignment Return
+            {fromConsignmentNote && (
+              <span style={{ fontSize: 'var(--fs-13)', fontWeight: 600, color: 'var(--fg-muted)', marginLeft: 8 }}>
+                {loadingPrefill ? '· loading note…' : '· from Consignment Note'}
+              </span>
+            )}
+          </h1>
         </div>
         <div className={styles.actions}>
           <Button variant="ghost" size="md" onClick={() => navigate('/consignment-return')}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending || !canSave}>
+          <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending || !canSave || loadingPrefill}>
             <Save {...ICON} />
             {create.isPending ? 'Saving…' : 'Create Consignment Return'}
           </Button>
