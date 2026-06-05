@@ -32,8 +32,11 @@ import {
   loadSpecialAddons,
   recomputeFromSnapshot,
   loadProductByCode,
+  loadProductsByCodes,
   loadFabricByCode,
+  loadFabricsByCodes,
   loadFabricSellingTiers,
+  loadFabricSellingTiersByIds,
   loadFabricTierAddonConfig,
   loadModelSofaModulePrices,
   type MfgItemForRecompute,
@@ -46,6 +49,7 @@ import {
 import {
   checkAllowedOptions,
   loadProductAndModel,
+  loadProductsAndModels,
 } from '../lib/allowed-options-check';
 import { findIncompleteVariantLines } from '../lib/so-variant-check';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
@@ -737,7 +741,7 @@ mfgSalesOrders.get('/:docNo/slip-url', async (c) => {
    follow-up (the unique index is the hard backstop). */
 type CrossCatEligibility = {
   eligible: boolean;
-  reason?: 'not_found' | 'cancelled' | 'different_customer' | 'already_used';
+  reason?: 'not_found' | 'cancelled' | 'different_customer' | 'already_used' | 'lookup_failed';
   debtorName?: string | null;
 };
 
@@ -747,11 +751,19 @@ async function checkCrossCategorySource(
   newPhoneRaw: string | null,
   newCustomerId: string | null = null,
 ): Promise<CrossCatEligibility> {
-  const { data: srcRow } = await sb
+  const { data: srcRow, error: srcErr } = await sb
     .from('mfg_sales_orders')
     .select('doc_no, status, phone, debtor_name, customer_id')
     .eq('doc_no', docNo)
     .maybeSingle();
+  /* Loo 2026-06-06 (SO-2606-025 incident) — a FAILED query is not a missing
+     order. This used to swallow the error and report "Order was not found"
+     for a real SO when the CF Workers free-plan subrequest cap killed this
+     exact fetch (#51 of 50). Surface it as retryable instead. */
+  if (srcErr) {
+    console.error('[mfg-so] cross-category source lookup failed:', srcErr.message ?? srcErr);
+    return { eligible: false, reason: 'lookup_failed' };
+  }
   const src = srcRow as { doc_no: string; status: string; phone: string | null; debtor_name: string | null; customer_id: string | null } | null;
   if (!src) return { eligible: false, reason: 'not_found' };
   if (src.status === 'CANCELLED') return { eligible: false, reason: 'cancelled' };
@@ -766,10 +778,16 @@ async function checkCrossCategorySource(
     const srcPhone = src.phone ? (normalizePhone(src.phone) ?? src.phone) : null;
     if (newPhone && srcPhone && newPhone !== srcPhone) return { eligible: false, reason: 'different_customer' };
   }
-  const { count } = await sb
+  const { count, error: countErr } = await sb
     .from('mfg_sales_orders')
     .select('doc_no', { count: 'exact', head: true })
     .eq('cross_category_source_doc_no', docNo);
+  // Same honesty rule as above — a failed count must not silently pass the
+  // already-used gate (fail-open) nor masquerade as another reason.
+  if (countErr) {
+    console.error('[mfg-so] cross-category already-used count failed:', countErr.message ?? countErr);
+    return { eligible: false, reason: 'lookup_failed' };
+  }
   if ((count ?? 0) > 0) return { eligible: false, reason: 'already_used' };
   return { eligible: true, debtorName: src.debtor_name ?? null };
 }
@@ -779,6 +797,7 @@ const crossCatReasonText = (docNo: string, reason?: string): string =>
   : reason === 'cancelled'         ? `Order ${docNo} is cancelled.`
   : reason === 'different_customer'? `Order ${docNo} belongs to a different customer.`
   : reason === 'already_used'      ? `Order ${docNo} was already used for a cross-category discount.`
+  : reason === 'lookup_failed'     ? `Could not verify order ${docNo} — please try again.`
   :                                  `Order ${docNo} is not a valid linked order.`;
 
 // GET /cross-category-eligibility?docNo&phone — live check for the handover
@@ -1231,18 +1250,20 @@ mfgSalesOrders.post('/', async (c) => {
   const cachedSpecialAddons = await loadSpecialAddons(sb);
   /* PR #216 — allowed_options pre-flight. Run BEFORE the pricing recompute
      so a disallowed variant returns the precise field/value/allowed
-     payload instead of getting silently re-priced. Loads (product,model)
-     once per line; reused inputs (item_code) hit Supabase's per-request
-     cache. First violation across all lines short-circuits the request. */
+     payload instead of getting silently re-priced. Batched (Loo 2026-06-06):
+     2 `in()` queries for the whole order instead of 2 × lines — per-line
+     loads helped a 6-item order blow the CF Workers subrequest cap.
+     First violation across all lines short-circuits the request. */
+  const pmByCode = await loadProductsAndModels(sb, items.map((it) => String(it?.itemCode ?? '')));
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     if (!it) continue;
     const code = String(it.itemCode ?? '');
     if (!code) continue;
-    const { product, model } = await loadProductAndModel(sb, code);
+    const pm = pmByCode.get(code) ?? { product: null, model: null };
     const err = checkAllowedOptions(
-      product,
-      model,
+      pm.product,
+      pm.model,
       (it.variants as Parameters<typeof checkAllowedOptions>[2]) ?? null,
     );
     if (err) {
@@ -1258,9 +1279,10 @@ mfgSalesOrders.post('/', async (c) => {
   const dropdownErr = await validateSoDropdownFields(sb, body);
   if (dropdownErr) return c.json(dropdownErr, 409);
 
-  const lineProducts = await Promise.all(
-    items.map((it) => loadProductByCode(sb, String(it.itemCode ?? ''))),
-  );
+  // Subrequest diet (Loo 2026-06-06) — one `in()` query for every line's
+  // product row instead of one query per line.
+  const productRowByCode = await loadProductsByCodes(sb, items.map((it) => String(it.itemCode ?? '')));
+  const lineProducts = items.map((it) => productRowByCode.get(String(it.itemCode ?? '').trim()) ?? null);
   /* PWP Code Voucher (migration 0130) — code-driven grant + atomic claim. A
      reward line earns its per-SKU pwp_price_sen ONLY if it carries a valid
      `variants.pwpCode`: the code exists, is redeemable (AVAILABLE, or RESERVED
@@ -1311,6 +1333,31 @@ mfgSalesOrders.post('/', async (c) => {
      until after this loop, so line B's orphan check found no such SO and
      "self-healed" line A's fresh claim. Gate duplicates up front. */
   const seenPwpCodes = new Set<string>();
+  /* Subrequest diet (Loo 2026-06-06) — prefetch every carried code in ONE
+     `in()` query instead of one read per code. The conditional UPDATE below
+     stays the atomicity authority: a code claimed by a parallel order between
+     this read and the claim simply fails the claim ("just claimed — try
+     again"), exactly as before. */
+  const allPwpCodes = Array.from(new Set(
+    items
+      .map((it) => String((it?.variants as { pwpCode?: string | null } | null)?.pwpCode ?? '').trim())
+      .filter(Boolean),
+  ));
+  const pwpRowByCode = new Map<string, Record<string, any>>();
+  let pwpPrefetchFailed = false;
+  if (allPwpCodes.length > 0) {
+    const { data: codeRows, error: codeReadErr } = await sb
+      .from('pwp_codes')
+      .select('code, status, owner_staff_id, reward_category, eligible_reward_model_ids, reward_combo_ids, customer_id, source_doc_no, redeemed_doc_no, type')
+      .in('code', allPwpCodes);
+    if (codeReadErr) {
+      // A failed read is NOT "code not found" (same honesty rule as the
+      // cross-category lookup) — reject as retryable, burn nothing.
+      console.error('[mfg-so] pwp code prefetch failed:', codeReadErr.message ?? codeReadErr);
+      pwpPrefetchFailed = true;
+    }
+    for (const r of ((codeRows as Array<Record<string, any>>) ?? [])) pwpRowByCode.set(String(r.code), r);
+  }
   for (let idx = 0; idx < items.length; idx++) {
     const it = items[idx];
     const code = String((it?.variants as { pwpCode?: string | null } | null)?.pwpCode ?? '').trim();
@@ -1321,11 +1368,8 @@ mfgSalesOrders.post('/', async (c) => {
     seenPwpCodes.add(code);
     const product = lineProducts[idx];
     if (!product) { reject('unknown item code'); continue; }
-    const { data: cRow } = await sb
-      .from('pwp_codes')
-      .select('status, owner_staff_id, reward_category, eligible_reward_model_ids, reward_combo_ids, customer_id, source_doc_no, redeemed_doc_no, type')
-      .eq('code', code)
-      .maybeSingle();
+    if (pwpPrefetchFailed) { reject('could not verify the code — please try again'); continue; }
+    const cRow = pwpRowByCode.get(code) ?? null;
     if (!cRow) { reject('code not found — it may have been replaced; re-apply PWP on this line'); continue; }
     const redeemable = cRow.status === 'AVAILABLE' || (cRow.status === 'RESERVED' && cRow.owner_staff_id === user.id);
     /* Orphan self-heal (2026-06-05, SO-2606-020 incident) — a code claimed by a
@@ -1461,24 +1505,37 @@ mfgSalesOrders.post('/', async (c) => {
   /* P3 — keep each sofa item's module price map so the split below distributes
      the build total with the SAME weights the drift gate priced from. */
   const sofaModulePricesByIdx = new Map<number, Record<string, number> | null>();
+  /* Subrequest diet (Loo 2026-06-06) — prefetch every line's fabric rows in
+     TWO `in()` queries (was 2 × lines), and memoize the per-(base_model,
+     depth) sofa module-price load so N lines of the same Model cost one
+     query instead of N. */
+  const fabricRowByCode = await loadFabricsByCodes(
+    sb, items.map((it) => (it.variants as { fabricCode?: string } | null)?.fabricCode ?? null));
+  const sellingTiersByFabricId = await loadFabricSellingTiersByIds(
+    sb, items.map((it) => (it.variants as { fabricId?: string } | null)?.fabricId ?? null));
+  const sofaModulePricesMemo = new Map<string, Promise<Record<string, number> | null>>();
   const recomputes: Array<RecomputedLine | null> = await Promise.all(items.map(async (it, idx) => {
     const itemCode = String(it.itemCode ?? '');
     if (!itemCode) return null;
     const product = lineProducts[idx] ?? null;
-    const [fabric, sellingTiers] = await Promise.all([
-      loadFabricByCode(sb, (it.variants as { fabricCode?: string } | null)?.fabricCode ?? null),
-      loadFabricSellingTiers(sb, (it.variants as { fabricId?: string } | null)?.fabricId ?? null),
-    ]);
+    const fabricCode = ((it.variants as { fabricCode?: string } | null)?.fabricCode ?? '').trim();
+    const fabricId = ((it.variants as { fabricId?: string } | null)?.fabricId ?? '').trim();
+    const fabric = fabricCode ? (fabricRowByCode.get(fabricCode) ?? null) : null;
+    const sellingTiers = fabricId ? (sellingTiersByFabricId.get(fabricId) ?? null) : null;
     // SOFA-SELLING-PLAN — a sofa's per-module SELLING prices are its Model's
     // module-SKU sell_price_sen; load them so the drift gate reprices the build
     // from the same source the POS used. Non-sofa lines skip it.
-    const sofaModulePrices = product?.category === 'SOFA'
-      ? await loadModelSofaModulePrices(
-          sb,
-          product.base_model,
-          String((it.variants as { depth?: unknown } | null)?.depth ?? '24'),
-        )
-      : null;
+    let sofaModulePrices: Record<string, number> | null = null;
+    if (product?.category === 'SOFA') {
+      const depth = String((it.variants as { depth?: unknown } | null)?.depth ?? '24');
+      const memoKey = `${product.base_model ?? ''}|${depth}`;
+      let pending = sofaModulePricesMemo.get(memoKey);
+      if (!pending) {
+        pending = loadModelSofaModulePrices(sb, product.base_model, depth);
+        sofaModulePricesMemo.set(memoKey, pending);
+      }
+      sofaModulePrices = await pending;
+    }
     sofaModulePricesByIdx.set(idx, sofaModulePrices);
     const draft: MfgItemForRecompute = {
       itemCode,

@@ -440,6 +440,21 @@ export async function loadProductByCode(sb: any, code: string): Promise<ProductR
   return data as ProductRowLite;
 }
 
+/** Batched mirror of {@link loadProductByCode} — ONE `in()` query for a whole
+ *  order's line codes, keyed by code. Subrequest diet (Loo 2026-06-06): the SO
+ *  create path used to issue one product lookup per line and a 6-item order
+ *  blew the CF Workers per-request subrequest cap; every per-line read on that
+ *  path must stay O(1) in queries. */
+export async function loadProductsByCodes(sb: any, codes: Array<string | null | undefined>): Promise<Map<string, ProductRowLite>> {
+  const uniq = Array.from(new Set(codes.map((c) => (c ?? '').trim()).filter(Boolean)));
+  if (uniq.length === 0) return new Map();
+  const { data } = await sb
+    .from('mfg_products')
+    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, pwp_price_sen, model_id, base_model, branding')
+    .in('code', uniq);
+  return new Map((((data as ProductRowLite[]) ?? [])).map((r) => [r.code, r]));
+}
+
 /** Load active Special Add-ons (migration 0134) as pricing defs. The SO recompute
  *  builds each line's specials pool from these (base sellingPriceSen + Σ chosen
  *  option-group extraSen) instead of the legacy maintenance_config.specials pool.
@@ -531,6 +546,18 @@ export async function loadFabricByCode(sb: any, code: string | null | undefined)
   return data as FabricRowLite;
 }
 
+/** Batched mirror of {@link loadFabricByCode} — ONE `in()` query, keyed by
+ *  fabric_code. Part of the SO-create subrequest diet (Loo 2026-06-06). */
+export async function loadFabricsByCodes(sb: any, codes: Array<string | null | undefined>): Promise<Map<string, FabricRowLite>> {
+  const uniq = Array.from(new Set(codes.map((c) => (c ?? '').trim()).filter(Boolean)));
+  if (uniq.length === 0) return new Map();
+  const { data } = await sb
+    .from('fabric_trackings')
+    .select('fabric_code, sofa_price_tier, bedframe_price_tier, price_tier')
+    .in('fabric_code', uniq);
+  return new Map((((data as FabricRowLite[]) ?? [])).map((r) => [r.fabric_code, r]));
+}
+
 /** Load the most-recent master maintenance config row's `config` JSON. */
 export async function loadMaintenanceConfig(sb: any): Promise<MaintenanceConfig | null> {
   const { data } = await sb
@@ -562,6 +589,27 @@ export async function loadFabricSellingTiers(
     sofaTier:     ((data as { sofa_tier?: string | null }).sofa_tier ?? null) as FabricTier | null,
     bedframeTier: ((data as { bedframe_tier?: string | null }).bedframe_tier ?? null) as FabricTier | null,
   };
+}
+
+/** Batched mirror of {@link loadFabricSellingTiers} — ONE `in()` query, keyed
+ *  by fabric_library id. Part of the SO-create subrequest diet (Loo 2026-06-06). */
+export async function loadFabricSellingTiersByIds(
+  sb: any,
+  ids: Array<string | null | undefined>,
+): Promise<Map<string, { sofaTier: FabricTier | null; bedframeTier: FabricTier | null }>> {
+  const uniq = Array.from(new Set(ids.map((i) => (i ?? '').trim()).filter(Boolean)));
+  if (uniq.length === 0) return new Map();
+  const { data } = await sb
+    .from('fabric_library')
+    .select('id, sofa_tier, bedframe_tier')
+    .in('id', uniq);
+  return new Map((((data as Array<{ id: string; sofa_tier?: string | null; bedframe_tier?: string | null }>) ?? [])).map((r) => [
+    r.id,
+    {
+      sofaTier:     (r.sofa_tier ?? null) as FabricTier | null,
+      bedframeTier: (r.bedframe_tier ?? null) as FabricTier | null,
+    },
+  ]));
 }
 
 /** Load the singleton fabric-tier add-on Δ config (whole MYR). Missing → all 0. */
