@@ -12,6 +12,7 @@
     "./pwp": "./src/pwp.ts",
     "./order-rules": "./src/order-rules.ts",
     "./so-variant-rule": "./src/so-variant-rule.ts",
+    "./service-sku": "./src/service-sku.ts",
     "./format": "./src/format.ts",
     "./phone": "./src/phone.ts",
     "./schemas": "./src/schemas/index.ts"
