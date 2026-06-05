@@ -131,7 +131,7 @@ describe('groupSoLinesForDisplay', () => {
 describe('pwpRewardNote', () => {
   it('renders code + trigger label for a same-cart redemption', () => {
     expect(pwpRewardNote({ pwp: true, pwpCode: 'PWP-9051VZQU', pwpTriggerLabel: 'Arrus Firm' }))
-      .toEqual({ tone: 'used', text: 'PWP price · PWP: PWP-9051VZQU · 换购自 Arrus Firm' });
+      .toEqual({ tone: 'used', text: 'PWP price · PWP: PWP-9051VZQU · redeemed with Arrus Firm' });
   });
 
   it('omits the label for cross-order redemptions (label is null)', () => {
@@ -159,7 +159,7 @@ describe('pwpTriggerNotes', () => {
   it('marks used vouchers short and unused ones per 排法 A', () => {
     expect(pwpTriggerNotes(['ARRUS-F-Q'], codes)).toEqual([
       { tone: 'used', text: 'PWP: PWP-AAAA1111' },
-      { tone: 'unused', text: 'PWP voucher issued: PWP-BBBB2222 · not redeemed yet 未使用' },
+      { tone: 'unused', text: 'PWP voucher issued: PWP-BBBB2222 · not redeemed yet' },
     ]);
   });
 
