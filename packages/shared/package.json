@@ -14,6 +14,7 @@
     "./so-variant-rule": "./src/so-variant-rule.ts",
     "./service-sku": "./src/service-sku.ts",
     "./service-lines": "./src/service-lines.ts",
+    "./so-sofa-split": "./src/so-sofa-split.ts",
     "./format": "./src/format.ts",
     "./phone": "./src/phone.ts",
     "./schemas": "./src/schemas/index.ts"

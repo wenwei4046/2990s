@@ -14,3 +14,4 @@ export * from './fabric-tier-addon';
 export * from './adjustment-reasons'; // 2026-06-04 — stock adjustment reason codes
 export * from './service-sku'; // 2026-06-05 — SERVICE SKU vocabulary + guards (SO-SKU spec P1)
 export * from './service-lines'; // 2026-06-05 — fee/addon → SERVICE line builders (SO-SKU spec P2)
+export * from './so-sofa-split'; // 2026-06-05 — sofa build → per-module line split (SO-SKU spec P3)
