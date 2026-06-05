@@ -46,13 +46,14 @@ export const TargetDateStep = ({
       update('deliveryDateLater', false);
     }
   };
-  // A specific delivery date is picked from the calendar. Seed the Process Date
-  // to today when unset, and never let an existing Process Date sit after the
-  // delivery date.
+  // A specific delivery date is picked from the calendar. The Process Date is
+  // NEVER auto-seeded (Loo 2026-06-05: the salesperson must fill it in
+  // deliberately) — we only CLEAR a previously-picked Process Date that now
+  // sits after the new delivery date, so the salesperson re-picks a valid one.
   const onPickDelivery = (date: string) => {
     update('deliveryDate', date);
-    if (!form.processDate || form.processDate > date) {
-      update('processDate', todayIso <= date ? todayIso : date);
+    if (form.processDate && form.processDate > date) {
+      update('processDate', '');
     }
   };
 
@@ -95,8 +96,8 @@ export const TargetDateStep = ({
             onChange={(e) => update('processDate', e.target.value)}
           />
           <p className={styles.methodHint}>
-            When production should start. Defaults to today — set it later (e.g. a
-            month before delivery) so we don't pull stock too early for a far-out
+            When production should start. Pick it deliberately (e.g. a month
+            before delivery) so we don't pull stock too early for a far-out
             delivery date. Cannot be after the delivery date.
           </p>
         </Field>

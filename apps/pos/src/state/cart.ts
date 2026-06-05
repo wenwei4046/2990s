@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { summarizeSofaCells, type Cell, type Depth } from '@2990s/shared';
+import { clearHandoverFormSnapshot } from '../lib/handover-helpers';
 
 /**
  * Cart line snapshot. The `total` field is what we display in the cart and
@@ -264,6 +265,9 @@ export const useCart = create<CartState>()((set, get) => ({
 
   clear() {
     set({ lines: [], sourceQuoteId: null });
+    // Next customer starts with a clean handover form — never leak the
+    // previous customer's details into a new order (Loo 2026-06-05).
+    clearHandoverFormSnapshot();
   },
 
   restore(lines, sourceQuoteId = null) {

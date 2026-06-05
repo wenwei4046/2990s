@@ -21,6 +21,7 @@ import {
   validateAddonsPayment, validateConfirmPayment, validateSign,
   getStepBlockers,
   computeAddonTotal,
+  loadHandoverFormSnapshot, clearHandoverFormSnapshot, HANDOVER_FORM_SNAPSHOT_KEY,
   type HandoverForm, type AddonInfo,
 } from '../lib/handover-helpers';
 import { Topbar } from '../components/Topbar';
@@ -92,10 +93,27 @@ export const Handover = () => {
   // Only show blockers banner AFTER user clicks Continue and validation fails.
   // Resets on step change so the new step starts clean.
   const [attempted, setAttempted] = useState(false);
-  const [form, setForm] = useState<HandoverForm>(() => ({
-    ...empty,
-    salespersonId: auth.user?.id ?? '',
-  }));
+  const [form, setForm] = useState<HandoverForm>(() => {
+    const base = { ...empty, salespersonId: auth.user?.id ?? '' };
+    const saved = loadHandoverFormSnapshot();
+    if (!saved) return base;
+    return {
+      ...base,
+      ...saved,
+      // Never carry a signature/acknowledgement across attempts; never let a
+      // snapshot from another login override who the salesperson is.
+      signed: false,
+      acknowledgedTerms: false,
+      salespersonId: saved.salespersonId || base.salespersonId,
+    };
+  });
+  // Snapshot every keystroke — cheap (one small JSON) and the tablet survives
+  // an accidental Back / refresh mid-handover.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(HANDOVER_FORM_SNAPSHOT_KEY, JSON.stringify(form));
+    } catch { /* storage off */ }
+  }, [form]);
   const [drift, setDrift] = useState<PricingDriftPayload | null>(null);
   const [serverError, setServerError] = useState<string | null>(null);
 
@@ -370,6 +388,7 @@ export const Handover = () => {
       // Consume the originating quote (if any) — mirrors submitOrder().
       if (sourceQuoteId) deleteQuote.mutate(sourceQuoteId);
       clear();
+      clearHandoverFormSnapshot();
       navigate(`/handover-confirmed/${encodeURIComponent(result.docNo)}`, { replace: true });
     } catch (err) {
       if (err instanceof PosHandoffApiError) {
@@ -460,6 +479,7 @@ export const Handover = () => {
       // block the confirmation; clear() then resets sourceQuoteId.
       if (sourceQuoteId) deleteQuote.mutate(sourceQuoteId);
       clear();
+      clearHandoverFormSnapshot();
       navigate(`/confirmed/${encodeURIComponent(result.id)}`, { replace: true });
     } catch (err) {
       if (err instanceof PricingDriftError) {

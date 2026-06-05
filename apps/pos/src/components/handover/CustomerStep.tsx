@@ -1,5 +1,5 @@
 import type { HandoverForm } from '../../lib/handover-helpers';
-import { useAllStaff } from '../../lib/staff';
+import { useAllStaff, useStaff } from '../../lib/staff';
 import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
 import { Field } from './Field';
 import styles from '../../pages/Handover.module.css';
@@ -18,7 +18,13 @@ export const CustomerStep = ({
   update: <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) => void;
 }) => {
   const staff = useAllStaff();
+  const me = useStaff();
   const customerTypes = useSoDropdownValues('customer_type', CUSTOMER_TYPE_FALLBACK);
+  /* Loo 2026-06-05 — a salesperson can only create orders under their own
+     account: the select is locked to self for the `sales` role (the server
+     enforces the same on POST /mfg-sales-orders). Leads/managers/admins keep
+     the full picker (entering an order on behalf of someone is their job). */
+  const lockedToSelf = me.data?.role === 'sales';
 
   return (
     <section className={styles.stepBody}>
@@ -67,12 +73,14 @@ export const CustomerStep = ({
           <select
             value={form.salespersonId}
             onChange={(e) => update('salespersonId', e.target.value)}
-            disabled={staff.isLoading}
+            disabled={staff.isLoading || lockedToSelf}
           >
             {staff.isLoading && <option value="">Loading…</option>}
-            {(staff.data ?? []).map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
+            {(staff.data ?? [])
+              .filter((s) => !lockedToSelf || s.id === form.salespersonId)
+              .map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
           </select>
         </Field>
         <Field label="Customer type">

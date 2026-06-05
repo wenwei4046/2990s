@@ -164,6 +164,10 @@ export interface PosHandoffError {
   /** variants_incomplete detail: which lines miss which variant axes. Keys are
    *  the Backend canonical names (seatHeight / legHeight / gap / …). */
   offenders?: Array<{ id?: string; itemCode: string; group: string; missing: string[] }>;
+  /** pricing_drift detail — which line drifted and by how much (sen). */
+  itemCode?: string;
+  client?: number;
+  server?: number;
 }
 
 export class PosHandoffApiError extends Error {
@@ -185,9 +189,17 @@ export const describePosHandoffError = (payload: PosHandoffError): string => {
   const offenders = (payload.offenders ?? [])
     .map((o) => `${o.itemCode}: missing ${o.missing.join(', ')}`)
     .join('; ');
+  /* pricing_drift names the offending line + both figures, so sales can see
+     WHICH item the server re-priced differently (the 2026-06-05 PWP failure
+     showed only the bare one-liner). Sen → whole RM for the strip. */
+  const drift = payload.error === 'pricing_drift' && payload.itemCode
+    ? ` (${payload.itemCode}: tablet RM ${Math.round((payload.client ?? 0) / 100).toLocaleString('en-MY')}`
+      + ` vs server RM ${Math.round((payload.server ?? 0) / 100).toLocaleString('en-MY')})`
+    : '';
   return `Order placement failed: ${payload.error}`
     + (detail ? ` — ${detail}` : '')
-    + (offenders ? ` (${offenders})` : '');
+    + (offenders ? ` (${offenders})` : '')
+    + drift;
 };
 
 /* ─── Item marshalling ──────────────────────────────────────────────── */

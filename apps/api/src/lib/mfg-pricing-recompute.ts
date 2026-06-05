@@ -186,9 +186,11 @@ export function recomputeFromSnapshot(
   sofaModulePrices: SofaModulePriceSen | null = null,
   sellingFabricTiers: { sofaTier: FabricTier | null; bedframeTier: FabricTier | null } | null = null,
   fabricAddonConfig: FabricTierAddonConfig | null = null,
-  /** PWP (换购) base price (sen) for this line when the order-level resolution
-   *  (shared resolvePwp, in the route) granted it. null/0 → normal selling base
-   *  (no change). Non-sofa only; fabric Δ still stacks on top. Migration 0128. */
+  /** PWP (换购) base price (sen) for this line when the order-level voucher
+   *  claim (route) granted it. null → no grant (normal selling base);
+   *  0 → granted FREE (a 'promo' code on a reward with no PWP price set —
+   *  migration 0145); > 0 → granted at that PWP base. Non-sofa only; fabric Δ
+   *  still stacks on top. Migrations 0128/0130/0145. */
   pwpBaseSen: number | null = null,
   /** PWP (换购) SOFA grant (Phase 2). The order-level consume validated this
    *  sofa-reward line's code and passes the code's reward combo ids; the sofa
@@ -314,14 +316,15 @@ export function recomputeFromSnapshot(
          couldn't resolve it client-side) → fill the authoritative price, no
          drift (driftThresholdExceeded returns false for client 0 vs server>0). */
   const sellBaseSen = Math.max(0, Math.round(Number(product?.sell_price_sen ?? 0)));
-  /* PWP (换购, migration 0128) — when the route's order-level resolution granted
-     this line, charge the per-SKU pwp_price_sen instead of sell_price_sen. The
-     route only passes pwpBaseSen for a validated reward line (qualifying trigger
-     present, eligible model, within allowance), so a forged claim never reaches
-     here as a real grant → the line reprices at full sell_price_sen → drift. Sofa
-     is excluded (it prices via the module path below). Selling-only; cost path
-     untouched. Default data (no grant / pwp 0) → effectiveBaseSen = sellBaseSen. */
-  const pwpBase = (pwpBaseSen != null && pwpBaseSen > 0 && category !== 'SOFA')
+  /* PWP (换购, migration 0128) — when the route's order-level voucher claim
+     granted this line, charge the granted base instead of sell_price_sen. The
+     route only passes pwpBaseSen for a validated + claimed code, so a forged
+     claim never reaches here as a real grant → the line reprices at full
+     sell_price_sen → drift. pwpBaseSen semantics: null = no grant; 0 = promo
+     code redeems FREE (migration 0145 — the reward has no PWP price set);
+     > 0 = the per-SKU pwp_price_sen. Sofa is excluded (it prices via the
+     module path below). Selling-only; cost path untouched. */
+  const pwpBase = (pwpBaseSen != null && pwpBaseSen >= 0 && category !== 'SOFA')
     ? Math.round(pwpBaseSen)
     : null;
   const effectiveBaseSen = pwpBase ?? sellBaseSen;

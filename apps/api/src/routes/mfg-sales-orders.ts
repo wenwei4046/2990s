@@ -951,6 +951,52 @@ mfgSalesOrders.get('/customer-credit/:debtorCode', async (c) => {
   return c.json({ debtorCode, balanceCenti: balance });
 });
 
+/* Loo 2026-06-05 — 409 gate for the maintained SO dropdown header fields.
+   customer_type / building_type / emergency_contact_relationship must hold a
+   value from the ACTIVE so_dropdown_options rows: these columns freeze under
+   the SO identity lock once a DO/SI exists, so a dirty value would be locked
+   in forever. Null / empty passes (the fields are optional); matching is exact
+   (the POS / Backend selects submit the maintained `value` verbatim).
+   Fail-open when the lookup itself returns nothing — a maintenance-table
+   hiccup must never block a paying customer at the counter. */
+const SO_DROPDOWN_FIELDS: Array<{ bodyKey: string; category: string }> = [
+  { bodyKey: 'customerType',                 category: 'customer_type' },
+  { bodyKey: 'buildingType',                 category: 'building_type' },
+  { bodyKey: 'emergencyContactRelationship', category: 'relationship' },
+];
+// eslint-disable-next-line @typescript-eslint/no-explicit-any — same loose sb
+// typing the other loaders in this file use.
+async function validateSoDropdownFields(
+  sb: any,
+  body: Record<string, unknown>,
+): Promise<{ error: string; reason: string; offenders: Array<{ field: string; value: string }> } | null> {
+  const present = SO_DROPDOWN_FIELDS
+    .map(({ bodyKey, category }) => ({ bodyKey, category, value: body[bodyKey] }))
+    .filter((f): f is { bodyKey: string; category: string; value: string } =>
+      typeof f.value === 'string' && f.value.trim().length > 0);
+  if (present.length === 0) return null;
+  const { data, error } = await sb
+    .from('so_dropdown_options')
+    .select('category, value')
+    .eq('active', true)
+    .in('category', present.map((f) => f.category));
+  if (error || !data || data.length === 0) return null;  // fail-open
+  const allowed = new Set(
+    (data as Array<{ category: string; value: string }>).map((r) => `${r.category}:${r.value}`),
+  );
+  const offenders = present
+    .filter((f) => !allowed.has(`${f.category}:${f.value.trim()}`))
+    .map((f) => ({ field: f.bodyKey, value: f.value.trim() }));
+  if (offenders.length === 0) return null;
+  return {
+    error: 'dropdown_value_invalid',
+    reason: offenders
+      .map((o) => `${o.field} "${o.value}" is not an active option in Sales Order Maintenance`)
+      .join('; '),
+    offenders,
+  };
+}
+
 mfgSalesOrders.post('/', async (c) => {
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
@@ -1108,18 +1154,28 @@ mfgSalesOrders.post('/', async (c) => {
      Backend-only roles leave it NULL. The client may pass an explicit
      venueId in the body to override (e.g. coordinator entering an SO on
      behalf of a specific venue). */
+  /* Caller's staff row — drives the venue auto-stamp AND the salesperson
+     self-lock below. */
+  const { data: callerStaff } = await sb
+    .from('staff')
+    .select('role, venue_id')
+    .eq('id', user.id)
+    .maybeSingle();
   let venueIdToStamp: string | null = (body.venueId as string | null | undefined) ?? null;
   if (!venueIdToStamp) {
-    const { data: callerStaff } = await sb
-      .from('staff')
-      .select('role, venue_id')
-      .eq('id', user.id)
-      .maybeSingle();
     if (callerStaff && callerStaff.venue_id &&
         ['sales', 'sales_executive', 'outlet_manager'].includes(callerStaff.role)) {
       venueIdToStamp = callerStaff.venue_id as string;
     }
   }
+  /* Loo 2026-06-05 — a `sales` caller can only create orders under their OWN
+     account: whatever salespersonId the client sent is overridden with the
+     caller's id (the POS locks the picker too; this closes the API hole).
+     Leads / managers / backend roles keep the free pick — entering an SO on
+     behalf of a salesperson is their job. */
+  const salespersonIdToStamp = callerStaff?.role === 'sales'
+    ? user.id
+    : ((body.salespersonId as string) ?? null);
 
   /* SO-SKU spec P5 (§4.5) — resolve the venue FK to its display name once.
      Until now venue_id was stamped but the `venue` TEXT stayed NULL, so the
@@ -1178,6 +1234,12 @@ mfgSalesOrders.post('/', async (c) => {
   const cachedCombos = await loadActiveSofaCombos(sb);  // Phase 4b — sofa selling recompute
   const cachedFabricAddonConfig = await loadFabricTierAddonConfig(sb);  // migration 0124 — fabric-tier Δ
 
+  /* Loo 2026-06-05 — maintained-dropdown 409 gate. Runs BEFORE any side
+     effect (customer upsert, PWP claims) so a rejected request leaves
+     nothing behind. */
+  const dropdownErr = await validateSoDropdownFields(sb, body);
+  if (dropdownErr) return c.json(dropdownErr, 409);
+
   const lineProducts = await Promise.all(
     items.map((it) => loadProductByCode(sb, String(it.itemCode ?? ''))),
   );
@@ -1227,12 +1289,28 @@ mfgSalesOrders.post('/', async (c) => {
     if (!product) continue;
     const { data: cRow } = await sb
       .from('pwp_codes')
-      .select('status, owner_staff_id, reward_category, eligible_reward_model_ids, reward_combo_ids, customer_id, source_doc_no, type')
+      .select('status, owner_staff_id, reward_category, eligible_reward_model_ids, reward_combo_ids, customer_id, source_doc_no, redeemed_doc_no, type')
       .eq('code', code)
       .maybeSingle();
     if (!cRow) continue;
     const redeemable = cRow.status === 'AVAILABLE' || (cRow.status === 'RESERVED' && cRow.owner_staff_id === user.id);
-    if (!redeemable) continue;
+    /* Orphan self-heal (2026-06-05, SO-2606-020 incident) — a code claimed by a
+       create attempt that died on a path without rollbackPwpClaims (uncaught
+       exception / Worker timeout) is left USED pointing at a doc_no that was
+       never inserted. Every retry then sees USED → no grant → full reprice →
+       pricing_drift, bricking the cart forever. If the redeemed SO does not
+       exist, the claim never really happened — treat the code as redeemable
+       again. (A legitimately USED code points at a real SO and stays burned.) */
+    let orphanedUsed = false;
+    if (!redeemable && cRow.status === 'USED' && cRow.redeemed_doc_no) {
+      const { data: deadSo } = await sb
+        .from('mfg_sales_orders')
+        .select('doc_no')
+        .eq('doc_no', cRow.redeemed_doc_no)
+        .maybeSingle();
+      orphanedUsed = !deadSo;
+    }
+    if (!redeemable && !orphanedUsed) continue;
     const prodCat = String(product.category ?? '').toUpperCase();
     if (prodCat !== String(cRow.reward_category).toUpperCase()) continue;
     // Customer binding — an AVAILABLE voucher only redeems for its earner.
@@ -1269,7 +1347,7 @@ mfgSalesOrders.post('/', async (c) => {
     // Atomic claim — USED only if still redeemable. Preserve the original
     // source_doc_no (earning SO) for a cross-order voucher; stamp it for a
     // same-cart one.
-    const { data: claimed } = await sb
+    let claimQ = sb
       .from('pwp_codes')
       .update({
         status:             'USED',
@@ -1278,12 +1356,23 @@ mfgSalesOrders.post('/', async (c) => {
         redeemed_item_code: product.code,
         updated_at:         new Date().toISOString(),
       })
-      .eq('code', code)
-      .in('status', ['RESERVED', 'AVAILABLE'])
-      .select('code')
-      .maybeSingle();
+      .eq('code', code);
+    // Orphaned-USED re-claim must match the orphan row exactly (USED + the same
+    // dead doc_no) so a parallel legitimate redemption can't be hijacked.
+    claimQ = orphanedUsed
+      ? claimQ.eq('status', 'USED').eq('redeemed_doc_no', cRow.redeemed_doc_no)
+      : claimQ.in('status', ['RESERVED', 'AVAILABLE']);
+    const { data: claimed } = await claimQ.select('code').maybeSingle();
     if (!claimed) continue;  // lost the race / already used → not granted
-    claimedPwpCodes.push({ code, prevStatus: cRow.status });
+    /* prevStatus drives the rollback restore. For an orphan re-claim the true
+       pre-incident status is unknown (the dead attempt never rolled back), so
+       restore to the most plausible redeemable state — RESERVED when the code
+       has an owner (same-cart voucher), else AVAILABLE — never back to the
+       bricked USED. */
+    const prevStatus = orphanedUsed
+      ? (cRow.owner_staff_id ? 'RESERVED' : 'AVAILABLE')
+      : cRow.status;
+    claimedPwpCodes.push({ code, prevStatus });
     if (grantSofaComboIds) pwpSofaByIdx.set(idx, grantSofaComboIds);
     else pwpBaseByIdx.set(idx, grantPwpPrice);
   }
@@ -1840,7 +1929,7 @@ mfgSalesOrders.post('/', async (c) => {
     /* PR #46 — POS handover fields written at create */
     email: (body.email as string) ?? null,
     customer_type: (body.customerType as string) ?? null,
-    salesperson_id: (body.salespersonId as string) ?? null,
+    salesperson_id: salespersonIdToStamp,
     city: (body.city as string) ?? null,
     postcode: (body.postcode as string) ?? null,
     building_type: (body.buildingType as string) ?? null,
@@ -2262,6 +2351,11 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
       return c.json({ error: 'phone_required', reason: 'A phone number is required on every sales order.' }, 400);
     }
   }
+
+  /* Loo 2026-06-05 — maintained-dropdown 409 gate on edit too, or the create
+     gate is bypassable by PATCHing a dirty value in afterwards. */
+  const dropdownErr = await validateSoDropdownFields(sb, body);
+  if (dropdownErr) return c.json(dropdownErr, 409);
 
   const map: Array<[string, string]> = [
     ['debtorCode', 'debtor_code'], ['debtorName', 'debtor_name'], ['agent', 'agent'],
