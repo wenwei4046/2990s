@@ -7,6 +7,7 @@ import {
   useMyReservedPwpCodes,
   useReservePwpCodes,
   useFreePwpCodes,
+  validatePwpCode,
   type PwpReservedCode,
 } from './products/pwp-queries';
 
@@ -129,47 +130,59 @@ export function usePwpCodeSync(): void {
           }
         }
 
-        // 3. Re-align SAME-CART reward lines to LIVE codes (2026-06-05, the
-        //    ARIA drift). A trigger's codes can be re-minted server-side (a
-        //    failed order burned them, an admin freed them, a restore replaced
-        //    them) — the reward line then points at a code that no longer
-        //    exists, the server won't grant the PWP price, and the order
-        //    drift-rejects at Confirm with no visible cause. Swap each stale
-        //    code for a live eligible reserved one; when the allowance is
-        //    exhausted, revert the line to full price so the salesperson SEES
-        //    the change on the tablet instead of a drift reject at signing.
-        //    Cross-order vouchers (pwpTriggerLabel == null — entered via
-        //    "Insert PWP Code", incl. all sofa redemptions) are left alone:
-        //    they are not in `reserved` and the server validates them itself.
-        //    Skipped on a pass that just minted codes — the closure's
-        //    `reserved` is stale; the invalidation re-runs the effect with the
-        //    fresh list and the repair happens then.
+        // 3. Re-align reward lines to LIVE codes (2026-06-05, the ARIA drift).
+        //    A trigger's codes can be re-minted server-side (a failed order
+        //    burned them, an admin freed them, a restore replaced them) — the
+        //    reward line then points at a code that no longer exists, the
+        //    server won't grant the PWP price, and the order drift-rejects at
+        //    Confirm with no visible cause. Swap each stale code for a live
+        //    eligible reserved one; when nothing is left, revert the line to
+        //    full price so the salesperson SEES the change on the tablet.
+        //    A code NOT in my reserved pool may be a legit cross-order voucher
+        //    (entered via "Insert PWP Code") — validate it against the server
+        //    before touching the line, and leave valid ones alone. (We can't
+        //    discriminate via pwpTriggerLabel — it's null in real data for
+        //    same-cart redemptions too.) Skipped on a pass that just minted
+        //    codes — the closure's `reserved` is stale; the invalidation
+        //    re-runs the effect with the fresh list and the repair runs then.
         if (!mintedThisPass) {
           const liveReserved = reserved.filter((rc) => rc.cartLineKey);
           const byCode = new Map(liveReserved.map((rc) => [rc.code, rc]));
           const cartNow = useCart.getState().lines;
-          const sameCartRewards = cartNow.filter((l) => {
-            const c = l.config as { pwp?: boolean; pwpCode?: string; pwpTriggerLabel?: string | null };
-            return c.pwp === true && !!c.pwpCode && c.pwpTriggerLabel != null;
+          const rewardLines = cartNow.filter((l) => {
+            const c = l.config as { pwp?: boolean; pwpCode?: string };
+            return c.pwp === true && !!c.pwpCode;
           });
           const eligibleFor = (config: unknown, rc: PwpReservedCode): boolean => {
             const c = config as { category?: string; modelId?: string | null };
             return String(rc.rewardCategory).toUpperCase() === String(c.category ?? '').toUpperCase()
               && inList(c.modelId ?? null, rc.eligibleRewardModelIds);
           };
-          // Pass 1 — keep every still-valid assignment (first claim wins on dups).
+          // Pass 1 — keep every still-valid same-cart assignment (first claim
+          // wins on dups) and decide which lines need attention.
           const used = new Set<string>();
-          const valid = new Map<string, boolean>();
-          for (const l of sameCartRewards) {
+          const stale: typeof rewardLines = [];
+          for (const l of rewardLines) {
             const code = (l.config as { pwpCode?: string }).pwpCode!;
             const rc = byCode.get(code);
-            const ok = !!rc && !used.has(code) && eligibleFor(l.config, rc);
-            if (ok) used.add(code);
-            valid.set(l.key, ok);
+            if (rc && !used.has(code) && eligibleFor(l.config, rc)) { used.add(code); continue; }
+            stale.push(l);
           }
-          // Pass 2 — repair the stale ones.
-          for (const l of sameCartRewards) {
-            if (valid.get(l.key)) continue;
+          // Pass 2 — repair. A code outside my reserved pool is checked with
+          // the server first: a valid cross-order voucher stays untouched.
+          for (const l of stale) {
+            const c = l.config as { pwpCode?: string; category?: string; modelId?: string | null };
+            const code = c.pwpCode!;
+            if (!byCode.has(code)) {
+              try {
+                const v = await validatePwpCode({
+                  code,
+                  rewardCategory: String(c.category ?? '').toUpperCase(),
+                  rewardModelId: c.modelId ?? null,
+                });
+                if (v.valid) continue;  // live cross-order voucher — leave it
+              } catch { continue; }     // can't verify — don't touch the line
+            }
             const replacement = liveReserved.find((rc) => !used.has(rc.code) && eligibleFor(l.config, rc));
             if (replacement) {
               used.add(replacement.code);
