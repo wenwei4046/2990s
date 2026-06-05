@@ -2,6 +2,7 @@ import { fmtRM } from '@2990s/shared';
 import { PriceTag } from '@2990s/design-system';
 import type { CartLine } from '../../state/cart';
 import { cartSummary } from '../../state/cart';
+import { cartLineTitle, useMfgCatalogIndex } from '../../lib/cart-display';
 import type { HandoverForm } from '../../lib/handover-helpers';
 import { COMPANY_LEGAL, RECEIPT_TERMS } from '../../lib/legal';
 import { ProductThumb } from '../ProductThumb';
@@ -54,6 +55,7 @@ export const OrderSummaryPane = (props: FormPaneProps | ReceiptPaneProps) => {
 const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: FormPaneProps) => {
   const placeholderId = 'SO-XXXX';
   const today = new Date().toLocaleDateString('en-GB');
+  const mfgById = useMfgCatalogIndex();
 
   const emergencyHasAny =
     form.emergencyName.trim() || form.emergencyRelation.trim() || form.emergencyPhone.trim();
@@ -66,15 +68,17 @@ const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: For
       </header>
 
       <Section heading={`Items · ${lines.length}`}>
-        {lines.map((l) => (
+        {lines.map((l) => {
+          const title = cartLineTitle(l.config, mfgById.get(l.config.productId));
+          return (
           <article key={l.key} className={styles.itemCard}>
             <ProductThumb
               className={styles.itemPhoto}
               productId={l.config.productId}
-              name={l.config.productName}
+              name={title}
             />
             <div className={styles.itemBody}>
-              <div className={styles.itemName}>{l.config.productName}</div>
+              <div className={styles.itemName}>{title}</div>
               <div className={styles.itemDetail}>{cartSummary(l.config)} · qty {l.qty}</div>
               {'fabricTierDelta' in l.config && (l.config.fabricTierDelta ?? 0) > 0 && (
                 <div className={styles.itemDetail}>Fabric upgrade · +{fmtRM((l.config.fabricTierDelta ?? 0) * l.qty)}</div>
@@ -90,7 +94,8 @@ const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: For
               {fmtRM(l.qty * l.config.total).replace('RM ', '')}
             </div>
           </article>
-        ))}
+          );
+        })}
       </Section>
 
       <Section heading="Customer">
@@ -166,6 +171,7 @@ const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: For
 
 const ReceiptPane = ({ orderId, placedAt, lines, customer, delivery, payment, paid }: ReceiptPaneProps) => {
   const dateStr = new Date(placedAt).toLocaleDateString('en-GB');
+  const mfgById = useMfgCatalogIndex();
   return (
     <aside className={`${styles.pane} receipt`}>
       <header className={styles.head}>
@@ -173,15 +179,17 @@ const ReceiptPane = ({ orderId, placedAt, lines, customer, delivery, payment, pa
         <h2 className={styles.title}>Receipt</h2>
       </header>
       <Section heading="Items">
-        {lines.map((l) => (
+        {lines.map((l) => {
+          const title = cartLineTitle(l.config, mfgById.get(l.config.productId));
+          return (
           <article key={l.key} className={styles.itemCard}>
             <ProductThumb
               className={styles.itemPhoto}
               productId={l.config.productId}
-              name={l.config.productName}
+              name={title}
             />
             <div className={styles.itemBody}>
-              <div className={styles.itemName}>{l.config.productName}</div>
+              <div className={styles.itemName}>{title}</div>
               <div className={styles.itemDetail}>qty {l.qty}</div>
             </div>
             <div className={styles.itemPrice}>
@@ -189,7 +197,8 @@ const ReceiptPane = ({ orderId, placedAt, lines, customer, delivery, payment, pa
               {fmtRM(l.qty * l.config.total).replace('RM ', '')}
             </div>
           </article>
-        ))}
+          );
+        })}
       </Section>
       <Section heading="Delivery">
         {customer.address && <Row label="Address" value={customer.address} />}

@@ -279,9 +279,10 @@ export const Handover = () => {
       // Resolve each cart line to its real size-specific mfg_products.code —
       // the cart stores the mfg id (`mfg-xxxx`), but the SO API validates +
       // reprices against the CODE. Without this every handover fails the
-      // server's itemCode guard (unknown_item_code).
-      const codeByKey = await fetchItemCodeMap(lines);
-      const items = cartLinesToSoItems(lines, catalog.data, codeByKey);
+      // server's itemCode guard (unknown_item_code). Also resolves the clean
+      // Model name per line for the sofa SO description ("Annsa · 1A(LHF) + …").
+      const resolution = await fetchItemCodeMap(lines);
+      const items = cartLinesToSoItems(lines, catalog.data, resolution);
       // PaymentMethod / merchant / installments — narrow the HandoverForm's
       // permissive string union to the API's value set. Empty string never
       // reaches here because validity['addons'] gates it.
