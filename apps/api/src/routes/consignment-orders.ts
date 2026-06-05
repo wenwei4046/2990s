@@ -56,18 +56,15 @@ consignmentOrders.use('*', supabaseAuth);
    ANY non-cancelled Delivery Order OR Sales Invoice referencing it. Mirrors the
    SO route's soHasDownstream. Returns the blocking JSON, or null if free. */
 async function coHasDownstream(sb: any, coDocNo: string): Promise<{ error: string; message: string } | null> {
-  const [{ count: doCount }, { count: siCount }] = await Promise.all([
-    sb.from('delivery_orders')
-      .select('id', { head: true, count: 'exact' })
-      .eq('so_doc_no', coDocNo)
-      .neq('status', 'CANCELLED'),
-    sb.from('sales_invoices')
-      .select('id', { head: true, count: 'exact' })
-      .eq('so_doc_no', coDocNo)
-      .neq('status', 'CANCELLED'),
-  ]);
-  if ((doCount ?? 0) > 0 || (siCount ?? 0) > 0) {
-    return { error: 'co_has_downstream', message: 'Consignment Order has a Delivery Order / Sales Invoice — delete or cancel it first to edit' };
+  // A Consignment Order's downstream is a Consignment Note (consignment_delivery_orders
+  // keyed on consignment_so_doc_no) — NOT the real delivery_orders/sales_invoices
+  // tables (those never reference a CS- doc number, so the lock silently never fired).
+  const { count: noteCount } = await sb.from('consignment_delivery_orders')
+    .select('id', { head: true, count: 'exact' })
+    .eq('consignment_so_doc_no', coDocNo)
+    .neq('status', 'CANCELLED');
+  if ((noteCount ?? 0) > 0) {
+    return { error: 'co_has_downstream', message: 'Consignment Order has a Consignment Note — cancel it first to edit' };
   }
   return null;
 }
@@ -296,18 +293,15 @@ consignmentOrders.get('/', async (c) => {
       }
     }
 
-    /* Tier 2 downstream-lock — mark has_children on any CO with a non-cancelled
-       DO / SI referencing it. */
+    /* Tier 2 downstream-lock — mark has_children on any CO that has a
+       non-cancelled Consignment Note (consignment_delivery_orders) referencing
+       it. (Was wrongly querying the real delivery_orders/sales_invoices tables,
+       which a CS- doc number never matches, so the flag was always false.) */
     const downstreamDocNos = new Set<string>();
-    const [doRowsRes, siRowsRes] = await Promise.all([
-      sb.from('delivery_orders').select('so_doc_no').in('so_doc_no', docNos).neq('status', 'CANCELLED'),
-      sb.from('sales_invoices').select('so_doc_no').in('so_doc_no', docNos).neq('status', 'CANCELLED'),
-    ]);
-    for (const d of ((doRowsRes.data ?? []) as Array<{ so_doc_no: string | null }>)) {
-      if (d.so_doc_no) downstreamDocNos.add(d.so_doc_no);
-    }
-    for (const s of ((siRowsRes.data ?? []) as Array<{ so_doc_no: string | null }>)) {
-      if (s.so_doc_no) downstreamDocNos.add(s.so_doc_no);
+    const noteRowsRes = await sb.from('consignment_delivery_orders')
+      .select('consignment_so_doc_no').in('consignment_so_doc_no', docNos).neq('status', 'CANCELLED');
+    for (const d of ((noteRowsRes.data ?? []) as Array<{ consignment_so_doc_no: string | null }>)) {
+      if (d.consignment_so_doc_no) downstreamDocNos.add(d.consignment_so_doc_no);
     }
 
     for (const r of rows) {
@@ -435,20 +429,15 @@ consignmentOrders.get('/:docNo', async (c) => {
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
-  /* Tier 2 downstream-lock — stamp has_children. */
-  const [{ count: doCount }, { count: siCount }] = await Promise.all([
-    sb.from('delivery_orders')
-      .select('id', { head: true, count: 'exact' })
-      .eq('so_doc_no', docNo)
-      .neq('status', 'CANCELLED'),
-    sb.from('sales_invoices')
-      .select('id', { head: true, count: 'exact' })
-      .eq('so_doc_no', docNo)
-      .neq('status', 'CANCELLED'),
-  ]);
+  /* Tier 2 downstream-lock — stamp has_children from the Consignment Note table
+     (consignment_delivery_orders), the CO's real downstream. */
+  const { count: noteCount } = await sb.from('consignment_delivery_orders')
+    .select('id', { head: true, count: 'exact' })
+    .eq('consignment_so_doc_no', docNo)
+    .neq('status', 'CANCELLED');
   const salesOrder = {
     ...(h.data as unknown as Record<string, unknown>),
-    has_children: (doCount ?? 0) > 0 || (siCount ?? 0) > 0,
+    has_children: (noteCount ?? 0) > 0,
   };
   const itemRows = (i.data ?? []) as unknown as Array<Record<string, unknown> & { id: string }>;
   const deliveriesMap = await coLineDeliveries(sb, itemRows.map((it) => it.id));
