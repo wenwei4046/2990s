@@ -117,7 +117,7 @@ purchaseConsignmentOrders.get('/', async (c) => {
     }
   }
   const purchaseConsignmentOrdersList = rows.map((r) => ({ ...r, has_children: childIds.has(r.id) }));
-  return c.json({ purchaseConsignmentOrders: purchaseConsignmentOrdersList });
+  return c.json({ purchaseOrders: purchaseConsignmentOrdersList });
 });
 
 /* Per-line receive breakdown — which PC Receive(s) each PC Order line was
@@ -192,7 +192,7 @@ purchaseConsignmentOrders.get('/:id', async (c) => {
   const receiptsMap = await pcoLineReceipts(supabase, itemRows.map((it) => it.id));
   const items = itemRows.map((it) => ({ ...it, receipts: receiptsMap.get(it.id) ?? [] }));
 
-  return c.json({ purchaseConsignmentOrder, items });
+  return c.json({ purchaseOrder: purchaseConsignmentOrder, items });
 });
 
 // ── Linked docs (Smart Buttons fan-out) ─────────────────────────────

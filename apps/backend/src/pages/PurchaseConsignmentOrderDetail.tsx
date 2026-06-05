@@ -104,7 +104,7 @@ export const PurchaseConsignmentOrderDetail = () => {
   const updateItem = useUpdatePurchaseConsignmentOrderItem();
   const deleteItem = useDeletePurchaseConsignmentOrderItem();
 
-  const po = detail.data?.purchaseConsignmentOrder ?? null;
+  const po = detail.data?.purchaseOrder ?? null;
   const items = detail.data?.items ?? [];
 
   const [searchParams] = useSearchParams();
