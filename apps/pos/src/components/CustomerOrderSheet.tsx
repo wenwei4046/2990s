@@ -13,7 +13,8 @@ import {
   Pencil,
 } from 'lucide-react';
 import { useCart, cartItemCount, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
-import { useCatalog, type CatalogProduct } from '../lib/queries';
+import { useCatalog, type CatalogProduct, type MfgCatalogRow } from '../lib/queries';
+import { cartLineTitle, useMfgCatalogIndex } from '../lib/cart-display';
 import { useSaveQuote, useUpdateQuote } from '../lib/quotes';
 import { useFreePwpCodes } from '../lib/products/pwp-queries';
 import styles from './CustomerOrderSheet.module.css';
@@ -45,6 +46,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
     for (const p of catalog.data ?? []) m.set(p.id, p);
     return m;
   }, [catalog.data]);
+  const mfgById = useMfgCatalogIndex();
 
   const saveQuote = useSaveQuote();
   const updateQuote = useUpdateQuote();
@@ -182,6 +184,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
                 key={line.key}
                 line={line}
                 product={productsById.get(line.config.productId)}
+                mfgRow={mfgById.get(line.config.productId)}
                 onRemove={() => remove(line.key)}
                 onDec={() => setQty(line.key, line.qty - 1)}
                 onInc={() => setQty(line.key, line.qty + 1)}
@@ -308,6 +311,8 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
 interface CartItemProps {
   line: CartLine;
   product: CatalogProduct | undefined;
+  /** mfg catalog row for mfg- product ids — Model photo + clean title source. */
+  mfgRow: MfgCatalogRow | undefined;
   onRemove: () => void;
   onDec: () => void;
   onInc: () => void;
@@ -316,8 +321,9 @@ interface CartItemProps {
   onEdit?: () => void;
 }
 
-const CartItem = ({ line, product, onRemove, onDec, onInc, onEdit }: CartItemProps) => {
-  const photo = product?.thumb_key ?? product?.img_key ?? null;
+const CartItem = ({ line, product, mfgRow, onRemove, onDec, onInc, onEdit }: CartItemProps) => {
+  const photo = mfgRow?.photoUrl ?? product?.thumb_key ?? product?.img_key ?? null;
+  const title = cartLineTitle(line.config, mfgRow);
   const lineTotal = line.qty * line.config.total;
   return (
     <div className={styles.item}>
@@ -326,11 +332,11 @@ const CartItem = ({ line, product, onRemove, onDec, onInc, onEdit }: CartItemPro
         style={photo ? { backgroundImage: `url(${photo})` } : undefined}
         aria-hidden="true"
       >
-        {!photo && productInitial(line.config.productName)}
+        {!photo && productInitial(title)}
       </div>
       <div className={styles.itemMain}>
         <div className={styles.itemNameRow}>
-          <span className={styles.itemName}>{line.config.productName}</span>
+          <span className={styles.itemName}>{title}</span>
         </div>
         <div className={styles.itemDetail}>{cartSummary(line.config)}</div>
         <div className={styles.itemQty}>

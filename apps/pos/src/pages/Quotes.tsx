@@ -12,6 +12,7 @@ import { fmtRM } from '@2990s/shared';
 import { useQuotes, useDeleteQuote, type QuoteRow } from '../lib/quotes';
 import { useFreePwpCodes } from '../lib/products/pwp-queries';
 import { useCart, cartSummary } from '../state/cart';
+import { cartLineTitle, useMfgCatalogIndex } from '../lib/cart-display';
 import { Topbar } from '../components/Topbar';
 import styles from './Quotes.module.css';
 
@@ -29,6 +30,9 @@ export const Quotes = () => {
   const del = useDeleteQuote();
   const freePwp = useFreePwpCodes();
   const restore = useCart((s) => s.restore);
+  // One index for every quote card's line previews — same derived title the
+  // cart / handover show for the identical CartLine (cart-display.ts).
+  const mfgById = useMfgCatalogIndex();
 
   const loadQuote = (q: QuoteRow) => {
     if (!q.cart || q.cart.length === 0) return;
@@ -90,7 +94,7 @@ export const Quotes = () => {
               <ul className={styles.lines}>
                 {q.cart.slice(0, 3).map((l, i) => (
                   <li key={`${q.id}-${i}`}>
-                    <span className={styles.lineName}>{l.config.productName}</span>
+                    <span className={styles.lineName}>{cartLineTitle(l.config, mfgById.get(l.config.productId))}</span>
                     <span className={styles.lineSummary}>{cartSummary(l.config)}</span>
                     <span className={styles.lineQty}>× {l.qty}</span>
                   </li>

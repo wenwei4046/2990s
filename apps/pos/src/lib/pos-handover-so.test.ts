@@ -322,7 +322,7 @@ describe('cartLinesToSoItems', () => {
     expect(items.map((i) => i.itemCode)).toEqual(['SKU-1', 'SKU-2']);
   });
 
-  it('books the resolved mfg code when codeByKey is supplied', () => {
+  it('books the resolved mfg code when a resolution is supplied', () => {
     const lines: CartLine[] = [
       {
         key: 'k1',
@@ -330,9 +330,42 @@ describe('cartLinesToSoItems', () => {
         config: { kind: 'size', productId: 'mfg-akkafirm', productName: 'Akka Firm', sizeId: 'king', total: 2990, summary: 'King' },
       },
     ];
-    const codeByKey = new Map([['k1', '2990 AKKA-FIRM MATT (K)']]);
-    const items = cartLinesToSoItems(lines, [], codeByKey);
+    const resolution = {
+      codeByKey: new Map([['k1', '2990 AKKA-FIRM MATT (K)']]),
+      modelNameByKey: new Map<string, string>(),
+    };
+    const items = cartLinesToSoItems(lines, [], resolution);
     expect(items[0]!.itemCode).toBe('2990 AKKA-FIRM MATT (K)');
+  });
+
+  it('sofa description uses the resolved clean Model name over the lead-SKU snapshot', () => {
+    // In prod the legacy catalog never matches an mfg- id, so without the
+    // resolution the description fell back to the snapshot productName —
+    // the lead per-module SKU name ("SOFA ANNSA 1A(LHF)").
+    const lines: CartLine[] = [
+      {
+        key: 'k1',
+        qty: 1,
+        config: {
+          kind: 'sofa',
+          productId: 'mfg-annsa1alhf',
+          productName: 'SOFA ANNSA 1A(LHF)',
+          cells: [
+            { moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 } as any,
+            { moduleId: '1A(RHF)', x: 1, y: 0, rot: 0 } as any,
+          ],
+          depth: '28',
+          total: 2615,
+          summary: '',
+        },
+      },
+    ];
+    const resolution = {
+      codeByKey: new Map([['k1', 'ANNSA-1A(LHF)']]),
+      modelNameByKey: new Map([['k1', 'Annsa']]),
+    };
+    const items = cartLinesToSoItems(lines, [], resolution);
+    expect(items[0]!.description).toBe('Annsa · 1A(LHF) + 1A(RHF)');
   });
 });
 

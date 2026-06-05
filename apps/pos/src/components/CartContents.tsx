@@ -4,6 +4,7 @@ import { Trash2, BookmarkPlus, Check, Pencil, Plus } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
 import { useCart, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
+import { cartLineTitle, useMfgCatalogIndex } from '../lib/cart-display';
 import { useSaveQuote } from '../lib/quotes';
 import { useFreePwpCodes } from '../lib/products/pwp-queries';
 import { ProductThumb } from './ProductThumb';
@@ -192,15 +193,18 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit }: {
   onRemove: (k: string) => void;
   onSetQty: (k: string, q: number) => void;
   onEdit?: () => void;
-}) => (
+}) => {
+  const mfgById = useMfgCatalogIndex();
+  const title = cartLineTitle(line.config, mfgById.get(line.config.productId));
+  return (
   <li className={`${styles.line} ${variant === 'rail' ? styles.lineRail : ''}`}>
     <ProductThumb
       className={styles.linePhoto}
       productId={line.config.productId}
-      name={line.config.productName}
+      name={title}
     />
     <div className={styles.lineMain}>
-      <div className={styles.lineName}>{line.config.productName}</div>
+      <div className={styles.lineName}>{title}</div>
       <div className={styles.lineSummary}>{cartSummary(line.config)}</div>
       {'pwp' in line.config && line.config.pwp && (
         <div className={styles.lineSummary}>
@@ -239,4 +243,5 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit }: {
       />
     </div>
   </li>
-);
+  );
+};

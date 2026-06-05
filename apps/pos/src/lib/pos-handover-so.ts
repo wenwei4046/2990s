@@ -361,6 +361,13 @@ interface MfgCodeRow {
   size_code: string | null;
 }
 
+/** What fetchItemCodeMap resolves per cart line: the bookable mfg code +
+ *  the clean Model name (product_models.name) for the SO line description. */
+export interface SoLineResolution {
+  codeByKey: Map<string, string>;
+  modelNameByKey: Map<string, string>;
+}
+
 /** Resolve the real mfg_products.code an SO line should book, given the line's
  *  config, its mfg row (looked up by productId), and that Model's sibling SKUs.
  *
@@ -388,21 +395,32 @@ export const pickSoItemCode = (
   return baseRow.code;
 };
 
-/** Build a {cartLineKey → mfg_products.code} map for a cart. Two reads:
- *  (1) the cart's mfg rows by id, (2) their Models' sibling SKUs (only when a
- *  size-variant line needs the size-specific code). The legacy `products`
- *  catalog is empty in production, so this — not product.sku — is the real
- *  itemCode source the SO handover depends on. */
-export const fetchItemCodeMap = async (lines: CartLine[]): Promise<Map<string, string>> => {
-  const result = new Map<string, string>();
+/** Resolve each cart line's bookable mfg code + clean Model name. Two reads:
+ *  (1) the cart's mfg rows by id (+ their Model's name via the FK embed),
+ *  (2) their Models' sibling SKUs (only when a size-variant line needs the
+ *  size-specific code). The legacy `products` catalog is empty in production,
+ *  so this — not product.sku — is the real itemCode source the SO handover
+ *  depends on. The Model name feeds the sofa SO line description
+ *  ("Annsa · 1A(LHF) + 1A(RHF)", Chairman 2026-06-03) — without it the
+ *  description fell back to the lead per-module SKU name. */
+export const fetchItemCodeMap = async (lines: CartLine[]): Promise<SoLineResolution> => {
+  const codeByKey = new Map<string, string>();
+  const modelNameByKey = new Map<string, string>();
+  const result: SoLineResolution = { codeByKey, modelNameByKey };
   const productIds = [...new Set(lines.map((l) => l.config.productId).filter(Boolean))];
   if (productIds.length === 0) return result;
 
   const { data: baseData } = await supabase
     .from('mfg_products')
-    .select('id, code, model_id, category, size_code')
+    .select('id, code, model_id, category, size_code, product_models:model_id ( name )')
     .in('id', productIds);
-  const byId = new Map<string, MfgCodeRow>(((baseData ?? []) as MfgCodeRow[]).map((r) => [r.id, r]));
+  type BaseRow = MfgCodeRow & {
+    // FK embed comes back object or array depending on the cached schema
+    // cardinality (same defensive coercion as useMfgCatalog).
+    product_models: { name: string } | Array<{ name: string }> | null;
+  };
+  const baseRows = ((baseData ?? []) as unknown as BaseRow[]);
+  const byId = new Map<string, BaseRow>(baseRows.map((r) => [r.id, r]));
 
   // Siblings only matter for size-variant lines (mattress / bedframe).
   const modelIds = [...new Set(
@@ -428,7 +446,9 @@ export const fetchItemCodeMap = async (lines: CartLine[]): Promise<Map<string, s
     const base = byId.get(l.config.productId);
     const sibs = base?.model_id ? sibsByModel.get(base.model_id) ?? [] : [];
     const code = pickSoItemCode(l.config, base, sibs);
-    if (code) result.set(l.key, code);
+    if (code) codeByKey.set(l.key, code);
+    const m = Array.isArray(base?.product_models) ? base?.product_models[0] : base?.product_models;
+    if (m?.name) modelNameByKey.set(l.key, m.name);
   }
   return result;
 };
@@ -443,6 +463,7 @@ export const cartLineToSoItem = (
   line: CartLine,
   productById: Map<string, CatalogProduct>,
   resolvedItemCode?: string,
+  resolvedModelName?: string,
 ): PosHandoffItem => {
   const product = productById.get(line.config.productId);
   // Fallback to the line's productId if neither the resolver nor the catalog
@@ -457,14 +478,21 @@ export const cartLineToSoItem = (
   // name followed by every compartment code of the build, left-to-right —
   // "Lyyar · 1A(LHF) + 1NA + 2A(RHF)". Other categories keep the Model/product
   // name. A bundle-only sofa (no cells) falls back to the Model name.
-  const modelName = product?.name ?? line.config.productName ?? itemCode;
-  let description = modelName;
-  if (line.config.kind === 'sofa' && line.config.cells && line.config.cells.length > 0) {
-    const codes = [...line.config.cells]
-      .sort((a, b) => a.x - b.x || a.y - b.y)
-      .map((c) => c.moduleId)
-      .filter(Boolean);
-    if (codes.length > 0) description = `${modelName} · ${codes.join(' + ')}`;
+  // `resolvedModelName` (product_models.name via fetchItemCodeMap) is the
+  // clean Model name; without it a sofa line fell back to its snapshot
+  // productName — the lead per-module SKU name ("SOFA ANNSA 1A(LHF)").
+  const fallbackName = product?.name ?? line.config.productName ?? itemCode;
+  let description = fallbackName;
+  if (line.config.kind === 'sofa') {
+    const modelName = resolvedModelName ?? fallbackName;
+    description = modelName;
+    if (line.config.cells && line.config.cells.length > 0) {
+      const codes = [...line.config.cells]
+        .sort((a, b) => a.x - b.x || a.y - b.y)
+        .map((c) => c.moduleId)
+        .filter(Boolean);
+      if (codes.length > 0) description = `${modelName} · ${codes.join(' + ')}`;
+    }
   }
   return {
     itemCode,
@@ -479,17 +507,20 @@ export const cartLineToSoItem = (
 };
 
 /** Marshal the full cart into the items array. Empty cart returns []. Pass
- *  `codeByKey` (from fetchItemCodeMap) so each line books its real mfg code;
- *  omit it only in tests that exercise the legacy catalog-sku fallback. */
+ *  `resolution` (from fetchItemCodeMap) so each line books its real mfg code
+ *  + the clean Model name for the sofa description; omit it only in tests
+ *  that exercise the legacy catalog-sku fallback. */
 export const cartLinesToSoItems = (
   lines: CartLine[],
   products: CatalogProduct[] | undefined,
-  codeByKey?: Map<string, string>,
+  resolution?: SoLineResolution,
 ): PosHandoffItem[] => {
   const productById = new Map<string, CatalogProduct>(
     (products ?? []).map((p) => [p.id, p]),
   );
-  return lines.map((l) => cartLineToSoItem(l, productById, codeByKey?.get(l.key)));
+  return lines.map((l) =>
+    cartLineToSoItem(l, productById, resolution?.codeByKey.get(l.key), resolution?.modelNameByKey.get(l.key)),
+  );
 };
 
 /* ─── Mutation ───────────────────────────────────────────────────────── */
