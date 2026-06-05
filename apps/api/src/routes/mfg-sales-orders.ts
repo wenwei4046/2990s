@@ -1121,6 +1121,19 @@ mfgSalesOrders.post('/', async (c) => {
     }
   }
 
+  /* SO-SKU spec P5 (§4.5) — resolve the venue FK to its display name once.
+     Until now venue_id was stamped but the `venue` TEXT stayed NULL, so the
+     Detail Listing's Venue column never lit for POS orders. An explicit
+     body.venue still wins (the Backend form types it); lines inherit via the
+     report flatten. */
+  let resolvedVenueName: string | null =
+    typeof body.venue === 'string' && body.venue.trim() ? body.venue.trim() : null;
+  if (!resolvedVenueName && venueIdToStamp) {
+    const { data: venueRow } = await sb
+      .from('venues').select('name').eq('id', venueIdToStamp).maybeSingle();
+    resolvedVenueName = (venueRow as { name?: string } | null)?.name ?? null;
+  }
+
   // Compute totals + category breakdown
   let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, total = 0, totalCost = 0;
   // Task #114 — also accumulate per-category COST so the four cost columns
@@ -1451,6 +1464,13 @@ mfgSalesOrders.post('/', async (c) => {
       // Commander 2026-05-31 — per-line ship-from warehouse (migration 0118).
       // Explicit per-line override wins; else the SO state's default.
       warehouse_id: (it.warehouseId as string | null | undefined) ?? defaultWarehouseId,
+      /* SO-SKU spec P5 (§4.5) — per-line snapshots so the Detail Listing's
+         Branding / Venue columns light without joins: branding from the SKU's
+         catalog row (mainly MATTRESS brands — already loaded, zero extra
+         queries), venue from the resolved header name (mirrors the add-line
+         path, which snapshots header.venue/branding). */
+      branding: lineProducts[idx]?.branding ?? null,
+      venue: resolvedVenueName,
       /* SO-SKU spec P2 — explicit (= the column default). Service rows appended
          below start READY; PostgREST bulk inserts null-fill missing keys
          instead of applying column defaults, so every row spells it out. */
@@ -1691,6 +1711,10 @@ mfgSalesOrders.post('/', async (c) => {
         // Services don't ship from a warehouse; NULL keeps them out of every
         // per-warehouse pool (allocation skips them anyway, P1).
         warehouse_id: null,
+        /* P5 — key parity with the goods rows (PostgREST null-fills missing
+           keys). Services carry no brand; venue mirrors the header. */
+        branding: null,
+        venue: resolvedVenueName,
         // Not goods — nothing to allocate; READY from birth (spec §4.6).
         stock_status: 'READY',
       } as (typeof itemRows)[number]);
@@ -1767,7 +1791,9 @@ mfgSalesOrders.post('/', async (c) => {
     sales_location: derivedSalesLocation ?? null,
     ref: (body.ref as string) ?? null,
     po_doc_no: (body.poDocNo as string) ?? null,
-    venue: (body.venue as string) ?? null,
+    /* SO-SKU spec P5 — the resolved venue NAME (explicit body.venue wins,
+       else looked up from the stamped venue_id) so the column finally lights. */
+    venue: resolvedVenueName,
     /* Migration 0086 — venue master FK (separate from legacy `venue` text). */
     venue_id: venueIdToStamp,
     address1: (body.address1 as string) ?? null,

@@ -1782,8 +1782,11 @@ export type SoDetailListingRow = Record<string, unknown> & {
      hack). custom_specials is a jsonb array — element shape varies
      (string | { label } | { description }) so the type stays loose. */
   fabric: string | null;
-  divan_height: number | null;
-  leg_height: number | null;
+  /* SO-SKU spec P5 — heights now also extract from line variants; values can
+     be non-numeric picks ('No Leg'), so the server passes number when
+     parseable, else the raw string. */
+  divan_height: number | string | null;
+  leg_height: number | string | null;
   custom_specials: unknown;
   last_payment_at: string | null;
   account_sheet: string | null;

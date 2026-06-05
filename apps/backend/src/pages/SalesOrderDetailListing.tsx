@@ -116,12 +116,31 @@ const formatSpecials = (raw: unknown): string => {
     if (typeof el === 'object') {
       const o = el as Record<string, unknown>;
       const v = o.label ?? o.description ?? o.name ?? o.value;
-      return typeof v === 'string' ? v : '';
+      const label = typeof v === 'string' ? v : '';
+      if (!label) return '';
+      /* SO-SKU spec P5 (D8) — show the surcharge next to the name, marked
+         "incl." because the amount is ALREADY folded into the line price
+         (custom_specials is the price COMPOSITION, not an extra charge).
+         Shapes across PRs: { surchargeSen } (older) | { priceCenti } (0134) —
+         both are sen. */
+      const sen = Number(o.surchargeSen ?? o.priceCenti ?? 0);
+      return sen > 0
+        ? `${label} (+RM${(sen / 100).toLocaleString('en-MY', { maximumFractionDigits: 2 })} incl.)`
+        : label;
     }
     return '';
   }).filter(Boolean);
   return parts.join(', ');
 };
+
+/* SO-SKU spec P5 — heights are number (inches) or a non-numeric pick string. */
+const fmtHeight = (v: number | string | null): string => {
+  if (v == null || v === '') return '—';
+  return typeof v === 'number' ? `${v}"` : String(v);
+};
+/* Numeric rows sort by value; string picks sink to the end (stable). */
+const heightSortValue = (v: number | string | null): number =>
+  typeof v === 'number' ? v : v == null ? -Infinity : Infinity;
 
 /* ─────────────────────────────────────────────────────────────────────────
    Column factory — 47 columns total (33 visible by default + 14 hidden).
@@ -316,19 +335,20 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       accessor: (r) => r.fabric ?? '—',
       searchValue: (r) => r.fabric ?? '',
     },
-    /* 20 — Task #63: integer inches column rendered as `30"` etc. */
+    /* 20 — SO-SKU spec P5: numbers render as `30"`; non-numeric variant picks
+       ('No Leg') pass through as-is. Numeric rows sort first. */
     {
       key: 'divan_height', label: 'Divan Height', width: 110, sortable: true, align: 'right',
-      accessor: (r) => r.divan_height != null ? `${r.divan_height}"` : '—',
+      accessor: (r) => fmtHeight(r.divan_height),
       searchValue: (r) => r.divan_height != null ? String(r.divan_height) : '',
-      sortFn: (a, b) => (a.divan_height ?? 0) - (b.divan_height ?? 0),
+      sortFn: (a, b) => heightSortValue(a.divan_height) - heightSortValue(b.divan_height),
     },
-    /* 21 — Task #63: integer inches column rendered as `4"` etc. */
+    /* 21 — same rendering rule as col 20. */
     {
       key: 'leg_height', label: 'Leg Height', width: 100, sortable: true, align: 'right',
-      accessor: (r) => r.leg_height != null ? `${r.leg_height}"` : '—',
+      accessor: (r) => fmtHeight(r.leg_height),
       searchValue: (r) => r.leg_height != null ? String(r.leg_height) : '',
-      sortFn: (a, b) => (a.leg_height ?? 0) - (b.leg_height ?? 0),
+      sortFn: (a, b) => heightSortValue(a.leg_height) - heightSortValue(b.leg_height),
     },
     /* 22 — Task #63: custom_specials is a jsonb array. Element shape
        varies across PRs (some lines store strings, others store
