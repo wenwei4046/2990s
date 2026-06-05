@@ -321,7 +321,7 @@ consignmentNotes.get('/', async (c) => {
     }
   }
   const consignmentNotesOut = rows.map((r) => ({ ...r, has_children: childIds.has(r.id) }));
-  return c.json({ consignmentNotes: consignmentNotesOut });
+  return c.json({ deliveryOrders: consignmentNotesOut });
 });
 
 // ── Detail ──────────────────────────────────────────────────────────────
@@ -348,7 +348,7 @@ consignmentNotes.get('/:id', async (c) => {
     const wid = lineWh.get(it.id) ?? null;
     return { ...it, warehouse_id: wid, warehouse_code: wid ? (codeMap.get(wid) ?? null) : null };
   });
-  return c.json({ consignmentNote, items });
+  return c.json({ deliveryOrder: consignmentNote, items });
 });
 
 // ── Create ──────────────────────────────────────────────────────────────

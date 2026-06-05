@@ -113,7 +113,7 @@ purchaseConsignmentReturns.get('/', async (c) => {
   const supplierId = c.req.query('supplierId'); if (supplierId) q = q.eq('supplier_id', supplierId);
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-  return c.json({ purchaseConsignmentReturns: data ?? [] });
+  return c.json({ purchaseReturns: data ?? [] });
 });
 
 purchaseConsignmentReturns.get('/:id', async (c) => {
@@ -127,7 +127,7 @@ purchaseConsignmentReturns.get('/:id', async (c) => {
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
   const items = (i.data ?? []) as unknown as Array<Record<string, unknown>>;
-  return c.json({ purchaseConsignmentReturn: h.data, items });
+  return c.json({ purchaseReturn: h.data, items });
 });
 
 // ── Linked docs (Smart Buttons fan-out) ─────────────────────────────

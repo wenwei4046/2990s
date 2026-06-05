@@ -54,10 +54,10 @@ export function usePurchaseConsignmentOrders(opts?: { status?: PoStatus; supplie
       const params = new URLSearchParams();
       if (opts?.status) params.set('status', opts.status);
       if (opts?.supplierId) params.set('supplierId', opts.supplierId);
-      const res = await authedFetch<{ purchaseOrders: PoHeaderRow[] }>(
+      const res = await authedFetch<{ purchaseConsignmentOrders: PoHeaderRow[] }>(
         `/purchase-consignment-orders${params.toString() ? `?${params.toString()}` : ''}`,
       );
-      return res.purchaseOrders;
+      return res.purchaseConsignmentOrders;
     },
     staleTime: 30_000,
     retry: 1,
@@ -69,7 +69,7 @@ export function usePurchaseConsignmentOrders(opts?: { status?: PoStatus; supplie
 export function usePurchaseConsignmentOrderDetail(id: string | null) {
   return useQuery({
     queryKey: ['pc-order-detail', id],
-    queryFn: () => authedFetch<{ purchaseOrder: PoHeaderRow; items: PoItemRow[] }>(`/purchase-consignment-orders/${id}`),
+    queryFn: () => authedFetch<{ purchaseConsignmentOrder: PoHeaderRow; items: PoItemRow[] }>(`/purchase-consignment-orders/${id}`),
     enabled: Boolean(id),
     staleTime: 30_000,
     retry: 1,

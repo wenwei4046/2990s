@@ -306,7 +306,7 @@ consignmentReturns.get('/', async (c) => {
   const status = c.req.query('status'); if (status) q = q.eq('status', status);
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-  return c.json({ consignmentReturns: data ?? [] });
+  return c.json({ deliveryReturns: data ?? [] });
 });
 
 // ── Detail ──────────────────────────────────────────────────────────────
@@ -326,7 +326,7 @@ consignmentReturns.get('/:id', async (c) => {
     const wid = lineWh.get(it.id) ?? null;
     return { ...it, warehouse_id: wid, warehouse_code: wid ? (codeMap.get(wid) ?? null) : null };
   });
-  return c.json({ consignmentReturn: h.data, items });
+  return c.json({ deliveryReturn: h.data, items });
 });
 
 /* Insert the return header from a client body. Shared by POST /. */

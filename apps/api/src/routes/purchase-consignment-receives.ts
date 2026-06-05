@@ -262,7 +262,7 @@ purchaseConsignmentReceives.get('/', async (c) => {
     total_centi: (g.total_centi as number | null | undefined) ?? 0,
     ...computePcReceiveFlags(linesByReceive.get(g.id) ?? []),
   }));
-  return c.json({ purchaseConsignmentReceives: receives });
+  return c.json({ grns: receives });
 });
 
 /* ── GET /outstanding-pco-items ──────────────────────────────────────────
@@ -393,7 +393,7 @@ purchaseConsignmentReceives.get('/:id', async (c) => {
     received_at: headerReceivedAt,
     downstream: downstreamMap.get(it.id) ?? [],
   }));
-  return c.json({ receive, items });
+  return c.json({ grn: receive, items });
 });
 
 // ── Linked docs (Smart Buttons fan-out) ─────────────────────────────
@@ -545,7 +545,7 @@ purchaseConsignmentReceives.post('/', async (c) => {
   // Populate header money rollups from the inserted lines.
   await recomputePcReceiveTotals(sb, h.id);
 
-  return c.json({ id: h.id, receiveNumber: h.receive_number }, 201);
+  return c.json({ id: h.id, grnNumber: h.receive_number }, 201);
 });
 
 // ── POST /from-pcos ─────────────────────────────────────────────────────
@@ -654,7 +654,7 @@ purchaseConsignmentReceives.post('/from-pcos', async (c) => {
   await postPcReceiveAndRollup(sb, h.id);
   await recomputePcReceiveTotals(sb, h.id);
 
-  return c.json({ id: h.id, receiveNumber: h.receive_number, pcoCount: pcoList.length, lineCount: itemList.length }, 201);
+  return c.json({ id: h.id, grnNumber: h.receive_number, pcoCount: pcoList.length, lineCount: itemList.length }, 201);
 });
 
 purchaseConsignmentReceives.patch('/:id/post', async (c) => {
