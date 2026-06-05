@@ -195,7 +195,7 @@ export function pwpRewardNote(variants: unknown): SoPwpNote | null {
     : null;
   const parts = ['PWP price'];
   if (code) parts.push(`PWP: ${code}`);
-  if (label) parts.push(`换购自 ${label}`);
+  if (label) parts.push(`redeemed with ${label}`);
   return { tone: 'used', text: parts.join(' · ') };
 }
 
@@ -212,6 +212,6 @@ export function pwpTriggerNotes(
   return mine.map((cd) =>
     cd.status === 'USED'
       ? { tone: 'used' as const, text: `PWP: ${cd.code}` }
-      : { tone: 'unused' as const, text: `PWP voucher issued: ${cd.code} · not redeemed yet 未使用` },
+      : { tone: 'unused' as const, text: `PWP voucher issued: ${cd.code} · not redeemed yet` },
   );
 }
