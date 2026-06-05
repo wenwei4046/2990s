@@ -18,6 +18,10 @@ import {
   type AddonSelectionInput,
   type ServiceLineSpec,
 } from '@2990s/shared/service-lines';
+/* SO-SKU spec P3 — a POS sofa build splits into per-compartment module lines
+   (SO-2606-018 reference shape). Pure decomposition in shared; the build-level
+   recompute + drift gate stay authoritative for the money. */
+import { splitSofaBuildIntoModuleLines } from '@2990s/shared/so-sofa-split';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
@@ -1274,6 +1278,9 @@ mfgSalesOrders.post('/', async (c) => {
     }
   };
 
+  /* P3 — keep each sofa item's module price map so the split below distributes
+     the build total with the SAME weights the drift gate priced from. */
+  const sofaModulePricesByIdx = new Map<number, Record<string, number> | null>();
   const recomputes: Array<RecomputedLine | null> = await Promise.all(items.map(async (it, idx) => {
     const itemCode = String(it.itemCode ?? '');
     if (!itemCode) return null;
@@ -1292,6 +1299,7 @@ mfgSalesOrders.post('/', async (c) => {
           String((it.variants as { depth?: unknown } | null)?.depth ?? '24'),
         )
       : null;
+    sofaModulePricesByIdx.set(idx, sofaModulePrices);
     const draft: MfgItemForRecompute = {
       itemCode,
       itemGroup:      String(it.itemGroup ?? 'others'),
@@ -1398,7 +1406,7 @@ mfgSalesOrders.post('/', async (c) => {
     const lineDeliveryDateOverridden = hasExplicitLineDate
       ? (it.lineDeliveryDateOverridden === undefined ? true : Boolean(it.lineDeliveryDateOverridden))
       : Boolean(it.lineDeliveryDateOverridden ?? false);
-    return {
+    const baseRow = {
       line_date: (it.lineDate as string) ?? new Date().toISOString().slice(0, 10),
       debtor_code: (body.debtorCode as string) ?? null,
       debtor_name: body.debtorName,
@@ -1438,7 +1446,68 @@ mfgSalesOrders.post('/', async (c) => {
          instead of applying column defaults, so every row spells it out. */
       stock_status: 'PENDING',
     };
-  }));
+
+    /* ── SO-SKU spec P3 (§4.3 + D3) — a POS sofa BUILD becomes one SO line per
+       compartment module SKU (the Backend hand-opened SO-2606-018 shape). The
+       money is settled ABOVE this point: `unit` is the authoritative per-build
+       selling price (combo / PWP / fabric-tier folded in by the recompute, the
+       drift gate already passed on it). Splitting only decomposes it — each
+       line gets its module-sell-price share, residue on the last line, so
+       Σ line totals === build total exactly. Shared variants ride every line
+       (the per-line variant-rule gate keeps passing); the cells array is
+       replaced by per-line buildKey/cellIndex/x/y/rot so DO picking, returns
+       and previews can regroup the set. Breakdown columns + custom_specials
+       stay on the FIRST line only — they are build-level report figures and
+       duplicating them ×N would double-display in SO Details. Non-splittable
+       payloads (no cells / unknown base model) keep the legacy single line. */
+    if (group === 'sofa') {
+      const product = lineProducts[idx] ?? null;
+      const split = splitSofaBuildIntoModuleLines({
+        baseModel: product?.base_model ?? null,
+        cells: (it.variants as { cells?: unknown } | null)?.cells,
+        buildUnitPriceSen: unit,
+        buildUnitCostSen: unitCost,
+        modulePrices: sofaModulePricesByIdx.get(idx) ?? null,
+      });
+      if (split && split.length > 0) {
+        const buildKey = `build-${idx + 1}`;
+        const { cells: _cells, ...sharedVariants } =
+          ((it.variants as Record<string, unknown> | null) ?? {});
+        return split.map((s, i) => {
+          const moduleVariants: Record<string, unknown> = {
+            ...sharedVariants,
+            buildKey,
+            cellIndex: s.cellIndex,
+            x: s.x,
+            y: s.y,
+            rot: s.rot,
+          };
+          const moduleLineTotal = (qty * s.unitPriceSen) - (i === 0 ? discount : 0);
+          const moduleLineCost = qty * s.unitCostSen;
+          return {
+            ...baseRow,
+            item_code: s.itemCode,
+            description: s.description,
+            description2: buildVariantSummary('sofa', moduleVariants) || null,
+            unit_price_centi: s.unitPriceSen,
+            discount_centi: i === 0 ? discount : 0,
+            total_centi: moduleLineTotal,
+            total_inc_centi: moduleLineTotal,
+            balance_centi: moduleLineTotal,
+            variants: moduleVariants,
+            unit_cost_centi: s.unitCostSen,
+            line_cost_centi: moduleLineCost,
+            line_margin_centi: moduleLineTotal - moduleLineCost,
+            divan_price_sen:         i === 0 ? (recomputed?.divan_price_sen ?? 0) : 0,
+            leg_price_sen:           i === 0 ? (recomputed?.leg_price_sen ?? 0) : 0,
+            special_order_price_sen: i === 0 ? (recomputed?.special_order_sen ?? 0) : 0,
+            custom_specials:         i === 0 ? (recomputed?.custom_specials ?? null) : null,
+          };
+        });
+      }
+    }
+    return [baseRow];
+  })).then((rows) => rows.flat());
 
   const margin = total - totalCost;
   const marginPctBasis = total > 0 ? Math.round((margin / total) * 10000) : 0;
@@ -1616,6 +1685,20 @@ mfgSalesOrders.post('/', async (c) => {
   const grandMargin         = margin + serviceCenti;
   const grandMarginPctBasis = grandTotal > 0 ? Math.round((grandMargin / grandTotal) * 10000) : 0;
 
+  /* SO-SKU spec P3 — Edge #4 for the ASSEMBLED rows. The payload-level gate
+     at the top validated what the client sent; the split just minted module
+     SKUs (ANNSA-1A(RHF) …) that must ALSO exist in the catalog. A 409 here
+     means the Model's module SKU is missing from the SKU Master — fail loudly
+     BEFORE the header insert so a rejected order leaves nothing behind. */
+  {
+    const rowCodes = itemRows.map((r) => (r as { item_code?: string | null }).item_code);
+    const rowCheck = await validateItemCodes(sb, rowCodes);
+    if (!rowCheck.ok) {
+      await rollbackPwpClaims();
+      return c.json(unknownItemCodeResponse(rowCheck.unknown), 409);
+    }
+  }
+
   /* Task #121 — derive country from the picked customer_state via the
      localities lookup. Stays null when the state is unknown so we don't
      forge a country the locality table never declared. */
@@ -1705,7 +1788,9 @@ mfgSalesOrders.post('/', async (c) => {
     // Cross-category follow-up link (migration 0141) — null unless sales linked
     // this SO back to an earlier one for the reduced delivery rate.
     cross_category_source_doc_no: crossCategorySourceDocNo,
-    line_count: items.length + serviceSpecs.length,
+    // P3 — itemRows now carries split sofa module lines + SERVICE lines;
+    // its length IS the line count (recomputeTotals re-derives it anyway).
+    line_count: itemRows.length,
     currency: ((body.currency as string) ?? 'MYR').toUpperCase(),
     note: (body.note as string) ?? null,
     /* PR #46 — POS handover fields written at create */
