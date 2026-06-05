@@ -462,3 +462,20 @@ deliverable remaining. **See the Returns SOP** for the full return-to-credit flo
 | `invalid_transition` | Illegal status move (e.g. CANCELLED→PAID) | Reopen to SENT first; let the ledger derive paid state. |
 | `not_payable` | Paying a cancelled invoice | Reopen the invoice first. |
 | `pricing_drift` | POS price tampered > 0.5% | Re-submit with the system price. |
+
+---
+
+### Appendix B — SO-SKU update (2026-06-05, spec `docs/specs/2026-06-04-so-sku-lines-and-sync-spec.md`)
+
+Every charge on a Sales Order is now a catalog-backed line (P1–P5 shipped, PRs #485–#490, migration 0155):
+
+| Change | What operators see |
+|---|---|
+| **Delivery fee = SERVICE lines** | `SVC-DELIVERY` / `SVC-DELIVERY-CROSS` / `SVC-DELIVERY-ADD` lines on POS-handover SOs. Amounts stay server-computed (config + cross-order link unchanged). The header fee column is still written during the transition; the lines are the truth. |
+| **POS add-ons on the SO** | `SVC-DISPOSE-MATTRESS` / `SVC-DISPOSE-BEDFRAME` RM80 lines; `SVC-LIFT-CARRY` qty = chargeable floor·items × RM100 (first 2 floors free, spelled out in the description). |
+| **SERVICE line behavior** | Rides SO→DO→SI (data + print). Never allocates stock, never blocks readiness, never returnable (`service_lines_not_returnable`), never MRP demand. Starts `READY`. |
+| **Sofa = one line per compartment** | A POS sofa build lands as `{MODEL}-{COMPARTMENT}` lines (like a Backend hand-opened SO). Build total distributed by module sell prices; Σ lines = quote. `variants.buildKey` groups a build's lines. |
+| **Deposit in the payments ledger** | The POS deposit auto-records as an `is_deposit` payment row at SO create — Paid / Balance / Collected By derive live. Do NOT re-key the deposit via "Add payment" (that's for balance payments). |
+| **Price follows the SKU Master** | Picking a SKU fills the sell price; below admin the field is locked. Deviations go through the audited override (admin only — `price_override_admin_only`). |
+
+New error codes: `service_lines_not_returnable` (remove SERVICE lines from a return), `price_override_admin_only` (ask an admin to override a line price).

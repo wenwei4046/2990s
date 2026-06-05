@@ -1,7 +1,7 @@
 # SPEC — SO 全面 SKU 化 + POS↔Backend 数据同步
 
 > 日期:2026-06-04 · 发起人:Loo(Chairman)· 起草:Claude(deep research 会话)
-> 状态:**实施中**(2026-06-05 起;§8 D1–D9 已全部拍板)— 本 spec 写给一个全新的 Claude Code 会话执行。
+> 状态:**P1–P5 已全部上线**(2026-06-05,PR #485–#490,迁移 0155 已打生产;P6 仅余 header `delivery_fee_centi` 退役决策待 Loo)。
 > 执行前必读:`CLAUDE.md`(仓库根)、本文 §0 的施工纪律。
 
 ---
@@ -156,11 +156,11 @@
 
 | Phase | 内容 | 验收 |
 |---|---|---|
-| **P1 守卫先行** | stock-allocation/MRP/DO 复制的 SERVICE 跳过逻辑 + 单测(此时还没有 SERVICE 行,纯防御,零行为变化) | 全测试过;现有 SO 流转无回归 |
-| **P2 SERVICE SKU + 运费/addons 行化** | seed SERVICE SKUs(Loo 确认命名)+ SO POST 运费块改产行(双写 header)+ `PosHandoffPayload.addons` + POS 发送 + 服务器 addon 行化 | 测试单:POS 带 dispose+运费下单 → SO 出现 SERVICE 行,总额=POS 屏幕;Backend 手开单能选 SVC SKU;跨单减免照常 |
-| **P3 沙发拆行** | 服务器端 cells→N 行(buildKey 链),分价+drift 聚合校验,QP/渲染回归 | ANNSA 1A(LHF)+1A(RHF) → 2 行;Σ=报价;Process date 单照过;DO/分配正常 |
-| **P4 卖价统一** | SoLineCard 默认价自 `sell_price_sen`;(若 D4=锁价)加权限门 | Backend 选 SKU 自动出 POS 卖价 |
-| **P5 SO Details 点亮** | reports.ts 提取修复(Fabrics/Divan/Leg)+ branding/venue 快照 + (D5 通过后)deposit→ledger + (D7)Model 列 | 截图同款页面所有列有值;Paid=订金 |
+| ✅ **P1 守卫先行** | stock-allocation/MRP/DO 复制的 SERVICE 跳过逻辑 + 单测(此时还没有 SERVICE 行,纯防御,零行为变化) | 全测试过;现有 SO 流转无回归 |
+| ✅ **P2 SERVICE SKU + 运费/addons 行化** | seed SERVICE SKUs(Loo 确认命名)+ SO POST 运费块改产行(双写 header)+ `PosHandoffPayload.addons` + POS 发送 + 服务器 addon 行化 | 测试单:POS 带 dispose+运费下单 → SO 出现 SERVICE 行,总额=POS 屏幕;Backend 手开单能选 SVC SKU;跨单减免照常 |
+| ✅ **P3 沙发拆行** | 服务器端 cells→N 行(buildKey 链),分价+drift 聚合校验,QP/渲染回归 | ANNSA 1A(LHF)+1A(RHF) → 2 行;Σ=报价;Process date 单照过;DO/分配正常 |
+| ✅ **P4 卖价统一** | SoLineCard 默认价自 `sell_price_sen`;(若 D4=锁价)加权限门 | Backend 选 SKU 自动出 POS 卖价 |
+| ✅ **P5 SO Details 点亮** | reports.ts 提取修复(Fabrics/Divan/Leg)+ branding/venue 快照 + (D5 通过后)deposit→ledger + (D7)Model 列 | 截图同款页面所有列有值;Paid=订金 |
 | **P6 收尾** | header `delivery_fee_centi` 停写或保留(再问 Loo)、文档(`docs/sop/01-order-to-cash.md`)更新、memory 更新 | — |
 
 每个 Phase:测试先行(vitest,shared/api 层纯函数全覆盖),`pnpm typecheck` + `pnpm test` 干净(slips.test.ts 3 个失败是 main 预存,无关),部署后在生产用测试单验证(参考既往做法:下测试单 → 验证 → CANCELLED)。
