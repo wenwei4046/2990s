@@ -15,6 +15,7 @@
     "./service-sku": "./src/service-sku.ts",
     "./service-lines": "./src/service-lines.ts",
     "./so-sofa-split": "./src/so-sofa-split.ts",
+    "./so-line-display": "./src/so-line-display.ts",
     "./format": "./src/format.ts",
     "./phone": "./src/phone.ts",
     "./schemas": "./src/schemas/index.ts"

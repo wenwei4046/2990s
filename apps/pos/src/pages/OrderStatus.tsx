@@ -22,6 +22,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { Button, IconButton } from '@2990s/design-system';
+import { groupSoLinesForDisplay } from '@2990s/shared/so-line-display';
 import { useAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import { Topbar } from '../components/Topbar';
@@ -136,12 +137,25 @@ const useMyOrders = () =>
       if (!res.ok) throw new Error(`GET /mfg-sales-orders/mine failed (${res.status})`);
       const body = (await res.json()) as { salesOrders: MineSoRow[] };
       return (body.salesOrders ?? []).map((r): MyOrderRow => {
-        const items: OrderItem[] = (r.items ?? []).map((it) => ({
-          qty: it.qty ?? 0,
-          lineTotal: Math.round((it.total_centi ?? 0) / 100),
-          productName: it.description ?? it.item_code,
-          productImage: null,
-        }));
+        /* Loo 2026-06-05 — fold per-module sofa SKU lines (variants.buildKey
+           groups from the P3 split) into ONE Model row with the combined
+           price, matching the customer-facing SO print. Lines without a
+           buildKey (legacy SOs, services, bedframes…) pass through 1:1. */
+        const items: OrderItem[] = groupSoLinesForDisplay(r.items ?? []).map((g) =>
+          g.kind === 'sofa-build' && g.display
+            ? {
+                qty: g.display.qty,
+                lineTotal: Math.round(g.display.totalCenti / 100),
+                productName: g.display.description,
+                productImage: null,
+              }
+            : {
+                qty: g.lines[0]!.qty ?? 0,
+                lineTotal: Math.round((g.lines[0]!.total_centi ?? 0) / 100),
+                productName: g.lines[0]!.description ?? g.lines[0]!.item_code,
+                productImage: null,
+              },
+        );
         const total = Math.round((r.total_revenue_centi ?? 0) / 100);
         return {
           id: r.doc_no,

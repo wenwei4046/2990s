@@ -937,7 +937,7 @@ export const MfgSalesOrdersList = () => {
       fetch(`${import.meta.env.VITE_API_URL}/mfg-sales-orders/${row.doc_no}/payments`, { headers }),
     ]);
     if (!detailRes.ok) { alert(`Failed to load SO ${row.doc_no}`); return; }
-    const json = (await detailRes.json()) as { salesOrder: unknown; items: unknown[] };
+    const json = (await detailRes.json()) as { salesOrder: unknown; items: unknown[]; pwpCodes?: unknown[] };
     /* Payments endpoint is best-effort: if it fails the PDF still renders
        with an empty Payments table rather than blocking Preview/Print. */
     let payments: unknown[] = [];
@@ -950,7 +950,10 @@ export const MfgSalesOrdersList = () => {
     /* Follow-up #83 — action routes the PDF to doc.save() / hidden iframe
        print / blob preview, instead of always downloading and asking the
        user to find the file. Payments arg from #81 is threaded through. */
-    await generateSalesOrderPdf(json.salesOrder as never, json.items as never, payments as never, action);
+    await generateSalesOrderPdf(
+      json.salesOrder as never, json.items as never, payments as never, action,
+      (json.pwpCodes ?? []) as never,
+    );
   };
 
   /* Soft-delete a SO row (sets status=CANCELLED). Fired from the row

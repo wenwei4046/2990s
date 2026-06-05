@@ -256,6 +256,26 @@
   line-height: 1.35;
 }
 
+/* PWP voucher notes under a line (Loo 2026-06-05).
+   used   = voucher consumed on/with this line — brand accent;
+   unused = issued by this order, not redeemed yet (排法 A) — muted. */
+.pwpUsed {
+  display: block;
+  margin-top: 2pt;
+  font-size: 8.5pt;
+  font-weight: 600;
+  color: var(--c-burnt);
+  line-height: 1.35;
+}
+
+.pwpUnused {
+  display: block;
+  margin-top: 2pt;
+  font-size: 8.5pt;
+  color: #6b6260;
+  line-height: 1.35;
+}
+
 /* ───── After-items row: customer signature (LEFT) + totals (RIGHT) ───── */
 .afterItems {
   display: grid;
