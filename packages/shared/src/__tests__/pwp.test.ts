@@ -11,7 +11,7 @@ const RULE: PwpRule = {
   qtyPerTrigger: 1,
 };
 
-type LineOpts = { qty?: number; name?: string; code?: string; pwp?: boolean };
+type LineOpts = { qty?: number; name?: string; code?: string; pwp?: boolean; isReward?: boolean };
 const line = (idx: number, category: string, modelId: string | null, o: LineOpts = {}): PwpLineInput => ({
   idx,
   category,
@@ -20,6 +20,7 @@ const line = (idx: number, category: string, modelId: string | null, o: LineOpts
   productName: o.name,
   productCode: o.code,
   pwpRequested: o.pwp ?? false,
+  ...(o.isReward !== undefined ? { isReward: o.isReward } : {}),
 });
 
 const grantedIdx = (rules: PwpRule[], lines: PwpLineInput[]): number[] =>
@@ -176,3 +177,63 @@ describe('resolvePwp — multiple differentiated rules', () => {
   });
 });
 
+
+/* Promo one-way (Loo 2026-06-06) — a rule whose trigger set == reward set
+   ("buy ARRUS, get an ARRUS free") must not let the free unit fund the next
+   free unit, while pwp rules still chain off reward lines. */
+describe('resolvePwp - promo one-way', () => {
+  const PROMO: PwpRule = {
+    triggerCategory: 'MATTRESS',
+    triggerEligibleModelIds: ['arrus'],
+    rewardCategory: 'MATTRESS',
+    eligibleRewardModelIds: ['arrus'],
+    qtyPerTrigger: 1,
+    type: 'promo',
+  };
+  const PWP_BED: PwpRule = {
+    triggerCategory: 'MATTRESS',
+    triggerEligibleModelIds: ['arrus'],
+    rewardCategory: 'BEDFRAME',
+    eligibleRewardModelIds: ['b-ok'],
+    qtyPerTrigger: 1,
+    type: 'pwp',
+  };
+
+  it('a full-price ARRUS funds ONE free ARRUS (the normal sale)', () => {
+    const lines = [
+      line(0, 'MATTRESS', 'arrus'),                          // paid trigger
+      line(1, 'MATTRESS', 'arrus', { pwp: true }),           // wants to be free
+    ];
+    expect(grantedIdx([PROMO], lines)).toEqual([1]);
+  });
+
+  it('a reward ARRUS line creates NO promo slots - free cannot fund free', () => {
+    const lines = [
+      line(0, 'MATTRESS', 'arrus', { isReward: true }),      // the FREE one from an earlier grant
+      line(1, 'MATTRESS', 'arrus', { pwp: true }),           // tries to ride on it
+    ];
+    expect(grantedIdx([PROMO], lines)).toEqual([]);
+  });
+
+  it('an ARRUS cannot be its own trigger (pwpRequested excluded from promo slots)', () => {
+    const lines = [line(0, 'MATTRESS', 'arrus', { pwp: true })];
+    expect(grantedIdx([PROMO], lines)).toEqual([]);
+  });
+
+  it('the reward ARRUS still triggers a pwp rule (chains stay allowed)', () => {
+    const lines = [
+      line(0, 'MATTRESS', 'arrus', { isReward: true }),      // free mattress
+      line(1, 'BEDFRAME', 'b-ok', { pwp: true }),            // bedframe at pwp price
+    ];
+    expect(grantedIdx([PWP_BED], lines)).toEqual([1]);
+  });
+
+  it('a rule without type behaves as pwp (reward lines still open slots)', () => {
+    const NO_TYPE: PwpRule = { ...PWP_BED, type: undefined };
+    const lines = [
+      line(0, 'MATTRESS', 'arrus', { isReward: true }),
+      line(1, 'BEDFRAME', 'b-ok', { pwp: true }),
+    ];
+    expect(grantedIdx([NO_TYPE], lines)).toEqual([1]);
+  });
+});

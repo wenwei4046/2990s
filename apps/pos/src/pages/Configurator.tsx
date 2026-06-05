@@ -489,6 +489,10 @@ export const Configurator = () => {
         qty: l.qty,
         productName: c.productName,
         pwpRequested: c.kind === 'bedframe' ? c.pwp === true : false,
+        /* Promo one-way (Loo 2026-06-06) — a line already bought with a code
+           never opens promo allowance (a free ARRUS can't fund the next free
+           ARRUS), while 'pwp' chains stay allowed. */
+        isReward: c.pwp === true,
       };
     });
     const candidateIdx = baseInputs.length;

@@ -96,6 +96,12 @@ const reserveSchema = z.object({
   // SOFA trigger (Phase 2) — the build's module codes (cell.moduleId). Matched
   // server-side against a SOFA rule's trigger_combo_ids. Omitted for non-sofa.
   sofaModules: z.array(z.string()).optional(),
+  // Promo is ONE-WAY (Loo 2026-06-06): when the line is itself a reward
+  // (bought with a PWP/promo code) it must never mint 'promo' codes — a free
+  // ARRUS can't fund the next free ARRUS. 'pwp' rules still apply (换购 may
+  // chain). The POS reconciler sets this; the order-Confirm backstop in
+  // mfg-sales-orders.ts catches anything that slips through.
+  rewardLine:  z.boolean().optional(),
 });
 
 /* ── POST /reserve — reserve codes for a trigger cart line. Idempotent per
@@ -112,7 +118,7 @@ pwpCodes.post('/reserve', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'validation_failed', issues: parsed.error.issues.map((i) => ({ path: i.path, message: i.message })) }, 400);
   }
-  const { cartLineKey, productId, qty } = parsed.data;
+  const { cartLineKey, productId, qty, rewardLine } = parsed.data;
 
   // 1. The trigger product (category + model + base_model for sofa combos).
   const { data: prod } = await supabase
@@ -163,6 +169,12 @@ pwpCodes.post('/reserve', async (c) => {
     );
   }
 
+  // 2c. Promo is one-way (Loo 2026-06-06) — a reward line never mints 'promo'
+  //     codes; only full-price purchases fund a free reward. 'pwp' rules stay.
+  if (rewardLine) {
+    matching = matching.filter((r) => String(r.type ?? 'pwp') !== 'promo');
+  }
+
   // 3. Existing RESERVED codes for this cart line, grouped by rule.
   const { data: existingRows } = await supabase
     .from('pwp_codes')
@@ -202,6 +214,21 @@ pwpCodes.post('/reserve', async (c) => {
       if (surplus.length > 0) {
         await supabase.from('pwp_codes').delete().in('code', surplus).eq('status', 'RESERVED');
       }
+    }
+  }
+
+  // 4b. Trim RESERVED codes whose rule no longer matches this line at all —
+  //     the line's model was edited away from a rule's trigger list, or the
+  //     line became a reward and promo rules dropped out of `matching` (2c).
+  //     Without this they'd ride to AVAILABLE at order Confirm as phantom
+  //     vouchers the customer never legitimately earned.
+  {
+    const matchingIds = new Set(matching.map((r) => r.id));
+    const strays = existing
+      .filter((e) => !e.rule_id || !matchingIds.has(e.rule_id))
+      .map((e) => e.code);
+    if (strays.length > 0) {
+      await supabase.from('pwp_codes').delete().in('code', strays).eq('status', 'RESERVED');
     }
   }
 

@@ -34,6 +34,12 @@ export interface PwpRule {
   triggerComboIds?: string[];
   /** SOFA reward: sofa_combo_pricing.id[] redeemable at the combo PWP price. */
   rewardComboIds?: string[];
+  /** 'promo' prices the reward FREE (migration 0145). Promo is ONE-WAY
+   *  (Loo 2026-06-06): a line that is itself a reward never creates trigger
+   *  slots for a promo rule — a free ARRUS must not free another ARRUS.
+   *  'pwp' rules are unaffected (rewards may chain into further 换购).
+   *  Optional — absent reads as 'pwp'. */
+  type?: 'pwp' | 'promo';
 }
 
 export interface PwpLineInput {
@@ -51,6 +57,9 @@ export interface PwpLineInput {
   productCode?: string;
   /** The salesperson toggled "use PWP price" on this reward line. */
   pwpRequested: boolean;
+  /** This line IS a reward already (bought with a PWP/promo code). Reward
+   *  lines still trigger 'pwp' rules but never 'promo' rules (one-way). */
+  isReward?: boolean;
 }
 
 export interface PwpGrant {
@@ -90,6 +99,11 @@ export function resolvePwp(rules: PwpRule[], lines: PwpLineInput[]): PwpGrant[] 
     for (const line of ordered) {
       if (line.category !== rule.triggerCategory) continue;
       if (!inList(line.modelId, rule.triggerEligibleModelIds)) continue;
+      // Promo is one-way (Loo 2026-06-06): a reward-side line (already bought
+      // with a code, or asking to be priced as a reward right now) never
+      // opens promo allowance — else a rule whose trigger set == reward set
+      // (buy ARRUS → free ARRUS) lets the free unit fund the next free unit.
+      if (rule.type === 'promo' && (line.isReward === true || line.pwpRequested)) continue;
       const units = safeQty(line.qty);
       for (let u = 0; u < units * qpt; u++) {
         slots.push({ name: line.productName ?? '', code: line.productCode ?? '' });
