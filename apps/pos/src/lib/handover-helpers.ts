@@ -72,6 +72,26 @@ export interface HandoverForm {
   acknowledgedTerms: boolean;
 }
 
+/* Loo 2026-06-05 — a failed submit + "Back to cart" used to WIPE everything
+   the salesperson keyed in (the form lived only in component state). The
+   Handover page snapshots the form to sessionStorage on every change and
+   hydrates on mount; the snapshot is cleared on a successful order AND
+   whenever the cart is cleared (next customer must start clean). The
+   signature + terms tick are intentionally never restored — the customer
+   must sign again on a fresh attempt. */
+export const HANDOVER_FORM_SNAPSHOT_KEY = 'pos-handover-form-v1';
+
+export const loadHandoverFormSnapshot = (): Partial<HandoverForm> | null => {
+  try {
+    const raw = sessionStorage.getItem(HANDOVER_FORM_SNAPSHOT_KEY);
+    return raw ? (JSON.parse(raw) as Partial<HandoverForm>) : null;
+  } catch { return null; }
+};
+
+export const clearHandoverFormSnapshot = (): void => {
+  try { sessionStorage.removeItem(HANDOVER_FORM_SNAPSHOT_KEY); } catch { /* storage off */ }
+};
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export const validateCustomer = (f: HandoverForm): boolean =>
