@@ -1302,12 +1302,20 @@ mfgSalesOrders.post('/', async (c) => {
      refused and reject the whole order with an explicit 409 instead — the
      salesperson sees "code belongs to a different customer", not a price diff. */
   const pwpRejections: Array<{ idx: number; itemCode: string; code: string; reason: string }> = [];
+  /* One code = one redemption (Loo 2026-06-06, PWP-1528WLIE incident) — the
+     same code on TWO lines of one order used to double-grant: line A's claim
+     flips it USED → redeemed_doc_no = docNo, but the SO row isn't inserted
+     until after this loop, so line B's orphan check found no such SO and
+     "self-healed" line A's fresh claim. Gate duplicates up front. */
+  const seenPwpCodes = new Set<string>();
   for (let idx = 0; idx < items.length; idx++) {
     const it = items[idx];
     const code = String((it?.variants as { pwpCode?: string | null } | null)?.pwpCode ?? '').trim();
     if (!code) continue;
     const reject = (reason: string) =>
       pwpRejections.push({ idx, itemCode: String(it?.itemCode ?? ''), code, reason });
+    if (seenPwpCodes.has(code)) { reject('code is already applied to another line on this order'); continue; }
+    seenPwpCodes.add(code);
     const product = lineProducts[idx];
     if (!product) { reject('unknown item code'); continue; }
     const { data: cRow } = await sb
@@ -1325,7 +1333,10 @@ mfgSalesOrders.post('/', async (c) => {
        exist, the claim never really happened — treat the code as redeemable
        again. (A legitimately USED code points at a real SO and stays burned.) */
     let orphanedUsed = false;
-    if (!redeemable && cRow.status === 'USED' && cRow.redeemed_doc_no) {
+    // Never treat THIS request's own docNo as a dead SO — it is inserted only
+    // after this loop, so a code claimed earlier in this request would look
+    // orphaned and get double-granted (belt to the seenPwpCodes braces above).
+    if (!redeemable && cRow.status === 'USED' && cRow.redeemed_doc_no && cRow.redeemed_doc_no !== docNo) {
       const { data: deadSo } = await sb
         .from('mfg_sales_orders')
         .select('doc_no')

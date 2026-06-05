@@ -538,6 +538,16 @@ export const Configurator = () => {
     const code = (codeArg ?? insertCodeInput).trim().toUpperCase();
     if (!code) return;
     setInsertCodeInput(code);
+    // One code = one redemption (Loo 2026-06-06) — the manual Insert path used
+    // to accept a code already applied on another cart line (the DB row stays
+    // AVAILABLE until Confirm, so the server validate alone can't catch it).
+    const appliedElsewhere = cartLines.some((l) =>
+      !(editKey && l.key === editKey) && (l.config as { pwpCode?: string }).pwpCode === code);
+    if (appliedElsewhere) {
+      setInsertedCode(null);
+      setInsertErr('This PWP code is already applied to another item in this cart.');
+      return;
+    }
     setInsertChecking(true); setInsertErr(null);
     try {
       const res = await validatePwpCode({ code, rewardCategory: pwpRewardCategory, rewardModelId: pwpRewardModelId });
@@ -879,6 +889,15 @@ export const Configurator = () => {
     const code = (codeArg ?? sofaPwpInput).trim().toUpperCase();
     if (!code) return;
     setSofaPwpInput(code);
+    // One code = one redemption (Loo 2026-06-06) — mirror applyInsertedCode's
+    // already-on-another-line gate; the server validate can't see the cart.
+    const appliedElsewhere = cartLines.some((l) =>
+      !(editKey && l.key === editKey) && (l.config as { pwpCode?: string }).pwpCode === code);
+    if (appliedElsewhere) {
+      setSofaPwpCode(null); setSofaPwpComboIds([]);
+      setSofaPwpErr('This PWP code is already applied to another item in this cart.');
+      return;
+    }
     setSofaPwpChecking(true); setSofaPwpErr(null);
     try {
       const matched = (sofaPricing.combos ?? []).filter((c) => matchComboSubset(sofaBuiltModules, c.modules) != null);
