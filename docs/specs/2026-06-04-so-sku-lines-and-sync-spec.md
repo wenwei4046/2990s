@@ -1,7 +1,7 @@
 # SPEC — SO 全面 SKU 化 + POS↔Backend 数据同步
 
 > 日期:2026-06-04 · 发起人:Loo(Chairman)· 起草:Claude(deep research 会话)
-> 状态:**待实施** — 本 spec 写给一个全新的 Claude Code 会话执行。
+> 状态:**实施中**(2026-06-05 起;§8 D1–D9 已全部拍板)— 本 spec 写给一个全新的 Claude Code 会话执行。
 > 执行前必读:`CLAUDE.md`(仓库根)、本文 §0 的施工纪律。
 
 ---
@@ -190,16 +190,21 @@
 - ✅ Backend SO 卖价跟 POS SKU Master 卖价 API。
 - ✅ SO Details 全列(Divan/Fabric/Branding/Venue/Payment Balance)必须同步。
 
-**待 Loo 拍板(实施会话开工前用 AskUserQuestion 逐个确认)**:
-- D1:SERVICE 收入进 `others_centi` 还是新建 `service_centi` 桶(影响 Finance 报表口径;GL 现按总额单笔过 4000,不分行,可不动)。
-- D2:送货单(DO)上要不要显示 SERVICE 行(司机看不看得到"运费"/"dispose")。spec 默认:**不复制上 DO**。
-- D3:沙发整体价(combo/PWP/bundle)与 Σmodule 卖价的差额怎么摆——(a) 按比例分摊进各行【推荐】 (b) 加一行负数 `SVC-COMBO-DISCOUNT` (c) 全贴末行。
-- D4:Backend 卖价自动填后,operator 还能不能改(现政策可改;锁死需要权限门)。
-- D5:订金自动入 payments ledger(slip 尚 pending 时)是否符合 Finance 对账流程——**不确认不做**。
-- D6:lift 行形态:qty=1 金额合并,还是 qty=floors·items × 单价 RM100。
-- D7:SO Details 加不加 Model 列(顺手,半小时)。
-- D8:`special_addons` 维持行内模式(spec 默认)还是也拆独立行。
-- D9:SERVICE SKU 命名风格(spec 建议 `SVC-*` 前缀,Loo 可改)。
+**已全部拍板(Loo,2026-06-05,实施会话逐个 AskUserQuestion 确认)**:
+- ✅ D1:**新建 `service_centi` 桶**(迁移 0155+;recomputeTotals SO/DO/SI 三处同步;0147 视图 DROP+CREATE 重建)。
+- ✅ D2:**执行类上 DO,运费类不上** —— dispose/lift 复制上 DO(司机要执行:收旧床垫、搬楼),`SVC-DELIVERY*` 运费行不上 DO;SI 照常含全部 SERVICE 行;DR 不含 SERVICE。
+- ✅ D3:**按行卖价占比分摊**,四舍五入差额贴末行,保证 Σ行 = 整 build 报价;drift 门按 build 聚合校验。
+- ✅ D4:**锁死** —— Backend 卖价自动填自 POS SKU Master 后,operator 不可改,admin 以上才能改(需加权限门;推翻 2026-05-31 "可改"政策,Loo 明确选择更严)。
+- ✅ D5:**订金自动入 payments ledger** —— SO 创建时同步写一条 payment 记录(amount=deposit、method、approval_code、collected_by=salesperson、slip 关联)。与 Finance 现行 Excel 导出对账流程一致(slip 人工审核 5/22 已废除)。
+- ✅ D6:**lift 行 qty = floors×items,单价 RM100**,description 注明 "X floors × Y items"。
+- ✅ D7:**不加** Model 列。
+- ✅ D8:**行内价不变 + 显示增强** —— special_addons 金额流向一分不动(surcharge 继续折进行价 + `custom_specials` 构成明细,生产已验证);SO 创建时把改装名追加进 description2 变体摘要(如 `CG-012 / SEAT 28 / LEG 4" / Right Drawer`);SO Details 的 Specials 列显示金额并标明已含(`Right Drawer (+RM500 incl.)`)。背景核查:Specials 列管道本来就是通的(读 `custom_specials` jsonb,只显示 label),SO-2606-018 显示 "—" 只因那两行没选改装件。
+- ✅ D9:**`SVC-*` 前缀**(SVC-DELIVERY / SVC-DELIVERY-CROSS / SVC-DELIVERY-ADD / SVC-DISPOSE-MATTRESS / SVC-DISPOSE-BEDFRAME / SVC-LIFT-CARRY)。
+
+**决策对实施的影响补充**:
+- D2 的"执行类/运费类"区分:守卫判据 = SERVICE category 为主 + `SVC-DELIVERY` 前缀区分运费类;谓词集中放 `packages/shared/src/service-sku.ts`(单一真源:SKU code 常量 + `isServiceLine` / `serviceLineGoesOnDo` 等)。
+- D4 需要 SoLineCard 加权限门(admin/super_admin/master_account 可编辑单价,其余角色只读)。
+- 实施时磁盘迁移号已到 0154(consignment 0152-0154 已并入 main),新迁移从 **0155** 起。
 
 ---
 
