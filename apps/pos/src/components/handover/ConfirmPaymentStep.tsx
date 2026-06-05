@@ -14,14 +14,17 @@ const METHOD_LABEL: Record<string, string> = {
 };
 
 export const ConfirmPaymentStep = ({
-  form, update, subtotal, addonTotal,
+  form, update, subtotal, addonTotal, deliveryFeeTotal,
 }: {
   form: HandoverForm;
   update: <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) => void;
   subtotal: number;
   addonTotal: number;
+  deliveryFeeTotal: number;
 }) => {
-  const total = subtotal + addonTotal;
+  // Payable total = the WHOLE order (goods + add-ons + delivery), so the
+  // deposit floor + full-payment ceiling match the Order summary on the right.
+  const total = subtotal + addonTotal + deliveryFeeTotal;
   const halfTotal = Math.round(total / 2);
   const seventyTotal = Math.round(total * 0.7);
 
