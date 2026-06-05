@@ -123,6 +123,16 @@ async function isPosTabletCaller(sb: any, userId: string | null | undefined): Pr
   return !!data && POS_TABLET_ROLES.includes(String(data.role));
 }
 
+/* SO-SKU spec P4 (D4, Loo 2026-06-05) — the SELLING price is locked to the
+   SKU Master; only admin-level roles may hand-override it (the audited
+   /override route). Mirrors the Backend UI's isAdminLevel (auth.tsx). */
+const PRICE_OVERRIDE_ROLES = ['admin', 'super_admin'];
+async function isPriceOverrideCaller(sb: any, userId: string | null | undefined): Promise<boolean> {
+  if (!userId) return false;
+  const { data } = await sb.from('staff').select('role').eq('id', userId).maybeSingle();
+  return !!data && PRICE_OVERRIDE_ROLES.includes(String(data.role));
+}
+
 /* PR — Commander 2026-05-28 — Server-side combo recompute.
    Fetches all active sofa_combo_pricing rows once (small table; ~64 rows
    in steady state) and returns them as SofaComboRow[] for the pure
@@ -2136,6 +2146,16 @@ mfgSalesOrders.get('/:docNo/price-overrides', async (c) => {
 mfgSalesOrders.post('/:docNo/items/:itemId/override', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId');
   const user = c.get('user');
+  /* SO-SKU spec P4 (D4) — price overrides are admin-level only. Everyone else
+     gets the SKU Master price (auto-filled in the UI, enforced by the server
+     recompute on POST/PATCH); this audited side-door is the ONLY way to
+     deviate, so it carries the role gate. */
+  if (!(await isPriceOverrideCaller(sb, user.id))) {
+    return c.json({
+      error: 'price_override_admin_only',
+      message: 'Unit prices follow the SKU Master sell price. Only an admin can override a line price.',
+    }, 403);
+  }
   let body: { overridePriceSen?: number; reason?: string };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const newPrice = Number(body.overridePriceSen ?? 0);

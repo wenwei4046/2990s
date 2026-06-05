@@ -40,6 +40,7 @@ import {
   fetchSoItemPhotoSignedUrl,
 } from '../lib/flow-queries';
 import { useDebouncedValue } from '../lib/hooks';
+import { useAuth, isAdminLevel } from '../lib/auth';
 import { CATEGORY_BADGE } from '../lib/category-badges';
 import styles from './SoLineCard.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -146,6 +147,13 @@ const SoLineCardInner = ({
   const fabricsQ = useFabricTrackings();
   const fabrics  = fabricsQ.data ?? [];
 
+  /* SO-SKU spec P4 (D4, Loo 2026-06-05) — the unit price is LOCKED to the
+     SKU Master sell price for everyone below admin. It auto-fills on pick and
+     the server recompute is authoritative at save; only admin-level roles can
+     hand-edit (the audited /override route is gated server-side too). */
+  const { staff } = useAuth();
+  const canEditPrice = isAdminLevel(staff?.role);
+
   const [search, setSearch] = useState(draft.description || draft.itemCode || '');
   const [picked, setPicked]         = useState<MfgProductRow | null>(null);
   const [showPicker, setShowPicker]   = useState(false);
@@ -224,11 +232,13 @@ const SoLineCardInner = ({
       itemCode:       p.code,
       itemGroup:      category,
       description:    p.name,
-      // Commander 2026-05-29: SELLING unit price defaults to 0 and is typed
-      // manually by the operator. The product's base_price_sen is COST, NOT a
-      // selling price, so it must NEVER auto-populate the selling field.
-      // Re-picking a product resets selling to 0.
-      unitPriceCenti: 0,
+      /* SO-SKU spec P4 (D4, Loo 2026-06-05) — the SELLING unit price defaults
+         from the SKU Master's sell_price_sen (POS Master / Main Account
+         authored), replacing the manual-0 default (Commander 2026-05-29 — that
+         predates the cost/sell split; base_price_sen remains COST and still
+         never auto-populates). The server recompute stays authoritative at
+         save; sofa module / seat-height pools land their exact figure there. */
+      unitPriceCenti: p.sell_price_sen ?? 0,
       variants:       seedVariants,
       overriddenKeys: [],
     });
@@ -458,15 +468,15 @@ const SoLineCardInner = ({
           }}
         />
 
-        {/* 5. Unit Price */}
+        {/* 5. Unit Price — D4: locked to the SKU Master sell price below admin. */}
         <input
           type="number"
           step="0.01"
           className={styles.numericInput}
           value={priceText}
-          disabled={!isEditing}
+          disabled={!isEditing || !canEditPrice}
+          title={!canEditPrice ? 'Price follows the SKU Master sell price — admin can override' : undefined}
           onChange={(e) => {
-            // Commander 2026-05-29 — selling unit price is operator-authored.
             const t = e.target.value;
             setPriceText(t);
             onChange({ unitPriceCenti: Math.round(Number(t) * 100) || 0 });
