@@ -1,5 +1,11 @@
 import { Banknote, CreditCard, Clock, Wallet, CheckCircle2, AlertCircle, Search } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import {
+  PAYMENT_METHOD_CODE_TO_VALUE,
+  PAYMENT_METHOD_DEFAULT_LABELS,
+  paymentMethodCodeForValue,
+  type PaymentMethodCode,
+} from '@2990s/shared/payment-methods';
 import type { HandoverForm, AddonSelection } from '../../lib/handover-helpers';
 import type { AddonRow } from '../../lib/queries';
 import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
@@ -10,13 +16,40 @@ import styles from '../../pages/Handover.module.css';
 const HANDOVER_ADDON_IDS = ['dispose-mattress', 'dispose-bedframe', 'lift', 'assemble'];
 
 /* Fallbacks shown until /so-dropdown-options loads — the pre-maintenance
-   hardcoded sets. The live lists come from the payment_merchant and
-   installment_plan categories on the SO Maintenance page. */
+   hardcoded sets. The live lists come from the payment_method,
+   payment_merchant and installment_plan categories on the SO Maintenance
+   page. */
 const MERCHANT_FALLBACK = ['GHL', 'HLB', 'MBB', 'PBB'].map((v) => ({ value: v, label: v }));
 const INSTALLMENT_FALLBACK = [
   { value: '6 months', label: '6 months' },
   { value: '12 months', label: '12 months' },
 ];
+
+/* 2026-06-06 payment-method unify (Loo: "all same together and decide from
+   so maintenance page") — the four method cards now render from the
+   payment_method maintenance rows: label + order are live, while the VALUE
+   is the locked key that resolves to the internal code the branch logic
+   still switches on. The API locks the category to exactly these four rows
+   (rename/reorder only), so the icon/hint/behaviour maps below stay keyed
+   by code. */
+const METHOD_FALLBACK = (['merchant', 'transfer', 'installment', 'cash'] as const).map((code) => ({
+  value: PAYMENT_METHOD_CODE_TO_VALUE[code],
+  label: PAYMENT_METHOD_DEFAULT_LABELS[code],
+}));
+
+const METHOD_ICON: Record<PaymentMethodCode, LucideIcon> = {
+  merchant:    CreditCard,
+  transfer:    Banknote,
+  installment: Clock,
+  cash:        Wallet,
+};
+
+const METHOD_HINT: Record<PaymentMethodCode, string> = {
+  merchant:    'Card via merchant terminal',
+  transfer:    'Slip required',
+  installment: 'Agreement / contract no.',
+  cash:        'Cash received at counter',
+};
 
 /** "6 months" / "12 Months" → 6 / 12. Non-term rows ("One-off") are skipped —
  *  installment_months on the SO is an integer term. */
@@ -55,6 +88,22 @@ export const AddonsPaymentStep = ({
   const handoverAddons = addons.filter(
     (a) => HANDOVER_ADDON_IDS.includes(a.id) && a.enabled,
   );
+
+  /* The four cards, live from SO Maintenance — label + sort follow the
+     maintenance rows; the code drives icons, hints and branch behaviour.
+     Rows whose value doesn't resolve to a core code are skipped (can't
+     happen while the API lock holds, but a render must never crash). */
+  const methodCards = useSoDropdownValues('payment_method', METHOD_FALLBACK)
+    .map((o) => ({ code: paymentMethodCodeForValue(o.value), label: o.label }))
+    .filter((m): m is { code: PaymentMethodCode; label: string } => m.code !== null);
+
+  /* Picking a method clears the sub-fields that don't apply to it, so a
+     Merchant→Cash switch never submits a stale bank or term. */
+  const selectMethod = (code: PaymentMethodCode) => {
+    update('paymentMethod', code);
+    if (code !== 'installment') update('installmentMonths', null);
+    if (code !== 'merchant') update('merchantProvider', null);
+  };
 
   const merchants = useSoDropdownValues('payment_merchant', MERCHANT_FALLBACK);
   const parsedTerms = Array.from(new Set(
@@ -190,38 +239,24 @@ export const AddonsPaymentStep = ({
       )}
 
       <h3 className="subTitle">Payment method</h3>
-      <div className="fieldRow">
-        <MethodButton
-          active={form.paymentMethod === 'merchant'}
-          icon={CreditCard}
-          label="Merchant"
-          hint="Card via merchant terminal"
-          onClick={() => { update('paymentMethod', 'merchant'); update('installmentMonths', null); }}
-        />
-        <MethodButton
-          active={form.paymentMethod === 'transfer'}
-          icon={Banknote}
-          label="Bank transfer / DuitNow"
-          hint="Slip required"
-          onClick={() => { update('paymentMethod', 'transfer'); update('installmentMonths', null); update('merchantProvider', null); }}
-        />
-      </div>
-      <div className="fieldRow">
-        <MethodButton
-          active={form.paymentMethod === 'installment'}
-          icon={Clock}
-          label="Installment"
-          hint="Agreement / contract no."
-          onClick={() => { update('paymentMethod', 'installment'); update('merchantProvider', null); }}
-        />
-        <MethodButton
-          active={form.paymentMethod === 'cash'}
-          icon={Wallet}
-          label="Cash"
-          hint="Cash received at counter"
-          onClick={() => { update('paymentMethod', 'cash'); update('installmentMonths', null); update('merchantProvider', null); }}
-        />
-      </div>
+      {/* Two cards per row — same 2×2 grid as before, now driven by the
+          maintenance order. */}
+      {Array.from({ length: Math.ceil(methodCards.length / 2) }, (_, i) =>
+        methodCards.slice(i * 2, i * 2 + 2),
+      ).map((pair) => (
+        <div className="fieldRow" key={pair.map((m) => m.code).join('-')}>
+          {pair.map((m) => (
+            <MethodButton
+              key={m.code}
+              active={form.paymentMethod === m.code}
+              icon={METHOD_ICON[m.code]}
+              label={m.label}
+              hint={METHOD_HINT[m.code]}
+              onClick={() => selectMethod(m.code)}
+            />
+          ))}
+        </div>
+      ))}
       {form.paymentMethod === 'merchant' && (
         <div className={styles.installmentTerm} role="group" aria-label="Merchant">
           <span className={styles.installmentTermLabel}>Merchant</span>

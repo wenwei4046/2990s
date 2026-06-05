@@ -26,6 +26,12 @@ import {
   DollarSign, Plus, Trash2, Save, FileText,
   Calendar as CalIcon, User as UserIcon, Tag,
 } from 'lucide-react';
+import {
+  PAYMENT_METHOD_CODE_TO_VALUE,
+  PAYMENT_METHOD_DEFAULT_LABELS,
+  paymentMethodCodeForValue,
+  type PaymentMethodCode,
+} from '@2990s/shared/payment-methods';
 import { useAuth } from '../lib/auth';
 import { useStaff } from '../lib/admin-queries';
 import {
@@ -50,69 +56,59 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
    so the Detail page's ledger semantics don't change).
    ════════════════════════════════════════════════════════════════════════ */
 
-export type PaymentMethod = 'merchant' | 'transfer' | 'cash';
+export type PaymentMethod = PaymentMethodCode;
 /* Bank provider name (now open-ended — sourced from
    so_dropdown_options('payment_merchant'), no longer constrained to the
    legacy 4-bank enum). */
 export type MerchantProvider = string;
 
-/* Task #122 (cascade) — Commander 2026-05-27 corrected the structure.
-   Method is now a 3-step cascade:
-     Method (L1)  → Merchant | Online | Cash
-       Merchant   → pick Merchant bank + Installment plan
-       Online     → pick Online sub-type (Bank Transfer / TNG / Cheque / DuitNow)
-       Cash       → done
-   The L1 labels are the only thing labelToApi() needs to route: Merchant →
-   'merchant' (card / installment), Online → 'transfer' (TNG / DuitNow /
-   cheque / bank transfer), Cash → 'cash'. Anything else falls through to
-   cash with a console.warn so a typo on the maintenance page doesn't
-   silently miscategorise a transaction. */
-export const PAYMENT_METHOD_OPTIONS = ['Merchant', 'Online', 'Cash'] as const;
+/* 2026-06-06 payment-method unify (Loo) — the L1 cascade and the POS
+   handover cards now share ONE maintenance list (payment_method category,
+   locked to four rows whose VALUE is the immutable key):
+     Method (L1)    → Merchant | Online | Installment | Cash
+       Merchant     → pick Merchant bank + Installment plan
+       Online       → pick Online sub-type (Bank Transfer / TNG / Cheque / DuitNow)
+       Installment  → pick Installment plan (term in months)
+       Cash         → done
+   Routing keys off the row VALUE via the shared map — labels are freely
+   renameable in SO Maintenance and never affect booking. The cash fallback
+   below can only fire on data that predates the API lock. */
 export type PaymentMethodLabel = string;
 
 export const labelToApi = (label: PaymentMethodLabel): {
   method: PaymentMethod;
   merchantProvider: MerchantProvider | null;
 } => {
-  switch (label) {
-    case 'Merchant':
-      return { method: 'merchant', merchantProvider: null };
-    case 'Online':
-      return { method: 'transfer', merchantProvider: null };
-    case 'Cash':
-      return { method: 'cash', merchantProvider: null };
-    default:
-      // Cascade Method labels are tightly scoped (3 values). An unknown
-      // label means the maintenance page row drifted from the cascade
-      // structure — surface it and fall back to cash so we don't book a
-      // card payment as transfer accidentally.
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[PaymentsTable] Unknown payment method label "${label}" — falling ` +
-        `back to method=cash. Method labels must be Merchant / Online / Cash. ` +
-        `If you've added a new category, update labelToApi() in ` +
-        `apps/backend/src/components/PaymentsTable.tsx.`,
-      );
-      return { method: 'cash', merchantProvider: null };
-  }
+  const method = paymentMethodCodeForValue(label);
+  if (method) return { method, merchantProvider: null };
+  // The payment_method category is locked server-side to the four core
+  // values, so an unknown value here means pre-lock drifted data — surface
+  // it and fall back to cash so we don't book a card payment as transfer.
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[PaymentsTable] Unknown payment method value "${label}" — falling ` +
+    `back to method=cash. Values are locked to Merchant / Online / ` +
+    `Installment / Cash (see @2990s/shared/payment-methods).`,
+  );
+  return { method: 'cash', merchantProvider: null };
 };
 
-const apiToLabel = (p: SoPayment): string => {
-  if (p.method === 'cash')     return 'Cash';
-  if (p.method === 'transfer') return 'Online';
-  if (p.method === 'merchant') return 'Merchant';
-  return 'Cash';
-};
+/* Persisted method code → the maintenance row VALUE (for select rehydrate
+   + the locked-set keys). Display labels resolve live from methodOpts. */
+const apiToValue = (p: SoPayment): string =>
+  PAYMENT_METHOD_CODE_TO_VALUE[p.method] ?? 'Cash';
 
 const methodPillStyle = (m: PaymentMethod): CSSProperties => {
   const bg =
-    m === 'merchant' ? 'rgba(232, 107, 58, 0.12)' :
-    m === 'transfer' ? 'rgba(47, 93, 79, 0.12)'   :
-                       'rgba(0, 0, 0, 0.06)';
+    m === 'merchant'    ? 'rgba(232, 107, 58, 0.12)' :
+    m === 'transfer'    ? 'rgba(47, 93, 79, 0.12)'   :
+    m === 'installment' ? 'rgba(34, 31, 32, 0.08)'   :
+                          'rgba(0, 0, 0, 0.06)';
   const fg =
-    m === 'merchant' ? 'var(--c-burnt)' :
-    m === 'transfer' ? 'var(--c-secondary-a, #2F5D4F)' :
-                       'var(--fg-muted)';
+    m === 'merchant'    ? 'var(--c-burnt)' :
+    m === 'transfer'    ? 'var(--c-secondary-a, #2F5D4F)' :
+    m === 'installment' ? 'var(--c-ink)' :
+                          'var(--fg-muted)';
   return {
     display: 'inline-block',
     fontFamily: 'var(--font-sans)',
@@ -178,6 +174,29 @@ export const parseInstallmentMonths = (label: string): number | null => {
   return m ? Number(m[1]) : null;
 };
 
+/* Method-scoped L2 fields for a draft row — shared by commitDraft below and
+   every page that batches PaymentDraft[] to a payments endpoint (New SO /
+   DO / SI / consignment flows), so the installment branch lives in exactly
+   one place. */
+export const draftMethodFields = (
+  method: PaymentMethod,
+  d: Pick<PaymentDraft, 'merchantProvider' | 'installmentMonthsLabel' | 'onlineType'>,
+): Record<string, unknown> => {
+  if (method === 'merchant') {
+    return {
+      merchantProvider:  d.merchantProvider || null,
+      installmentMonths: parseInstallmentMonths(d.installmentMonthsLabel),
+    };
+  }
+  if (method === 'installment') {
+    return { installmentMonths: parseInstallmentMonths(d.installmentMonthsLabel) };
+  }
+  if (method === 'transfer') {
+    return { onlineType: d.onlineType || null };
+  }
+  return {};
+};
+
 /* ════════════════════════════════════════════════════════════════════════
    Props — discriminated union on `docNo`.
    - docNo: string   → SAVED mode (mutations + remote fetch)
@@ -217,12 +236,13 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
   const staff  = staffQ.data ?? [];
   const auth   = useAuth();
 
-  /* Task #118 — methods are DB-backed (so_dropdown_options 'payment_method').
-     Falls back to PAYMENT_METHOD_OPTIONS during loading + when the DB has
-     zero rows so the user never sees an empty select.
+  /* Task #118 — methods are DB-backed (so_dropdown_options 'payment_method',
+     locked to the four core rows since the 2026-06-06 unify). Falls back to
+     FALLBACK_OPTIONS during loading + when the DB has zero rows so the user
+     never sees an empty select.
 
      Task #122 (cascade) — three additional categories for the L2 picks
-     under Merchant + Online. */
+     under Merchant / Online / Installment. */
   const methodOptsQ      = useSoDropdownOptions('payment_method');
   const methodOpts       = optionsOrFallback('payment_method', methodOptsQ.data);
   const merchantOptsQ    = useSoDropdownOptions('payment_merchant');
@@ -303,9 +323,10 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
     if (!isSaved) return;
     if (d.amountCenti <= 0) return;
     const { method } = labelToApi(d.methodLabel);
-    /* Cascade payload — populate sub-fields by the L1 method only. The
-       API mirrors the same guard and will scrub any irrelevant sub-fields
-       (e.g. a stale onlineType left over from a Merchant→Online toggle). */
+    /* Cascade payload — populate sub-fields by the L1 method only
+       (draftMethodFields). The API mirrors the same guard and will scrub any
+       irrelevant sub-fields (e.g. a stale onlineType left over from a
+       Merchant→Online toggle). */
     const body: Record<string, unknown> = {
       docNo:        (props as SavedModeProps).docNo,
       paidAt:       d.paidAt,
@@ -314,13 +335,8 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
       accountSheet: d.accountSheet || null,
       approvalCode: d.approvalCode || null,
       collectedBy:  d.collectedBy  || null,
+      ...draftMethodFields(method, d),
     };
-    if (method === 'merchant') {
-      body.merchantProvider  = d.merchantProvider || null;
-      body.installmentMonths = parseInstallmentMonths(d.installmentMonthsLabel);
-    } else if (method === 'transfer') {
-      body.onlineType = d.onlineType || null;
-    }
     addPayment.mutate(body as { docNo: string } & Record<string, unknown>, {
       onSuccess: () => removeDraft(d.uid),
       onError: (e) => {
@@ -342,6 +358,16 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
   const staffNameById = (id: string | null): string | null => {
     if (!id) return null;
     return staff.find((s) => s.id === id)?.name ?? null;
+  };
+
+  /* Persisted row → display label. Resolves the live maintenance label for
+     the row's method (so a rename in SO Maintenance re-labels history too);
+     falls back to the shared defaults. */
+  const methodDisplay = (p: SoPayment): string => {
+    const value = apiToValue(p);
+    return methodOpts.find((m) => m.value === value)?.label
+      ?? PAYMENT_METHOD_DEFAULT_LABELS[p.method as PaymentMethodCode]
+      ?? value;
   };
 
   const totalRowCount = persistedPayments.length + drafts.length;
@@ -418,11 +444,12 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                 </span>
                 <span className={paymentsStyles.cell} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
                   <span className={paymentsStyles.methodPill} style={methodPillStyle(p.method)}>
-                    {apiToLabel(p)}
+                    {methodDisplay(p)}
                   </span>
                   {/* Task #122 (cascade) — surface the L2 picks below the
                       pill so a Merchant row reads as "Merchant · MBB · 12
-                      months", an Online row as "Online · TNG", etc. */}
+                      months", an Online row as "Online · TNG", an
+                      Installment row as "Installment · 12m". */}
                   {p.method === 'merchant' && (p.merchant_provider || p.installment_months) && (
                     <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
                       {p.merchant_provider ?? '—'}
@@ -432,6 +459,12 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                   {p.method === 'transfer' && p.online_type && (
                     <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
                       {p.online_type}
+                    </span>
+                  )}
+                  {p.method === 'installment' && (p.merchant_provider || p.installment_months) && (
+                    <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                      {p.merchant_provider ? `${p.merchant_provider} · ` : ''}
+                      {p.installment_months ? `${p.installment_months}m` : ''}
                     </span>
                   )}
                 </span>
@@ -455,7 +488,7 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                       className={paymentsStyles.trashBtn}
                       disabled={deletePayment.isPending}
                       onClick={() => {
-                        if (confirm(`Delete this ${apiToLabel(p)} payment of ${fmtRm(p.amount_centi, currency)}?`)) {
+                        if (confirm(`Delete this ${methodDisplay(p)} payment of ${fmtRm(p.amount_centi, currency)}?`)) {
                           deletePayment.mutate({ docNo: (props as SavedModeProps).docNo, id: p.id });
                         }
                       }}
@@ -493,9 +526,10 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                       const next = e.target.value;
                       patchDraft(d.uid, {
                         methodLabel: next,
-                        merchantProvider:       next === 'Merchant' ? d.merchantProvider       : '',
-                        installmentMonthsLabel: next === 'Merchant' ? d.installmentMonthsLabel : '',
-                        onlineType:             next === 'Online'   ? d.onlineType             : '',
+                        merchantProvider:       next === 'Merchant' ? d.merchantProvider : '',
+                        installmentMonthsLabel: next === 'Merchant' || next === 'Installment'
+                          ? d.installmentMonthsLabel : '',
+                        onlineType:             next === 'Online'   ? d.onlineType       : '',
                       });
                     }}
                   >
@@ -564,6 +598,26 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                       ))}
                       {d.onlineType && !onlineOpts.some((o) => o.value === d.onlineType) && (
                         <option value={d.onlineType}>{d.onlineType}</option>
+                      )}
+                    </select>
+                  )}
+
+                  {/* L2 — Installment cascade: pick the plan (term). */}
+                  {d.methodLabel === 'Installment' && (
+                    <select
+                      className={paymentsStyles.inlineSelect}
+                      style={{ fontSize: 'var(--fs-11)' }}
+                      value={d.installmentMonthsLabel}
+                      disabled={locked}
+                      onChange={(e) => patchDraft(d.uid, { installmentMonthsLabel: e.target.value })}
+                      aria-label="Installment plan"
+                    >
+                      <option value="">— Plan —</option>
+                      {installmentOpts.map((m) => (
+                        <option key={m.id} value={m.value}>{m.label}</option>
+                      ))}
+                      {d.installmentMonthsLabel && !installmentOpts.some((m) => m.value === d.installmentMonthsLabel) && (
+                        <option value={d.installmentMonthsLabel}>{d.installmentMonthsLabel}</option>
                       )}
                     </select>
                   )}

@@ -42,7 +42,7 @@ import {
 import { useStateWarehouseMappings } from '../lib/state-warehouse-queries';
 import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
 import {
-  PaymentsTable, labelToApi, parseInstallmentMonths, type PaymentDraft,
+  PaymentsTable, labelToApi, draftMethodFields, type PaymentDraft,
 } from '../components/PaymentsTable';
 import { formatPhone } from '@2990s/shared/phone';
 import styles from './SalesOrderDetail.module.css';
@@ -407,12 +407,7 @@ export const ConsignmentOrderNew = () => {
           approvalCode: d.approvalCode || null,
           collectedBy:  d.collectedBy  || null,
         };
-        if (method === 'merchant') {
-          body.merchantProvider  = d.merchantProvider || null;
-          body.installmentMonths = parseInstallmentMonths(d.installmentMonthsLabel);
-        } else if (method === 'transfer') {
-          body.onlineType = d.onlineType || null;
-        }
+        Object.assign(body, draftMethodFields(method, d));
         try {
           await addPayment.mutateAsync(body);
           return true;

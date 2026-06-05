@@ -456,7 +456,9 @@ mfgSalesOrders.get('/', async (c) => {
        balance), so we collect the DISTINCT method labels per doc_no and join
        them with " + " (→ "Cash + Card"). Label rules mirror the payment form
        cascade: cash→"Cash"; merchant→"Card"; transfer→its online_type
-       (Bank Transfer / TNG / Cheque / DuitNow) when set, else "Transfer".
+       (Bank Transfer / TNG / Cheque / DuitNow) when set, else "Transfer";
+       installment→"Installment" (2026-06-06 unify — these rows were
+       silently dropped from the summary before).
        One cheap batched read over the same doc_no set already in play. */
     const paymentMethods = new Map<string, Set<string>>();
     {
@@ -470,6 +472,7 @@ mfgSalesOrders.get('/', async (c) => {
         if (m === 'cash') label = 'Cash';
         else if (m === 'merchant') label = 'Card';
         else if (m === 'transfer') label = (p.online_type && p.online_type.trim()) ? p.online_type.trim() : 'Transfer';
+        else if (m === 'installment') label = 'Installment';
         else continue;
         let set = paymentMethods.get(p.so_doc_no);
         if (!set) { set = new Set(); paymentMethods.set(p.so_doc_no, set); }
@@ -3585,7 +3588,12 @@ mfgSalesOrders.get('/:docNo/payments', async (c) => {
    Cheque / DuitNow). */
 const paymentCreateSchema = z.object({
   paidAt:             z.string().min(1),
-  method:             z.enum(['merchant', 'transfer', 'cash']),
+  /* 2026-06-06 payment-method unify — 'installment' joins the manual route.
+     It was already a first-class method on the POS deposit path (SO create
+     writes method='installment' raw); now Finance can record installment
+     receipts directly too. Kept in sync with PAYMENT_METHOD_CODES in
+     packages/shared/src/payment-methods.ts. */
+  method:             z.enum(['merchant', 'transfer', 'cash', 'installment']),
   merchantProvider:   z.string().trim().min(1).optional().nullable(),
   installmentMonths:  z.number().int().min(0).max(60).optional().nullable(),
   onlineType:         z.string().trim().min(1).optional().nullable(),
@@ -3611,13 +3619,16 @@ mfgSalesOrders.post('/:docNo/payments', async (c) => {
   const p = parsed.data;
 
   // Method-scoped fields per the cascade:
-  //   merchant  → merchant_provider + installment_months (0 / null = One-off)
-  //   transfer  → online_type
-  //   cash      → no extras
-  const merchantProvider  = p.method === 'merchant' ? (p.merchantProvider ?? null) : null;
+  //   merchant    → merchant_provider + installment_months (0 / null = One-off)
+  //   installment → merchant_provider + installment_months (merchant-like —
+  //                 mirrors the SO-create deposit path, which keeps both)
+  //   transfer    → online_type
+  //   cash        → no extras
+  const merchantLike      = p.method === 'merchant' || p.method === 'installment';
+  const merchantProvider  = merchantLike ? (p.merchantProvider ?? null) : null;
   // 0 = "One-off" — store as NULL so the integer column carries semantic
   // "no installment". Anything > 0 is the term in months.
-  const installmentMonths = p.method === 'merchant'
+  const installmentMonths = merchantLike
     ? (typeof p.installmentMonths === 'number' && p.installmentMonths > 0 ? p.installmentMonths : null)
     : null;
   const onlineType        = p.method === 'transfer' ? (p.onlineType ?? null) : null;

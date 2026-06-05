@@ -11,6 +11,7 @@
     "./fabric-tier-addon": "./src/fabric-tier-addon.ts",
     "./pwp": "./src/pwp.ts",
     "./order-rules": "./src/order-rules.ts",
+    "./payment-methods": "./src/payment-methods.ts",
     "./so-variant-rule": "./src/so-variant-rule.ts",
     "./service-sku": "./src/service-sku.ts",
     "./service-lines": "./src/service-lines.ts",

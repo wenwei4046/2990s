@@ -2307,12 +2307,23 @@ export const stateWarehouseMappings = pgTable('state_warehouse_mappings', {
    hardcoded in TS; this single table backs all of them so the SO
    Maintenance page can CRUD them at runtime.
 
-   `category` is one of:
-     - 'customer_type'   (NEW / EXISTING …)
-     - 'building_type'   (Condo / Landed / Apartment …)
-     - 'relationship'    (Spouse / Parent …)
-     - 'payment_method'  (CASH / MBB / VISA …) — value still maps to the
-                         payment_method enum via labelToApi() in the UI. */
+   `category` is one of (Task #122 widened the original four with the
+   payments-cascade L2 lists + venue; CHECK below matches the live prod
+   constraint — it was out of sync with this file until 2026-06-06):
+     - 'customer_type'    (NEW / EXISTING …)
+     - 'building_type'    (Condo / Landed / Apartment …)
+     - 'relationship'     (Spouse / Parent …)
+     - 'payment_method'   L1 of the payments cascade AND the POS handover
+                          cards. LOCKED set of four rows (Merchant / Online /
+                          Installment / Cash) — value is the immutable key
+                          mapped to the ledger code in
+                          packages/shared/src/payment-methods.ts; the API
+                          blocks add/delete/deactivate/value-edit (migration
+                          0156). Label + sort stay editable.
+     - 'payment_merchant' (MBB / CIMB / GHL …) L2 bank under Merchant
+     - 'online_type'      (Bank Transfer / TNG / Cheque / DuitNow) L2 under Online
+     - 'installment_plan' (One-off / 3 / 6 / 12 / 24 / 36 months)
+     - 'venue'            roadshow / exhibition venues */
 export const soDropdownOptions = pgTable('so_dropdown_options', {
   id:         uuid('id').primaryKey().defaultRandom(),
   category:   text('category').notNull(),
@@ -2323,7 +2334,7 @@ export const soDropdownOptions = pgTable('so_dropdown_options', {
   createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   catCheck: check('so_dropdown_options_category_check',
-    sql`${t.category} IN ('customer_type', 'building_type', 'relationship', 'payment_method')`),
+    sql`${t.category} IN ('customer_type', 'building_type', 'relationship', 'payment_method', 'payment_merchant', 'online_type', 'installment_plan', 'venue')`),
   uniqCatVal: uniqueIndex('so_dropdown_options_category_value_key').on(t.category, t.value),
   idxCat:     index('idx_sdo_category').on(t.category, t.sortOrder),
 }));

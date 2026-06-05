@@ -165,13 +165,15 @@ export const FALLBACK_OPTIONS: Record<SoDropdownCategory, SoDropdownOption[]> = 
     { id: 'fallback-rel-colleague', category: 'relationship', value: 'Colleague', label: 'Colleague', sortOrder: 7, active: true },
     { id: 'fallback-rel-other',     category: 'relationship', value: 'Other',     label: 'Other',     sortOrder: 8, active: true },
   ],
-  /* Task #122 (cascade) — Method is now a 3-step cascade. L1 is just
-     Merchant / Online / Cash; the bank list, online sub-type, and
+  /* Task #122 (cascade) — Method is a cascade. 2026-06-06 payment-method
+     unify (migration 0156): L1 is the LOCKED set of four core rows shared
+     with the POS handover cards; the bank list, online sub-type, and
      installment plan are separate categories below. */
   payment_method: [
-    { id: 'fallback-pm-merchant', category: 'payment_method', value: 'Merchant', label: 'Merchant', sortOrder: 1, active: true },
-    { id: 'fallback-pm-online',   category: 'payment_method', value: 'Online',   label: 'Online',   sortOrder: 2, active: true },
-    { id: 'fallback-pm-cash',     category: 'payment_method', value: 'Cash',     label: 'Cash',     sortOrder: 3, active: true },
+    { id: 'fallback-pm-merchant',    category: 'payment_method', value: 'Merchant',    label: 'Merchant',                sortOrder: 1, active: true },
+    { id: 'fallback-pm-online',      category: 'payment_method', value: 'Online',      label: 'Bank transfer / DuitNow', sortOrder: 2, active: true },
+    { id: 'fallback-pm-installment', category: 'payment_method', value: 'Installment', label: 'Installment',             sortOrder: 3, active: true },
+    { id: 'fallback-pm-cash',        category: 'payment_method', value: 'Cash',        label: 'Cash',                    sortOrder: 4, active: true },
   ],
   payment_merchant: [
     { id: 'fallback-pmer-mbb',        category: 'payment_merchant', value: 'MBB',        label: 'MBB',        sortOrder: 1, active: true },

@@ -5,15 +5,9 @@ import { cartSummary } from '../../state/cart';
 import { cartLineTitle, useMfgCatalogIndex } from '../../lib/cart-display';
 import type { HandoverForm } from '../../lib/handover-helpers';
 import { COMPANY_LEGAL, RECEIPT_TERMS } from '../../lib/legal';
+import { usePaymentMethodLabels } from '../../lib/so-maintenance/so-dropdown-options-queries';
 import { ProductThumb } from '../ProductThumb';
 import styles from './OrderSummaryPane.module.css';
-
-const PAYMENT_LABEL: Record<string, string> = {
-  merchant: 'Merchant',
-  transfer: 'Bank transfer / DuitNow',
-  installment: 'Installment',
-  cash: 'Cash',
-};
 
 const formatDate = (iso: string): string => {
   if (!iso) return '';
@@ -56,6 +50,8 @@ const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: For
   const placeholderId = 'SO-XXXX';
   const today = new Date().toLocaleDateString('en-GB');
   const mfgById = useMfgCatalogIndex();
+  /* 2026-06-06 payment-method unify — live labels from SO Maintenance. */
+  const paymentLabels = usePaymentMethodLabels() as Record<string, string>;
 
   const emergencyHasAny =
     form.emergencyName.trim() || form.emergencyRelation.trim() || form.emergencyPhone.trim();
@@ -137,7 +133,7 @@ const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: For
 
       <Section heading="Payment">
         {form.paymentMethod
-          ? <p className={styles.rowValue}>{PAYMENT_LABEL[form.paymentMethod]}</p>
+          ? <p className={styles.rowValue}>{paymentLabels[form.paymentMethod]}</p>
           : <p className={styles.placeholder}>Pending</p>}
       </Section>
 

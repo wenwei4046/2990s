@@ -2,14 +2,8 @@ import { Link, useParams } from 'react-router';
 import { ArrowLeft, Printer } from 'lucide-react';
 import { useSalesOrderDoc, type PrintableSO } from '../lib/so-doc';
 import { COMPANY_LEGAL, RECEIPT_TERMS } from '../lib/legal';
+import { usePaymentMethodLabels } from '../lib/so-maintenance/so-dropdown-options-queries';
 import styles from './SalesOrderPrint.module.css';
-
-const PAYMENT_LABEL: Record<string, string> = {
-  merchant:    'Merchant',
-  transfer:    'Bank transfer / DuitNow',
-  installment: 'Installment',
-  cash:        'Cash',
-};
 
 const fmtMoney = (n: number) =>
   `MYR ${n.toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -86,24 +80,28 @@ const Header = ({ order }: { order: PrintableSO }) => (
   </header>
 );
 
-const MetaRow = ({ order }: { order: PrintableSO }) => (
-  <div className={styles.metaRow}>
-    <div className={styles.metaBox}>
-      <div className={styles.metaLabel}>Order reference</div>
-      <div className={styles.metaValue}>{order.id}</div>
-      <div className={styles.metaSub}>Placed {fmtIsoDate(order.date)}</div>
-    </div>
-    <div className={styles.metaBox}>
-      <div className={styles.metaLabel}>Delivery Estimate Date</div>
-      <div className={styles.metaValue}>
-        {order.deliveryDate ? fmtIsoDate(order.deliveryDate) : 'To be confirmed'}
+const MetaRow = ({ order }: { order: PrintableSO }) => {
+  /* 2026-06-06 payment-method unify — live labels from SO Maintenance. */
+  const paymentLabels = usePaymentMethodLabels() as Record<string, string>;
+  return (
+    <div className={styles.metaRow}>
+      <div className={styles.metaBox}>
+        <div className={styles.metaLabel}>Order reference</div>
+        <div className={styles.metaValue}>{order.id}</div>
+        <div className={styles.metaSub}>Placed {fmtIsoDate(order.date)}</div>
       </div>
-      <div className={styles.metaSub}>
-        Method: {order.paymentMethod ? PAYMENT_LABEL[order.paymentMethod] ?? order.paymentMethod : '—'}
+      <div className={styles.metaBox}>
+        <div className={styles.metaLabel}>Delivery Estimate Date</div>
+        <div className={styles.metaValue}>
+          {order.deliveryDate ? fmtIsoDate(order.deliveryDate) : 'To be confirmed'}
+        </div>
+        <div className={styles.metaSub}>
+          Method: {order.paymentMethod ? paymentLabels[order.paymentMethod] ?? order.paymentMethod : '—'}
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 const PartiesRow = ({ order }: { order: PrintableSO }) => (
   <div className={styles.partiesRow}>

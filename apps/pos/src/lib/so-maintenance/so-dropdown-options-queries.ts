@@ -10,6 +10,11 @@
 // ----------------------------------------------------------------------------
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  PAYMENT_METHOD_DEFAULT_LABELS,
+  PAYMENT_METHOD_VALUE_TO_CODE,
+  type PaymentMethodCode,
+} from '@2990s/shared/payment-methods';
 import { supabase } from '../supabase';
 
 const API_URL = import.meta.env.VITE_API_URL;
@@ -81,6 +86,24 @@ export function useSoDropdownValues(
   const rows = (q.data?.[category] ?? []).filter((o) => o.active);
   if (rows.length === 0) return fallback;
   return rows.map((o) => ({ value: o.value, label: o.label }));
+}
+
+/* 2026-06-06 payment-method unify — internal code → live display label.
+   The payment_method maintenance rows carry the label for each of the four
+   core methods (value is the immutable key, mapped to the ledger code via
+   @2990s/shared/payment-methods). Renaming a label in SO Maintenance
+   re-labels every POS surface that uses this hook: the handover cards,
+   Confirm step, summary pane, Confirmed page, and the SO print. Defaults
+   cover first paint / an empty fetch. */
+export function usePaymentMethodLabels(): Record<PaymentMethodCode, string> {
+  const q = useAllSoDropdownOptions();
+  const labels: Record<PaymentMethodCode, string> = { ...PAYMENT_METHOD_DEFAULT_LABELS };
+  for (const row of q.data?.payment_method ?? []) {
+    if (!row.active) continue;
+    const code = PAYMENT_METHOD_VALUE_TO_CODE[row.value];
+    if (code && row.label) labels[code] = row.label;
+  }
+  return labels;
 }
 
 export function useCreateSoDropdownOption() {

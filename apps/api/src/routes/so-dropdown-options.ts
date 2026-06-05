@@ -22,12 +22,27 @@
 
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { isCorePaymentMethodRow } from '@2990s/shared/payment-methods';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
 export const soDropdownOptions = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 soDropdownOptions.use('*', supabaseAuth);
+
+/* Loo 2026-06-06 — payment_method is a LOCKED set. The four core rows
+   (Merchant / Online / Installment / Cash) drive branch logic end-to-end:
+   POS handover cards, the deposit ledger at SO create, the payments route
+   enum, and the list-grid summary. Renaming a label or reordering is fine —
+   that's the point of the maintenance page — but adding, deleting,
+   deactivating, or editing a VALUE (the immutable key the apps map to the
+   ledger code) would strand orders behind logic that no longer matches.
+   The maintenance UIs mirror this with a lock affordance; this gate is the
+   backstop for direct API calls. */
+const PAYMENT_METHOD_LOCK_REASON =
+  'Payment methods are a fixed set of four — they are wired to order logic ' +
+  '(POS handover cards, deposit ledger, payments cascade). Rename or reorder ' +
+  'them anytime; they cannot be added to, removed, or turned off.';
 
 const CATEGORIES = [
   'customer_type',
@@ -139,6 +154,10 @@ soDropdownOptions.post('/', async (c) => {
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) return c.json({ error: 'invalid_body', issues: parsed.error.issues }, 400);
 
+  if (parsed.data.category === 'payment_method') {
+    return c.json({ error: 'payment_method_locked', reason: PAYMENT_METHOD_LOCK_REASON }, 409);
+  }
+
   const sb = c.get('supabase');
   const { data, error } = await sb
     .from('so_dropdown_options')
@@ -178,6 +197,22 @@ soDropdownOptions.patch('/:id', async (c) => {
   if (Object.keys(patch).length === 0) return c.json({ ok: true, changed: 0 });
 
   const sb = c.get('supabase');
+
+  /* Locked-set gate — look the row up first so we know its category+value.
+     Core payment_method rows accept label / sortOrder / active=true only. */
+  const { data: existing } = await sb
+    .from('so_dropdown_options')
+    .select('category, value')
+    .eq('id', id)
+    .maybeSingle();
+  if (!existing) return c.json({ error: 'not_found' }, 404);
+  if (isCorePaymentMethodRow(existing.category as string, existing.value as string)) {
+    const valueChanged = parsed.data.value !== undefined && parsed.data.value !== existing.value;
+    if (valueChanged || parsed.data.active === false) {
+      return c.json({ error: 'payment_method_locked', reason: PAYMENT_METHOD_LOCK_REASON }, 409);
+    }
+  }
+
   const { data, error } = await sb
     .from('so_dropdown_options')
     .update(patch)
@@ -200,6 +235,18 @@ soDropdownOptions.patch('/:id', async (c) => {
 soDropdownOptions.delete('/:id', async (c) => {
   const id = c.req.param('id');
   const sb = c.get('supabase');
+
+  /* Locked-set gate — core payment_method rows can never be deleted. */
+  const { data: existing } = await sb
+    .from('so_dropdown_options')
+    .select('category, value')
+    .eq('id', id)
+    .maybeSingle();
+  if (!existing) return c.json({ error: 'not_found' }, 404);
+  if (isCorePaymentMethodRow(existing.category as string, existing.value as string)) {
+    return c.json({ error: 'payment_method_locked', reason: PAYMENT_METHOD_LOCK_REASON }, 409);
+  }
+
   const { error } = await sb.from('so_dropdown_options').delete().eq('id', id);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   return c.json({ ok: true });

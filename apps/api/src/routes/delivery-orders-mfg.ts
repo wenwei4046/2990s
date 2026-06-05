@@ -2132,7 +2132,8 @@ deliveryOrdersMfg.get('/:id/payments', async (c) => {
 
 const paymentCreateSchema = z.object({
   paidAt:             z.string().min(1),
-  method:             z.enum(['merchant', 'transfer', 'cash']),
+  /* 2026-06-06 payment-method unify — 'installment' is first-class L1. */
+  method:             z.enum(['merchant', 'transfer', 'cash', 'installment']),
   merchantProvider:   z.string().trim().min(1).optional().nullable(),
   installmentMonths:  z.number().int().min(0).max(60).optional().nullable(),
   onlineType:         z.string().trim().min(1).optional().nullable(),
@@ -2155,8 +2156,9 @@ deliveryOrdersMfg.post('/:id/payments', async (c) => {
   if (!parsed.success) return c.json({ error: 'invalid_body', issues: parsed.error.issues }, 400);
   const p = parsed.data;
 
-  const merchantProvider  = p.method === 'merchant' ? (p.merchantProvider ?? null) : null;
-  const installmentMonths = p.method === 'merchant'
+  const merchantLike      = p.method === 'merchant' || p.method === 'installment';
+  const merchantProvider  = merchantLike ? (p.merchantProvider ?? null) : null;
+  const installmentMonths = merchantLike
     ? (typeof p.installmentMonths === 'number' && p.installmentMonths > 0 ? p.installmentMonths : null)
     : null;
   const onlineType        = p.method === 'transfer' ? (p.onlineType ?? null) : null;

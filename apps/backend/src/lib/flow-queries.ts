@@ -754,7 +754,9 @@ export type SoPayment = {
   id: string;
   so_doc_no: string;
   paid_at: string;                       // YYYY-MM-DD
-  method: 'merchant' | 'transfer' | 'cash';
+  /* 2026-06-06 payment-method unify — 'installment' is first-class (the POS
+     deposit path has always written it; the manual routes accept it now). */
+  method: 'merchant' | 'transfer' | 'cash' | 'installment';
   merchant_provider: string | null;
   installment_months: number | null;
   online_type: string | null;

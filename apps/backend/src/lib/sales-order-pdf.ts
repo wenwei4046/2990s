@@ -76,7 +76,8 @@ type SoItem = {
    accepted so callers can pass the row verbatim. */
 type SoPayment = {
   paid_at: string;
-  method: 'merchant' | 'transfer' | 'cash';
+  /* 2026-06-06 payment-method unify — 'installment' is first-class. */
+  method: 'merchant' | 'transfer' | 'cash' | 'installment';
   /* Task #122 (cascade) — merchant_provider / installment_months are now
      open string + integer (driven by the so_dropdown_options cascade
      categories). online_type is the new Online sub-type column. */
@@ -127,6 +128,11 @@ const methodLabel = (p: SoPayment): string => {
      TNG / Cheque / DuitNow) so the printed PDF reads as the user actually
      filed it, not a generic "Bank Transfer". */
   if (p.method === 'transfer') return p.online_type ? `Online (${p.online_type})` : 'Online';
+  /* 2026-06-06 payment-method unify — installment rows print their term. */
+  if (p.method === 'installment') {
+    const base = p.merchant_provider ? `Installment (${p.merchant_provider})` : 'Installment';
+    return p.installment_months ? `${base} · ${p.installment_months}m` : base;
+  }
   return 'Cash';
 };
 

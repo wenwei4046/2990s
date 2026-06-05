@@ -8,19 +8,15 @@ import { Hero } from '../components/handover/Hero';
 import { OrderSummaryPane } from '../components/handover/OrderSummaryPane';
 import { Topbar } from '../components/Topbar';
 import type { CartLine } from '../state/cart';
+import { usePaymentMethodLabels } from '../lib/so-maintenance/so-dropdown-options-queries';
 import styles from './Confirmed.module.css';
 import './Confirmed.print.css';
-
-const PAYMENT_LABEL: Record<string, string> = {
-  merchant: 'Merchant',
-  transfer: 'Bank transfer / DuitNow',
-  installment: 'Installment',
-  cash: 'Cash',
-};
 
 export const Confirmed = () => {
   const { orderId } = useParams<{ orderId: string }>();
   const { data, isLoading, error } = useOrderById(orderId);
+  /* 2026-06-06 payment-method unify — live labels from SO Maintenance. */
+  const paymentLabels = usePaymentMethodLabels() as Record<string, string>;
 
   useEffect(() => { window.scrollTo(0, 0); }, []);
 
@@ -84,7 +80,7 @@ export const Confirmed = () => {
               address: data.customer_address ?? undefined,
             }}
             delivery={{ date: data.delivery_date ? eta : undefined }}
-            payment={{ method: PAYMENT_LABEL[data.payment_method] ?? data.payment_method }}
+            payment={{ method: paymentLabels[data.payment_method] ?? data.payment_method }}
             paid={data.paid}
           />
         </div>

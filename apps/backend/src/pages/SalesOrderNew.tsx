@@ -46,7 +46,7 @@ import {
 import { useStateWarehouseMappings } from '../lib/state-warehouse-queries';
 import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
 import {
-  PaymentsTable, labelToApi, parseInstallmentMonths, type PaymentDraft,
+  PaymentsTable, labelToApi, draftMethodFields, type PaymentDraft,
 } from '../components/PaymentsTable';
 import { formatPhone } from '@2990s/shared/phone';
 import styles from './SalesOrderDetail.module.css';
@@ -527,12 +527,7 @@ export const SalesOrderNew = () => {
         /* Task #122 (cascade) — replay the L2 picks per method so the
            created payment row carries the bank + plan / sub-type that
            commander entered during the draft. */
-        if (method === 'merchant') {
-          body.merchantProvider  = d.merchantProvider || null;
-          body.installmentMonths = parseInstallmentMonths(d.installmentMonthsLabel);
-        } else if (method === 'transfer') {
-          body.onlineType = d.onlineType || null;
-        }
+        Object.assign(body, draftMethodFields(method, d));
         try {
           await addPayment.mutateAsync(body);
           return true;
