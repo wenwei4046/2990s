@@ -1281,18 +1281,26 @@ mfgSalesOrders.post('/', async (c) => {
   const pwpBaseByIdx = new Map<number, number>();            // non-sofa idx → pwp_price_sen
   const pwpSofaByIdx = new Map<number, string[]>();          // sofa idx → granted reward combo ids
   const claimedPwpCodes: Array<{ code: string; prevStatus: string }> = [];
+  /* Loo 2026-06-05 (VALOR / PW-Test-voucher incident) — a line that CARRIES a
+     pwpCode but fails the grant used to be silently repriced at full price,
+     surfacing later as an inscrutable pricing_drift. Track WHY each code was
+     refused and reject the whole order with an explicit 409 instead — the
+     salesperson sees "code belongs to a different customer", not a price diff. */
+  const pwpRejections: Array<{ idx: number; itemCode: string; code: string; reason: string }> = [];
   for (let idx = 0; idx < items.length; idx++) {
     const it = items[idx];
     const code = String((it?.variants as { pwpCode?: string | null } | null)?.pwpCode ?? '').trim();
     if (!code) continue;
+    const reject = (reason: string) =>
+      pwpRejections.push({ idx, itemCode: String(it?.itemCode ?? ''), code, reason });
     const product = lineProducts[idx];
-    if (!product) continue;
+    if (!product) { reject('unknown item code'); continue; }
     const { data: cRow } = await sb
       .from('pwp_codes')
       .select('status, owner_staff_id, reward_category, eligible_reward_model_ids, reward_combo_ids, customer_id, source_doc_no, redeemed_doc_no, type')
       .eq('code', code)
       .maybeSingle();
-    if (!cRow) continue;
+    if (!cRow) { reject('code not found — it may have been replaced; re-apply PWP on this line'); continue; }
     const redeemable = cRow.status === 'AVAILABLE' || (cRow.status === 'RESERVED' && cRow.owner_staff_id === user.id);
     /* Orphan self-heal (2026-06-05, SO-2606-020 incident) — a code claimed by a
        create attempt that died on a path without rollbackPwpClaims (uncaught
@@ -1310,11 +1318,24 @@ mfgSalesOrders.post('/', async (c) => {
         .maybeSingle();
       orphanedUsed = !deadSo;
     }
-    if (!redeemable && !orphanedUsed) continue;
+    if (!redeemable && !orphanedUsed) {
+      reject(cRow.status === 'USED'
+        ? `code already used${cRow.redeemed_doc_no ? ` on ${cRow.redeemed_doc_no}` : ''}`
+        : cRow.status === 'RESERVED'
+          ? 'code is reserved by another salesperson'
+          : `code is not redeemable (${cRow.status})`);
+      continue;
+    }
     const prodCat = String(product.category ?? '').toUpperCase();
-    if (prodCat !== String(cRow.reward_category).toUpperCase()) continue;
+    if (prodCat !== String(cRow.reward_category).toUpperCase()) {
+      reject(`code rewards ${String(cRow.reward_category)}, not this item`);
+      continue;
+    }
     // Customer binding — an AVAILABLE voucher only redeems for its earner.
-    if (cRow.status === 'AVAILABLE' && cRow.customer_id && orderCustomerId && cRow.customer_id !== orderCustomerId) continue;
+    if (cRow.status === 'AVAILABLE' && cRow.customer_id && orderCustomerId && cRow.customer_id !== orderCustomerId) {
+      reject('code belongs to a different customer');
+      continue;
+    }
 
     // Eligibility — SOFA is matched by Combo (Phase 2); other categories by the
     // reward Model + a per-SKU PWP price. A miss → not granted → the line keeps
@@ -1323,24 +1344,27 @@ mfgSalesOrders.post('/', async (c) => {
     let grantPwpPrice = 0;
     if (prodCat === 'SOFA') {
       const rewardComboIds = (cRow.reward_combo_ids as string[] | null) ?? [];
-      if (rewardComboIds.length === 0) continue;
+      if (rewardComboIds.length === 0) { reject('voucher has no reward combos'); continue; }
       const sofaArgs = extractSofaComboLookupArgs(String(it?.itemGroup ?? 'sofa'), (it?.variants as Record<string, unknown> | null) ?? null);
       const built = sofaArgs?.modules ?? [];
-      if (built.length === 0) continue;
+      if (built.length === 0) { reject('sofa line carries no build modules'); continue; }
       const candidate = cachedCombos.filter(
         (c) => rewardComboIds.includes(c.id) && (!product.base_model || c.baseModel === product.base_model),
       );
-      if (!candidate.some((c) => matchComboSubset(built, c.modules) != null)) continue;
+      if (!candidate.some((c) => matchComboSubset(built, c.modules) != null)) {
+        reject("sofa build doesn't match the voucher's reward combo");
+        continue;
+      }
       grantSofaComboIds = rewardComboIds;
     } else {
       const pwpPrice = Math.round(Number(product.pwp_price_sen ?? 0));
       // A 'promo' code prices a 0 reward as FREE; a 'pwp' code still needs a set
       // price (> 0), where 0 means "no PWP price". (migration 0145)
       const isPromo = String(cRow.type ?? 'pwp') === 'promo';
-      if (!isPromo && !(pwpPrice > 0)) continue;
+      if (!isPromo && !(pwpPrice > 0)) { reject('this SKU has no PWP price set (SKU Master)'); continue; }
       const elig = (cRow.eligible_reward_model_ids as string[] | null) ?? [];
       const modelOk = elig.length === 0 || (product.model_id != null && elig.includes(product.model_id));
-      if (!modelOk) continue;
+      if (!modelOk) { reject('code is not valid for this model'); continue; }
       grantPwpPrice = pwpPrice;
     }
 
@@ -1363,7 +1387,7 @@ mfgSalesOrders.post('/', async (c) => {
       ? claimQ.eq('status', 'USED').eq('redeemed_doc_no', cRow.redeemed_doc_no)
       : claimQ.in('status', ['RESERVED', 'AVAILABLE']);
     const { data: claimed } = await claimQ.select('code').maybeSingle();
-    if (!claimed) continue;  // lost the race / already used → not granted
+    if (!claimed) { reject('code was just claimed by another order — try again'); continue; }
     /* prevStatus drives the rollback restore. For an orphan re-claim the true
        pre-incident status is unknown (the dead attempt never rolled back), so
        restore to the most plausible redeemable state — RESERVED when the code
@@ -1389,6 +1413,21 @@ mfgSalesOrders.post('/', async (c) => {
       await sb.from('pwp_codes').update(patch).eq('code', code).eq('status', 'USED');
     }
   };
+
+  /* Explicit 409 when ANY carried code was refused (Loo 2026-06-05). Without
+     this the refused line silently repriced at full price and the order died
+     later as a bare pricing_drift — undebuggable from the tablet. Codes that
+     DID claim for other lines are rolled back so nothing burns. */
+  if (pwpRejections.length > 0) {
+    await rollbackPwpClaims();
+    return c.json({
+      error: 'pwp_code_rejected',
+      reason: pwpRejections
+        .map((r) => `${r.itemCode || `line ${r.idx + 1}`}: ${r.code} — ${r.reason}`)
+        .join('; '),
+      offendersPwp: pwpRejections,
+    }, 409);
+  }
 
   /* P3 — keep each sofa item's module price map so the split below distributes
      the build total with the SAME weights the drift gate priced from. */
