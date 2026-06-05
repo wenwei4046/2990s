@@ -271,3 +271,39 @@ export async function loadProductAndModel(
   const model = (modelRow ?? null) as ModelForCheck | null;
   return { product, model };
 }
+
+/** Batched mirror of {@link loadProductAndModel} — TWO `in()` queries for a
+ *  whole order (products by code, then their models), keyed by item code.
+ *  Subrequest diet (Loo 2026-06-06): the per-line loader cost 2 subrequests ×
+ *  lines on the SO create path and helped a 6-item order blow the CF Workers
+ *  per-request cap. Missing codes simply have no entry (caller treats as
+ *  nulls → "allowed"). */
+export async function loadProductsAndModels(
+  sb:        any,
+  itemCodes: Array<string | null | undefined>,
+): Promise<Map<string, { product: ProductForCheck | null; model: ModelForCheck | null }>> {
+  const out = new Map<string, { product: ProductForCheck | null; model: ModelForCheck | null }>();
+  const codes = Array.from(new Set(itemCodes.map((c) => (c ?? '').trim()).filter(Boolean)));
+  if (codes.length === 0) return out;
+
+  const { data: productRows } = await sb
+    .from('mfg_products')
+    .select('code, category, model_id, size_code')
+    .in('code', codes);
+  const products = ((productRows as ProductForCheck[]) ?? []);
+
+  const modelIds = Array.from(new Set(products.map((p) => p.model_id).filter(Boolean))) as string[];
+  const modelById = new Map<string, ModelForCheck>();
+  if (modelIds.length > 0) {
+    const { data: modelRows } = await sb
+      .from('product_models')
+      .select('id, allowed_options')
+      .in('id', modelIds);
+    for (const m of ((modelRows as ModelForCheck[]) ?? [])) modelById.set(m.id, m);
+  }
+
+  for (const p of products) {
+    out.set(p.code, { product: p, model: p.model_id ? (modelById.get(p.model_id) ?? null) : null });
+  }
+  return out;
+}
