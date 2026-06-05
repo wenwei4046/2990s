@@ -117,4 +117,26 @@ describe('liftChargeableUnits', () => {
   ])('floors=%i items=%i → %i units', (floors, items, expected) => {
     expect(liftChargeableUnits(floors, items)).toBe(expected);
   });
+
+  it('clamps absurd floors/items to the sanity ceilings (overflow guard)', () => {
+    // 1e9 floors × 1e9 items would overflow qty × unitPriceSen — clamped to 50/99.
+    expect(liftChargeableUnits(1e9, 1e9)).toBe((50 - 2) * 99);
+  });
+});
+
+describe('abuse guards', () => {
+  it('duplicate addon ids book ONE line, first selection wins', () => {
+    const lines = computeAddonServiceLines(
+      [{ id: 'dispose-mattress', qty: 1 }, { id: 'dispose-mattress', qty: 5 }],
+      ADDON_ROWS,
+    );
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.qty).toBe(1);
+  });
+
+  it('qty is clamped to the ceiling', () => {
+    const lines = computeAddonServiceLines([{ id: 'dispose-bedframe', qty: 1e9 }], ADDON_ROWS);
+    expect(lines[0]!.qty).toBe(99);
+    expect(lines[0]!.totalSen).toBe(99 * 8000);
+  });
 });

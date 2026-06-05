@@ -1758,7 +1758,8 @@ mfgSalesOrders.post('/', async (c) => {
     merchant_provider:  (body.merchantProvider as string) ?? null,
     approval_code:      (body.approvalCode as string) ?? null,
     payment_date:       (body.paymentDate as string) ?? null,
-    deposit_centi:      typeof body.depositCenti === 'number' ? body.depositCenti : 0,
+    // Clamped ≥ 0 — a negative deposit would deflate the live paid rollup.
+    deposit_centi:      Math.max(0, typeof body.depositCenti === 'number' ? body.depositCenti : 0),
     paid_centi:         typeof body.paidCenti === 'number' ? body.paidCenti : 0,
     /* PR #154 — Commander 2026-05-27: "我们的整个系统是没有 Draft 功能的，
        把 Draft 的功能去除掉, 我们 create 的全部都是 confirm 的". 2990 is a
@@ -1790,12 +1791,18 @@ mfgSalesOrders.post('/', async (c) => {
      block the order (the header column still carries the deposit). */
   {
     const depositCenti = typeof body.depositCenti === 'number' ? body.depositCenti : 0;
-    const depositMethod = typeof body.paymentMethod === 'string' && body.paymentMethod.trim()
-      ? body.paymentMethod.trim()
-      : null;
+    /* Whitelist — the ledger's method vocabulary is closed; an arbitrary
+       string must not reach Finance reports. Unknown method → header-only
+       (the deposit still shows via the legacy fallback), no ledger row. */
+    const VALID_METHODS = new Set(['cash', 'merchant', 'transfer', 'installment']);
+    const rawMethod = typeof body.paymentMethod === 'string' ? body.paymentMethod.trim() : '';
+    const depositMethod = VALID_METHODS.has(rawMethod) ? rawMethod : null;
     if (depositCenti > 0 && depositMethod) {
-      const merchantProvider = depositMethod === 'merchant' ? ((body.merchantProvider as string) ?? null) : null;
-      const installmentMonths = depositMethod === 'merchant'
+      /* 'installment' is a merchant transaction with a term — both keep the
+         provider/months fields (prod uses both method values). */
+      const merchantLike = depositMethod === 'merchant' || depositMethod === 'installment';
+      const merchantProvider = merchantLike ? ((body.merchantProvider as string) ?? null) : null;
+      const installmentMonths = merchantLike
         && typeof body.installmentMonths === 'number' && body.installmentMonths > 0
         ? body.installmentMonths : null;
       const paidAt = (body.paymentDate as string) ?? new Date().toISOString().slice(0, 10);
@@ -2449,6 +2456,8 @@ async function recomputeTotals(sb: any, docNo: string) {
   // LINES are the truth when they exist (their amounts are already inside
   // `service`/`total` above — folding the header snapshot back in would
   // double-count); only a line-less legacy SO still reads the header back.
+  // ⚠️ DO NOT DELETE this fallback without retiring the delivery_fee_centi
+  // header column itself (SO-SKU spec §5 P6 — Loo decides the retirement).
   const hasDeliveryFeeLines = rows.some((r) => isDeliveryFeeServiceCode(r.item_code));
   let deliveryCenti = 0;
   if (!hasDeliveryFeeLines) {

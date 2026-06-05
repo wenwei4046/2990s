@@ -87,11 +87,12 @@ SELECT
   so.doc_no,
   COALESCE(so.payment_date, so.so_date),
   so.payment_method,
-  CASE WHEN so.payment_method = 'merchant' THEN so.merchant_provider END,
-  CASE WHEN so.payment_method = 'merchant' THEN so.installment_months END,
+  -- 'installment' is a merchant transaction with a term — keep its fields too.
+  CASE WHEN so.payment_method IN ('merchant', 'installment') THEN so.merchant_provider END,
+  CASE WHEN so.payment_method IN ('merchant', 'installment') THEN so.installment_months END,
   so.approval_code,
   so.deposit_centi,
-  so.salesperson_id,
+  COALESCE(so.salesperson_id, so.created_by),  -- collected_by: fall back to the author
   so.created_by,
   true,
   'Backfill 0155: POS deposit recorded from SO header'

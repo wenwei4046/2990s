@@ -64,10 +64,19 @@ export const ADDON_ID_TO_SERVICE_SKU: Record<string, string> = {
   'lift':             SVC_LIFT_CARRY,
 };
 
+/* Sanity ceilings — a crafted payload must not be able to overflow
+   qty × unitPriceSen into precision-loss territory. Generous vs reality
+   (no Malaysian walk-up exceeds 50 floors; no order carries 99 pieces). */
+export const MAX_LIFT_FLOORS = 50;
+export const MAX_LIFT_ITEMS = 99;
+export const MAX_ADDON_QTY = 99;
+
 /** Lift pricing rule (matches the shared addonPrice / POS computeAddonTotal):
- *  the first 2 floors are free — chargeable units = max(0, floors − 2) × items. */
+ *  the first 2 floors are free — chargeable units = max(0, floors − 2) × items.
+ *  Inputs are clamped to the sanity ceilings above. */
 export const liftChargeableUnits = (floorsCount: number, itemsCount: number): number =>
-  Math.max(0, Math.floor(floorsCount) - 2) * Math.max(0, Math.floor(itemsCount));
+  Math.max(0, Math.min(MAX_LIFT_FLOORS, Math.floor(floorsCount)) - 2) *
+  Math.max(0, Math.min(MAX_LIFT_ITEMS, Math.floor(itemsCount)));
 
 /**
  * Decompose a server-computed delivery fee into SERVICE lines (§4.1).
@@ -118,8 +127,14 @@ export function computeAddonServiceLines(
   addonRows: AddonRowInput[],
 ): ServiceLineSpec[] {
   const rowById = new Map(addonRows.map((r) => [r.id, r]));
+  /* One line per addon id — first selection wins. The POS form is a dict
+     keyed by id so real clients can't duplicate; a crafted payload repeating
+     an id must not book the charge twice. */
+  const seen = new Set<string>();
   const lines: ServiceLineSpec[] = [];
   for (const sel of selections) {
+    if (seen.has(sel.id)) continue;
+    seen.add(sel.id);
     const row = rowById.get(sel.id);
     const itemCode = ADDON_ID_TO_SERVICE_SKU[sel.id];
     if (!row || !itemCode) continue;          // unknown to catalog or unmapped
@@ -139,8 +154,9 @@ export function computeAddonServiceLines(
         totalSen: units * unitSen,
       });
     } else {
-      // 'qty' (and a defensive 'flat' fallback: qty=1).
-      const qty = row.kind === 'qty' ? Math.max(1, Math.floor(sel.qty ?? 1)) : 1;
+      // 'qty' (and a defensive 'flat' fallback: qty=1). Clamped to the
+      // sanity ceiling so qty × unitPriceSen can't blow up.
+      const qty = row.kind === 'qty' ? Math.min(MAX_ADDON_QTY, Math.max(1, Math.floor(sel.qty ?? 1))) : 1;
       const unitSen = Math.round(Number(row.price ?? 0) * 100);
       if (unitSen <= 0) continue;
       lines.push({
