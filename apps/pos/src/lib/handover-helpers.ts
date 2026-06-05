@@ -1,7 +1,12 @@
-export type CustomerType = 'new' | 'existing';
-export type BuildingType = '' | 'condo' | 'landed' | 'apartment' | 'office' | 'shop' | 'other';
+/* customerType / buildingType / merchantProvider vocabularies now come from
+   so_dropdown_options (the SO Maintenance page) at runtime — see
+   useSoDropdownValues() — so these are plain strings, not literal unions.
+   PaymentMethod stays a closed union: the four methods drive branch logic
+   (merchant → bank chips, installment → term chips) and the deposit ledger. */
+export type CustomerType = string;
+export type BuildingType = string;
 export type PaymentMethod = '' | 'merchant' | 'transfer' | 'installment' | 'cash';
-export type MerchantProvider = 'GHL' | 'HLB' | 'MBB' | 'PBB';
+export type MerchantProvider = string;
 export type PaymentPreset = 'half' | 'full' | 'seventy' | 'custom';
 
 export interface AddonSelection {
@@ -44,8 +49,9 @@ export interface HandoverForm {
 
   addons: Record<string, AddonSelection>;
   paymentMethod: PaymentMethod;
-  /** Installment term in months. Required when paymentMethod === 'installment'. */
-  installmentMonths: 6 | 12 | null;
+  /** Installment term in months (from the installment_plan dropdown options).
+   *  Required when paymentMethod === 'installment'. */
+  installmentMonths: number | null;
   /** Merchant acquirer / terminal. Required when paymentMethod === 'merchant'. */
   merchantProvider: MerchantProvider | null;
 
@@ -182,10 +188,10 @@ const targetDateBlockers = (f: HandoverForm): string[] => {
 const addonsPaymentBlockers = (f: HandoverForm): string[] => {
   if (!f.paymentMethod) return ['Pick a payment method'];
   if (f.paymentMethod === 'installment' && f.installmentMonths == null) {
-    return ['Pick the installment term (6 or 12 months)'];
+    return ['Pick the installment term'];
   }
   if (f.paymentMethod === 'merchant' && f.merchantProvider == null) {
-    return ['Pick the merchant (GHL / HLB / MBB / PBB)'];
+    return ['Pick the merchant'];
   }
   return [];
 };

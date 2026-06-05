@@ -39,7 +39,9 @@ export interface PosHandoffPayload {
   /** Customer header — maps to debtor_name in the SO table. */
   debtorName: string;
   email?: string;
-  customerType?: 'new' | 'existing';
+  /** Value from the maintained customer_type dropdown (so_dropdown_options),
+   *  e.g. 'NEW' / 'EXISTING'. Free string — admins can add options. */
+  customerType?: string;
   /** auth.users.id of the sales staff who took the order. */
   salespersonId?: string;
   /** Storage form (E.164 if MY); server normalises defensively. */
@@ -51,7 +53,8 @@ export interface PosHandoffPayload {
   city?: string;
   postcode?: string;
   customerState?: string;
-  buildingType?: 'condo' | 'landed' | 'apartment' | 'office' | 'shop' | 'other';
+  /** Value from the maintained building_type dropdown, e.g. 'Condo' / 'Landed'. */
+  buildingType?: string;
   /** Billing address as a single line, sent ONLY when it differs from the
    *  delivery address. Maps to the SO's existing `bill_to_address` column (the
    *  coordinator sees it on the SO detail page). Omitted when billing == delivery. */
@@ -92,8 +95,10 @@ export interface PosHandoffPayload {
 
   /* Payment. */
   paymentMethod?: 'merchant' | 'transfer' | 'installment' | 'cash';
-  installmentMonths?: 6 | 12;
-  merchantProvider?: 'GHL' | 'HLB' | 'MBB' | 'PBB';
+  /** Term in months, parsed from the maintained installment_plan options. */
+  installmentMonths?: number;
+  /** Value from the maintained payment_merchant dropdown (bank / terminal). */
+  merchantProvider?: string;
   approvalCode?: string;
   /** Deposit / amount collected at handover in centi-MYR (sen). */
   depositCenti?: number;

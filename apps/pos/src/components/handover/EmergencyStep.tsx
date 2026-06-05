@@ -1,18 +1,23 @@
 import type { HandoverForm } from '../../lib/handover-helpers';
+import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
 import { Field } from './Field';
 import styles from '../../pages/Handover.module.css';
 
-const RELATIONS = [
+/* Shown until /so-dropdown-options loads — the POS vocabulary, which is also
+   seeded into the maintained relationship category (2026-06-05). */
+const RELATIONS_FALLBACK = [
   'Husband','Wife','Father','Mother','Son','Daughter',
   'Brother','Sister','Friend','Colleague','Relative','Other',
-];
+].map((v) => ({ value: v, label: v }));
 
 export const EmergencyStep = ({
   form, update,
 }: {
   form: HandoverForm;
   update: <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) => void;
-}) => (
+}) => {
+  const relations = useSoDropdownValues('relationship', RELATIONS_FALLBACK);
+  return (
   <section className={styles.stepBody}>
     <h2 className={styles.stepTitle}>Customer additional info</h2>
 
@@ -34,7 +39,7 @@ export const EmergencyStep = ({
           onChange={(e) => update('emergencyRelation', e.target.value)}
         >
           <option value="">Select…</option>
-          {RELATIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+          {relations.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
         </select>
       </Field>
     </div>
@@ -49,4 +54,5 @@ export const EmergencyStep = ({
       />
     </Field>
   </section>
-);
+  );
+};

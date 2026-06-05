@@ -1,17 +1,14 @@
 import { useMemo } from 'react';
-import type { HandoverForm, BuildingType } from '../../lib/handover-helpers';
+import type { HandoverForm } from '../../lib/handover-helpers';
 import type { LocalityRow } from '../../lib/queries';
+import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
 import { Field } from './Field';
 import styles from '../../pages/Handover.module.css';
 
-const BUILDING_TYPES: { v: Exclude<BuildingType, ''>; l: string }[] = [
-  { v: 'condo', l: 'Condo' },
-  { v: 'landed', l: 'Landed' },
-  { v: 'apartment', l: 'Apartment' },
-  { v: 'office', l: 'Office' },
-  { v: 'shop', l: 'Shop' },
-  { v: 'other', l: 'Other' },
-];
+/* Shown until /so-dropdown-options loads — mirrors the seeded building_type
+   rows. Values are the maintained capitalised vocabulary (migration 0081). */
+const BUILDING_TYPE_FALLBACK = ['Condo', 'Landed', 'Apartment', 'Office', 'Shop', 'Other']
+  .map((v) => ({ value: v, label: v }));
 
 export const AddressStep = ({
   form, update, localities,
@@ -20,6 +17,7 @@ export const AddressStep = ({
   update: <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) => void;
   localities: LocalityRow[];
 }) => {
+  const buildingTypes = useSoDropdownValues('building_type', BUILDING_TYPE_FALLBACK);
   const states = useMemo(() => {
     const set = new Set<string>();
     for (const l of localities) set.add(l.state);
@@ -123,10 +121,10 @@ export const AddressStep = ({
             <Field label="Building type">
               <select
                 value={form.buildingType}
-                onChange={(e) => update('buildingType', e.target.value as BuildingType)}
+                onChange={(e) => update('buildingType', e.target.value)}
               >
                 <option value="">Select…</option>
-                {BUILDING_TYPES.map((b) => <option key={b.v} value={b.v}>{b.l}</option>)}
+                {buildingTypes.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}
               </select>
             </Field>
           </div>

@@ -53,7 +53,7 @@ type StepKey = typeof STEPS[number]['key'];
 const empty: HandoverForm = {
   name: '', phone: '', email: '',
   salespersonId: '',
-  customerType: 'new',
+  customerType: 'NEW',
   addressLater: false,
   fullAddress: '', addressLine2: '',
   postcode: '', city: '', state: '', buildingType: '',
@@ -384,6 +384,29 @@ export const Handover = () => {
 
   const submitOrder = async (acceptedServerTotal?: number) => {
     setServerError(null);
+    // Legacy escape hatch (VITE_HANDOVER_MODE='retail') — the retail orders
+    // table still has CHECK constraints with the OLD fixed vocabulary, while
+    // the form now carries values from the maintained so_dropdown_options
+    // (e.g. 'NEW' / 'Condo' / 'CIMB'). Normalise down; drop anything the
+    // legacy schema can't hold rather than fail the CHECK.
+    const legacyCustomerType: 'new' | 'existing' =
+      form.customerType.trim().toLowerCase() === 'existing' ? 'existing' : 'new';
+    const legacyBuilding = form.buildingType.trim().toLowerCase();
+    const legacyBuildingType = (
+      ['condo', 'landed', 'apartment', 'office', 'shop', 'other'] as const
+    ).find((b) => b === legacyBuilding);
+    const legacyMerchant = (['GHL', 'HLB', 'MBB', 'PBB'] as const)
+      .find((p) => p === form.merchantProvider) ?? null;
+    const legacyInstallment =
+      form.installmentMonths === 6 || form.installmentMonths === 12
+        ? form.installmentMonths
+        : null;
+    if (form.merchantProvider && !legacyMerchant) {
+      console.warn(`legacy retail order: merchant "${form.merchantProvider}" not storable, dropped`);
+    }
+    if (form.installmentMonths != null && legacyInstallment == null) {
+      console.warn(`legacy retail order: installment term ${form.installmentMonths} not storable, dropped`);
+    }
     try {
       const result = await createOrder.mutateAsync({
         customer: {
@@ -399,8 +422,8 @@ export const Handover = () => {
         paymentMethod: form.paymentMethod as Exclude<typeof form.paymentMethod, ''>,
         approvalCode: form.approvalCode.trim() || undefined,
         deliveryDate: !form.deliveryDateLater && form.deliveryDate ? form.deliveryDate : undefined,
-        customerType: form.customerType,
-        buildingType: form.buildingType || undefined,
+        customerType: legacyCustomerType,
+        buildingType: legacyBuildingType,
         billingSame: form.billingSame,
         ...(form.billingSame ? {} : {
           billingAddress: form.billingAddress.trim() || undefined,
@@ -422,8 +445,8 @@ export const Handover = () => {
           })),
         addonTotal,
         paid: form.amountPaid,
-        installmentMonths: form.installmentMonths,
-        merchantProvider: form.merchantProvider,
+        installmentMonths: legacyInstallment,
+        merchantProvider: legacyMerchant,
         additionalDeliveryFee: form.additionalDeliveryFee,
         deliveryFeeTotal: deliveryFee.total,
         lines,

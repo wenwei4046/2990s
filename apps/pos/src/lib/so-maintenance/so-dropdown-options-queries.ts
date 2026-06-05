@@ -67,6 +67,22 @@ export function useAllSoDropdownOptions() {
   });
 }
 
+/** One category's ACTIVE options as {value,label} pairs, sorted server-side.
+ *  Falls back to the caller's hardcoded list while the fetch is in flight or
+ *  failed — the create-order flow must never render an empty dropdown.
+ *  (PR — link the POS create-SO flow to the SO Maintenance data, 2026-06-05:
+ *  CustomerStep / AddressStep / EmergencyStep / AddonsPaymentStep / NewOrder
+ *  all read their option lists here instead of hardcoding them.) */
+export function useSoDropdownValues(
+  category: SoDropdownCategory,
+  fallback: { value: string; label: string }[],
+): { value: string; label: string }[] {
+  const q = useAllSoDropdownOptions();
+  const rows = (q.data?.[category] ?? []).filter((o) => o.active);
+  if (rows.length === 0) return fallback;
+  return rows.map((o) => ({ value: o.value, label: o.label }));
+}
+
 export function useCreateSoDropdownOption() {
   const qc = useQueryClient();
   return useMutation({
