@@ -942,6 +942,15 @@ const TotalsCard = ({ header, costPending = false }: { header: SiHeader; costPen
     { label: 'Bedframe',        rev: header.bedframe_centi,      cost: header.bedframe_cost_centi      ?? 0 },
     { label: 'Accessories',     rev: header.accessories_centi,   cost: header.accessories_cost_centi   ?? 0 },
     { label: 'Others',          rev: header.others_centi,        cost: header.others_cost_centi        ?? 0 },
+    /* SO-SKU spec P2 (D1, migration 0155) — SERVICE bucket (delivery fee /
+       dispose / lift lines); hidden when zero so legacy docs keep 4 rows. */
+    ...((((header as unknown as { service_centi?: number | null }).service_centi ?? 0) > 0)
+      ? [{
+          label: 'Services',
+          rev:  (header as unknown as { service_centi?: number | null }).service_centi ?? 0,
+          cost: (header as unknown as { service_cost_centi?: number | null }).service_cost_centi ?? 0,
+        }]
+      : []),
   ];
 
   const fmtMarginClass = (rev: number, marginCenti: number) => {

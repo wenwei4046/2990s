@@ -19,7 +19,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { normalizePhone } from '@2990s/shared/phone';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, isServiceLine } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { postSiRevenue, reverseSiRevenue, resyncSiRevenue } from '../lib/post-si-revenue';
@@ -72,17 +72,20 @@ const nextNum = async (sb: any): Promise<string> => {
    posting + the legacy payments path). Called after every item mutation. */
 async function recomputeTotals(sb: any, salesInvoiceId: string) {
   const { data: items } = await sb.from('sales_invoice_items')
-    .select('item_group, line_total_centi, line_cost_centi')
+    .select('item_code, item_group, line_total_centi, line_cost_centi')
     .eq('sales_invoice_id', salesInvoiceId);
-  let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, total = 0, totalCost = 0;
-  let mattressSofaCost = 0, bedframeCost = 0, accessoriesCost = 0, othersCost = 0;
-  for (const it of (items ?? []) as Array<{ item_group: string | null; line_total_centi: number | null; line_cost_centi: number | null }>) {
+  let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, service = 0, total = 0, totalCost = 0;
+  let mattressSofaCost = 0, bedframeCost = 0, accessoriesCost = 0, othersCost = 0, serviceCost = 0;
+  for (const it of (items ?? []) as Array<{ item_code: string | null; item_group: string | null; line_total_centi: number | null; line_cost_centi: number | null }>) {
     const lineTotal = Number(it.line_total_centi ?? 0);
     const lineCost  = Number(it.line_cost_centi ?? 0);
     total += lineTotal;
     totalCost += lineCost;
     const g = (it.item_group ?? '').toLowerCase();
-    if (g.includes('mattress') || g.includes('sofa')) { mattressSofa += lineTotal; mattressSofaCost += lineCost; }
+    /* SO-SKU spec P2 (D1, migration 0155) — the SI bills ALL SERVICE lines
+       (D2 final); they bucket separately, never into "others". */
+    if (isServiceLine({ itemGroup: g, itemCode: it.item_code })) { service += lineTotal; serviceCost += lineCost; }
+    else if (g.includes('mattress') || g.includes('sofa')) { mattressSofa += lineTotal; mattressSofaCost += lineCost; }
     else if (g.includes('bedframe')) { bedframe += lineTotal; bedframeCost += lineCost; }
     else if (g.includes('accessor')) { accessories += lineTotal; accessoriesCost += lineCost; }
     else { others += lineTotal; othersCost += lineCost; }
@@ -93,10 +96,12 @@ async function recomputeTotals(sb: any, salesInvoiceId: string) {
     bedframe_centi: bedframe,
     accessories_centi: accessories,
     others_centi: others,
+    service_centi: service,
     mattress_sofa_cost_centi: mattressSofaCost,
     bedframe_cost_centi: bedframeCost,
     accessories_cost_centi: accessoriesCost,
     others_cost_centi: othersCost,
+    service_cost_centi: serviceCost,
     local_total_centi: total,
     total_cost_centi: totalCost,
     total_margin_centi: margin,
