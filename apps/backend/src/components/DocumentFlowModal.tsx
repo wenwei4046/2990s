@@ -102,7 +102,9 @@ export function DocumentFlowModal({ type, id, open, onClose }: Props) {
   // The SO column is vertically centred across both bands. The canvas must fit
   // whichever is taller — the bands OR the SO block — otherwise a document with
   // no downstream rows (a lone SO node) gets clipped at the bottom.
-  const soNodes = nodes.filter((n) => n.type === 'so').sort((a, b) => a.label.localeCompare(b.label));
+  // The mid column holds the chain root — an SO, or a consignment root
+  // (cso / pco), all of which use band 'mid'.
+  const soNodes = nodes.filter((n) => TYPE_META[n.type].band === 'mid').sort((a, b) => a.label.localeCompare(b.label));
   const soBlockH = soNodes.length > 0 ? soNodes.length * (NODE_H + ROW_GAP) - ROW_GAP : 0;
   const contentBottom = Math.max(bandsBottom, PAD + soBlockH);
 
