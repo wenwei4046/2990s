@@ -149,9 +149,13 @@ export const PurchaseConsignmentOrderDetail = () => {
   /* Per-line "Received" drill-down — which PC Receive took how much (backend
      attaches `receipts` per item via pcoLineReceipts). Mirrors the PO detail. */
   const renderReceived = (it: PoItemRow) => {
-    const row = it as PoItemRow & {
-      receipts?: Array<{ receiveNumber: string; qty: number; status: string }>;
+    // The PC Order detail backend returns `receipts` keyed by receiveNumber
+    // (PcoLineReceipt), distinct from the shared PoItemRow.receipts (grnNumber) —
+    // cast through unknown to override that field shape.
+    const row = it as unknown as {
+      qty?: number;
       received_qty?: number;
+      receipts?: Array<{ receiveNumber: string; qty: number; status: string }>;
     };
     const receipts = row.receipts ?? [];
     if (receipts.length === 0) return <span className={styles.muted}>—</span>;
