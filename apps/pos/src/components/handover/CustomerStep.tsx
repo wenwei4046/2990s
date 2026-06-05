@@ -1,7 +1,15 @@
 import type { HandoverForm } from '../../lib/handover-helpers';
 import { useAllStaff } from '../../lib/staff';
+import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
 import { Field } from './Field';
 import styles from '../../pages/Handover.module.css';
+
+/* Shown until /so-dropdown-options loads — mirrors the seeded customer_type
+   rows (values 'NEW' / 'EXISTING', the vocabulary the Backend SO pages use). */
+const CUSTOMER_TYPE_FALLBACK = [
+  { value: 'NEW', label: 'New customer' },
+  { value: 'EXISTING', label: 'Existing customer' },
+];
 
 export const CustomerStep = ({
   form, update,
@@ -10,6 +18,7 @@ export const CustomerStep = ({
   update: <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) => void;
 }) => {
   const staff = useAllStaff();
+  const customerTypes = useSoDropdownValues('customer_type', CUSTOMER_TYPE_FALLBACK);
 
   return (
     <section className={styles.stepBody}>
@@ -69,10 +78,11 @@ export const CustomerStep = ({
         <Field label="Customer type">
           <select
             value={form.customerType}
-            onChange={(e) => update('customerType', e.target.value as 'new' | 'existing')}
+            onChange={(e) => update('customerType', e.target.value)}
           >
-            <option value="new">New</option>
-            <option value="existing">Existing</option>
+            {customerTypes.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
           </select>
         </Field>
       </div>

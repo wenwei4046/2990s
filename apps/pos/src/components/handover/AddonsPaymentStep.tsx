@@ -2,11 +2,28 @@ import { Banknote, CreditCard, Clock, Wallet, CheckCircle2, AlertCircle, Search 
 import type { LucideIcon } from 'lucide-react';
 import type { HandoverForm, AddonSelection } from '../../lib/handover-helpers';
 import type { AddonRow } from '../../lib/queries';
+import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
 import { AddonCard } from './AddonCard';
 import { Field } from './Field';
 import styles from '../../pages/Handover.module.css';
 
 const HANDOVER_ADDON_IDS = ['dispose-mattress', 'dispose-bedframe', 'lift', 'assemble'];
+
+/* Fallbacks shown until /so-dropdown-options loads — the pre-maintenance
+   hardcoded sets. The live lists come from the payment_merchant and
+   installment_plan categories on the SO Maintenance page. */
+const MERCHANT_FALLBACK = ['GHL', 'HLB', 'MBB', 'PBB'].map((v) => ({ value: v, label: v }));
+const INSTALLMENT_FALLBACK = [
+  { value: '6 months', label: '6 months' },
+  { value: '12 months', label: '12 months' },
+];
+
+/** "6 months" / "12 Months" → 6 / 12. Non-term rows ("One-off") are skipped —
+ *  installment_months on the SO is an integer term. */
+const parseTermMonths = (value: string): number | null => {
+  const m = /^(\d+)\s*month/i.exec(value.trim());
+  return m ? Number(m[1]) : null;
+};
 
 /** Live status of the typed "Previous SO number" (server-validated). */
 export interface CrossCategoryLinkStatus {
@@ -38,6 +55,17 @@ export const AddonsPaymentStep = ({
   const handoverAddons = addons.filter(
     (a) => HANDOVER_ADDON_IDS.includes(a.id) && a.enabled,
   );
+
+  const merchants = useSoDropdownValues('payment_merchant', MERCHANT_FALLBACK);
+  const parsedTerms = Array.from(new Set(
+    useSoDropdownValues('installment_plan', INSTALLMENT_FALLBACK)
+      .map((o) => parseTermMonths(o.value))
+      .filter((n): n is number => n !== null),
+  )).sort((a, b) => a - b);
+  // The maintained list can legitimately contain only non-term rows (e.g.
+  // just "One-off") — never leave the installment picker with zero chips,
+  // or the step's validation gate becomes unpassable.
+  const installmentTerms = parsedTerms.length > 0 ? parsedTerms : [6, 12];
 
   const setSelection = (id: string, sel: AddonSelection) =>
     update('addons', { ...form.addons, [id]: sel });
@@ -167,7 +195,7 @@ export const AddonsPaymentStep = ({
           active={form.paymentMethod === 'merchant'}
           icon={CreditCard}
           label="Merchant"
-          hint="Card via GHL / HLB / MBB / PBB terminal"
+          hint="Card via merchant terminal"
           onClick={() => { update('paymentMethod', 'merchant'); update('installmentMonths', null); }}
         />
         <MethodButton
@@ -197,15 +225,15 @@ export const AddonsPaymentStep = ({
       {form.paymentMethod === 'merchant' && (
         <div className={styles.installmentTerm} role="group" aria-label="Merchant">
           <span className={styles.installmentTermLabel}>Merchant</span>
-          {(['GHL', 'HLB', 'MBB', 'PBB'] as const).map((p) => (
+          {merchants.map((p) => (
             <button
-              key={p}
+              key={p.value}
               type="button"
-              className={`${styles.termChip} ${form.merchantProvider === p ? styles.termChipActive : ''}`}
-              aria-pressed={form.merchantProvider === p}
-              onClick={() => update('merchantProvider', p)}
+              className={`${styles.termChip} ${form.merchantProvider === p.value ? styles.termChipActive : ''}`}
+              aria-pressed={form.merchantProvider === p.value}
+              onClick={() => update('merchantProvider', p.value)}
             >
-              {p}
+              {p.label}
             </button>
           ))}
         </div>
@@ -213,7 +241,7 @@ export const AddonsPaymentStep = ({
       {form.paymentMethod === 'installment' && (
         <div className={styles.installmentTerm} role="group" aria-label="Installment term">
           <span className={styles.installmentTermLabel}>Term</span>
-          {([6, 12] as const).map((m) => (
+          {installmentTerms.map((m) => (
             <button
               key={m}
               type="button"
