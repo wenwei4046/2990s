@@ -17,7 +17,7 @@ import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
-import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { computeVariantKey, isServiceLine, type VariantAttrs } from '@2990s/shared';
 import { syncSoDeliveredFromDo } from '../lib/so-delivery-sync';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { checkStockAvailability, shortStockResponse } from '../lib/check-stock-availability';
@@ -357,6 +357,10 @@ async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedB
     warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number; batch_no: string | null;
   }>();
   for (const it of (items as Array<{ id: string; so_item_id?: string | null; item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }>)) {
+    /* P1 SO-SKU spec §4.6 — SERVICE lines (delivery fee / dispose / lift) ride
+       the DO for invoicing + driver visibility (D2 final) but are not goods:
+       shipping them must not deduct stock. */
+    if (isServiceLine({ itemGroup: it.item_group, itemCode: it.item_code })) continue;
     const qty = Number(it.qty ?? 0);
     if (qty <= 0) continue;
     const warehouseId = lineWh.get(it.id) ?? null;
@@ -454,6 +458,10 @@ async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedB
   type Bucket = { warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number; batch_no: string | null };
   const targetByBucket = new Map<string, Bucket>();
   for (const it of (items as Array<{ id: string; so_item_id?: string | null; item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }> ?? [])) {
+    /* P1 SO-SKU spec §4.6 — SERVICE lines never wrote OUT on first ship, so
+       they must stay out of the resync TARGET too, or the delta walk would
+       "correct" the net OUT upward and deduct phantom stock. */
+    if (isServiceLine({ itemGroup: it.item_group, itemCode: it.item_code })) continue;
     const qty = Number(it.qty ?? 0);
     if (qty <= 0) continue;
     const warehouseId = lineWh.get(it.id) ?? null;

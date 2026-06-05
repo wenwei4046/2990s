@@ -21,6 +21,8 @@ import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { doLineRemaining, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
+import { isServiceLine } from '@2990s/shared';
+import { findServiceLineCodes, serviceLinesNotReturnableResponse } from '../lib/service-line-guard';
 
 export const deliveryReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
 deliveryReturns.use('*', supabaseAuth);
@@ -266,6 +268,10 @@ async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, per
     warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number; unit_cost_sen: number; batch_no: string | null;
   }>();
   for (const it of (items as Array<{ id: string; item_code: string; description: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null; unit_cost_centi?: number | null }>)) {
+    /* P1 SO-SKU spec §4.6 — depth guard: a SERVICE line must never write stock
+       IN. The route guards reject them at create/edit; this keeps any line
+       that slips through (legacy data, direct DB write) inventory-neutral. */
+    if (isServiceLine({ itemGroup: it.item_group, itemCode: it.item_code })) continue;
     const qty = Number(it.qty_returned ?? 0);
     if (qty <= 0) continue;
     const warehouseId = lineWh.get(it.id) ?? null;
@@ -356,6 +362,10 @@ async function resyncInventoryForReturn(sb: any, deliveryReturnId: string, perfo
     const lineWh = await resolveDrLineWarehouses(sb, lineRows as Array<{ id: string; do_item_id?: string | null }>, drHeaderWarehouseId);
     const lineBatch = await resolveDrLineBatches(sb, lineRows as Array<{ id: string; do_item_id?: string | null }>);
     for (const it of lineRows) {
+      /* P1 SO-SKU spec §4.6 — SERVICE lines never wrote IN on create, so they
+         stay out of the resync TARGET too (else the delta walk would write a
+         phantom IN to "catch up"). */
+      if (isServiceLine({ itemGroup: it.item_group, itemCode: it.item_code })) continue;
       const qty = Number(it.qty_returned ?? 0);
       if (qty <= 0) continue;
       const warehouseId = lineWh.get(it.id) ?? null;
@@ -719,6 +729,17 @@ deliveryReturns.post('/', async (c) => {
     if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
   }
 
+  /* P1 SO-SKU spec §4.6 — SERVICE lines (delivery fee / dispose / lift) ride
+     SO→DO→SI but are NOT returnable goods: a DR line for one would write
+     phantom stock IN. Reject the whole request so the operator removes them. */
+  {
+    const svc = await findServiceLineCodes(sb, items.map((it) => ({
+      itemCode: it.itemCode as string | null | undefined,
+      itemGroup: it.itemGroup as string | null | undefined,
+    })));
+    if (svc.length > 0) return c.json(serviceLinesNotReturnableResponse(svc), 409);
+  }
+
   /* Bug #16 (Commander 2026-05-31) — "no DO, no Return". Every return line MUST
      be tied to a Delivery Order line; only goods actually shipped can come back.
      Free-entry (doItemId=null) lines were a back door that wrote stock IN with no
@@ -889,6 +910,17 @@ const convertDoLinesToReturn = async (c: any) => {
         requested: qty,
       }, 409);
     }
+  }
+
+  /* P1 SO-SKU spec §4.6 — SERVICE lines ride the DO (D2 final) so the picker
+     CAN surface them, but they are not returnable goods. Reject the convert
+     if any picked line is a SERVICE line. */
+  {
+    const svc = await findServiceLineCodes(sb, pickedIds.map((id) => {
+      const line = remainingMap.get(id)!;
+      return { itemCode: line.itemCode, itemGroup: line.itemGroup };
+    }));
+    if (svc.length > 0) return c.json(serviceLinesNotReturnableResponse(svc), 409);
   }
 
   // 3. Create ONE return header from the FIRST pick's DO. "First" = the DO of
@@ -1064,6 +1096,15 @@ deliveryReturns.post('/:id/items', async (c) => {
     if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
   }
 
+  /* P1 SO-SKU spec §4.6 — SERVICE lines are not returnable goods. */
+  {
+    const svc = await findServiceLineCodes(sb, [{
+      itemCode: it.itemCode as string | null | undefined,
+      itemGroup: it.itemGroup as string | null | undefined,
+    }]);
+    if (svc.length > 0) return c.json(serviceLinesNotReturnableResponse(svc), 409);
+  }
+
   const { data: header } = await sb.from('delivery_returns').select('id').eq('id', id).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
 
@@ -1099,6 +1140,16 @@ deliveryReturns.patch('/:id/items/:itemId', async (c) => {
     .select('qty_returned, unit_price_centi, discount_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes, condition')
     .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
+
+  /* P1 SO-SKU spec §4.6 — block edits that would TURN a return line into a
+     SERVICE line (code/group swap). Effective = patch value ?? stored value. */
+  if (it.itemCode !== undefined || it.itemGroup !== undefined) {
+    const svc = await findServiceLineCodes(sb, [{
+      itemCode: (it.itemCode ?? prev.item_code) as string | null | undefined,
+      itemGroup: (it.itemGroup ?? prev.item_group) as string | null | undefined,
+    }]);
+    if (svc.length > 0) return c.json(serviceLinesNotReturnableResponse(svc), 409);
+  }
 
   const qty = (it.qtyReturned ?? it.qty) !== undefined ? Number(it.qtyReturned ?? it.qty) : Number(prev.qty_returned);
   const unitPrice = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : Number(prev.unit_price_centi);

@@ -41,7 +41,7 @@
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
-import { computeVariantKey, buildVariantSummary, type VariantAttrs } from '@2990s/shared';
+import { computeVariantKey, buildVariantSummary, isServiceLine, type VariantAttrs } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import { soDeliverableRemaining } from './delivery-orders-mfg';
 import type { Env, Variables } from '../env';
@@ -392,6 +392,11 @@ export async function computeMrp(
   for (const d of demand) {
     const prod = prodByCode.get(d.item_code);
     const cat = prod?.category ?? null;
+    /* P1 SO-SKU spec §4.6 — SERVICE lines (delivery fee / dispose / lift) are
+       services, not goods: they never create purchase demand. Skip BEFORE the
+       category filter so even ?category=SERVICE can't surface them. (Section 8
+       below is SOFA-only by construction — SERVICE can't enter it.) */
+    if (isServiceLine({ itemGroup: d.item_group, itemCode: d.item_code, category: cat })) continue;
     if (catFilter && cat !== catFilter) continue;
     if (cat === 'SOFA') continue;
     if (whFilter && (d.warehouse_id ?? null) !== whFilter) continue;

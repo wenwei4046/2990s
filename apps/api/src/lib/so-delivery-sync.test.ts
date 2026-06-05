@@ -92,4 +92,26 @@ describe('isSoFullyCovered (DO → SO Delivered decision)', () => {
       [{ soItemId: null, qty: 9 }],
     )).toBe(true);
   });
+
+  /* P1 SO-SKU spec (2026-06-05, D2 final) — SERVICE lines (delivery fee /
+     dispose / lift) ride the document chain as ORDINARY coverage lines. They
+     are deliberately NOT filtered here:
+       · delivered on a DO → they accrue coverage like goods;
+       · left off every DO → the SO stays open, which is the anti-leak rule
+         (an open billable line must reach a DO → SI before the order closes).
+     If you are tempted to skip SERVICE lines in isSoFullyCovered, you are
+     re-opening the revenue hole this spec exists to close. */
+  it('a SERVICE line delivered on a DO accrues coverage like any goods line', () => {
+    expect(isSoFullyCovered(
+      [{ id: 'sofa-line', qty: 1 }, { id: 'svc-delivery-line', qty: 1 }],
+      [{ soItemId: 'sofa-line', qty: 1 }, { soItemId: 'svc-delivery-line', qty: 1 }],
+    )).toBe(true);
+  });
+
+  it('an undelivered SERVICE line keeps the SO open (intended — billable line must reach a DO/SI)', () => {
+    expect(isSoFullyCovered(
+      [{ id: 'sofa-line', qty: 1 }, { id: 'svc-delivery-line', qty: 1 }],
+      [{ soItemId: 'sofa-line', qty: 1 }],
+    )).toBe(false);
+  });
 });

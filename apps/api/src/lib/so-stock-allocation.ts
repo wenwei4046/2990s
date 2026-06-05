@@ -30,7 +30,7 @@
 // rolling back a GRN/SO post (audit-DLQ pattern matching writeMovements).
 // ----------------------------------------------------------------------------
 
-import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { computeVariantKey, isServiceLine, type VariantAttrs } from '@2990s/shared';
 import { summariseReadiness } from './so-readiness';
 import { loadSofaBatchStock, findCoveringBatch, claimSofaBatch } from './sofa-set-coverage';
 
@@ -117,8 +117,14 @@ export async function recomputeSoStockAllocation(
        FIFO and is NOT batched. */
     const { data: catRows } = await sb.from('mfg_products').select('code, category');
     const batchedCodes = new Set<string>();
+    /* P1 SO-SKU spec — SERVICE SKUs (delivery fee / dispose / lift) are not
+       goods. Collect their codes here (same catalog pull) so the needs walk
+       below can skip them by the authoritative category signal too. */
+    const serviceCodes = new Set<string>();
     for (const p of (catRows ?? []) as Array<{ code: string; category: string | null }>) {
-      if ((p.category ?? '').toUpperCase() === 'SOFA') batchedCodes.add(p.code);
+      const cat = (p.category ?? '').toUpperCase();
+      if (cat === 'SOFA') batchedCodes.add(p.code);
+      else if (cat === 'SERVICE') serviceCodes.add(p.code);
     }
     const isBatchedLine = (item_code: string, item_group: string | null) =>
       batchedCodes.has(item_code) || (item_group ?? '').toUpperCase().includes('SOFA');
@@ -212,6 +218,16 @@ export async function recomputeSoStockAllocation(
     };
     const sofaLineRecs: SofaLineRec[] = [];
     for (const l of lines) {
+      /* P1 SO-SKU spec §4.6 — SERVICE lines are services, not goods: never
+         allocate stock to them and never let them gate readiness. Without
+         this skip a SERVICE line stays PENDING forever and wedges the SO
+         short of READY_TO_SHIP (so-readiness already treats SERVICE as
+         non-MAIN, so skipping here completes the pair). */
+      if (isServiceLine({
+        itemGroup: l.item_group,
+        itemCode: l.item_code,
+        category: serviceCodes.has(l.item_code) ? 'SERVICE' : null,
+      })) continue;
       const delivered = deliveredBySoItem.get(l.id) ?? 0;
       const returned = returnedBySoItem.get(l.id) ?? 0;
       const remaining = Number(l.qty ?? 0) - delivered + returned;
