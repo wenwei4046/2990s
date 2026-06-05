@@ -123,10 +123,10 @@ export const validateAddress = (f: HandoverForm): boolean => {
   return true;
 };
 
-export const validateEmergency = (f: HandoverForm): boolean => {
-  const filledCount = [f.emergencyName, f.emergencyRelation, f.emergencyPhone].filter((v) => v.trim()).length;
-  return filledCount === 0 || filledCount === 3;
-};
+/** Loo 2026-06-06 — emergency contact is COMPULSORY (was all-or-nothing
+ *  optional): all three fields must be filled before the step can advance. */
+export const validateEmergency = (f: HandoverForm): boolean =>
+  [f.emergencyName, f.emergencyRelation, f.emergencyPhone].every((v) => v.trim().length > 0);
 
 export const validateTargetDate = (f: HandoverForm): boolean => {
   // "For further notice" (UFN) — no dates committed yet; allowed.
@@ -193,10 +193,13 @@ const addressBlockers = (f: HandoverForm): string[] => {
   return b;
 };
 
+// Loo 2026-06-06 — compulsory: list exactly what is still missing.
 const emergencyBlockers = (f: HandoverForm): string[] => {
-  const filled = [f.emergencyName, f.emergencyRelation, f.emergencyPhone].filter((v) => v.trim()).length;
-  if (filled === 0 || filled === 3) return [];
-  return ['Emergency contact needs all 3 fields filled — or leave all blank'];
+  const b: string[] = [];
+  if (!f.emergencyName.trim())     b.push('Emergency contact name is required');
+  if (!f.emergencyRelation.trim()) b.push('Emergency contact relationship is required');
+  if (!f.emergencyPhone.trim())    b.push('Emergency contact phone is required');
+  return b;
 };
 
 const targetDateBlockers = (f: HandoverForm): string[] => {
