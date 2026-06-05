@@ -1941,7 +1941,9 @@ export const useOutstandingSummary = (opts?: { from?: string; to?: string }) => 
 };
 
 /* ── Document relationship map (SAP-style flow diagram) ─────────────────── */
-export type FlowNodeType = 'so' | 'do' | 'si' | 'payment' | 'po' | 'grn' | 'pi' | 'dr' | 'pr';
+export type FlowNodeType =
+  | 'so' | 'do' | 'si' | 'payment' | 'po' | 'grn' | 'pi' | 'dr' | 'pr'
+  | 'cso' | 'cdo' | 'cdr' | 'pco' | 'pcr' | 'pcrn';
 export type FlowEdgeKind = 'full' | 'partial' | 'value' | 'payment';
 export type FlowNode = {
   key: string;

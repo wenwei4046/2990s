@@ -18,6 +18,7 @@ import {
   type CSSProperties,
 } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
   ArrowLeft, Pencil, Plus, Save, Undo2, ChevronDown, Ban, RotateCcw,
 } from 'lucide-react';
@@ -350,6 +351,7 @@ export const ConsignmentReturnDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[header.status] ?? ''}`}>
             {header.status.replace(/_/g, ' ')}
           </span>
+          <RelationshipMapButton type="cdr" id={id} />
           {isCancelled ? (
             <Button variant="primary" size="md" onClick={handleReopen} disabled={updateStatus.isPending}>
               <RotateCcw {...ICON} /><span>Reopen Return</span>

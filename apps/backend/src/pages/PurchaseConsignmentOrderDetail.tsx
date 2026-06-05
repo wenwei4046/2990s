@@ -39,6 +39,7 @@ import {
 } from '../lib/suppliers-queries';
 import { useWarehouses } from '../lib/inventory-queries';
 import { MoneyInput } from '../components/MoneyInput';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -144,6 +145,34 @@ export const PurchaseConsignmentOrderDetail = () => {
   }
 
   const visibleItems = items;
+
+  /* Per-line "Received" drill-down — which PC Receive took how much (backend
+     attaches `receipts` per item via pcoLineReceipts). Mirrors the PO detail. */
+  const renderReceived = (it: PoItemRow) => {
+    const row = it as PoItemRow & {
+      receipts?: Array<{ receiveNumber: string; qty: number; status: string }>;
+      received_qty?: number;
+    };
+    const receipts = row.receipts ?? [];
+    if (receipts.length === 0) return <span className={styles.muted}>—</span>;
+    const remaining = Math.max(0, (it.qty ?? 0) - (row.received_qty ?? 0));
+    return (
+      <div>
+        {receipts.map((r, ri) => (
+          <div key={ri} style={{ fontWeight: 600, whiteSpace: 'nowrap', fontSize: 'var(--fs-12)' }}>
+            {r.receiveNumber} <span className={styles.muted} style={{ fontWeight: 400 }}>×{r.qty}</span>
+          </div>
+        ))}
+        <div style={{
+          fontSize: 'var(--fs-11)', marginTop: 1,
+          color: remaining > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
+        }}>
+          {remaining > 0 ? `Balance ${remaining}` : 'Fully received'}
+        </div>
+      </div>
+    );
+  };
+
   const lineOf = (it: PoItemRow): LineDraft => lineDrafts[it.id] ?? lineSnapshot(it);
   const lineTotalOf = (it: PoItemRow): number => {
     if (!isEditing) return it.line_total_centi ?? 0;
@@ -234,6 +263,7 @@ export const PurchaseConsignmentOrderDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[po.status as PoStatus]}`}>
             {po.status.replace(/_/g, ' ')}
           </span>
+          <RelationshipMapButton type="pco" id={po.id} />
           {(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
             <Button variant="ghost" size="md"
               onClick={() => {
@@ -328,6 +358,7 @@ export const PurchaseConsignmentOrderDetail = () => {
                 <th className={styles.tableRight}>Disc</th>
                 <th className={styles.tableRight}>Total</th>
                 <th className={styles.tableRight}>Delivery</th>
+                {!isEditing && <th>Received</th>}
                 {isEditing && <th className={styles.tableRight}>Actions</th>}
               </tr>
             </thead>
@@ -403,6 +434,7 @@ export const PurchaseConsignmentOrderDetail = () => {
                         <td className={styles.tableRight}>{(it.discount_centi ?? 0) > 0 ? fmtRm(it.discount_centi, po.currency) : '—'}</td>
                         <td className={styles.priceCell}>{fmtRm(it.line_total_centi, po.currency)}</td>
                         <td className={styles.tableRight}>{it.delivery_date ?? '—'}</td>
+                        <td>{renderReceived(it)}</td>
                       </>
                     )}
                   </tr>

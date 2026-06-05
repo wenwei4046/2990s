@@ -17,7 +17,8 @@
 // ----------------------------------------------------------------------------
 
 import { useEffect, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Save, Ban, ChevronDown,
 } from 'lucide-react';
@@ -111,6 +112,7 @@ const lineSnapshot = (it: GrnItemRow): LineDraft => ({
 
 export const PurchaseConsignmentReceiveDetail = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const detail = usePurchaseConsignmentReceiveDetail(id ?? null);
   const updateHeader = useUpdatePurchaseConsignmentReceiveHeader();
   const updateItem = useUpdatePurchaseConsignmentReceiveItem();
@@ -248,6 +250,14 @@ export const PurchaseConsignmentReceiveDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[grn.status as string] ?? ''}`}>
             {STATUS_LABEL[grn.status as string] ?? String(grn.status)}
           </span>
+          <RelationshipMapButton type="pcr" id={grn.id} />
+          {grn.status === 'POSTED' && !isEditing && (
+            <Button variant="ghost" size="md"
+              onClick={() => navigate(`/purchase-consignment-return/new?fromPcReceive=${grn.id}`)}>
+              <FileText {...ICON} />
+              <span>Raise Return</span>
+            </Button>
+          )}
           {grn.status === 'POSTED' && !hasChildren && (
             <Button variant="ghost" size="md"
               onClick={() => {

@@ -21,7 +21,8 @@ import {
   forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
   type CSSProperties,
 } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
   ArrowLeft, FileText, Pencil, Plus, Save, Ban, RotateCcw, ChevronDown,
 } from 'lucide-react';
@@ -140,6 +141,7 @@ const draftFromItem = (it: CnItem): SoLineDraft => ({
 
 export const ConsignmentNoteDetail = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const detail = useConsignmentNoteDetail(id ?? null);
   const updateHeader = useUpdateConsignmentNoteHeader();
@@ -342,6 +344,13 @@ export const ConsignmentNoteDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[header.status] ?? ''}`}>
             {header.status.replace(/_/g, ' ')}
           </span>
+          <RelationshipMapButton type="cdo" id={id} />
+          {!isCancelled && !isEditing && (
+            <Button variant="ghost" size="md"
+              onClick={() => navigate(`/consignment-return/new?fromConsignmentNote=${id}`)}>
+              <FileText {...ICON} /><span>Create Consignment Return</span>
+            </Button>
+          )}
           {isCancelled ? (
             <Button variant="primary" size="md" onClick={handleReopen} disabled={updateStatus.isPending}>
               <RotateCcw {...ICON} /><span>Reopen Note</span>
