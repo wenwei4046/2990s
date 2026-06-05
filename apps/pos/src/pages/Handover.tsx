@@ -233,7 +233,7 @@ export const Handover = () => {
     // Block this step when a linked SO number was typed but is invalid — the
     // server would reject the order, so catch it here with a clear message.
     addons:    validateAddonsPayment(form) && !linkInvalid,
-    confirm:   validateConfirmPayment(form, subtotal, addonTotal),
+    confirm:   validateConfirmPayment(form, subtotal, addonTotal, deliveryFee.total),
     sign:      validateSign(form),
   };
 
@@ -498,7 +498,7 @@ export const Handover = () => {
                 }}
               />
             )}
-            {current.key === 'confirm'   && <ConfirmPaymentStep form={form} update={update} subtotal={subtotal} addonTotal={addonTotal} />}
+            {current.key === 'confirm'   && <ConfirmPaymentStep form={form} update={update} subtotal={subtotal} addonTotal={addonTotal} deliveryFeeTotal={deliveryFee.total} />}
             {current.key === 'sign'      && <SignConfirmStep   form={form} update={update} signatureRef={signatureRef} />}
 
             {serverError && <p className={styles.error}>{serverError}</p>}
@@ -509,7 +509,7 @@ export const Handover = () => {
               valid={validity[current.key]}
               submitting={createOrder.isPending || handoffToSo.isPending}
               paymentRecorded={form.paymentRecorded}
-              blockers={getStepBlockers(current.key, form, subtotal, addonTotal)}
+              blockers={getStepBlockers(current.key, form, subtotal, addonTotal, deliveryFee.total)}
               attempted={attempted}
               onPrev={goPrev}
               onNext={goNext}

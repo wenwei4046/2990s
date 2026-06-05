@@ -115,9 +115,11 @@ export const validateAddonsPayment = (f: HandoverForm): boolean => {
   return true;
 };
 
-export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonTotal: number): boolean => {
+export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonTotal: number, deliveryFeeTotal = 0): boolean => {
   if (f.paymentMethod === '') return false;  // method must be chosen (defense-in-depth — orchestrator step 5 already gates this)
-  const total = subtotal + addonTotal;
+  // The payable total is the WHOLE order — goods + add-ons + delivery — so the
+  // 50%-deposit floor and full-payment ceiling match the Order summary total.
+  const total = subtotal + addonTotal + deliveryFeeTotal;
   const halfTotal = Math.round(total / 2);
   if (f.amountPaid < halfTotal || f.amountPaid > total) return false;
   if (f.approvalCode.trim().length === 0) return false;
@@ -190,10 +192,11 @@ const addonsPaymentBlockers = (f: HandoverForm): string[] => {
   return [];
 };
 
-const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: number): string[] => {
+const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: number, deliveryFeeTotal = 0): string[] => {
   const b: string[] = [];
   if (!f.paymentMethod) b.push('Payment method missing');
-  const total = subtotal + addonTotal;
+  // Whole-order basis — goods + add-ons + delivery (matches the Order summary).
+  const total = subtotal + addonTotal + deliveryFeeTotal;
   const halfTotal = Math.round(total / 2);
   if (f.amountPaid < halfTotal) b.push(`Amount paid must be at least RM ${halfTotal.toLocaleString('en-MY')} (50% deposit)`);
   else if (f.amountPaid > total) b.push('Amount paid exceeds total');
@@ -215,6 +218,7 @@ export const getStepBlockers = (
   f: HandoverForm,
   subtotal: number,
   addonTotal: number,
+  deliveryFeeTotal = 0,
 ): string[] => {
   switch (key) {
     case 'customer': return customerBlockers(f);
@@ -222,7 +226,7 @@ export const getStepBlockers = (
     case 'emergency': return emergencyBlockers(f);
     case 'target':   return targetDateBlockers(f);
     case 'addons':   return addonsPaymentBlockers(f);
-    case 'confirm':  return confirmPaymentBlockers(f, subtotal, addonTotal);
+    case 'confirm':  return confirmPaymentBlockers(f, subtotal, addonTotal, deliveryFeeTotal);
     case 'sign':     return signBlockers(f);
   }
 };

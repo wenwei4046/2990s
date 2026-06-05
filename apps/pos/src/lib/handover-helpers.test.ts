@@ -146,6 +146,17 @@ describe('validateConfirmPayment', () => {
     };
     expect(validateConfirmPayment(f, 2990, 0)).toBe(false);
   });
+
+  it('the payable total INCLUDES delivery fee (goods 2990 + addon 80 + delivery 500 = 3570)', () => {
+    const base = { ...baseForm, paymentMethod: 'cash' as const, approvalCode: '123', paymentRecorded: true, slipUploadSessionId: 'sess' };
+    // Full payment must clear at the whole-order total (3570), not the
+    // goods+addon basis (3070) which previously capped it too low.
+    expect(validateConfirmPayment({ ...base, amountPaid: 3570 }, 2990, 80, 500)).toBe(true);
+    // A 50% deposit floor is now half of 3570 = 1785; 1535 (half of the old
+    // 3070 basis) is BELOW the floor and must be rejected.
+    expect(validateConfirmPayment({ ...base, amountPaid: 1785 }, 2990, 80, 500)).toBe(true);
+    expect(validateConfirmPayment({ ...base, amountPaid: 1535 }, 2990, 80, 500)).toBe(false);
+  });
 });
 
 describe('validateSign', () => {
