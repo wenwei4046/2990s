@@ -100,3 +100,34 @@ export function useCreateSoDropdownOption() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['so-dropdown-options'] }); },
   });
 }
+
+/* 2026-06-05 — edit/delete for full-mode (admin/super_admin) on the POS SO
+   Maintenance page. Mirrors Backend's useUpdateSoDropdownOption /
+   useDeleteSoDropdownOption verbatim; the page-level mode gate keeps these
+   out of add-only/view. */
+export function useUpdateSoDropdownOption() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }: {
+      id:        string;
+      value?:    string;
+      label?:    string;
+      sortOrder?: number;
+      active?:   boolean;
+    }) =>
+      authedFetch<{ option: SoDropdownOption }>(`/so-dropdown-options/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['so-dropdown-options'] }); },
+  });
+}
+
+export function useDeleteSoDropdownOption() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch<{ ok: true }>(`/so-dropdown-options/${id}`, { method: 'DELETE' }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['so-dropdown-options'] }); },
+  });
+}

@@ -87,3 +87,14 @@ export function useUpsertStateWarehouseMapping() {
     onSettled: () => { qc.invalidateQueries({ queryKey: ['state-warehouse-mappings'] }); },
   });
 }
+
+/* 2026-06-05 — Clear-mapping for full-mode (admin/super_admin) on the POS SO
+   Maintenance page. Mirrors Backend's useDeleteStateWarehouseMapping. */
+export function useDeleteStateWarehouseMapping() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ state }: { state: string }) =>
+      authedFetch(`/state-warehouse-mappings/${encodeURIComponent(state)}`, { method: 'DELETE' }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['state-warehouse-mappings'] }); },
+  });
+}

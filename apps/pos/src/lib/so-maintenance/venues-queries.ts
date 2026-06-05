@@ -69,3 +69,26 @@ export function useCreateVenue() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['venues'] }),
   });
 }
+
+/* 2026-06-05 — edit affordances for full-mode (admin/super_admin) on the POS
+   SO Maintenance page. Mirrors Backend's useUpdateVenue / useDeactivateVenue
+   verbatim; the page-level mode gate keeps these out of add-only/view. */
+export function useUpdateVenue() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: Partial<NewVenue> & { id: string }) =>
+      authedFetch<{ venue: VenueRow }>(`/venues/${id}`, {
+        method: 'PATCH', body: JSON.stringify(body),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['venues'] }),
+  });
+}
+
+export function useDeactivateVenue() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch<{ venue: VenueRow }>(`/venues/${id}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['venues'] }),
+  });
+}

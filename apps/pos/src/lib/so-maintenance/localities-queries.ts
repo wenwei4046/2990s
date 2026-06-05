@@ -97,6 +97,33 @@ export const useCreateLocality = () => {
   });
 };
 
+/* 2026-06-05 — edit/delete for full-mode (admin/super_admin) on the POS SO
+   Maintenance page. Mirrors Backend's useUpdateLocality / useDeleteLocality
+   verbatim; the page-level mode gate keeps these out of add-only/view. */
+export const useUpdateLocality = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }: {
+      id: string;
+      state?: string; stateCode?: string; city?: string; postcode?: string;
+      country?: string;
+      /* warehouseId: uuid sets the override; '' or null clears it. */
+      warehouseId?: string | null;
+    }) =>
+      authedFetch(`/localities/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['my_localities'] }); },
+  });
+};
+
+export const useDeleteLocality = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch(`/localities/${id}`, { method: 'DELETE' }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['my_localities'] }); },
+  });
+};
+
 export const distinctStates = (rows: LocalityRow[]): string[] => {
   const s = new Set<string>();
   for (const r of rows) s.add(r.state);
