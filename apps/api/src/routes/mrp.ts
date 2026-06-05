@@ -41,7 +41,7 @@
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
-import { computeVariantKey, buildVariantSummary, isServiceLine, type VariantAttrs } from '@2990s/shared';
+import { computeVariantKey, buildVariantSummary, isServiceLine, splitSofaCode, type VariantAttrs } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import { soDeliverableRemaining } from './delivery-orders-mfg';
 import type { Env, Variables } from '../env';
@@ -570,7 +570,13 @@ export async function computeMrp(
     for (const d of rows) {
       const v = (d.variants ?? {}) as Record<string, unknown>;
       const cells = Array.isArray(v.cells) ? (v.cells as Array<{ moduleId?: string }>) : [];
-      const modules = cells.map((c) => sstr(c.moduleId)).filter(Boolean);
+      /* SO-SKU spec P3 — split module lines (and Backend hand-opened lines)
+         carry no cells[]; the line ITSELF is one module. Derive its code from
+         the SKU so the set-composition label stays filled. Display only — the
+         allocation math above pools by (warehouse, item_code, variant_key). */
+      const modules = cells.length > 0
+        ? cells.map((c) => sstr(c.moduleId)).filter(Boolean)
+        : [sstr(splitSofaCode(d.item_code).sizeCode)].filter(Boolean);
       const colour = [sstr(v.fabricCode), sstr(v.colorCode) || sstr(v.colourCode)].filter(Boolean).join(' ');
       const eff = effQtyOf(d);                        // set qty still to fulfil (ordered − delivered + returned)
       const prod = prodByCode.get(d.item_code);

@@ -1462,12 +1462,20 @@ mfgSalesOrders.post('/', async (c) => {
        payloads (no cells / unknown base model) keep the legacy single line. */
     if (group === 'sofa') {
       const product = lineProducts[idx] ?? null;
+      const modulePrices = sofaModulePricesByIdx.get(idx) ?? null;
+      if (!modulePrices && product?.base_model) {
+        // Catalog gap — split degrades to an equal-price split. Surface it so
+        // ops can fix the Model's module SKU prices instead of silently
+        // booking approximate per-line figures (Σ stays exact regardless).
+        // eslint-disable-next-line no-console
+        console.warn(`[so-create] no module prices for ${product.base_model} — sofa split uses equal weights`);
+      }
       const split = splitSofaBuildIntoModuleLines({
         baseModel: product?.base_model ?? null,
         cells: (it.variants as { cells?: unknown } | null)?.cells,
         buildUnitPriceSen: unit,
         buildUnitCostSen: unitCost,
-        modulePrices: sofaModulePricesByIdx.get(idx) ?? null,
+        modulePrices,
       });
       if (split && split.length > 0) {
         const buildKey = `build-${idx + 1}`;
