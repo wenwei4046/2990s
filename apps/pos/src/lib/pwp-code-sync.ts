@@ -173,14 +173,17 @@ export function usePwpCodeSync(): void {
           for (const l of stale) {
             const c = l.config as { pwpCode?: string; category?: string; modelId?: string | null };
             const code = c.pwpCode!;
-            if (!byCode.has(code)) {
+            // One code = one redemption (Loo 2026-06-06) — a cross-order code
+            // already kept by an earlier line must NOT survive on this one too
+            // (carts saved before the apply-time dup gate can carry doubles).
+            if (!byCode.has(code) && !used.has(code)) {
               try {
                 const v = await validatePwpCode({
                   code,
                   rewardCategory: String(c.category ?? '').toUpperCase(),
                   rewardModelId: c.modelId ?? null,
                 });
-                if (v.valid) continue;  // live cross-order voucher — leave it
+                if (v.valid) { used.add(code); continue; }  // live cross-order voucher — leave it
               } catch { continue; }     // can't verify — don't touch the line
             }
             const replacement = liveReserved.find((rc) => !used.has(rc.code) && eligibleFor(l.config, rc));
