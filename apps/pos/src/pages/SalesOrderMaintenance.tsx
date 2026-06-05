@@ -17,6 +17,14 @@
 // sales director 可以添加,不能 edit". outlet_manager dropped from add-only
 // down to view-only; only sales_director adds, only admin edits.
 //
+// 2026-06-05 — full mode now actually delivers the Backend edit surface.
+// The original port shipped read tables + Add forms only, so admins saw
+// "(identical to Backend)" in this comment but no Edit buttons on screen.
+// Ported, all gated on canEdit(mode) === 'full': Venues edit/deactivate,
+// L2 country-move + warehouse assign + notes + Clear, L3 city warehouse
+// override (bulk stamp), L4 postcode delete, Dropdowns inline edit /
+// Active toggle / delete. add-only and view behaviour is unchanged.
+//
 // Per-section behaviour summary:
 //
 //   Venues — view: read-only table; add-only: + add-venue row; full: identical
@@ -35,27 +43,31 @@
 //   - No new API endpoints; no new schema; copied query plumbing only.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { ArrowLeft, Plus, ChevronDown, ChevronRight, MapPin } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronRight, MapPin } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useStaff } from '../lib/staff';
 import {
-  useVenues, useCreateVenue,
+  useVenues, useCreateVenue, useUpdateVenue, useDeactivateVenue,
   type VenueRow,
 } from '../lib/so-maintenance/venues-queries';
 import {
   useStateWarehouseMappings,
+  useUpsertStateWarehouseMapping,
+  useDeleteStateWarehouseMapping,
 } from '../lib/so-maintenance/state-warehouse-queries';
 import { useWarehouses } from '../lib/so-maintenance/warehouses-queries';
 import {
   useLocalities, distinctStates,
-  useCreateLocality,
+  useCreateLocality, useUpdateLocality, useDeleteLocality,
   type LocalityRow,
 } from '../lib/so-maintenance/localities-queries';
 import {
   useAllSoDropdownOptions,
   useCreateSoDropdownOption,
+  useUpdateSoDropdownOption,
+  useDeleteSoDropdownOption,
   type SoDropdownCategory,
   type SoDropdownOption,
 } from '../lib/so-maintenance/so-dropdown-options-queries';
@@ -176,6 +188,12 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
   const warehouses = useWarehouses();
   const localities = useLocalities();
   const createLoc = useCreateLocality();
+  /* Full-mode edit mutations (2026-06-05) — only reachable through UI that
+     renders behind canEdit(mode). */
+  const upsert = useUpsertStateWarehouseMapping();
+  const removeMapping = useDeleteStateWarehouseMapping();
+  const updateLoc = useUpdateLocality();
+  const deleteLoc = useDeleteLocality();
 
   const states = useMemo(() => distinctStates(localities.data ?? []), [localities.data]);
   // suppress unused — kept so the read pattern matches Backend in case a
@@ -189,6 +207,25 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
     }
     return m;
   }, [mappings.data]);
+
+  /* Optimistic mirror of the warehouse-per-state selection (Backend Task
+     #120) — without it the controlled <select> snaps back to the prior
+     value during the in-flight window and the change looks ignored. */
+  const [pendingByState, setPendingByState] = useState<Map<string, string | null>>(new Map());
+  useEffect(() => {
+    // Once the persisted mapping matches our optimistic value, drop the override.
+    if (pendingByState.size === 0) return;
+    const next = new Map(pendingByState);
+    let changed = false;
+    for (const [state, optimistic] of pendingByState) {
+      const persisted = mappedByState.get(state)?.warehouseId ?? null;
+      if (persisted === optimistic) {
+        next.delete(state);
+        changed = true;
+      }
+    }
+    if (changed) setPendingByState(next);
+  }, [mappedByState, pendingByState]);
 
   const [geoView, setGeoView]                 = useState<'country' | 'state' | 'city' | 'postcode'>('country');
   const [selectedCountry, setSelectedCountry] = useState<string>('');
@@ -300,6 +337,44 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
       },
       onError: (err) => window.alert(String((err as Error).message ?? err)),
     });
+  };
+
+  /* Full-mode only: bulk-stamp every locality under (state, city) with the
+     same warehouse_id — mirrors Backend's per-city override semantics. */
+  const setCityWarehouse = async (state: string, city: string, warehouseId: string | null) => {
+    const rows = stateLocalities.filter((r) => r.city === city && r.id);
+    if (rows.length === 0) return;
+    try {
+      await Promise.all(rows.map((r) =>
+        updateLoc.mutateAsync({
+          id: r.id!,
+          warehouseId: warehouseId ?? '',
+        }),
+      ));
+    } catch (err) {
+      window.alert(`Save failed partway: ${String((err as Error).message ?? err)}`);
+    }
+  };
+
+  /* Full-mode only: move every locality under a state to a new country in
+     one shot (parallel PATCHes, same as Backend). */
+  const moveStateToCountry = async (state: string, fromCountry: string, toCountry: string) => {
+    const trimmed = toCountry.trim();
+    if (!trimmed || trimmed === fromCountry) return;
+    const rows = (localities.data ?? []).filter(
+      (r) => (r.country || 'Malaysia') === fromCountry && r.state === state && r.id,
+    );
+    if (rows.length === 0) return;
+    if (!confirm(
+      `Move all ${rows.length} localities under ${state} from "${fromCountry}" to "${trimmed}"?`,
+    )) return;
+    try {
+      await Promise.all(rows.map((r) =>
+        updateLoc.mutateAsync({ id: r.id!, country: trimmed }),
+      ));
+    } catch (err) {
+      window.alert(`Move failed partway: ${String((err as Error).message ?? err)}`);
+    }
   };
 
   /* Navigation helpers — drill is just navigation; not a mutation. Available
@@ -423,8 +498,10 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
         </div>
       )}
 
-      {/* L2 — States. Warehouse picker + Country edit + Clear button hidden
-          unless mode==='full' (those are edits, not adds). */}
+      {/* L2 — States. Warehouse picker + Notes + Country edit + Clear button
+          hidden unless mode==='full' (those are edits, not adds). Full mode
+          mirrors Backend: inline country move, warehouse assign with
+          optimistic mirror, notes on blur, Clear mapping action. */}
       {geoView === 'state' && (
         <div className={styles.tableCard}>
           {(() => {
@@ -442,14 +519,18 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
                     <th style={{ width: 80 }}>Code</th>
                     <th style={{ width: 140 }}>Country</th>
                     {canEdit(mode) && <th>Warehouse</th>}
+                    {canEdit(mode) && <th>Notes</th>}
                     <th style={{ width: 80, textAlign: 'right' }}>Cities</th>
                     <th style={{ width: 90, textAlign: 'right' }}>Postcodes</th>
+                    {canEdit(mode) && <th aria-label="actions" style={{ width: 70 }} />}
                   </tr>
                 </thead>
                 <tbody>
                   {statesInCountry.map((s) => {
                     const current = mappedByState.get(s.state);
-                    const wh = (warehouses.data ?? []).find((w) => w.id === current?.warehouseId);
+                    const displayWarehouseId = pendingByState.has(s.state)
+                      ? pendingByState.get(s.state) ?? ''
+                      : current?.warehouseId ?? '';
                     return (
                       <tr
                         key={s.state}
@@ -460,12 +541,102 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
                         <td style={{ cursor: 'pointer' }}>
                           <code className={styles.code}>{s.stateCode}</code>
                         </td>
-                        <td>{s.country}</td>
+                        <td onDoubleClick={(e) => e.stopPropagation()}>
+                          {canEdit(mode) ? (
+                            <input
+                              className={styles.input}
+                              defaultValue={s.country}
+                              disabled={updateLoc.isPending}
+                              onBlur={(e) => moveStateToCountry(s.state, s.country, e.target.value)}
+                              aria-label={`Country for ${s.state}`}
+                            />
+                          ) : s.country}
+                        </td>
                         {canEdit(mode) && (
-                          <td>{wh ? `${wh.code} · ${wh.name}` : '—'}</td>
+                          <td onDoubleClick={(e) => e.stopPropagation()}>
+                            <select
+                              className={styles.input}
+                              value={displayWarehouseId}
+                              onChange={(e) => {
+                                const warehouseId = e.target.value || null;
+                                setPendingByState((m) => {
+                                  const next = new Map(m);
+                                  next.set(s.state, warehouseId);
+                                  return next;
+                                });
+                                upsert.mutate(
+                                  { state: s.state, warehouseId, notes: current?.notes ?? null },
+                                  {
+                                    onError: (err) => {
+                                      setPendingByState((m) => {
+                                        const next = new Map(m);
+                                        next.delete(s.state);
+                                        return next;
+                                      });
+                                      window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+                                    },
+                                  },
+                                );
+                              }}
+                              aria-label={`Warehouse for ${s.state}`}
+                            >
+                              <option value="">— Unassigned —</option>
+                              {(warehouses.data ?? []).filter((w) => w.is_active).map((w) => (
+                                <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+                              ))}
+                            </select>
+                          </td>
+                        )}
+                        {canEdit(mode) && (
+                          <td onDoubleClick={(e) => e.stopPropagation()}>
+                            <input
+                              className={styles.input}
+                              defaultValue={current?.notes ?? ''}
+                              key={`${s.state}-${current?.notes ?? ''}`}
+                              placeholder="Optional"
+                              onBlur={(e) => {
+                                const notes = e.target.value.trim() || null;
+                                if ((current?.notes ?? null) === notes) return;
+                                upsert.mutate(
+                                  { state: s.state, warehouseId: current?.warehouseId ?? null, notes },
+                                  {
+                                    onError: (err) => window.alert(`Notes save failed: ${err instanceof Error ? err.message : String(err)}`),
+                                  },
+                                );
+                              }}
+                              aria-label={`Notes for ${s.state}`}
+                            />
+                          </td>
                         )}
                         <td style={{ textAlign: 'right', cursor: 'pointer' }}>{s.cities.size}</td>
                         <td style={{ textAlign: 'right', cursor: 'pointer' }}>{s.postcodeCount}</td>
+                        {canEdit(mode) && (
+                          <td onDoubleClick={(e) => e.stopPropagation()}>
+                            {current && (
+                              <button
+                                type="button"
+                                className={styles.editBtn}
+                                disabled={removeMapping.isPending}
+                                onClick={() => removeMapping.mutate(
+                                  { state: s.state },
+                                  {
+                                    onSuccess: () => {
+                                      setPendingByState((m) => {
+                                        const next = new Map(m);
+                                        next.delete(s.state);
+                                        return next;
+                                      });
+                                    },
+                                    onError: (err) => window.alert(`Clear failed: ${err instanceof Error ? err.message : String(err)}`),
+                                  },
+                                )}
+                                aria-label={`Clear warehouse for ${s.state}`}
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     );
                   })}
@@ -503,10 +674,11 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
             <Button
               variant="primary"
               size="md"
-              disabled={createLoc.isPending}
+              disabled={createLoc.isPending || upsert.isPending}
               onClick={async () => {
                 const state = newState.trim();
                 const stateCode = newStateCode.trim().toUpperCase();
+                const whId = newCountry.trim(); // repurposed as the new-state warehouseId picker; '' = none
                 if (!state || !stateCode) {
                   window.alert('State name and code are required.');
                   return;
@@ -515,14 +687,22 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
                   /* Seed placeholder locality so the state surfaces in L2.
                      Add-only mode INTENTIONALLY skips the warehouse upsert —
                      that PUT is an edit on state_warehouse_mappings and the
-                     gate forbids edits. Sales_director / outlet_manager who
-                     want a default warehouse can ask admin to assign it. */
+                     gate forbids edits. Full mode (2026-06-05) honours the
+                     picker, same as Backend. */
                   await createLoc.mutateAsync({
                     state, stateCode, city: '—', postcode: '—',
                     country: selectedCountry || 'Malaysia',
                   });
+                  if (canEdit(mode) && whId) {
+                    await new Promise<void>((resolve, reject) => {
+                      upsert.mutate(
+                        { state, warehouseId: whId, notes: null },
+                        { onSuccess: () => resolve(), onError: reject },
+                      );
+                    });
+                  }
                   setNewState(''); setNewStateCode(''); setNewCountry('');
-                  window.alert(`Added ${state}.`);
+                  window.alert(`Added ${state}${canEdit(mode) && whId ? ' with default warehouse' : ''}.`);
                 } catch (err) {
                   window.alert(`Add failed: ${err instanceof Error ? err.message : String(err)}`);
                 }
@@ -535,24 +715,28 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
       )}
 
       {/* L3 — Cities. Warehouse override column hidden in non-full modes
-          (commander 2026-05-28 — override is an edit, not an add). */}
+          (commander 2026-05-28 — override is an edit, not an add). Full
+          mode (2026-06-05) gets the Backend bulk-stamp select: changing it
+          stamps every postcode under the city; blank = follow state. */}
       {geoView === 'city' && (
         <div className={styles.tableCard}>
           {citiesInState.length === 0 ? (
             <div className={styles.empty}>No cities in {selectedState}{canAdd(mode) ? ' — add one below.' : '.'}</div>
-          ) : (
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th>City</th>
-                  {canEdit(mode) && <th>Warehouse override</th>}
-                  <th style={{ width: 130, textAlign: 'right' }}>Postcodes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {citiesInState.map((c) => {
-                  const wh = (warehouses.data ?? []).find((w) => w.id === c.warehouseId);
-                  return (
+          ) : (() => {
+            const stateMappingId = mappedByState.get(selectedState)?.warehouseId ?? null;
+            const stateWh = (warehouses.data ?? []).find((w) => w.id === stateMappingId);
+            const stateWhLabel = stateWh ? `${stateWh.code} · ${stateWh.name}` : '— state default unset —';
+            return (
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>City</th>
+                    {canEdit(mode) && <th>Warehouse (override · blank = follow state)</th>}
+                    <th style={{ width: 130, textAlign: 'right' }}>Postcodes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {citiesInState.map((c) => (
                     <tr
                       key={c.city}
                       onDoubleClick={() => drillIntoCity(c.city)}
@@ -560,19 +744,35 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
                     >
                       <td style={{ cursor: 'pointer' }}><strong>{c.city}</strong></td>
                       {canEdit(mode) && (
-                        <td>
-                          {c.mixed ? '(mixed)'
-                            : wh ? `${wh.code} · ${wh.name}`
-                            : '— follows state —'}
+                        <td onDoubleClick={(e) => e.stopPropagation()}>
+                          <select
+                            className={styles.input}
+                            value={c.mixed ? '__mixed__' : (c.warehouseId ?? '')}
+                            disabled={updateLoc.isPending}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (v === '__mixed__') return; // sentinel
+                              setCityWarehouse(selectedState, c.city, v || null);
+                            }}
+                            aria-label={`Warehouse override for ${c.city}`}
+                          >
+                            {c.mixed && <option value="__mixed__">(mixed)</option>}
+                            {/* Empty value = inherit state; display the
+                                inherited warehouse name directly. */}
+                            <option value="">{stateWhLabel}</option>
+                            {(warehouses.data ?? []).filter((w) => w.is_active).map((w) => (
+                              <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+                            ))}
+                          </select>
                         </td>
                       )}
                       <td style={{ textAlign: 'right', cursor: 'pointer' }}>{c.postcodeCount}</td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
+                  ))}
+                </tbody>
+              </table>
+            );
+          })()}
         </div>
       )}
 
@@ -603,12 +803,34 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
               <thead>
                 <tr>
                   <th>Postcode</th>
+                  {canEdit(mode) && <th aria-label="actions" style={{ width: 70 }} />}
                 </tr>
               </thead>
               <tbody>
                 {postcodeRows.map((r) => (
                   <tr key={r.id ?? `${r.state}-${r.city}-${r.postcode}`}>
                     <td><code className={styles.code}>{r.postcode}</code></td>
+                    {canEdit(mode) && (
+                      <td>
+                        {r.id && (
+                          <button
+                            type="button"
+                            className={styles.editBtn}
+                            disabled={deleteLoc.isPending}
+                            onClick={() => {
+                              if (confirm(`Delete ${selectedCity} / ${r.postcode}?`)) {
+                                deleteLoc.mutate(r.id!, {
+                                  onError: (err) => window.alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),
+                                });
+                              }
+                            }}
+                            aria-label="Delete postcode"
+                          >
+                            <Trash2 size={14} strokeWidth={1.75} />
+                          </button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -730,8 +952,48 @@ const DropdownCategoryCard = ({
 }) => {
   const [expanded, setExpanded] = useState(true);
   const createOpt = useCreateSoDropdownOption();
+  const updateOpt = useUpdateSoDropdownOption();
+  const deleteOpt = useDeleteSoDropdownOption();
   const [newValue, setNewValue] = useState('');
   const [newLabel, setNewLabel] = useState('');
+
+  /* Full-mode per-row edit buffers (uncommitted edits) — keyed by id.
+     Mirrors Backend's commit-on-blur/Enter pattern. */
+  const [edits, setEdits] = useState<Record<string, Partial<{ value: string; label: string; sortOrder: number }>>>({});
+
+  const commitRow = (row: SoDropdownOption) => {
+    const buf = edits[row.id];
+    if (!buf) return;
+    const patch: Parameters<typeof updateOpt.mutate>[0] = { id: row.id };
+    if (buf.value     !== undefined && buf.value     !== row.value)     patch.value     = buf.value;
+    if (buf.label     !== undefined && buf.label     !== row.label)     patch.label     = buf.label;
+    if (buf.sortOrder !== undefined && buf.sortOrder !== row.sortOrder) patch.sortOrder = buf.sortOrder;
+    if (Object.keys(patch).length === 1) {
+      // no real change — just clear the buffer
+      setEdits((e) => { const next = { ...e }; delete next[row.id]; return next; });
+      return;
+    }
+    updateOpt.mutate(patch, {
+      onSuccess: () => {
+        setEdits((e) => { const next = { ...e }; delete next[row.id]; return next; });
+      },
+      onError: (err) => window.alert(`Update failed: ${(err as Error).message ?? err}`),
+    });
+  };
+
+  const toggleActive = (row: SoDropdownOption) => {
+    updateOpt.mutate(
+      { id: row.id, active: !row.active },
+      { onError: (err) => window.alert(`Update failed: ${(err as Error).message ?? err}`) },
+    );
+  };
+
+  const removeRow = (row: SoDropdownOption) => {
+    if (!confirm(`Delete "${row.label}" from ${title}? Historical SOs that reference "${row.value}" stay valid; this just removes the option from new dropdowns.`)) return;
+    deleteOpt.mutate(row.id, {
+      onError: (err) => window.alert(`Delete failed: ${(err as Error).message ?? err}`),
+    });
+  };
 
   const addRow = () => {
     const value = newValue.trim();
@@ -805,18 +1067,92 @@ const DropdownCategoryCard = ({
                   {/* Active column only renders for full-mode admins — in
                       add-only / view modes a toggle would be an edit. */}
                   {canEdit(mode) && <th style={{ width: 80 }}>Active</th>}
+                  {canEdit(mode) && <th style={{ width: 60 }} aria-label="actions" />}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
-                  <tr key={row.id}>
-                    <td><code className={styles.code}>{row.value}</code></td>
-                    <td>{row.label}</td>
-                    {canEdit(mode) && (
-                      <td>{row.active ? 'Yes' : 'No'}</td>
-                    )}
-                  </tr>
-                ))}
+                {rows.map((row) => {
+                  /* add-only / view keep the original read-only render. */
+                  if (!canEdit(mode)) {
+                    return (
+                      <tr key={row.id}>
+                        <td><code className={styles.code}>{row.value}</code></td>
+                        <td>{row.label}</td>
+                      </tr>
+                    );
+                  }
+                  const buf = edits[row.id] ?? {};
+                  const curValue     = buf.value     ?? row.value;
+                  const curLabel     = buf.label     ?? row.label;
+                  const curSortOrder = buf.sortOrder ?? row.sortOrder;
+                  const dirty =
+                    curValue     !== row.value ||
+                    curLabel     !== row.label ||
+                    curSortOrder !== row.sortOrder;
+                  return (
+                    <tr key={row.id}>
+                      <td>
+                        <input
+                          className={styles.input}
+                          value={curValue}
+                          disabled={updateOpt.isPending}
+                          onChange={(e) => setEdits((s) => ({
+                            ...s, [row.id]: { ...s[row.id], value: e.target.value },
+                          }))}
+                          onBlur={() => commitRow(row)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') commitRow(row); }}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className={styles.input}
+                          value={curLabel}
+                          disabled={updateOpt.isPending}
+                          onChange={(e) => setEdits((s) => ({
+                            ...s, [row.id]: { ...s[row.id], label: e.target.value },
+                          }))}
+                          onBlur={() => commitRow(row)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') commitRow(row); }}
+                        />
+                      </td>
+                      <td>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <input
+                            type="checkbox"
+                            checked={row.active}
+                            disabled={updateOpt.isPending}
+                            onChange={() => toggleActive(row)}
+                          />
+                          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                            {row.active ? 'Yes' : 'No'}
+                          </span>
+                        </label>
+                      </td>
+                      <td>
+                        {dirty && (
+                          <button
+                            type="button"
+                            className={styles.editBtn}
+                            disabled={updateOpt.isPending}
+                            onClick={() => commitRow(row)}
+                            style={{ marginRight: 4 }}
+                          >
+                            Save
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className={styles.editBtn}
+                          disabled={deleteOpt.isPending}
+                          onClick={() => removeRow(row)}
+                          aria-label="Delete option"
+                        >
+                          <Trash2 size={14} strokeWidth={1.75} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -861,15 +1197,44 @@ const DropdownCategoryCard = ({
 
 /* ════════════════════════════════════════════════════════════════════════
    VenuesSection — read in every mode; add-venue form in add-only + full;
-   Edit + Deactivate buttons only in full.
+   Edit + Deactivate buttons only in full (ported 2026-06-05 — the original
+   port declared this contract but never rendered the buttons).
    ════════════════════════════════════════════════════════════════════════ */
 
 const VenuesSection = ({ mode }: { mode: MaintenanceMode }) => {
   const venues = useVenues({ includeInactive: true });
   const create = useCreateVenue();
+  const update = useUpdateVenue();
+  const deactivate = useDeactivateVenue();
 
   const [newName, setNewName] = useState('');
   const [newAddress, setNewAddress] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', address: '', active: true });
+
+  const startEdit = (v: VenueRow) => {
+    setEditingId(v.id);
+    setEditForm({ name: v.name, address: v.address ?? '', active: v.active });
+  };
+
+  const saveEdit = () => {
+    if (!editingId) return;
+    if (!editForm.name.trim()) { window.alert('Name required.'); return; }
+    update.mutate(
+      { id: editingId, name: editForm.name.trim(), address: editForm.address.trim() || null, active: editForm.active },
+      {
+        onSuccess: () => setEditingId(null),
+        onError: (e) => window.alert(`Update failed: ${(e as Error).message}`),
+      },
+    );
+  };
+
+  const removeVenue = (v: VenueRow) => {
+    if (!confirm(`Deactivate venue "${v.name}"? Existing SOs that reference it are kept; the venue just hides from pickers.`)) return;
+    deactivate.mutate(v.id, {
+      onError: (e) => window.alert(`Deactivate failed: ${(e as Error).message}`),
+    });
+  };
 
   const addVenue = () => {
     if (!newName.trim()) { window.alert('Name required.'); return; }
@@ -908,34 +1273,89 @@ const VenuesSection = ({ mode }: { mode: MaintenanceMode }) => {
               <th>Name</th>
               <th>Address</th>
               <th style={{ width: 110 }}>Status</th>
+              {canEdit(mode) && <th aria-label="actions" style={{ width: 170 }} />}
             </tr>
           </thead>
           <tbody>
             {venues.isLoading && (
-              <tr><td colSpan={3} className={styles.empty}>Loading…</td></tr>
+              <tr><td colSpan={canEdit(mode) ? 4 : 3} className={styles.empty}>Loading…</td></tr>
             )}
             {!venues.isLoading && (venues.data ?? []).length === 0 && (
-              <tr><td colSpan={3} className={styles.empty}>
+              <tr><td colSpan={canEdit(mode) ? 4 : 3} className={styles.empty}>
                 No venues yet{canAdd(mode) ? ' — add one below.' : '.'}
               </td></tr>
             )}
-            {(venues.data ?? []).map((v: VenueRow) => (
-              <tr key={v.id}>
-                <td><strong>{v.name}</strong></td>
-                <td>{v.address ?? '—'}</td>
-                <td>
-                  <span style={{
-                    display: 'inline-block', padding: '3px 10px',
-                    borderRadius: 999, fontSize: 'var(--fs-11)', fontWeight: 600,
-                    letterSpacing: '0.08em', textTransform: 'uppercase',
-                    background: v.active ? 'rgba(47, 93, 79, 0.12)' : 'rgba(34, 31, 32, 0.06)',
-                    color: v.active ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)',
-                  }}>
-                    {v.active ? 'Active' : 'Inactive'}
-                  </span>
-                </td>
-              </tr>
-            ))}
+            {(venues.data ?? []).map((v: VenueRow) => {
+              const isEditing = canEdit(mode) && editingId === v.id;
+              return (
+                <tr key={v.id}>
+                  <td>
+                    {isEditing ? (
+                      <input
+                        className={styles.input}
+                        value={editForm.name}
+                        onChange={(e) => setEditForm((s) => ({ ...s, name: e.target.value }))}
+                        aria-label="Venue name"
+                      />
+                    ) : (
+                      <strong>{v.name}</strong>
+                    )}
+                  </td>
+                  <td>
+                    {isEditing ? (
+                      <input
+                        className={styles.input}
+                        value={editForm.address}
+                        onChange={(e) => setEditForm((s) => ({ ...s, address: e.target.value }))}
+                        placeholder="Optional address"
+                        aria-label="Venue address"
+                      />
+                    ) : (v.address ?? '—')}
+                  </td>
+                  <td>
+                    {isEditing ? (
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <input
+                          type="checkbox"
+                          checked={editForm.active}
+                          onChange={(e) => setEditForm((s) => ({ ...s, active: e.target.checked }))}
+                        />
+                        <span>{editForm.active ? 'Active' : 'Inactive'}</span>
+                      </label>
+                    ) : (
+                      <span style={{
+                        display: 'inline-block', padding: '3px 10px',
+                        borderRadius: 999, fontSize: 'var(--fs-11)', fontWeight: 600,
+                        letterSpacing: '0.08em', textTransform: 'uppercase',
+                        background: v.active ? 'rgba(47, 93, 79, 0.12)' : 'rgba(34, 31, 32, 0.06)',
+                        color: v.active ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)',
+                      }}>
+                        {v.active ? 'Active' : 'Inactive'}
+                      </span>
+                    )}
+                  </td>
+                  {canEdit(mode) && (
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {isEditing ? (
+                        <>
+                          <Button variant="ghost" size="sm" onClick={() => setEditingId(null)}>Cancel</Button>
+                          <Button variant="primary" size="sm" onClick={saveEdit} disabled={update.isPending}>Save</Button>
+                        </>
+                      ) : (
+                        <>
+                          <Button variant="ghost" size="sm" onClick={() => startEdit(v)}>Edit</Button>
+                          {v.active && (
+                            <Button variant="ghost" size="sm" onClick={() => removeVenue(v)} aria-label={`Deactivate ${v.name}`}>
+                              <Trash2 size={14} strokeWidth={1.75} />
+                            </Button>
+                          )}
+                        </>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         {canAdd(mode) && (
