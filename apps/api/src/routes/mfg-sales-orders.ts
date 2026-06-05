@@ -2205,10 +2205,63 @@ mfgSalesOrders.post('/', async (c) => {
   const pwpCartLineKeys = Array.from(new Set(
     items.map((it) => String((it as { cartLineKey?: string } | null)?.cartLineKey ?? '')).filter(Boolean),
   ));
+  /* Promo is ONE-WAY (Loo 2026-06-06, the PWP-7615UAWC incident) — a reward
+     line (bought with a code, variants.pwpCode) must never mint a FREE
+     voucher of its own: with a rule whose trigger set == reward set (buy
+     ARRUS → free ARRUS) the free unit would fund the next free unit, forever.
+     The POS reconciler + /pwp-codes/reserve already refuse to mint these;
+     this backstop kills anything reserved before that gate (old carts /
+     tampered clients) instead of carrying it forward as an AVAILABLE voucher. */
+  const rewardLineKeys = Array.from(new Set(
+    items
+      .filter((it) => String((it?.variants as { pwpCode?: string | null } | null)?.pwpCode ?? '').trim() !== '')
+      .map((it) => String((it as { cartLineKey?: string } | null)?.cartLineKey ?? ''))
+      .filter(Boolean),
+  ));
+  if (rewardLineKeys.length > 0) {
+    await sb.from('pwp_codes').delete()
+      .eq('owner_staff_id', user.id).eq('status', 'RESERVED').eq('type', 'promo')
+      .in('cart_line_key', rewardLineKeys);
+  }
   if (pwpCartLineKeys.length > 0) {
     await sb.from('pwp_codes').update({
       status: 'AVAILABLE', source_doc_no: docNo, customer_id: orderCustomerId, updated_at: new Date().toISOString(),
     }).eq('owner_staff_id', user.id).eq('status', 'RESERVED').in('cart_line_key', pwpCartLineKeys);
+  }
+
+  /* Re-stamp trigger_item_code (Loo 2026-06-06, the (K)→(Q) drift) — the
+     snapshot is written ONCE at reserve time; a size edit keeps the cart line
+     key but books a new item_code, so the printed SO's trigger / unused-
+     voucher annotations (matched by item_code in shared/so-line-display.ts)
+     silently drop. One batched read, then one update per distinct lead code
+     that actually drifted (a sofa SET splits one key across module rows —
+     the LEAD row's item_code is what the display group matches). Covers both
+     USED (claimed above — cart_line_key survives the claim) and AVAILABLE. */
+  if (pwpCartLineKeys.length > 0) {
+    const leadItemCodeByKey = new Map<string, string>();
+    for (const it of items) {
+      const k = String((it as { cartLineKey?: string } | null)?.cartLineKey ?? '');
+      const lineCode = String((it as { itemCode?: string } | null)?.itemCode ?? '');
+      if (k && lineCode && !leadItemCodeByKey.has(k)) leadItemCodeByKey.set(k, lineCode);
+    }
+    const { data: stampRows } = await sb.from('pwp_codes')
+      .select('code, cart_line_key, trigger_item_code')
+      .eq('owner_staff_id', user.id)
+      .in('cart_line_key', pwpCartLineKeys);
+    const codesByLead = new Map<string, string[]>();
+    for (const r of ((stampRows ?? []) as Array<{ code: string; cart_line_key: string | null; trigger_item_code: string | null }>)) {
+      const lead = r.cart_line_key ? leadItemCodeByKey.get(r.cart_line_key) : undefined;
+      if (lead && r.trigger_item_code !== lead) {
+        const arr = codesByLead.get(lead) ?? [];
+        arr.push(r.code);
+        codesByLead.set(lead, arr);
+      }
+    }
+    for (const [lead, codes] of codesByLead) {
+      await sb.from('pwp_codes')
+        .update({ trigger_item_code: lead, updated_at: new Date().toISOString() })
+        .in('code', codes);
+    }
   }
 
   // PR-D — audit row. Emit one CREATE entry with every non-null field the

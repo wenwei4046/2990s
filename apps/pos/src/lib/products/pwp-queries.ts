@@ -157,7 +157,9 @@ export function useReservePwpCodes() {
   const qc = useQueryClient();
   return useMutation({
     // sofaModules (cell.moduleId[]) lets the server match a SOFA trigger by combo.
-    mutationFn: async (body: { cartLineKey: string; productId: string; qty: number; sofaModules?: string[] }) =>
+    // rewardLine: the line is itself a reward (bought with a code) — promo is
+    // one-way (Loo 2026-06-06), so the server skips 'promo' rules for it.
+    mutationFn: async (body: { cartLineKey: string; productId: string; qty: number; rewardLine?: boolean; sofaModules?: string[] }) =>
       authedFetch<{ codes: PwpReservedCode[] }>('/pwp-codes/reserve', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['pwp-codes-mine'] }); },
   });

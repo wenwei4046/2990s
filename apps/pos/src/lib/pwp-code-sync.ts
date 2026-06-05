@@ -67,30 +67,51 @@ export function usePwpCodeSync(): void {
         // 1. Reserve trigger lines (once per (key, signature)). SOFA triggers are
         //    matched server-side by Combo (Phase 2) — we send the build's module
         //    codes; non-sofa triggers match by category + model client-side.
+        //    Promo is ONE-WAY (Loo 2026-06-06): a reward line (bought with a
+        //    code, config.pwp) never mints 'promo' codes — a free ARRUS must
+        //    not fund the next free ARRUS — while 'pwp' rules still fire so
+        //    换购 chains keep working. The server reserve applies the same
+        //    filter via the rewardLine flag (it matches rules per line itself).
         let mintedThisPass = false;
+        const staleTriggerKeys: string[] = [];
         for (const l of cart) {
           const c = l.config as {
             kind?: string; productId?: string; category?: string; modelId?: string | null;
-            cells?: Array<{ moduleId?: string }>;
+            pwp?: boolean; cells?: Array<{ moduleId?: string }>;
           };
           if (!c.productId) continue;
+          const isReward = c.pwp === true;
           let sofaModules: string[] | undefined;
           let isTrigger = false;
           if (c.kind === 'sofa') {
-            const hasSofaTriggerRule = rules.some((r) => r.triggerCategory === 'SOFA' && (r.triggerComboIds?.length ?? 0) > 0);
-            if (!hasSofaTriggerRule) continue;
-            sofaModules = (c.cells ?? []).map((cell) => String(cell.moduleId ?? '')).filter(Boolean);
-            if (sofaModules.length === 0) continue;
-            isTrigger = true;  // the server decides the actual combo match
+            const hasSofaTriggerRule = rules.some((r) =>
+              r.triggerCategory === 'SOFA'
+              && (r.triggerComboIds?.length ?? 0) > 0
+              && !(isReward && r.type === 'promo'));
+            if (hasSofaTriggerRule) {
+              sofaModules = (c.cells ?? []).map((cell) => String(cell.moduleId ?? '')).filter(Boolean);
+              isTrigger = sofaModules.length > 0;  // the server decides the actual combo match
+            }
           } else {
             const cat = String(c.category ?? '').toUpperCase();
-            isTrigger = rules.some((r) => r.triggerCategory === cat && inList(c.modelId ?? null, r.triggerEligibleModelIds));
+            isTrigger = rules.some((r) =>
+              r.triggerCategory === cat
+              && inList(c.modelId ?? null, r.triggerEligibleModelIds)
+              && !(isReward && r.type === 'promo'));
           }
-          if (!isTrigger) continue;
-          const sig = `${l.qty}:${sofaModules ? sofaModules.join(',') : ''}`;
+          if (!isTrigger) {
+            // A LIVE line that stopped being a trigger (model edited away, or a
+            // promo-only trigger that became a reward) can still hold RESERVED
+            // codes on its key — without this they'd ride to AVAILABLE at
+            // Confirm as phantom vouchers. Queue the key for the free sweep.
+            if (reserved.some((rc) => rc.cartLineKey === l.key)) staleTriggerKeys.push(l.key);
+            last.delete(l.key);
+            continue;
+          }
+          const sig = `${l.qty}:${isReward ? 'R' : ''}:${sofaModules ? sofaModules.join(',') : ''}`;
           if (last.get(l.key) === sig) continue;
           await reserve.mutateAsync({
-            cartLineKey: l.key, productId: c.productId, qty: l.qty,
+            cartLineKey: l.key, productId: c.productId, qty: l.qty, rewardLine: isReward,
             ...(sofaModules ? { sofaModules } : {}),
           });
           mintedThisPass = true;
@@ -100,6 +121,8 @@ export function usePwpCodeSync(): void {
         // 2. Free orphans — RESERVED codes whose owning cart line is gone AND not
         //    parked in a saved quote. Skip the sweep until quotes have loaded so
         //    a quote's reserved codes are never freed on a transient miss.
+        //    staleTriggerKeys (live lines that stopped being triggers) join the
+        //    sweep unconditionally — being in the cart is what makes them stale.
         if (quotes) {
           const liveKeys = new Set<string>(cartKeys);
           for (const q of quotes) for (const l of q.cart ?? []) liveKeys.add(l.key);
@@ -108,6 +131,7 @@ export function usePwpCodeSync(): void {
               .filter((rc) => rc.cartLineKey && !liveKeys.has(rc.cartLineKey))
               .map((rc) => rc.cartLineKey as string),
           );
+          for (const k of staleTriggerKeys) orphanSet.add(k);
           const orphanKeys = Array.from(orphanSet);
           // Codes about to be freed (their owning TRIGGER line left the cart). Any
           // reward line that redeemed one of these same-cart codes must revert to
