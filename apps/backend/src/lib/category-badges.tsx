@@ -37,6 +37,10 @@ export const CATEGORY_BADGE: Record<string, CategoryBadgeSpec> = {
   mattress:  { bg: 'rgba(199, 127, 62, 0.16)', fg: 'var(--c-festive-a, #C77F3E)',    label: 'MATTRESS' },
   accessory: { bg: 'rgba(34, 31, 32, 0.10)',   fg: 'var(--fg-muted)',                label: 'ACC' },
   others:    OTHERS_BADGE,
+  /* SO-SKU spec P2 — SERVICE lines (delivery fee / dispose / lift) are
+     first-class SO lines now; muted slate keeps them visually quiet next to
+     the goods categories. */
+  service:   { bg: 'rgba(90, 96, 102, 0.12)',  fg: 'var(--fg-muted)',                label: 'SERVICE' },
 };
 
 /** Resolve a badge spec for any item_group string, case-insensitively.

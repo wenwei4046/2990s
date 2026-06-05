@@ -8,7 +8,16 @@ import {
   pickComboMatch, spreadComboTotal, splitSofaCode, sofaHeightKey,
   buildVariantSummary, comboChargedPrices, matchComboSubset, type SofaComboRow, type SofaPriceTier,
 } from '@2990s/shared';
-import { computeSoDeliveryFee } from '@2990s/shared/pricing';
+import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
+/* SO-SKU spec P2 — every charge is a SKU line. Predicates from P1; the
+   fee/addon → SERVICE-line decomposition builders are pure + shared. */
+import { isServiceLine, isDeliveryFeeServiceCode } from '@2990s/shared/service-sku';
+import {
+  buildDeliveryFeeServiceLines,
+  computeAddonServiceLines,
+  type AddonSelectionInput,
+  type ServiceLineSpec,
+} from '@2990s/shared/service-lines';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
@@ -379,6 +388,7 @@ mfgSalesOrders.get('/', async (c) => {
       if (g.includes('SOFA'))     return 'SOFA';
       if (g.includes('MATTRESS')) return 'MATTRESS';
       if (g.includes('ACCESSOR')) return 'ACCESSORY';
+      if (g.includes('SERVICE')) return 'SERVICE'; // SO-SKU spec P2 — synced with normCat below
       return 'OTHERS';
     };
     for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_group: string; stock_status: string; cancelled: boolean; branding: string | null; item_code: string | null; created_at: string | null }>) {
@@ -621,29 +631,35 @@ mfgSalesOrders.get('/mine', async (c) => {
     }
   }
 
-  /* Live paid = the handover deposit (stored in deposit_centi at create — the
-     SO create path does NOT write a ledger row for it) PLUS any payments
-     recorded since (mfg_sales_order_payments). The header `paid_centi` is being
-     deprecated, so we don't read it. One batched ledger query. */
+  /* Live paid = the payments ledger, PLUS the header deposit ONLY for legacy
+     SOs whose deposit never reached the ledger. Since P2 (D5, migration 0155)
+     the SO create path writes the deposit as an is_deposit ledger row (and
+     0155 backfilled history), so adding the header column on top would double
+     count — the is_deposit marker tells the two worlds apart. The header
+     `paid_centi` is deprecated; not read. One batched ledger query. */
   const paidLedgerByDoc = new Map<string, number>();
+  const depositInLedger = new Set<string>();
   if (docNos.length > 0) {
     const { data: payRows } = await sb
       .from('mfg_sales_order_payments')
-      .select('so_doc_no, amount_centi')
+      .select('so_doc_no, amount_centi, is_deposit')
       .in('so_doc_no', docNos);
-    for (const p of (payRows ?? []) as Array<{ so_doc_no: string; amount_centi: number }>) {
+    for (const p of (payRows ?? []) as Array<{ so_doc_no: string; amount_centi: number; is_deposit?: boolean | null }>) {
       paidLedgerByDoc.set(p.so_doc_no, (paidLedgerByDoc.get(p.so_doc_no) ?? 0) + (p.amount_centi ?? 0));
+      if (p.is_deposit) depositInLedger.add(p.so_doc_no);
     }
   }
 
   const salesOrders = rows.map((r) => {
+    const docNo = r.doc_no ?? '';
     const deposit = typeof r.deposit_centi === 'number' ? r.deposit_centi : 0;
-    const ledger = paidLedgerByDoc.get(r.doc_no ?? '') ?? 0;
+    const ledger = paidLedgerByDoc.get(docNo) ?? 0;
     return {
       ...r,
-      // Total received = handover deposit + subsequent ledger payments.
-      paid_centi_total: deposit + ledger,
-      items: itemsByDoc.get(r.doc_no ?? '') ?? [],
+      // Total received = ledger payments (+ header deposit only when the
+      // ledger doesn't already carry it as an is_deposit row).
+      paid_centi_total: (depositInLedger.has(docNo) ? 0 : deposit) + ledger,
+      items: itemsByDoc.get(docNo) ?? [],
     };
   });
 
@@ -1417,6 +1433,10 @@ mfgSalesOrders.post('/', async (c) => {
       // Commander 2026-05-31 — per-line ship-from warehouse (migration 0118).
       // Explicit per-line override wins; else the SO state's default.
       warehouse_id: (it.warehouseId as string | null | undefined) ?? defaultWarehouseId,
+      /* SO-SKU spec P2 — explicit (= the column default). Service rows appended
+         below start READY; PostgREST bulk inserts null-fill missing keys
+         instead of applying column defaults, so every row spells it out. */
+      stock_status: 'PENDING',
     };
   }));
 
@@ -1436,6 +1456,7 @@ mfgSalesOrders.post('/', async (c) => {
      category revenue buckets stay goods-only. (Phase 1 special-model fees +
      Phase 2 cross-order follow-up plug into the same call.) */
   let deliveryFeeCenti = 0;
+  let deliveryFee: SoDeliveryFeeResult | null = null;
   let crossCategorySourceDocNo: string | null = null;
   if (body.applyDeliveryFee) {
     const { data: dcfg } = await sb
@@ -1498,13 +1519,101 @@ mfgSalesOrders.post('/', async (c) => {
       isCrossCategoryFollowup = true;
     }
 
-    deliveryFeeCenti = computeSoDeliveryFee(
+    deliveryFee = computeSoDeliveryFee(
       { categoryIds, specialModels, isCrossCategoryFollowup, additionalFee: additionalSen },
       cfgSen,
-    ).total;
+    );
+    deliveryFeeCenti = deliveryFee.total;
   }
-  const grandTotal          = total + deliveryFeeCenti;
-  const grandMargin         = margin + deliveryFeeCenti;
+
+  /* ── SO-SKU spec P2 (§4.1 + §4.2, D2/D6/D9 final) — every charge is a SKU
+     line. The delivery fee just computed decomposes into SVC-DELIVERY* lines
+     (Σ lines === deliveryFeeCenti always); POS handover add-ons (dispose /
+     lift) are re-priced server-side from the addons table — the client's
+     amounts are never trusted — and become SVC-DISPOSE-* / SVC-LIFT-CARRY
+     lines. The header delivery_fee_centi keeps being written (dual-write
+     transition; recomputeTotals only folds it back in when NO fee lines
+     exist, so nothing double-counts). Lines ride the whole SO→DO→SI chain;
+     they are not goods — P1 guards keep them out of allocation / inventory /
+     MRP / returns, and stock_status starts READY so the stock remark never
+     shows a phantom PENDING service. */
+  const feeServiceSpecs = deliveryFee
+    ? buildDeliveryFeeServiceLines(deliveryFee, crossCategorySourceDocNo)
+    : [];
+  let addonServiceSpecs: ServiceLineSpec[] = [];
+  const addonSelections: AddonSelectionInput[] = Array.isArray(body.addons)
+    ? (body.addons as Array<Record<string, unknown>>)
+        .filter((a) => a && typeof a.id === 'string' && (a.id as string).trim())
+        .map((a) => ({
+          id:          (a.id as string).trim(),
+          qty:         typeof a.qty === 'number' ? a.qty : undefined,
+          floorsCount: typeof a.floorsCount === 'number' ? a.floorsCount : undefined,
+          itemsCount:  typeof a.itemsCount === 'number' ? a.itemsCount : undefined,
+        }))
+    : [];
+  if (addonSelections.length > 0) {
+    const { data: addonRows } = await sb
+      .from('addons')
+      .select('id, kind, price, per_floor_item, label, enabled')
+      .in('id', [...new Set(addonSelections.map((a) => a.id))]);
+    addonServiceSpecs = computeAddonServiceLines(
+      addonSelections,
+      ((addonRows ?? []) as Array<{ id: string; kind: string; price: number; per_floor_item: number | null; label: string | null; enabled: boolean | null }>)
+        .map((r) => ({ id: r.id, kind: r.kind, price: Number(r.price ?? 0), perFloorItem: r.per_floor_item, label: r.label, enabled: r.enabled })),
+    );
+  }
+  const serviceSpecs = [...feeServiceSpecs, ...addonServiceSpecs];
+  const serviceCenti = serviceSpecs.reduce((s, l) => s + l.totalSen, 0);
+  if (serviceSpecs.length > 0) {
+    /* Same Edge #4 contract as goods lines: a SERVICE line's SKU must exist in
+       the catalog (seeded by migration 0155). A 409 here means the seed is
+       missing — fail loudly rather than booking an off-catalog charge. */
+    const svcCheck = await validateItemCodes(sb, serviceSpecs.map((s) => s.itemCode));
+    if (!svcCheck.ok) {
+      await rollbackPwpClaims();
+      return c.json(unknownItemCodeResponse(svcCheck.unknown), 409);
+    }
+    const lineDateToday = new Date().toISOString().slice(0, 10);
+    for (const spec of serviceSpecs) {
+      itemRows.push({
+        line_date: lineDateToday,
+        debtor_code: (body.debtorCode as string) ?? null,
+        debtor_name: customerName,
+        agent: (body.agent as string) ?? null,
+        item_group: 'service',
+        item_code: spec.itemCode,
+        description: spec.description,
+        description2: null,
+        uom: 'UNIT',
+        qty: spec.qty,
+        unit_price_centi: spec.unitPriceSen,
+        discount_centi: 0,
+        total_centi: spec.totalSen,
+        total_inc_centi: spec.totalSen,
+        balance_centi: spec.totalSen,
+        variants: null,
+        unit_cost_centi: 0,
+        line_cost_centi: 0,
+        line_margin_centi: spec.totalSen,
+        divan_price_sen: 0,
+        leg_price_sen: 0,
+        special_order_price_sen: 0,
+        custom_specials: null,
+        line_delivery_date: headerDeliveryDate,
+        line_delivery_date_overridden: false,
+        // Services don't ship from a warehouse; NULL keeps them out of every
+        // per-warehouse pool (allocation skips them anyway, P1).
+        warehouse_id: null,
+        // Not goods — nothing to allocate; READY from birth (spec §4.6).
+        stock_status: 'READY',
+      } as (typeof itemRows)[number]);
+    }
+  }
+
+  const grandTotal          = total + serviceCenti;
+  /* Service lines carry zero cost, so the whole serviceCenti is margin —
+     same treatment the header-only delivery fee got before. */
+  const grandMargin         = margin + serviceCenti;
   const grandMarginPctBasis = grandTotal > 0 ? Math.round((grandMargin / grandTotal) * 10000) : 0;
 
   /* Task #121 — derive country from the picked customer_state via the
@@ -1579,18 +1688,24 @@ mfgSalesOrders.post('/', async (c) => {
     bedframe_cost_centi:      bedframeCost,
     accessories_cost_centi:   accessoriesCost,
     others_cost_centi:        othersCost,
+    /* SO-SKU spec P2 (D1, migration 0155) — SERVICE bucket = fee + addon
+       lines (cost 0). Keeps Finance's "Others" goods-only. */
+    service_centi: serviceCenti,
+    service_cost_centi: 0,
     local_total_centi: grandTotal,
     balance_centi: grandTotal,
     total_cost_centi: totalCost,
     total_revenue_centi: grandTotal,
     total_margin_centi: grandMargin,
     margin_pct_basis: grandMarginPctBasis,
-    // Delivery fee snapshot (migration 0133) — recomputeTotals reads it back.
+    // Delivery fee snapshot (migration 0133) — DUAL-WRITE transition (P2):
+    // still written for view/report back-compat, but recomputeTotals now folds
+    // it in ONLY when no SVC-DELIVERY* lines exist (they are the new truth).
     delivery_fee_centi: deliveryFeeCenti,
     // Cross-category follow-up link (migration 0141) — null unless sales linked
     // this SO back to an earlier one for the reduced delivery rate.
     cross_category_source_doc_no: crossCategorySourceDocNo,
-    line_count: items.length,
+    line_count: items.length + serviceSpecs.length,
     currency: ((body.currency as string) ?? 'MYR').toUpperCase(),
     note: (body.note as string) ?? null,
     /* PR #46 — POS handover fields written at create */
@@ -1643,7 +1758,8 @@ mfgSalesOrders.post('/', async (c) => {
     merchant_provider:  (body.merchantProvider as string) ?? null,
     approval_code:      (body.approvalCode as string) ?? null,
     payment_date:       (body.paymentDate as string) ?? null,
-    deposit_centi:      typeof body.depositCenti === 'number' ? body.depositCenti : 0,
+    // Clamped ≥ 0 — a negative deposit would deflate the live paid rollup.
+    deposit_centi:      Math.max(0, typeof body.depositCenti === 'number' ? body.depositCenti : 0),
     paid_centi:         typeof body.paidCenti === 'number' ? body.paidCenti : 0,
     /* PR #154 — Commander 2026-05-27: "我们的整个系统是没有 Draft 功能的，
        把 Draft 的功能去除掉, 我们 create 的全部都是 confirm 的". 2990 is a
@@ -1663,6 +1779,67 @@ mfgSalesOrders.post('/', async (c) => {
     await sb.from('pending_slip_uploads')
       .update({ status: 'promoted', promoted_at: new Date().toISOString() })
       .eq('upload_session_id', uploadSessionId);
+  }
+
+  /* ── SO-SKU spec P2 (D5, migration 0155) — the POS deposit becomes a real
+     payments-ledger row at create, so Paid / Last Payment / Account Sheet /
+     Collected By / Balance derive live instead of sitting dead in the
+     deposit_centi header. is_deposit=true marks it so the list paid-rollup
+     doesn't ALSO add the header column (double count) and Finance can tell
+     deposits from balance payments. Method-scoped fields mirror the manual
+     POST /:docNo/payments route. Best-effort: a ledger failure must never
+     block the order (the header column still carries the deposit). */
+  {
+    const depositCenti = typeof body.depositCenti === 'number' ? body.depositCenti : 0;
+    /* Whitelist — the ledger's method vocabulary is closed; an arbitrary
+       string must not reach Finance reports. Unknown method → header-only
+       (the deposit still shows via the legacy fallback), no ledger row. */
+    const VALID_METHODS = new Set(['cash', 'merchant', 'transfer', 'installment']);
+    const rawMethod = typeof body.paymentMethod === 'string' ? body.paymentMethod.trim() : '';
+    const depositMethod = VALID_METHODS.has(rawMethod) ? rawMethod : null;
+    if (depositCenti > 0 && depositMethod) {
+      /* 'installment' is a merchant transaction with a term — both keep the
+         provider/months fields (prod uses both method values). */
+      const merchantLike = depositMethod === 'merchant' || depositMethod === 'installment';
+      const merchantProvider = merchantLike ? ((body.merchantProvider as string) ?? null) : null;
+      const installmentMonths = merchantLike
+        && typeof body.installmentMonths === 'number' && body.installmentMonths > 0
+        ? body.installmentMonths : null;
+      const paidAt = (body.paymentDate as string) ?? new Date().toISOString().slice(0, 10);
+      const { error: depErr } = await sb.from('mfg_sales_order_payments').insert({
+        so_doc_no:          docNo,
+        paid_at:            paidAt,
+        method:             depositMethod,
+        merchant_provider:  merchantProvider,
+        installment_months: installmentMonths,
+        approval_code:      (body.approvalCode as string) ?? null,
+        amount_centi:       depositCenti,
+        collected_by:       (body.salespersonId as string) ?? user.id,
+        created_by:         user.id,
+        is_deposit:         true,
+        note:               'POS deposit (auto-recorded at SO create)',
+      });
+      if (depErr) {
+        // eslint-disable-next-line no-console
+        console.error('[so-create] deposit ledger insert failed:', depErr.message);
+      } else {
+        await recordSoAudit(sb, {
+          docNo,
+          action: 'ADD_PAYMENT',
+          actorId: user.id,
+          actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+          source: 'automation',
+          note: 'Auto: POS deposit recorded at SO create',
+          fieldChanges: [
+            { field: 'paidAt',      from: null, to: paidAt },
+            { field: 'method',      from: null, to: depositMethod },
+            { field: 'amountCenti', from: null, to: depositCenti },
+            ...(merchantProvider ? [{ field: 'merchantProvider', from: null, to: merchantProvider } satisfies FieldChange] : []),
+            ...(body.approvalCode ? [{ field: 'approvalCode', from: null, to: body.approvalCode as string } satisfies FieldChange] : []),
+          ],
+        });
+      }
+    }
   }
 
   if (itemRows.length > 0) {
@@ -2243,19 +2420,24 @@ async function recomputeTotals(sb: any, docNo: string) {
     }
   }
 
-  let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, total = 0, totalCost = 0;
+  let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, service = 0, total = 0, totalCost = 0;
   // Task #114 — per-category cost mirrors the revenue accumulators. Each
   // bucket below tracks both revenue (total_centi) and cost (line_cost_centi)
-  // so the SO header's 4 new cost columns (migration 0079) stay in sync
-  // with the existing 4 revenue columns.
-  let mattressSofaCost = 0, bedframeCost = 0, accessoriesCost = 0, othersCost = 0;
-  for (const it of (items ?? []) as Array<{ item_group: string; total_centi: number; line_cost_centi: number }>) {
+  // so the SO header's cost columns (migration 0079 + 0155) stay in sync
+  // with the revenue columns.
+  let mattressSofaCost = 0, bedframeCost = 0, accessoriesCost = 0, othersCost = 0, serviceCost = 0;
+  for (const it of rows) {
     const lineTotal = it.total_centi || 0;
     const lineCost  = it.line_cost_centi || 0;
     total += lineTotal;
     totalCost += lineCost;
     const g = (it.item_group ?? '').toLowerCase();
-    if (g.includes('mattress') || g.includes('sofa')) {
+    /* SO-SKU spec P2 (D1) — SERVICE lines get their own bucket; checked
+       FIRST so a service line can never leak into the goods buckets. */
+    if (isServiceLine({ itemGroup: g, itemCode: it.item_code })) {
+      service += lineTotal;
+      serviceCost += lineCost;
+    } else if (g.includes('mattress') || g.includes('sofa')) {
       mattressSofa += lineTotal;
       mattressSofaCost += lineCost;
     } else if (g.includes('bedframe')) {
@@ -2269,16 +2451,23 @@ async function recomputeTotals(sb: any, docNo: string) {
       othersCost += lineCost;
     }
   }
-  // Delivery fee (migration 0133) — lives on the header, not the lines, so the
-  // lines-only roll-up above would erase it. Read the snapshot back and fold it
-  // into the grand totals + margin so re-rolls (line edits, combo re-spread)
-  // preserve it. 0 for backend-authored SOs.
-  const { data: hdrFee } = await sb
-    .from('mfg_sales_orders')
-    .select('delivery_fee_centi')
-    .eq('doc_no', docNo)
-    .maybeSingle();
-  const deliveryCenti = Number((hdrFee as { delivery_fee_centi?: number } | null)?.delivery_fee_centi ?? 0);
+  // Delivery fee (migration 0133) — header-only on legacy SOs, so the lines-
+  // only roll-up would erase it there. P2 transition rule: the SVC-DELIVERY*
+  // LINES are the truth when they exist (their amounts are already inside
+  // `service`/`total` above — folding the header snapshot back in would
+  // double-count); only a line-less legacy SO still reads the header back.
+  // ⚠️ DO NOT DELETE this fallback without retiring the delivery_fee_centi
+  // header column itself (SO-SKU spec §5 P6 — Loo decides the retirement).
+  const hasDeliveryFeeLines = rows.some((r) => isDeliveryFeeServiceCode(r.item_code));
+  let deliveryCenti = 0;
+  if (!hasDeliveryFeeLines) {
+    const { data: hdrFee } = await sb
+      .from('mfg_sales_orders')
+      .select('delivery_fee_centi')
+      .eq('doc_no', docNo)
+      .maybeSingle();
+    deliveryCenti = Number((hdrFee as { delivery_fee_centi?: number } | null)?.delivery_fee_centi ?? 0);
+  }
   const grandTotal  = total + deliveryCenti;
   const grandMargin = grandTotal - totalCost;
   await sb.from('mfg_sales_orders').update({
@@ -2286,6 +2475,9 @@ async function recomputeTotals(sb: any, docNo: string) {
     bedframe_centi: bedframe,
     accessories_centi: accessories,
     others_centi: others,
+    /* SO-SKU spec P2 (D1, migration 0155). */
+    service_centi: service,
+    service_cost_centi: serviceCost,
     // Task #114 — per-category cost (migration 0079).
     mattress_sofa_cost_centi: mattressSofaCost,
     bedframe_cost_centi:      bedframeCost,
@@ -2449,6 +2641,12 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     line_delivery_date: lineDeliveryDate,
     line_delivery_date_overridden: lineDeliveryDateOverridden,
     warehouse_id: addLineWarehouseId,
+    /* SO-SKU spec P2 — a hand-added SERVICE line (Backend SoLineCard picks a
+       SVC SKU → itemGroup 'service') is not goods: allocation skips it (P1),
+       so it must start READY or its PENDING badge would never clear. */
+    ...(isServiceLine({ itemGroup: String(it.itemGroup ?? ''), itemCode: itemCodeStr })
+      ? { stock_status: 'READY' }
+      : {}),
   };
   const { data, error } = await sb.from('mfg_sales_order_items').insert(row).select('*').single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);

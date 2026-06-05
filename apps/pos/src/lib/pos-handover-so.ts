@@ -111,6 +111,19 @@ export interface PosHandoffPayload {
    *  cross delivery rate. Migration 0141. */
   crossCategorySourceDocNo?: string;
 
+  /* Handover add-ons (SO-SKU spec P2, §4.2). The SELECTION only — ids +
+   * quantities; the server re-prices each from the addons table (never the
+   * client) and books them as SVC-DISPOSE-* / SVC-LIFT-CARRY SERVICE lines.
+   * lift carries floorsCount/itemsCount (first 2 floors free, RM100 per
+   * chargeable floor·item — D6). Omitted when nothing selected; an old PWA
+   * that doesn't send it simply books no add-on lines (back-compat). */
+  addons?: Array<{
+    id: string;
+    qty?: number;
+    floorsCount?: number;
+    itemsCount?: number;
+  }>;
+
   /* Items. */
   items: PosHandoffItem[];
 }

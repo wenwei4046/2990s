@@ -347,6 +347,21 @@ export const Handover = () => {
         ...(form.crossCategorySourceSo.trim()
           ? { crossCategorySourceDocNo: form.crossCategorySourceSo.trim() }
           : {}),
+        // SO-SKU spec P2 (§4.2) — selected handover add-ons (dispose / lift)
+        // ride the handoff so the server books them as SERVICE SKU lines.
+        // Selection only (same shape as legacy submitOrder, key renamed to
+        // `id`); the server re-prices from the addons table.
+        ...((): Partial<PosHandoffPayload> => {
+          const addons = Object.entries(form.addons)
+            .filter(([, s]) => s.selected)
+            .map(([addonId, s]) => ({
+              id: addonId,
+              ...(s.qty !== undefined ? { qty: s.qty } : {}),
+              ...(s.floorsCount !== undefined ? { floorsCount: s.floorsCount } : {}),
+              ...(s.itemsCount !== undefined ? { itemsCount: s.itemsCount } : {}),
+            }));
+          return addons.length > 0 ? { addons } : {};
+        })(),
         items,
       };
 

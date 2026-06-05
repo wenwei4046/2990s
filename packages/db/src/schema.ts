@@ -1208,6 +1208,11 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   bedframeCostCenti:     integer('bedframe_cost_centi').notNull().default(0),
   accessoriesCostCenti:  integer('accessories_cost_centi').notNull().default(0),
   othersCostCenti:       integer('others_cost_centi').notNull().default(0),
+  // SO-SKU spec P2 (D1, migration 0155) — SERVICE lines (delivery fee /
+  // dispose / lift) get their own revenue bucket so Finance's "Others" keeps
+  // its meaning. Routed by isServiceLine in recomputeTotals.
+  serviceCenti:     integer('service_centi').notNull().default(0),
+  serviceCostCenti: integer('service_cost_centi').notNull().default(0),
   localTotalCenti:   integer('local_total_centi').notNull().default(0),
   balanceCenti:      integer('balance_centi').notNull().default(0),
 
@@ -1504,6 +1509,11 @@ export const mfgSalesOrderPayments = pgTable('mfg_sales_order_payments', {
   accountSheet:       text('account_sheet'),                  // bank account / cashbook funds landed in
   collectedBy:        uuid('collected_by').references(() => staff.id, { onDelete: 'set null' }),
   note:               text('note'),
+  /* SO-SKU spec P2 (D5, migration 0155) — true on the auto-row the SO POST
+     writes for the POS deposit (+ the 0155 backfill of historical headers).
+     Lets the paid-rollup skip header deposit_centi when a ledger row already
+     carries it, and lets Finance tell deposits from balance payments. */
+  isDeposit:          boolean('is_deposit').notNull().default(false),
   createdAt:          timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy:          uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
 }, (t) => ({

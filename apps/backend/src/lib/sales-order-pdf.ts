@@ -288,7 +288,15 @@ export async function generateSalesOrderPdf(
   drawRow('Mattress / Sofa', fmtRm(header.mattress_sofa_centi, header.currency), ty); ty += 4;
   drawRow('Bedframe',        fmtRm(header.bedframe_centi,       header.currency), ty); ty += 4;
   drawRow('Accessories',     fmtRm(header.accessories_centi,    header.currency), ty); ty += 4;
-  drawRow('Others',          fmtRm(header.others_centi,         header.currency), ty); ty += 5;
+  drawRow('Others',          fmtRm(header.others_centi,         header.currency), ty); ty += 4;
+  /* SO-SKU spec P2 (D1) — delivery fee / dispose / lift now live as SERVICE
+     lines with their own bucket. Drawn only when non-zero so legacy SOs keep
+     their familiar 4-row totals block. */
+  {
+    const svc = (header as { service_centi?: number }).service_centi ?? 0;
+    if (svc > 0) { drawRow('Services', fmtRm(svc, header.currency), ty); ty += 4; }
+  }
+  ty += 1;
   doc.setDrawColor(0);
   doc.line(totalsX, ty - 2, pageW - margin, ty - 2);
   doc.setFontSize(11);
