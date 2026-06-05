@@ -25,7 +25,7 @@ export const EmergencyStep = ({
     <p className={styles.stepLead}>Used only if we cannot reach the customer on delivery day.</p>
 
     <div className="fieldRow">
-      <Field label="Contact name">
+      <Field label="Contact name *">
         <input
           type="text"
           value={form.emergencyName}
@@ -33,7 +33,7 @@ export const EmergencyStep = ({
           placeholder="e.g. Lim Mei Hua"
         />
       </Field>
-      <Field label="Relationship">
+      <Field label="Relationship *">
         <select
           value={form.emergencyRelation}
           onChange={(e) => update('emergencyRelation', e.target.value)}
@@ -44,7 +44,7 @@ export const EmergencyStep = ({
       </Field>
     </div>
 
-    <Field label="Phone">
+    <Field label="Phone *">
       <input
         type="tel"
         value={form.emergencyPhone}

@@ -62,8 +62,8 @@ describe('validateAddress', () => {
 });
 
 describe('validateEmergency', () => {
-  it('passes when all three empty (optional)', () => {
-    expect(validateEmergency(baseForm)).toBe(true);
+  it('fails when all three empty (compulsory since 2026-06-06)', () => {
+    expect(validateEmergency(baseForm)).toBe(false);
   });
   it('fails when any one is filled but not all three', () => {
     expect(validateEmergency({ ...baseForm, emergencyName: 'X' })).toBe(false);
