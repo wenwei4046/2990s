@@ -7,6 +7,7 @@ import {
   useMyReservedPwpCodes,
   useReservePwpCodes,
   useFreePwpCodes,
+  type PwpReservedCode,
 } from './products/pwp-queries';
 
 // product_models.id list match: [] = whole category (mirrors shared/pwp.ts).
@@ -65,6 +66,7 @@ export function usePwpCodeSync(): void {
         // 1. Reserve trigger lines (once per (key, signature)). SOFA triggers are
         //    matched server-side by Combo (Phase 2) — we send the build's module
         //    codes; non-sofa triggers match by category + model client-side.
+        let mintedThisPass = false;
         for (const l of cart) {
           const c = l.config as {
             kind?: string; productId?: string; category?: string; modelId?: string | null;
@@ -90,6 +92,7 @@ export function usePwpCodeSync(): void {
             cartLineKey: l.key, productId: c.productId, qty: l.qty,
             ...(sofaModules ? { sofaModules } : {}),
           });
+          mintedThisPass = true;
           last.set(l.key, sig);
         }
 
@@ -122,6 +125,60 @@ export function usePwpCodeSync(): void {
               if (c.pwp && c.pwpCode && freedCodes.has(c.pwpCode)) {
                 useCart.getState().revertPwp(l.key);
               }
+            }
+          }
+        }
+
+        // 3. Re-align SAME-CART reward lines to LIVE codes (2026-06-05, the
+        //    ARIA drift). A trigger's codes can be re-minted server-side (a
+        //    failed order burned them, an admin freed them, a restore replaced
+        //    them) — the reward line then points at a code that no longer
+        //    exists, the server won't grant the PWP price, and the order
+        //    drift-rejects at Confirm with no visible cause. Swap each stale
+        //    code for a live eligible reserved one; when the allowance is
+        //    exhausted, revert the line to full price so the salesperson SEES
+        //    the change on the tablet instead of a drift reject at signing.
+        //    Cross-order vouchers (pwpTriggerLabel == null — entered via
+        //    "Insert PWP Code", incl. all sofa redemptions) are left alone:
+        //    they are not in `reserved` and the server validates them itself.
+        //    Skipped on a pass that just minted codes — the closure's
+        //    `reserved` is stale; the invalidation re-runs the effect with the
+        //    fresh list and the repair happens then.
+        if (!mintedThisPass) {
+          const liveReserved = reserved.filter((rc) => rc.cartLineKey);
+          const byCode = new Map(liveReserved.map((rc) => [rc.code, rc]));
+          const cartNow = useCart.getState().lines;
+          const sameCartRewards = cartNow.filter((l) => {
+            const c = l.config as { pwp?: boolean; pwpCode?: string; pwpTriggerLabel?: string | null };
+            return c.pwp === true && !!c.pwpCode && c.pwpTriggerLabel != null;
+          });
+          const eligibleFor = (config: unknown, rc: PwpReservedCode): boolean => {
+            const c = config as { category?: string; modelId?: string | null };
+            return String(rc.rewardCategory).toUpperCase() === String(c.category ?? '').toUpperCase()
+              && inList(c.modelId ?? null, rc.eligibleRewardModelIds);
+          };
+          // Pass 1 — keep every still-valid assignment (first claim wins on dups).
+          const used = new Set<string>();
+          const valid = new Map<string, boolean>();
+          for (const l of sameCartRewards) {
+            const code = (l.config as { pwpCode?: string }).pwpCode!;
+            const rc = byCode.get(code);
+            const ok = !!rc && !used.has(code) && eligibleFor(l.config, rc);
+            if (ok) used.add(code);
+            valid.set(l.key, ok);
+          }
+          // Pass 2 — repair the stale ones.
+          for (const l of sameCartRewards) {
+            if (valid.get(l.key)) continue;
+            const replacement = liveReserved.find((rc) => !used.has(rc.code) && eligibleFor(l.config, rc));
+            if (replacement) {
+              used.add(replacement.code);
+              useCart.getState().setPwpCode(l.key, replacement.code);
+            } else {
+              // No voucher left for this reward — the redemption exceeds the
+              // cart's allowance (or the codes are gone for good). Back to
+              // full price; the salesperson can re-apply / Insert a code.
+              useCart.getState().revertPwp(l.key);
             }
           }
         }

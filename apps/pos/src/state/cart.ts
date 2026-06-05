@@ -170,6 +170,10 @@ interface CartState {
    *  price. Called when the same-cart trigger leaves the cart (its reserved
    *  code is freed) so a reward never lingers at the PWP price with a dead code. */
   revertPwp: (key: string) => void;
+  /** Swap a reward line's voucher code in place (price unchanged). Used by the
+   *  PWP reconciler when the server re-minted a trigger's codes (e.g. after a
+   *  failed order burned + replaced them) and the line's snapshot went stale. */
+  setPwpCode: (key: string, code: string) => void;
   clear: () => void;
   restore: (lines: CartLine[], sourceQuoteId?: string | null) => void;
 }
@@ -259,6 +263,17 @@ export const useCart = create<CartState>()((set, get) => ({
         delete next.pwpTriggerLabel;
         delete next.pwpOriginalTotal;
         return { ...l, config: next as CartConfig };
+      }),
+    });
+  },
+
+  setPwpCode(key, code) {
+    set({
+      lines: get().lines.map((l) => {
+        if (l.key !== key) return l;
+        const c = l.config as CartConfig & { pwp?: boolean; pwpCode?: string };
+        if (!c.pwp) return l;  // only a redeemed reward line carries a code
+        return { ...l, config: { ...c, pwpCode: code } as CartConfig };
       }),
     });
   },
