@@ -22,6 +22,7 @@ import {
   type CSSProperties,
 } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
   ArrowLeft, FileText, Pencil, Plus, Save, Ban, RotateCcw, ChevronDown,
 } from 'lucide-react';
@@ -343,6 +344,7 @@ export const ConsignmentNoteDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[header.status] ?? ''}`}>
             {header.status.replace(/_/g, ' ')}
           </span>
+          <RelationshipMapButton type="cdo" id={id} />
           {!isCancelled && !isEditing && (
             <Button variant="ghost" size="md"
               onClick={() => navigate(`/consignment-return/new?fromConsignmentNote=${id}`)}>

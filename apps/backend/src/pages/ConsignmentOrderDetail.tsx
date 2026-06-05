@@ -47,6 +47,7 @@ import {
   type ConsignmentPayment,
 } from '../lib/consignment-order-queries';
 import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
   useLocalities,
   distinctStates,
@@ -480,6 +481,7 @@ export const ConsignmentOrderDetail = () => {
               {fmtRm(header.local_total_centi, header.currency)}
             </span>
           </div>
+          <RelationshipMapButton type="cso" id={header.doc_no} />
           {!isEditing ? (
             <>
               <Button variant="ghost" size="md"

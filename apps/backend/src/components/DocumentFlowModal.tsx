@@ -40,6 +40,15 @@ const TYPE_META: Record<
   // right of their parent and share a warm red accent to read as "sent back".
   dr:      { col: 2, band: 'top',    title: 'Delivery Return',  route: (id) => `/delivery-returns/${id}`,    bg: '#fef2f2', accent: '#b91c1c' },
   pr:      { col: 3, band: 'bottom', title: 'Purchase Return',  route: (id) => `/purchase-returns/${id}`,    bg: '#fef2f2', accent: '#b91c1c' },
+  // Consignment family — its own self-contained map (sales OR purchase chain,
+  // never both at once). cso/pco are the roots (mid), notes/receipts and their
+  // returns fan out to the right exactly like the SO→DO→DR / PO→GRN→PR layout.
+  cso:     { col: 0, band: 'mid',    title: 'Consignment Order',  route: (id) => `/consignment/${id}`,                  bg: '#eef2ff', accent: '#4f46e5' },
+  cdo:     { col: 1, band: 'top',    title: 'Consignment Note',   route: (id) => `/consignment-note/${id}`,             bg: '#ecfeff', accent: '#0891b2' },
+  cdr:     { col: 2, band: 'top',    title: 'Consignment Return', route: (id) => `/consignment-return/${id}`,           bg: '#fef2f2', accent: '#b91c1c' },
+  pco:     { col: 0, band: 'mid',    title: 'PC Order',           route: (id) => `/purchase-consignment/${id}`,         bg: '#faf5ff', accent: '#9333ea' },
+  pcr:     { col: 1, band: 'bottom', title: 'PC Receive',         route: (id) => `/purchase-consignment-receive/${id}`, bg: '#f0f9ff', accent: '#0284c7' },
+  pcrn:    { col: 2, band: 'bottom', title: 'PC Return',          route: (id) => `/purchase-consignment-return/${id}`,  bg: '#fef2f2', accent: '#b91c1c' },
 };
 
 const EDGE_COLOR: Record<FlowEdgeKind, string> = {

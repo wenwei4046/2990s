@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
   ArrowLeft, Undo2, Pencil, Trash2, Save, Ban, ChevronDown,
 } from 'lucide-react';
@@ -214,6 +215,7 @@ export const PurchaseConsignmentReturnDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[pr.status as string] ?? ''}`}>
             {STATUS_LABEL[pr.status as string] ?? String(pr.status)}
           </span>
+          <RelationshipMapButton type="pcrn" id={pr.id} />
           {pr.status !== 'CANCELLED' && pr.status !== 'COMPLETED' && (
             <Button variant="ghost" size="md"
               onClick={() => {

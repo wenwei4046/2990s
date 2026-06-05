@@ -39,6 +39,7 @@ import {
 } from '../lib/suppliers-queries';
 import { useWarehouses } from '../lib/inventory-queries';
 import { MoneyInput } from '../components/MoneyInput';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -262,6 +263,7 @@ export const PurchaseConsignmentOrderDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[po.status as PoStatus]}`}>
             {po.status.replace(/_/g, ' ')}
           </span>
+          <RelationshipMapButton type="pco" id={po.id} />
           {(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
             <Button variant="ghost" size="md"
               onClick={() => {

@@ -33,8 +33,15 @@ import type { Env, Variables } from '../env';
 export const documentFlow = new Hono<{ Bindings: Env; Variables: Variables }>();
 documentFlow.use('*', supabaseAuth);
 
-type NodeType = 'so' | 'do' | 'si' | 'payment' | 'po' | 'grn' | 'pi' | 'dr' | 'pr';
+type NodeType =
+  | 'so' | 'do' | 'si' | 'payment' | 'po' | 'grn' | 'pi' | 'dr' | 'pr'
+  // Consignment family (its own self-contained graph — not linked to the SO root):
+  //   sales:    cso ──▶ cdo ──▶ cdr   (Consignment Order / Note / Return)
+  //   purchase: pco ──▶ pcr ──▶ pcrn  (PC Order / Receive / Return)
+  | 'cso' | 'cdo' | 'cdr' | 'pco' | 'pcr' | 'pcrn';
 type EdgeKind = 'full' | 'partial' | 'value' | 'payment';
+
+const CONSIGNMENT_TYPES: NodeType[] = ['cso', 'cdo', 'cdr', 'pco', 'pcr', 'pcrn'];
 
 type FlowNode = {
   key: string;            // unique `${type}:${id}`
@@ -116,12 +123,206 @@ async function soDocNosFromDoItems(sb: any, doItemIds: string[]): Promise<string
   return soDocNosFromSoItems(sb, uniq((data ?? []).map((r: any) => r.so_item_id)));
 }
 
+/* Self-contained graph for the consignment family. The consignment chains are
+   NOT linked to the mfg Sales Order root, so they get their own rooted builder:
+     sales:    cso (Consignment Order) ▶ cdo (Note) ▶ cdr (Return)
+     purchase: pco (PC Order) ▶ pcr (PC Receive) ▶ pcrn (PC Return)
+   FKs (confirmed against migrations 0153/0154):
+     consignment_delivery_orders.consignment_so_doc_no
+     consignment_delivery_order_items.consignment_so_item_id
+     consignment_delivery_returns.consignment_do_id
+     consignment_delivery_return_items.consignment_do_item_id
+     purchase_consignment_receives.purchase_consignment_order_id
+     purchase_consignment_receive_items.pc_order_item_id
+     purchase_consignment_returns.pc_order_id / .pc_receive_id
+     purchase_consignment_return_items.pc_receive_item_id                       */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function buildConsignmentFlow(sb: any, type: NodeType, id: string) {
+  const anchorKey = keyOf(type, id);
+  const nodes = new Map<string, FlowNode>();
+  const edges: FlowEdge[] = [];
+  const addEdge = (from: string, to: string, kind: EdgeKind) => {
+    if (nodes.has(from) && nodes.has(to)) edges.push({ from, to, kind });
+  };
+  const orphan = (rootSos: string[]) => {
+    if (nodes.size === 0) nodes.set(anchorKey, { key: anchorKey, type, id, label: id, status: null, isAnchor: true });
+    return { nodes: [...nodes.values()], edges, rootSos };
+  };
+
+  // ── SALES chain: cso ▶ cdo ▶ cdr ─────────────────────────────────────────
+  if (type === 'cso' || type === 'cdo' || type === 'cdr') {
+    let rootDoc: string | null = null;
+    if (type === 'cso') rootDoc = id;
+    else if (type === 'cdo') {
+      const { data } = await sb.from('consignment_delivery_orders').select('consignment_so_doc_no').eq('id', id).maybeSingle();
+      rootDoc = data?.consignment_so_doc_no ?? null;
+    } else {
+      const { data } = await sb.from('consignment_delivery_returns').select('consignment_do_id').eq('id', id).maybeSingle();
+      if (data?.consignment_do_id) {
+        const { data: doRow } = await sb.from('consignment_delivery_orders').select('consignment_so_doc_no').eq('id', data.consignment_do_id).maybeSingle();
+        rootDoc = doRow?.consignment_so_doc_no ?? null;
+      }
+    }
+    if (!rootDoc) return orphan([]);
+
+    const { data: so } = await sb.from('consignment_sales_orders').select('doc_no, status').eq('doc_no', rootDoc).maybeSingle();
+    if (so) {
+      const k = keyOf('cso', so.doc_no);
+      nodes.set(k, { key: k, type: 'cso', id: so.doc_no, label: so.doc_no, status: so.status ?? null, isAnchor: k === anchorKey });
+    }
+    const { data: soLines } = await sb.from('consignment_sales_order_items').select('id, qty').eq('doc_no', rootDoc);
+    const soItemQty = new Map<string, number>();
+    for (const l of (soLines ?? []) as any[]) soItemQty.set(l.id, Number(l.qty ?? 0));
+    const soItemIds = [...soItemQty.keys()];
+
+    const { data: doHeaders } = await sb.from('consignment_delivery_orders').select('id, do_number, status').eq('consignment_so_doc_no', rootDoc);
+    const doIds = uniq((doHeaders ?? []).map((d: any) => d.id));
+    const doLines = soItemIds.length
+      ? (await sb.from('consignment_delivery_order_items').select('id, consignment_delivery_order_id, consignment_so_item_id, qty').in('consignment_so_item_id', soItemIds)).data ?? []
+      : [];
+    const doItemMeta = new Map<string, { doId: string; qty: number }>();
+    const soToDo = new Map<string, { childQty: number; parentItems: Set<string> }>();
+    for (const l of (doLines as any[])) {
+      doItemMeta.set(l.id, { doId: l.consignment_delivery_order_id, qty: Number(l.qty ?? 0) });
+      if (!l.consignment_so_item_id) continue;
+      const agg = soToDo.get(l.consignment_delivery_order_id) ?? { childQty: 0, parentItems: new Set<string>() };
+      agg.childQty += Number(l.qty ?? 0);
+      agg.parentItems.add(l.consignment_so_item_id);
+      soToDo.set(l.consignment_delivery_order_id, agg);
+    }
+    for (const d of (doHeaders ?? []) as any[]) {
+      const k = keyOf('cdo', d.id);
+      nodes.set(k, { key: k, type: 'cdo', id: d.id, label: d.do_number ?? d.id, status: d.status ?? null, isAnchor: k === anchorKey });
+      const agg = soToDo.get(d.id);
+      const parentQty = agg ? [...agg.parentItems].reduce((s, si) => s + (soItemQty.get(si) ?? 0), 0) : 0;
+      addEdge(keyOf('cso', rootDoc), k, agg ? cover(agg.childQty, parentQty) : 'full');
+    }
+
+    if (doIds.length) {
+      const { data: drHeaders } = await sb.from('consignment_delivery_returns').select('id, return_number, status, consignment_do_id').in('consignment_do_id', doIds);
+      const drIds = uniq((drHeaders ?? []).map((d: any) => d.id));
+      const drLines = drIds.length
+        ? (await sb.from('consignment_delivery_return_items').select('consignment_delivery_return_id, consignment_do_item_id, qty_returned').in('consignment_delivery_return_id', drIds)).data ?? []
+        : [];
+      const doToDr = new Map<string, { childQty: number; parentItems: Set<string> }>();
+      for (const l of (drLines as any[])) {
+        const dm = l.consignment_do_item_id ? doItemMeta.get(l.consignment_do_item_id) : undefined;
+        if (!dm) continue;
+        const kk = `${dm.doId}|${l.consignment_delivery_return_id}`;
+        const agg = doToDr.get(kk) ?? { childQty: 0, parentItems: new Set<string>() };
+        agg.childQty += Number(l.qty_returned ?? 0);
+        agg.parentItems.add(l.consignment_do_item_id);
+        doToDr.set(kk, agg);
+      }
+      for (const d of (drHeaders ?? []) as any[]) {
+        const k = keyOf('cdr', d.id);
+        nodes.set(k, { key: k, type: 'cdr', id: d.id, label: d.return_number ?? d.id, status: d.status ?? null, isAnchor: k === anchorKey });
+        if (d.consignment_do_id) {
+          const agg = doToDr.get(`${d.consignment_do_id}|${d.id}`);
+          const parentQty = agg ? [...agg.parentItems].reduce((s, di) => s + (doItemMeta.get(di)?.qty ?? 0), 0) : 0;
+          addEdge(keyOf('cdo', d.consignment_do_id), k, agg ? cover(agg.childQty, parentQty) : 'full');
+        }
+      }
+    }
+    return orphan([rootDoc]);
+  }
+
+  // ── PURCHASE chain: pco ▶ pcr ▶ pcrn ─────────────────────────────────────
+  let rootPco: string | null = null;
+  if (type === 'pco') rootPco = id;
+  else if (type === 'pcr') {
+    const { data } = await sb.from('purchase_consignment_receives').select('purchase_consignment_order_id').eq('id', id).maybeSingle();
+    rootPco = data?.purchase_consignment_order_id ?? null;
+  } else {
+    const { data } = await sb.from('purchase_consignment_returns').select('pc_order_id, pc_receive_id').eq('id', id).maybeSingle();
+    if (data?.pc_order_id) rootPco = data.pc_order_id;
+    else if (data?.pc_receive_id) {
+      const { data: rec } = await sb.from('purchase_consignment_receives').select('purchase_consignment_order_id').eq('id', data.pc_receive_id).maybeSingle();
+      rootPco = rec?.purchase_consignment_order_id ?? null;
+    }
+  }
+  if (!rootPco) return orphan([]);
+
+  const { data: po } = await sb.from('purchase_consignment_orders').select('id, pc_number, status').eq('id', rootPco).maybeSingle();
+  if (po) {
+    const k = keyOf('pco', po.id);
+    nodes.set(k, { key: k, type: 'pco', id: po.id, label: po.pc_number ?? po.id, status: po.status ?? null, isAnchor: k === anchorKey });
+  }
+  const { data: poLines } = await sb.from('purchase_consignment_order_items').select('id, qty').eq('purchase_consignment_order_id', rootPco);
+  const poItemQty = new Map<string, number>();
+  for (const l of (poLines ?? []) as any[]) poItemQty.set(l.id, Number(l.qty ?? 0));
+  const poItemIds = [...poItemQty.keys()];
+
+  const { data: recHeaders } = await sb.from('purchase_consignment_receives').select('id, receive_number, status').eq('purchase_consignment_order_id', rootPco);
+  const recIds = uniq((recHeaders ?? []).map((r: any) => r.id));
+  const recLines = poItemIds.length
+    ? (await sb.from('purchase_consignment_receive_items').select('id, pc_receive_id, pc_order_item_id, qty_accepted').in('pc_order_item_id', poItemIds)).data ?? []
+    : [];
+  const recItemMeta = new Map<string, { recId: string; qty: number }>();
+  const poToRec = new Map<string, { childQty: number; parentItems: Set<string> }>();
+  for (const l of (recLines as any[])) {
+    recItemMeta.set(l.id, { recId: l.pc_receive_id, qty: Number(l.qty_accepted ?? 0) });
+    if (!l.pc_order_item_id) continue;
+    const agg = poToRec.get(l.pc_receive_id) ?? { childQty: 0, parentItems: new Set<string>() };
+    agg.childQty += Number(l.qty_accepted ?? 0);
+    agg.parentItems.add(l.pc_order_item_id);
+    poToRec.set(l.pc_receive_id, agg);
+  }
+  for (const r of (recHeaders ?? []) as any[]) {
+    const k = keyOf('pcr', r.id);
+    nodes.set(k, { key: k, type: 'pcr', id: r.id, label: r.receive_number ?? r.id, status: r.status ?? null, isAnchor: k === anchorKey });
+    const agg = poToRec.get(r.id);
+    const parentQty = agg ? [...agg.parentItems].reduce((s, pi) => s + (poItemQty.get(pi) ?? 0), 0) : 0;
+    addEdge(keyOf('pco', rootPco), k, agg ? cover(agg.childQty, parentQty) : 'full');
+  }
+
+  const { data: retByReceive } = recIds.length
+    ? await sb.from('purchase_consignment_returns').select('id, return_number, status, pc_receive_id, pc_order_id').in('pc_receive_id', recIds)
+    : { data: [] };
+  const { data: retByOrder } = await sb.from('purchase_consignment_returns').select('id, return_number, status, pc_receive_id, pc_order_id').eq('pc_order_id', rootPco);
+  const retById = new Map<string, any>();
+  for (const r of [...((retByReceive ?? []) as any[]), ...((retByOrder ?? []) as any[])]) retById.set(r.id, r);
+  const retIds = [...retById.keys()];
+  const retLines = retIds.length
+    ? (await sb.from('purchase_consignment_return_items').select('purchase_consignment_return_id, pc_receive_item_id, qty_returned').in('purchase_consignment_return_id', retIds)).data ?? []
+    : [];
+  const recToRet = new Map<string, { childQty: number; parentItems: Set<string> }>();
+  for (const l of (retLines as any[])) {
+    const rm = l.pc_receive_item_id ? recItemMeta.get(l.pc_receive_item_id) : undefined;
+    if (!rm) continue;
+    const kk = `${rm.recId}|${l.purchase_consignment_return_id}`;
+    const agg = recToRet.get(kk) ?? { childQty: 0, parentItems: new Set<string>() };
+    agg.childQty += Number(l.qty_returned ?? 0);
+    agg.parentItems.add(l.pc_receive_item_id);
+    recToRet.set(kk, agg);
+  }
+  for (const r of retById.values()) {
+    const k = keyOf('pcrn', r.id);
+    nodes.set(k, { key: k, type: 'pcrn', id: r.id, label: r.return_number ?? r.id, status: r.status ?? null, isAnchor: k === anchorKey });
+    let linked = false;
+    if (r.pc_receive_id && nodes.has(keyOf('pcr', r.pc_receive_id))) {
+      const agg = recToRet.get(`${r.pc_receive_id}|${r.id}`);
+      const parentQty = agg ? [...agg.parentItems].reduce((s, ri) => s + (recItemMeta.get(ri)?.qty ?? 0), 0) : 0;
+      addEdge(keyOf('pcr', r.pc_receive_id), k, agg ? cover(agg.childQty, parentQty) : 'full');
+      linked = true;
+    }
+    if (!linked) addEdge(keyOf('pco', rootPco), k, 'full');
+  }
+  return orphan([rootPco]);
+}
+
 documentFlow.get('/:type/:id', async (c) => {
   const sb = c.get('supabase');
   const type = c.req.param('type') as NodeType;
   const id = c.req.param('id');
-  if (!['so', 'do', 'si', 'payment', 'po', 'grn', 'pi', 'dr', 'pr'].includes(type)) {
+  const ALL_TYPES: NodeType[] = ['so', 'do', 'si', 'payment', 'po', 'grn', 'pi', 'dr', 'pr', ...CONSIGNMENT_TYPES];
+  if (!ALL_TYPES.includes(type)) {
     return c.json({ error: 'bad_type' }, 400);
+  }
+
+  // Consignment docs form their own self-contained family graph.
+  if (CONSIGNMENT_TYPES.includes(type)) {
+    return c.json(await buildConsignmentFlow(sb, type, id));
   }
 
   const rootSos = await resolveRootSos(sb, type, id);
