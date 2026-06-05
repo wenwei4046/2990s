@@ -938,7 +938,22 @@ mfgSalesOrders.get('/:docNo', async (c) => {
   ]);
   (salesOrder as Record<string, unknown>).lifecycle_state = lifecycleByDoc.get(docNo) ?? 'none';
   (salesOrder as Record<string, unknown>).current_doc_no = currentByDoc.get(docNo) ?? (docNo || null);
-  return c.json({ salesOrder, items });
+  /* PWP vouchers THIS order's trigger items issued (Loo 2026-06-05) — the
+     customer-facing prints mark the trigger line with the code (used → short
+     reference; unused → "issued, not redeemed yet"). pwp_codes always intended
+     this ("printed on the SO, redeemable cross-order"); this is the read half.
+     Best-effort: a failed lookup never blocks the SO detail. */
+  let pwpCodes: Array<Record<string, unknown>> = [];
+  try {
+    const { data: codeRows } = await sb
+      .from('pwp_codes')
+      .select('code, status, trigger_item_code, redeemed_doc_no')
+      .eq('source_doc_no', docNo);
+    pwpCodes = (codeRows ?? []) as Array<Record<string, unknown>>;
+  } catch {
+    pwpCodes = [];
+  }
+  return c.json({ salesOrder, items, pwpCodes });
 });
 
 /* Customer credit balance lookup — used by the New Sales Order form to flash

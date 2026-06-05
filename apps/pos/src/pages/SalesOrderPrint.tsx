@@ -142,7 +142,18 @@ const ItemsTable = ({ order }: { order: PrintableSO }) => (
       {order.lines.map((l, i) => (
         <tr key={i}>
           <td className={styles.colSku}>{l.sku}</td>
-          <td className={styles.colDesc}>{l.description}</td>
+          <td className={styles.colDesc}>
+            {l.description}
+            {l.sub && <span className={styles.lineDesc}>{l.sub}</span>}
+            {l.notes.map((n, j) => (
+              <span
+                key={j}
+                className={n.tone === 'used' ? styles.pwpUsed : styles.pwpUnused}
+              >
+                {n.text}
+              </span>
+            ))}
+          </td>
           <td className={styles.colQty}>{l.qty}</td>
           <td className={styles.colMoney}>{fmtMoney(l.unitPrice)}</td>
           <td className={styles.colMoney}>{fmtMoney(l.lineTotal)}</td>

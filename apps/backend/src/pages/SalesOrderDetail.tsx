@@ -759,7 +759,10 @@ export const SalesOrderDetail = () => {
       return;
     }
     const payments = printPaymentsQ.data ?? [];
-    generateSalesOrderPdf(header, items, payments).catch((e) => {
+    /* `pwpCodes` rides on the same GET /:docNo payload — vouchers this SO's
+       trigger items issued, so the printed PDF can mark the trigger lines. */
+    const pwpCodes = ((detail.data as { pwpCodes?: unknown[] } | undefined)?.pwpCodes ?? []) as never;
+    generateSalesOrderPdf(header, items, payments, 'save', pwpCodes).catch((e) => {
       // eslint-disable-next-line no-console
       console.error('PDF generation failed:', e);
       alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`);

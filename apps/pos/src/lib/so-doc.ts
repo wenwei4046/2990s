@@ -1,4 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
+import {
+  groupSoLinesForDisplay,
+  pwpRewardNote,
+  pwpTriggerNotes,
+  type SoPwpCodeRow,
+  type SoPwpNote,
+} from '@2990s/shared/so-line-display';
 import { supabase } from './supabase';
 import { COMPANY_LEGAL } from './legal';
 
@@ -11,6 +18,10 @@ const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 export interface PrintableLine {
   sku: string;
   description: string;
+  /** Muted second line — folded sofa composition + shared variant summary. */
+  sub: string | null;
+  /** PWP voucher notes (used = accent, unused = muted — 排法 A). */
+  notes: SoPwpNote[];
   qty: number;
   unitPrice: number; // MYR
   lineTotal: number; // MYR
@@ -62,9 +73,14 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
         headers: { authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error(`GET /mfg-sales-orders/${docNo} failed (${res.status})`);
-      const body = (await res.json()) as { salesOrder: Record<string, any>; items: Record<string, any>[] };
+      const body = (await res.json()) as {
+        salesOrder: Record<string, any>;
+        items: Record<string, any>[];
+        pwpCodes?: SoPwpCodeRow[];
+      };
       const so = body.salesOrder ?? {};
       const items = body.items ?? [];
+      const pwpCodes = body.pwpCodes ?? [];
 
       // Bill-to address: address1..4 then "postcode city state". Skip blanks.
       const tail = [so.postcode, so.city, so.customer_state].filter(Boolean).join(' ');
@@ -86,23 +102,49 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
         ? (rawSig.startsWith('data:') ? rawSig : `data:image/png;base64,${rawSig}`)
         : null;
 
-      const lines: PrintableLine[] = items
-        .filter((it) => !it.cancelled)
-        .map((it) => {
-          const qty = Number(it.qty ?? 0);
-          const lineTotal = centiToMyr(it.total_centi);
-          const unitPrice = it.unit_price_centi != null
-            ? centiToMyr(it.unit_price_centi)
-            : qty > 0 ? lineTotal / qty : lineTotal;
-          const desc = [it.description, it.description2].filter(Boolean).join(' · ');
+      /* Loo 2026-06-05 — customer-facing fold: per-module sofa SKU lines
+         (variants.buildKey groups from the P3 split) render as ONE Model row
+         with the combined price; the persisted lines and the Backend grids
+         stay per-SKU. PWP notes ride under the description: a reward line
+         shows the voucher it consumed, a trigger line shows codes this SO
+         issued (USED → short reference; unused → "not redeemed yet" 排法 A). */
+      const groups = groupSoLinesForDisplay(
+        items.filter((it) => !it.cancelled) as Array<Record<string, any> & { item_code: string }>,
+      );
+      const lines: PrintableLine[] = groups.map((g) => {
+        const lead = g.lines[0]!;
+        const notes: SoPwpNote[] = [
+          pwpRewardNote(lead.variants),
+          ...pwpTriggerNotes(g.lines.map((l) => l.item_code as string), pwpCodes),
+        ].filter((n): n is SoPwpNote => n != null);
+        if (g.kind === 'sofa-build' && g.display) {
+          const d = g.display;
           return {
-            sku: (it.item_code as string) ?? '—',
-            description: desc || ((it.item_code as string) ?? ''),
-            qty,
-            unitPrice,
-            lineTotal,
+            sku: d.itemCode,
+            description: d.description,
+            sub: [d.composition, d.description2].filter(Boolean).join(' · ') || null,
+            notes,
+            qty: d.qty,
+            unitPrice: centiToMyr(d.unitPriceCenti),
+            lineTotal: centiToMyr(d.totalCenti),
           };
-        });
+        }
+        const qty = Number(lead.qty ?? 0);
+        const lineTotal = centiToMyr(lead.total_centi as number | null);
+        const unitPrice = lead.unit_price_centi != null
+          ? centiToMyr(lead.unit_price_centi)
+          : qty > 0 ? lineTotal / qty : lineTotal;
+        const desc = [lead.description, lead.description2].filter(Boolean).join(' · ');
+        return {
+          sku: (lead.item_code as string) ?? '—',
+          description: desc || ((lead.item_code as string) ?? ''),
+          sub: null,
+          notes,
+          qty,
+          unitPrice,
+          lineTotal,
+        };
+      });
 
       return {
         id: (so.doc_no as string) ?? docNo,

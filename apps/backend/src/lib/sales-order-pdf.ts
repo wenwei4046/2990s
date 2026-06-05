@@ -1,4 +1,10 @@
 import { formatPhone } from '@2990s/shared/phone';
+import {
+  groupSoLinesForDisplay,
+  pwpRewardNote,
+  pwpTriggerNotes,
+  type SoPwpCodeRow,
+} from '@2990s/shared/so-line-display';
 import { fmtDocDate } from './pdf-common';
 
 // ----------------------------------------------------------------------------
@@ -54,6 +60,7 @@ type SoItem = {
   item_group: string;
   item_code: string;
   description: string | null;
+  description2?: string | null;
   uom: string;
   qty: number;
   unit_price_centi: number;
@@ -88,10 +95,19 @@ const fmtRm = (centi: number, currency: string): string =>
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   })}`;
 
+/* Internal / machine keys the customer never needs: sofa-split grouping +
+   geometry (buildKey/cellIndex/x/y/rot, P3), the raw cells array, the build
+   summary (rendered via the folded row instead), and the PWP keys (rendered
+   as dedicated PWP note lines — see pwpRewardNote / pwpTriggerNotes). */
+const VARIANT_KEYS_HIDDEN = new Set([
+  'buildKey', 'cellIndex', 'x', 'y', 'rot', 'cells', 'summary',
+  'pwp', 'pwpCode', 'pwpTriggerLabel', 'pwpOriginalTotal',
+]);
+
 const variantSummary = (v: Record<string, unknown> | null): string => {
   if (!v) return '';
   return Object.entries(v)
-    .filter(([, val]) => val != null && val !== '')
+    .filter(([k, val]) => !VARIANT_KEYS_HIDDEN.has(k) && val != null && val !== '')
     .map(([k, val]) => `${k}: ${val}`)
     .join(', ');
 };
@@ -157,6 +173,9 @@ export async function generateSalesOrderPdf(
   items: SoItem[],
   payments: SoPayment[] = [],
   action: PdfAction = 'save',
+  /* PWP vouchers this SO's trigger items issued (GET /:docNo `pwpCodes`) —
+     used to mark trigger lines. Optional so older callers stay valid. */
+  pwpCodes: SoPwpCodeRow[] = [],
 ): Promise<void> {
   // Dynamic import — code-split into a vendor chunk.
   const { jsPDF } = await import('jspdf');
@@ -238,18 +257,44 @@ export async function generateSalesOrderPdf(
   y = blockTop + Math.max(leftLines.length, rightLines.length) * 4 + 4;
 
   // ── Line items table ─────────────────────────────────────────────
-  const tableRows = items.map((it, idx) => {
-    const vs = variantSummary(it.variants);
-    const desc = [it.description, vs].filter(Boolean).join('\n');
+  /* Loo 2026-06-05 — customer-facing fold: per-module sofa SKU lines
+     (variants.buildKey groups from the P3 split) render as ONE Model row with
+     the combined price; the persisted lines and every Backend grid stay
+     per-SKU. PWP notes ride inside the Description cell: a reward line shows
+     the voucher it consumed, a trigger line shows the codes this SO issued
+     (USED → short reference; otherwise "issued, not redeemed yet"). */
+  const groups = groupSoLinesForDisplay(items);
+  const tableRows = groups.map((g, idx) => {
+    const lead = g.lines[0]!;
+    const notes = [
+      pwpRewardNote(lead.variants),
+      ...pwpTriggerNotes(g.lines.map((l) => l.item_code), pwpCodes),
+    ].filter((n): n is NonNullable<typeof n> => n != null).map((n) => n.text);
+    if (g.kind === 'sofa-build' && g.display) {
+      const d = g.display;
+      const sub = [d.composition, d.description2].filter(Boolean).join(' · ');
+      return [
+        String(idx + 1),
+        d.itemCode,
+        [d.description, sub, ...notes].filter(Boolean).join('\n'),
+        lead.item_group.toUpperCase(),
+        `${d.qty} ${lead.uom}`,
+        fmtRm(d.unitPriceCenti, header.currency),
+        d.discountCenti > 0 ? fmtRm(d.discountCenti, header.currency) : '—',
+        fmtRm(d.totalCenti, header.currency),
+      ];
+    }
+    const vs = variantSummary(lead.variants);
+    const desc = [lead.description, vs, ...notes].filter(Boolean).join('\n');
     return [
       String(idx + 1),
-      it.item_code,
+      lead.item_code,
       desc,
-      it.item_group.toUpperCase(),
-      String(it.qty) + ' ' + it.uom,
-      fmtRm(it.unit_price_centi, header.currency),
-      it.discount_centi > 0 ? fmtRm(it.discount_centi, header.currency) : '—',
-      fmtRm(it.total_centi, header.currency),
+      lead.item_group.toUpperCase(),
+      String(lead.qty) + ' ' + lead.uom,
+      fmtRm(lead.unit_price_centi, header.currency),
+      lead.discount_centi > 0 ? fmtRm(lead.discount_centi, header.currency) : '—',
+      fmtRm(lead.total_centi, header.currency),
     ];
   });
 
