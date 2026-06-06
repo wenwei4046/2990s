@@ -71,6 +71,14 @@ export type MfgItemVariants = {
    *  reward line. The route's order-level resolvePwp validates it; only a granted
    *  line actually gets the PWP base. */
   pwp?:           boolean | null;
+  /** Per-line operator remark keyed on the POS product page (spec 2026-06-06).
+   *  Not priced — persisted to mfg_sales_order_items.remark by the route. */
+  remark?:        string | null;
+  /** Declared extra charge keyed on the POS product page, WHOLE MYR (spec D1).
+   *  The POS folds it into the line's selling price; the recompute adds the
+   *  same amount to the authoritative figure so the drift gate stays exact.
+   *  Clamped ≥ 0 — this field can never discount. */
+  extraAddonAmountRM?: number | null;
 };
 
 export type MfgItemForRecompute = {
@@ -359,6 +367,15 @@ export function recomputeFromSnapshot(
     ? fabricTierAddon(category, sellingTier, fabricAddonConfig) * 100
     : 0;
 
+  /* Declared extra charge (spec 2026-06-06 D1) — whole MYR → sen, clamped ≥ 0.
+     Added to BOTH authoritative branches below, symmetric with the POS folding
+     the same amount into its submitted total. Never applied to the PWP base
+     (it stacks AFTER pwp/combo/fabric folds) and never to the cost path.
+     NaN-safe: a non-numeric variants value (Number('abc') = NaN) collapses to
+     0 instead of poisoning the authoritative figure → no false reject. */
+  const rawExtra = Number(variants.extraAddonAmountRM ?? 0);
+  const extraSen = (Number.isFinite(rawExtra) ? Math.max(0, Math.round(rawExtra)) : 0) * 100;
+
   let drift: boolean;
   let unitToPersistSen: number;
   if (canPriceSofa) {
@@ -387,7 +404,7 @@ export function recomputeFromSnapshot(
       // Server has authoritative per-Model module SELLING prices for this build,
       // + the SELLING fabric-tier Δ (migration 0124); the POS adds the same Δ so
       // the gate matches. Δ = 0 with default data (no tier / no config set).
-      const authoritativeSofaSen = sofaSellingSen + fabricAddonCenti;
+      const authoritativeSofaSen = sofaSellingSen + fabricAddonCenti + extraSen;
       drift = driftThresholdExceeded(manualUnitSelling, authoritativeSofaSen);
       unitToPersistSen = authoritativeSofaSen;
     } else {
@@ -402,7 +419,7 @@ export function recomputeFromSnapshot(
     // + SELLING fabric-tier Δ (migration 0124). Non-zero only for BEDFRAME (the
     // shared fabricTierAddon returns 0 for mattress/accessory/service). POS adds
     // the same Δ so the gate matches; 0 with default data (no tier / no config).
-    const authoritativeWithFabric = authoritativeSellingSen + fabricAddonCenti;
+    const authoritativeWithFabric = authoritativeSellingSen + fabricAddonCenti + extraSen;
     drift = driftThresholdExceeded(manualUnitSelling, authoritativeWithFabric);
     unitToPersistSen = authoritativeWithFabric;
   } else {
