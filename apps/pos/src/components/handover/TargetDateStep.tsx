@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+﻿import { useMemo } from 'react';
 import { MonthCalendar } from './MonthCalendar';
 import { Field } from './Field';
 import type { HandoverForm } from '../../lib/handover-helpers';
@@ -103,14 +103,6 @@ export const TargetDateStep = ({
         </Field>
       )}
 
-      <Field label="Special instructions (optional)">
-        <textarea
-          rows={3}
-          value={form.specialInstructions}
-          onChange={(e) => update('specialInstructions', e.target.value)}
-          placeholder="Lift available, leave at concierge, etc."
-        />
-      </Field>
     </section>
   );
 };

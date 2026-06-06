@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+﻿import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import { useCart, cartSubtotal } from '../state/cart';
@@ -62,7 +62,6 @@ const empty: HandoverForm = {
   emergencyName: '', emergencyRelation: '', emergencyPhone: '',
   deliveryDate: '', deliveryDateLater: false,
   processDate: '',
-  specialInstructions: '',
   addons: {}, paymentMethod: '',
   amountPaid: 0,
   extraPayments: [],
@@ -339,7 +338,6 @@ export const Handover = () => {
         ...(targetDate && processDate
           ? { targetDate, customerDeliveryDate: targetDate, internalExpectedDd: processDate }
           : {}),
-        ...(form.specialInstructions.trim() ? { note: form.specialInstructions.trim() } : {}),
         ...(signatureData ? { signatureB64: signatureData } : {}),
         ...(form.slipUploadSessionId ? { uploadSessionId: form.slipUploadSessionId } : {}),
         ...(paymentMethod ? { paymentMethod } : {}),

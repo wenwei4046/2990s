@@ -1,4 +1,4 @@
-/* customerType / buildingType / merchantProvider vocabularies now come from
+﻿/* customerType / buildingType / merchantProvider vocabularies now come from
    so_dropdown_options (the SO Maintenance page) at runtime — see
    useSoDropdownValues() — so these are plain strings, not literal unions.
    PaymentMethod stays a closed union of internal CODES: the four methods
@@ -74,7 +74,6 @@ export interface HandoverForm {
    *  and on/before deliveryDate. Empty when "For further notice" (UFN). Maps to
    *  the SO's internal_expected_dd column; the API pairs it with deliveryDate. */
   processDate: string;
-  specialInstructions: string;
 
   addons: Record<string, AddonSelection>;
   paymentMethod: PaymentMethod;
