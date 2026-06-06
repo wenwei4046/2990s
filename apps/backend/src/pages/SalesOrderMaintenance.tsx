@@ -1553,9 +1553,7 @@ const PosSettingsSection = ({ canEdit }: { canEdit: boolean }) => {
         </h2>
       </header>
       <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
-        Feature toggles that the POS reads at runtime. The server also enforces
-        these flags on SO create — turning one off here immediately blocks the
-        corresponding feature for all showrooms.
+        Feature toggles the POS reads at runtime. The server enforces these on every order immediately; the POS card updates on this device right away — other tablets pick up the change on their next reload.
       </p>
 
       <div style={{
@@ -1565,7 +1563,10 @@ const PosSettingsSection = ({ canEdit }: { canEdit: boolean }) => {
         {q.isLoading && (
           <div style={{ ...emptyStyle }}>Loading settings…</div>
         )}
-        {!q.isLoading && (q.data ?? []).length === 0 && (
+        {!q.isLoading && q.isError && (
+          <div style={{ ...emptyStyle }}>Couldn't load settings.</div>
+        )}
+        {!q.isLoading && !q.isError && (q.data ?? []).length === 0 && (
           <div style={{ ...emptyStyle }}>No settings found.</div>
         )}
         {!q.isLoading && (q.data ?? []).map((s, i) => (
@@ -1597,9 +1598,9 @@ const PosSettingsSection = ({ canEdit }: { canEdit: boolean }) => {
         ))}
       </div>
 
-      {update.isError && (
+      {canEdit && update.isError && (
         <p style={{ marginTop: 'var(--space-2)', fontSize: 'var(--fs-13)', color: 'var(--c-festive-b, #B8331F)' }}>
-          Save failed — only coordinators and above can change these.
+          Save failed. Please try again.
         </p>
       )}
     </section>
