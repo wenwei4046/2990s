@@ -432,6 +432,10 @@ export const addons = pgTable('addons', {
   defaultQty:   integer('default_qty').notNull().default(1),
   stock:        integer('stock'),                 // NULL = unlimited
   enabled:      boolean('enabled').notNull().default(true),
+  /* Migration 0157 (Loo 2026-06-06) — membership of the POS handover add-on
+     screen, replacing the frontend's hardcoded HANDOVER_ADDON_IDS allowlist.
+     `enabled` keeps gating saleability everywhere; this flags WHERE it shows. */
+  showAtHandover: boolean('show_at_handover').notNull().default(false),
   sortOrder:    integer('sort_order').notNull().default(0),
   updatedAt:    timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

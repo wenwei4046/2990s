@@ -218,6 +218,9 @@ export interface AddonRow {
   perFloorItem: number | null;
   unit: string | null;
   enabled: boolean;
+  /** Migration 0157 (Loo 2026-06-06) — data-driven handover membership,
+   *  replacing the hardcoded HANDOVER_ADDON_IDS allowlist. */
+  showAtHandover: boolean;
 }
 
 export const useAddons = () =>
@@ -227,7 +230,7 @@ export const useAddons = () =>
     queryFn: async (): Promise<AddonRow[]> => {
       const { data, error } = await supabase
         .from('addons')
-        .select('id, label, description, icon, kind, category, price, per_floor_item, unit, enabled')
+        .select('id, label, description, icon, kind, category, price, per_floor_item, unit, enabled, show_at_handover')
         .eq('enabled', true)
         .order('sort_order');
       if (error) throw error;
@@ -242,6 +245,7 @@ export const useAddons = () =>
         perFloorItem: r.per_floor_item,
         unit: r.unit,
         enabled: r.enabled,
+        showAtHandover: r.show_at_handover ?? false,
       }));
     },
   });
@@ -266,6 +270,8 @@ export interface AdminAddonRow {
   defaultQty: number;
   stock: number | null;
   enabled: boolean;
+  /** Migration 0157 — shows on the POS handover add-ons screen. */
+  showAtHandover: boolean;
   sortOrder: number;
 }
 
@@ -276,13 +282,14 @@ export const useAllAddons = () =>
     queryFn: async (): Promise<AdminAddonRow[]> => {
       const { data, error } = await supabase
         .from('addons')
-        .select('id, label, description, icon, kind, category, price, per_floor_item, unit, default_qty, stock, enabled, sort_order')
+        .select('id, label, description, icon, kind, category, price, per_floor_item, unit, default_qty, stock, enabled, show_at_handover, sort_order')
         .order('sort_order');
       if (error) throw error;
       return (data ?? []).map((r: any) => ({
         id: r.id, label: r.label, description: r.description, icon: r.icon, kind: r.kind,
         category: r.category, price: r.price, perFloorItem: r.per_floor_item, unit: r.unit,
-        defaultQty: r.default_qty, stock: r.stock, enabled: r.enabled, sortOrder: r.sort_order,
+        defaultQty: r.default_qty, stock: r.stock, enabled: r.enabled,
+        showAtHandover: r.show_at_handover ?? false, sortOrder: r.sort_order,
       }));
     },
   });
@@ -295,11 +302,12 @@ const invalidateAddons = (qc: ReturnType<typeof useQueryClient>) => {
 export const useUpdateAddon = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, patch }: { id: string; patch: { price?: number; perFloorItem?: number | null; enabled?: boolean } }) => {
+    mutationFn: async ({ id, patch }: { id: string; patch: { price?: number; perFloorItem?: number | null; enabled?: boolean; showAtHandover?: boolean } }) => {
       const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
-      if (patch.price !== undefined)        update.price = patch.price;
-      if (patch.perFloorItem !== undefined) update.per_floor_item = patch.perFloorItem;
-      if (patch.enabled !== undefined)      update.enabled = patch.enabled;
+      if (patch.price !== undefined)          update.price = patch.price;
+      if (patch.perFloorItem !== undefined)   update.per_floor_item = patch.perFloorItem;
+      if (patch.enabled !== undefined)        update.enabled = patch.enabled;
+      if (patch.showAtHandover !== undefined) update.show_at_handover = patch.showAtHandover;
       const { error } = await supabase.from('addons').update(update).eq('id', id);
       if (error) throw error;
     },
@@ -314,13 +322,13 @@ export const useCreateAddon = () => {
       id: string; label: string; description: string | null; icon: string;
       kind: 'qty' | 'floors_items' | 'flat'; category: string | null;
       price: number; perFloorItem: number | null; unit: string | null;
-      stock: number | null; enabled: boolean; sortOrder: number;
+      stock: number | null; enabled: boolean; showAtHandover: boolean; sortOrder: number;
     }) => {
       const { error } = await supabase.from('addons').insert({
         id: row.id, label: row.label, description: row.description, icon: row.icon,
         kind: row.kind, category: row.category, price: row.price,
         per_floor_item: row.perFloorItem, unit: row.unit, stock: row.stock,
-        enabled: row.enabled, sort_order: row.sortOrder,
+        enabled: row.enabled, show_at_handover: row.showAtHandover, sort_order: row.sortOrder,
       });
       if (error) throw error;
     },

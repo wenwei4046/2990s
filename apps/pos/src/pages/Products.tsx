@@ -4907,11 +4907,13 @@ const OrderAddonsManager = () => {
   const [draft, setDraft] = useState({
     label: '', id: '', description: '', icon: 'package',
     kind: 'qty' as 'qty' | 'flat' | 'floors_items', category: '',
-    price: '', perFloorItem: '', unit: '', enabled: true,
+    /* Migration 0157 — order add-ons exist to be offered at handover, so the
+       creator defaults the flag ON (the editor can switch it off later). */
+    price: '', perFloorItem: '', unit: '', enabled: true, showAtHandover: true,
   });
   const setD = (p: Partial<typeof draft>) => setDraft((d) => ({ ...d, ...p }));
 
-  const commitField = (row: AdminAddonRow, patch: { price?: number; perFloorItem?: number | null; enabled?: boolean }) => {
+  const commitField = (row: AdminAddonRow, patch: { price?: number; perFloorItem?: number | null; enabled?: boolean; showAtHandover?: boolean }) => {
     setError(null);
     update.mutate({ id: row.id, patch }, { onError: (e) => setError(String((e as Error).message ?? e)) });
   };
@@ -4931,10 +4933,11 @@ const OrderAddonsManager = () => {
         id, label: draft.label.trim(), description: draft.description.trim() || null,
         icon: draft.icon, kind: draft.kind, category: draft.category.trim() || null,
         price: isFloors ? 0 : rate, perFloorItem: isFloors ? rate : null,
-        unit: draft.unit.trim() || null, stock: null, enabled: draft.enabled, sortOrder: maxSort + 1,
+        unit: draft.unit.trim() || null, stock: null, enabled: draft.enabled,
+        showAtHandover: draft.showAtHandover, sortOrder: maxSort + 1,
       });
       setCreating(false);
-      setDraft({ label: '', id: '', description: '', icon: 'package', kind: 'qty', category: '', price: '', perFloorItem: '', unit: '', enabled: true });
+      setDraft({ label: '', id: '', description: '', icon: 'package', kind: 'qty', category: '', price: '', perFloorItem: '', unit: '', enabled: true, showAtHandover: true });
     } catch (e) { setError(String((e as Error).message ?? e)); }
   };
 
@@ -4976,6 +4979,14 @@ const OrderAddonsManager = () => {
                 {OA_ICONS.map((i) => <option key={i} value={i}>{i}</option>)}
               </select></label>
           </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 'var(--space-3)', fontSize: 'var(--fs-13)' }}>
+            <input
+              type="checkbox"
+              checked={draft.showAtHandover}
+              onChange={(e) => setD({ showAtHandover: e.target.checked })}
+            />
+            Show on the POS handover add-ons screen
+          </label>
           <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
             <Button variant="primary" size="sm" onClick={() => void submitNew()} disabled={create.isPending}>{create.isPending ? 'Creating…' : 'Create'}</Button>
             <Button variant="ghost" size="sm" onClick={() => { setCreating(false); setError(null); }}>Cancel</Button>
@@ -4997,6 +5008,7 @@ const OrderAddonsManager = () => {
               <th style={{ padding: '6px 8px' }}>Kind</th>
               <th style={{ padding: '6px 8px' }}>{'Price / rate (RM)'}</th>
               <th style={{ padding: '6px 8px' }}>Enabled</th>
+              <th style={{ padding: '6px 8px' }}>At handover</th>
             </tr>
           </thead>
           <tbody>
@@ -5028,6 +5040,15 @@ const OrderAddonsManager = () => {
                       onClick={() => canEdit && commitField(row, { enabled: !row.enabled })}
                       style={{ fontSize: 'var(--fs-12)', padding: '3px 10px', borderRadius: 999, border: '1px solid var(--line)', cursor: canEdit ? 'pointer' : 'default', background: row.enabled ? 'var(--c-cream)' : 'transparent', fontWeight: row.enabled ? 600 : 400 }}>
                       {row.enabled ? 'On' : 'Off'}
+                    </button>
+                  </td>
+                  <td style={{ padding: '6px 8px' }}>
+                    {/* Migration 0157 — where it shows (the handover screen),
+                        independent of whether it's saleable (Enabled). */}
+                    <button type="button" role="switch" aria-checked={row.showAtHandover} disabled={!canEdit}
+                      onClick={() => canEdit && commitField(row, { showAtHandover: !row.showAtHandover })}
+                      style={{ fontSize: 'var(--fs-12)', padding: '3px 10px', borderRadius: 999, border: '1px solid var(--line)', cursor: canEdit ? 'pointer' : 'default', background: row.showAtHandover ? 'var(--c-cream)' : 'transparent', fontWeight: row.showAtHandover ? 600 : 400 }}>
+                      {row.showAtHandover ? 'On' : 'Off'}
                     </button>
                   </td>
                 </tr>

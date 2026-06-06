@@ -26,6 +26,11 @@ export const SVC_DELIVERY_ADD = 'SVC-DELIVERY-ADD';
 export const SVC_DISPOSE_MATTRESS = 'SVC-DISPOSE-MATTRESS';
 export const SVC_DISPOSE_BEDFRAME = 'SVC-DISPOSE-BEDFRAME';
 export const SVC_LIFT_CARRY = 'SVC-LIFT-CARRY';
+/** Migration 0157 (Loo 2026-06-06) — generic execution SKU for any handover
+ *  add-on WITHOUT a dedicated SVC-* code above. The line description carries
+ *  the add-on's label, so an admin-created add-on books + prints correctly
+ *  with zero code change. */
+export const SVC_ADDON = 'SVC-ADDON';
 
 /** Delivery-fee SERVICE SKUs — amounts are server-computed
  *  (computeSoDeliveryFee / operator-entered additional fee), §4.1. */
@@ -36,11 +41,13 @@ export const SERVICE_DELIVERY_FEE_CODES = [
 ] as const;
 
 /** Execution SERVICE SKUs — the driver performs these on site
- *  (collect the old mattress/bedframe, stair-carry), §4.2 + D6. */
+ *  (collect the old mattress/bedframe, stair-carry), §4.2 + D6.
+ *  SVC-ADDON is the generic bucket for admin-created handover add-ons. */
 export const SERVICE_EXECUTION_CODES = [
   SVC_DISPOSE_MATTRESS,
   SVC_DISPOSE_BEDFRAME,
   SVC_LIFT_CARRY,
+  SVC_ADDON,
 ] as const;
 
 export const SERVICE_SKU_PREFIX = 'SVC-';
