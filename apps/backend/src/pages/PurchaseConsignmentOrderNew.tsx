@@ -32,6 +32,7 @@ import {
 } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
+import { PcVariantEditor } from '../components/PcVariantEditor';
 import { useWarehouses } from '../lib/inventory-queries';
 import {
   computeMfgPoUnitCost,
@@ -760,115 +761,13 @@ export const PurchaseConsignmentOrderNew = () => {
                       {l.category} Variants
                     </div>
 
-                    {l.category === 'bedframe' && (
-                      <>
-                        <div className={styles.formGrid4}>
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Fabrics</span>
-                            <select
-                              className={styles.fieldSelect}
-                              value={String(l.variants.fabricCode ?? '')}
-                              onChange={(e) => setVariant(l.rid, 'fabricCode', e.target.value)}
-                            >
-                              <option value="" disabled>Select…</option>
-                              {fabrics.map((f) => (
-                                <option key={f.id} value={f.fabric_code}>
-                                  {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Gaps</span>
-                            <select
-                              className={styles.fieldSelect}
-                              value={String(l.variants.gap ?? '')}
-                              onChange={(e) => setVariant(l.rid, 'gap', e.target.value)}
-                            >
-                              <option value="" disabled>Select…</option>
-                              {maint!.gaps.map((g) => (<option key={g} value={g}>{g}</option>))}
-                            </select>
-                          </label>
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Divan Heights</span>
-                            <select
-                              className={styles.fieldSelect}
-                              value={String(l.variants.divanHeight ?? '')}
-                              onChange={(e) => setVariant(l.rid, 'divanHeight', e.target.value)}
-                            >
-                              <option value="" disabled>Select…</option>
-                              {maint!.divanHeights.map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
-                            </select>
-                          </label>
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Leg Heights</span>
-                            <select
-                              className={styles.fieldSelect}
-                              value={String(l.variants.legHeight ?? '')}
-                              onChange={(e) => setVariant(l.rid, 'legHeight', e.target.value)}
-                            >
-                              <option value="" disabled>Select…</option>
-                              {maint!.legHeights.map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
-                            </select>
-                          </label>
-                        </div>
-                        <SpecialsCheckboxes
-                          pool={maint!.specials}
-                          picked={Array.isArray(l.variants.specials) ? (l.variants.specials as string[]) : []}
-                          onChange={(arr) => setVariant(l.rid, 'specials', arr)}
-                        />
-                      </>
-                    )}
-
-                    {l.category === 'sofa' && (
-                      <>
-                        <div className={styles.formGrid4}>
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Fabrics</span>
-                            <select
-                              className={styles.fieldSelect}
-                              value={String(l.variants.fabricCode ?? '')}
-                              onChange={(e) => setVariant(l.rid, 'fabricCode', e.target.value)}
-                            >
-                              <option value="" disabled>Select…</option>
-                              {fabrics.map((f) => (
-                                <option key={f.id} value={f.fabric_code}>
-                                  {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Seat Size</span>
-                            <select
-                              className={styles.fieldSelect}
-                              value={String(l.variants.seatHeight ?? '')}
-                              onChange={(e) => setVariant(l.rid, 'seatHeight', e.target.value)}
-                            >
-                              <option value="" disabled>Select…</option>
-                              {maint!.sofaSizes.map((s) => (<option key={s} value={s}>{s}</option>))}
-                            </select>
-                          </label>
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Leg Heights</span>
-                            <select
-                              className={styles.fieldSelect}
-                              value={String(l.variants.legHeight ?? '')}
-                              onChange={(e) => setVariant(l.rid, 'legHeight', e.target.value)}
-                            >
-                              <option value="" disabled>Select…</option>
-                              {maint!.sofaLegHeights.map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
-                            </select>
-                          </label>
-                          <span />
-                        </div>
-                        <SpecialsCheckboxes
-                          pool={maint!.sofaSpecials}
-                          picked={Array.isArray(l.variants.specials) ? (l.variants.specials as string[]) : []}
-                          onChange={(arr) => setVariant(l.rid, 'specials', arr)}
-                        />
-                      </>
-                    )}
+                    <PcVariantEditor
+                      category={l.category ?? ''}
+                      variants={l.variants as Record<string, unknown>}
+                      onChange={(k, v) => setVariant(l.rid, k, v)}
+                      fabrics={fabrics}
+                      maint={maint!}
+                    />
                   </div>
                 )}
 

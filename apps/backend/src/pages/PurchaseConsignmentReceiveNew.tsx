@@ -35,6 +35,8 @@ import {
 } from '../lib/purchase-consignment-order-queries';
 import { useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
+import { useFabricTrackings } from '../lib/fabric-queries';
+import { PcVariantEditor } from '../components/PcVariantEditor';
 import { useWarehouses } from '../lib/inventory-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { ActionResultDialog } from '../components/ActionResultDialog';
@@ -110,6 +112,7 @@ export const PurchaseConsignmentReceiveNew = () => {
 
   const maintQ = useMaintenanceConfig('master');
   const maint  = maintQ.data?.data ?? null;
+  const fabrics = useFabricTrackings().data ?? [];
 
   const outstanding = useMemo(
     () => (poListQ.data ?? []).filter((po) => po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED'),
@@ -499,7 +502,7 @@ export const PurchaseConsignmentReceiveNew = () => {
                 isManualLine &&
                 (l.itemGroup === 'bedframe' || l.itemGroup === 'sofa') &&
                 !!maint;
-              const setVariant = (key: string, value: string) =>
+              const setVariant = (key: string, value: unknown) =>
                 setLine(l.rid, { variants: (() => {
                   const variants: Record<string, unknown> = { ...(l.variants ?? {}), [key]: value };
                   if (l.itemGroup === 'bedframe' && (key === 'divanHeight' || key === 'legHeight' || key === 'gap')) {
@@ -636,42 +639,13 @@ export const PurchaseConsignmentReceiveNew = () => {
                         letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--fg-muted)',
                         marginBottom: 'var(--space-2)',
                       }}>{l.itemGroup} Variants</div>
-                      {l.itemGroup === 'bedframe' ? (
-                        <div className={styles.formGrid4}>
-                          <VariantSelect label="Divan Height" options={maint!.divanHeights}
-                            value={String(l.variants?.divanHeight ?? '')}
-                            onChange={(v) => setVariant('divanHeight', v)} />
-                          <VariantSelect label="Gap"
-                            options={maint!.gaps.map((g) => ({ value: g, priceSen: 0 }))}
-                            value={String(l.variants?.gap ?? '')}
-                            onChange={(v) => setVariant('gap', v)} />
-                          <VariantSelect label="Leg Height" options={maint!.legHeights}
-                            value={String(l.variants?.legHeight ?? '')}
-                            onChange={(v) => setVariant('legHeight', v)} />
-                          <VariantSelect label="Special" options={maint!.specials}
-                            value={String(l.variants?.special ?? '')}
-                            onChange={(v) => setVariant('special', v)} />
-                        </div>
-                      ) : (
-                        <div className={styles.formGrid4}>
-                          <VariantSelect label="Seat Size"
-                            options={maint!.sofaSizes.map((s) => ({ value: s, priceSen: 0 }))}
-                            value={String(l.variants?.seatHeight ?? '')}
-                            onChange={(v) => setVariant('seatHeight', v)} />
-                          <VariantSelect label="Leg Height" options={maint!.sofaLegHeights}
-                            value={String(l.variants?.legHeight ?? '')}
-                            onChange={(v) => setVariant('legHeight', v)} />
-                          <VariantSelect label="Special" options={maint!.sofaSpecials}
-                            value={String(l.variants?.special ?? '')}
-                            onChange={(v) => setVariant('special', v)} />
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Fabrics (free text)</span>
-                            <input className={styles.fieldInput}
-                              value={String(l.variants?.fabricColor ?? '')}
-                              onChange={(e) => setVariant('fabricColor', e.target.value)} />
-                          </label>
-                        </div>
-                      )}
+                      <PcVariantEditor
+                        category={l.itemGroup ?? ''}
+                        variants={(l.variants ?? {}) as Record<string, unknown>}
+                        onChange={setVariant}
+                        fabrics={fabrics}
+                        maint={maint!}
+                      />
                     </div>
                   )}
 
