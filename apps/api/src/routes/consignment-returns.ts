@@ -26,7 +26,7 @@ import { normalizePhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { defaultWarehouseId, writeMovements, resolveWarehouseLotBatches } from '../lib/inventory-movements';
+import { defaultWarehouseId, writeMovements, resolveWarehouseLotBatches, resolveWarehouseLotCosts } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 
@@ -207,7 +207,8 @@ async function resyncReturnInventory(sb: any, returnId: string, performedBy: str
     const lineWh = await resolveReturnLineWarehouses(sb, (items ?? []) as Array<{ id: string; consignment_do_item_id?: string | null }>, headerWarehouseId);
     const distinctWh = [...new Set(((items ?? []) as Array<{ id: string }>).map((it) => lineWh.get(it.id)).filter((x): x is string => !!x))];
     const batchByWh = new Map<string, Map<string, string | null>>();
-    for (const wh of distinctWh) batchByWh.set(wh, await resolveWarehouseLotBatches(sb, wh));
+    const costByWh = new Map<string, Map<string, number>>();
+    for (const wh of distinctWh) { batchByWh.set(wh, await resolveWarehouseLotBatches(sb, wh)); costByWh.set(wh, await resolveWarehouseLotCosts(sb, wh)); }
     for (const it of ((items ?? []) as Array<{ id: string; item_code: string; description: string | null; qty_returned: number; unit_cost_centi?: number | null; item_group?: string | null; variants?: VariantAttrs | null }>)) {
       const qty = Number(it.qty_returned ?? 0);
       if (qty <= 0) continue;
@@ -215,10 +216,15 @@ async function resyncReturnInventory(sb: any, returnId: string, performedBy: str
       if (!wh) continue;
       const vk = computeVariantKey(it.item_group ?? null, it.variants ?? null);
       const batch = batchByWh.get(wh)?.get(`${it.item_code}::${vk}`) ?? null;
+      // Cost = the return line's snapshot; if it's 0 (free-entry return with no
+      // cost), fall back to the SKU's current on-hand avg cost so we don't open a
+      // 0-cost lot that a later FIFO sale would eat and under-state its COGS.
+      const lineCost = Number(it.unit_cost_centi ?? 0);
+      const unitCost = lineCost > 0 ? lineCost : (costByWh.get(wh)?.get(`${it.item_code}::${vk}`) ?? 0);
       const k = `${wh}::${it.item_code}::${vk}::${batch ?? ''}`;
       const cur = targetByBucket.get(k);
       if (cur) cur.qty += qty;
-      else targetByBucket.set(k, { warehouse_id: wh, product_code: it.item_code, variant_key: vk, product_name: it.description, qty, unit_cost_sen: Number(it.unit_cost_centi ?? 0), batch_no: batch });
+      else targetByBucket.set(k, { warehouse_id: wh, product_code: it.item_code, variant_key: vk, product_name: it.description, qty, unit_cost_sen: unitCost, batch_no: batch });
     }
   }
 

@@ -15,6 +15,7 @@
 import {
   forwardRef, memo, useEffect, useImperativeHandle, useRef, useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { formatPhone } from '@2990s/shared/phone';
 import { PhoneInput } from '../../components/PhoneInput';
 import { useDebtorSearch, type DebtorSuggestion } from '../../lib/flow-queries';

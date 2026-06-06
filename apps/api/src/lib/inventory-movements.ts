@@ -153,6 +153,45 @@ export async function resolveWarehouseLotBatches(
 }
 
 /**
+ * Resolve the CURRENT weighted-average unit cost (sen) per (product_code,
+ * variant_key) bucket from the OPEN lots in a warehouse. Used as a cost fallback
+ * for a stock-IN whose document carries no cost (e.g. a free-entry consignment
+ * return at 0): re-entering at the SKU's real on-hand cost — instead of opening a
+ * 0-cost lot that a later FIFO sale would consume and under-state COGS. Returns 0
+ * for a bucket with no open lots (genuinely unknown cost). Best-effort.
+ */
+export async function resolveWarehouseLotCosts(
+  sb: any,
+  warehouseId: string,
+): Promise<Map<string, number>> {
+  const byBucket = new Map<string, number>();
+  if (!warehouseId) return byBucket;
+  try {
+    const { data: lots, error } = await sb
+      .from('v_inventory_lots_open')
+      .select('product_code, variant_key, qty_remaining, unit_cost_sen')
+      .eq('warehouse_id', warehouseId)
+      .gt('qty_remaining', 0);
+    if (!error) {
+      const acc = new Map<string, { qty: number; cost: number }>();
+      for (const r of (lots ?? []) as Array<{ product_code: string; variant_key: string | null; qty_remaining: number; unit_cost_sen: number | null }>) {
+        const k = `${r.product_code}::${r.variant_key ?? ''}`;
+        const q = Number(r.qty_remaining ?? 0);
+        if (q <= 0) continue;
+        const a = acc.get(k) ?? { qty: 0, cost: 0 };
+        a.qty += q;
+        a.cost += q * Number(r.unit_cost_sen ?? 0);
+        acc.set(k, a);
+      }
+      for (const [k, a] of acc.entries()) {
+        byBucket.set(k, a.qty > 0 ? Math.round(a.cost / a.qty) : 0);
+      }
+    }
+  } catch { /* view absent — no cost fallback available */ }
+  return byBucket;
+}
+
+/**
  * Reverse EVERY inventory movement a document wrote, by posting an
  * opposite-direction movement (IN→OUT / OUT→IN) per original row. This is the
  * SAFE way to undo a posting: the FIFO trigger (migration 0095) treats the

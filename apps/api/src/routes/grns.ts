@@ -1617,19 +1617,27 @@ grns.patch('/:id/items/:itemId', async (c) => {
   // Now write the inventory delta (best-effort, mirroring add/delete-line).
   if (inventoryChange && editWarehouseId) {
     const warehouseId = editWarehouseId;
+    /* Carry the line's dye-lot batch (= its source PO number, like add/delete/
+       cancel do) so a batched sofa edit moves the SAME lot, not a plain-FIFO one.
+       Batch is per-PO so it applies to all four delta movements below. */
+    const editPoItemId = (prev as { purchase_order_item_id: string | null }).purchase_order_item_id;
+    const editBatch = editPoItemId
+      ? ((await resolvePoBatchByItem(sb, [editPoItemId])).get(editPoItemId) ?? null)
+      : null;
+    const batchTag = editBatch ? { batch_no: editBatch } : {};
     const movements: Array<Parameters<typeof writeMovements>[1][number]> = [];
     if (bucketChanged) {
       if (prevAccepted > 0) movements.push({
         movement_type: 'OUT', warehouse_id: warehouseId, product_code: matCode,
         variant_key: oldKey, product_name: matName, qty: prevAccepted,
         source_doc_type: 'GRN', source_doc_id: grnId, source_doc_no: editGrnNo,
-        performed_by: user.id, notes: 'GRN line edited — variant changed, reversing old bucket',
+        performed_by: user.id, notes: 'GRN line edited — variant changed, reversing old bucket', ...batchTag,
       });
       if (newAccepted > 0) movements.push({
         movement_type: 'IN', warehouse_id: warehouseId, product_code: matCode,
         variant_key: newKey, product_name: matName, qty: newAccepted, unit_cost_sen: unit,
         source_doc_type: 'GRN', source_doc_id: grnId, source_doc_no: editGrnNo,
-        performed_by: user.id, notes: 'GRN line edited — variant changed, re-adding new bucket',
+        performed_by: user.id, notes: 'GRN line edited — variant changed, re-adding new bucket', ...batchTag,
       });
     } else {
       const delta = newAccepted - prevAccepted;
@@ -1637,13 +1645,13 @@ grns.patch('/:id/items/:itemId', async (c) => {
         movement_type: 'IN', warehouse_id: warehouseId, product_code: matCode,
         variant_key: newKey, product_name: matName, qty: delta, unit_cost_sen: unit,
         source_doc_type: 'GRN', source_doc_id: grnId, source_doc_no: editGrnNo,
-        performed_by: user.id, notes: 'GRN line qty edited — receiving delta',
+        performed_by: user.id, notes: 'GRN line qty edited — receiving delta', ...batchTag,
       });
       else if (delta < 0) movements.push({
         movement_type: 'OUT', warehouse_id: warehouseId, product_code: matCode,
         variant_key: newKey, product_name: matName, qty: -delta,
         source_doc_type: 'GRN', source_doc_id: grnId, source_doc_no: editGrnNo,
-        performed_by: user.id, notes: 'GRN line qty edited — reversing delta',
+        performed_by: user.id, notes: 'GRN line qty edited — reversing delta', ...batchTag,
       });
     }
     if (movements.length > 0) {

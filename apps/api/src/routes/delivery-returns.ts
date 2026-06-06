@@ -1137,7 +1137,7 @@ deliveryReturns.patch('/:id/items/:itemId', async (c) => {
   }
 
   const { data: prev } = await sb.from('delivery_return_items')
-    .select('qty_returned, unit_price_centi, discount_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes, condition')
+    .select('qty_returned, unit_price_centi, discount_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes, condition, do_item_id')
     .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
@@ -1152,6 +1152,20 @@ deliveryReturns.patch('/:id/items/:itemId', async (c) => {
   }
 
   const qty = (it.qtyReturned ?? it.qty) !== undefined ? Number(it.qtyReturned ?? it.qty) : Number(prev.qty_returned);
+
+  /* Over-return cap (parity with create + add-line; was the one DR back door).
+     An edited qty must not push the DO line past its remaining (delivered −
+     invoiced − returned). The line's OWN current qty is already in `returned`, so
+     only the INCREASE is checked against remaining; a reduction always passes. */
+  {
+    const doItemId = (prev as { do_item_id?: string | null }).do_item_id ?? null;
+    const delta = qty - Number(prev.qty_returned ?? 0);
+    if (doItemId && delta > 0) {
+      const over = await checkDrOverRemaining(sb, [{ doItemId, qtyReturned: delta } as Record<string, unknown>]);
+      if (over) return c.json(over, 409);
+    }
+  }
+
   const unitPrice = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : Number(prev.unit_price_centi);
   const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : Number(prev.discount_centi);
   const unitCost = it.unitCostCenti !== undefined ? Number(it.unitCostCenti) : Number(prev.unit_cost_centi);
