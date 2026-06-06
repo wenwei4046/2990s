@@ -54,6 +54,9 @@ const CustomerCardInner = forwardRef<CardHandle, Props>(({ header, isEditing, lo
   useEffect(() => { setForm(initialFormFor(header)); }, [header]);
 
   const [showSuggest, setShowSuggest] = useState(false);
+  // Portal the debtor dropdown so the section card's overflow:hidden can't clip it.
+  const custInputRef = useRef<HTMLInputElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
   /* Task #99 (UI perf) — 200 ms debounce on the debtor autocomplete. */
   const debouncedDebtorQ = useDebouncedValue(form.customerName, 200);
@@ -100,6 +103,21 @@ const CustomerCardInner = forwardRef<CardHandle, Props>(({ header, isEditing, lo
 
   const inputsDisabled = !isEditing || locked;
 
+  useEffect(() => {
+    if (!showSuggest || inputsDisabled) { setMenuPos(null); return; }
+    const update = () => {
+      const el = custInputRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setMenuPos({ top: r.bottom + 4, left: r.left, width: r.width });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => { window.removeEventListener('scroll', update, true); window.removeEventListener('resize', update); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSuggest, inputsDisabled]);
+
   return (
     <section className={styles.card}>
       <header className={styles.cardHeader}>
@@ -110,6 +128,7 @@ const CustomerCardInner = forwardRef<CardHandle, Props>(({ header, isEditing, lo
           <label className={styles.field} style={{ gridColumn: 'span 3' }}>
             <span className={styles.fieldLabel}>Customer Name *</span>
             <input
+              ref={custInputRef}
               className={styles.fieldInput}
               value={form.customerName}
               disabled={inputsDisabled}
@@ -117,8 +136,11 @@ const CustomerCardInner = forwardRef<CardHandle, Props>(({ header, isEditing, lo
               onFocus={() => setShowSuggest(true)}
               onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
             />
-            {showSuggest && suggestions.length > 0 && !inputsDisabled && (
-              <ul className={styles.suggestList}>
+            {showSuggest && suggestions.length > 0 && !inputsDisabled && menuPos && createPortal(
+              <ul
+                className={styles.suggestList}
+                style={{ position: 'fixed', top: menuPos.top, left: menuPos.left, width: menuPos.width, right: 'auto', marginTop: 0, zIndex: 1000 }}
+              >
                 {suggestions.slice(0, 8).map((d, i) => (
                   <li
                     key={`${d.debtor_code ?? ''}-${i}`}
@@ -133,7 +155,8 @@ const CustomerCardInner = forwardRef<CardHandle, Props>(({ header, isEditing, lo
                     )}
                   </li>
                 ))}
-              </ul>
+              </ul>,
+              document.body,
             )}
           </label>
           <label className={styles.field}>

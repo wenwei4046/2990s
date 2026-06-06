@@ -12,6 +12,7 @@
 // ----------------------------------------------------------------------------
 
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Plus, X } from 'lucide-react';
 import type { SupplierRow } from '../lib/suppliers-queries';
 
@@ -30,17 +31,38 @@ export function MultiSupplierPicker({
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  // The dropdown is portaled to body (so an overflow:hidden ancestor can't clip
+  // it); menuRef tracks the portaled node so click-outside doesn't close on an
+  // in-dropdown click, and menuPos pins it under the trigger.
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
-  // Click-outside closes the dropdown — same pattern as other small
-  // chip pickers in the backend (e.g. AuditLogFilterBar).
+  // Click-outside closes the dropdown — must treat BOTH the wrapper and the
+  // portaled menu as "inside".
   useEffect(() => {
     if (!open) return;
     const onDocClick = (e: MouseEvent) => {
-      if (!wrapRef.current) return;
-      if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (wrapRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
     };
     document.addEventListener('mousedown', onDocClick);
     return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  // Pin the portaled dropdown under the wrapper while open.
+  useEffect(() => {
+    if (!open) { setMenuPos(null); return; }
+    const update = () => {
+      const el = wrapRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setMenuPos({ top: r.bottom + 4, left: r.left, width: r.width });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => { window.removeEventListener('scroll', update, true); window.removeEventListener('resize', update); };
   }, [open]);
 
   const selectedSet = new Set(selectedIds);
@@ -143,20 +165,19 @@ export function MultiSupplierPicker({
         </button>
       </div>
 
-      {open && (
-        <div style={{
-          position: 'absolute',
-          top: '100%',
-          left: 0,
-          right: 0,
-          marginTop: 4,
+      {open && menuPos && createPortal(
+        <div ref={menuRef} style={{
+          position: 'fixed',
+          top: menuPos.top,
+          left: menuPos.left,
+          width: menuPos.width,
           maxHeight: 280,
           overflowY: 'auto',
           background: 'var(--c-paper)',
           border: '1px solid var(--line)',
           borderRadius: 'var(--radius-sm)',
           boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
-          zIndex: 30,
+          zIndex: 1000,
         }}>
           {suppliers.length === 0 ? (
             <div style={{ padding: '12px', color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>
@@ -188,7 +209,8 @@ export function MultiSupplierPicker({
               </label>
             );
           })}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

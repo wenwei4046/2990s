@@ -25,7 +25,8 @@
 //      POST (detail page) or stash in local draft state (new-SO page)
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
@@ -79,11 +80,30 @@ export const SoLineItemModal = ({
   // seat_height_prices for sofa pricing + mattress size pool.
   const [picked, setPicked] = useState<MfgProductRow | null>(null);
 
+  // Portal the SKU dropdown so an overflow:hidden ancestor can't clip it.
+  const pickerInputRef = useRef<HTMLInputElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
+
   const [draft, setDraft] = useState<SoLineDraft>(initial ?? {
     itemCode: '', itemGroup: 'others', description: '', uom: 'UNIT',
     qty: 1, unitPriceCenti: 0, discountCenti: 0, unitCostCenti: 0,
     variants: {}, remark: '',
   });
+
+  const showProductPicker = Boolean(search.trim()) && candidates.length > 0 && search !== draft.itemCode;
+  useEffect(() => {
+    if (!showProductPicker) { setMenuPos(null); return; }
+    const update = () => {
+      const el = pickerInputRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setMenuPos({ top: r.bottom + 4, left: r.left, width: r.width });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => { window.removeEventListener('scroll', update, true); window.removeEventListener('resize', update); };
+  }, [showProductPicker]);
 
   const pickProduct = (p: MfgProductRow) => {
     setPicked(p);
@@ -170,13 +190,17 @@ export const SoLineItemModal = ({
             <p className={styles.subHead}>Product</p>
             <div className={styles.pickerWrap}>
               <input
+                ref={pickerInputRef}
                 className={styles.fieldInput}
                 placeholder="Search by code or name…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
-              {search.trim() && candidates.length > 0 && search !== draft.itemCode && (
-                <ul className={styles.suggestList}>
+              {showProductPicker && menuPos && createPortal(
+                <ul
+                  className={styles.suggestList}
+                  style={{ position: 'fixed', top: menuPos.top, left: menuPos.left, width: menuPos.width, right: 'auto', marginTop: 0, zIndex: 1000 }}
+                >
                   {candidates.slice(0, 10).map((p) => (
                     <li key={p.id} className={styles.suggestItem} onMouseDown={() => pickProduct(p)}>
                       <div>
@@ -187,7 +211,8 @@ export const SoLineItemModal = ({
                       </div>
                     </li>
                   ))}
-                </ul>
+                </ul>,
+                document.body,
               )}
             </div>
             {draft.itemCode && (
