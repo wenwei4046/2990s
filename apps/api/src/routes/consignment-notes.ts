@@ -324,6 +324,76 @@ consignmentNotes.get('/', async (c) => {
   return c.json({ deliveryOrders: consignmentNotesOut });
 });
 
+// ── Deliverable Consignment Order lines (From-Order multi-picker) ─────────
+// Every consignment_sales_order_item with outstanding = ordered (qty) −
+// already-noted (sum of qty across non-cancelled Consignment Notes linked to
+// that order line via consignment_so_item_id). Only outstanding > 0 lines are
+// pickable. Mirrors the SO→DO from-so picker. MUST precede /:id.
+consignmentNotes.get('/deliverable-order-lines', async (c) => {
+  const sb = c.get('supabase');
+  const { data: orders, error: oErr } = await sb
+    .from('consignment_sales_orders')
+    .select('doc_no, debtor_code, debtor_name')
+    .order('so_date', { ascending: false })
+    .limit(1000);
+  if (oErr) return c.json({ error: 'load_failed', reason: oErr.message }, 500);
+  const orderList = (orders ?? []) as Array<{ doc_no: string; debtor_code: string | null; debtor_name: string | null }>;
+  if (orderList.length === 0) return c.json({ lines: [] });
+  const orderByDoc = new Map(orderList.map((o) => [o.doc_no, o]));
+  const docNos = orderList.map((o) => o.doc_no);
+
+  const { data: items, error: iErr } = await sb
+    .from('consignment_sales_order_items')
+    .select('id, doc_no, item_code, item_group, description, description2, uom, qty, unit_price_centi, discount_centi, unit_cost_centi, variants, cancelled')
+    .in('doc_no', docNos);
+  if (iErr) return c.json({ error: 'load_failed', reason: iErr.message }, 500);
+  const itemList = (items ?? []).filter((it: Record<string, unknown>) => !it.cancelled) as Array<Record<string, unknown>>;
+  if (itemList.length === 0) return c.json({ lines: [] });
+  const itemIds = itemList.map((it) => it.id as string);
+
+  // Already-delivered per CO line — only count non-cancelled notes.
+  const { data: noteRows } = await sb
+    .from('consignment_delivery_orders')
+    .select('id, status')
+    .neq('status', 'CANCELLED');
+  const liveNoteIds = new Set(((noteRows ?? []) as Array<{ id: string }>).map((r) => r.id));
+  const { data: noteItems } = await sb
+    .from('consignment_delivery_order_items')
+    .select('consignment_delivery_order_id, consignment_so_item_id, qty')
+    .in('consignment_so_item_id', itemIds);
+  const deliveredByItem = new Map<string, number>();
+  for (const r of ((noteItems ?? []) as Array<{ consignment_delivery_order_id: string; consignment_so_item_id: string | null; qty: number }>)) {
+    if (!r.consignment_so_item_id || !liveNoteIds.has(r.consignment_delivery_order_id)) continue;
+    deliveredByItem.set(r.consignment_so_item_id, (deliveredByItem.get(r.consignment_so_item_id) ?? 0) + Number(r.qty ?? 0));
+  }
+
+  const lines = itemList.map((it) => {
+    const o = orderByDoc.get(it.doc_no as string);
+    const ordered = Number(it.qty ?? 0);
+    const delivered = deliveredByItem.get(it.id as string) ?? 0;
+    return {
+      orderItemId: it.id as string,
+      orderDocNo: it.doc_no as string,
+      debtorCode: o?.debtor_code ?? null,
+      debtorName: o?.debtor_name ?? null,
+      itemCode: it.item_code as string,
+      itemGroup: (it.item_group as string | null) ?? null,
+      description: (it.description as string | null) ?? null,
+      description2: (it.description2 as string | null) ?? null,
+      uom: (it.uom as string | null) ?? null,
+      ordered,
+      delivered,
+      outstanding: ordered - delivered,
+      unitPriceCenti: Number(it.unit_price_centi ?? 0),
+      discountCenti: Number(it.discount_centi ?? 0),
+      unitCostCenti: Number(it.unit_cost_centi ?? 0),
+      variants: it.variants ?? null,
+    };
+  }).filter((l) => l.outstanding > 0);
+
+  return c.json({ lines });
+});
+
 // ── Detail ──────────────────────────────────────────────────────────────
 consignmentNotes.get('/:id', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');

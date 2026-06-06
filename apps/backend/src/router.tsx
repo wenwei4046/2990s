@@ -132,6 +132,7 @@ const ConsignmentOrderDetail = lazyRetry(() => import('./pages/ConsignmentOrderD
 // Consignment Note (faithful DO-clone module, /consignment-notes API).
 const ConsignmentNotes = lazyRetry(() => import('./pages/ConsignmentNotes').then(m => ({ default: m.ConsignmentNotes })));
 const ConsignmentNoteNew = lazyRetry(() => import('./pages/ConsignmentNoteNew').then(m => ({ default: m.ConsignmentNoteNew })));
+const ConsignmentNoteFromOrder = lazyRetry(() => import('./pages/ConsignmentNoteFromOrder').then(m => ({ default: m.ConsignmentNoteFromOrder })));
 const ConsignmentNoteDetail = lazyRetry(() => import('./pages/ConsignmentNoteDetail').then(m => ({ default: m.ConsignmentNoteDetail })));
 // Consignment Return (faithful DR-clone module, /consignment-returns API).
 const ConsignmentReturns = lazyRetry(() => import('./pages/ConsignmentReturns').then(m => ({ default: m.ConsignmentReturns })));
@@ -231,6 +232,7 @@ export const router = createBrowserRouter([
       // STATIC, must precede the :id route.
       { path: 'consignment-note', element: <ConsignmentNotes /> },
       { path: 'consignment-note/new', element: <ConsignmentNoteNew /> },
+      { path: 'consignment-note/from-order', element: <ConsignmentNoteFromOrder /> },
       { path: 'consignment-note/:id', element: <ConsignmentNoteDetail /> },
       // Consignment Return — DR-clone module (/consignment-returns API). /new is
       // STATIC, must precede the :id route.

@@ -57,6 +57,35 @@ export const useConsignmentNoteDetail = (id: string | null) => useQuery({
   enabled: Boolean(id), staleTime: 30_000, retry: 1, retryDelay: 800,
 });
 
+/* ── Deliverable Consignment Order lines (From-Order multi-picker) ────── */
+export type DeliverableOrderLine = {
+  orderItemId: string;
+  orderDocNo: string;
+  debtorCode: string | null;
+  debtorName: string | null;
+  itemCode: string;
+  itemGroup: string | null;
+  description: string | null;
+  description2: string | null;
+  uom: string | null;
+  ordered: number;
+  delivered: number;
+  outstanding: number;
+  unitPriceCenti: number;
+  discountCenti: number;
+  unitCostCenti: number;
+  variants: unknown;
+};
+
+export const useDeliverableOrderLines = () => useQuery({
+  queryKey: ['consignment-note', 'deliverable-order-lines'],
+  queryFn: () => authedFetch<{ lines: DeliverableOrderLine[] }>(
+    `/consignment-notes/deliverable-order-lines`,
+  ).then((r) => r.lines),
+  staleTime: 30_000,
+  retry: 1,
+});
+
 /* ── Create ──────────────────────────────────────────────────────────── */
 export const useCreateConsignmentNote = () => {
   const qc = useQueryClient();

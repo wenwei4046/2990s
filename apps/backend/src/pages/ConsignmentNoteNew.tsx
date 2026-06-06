@@ -22,7 +22,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import {
@@ -45,7 +45,7 @@ import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-type DraftLine = SoLineDraft & { rid: string };
+type DraftLine = SoLineDraft & { rid: string; soItemId?: string };
 
 const newLine = (): DraftLine => ({
   ...emptySoLine(),
@@ -61,6 +61,7 @@ export const ConsignmentNoteNew = () => {
   // Convert-from: a Consignment Order (=SO) this note ships against. Mirrors the
   // DO's ?fromSo= prefill — seed header + lines from the order, free-edit after.
   const fromConsignmentOrder = searchParams.get('fromConsignmentOrder');
+  const fromPicks = searchParams.get('fromPicks') === '1';
 
   const create = useCreateConsignmentNote();
   const addPayment = useAddConsignmentNotePayment();
@@ -148,7 +149,10 @@ export const ConsignmentNoteNew = () => {
     setEmergencyRel(str(co.emergency_contact_relationship));
     setEmergencyPhone(str(co.emergency_contact_phone));
 
-    if (coItems.length > 0) {
+    // When we arrived from the multi-line picker (fromPicks) the operator already
+    // chose specific order lines + quantities — the picker-merge effect below
+    // drives the lines. Here we only seed the HEADER from the first order.
+    if (!fromPicks && coItems.length > 0) {
       setLines(coItems.map((it, idx) => ({
         ...newLine(),
         rid: `l${Date.now()}-${idx}-${str(it.id).slice(0, 6)}`,
@@ -166,6 +170,40 @@ export const ConsignmentNoteNew = () => {
 
     setPrefilled(true);
   }, [fromConsignmentOrder, prefilled, coDetail.data]);
+
+  // From-Order multi-picker merge (fromPicks): seed lines from the stash, each
+  // carrying its source CO-line id so the note links back (delivery tracking).
+  const [picksLoaded, setPicksLoaded] = useState(false);
+  useEffect(() => {
+    if (!fromPicks || picksLoaded) return;
+    type Stash = {
+      orderItemId: string; orderDocNo: string;
+      debtorCode: string | null; debtorName: string | null;
+      itemCode: string; itemGroup: string | null; description: string | null;
+      uom: string | null; qty: number;
+      unitPriceCenti: number; discountCenti: number; unitCostCenti: number; variants: unknown;
+    };
+    let stash: Stash[] | null = null;
+    try { stash = JSON.parse(sessionStorage.getItem('cnFromOrderPicks') ?? 'null'); }
+    catch { stash = null; }
+    if (!stash || stash.length === 0) return;
+    setLines(stash.map((s, idx) => ({
+      ...newLine(),
+      rid: `l${Date.now()}-${idx}-${s.orderItemId.slice(0, 6)}`,
+      itemGroup: (s.itemGroup as string) || 'others',
+      itemCode: s.itemCode ?? '',
+      description: s.description ?? '',
+      uom: s.uom ?? 'UNIT',
+      qty: Number(s.qty ?? 1),
+      unitPriceCenti: Number(s.unitPriceCenti ?? 0),
+      discountCenti: Number(s.discountCenti ?? 0),
+      unitCostCenti: Number(s.unitCostCenti ?? 0),
+      variants: (s.variants as Record<string, unknown>) ?? {},
+      soItemId: s.orderItemId,
+    })));
+    sessionStorage.removeItem('cnFromOrderPicks');
+    setPicksLoaded(true);
+  }, [fromPicks, picksLoaded]);
 
   const loadingPrefill = Boolean(fromConsignmentOrder) && !prefilled && coDetail.isLoading;
 
@@ -264,6 +302,7 @@ export const ConsignmentNoteNew = () => {
           discountCenti: l.discountCenti,
           unitCostCenti: l.unitCostCenti,
           variants: l.variants,
+          consignmentSoItemId: l.soItemId,
         })),
       },
       {
@@ -300,6 +339,9 @@ export const ConsignmentNoteNew = () => {
           </h1>
         </div>
         <div className={styles.actions}>
+          <Button variant="ghost" size="md" onClick={() => navigate('/consignment-note/from-order')}>
+            <ArrowRightLeft {...ICON} /> From Consignment Order
+          </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/consignment-note')}>
             <X {...ICON} /> Cancel
           </Button>
