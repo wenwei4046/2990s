@@ -369,6 +369,51 @@ describe('cartLinesToSoItems', () => {
   });
 });
 
+describe('pos-handover-so — remark + extraAddonAmountRM threading', () => {
+  it('threads remark + declared extra into variants and folds extra into the price', () => {
+    const line: CartLine = {
+      key: 'cfg-test1', qty: 1,
+      config: {
+        kind: 'size', productId: 'mfg-1', productName: '2990 AKKA-FIRM', sizeId: 'king',
+        total: 3190,                       // 2990 base + 200 extra, folded at Add-to-Cart
+        summary: 'King',
+        remark: 'deliver before CNY',
+        extraAddonAmountRM: 200,
+      },
+    };
+    const item = cartLineToSoItem(line, new Map());
+    expect(item.unitPriceCenti).toBe(319000);
+    expect(item.variants).toMatchObject({ remark: 'deliver before CNY', extraAddonAmountRM: 200 });
+  });
+
+  it('per-unit semantics: qty multiplies the extra (unit price carries it once)', () => {
+    const line: CartLine = {
+      key: 'cfg-test2', qty: 2,
+      config: {
+        kind: 'size', productId: 'mfg-1', productName: '2990 AKKA-FIRM', sizeId: 'king',
+        total: 3190, summary: 'King', extraAddonAmountRM: 200,
+      },
+    };
+    const item = cartLineToSoItem(line, new Map());
+    expect(item.unitPriceCenti).toBe(319000);   // per-unit; server does qty × unit
+    expect(item.qty).toBe(2);
+  });
+
+  it('whitespace-only remark and zero extra are omitted from variants', () => {
+    const line: CartLine = {
+      key: 'cfg-test3', qty: 1,
+      config: {
+        kind: 'size', productId: 'mfg-1', productName: '2990 AKKA-FIRM', sizeId: 'king',
+        total: 2990, summary: 'King', remark: '   ', extraAddonAmountRM: 0,
+      },
+    };
+    const item = cartLineToSoItem(line, new Map());
+    const v = (item.variants ?? {}) as Record<string, unknown>;
+    expect('remark' in v).toBe(false);
+    expect('extraAddonAmountRM' in v).toBe(false);
+  });
+});
+
 describe('pickSoItemCode', () => {
   const base = (over: Partial<Parameters<typeof pickSoItemCode>[1]> = {}) => ({
     id: 'mfg-rep', code: 'REP-CODE', model_id: 'model-1', category: 'MATTRESS', size_code: 'Q', ...over,

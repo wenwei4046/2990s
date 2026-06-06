@@ -45,6 +45,13 @@ export interface SofaConfigSnapshot {
   // the build against the code's reward combos + marks the code USED at Confirm.
   pwp?: boolean;
   pwpCode?: string;
+  /** Per-line remark keyed on the product page (spec 2026-06-06). Rides the
+   *  SO variants → mfg_sales_order_items.remark. */
+  remark?: string;
+  /** Extra charge keyed on the product page, whole MYR PER UNIT (spec D1).
+   *  Already folded into `total`; also declared in variants so the server
+   *  drift gate adds the same amount to its authoritative figure. */
+  extraAddonAmountRM?: number;
   total: number;
   summary: string;       // e.g. "3+L · Bundle · Velvet/Sand"
 }
@@ -66,6 +73,13 @@ export interface SizeConfigSnapshot {
   // Original (non-PWP) total — so the cart can auto-revert the price if the
   // same-cart trigger is removed and this line's reserved code is freed.
   pwpOriginalTotal?: number;
+  /** Per-line remark keyed on the product page (spec 2026-06-06). Rides the
+   *  SO variants → mfg_sales_order_items.remark. */
+  remark?: string;
+  /** Extra charge keyed on the product page, whole MYR PER UNIT (spec D1).
+   *  Already folded into `total`; also declared in variants so the server
+   *  drift gate adds the same amount to its authoritative figure. */
+  extraAddonAmountRM?: number;
   total: number;
   summary: string;       // e.g. "Queen"
   /** Paid-extra add-ons attached to this configured line (e.g. extra pillows
@@ -134,6 +148,13 @@ export interface BedframeConfigSnapshot {
   // Original (non-PWP) total — auto-revert source when the same-cart trigger
   // (and its reserved code) is removed from the cart.
   pwpOriginalTotal?: number;
+  /** Per-line remark keyed on the product page (spec 2026-06-06). Rides the
+   *  SO variants → mfg_sales_order_items.remark. */
+  remark?: string;
+  /** Extra charge keyed on the product page, whole MYR PER UNIT (spec D1).
+   *  Already folded into `total`; also declared in variants so the server
+   *  drift gate adds the same amount to its authoritative figure. */
+  extraAddonAmountRM?: number;
   // Display-label snapshots (parallel to the *Id fields) so the cart, printed
   // Sales Order, and Backend detail render the spec without a join.
   gapLabel?: string | null;

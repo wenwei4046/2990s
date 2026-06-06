@@ -295,6 +295,8 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     }
     if (config.specialLabels && config.specialLabels.length > 0) v.specialLabels = config.specialLabels;
     if (config.specialChoices && Object.keys(config.specialChoices).length > 0) v.specialChoices = config.specialChoices;
+    if (config.remark?.trim())          v.remark = config.remark.trim();
+    if ((config.extraAddonAmountRM ?? 0) > 0) v.extraAddonAmountRM = config.extraAddonAmountRM;
     if (config.summary)         v.summary = config.summary;
     return Object.keys(v).length > 0 ? v : null;
   }
@@ -344,6 +346,8 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     }
     if (config.specialLabels && config.specialLabels.length > 0) v.specialLabels = config.specialLabels;
     if (config.specialChoices && Object.keys(config.specialChoices).length > 0) v.specialChoices = config.specialChoices;
+    if (config.remark?.trim())          v.remark = config.remark.trim();
+    if ((config.extraAddonAmountRM ?? 0) > 0) v.extraAddonAmountRM = config.extraAddonAmountRM;
     if (config.summary)               v.summary = config.summary;
     return v;
   }
@@ -365,6 +369,8 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     }
     if (config.specialLabels && config.specialLabels.length > 0) v.specialLabels = config.specialLabels;
     if (config.specialChoices && Object.keys(config.specialChoices).length > 0) v.specialChoices = config.specialChoices;
+    if (config.remark?.trim())          v.remark = config.remark.trim();
+    if ((config.extraAddonAmountRM ?? 0) > 0) v.extraAddonAmountRM = config.extraAddonAmountRM;
     if (config.summary)               v.summary = config.summary;
     return v;
   }
