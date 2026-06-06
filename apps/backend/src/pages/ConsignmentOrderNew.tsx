@@ -994,14 +994,9 @@ export const ConsignmentOrderNew = () => {
         </div>
       </section>
 
-      {/* ── PAYMENTS (shared with Detail, draft mode) ─────────────────── */}
-      <PaymentsTable
-        docNo={null}
-        payments={paymentDrafts}
-        onChange={setPaymentDrafts}
-        grandTotalCenti={subtotalCenti}
-        currency="MYR"
-      />
+      {/* PAYMENTS removed (Wei Siang 2026-06-06): a consignment is goods placed
+          on loan at the showroom, not a sale — no money is collected, so there
+          is no payments ledger. */}
 
     </div>
   );

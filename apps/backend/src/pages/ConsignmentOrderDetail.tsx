@@ -636,71 +636,10 @@ export const ConsignmentOrderDetail = () => {
         )}
       </section>
 
-      {/* ── Payments ledger (read-only) ───────────────────────────
-          Rendered inline via the consignment payment hooks because the shared
-          PaymentsTable saved-mode is hardwired to the SO endpoints. */}
-      <PaymentsSection docNo={header.doc_no} grandTotalCenti={header.local_total_centi} currency={header.currency} />
+      {/* PAYMENTS removed (Wei Siang 2026-06-06): a consignment is goods placed
+          on loan at the showroom, not a sale — no money is collected, so there
+          is no payments ledger. */}
     </div>
-  );
-};
-
-/* ════════════════════════════════════════════════════════════════════════
-   Payments ledger — read-only view of the consignment payment ledger.
-   ════════════════════════════════════════════════════════════════════════ */
-const PaymentsSection = ({ docNo, grandTotalCenti, currency }: {
-  docNo: string; grandTotalCenti: number; currency: string;
-}) => {
-  const q = useConsignmentOrderPayments(docNo);
-  const payments = q.data ?? [];
-  const paidCenti = payments.reduce((s, p) => s + (p.amount_centi ?? 0), 0);
-  const balanceCenti = grandTotalCenti - paidCenti;
-
-  return (
-    <section className={styles.card}>
-      <header className={styles.cardHeader}>
-        <h2 className={styles.cardTitle}>Payments</h2>
-      </header>
-      <div className={styles.cardBody}>
-        {q.isLoading ? (
-          <p className={styles.fieldLabel}>Loading…</p>
-        ) : payments.length === 0 ? (
-          <p className={styles.muted}>No payments recorded yet.</p>
-        ) : (
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Method</th>
-                <th>Approval</th>
-                <th>Collected By</th>
-                <th className={styles.tableRight}>Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {payments.map((p: ConsignmentPayment) => (
-                <tr key={p.id}>
-                  <td>{fmtDateOrDash(p.paid_at)}</td>
-                  <td style={{ textTransform: 'capitalize' }}>
-                    {p.method}{p.merchant_provider ? ` · ${p.merchant_provider}` : ''}{p.online_type ? ` · ${p.online_type}` : ''}
-                  </td>
-                  <td>{p.approval_code ?? '—'}</td>
-                  <td>{p.collected_by_name ?? '—'}</td>
-                  <td className={styles.priceCell}>{fmtRm(p.amount_centi, currency)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        <div style={{
-          display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-4)',
-          marginTop: 'var(--space-3)', paddingTop: 'var(--space-3)',
-          borderTop: '1px solid var(--line)', fontVariantNumeric: 'tabular-nums',
-        }}>
-          <span>Paid <strong style={{ color: 'var(--c-secondary-a, #2F5D4F)' }}>{fmtRm(paidCenti, currency)}</strong></span>
-          <span>Balance <strong style={{ color: balanceCenti > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)' }}>{fmtRm(balanceCenti, currency)}</strong></span>
-        </div>
-      </div>
-    </section>
   );
 };
 

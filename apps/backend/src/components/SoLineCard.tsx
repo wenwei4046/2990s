@@ -25,6 +25,7 @@
 // ----------------------------------------------------------------------------
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Trash2, ImagePlus, X, ChevronDown, ChevronRight } from 'lucide-react';
 import {
   computeMfgLinePrice,
@@ -175,6 +176,13 @@ const SoLineCardInner = ({
   const [search, setSearch] = useState(draft.description || draft.itemCode || '');
   const [picked, setPicked]         = useState<MfgProductRow | null>(null);
   const [showPicker, setShowPicker]   = useState(false);
+  // The SKU dropdown is rendered in a portal (document.body) and positioned with
+  // position:fixed from the input's live rect. Without this it lived inside the
+  // section `.card`, whose `overflow:hidden` (rounded corners) clipped it off —
+  // the options got cut at the card's bottom edge on every doc that uses this
+  // card (SO / DO / DR / consignment). Wei Siang 2026-06-06.
+  const pickerWrapRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const [specialsOpen, setSpecialsOpen] = useState(false);
   /* Commander 2026-05-30 — Unit Price is a free-typed field. Keep the raw
      typed text in local state so multi-digit entry (e.g. 1000) and
@@ -504,6 +512,25 @@ const SoLineCardInner = ({
 
   /* ── Render ─────────────────────────────────────────────────────── */
 
+  // Keep the portal'd SKU dropdown pinned under its input while open; reposition
+  // on scroll/resize so it tracks the page.
+  useEffect(() => {
+    if (!showPicker || !isEditing) { setMenuPos(null); return; }
+    const update = () => {
+      const el = pickerWrapRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setMenuPos({ top: r.bottom + 4, left: r.left, width: r.width });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [showPicker, isEditing]);
+
   return (
     <div className={styles.card}>
       {/* ── Main single row ────────────────────────────────────────── */}
@@ -512,7 +539,7 @@ const SoLineCardInner = ({
         <span className={styles.lineNo}>{index + 1}</span>
 
         {/* 2. Item picker (SKU search → code on top, description below) */}
-        <div className={styles.pickerWrap}>
+        <div className={styles.pickerWrap} ref={pickerWrapRef}>
           {draft.itemCode && search === draft.description && !showPicker ? (
             <button
               type="button"
@@ -538,39 +565,42 @@ const SoLineCardInner = ({
               onChange={(e) => { setSearch(e.target.value); setShowPicker(true); }}
             />
           )}
-          {showPicker && isEditing && candidates.length > 0 && (
-            <ul className={styles.suggestList}>
-              {/* Commander 2026-05-27: picker dropdown rows show description +
-                  price only — code chip line + category pill stripped so the
-                  list is one scannable line per SKU. The code still binds on
-                  click (pickProduct uses p.code) and shows on the collapsed
-                  picker; only the dropdown's per-row chrome was trimmed. */}
-              {candidates.slice(0, 50).map((p) => (
-                <li
-                  key={p.id}
-                  className={styles.suggestItem}
-                  onMouseDown={() => { pickProduct(p); setShowPicker(false); }}
-                >
-                  <div className={styles.suggestItemMeta}>
-                    {p.name}
-                  </div>
+          {showPicker && isEditing && menuPos && createPortal(
+            /* Portal to body + position:fixed so the dropdown escapes the
+               section card's overflow:hidden clip and floats over whatever is
+               below (e.g. the next card). Inline top/left/width override the
+               class's absolute top:100%/left/right. */
+            <ul
+              className={styles.suggestList}
+              style={{ position: 'fixed', top: menuPos.top, left: menuPos.left, width: menuPos.width, right: 'auto', marginTop: 0, zIndex: 1000 }}
+            >
+              {candidates.length > 0 ? (
+                /* Commander 2026-05-27: picker rows show description only — one
+                   scannable line per SKU. The code still binds on click. */
+                candidates.slice(0, 50).map((p) => (
+                  <li
+                    key={p.id}
+                    className={styles.suggestItem}
+                    onMouseDown={() => { pickProduct(p); setShowPicker(false); }}
+                  >
+                    <div className={styles.suggestItemMeta}>
+                      {p.name}
+                    </div>
+                  </li>
+                ))
+              ) : (
+                <li className={styles.suggestItem} style={{ color: 'var(--fg-muted)', cursor: 'default' }}>
+                  {/* Task #102 — Distinguish "type more" (gate hasn't tripped)
+                      from "no matches" (server returned []). */}
+                  {trimmedSearch.length < 2
+                    ? 'Type at least 2 characters to search…'
+                    : productsQuery.isFetching
+                      ? 'Searching…'
+                      : `No products match "${trimmedSearch}".`}
                 </li>
-              ))}
-            </ul>
-          )}
-          {showPicker && isEditing && candidates.length === 0 && (
-            <ul className={styles.suggestList}>
-              <li className={styles.suggestItem} style={{ color: 'var(--fg-muted)', cursor: 'default' }}>
-                {/* Task #102 — Distinguish "type more" (gate hasn't tripped)
-                    from "no matches" (server returned []) so the user knows
-                    why nothing is showing. */}
-                {trimmedSearch.length < 2
-                  ? 'Type at least 2 characters to search…'
-                  : productsQuery.isFetching
-                    ? 'Searching…'
-                    : `No products match "${trimmedSearch}".`}
-              </li>
-            </ul>
+              )}
+            </ul>,
+            document.body,
           )}
         </div>
 
