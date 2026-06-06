@@ -234,6 +234,9 @@ type DraftModeProps = {
   grandTotalCenti: number;
   currency?: string;
   locked?: boolean;
+  /** Render the per-draft slip uploader (SO-route batching only — the SO payments
+   *  endpoint requires a slip per payment; DO/SI endpoints don't accept one). */
+  slipUpload?: boolean;
 };
 
 export type PaymentsTableProps = SavedModeProps | DraftModeProps;
@@ -247,7 +250,7 @@ export type PaymentsTableProps = SavedModeProps | DraftModeProps;
    ════════════════════════════════════════════════════════════════════════ */
 const PaymentSlipThumb = ({ docNo, payment, orderSlipUrl, orderSlipType }: {
   docNo: string;
-  payment: SoPayment & { id: string };
+  payment: SoPayment;
   orderSlipUrl: string | null;
   orderSlipType: string;
 }) => {
@@ -568,7 +571,7 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                     {isSaved ? (
                       <PaymentSlipThumb
                         docNo={(props as SavedModeProps).docNo}
-                        payment={p as SoPayment & { id: string }}
+                        payment={p}
                         orderSlipUrl={slipUrl}
                         orderSlipType={slipType}
                       />
@@ -782,13 +785,14 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                 </span>
                 <span className={paymentsStyles.cell}>
                   <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end', alignItems: 'center' }}>
-                    {/* DRAFT mode with no Slip column (DO / SI / consignment
-                        batching pages) — offer an OPTIONAL slip uploader inline
-                        before the actions. Those parent pages POST to their own
-                        endpoints, which ignore the extra slipUploadSessionId,
-                        so there is no commit gate here. */}
-                    {!isSaved && !showSlip && (
+                    {/* DRAFT mode slip uploader — opt-in via slipUpload prop.
+                        Only the SO-route batching page (SalesOrderNew) sets
+                        slipUpload; DO / SI / consignment pages do NOT, so their
+                        tables render no uploader (the endpoint doesn't accept
+                        one). Required-marked ("Slip *") when rendered here. */}
+                    {!isSaved && (props as DraftModeProps).slipUpload && (
                       <SlipUploadField
+                        required
                         disabled={locked}
                         onConfirmed={(sid) => patchDraft(d.uid, { slipUploadSessionId: sid })}
                         onCleared={() => patchDraft(d.uid, { slipUploadSessionId: null })}

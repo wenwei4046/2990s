@@ -1207,6 +1207,7 @@ export const SalesOrderNew = () => {
         onChange={setPaymentDrafts}
         grandTotalCenti={subtotalCenti}
         currency="MYR"
+        slipUpload
       />
 
     </div>
