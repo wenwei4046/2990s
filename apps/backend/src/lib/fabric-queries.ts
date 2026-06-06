@@ -66,6 +66,41 @@ export type FabricTrackingRow = {
   series: string | null;
 };
 
+/* SO-parity (Loo 2026-06-06) — the SELLING-side colour rows the POS fabric
+ * picker reads (fabric_colours.colour_id == fabric_trackings.fabric_code, kept
+ * in sync by the fabric-tracking route's syncFabricToSellingLibrary). The SO
+ * line editor's Fabrics dropdown now sources THESE (filtered by the Model's
+ * allowed_options.fabrics) instead of the raw procurement fabric_trackings
+ * list, so Backend offers exactly what POS offers per Model. */
+export type FabricColourRow = {
+  fabricId: string;   // fabric_library.id — the series, e.g. 'CG' (drives the tier add-on)
+  colourId: string;   // == fabric_trackings.fabric_code, e.g. 'CG-002'
+  label: string | null;
+  swatchHex: string | null;
+  sortOrder: number;
+};
+
+export const useFabricColoursActive = () =>
+  useQuery({
+    queryKey: ['fabric-colours', 'active'],
+    staleTime: 60_000,
+    queryFn: async (): Promise<FabricColourRow[]> => {
+      const { data, error } = await supabase
+        .from('fabric_colours')
+        .select('fabric_id, colour_id, label, swatch_hex, active, sort_order')
+        .eq('active', true)
+        .order('sort_order');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        fabricId: r.fabric_id,
+        colourId: r.colour_id,
+        label: r.label,
+        swatchHex: r.swatch_hex,
+        sortOrder: r.sort_order,
+      }));
+    },
+  });
+
 export function useFabricTrackings(opts?: {
   category?: FabricCategoryValue;
   search?: string;

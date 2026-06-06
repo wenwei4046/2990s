@@ -28,12 +28,21 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Trash2, ImagePlus, X, ChevronDown, ChevronRight } from 'lucide-react';
 import {
   computeMfgLinePrice,
+  buildSpecialsPoolFromAddons,
   type MfgPricingProduct,
   type MfgFabricTier,
 } from '@2990s/shared/mfg-pricing';
 import { missingVariantAxes } from '@2990s/shared/so-variant-rule';
-import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
-import { useFabricTrackings, type FabricTrackingRow } from '../lib/fabric-queries';
+import {
+  useMfgProducts,
+  useMaintenanceConfig,
+  useSpecialAddons,
+  useModelAllowedOptionsByCode,
+  type MfgProductRow,
+  type SpecialAddonRow,
+} from '../lib/mfg-products-queries';
+import { useFabricTrackings, useFabricColoursActive, type FabricTrackingRow } from '../lib/fabric-queries';
+import { useFabricLibrary } from '../lib/queries';
 import {
   useUploadSoItemPhoto,
   useDeleteSoItemPhoto,
@@ -144,8 +153,17 @@ const SoLineCardInner = ({
 }) => {
   const maintQ   = useMaintenanceConfig('master');
   const maint    = maintQ.data?.data ?? null;
+  /* fabric_trackings stays ONLY for the read-only pricing-tier breakdown
+     (pickedFabric below) — the Fabrics DROPDOWN now sources the selling-side
+     fabric_colours, same as POS (SO-parity, Loo 2026-06-06). */
   const fabricsQ = useFabricTrackings();
   const fabrics  = fabricsQ.data ?? [];
+  const fabricColoursQ = useFabricColoursActive();
+  const fabricLibQ     = useFabricLibrary();
+  /* Special Add-ons (the per-Model system POS sells from + the server prices
+     from). Replaces the legacy maintenance_config specials/sofaSpecials pools. */
+  const specialAddonsQ = useSpecialAddons();
+  const specialDefs    = useMemo(() => specialAddonsQ.data ?? [], [specialAddonsQ.data]);
 
   /* SO-SKU spec P4 (D4, Loo 2026-06-05) — the unit price is LOCKED to the
      SKU Master sell price for everyone below admin. It auto-fills on pick and
@@ -269,14 +287,18 @@ const SoLineCardInner = ({
   }, [computedTotalHeight, draft.itemGroup]);
 
   /* PR #147 — Variant edits add the key to overriddenKeys so cascade
-     leaves this line alone when LINE 1 changes. */
-  const setVariant = (k: string, v: string | number | string[]) => {
-    const nextOverrides = Array.from(new Set([...(draft.overriddenKeys ?? []), k]));
+     leaves this line alone when LINE 1 changes.
+     SO-parity (Loo 2026-06-06) — setVariants writes several keys atomically
+     (a fabric pick lands fabricCode + colourId + fabricId + labels in ONE
+     patch, mirroring what the POS handover payload sends per line). */
+  const setVariants = (patch: Record<string, unknown>) => {
+    const nextOverrides = Array.from(new Set([...(draft.overriddenKeys ?? []), ...Object.keys(patch)]));
     onChange({
-      variants: { ...draft.variants, [k]: v },
+      variants: { ...draft.variants, ...patch },
       overriddenKeys: nextOverrides,
     });
   };
+  const setVariant = (k: string, v: string | number | string[]) => setVariants({ [k]: v });
 
   /* PR #127 — HOOKKA multi-select Special Orders. */
   const specialsList = (v: unknown): string[] => {
@@ -313,6 +335,16 @@ const SoLineCardInner = ({
       seatHeightPrices: picked.seat_height_prices ?? null,
     };
     const specs = specialsList(draft.variants.specials ?? draft.variants.special);
+    /* SO-parity (Loo 2026-06-06) — price the picked specials from the
+       special_addons defs via the SAME pure pool builder the server recompute
+       uses (base sellingPriceSen + chosen-choice extras), instead of the
+       legacy maintenance string pools. Keeps this preview honest with what
+       POST /mfg-sales-orders will actually charge. */
+    const choices = (draft.variants.specialChoices && typeof draft.variants.specialChoices === 'object')
+      ? (draft.variants.specialChoices as Record<string, string[]>)
+      : null;
+    const specialsPool = buildSpecialsPoolFromAddons(specialDefs, specs, choices);
+    const effMaint = maint ? { ...maint, specials: specialsPool, sofaSpecials: specialsPool } : maint;
     return computeMfgLinePrice(
       {
         product,
@@ -325,10 +357,10 @@ const SoLineCardInner = ({
         seatSize:      (draft.variants.seatHeight as string | undefined) ?? null,
         sofaLegHeight: (draft.variants.sofaLegHeight as string | undefined) ?? null,
       },
-      maint,
+      effMaint,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picked, pickedFabric, draft.variants, draft.itemGroup, draft.qty, maint]);
+  }, [picked, pickedFabric, draft.variants, draft.itemGroup, draft.qty, maint, specialDefs]);
 
   /* Commander 2026-05-29 — the SELLING unit price is operator-authored. It
      defaults to 0 on product pick (see pickProduct) and is typed manually;
@@ -340,12 +372,105 @@ const SoLineCardInner = ({
 
   /* Commander 2026-05-29 — only show variant choices the SKU's Model allows
      (allowed_options). An empty/absent pool = no restriction. Stops the editor
-     offering e.g. a leg height the SKU rejects on save (variant_not_allowed). */
-  const allowOpts = picked?.allowed_options ?? null;
+     offering e.g. a leg height the SKU rejects on save (variant_not_allowed).
+     SO-parity (Loo 2026-06-06) — `picked` only exists for a freshly-picked
+     product; EDITING a saved line on SO Detail used to render unrestricted.
+     Resolve the pools by item code too so saved lines filter identically. */
+  const allowedByCodeQ = useModelAllowedOptionsByCode(draft.itemCode || undefined);
+  const allowOpts = picked?.allowed_options ?? allowedByCodeQ.data ?? null;
   const restrictP = (opts: Array<{ value: string; priceSen: number }>, pool?: string[] | null) =>
     (Array.isArray(pool) && pool.length > 0) ? opts.filter((o) => pool.includes(o.value)) : opts;
   const restrictS = (opts: string[], pool?: string[] | null) =>
     (Array.isArray(pool) && pool.length > 0) ? opts.filter((o) => pool.includes(o)) : opts;
+
+  /* ── Fabrics dropdown (SO-parity, Loo 2026-06-06) ─────────────────────
+     Source: selling-side fabric_colours (what POS offers), filtered by the
+     Model's allowed_options.fabrics (colour codes — the Modular ON/OFF
+     authority). Non-empty pool = filter (same as the server gate); empty/null
+     = show all active colours. A saved line whose code fell out of the live
+     list still renders as "(current)" so the select doesn't blank out. */
+  const fabricOptions = useMemo(() => {
+    const seriesLabel = new Map((fabricLibQ.data ?? []).map((f) => [f.id, f.label]));
+    const pool = allowOpts?.fabrics;
+    const colours = (Array.isArray(pool) && pool.length > 0)
+      ? (fabricColoursQ.data ?? []).filter((c) => pool.includes(c.colourId))
+      : (fabricColoursQ.data ?? []);
+    const opts = colours.map((c) => ({
+      value: c.colourId,
+      priceSen: 0,
+      display: `${c.colourId} · ${seriesLabel.get(c.fabricId) ?? c.fabricId}${c.label && c.label !== c.colourId ? ` (${c.label})` : ''}`,
+    }));
+    const current = String(draft.variants.fabricCode ?? '');
+    if (current && !opts.some((o) => o.value === current)) {
+      opts.unshift({ value: current, priceSen: 0, display: `${current} (current)` });
+    }
+    return opts;
+  }, [fabricColoursQ.data, fabricLibQ.data, allowOpts, draft.variants.fabricCode]);
+
+  /* Picking a colour writes the SAME variant keys the POS handover payload
+     sends (pos-handover-so.ts buildVariants): fabricCode + colourId satisfy
+     the server's allowed-fabric gate + cost lookup; fabricId (the SERIES,
+     fabric_library.id) is what the selling fabric-tier add-on keys on — the
+     Backend never sent it before, so a configured tier Δ silently priced
+     RM 0 on Backend-keyed lines. */
+  const pickFabricColour = (colourId: string) => {
+    const c = (fabricColoursQ.data ?? []).find((x) => x.colourId === colourId);
+    const seriesLabel = (fabricLibQ.data ?? []).find((f) => f.id === c?.fabricId)?.label ?? null;
+    setVariants({
+      fabricCode: colourId,
+      colourId,
+      ...(c ? { fabricId: c.fabricId } : {}),
+      ...(seriesLabel ? { fabricLabel: seriesLabel } : {}),
+      ...(c?.label ? { colourLabel: c.label } : {}),
+      ...(c?.swatchHex ? { colourHex: c.swatchHex } : {}),
+    });
+  };
+
+  /* ── Special Add-ons (SO-parity, Loo 2026-06-06) ──────────────────────
+     Mirror the POS configurator exactly: active special_addons rows for this
+     line's category ∩ the Model's allowed_options.specials ticks. POS
+     semantics — no ticks = nothing offered (Modular is the ON/OFF authority),
+     unlike the height pools where empty = unrestricted. */
+  const catUpper = draft.itemGroup.toUpperCase();
+  const specialOptions = useMemo(() => {
+    const allowed = new Set(allowOpts?.specials ?? []);
+    return specialDefs.filter(
+      (a) => a.active && a.categories.includes(catUpper) && allowed.has(a.code),
+    );
+  }, [specialDefs, catUpper, allowOpts]);
+  const specialChoicesMap: Record<string, string[]> =
+    (draft.variants.specialChoices && typeof draft.variants.specialChoices === 'object'
+      ? (draft.variants.specialChoices as Record<string, string[]>)
+      : {});
+
+  /* Tick/untick writes specials (codes) + specialChoices (per-code chosen
+     option-group labels; required groups default to their first choice, like
+     the POS picker) + specialLabels (display snapshot) in one patch. */
+  const toggleSpecial = (code: string) => {
+    const current = specialsList(draft.variants.specials ?? draft.variants.special);
+    const has = current.includes(code);
+    const nextPicked = has ? current.filter((c) => c !== code) : [...current, code];
+    const nextChoices: Record<string, string[]> = { ...specialChoicesMap };
+    if (has) {
+      delete nextChoices[code];
+    } else {
+      const def = specialDefs.find((d) => d.code === code);
+      if (def && def.optionGroups.length > 0) {
+        nextChoices[code] = def.optionGroups.map((g) => (g.required && g.choices[0] ? g.choices[0].label : ''));
+      }
+    }
+    setVariants({
+      specials: nextPicked,
+      specialChoices: nextChoices,
+      specialLabels: nextPicked.map((c) => specialDefs.find((d) => d.code === c)?.label ?? c),
+    });
+  };
+  const changeSpecialChoice = (code: string, groupIdx: number, label: string) => {
+    const def = specialDefs.find((d) => d.code === code);
+    const entry = [...(specialChoicesMap[code] ?? (def?.optionGroups ?? []).map(() => ''))];
+    entry[groupIdx] = label;
+    setVariants({ specialChoices: { ...specialChoicesMap, [code]: entry } });
+  };
 
   /* Commander 2026-05-29 — the right-rail "Pricing" summary reflects the
      operator-authored SELLING unit price, not a computed cost base. extraSen
@@ -370,6 +495,12 @@ const SoLineCardInner = ({
   const badge = CATEGORY_BADGE[category] ?? CATEGORY_BADGE.others!;
   const hasVariants = Boolean(draft.itemCode) && Boolean(maint) && (category === 'bedframe' || category === 'sofa');
   const specials = specialsList(draft.variants.specials ?? draft.variants.special);
+  /* SO-parity (Loo 2026-06-06) — mattress lines can carry Special Add-ons too
+     (POS prices MATTRESS specials since PR #456). Render JUST the accordion
+     for them — no fabric/height grid. Hidden until a mattress Model has
+     specials ticked in Modular (none today) or the line already carries one. */
+  const hasMattressSpecials = Boolean(draft.itemCode) && category === 'mattress'
+    && (specialOptions.length > 0 || specials.length > 0);
 
   /* ── Render ─────────────────────────────────────────────────────── */
 
@@ -535,12 +666,12 @@ const SoLineCardInner = ({
           per-line variants — render only the right rail (pricing + photos)
           so the row stays compact. We collapse the grid by skipping bodyLeft
           when there's no variant UI to show. */}
-      {(picked || hasVariants || canShowPhotos) && (
+      {(picked || hasVariants || hasMattressSpecials || canShowPhotos) && (
       <div
         className={styles.body}
-        style={hasVariants ? undefined : { gridTemplateColumns: '1fr' }}
+        style={(hasVariants || hasMattressSpecials) ? undefined : { gridTemplateColumns: '1fr' }}
       >
-        {hasVariants && <div className={styles.bodyLeft}>
+        {(hasVariants || hasMattressSpecials) && <div className={styles.bodyLeft}>
       {hasVariants && category === 'bedframe' && (
         <div className={styles.variants}>
           <div className={styles.variantsHead}>BEDFRAME VARIANTS</div>
@@ -549,18 +680,14 @@ const SoLineCardInner = ({
               label="Fabrics" required
               value={String(draft.variants.fabricCode ?? '')}
               disabled={!isEditing}
-              options={fabrics.map((f) => ({
-                value: f.fabric_code,
-                priceSen: 0,
-                display: `${f.fabric_code}${f.series ? ` · ${f.series}` : ''}`,
-              }))}
-              onChange={(v) => setVariant('fabricCode', v)}
+              options={fabricOptions}
+              onChange={pickFabricColour}
             />
             <VariantSelect
               label="Gaps" required
               value={String(draft.variants.gap ?? '')}
               disabled={!isEditing}
-              options={maint!.gaps.map((g) => ({ value: g, priceSen: 0 }))}
+              options={restrictS(maint!.gaps, allowOpts?.gaps).map((g) => ({ value: g, priceSen: 0 }))}
               onChange={(v) => setVariant('gap', v)}
             />
             <VariantSelect
@@ -593,9 +720,11 @@ const SoLineCardInner = ({
             open={specialsOpen}
             onToggle={() => setSpecialsOpen((o) => !o)}
             picked={specials}
-            options={restrictP(maint!.specials, allowOpts?.specials)}
+            choices={specialChoicesMap}
+            options={specialOptions}
             disabled={!isEditing}
-            onChange={(arr) => setVariant('specials', arr)}
+            onToggleCode={toggleSpecial}
+            onChoice={changeSpecialChoice}
           />
         </div>
       )}
@@ -608,12 +737,8 @@ const SoLineCardInner = ({
               label="Fabrics" required
               value={String(draft.variants.fabricCode ?? '')}
               disabled={!isEditing}
-              options={fabrics.map((f) => ({
-                value: f.fabric_code,
-                priceSen: 0,
-                display: `${f.fabric_code}${f.series ? ` · ${f.series}` : ''}`,
-              }))}
-              onChange={(v) => setVariant('fabricCode', v)}
+              options={fabricOptions}
+              onChange={pickFabricColour}
             />
             <VariantSelect
               label="Seat Heights" required
@@ -642,9 +767,27 @@ const SoLineCardInner = ({
             open={specialsOpen}
             onToggle={() => setSpecialsOpen((o) => !o)}
             picked={specials}
-            options={restrictP(maint!.sofaSpecials, allowOpts?.specials)}
+            choices={specialChoicesMap}
+            options={specialOptions}
             disabled={!isEditing}
-            onChange={(arr) => setVariant('specials', arr)}
+            onToggleCode={toggleSpecial}
+            onChoice={changeSpecialChoice}
+          />
+        </div>
+      )}
+
+      {hasMattressSpecials && (
+        <div className={styles.variants}>
+          <div className={styles.variantsHead}>MATTRESS ADD-ONS</div>
+          <SpecialsAccordion
+            open={specialsOpen}
+            onToggle={() => setSpecialsOpen((o) => !o)}
+            picked={specials}
+            choices={specialChoicesMap}
+            options={specialOptions}
+            disabled={!isEditing}
+            onToggleCode={toggleSpecial}
+            onChoice={changeSpecialChoice}
           />
         </div>
       )}
@@ -865,6 +1008,11 @@ const VariantSelect = ({
   onChange: (v: string) => void;
 }) => {
   const invalid = required && !value;
+  /* SO-parity (Loo 2026-06-06) — saved lines can hold a value the Model's
+     allowed_options pool no longer offers (now that pools also filter on SO
+     Detail). Render it as "(current)" instead of blanking the select — the
+     coordinator can see what's on the line and re-pick a live option. */
+  const hasCurrent = Boolean(value) && options.some((o) => o.value === value);
   return (
     <label className={styles.variantField}>
       <span className={styles.variantLabel}>{label}{required ? ' *' : ''}</span>
@@ -878,6 +1026,7 @@ const VariantSelect = ({
         {/* Commander 2026-05-28: no selectable blank "—" — the placeholder is
             disabled so it can't be chosen to "proceed without selecting". */}
         <option value="" disabled>Select…</option>
+        {value && !hasCurrent && <option value={value}>{value} (current)</option>}
         {options.map((o) => {
           const sell = o.sellingPriceSen ?? 0;
           return (
@@ -916,22 +1065,39 @@ export function missingRequiredVariants(
    ────────────────────────────────────────────────────────────────────── */
 
 const SpecialsAccordion = ({
-  open, onToggle, picked, options, onChange, disabled = false,
+  open, onToggle, picked, choices, options, onToggleCode, onChoice, disabled = false,
 }: {
   open:     boolean;
   onToggle: () => void;
+  /** Picked special_addons CODES (variants.specials). */
   picked:   string[];
-  /* Commander 2026-05-28: show the SELLING surcharge (sellingPriceSen), not
-     the cost priceSen. Unset → render "RM 0" / no surcharge. */
-  options:  Array<{ value: string; priceSen: number; sellingPriceSen?: number }>;
+  /** variants.specialChoices — per-code chosen option-group labels, indexed
+      by optionGroups position (the POS storage convention). */
+  choices:  Record<string, string[]>;
+  /* SO-parity (Loo 2026-06-06): options are live special_addons rows (already
+     filtered to this line's category ∩ the Model's allowed_options.specials),
+     replacing the legacy maintenance string pool. Shows the SELLING surcharge
+     (base + chosen-choice extras), the same figure the server recompute
+     charges via buildSpecialsPoolFromAddons. */
+  options:  SpecialAddonRow[];
   disabled?: boolean;
-  onChange: (next: string[]) => void;
+  onToggleCode: (code: string) => void;
+  onChoice: (code: string, groupIdx: number, label: string) => void;
 }) => {
-  const toggle = (v: string) => {
-    if (disabled) return;
-    const next = picked.includes(v) ? picked.filter((x) => x !== v) : [...picked, v];
-    onChange(next);
+  /* Effective selling surcharge for one add-on = base + Σ chosen extras. */
+  const effectiveSen = (o: SpecialAddonRow): number => {
+    let sen = o.sellingPriceSen;
+    (choices[o.code] ?? []).forEach((label, i) => {
+      const hit = label ? o.optionGroups[i]?.choices.find((c) => c.label === label) : undefined;
+      if (hit) sen += hit.extraSen;
+    });
+    return sen;
   };
+  /* A saved line can carry codes that have since been retired/renamed in the
+     Special Add-ons tab (or pre-takeover legacy strings). Surface them as
+     removable rows — invisible-but-stuck picks were how the old editor leaked
+     RM 0 specials onto orders. */
+  const retired = picked.filter((c) => !options.some((o) => o.code === c));
   return (
     <div className={styles.specials}>
       <div
@@ -947,31 +1113,74 @@ const SpecialsAccordion = ({
       </div>
       {open && (
         <div className={styles.specialsBody}>
-          {options.length === 0 && (
+          {options.length === 0 && retired.length === 0 && (
             <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
               No specials configured.
             </span>
           )}
           {options.map((o) => {
-            const on = picked.includes(o.value);
+            const on = picked.includes(o.code);
+            const sen = on ? effectiveSen(o) : o.sellingPriceSen;
             return (
-              <label key={o.value} className={styles.specialsItem}>
+              <label key={o.code} className={styles.specialsItem}>
                 <input
                   type="checkbox"
                   className={styles.specialsCheckbox}
                   checked={on}
                   disabled={disabled}
-                  onChange={() => toggle(o.value)}
+                  onChange={() => { if (!disabled) onToggleCode(o.code); }}
                 />
                 <div>
-                  <div className={styles.specialsLabel}>{o.value}</div>
+                  <div className={styles.specialsLabel}>{o.label}</div>
                   <div className={styles.specialsSurcharge}>
-                    {(o.sellingPriceSen ?? 0) > 0 ? `+${fmtRm(o.sellingPriceSen!)}` : 'RM 0'}
+                    {sen > 0 ? `+${fmtRm(sen)}` : sen < 0 ? `−${fmtRm(Math.abs(sen))}` : 'RM 0'}
                   </div>
                 </div>
               </label>
             );
           })}
+          {retired.map((code) => (
+            <label key={`retired-${code}`} className={styles.specialsItem}>
+              <input
+                type="checkbox"
+                className={styles.specialsCheckbox}
+                checked
+                disabled={disabled}
+                onChange={() => { if (!disabled) onToggleCode(code); }}
+              />
+              <div>
+                <div className={styles.specialsLabel}>{code}</div>
+                <div className={styles.specialsSurcharge} style={{ color: 'var(--c-festive-b, #B8331F)' }}>
+                  retired — prices RM 0, untick to remove
+                </div>
+              </div>
+            </label>
+          ))}
+          {/* Follow-up choice pickers (追问) for ticked add-ons with option
+              groups — mirrors the POS SpecialAddonsPicker. */}
+          {options.filter((o) => picked.includes(o.code) && o.optionGroups.length > 0).map((o) =>
+            o.optionGroups.map((g, gi) => (
+              <label key={`${o.code}-${gi}`} className={styles.variantField} style={{ gridColumn: '1 / -1' }}>
+                <span className={styles.variantLabel}>
+                  {o.label} · {g.label}{g.required ? ' *' : ''}
+                </span>
+                <select
+                  className={styles.select}
+                  value={(choices[o.code] ?? [])[gi] ?? ''}
+                  disabled={disabled}
+                  onChange={(e) => onChoice(o.code, gi, e.target.value)}
+                >
+                  {!g.required && <option value="">None</option>}
+                  {g.required && <option value="" disabled>Select…</option>}
+                  {g.choices.map((c) => (
+                    <option key={c.label} value={c.label}>
+                      {c.label}{c.extraSen !== 0 ? ` (${c.extraSen > 0 ? '+' : '−'}${fmtRm(Math.abs(c.extraSen))})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )),
+          )}
         </div>
       )}
     </div>

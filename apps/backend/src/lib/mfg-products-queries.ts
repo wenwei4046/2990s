@@ -107,15 +107,25 @@ export type MfgProductRow = {
   updated_at: string;
   /** Commander 2026-05-29 — the SKU's Model allowed_options (sizes / leg_heights
       / divan_heights / total_heights / specials). Non-empty pool = restrict the
-      SO variant dropdowns to those values; null / empty = no restriction. */
-  allowed_options?: {
-    sizes?: string[] | null;
-    compartments?: string[] | null;
-    divan_heights?: string[] | null;
-    total_heights?: string[] | null;
-    leg_heights?: string[] | null;
-    specials?: string[] | null;
-  } | null;
+      SO variant dropdowns to those values; null / empty = no restriction.
+      SO-parity (Loo 2026-06-06) — `gaps` + `fabrics` surfaced too: the server
+      gate (allowed-options-check.ts) already validates both; the SO line editor
+      now mirrors POS and filters its Gap + Fabric dropdowns by the same pools. */
+  allowed_options?: ModelAllowedOptions | null;
+};
+
+/** The Model's Modular (allowed_options) pools — single ON/OFF authority for
+ *  what a SKU may sell with. `fabrics` holds fabric COLOUR codes
+ *  (fabric_colours.colour_id, e.g. 'CG-002'), same vocabulary POS writes. */
+export type ModelAllowedOptions = {
+  sizes?: string[] | null;
+  compartments?: string[] | null;
+  divan_heights?: string[] | null;
+  total_heights?: string[] | null;
+  leg_heights?: string[] | null;
+  gaps?: string[] | null;
+  fabrics?: string[] | null;
+  specials?: string[] | null;
 };
 
 /* PR #216 — Commander 2026-05-27: parallel cost-side editor. Operation
@@ -462,6 +472,68 @@ export function useMaintenanceConfigHistory(scope = 'master') {
     staleTime: 30_000,
   });
 }
+
+/* ─── Special Add-ons (migration 0134) — SO-parity read (Loo 2026-06-06) ───
+ * The per-Model Product Add-ons system the POS configurator sells from and the
+ * server prices from (buildSpecialsPoolFromAddons over the special_addons
+ * table). The SO line editor's Specials accordion now reads THESE — the same
+ * GET /special-addons the POS uses — instead of the legacy maintenance_config
+ * specials/sofaSpecials string pools, so a rename/retire in the Special
+ * Add-ons tab can never leave the Backend offering a code the server prices
+ * at RM 0. Shapes mirror apps/pos/src/lib/queries.ts. */
+export interface SpecialAddonChoice { label: string; extraSen: number; }
+export interface SpecialAddonGroup { label: string; required: boolean; choices: SpecialAddonChoice[]; }
+export interface SpecialAddonRow {
+  id: string;
+  code: string;
+  label: string;
+  soDescription: string;
+  categories: string[];          // UPPERCASE mfg categories, e.g. ['BEDFRAME']
+  sellingPriceSen: number;
+  costPriceSen: number;
+  optionGroups: SpecialAddonGroup[];
+  active: boolean;
+  sortOrder: number;
+}
+
+export const useSpecialAddons = () =>
+  useQuery({
+    queryKey: ['special-addons'],
+    staleTime: 60_000,
+    queryFn: async (): Promise<SpecialAddonRow[]> => {
+      const body = await authedFetch<{ addons: SpecialAddonRow[] }>('/special-addons');
+      return body.addons ?? [];
+    },
+  });
+
+/* ─── Model allowed_options by SKU code (SO-parity, Loo 2026-06-06) ────────
+ * The SO line editor previously only knew a line's allowed_options when the
+ * product was freshly picked this session (`picked` state) — EDITING an
+ * already-saved line on SO Detail rendered every variant dropdown unfiltered.
+ * This hook resolves the pools for any line by its item code, mirroring the
+ * POS useModelAllowedSpecials/useModelAllowedFabricCodes joins. Returns null
+ * for legacy/unknown codes (no Model link) → callers fall back to no
+ * restriction, same as before. */
+export const useModelAllowedOptionsByCode = (itemCode: string | undefined) =>
+  useQuery({
+    enabled: Boolean(itemCode),
+    queryKey: ['model-allowed-options-by-code', itemCode],
+    staleTime: 60_000,
+    queryFn: async (): Promise<ModelAllowedOptions | null> => {
+      if (!itemCode) return null;
+      const { data, error } = await supabase
+        .from('mfg_products')
+        .select('product_models:model_id ( allowed_options )')
+        .eq('code', itemCode)
+        .limit(1);
+      if (error) throw error;
+      const row = (data ?? [])[0] as
+        | { product_models?: { allowed_options?: ModelAllowedOptions | null } | Array<{ allowed_options?: ModelAllowedOptions | null }> | null }
+        | undefined;
+      const rel = Array.isArray(row?.product_models) ? row?.product_models[0] : row?.product_models;
+      return rel?.allowed_options ?? null;
+    },
+  });
 
 /**
  * Maintenance-is-master cascade rename (Loo 2026-06-04). Renames a sofa
