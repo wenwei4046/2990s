@@ -171,140 +171,121 @@ async function warehouseCodeMap(
   return out;
 }
 
-/* ── shipLoanerForNote — VALUE-NEUTRAL replacement for deductInventoryForDo ────
-   The DO deducts stock (FIFO OUT + COGS) on the first ship transition. A
-   Consignment Note instead TRANSFERS the loaner from each line's ship-from
-   warehouse to the consignment warehouse (goods stay owned). IDEMPOTENT: the
-   CS_DO partial UNIQUE index (uq_inv_mov_cs_do_source) makes the transfer fire
-   once per note; we also pre-check for an existing CS_DO OUT row. Best-effort. */
-async function shipLoanerForNote(sb: any, noteId: string, performedBy: string | null): Promise<string[]> {
-  // Idempotency guard — has this note already shipped (CS_DO OUT exists)?
-  const { count: existing } = await sb
-    .from('inventory_movements')
-    .select('id', { head: true, count: 'exact' })
-    .eq('source_doc_type', 'CS_DO')
-    .eq('source_doc_id', noteId)
-    .eq('movement_type', 'OUT');
-  if ((existing ?? 0) > 0) return [];
-
+/* ── resyncNoteInventory — self-healing OUT ledger for a Consignment Note ──────
+   ONE function for the whole lifecycle (ship / add-line / edit-qty / delete-line
+   / cancel), mirroring the Delivery Order's resyncInventoryForDo. It reconciles
+   the note's CURRENT lines (the TARGET net OUT per warehouse/product/variant/
+   batch bucket) against what inventory_movements already record for this note,
+   and writes only the DELTA:
+     • first-ever OUT for a bucket  → CS_DO  (carries the "out via Consignment
+       Note" label + the CS_DO unique-index idempotency backstop)
+     • any later increase/decrease  → STOCK_TRANSFER OUT/IN  (no unique index →
+       no collision with the CS_DO row; still FIFO-aware so cost moves correctly)
+     • cancel → status CANCELLED → TARGET is empty → every bucket's net is driven
+       back to 0 via STOCK_TRANSFER IN.
+   Idempotent: a re-run finds delta 0 everywhere and writes nothing. Best-effort.
+   Only runs once the note has shipped (or is being cancelled). */
+async function resyncNoteInventory(sb: any, noteId: string, performedBy: string | null): Promise<string[]> {
   const { data: header } = await sb.from('consignment_delivery_orders')
-    .select('do_number, warehouse_id').eq('id', noteId).maybeSingle();
-  const { data: items } = await sb.from('consignment_delivery_order_items')
-    .select('id, consignment_so_item_id, item_code, description, qty, item_group, variants')
-    .eq('consignment_delivery_order_id', noteId);
-  if (!items || items.length === 0) return [];
-  const headerWarehouseId = (header as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
-  const noteNo = (header as { do_number: string } | null)?.do_number ?? noteId;
+    .select('do_number, status, warehouse_id').eq('id', noteId).maybeSingle();
+  if (!header) return [];
+  const status = ((header as { status: string | null }).status ?? '').toUpperCase();
+  const noteNo = (header as { do_number: string }).do_number ?? noteId;
+  const cancelled = status === 'CANCELLED';
+  // Nothing to reconcile until the note has shipped (no OUT yet) — unless we're
+  // cancelling (drive any prior net back to 0).
+  if (!cancelled && !SHIPPED_STATES.includes(status)) return [];
 
-  const lineWh = await resolveNoteLineWarehouses(sb, items as Array<{ id: string; consignment_so_item_id?: string | null }>, headerWarehouseId);
-
-  /* UNIFIED inventory (Wei Siang 2026-06-06): a Consignment Note now ships goods
-     OUT of the warehouse exactly like a Delivery Order — FIFO is consumed and the
-     cost leaves inventory (COGS). No more value-neutral transfer to a hidden
-     consignment warehouse. Source-tagged CS_DO so the movement reads "out via
-     Consignment Note" in the unified stock ledger.
-
-     Collapse to ONE OUT per (product, variant): the CS_DO partial unique index
-     (source_doc_type, source_doc_id, product_code, variant_key — no warehouse)
-     rejects a 2nd identical row, so duplicate lines must sum into one movement.
-     The ship-from warehouse is the first resolved warehouse for the bucket. */
-  const byKey = new Map<string, { warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number }>();
-  for (const it of (items as Array<{ id: string; item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }>)) {
-    const qty = Number(it.qty ?? 0);
-    if (qty <= 0) continue;
-    const fromWh = lineWh.get(it.id) ?? null;
-    if (!fromWh) continue; // no resolvable warehouse — skip rather than guess
-    const variantKey = computeVariantKey(it.item_group ?? null, it.variants ?? null);
-    const k = `${it.item_code}::${variantKey}`;
-    const cur = byKey.get(k);
-    if (cur) { cur.qty += qty; }
-    else byKey.set(k, { warehouse_id: fromWh, product_code: it.item_code, variant_key: variantKey, product_name: it.description, qty });
+  // 1. TARGET net OUT per bucket = sum of current active lines (empty if cancelled).
+  type Bucket = { warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number; batch_no: string | null };
+  const targetByBucket = new Map<string, Bucket>();
+  if (!cancelled) {
+    const { data: items } = await sb.from('consignment_delivery_order_items')
+      .select('id, consignment_so_item_id, item_code, description, qty, item_group, variants')
+      .eq('consignment_delivery_order_id', noteId);
+    const lineWh = await resolveNoteLineWarehouses(sb, (items ?? []) as Array<{ id: string; consignment_so_item_id?: string | null }>, (header as { warehouse_id: string | null }).warehouse_id ?? null);
+    const distinctWh = [...new Set(((items ?? []) as Array<{ id: string }>).map((it) => lineWh.get(it.id)).filter((x): x is string => !!x))];
+    const batchByWh = new Map<string, Map<string, string | null>>();
+    for (const wh of distinctWh) batchByWh.set(wh, await resolveWarehouseLotBatches(sb, wh));
+    for (const it of ((items ?? []) as Array<{ id: string; item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }>)) {
+      const qty = Number(it.qty ?? 0);
+      if (qty <= 0) continue;
+      const wh = lineWh.get(it.id) ?? null;
+      if (!wh) continue;
+      const vk = computeVariantKey(it.item_group ?? null, it.variants ?? null);
+      const batch = batchByWh.get(wh)?.get(`${it.item_code}::${vk}`) ?? null;
+      const k = `${wh}::${it.item_code}::${vk}::${batch ?? ''}`;
+      const cur = targetByBucket.get(k);
+      if (cur) cur.qty += qty;
+      else targetByBucket.set(k, { warehouse_id: wh, product_code: it.item_code, variant_key: vk, product_name: it.description, qty, batch_no: batch });
+    }
   }
-  if (byKey.size === 0) return [];
 
-  // Resolve the dye-lot batch each bucket ships from the warehouse's open lots
-  // (a sofa consumes the right lot + the OUT shows its batch), exactly like a
-  // Delivery Order. Single batch in the warehouse → carry it; multi → plain FIFO.
-  const distinctWh = [...new Set([...byKey.values()].map((l) => l.warehouse_id))];
-  const batchByWh = new Map<string, Map<string, string | null>>();
-  for (const wh of distinctWh) batchByWh.set(wh, await resolveWarehouseLotBatches(sb, wh));
-
-  const res = await writeMovements(sb, [...byKey.values()].map((l) => {
-    const batchNo = batchByWh.get(l.warehouse_id)?.get(`${l.product_code}::${l.variant_key}`) ?? null;
-    return {
-      movement_type:   'OUT' as const,
-      warehouse_id:    l.warehouse_id,
-      product_code:    l.product_code,
-      variant_key:     l.variant_key,
-      product_name:    l.product_name,
-      qty:             l.qty,
-      source_doc_type: 'CS_DO' as const,
-      source_doc_id:   noteId,
-      source_doc_no:   noteNo,
-      ...(batchNo ? { batch_no: batchNo } : {}),
-      performed_by:    performedBy,
-      notes:           'Consignment Note ship-out (goods to showroom)',
-    };
-  }));
-
-  // Stock dropped — re-walk SO allocation in case the ship-from warehouse feeds it.
-  try {
-    const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
-    await recomputeSoStockAllocation(sb);
-  } catch { /* best-effort */ }
-
-  return res.ok ? [] : [res.reason ?? 'consignment ship-out failed'];
-}
-
-/* ── reverseLoanerForNote — undo the ship-out on cancel ───────────────────────
-   Re-derive this note's CS_DO OUT rows and write a balancing IN per bucket (under
-   STOCK_TRANSFER + '-CANCEL' so it sidesteps the CS_DO unique index), at the
-   OUT's booked cost basis. Idempotent (pre-checks the '-CANCEL' row). */
-async function reverseLoanerForNote(sb: any, noteId: string, performedBy: string | null): Promise<string[]> {
-  const { data: header } = await sb.from('consignment_delivery_orders')
-    .select('do_number').eq('id', noteId).maybeSingle();
-  const noteNo = (header as { do_number: string } | null)?.do_number ?? noteId;
-  const cancelNo = `${noteNo}-CANCEL`;
-
-  const { count: already } = await sb
-    .from('inventory_movements')
-    .select('id', { head: true, count: 'exact' })
+  // 2. CURRENT net OUT per bucket from ALL this note's movements (CS_DO ship +
+  //    any prior STOCK_TRANSFER resync/cancel deltas).
+  const { data: movs } = await sb.from('inventory_movements')
+    .select('movement_type, warehouse_id, product_code, variant_key, batch_no, qty, total_cost_sen, product_name')
     .eq('source_doc_id', noteId)
-    .eq('source_doc_type', 'STOCK_TRANSFER')
-    .eq('source_doc_no', cancelNo);
-  if ((already ?? 0) > 0) return [];
+    .in('source_doc_type', ['CS_DO', 'STOCK_TRANSFER']);
+  type Agg = { out_qty: number; in_qty: number; out_total_cost: number; product_name: string | null };
+  const aggByBucket = new Map<string, Agg>();
+  for (const m of (movs ?? []) as Array<{ movement_type: string; warehouse_id: string; product_code: string; variant_key: string | null; batch_no?: string | null; qty: number; total_cost_sen: number | null; product_name: string | null }>) {
+    const k = `${m.warehouse_id}::${m.product_code}::${m.variant_key ?? ''}::${m.batch_no ?? ''}`;
+    let a = aggByBucket.get(k);
+    if (!a) { a = { out_qty: 0, in_qty: 0, out_total_cost: 0, product_name: m.product_name }; aggByBucket.set(k, a); }
+    if (m.movement_type === 'OUT') { a.out_qty += Number(m.qty ?? 0); a.out_total_cost += Number(m.total_cost_sen ?? 0); }
+    else if (m.movement_type === 'IN') a.in_qty += Number(m.qty ?? 0);
+    if (!a.product_name) a.product_name = m.product_name;
+  }
 
-  const { data: outs } = await sb.from('inventory_movements')
-    .select('warehouse_id, product_code, variant_key, batch_no, qty, total_cost_sen, product_name')
-    .eq('source_doc_type', 'CS_DO').eq('source_doc_id', noteId).eq('movement_type', 'OUT');
-  if (!outs || outs.length === 0) return [];
+  // 3. delta = target − current_net_out. >0 → ship more OUT; <0 → give stock back IN.
+  type MovOut = Parameters<typeof writeMovements>[1][number];
+  const writes: MovOut[] = [];
+  const csDoEmitted = new Set<string>(); // product::variant given a CS_DO this run (avoid 2nd-warehouse collision)
+  for (const k of new Set<string>([...targetByBucket.keys(), ...aggByBucket.keys()])) {
+    const t = targetByBucket.get(k);
+    const a = aggByBucket.get(k) ?? { out_qty: 0, in_qty: 0, out_total_cost: 0, product_name: null };
+    const delta = (t?.qty ?? 0) - (a.out_qty - a.in_qty);
+    if (delta === 0) continue;
+    const [wh, pc, vk, batchSeg] = k.split('::');
+    const batch_no = batchSeg || null;
+    const pname = t?.product_name ?? a.product_name ?? null;
+    if (delta > 0) {
+      // First OUT for this product+variant → CS_DO (label + index guard); any
+      // later increase (or a 2nd warehouse for the same SKU) → STOCK_TRANSFER.
+      const neverMoved = a.out_qty === 0 && a.in_qty === 0;
+      const useCsDo = neverMoved && !csDoEmitted.has(`${pc}::${vk}`);
+      if (useCsDo) csDoEmitted.add(`${pc}::${vk}`);
+      writes.push({
+        movement_type: 'OUT', warehouse_id: wh ?? '', product_code: pc ?? '', variant_key: vk ?? '', product_name: pname,
+        qty: delta,
+        source_doc_type: useCsDo ? 'CS_DO' : 'STOCK_TRANSFER',
+        source_doc_id: noteId, source_doc_no: noteNo,
+        ...(batch_no ? { batch_no } : {}),
+        performed_by: performedBy,
+        notes: useCsDo ? 'Consignment Note ship-out (goods to showroom)' : 'Consignment Note resync: line qty increased / added.',
+      });
+    } else {
+      const unitCost = a.out_qty > 0 ? Math.round(a.out_total_cost / a.out_qty) : 0;
+      writes.push({
+        movement_type: 'IN', warehouse_id: wh ?? '', product_code: pc ?? '', variant_key: vk ?? '', product_name: pname,
+        qty: -delta, unit_cost_sen: unitCost,
+        source_doc_type: 'STOCK_TRANSFER',
+        source_doc_id: noteId, source_doc_no: cancelled ? `${noteNo}-CANCEL` : noteNo,
+        ...(batch_no ? { batch_no } : {}),
+        performed_by: performedBy,
+        notes: cancelled ? 'Consignment Note cancelled — stock returned' : 'Consignment Note resync: line qty reduced / deleted.',
+      });
+    }
+  }
 
-  const res = await writeMovements(sb, (outs as Array<{ warehouse_id: string; product_code: string; variant_key: string | null; batch_no?: string | null; qty: number; total_cost_sen: number | null; product_name: string | null }>).map((o) => {
-    const q = Number(o.qty ?? 0);
-    const unitCost = q > 0 ? Math.round(Number(o.total_cost_sen ?? 0) / q) : 0;
-    return {
-      movement_type:   'IN' as const,
-      warehouse_id:    o.warehouse_id,
-      product_code:    o.product_code,
-      variant_key:     o.variant_key ?? '',
-      product_name:    o.product_name,
-      qty:             q,
-      unit_cost_sen:   unitCost,
-      source_doc_type: 'STOCK_TRANSFER' as const,
-      source_doc_id:   noteId,
-      source_doc_no:   cancelNo,
-      ...(o.batch_no ? { batch_no: o.batch_no } : {}),
-      performed_by:    performedBy,
-      notes:           'Consignment Note cancelled — stock returned',
-    };
-  }));
-
+  if (writes.length === 0) return [];
+  const res = await writeMovements(sb, writes);
   try {
     const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
     await recomputeSoStockAllocation(sb);
   } catch { /* best-effort */ }
-
-  return res.ok ? [] : [res.reason ?? 'consignment ship-out reverse failed'];
+  return res.ok ? [] : [res.reason ?? 'consignment note inventory resync failed'];
 }
 
 /* Build one consignment_delivery_order_items insert row from a client line
@@ -547,7 +528,7 @@ consignmentNotes.post('/', async (c) => {
   /* Value-neutral loaner transfer: shipping warehouse → consignment warehouse.
      Replaces the DO's deductInventoryForDo (FIFO OUT + COGS). Idempotent +
      best-effort — a failed transfer never rolls back the note. */
-  const movementErrors = await shipLoanerForNote(sb, h.id, user.id);
+  const movementErrors = await resyncNoteInventory(sb, h.id, user.id);
 
   return c.json({ id: h.id, doNumber: h.do_number, movementErrors: movementErrors.length ? movementErrors : undefined }, 201);
 });
@@ -624,13 +605,9 @@ consignmentNotes.post('/:id/items', async (c) => {
   const { data, error } = await sb.from('consignment_delivery_order_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
-  /* If the note has already shipped, transfer the added loaner line too. The
-     transfer is idempotent at the (note, product, variant) level, so re-running
-     ships only the genuinely new bucket. Best-effort. */
-  const h = header as { status: string | null };
-  if (SHIPPED_STATES.includes((h.status ?? '').toUpperCase())) {
-    try { await shipLoanerForNote(sb, id, user?.id ?? null); } catch { /* best-effort */ }
-  }
+  /* Reconcile inventory for the added line — resync writes the new line's OUT
+     when the note has already shipped, and is a no-op otherwise. Idempotent. */
+  try { await resyncNoteInventory(sb, id, user?.id ?? null); } catch { /* best-effort */ }
   return c.json({ item: data }, 201);
 });
 
@@ -683,6 +660,8 @@ consignmentNotes.patch('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('consignment_delivery_order_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  /* Adjust inventory by the qty/variant delta (no-op until shipped). */
+  try { await resyncNoteInventory(sb, id, c.get('user')?.id ?? null); } catch { /* best-effort */ }
   return c.json({ ok: true });
 });
 
@@ -696,6 +675,8 @@ consignmentNotes.delete('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('consignment_delivery_order_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  /* Give the deleted line's stock back (no-op until shipped). */
+  try { await resyncNoteInventory(sb, id, c.get('user')?.id ?? null); } catch { /* best-effort */ }
   return c.json({ ok: true });
 });
 
@@ -821,17 +802,11 @@ consignmentNotes.patch('/:id/status', async (c) => {
     data = updated as { id: string; status: string };
   }
 
-  /* Loaner transfer OUT — fire on the first transition into ANY shipped state.
-     shipLoanerForNote is idempotent (CS_DO existence check + UNIQUE index). */
-  if (SHIPPED_STATES.includes(body.status)) {
-    try { await shipLoanerForNote(sb, id, user.id); } catch { /* best-effort */ }
-  }
-
-  /* Cancelling a Consignment Note REVERSES the loaner transfer: the units come
-     back out of the consignment warehouse into the original shipping warehouse
-     (value-neutral). reverseLoanerForNote is idempotent + best-effort. */
-  if (body.status === 'CANCELLED') {
-    try { await reverseLoanerForNote(sb, id, user.id); } catch { /* best-effort */ }
+  /* Inventory ledger — one self-healing resync covers BOTH the ship-out (first
+     transition into a shipped state writes the CS_DO OUT) and the cancel (status
+     CANCELLED drives every bucket's net back to 0). Idempotent + best-effort. */
+  if (SHIPPED_STATES.includes(body.status) || body.status === 'CANCELLED') {
+    try { await resyncNoteInventory(sb, id, user.id); } catch { /* best-effort */ }
   }
 
   return c.json({ consignmentNote: data });
