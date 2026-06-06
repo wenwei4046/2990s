@@ -763,6 +763,10 @@ export type SoPayment = {
   approval_code: string | null;
   amount_centi: number;
   account_sheet: string | null;
+  /* Spec D4 (2026-06-06, migration 0159) — per-payment slip R2 key. NULL on
+     legacy rows that predate the per-payment slip column; the UI falls back
+     to the order-level slip in that case. */
+  slip_key?: string | null;
   collected_by: string | null;            // staff.id (uuid)
   collected_by_name: string | null;       // joined staff.name
   note: string | null;

@@ -517,12 +517,15 @@ export const SalesOrderNew = () => {
         const { method } = labelToApi(d.methodLabel);
         const body: { docNo: string } & Record<string, unknown> = {
           docNo,
-          paidAt:       d.paidAt,
+          paidAt:          d.paidAt,
           method,
-          amountCenti:  d.amountCenti,
-          accountSheet: d.accountSheet || null,
-          approvalCode: d.approvalCode || null,
-          collectedBy:  d.collectedBy  || null,
+          amountCenti:     d.amountCenti,
+          accountSheet:    d.accountSheet || null,
+          approvalCode:    d.approvalCode || null,
+          collectedBy:     d.collectedBy  || null,
+          /* Spec D4 — the SO payments route requires a slip; the onSave gate
+             below guarantees every amount-bearing draft carries one. */
+          uploadSessionId: d.slipUploadSessionId,
         };
         /* Task #122 (cascade) — replay the L2 picks per method so the
            created payment row carries the bank + plan / sub-type that
@@ -592,6 +595,21 @@ export const SalesOrderNew = () => {
         );
         return;
       }
+    }
+
+    /* Spec D4 — every SO payment must carry its own slip. The SO payments
+       route (POST /:docNo/payments) 400s a slip-less payment, so gate the
+       create here: any amount-bearing draft without a confirmed slip blocks
+       the save and tells commander which rows to fix. */
+    const slipless = paymentDrafts.filter((d) => d.amountCenti > 0 && !d.slipUploadSessionId);
+    if (slipless.length > 0) {
+      window.alert(
+        `Each payment needs a slip uploaded before saving.\n\n` +
+        `${slipless.length} payment row${slipless.length === 1 ? '' : 's'} ` +
+        `${slipless.length === 1 ? 'is' : 'are'} missing a slip — upload ` +
+        `${slipless.length === 1 ? 'it' : 'them'} (the "Slip *" button) and try again.`,
+      );
+      return;
     }
 
     create.mutate(

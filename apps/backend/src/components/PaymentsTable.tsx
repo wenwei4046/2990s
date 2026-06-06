@@ -22,11 +22,14 @@
 // ----------------------------------------------------------------------------
 
 import { memo, useEffect, useState, type CSSProperties } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   DollarSign, Plus, Trash2, Save, FileText, Image as ImageIcon,
   Calendar as CalIcon, User as UserIcon, Tag,
 } from 'lucide-react';
 import type { SlipUrlResponse } from '@2990s/shared/schemas';
+import { fetchPaymentSlipUrl } from '../lib/slip';
+import { SlipUploadField } from './SlipUploadField';
 import {
   PAYMENT_METHOD_CODE_TO_VALUE,
   PAYMENT_METHOD_DEFAULT_LABELS,
@@ -151,6 +154,10 @@ export type PaymentDraft = {
   accountSheet:             string;
   approvalCode:             string;
   collectedBy:              string;             // staff.id (uuid) | ''
+  /* Spec D4 (2026-06-06) — committed slip upload session for this row. In
+     SAVED mode (SO route) it is REQUIRED before commit; in DRAFT mode it is
+     optional and the batching pages (DO / SI / consignment) ignore it. */
+  slipUploadSessionId:      string | null;
 };
 
 export const newPaymentDraft = (defaultStaffId = ''): PaymentDraft => ({
@@ -164,6 +171,7 @@ export const newPaymentDraft = (defaultStaffId = ''): PaymentDraft => ({
   accountSheet: '',
   approvalCode: '',
   collectedBy: defaultStaffId,
+  slipUploadSessionId: null,
 });
 
 /* Parse an installment-plan label like 'One-off' / '3 months' / '12 months'
@@ -229,6 +237,38 @@ type DraftModeProps = {
 };
 
 export type PaymentsTableProps = SavedModeProps | DraftModeProps;
+
+/* ════════════════════════════════════════════════════════════════════════
+   Per-payment slip thumbnail (Spec D4, migration 0159).
+
+   Per-payment slip (0159) first; legacy rows fall back to the order slip
+   (Wei Siang's 2026-06-06 column semantics). The per-row presigned URL is
+   fetched lazily and only when the row actually carries a slip_key.
+   ════════════════════════════════════════════════════════════════════════ */
+const PaymentSlipThumb = ({ docNo, payment, orderSlipUrl, orderSlipType }: {
+  docNo: string;
+  payment: SoPayment & { id: string };
+  orderSlipUrl: string | null;
+  orderSlipType: string;
+}) => {
+  const perRowQ = useQuery({
+    queryKey: ['payment-slip', payment.id],
+    enabled: Boolean(payment.slip_key),
+    staleTime: 4 * 60 * 1000,   // presigned URLs live 5 min
+    queryFn: () => fetchPaymentSlipUrl(docNo, payment.id),
+  });
+  const url = payment.slip_key ? (perRowQ.data?.url ?? null) : orderSlipUrl;
+  const contentType = payment.slip_key ? (perRowQ.data?.contentType ?? 'image/jpeg') : orderSlipType;
+  if (!url) return <span className={detailStyles.muted}>—</span>;
+  if (contentType.startsWith('image/')) {
+    return (
+      <a href={url} target="_blank" rel="noreferrer" title="Open payment slip">
+        <img src={url} alt="Slip" style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--line)', display: 'block' }} />
+      </a>
+    );
+  }
+  return <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 'var(--fs-11)', color: 'var(--c-burnt)' }}>PDF</a>;
+};
 
 /* ════════════════════════════════════════════════════════════════════════
    Component.
@@ -328,20 +368,24 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
      commit affordance; the parent batches them at SO-create time. */
   const commitDraft = (d: PaymentDraft) => {
     if (!isSaved) return;
-    if (d.amountCenti <= 0) return;
+    /* Spec D4 — a SAVED-mode (SO route) payment is rejected by the API
+       without a slip; gate the commit on both the amount and a confirmed
+       slip upload session so the user never round-trips a 400. */
+    if (d.amountCenti <= 0 || !d.slipUploadSessionId) return;
     const { method } = labelToApi(d.methodLabel);
     /* Cascade payload — populate sub-fields by the L1 method only
        (draftMethodFields). The API mirrors the same guard and will scrub any
        irrelevant sub-fields (e.g. a stale onlineType left over from a
        Merchant→Online toggle). */
     const body: Record<string, unknown> = {
-      docNo:        (props as SavedModeProps).docNo,
-      paidAt:       d.paidAt,
+      docNo:           (props as SavedModeProps).docNo,
+      paidAt:          d.paidAt,
       method,
-      amountCenti:  d.amountCenti,
-      accountSheet: d.accountSheet || null,
-      approvalCode: d.approvalCode || null,
-      collectedBy:  d.collectedBy  || null,
+      amountCenti:     d.amountCenti,
+      accountSheet:    d.accountSheet || null,
+      approvalCode:    d.approvalCode || null,
+      collectedBy:     d.collectedBy  || null,
+      uploadSessionId: d.slipUploadSessionId,
       ...draftMethodFields(method, d),
     };
     addPayment.mutate(body as { docNo: string } & Record<string, unknown>, {
@@ -383,7 +427,10 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
      render the same proof thumbnail on each persisted row, in a "Slip" column
      immediately left of Collected By. */
   const slipProp = isSaved ? (props as SavedModeProps).slip : undefined;
-  const showSlip = Boolean(slipProp);
+  /* Show the Slip column when the order prop is passed (SO detail) OR when any
+     persisted row carries its own per-payment slip (Spec D4). DO/SI tables
+     pass no prop and their payments have no slip_key, so they stay unchanged. */
+  const showSlip = Boolean(slipProp) || persistedPayments.some((p) => p.slip_key);
   const [slipUrl, setSlipUrl] = useState<string | null>(null);
   const [slipType, setSlipType] = useState<string>('image/jpeg');
   useEffect(() => {
@@ -398,18 +445,6 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSaved, slipProp?.slipKey]);
-
-  const slipCell = () => {
-    if (!slipUrl) return <span className={detailStyles.muted}>—</span>;
-    if (slipType.startsWith('image/')) {
-      return (
-        <a href={slipUrl} target="_blank" rel="noreferrer" title="Open payment slip">
-          <img src={slipUrl} alt="Slip" style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--line)', display: 'block' }} />
-        </a>
-      );
-    }
-    return <a href={slipUrl} target="_blank" rel="noreferrer" style={{ fontSize: 'var(--fs-11)', color: 'var(--c-burnt)' }}>PDF</a>;
-  };
 
   /* 8-column override when the Slip column is shown (inserts a 64px slip column
      just before Collected By). Leaves the shared 7-column CSS untouched. */
@@ -528,7 +563,20 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                 <span className={paymentsStyles.cell} style={{ fontVariantNumeric: 'tabular-nums' }}>
                   {p.approval_code ?? <span className={detailStyles.muted}>—</span>}
                 </span>
-                {showSlip && <span className={paymentsStyles.cell}>{slipCell()}</span>}
+                {showSlip && (
+                  <span className={paymentsStyles.cell}>
+                    {isSaved ? (
+                      <PaymentSlipThumb
+                        docNo={(props as SavedModeProps).docNo}
+                        payment={p as SoPayment & { id: string }}
+                        orderSlipUrl={slipUrl}
+                        orderSlipType={slipType}
+                      />
+                    ) : (
+                      <span className={detailStyles.muted}>—</span>
+                    )}
+                  </span>
+                )}
                 <span className={paymentsStyles.cell}>
                   {p.collected_by_name ?? staffNameById(p.collected_by) ?? <span className={detailStyles.muted}>—</span>}
                 </span>
@@ -706,7 +754,19 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                     onChange={(e) => patchDraft(d.uid, { approvalCode: e.target.value })}
                   />
                 </span>
-                {showSlip && <span className={paymentsStyles.cell} />}
+                {showSlip && (
+                  <span className={paymentsStyles.cell}>
+                    {/* Spec D4 — per-payment slip uploader. SAVED mode (SO
+                        route) REQUIRES it; the commit button stays disabled
+                        until a slip is confirmed. */}
+                    <SlipUploadField
+                      required={isSaved}
+                      disabled={locked}
+                      onConfirmed={(sid) => patchDraft(d.uid, { slipUploadSessionId: sid })}
+                      onCleared={() => patchDraft(d.uid, { slipUploadSessionId: null })}
+                    />
+                  </span>
+                )}
                 <span className={paymentsStyles.cell}>
                   <select
                     className={paymentsStyles.inlineInputUser}
@@ -721,26 +781,50 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                   </select>
                 </span>
                 <span className={paymentsStyles.cell}>
-                  <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
+                  <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end', alignItems: 'center' }}>
+                    {/* DRAFT mode with no Slip column (DO / SI / consignment
+                        batching pages) — offer an OPTIONAL slip uploader inline
+                        before the actions. Those parent pages POST to their own
+                        endpoints, which ignore the extra slipUploadSessionId,
+                        so there is no commit gate here. */}
+                    {!isSaved && !showSlip && (
+                      <SlipUploadField
+                        disabled={locked}
+                        onConfirmed={(sid) => patchDraft(d.uid, { slipUploadSessionId: sid })}
+                        onCleared={() => patchDraft(d.uid, { slipUploadSessionId: null })}
+                      />
+                    )}
                     {/* SAVED mode shows the Save (commit) button next to
                         Discard. DRAFT mode has no Save — the parent batches
                         all drafts on SO-create. We still show Discard so the
                         user can drop a half-typed row. */}
-                    {isSaved && (
-                      <button
-                        type="button"
-                        onClick={() => commitDraft(d)}
-                        disabled={locked || addPayment.isPending || d.amountCenti <= 0}
-                        title={d.amountCenti <= 0 ? 'Enter an amount > 0 first' : 'Save payment'}
-                        style={{
-                          background: 'transparent', border: 'none', padding: 4,
-                          cursor: d.amountCenti <= 0 ? 'not-allowed' : 'pointer',
-                          color: d.amountCenti <= 0 ? 'var(--fg-muted)' : 'var(--c-secondary-a, #2F5D4F)',
-                        }}
-                      >
-                        <Save size={14} strokeWidth={1.75} />
-                      </button>
-                    )}
+                    {isSaved && (() => {
+                      /* Spec D4 — commit needs an amount AND a confirmed slip
+                         (the SO route 400s without one). */
+                      const noAmount = d.amountCenti <= 0;
+                      const noSlip   = !d.slipUploadSessionId;
+                      const blocked  = noAmount || noSlip;
+                      const title = noAmount
+                        ? 'Enter an amount > 0 first'
+                        : noSlip
+                          ? 'Upload the payment slip first'
+                          : 'Save payment';
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => commitDraft(d)}
+                          disabled={locked || addPayment.isPending || blocked}
+                          title={title}
+                          style={{
+                            background: 'transparent', border: 'none', padding: 4,
+                            cursor: blocked ? 'not-allowed' : 'pointer',
+                            color: blocked ? 'var(--fg-muted)' : 'var(--c-secondary-a, #2F5D4F)',
+                          }}
+                        >
+                          <Save size={14} strokeWidth={1.75} />
+                        </button>
+                      );
+                    })()}
                     <button
                       type="button"
                       className={paymentsStyles.trashBtn}
