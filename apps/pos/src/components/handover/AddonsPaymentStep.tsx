@@ -18,9 +18,10 @@ const HANDOVER_ADDON_IDS = ['dispose-mattress', 'dispose-bedframe', 'lift', 'ass
 /* Fallbacks shown until /so-dropdown-options loads — the pre-maintenance
    hardcoded sets. The live lists come from the payment_method,
    payment_merchant and installment_plan categories on the SO Maintenance
-   page. */
-const MERCHANT_FALLBACK = ['GHL', 'HLB', 'MBB', 'PBB'].map((v) => ({ value: v, label: v }));
-const INSTALLMENT_FALLBACK = [
+   page. Exported for the split-payment rows in ConfirmPaymentStep (Loo
+   2026-06-06) so both steps read the same sources. */
+export const MERCHANT_FALLBACK = ['GHL', 'HLB', 'MBB', 'PBB'].map((v) => ({ value: v, label: v }));
+export const INSTALLMENT_FALLBACK = [
   { value: '6 months', label: '6 months' },
   { value: '12 months', label: '12 months' },
 ];
@@ -52,8 +53,9 @@ const METHOD_HINT: Record<PaymentMethodCode, string> = {
 };
 
 /** "6 months" / "12 Months" → 6 / 12. Non-term rows ("One-off") are skipped —
- *  installment_months on the SO is an integer term. */
-const parseTermMonths = (value: string): number | null => {
+ *  installment_months on the SO is an integer term. Exported for the
+ *  split-payment rows in ConfirmPaymentStep. */
+export const parseTermMonths = (value: string): number | null => {
   const m = /^(\d+)\s*month/i.exec(value.trim());
   return m ? Number(m[1]) : null;
 };

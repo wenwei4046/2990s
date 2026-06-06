@@ -65,6 +65,7 @@ const empty: HandoverForm = {
   specialInstructions: '',
   addons: {}, paymentMethod: '',
   amountPaid: 0,
+  extraPayments: [],
   additionalDeliveryFee: 0,
   crossCategorySourceSo: '',
   paymentPreset: 'full', approvalCode: '',
@@ -347,6 +348,29 @@ export const Handover = () => {
         ...(form.approvalCode.trim() ? { approvalCode: form.approvalCode.trim() } : {}),
         // Whole-MYR → sen.
         depositCenti: Math.round(form.amountPaid * 100),
+        // Split payment (Loo 2026-06-06) — only when extra transactions exist.
+        // Row 1 = the primary payment fields above (also kept on the header);
+        // the server then books EVERY row and sums them into deposit_centi.
+        ...(form.extraPayments.length > 0 && paymentMethod
+          ? {
+              payments: [
+                {
+                  method: paymentMethod,
+                  amountCenti: Math.round(form.amountPaid * 100),
+                  ...(form.approvalCode.trim() ? { approvalCode: form.approvalCode.trim() } : {}),
+                  ...(form.merchantProvider ? { merchantProvider: form.merchantProvider } : {}),
+                  ...(form.installmentMonths ? { installmentMonths: form.installmentMonths } : {}),
+                },
+                ...form.extraPayments.map((p) => ({
+                  method: p.method,
+                  amountCenti: Math.round(p.amount * 100),
+                  ...(p.approvalCode.trim() ? { approvalCode: p.approvalCode.trim() } : {}),
+                  ...(p.merchantProvider ? { merchantProvider: p.merchantProvider } : {}),
+                  ...(p.installmentMonths ? { installmentMonths: p.installmentMonths } : {}),
+                })),
+              ],
+            }
+          : {}),
         // Delivery fee (migration 0133) — opt this SO into the server-recomputed
         // delivery fee + forward the optional additional fee sales keyed in.
         applyDeliveryFee: true,
