@@ -88,10 +88,26 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
         .map((s) => (typeof s === 'string' ? s.trim() : ''))
         .filter(Boolean);
 
-      // Sold by: the showroom venue name + its street address (single showroom
-      // at MVP — "PJ Showroom" per Loo). When a 2nd showroom opens this becomes
-      // a per-SO lookup; for now both come from legal.ts.
-      const soldByName = COMPANY_LEGAL.showroomName;
+      // Sold by (Loo 2026-06-06: "fix this, future will have new venue") —
+      // per-SO lookup: the order's stamped venue (venue_id first, the venue
+      // name text as a fallback key) resolves name + street address from the
+      // venues master. Orders with NO venue (admin-placed tests) and any
+      // lookup failure fall back to the legal.ts defaults, so the document
+      // never renders a blank seller.
+      let soldByName: string = COMPANY_LEGAL.showroomName;
+      let soldByAddress: string = COMPANY_LEGAL.showroomLine;
+      try {
+        const venueId = typeof so.venue_id === 'string' && so.venue_id ? so.venue_id : null;
+        const venueName = typeof so.venue === 'string' && so.venue.trim() ? so.venue.trim() : null;
+        if (venueId || venueName) {
+          const q = supabase.from('venues').select('name, address').limit(1);
+          const { data: vRows } = venueId ? await q.eq('id', venueId) : await q.eq('name', venueName!);
+          const v = (vRows ?? [])[0] as { name?: string | null; address?: string | null } | undefined;
+          if (v?.name) soldByName = v.name;
+          else if (venueName) soldByName = venueName;
+          if (v?.address?.trim()) soldByAddress = v.address.trim();
+        }
+      } catch { /* keep legal.ts fallback */ }
 
       const total = centiToMyr(so.total_revenue_centi);
       const paid = centiToMyr(so.paid_centi ?? so.deposit_centi);
@@ -155,7 +171,7 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
         customerAddressLines,
         customerPhone: so.phone ?? null,
         soldByName,
-        soldByAddressLines: splitMyAddress(COMPANY_LEGAL.showroomLine),
+        soldByAddressLines: splitMyAddress(soldByAddress),
         // No separate subtotal on the SO model — the total stands in (add-ons
         // ride inside the line totals), matching GET /mfg-sales-orders/mine.
         subtotal: total,
