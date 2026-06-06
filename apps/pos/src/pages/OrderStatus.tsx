@@ -26,6 +26,7 @@ import { groupSoLinesForDisplay } from '@2990s/shared/so-line-display';
 import { useAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import { Topbar } from '../components/Topbar';
+import { CountryPhoneInput } from '../components/CountryPhoneInput';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocalities, useSalesStats } from '../lib/queries';
 import { useStaff } from '../lib/staff';
@@ -1037,12 +1038,10 @@ const OrderDetail = ({ order, onClose }: {
                 />
               </DetailField>
               <DetailField label="Phone" disabled={!editable}>
-                <input
-                  type="tel"
+                <CountryPhoneInput
                   value={edited.customerPhone ?? ''}
-                  onChange={(e) => set('customerPhone', e.target.value)}
+                  onChange={(next) => set('customerPhone', next)}
                   disabled={!editable}
-                  placeholder="+60 12 345 6789"
                 />
               </DetailField>
               <DetailField label="Email *" span={2} disabled={!editable}>

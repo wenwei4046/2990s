@@ -8,6 +8,7 @@ import { cartLineTitle, useMfgCatalogIndex } from '../lib/cart-display';
 import { useSaveQuote } from '../lib/quotes';
 import { useFreePwpCodes } from '../lib/products/pwp-queries';
 import { ProductThumb } from './ProductThumb';
+import { CountryPhoneInput } from './CountryPhoneInput';
 import styles from './CartContents.module.css';
 
 export type CartContentsVariant = 'page' | 'rail';
@@ -125,11 +126,7 @@ export const CartContents = ({ variant, onContinue }: Props) => {
             </label>
             <label className={styles.quoteField}>
               <span>Phone (optional)</span>
-              <input
-                type="tel"
-                value={quotePhone}
-                onChange={(e) => setQuotePhone(e.target.value)}
-              />
+              <CountryPhoneInput value={quotePhone} onChange={setQuotePhone} />
             </label>
           </div>
           {saveErr && <p className={styles.quoteErr}>{saveErr}</p>}

@@ -17,6 +17,7 @@ import { useCatalog, type CatalogProduct, type MfgCatalogRow } from '../lib/quer
 import { cartLineTitle, useMfgCatalogIndex } from '../lib/cart-display';
 import { useSaveQuote, useUpdateQuote } from '../lib/quotes';
 import { useFreePwpCodes } from '../lib/products/pwp-queries';
+import { CountryPhoneInput } from './CountryPhoneInput';
 import styles from './CustomerOrderSheet.module.css';
 
 interface Props {
@@ -219,11 +220,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
               </label>
               <label className={styles.quoteField}>
                 <span>Phone (optional)</span>
-                <input
-                  type="tel"
-                  value={quotePhone}
-                  onChange={(e) => setQuotePhone(e.target.value)}
-                />
+                <CountryPhoneInput value={quotePhone} onChange={setQuotePhone} />
               </label>
             </div>
             {saveErr && <p className={styles.quoteErr}>{saveErr}</p>}

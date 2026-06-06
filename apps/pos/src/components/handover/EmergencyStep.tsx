@@ -1,6 +1,7 @@
 import type { HandoverForm } from '../../lib/handover-helpers';
 import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
 import { Field } from './Field';
+import { CountryPhoneInput } from '../CountryPhoneInput';
 import styles from '../../pages/Handover.module.css';
 
 /* Shown until /so-dropdown-options loads — the POS vocabulary, which is also
@@ -45,12 +46,10 @@ export const EmergencyStep = ({
     </div>
 
     <Field label="Phone *">
-      <input
-        type="tel"
+      <CountryPhoneInput
+        required
         value={form.emergencyPhone}
-        onChange={(e) => update('emergencyPhone', e.target.value)}
-        placeholder="+60 12 345 6789"
-        inputMode="tel"
+        onChange={(next) => update('emergencyPhone', next)}
       />
     </Field>
   </section>

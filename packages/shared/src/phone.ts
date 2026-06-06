@@ -135,6 +135,73 @@ export function formatPhone(stored: string | null | undefined): string {
   return raw;
 }
 
+/* ────────────────────────────────────────────────────────────────────────
+   Country dial codes — for the country-selectable phone input. Malaysia is
+   first so it is the default selection everywhere (Backend + POS). Curated
+   list (no libphonenumber): ASEAN + the regions we actually trade with.
+   ──────────────────────────────────────────────────────────────────────── */
+export type CountryDial = { iso: string; name: string; dial: string; flag: string };
+
+export const COUNTRY_DIAL_CODES: CountryDial[] = [
+  { iso: 'MY', name: 'Malaysia',        dial: '60',  flag: '🇲🇾' }, // default
+  { iso: 'SG', name: 'Singapore',       dial: '65',  flag: '🇸🇬' },
+  { iso: 'ID', name: 'Indonesia',       dial: '62',  flag: '🇮🇩' },
+  { iso: 'TH', name: 'Thailand',        dial: '66',  flag: '🇹🇭' },
+  { iso: 'BN', name: 'Brunei',          dial: '673', flag: '🇧🇳' },
+  { iso: 'VN', name: 'Vietnam',         dial: '84',  flag: '🇻🇳' },
+  { iso: 'PH', name: 'Philippines',     dial: '63',  flag: '🇵🇭' },
+  { iso: 'KH', name: 'Cambodia',        dial: '855', flag: '🇰🇭' },
+  { iso: 'MM', name: 'Myanmar',         dial: '95',  flag: '🇲🇲' },
+  { iso: 'LA', name: 'Laos',            dial: '856', flag: '🇱🇦' },
+  { iso: 'CN', name: 'China',           dial: '86',  flag: '🇨🇳' },
+  { iso: 'HK', name: 'Hong Kong',       dial: '852', flag: '🇭🇰' },
+  { iso: 'TW', name: 'Taiwan',          dial: '886', flag: '🇹🇼' },
+  { iso: 'IN', name: 'India',           dial: '91',  flag: '🇮🇳' },
+  { iso: 'BD', name: 'Bangladesh',      dial: '880', flag: '🇧🇩' },
+  { iso: 'PK', name: 'Pakistan',        dial: '92',  flag: '🇵🇰' },
+  { iso: 'LK', name: 'Sri Lanka',       dial: '94',  flag: '🇱🇰' },
+  { iso: 'AU', name: 'Australia',       dial: '61',  flag: '🇦🇺' },
+  { iso: 'NZ', name: 'New Zealand',     dial: '64',  flag: '🇳🇿' },
+  { iso: 'JP', name: 'Japan',           dial: '81',  flag: '🇯🇵' },
+  { iso: 'KR', name: 'South Korea',     dial: '82',  flag: '🇰🇷' },
+  { iso: 'AE', name: 'UAE',             dial: '971', flag: '🇦🇪' },
+  { iso: 'SA', name: 'Saudi Arabia',    dial: '966', flag: '🇸🇦' },
+  { iso: 'GB', name: 'United Kingdom',  dial: '44',  flag: '🇬🇧' },
+  { iso: 'US', name: 'USA / Canada',    dial: '1',   flag: '🇺🇸' },
+];
+
+/** Default country dial code (Malaysia). */
+export const DEFAULT_DIAL = '60';
+
+// Longest dial codes first so prefix matching is greedy (e.g. 673 before 6, 65).
+const DIALS_BY_LEN = [...COUNTRY_DIAL_CODES].sort((a, b) => b.dial.length - a.dial.length);
+
+/**
+ * Split a stored E.164 phone into its country dial code + national part, for
+ * the country-selectable input. Empty / unparseable input defaults to Malaysia
+ * with an empty national part. Matching is greedy on the longest known dial code.
+ */
+export function splitE164(stored: string | null | undefined): { dial: string; national: string } {
+  const digits = onlyDigits(String(stored ?? ''));
+  if (digits.length === 0) return { dial: DEFAULT_DIAL, national: '' };
+  for (const c of DIALS_BY_LEN) {
+    if (digits.startsWith(c.dial)) return { dial: c.dial, national: digits.slice(c.dial.length) };
+  }
+  // No known country code — assume the digits are a Malaysian national number.
+  return { dial: DEFAULT_DIAL, national: digits.startsWith('60') ? digits.slice(2) : digits };
+}
+
+/**
+ * Combine a country dial code + national digits into E.164 storage form.
+ * Returns '' when there is no national number (so an empty field clears cleanly).
+ */
+export function combineE164(dial: string, national: string): string {
+  const n = onlyDigits(String(national ?? ''));
+  if (n === '') return '';
+  const d = onlyDigits(String(dial ?? '')) || DEFAULT_DIAL;
+  return `+${d}${n}`;
+}
+
 /**
  * Validate that a phone is a usable Malaysian mobile (+60 1x ... where
  * total digits 11-12). Returns true / false.

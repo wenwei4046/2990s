@@ -30,6 +30,7 @@ import { useMemo, useState, type CSSProperties, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { Button } from '@2990s/design-system';
 import { Topbar } from '../components/Topbar';
+import { CountryPhoneInput } from '../components/CountryPhoneInput';
 import { useLocalities, useNewOrderMutation } from '../lib/queries';
 import { useSoDropdownValues } from '../lib/so-maintenance/so-dropdown-options-queries';
 
@@ -161,11 +162,9 @@ export const NewOrder = () => {
                 />
               </Field>
               <Field label="Phone">
-                <input
-                  type="tel"
+                <CountryPhoneInput
                   value={form.phone}
-                  onChange={setField('phone')}
-                  placeholder="+60 12 345 6789"
+                  onChange={(next) => setForm((cur) => ({ ...cur, phone: next }))}
                   style={inputStyle}
                 />
               </Field>

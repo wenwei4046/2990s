@@ -1821,24 +1821,8 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                 onChange={(e) => { set('customerDeliveryDate', e.target.value); onDeliveryDateChange?.(e.target.value); }}
                 style={datesXor && !form.customerDeliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
             </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Proceed Date</span>
-              {/* Read-only — auto-stamped server-side (proceeded_at, migration
-                  0110) the first time the POS marks this order Proceed. */}
-              <input
-                className={styles.fieldInput}
-                value={header?.proceeded_at ? fmtDateTime(header.proceeded_at) : '—'}
-                disabled
-                readOnly
-                aria-label="Proceed Date (auto-stamped when the POS marks the order Proceed)" />
-              <span style={{
-                fontSize: 'var(--fs-11)',
-                color: 'var(--fg-muted)',
-                marginTop: 2,
-              }}>
-                Auto-stamped when the POS marks this order Proceed.
-              </span>
-            </label>
+            {/* Proceed Date field removed per request 2026-06-05 — the POS still
+                stamps proceeded_at server-side; it's just no longer surfaced here. */}
             <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
               <span className={styles.fieldLabel}>Note</span>
               <input className={styles.fieldInput} value={form.note}

@@ -2,6 +2,7 @@ import type { HandoverForm } from '../../lib/handover-helpers';
 import { useAllStaff, useStaff } from '../../lib/staff';
 import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
 import { Field } from './Field';
+import { CountryPhoneInput } from '../CountryPhoneInput';
 import styles from '../../pages/Handover.module.css';
 
 /* Shown until /so-dropdown-options loads — mirrors the seeded customer_type
@@ -45,14 +46,10 @@ export const CustomerStep = ({
           />
         </Field>
         <Field label="Phone *">
-          <input
-            type="tel"
+          <CountryPhoneInput
             required
             value={form.phone}
-            onChange={(e) => update('phone', e.target.value)}
-            autoComplete="tel"
-            placeholder="+60 12 345 6789"
-            inputMode="tel"
+            onChange={(next) => update('phone', next)}
           />
         </Field>
       </div>
