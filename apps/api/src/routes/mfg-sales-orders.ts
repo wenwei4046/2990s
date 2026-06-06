@@ -1261,11 +1261,6 @@ mfgSalesOrders.post('/', async (c) => {
 
   const docNo = await nextDocNo(sb);
 
-  /* Migration 0086 — auto-stamp venue_id from the caller's staff.venue_id
-     when they're a POS-side role (sales / sales_executive / outlet_manager).
-     Backend-only roles leave it NULL. The client may pass an explicit
-     venueId in the body to override (e.g. coordinator entering an SO on
-     behalf of a specific venue). */
   /* Caller's staff row — drives the venue auto-stamp AND the salesperson
      self-lock below. */
   const { data: callerStaff } = await sb
@@ -1273,13 +1268,6 @@ mfgSalesOrders.post('/', async (c) => {
     .select('role, venue_id')
     .eq('id', user.id)
     .maybeSingle();
-  let venueIdToStamp: string | null = (body.venueId as string | null | undefined) ?? null;
-  if (!venueIdToStamp) {
-    if (callerStaff && callerStaff.venue_id &&
-        ['sales', 'sales_executive', 'outlet_manager'].includes(callerStaff.role)) {
-      venueIdToStamp = callerStaff.venue_id as string;
-    }
-  }
   /* Loo 2026-06-05 — a `sales` caller can only create orders under their OWN
      account: whatever salespersonId the client sent is overridden with the
      caller's id (the POS locks the picker too; this closes the API hole).
@@ -1288,6 +1276,35 @@ mfgSalesOrders.post('/', async (c) => {
   const salespersonIdToStamp = callerStaff?.role === 'sales'
     ? user.id
     : ((body.salespersonId as string) ?? null);
+
+  /* Migration 0086 + Loo 2026-06-06 — venue follows the SELECTED salesperson:
+     an admin/coordinator entering an SO on behalf of a PJ salesperson stamps
+     PJ automatically (before, only the CALLER's venue counted, so any
+     admin-placed POS order carried a blank venue). Priority:
+       1. explicit body.venueId (the Backend form types/derives it)
+       2. the stamped salesperson's staff.venue_id
+       3. the caller's own staff.venue_id when they're a POS-side role
+     A venue-less salesperson (admin testing under their own name) stays
+     NULL — admins oversee every venue by design. */
+  let venueIdToStamp: string | null = (body.venueId as string | null | undefined) ?? null;
+  if (!venueIdToStamp && salespersonIdToStamp) {
+    if (salespersonIdToStamp === user.id) {
+      venueIdToStamp = (callerStaff?.venue_id as string | null) ?? null;
+    } else {
+      const { data: spStaff } = await sb
+        .from('staff')
+        .select('venue_id')
+        .eq('id', salespersonIdToStamp)
+        .maybeSingle();
+      venueIdToStamp = (spStaff as { venue_id?: string | null } | null)?.venue_id ?? null;
+    }
+  }
+  if (!venueIdToStamp) {
+    if (callerStaff && callerStaff.venue_id &&
+        ['sales', 'sales_executive', 'outlet_manager'].includes(callerStaff.role)) {
+      venueIdToStamp = callerStaff.venue_id as string;
+    }
+  }
 
   /* SO-SKU spec P5 (§4.5) — resolve the venue FK to its display name once.
      Until now venue_id was stamped but the `venue` TEXT stayed NULL, so the
