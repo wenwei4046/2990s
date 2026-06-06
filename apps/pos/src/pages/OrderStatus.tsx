@@ -956,6 +956,10 @@ const OrderDetail = ({ order, onClose }: {
       setPaymentAdd('');
       setPaySlipSession(null);
       setSlipResetKey((k) => k + 1);
+      // Clear the approval code so the next payment can't silently reuse the
+      // last terminal ref. Raw setter used intentionally — approvalCode is NOT
+      // in the dirty expression, so this won't flip the Save button on.
+      setEdited((prev) => ({ ...prev, approvalCode: null }));
       queryClient.invalidateQueries({ queryKey: ['my-orders'] });
       queryClient.invalidateQueries({ queryKey: ['so-payments', order.id] });
     },
@@ -982,7 +986,7 @@ const OrderDetail = ({ order, onClose }: {
   });
 
   const onSave = () => saveMutation.mutate();
-  const onRecordPayment = () => { if (additionalPaid > 0) paymentMutation.mutate(); };
+  const onRecordPayment = () => { if (additionalPaid > 0 && paySlipSession !== null) paymentMutation.mutate(); };
   const onProceed = () => {
     if (!allOk) return;
     proceedMutation.mutate();
@@ -1323,6 +1327,7 @@ const OrderDetail = ({ order, onClose }: {
                       || paySlipSession === null
                       || !(edited.approvalCode ?? '').trim()
                       || (payMethod === 'merchant' && !payMerchant)
+                      || (payMethod === 'installment' && payInstallmentMonths === null)
                     }
                   >
                     <Receipt size={14} strokeWidth={1.75} />
