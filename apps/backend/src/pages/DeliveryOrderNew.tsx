@@ -216,6 +216,8 @@ export const DeliveryOrderNew = () => {
           accountSheet: p.account_sheet ?? '',
           approvalCode: p.approval_code ?? '',
           collectedBy: p.collected_by ?? '',
+          // Copied SO payments become fresh DO drafts; DO route needs no slip.
+          slipUploadSessionId: null,
         };
       }));
     }

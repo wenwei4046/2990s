@@ -221,6 +221,8 @@ export const SalesInvoiceNew = () => {
           accountSheet: p.account_sheet ?? '',
           approvalCode: p.approval_code ?? '',
           collectedBy: p.collected_by ?? '',
+          // Copied DO payments become fresh SI drafts; SI route needs no slip.
+          slipUploadSessionId: null,
         };
       }));
     }

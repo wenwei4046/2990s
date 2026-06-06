@@ -216,6 +216,8 @@ export const SalesInvoiceDetail = () => {
       accountSheet: p.account_sheet ?? '',
       approvalCode: p.approval_code ?? '',
       collectedBy: p.collected_by ?? '',
+      // SI payments carry no per-payment slip (Spec D4 applies to the SO route).
+      slipUploadSessionId: null,
     };
   }, []);
 

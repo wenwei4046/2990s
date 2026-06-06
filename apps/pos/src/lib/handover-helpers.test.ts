@@ -7,6 +7,7 @@ import {
   validateAddonsPayment,
   validateConfirmPayment,
   validateSign,
+  extraPaymentComplete,
   computeMinCalendarDate,
   computeAddonTotal,
   firstName,
@@ -160,7 +161,7 @@ describe('validateConfirmPayment', () => {
   /* Split payment (Loo 2026-06-06) — extras count toward the floor/ceiling
      and every extra row must be complete. */
   describe('split payment', () => {
-    const okExtra = { method: 'cash' as const, amount: 1000, approvalCode: 'CR-1', merchantProvider: null, installmentMonths: null };
+    const okExtra = { uid: 'test-uid-1', method: 'cash' as const, amount: 1000, approvalCode: 'CR-1', merchantProvider: null, installmentMonths: null, slipUploadSessionId: 'ex-sess' };
     const base = {
       ...baseForm, paymentMethod: 'transfer' as const, approvalCode: '123',
       paymentRecorded: true, slipUploadSessionId: 'sess',
@@ -180,13 +181,13 @@ describe('validateConfirmPayment', () => {
         { ...base, amountPaid: 800, extraPayments: [{ ...okExtra, approvalCode: '' }] }, 2990, 0,
       )).toBe(false);
       expect(validateConfirmPayment(
-        { ...base, amountPaid: 800, extraPayments: [{ ...okExtra, method: 'merchant' }] }, 2990, 0,
+        { ...base, amountPaid: 800, extraPayments: [{ ...okExtra, method: 'merchant', merchantProvider: null }] }, 2990, 0,
       )).toBe(false);
       expect(validateConfirmPayment(
         { ...base, amountPaid: 800, extraPayments: [{ ...okExtra, method: 'merchant', merchantProvider: 'GHL' }] }, 2990, 0,
       )).toBe(true);
       expect(validateConfirmPayment(
-        { ...base, amountPaid: 800, extraPayments: [{ ...okExtra, method: 'installment' }] }, 2990, 0,
+        { ...base, amountPaid: 800, extraPayments: [{ ...okExtra, method: 'installment', installmentMonths: null }] }, 2990, 0,
       )).toBe(false);
       expect(validateConfirmPayment(
         { ...base, amountPaid: 800, extraPayments: [{ ...okExtra, method: 'installment', installmentMonths: 12 }] }, 2990, 0,
@@ -196,6 +197,12 @@ describe('validateConfirmPayment', () => {
       expect(validateConfirmPayment(
         { ...base, amountPaid: 0, extraPayments: [{ ...okExtra, amount: 2990 }] }, 2990, 0,
       )).toBe(false);
+    });
+    it('extra payment is incomplete without its own slip (spec D4)', () => {
+      const p = { uid: 'test-uid-2', method: 'cash' as const, amount: 100, approvalCode: 'R-1',
+        merchantProvider: null, installmentMonths: null, slipUploadSessionId: null };
+      expect(extraPaymentComplete(p)).toBe(false);
+      expect(extraPaymentComplete({ ...p, slipUploadSessionId: 'sess-1' })).toBe(true);
     });
   });
 });

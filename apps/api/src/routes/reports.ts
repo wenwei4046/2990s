@@ -128,6 +128,9 @@ reports.get('/sales-order-detail-listing', async (c) => {
     collectedById: string | null;
   };
   const paymentMetaByDoc = new Map<string, PaymentMeta>();
+  /* Spec D7 (Loo 2026-06-06) — the Approval Code column aggregates EVERY
+     ledger code (Loo paid twice and saw only the most-recent one). */
+  const approvalCodesByDoc = new Map<string, Array<{ paidAt: string | null; code: string }>>();
   if (docNos.length > 0) {
     const { data: paymentTotals, error: payErr } = await sb
       .from('mfg_sales_order_payments')
@@ -145,6 +148,11 @@ reports.get('/sales-order-detail-listing', async (c) => {
       };
       const key = row.so_doc_no;
       paidByDoc.set(key, (paidByDoc.get(key) ?? 0) + Number(row.amount_centi ?? 0));
+      if (row.approval_code && row.approval_code.trim() !== '') {
+        const arr = approvalCodesByDoc.get(key) ?? [];
+        arr.push({ paidAt: row.paid_at ?? null, code: row.approval_code.trim() });
+        approvalCodesByDoc.set(key, arr);
+      }
       const prev = paymentMetaByDoc.get(key);
       // "Most recent" = max paid_at; on tie keep first seen. Null paid_at
       // sorts older than any real date.
@@ -239,10 +247,15 @@ reports.get('/sales-order-detail-listing', async (c) => {
       const pm = paymentMetaByDoc.get(r.doc_no);
       flat.last_payment_at = pm?.lastPaidAt   ?? null;
       flat.account_sheet   = pm?.accountSheet ?? null;
-      // approval_code: prefer the payment ledger value; fall back to the
-      // header-level approval_code (legacy single-shot SOs predating the
-      // payments ledger still carry it on the header).
-      flat.approval_code   = pm?.approvalCode ?? (h.approval_code as string | null) ?? null;
+      /* Spec D7 (Loo 2026-06-06) — ALL approval codes, oldest→newest, plus a
+         count when there are several ("123123 + 456456 (2)"). Header-level
+         code keeps covering legacy single-shot SOs with no ledger rows. */
+      const codes = (approvalCodesByDoc.get(r.doc_no) ?? [])
+        .sort((a, b) => String(a.paidAt ?? '').localeCompare(String(b.paidAt ?? '')))
+        .map((x) => x.code);
+      flat.approval_code = codes.length > 0
+        ? codes.join(' + ') + (codes.length > 1 ? ` (${codes.length})` : '')
+        : ((h.approval_code as string | null) ?? null);
       flat.collected_by    = pm?.collectedById ? (staffNameById.get(pm.collectedById) ?? null) : null;
       return flat;
     })
