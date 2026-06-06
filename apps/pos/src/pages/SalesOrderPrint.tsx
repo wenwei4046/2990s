@@ -143,6 +143,10 @@ const ItemsTable = ({ order }: { order: PrintableSO }) => (
           <td className={styles.colDesc}>
             {l.description}
             {l.sub && <span className={styles.lineDesc}>{l.sub}</span>}
+            {/* Spec D3 (2026-06-06) — the per-line remark the salesperson keyed
+                on the product page prints for the customer, same as the
+                backend SO PDF. */}
+            {l.remark && <span className={styles.lineDesc}>Remark: {l.remark}</span>}
             {l.notes.map((n, j) => (
               <span
                 key={j}

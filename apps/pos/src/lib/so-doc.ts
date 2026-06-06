@@ -22,6 +22,10 @@ export interface PrintableLine {
   sub: string | null;
   /** PWP voucher notes (used = accent, unused = muted — 排法 A). */
   notes: SoPwpNote[];
+  /** Per-line operator remark (spec 2026-06-06 D3 — prints for the customer).
+   *  Folded sofa builds surface the fold's remark (first non-empty by
+   *  cellIndex); single lines read their own column. */
+  remark: string | null;
   qty: number;
   unitPrice: number; // MYR
   lineTotal: number; // MYR
@@ -140,6 +144,7 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
             description: d.description,
             sub: [d.composition, d.description2].filter(Boolean).join(' · ') || null,
             notes,
+            remark: d.remark,
             qty: d.qty,
             unitPrice: centiToMyr(d.unitPriceCenti),
             lineTotal: centiToMyr(d.totalCenti),
@@ -156,6 +161,7 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
           description: desc || ((lead.item_code as string) ?? ''),
           sub: null,
           notes,
+          remark: typeof lead.remark === 'string' && lead.remark.trim() !== '' ? lead.remark : null,
           qty,
           unitPrice,
           lineTotal,
