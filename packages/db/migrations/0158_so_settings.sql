@@ -20,6 +20,14 @@ DO $$ BEGIN
     FOR SELECT TO authenticated USING (true);
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+-- Writes ride the user-scoped API client (same trust model as
+-- so_dropdown_options, 0081): RLS admits authenticated, the /so-settings
+-- PATCH route enforces coordinator-or-above before issuing the UPDATE.
+DO $$ BEGIN
+  CREATE POLICY so_settings_update ON so_settings
+    FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 INSERT INTO so_settings (key, enabled, label)
 VALUES ('pos_product_remark', true, 'Product page remark & extra charge (POS)')
 ON CONFLICT (key) DO NOTHING;
