@@ -13,10 +13,11 @@ export const soSettings = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 soSettings.use('*', supabaseAuth);
 
-const ELEVATED = new Set([
-  'coordinator', 'finance', 'admin', 'outlet_manager',
-  'sales_director', 'super_admin', 'master_account',
-]);
+/* Canonical elevated-write set — keep in lock-step with admin.ts
+   COORDINATOR_OR_ABOVE_ROLES and the public.is_coordinator_or_above()
+   SQL helper (+ super_admin). Widening (e.g. outlet_manager) is a Loo
+   decision, not a default. */
+const ELEVATED = new Set(['coordinator', 'finance', 'admin', 'super_admin']);
 
 soSettings.get('/', async (c) => {
   const sb = c.get('supabase');
@@ -38,6 +39,7 @@ soSettings.patch('/:key', async (c) => {
   const { data: staffRow, error: staffErr } = await sb
     .from('staff').select('role').eq('id', user.id).maybeSingle();
   if (staffErr) return c.json({ error: 'load_failed', reason: staffErr.message }, 500);
+  // maybeSingle() returns null data (not an error) for a missing row — staffErr covers network/auth failures.
   if (!staffRow || !ELEVATED.has((staffRow as { role: string }).role)) {
     return c.json({ error: 'forbidden' }, 403);
   }
