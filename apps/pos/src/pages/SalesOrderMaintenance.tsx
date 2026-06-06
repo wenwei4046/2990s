@@ -72,6 +72,8 @@ import {
   type SoDropdownCategory,
   type SoDropdownOption,
 } from '../lib/so-maintenance/so-dropdown-options-queries';
+/* 2026-06-06 — POS feature toggles (pos_product_remark et al.). */
+import { useSoSettings, useUpdateSoSetting } from '../lib/so-maintenance/so-settings-queries';
 import { Topbar } from '../components/Topbar';
 import styles from './SalesOrderMaintenance.module.css';
 
@@ -857,6 +859,9 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
       )}
 
       <DropdownsSection mode={mode} />
+
+      {/* ── POS feature toggles (spec 2026-06-06 D5) ─────────────────── */}
+      <PosSettingsSection mode={mode} />
     </>
   );
 };
@@ -1429,6 +1434,84 @@ const VenuesSection = ({ mode }: { mode: MaintenanceMode }) => {
           </div>
         )}
       </div>
+    </section>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   PosSettingsSection (spec 2026-06-06 D5) — feature toggles read by the
+   POS at runtime. First switch: the product-page "Remark & extra charge"
+   card. The SO create path enforces the same flag server-side.
+
+   Mode gating (mirrors Dropdowns pattern in this file):
+   - full:     checkboxes enabled — admin/super_admin can toggle.
+   - add-only: checkboxes disabled — sales_director can view but not toggle
+               (toggling is an EDIT, not an ADD; also 403-gated server-side).
+   - view:     checkboxes disabled — read-only display.
+   ════════════════════════════════════════════════════════════════════════ */
+const PosSettingsSection = ({ mode }: { mode: MaintenanceMode }) => {
+  const q = useSoSettings();
+  const update = useUpdateSoSetting();
+  const editable = canEdit(mode);
+
+  return (
+    <section style={{ marginBottom: 'var(--space-6)' }}>
+      <header style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
+        <Lock size={20} strokeWidth={1.75} />
+        <h2 style={{ margin: 0, fontFamily: 'var(--font-title)', fontSize: 'var(--fs-20)', fontWeight: 700 }}>
+          POS settings
+        </h2>
+      </header>
+      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
+        Feature toggles that the POS reads at runtime. The server also enforces
+        these flags on SO create — turning one off here immediately blocks the
+        corresponding feature for all showrooms.
+      </p>
+
+      <div style={{
+        background: 'var(--c-paper)', border: '1px solid var(--line)',
+        borderRadius: 'var(--radius-lg)', overflow: 'hidden',
+      }}>
+        {q.isLoading && (
+          <div className={styles.empty}>Loading settings…</div>
+        )}
+        {!q.isLoading && (q.data ?? []).length === 0 && (
+          <div className={styles.empty}>No settings found.</div>
+        )}
+        {!q.isLoading && (q.data ?? []).map((s, i) => (
+          <label
+            key={s.key}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--space-3)',
+              padding: 'var(--space-3) var(--space-4)',
+              borderTop: i === 0 ? undefined : '1px solid var(--line)',
+              cursor: editable ? 'pointer' : 'default',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={s.enabled}
+              disabled={!editable || update.isPending}
+              onChange={(e) => update.mutate({ key: s.key, enabled: e.target.checked })}
+              style={{ width: 16, height: 16, accentColor: 'var(--c-orange)', cursor: 'inherit' }}
+            />
+            <span style={{ fontSize: 'var(--fs-14)', color: 'var(--c-ink)' }}>{s.label}</span>
+            {!editable && (
+              <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                Read-only
+              </span>
+            )}
+          </label>
+        ))}
+      </div>
+
+      {update.isError && (
+        <p style={{ marginTop: 'var(--space-2)', fontSize: 'var(--fs-13)', color: 'var(--c-festive-b, #B8331F)' }}>
+          Save failed — only coordinators and above can change these.
+        </p>
+      )}
     </section>
   );
 };
