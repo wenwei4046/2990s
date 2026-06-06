@@ -21,11 +21,12 @@
 // across both modes.
 // ----------------------------------------------------------------------------
 
-import { memo, useState, type CSSProperties } from 'react';
+import { memo, useEffect, useState, type CSSProperties } from 'react';
 import {
-  DollarSign, Plus, Trash2, Save, FileText,
+  DollarSign, Plus, Trash2, Save, FileText, Image as ImageIcon,
   Calendar as CalIcon, User as UserIcon, Tag,
 } from 'lucide-react';
+import type { SlipUrlResponse } from '@2990s/shared/schemas';
 import {
   PAYMENT_METHOD_CODE_TO_VALUE,
   PAYMENT_METHOD_DEFAULT_LABELS,
@@ -210,6 +211,12 @@ type SavedModeProps = {
   currency?: string;
   /** When true, hides Add Payment + per-row trash/save controls. */
   locked?: boolean;
+  /** Optional payment-slip column (Wei Siang 2026-06-06). When provided, a
+   *  "Slip" column is rendered immediately LEFT of "Collected By", showing the
+   *  order's POS-handover payment slip thumbnail (one slip per order — the same
+   *  proof backs each payment row). Only the Sales Order detail passes this; the
+   *  DO / SI tables that also use PaymentsTable leave it unset and are unchanged. */
+  slip?: { slipKey: string | null; fetcher: (id: string) => Promise<SlipUrlResponse> };
 };
 
 type DraftModeProps = {
@@ -372,6 +379,44 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
 
   const totalRowCount = persistedPayments.length + drafts.length;
 
+  /* Optional payment-slip column. One slip per order, so we fetch it once and
+     render the same proof thumbnail on each persisted row, in a "Slip" column
+     immediately left of Collected By. */
+  const slipProp = isSaved ? (props as SavedModeProps).slip : undefined;
+  const showSlip = Boolean(slipProp);
+  const [slipUrl, setSlipUrl] = useState<string | null>(null);
+  const [slipType, setSlipType] = useState<string>('image/jpeg');
+  useEffect(() => {
+    if (!isSaved || !slipProp?.slipKey) { setSlipUrl(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await slipProp.fetcher((props as SavedModeProps).docNo);
+        if (!cancelled) { setSlipUrl(r.url); setSlipType(r.contentType); }
+      } catch { if (!cancelled) setSlipUrl(null); }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSaved, slipProp?.slipKey]);
+
+  const slipCell = () => {
+    if (!slipUrl) return <span className={detailStyles.muted}>—</span>;
+    if (slipType.startsWith('image/')) {
+      return (
+        <a href={slipUrl} target="_blank" rel="noreferrer" title="Open payment slip">
+          <img src={slipUrl} alt="Slip" style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 4, border: '1px solid var(--line)', display: 'block' }} />
+        </a>
+      );
+    }
+    return <a href={slipUrl} target="_blank" rel="noreferrer" style={{ fontSize: 'var(--fs-11)', color: 'var(--c-burnt)' }}>PDF</a>;
+  };
+
+  /* 8-column override when the Slip column is shown (inserts a 64px slip column
+     just before Collected By). Leaves the shared 7-column CSS untouched. */
+  const gridStyle: CSSProperties | undefined = showSlip
+    ? { gridTemplateColumns: '140px 140px minmax(120px, 1fr) minmax(140px, 1.4fr) minmax(140px, 1.4fr) 64px 160px 32px' }
+    : undefined;
+
   return (
     <section className={detailStyles.card}>
       <header className={detailStyles.cardHeader}>
@@ -400,7 +445,7 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
           </div>
 
           {/* Transactions table ──────────────────────────────────────── */}
-          <div className={paymentsStyles.grid}>
+          <div className={paymentsStyles.grid} style={gridStyle}>
             {/* Header row */}
             <span className={paymentsStyles.headerCell}>
               Date <CalIcon size={12} strokeWidth={1.75} />
@@ -417,6 +462,11 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
             <span className={paymentsStyles.headerCell}>
               Approval Code <FileText size={12} strokeWidth={1.75} />
             </span>
+            {showSlip && (
+              <span className={paymentsStyles.headerCell}>
+                Slip <ImageIcon size={12} strokeWidth={1.75} />
+              </span>
+            )}
             <span className={paymentsStyles.headerCell}>
               Collected By <UserIcon size={12} strokeWidth={1.75} />
             </span>
@@ -478,6 +528,7 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                 <span className={paymentsStyles.cell} style={{ fontVariantNumeric: 'tabular-nums' }}>
                   {p.approval_code ?? <span className={detailStyles.muted}>—</span>}
                 </span>
+                {showSlip && <span className={paymentsStyles.cell}>{slipCell()}</span>}
                 <span className={paymentsStyles.cell}>
                   {p.collected_by_name ?? staffNameById(p.collected_by) ?? <span className={detailStyles.muted}>—</span>}
                 </span>
@@ -655,6 +706,7 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                     onChange={(e) => patchDraft(d.uid, { approvalCode: e.target.value })}
                   />
                 </span>
+                {showSlip && <span className={paymentsStyles.cell} />}
                 <span className={paymentsStyles.cell}>
                   <select
                     className={paymentsStyles.inlineInputUser}

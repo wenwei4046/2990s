@@ -1223,7 +1223,26 @@ export const SalesOrderDetail = () => {
         grandTotalCenti={header.local_total_centi}
         currency={header.currency}
         locked={isLocked || !isEditing}
+        slip={{ slipKey: header.slip_key, fetcher: fetchSoSlipUrl }}
       />
+
+      {/* ── CUSTOMER SIGNATURE — moved directly below Payments (Wei Siang
+          2026-06-06). Read-only proof captured on the POS handover pad; only
+          shown when the SO carries one (POS orders). */}
+      {header.signature_b64 && (
+        <section className={styles.card}>
+          <header className={styles.cardHeader}>
+            <h2 className={styles.cardTitle}>Customer Signature</h2>
+          </header>
+          <div className={styles.cardBody}>
+            <img
+              src={header.signature_b64}
+              alt="Customer signature captured at handover"
+              style={{ maxWidth: 360, width: '100%', height: 'auto', border: '1px solid var(--c-line, #E5E1DC)', borderRadius: 8, background: '#fff' }}
+            />
+          </div>
+        </section>
+      )}
 
       {/* ── Variant-completeness banner ─────────────────────────────
           PR #144 + #156 gating rule kept as a read-only warning. The
@@ -1894,33 +1913,9 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
         </div>
       </section>
 
-      {/* ── CUSTOMER SIGNATURE (P1, migration 0142) ─────────────────
-          Read-only proof captured on the POS handover pad. Only shown when the
-          SO carries one (POS orders); B2B / legacy SOs simply omit the card. */}
-      {header.signature_b64 && (
-        <section className={styles.card}>
-          <header className={styles.cardHeader}>
-            <h2 className={styles.cardTitle}>Customer Signature</h2>
-          </header>
-          <div className={styles.cardBody}>
-            <img
-              src={header.signature_b64}
-              alt="Customer signature captured at handover"
-              style={{ maxWidth: 360, width: '100%', height: 'auto', border: '1px solid var(--c-line, #E5E1DC)', borderRadius: 8, background: '#fff' }}
-            />
-          </div>
-        </section>
-      )}
-
-      {/* ── PAYMENT SLIP (P1, migration 0143) ───────────────────────
-          POS handover payment proof, read-only. Reuses the legacy SlipSection
-          viewer with the SO-keyed fetcher; renders its own "No slip uploaded"
-          empty state, so it's always shown. */}
-      <section className={styles.card}>
-        <div className={styles.cardBody}>
-          <SlipSection orderId={header.doc_no} slipKey={header.slip_key} fetcher={fetchSoSlipUrl} />
-        </div>
-      </section>
+      {/* CUSTOMER SIGNATURE + PAYMENT SLIP relocated (Wei Siang 2026-06-06):
+          signature now renders directly below Payments (above), and the payment
+          slip is shown as a column inside the Payments table. */}
 
       {/* ── DELIVERY ADDRESS ──────────────────────────────────────── */}
       <section className={styles.card}>
