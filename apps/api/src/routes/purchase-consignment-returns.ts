@@ -28,11 +28,82 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { writeMovements, reverseMovements, defaultWarehouseId } from '../lib/inventory-movements';
 import { recomputePcoReceived } from './purchase-consignment-receives';
 
 export const purchaseConsignmentReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseConsignmentReturns.use('*', supabaseAuth);
+
+/* Book a PC Return's lines as an inventory OUT — pull the returned stock back
+   out of the warehouse the matching PC Receive booked it INTO (request
+   2026-06-05). Each line's warehouse is resolved via pc_receive_item_id →
+   receive → receive.warehouse_id, falling back to the header receive's
+   warehouse, then the default. Idempotent + best-effort. */
+async function writePcReturnInventoryOut(sb: any, returnId: string): Promise<void> {
+  try {
+    const { data: head } = await sb.from('purchase_consignment_returns')
+      .select('return_number, pc_receive_id').eq('id', returnId).maybeSingle();
+    if (!head) return;
+    const { count: existing } = await sb.from('inventory_movements')
+      .select('id', { head: true, count: 'exact' })
+      .eq('source_doc_type', 'PC_RETURN').eq('source_doc_id', returnId);
+    if ((existing ?? 0) > 0) return; // already booked
+
+    const returnNo = (head as { return_number: string }).return_number;
+    let headerWh: string | null = null;
+    if ((head as { pc_receive_id: string | null }).pc_receive_id) {
+      const { data: rcv } = await sb.from('purchase_consignment_receives')
+        .select('warehouse_id').eq('id', (head as { pc_receive_id: string }).pc_receive_id).maybeSingle();
+      headerWh = (rcv as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
+    }
+    const fallbackWh = headerWh ?? (await defaultWarehouseId(sb));
+
+    const { data: lines } = await sb.from('purchase_consignment_return_items')
+      .select('pc_receive_item_id, material_code, material_name, qty_returned, item_group, variants')
+      .eq('purchase_consignment_return_id', returnId);
+    const lineList = ((lines ?? []) as Array<{
+      pc_receive_item_id: string | null; material_code: string; material_name: string | null;
+      qty_returned: number | null; item_group: string | null; variants: unknown;
+    }>);
+
+    // Resolve per-line warehouse via receive_item → receive (handles multi-receive batches).
+    const recvItemIds = [...new Set(lineList.map((l) => l.pc_receive_item_id).filter((x): x is string => !!x))];
+    const whByRecvItem = new Map<string, string | null>();
+    if (recvItemIds.length) {
+      const { data: ri } = await sb.from('purchase_consignment_receive_items')
+        .select('id, pc_receive_id').in('id', recvItemIds);
+      const riRows = (ri ?? []) as Array<{ id: string; pc_receive_id: string }>;
+      const recvIds = [...new Set(riRows.map((r) => r.pc_receive_id).filter(Boolean))];
+      const { data: recvs } = recvIds.length
+        ? await sb.from('purchase_consignment_receives').select('id, warehouse_id').in('id', recvIds)
+        : { data: [] };
+      const whByRecv = new Map(((recvs ?? []) as Array<{ id: string; warehouse_id: string | null }>).map((r) => [r.id, r.warehouse_id]));
+      for (const r of riRows) whByRecvItem.set(r.id, whByRecv.get(r.pc_receive_id) ?? null);
+    }
+
+    const movements = lineList
+      .filter((it) => Number(it.qty_returned ?? 0) > 0)
+      .map((it) => {
+        const wh = (it.pc_receive_item_id ? whByRecvItem.get(it.pc_receive_item_id) : null) ?? fallbackWh;
+        if (!wh) return null;
+        return {
+          movement_type: 'OUT' as const,
+          warehouse_id: wh,
+          product_code: it.material_code,
+          variant_key: computeVariantKey(it.item_group, (it.variants as VariantAttrs | null) ?? null),
+          product_name: it.material_name,
+          qty: Number(it.qty_returned ?? 0),
+          source_doc_type: 'PC_RETURN' as const,
+          source_doc_id: returnId,
+          source_doc_no: returnNo,
+          performed_by: null,
+        };
+      })
+      .filter((m): m is NonNullable<typeof m> => m !== null);
+    if (movements.length > 0) await writeMovements(sb, movements);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[pc-return] inventory OUT failed:', e); }
+}
 
 const HEADER =
   'id, return_number, pc_order_id, pc_receive_id, supplier_id, return_date, ' +
@@ -244,6 +315,9 @@ purchaseConsignmentReturns.post('/', async (c) => {
     if (r.pc_receive_item_id) await adjustPcReceiveReturnedQty(sb, r.pc_receive_item_id, Number(r.qty_returned));
   }
 
+  // Inventory OUT — pull the returned stock back out of its receive's warehouse.
+  await writePcReturnInventoryOut(sb, h.id);
+
   return c.json({ id: h.id, returnNumber: h.return_number }, 201);
 });
 
@@ -333,10 +407,13 @@ purchaseConsignmentReturns.post('/from-pc-receives', async (c) => {
   const { error: iErr } = await sb.from('purchase_consignment_return_items').insert(rows);
   if (iErr) { await sb.from('purchase_consignment_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
 
-  // Consume each receive line: recount returned_qty from live (off-ledger).
+  // Consume each receive line: recount returned_qty from live.
   for (const it of rejectedItems) {
     await adjustPcReceiveReturnedQty(sb, it.id, it._qty);
   }
+
+  // Inventory OUT — pull the returned stock back out of its receive's warehouse.
+  await writePcReturnInventoryOut(sb, h.id);
 
   return c.json({ id: h.id, returnNumber: h.return_number, pcReceiveCount: recvList.length, lineCount: rejectedItems.length }, 201);
 });
@@ -417,6 +494,9 @@ purchaseConsignmentReturns.post('/from-pc-receive', async (c) => {
 
   await recomputePcReturnTotals(sb, h.id);
 
+  // Inventory OUT — pull the returned stock back out of its receive's warehouse.
+  await writePcReturnInventoryOut(sb, h.id);
+
   return c.json({ id: h.id, returnNumber: h.return_number }, 201);
 });
 
@@ -493,6 +573,12 @@ purchaseConsignmentReturns.patch('/:id/cancel', async (c) => {
       if (l.pc_receive_item_id) await adjustPcReceiveReturnedQty(sb, l.pc_receive_item_id, -(l.qty_returned ?? 0));
     }
   } catch { /* best-effort */ }
+
+  // Inventory reversal (2026-06-05, now on-ledger) — the OUT pulled stock out of
+  // its receive's warehouse; cancelling puts it back IN. Best-effort.
+  try {
+    await reverseMovements(sb, 'PC_RETURN', id, c.get('user')?.id ?? null);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[pc-return] cancel reversal failed:', e); }
 
   return c.json({ purchaseConsignmentReturn: { id, status: 'CANCELLED' } });
 });

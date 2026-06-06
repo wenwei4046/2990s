@@ -136,7 +136,12 @@ inventory.get('/', async (c) => {
     return c.json({ error: 'load_failed', reason: error.message }, 500);
   }
 
-  const { data: whs } = await sb.from('warehouses').select('id, code, name').eq('is_active', true);
+  /* Show active warehouses PLUS consignment/showroom warehouses (those are kept
+     is_active=false so they stay out of the normal GRN/DO pickers) — so consigned
+     stock sitting at a showroom is visible in Inventory. (2026-06-05) */
+  const { data: whs } = await sb.from('warehouses')
+    .select('id, code, name, is_consignment')
+    .or('is_active.eq.true,is_consignment.eq.true');
   return c.json({ balances: data ?? [], warehouses: whs ?? [] });
 });
 

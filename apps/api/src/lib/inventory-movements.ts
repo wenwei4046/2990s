@@ -38,7 +38,13 @@ type MovementInput = {
        warehouse; CS_DR = a Consignment Return brings it back. Their partial
        UNIQUE indexes (uq_inv_mov_cs_do_source / uq_inv_mov_cs_dr_source,
        migration 0153) are the per-doc idempotency backstop. */
-    | 'CS_DO' | 'CS_DR';
+    | 'CS_DO' | 'CS_DR'
+    /* Purchase-consignment ON-ledger movements (request 2026-06-05 — consigned
+       stock at a showroom must show in Inventory). PC_RECEIVE = a Purchase
+       Consignment Receive books goods IN to its warehouse; PC_RETURN = a
+       Purchase Consignment Return takes them back OUT. Reversed on cancel via
+       reverseMovements. Excluded from MRP by warehouse separation. */
+    | 'PC_RECEIVE' | 'PC_RETURN';
   source_doc_id?: string;
   source_doc_no?: string;
   /** Migration 0120 — production batch (source PO number). On IN rows the FIFO
