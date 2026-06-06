@@ -4,6 +4,18 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-07-001 — Consignment-ledger correctness gaps (3 fixes)
+
+Surfaced while unifying the consignment stock ledger with the main DO/GRN ledger (branch `feat/consignment-unified-inventory`, fix commit `f35a13c`). Each verified at file:line before fixing.
+
+1. **0-cost consignment return re-entered stock at cost 0 → understated COGS** — a free-entry consignment return with a 0 `unit_cost_centi` posted an IN at cost 0; a later FIFO sale would consume that 0-cost lot and under-state COGS. **Fix:** `resyncReturnInventory` (consignment-returns.ts) now falls back to the SKU's current on-hand weighted-avg cost (new shared helper `resolveWarehouseLotCosts` in inventory-movements.ts, computed from `v_inventory_lots_open`) when the line cost is 0.
+2. **Delivery Return line-edit had no over-return cap** — `PATCH /delivery-returns/:id/items/:itemId` could raise `qty_returned` above the qty actually delivered (the create path was guarded; the edit path was not). **Fix:** the edit now runs the shared `checkDrOverRemaining` on the positive delta and returns 409 when it would exceed the delivered balance.
+3. **GRN line-edit delta movements dropped the dye-lot batch** — `PATCH /grns/:id/items/:itemId` posted its bucket-change + qty-delta IN/OUT movements with no `batch_no` (= source PO number), so editing a posted sofa line consumed plain-FIFO across the variant instead of that PO's dye-lot. **Fix:** resolves the line's PO-item batch (`resolvePoBatchByItem`) and stamps `batch_no` onto all four delta movements.
+
+**Caught by:** Consignment ledger unification + fix-one→audit-whole-system sweep (2026-06-06).
+
+---
+
 ## BUG-2026-06-04-001 — Reversal paths lose batch_no + unit_cost_sen (cost/valuation drift)
 
 Full supply-chain × inventory audit (3-agent code sweep). Branch `fix/inventory-reversal-integrity`. Each finding re-verified at file:line before fixing (the DO-cancel finding was DISMISSED on verification — see below).
