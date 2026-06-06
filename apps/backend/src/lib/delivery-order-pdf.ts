@@ -92,7 +92,7 @@ export async function generateDeliveryOrderPdf(
   const rightLines = [
     header.driver_name ? `Driver: ${header.driver_name}` : null,
     header.vehicle ? `Vehicle: ${header.vehicle}` : null,
-    header.expected_delivery_at ? `Expected: ${header.expected_delivery_at}` : null,
+    header.expected_delivery_at ? `Expected: ${fmtDocDate(header.expected_delivery_at)}` : null,
     header.m3_total_milli ? `Volume: ${(header.m3_total_milli / 1000).toFixed(3)} m³` : null,
     header.notes ? `Note: ${header.notes}` : null,
   ].filter(Boolean) as string[];

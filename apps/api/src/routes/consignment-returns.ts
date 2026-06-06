@@ -560,11 +560,25 @@ consignmentReturns.patch('/:id', async (c) => {
 });
 
 // ── Item CRUD ─────────────────────────────────────────────────────────────
+/* A REFUNDED / CREDIT_NOTED / CANCELLED return is terminal — lock line edits to
+   ACTIVE returns (mirrors pcReturnLineLock on the purchase side). Editing a
+   terminal return re-runs recomputeTotals + resyncReturnInventory, which would
+   rewrite settled totals and (for non-cancelled terminal states) re-book stock. */
+async function returnLineLock(sb: any, id: string): Promise<{ error: string; message: string } | null> {
+  const { data } = await sb.from('consignment_delivery_returns').select('status').eq('id', id).maybeSingle();
+  const st = (data as { status: string } | null)?.status;
+  if (st === 'CANCELLED') return { error: 'return_cancelled', message: 'This consignment return is cancelled — its lines can no longer be changed.' };
+  if (st === 'REFUNDED') return { error: 'return_refunded', message: 'This consignment return is refunded — its lines can no longer be changed.' };
+  if (st === 'CREDIT_NOTED') return { error: 'return_credit_noted', message: 'This consignment return is credit-noted — its lines can no longer be changed.' };
+  return null;
+}
+
 consignmentReturns.post('/:id/items', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
+  { const lock = await returnLineLock(sb, id); if (lock) return c.json(lock, 409); }
 
   /* DROPPED vs DR: the "no DO, no Return" single-line guard. */
 
@@ -590,6 +604,7 @@ consignmentReturns.patch('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  { const lock = await returnLineLock(sb, id); if (lock) return c.json(lock, 409); }
 
   /* itemCode catalog guard (only when caller is changing it). */
   if (it.itemCode !== undefined) {
@@ -636,6 +651,7 @@ consignmentReturns.patch('/:id/items/:itemId', async (c) => {
 
 consignmentReturns.delete('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
+  { const lock = await returnLineLock(sb, id); if (lock) return c.json(lock, 409); }
   const { error } = await sb.from('consignment_delivery_return_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);

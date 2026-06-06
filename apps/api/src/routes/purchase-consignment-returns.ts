@@ -367,9 +367,10 @@ purchaseConsignmentReturns.post('/', async (c) => {
   const sb = c.get('supabase'); const user = c.get('user');
   const returnNumber = await nextNum(sb);
 
-  /* Clamp each PC-receive-linked line to its remaining
-     (qty_accepted - returned_qty) so a bare create can't over-return. Manual
-     lines (no pc_receive_item_id) are uncapped. */
+  /* Reject (don't clamp) any PC-receive-linked line that exceeds its remaining
+     (qty_accepted - returned_qty) — matches the add-line + edit paths, which
+     409 instead of silently normalizing. Manual lines (no pc_receive_item_id)
+     are uncapped. */
   const preReceiveItemIds = [...new Set(items
     .map((it) => (it.pcReceiveItemId as string | undefined) ?? null)
     .filter((x): x is string => !!x))];
@@ -381,14 +382,21 @@ purchaseConsignmentReturns.post('/', async (c) => {
       remainingByReceiveItem.set(r.id, Math.max(0, (r.qty_accepted ?? 0) - (r.returned_qty ?? 0)));
     }
   }
+  for (const it of items) {
+    const receiveItemId = (it.pcReceiveItemId as string | undefined) ?? null;
+    if (receiveItemId && remainingByReceiveItem.has(receiveItemId)) {
+      const requested = Number(it.qtyReturned ?? 0);
+      const remaining = remainingByReceiveItem.get(receiveItemId) as number;
+      if (requested > remaining) {
+        return c.json({ error: 'qty_exceeds_remaining', requested, remaining, materialCode: it.materialCode ?? null }, 409);
+      }
+    }
+  }
 
   let totalRefund = 0;
   const itemRows = items.map((it) => {
     const receiveItemId = (it.pcReceiveItemId as string | undefined) ?? null;
-    let qty = Number(it.qtyReturned ?? 0);
-    if (receiveItemId && remainingByReceiveItem.has(receiveItemId)) {
-      qty = Math.min(qty, remainingByReceiveItem.get(receiveItemId) as number);
-    }
+    const qty = Number(it.qtyReturned ?? 0);
     const unit = Number(it.unitPriceCenti ?? 0);
     const lineRefund = qty * unit;
     totalRefund += lineRefund;

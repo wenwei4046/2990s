@@ -20,6 +20,7 @@ import {
   forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
   type CSSProperties,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Plus, X, Printer, Save,
@@ -1456,6 +1457,10 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
 
   const [form, setForm] = useState(() => initialFormFor(header));
   const [showSuggest, setShowSuggest] = useState(false);
+  /* Portal the debtor dropdown to document.body so the section card's
+     overflow:hidden can't clip it (mirrors the SoLineCard fix). */
+  const custInputRef = useRef<HTMLInputElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
   /* Task #99 (UI perf) — 200 ms debounce on the debtor autocomplete. Until
      this commit each keystroke in the Customer Name field issued a
      /debtors/search request. The hook itself now guards length>=2 (see
@@ -1470,10 +1475,16 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     (d) => (d.debtor_name ?? '').toLowerCase() !== form.customerName.trim().toLowerCase(),
   );
 
+  /* Reset the local form to the header ONLY when not actively editing. A
+     background refetch (payment add, slip upload, line-draft autosave) hands a
+     fresh `header` reference; without this guard it would overwrite the
+     operator's in-progress, unsaved Customer edits — the same silent-data-loss
+     the line-item drafts buffer prevents. Cancel still resets via the ref. */
   useEffect(() => {
+    if (isEditing) return;
     setForm(initialFormFor(header));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [header]);
+  }, [header, isEditing]);
 
   const set = <K extends keyof typeof form>(k: K, v: string) =>
     setForm((s) => ({ ...s, [k]: v }));
@@ -1661,6 +1672,22 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
      semantics intact. */
   const inputsDisabled = !isEditing || locked;
 
+  /* Pin the portaled debtor dropdown under the Customer Name input while open. */
+  useEffect(() => {
+    if (!showSuggest || inputsDisabled) { setMenuPos(null); return; }
+    const update = () => {
+      const el = custInputRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setMenuPos({ top: r.bottom + 4, left: r.left, width: r.width });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => { window.removeEventListener('scroll', update, true); window.removeEventListener('resize', update); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showSuggest, inputsDisabled]);
+
   /* PR #168 — Commander 2026-05-27 screenshot diff vs. Create SO: Detail
      was using one big "Customer · Addresses" card with 4 hairline-divided
      sub-blocks; Create SO uses 4 visually distinct top-level cards. Mirror
@@ -1685,6 +1712,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             <label className={styles.field} style={{ gridColumn: 'span 3' }}>
               <span className={styles.fieldLabel}>Customer Name *</span>
               <input
+                ref={custInputRef}
                 className={styles.fieldInput}
                 value={form.customerName}
                 disabled={inputsDisabled}
@@ -1692,8 +1720,11 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                 onFocus={() => setShowSuggest(true)}
                 onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
               />
-              {showSuggest && suggestions.length > 0 && !inputsDisabled && (
-                <ul className={styles.suggestList}>
+              {showSuggest && suggestions.length > 0 && !inputsDisabled && menuPos && createPortal(
+                <ul
+                  className={styles.suggestList}
+                  style={{ position: 'fixed', top: menuPos.top, left: menuPos.left, width: menuPos.width, right: 'auto', marginTop: 0, zIndex: 1000 }}
+                >
                   {suggestions.slice(0, 8).map((d, i) => (
                     <li
                       key={`${d.debtor_code ?? ''}-${i}`}
@@ -1708,7 +1739,8 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                       )}
                     </li>
                   ))}
-                </ul>
+                </ul>,
+                document.body,
               )}
             </label>
             <label className={styles.field}>

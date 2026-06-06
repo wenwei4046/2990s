@@ -4,6 +4,20 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-07-002 — Whole-stack audit batch (5 fixes)
+
+Three-agent frontend/backend/database audit; each finding re-verified at file:line before fixing (several agent-flagged items were dismissed as by-design or stale).
+
+1. **Delivery Order / Consignment Note PDF printed a raw ISO timestamp for "Expected" delivery date** — `delivery-order-pdf.ts:95` interpolated `header.expected_delivery_at` verbatim (`Expected: 2026-06-02T00:00:00.000Z`) while every sibling date used `fmtDocDate`. Customer-facing DO PDFs showed the machine timestamp. **Fix:** wrapped in `fmtDocDate(...)`.
+2. **Debtor-autocomplete dropdown portal fix had landed on a DEAD file** — the prior dropdown-clipping fix was applied to `pages/sales-order/CustomerCard.tsx`, which is imported nowhere; the live customer card is the inline `CustomerCardInner` in `SalesOrderDetail.tsx`, whose debtor `<ul>` was still un-portaled and clipped by the section card's `overflow:hidden`. **Fix:** applied the `createPortal` + `getBoundingClientRect` + scroll/resize re-pin pattern to the live component (`SalesOrderDetail.tsx:1695`) and **deleted** the dead `CustomerCard.tsx`.
+3. **Consignment Return line CRUD had no terminal-status lock** — `consignment-returns.ts` item POST/PATCH/DELETE could add/edit/delete lines on a CANCELLED / REFURBED / CREDIT_NOTED return, re-running `recomputeTotals` + `resyncReturnInventory` (rewriting settled totals and, for non-cancelled terminal states, re-booking stock). The purchase side already had `pcReturnLineLock`; the sales side was missing it. **Fix:** added `returnLineLock` (REFUNDED / CREDIT_NOTED / CANCELLED → 409) wired into all 3 line routes; frontend already blocks edit for those statuses, so the two are now unified.
+4. **Purchase Consignment Return bare-create silently clamped over-return qty** — `purchase-consignment-returns.ts:390` did `qty = Math.min(qty, remaining)` on the POST `/` path, while add-line + edit reject with 409 `qty_exceeds_remaining`. Violated the reject-don't-normalize rule and was inconsistent within the same route. **Fix:** the bare-create path now 409s on any PC-receive-linked line exceeding its remaining instead of truncating.
+5. **Sales Order Customer card silently discarded unsaved edits on a background refetch** — `SalesOrderDetail.tsx` `CustomerCardInner` reset its entire local form on `useEffect(..., [header])`; any mid-edit mutation that invalidates the SO-detail query (payment add, slip upload, line autosave) handed a fresh `header` ref and wiped in-progress Customer name/phone/email edits (the line cells have the drafts buffer; the header card did not). **Fix:** the reset now skips while `isEditing` (Cancel still resets via the ref).
+
+**Caught by:** Three-agent whole-stack audit (2026-06-07), each finding verified at file:line.
+
+---
+
 ## BUG-2026-06-07-001 — Consignment-ledger correctness gaps (3 fixes)
 
 Surfaced while unifying the consignment stock ledger with the main DO/GRN ledger (branch `feat/consignment-unified-inventory`, fix commit `f35a13c`). Each verified at file:line before fixing.
