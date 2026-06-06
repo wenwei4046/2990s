@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import { useCart, cartSubtotal } from '../state/cart';
-import { useCreateOrder, PricingDriftError, type PricingDriftPayload } from '../lib/orders';
 import {
   usePosHandoffToSo,
   cartLinesToSoItems,
@@ -36,7 +35,6 @@ import { AddonsPaymentStep } from '../components/handover/AddonsPaymentStep';
 import { ConfirmPaymentStep } from '../components/handover/ConfirmPaymentStep';
 import { SignConfirmStep } from '../components/handover/SignConfirmStep';
 import type { SignaturePadHandle } from '../components/handover/SignaturePad';
-import { PricingDriftModal } from '../components/PricingDriftModal';
 import styles from './Handover.module.css';
 
 const STEPS = [
@@ -114,18 +112,14 @@ export const Handover = () => {
       sessionStorage.setItem(HANDOVER_FORM_SNAPSHOT_KEY, JSON.stringify(form));
     } catch { /* storage off */ }
   }, [form]);
-  const [drift, setDrift] = useState<PricingDriftPayload | null>(null);
   const [serverError, setServerError] = useState<string | null>(null);
 
-  const createOrder = useCreateOrder();
-  /* Task #70 — Manufacturing SO handoff. The Sales Order is now the single
-     order system of record (Commander 2026-05-30: unify POS orders onto
-     mfg_sales_orders + retire the legacy 6-lane board). So the SO handoff is
-     now the DEFAULT:
-       unset / anything → POST /mfg-sales-orders (the SO handoff)
-       'retail'         → legacy POST /orders (kept only as an escape hatch). */
-  const handoverMode = import.meta.env.VITE_HANDOVER_MODE as string | undefined;
-  const useMfgSoFlow = handoverMode !== 'retail';
+  /* Task #70 — Manufacturing SO handoff. The Sales Order is the single order
+     system of record (Commander 2026-05-30: unify POS orders onto
+     mfg_sales_orders). SO-parity cleanup (Loo 2026-06-06): the legacy
+     POST /orders escape hatch + its VITE_HANDOVER_MODE build flag are GONE —
+     one env var could silently reroute every POS order onto the dead retail
+     schema with different validation. POST /mfg-sales-orders is the only path. */
   const handoffToSo = usePosHandoffToSo();
   const deleteQuote = useDeleteQuote();
   const addons = useAddons();
@@ -268,11 +262,7 @@ export const Handover = () => {
       return;
     }
     if (isLast) {
-      if (useMfgSoFlow) {
-        await submitHandoffToSo();
-      } else {
-        await submitOrder();
-      }
+      await submitHandoffToSo();
       return;
     }
     setAttempted(false);
@@ -286,10 +276,9 @@ export const Handover = () => {
      coordinator picks up the new SO from there.
 
      Notes:
-       - The Backend SO API does NOT run the 0.5% pricing-drift recompute
-         the retail /orders flow uses, so we don't pass acceptedServerTotal
-         here. If/when manufacturing pricing recompute lands, plumb it
-         through the same way as the legacy flow.
+       - The SO API runs the server-authoritative pricing recompute and
+         rejects POS-tablet drift >0.5% with a `pricing_drift` 400 —
+         describePosHandoffError surfaces the offending line + both figures.
        - paid (whole-MYR) becomes depositCenti (sen) on the SO header. */
   const submitHandoffToSo = async () => {
     setServerError(null);
@@ -402,94 +391,6 @@ export const Handover = () => {
     }
   };
 
-  const submitOrder = async (acceptedServerTotal?: number) => {
-    setServerError(null);
-    // Legacy escape hatch (VITE_HANDOVER_MODE='retail') — the retail orders
-    // table still has CHECK constraints with the OLD fixed vocabulary, while
-    // the form now carries values from the maintained so_dropdown_options
-    // (e.g. 'NEW' / 'Condo' / 'CIMB'). Normalise down; drop anything the
-    // legacy schema can't hold rather than fail the CHECK.
-    const legacyCustomerType: 'new' | 'existing' =
-      form.customerType.trim().toLowerCase() === 'existing' ? 'existing' : 'new';
-    const legacyBuilding = form.buildingType.trim().toLowerCase();
-    const legacyBuildingType = (
-      ['condo', 'landed', 'apartment', 'office', 'shop', 'other'] as const
-    ).find((b) => b === legacyBuilding);
-    const legacyMerchant = (['GHL', 'HLB', 'MBB', 'PBB'] as const)
-      .find((p) => p === form.merchantProvider) ?? null;
-    const legacyInstallment =
-      form.installmentMonths === 6 || form.installmentMonths === 12
-        ? form.installmentMonths
-        : null;
-    if (form.merchantProvider && !legacyMerchant) {
-      console.warn(`legacy retail order: merchant "${form.merchantProvider}" not storable, dropped`);
-    }
-    if (form.installmentMonths != null && legacyInstallment == null) {
-      console.warn(`legacy retail order: installment term ${form.installmentMonths} not storable, dropped`);
-    }
-    try {
-      const result = await createOrder.mutateAsync({
-        customer: {
-          name: form.name.trim(),
-          phone: form.phone.trim() || undefined,
-          email: form.email.trim() || undefined,
-          address: form.fullAddress.trim() || undefined,
-          addressLine2: form.addressLine2.trim() || undefined,
-          postcode: form.postcode.trim() || undefined,
-          city: form.city.trim() || undefined,
-          state: form.state.trim() || undefined,
-        },
-        paymentMethod: form.paymentMethod as Exclude<typeof form.paymentMethod, ''>,
-        approvalCode: form.approvalCode.trim() || undefined,
-        deliveryDate: !form.deliveryDateLater && form.deliveryDate ? form.deliveryDate : undefined,
-        customerType: legacyCustomerType,
-        buildingType: legacyBuildingType,
-        billingSame: form.billingSame,
-        ...(form.billingSame ? {} : {
-          billingAddress: form.billingAddress.trim() || undefined,
-          billingAddressLine2: form.billingAddressLine2.trim() || undefined,
-          billingPostcode: form.billingPostcode.trim() || undefined,
-          billingCity: form.billingCity.trim() || undefined,
-          billingState: form.billingState.trim() || undefined,
-        }),
-        salespersonId: form.salespersonId || undefined,
-        specialInstructions: form.specialInstructions.trim() || undefined,
-        addressLater: form.addressLater,
-        addons: Object.entries(form.addons)
-          .filter(([, s]) => s.selected)
-          .map(([addonId, s]) => ({
-            addonId,
-            ...(s.qty !== undefined ? { qty: s.qty } : {}),
-            ...(s.floorsCount !== undefined ? { floorsCount: s.floorsCount } : {}),
-            ...(s.itemsCount !== undefined ? { itemsCount: s.itemsCount } : {}),
-          })),
-        addonTotal,
-        paid: form.amountPaid,
-        installmentMonths: legacyInstallment,
-        merchantProvider: legacyMerchant,
-        additionalDeliveryFee: form.additionalDeliveryFee,
-        deliveryFeeTotal: deliveryFee.total,
-        lines,
-        acceptedServerTotal,
-        uploadSessionId: form.slipUploadSessionId ?? undefined,
-        signatureData: signatureRef.current?.getDataUrl() ?? undefined,
-      });
-      // Consume the originating quote (if this cart was loaded from one) now
-      // that the order is confirmed. Best-effort — a failed delete must not
-      // block the confirmation; clear() then resets sourceQuoteId.
-      if (sourceQuoteId) deleteQuote.mutate(sourceQuoteId);
-      clear();
-      clearHandoverFormSnapshot();
-      navigate(`/confirmed/${encodeURIComponent(result.id)}`, { replace: true });
-    } catch (err) {
-      if (err instanceof PricingDriftError) {
-        setDrift(err.payload);
-        return;
-      }
-      setServerError(err instanceof Error ? err.message : 'Order submission failed');
-    }
-  };
-
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     void goNext();
@@ -551,7 +452,7 @@ export const Handover = () => {
               isFirst={idx === 0}
               currentKey={current.key}
               valid={validity[current.key]}
-              submitting={createOrder.isPending || handoffToSo.isPending}
+              submitting={handoffToSo.isPending}
               paymentRecorded={form.paymentRecorded}
               blockers={getStepBlockers(current.key, form, subtotal, addonTotal, deliveryFee.total)}
               attempted={attempted}
@@ -571,15 +472,6 @@ export const Handover = () => {
             total={total}
           />
         </form>
-
-        {drift && (
-          <PricingDriftModal
-            drift={drift}
-            submitting={createOrder.isPending || handoffToSo.isPending}
-            onAccept={(serverTotal) => { setDrift(null); void submitOrder(serverTotal); }}
-            onCancel={() => setDrift(null)}
-          />
-        )}
       </main>
     </>
   );
