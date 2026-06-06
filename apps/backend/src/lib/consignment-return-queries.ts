@@ -61,6 +61,36 @@ export const useConsignmentReturns = (status?: string) => useQuery({
   retry: 1,
 });
 
+/* ── Returnable Consignment Note lines (From-Note multi-picker) ────────── */
+export type ReturnableNoteLine = {
+  noteItemId: string;
+  consignmentDoId: string;
+  noteNumber: string;
+  debtorCode: string | null;
+  debtorName: string | null;
+  itemCode: string;
+  itemGroup: string | null;
+  description: string | null;
+  description2: string | null;
+  uom: string | null;
+  delivered: number;
+  returned: number;
+  remaining: number;
+  unitPriceCenti: number;
+  discountCenti: number;
+  unitCostCenti: number;
+  variants: unknown;
+};
+
+export const useReturnableNoteLines = () => useQuery({
+  queryKey: ['consignment-return', 'returnable-note-lines'],
+  queryFn: () => authedFetch<{ lines: ReturnableNoteLine[] }>(
+    `/consignment-returns/returnable-note-lines`,
+  ).then((r) => r.lines),
+  staleTime: 30_000,
+  retry: 1,
+});
+
 /* ── Detail ──────────────────────────────────────────────────────────── */
 export const useConsignmentReturnDetail = (id: string | null) => useQuery({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

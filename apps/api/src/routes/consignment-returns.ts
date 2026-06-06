@@ -309,6 +309,78 @@ consignmentReturns.get('/', async (c) => {
   return c.json({ deliveryReturns: data ?? [] });
 });
 
+// ── Returnable Consignment Note lines (From-Note multi-picker) ────────────
+// Every consignment_delivery_order_item, with remaining = delivered (qty) −
+// already-returned (sum of qty_returned across non-cancelled Consignment Returns
+// linked to that note line via consignment_do_item_id). Only remaining > 0 lines
+// are pickable. Mirrors the DO→DR /returnable-do-lines endpoint. MUST be
+// registered before /:id so 'returnable-note-lines' isn't read as an id.
+consignmentReturns.get('/returnable-note-lines', async (c) => {
+  const sb = c.get('supabase');
+  const { data: notes, error: nErr } = await sb
+    .from('consignment_delivery_orders')
+    .select('id, do_number, debtor_code, debtor_name')
+    .order('do_number', { ascending: false })
+    .limit(1000);
+  if (nErr) return c.json({ error: 'load_failed', reason: nErr.message }, 500);
+  const noteList = (notes ?? []) as Array<{ id: string; do_number: string; debtor_code: string | null; debtor_name: string | null }>;
+  if (noteList.length === 0) return c.json({ lines: [] });
+  const noteById = new Map(noteList.map((n) => [n.id, n]));
+  const noteIds = noteList.map((n) => n.id);
+
+  const { data: items, error: iErr } = await sb
+    .from('consignment_delivery_order_items')
+    .select('id, consignment_delivery_order_id, item_code, item_group, description, description2, uom, qty, unit_price_centi, discount_centi, unit_cost_centi, variants')
+    .in('consignment_delivery_order_id', noteIds);
+  if (iErr) return c.json({ error: 'load_failed', reason: iErr.message }, 500);
+  const itemList = (items ?? []) as Array<Record<string, unknown>>;
+  if (itemList.length === 0) return c.json({ lines: [] });
+  const itemIds = itemList.map((it) => it.id as string);
+
+  // Already-returned per note line — only count non-cancelled returns.
+  const { data: relRows } = await sb
+    .from('consignment_delivery_returns')
+    .select('id, status')
+    .neq('status', 'CANCELLED');
+  const liveReturnIds = new Set(((relRows ?? []) as Array<{ id: string }>).map((r) => r.id));
+  const { data: retItems } = await sb
+    .from('consignment_delivery_return_items')
+    .select('consignment_delivery_return_id, consignment_do_item_id, qty_returned')
+    .in('consignment_do_item_id', itemIds);
+  const returnedByItem = new Map<string, number>();
+  for (const r of ((retItems ?? []) as Array<{ consignment_delivery_return_id: string; consignment_do_item_id: string | null; qty_returned: number }>)) {
+    if (!r.consignment_do_item_id || !liveReturnIds.has(r.consignment_delivery_return_id)) continue;
+    returnedByItem.set(r.consignment_do_item_id, (returnedByItem.get(r.consignment_do_item_id) ?? 0) + Number(r.qty_returned ?? 0));
+  }
+
+  const lines = itemList.map((it) => {
+    const note = noteById.get(it.consignment_delivery_order_id as string);
+    const delivered = Number(it.qty ?? 0);
+    const returned = returnedByItem.get(it.id as string) ?? 0;
+    return {
+      noteItemId: it.id as string,
+      consignmentDoId: it.consignment_delivery_order_id as string,
+      noteNumber: note?.do_number ?? '',
+      debtorCode: note?.debtor_code ?? null,
+      debtorName: note?.debtor_name ?? null,
+      itemCode: it.item_code as string,
+      itemGroup: (it.item_group as string | null) ?? null,
+      description: (it.description as string | null) ?? null,
+      description2: (it.description2 as string | null) ?? null,
+      uom: (it.uom as string | null) ?? null,
+      delivered,
+      returned,
+      remaining: delivered - returned,
+      unitPriceCenti: Number(it.unit_price_centi ?? 0),
+      discountCenti: Number(it.discount_centi ?? 0),
+      unitCostCenti: Number(it.unit_cost_centi ?? 0),
+      variants: it.variants ?? null,
+    };
+  }).filter((l) => l.remaining > 0);
+
+  return c.json({ lines });
+});
+
 // ── Detail ──────────────────────────────────────────────────────────────
 consignmentReturns.get('/:id', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');

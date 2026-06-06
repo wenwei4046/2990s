@@ -22,7 +22,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import { useCreateConsignmentReturn } from '../lib/consignment-return-queries';
@@ -39,7 +39,7 @@ import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-type DraftLine = SoLineDraft & { rid: string; condition?: string };
+type DraftLine = SoLineDraft & { rid: string; condition?: string; doItemId?: string };
 
 const newLine = (): DraftLine => ({
   ...emptySoLine(),
@@ -55,6 +55,7 @@ export const ConsignmentReturnNew = () => {
   // Convert-from: a Consignment Note (=DO) this return collects back. Mirrors the
   // DR's ?fromDo= prefill — seed header + lines from the note, free-edit after.
   const fromConsignmentNote = searchParams.get('fromConsignmentNote');
+  const fromPicks = searchParams.get('fromPicks') === '1';
 
   const create = useCreateConsignmentReturn();
   const staffQ = useStaff();
@@ -154,6 +155,49 @@ export const ConsignmentReturnNew = () => {
     setPrefilled(true);
   }, [fromConsignmentNote, prefilled, cnDetail.data]);
 
+  // ── From-Note multi-picker merge (fromPicks) — the operator chose specific
+  //    note lines + quantities on /consignment-return/from-note. Seed lines from
+  //    the stash, carrying each line's source note-line id so the backend links
+  //    the return to the note line. Debtor comes from the first picked line —
+  //    one debtor per return (the picker enforces it).
+  useEffect(() => {
+    if (!fromPicks || prefilled) return;
+    type Stash = {
+      noteItemId: string; consignmentDoId: string; noteNumber: string;
+      debtorCode: string | null; debtorName: string | null;
+      itemCode: string; itemGroup: string | null; description: string | null;
+      uom: string | null; qty: number; condition: string;
+      unitPriceCenti: number; discountCenti: number; unitCostCenti: number; variants: unknown;
+    };
+    let stash: Stash[] | null = null;
+    try { stash = JSON.parse(sessionStorage.getItem('crFromNotePicks') ?? 'null'); }
+    catch { stash = null; }
+    if (!stash || stash.length === 0) return;
+
+    const first = stash[0];
+    if (!first) return;
+    setDebtorCode(first.debtorCode ?? '');
+    setDebtorName(first.debtorName ?? '');
+    setReason(`Return from ${first.noteNumber}`);
+    setLines(stash.map((s, idx) => ({
+      ...newLine(),
+      rid: `l${Date.now()}-${idx}-${s.noteItemId.slice(0, 6)}`,
+      itemGroup: (s.itemGroup as string) || 'others',
+      itemCode: s.itemCode ?? '',
+      description: s.description ?? '',
+      uom: s.uom ?? 'UNIT',
+      qty: Number(s.qty ?? 1),
+      unitPriceCenti: Number(s.unitPriceCenti ?? 0),
+      discountCenti: Number(s.discountCenti ?? 0),
+      unitCostCenti: Number(s.unitCostCenti ?? 0),
+      variants: (s.variants as Record<string, unknown>) ?? {},
+      condition: s.condition || 'NEW',
+      doItemId: s.noteItemId,
+    })));
+    sessionStorage.removeItem('crFromNotePicks');
+    setPrefilled(true);
+  }, [fromPicks, prefilled]);
+
   const loadingPrefill = Boolean(fromConsignmentNote) && !prefilled && cnDetail.isLoading;
 
   const staffList = useMemo(() => (staffQ.data ?? []).filter((s) => s.active), [staffQ.data]);
@@ -220,6 +264,7 @@ export const ConsignmentReturnNew = () => {
           discountCenti: l.discountCenti,
           unitCostCenti: l.unitCostCenti,
           variants: l.variants,
+          consignmentDoItemId: l.doItemId,
         })),
       },
       {
@@ -248,6 +293,9 @@ export const ConsignmentReturnNew = () => {
           </h1>
         </div>
         <div className={styles.actions}>
+          <Button variant="ghost" size="md" onClick={() => navigate('/consignment-return/from-note')}>
+            <ArrowRightLeft {...ICON} /> From Consignment Note
+          </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/consignment-return')}>
             <X {...ICON} /> Cancel
           </Button>

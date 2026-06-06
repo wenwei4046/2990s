@@ -410,6 +410,59 @@ export async function pcReceiveLineDownstream(
   return out;
 }
 
+// ── Outstanding PC Order lines (From-Order multi-picker) ──────────────────
+// Every purchase_consignment_order_item with outstanding = qty − received_qty
+// still > 0, across all non-cancelled PC Orders. Mirrors the PO→GRN from-po
+// picker. MUST precede /:id so the static path isn't read as an id.
+purchaseConsignmentReceives.get('/outstanding-order-lines', async (c) => {
+  const sb = c.get('supabase');
+  const { data: orders, error: oErr } = await sb
+    .from('purchase_consignment_orders')
+    .select('id, pc_number, supplier_id, status, supplier:suppliers(id, code, name)')
+    .neq('status', 'CANCELLED')
+    .order('pc_number', { ascending: false })
+    .limit(1000);
+  if (oErr) return c.json({ error: 'load_failed', reason: oErr.message }, 500);
+  const orderList = (orders ?? []) as Array<{ id: string; pc_number: string; supplier_id: string | null; supplier?: { name?: string | null } | null }>;
+  if (orderList.length === 0) return c.json({ lines: [] });
+  const orderById = new Map(orderList.map((o) => [o.id, o]));
+  const orderIds = orderList.map((o) => o.id);
+
+  const { data: items, error: iErr } = await sb
+    .from('purchase_consignment_order_items')
+    .select('id, purchase_consignment_order_id, material_kind, material_code, material_name, supplier_sku, item_group, description, uom, qty, received_qty, unit_price_centi, variants')
+    .in('purchase_consignment_order_id', orderIds);
+  if (iErr) return c.json({ error: 'load_failed', reason: iErr.message }, 500);
+  const itemList = (items ?? []) as Array<Record<string, unknown>>;
+
+  const lines = itemList.map((it) => {
+    const o = orderById.get(it.purchase_consignment_order_id as string);
+    const ordered = Number(it.qty ?? 0);
+    const received = Number(it.received_qty ?? 0);
+    return {
+      orderItemId: it.id as string,
+      purchaseConsignmentOrderId: it.purchase_consignment_order_id as string,
+      pcNumber: o?.pc_number ?? '',
+      supplierId: o?.supplier_id ?? null,
+      supplierName: o?.supplier?.name ?? null,
+      materialKind: (it.material_kind as string) ?? 'OTHER',
+      materialCode: it.material_code as string,
+      materialName: (it.material_name as string) ?? '',
+      supplierSku: (it.supplier_sku as string | null) ?? null,
+      itemGroup: (it.item_group as string | null) ?? null,
+      description: (it.description as string | null) ?? null,
+      uom: (it.uom as string | null) ?? null,
+      ordered,
+      received,
+      outstanding: ordered - received,
+      unitPriceCenti: Number(it.unit_price_centi ?? 0),
+      variants: it.variants ?? null,
+    };
+  }).filter((l) => l.outstanding > 0);
+
+  return c.json({ lines });
+});
+
 purchaseConsignmentReceives.get('/:id', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
   const [h, i] = await Promise.all([

@@ -22,7 +22,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, Plus, Save, Trash2, X, ChevronDown } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, Plus, Save, Trash2, X, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
@@ -103,6 +103,7 @@ export const PurchaseConsignmentReceiveNew = () => {
   // ── Source Purchase Consignment Order (inline single-order picker, or the
   //    ?fromPcOrder= deep link from a PC Order detail "Receive Goods"). ──────
   const [selPoId, setSelPoId] = useState<string>(params.get('fromPcOrder') ?? '');
+  const fromPicks = params.get('fromPicks') === '1';
   const poListQ = usePurchaseConsignmentOrders();
   const poQ     = usePurchaseConsignmentOrderDetail(selPoId || null);
 
@@ -131,8 +132,45 @@ export const PurchaseConsignmentReceiveNew = () => {
   const warehousesQ = useWarehouses();
   const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
 
+  // From-Order multi-picker merge (fromPicks) — the operator chose specific PC
+  // Order lines + quantities on /purchase-consignment-receive/from-pc-order. The
+  // header still binds to the first picked order (via ?fromPcOrder=), but the
+  // LINES come from the stash (picked subset + picked qty).
+  const [picksLoaded, setPicksLoaded] = useState(false);
+  useEffect(() => {
+    if (!fromPicks || picksLoaded) return;
+    type Stash = {
+      orderItemId: string; purchaseConsignmentOrderId: string;
+      materialKind: string; materialCode: string; materialName: string;
+      supplierSku: string | null; itemGroup: string | null; description: string | null;
+      uom: string | null; qty: number; unitPriceCenti: number; variants: unknown;
+    };
+    let stash: Stash[] | null = null;
+    try { stash = JSON.parse(sessionStorage.getItem('pcrFromOrderPicks') ?? 'null'); }
+    catch { stash = null; }
+    if (!stash || stash.length === 0) return;
+    setLines(stash.map((s) => ({
+      rid:                 `p${s.orderItemId}`,
+      purchaseOrderItemId: s.orderItemId,
+      materialKind:        s.materialKind || 'mfg_product',
+      materialCode:        s.materialCode,
+      materialName:        s.materialName,
+      itemGroup:           s.itemGroup,
+      variants:            (s.variants as Record<string, unknown> | null) ?? null,
+      outstanding:         Number(s.qty ?? 0),
+      qtyReceived:         Number(s.qty ?? 0),
+      qtyAccepted:         Number(s.qty ?? 0),
+      qtyRejected:         0,
+      unitPriceCenti:      Number(s.unitPriceCenti ?? 0),
+      notes:               '',
+    })));
+    sessionStorage.removeItem('pcrFromOrderPicks');
+    setPicksLoaded(true);
+  }, [fromPicks, picksLoaded]);
+
   // Load lines from the selected single PC Order (only outstanding qty > 0).
   useEffect(() => {
+    if (fromPicks) return; // the picker stash drives the lines, not the full order
     if (!selPoId) {
       // Manual mode — seed ONE blank starter line so a LINE 1 card shows.
       setLines((prev) => prev.length > 0 ? prev : [{
@@ -322,6 +360,9 @@ export const PurchaseConsignmentReceiveNew = () => {
           <h1 className={styles.title}>New Purchase Consignment Receive{po?.po_number ? ` · ${po.po_number}` : ''}</h1>
         </div>
         <div className={styles.actions}>
+          <Button variant="ghost" size="md" onClick={() => navigate('/purchase-consignment-receive/from-pc-order')}>
+            <ArrowRightLeft {...ICON} /> From Purchase Consignment Order
+          </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-consignment-receive')}>
             <X {...ICON} /> Cancel
           </Button>

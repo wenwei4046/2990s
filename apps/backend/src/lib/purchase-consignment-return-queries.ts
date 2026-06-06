@@ -57,6 +57,35 @@ export const usePurchaseConsignmentReturnDetail = (id: string | null) => useQuer
   enabled: Boolean(id), staleTime: 30_000, retry: 1, retryDelay: 800,
 });
 
+/* ── Returnable PC Receive lines (From-Receive multi-picker) ──────────── */
+export type ReturnablePcReceiveLine = {
+  receiveItemId: string;
+  pcReceiveId: string;
+  receiveNumber: string;
+  supplierId: string | null;
+  supplierName: string | null;
+  materialKind: string;
+  materialCode: string;
+  materialName: string;
+  itemGroup: string | null;
+  description: string | null;
+  uom: string | null;
+  accepted: number;
+  returned: number;
+  remaining: number;
+  unitPriceCenti: number;
+  variants: unknown;
+};
+
+export const useReturnablePcReceiveLines = () => useQuery({
+  queryKey: ['pc-return', 'returnable-receive-lines'],
+  queryFn: () => authedFetch<{ lines: ReturnablePcReceiveLine[] }>(
+    `/purchase-consignment-returns/returnable-receive-lines`,
+  ).then((r) => r.lines),
+  staleTime: 30_000,
+  retry: 1,
+});
+
 /* ── Create + post ───────────────────────────────────────────────────── */
 export const useCreatePurchaseConsignmentReturn = () => {
   const qc = useQueryClient();

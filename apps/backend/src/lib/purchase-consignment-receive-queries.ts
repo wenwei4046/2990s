@@ -57,6 +57,36 @@ export const usePurchaseConsignmentReceiveDetail = (id: string | null) => useQue
   enabled: Boolean(id), staleTime: 30_000, retry: 1, retryDelay: 800,
 });
 
+/* ── Outstanding PC Order lines (From-Order multi-picker) ─────────────── */
+export type OutstandingPcOrderLine = {
+  orderItemId: string;
+  purchaseConsignmentOrderId: string;
+  pcNumber: string;
+  supplierId: string | null;
+  supplierName: string | null;
+  materialKind: string;
+  materialCode: string;
+  materialName: string;
+  supplierSku: string | null;
+  itemGroup: string | null;
+  description: string | null;
+  uom: string | null;
+  ordered: number;
+  received: number;
+  outstanding: number;
+  unitPriceCenti: number;
+  variants: unknown;
+};
+
+export const useOutstandingPcOrderLines = () => useQuery({
+  queryKey: ['pc-receive', 'outstanding-order-lines'],
+  queryFn: () => authedFetch<{ lines: OutstandingPcOrderLine[] }>(
+    `/purchase-consignment-receives/outstanding-order-lines`,
+  ).then((r) => r.lines),
+  staleTime: 30_000,
+  retry: 1,
+});
+
 /* ── Create + post ───────────────────────────────────────────────────── */
 export const useCreatePurchaseConsignmentReceive = () => {
   const qc = useQueryClient();

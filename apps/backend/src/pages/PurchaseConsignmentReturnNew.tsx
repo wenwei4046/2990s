@@ -17,7 +17,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, Plus, Save, Trash2, X, ChevronDown } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, Plus, Save, Trash2, X, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
 import {
@@ -104,6 +104,7 @@ export const PurchaseConsignmentReturnNew = () => {
   const [params] = useSearchParams();
   const receiveId = params.get('fromPcReceive');
   const orderId   = params.get('fromPcOrder');
+  const fromPicks = params.get('fromPicks') === '1';
 
   const receiveQ   = usePurchaseConsignmentReceiveDetail(receiveId);
   const orderQ     = usePurchaseConsignmentOrderDetail(orderId);
@@ -132,8 +133,44 @@ export const PurchaseConsignmentReturnNew = () => {
     setLines((prev) => prev.length > 0 ? prev : [newLine()]);
   }, [isManual]);
 
+  // From-Receive multi-picker merge (fromPicks) — the operator chose specific
+  // receive lines + quantities on /purchase-consignment-return/from-receive. The
+  // header still binds to the first picked receive (via ?fromPcReceive=), but the
+  // LINES come from the stash (picked subset + picked qty).
+  const [picksLoaded, setPicksLoaded] = useState(false);
+  useEffect(() => {
+    if (!fromPicks || picksLoaded) return;
+    type Stash = {
+      receiveItemId: string; pcReceiveId: string; supplierId: string | null;
+      materialKind: string; materialCode: string; materialName: string;
+      itemGroup: string | null; description: string | null; uom: string | null;
+      qty: number; unitPriceCenti: number; variants: unknown;
+    };
+    let stash: Stash[] | null = null;
+    try { stash = JSON.parse(sessionStorage.getItem('pcrnFromReceivePicks') ?? 'null'); }
+    catch { stash = null; }
+    if (!stash || stash.length === 0) return;
+    setSupplierId(stash[0]?.supplierId ?? '');
+    setLines(stash.map((s) => ({
+      rid:            `p${s.receiveItemId}`,
+      grnItemId:      s.receiveItemId,
+      materialKind:   s.materialKind,
+      materialCode:   s.materialCode,
+      materialName:   s.materialName,
+      itemGroup:      s.itemGroup,
+      variants:       (s.variants as Record<string, unknown> | null) ?? null,
+      qtyReturned:    Number(s.qty ?? 0),
+      unitPriceCenti: Number(s.unitPriceCenti ?? 0),
+      reason:         '',
+      notes:          '',
+    })));
+    sessionStorage.removeItem('pcrnFromReceivePicks');
+    setPicksLoaded(true);
+  }, [fromPicks, picksLoaded]);
+
   // Pre-fill lines + supplier from the source Receive.
   useEffect(() => {
+    if (fromPicks) return; // the picker stash drives the lines, not the whole receive
     if (!receiveQ.data) return;
     const grn = receiveQ.data.grn as { supplier_id?: string } | null;
     setSupplierId(grn?.supplier_id ?? '');
@@ -233,6 +270,7 @@ export const PurchaseConsignmentReturnNew = () => {
         notes: notes || undefined,
         items: validLines.map((l) => ({
           grnItemId:      l.grnItemId,
+          pcReceiveItemId: l.grnItemId,
           materialKind:   l.materialKind,
           materialCode:   l.materialCode,
           materialName:   l.materialName,
@@ -268,6 +306,9 @@ export const PurchaseConsignmentReturnNew = () => {
           <h1 className={styles.title}>New Purchase Consignment Return {sourceTitle}</h1>
         </div>
         <div className={styles.actions}>
+          <Button variant="ghost" size="md" onClick={() => navigate('/purchase-consignment-return/from-receive')}>
+            <ArrowRightLeft {...ICON} /> From Purchase Consignment Receive
+          </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-consignment-return')}>
             <X {...ICON} /> Cancel
           </Button>
