@@ -101,6 +101,34 @@ describe('computeAddonServiceLines (§4.2 + D6)', () => {
     expect(computeAddonServiceLines([{ id: 'no-such-addon' }], ADDON_ROWS)).toEqual([]);
   });
 
+  /* Migration 0157 — an addon WITHOUT a dedicated SVC-* mapping books under
+     the generic SVC-ADDON SKU with the row's label as the description, so an
+     admin-created handover add-on charges with zero code change. (Before
+     0157 it was silently dropped — the 'assemble' trap.) */
+  it('an admin-created addon (no dedicated SKU) books under SVC-ADDON', () => {
+    const rows: AddonRowInput[] = [
+      { id: 'dispose-old-wardrobe', kind: 'qty', price: 200, label: 'Dispose old wardrobe', enabled: true },
+    ];
+    const lines = computeAddonServiceLines([{ id: 'dispose-old-wardrobe', qty: 1 }], rows);
+    expect(lines).toEqual([{
+      itemCode: 'SVC-ADDON',
+      description: 'Dispose old wardrobe',
+      qty: 1, unitPriceSen: 20000, totalSen: 20000,
+    }]);
+  });
+
+  it('a flat-kind admin addon books qty=1 at its price under SVC-ADDON', () => {
+    const rows: AddonRowInput[] = [
+      { id: 'assemble', kind: 'flat', price: 80, label: 'Assembly service', enabled: true },
+    ];
+    const lines = computeAddonServiceLines([{ id: 'assemble', qty: 5 }], rows);
+    expect(lines).toEqual([{
+      itemCode: 'SVC-ADDON',
+      description: 'Assembly service',
+      qty: 1, unitPriceSen: 8000, totalSen: 8000,
+    }]);
+  });
+
   it('client cannot inflate or zero the price — amounts come from the rows', () => {
     // selection carries no price field at all; row price drives everything
     const lines = computeAddonServiceLines(

@@ -21,6 +21,7 @@ import {
   SVC_DISPOSE_MATTRESS,
   SVC_DISPOSE_BEDFRAME,
   SVC_LIFT_CARRY,
+  SVC_ADDON,
 } from './service-sku';
 
 /** One SERVICE line to append to a Sales Order. */
@@ -55,9 +56,12 @@ export interface AddonRowInput {
   enabled?:      boolean | null;
 }
 
-/** POS addon id → SERVICE SKU code. Only these three handover addons become
- *  SO lines today; an unmapped id is skipped (defensive — POS only offers
- *  enabled handover addons). */
+/** POS addon id → dedicated SERVICE SKU code. Migration 0157 (Loo
+ *  2026-06-06): an id WITHOUT a dedicated mapping is no longer skipped — it
+ *  books under the generic SVC-ADDON SKU with the add-on's label as the line
+ *  description, so an admin-created handover add-on charges + prints with
+ *  zero code change. (The old silent skip was how 'assemble' could sit in
+ *  the frontend list yet never become a line.) */
 export const ADDON_ID_TO_SERVICE_SKU: Record<string, string> = {
   'dispose-mattress': SVC_DISPOSE_MATTRESS,
   'dispose-bedframe': SVC_DISPOSE_BEDFRAME,
@@ -136,8 +140,9 @@ export function computeAddonServiceLines(
     if (seen.has(sel.id)) continue;
     seen.add(sel.id);
     const row = rowById.get(sel.id);
-    const itemCode = ADDON_ID_TO_SERVICE_SKU[sel.id];
-    if (!row || !itemCode) continue;          // unknown to catalog or unmapped
+    // Dedicated SKU when mapped; generic SVC-ADDON otherwise (0157).
+    const itemCode = ADDON_ID_TO_SERVICE_SKU[sel.id] ?? SVC_ADDON;
+    if (!row) continue;                       // unknown to the addons catalog
     if (row.enabled === false) continue;      // operator disabled it since
     const label = (row.label ?? '').trim() || sel.id;
     if (row.kind === 'floors_items') {

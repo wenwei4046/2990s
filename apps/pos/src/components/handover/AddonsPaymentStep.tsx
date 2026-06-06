@@ -13,8 +13,6 @@ import { AddonCard } from './AddonCard';
 import { Field } from './Field';
 import styles from '../../pages/Handover.module.css';
 
-const HANDOVER_ADDON_IDS = ['dispose-mattress', 'dispose-bedframe', 'lift', 'assemble'];
-
 /* Fallbacks shown until /so-dropdown-options loads — the pre-maintenance
    hardcoded sets. The live lists come from the payment_method,
    payment_merchant and installment_plan categories on the SO Maintenance
@@ -85,9 +83,11 @@ export const AddonsPaymentStep = ({
   linkStatus: CrossCategoryLinkStatus;
   autoMatch: AutoMatchControls;
 }) => {
-  const handoverAddons = addons.filter(
-    (a) => HANDOVER_ADDON_IDS.includes(a.id) && a.enabled,
-  );
+  /* Migration 0157 (Loo 2026-06-06) — membership is data-driven now: the
+     "Show at handover" toggle in the Order Add-ons editor, not a hardcoded
+     ID list. An admin-created add-on appears here the moment it's flagged
+     (the server books it as a SERVICE line via the generic SVC-ADDON SKU). */
+  const handoverAddons = addons.filter((a) => a.showAtHandover && a.enabled);
 
   /* The four cards, live from SO Maintenance — label + sort follow the
      maintenance rows; the code drives icons, hints and branch behaviour.
