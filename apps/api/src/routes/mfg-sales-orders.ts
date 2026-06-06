@@ -4005,11 +4005,26 @@ mfgSalesOrders.post('/:docNo/payments', async (c) => {
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
 
   /* Promote — 'promoted' rows are excluded from the slip reaper (same dance
-     as the SO-create slip). Best-effort: a failed promote never blocks the
-     payment (the slip_key is already persisted on the row). */
-  await sb.from('pending_slip_uploads')
+     as the SO-create slip). The UPDATE runs under the caller's RLS
+     (pending_slip_uploads allows the UPLOADER to promote); in this flow the
+     uploader IS the payment recorder, so it matches. If it ever doesn't
+     (or errors), the row stays 'uploaded' → the reaper would delete the R2
+     object after TTL and the same session would be replayable — so a
+     no-op promote is logged LOUDLY instead of swallowed. Best-effort: the
+     payment itself stands either way (slip_key already persisted). */
+  const { data: promoted, error: promoteErr } = await sb
+    .from('pending_slip_uploads')
     .update({ status: 'promoted', promoted_at: new Date().toISOString() })
-    .eq('upload_session_id', p.uploadSessionId);
+    .eq('upload_session_id', p.uploadSessionId)
+    .select('upload_session_id');
+  if (promoteErr || !promoted || promoted.length === 0) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[payments] slip promote FAILED for session ${p.uploadSessionId} on ${docNo}: `
+      + (promoteErr?.message ?? 'no row matched (RLS uploader mismatch?)')
+      + ' — slip will be reaped after TTL; replay window open until then.',
+    );
+  }
 
   /* Post-merge stitch — wire ADD_PAYMENT into the PR-D audit ledger.
      Field-changes list mirrors what the user typed so the History panel
