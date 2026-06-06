@@ -1,12 +1,12 @@
-// /consignment-returns — Consignment Return (CRN): the loaner comes back (or is
-// exchanged). A faithful clone of the Delivery Return API
-// (apps/api/src/routes/delivery-returns.ts), but with a VALUE-NEUTRAL loaner
-// inventory model instead of a receive-in.
+// /consignment-returns — Consignment Return (CRN): consignment goods come back.
+// A faithful clone of the Delivery Return API
+// (apps/api/src/routes/delivery-returns.ts).
 //
-// A Delivery Return ADDS stock (IN to the main warehouse — goods sold then
-// returned re-enter inventory). A Consignment Return instead TRANSFERS the
-// loaner back: consignment warehouse → shipping warehouse (value-neutral, goods
-// were always owned). Cancelling reverses that (shipping → consignment).
+// UNIFIED inventory model (Wei Siang 2026-06-06): a Consignment Return now books
+// a plain IN to the destination warehouse exactly like a Delivery Return — goods
+// physically re-enter inventory at the return line's snapshot cost, recorded as a
+// plain IN tagged CS_DR in the same stock ledger. Cancelling writes a balancing
+// OUT. (Superseded the earlier value-neutral transfer-from-hidden-warehouse model.)
 //
 // Tables: consignment_delivery_returns / _items (migration 0153). The DR's
 // delivery_order_id / do_item_id become consignment_do_id /
@@ -26,10 +26,9 @@ import { normalizePhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { defaultWarehouseId } from '../lib/inventory-movements';
+import { defaultWarehouseId, writeMovements } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
-import { consignmentWarehouseId, transferLoaner, reverseLoaner, type LoanerLine } from '../lib/consignment-loaner';
 
 export const consignmentReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
 consignmentReturns.use('*', supabaseAuth);
@@ -180,23 +179,19 @@ async function warehouseCodeMap(
    the CS_DR partial UNIQUE index (uq_inv_mov_cs_dr_source) makes it fire once per
    return; we also pre-check for an existing CS_DR OUT row. Best-effort. */
 async function receiveLoanerForReturn(sb: any, returnId: string, performedBy: string | null): Promise<string[]> {
-  // Idempotency guard #1 — has this return already received the loaner back?
-  // The transfer's canonical leg is a CS_DR OUT (from the consignment warehouse).
+  // Idempotency guard — has this return already booked its IN (CS_DR IN exists)?
   const { count: existing } = await sb
     .from('inventory_movements')
     .select('id', { head: true, count: 'exact' })
     .eq('source_doc_type', 'CS_DR')
     .eq('source_doc_id', returnId)
-    .eq('movement_type', 'OUT');
+    .eq('movement_type', 'IN');
   if ((existing ?? 0) > 0) return [];
-
-  const consignWh = await consignmentWarehouseId(sb);
-  if (!consignWh) return ['consignment warehouse not configured (migration 0152)'];
 
   const { data: header } = await sb.from('consignment_delivery_returns')
     .select('return_number, warehouse_id').eq('id', returnId).maybeSingle();
   const { data: items } = await sb.from('consignment_delivery_return_items')
-    .select('id, consignment_do_item_id, item_code, description, qty_returned, item_group, variants')
+    .select('id, consignment_do_item_id, item_code, description, qty_returned, unit_cost_centi, item_group, variants')
     .eq('consignment_delivery_return_id', returnId);
   if (!items || items.length === 0) return [];
   const headerWarehouseId = (header as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
@@ -204,65 +199,95 @@ async function receiveLoanerForReturn(sb: any, returnId: string, performedBy: st
 
   const lineWh = await resolveReturnLineWarehouses(sb, items as Array<{ id: string; consignment_do_item_id?: string | null }>, headerWarehouseId);
 
-  /* Group returned lines by DESTINATION warehouse — each transfers from the
-     consignment warehouse back to that destination. */
-  const byWarehouse = new Map<string, LoanerLine[]>();
-  for (const it of (items as Array<{ id: string; item_code: string; description: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null }>)) {
+  /* UNIFIED inventory (Wei Siang 2026-06-06): a Consignment Return now books a
+     plain IN to the destination warehouse exactly like a Delivery Return — goods
+     physically come back, re-entering at the return line's snapshot cost. No more
+     transfer from a hidden consignment warehouse. Source CS_DR.
+
+     Collapse to ONE IN per (product, variant): the CS_DR unique index is the
+     idempotency backstop. The destination warehouse + cost are the bucket's
+     first resolved line. */
+  const byKey = new Map<string, { warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number; unit_cost_sen: number }>();
+  for (const it of (items as Array<{ id: string; item_code: string; description: string | null; qty_returned: number; unit_cost_centi?: number | null; item_group?: string | null; variants?: VariantAttrs | null }>)) {
     const qty = Number(it.qty_returned ?? 0);
     if (qty <= 0) continue;
     const toWh = lineWh.get(it.id) ?? null;
     if (!toWh) continue; // no resolvable destination — skip rather than guess
-    const arr = byWarehouse.get(toWh) ?? [];
-    arr.push({
-      product_code: it.item_code,
-      variant_key: computeVariantKey(it.item_group ?? null, it.variants ?? null),
-      product_name: it.description,
-      qty,
-    });
-    byWarehouse.set(toWh, arr);
+    const variantKey = computeVariantKey(it.item_group ?? null, it.variants ?? null);
+    const k = `${it.item_code}::${variantKey}`;
+    const cur = byKey.get(k);
+    if (cur) { cur.qty += qty; }
+    else byKey.set(k, { warehouse_id: toWh, product_code: it.item_code, variant_key: variantKey, product_name: it.description, qty, unit_cost_sen: Number(it.unit_cost_centi ?? 0) });
   }
+  if (byKey.size === 0) return [];
 
-  const errors: string[] = [];
-  for (const [toWh, lines] of byWarehouse) {
-    // consignment warehouse → destination warehouse; CS_DR source type.
-    const errs = await transferLoaner(sb, consignWh, toWh, lines, 'CS_DR', returnId, returnNo, performedBy);
-    errors.push(...errs);
-  }
-  return errors;
+  const res = await writeMovements(sb, [...byKey.values()].map((l) => ({
+    movement_type:   'IN' as const,
+    warehouse_id:    l.warehouse_id,
+    product_code:    l.product_code,
+    variant_key:     l.variant_key,
+    product_name:    l.product_name,
+    qty:             l.qty,
+    unit_cost_sen:   l.unit_cost_sen,
+    source_doc_type: 'CS_DR' as const,
+    source_doc_id:   returnId,
+    source_doc_no:   returnNo,
+    performed_by:    performedBy,
+    notes:           'Consignment Return — stock back IN',
+  })));
+
+  try {
+    const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+    await recomputeSoStockAllocation(sb);
+  } catch { /* best-effort */ }
+
+  return res.ok ? [] : [res.reason ?? 'consignment return-in failed'];
 }
 
-/* ── reverseLoanerForReturn — reverse the return transfer on cancel ────────────
-   On cancel, send the loaner back OUT to the consignment warehouse: the exact
-   opposite of receiveLoanerForReturn. Idempotent + best-effort. */
+/* ── reverseLoanerForReturn — undo the return IN on cancel ─────────────────────
+   Re-derive this return's CS_DR IN rows and write a balancing OUT per bucket
+   (under STOCK_TRANSFER + '-CANCEL' so it sidesteps the CS_DR unique index).
+   Idempotent (pre-checks the '-CANCEL' row). Best-effort. */
 async function reverseLoanerForReturn(sb: any, returnId: string, performedBy: string | null): Promise<string[]> {
-  const consignWh = await consignmentWarehouseId(sb);
-  if (!consignWh) return [];
-
   const { data: header } = await sb.from('consignment_delivery_returns')
-    .select('return_number, warehouse_id').eq('id', returnId).maybeSingle();
+    .select('return_number').eq('id', returnId).maybeSingle();
   const returnNo = (header as { return_number: string } | null)?.return_number ?? returnId;
-  const headerWarehouseId = (header as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
+  const cancelNo = `${returnNo}-CANCEL`;
 
-  const { data: items } = await sb.from('consignment_delivery_return_items')
-    .select('id, consignment_do_item_id').eq('consignment_delivery_return_id', returnId);
-  const lineWh = await resolveReturnLineWarehouses(sb, (items ?? []) as Array<{ id: string; consignment_do_item_id?: string | null }>, headerWarehouseId);
+  const { count: already } = await sb
+    .from('inventory_movements')
+    .select('id', { head: true, count: 'exact' })
+    .eq('source_doc_id', returnId)
+    .eq('source_doc_type', 'STOCK_TRANSFER')
+    .eq('source_doc_no', cancelNo);
+  if ((already ?? 0) > 0) return [];
 
-  const toWarehouses = [...new Set([...lineWh.values()].filter((x): x is string => !!x))];
-  if (toWarehouses.length === 0) return [];
+  const { data: ins } = await sb.from('inventory_movements')
+    .select('warehouse_id, product_code, variant_key, batch_no, qty, product_name')
+    .eq('source_doc_type', 'CS_DR').eq('source_doc_id', returnId).eq('movement_type', 'IN');
+  if (!ins || ins.length === 0) return [];
 
-  /* The forward transfer ran consignWh → destination(s). reverseLoaner derives
-     the per-bucket net-out from THIS return's CS_DR OUT rows (which left the
-     consignment warehouse) and runs the opposite transfer: pull the units back
-     out of the destination and IN @ the consignment warehouse. The CS_DR OUT
-     rows carry their destination in the paired STOCK_TRANSFER IN, but reverse
-     keys on the consignment-side OUT — so we pass fromWh = consignment warehouse
-     (where the canonical OUT left) and toWh = primary destination. */
-  const primaryToWh = toWarehouses[0]!;
-  // reverseLoaner(sourceType, id, no, fromWh, toWh): it pulls each bucket OUT of
-  // `toWh` and IN @ `fromWh`. The forward CS_DR canonical OUT left the
-  // consignment warehouse, so to undo it we pull back OUT of the destination
-  // (primaryToWh) and IN @ the consignment warehouse.
-  return reverseLoaner(sb, 'CS_DR', returnId, returnNo, consignWh, primaryToWh, performedBy);
+  const res = await writeMovements(sb, (ins as Array<{ warehouse_id: string; product_code: string; variant_key: string | null; batch_no?: string | null; qty: number; product_name: string | null }>).map((o) => ({
+    movement_type:   'OUT' as const,
+    warehouse_id:    o.warehouse_id,
+    product_code:    o.product_code,
+    variant_key:     o.variant_key ?? '',
+    product_name:    o.product_name,
+    qty:             Number(o.qty ?? 0),
+    source_doc_type: 'STOCK_TRANSFER' as const,
+    source_doc_id:   returnId,
+    source_doc_no:   cancelNo,
+    ...(o.batch_no ? { batch_no: o.batch_no } : {}),
+    performed_by:    performedBy,
+    notes:           'Consignment Return cancelled — stock out again',
+  })));
+
+  try {
+    const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+    await recomputeSoStockAllocation(sb);
+  } catch { /* best-effort */ }
+
+  return res.ok ? [] : [res.reason ?? 'consignment return-in reverse failed'];
 }
 
 /* Build one consignment_delivery_return_items insert row from a client line

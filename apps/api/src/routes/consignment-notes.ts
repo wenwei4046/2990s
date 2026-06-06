@@ -1,13 +1,13 @@
-// /consignment-notes — Consignment Note (CN): ship a LOANER unit to a customer
-// on consignment. A faithful clone of the Delivery Order API
-// (apps/api/src/routes/delivery-orders-mfg.ts), but with a VALUE-NEUTRAL loaner
-// inventory model instead of a FIFO-consume / COGS sale.
+// /consignment-notes — Consignment Note (CN): ship consignment goods to a
+// customer / showroom. A faithful clone of the Delivery Order API
+// (apps/api/src/routes/delivery-orders-mfg.ts).
 //
-// A Consignment Note = goods leave the shipping warehouse but stay MY asset, so
-// the stock effect is a TRANSFER  shippingWarehouse → consignment warehouse
-// (migration 0152, is_consignment = true) via transferLoaner, NOT a COGS OUT.
-// Cancelling reverses that transfer (consignment → shipping). No margin / COGS
-// is realised, so there's no restampDoActualCost / cost-resync machinery here.
+// UNIFIED inventory model (Wei Siang 2026-06-06): a Consignment Note now ships
+// goods OUT of the warehouse exactly like a Delivery Order — FIFO is consumed and
+// the cost LEAVES inventory (COGS), recorded as a plain OUT tagged CS_DO in the
+// same stock ledger as DO/GRN. Cancelling writes a balancing IN. (Superseded the
+// earlier value-neutral transfer-to-hidden-consignment-warehouse model; keep
+// consignment stock in a showroom warehouse to stay out of MRP.)
 //
 // Tables: consignment_delivery_orders / _items / _payments (migration 0153).
 // The DO's so_doc_no / so_item_id become consignment_so_doc_no /
@@ -28,10 +28,9 @@ import { normalizePhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { defaultWarehouseId } from '../lib/inventory-movements';
+import { defaultWarehouseId, writeMovements } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
-import { consignmentWarehouseId, transferLoaner, reverseLoaner, type LoanerLine } from '../lib/consignment-loaner';
 
 export const consignmentNotes = new Hono<{ Bindings: Env; Variables: Variables }>();
 consignmentNotes.use('*', supabaseAuth);
@@ -179,7 +178,7 @@ async function warehouseCodeMap(
    CS_DO partial UNIQUE index (uq_inv_mov_cs_do_source) makes the transfer fire
    once per note; we also pre-check for an existing CS_DO OUT row. Best-effort. */
 async function shipLoanerForNote(sb: any, noteId: string, performedBy: string | null): Promise<string[]> {
-  // Idempotency guard #1 — has this note already shipped (CS_DO OUT exists)?
+  // Idempotency guard — has this note already shipped (CS_DO OUT exists)?
   const { count: existing } = await sb
     .from('inventory_movements')
     .select('id', { head: true, count: 'exact' })
@@ -187,9 +186,6 @@ async function shipLoanerForNote(sb: any, noteId: string, performedBy: string | 
     .eq('source_doc_id', noteId)
     .eq('movement_type', 'OUT');
   if ((existing ?? 0) > 0) return [];
-
-  const consignWh = await consignmentWarehouseId(sb);
-  if (!consignWh) return ['consignment warehouse not configured (migration 0152)'];
 
   const { data: header } = await sb.from('consignment_delivery_orders')
     .select('do_number, warehouse_id').eq('id', noteId).maybeSingle();
@@ -202,68 +198,102 @@ async function shipLoanerForNote(sb: any, noteId: string, performedBy: string | 
 
   const lineWh = await resolveNoteLineWarehouses(sb, items as Array<{ id: string; consignment_so_item_id?: string | null }>, headerWarehouseId);
 
-  /* Group lines by ship-from warehouse — each warehouse transfers its own lines
-     to the consignment warehouse (stock never crosses other warehouses). */
-  const byWarehouse = new Map<string, LoanerLine[]>();
+  /* UNIFIED inventory (Wei Siang 2026-06-06): a Consignment Note now ships goods
+     OUT of the warehouse exactly like a Delivery Order — FIFO is consumed and the
+     cost leaves inventory (COGS). No more value-neutral transfer to a hidden
+     consignment warehouse. Source-tagged CS_DO so the movement reads "out via
+     Consignment Note" in the unified stock ledger.
+
+     Collapse to ONE OUT per (product, variant): the CS_DO partial unique index
+     (source_doc_type, source_doc_id, product_code, variant_key — no warehouse)
+     rejects a 2nd identical row, so duplicate lines must sum into one movement.
+     The ship-from warehouse is the first resolved warehouse for the bucket. */
+  const byKey = new Map<string, { warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number }>();
   for (const it of (items as Array<{ id: string; item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }>)) {
     const qty = Number(it.qty ?? 0);
     if (qty <= 0) continue;
     const fromWh = lineWh.get(it.id) ?? null;
     if (!fromWh) continue; // no resolvable warehouse — skip rather than guess
-    const arr = byWarehouse.get(fromWh) ?? [];
-    arr.push({
-      product_code: it.item_code,
-      variant_key: computeVariantKey(it.item_group ?? null, it.variants ?? null),
-      product_name: it.description,
-      qty,
-    });
-    byWarehouse.set(fromWh, arr);
+    const variantKey = computeVariantKey(it.item_group ?? null, it.variants ?? null);
+    const k = `${it.item_code}::${variantKey}`;
+    const cur = byKey.get(k);
+    if (cur) { cur.qty += qty; }
+    else byKey.set(k, { warehouse_id: fromWh, product_code: it.item_code, variant_key: variantKey, product_name: it.description, qty });
   }
+  if (byKey.size === 0) return [];
 
-  const errors: string[] = [];
-  for (const [fromWh, lines] of byWarehouse) {
-    const errs = await transferLoaner(sb, fromWh, consignWh, lines, 'CS_DO', noteId, noteNo, performedBy);
-    errors.push(...errs);
-  }
-  return errors;
+  const res = await writeMovements(sb, [...byKey.values()].map((l) => ({
+    movement_type:   'OUT' as const,
+    warehouse_id:    l.warehouse_id,
+    product_code:    l.product_code,
+    variant_key:     l.variant_key,
+    product_name:    l.product_name,
+    qty:             l.qty,
+    source_doc_type: 'CS_DO' as const,
+    source_doc_id:   noteId,
+    source_doc_no:   noteNo,
+    performed_by:    performedBy,
+    notes:           'Consignment Note ship-out (goods to showroom)',
+  })));
+
+  // Stock dropped — re-walk SO allocation in case the ship-from warehouse feeds it.
+  try {
+    const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+    await recomputeSoStockAllocation(sb);
+  } catch { /* best-effort */ }
+
+  return res.ok ? [] : [res.reason ?? 'consignment ship-out failed'];
 }
 
-/* ── reverseLoanerForNote — VALUE-NEUTRAL replacement for reverseInventoryForDo ─
-   On cancel, reverse the loaner transfer: pull the units back out of the
-   consignment warehouse and into each line's original ship-from warehouse.
-   Idempotent (reverseLoaner pre-checks for a prior '-CANCEL' row). Best-effort. */
+/* ── reverseLoanerForNote — undo the ship-out on cancel ───────────────────────
+   Re-derive this note's CS_DO OUT rows and write a balancing IN per bucket (under
+   STOCK_TRANSFER + '-CANCEL' so it sidesteps the CS_DO unique index), at the
+   OUT's booked cost basis. Idempotent (pre-checks the '-CANCEL' row). */
 async function reverseLoanerForNote(sb: any, noteId: string, performedBy: string | null): Promise<string[]> {
-  const consignWh = await consignmentWarehouseId(sb);
-  if (!consignWh) return [];
-
   const { data: header } = await sb.from('consignment_delivery_orders')
-    .select('do_number, warehouse_id').eq('id', noteId).maybeSingle();
+    .select('do_number').eq('id', noteId).maybeSingle();
   const noteNo = (header as { do_number: string } | null)?.do_number ?? noteId;
-  const headerWarehouseId = (header as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
+  const cancelNo = `${noteNo}-CANCEL`;
 
-  const { data: items } = await sb.from('consignment_delivery_order_items')
-    .select('id, consignment_so_item_id').eq('consignment_delivery_order_id', noteId);
-  const lineWh = await resolveNoteLineWarehouses(sb, (items ?? []) as Array<{ id: string; consignment_so_item_id?: string | null }>, headerWarehouseId);
+  const { count: already } = await sb
+    .from('inventory_movements')
+    .select('id', { head: true, count: 'exact' })
+    .eq('source_doc_id', noteId)
+    .eq('source_doc_type', 'STOCK_TRANSFER')
+    .eq('source_doc_no', cancelNo);
+  if ((already ?? 0) > 0) return [];
 
-  /* The original transfer may have spanned several ship-from warehouses. Reverse
-     per warehouse: the consignment side returns the loaner to each fromWh. We
-     reverse all units back to whichever fromWh the lines resolve to; reverseLoaner
-     derives the per-bucket qty from THIS note's own CS_DO OUT rows, so calling it
-     once per distinct fromWh restores each warehouse's share. */
-  const fromWarehouses = [...new Set([...lineWh.values()].filter((x): x is string => !!x))];
-  if (fromWarehouses.length === 0) return [];
+  const { data: outs } = await sb.from('inventory_movements')
+    .select('warehouse_id, product_code, variant_key, batch_no, qty, total_cost_sen, product_name')
+    .eq('source_doc_type', 'CS_DO').eq('source_doc_id', noteId).eq('movement_type', 'OUT');
+  if (!outs || outs.length === 0) return [];
 
-  // Common case: a single ship-from warehouse. Reverse the whole transfer in one
-  // call. (Multi-warehouse notes are rare for a loaner; reverseLoaner keys on the
-  // CS_DO OUT rows which carry their own warehouse, so a single reverse per
-  // fromWh restores exactly that warehouse's outflow — but since reverseLoaner
-  // re-derives ALL net-out buckets from the CS_DO rows regardless of warehouse,
-  // we run it once with the primary fromWh to avoid double-reversing.)
-  const errors: string[] = [];
-  const primaryFromWh = fromWarehouses[0]!;
-  const errs = await reverseLoaner(sb, 'CS_DO', noteId, noteNo, primaryFromWh, consignWh, performedBy);
-  errors.push(...errs);
-  return errors;
+  const res = await writeMovements(sb, (outs as Array<{ warehouse_id: string; product_code: string; variant_key: string | null; batch_no?: string | null; qty: number; total_cost_sen: number | null; product_name: string | null }>).map((o) => {
+    const q = Number(o.qty ?? 0);
+    const unitCost = q > 0 ? Math.round(Number(o.total_cost_sen ?? 0) / q) : 0;
+    return {
+      movement_type:   'IN' as const,
+      warehouse_id:    o.warehouse_id,
+      product_code:    o.product_code,
+      variant_key:     o.variant_key ?? '',
+      product_name:    o.product_name,
+      qty:             q,
+      unit_cost_sen:   unitCost,
+      source_doc_type: 'STOCK_TRANSFER' as const,
+      source_doc_id:   noteId,
+      source_doc_no:   cancelNo,
+      ...(o.batch_no ? { batch_no: o.batch_no } : {}),
+      performed_by:    performedBy,
+      notes:           'Consignment Note cancelled — stock returned',
+    };
+  }));
+
+  try {
+    const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+    await recomputeSoStockAllocation(sb);
+  } catch { /* best-effort */ }
+
+  return res.ok ? [] : [res.reason ?? 'consignment ship-out reverse failed'];
 }
 
 /* Build one consignment_delivery_order_items insert row from a client line
