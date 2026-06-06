@@ -399,6 +399,63 @@ describe('pos-handover-so — remark + extraAddonAmountRM threading', () => {
     expect(item.qty).toBe(2);
   });
 
+  it('sofa quick-pick: remark + extraAddonAmountRM thread into variants', () => {
+    const sofaProduct = product({
+      id: 'prod-sofa-qp',
+      sku: 'SOFA-QP-001',
+      name: 'Annsa Sofa',
+      pricing_kind: 'sofa_build',
+      category: { id: 'sofa', label: 'Sofa', icon: 'sofa', tbc: false },
+    });
+    const line: CartLine = {
+      key: 'cfg-sofa-remark',
+      qty: 1,
+      config: {
+        kind: 'sofa',
+        productId: 'prod-sofa-qp',
+        productName: 'Annsa Sofa',
+        bundleId: 'bundle-3l',
+        depth: '39',
+        total: 5480,        // 5280 base + 200 extra, folded at Add-to-Cart
+        summary: '3+L · Bundle',
+        remark: 'customer wants extra padding',
+        extraAddonAmountRM: 200,
+      },
+    };
+    const item = cartLineToSoItem(line, new Map([['prod-sofa-qp', sofaProduct]]));
+    expect(item.variants).toMatchObject({ remark: 'customer wants extra padding', extraAddonAmountRM: 200 });
+  });
+
+  it('bedframe: remark + extraAddonAmountRM thread into variants', () => {
+    const bedframeProduct = product({
+      id: 'prod-bf-remark',
+      sku: 'BF-RMK-001',
+      name: 'Fenrir Bedframe',
+      pricing_kind: 'bedframe_build',
+      category: { id: 'bedframe', label: 'Bedframe', icon: 'bed', tbc: false },
+    });
+    const line: CartLine = {
+      key: 'cfg-bf-remark',
+      qty: 1,
+      config: {
+        kind: 'bedframe',
+        productId: 'prod-bf-remark',
+        productName: 'Fenrir Bedframe',
+        sizeId: 'size-queen',
+        colourId: 'clr-ash',
+        colourLabel: 'Ash Grey',
+        legHeightId: 'leg-6',
+        legHeightLabel: '6"',
+        total: 4490,        // 4290 base + 200 extra, folded at Add-to-Cart
+        summary: 'Queen · Ash Grey · Leg 6"',
+        remark: 'deliver to 2nd floor, no lift',
+        extraAddonAmountRM: 200,
+      },
+    };
+    const item = cartLineToSoItem(line, new Map([['prod-bf-remark', bedframeProduct]]));
+    expect(item.variants).toMatchObject({ remark: 'deliver to 2nd floor, no lift', extraAddonAmountRM: 200 });
+  });
+
   it('whitespace-only remark and zero extra are omitted from variants', () => {
     const line: CartLine = {
       key: 'cfg-test3', qty: 1,

@@ -50,7 +50,8 @@ export interface SofaConfigSnapshot {
   remark?: string;
   /** Extra charge keyed on the product page, whole MYR PER UNIT (spec D1).
    *  Already folded into `total`; also declared in variants so the server
-   *  drift gate adds the same amount to its authoritative figure. */
+   *  drift gate adds the same amount to its authoritative figure.
+   *  Never pre-multiplied by qty — the server scales unit × qty. */
   extraAddonAmountRM?: number;
   total: number;
   summary: string;       // e.g. "3+L · Bundle · Velvet/Sand"
@@ -78,7 +79,8 @@ export interface SizeConfigSnapshot {
   remark?: string;
   /** Extra charge keyed on the product page, whole MYR PER UNIT (spec D1).
    *  Already folded into `total`; also declared in variants so the server
-   *  drift gate adds the same amount to its authoritative figure. */
+   *  drift gate adds the same amount to its authoritative figure.
+   *  Never pre-multiplied by qty — the server scales unit × qty. */
   extraAddonAmountRM?: number;
   total: number;
   summary: string;       // e.g. "Queen"
@@ -153,7 +155,8 @@ export interface BedframeConfigSnapshot {
   remark?: string;
   /** Extra charge keyed on the product page, whole MYR PER UNIT (spec D1).
    *  Already folded into `total`; also declared in variants so the server
-   *  drift gate adds the same amount to its authoritative figure. */
+   *  drift gate adds the same amount to its authoritative figure.
+   *  Never pre-multiplied by qty — the server scales unit × qty. */
   extraAddonAmountRM?: number;
   // Display-label snapshots (parallel to the *Id fields) so the cart, printed
   // Sales Order, and Backend detail render the spec without a join.
