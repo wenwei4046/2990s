@@ -1183,7 +1183,7 @@ export const Configurator = () => {
           step={1}
           placeholder="0"
           value={lineExtraRm || ''}
-          onChange={(e) => setLineExtraRm(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+          onChange={(e) => setLineExtraRm(Math.max(0, Math.min(99999, Math.round(Number(e.target.value) || 0))))}
         />
       </label>
     </RailSection>

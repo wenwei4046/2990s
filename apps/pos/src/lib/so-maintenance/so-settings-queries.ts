@@ -7,9 +7,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../supabase';
 
-const API_URL = import.meta.env.VITE_API_URL;
+const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
 async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  if (!API_URL) throw new Error('VITE_API_URL is not set');
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new Error('not_authenticated');
