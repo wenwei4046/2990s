@@ -26,13 +26,17 @@
 //     backend SO Detail or a future POS-side line composer.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState, type CSSProperties, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { Button } from '@2990s/design-system';
 import { Topbar } from '../components/Topbar';
 import { CountryPhoneInput } from '../components/CountryPhoneInput';
 import { CustomerNameSearch } from '../components/CustomerNameSearch';
-import type { CustomerSearchHit } from '../lib/customer-search';
+import {
+  useCustomerNameSearch,
+  matchCustomerIdentity,
+  type CustomerSearchHit,
+} from '../lib/customer-search';
 import { useLocalities, useNewOrderMutation } from '../lib/queries';
 import { useSoDropdownValues } from '../lib/so-maintenance/so-dropdown-options-queries';
 
@@ -112,14 +116,14 @@ export const NewOrder = () => {
   };
 
   /* Returning-customer pick (Loo 2026-06-06) — autofill every field the
-     snapshot carries; the salesperson can still edit any of them. */
+     snapshot carries; the salesperson can still edit any of them. (Customer
+     type is auto-derived below, not copied.) */
   const pickCustomer = (h: CustomerSearchHit) => {
     setForm((cur) => ({
       ...cur,
       customerName:  h.debtorName,
       phone:         h.phone ?? cur.phone,
       email:         h.email ?? cur.email,
-      customerType:  h.customerType ?? cur.customerType,
       buildingType:  h.buildingType ?? cur.buildingType,
       address1:      h.address1 ?? cur.address1,
       address2:      h.address2 ?? cur.address2,
@@ -128,6 +132,16 @@ export const NewOrder = () => {
       postcode:      h.postcode ?? cur.postcode,
     }));
   };
+
+  /* Customer type is DERIVED, not picked (Loo 2026-06-06): the (name, phone)
+     pair recognised in the customer list → EXISTING, otherwise NEW — and
+     Existing can't be hand-picked. Mirrors the Handover Customer step. */
+  const identitySearch = useCustomerNameSearch(form.customerName, true);
+  const matched = matchCustomerIdentity(identitySearch.data, form.customerName, form.phone);
+  const derivedType = matched ? 'EXISTING' : 'NEW';
+  useEffect(() => {
+    setForm((cur) => (cur.customerType === derivedType ? cur : { ...cur, customerType: derivedType }));
+  }, [derivedType]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -198,13 +212,15 @@ export const NewOrder = () => {
                   style={inputStyle}
                 />
               </Field>
-              <Field label="Customer type">
+              <Field label="Customer type (auto)">
                 <select
                   value={form.customerType}
-                  onChange={setField('customerType')}
+                  disabled
                   style={inputStyle}
+                  title={matched
+                    ? `Matched ${matched.debtorName} (${matched.phone ?? 'no phone'}) — last order ${matched.lastDocNo}`
+                    : 'No matching customer for this name + phone — recorded as a new customer'}
                 >
-                  <option value="">— Select —</option>
                   {customerTypes.map((o) => (
                     <option key={o.value} value={o.value}>{o.label}</option>
                   ))}

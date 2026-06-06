@@ -896,15 +896,31 @@ mfgSalesOrders.get('/customer-search', async (c) => {
     postcode: string | null; customer_state: string | null;
     building_type: string | null; created_at: string;
   };
-  const seen = new Set<string>();
-  const customers: Array<Record<string, unknown>> = [];
+  /* Per-identity COALESCE (Loo 2026-06-06 follow-up: "link them with address
+     as well") — the newest order wins per FIELD, not per row. A customer whose
+     latest SO was "fill in address later" still autofills from their previous
+     order's address: rows arrive newest-first, the first occurrence seeds the
+     entry, and older same-identity rows only patch fields that are still
+     empty. lastDocNo/lastOrderAt always stay the newest order's. */
+  const byKey = new Map<string, Record<string, unknown>>();
+  const FILL_FIELDS = [
+    ['email', 'email'], ['customerType', 'customer_type'],
+    ['address1', 'address1'], ['address2', 'address2'], ['city', 'city'],
+    ['postcode', 'postcode'], ['customerState', 'customer_state'],
+    ['buildingType', 'building_type'],
+  ] as const;
   for (const r of (data ?? []) as Row[]) {
     const name = (r.debtor_name ?? '').trim();
     if (!name) continue;
     const key = `${name.toLowerCase()}|${(r.phone ?? '').trim()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    customers.push({
+    const existing = byKey.get(key);
+    if (existing) {
+      for (const [out, col] of FILL_FIELDS) {
+        if (existing[out] == null || existing[out] === '') existing[out] = r[col];
+      }
+      continue;
+    }
+    byKey.set(key, {
       debtorName:    name,
       phone:         r.phone,
       email:         r.email,
@@ -918,9 +934,8 @@ mfgSalesOrders.get('/customer-search', async (c) => {
       lastDocNo:     r.doc_no,
       lastOrderAt:   r.created_at,
     });
-    if (customers.length >= 8) break;
   }
-  return c.json({ customers });
+  return c.json({ customers: [...byKey.values()].slice(0, 8) });
 });
 
 mfgSalesOrders.get('/:docNo', async (c) => {
