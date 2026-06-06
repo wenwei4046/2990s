@@ -262,6 +262,13 @@ interface CustomBuilderProps {
   /** When true (the Model offers leg heights), a leg pick is compulsory before
    *  Add-to-Cart (Loo 2026-06-03). */
   legRequired?: boolean;
+  /** Product-page remark + extra charge (spec 2026-06-06) — parent-owned, like
+   *  legBlock/legHeight. remarkBlock renders in the left rail; remark/extra
+   *  land on the FIRST seamless group's snapshot only (a canvas usually holds
+   *  one sofa; the extra must never multiply across groups). */
+  remarkBlock?: ReactNode;
+  remark?: string;
+  extraAmountRm?: number;
 }
 
 // Cell ids must survive HMR (which resets module locals) and a future cells-
@@ -285,7 +292,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, legBlock, legHeight = null, legSurchargeRm = 0, legRequired = false, pwpCode = null, pwpComboIds = [] }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, legBlock, legHeight = null, legSurchargeRm = 0, legRequired = false, remarkBlock, remark = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [] }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -896,7 +903,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         fabricTierDelta: sofaFabricDelta,
         ...(isPwpGroup && pwpCode ? { pwp: true, pwpCode } : {}),
         ...(legHeight ? { sofaLegHeight: legHeight } : {}),
-        total: g.finalPrice + sofaFabricDelta + legSurchargeRm,
+        // Per-line remark + extra charge (spec 2026-06-06). A canvas usually
+        // holds one sofa; when staff placed several, the remark/extra land on
+        // the FIRST emitted group only (usedEditKey is still false here for the
+        // lead group — it flips after addConfigured below) so the extra never
+        // multiplies across groups.
+        ...(!usedEditKey && remark.trim() ? { remark: remark.trim() } : {}),
+        ...(!usedEditKey && extraAmountRm > 0 ? { extraAddonAmountRM: extraAmountRm } : {}),
+        total: g.finalPrice + sofaFabricDelta + legSurchargeRm + (!usedEditKey ? extraAmountRm : 0),
         summary,
       };
       addConfigured(snapshot, !usedEditKey && editingKey ? { editingKey } : undefined);
@@ -1092,6 +1106,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           enabledColourIds={productId?.startsWith('mfg-') ? fabricCodes : null}
         />
         {legBlock}
+        {remarkBlock}
       </aside>
 
       <section className={styles.canvasCol}>
@@ -1619,7 +1634,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         <footer className={styles.priceBar}>
           <div>
             <span className="t-eyebrow">{allClosed && cells.length > 0 ? 'Total' : 'Provisional'}</span>
-            <PriceTag amount={priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length} size="lg" />
+            {/* extraAmountRm is per-unit on the LEAD group only (see handleAdd),
+                so it's added ONCE here — not × groups.length like fabric/leg. */}
+            <PriceTag amount={priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length + extraAmountRm} size="lg" />
             {/* Combo cue (HOOKKA parity) — when any group priced via a combo,
                 show the savings the combo gave over the matched subset's own
                 à-la-carte sum. Extra modules outside the combo subset stay at
