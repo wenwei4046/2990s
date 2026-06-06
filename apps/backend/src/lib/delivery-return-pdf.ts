@@ -13,7 +13,11 @@ type DrItem = {
   unit_price_centi: number; refund_centi: number;
 };
 
-export async function generateDeliveryReturnPdf(header: DrHeader, items: DrItem[]): Promise<void> {
+export async function generateDeliveryReturnPdf(
+  header: DrHeader,
+  items: DrItem[],
+  opts?: { docTitle?: string; docNoLabel?: string; amountLabel?: string; totalLabel?: string },
+): Promise<void> {
   const { jsPDF } = await import('jspdf');
   const autoTable = (await import('jspdf-autotable')).default;
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
@@ -21,9 +25,9 @@ export async function generateDeliveryReturnPdf(header: DrHeader, items: DrItem[
   const margin = 14;
 
   let y = drawHeader(doc, {
-    docTitle: 'DELIVERY RETURN',
+    docTitle: opts?.docTitle ?? 'DELIVERY RETURN',
     rightMeta: [
-      { label: 'DR No',  value: header.return_number },
+      { label: opts?.docNoLabel ?? 'DR No',  value: header.return_number },
       { label: 'Date',   value: fmtDocDate(header.return_date) },
       { label: 'Status', value: header.status },
     ],
@@ -48,7 +52,7 @@ export async function generateDeliveryReturnPdf(header: DrHeader, items: DrItem[
   ]);
   autoTable(doc, {
     startY: y,
-    head: [['#', 'Item', 'Description', 'Qty', 'Condition', 'Unit Price', 'Refund']],
+    head: [['#', 'Item', 'Description', 'Qty', 'Condition', 'Unit Price', opts?.amountLabel ?? 'Refund']],
     body: rows,
     theme: 'striped',
     styles: { fontSize: 8.5, cellPadding: 2 },
@@ -68,7 +72,7 @@ export async function generateDeliveryReturnPdf(header: DrHeader, items: DrItem[
 
   const totalsX = pageW - margin - 70;
   doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
-  doc.text('TOTAL REFUND', totalsX, lastY + 2);
+  doc.text(opts?.totalLabel ?? 'TOTAL REFUND', totalsX, lastY + 2);
   doc.text(fmtRm(header.refund_centi), pageW - margin, lastY + 2, { align: 'right' });
 
   drawSignatureBoxes(doc, lastY + 12, 'Customer Confirms Return', "2990's Home Received By");

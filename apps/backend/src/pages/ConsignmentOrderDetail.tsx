@@ -28,7 +28,7 @@ import {
 } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Plus, Save, X, ChevronDown,
+  ArrowLeft, FileText, Pencil, Plus, Printer, Save, X, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
@@ -454,6 +454,17 @@ export const ConsignmentOrderDetail = () => {
     );
   }
 
+  const handlePrint = () => {
+    // The raw detail response carries the category-total fields the SO PDF
+    // needs (the typed subset above omits them). Consignment has no payments.
+    import('../lib/sales-order-pdf')
+      .then(({ generateSalesOrderPdf }) =>
+        generateSalesOrderPdf(header as never, items as never, [], 'save', [], {
+          docTitle: 'CONSIGNMENT ORDER', docNoLabel: 'CO No',
+        }))
+      .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+  };
+
   return (
     <div className={styles.page}>
       {/* ── Header ──────────────────────────────────────────────── */}
@@ -482,6 +493,9 @@ export const ConsignmentOrderDetail = () => {
             </span>
           </div>
           <RelationshipMapButton type="cso" id={header.doc_no} />
+          <Button variant="ghost" size="md" onClick={handlePrint}>
+            <Printer {...ICON} /><span>Print PDF</span>
+          </Button>
           {!isEditing ? (
             <>
               <Button variant="ghost" size="md"

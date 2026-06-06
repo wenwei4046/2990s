@@ -15,7 +15,11 @@ type PrItem = {
   reason: string | null;
 };
 
-export async function generatePurchaseReturnPdf(header: PrHeader, items: PrItem[]): Promise<void> {
+export async function generatePurchaseReturnPdf(
+  header: PrHeader,
+  items: PrItem[],
+  opts?: { docTitle?: string; docNoLabel?: string; amountLabel?: string; totalLabel?: string },
+): Promise<void> {
   const { jsPDF } = await import('jspdf');
   const autoTable = (await import('jspdf-autotable')).default;
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
@@ -23,9 +27,9 @@ export async function generatePurchaseReturnPdf(header: PrHeader, items: PrItem[
   const margin = 14;
 
   let y = drawHeader(doc, {
-    docTitle: 'PURCHASE RETURN',
+    docTitle: opts?.docTitle ?? 'PURCHASE RETURN',
     rightMeta: [
-      { label: 'PR No',   value: header.return_number },
+      { label: opts?.docNoLabel ?? 'PR No',   value: header.return_number },
       { label: 'Date',    value: fmtDocDate(header.return_date) },
       { label: 'PO Ref',  value: header.purchase_order?.po_number ?? '—' },
       { label: 'GRN Ref', value: header.grn?.grn_number ?? '—' },
@@ -52,7 +56,7 @@ export async function generatePurchaseReturnPdf(header: PrHeader, items: PrItem[
   ]);
   autoTable(doc, {
     startY: y,
-    head: [['#', 'Code', 'Description', 'Qty', 'Unit Price', 'Refund', 'Reason']],
+    head: [['#', 'Code', 'Description', 'Qty', 'Unit Price', opts?.amountLabel ?? 'Refund', 'Reason']],
     body: rows,
     theme: 'striped',
     styles: { fontSize: 8.5, cellPadding: 2 },
@@ -73,7 +77,7 @@ export async function generatePurchaseReturnPdf(header: PrHeader, items: PrItem[
   // Total refund row
   const totalsX = pageW - margin - 70;
   doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
-  doc.text('TOTAL REFUND', totalsX, lastY + 2);
+  doc.text(opts?.totalLabel ?? 'TOTAL REFUND', totalsX, lastY + 2);
   doc.text(fmtRm(header.refund_centi), pageW - margin, lastY + 2, { align: 'right' });
 
   drawSignatureBoxes(doc, lastY + 12, "2990's Home Issued By", 'Supplier Acknowledgement');

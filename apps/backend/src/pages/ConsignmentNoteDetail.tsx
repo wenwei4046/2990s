@@ -24,7 +24,7 @@ import {
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
-  ArrowLeft, FileText, Pencil, Plus, Save, Ban, RotateCcw, ChevronDown,
+  ArrowLeft, FileText, Pencil, Plus, Printer, Save, Ban, RotateCcw, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
@@ -308,6 +308,13 @@ export const ConsignmentNoteDetail = () => {
   const isLocked = lockedStatuses.includes(header.status);
   const isCancelled = header.status === 'CANCELLED';
 
+  const handlePrint = () => {
+    import('../lib/delivery-order-pdf')
+      .then(({ generateDeliveryOrderPdf }) =>
+        generateDeliveryOrderPdf(header as never, items as never, { docTitle: 'CONSIGNMENT NOTE', docNoLabel: 'CN No' }))
+      .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+  };
+
   const handleCancel = () => {
     if (!window.confirm(`Cancel ${header.do_number}? This sets status = CANCELLED.`)) return;
     updateStatus.mutate({ id: header.id, status: 'CANCELLED' });
@@ -345,6 +352,9 @@ export const ConsignmentNoteDetail = () => {
             {header.status.replace(/_/g, ' ')}
           </span>
           <RelationshipMapButton type="cdo" id={id} />
+          <Button variant="ghost" size="md" onClick={handlePrint}>
+            <Printer size={15} strokeWidth={1.75} /><span>Print PDF</span>
+          </Button>
           {!isCancelled && !isEditing && (
             <Button variant="ghost" size="md"
               onClick={() => navigate(`/consignment-return/new?fromConsignmentNote=${id}`)}>

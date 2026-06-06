@@ -19,7 +19,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Trash2, Save, Ban, ChevronDown,
+  ArrowLeft, FileText, Pencil, Printer, Trash2, Save, Ban, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
@@ -188,6 +188,13 @@ export const PurchaseConsignmentOrderDetail = () => {
 
   const headerView = headerDraft ?? headerSnapshot(po);
 
+  const handlePrint = () => {
+    import('../lib/purchase-order-pdf')
+      .then(({ generatePurchaseOrderPdf }) =>
+        generatePurchaseOrderPdf(po as never, items as never, { docTitle: 'PURCHASE CONSIGNMENT ORDER' }))
+      .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+  };
+
   const setHeaderField = (k: keyof HeaderDraft, v: string) => {
     setHeaderDraft((h) => ({ ...(h ?? headerSnapshot(po)), [k]: v }));
     if (k === 'expectedAt') {
@@ -268,6 +275,9 @@ export const PurchaseConsignmentOrderDetail = () => {
             {po.status.replace(/_/g, ' ')}
           </span>
           <RelationshipMapButton type="pco" id={po.id} />
+          <Button variant="ghost" size="md" onClick={handlePrint}>
+            <Printer {...ICON} /><span>Print PDF</span>
+          </Button>
           {(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
             <Button variant="ghost" size="md"
               onClick={() => {

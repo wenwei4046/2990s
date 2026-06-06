@@ -16,7 +16,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
-  ArrowLeft, Undo2, Pencil, Trash2, Save, Ban, ChevronDown,
+  ArrowLeft, Undo2, Pencil, Printer, Trash2, Save, Ban, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
@@ -148,6 +148,34 @@ export const PurchaseConsignmentReturnDetail = () => {
 
   const headerView = headerDraft ?? headerSnapshot(pr);
 
+  const handlePrint = () => {
+    const pdfHeader = {
+      return_number: pr.return_number,
+      status: String(pr.status),
+      return_date: pr.return_date ?? '',
+      reason: pr.reason ?? null,
+      refund_centi: refundTotal,
+      credit_note_ref: pr.credit_note_ref ?? null,
+      notes: pr.notes ?? null,
+      supplier: pr.supplier ?? undefined,
+    };
+    const pdfItems = items.map((it) => ({
+      material_code: it.material_code,
+      material_name: it.material_name,
+      qty_returned: it.qty_returned,
+      unit_price_centi: it.unit_price_centi,
+      line_refund_centi: it.line_refund_centi ?? (it.qty_returned * it.unit_price_centi),
+      reason: null,
+    }));
+    import('../lib/purchase-return-pdf')
+      .then(({ generatePurchaseReturnPdf }) =>
+        generatePurchaseReturnPdf(pdfHeader as never, pdfItems as never, {
+          docTitle: 'PURCHASE CONSIGNMENT RETURN', docNoLabel: 'Return No',
+          amountLabel: 'Value', totalLabel: 'TOTAL VALUE',
+        }))
+      .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+  };
+
   const setHeaderField = (k: keyof HeaderDraft, v: string) => {
     setHeaderDraft((h) => ({ ...(h ?? headerSnapshot(pr)), [k]: v }));
   };
@@ -216,6 +244,9 @@ export const PurchaseConsignmentReturnDetail = () => {
             {STATUS_LABEL[pr.status as string] ?? String(pr.status)}
           </span>
           <RelationshipMapButton type="pcrn" id={pr.id} />
+          <Button variant="ghost" size="md" onClick={handlePrint}>
+            <Printer {...ICON} /><span>Print PDF</span>
+          </Button>
           {pr.status !== 'CANCELLED' && pr.status !== 'COMPLETED' && (
             <Button variant="ghost" size="md"
               onClick={() => {

@@ -33,14 +33,18 @@ type DoItem = {
   item_code: string;
   description: string | null;
   qty: number;
-  m3_milli: number;
+  m3_milli: number | null;
   unit_price_centi: number;
 };
 
 const fmtRm = (centi: number): string =>
   `RM ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export async function generateDeliveryOrderPdf(header: DoHeader, items: DoItem[]): Promise<void> {
+export async function generateDeliveryOrderPdf(
+  header: DoHeader,
+  items: DoItem[],
+  opts?: { docTitle?: string; docNoLabel?: string },
+): Promise<void> {
   const { jsPDF } = await import('jspdf');
   const autoTable = (await import('jspdf-autotable')).default;
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
@@ -58,10 +62,10 @@ export async function generateDeliveryOrderPdf(header: DoHeader, items: DoItem[]
   // Right-aligned doc info
   let rightY = margin;
   doc.setFont('helvetica', 'bold'); doc.setFontSize(14);
-  doc.text('DELIVERY ORDER', pageW - margin, rightY, { align: 'right' });
+  doc.text(opts?.docTitle ?? 'DELIVERY ORDER', pageW - margin, rightY, { align: 'right' });
   rightY += 6;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
-  doc.text(`DO No: ${header.do_number}`, pageW - margin, rightY, { align: 'right' }); rightY += 5;
+  doc.text(`${opts?.docNoLabel ?? 'DO No'}: ${header.do_number}`, pageW - margin, rightY, { align: 'right' }); rightY += 5;
   doc.text(`Date:  ${fmtDocDate(header.do_date)}`, pageW - margin, rightY, { align: 'right' }); rightY += 5;
   if (header.so_doc_no) { doc.text(`SO Ref: ${header.so_doc_no}`, pageW - margin, rightY, { align: 'right' }); rightY += 5; }
   doc.text(`Status: ${header.status.replace(/_/g, ' ')}`, pageW - margin, rightY, { align: 'right' });
@@ -104,7 +108,7 @@ export async function generateDeliveryOrderPdf(header: DoHeader, items: DoItem[]
     it.item_code,
     it.description ?? '—',
     String(it.qty),
-    (it.m3_milli / 1000).toFixed(3),
+    it.m3_milli != null ? (it.m3_milli / 1000).toFixed(3) : '—',
     fmtRm(it.unit_price_centi),
   ]);
 

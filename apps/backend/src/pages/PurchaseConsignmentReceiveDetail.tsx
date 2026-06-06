@@ -20,7 +20,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
-  ArrowLeft, FileText, Pencil, Trash2, Save, Ban, ChevronDown,
+  ArrowLeft, FileText, Pencil, Printer, Trash2, Save, Ban, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
@@ -171,6 +171,32 @@ export const PurchaseConsignmentReceiveDetail = () => {
 
   const headerView = headerDraft ?? headerSnapshot(grn);
 
+  const handlePrint = () => {
+    // A consignment receive has no QC accept/reject — accepted = received.
+    const pdfHeader = {
+      grn_number: grn.grn_number,
+      status: String(grn.status),
+      received_at: grn.received_at ?? '',
+      delivery_note_ref: grn.delivery_note_ref ?? null,
+      notes: grn.notes ?? null,
+      posted_at: grn.posted_at ?? null,
+      supplier: grn.supplier ?? undefined,
+    };
+    const pdfItems = items.map((it) => ({
+      material_code: it.material_code,
+      material_name: it.material_name,
+      qty_received: it.qty_received,
+      qty_accepted: it.qty_received,
+      qty_rejected: 0,
+      rejection_reason: null,
+      unit_price_centi: it.unit_price_centi,
+    }));
+    import('../lib/grn-pdf')
+      .then(({ generateGrnPdf }) =>
+        generateGrnPdf(pdfHeader as never, pdfItems as never, { docTitle: 'CONSIGNMENT RECEIVE', docNoLabel: 'Receive No' }))
+      .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+  };
+
   const setHeaderField = (k: keyof HeaderDraft, v: string) => {
     setHeaderDraft((h) => ({ ...(h ?? headerSnapshot(grn)), [k]: v }));
     if (k === 'receivedAt') {
@@ -251,6 +277,9 @@ export const PurchaseConsignmentReceiveDetail = () => {
             {STATUS_LABEL[grn.status as string] ?? String(grn.status)}
           </span>
           <RelationshipMapButton type="pcr" id={grn.id} />
+          <Button variant="ghost" size="md" onClick={handlePrint}>
+            <Printer {...ICON} /><span>Print PDF</span>
+          </Button>
           {grn.status === 'POSTED' && !isEditing && (
             <Button variant="ghost" size="md"
               onClick={() => navigate(`/purchase-consignment-return/new?fromPcReceive=${grn.id}`)}>

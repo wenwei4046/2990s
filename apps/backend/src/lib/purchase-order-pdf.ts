@@ -91,7 +91,11 @@ const fmtMoney = (centi: number, currency: string): string =>
 const fmtAmount = (centi: number): string =>
   (centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export async function generatePurchaseOrderPdf(header: PoHeader, items: PoItem[]): Promise<void> {
+export async function generatePurchaseOrderPdf(
+  header: PoHeader,
+  items: PoItem[],
+  opts?: { docTitle?: string },
+): Promise<void> {
   const { jsPDF } = await import('jspdf');
   const autoTable = (await import('jspdf-autotable')).default;
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
@@ -119,7 +123,7 @@ export async function generatePurchaseOrderPdf(header: PoHeader, items: PoItem[]
 
   // ── Title bar: "PURCHASE ORDER" centered + "No.: PO-XXXX" right ──────
   doc.setFont('helvetica', 'bold'); doc.setFontSize(15);
-  doc.text('PURCHASE ORDER', pageW / 2, y, { align: 'center' });
+  doc.text(opts?.docTitle ?? 'PURCHASE ORDER', pageW / 2, y, { align: 'center' });
   doc.setFontSize(11);
   doc.text(`No.  :  ${header.po_number}`, pageW - margin, y, { align: 'right' });
   y += 8;

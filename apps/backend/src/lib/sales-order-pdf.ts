@@ -187,6 +187,7 @@ export async function generateSalesOrderPdf(
   /* PWP vouchers this SO's trigger items issued (GET /:docNo `pwpCodes`) —
      used to mark trigger lines. Optional so older callers stay valid. */
   pwpCodes: SoPwpCodeRow[] = [],
+  opts?: { docTitle?: string; docNoLabel?: string },
 ): Promise<void> {
   // Dynamic import — code-split into a vendor chunk.
   const { jsPDF } = await import('jspdf');
@@ -214,11 +215,11 @@ export async function generateSalesOrderPdf(
   let rightY = margin;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(14);
-  doc.text('SALES ORDER', pageW - margin, rightY, { align: 'right' });
+  doc.text(opts?.docTitle ?? 'SALES ORDER', pageW - margin, rightY, { align: 'right' });
   rightY += 6;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
-  doc.text(`Doc No: ${header.doc_no}`, pageW - margin, rightY, { align: 'right' });
+  doc.text(`${opts?.docNoLabel ?? 'Doc No'}: ${header.doc_no}`, pageW - margin, rightY, { align: 'right' });
   rightY += 5;
   doc.text(`Date:   ${fmtDocDate(header.so_date)}`, pageW - margin, rightY, { align: 'right' });
   rightY += 5;

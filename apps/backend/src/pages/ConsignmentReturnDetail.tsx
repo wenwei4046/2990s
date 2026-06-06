@@ -20,7 +20,7 @@ import {
 import { Link, useParams, useSearchParams } from 'react-router';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
-  ArrowLeft, Pencil, Plus, Save, Undo2, ChevronDown, Ban, RotateCcw,
+  ArrowLeft, Pencil, Plus, Printer, Save, Undo2, ChevronDown, Ban, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
@@ -315,6 +315,19 @@ export const ConsignmentReturnDetail = () => {
   const isLocked = lockedStatuses.includes(header.status);
   const isCancelled = header.status === 'CANCELLED';
 
+  const handlePrint = () => {
+    // A consignment return has no money refund — show the goods value instead.
+    const pdfHeader = { ...header, refund_centi: header!.local_total_centi };
+    const pdfItems = items.map((it) => ({ ...it, refund_centi: it.line_total_centi }));
+    import('../lib/delivery-return-pdf')
+      .then(({ generateDeliveryReturnPdf }) =>
+        generateDeliveryReturnPdf(pdfHeader as never, pdfItems as never, {
+          docTitle: 'CONSIGNMENT RETURN', docNoLabel: 'CR No',
+          amountLabel: 'Value', totalLabel: 'TOTAL VALUE',
+        }))
+      .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+  };
+
   const handleCancel = () => {
     if (!window.confirm(`Cancel ${header.return_number}? This sets status = CANCELLED.`)) return;
     updateStatus.mutate({ id: header.id, status: 'CANCELLED' });
@@ -352,6 +365,9 @@ export const ConsignmentReturnDetail = () => {
             {header.status.replace(/_/g, ' ')}
           </span>
           <RelationshipMapButton type="cdr" id={id} />
+          <Button variant="ghost" size="md" onClick={handlePrint}>
+            <Printer size={15} strokeWidth={1.75} /><span>Print PDF</span>
+          </Button>
           {isCancelled ? (
             <Button variant="primary" size="md" onClick={handleReopen} disabled={updateStatus.isPending}>
               <RotateCcw {...ICON} /><span>Reopen Return</span>

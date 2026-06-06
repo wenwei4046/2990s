@@ -14,7 +14,11 @@ type GrnItem = {
   rejection_reason: string | null; unit_price_centi: number;
 };
 
-export async function generateGrnPdf(header: GrnHeader, items: GrnItem[]): Promise<void> {
+export async function generateGrnPdf(
+  header: GrnHeader,
+  items: GrnItem[],
+  opts?: { docTitle?: string; docNoLabel?: string },
+): Promise<void> {
   const { jsPDF } = await import('jspdf');
   const autoTable = (await import('jspdf-autotable')).default;
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
@@ -22,9 +26,9 @@ export async function generateGrnPdf(header: GrnHeader, items: GrnItem[]): Promi
   const margin = 14;
 
   let y = drawHeader(doc, {
-    docTitle: 'GOODS RECEIPT NOTE',
+    docTitle: opts?.docTitle ?? 'GOODS RECEIPT NOTE',
     rightMeta: [
-      { label: 'GRN No',   value: header.grn_number },
+      { label: opts?.docNoLabel ?? 'GRN No',   value: header.grn_number },
       { label: 'Received', value: fmtDocDate(header.received_at) },
       { label: 'DN Ref',   value: header.delivery_note_ref ?? '—' },
       { label: 'PO Ref',   value: header.purchase_order?.po_number ?? '—' },
