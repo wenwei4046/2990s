@@ -128,6 +128,32 @@ describe('groupSoLinesForDisplay', () => {
   });
 });
 
+describe('groupSoLinesForDisplay — remark carry', () => {
+  it('keeps the lead line remark on a folded sofa build', () => {
+    const lines = [
+      { item_code: 'BOOQIT-1A(LHF)', qty: 1, unit_price_centi: 100000, total_centi: 100000,
+        remark: 'Customer wants firmer seat', variants: { buildKey: 'build-1', cellIndex: 0 } },
+      { item_code: 'BOOQIT-2A(RHF)', qty: 1, unit_price_centi: 200000, total_centi: 200000,
+        remark: null, variants: { buildKey: 'build-1', cellIndex: 1 } },
+    ];
+    const groups = groupSoLinesForDisplay(lines);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.kind).toBe('sofa-build');
+    expect(groups[0]!.display!.remark).toBe('Customer wants firmer seat');
+  });
+
+  it('falls back to the first non-empty remark in the group', () => {
+    const lines = [
+      { item_code: 'BOOQIT-1A(LHF)', qty: 1, unit_price_centi: 100000, total_centi: 100000,
+        remark: null, variants: { buildKey: 'build-1', cellIndex: 0 } },
+      { item_code: 'BOOQIT-2A(RHF)', qty: 1, unit_price_centi: 200000, total_centi: 200000,
+        remark: 'left arm fabric swap', variants: { buildKey: 'build-1', cellIndex: 1 } },
+    ];
+    const groups = groupSoLinesForDisplay(lines);
+    expect(groups[0]!.display!.remark).toBe('left arm fabric swap');
+  });
+});
+
 describe('pwpRewardNote', () => {
   it('renders code + trigger label for a same-cart redemption', () => {
     expect(pwpRewardNote({ pwp: true, pwpCode: 'PWP-9051VZQU', pwpTriggerLabel: 'Arrus Firm' }))
