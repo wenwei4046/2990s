@@ -156,7 +156,7 @@ export const ConfirmPaymentStep = ({
       </p>
       {extras.map((p, i) => (
         <div
-          key={i}
+          key={p.uid}
           style={{
             display: 'grid',
             gridTemplateColumns: 'minmax(120px, 1fr) minmax(100px, 0.8fr) minmax(140px, 1fr) auto',
@@ -253,7 +253,7 @@ export const ConfirmPaymentStep = ({
         className={styles.presetPill}
         onClick={() => setExtras([
           ...extras,
-          { method: 'cash', amount: 0, approvalCode: '', merchantProvider: null, installmentMonths: null, slipUploadSessionId: null },
+          { uid: Math.random().toString(36).slice(2, 10), method: 'cash', amount: 0, approvalCode: '', merchantProvider: null, installmentMonths: null, slipUploadSessionId: null },
         ])}
         style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
       >
@@ -264,8 +264,8 @@ export const ConfirmPaymentStep = ({
         <p className={styles.stepLead} style={{ marginTop: 8 }}>
           Total collected: <strong>{fmtRM(collected)}</strong> of {fmtRM(total)}
           {' '}({methodLabel} {fmtRM(form.amountPaid)}
-          {extras.map((p, i) => (
-            <span key={i}> + {methodLabels[p.method] ?? p.method} {fmtRM(p.amount || 0)}</span>
+          {extras.map((p) => (
+            <span key={p.uid}> + {methodLabels[p.method] ?? p.method} {fmtRM(p.amount || 0)}</span>
           ))})
         </p>
       )}

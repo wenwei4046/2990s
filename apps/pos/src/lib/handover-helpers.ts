@@ -32,6 +32,8 @@ export interface AddonInfo {
  *  Each row picks its own method + amount + approval code; merchant /
  *  installment sub-fields mirror the primary cascade. Amounts are whole RM. */
 export interface ExtraPayment {
+  /** Stable row identity for React keys — never sent to the API. */
+  uid: string;
   method: Exclude<PaymentMethod, ''>;
   amount: number;
   approvalCode: string;

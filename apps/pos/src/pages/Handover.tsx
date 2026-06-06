@@ -103,6 +103,12 @@ export const Handover = () => {
       signed: false,
       acknowledgedTerms: false,
       salespersonId: saved.salespersonId || base.salespersonId,
+      // Old snapshots (pre-uid) won't have uid on ExtraPayment rows — assign
+      // stable ids so key={p.uid} never collapses to undefined/duplicate keys.
+      extraPayments: (saved.extraPayments ?? []).map((p) => ({
+        ...p,
+        uid: p.uid ?? Math.random().toString(36).slice(2, 10),
+      })),
     };
   });
   // Snapshot every keystroke — cheap (one small JSON) and the tablet survives
