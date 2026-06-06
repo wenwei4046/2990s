@@ -29,7 +29,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
-import { writeMovements, reverseMovements, defaultWarehouseId } from '../lib/inventory-movements';
+import { writeMovements, reverseMovements, defaultWarehouseId, resolveWarehouseLotBatches } from '../lib/inventory-movements';
 import { recomputePcoReceived } from './purchase-consignment-receives';
 
 export const purchaseConsignmentReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -82,21 +82,31 @@ async function writePcReturnInventoryOut(sb: any, returnId: string): Promise<voi
       for (const r of riRows) whByRecvItem.set(r.id, whByRecv.get(r.pc_receive_id) ?? null);
     }
 
+    // Resolve dye-lot batches for every warehouse the return pulls out of, so a
+    // returned sofa consumes the right lot (mirrors the Delivery / Purchase
+    // Return ship-back).
+    const allWh = [...new Set([...whByRecvItem.values(), fallbackWh].filter((x): x is string => !!x))];
+    const batchByWh = new Map<string, Map<string, string | null>>();
+    for (const wh of allWh) batchByWh.set(wh, await resolveWarehouseLotBatches(sb, wh));
+
     const movements = lineList
       .filter((it) => Number(it.qty_returned ?? 0) > 0)
       .map((it) => {
         const wh = (it.pc_receive_item_id ? whByRecvItem.get(it.pc_receive_item_id) : null) ?? fallbackWh;
         if (!wh) return null;
+        const variantKey = computeVariantKey(it.item_group, (it.variants as VariantAttrs | null) ?? null);
+        const batchNo = batchByWh.get(wh)?.get(`${it.material_code}::${variantKey}`) ?? null;
         return {
           movement_type: 'OUT' as const,
           warehouse_id: wh,
           product_code: it.material_code,
-          variant_key: computeVariantKey(it.item_group, (it.variants as VariantAttrs | null) ?? null),
+          variant_key: variantKey,
           product_name: it.material_name,
           qty: Number(it.qty_returned ?? 0),
           source_doc_type: 'PC_RETURN' as const,
           source_doc_id: returnId,
           source_doc_no: returnNo,
+          ...(batchNo ? { batch_no: batchNo } : {}),
           performed_by: null,
         };
       })

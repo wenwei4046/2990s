@@ -28,7 +28,7 @@ import { normalizePhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { defaultWarehouseId, writeMovements } from '../lib/inventory-movements';
+import { defaultWarehouseId, writeMovements, resolveWarehouseLotBatches } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 
@@ -222,19 +222,30 @@ async function shipLoanerForNote(sb: any, noteId: string, performedBy: string | 
   }
   if (byKey.size === 0) return [];
 
-  const res = await writeMovements(sb, [...byKey.values()].map((l) => ({
-    movement_type:   'OUT' as const,
-    warehouse_id:    l.warehouse_id,
-    product_code:    l.product_code,
-    variant_key:     l.variant_key,
-    product_name:    l.product_name,
-    qty:             l.qty,
-    source_doc_type: 'CS_DO' as const,
-    source_doc_id:   noteId,
-    source_doc_no:   noteNo,
-    performed_by:    performedBy,
-    notes:           'Consignment Note ship-out (goods to showroom)',
-  })));
+  // Resolve the dye-lot batch each bucket ships from the warehouse's open lots
+  // (a sofa consumes the right lot + the OUT shows its batch), exactly like a
+  // Delivery Order. Single batch in the warehouse → carry it; multi → plain FIFO.
+  const distinctWh = [...new Set([...byKey.values()].map((l) => l.warehouse_id))];
+  const batchByWh = new Map<string, Map<string, string | null>>();
+  for (const wh of distinctWh) batchByWh.set(wh, await resolveWarehouseLotBatches(sb, wh));
+
+  const res = await writeMovements(sb, [...byKey.values()].map((l) => {
+    const batchNo = batchByWh.get(l.warehouse_id)?.get(`${l.product_code}::${l.variant_key}`) ?? null;
+    return {
+      movement_type:   'OUT' as const,
+      warehouse_id:    l.warehouse_id,
+      product_code:    l.product_code,
+      variant_key:     l.variant_key,
+      product_name:    l.product_name,
+      qty:             l.qty,
+      source_doc_type: 'CS_DO' as const,
+      source_doc_id:   noteId,
+      source_doc_no:   noteNo,
+      ...(batchNo ? { batch_no: batchNo } : {}),
+      performed_by:    performedBy,
+      notes:           'Consignment Note ship-out (goods to showroom)',
+    };
+  }));
 
   // Stock dropped — re-walk SO allocation in case the ship-from warehouse feeds it.
   try {

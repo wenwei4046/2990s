@@ -26,7 +26,7 @@ import { normalizePhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { defaultWarehouseId, writeMovements } from '../lib/inventory-movements';
+import { defaultWarehouseId, writeMovements, resolveWarehouseLotBatches } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 
@@ -221,20 +221,30 @@ async function receiveLoanerForReturn(sb: any, returnId: string, performedBy: st
   }
   if (byKey.size === 0) return [];
 
-  const res = await writeMovements(sb, [...byKey.values()].map((l) => ({
-    movement_type:   'IN' as const,
-    warehouse_id:    l.warehouse_id,
-    product_code:    l.product_code,
-    variant_key:     l.variant_key,
-    product_name:    l.product_name,
-    qty:             l.qty,
-    unit_cost_sen:   l.unit_cost_sen,
-    source_doc_type: 'CS_DR' as const,
-    source_doc_id:   returnId,
-    source_doc_no:   returnNo,
-    performed_by:    performedBy,
-    notes:           'Consignment Return — stock back IN',
-  })));
+  // Re-join the dye-lot the returned sofa came from when that lot is still open
+  // in the destination warehouse (single batch → carry it; else plain IN).
+  const distinctWh = [...new Set([...byKey.values()].map((l) => l.warehouse_id))];
+  const batchByWh = new Map<string, Map<string, string | null>>();
+  for (const wh of distinctWh) batchByWh.set(wh, await resolveWarehouseLotBatches(sb, wh));
+
+  const res = await writeMovements(sb, [...byKey.values()].map((l) => {
+    const batchNo = batchByWh.get(l.warehouse_id)?.get(`${l.product_code}::${l.variant_key}`) ?? null;
+    return {
+      movement_type:   'IN' as const,
+      warehouse_id:    l.warehouse_id,
+      product_code:    l.product_code,
+      variant_key:     l.variant_key,
+      product_name:    l.product_name,
+      qty:             l.qty,
+      unit_cost_sen:   l.unit_cost_sen,
+      source_doc_type: 'CS_DR' as const,
+      source_doc_id:   returnId,
+      source_doc_no:   returnNo,
+      ...(batchNo ? { batch_no: batchNo } : {}),
+      performed_by:    performedBy,
+      notes:           'Consignment Return — stock back IN',
+    };
+  }));
 
   try {
     const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');

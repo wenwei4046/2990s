@@ -73,7 +73,7 @@ async function postPcReceiveAndRollup(sb: any, receiveId: string): Promise<{ ok:
 async function writePcReceiveInventoryIn(sb: any, receiveId: string): Promise<void> {
   try {
     const { data: head } = await sb.from('purchase_consignment_receives')
-      .select('receive_number, warehouse_id').eq('id', receiveId).maybeSingle();
+      .select('receive_number, warehouse_id, pc_order_no').eq('id', receiveId).maybeSingle();
     if (!head) return;
     const { count: existing } = await sb.from('inventory_movements')
       .select('id', { head: true, count: 'exact' })
@@ -83,6 +83,10 @@ async function writePcReceiveInventoryIn(sb: any, receiveId: string): Promise<vo
     const warehouseId = (head as { warehouse_id: string | null }).warehouse_id ?? (await defaultWarehouseId(sb));
     if (!warehouseId) return;
     const receiveNo = (head as { receive_number: string }).receive_number;
+    // Dye-lot batch = the source PC Order number, mirroring how a GRN stamps
+    // batch_no = source PO number (migration 0120) so a sofa set's components
+    // share one lot. Manual receives (no order) stay un-batched (plain FIFO).
+    const batchNo = (head as { pc_order_no: string | null }).pc_order_no ?? null;
 
     const { data: lines } = await sb.from('purchase_consignment_receive_items')
       .select('material_code, material_name, qty_accepted, unit_price_centi, item_group, variants')
@@ -103,6 +107,7 @@ async function writePcReceiveInventoryIn(sb: any, receiveId: string): Promise<vo
         source_doc_type: 'PC_RECEIVE' as const,
         source_doc_id: receiveId,
         source_doc_no: receiveNo,
+        ...(batchNo ? { batch_no: batchNo } : {}),
         performed_by: null,
       }));
     if (movements.length > 0) await writeMovements(sb, movements);
