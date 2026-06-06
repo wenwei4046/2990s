@@ -37,6 +37,8 @@ export interface ExtraPayment {
   approvalCode: string;
   merchantProvider: MerchantProvider | null;
   installmentMonths: number | null;
+  /** Spec D4 — every split payment carries its own slip. */
+  slipUploadSessionId: string | null;
 }
 
 /** Everything collected at handover = primary amount + every extra row. */
@@ -50,7 +52,8 @@ export const extraPaymentComplete = (p: ExtraPayment): boolean =>
   && p.amount > 0
   && p.approvalCode.trim().length > 0
   && (p.method !== 'merchant' || p.merchantProvider != null)
-  && (p.method !== 'installment' || p.installmentMonths != null);
+  && (p.method !== 'installment' || p.installmentMonths != null)
+  && p.slipUploadSessionId !== null;
 
 export interface HandoverForm {
   name: string; phone: string; email: string;
@@ -270,7 +273,7 @@ const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: n
   if (collected < halfTotal) b.push(`Total collected must be at least RM ${halfTotal.toLocaleString('en-MY')} (50% deposit)`);
   else if (collected > total) b.push('Total collected exceeds the order total');
   extras.forEach((p, i) => {
-    if (!extraPaymentComplete(p)) b.push(`Payment ${i + 2}: pick method, amount and approval code${p.method === 'merchant' ? ' (and merchant)' : p.method === 'installment' ? ' (and term)' : ''}`);
+    if (!extraPaymentComplete(p)) b.push(`Payment ${i + 2}: pick method, amount and approval code${p.method === 'merchant' ? ' (and merchant)' : p.method === 'installment' ? ' (and term)' : ''}${p.slipUploadSessionId === null ? ' (and slip)' : ''}`);
   });
   if (!f.approvalCode.trim()) b.push('Approval code required');
   if (f.slipUploadSessionId === null) b.push('Payment slip / proof required');

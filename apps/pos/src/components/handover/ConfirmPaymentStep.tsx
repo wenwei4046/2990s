@@ -238,6 +238,14 @@ export const ConfirmPaymentStep = ({
               </Field>
             </div>
           )}
+          <div style={{ gridColumn: '1 / -1' }}>
+            <Field label={`Payment ${i + 2} slip / proof *`}>
+              <SlipUploadStep
+                onConfirmed={(id) => patchExtra(i, { slipUploadSessionId: id })}
+                onCleared={() => patchExtra(i, { slipUploadSessionId: null })}
+              />
+            </Field>
+          </div>
         </div>
       ))}
       <button
@@ -245,7 +253,7 @@ export const ConfirmPaymentStep = ({
         className={styles.presetPill}
         onClick={() => setExtras([
           ...extras,
-          { method: 'cash', amount: 0, approvalCode: '', merchantProvider: null, installmentMonths: null },
+          { method: 'cash', amount: 0, approvalCode: '', merchantProvider: null, installmentMonths: null, slipUploadSessionId: null },
         ])}
         style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
       >
@@ -263,7 +271,7 @@ export const ConfirmPaymentStep = ({
       )}
 
       <h3 className="subTitle">
-        Payment slip / proof <span className={styles.required}>*</span>
+        Payment 1 slip / proof <span className={styles.required}>*</span>
       </h3>
       <SlipUploadStep
         onConfirmed={(id) => update('slipUploadSessionId', id)}

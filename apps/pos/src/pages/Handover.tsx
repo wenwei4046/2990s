@@ -355,6 +355,13 @@ export const Handover = () => {
                 {
                   method: paymentMethod,
                   amountCenti: Math.round(form.amountPaid * 100),
+                  // Spec D4 — every payments[] row carries its own slip. The
+                  // primary row reuses the order-level slip (form.slipUploadSessionId).
+                  // Non-null is airtight: reaching submit means the confirm step
+                  // passed validateConfirmPayment, which rejects a null slip
+                  // (handover-helpers.ts) — and PhaseNav only jumps backward, so
+                  // sign/submit is unreachable without clearing confirm first.
+                  uploadSessionId: form.slipUploadSessionId!,
                   ...(form.approvalCode.trim() ? { approvalCode: form.approvalCode.trim() } : {}),
                   ...(form.merchantProvider ? { merchantProvider: form.merchantProvider } : {}),
                   ...(form.installmentMonths ? { installmentMonths: form.installmentMonths } : {}),
@@ -362,6 +369,11 @@ export const Handover = () => {
                 ...form.extraPayments.map((p) => ({
                   method: p.method,
                   amountCenti: Math.round(p.amount * 100),
+                  // Spec D4 — each extra's own slip. Non-null is airtight via the
+                  // same confirm gate: validateConfirmPayment runs
+                  // extraPayments.every(extraPaymentComplete), and
+                  // extraPaymentComplete now requires slipUploadSessionId !== null.
+                  uploadSessionId: p.slipUploadSessionId!,
                   ...(p.approvalCode.trim() ? { approvalCode: p.approvalCode.trim() } : {}),
                   ...(p.merchantProvider ? { merchantProvider: p.merchantProvider } : {}),
                   ...(p.installmentMonths ? { installmentMonths: p.installmentMonths } : {}),
