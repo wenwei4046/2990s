@@ -56,6 +56,7 @@ interface OrderItem {
   lineTotal: number;
   productName: string | null;
   productImage: string | null;
+  remark: string | null;
 }
 
 interface MyOrderRow {
@@ -117,6 +118,7 @@ interface MineSoRow {
     qty: number | null;
     total_centi: number | null;
     variants: unknown;
+    remark?: string | null;
   }> | null;
 }
 
@@ -149,12 +151,14 @@ const useMyOrders = () =>
                 lineTotal: Math.round(g.display.totalCenti / 100),
                 productName: g.display.description,
                 productImage: null,
+                remark: g.display.remark,
               }
             : {
                 qty: g.lines[0]!.qty ?? 0,
                 lineTotal: Math.round((g.lines[0]!.total_centi ?? 0) / 100),
                 productName: g.lines[0]!.description ?? g.lines[0]!.item_code,
                 productImage: null,
+                remark: g.lines[0]!.remark ?? null,
               },
         );
         const total = Math.round((r.total_revenue_centi ?? 0) / 100);
@@ -996,6 +1000,7 @@ const OrderDetail = ({ order, onClose }: {
                   </div>
                   <div className={styles.detailItemBody}>
                     <div className={styles.detailItemName}>{it.productName ?? 'Product'}</div>
+                    {it.remark && <div className={styles.detailSectionMeta}>Remark: {it.remark}</div>}
                   </div>
                   <div className={styles.detailItemQty}>×{it.qty}</div>
                   <div className={styles.detailItemPrice}>

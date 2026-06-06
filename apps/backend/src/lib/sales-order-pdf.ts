@@ -67,6 +67,7 @@ type SoItem = {
   discount_centi: number;
   total_centi: number;
   variants: Record<string, unknown> | null;
+  remark?: string | null;
 };
 
 /* Mirrors flow-queries.ts `SoPayment`. Re-declared here to keep the PDF
@@ -99,10 +100,14 @@ const fmtRm = (centi: number, currency: string): string =>
 /* Internal / machine keys the customer never needs: sofa-split grouping +
    geometry (buildKey/cellIndex/x/y/rot, P3), the raw cells array, the build
    summary (rendered via the folded row instead), and the PWP keys (rendered
-   as dedicated PWP note lines — see pwpRewardNote / pwpTriggerNotes). */
+   as dedicated PWP note lines — see pwpRewardNote / pwpTriggerNotes). Also
+   'remark' (printed as its own "Remark:" note line below, not as a variant
+   pair) and 'extraAddonAmountRM' (an internal declared-extra money key — the
+   line price already includes it, so it must NEVER surface to the customer). */
 const VARIANT_KEYS_HIDDEN = new Set([
   'buildKey', 'cellIndex', 'x', 'y', 'rot', 'cells', 'summary',
   'pwp', 'pwpCode', 'pwpTriggerLabel', 'pwpOriginalTotal',
+  'remark', 'extraAddonAmountRM',
 ]);
 
 const variantSummary = (v: Record<string, unknown> | null): string => {
@@ -276,6 +281,14 @@ export async function generateSalesOrderPdf(
       pwpRewardNote(lead.variants),
       ...pwpTriggerNotes(g.lines.map((l) => l.item_code), pwpCodes),
     ].filter((n): n is NonNullable<typeof n> => n != null).map((n) => n.text);
+    /* Loo D3 — per-line operator remark prints as its own note line in the
+       Description cell. For a folded sofa build use the group's first remark;
+       otherwise the lead line's own remark. Suppressed from variantSummary via
+       VARIANT_KEYS_HIDDEN so it never double-prints. */
+    const remarkText = g.kind === 'sofa-build' && g.display
+      ? g.display.remark
+      : (typeof lead.remark === 'string' && lead.remark.trim() !== '' ? lead.remark : null);
+    if (remarkText) notes.push(`Remark: ${remarkText}`);
     if (g.kind === 'sofa-build' && g.display) {
       const d = g.display;
       const sub = [d.composition, d.description2].filter(Boolean).join(' · ');
