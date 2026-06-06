@@ -74,7 +74,6 @@ export interface HandoverForm {
    *  and on/before deliveryDate. Empty when "For further notice" (UFN). Maps to
    *  the SO's internal_expected_dd column; the API pairs it with deliveryDate. */
   processDate: string;
-  specialInstructions: string;
 
   addons: Record<string, AddonSelection>;
   paymentMethod: PaymentMethod;

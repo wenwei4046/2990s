@@ -37,6 +37,9 @@ export interface RawSoDisplayLine {
   discount_centi?: number | null;
   total_centi?: number | null;
   variants?: unknown;
+  /** Per-line operator remark (mfg_sales_order_items.remark). Optional —
+   *  legacy callers that don't select it simply fold without remarks. */
+  remark?: string | null;
 }
 
 /** One display row after folding: either a single original line, or a sofa
@@ -58,6 +61,8 @@ export interface SoDisplayGroup<T extends RawSoDisplayLine> {
     unitPriceCenti: number;
     discountCenti: number;
     totalCenti: number;
+    /** First non-empty remark in cellIndex order across the group; null if none. */
+    remark: string | null;
   };
 }
 
@@ -160,6 +165,7 @@ export function groupSoLinesForDisplay<T extends RawSoDisplayLine>(
         unitPriceCenti: ordered.reduce((s, l) => s + Number(l.unit_price_centi ?? 0), 0),
         discountCenti: Number(lead.discount_centi ?? 0),
         totalCenti: ordered.reduce((s, l) => s + Number(l.total_centi ?? 0), 0),
+        remark: ordered.find((l) => typeof l.remark === 'string' && l.remark.trim() !== '')?.remark ?? null,
       },
     });
   }

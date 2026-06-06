@@ -34,6 +34,7 @@ import {
   type BedframeOptionRow,
 } from '../lib/queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
+import { useSoSettingEnabled } from '../lib/so-maintenance/so-settings-queries';
 import { useMyQuickPicks, useDeletePersonalQuickPick } from '../lib/personal-quick-picks';
 import {
   useCart,
@@ -411,6 +412,18 @@ export const Configurator = () => {
   // target key/product changes the one-shot guard shouldn't stay latched.
   useEffect(() => { hydratedRef.current = false; }, [editKey, productId]);
 
+  // Per-line remark + extra charge (spec 2026-06-06, Loo) — keyed on the
+  // product page, stored in the cart snapshot, lands on the SO line. The
+  // card is feature-gated in SO Maintenance (pos_product_remark).
+  const remarkCardEnabled = useSoSettingEnabled('pos_product_remark');
+  const [lineRemark, setLineRemark] = useState('');
+  const [lineExtraRm, setLineExtraRm] = useState(0);
+  useEffect(() => { setLineRemark(''); setLineExtraRm(0); }, [editKey, productId]);
+  // Effective extra (whole MYR, per unit) — 0 when the card is gated off, so a
+  // mid-session toggle can never leave a hidden charge in the total. Declared up
+  // here because the size/bedframe/sofa totals below fold it in.
+  const effectiveExtraRm = remarkCardEnabled ? Math.max(0, Math.min(99999, Math.round(lineExtraRm || 0))) : 0;
+
   // Bedframe colour + option libraries (also used by <BedframeOptions>; React
   // Query dedupes). The parent needs them to rebuild bfSel labels + surcharges
   // when editing a bedframe line.
@@ -604,6 +617,8 @@ export const Configurator = () => {
         const choices = cfg.specialChoices?.[code] ?? [];
         return { id: code, label: addon?.label ?? cfg.specialLabels?.[i] ?? code, surcharge: addon ? specialSelSurchargeRM(addon, choices) : 0, choices };
       }));
+      setLineRemark(cfg.remark ?? '');
+      setLineExtraRm(cfg.extraAddonAmountRM ?? 0);
       hydratedRef.current = true;
     } else if (cfg.kind === 'bedframe') {
       if (bedframeColours.data == null || bedframeOptions.data == null || fabricLib.data == null) return;
@@ -665,6 +680,8 @@ export const Configurator = () => {
           .then((res) => { if (res.valid && res.type) setInsertedCodeType(res.type); })
           .catch(() => { /* keep 'pwp' default; server stays authoritative */ });
       }
+      setLineRemark(cfg.remark ?? '');
+      setLineExtraRm(cfg.extraAddonAmountRM ?? 0);
       hydratedRef.current = true;
     } else if (cfg.kind === 'sofa') {
       // Wait for fabric data to be ready — for mfg products this means both
@@ -719,6 +736,8 @@ export const Configurator = () => {
         return { id: code, label: addon?.label ?? cfg.specialLabels?.[i] ?? code, surcharge: addon ? specialSelSurchargeRM(addon, choices) : 0, choices };
       }));
       setSofaLegValue(cfg.sofaLegHeight ?? null);
+      setLineRemark(cfg.remark ?? '');
+      setLineExtraRm(cfg.extraAddonAmountRM ?? 0);
       hydratedRef.current = true;
     }
   }, [isEditing, editingLine, bedframeColours.data, bedframeOptions.data,
@@ -1072,10 +1091,10 @@ export const Configurator = () => {
   // Redeemed unit price: a promo with no set price is free (0); else the size's PWP price.
   const redeemedUnitPrice = pwpUnitPrice ?? 0;
   const bedframeBase = pwpActive ? redeemedUnitPrice : sizeBase;
-  const bedframeTotal = bedframeBase + bedframeSurcharge(bfSel) + bedframeFabricDelta;
+  const bedframeTotal = bedframeBase + bedframeSurcharge(bfSel) + bedframeFabricDelta + effectiveExtraRm;
   // Mattress (size) line total — PWP base when redeemed, else the size price.
   const sizeTotal = (pwpActive ? redeemedUnitPrice : sizeBase) + extrasTotal
-    + specialSelsSurcharge(mattressSpecialSel);
+    + specialSelsSurcharge(mattressSpecialSel) + effectiveExtraRm;
 
   /* PWP Code Voucher (0130/0132) — shared section for the bed frame + mattress
      reward configurators (discoverability, Chairman 2026-06-02). Always shown so
@@ -1138,6 +1157,37 @@ export const Configurator = () => {
       )}
     </RailSection>
   );
+
+  // Remark + extra-charge card (effectiveExtraRm computed near the state, above,
+  // so the totals can fold it in). Gated off in SO Maintenance → null.
+  const remarkExtraRailSection = remarkCardEnabled ? (
+    <RailSection title="Remark & extra charge" sub="Optional — prints on the sales order">
+      <label className={styles.sizeOtherField}>
+        <span className={styles.sizeOtherLabel}>Remark</span>
+        <textarea
+          className={styles.sizeOtherInput}
+          rows={2}
+          placeholder="Remark for this item…"
+          value={lineRemark}
+          maxLength={300}
+          onChange={(e) => setLineRemark(e.target.value)}
+          style={{ resize: 'vertical' }}
+        />
+      </label>
+      <label className={styles.sizeOtherField}>
+        <span className={styles.sizeOtherLabel}>Extra add-on amount (RM)</span>
+        <input
+          className={styles.sizeOtherInput}
+          type="number"
+          min={0}
+          step={1}
+          placeholder="0"
+          value={lineExtraRm || ''}
+          onChange={(e) => setLineExtraRm(Math.max(0, Math.min(99999, Math.round(Number(e.target.value) || 0))))}
+        />
+      </label>
+    </RailSection>
+  ) : null;
   // Required: size (active+priced) + colour + leg always; gap/divan/total also
   // for non-DIVAN. Specials are optional. Mirrors the server recompute's
   // required-ness so a gated Add-to-Cart never produces a 400.
@@ -1173,8 +1223,13 @@ export const Configurator = () => {
       category: String(p.category_id ?? '').toUpperCase(),
       ...(pwpActive && appliedPwpCode
         ? { pwp: true, pwpCode: appliedPwpCode, pwpTriggerLabel: crossPwpActive ? null : pwpEval.triggerLabel,
-            pwpOriginalTotal: sizeBase + bedframeSurcharge(bfSel) + bedframeFabricDelta }
+            pwpOriginalTotal: sizeBase + bedframeSurcharge(bfSel) + bedframeFabricDelta + effectiveExtraRm }
         : {}),
+      // Per-line remark + extra charge (spec 2026-06-06). The extra is already
+      // folded into bedframeTotal (and pwpOriginalTotal) — declared here only so
+      // the server's drift gate adds the same per-unit amount.
+      ...(remarkCardEnabled && lineRemark.trim() ? { remark: lineRemark.trim() } : {}),
+      ...(effectiveExtraRm > 0 ? { extraAddonAmountRM: effectiveExtraRm } : {}),
       ...(bfSel.gapId ? { gapId: bfSel.gapId, gapLabel: bfSel.gapLabel } : {}),
       legHeightId: bfSel.legId,
       legHeightLabel: bfSel.legLabel,
@@ -1216,8 +1271,13 @@ export const Configurator = () => {
       // already reflects the PWP base; the server re-validates the code at Confirm.
       ...(pwpActive && appliedPwpCode
         ? { pwp: true, pwpCode: appliedPwpCode, pwpTriggerLabel: crossPwpActive ? null : pwpEval.triggerLabel,
-            pwpOriginalTotal: sizeBase + extrasTotal + specialSelsSurcharge(mattressSpecialSel) }
+            pwpOriginalTotal: sizeBase + extrasTotal + specialSelsSurcharge(mattressSpecialSel) + effectiveExtraRm }
         : {}),
+      // Per-line remark + extra charge (spec 2026-06-06). The extra is already
+      // folded into sizeTotal (and pwpOriginalTotal) — declared here only so the
+      // server's drift gate adds the same per-unit amount.
+      ...(remarkCardEnabled && lineRemark.trim() ? { remark: lineRemark.trim() } : {}),
+      ...(effectiveExtraRm > 0 ? { extraAddonAmountRM: effectiveExtraRm } : {}),
       total: sizeTotal,
       summary: `${pickedSize.label}${extraSummary}`,
       addonExtras: extrasArr.length > 0 ? extrasArr : undefined,
@@ -1291,7 +1351,7 @@ export const Configurator = () => {
   ) : null;
   const sofaTotal = (pickedQP
     ? qpPickPrice + sofaFabricDelta
-    : (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? sofaFabricDelta : 0)) + sofaSpecialDelta + sofaLegSurcharge;
+    : (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? sofaFabricDelta : 0)) + sofaSpecialDelta + sofaLegSurcharge + effectiveExtraRm;
 
   // Sofas require a fabric + colour (G6) and — when offered — a leg height before
   // Add-to-Cart.
@@ -1329,7 +1389,10 @@ export const Configurator = () => {
         specialChoices: Object.fromEntries(sofaSpecialSel.map((s) => [s.id, s.choices ?? []])),
       } : {}),
       ...(sofaLegValue ? { sofaLegHeight: sofaLegValue } : {}),
-      total: pickedSofaRow.price + sofaFabricDelta + sofaSpecialDelta + sofaLegSurcharge,
+      // Per-line remark + extra charge (spec 2026-06-06) — folded into total once.
+      ...(remarkCardEnabled && lineRemark.trim() ? { remark: lineRemark.trim() } : {}),
+      ...(effectiveExtraRm > 0 ? { extraAddonAmountRM: effectiveExtraRm } : {}),
+      total: pickedSofaRow.price + sofaFabricDelta + sofaSpecialDelta + sofaLegSurcharge + effectiveExtraRm,
       summary: lShape
         ? `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${quickFlip}-facing · ${activeDepth}"${fabricSuffix}`
         : `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${activeDepth}"${fabricSuffix}`,
@@ -1372,7 +1435,10 @@ export const Configurator = () => {
         specialChoices: Object.fromEntries(sofaSpecialSel.map((s) => [s.id, s.choices ?? []])),
       } : {}),
       ...(sofaLegValue ? { sofaLegHeight: sofaLegValue } : {}),
-      total: qpPickPrice + sofaFabricDelta + sofaSpecialDelta + sofaLegSurcharge,
+      // Per-line remark + extra charge (spec 2026-06-06) — folded into total once.
+      ...(remarkCardEnabled && lineRemark.trim() ? { remark: lineRemark.trim() } : {}),
+      ...(effectiveExtraRm > 0 ? { extraAddonAmountRM: effectiveExtraRm } : {}),
+      total: qpPickPrice + sofaFabricDelta + sofaSpecialDelta + sofaLegSurcharge + effectiveExtraRm,
       summary: `${label} · ${activeDepth}"${fabricSuffix}`,
     };
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
@@ -1714,6 +1780,7 @@ export const Configurator = () => {
               <SpecialAddonsPicker addons={sofaSpecialAddons} value={sofaSpecialSel} onChange={setSofaSpecialSel} />
             }
             legBlock={sofaLegBlock}
+            remarkBlock={remarkExtraRailSection}
           />
         ) : (
           <CustomBuilder
@@ -1733,6 +1800,9 @@ export const Configurator = () => {
             legHeight={sofaLegValue}
             legSurchargeRm={sofaLegSurcharge}
             legRequired={sofaLegRequired}
+            remarkBlock={remarkExtraRailSection}
+            remark={remarkCardEnabled ? lineRemark : ''}
+            extraAmountRm={effectiveExtraRm}
             onAdded={() => navigate(isEditing ? '/cart' : '/catalog')}
           />
         )
@@ -1768,6 +1838,7 @@ export const Configurator = () => {
             {/* PWP redeem — shared bed frame + mattress section. Shown once a size
                 is picked (it prices off the size's PWP price). */}
             {pickedSize && pwpRailSection}
+            {pickedSize && remarkExtraRailSection}
 
             <RailSection title={`About this ${p.category_id}`}>
               {p.detail ? (
@@ -1884,6 +1955,7 @@ export const Configurator = () => {
 
             {/* PWP redeem — shared bed frame + mattress section (see pwpRailSection). */}
             {isBedframe && pwpRailSection}
+            {remarkExtraRailSection}
 
             <RailSection title="Build">
               <BedframeOptions
@@ -2218,6 +2290,9 @@ interface SofaQuickPickProps {
   specialAddonsBlock?: React.ReactNode;
   /** Sofa leg-height picker (Loo 2026-06-03), rendered in the rail under fabric. */
   legBlock?: React.ReactNode;
+  /** Product-page remark + extra-charge card (spec 2026-06-06), rendered in the
+   *  rail under the leg picker. Parent-owned; null when gated off. */
+  remarkBlock?: React.ReactNode;
   /** Global Quick Picks (Master-Admin-curated, shared). */
   globalQuickPicks?: QuickPickItem[];
   /** This salesperson's personal Quick Picks ("Yours", per-device). */
@@ -2351,7 +2426,7 @@ const heroAnchorStyle = (
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
-const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, specialAddonsBlock, legBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
+const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, specialAddonsBlock, legBlock, remarkBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
   // Hide bundles not activated for this Model. The productSchema refine
   // guarantees ≥1 active+priced bundle exists for every sofa SKU.
   const activeRows = useMemo(
@@ -2557,6 +2632,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
         {fabricBlock}
         {specialAddonsBlock}
         {legBlock}
+        {remarkBlock}
       </aside>
 
       <section className={styles.qpHero}>

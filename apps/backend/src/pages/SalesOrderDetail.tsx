@@ -1098,6 +1098,11 @@ export const SalesOrderDetail = () => {
                   <td>
                     <div className={styles.codeCell}>{it.item_code}</div>
                     {it.description && <div className={styles.muted}>{it.description}</div>}
+                    {it.remark && (
+                      <div className={styles.muted} style={{ fontStyle: 'italic' }}>
+                        Remark: {it.remark}
+                      </div>
+                    )}
                   </td>
                   {/* Commander 2026-05-28 — "Description 2": the HOOKKA-style
                       one-line variant/spec summary in its own column. Prefers the

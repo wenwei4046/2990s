@@ -452,3 +452,86 @@ describe('recomputeFromSnapshot — combo charges SELLING, not cost', () => {
     expect(r.drift).toBe(true);
   });
 });
+
+/* ── Declared per-line extra charge (spec 2026-06-06 D1) ──────────────────────
+   The POS product page lets sales key an "extra add-on amount" (whole MYR) per
+   line. The POS FOLDS that amount into the submitted selling price AND declares
+   it on variants.extraAddonAmountRM. The drift gate adds the SAME declared
+   amount to its authoritative figure, so a price bump backed by a declaration
+   passes while an UNDECLARED bump still drifts (the gate is never weakened).
+   Clamped ≥ 0 — this field can never discount. Never touches the cost path,
+   the PWP base, or the trust-the-operator (else) branch. */
+const extraProduct: ProductRowLite = {
+  code: 'AKKA-FIRM-K', category: 'MATTRESS',
+  base_price_sen: null, price1_sen: null, cost_price_sen: 100000,
+  seat_height_prices: null, base_model: null, sell_price_sen: 299000,
+};
+
+describe('recomputeFromSnapshot — declared extraAddonAmountRM (spec D1)', () => {
+  it('accepts a client price that folds in the declared extra (no drift)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
+        unitPriceCenti: 299000 + 20000,
+        variants: { extraAddonAmountRM: 200 } },
+      extraProduct, null, null,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(319000);
+  });
+
+  it('still drifts when the client inflates beyond the declared extra', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
+        unitPriceCenti: 299000 + 50000,
+        variants: { extraAddonAmountRM: 200 } },
+      extraProduct, null, null,
+    );
+    expect(r.drift).toBe(true);
+  });
+
+  it('a negative declared extra is clamped to 0 (cannot discount via this field)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
+        unitPriceCenti: 299000,
+        variants: { extraAddonAmountRM: -200 } },
+      extraProduct, null, null,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(299000);
+  });
+
+  it('no declared extra → behavior unchanged (catalog price authoritative)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
+        unitPriceCenti: 299000, variants: {} },
+      extraProduct, null, null,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(299000);
+  });
+
+  it('a garbage (non-numeric) declared extra is treated as 0 (NaN-safe, no false reject)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
+        unitPriceCenti: 299000,
+        variants: { extraAddonAmountRM: 'abc' as never } },
+      extraProduct, null, null,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(299000);
+  });
+
+  it('the declared extra never touches the cost path (unit_cost_sen unchanged)', () => {
+    const withExtra = recomputeFromSnapshot(
+      { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
+        unitPriceCenti: 319000, variants: { extraAddonAmountRM: 200 } },
+      extraProduct, null, null,
+    );
+    const without = recomputeFromSnapshot(
+      { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
+        unitPriceCenti: 299000, variants: {} },
+      extraProduct, null, null,
+    );
+    expect(withExtra.unit_cost_sen).toBe(without.unit_cost_sen);
+  });
+});

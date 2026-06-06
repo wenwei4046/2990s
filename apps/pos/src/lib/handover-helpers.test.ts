@@ -24,7 +24,6 @@ const baseForm: HandoverForm = {
   emergencyName: '', emergencyRelation: '', emergencyPhone: '',
   deliveryDate: '', deliveryDateLater: false,
   processDate: '',
-  specialInstructions: '',
   addons: {}, paymentMethod: '',
   amountPaid: 0, extraPayments: [], additionalDeliveryFee: 0, crossCategorySourceSo: '',
   paymentPreset: 'full', approvalCode: '',

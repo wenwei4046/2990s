@@ -83,6 +83,12 @@ export const TargetDateStep = ({
         />
       )}
 
+      {form.deliveryDateLater && (
+        <p className={styles.methodHint}>
+          We'll contact the customer to confirm a delivery date before scheduling.
+        </p>
+      )}
+
       {/* Process Date (factory start) — shown once a delivery date is picked.
           Hidden for "For further notice", where both dates stay open.
           Bounded today..deliveryDate. */}
@@ -103,14 +109,6 @@ export const TargetDateStep = ({
         </Field>
       )}
 
-      <Field label="Special instructions (optional)">
-        <textarea
-          rows={3}
-          value={form.specialInstructions}
-          onChange={(e) => update('specialInstructions', e.target.value)}
-          placeholder="Lift available, leave at concierge, etc."
-        />
-      </Field>
     </section>
   );
 };

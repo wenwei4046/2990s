@@ -637,17 +637,17 @@ mfgSalesOrders.get('/mine', async (c) => {
      fetch. Group non-cancelled lines by doc_no → each item the board needs:
      { item_code, description, qty, total_centi, variants }. */
   const docNos = rows.map((r) => r.doc_no).filter((x): x is string => !!x);
-  const itemsByDoc = new Map<string, Array<{ item_code: string; description: string | null; qty: number; total_centi: number; variants: unknown }>>();
+  const itemsByDoc = new Map<string, Array<{ item_code: string; description: string | null; qty: number; total_centi: number; variants: unknown; remark: string | null }>>();
   if (docNos.length > 0) {
     const { data: itemRows } = await sb
       .from('mfg_sales_order_items')
-      .select('doc_no, item_code, description, qty, total_centi, variants')
+      .select('doc_no, item_code, description, qty, total_centi, variants, remark')
       .in('doc_no', docNos)
       .eq('cancelled', false)
       .order('created_at', { ascending: true });
-    for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_code: string; description: string | null; qty: number; total_centi: number; variants: unknown }>) {
+    for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_code: string; description: string | null; qty: number; total_centi: number; variants: unknown; remark: string | null }>) {
       const arr = itemsByDoc.get(it.doc_no) ?? [];
-      arr.push({ item_code: it.item_code, description: it.description, qty: it.qty, total_centi: it.total_centi, variants: it.variants });
+      arr.push({ item_code: it.item_code, description: it.description, qty: it.qty, total_centi: it.total_centi, variants: it.variants, remark: it.remark ?? null });
       itemsByDoc.set(it.doc_no, arr);
     }
   }
@@ -1597,6 +1597,29 @@ mfgSalesOrders.post('/', async (c) => {
   /* P3 — keep each sofa item's module price map so the split below distributes
      the build total with the SAME weights the drift gate priced from. */
   const sofaModulePricesByIdx = new Map<number, Record<string, number> | null>();
+  /* Spec 2026-06-06 (D5) — the POS product-page extra charge is feature-
+     gated in SO Maintenance (so_settings.pos_product_remark). When OFF, a
+     line that still declares an extra is rejected EXPLICITLY (never silently
+     dropped or silently charged — CF-cap lesson: surface, don't swallow).
+     Remarks themselves are always accepted (free text, no money). */
+  const hasDeclaredExtra = items.some((it) =>
+    Number((it.variants as { extraAddonAmountRM?: unknown } | null)?.extraAddonAmountRM ?? 0) > 0);
+  if (hasDeclaredExtra) {
+    const { data: flagRow, error: flagErr } = await sb
+      .from('so_settings').select('enabled').eq('key', 'pos_product_remark').maybeSingle();
+    if (flagErr) {
+      await rollbackPwpClaims();
+      return c.json({ error: 'lookup_failed', reason: flagErr.message }, 500);
+    }
+    if (flagRow && (flagRow as { enabled: boolean }).enabled === false) {
+      await rollbackPwpClaims();
+      return c.json({
+        error: 'extra_amount_disabled',
+        reason: 'Product-page extra charge is turned off in SO Maintenance.',
+      }, 400);
+    }
+  }
+
   /* Subrequest diet (Loo 2026-06-06) — prefetch every line's fabric rows in
      TWO `in()` queries (was 2 × lines), and memoize the per-(base_model,
      depth) sofa module-price load so N lines of the same Model cost one
@@ -1747,6 +1770,12 @@ mfgSalesOrders.post('/', async (c) => {
          summary (the long attribute string). Server-generated from the line's
          variants so it stays the single source of truth. */
       description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
+      /* Spec 2026-06-06 — per-line operator remark from the POS product page.
+         Same column SoLineCard edits (mfg_sales_order_items.remark). */
+      remark: (() => {
+        const r = (it.variants as { remark?: unknown } | null)?.remark;
+        return typeof r === 'string' && r.trim() !== '' ? r.trim() : null;
+      })(),
       uom: (it.uom as string) ?? 'UNIT',
       qty,
       unit_price_centi: unit,
@@ -1846,6 +1875,7 @@ mfgSalesOrders.post('/', async (c) => {
             leg_price_sen:           i === 0 ? (recomputed?.leg_price_sen ?? 0) : 0,
             special_order_price_sen: i === 0 ? (recomputed?.special_order_sen ?? 0) : 0,
             custom_specials:         i === 0 ? (recomputed?.custom_specials ?? null) : null,
+            remark: i === 0 ? baseRow.remark : null,
           };
         });
       }
@@ -1997,6 +2027,10 @@ mfgSalesOrders.post('/', async (c) => {
         item_code: spec.itemCode,
         description: spec.description,
         description2: null,
+        /* Spec 2026-06-06 — key parity with goods rows (PostgREST null-fills
+           missing keys, but the TS row type from baseRow now requires it).
+           Service lines carry no operator product-page remark. */
+        remark: null,
         uom: 'UNIT',
         qty: spec.qty,
         unit_price_centi: spec.unitPriceSen,
