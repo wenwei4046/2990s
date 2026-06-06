@@ -3,6 +3,8 @@ import { useAllStaff, useStaff } from '../../lib/staff';
 import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
 import { Field } from './Field';
 import { CountryPhoneInput } from '../CountryPhoneInput';
+import { CustomerNameSearch } from '../CustomerNameSearch';
+import type { CustomerSearchHit } from '../../lib/customer-search';
 import styles from '../../pages/Handover.module.css';
 
 /* Shown until /so-dropdown-options loads — mirrors the seeded customer_type
@@ -27,6 +29,22 @@ export const CustomerStep = ({
      the full picker (entering an order on behalf of someone is their job). */
   const lockedToSelf = me.data?.role === 'sales';
 
+  /* Returning-customer pick (Loo 2026-06-06) — autofill EVERYTHING the
+     snapshot carries: contact + customer type here, plus the Address step's
+     fields so the salesperson doesn't re-key them. All editable after. */
+  const pickCustomer = (h: CustomerSearchHit) => {
+    update('name', h.debtorName);
+    if (h.phone) update('phone', h.phone);
+    if (h.email) update('email', h.email);
+    if (h.customerType) update('customerType', h.customerType);
+    if (h.address1) update('fullAddress', h.address1);
+    if (h.address2) update('addressLine2', h.address2);
+    if (h.city) update('city', h.city);
+    if (h.postcode) update('postcode', h.postcode);
+    if (h.customerState) update('state', h.customerState);
+    if (h.buildingType) update('buildingType', h.buildingType);
+  };
+
   return (
     <section className={styles.stepBody}>
       <h2 className={styles.stepTitle}>Customer additional info</h2>
@@ -36,13 +54,12 @@ export const CustomerStep = ({
 
       <div className="fieldRow">
         <Field label="Full name *">
-          <input
-            type="text"
+          <CustomerNameSearch
             required
-            value={form.name}
-            onChange={(e) => update('name', e.target.value)}
-            autoComplete="name"
             autoFocus
+            value={form.name}
+            onChange={(v) => update('name', v)}
+            onPick={pickCustomer}
           />
         </Field>
         <Field label="Phone *">

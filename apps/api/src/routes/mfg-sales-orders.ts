@@ -863,6 +863,66 @@ mfgSalesOrders.get('/cross-category-match', async (c) => {
     : c.json({ found: false });
 });
 
+/* GET /customer-search?name= — POS customer-name autocomplete (Loo
+   2026-06-06: "when key in customer name, search the customer list, give
+   option for same name"). Searches past SO headers by name (ilike) and
+   dedupes to ONE entry per (lower-trim name, phone) identity — the same key
+   as migration 0144's customers unique index — keeping the NEWEST order's
+   contact + address snapshot for the autofill. Header-based (not the
+   customers registry) so it covers ALL order history today; the registry
+   only has rows minted since 0144 went live (backfill = Phase 2). Phone is
+   returned in full — this is a staff-only surface behind auth, and the
+   phone is exactly how sales tell two same-name customers apart.
+   Read-only: never mints a customer row. Registered before /:docNo so the
+   static path isn't captured as a docNo. */
+mfgSalesOrders.get('/customer-search', async (c) => {
+  const sb = c.get('supabase');
+  const q = (c.req.query('name') ?? '').trim();
+  if (q.length < 2) return c.json({ customers: [] });
+  // Escape LIKE metacharacters so a literal "%" in a name can't widen the scan.
+  const esc = q.replace(/[\\%_]/g, (m) => `\\${m}`);
+  const { data, error } = await sb
+    .from('mfg_sales_orders')
+    .select('doc_no, debtor_name, phone, email, customer_type, address1, address2, city, postcode, customer_state, building_type, created_at')
+    .ilike('debtor_name', `%${esc}%`)
+    .neq('status', 'CANCELLED')
+    .order('created_at', { ascending: false })
+    .limit(60);
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  type Row = {
+    doc_no: string; debtor_name: string | null; phone: string | null;
+    email: string | null; customer_type: string | null;
+    address1: string | null; address2: string | null; city: string | null;
+    postcode: string | null; customer_state: string | null;
+    building_type: string | null; created_at: string;
+  };
+  const seen = new Set<string>();
+  const customers: Array<Record<string, unknown>> = [];
+  for (const r of (data ?? []) as Row[]) {
+    const name = (r.debtor_name ?? '').trim();
+    if (!name) continue;
+    const key = `${name.toLowerCase()}|${(r.phone ?? '').trim()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    customers.push({
+      debtorName:    name,
+      phone:         r.phone,
+      email:         r.email,
+      customerType:  r.customer_type,
+      address1:      r.address1,
+      address2:      r.address2,
+      city:          r.city,
+      postcode:      r.postcode,
+      customerState: r.customer_state,
+      buildingType:  r.building_type,
+      lastDocNo:     r.doc_no,
+      lastOrderAt:   r.created_at,
+    });
+    if (customers.length >= 8) break;
+  }
+  return c.json({ customers });
+});
+
 mfgSalesOrders.get('/:docNo', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo');
   const [h, i] = await Promise.all([

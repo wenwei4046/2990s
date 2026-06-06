@@ -1,0 +1,68 @@
+/* CustomerNameSearch — returning-customer dropdown under the name input.
+   Brand tokens per design-system; mirrors the suggest-list pattern the
+   Backend debtor autocomplete uses. */
+
+.wrap {
+  position: relative;
+}
+
+.wrap input {
+  width: 100%;
+}
+
+.list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--c-paper, #FFFDF8);
+  border: 1px solid var(--border, #E6DFD5);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(34, 31, 32, 0.10);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--c-ink, #221F20);
+}
+
+.item:hover,
+.item:focus-visible {
+  background: var(--c-cream, #F6EFE3);
+}
+
+.icon {
+  flex: 0 0 auto;
+  color: var(--fg-muted, #8A8378);
+}
+
+.name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: var(--fs-12, 12px);
+  color: var(--fg-muted, #8A8378);
+  font-variant-numeric: tabular-nums;
+}

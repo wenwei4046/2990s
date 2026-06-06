@@ -31,6 +31,8 @@ import { useNavigate } from 'react-router';
 import { Button } from '@2990s/design-system';
 import { Topbar } from '../components/Topbar';
 import { CountryPhoneInput } from '../components/CountryPhoneInput';
+import { CustomerNameSearch } from '../components/CustomerNameSearch';
+import type { CustomerSearchHit } from '../lib/customer-search';
 import { useLocalities, useNewOrderMutation } from '../lib/queries';
 import { useSoDropdownValues } from '../lib/so-maintenance/so-dropdown-options-queries';
 
@@ -109,6 +111,24 @@ export const NewOrder = () => {
     setForm((cur) => ({ ...cur, [k]: e.target.value }));
   };
 
+  /* Returning-customer pick (Loo 2026-06-06) — autofill every field the
+     snapshot carries; the salesperson can still edit any of them. */
+  const pickCustomer = (h: CustomerSearchHit) => {
+    setForm((cur) => ({
+      ...cur,
+      customerName:  h.debtorName,
+      phone:         h.phone ?? cur.phone,
+      email:         h.email ?? cur.email,
+      customerType:  h.customerType ?? cur.customerType,
+      buildingType:  h.buildingType ?? cur.buildingType,
+      address1:      h.address1 ?? cur.address1,
+      address2:      h.address2 ?? cur.address2,
+      customerState: h.customerState ?? cur.customerState,
+      city:          h.city ?? cur.city,
+      postcode:      h.postcode ?? cur.postcode,
+    }));
+  };
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -153,11 +173,12 @@ export const NewOrder = () => {
             <div style={sectionEyebrow}>Customer</div>
             <div style={gridStyle}>
               <Field label="Customer name *" colSpan={2}>
-                <input
+                <CustomerNameSearch
                   value={form.customerName}
-                  onChange={setField('customerName')}
+                  onChange={(v) => setForm((cur) => ({ ...cur, customerName: v }))}
+                  onPick={pickCustomer}
                   placeholder="Full name"
-                  style={inputStyle}
+                  inputStyle={inputStyle}
                   autoFocus
                 />
               </Field>
