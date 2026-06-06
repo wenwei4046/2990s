@@ -3873,7 +3873,7 @@ mfgSalesOrders.delete('/:docNo/items/:itemId/photos/:photoKey', async (c) => {
 // drop in a follow-up migration once live data is migrated.
 const PAYMENT_COLS =
   'id, so_doc_no, paid_at, method, merchant_provider, installment_months, ' +
-  'online_type, approval_code, amount_centi, account_sheet, collected_by, note, ' +
+  'online_type, approval_code, amount_centi, account_sheet, slip_key, collected_by, note, ' +
   'created_at, created_by';
 
 mfgSalesOrders.get('/:docNo/payments', async (c) => {
@@ -3919,6 +3919,9 @@ const paymentCreateSchema = z.object({
   accountSheet:       z.string().optional().nullable(),
   collectedBy:        z.string().uuid().optional().nullable(),
   note:               z.string().optional().nullable(),
+  /* Spec D4 (2026-06-06) — every payment carries its own slip. The client
+     uploads via /slips/init + confirm and sends the session id here. */
+  uploadSessionId:    z.string().min(1),
 });
 
 mfgSalesOrders.post('/:docNo/payments', async (c) => {
@@ -3934,6 +3937,40 @@ mfgSalesOrders.post('/:docNo/payments', async (c) => {
   const parsed = paymentCreateSchema.safeParse(body);
   if (!parsed.success) return c.json({ error: 'invalid_body', issues: parsed.error.issues }, 400);
   const p = parsed.data;
+
+  /* Spec D6 — server-side overpayment guard. The SO total is authoritative;
+     Σ(ledger) + this payment may never exceed it. Honest error: the client
+     shows the remaining balance. */
+  const { data: soTotalRow, error: totalErr } = await sb
+    .from('mfg_sales_orders').select('total_revenue_centi').eq('doc_no', docNo).maybeSingle();
+  if (totalErr) return c.json({ error: 'lookup_failed', reason: totalErr.message }, 500);
+  const totalCenti = Number((soTotalRow as { total_revenue_centi: number | null } | null)?.total_revenue_centi ?? 0);
+  const { data: paidRows, error: paidErr } = await sb
+    .from('mfg_sales_order_payments').select('amount_centi').eq('so_doc_no', docNo);
+  if (paidErr) return c.json({ error: 'lookup_failed', reason: paidErr.message }, 500);
+  const paidCenti = (paidRows ?? []).reduce((s, r) => s + Number((r as { amount_centi: number }).amount_centi ?? 0), 0);
+  if (totalCenti > 0 && paidCenti + p.amountCenti > totalCenti) {
+    return c.json({
+      error: 'over_payment',
+      reason: `Payment exceeds the order total. Balance: ${((totalCenti - paidCenti) / 100).toFixed(2)}`,
+      balanceCenti: Math.max(0, totalCenti - paidCenti),
+    }, 400);
+  }
+
+  /* Spec D4 — resolve the slip upload session → committed R2 key. Required:
+     a payment without a slip is rejected (same vocabulary as the order-level
+     slip_required guard). Mirrors the SO-create resolve. */
+  const { data: slipRow, error: slipErr } = await sb
+    .from('pending_slip_uploads')
+    .select('r2_key, status')
+    .eq('upload_session_id', p.uploadSessionId)
+    .maybeSingle();
+  if (slipErr) return c.json({ error: 'lookup_failed', reason: slipErr.message }, 500);
+  const slipRowT = slipRow as { r2_key: string | null; status: string } | null;
+  if (!slipRowT || slipRowT.status !== 'uploaded' || !slipRowT.r2_key) {
+    return c.json({ error: 'slip_required', reason: 'Upload the payment slip first.' }, 400);
+  }
+  const paymentSlipKey = slipRowT.r2_key;
 
   // Method-scoped fields per the cascade:
   //   merchant    → merchant_provider + installment_months (0 / null = One-off)
@@ -3960,11 +3997,19 @@ mfgSalesOrders.post('/:docNo/payments', async (c) => {
     approval_code:      p.approvalCode ?? null,
     amount_centi:       p.amountCenti,
     account_sheet:      p.accountSheet ?? null,
+    slip_key:           paymentSlipKey,
     collected_by:       p.collectedBy ?? null,
     note:               p.note ?? null,
     created_by:         user.id,
   }).select(PAYMENT_COLS).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+
+  /* Promote — 'promoted' rows are excluded from the slip reaper (same dance
+     as the SO-create slip). Best-effort: a failed promote never blocks the
+     payment (the slip_key is already persisted on the row). */
+  await sb.from('pending_slip_uploads')
+    .update({ status: 'promoted', promoted_at: new Date().toISOString() })
+    .eq('upload_session_id', p.uploadSessionId);
 
   /* Post-merge stitch — wire ADD_PAYMENT into the PR-D audit ledger.
      Field-changes list mirrors what the user typed so the History panel
@@ -4018,6 +4063,39 @@ mfgSalesOrders.delete('/:docNo/payments/:id', async (c) => {
   });
 
   return c.json({ ok: true });
+});
+
+/* Spec D4 — per-payment slip view. Same presign helper + vocabulary as the
+   order-level /:docNo/slip-url route; legacy rows (slip_key NULL) →
+   no_slip_attached and the UI falls back to the order slip. */
+mfgSalesOrders.get('/:docNo/payments/:id/slip-url', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const id = c.req.param('id');
+  const { data: row, error } = await sb
+    .from('mfg_sales_order_payments')
+    .select('so_doc_no, slip_key')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) return c.json({ error: 'db_fetch_failed', detail: error.message }, 500);
+  const r = row as { so_doc_no: string; slip_key: string | null } | null;
+  if (!r || r.so_doc_no !== docNo) return c.json({ error: 'not_found' }, 404);
+  if (!r.slip_key) return c.json({ error: 'no_slip_attached' }, 400);
+
+  const bindings = slipBindings(c.env);
+  const url = await presign({
+    bucket: bindings.bucketName,
+    region: 'auto',
+    accessKeyId: bindings.accessKeyId,
+    secretAccessKey: bindings.secretAccessKey,
+    endpoint: bindings.endpoint,
+    key: r.slip_key,
+    method: 'GET',
+    expiresInSeconds: 5 * 60,
+  });
+  return c.json({
+    url,
+    contentType: mimeFromKey(r.slip_key),
+    expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+  });
 });
 
 // ── Debtor lookup — autocomplete from prior SOs ───────────────────────
