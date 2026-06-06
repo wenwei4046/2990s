@@ -23,12 +23,23 @@ import {
 } from 'lucide-react';
 import { Button, IconButton } from '@2990s/design-system';
 import { groupSoLinesForDisplay } from '@2990s/shared/so-line-display';
+import { PAYMENT_METHOD_CODES } from '@2990s/shared/payment-methods';
 import { useAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import { Topbar } from '../components/Topbar';
 import { CountryPhoneInput } from '../components/CountryPhoneInput';
+import { SlipUploadStep } from '../components/SlipUploadStep';
+import {
+  MERCHANT_FALLBACK,
+  INSTALLMENT_FALLBACK,
+  parseTermMonths,
+} from '../components/handover/AddonsPaymentStep';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocalities, useSalesStats } from '../lib/queries';
+import {
+  usePaymentMethodLabels,
+  useSoDropdownValues,
+} from '../lib/so-maintenance/so-dropdown-options-queries';
 import { useStaff } from '../lib/staff';
 import styles from './OrderStatus.module.css';
 
@@ -878,6 +889,32 @@ const OrderDetail = ({ order, onClose }: {
     return res;
   };
 
+  /* Record-payment full set (spec 2026-06-06 D4/D6) — method cascade synced
+     with SO Maintenance (same hooks as the handover), per-payment slip,
+     ledger history. */
+  const methodLabels = usePaymentMethodLabels() as Record<string, string>;
+  const merchants = useSoDropdownValues('payment_merchant', MERCHANT_FALLBACK);
+  const onlineTypes = useSoDropdownValues('online_type', []);
+  const installmentPlans = useSoDropdownValues('installment_plan', INSTALLMENT_FALLBACK);
+  const [payMethod, setPayMethod] = useState<'merchant' | 'transfer' | 'cash' | 'installment'>('cash');
+  const [payMerchant, setPayMerchant] = useState('');
+  const [payOnlineType, setPayOnlineType] = useState('');
+  const [payInstallmentMonths, setPayInstallmentMonths] = useState<number | null>(null);
+  const [paySlipSession, setPaySlipSession] = useState<string | null>(null);
+  /* Slip uploader remount key — a recorded payment must reset the uploader
+     to idle (its internal state is otherwise sticky). */
+  const [slipResetKey, setSlipResetKey] = useState(0);
+  const paymentsQ = useQuery({
+    queryKey: ['so-payments', order.id],
+    queryFn: async () => {
+      const res = await authedFetch(`/mfg-sales-orders/${order.id}/payments`, { method: 'GET' });
+      return ((await res.json()) as { payments: Array<{
+        id: string; paid_at: string; method: string; approval_code: string | null;
+        amount_centi: number; slip_key: string | null;
+      }> }).payments;
+    },
+  });
+
   // Header edit → PATCH /mfg-sales-orders/:docNo.
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -891,41 +928,36 @@ const OrderDetail = ({ order, onClose }: {
     },
   });
 
-  // Map the SO header payment_method → the ledger enum. 2026-06-06
-  // payment-method unify: 'installment' is now first-class on the payments
-  // route, so it passes through instead of folding into 'merchant'. We don't
-  // forward an installmentMonths term here — the /mine payload doesn't carry
-  // it, and the SO header already tracks the plan length. Anything
-  // unrecognised defaults to cash.
-  const paymentMethodFor = (): { method: 'merchant' | 'transfer' | 'cash' | 'installment' } => {
-    const m = (order.paymentMethod ?? '').toLowerCase();
-    if (m === 'merchant' || m === 'transfer' || m === 'cash' || m === 'installment') return { method: m };
-    return { method: 'cash' };
-  };
-
-  // Record payment → POST /mfg-sales-orders/:docNo/payments (SO ledger). The SO
-  // has no slip-image field; approval_code is the proof (matches how the backend
-  // records SO payments).
+  // Record payment → POST /mfg-sales-orders/:docNo/payments (SO ledger). Full
+  // set (spec D4/D6): method cascade synced with SO Maintenance, a REQUIRED
+  // slip per payment, approval code, server-side overpay guard.
   const paymentMutation = useMutation({
     mutationFn: async () => {
       const amount = additionalPaid;
-      if (amount <= 0) return;
-      const { method } = paymentMethodFor();
+      if (amount <= 0 || !paySlipSession) return;
       const today = new Date().toISOString().slice(0, 10);
       await authedFetch(`/mfg-sales-orders/${order.id}/payments`, {
         method: 'POST',
         body: JSON.stringify({
           paidAt: today,
-          method,
+          method: payMethod,
           amountCenti: Math.round(amount * 100),
+          ...(payMethod === 'merchant' ? { merchantProvider: payMerchant || null } : {}),
+          ...(payMethod === 'merchant' || payMethod === 'installment'
+            ? { installmentMonths: payInstallmentMonths } : {}),
+          ...(payMethod === 'transfer' ? { onlineType: payOnlineType || null } : {}),
           ...(edited.approvalCode?.trim() ? { approvalCode: edited.approvalCode.trim() } : {}),
           ...(user?.id ? { collectedBy: user.id } : {}),
+          uploadSessionId: paySlipSession,
         }),
       });
     },
     onSuccess: () => {
       setPaymentAdd('');
+      setPaySlipSession(null);
+      setSlipResetKey((k) => k + 1);
       queryClient.invalidateQueries({ queryKey: ['my-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['so-payments', order.id] });
     },
   });
 
@@ -1181,8 +1213,70 @@ const OrderDetail = ({ order, onClose }: {
               <span>{paidPct}% collected</span>
               <span>Threshold · 50%</span>
             </div>
+            {(paymentsQ.data ?? []).length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                {(paymentsQ.data ?? []).map((p) => (
+                  <div key={p.id} className={styles.detailKV}>
+                    <span>{p.paid_at} · {methodLabels[p.method] ?? p.method}</span>
+                    <span>
+                      <span className={styles.detailItemPriceUnit}>RM</span>
+                      {fmtMoney(Math.round(p.amount_centi / 100))}
+                      {p.approval_code ? <em> · {p.approval_code}</em> : null}
+                    </span>
+                  </div>
+                ))}
+                <div className={styles.detailPayLegend}>
+                  <span>{(paymentsQ.data ?? []).length} payment{(paymentsQ.data ?? []).length > 1 ? 's' : ''} recorded</span>
+                </div>
+              </div>
+            )}
             {editable && (
               <>
+                <div className={styles.detailFieldGrid} style={{ marginTop: 12 }}>
+                  <DetailField label="Method *" disabled={false}>
+                    <select value={payMethod} onChange={(e) => {
+                      const m = e.target.value as typeof payMethod;
+                      setPayMethod(m);
+                      if (m !== 'merchant') setPayMerchant('');
+                      if (m !== 'merchant' && m !== 'installment') setPayInstallmentMonths(null);
+                      if (m !== 'transfer') setPayOnlineType('');
+                    }}>
+                      {PAYMENT_METHOD_CODES.map((code) => (
+                        <option key={code} value={code}>{methodLabels[code] ?? code}</option>
+                      ))}
+                    </select>
+                  </DetailField>
+                  {payMethod === 'merchant' && (
+                    <DetailField label="Merchant *" disabled={false}>
+                      <select value={payMerchant} onChange={(e) => setPayMerchant(e.target.value)}>
+                        <option value="">Select…</option>
+                        {merchants.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                      </select>
+                    </DetailField>
+                  )}
+                  {payMethod === 'transfer' && (
+                    <DetailField label="Online type" disabled={false}>
+                      <select value={payOnlineType} onChange={(e) => setPayOnlineType(e.target.value)}>
+                        <option value="">Select…</option>
+                        {onlineTypes.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                    </DetailField>
+                  )}
+                  {(payMethod === 'merchant' || payMethod === 'installment') && (
+                    <DetailField label="Installment term" disabled={false}>
+                      <select
+                        value={payInstallmentMonths ?? ''}
+                        onChange={(e) => setPayInstallmentMonths(e.target.value ? Number(e.target.value) : null)}
+                      >
+                        <option value="">One-off</option>
+                        {installmentPlans
+                          .map((o) => parseTermMonths(o.value))
+                          .filter((n): n is number => n !== null)
+                          .map((t) => <option key={t} value={t}>{t} months</option>)}
+                      </select>
+                    </DetailField>
+                  )}
+                </div>
                 <div className={styles.detailFieldGrid} style={{ marginTop: 12 }}>
                   <DetailField label="Record payment (RM)" disabled={false}>
                     <input
@@ -1203,6 +1297,15 @@ const OrderDetail = ({ order, onClose }: {
                     />
                   </DetailField>
                 </div>
+                <div style={{ marginTop: 8 }}>
+                  <DetailField label="Payment slip / proof *" disabled={false}>
+                    <SlipUploadStep
+                      key={slipResetKey}
+                      onConfirmed={(id) => setPaySlipSession(id)}
+                      onCleared={() => setPaySlipSession(null)}
+                    />
+                  </DetailField>
+                </div>
 
                 {paymentMutation.error && (
                   <p className={styles.detailFootError}>
@@ -1214,7 +1317,13 @@ const OrderDetail = ({ order, onClose }: {
                     type="button"
                     className={styles.detailSaveBtn}
                     onClick={onRecordPayment}
-                    disabled={additionalPaid <= 0 || paymentMutation.isPending}
+                    disabled={
+                      additionalPaid <= 0
+                      || paymentMutation.isPending
+                      || paySlipSession === null
+                      || !(edited.approvalCode ?? '').trim()
+                      || (payMethod === 'merchant' && !payMerchant)
+                    }
                   >
                     <Receipt size={14} strokeWidth={1.75} />
                     {paymentMutation.isPending ? 'Recording…' : 'Record payment'}
