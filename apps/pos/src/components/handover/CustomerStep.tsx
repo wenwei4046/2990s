@@ -1,10 +1,15 @@
+import { useEffect } from 'react';
 import type { HandoverForm } from '../../lib/handover-helpers';
 import { useAllStaff, useStaff } from '../../lib/staff';
 import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
 import { Field } from './Field';
 import { CountryPhoneInput } from '../CountryPhoneInput';
 import { CustomerNameSearch } from '../CustomerNameSearch';
-import type { CustomerSearchHit } from '../../lib/customer-search';
+import {
+  useCustomerNameSearch,
+  matchCustomerIdentity,
+  type CustomerSearchHit,
+} from '../../lib/customer-search';
 import styles from '../../pages/Handover.module.css';
 
 /* Shown until /so-dropdown-options loads — mirrors the seeded customer_type
@@ -30,13 +35,14 @@ export const CustomerStep = ({
   const lockedToSelf = me.data?.role === 'sales';
 
   /* Returning-customer pick (Loo 2026-06-06) — autofill EVERYTHING the
-     snapshot carries: contact + customer type here, plus the Address step's
-     fields so the salesperson doesn't re-key them. All editable after. */
+     snapshot carries: contact here, plus the Address step's fields so the
+     salesperson doesn't re-key them. All editable after. (Customer type is
+     NOT copied — it's auto-derived below from whether the identity is
+     recognised, per Loo's follow-up the same day.) */
   const pickCustomer = (h: CustomerSearchHit) => {
     update('name', h.debtorName);
     if (h.phone) update('phone', h.phone);
     if (h.email) update('email', h.email);
-    if (h.customerType) update('customerType', h.customerType);
     if (h.address1) update('fullAddress', h.address1);
     if (h.address2) update('addressLine2', h.address2);
     if (h.city) update('city', h.city);
@@ -44,6 +50,21 @@ export const CustomerStep = ({
     if (h.customerState) update('state', h.customerState);
     if (h.buildingType) update('buildingType', h.buildingType);
   };
+
+  /* Customer type is DERIVED, not picked (Loo 2026-06-06: "if there is the
+     existing customer, then will be auto select; if that's not, it can't
+     select"). The live (name, phone) pair is checked against the customer
+     list — both matching (the 0144 identity rule) → EXISTING, anything else
+     → NEW. The select below is read-only; editing the name or phone after a
+     pick re-evaluates automatically. React Query dedupes this with the name
+     dropdown's own search (same key), so no extra network. */
+  const identitySearch = useCustomerNameSearch(form.name, true);
+  const matched = matchCustomerIdentity(identitySearch.data, form.name, form.phone);
+  const derivedType = matched ? 'EXISTING' : 'NEW';
+  useEffect(() => {
+    if (form.customerType !== derivedType) update('customerType', derivedType);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [derivedType]);
 
   return (
     <section className={styles.stepBody}>
@@ -97,15 +118,23 @@ export const CustomerStep = ({
               ))}
           </select>
         </Field>
-        <Field label="Customer type">
+        <Field label="Customer type (auto)">
           <select
             value={form.customerType}
-            onChange={(e) => update('customerType', e.target.value)}
+            disabled
+            title={matched
+              ? `Matched ${matched.debtorName} (${matched.phone ?? 'no phone'}) — last order ${matched.lastDocNo}`
+              : 'No matching customer for this name + phone — recorded as a new customer'}
           >
             {customerTypes.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
+          <p className={styles.signCaption} style={{ marginTop: 4 }}>
+            {matched
+              ? `Recognised — last order ${matched.lastDocNo}`
+              : 'Auto-detected from past orders (name + phone)'}
+          </p>
         </Field>
       </div>
     </section>

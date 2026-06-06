@@ -35,6 +35,32 @@ export interface CustomerSearchHit {
   lastOrderAt: string;
 }
 
+/** Same-customer test against the 0144 identity rule: lower(trim(name)) must
+ *  match AND the phone must be the same number. Phones compare on digits with
+ *  suffix tolerance (form may hold "16 616 4727" while storage is E.164
+ *  "+60166164727" — same number, different prefix shape); both sides must be
+ *  ≥8 digits so a fragment can't fake a match. Same phone + different name =
+ *  a DIFFERENT customer, per the rule. */
+const digits = (v: string | null | undefined): string => (v ?? '').replace(/\D/g, '');
+
+const samePhone = (a: string | null | undefined, b: string | null | undefined): boolean => {
+  const da = digits(a); const db = digits(b);
+  if (da.length < 8 || db.length < 8) return false;
+  return da === db || da.endsWith(db) || db.endsWith(da);
+};
+
+export const matchCustomerIdentity = (
+  hits: CustomerSearchHit[] | undefined,
+  name: string,
+  phone: string,
+): CustomerSearchHit | null => {
+  const n = name.trim().toLowerCase();
+  if (!n) return null;
+  return (hits ?? []).find(
+    (h) => h.debtorName.trim().toLowerCase() === n && samePhone(h.phone, phone),
+  ) ?? null;
+};
+
 export const useCustomerNameSearch = (name: string, enabled: boolean) => {
   const trimmed = name.trim();
   const [debounced, setDebounced] = useState(trimmed);
