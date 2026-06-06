@@ -27,6 +27,31 @@ export interface AddonInfo {
   perFloorItem: number;
 }
 
+/** Split payment (Loo 2026-06-06) — one EXTRA transaction collected at
+ *  handover on top of the primary payment (e.g. half cash + half card).
+ *  Each row picks its own method + amount + approval code; merchant /
+ *  installment sub-fields mirror the primary cascade. Amounts are whole RM. */
+export interface ExtraPayment {
+  method: Exclude<PaymentMethod, ''>;
+  amount: number;
+  approvalCode: string;
+  merchantProvider: MerchantProvider | null;
+  installmentMonths: number | null;
+}
+
+/** Everything collected at handover = primary amount + every extra row. */
+export const collectedTotal = (f: Pick<HandoverForm, 'amountPaid' | 'extraPayments'>): number =>
+  f.amountPaid + (f.extraPayments ?? []).reduce((acc, p) => acc + (p.amount || 0), 0);
+
+/** Per-row completeness — method picked, positive amount, approval code,
+ *  and the method-scoped sub-field (bank / term) present. */
+export const extraPaymentComplete = (p: ExtraPayment): boolean =>
+  Boolean(p.method)
+  && p.amount > 0
+  && p.approvalCode.trim().length > 0
+  && (p.method !== 'merchant' || p.merchantProvider != null)
+  && (p.method !== 'installment' || p.installmentMonths != null);
+
 export interface HandoverForm {
   name: string; phone: string; email: string;
   salespersonId: string; customerType: CustomerType;
@@ -60,6 +85,9 @@ export interface HandoverForm {
   merchantProvider: MerchantProvider | null;
 
   amountPaid: number;
+  /** Split payment (Loo 2026-06-06) — extra transactions on top of the primary
+   *  one. Empty for the ordinary single-payment handover. */
+  extraPayments: ExtraPayment[];
   /** Additional delivery fee keyed in by sales at handover. Whole RM, 0 if none. */
   additionalDeliveryFee: number;
   /** Cross-category follow-up: the earlier SO's number sales types so delivery
@@ -149,9 +177,14 @@ export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonT
   if (f.paymentMethod === '') return false;  // method must be chosen (defense-in-depth — orchestrator step 5 already gates this)
   // The payable total is the WHOLE order — goods + add-ons + delivery — so the
   // 50%-deposit floor and full-payment ceiling match the Order summary total.
+  // Split payment (Loo 2026-06-06): the floor/ceiling apply to EVERYTHING
+  // collected (primary + extras), and every extra row must be complete.
   const total = subtotal + addonTotal + deliveryFeeTotal;
   const halfTotal = Math.round(total / 2);
-  if (f.amountPaid < halfTotal || f.amountPaid > total) return false;
+  const collected = collectedTotal(f);
+  if (f.amountPaid <= 0) return false;
+  if (collected < halfTotal || collected > total) return false;
+  if (!(f.extraPayments ?? []).every(extraPaymentComplete)) return false;
   if (f.approvalCode.trim().length === 0) return false;
   if (!f.paymentRecorded) return false;
   if (f.slipUploadSessionId === null) return false;  // slip / proof compulsory for ALL payment methods
@@ -229,10 +262,17 @@ const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: n
   const b: string[] = [];
   if (!f.paymentMethod) b.push('Payment method missing');
   // Whole-order basis — goods + add-ons + delivery (matches the Order summary).
+  // Split payment: the 50% floor / full ceiling apply to the COLLECTED total.
   const total = subtotal + addonTotal + deliveryFeeTotal;
   const halfTotal = Math.round(total / 2);
-  if (f.amountPaid < halfTotal) b.push(`Amount paid must be at least RM ${halfTotal.toLocaleString('en-MY')} (50% deposit)`);
-  else if (f.amountPaid > total) b.push('Amount paid exceeds total');
+  const extras = f.extraPayments ?? [];
+  const collected = collectedTotal(f);
+  if (extras.length > 0 && f.amountPaid <= 0) b.push('First payment amount required');
+  if (collected < halfTotal) b.push(`Total collected must be at least RM ${halfTotal.toLocaleString('en-MY')} (50% deposit)`);
+  else if (collected > total) b.push('Total collected exceeds the order total');
+  extras.forEach((p, i) => {
+    if (!extraPaymentComplete(p)) b.push(`Payment ${i + 2}: pick method, amount and approval code${p.method === 'merchant' ? ' (and merchant)' : p.method === 'installment' ? ' (and term)' : ''}`);
+  });
   if (!f.approvalCode.trim()) b.push('Approval code required');
   if (f.slipUploadSessionId === null) b.push('Payment slip / proof required');
   if (!f.paymentRecorded) b.push('Click "Confirm payment received" first to record');
