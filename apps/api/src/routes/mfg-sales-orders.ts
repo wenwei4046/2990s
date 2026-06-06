@@ -2353,6 +2353,9 @@ mfgSalesOrders.post('/', async (c) => {
         installment_months: installmentMonths,
         approval_code:      p.approvalCode ?? null,
         slip_key:           posPaymentSlipKeys![i],
+        /* Account Sheet auto-fill (Loo 2026-06-07) — split rows carry no
+           onlineType, so transfer falls back to 'Bank transfer'. */
+        account_sheet:      deriveAccountSheet(p.method, merchantProvider, null),
         amount_centi:       p.amountCenti,
         collected_by:       (body.salespersonId as string) ?? user.id,
         created_by:         user.id,
@@ -2427,6 +2430,8 @@ mfgSalesOrders.post('/', async (c) => {
         installment_months: installmentMonths,
         approval_code:      (body.approvalCode as string) ?? null,
         slip_key:           slipKey,        // order-level handover slip = the deposit's proof
+        /* Account Sheet auto-fill (Loo 2026-06-07). */
+        account_sheet:      deriveAccountSheet(depositMethod, merchantProvider, null),
         amount_centi:       depositCenti,
         collected_by:       (body.salespersonId as string) ?? user.id,
         created_by:         user.id,
@@ -3932,6 +3937,27 @@ mfgSalesOrders.delete('/:docNo/items/:itemId/photos/:photoKey', async (c) => {
 // balance computes from header.local_total_centi − sum(amount_centi).
 //
 // Legacy single-row payment fields on mfg_sales_orders (payment_method,
+/* Account Sheet auto-fill (Loo 2026-06-07) — "where did the money land".
+   Derived from the payment's own method fields whenever the operator didn't
+   type one, so the Detail Listing column stops rendering dashes:
+     merchant / installment → the acquiring bank (merchant_provider)
+     transfer               → the online sub-type (DuitNow / TNG / …)
+     cash                   → 'Cash'
+   A hand-typed value (Finance, backend PaymentsTable) ALWAYS wins — this is
+   a default, not an overwrite. Hoisted `function` so the SO-create deposit
+   paths above can call it too. */
+function deriveAccountSheet(
+  method: string,
+  merchantProvider?: string | null,
+  onlineType?: string | null,
+): string {
+  if (method === 'merchant' || method === 'installment') {
+    return merchantProvider?.trim() || 'Card terminal';
+  }
+  if (method === 'transfer') return onlineType?.trim() || 'Bank transfer';
+  return 'Cash';
+}
+
 // merchant_provider, installment_months, approval_code, payment_date,
 // paid_centi) are NOT touched here — those columns are scheduled for
 // drop in a follow-up migration once live data is migrated.
@@ -4060,7 +4086,9 @@ mfgSalesOrders.post('/:docNo/payments', async (c) => {
     online_type:        onlineType,
     approval_code:      p.approvalCode ?? null,
     amount_centi:       p.amountCenti,
-    account_sheet:      p.accountSheet ?? null,
+    /* Account Sheet auto-fill (Loo 2026-06-07) — a hand-typed value wins;
+       blank/whitespace falls back to the method-derived default. */
+    account_sheet:      p.accountSheet?.trim() || deriveAccountSheet(p.method, merchantProvider, onlineType),
     slip_key:           paymentSlipKey,
     collected_by:       p.collectedBy ?? null,
     note:               p.note ?? null,
