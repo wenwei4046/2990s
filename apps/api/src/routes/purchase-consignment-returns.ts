@@ -29,36 +29,51 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
-import { writeMovements, reverseMovements, defaultWarehouseId } from '../lib/inventory-movements';
+import { writeMovements, defaultWarehouseId, resolveWarehouseLotBatches } from '../lib/inventory-movements';
 import { recomputePcoReceived } from './purchase-consignment-receives';
 
 export const purchaseConsignmentReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseConsignmentReturns.use('*', supabaseAuth);
 
-/* Book a PC Return's lines as an inventory OUT — pull the returned stock back
-   out of the warehouse the matching PC Receive booked it INTO (request
-   2026-06-05). Each line's warehouse is resolved via pc_receive_item_id →
-   receive → receive.warehouse_id, falling back to the header receive's
-   warehouse, then the default. Idempotent + best-effort. */
-async function writePcReturnInventoryOut(sb: any, returnId: string): Promise<void> {
-  try {
-    const { data: head } = await sb.from('purchase_consignment_returns')
-      .select('return_number, pc_receive_id').eq('id', returnId).maybeSingle();
-    if (!head) return;
-    const { count: existing } = await sb.from('inventory_movements')
-      .select('id', { head: true, count: 'exact' })
-      .eq('source_doc_type', 'PC_RETURN').eq('source_doc_id', returnId);
-    if ((existing ?? 0) > 0) return; // already booked
+/* ── resyncPcReturnInventory — self-healing OUT ledger for a PC Return ─────────
+   ONE function for the whole lifecycle (post / add-line / edit-qty / delete-line
+   / cancel), mirroring resyncNoteInventory (OUT-primary — a supplier return ships
+   the consigned stock back OUT). It reconciles the return's CURRENT lines (the
+   TARGET net OUT per warehouse/product/variant/batch bucket) against what
+   inventory_movements already record for this return, and writes only the DELTA:
+     • first-ever OUT for a bucket  → PC_RETURN  (carries the "stock out" label;
+       PC_RETURN has no unique index, but we keep the first/delta split for
+       consistency with the note template)
+     • any later increase           → STOCK_TRANSFER OUT
+     • any decrease / give-back     → STOCK_TRANSFER IN
+     • cancel → status CANCELLED → TARGET is empty → every bucket's net is driven
+       back to 0 via STOCK_TRANSFER IN.
+   Each line's warehouse resolves via pc_receive_item_id → receive →
+   receive.warehouse_id, falling back to the header receive's warehouse, then the
+   default. Sofa batch via resolveWarehouseLotBatches per warehouse. A return posts
+   on create — it is "active" (books OUT) whenever status !== 'CANCELLED'.
+   Idempotent: a re-run finds delta 0 everywhere and writes nothing. Best-effort. */
+async function resyncPcReturnInventory(sb: any, returnId: string, performedBy: string | null): Promise<string[]> {
+  const { data: header } = await sb.from('purchase_consignment_returns')
+    .select('return_number, status, pc_receive_id').eq('id', returnId).maybeSingle();
+  if (!header) return [];
+  const status = ((header as { status: string | null }).status ?? '').toUpperCase();
+  const returnNo = (header as { return_number: string }).return_number ?? returnId;
+  const cancelled = status === 'CANCELLED';
 
-    const returnNo = (head as { return_number: string }).return_number;
-    let headerWh: string | null = null;
-    if ((head as { pc_receive_id: string | null }).pc_receive_id) {
-      const { data: rcv } = await sb.from('purchase_consignment_receives')
-        .select('warehouse_id').eq('id', (head as { pc_receive_id: string }).pc_receive_id).maybeSingle();
-      headerWh = (rcv as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
-    }
-    const fallbackWh = headerWh ?? (await defaultWarehouseId(sb));
+  // Header receive's warehouse — the fallback when a line has no receive link.
+  let headerWh: string | null = null;
+  if ((header as { pc_receive_id: string | null }).pc_receive_id) {
+    const { data: rcv } = await sb.from('purchase_consignment_receives')
+      .select('warehouse_id').eq('id', (header as { pc_receive_id: string }).pc_receive_id).maybeSingle();
+    headerWh = (rcv as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
+  }
+  const fallbackWh = headerWh ?? (await defaultWarehouseId(sb));
 
+  // 1. TARGET net OUT per bucket = sum of current lines (empty if cancelled).
+  type Bucket = { warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number; batch_no: string | null };
+  const targetByBucket = new Map<string, Bucket>();
+  if (!cancelled) {
     const { data: lines } = await sb.from('purchase_consignment_return_items')
       .select('pc_receive_item_id, material_code, material_name, qty_returned, item_group, variants')
       .eq('purchase_consignment_return_id', returnId);
@@ -82,27 +97,89 @@ async function writePcReturnInventoryOut(sb: any, returnId: string): Promise<voi
       for (const r of riRows) whByRecvItem.set(r.id, whByRecv.get(r.pc_receive_id) ?? null);
     }
 
-    const movements = lineList
-      .filter((it) => Number(it.qty_returned ?? 0) > 0)
-      .map((it) => {
-        const wh = (it.pc_receive_item_id ? whByRecvItem.get(it.pc_receive_item_id) : null) ?? fallbackWh;
-        if (!wh) return null;
-        return {
-          movement_type: 'OUT' as const,
-          warehouse_id: wh,
-          product_code: it.material_code,
-          variant_key: computeVariantKey(it.item_group, (it.variants as VariantAttrs | null) ?? null),
-          product_name: it.material_name,
-          qty: Number(it.qty_returned ?? 0),
-          source_doc_type: 'PC_RETURN' as const,
-          source_doc_id: returnId,
-          source_doc_no: returnNo,
-          performed_by: null,
-        };
-      })
-      .filter((m): m is NonNullable<typeof m> => m !== null);
-    if (movements.length > 0) await writeMovements(sb, movements);
-  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[pc-return] inventory OUT failed:', e); }
+    // Resolve dye-lot batches for every warehouse the return pulls out of, so a
+    // returned sofa consumes the right lot.
+    const allWh = [...new Set(lineList.map((l) => (l.pc_receive_item_id ? whByRecvItem.get(l.pc_receive_item_id) : null) ?? fallbackWh).filter((x): x is string => !!x))];
+    const batchByWh = new Map<string, Map<string, string | null>>();
+    for (const wh of allWh) batchByWh.set(wh, await resolveWarehouseLotBatches(sb, wh));
+
+    for (const it of lineList) {
+      const qty = Number(it.qty_returned ?? 0);
+      if (qty <= 0) continue;
+      const wh = (it.pc_receive_item_id ? whByRecvItem.get(it.pc_receive_item_id) : null) ?? fallbackWh;
+      if (!wh) continue;
+      const vk = computeVariantKey(it.item_group, (it.variants as VariantAttrs | null) ?? null);
+      const batch = batchByWh.get(wh)?.get(`${it.material_code}::${vk}`) ?? null;
+      const k = `${wh}::${it.material_code}::${vk}::${batch ?? ''}`;
+      const cur = targetByBucket.get(k);
+      if (cur) cur.qty += qty;
+      else targetByBucket.set(k, { warehouse_id: wh, product_code: it.material_code, variant_key: vk, product_name: it.material_name, qty, batch_no: batch });
+    }
+  }
+
+  // 2. CURRENT net OUT per bucket from ALL this return's movements (PC_RETURN OUT
+  //    + any prior STOCK_TRANSFER resync/cancel deltas).
+  const { data: movs } = await sb.from('inventory_movements')
+    .select('movement_type, warehouse_id, product_code, variant_key, batch_no, qty, total_cost_sen, product_name')
+    .eq('source_doc_id', returnId)
+    .in('source_doc_type', ['PC_RETURN', 'STOCK_TRANSFER']);
+  type Agg = { out_qty: number; in_qty: number; out_total_cost: number; product_name: string | null };
+  const aggByBucket = new Map<string, Agg>();
+  for (const m of (movs ?? []) as Array<{ movement_type: string; warehouse_id: string; product_code: string; variant_key: string | null; batch_no?: string | null; qty: number; total_cost_sen: number | null; product_name: string | null }>) {
+    const k = `${m.warehouse_id}::${m.product_code}::${m.variant_key ?? ''}::${m.batch_no ?? ''}`;
+    let a = aggByBucket.get(k);
+    if (!a) { a = { out_qty: 0, in_qty: 0, out_total_cost: 0, product_name: m.product_name }; aggByBucket.set(k, a); }
+    if (m.movement_type === 'OUT') { a.out_qty += Number(m.qty ?? 0); a.out_total_cost += Number(m.total_cost_sen ?? 0); }
+    else if (m.movement_type === 'IN') a.in_qty += Number(m.qty ?? 0);
+    if (!a.product_name) a.product_name = m.product_name;
+  }
+
+  // 3. delta = target − current_net_out. >0 → ship more OUT; <0 → give stock back IN.
+  type MovOut = Parameters<typeof writeMovements>[1][number];
+  const writes: MovOut[] = [];
+  const pcReturnEmitted = new Set<string>(); // product::variant given a PC_RETURN this run
+  for (const k of new Set<string>([...targetByBucket.keys(), ...aggByBucket.keys()])) {
+    const t = targetByBucket.get(k);
+    const a = aggByBucket.get(k) ?? { out_qty: 0, in_qty: 0, out_total_cost: 0, product_name: null };
+    const delta = (t?.qty ?? 0) - (a.out_qty - a.in_qty);
+    if (delta === 0) continue;
+    const [wh, pc, vk, batchSeg] = k.split('::');
+    const batch_no = batchSeg || null;
+    const pname = t?.product_name ?? a.product_name ?? null;
+    if (delta > 0) {
+      const neverMoved = a.out_qty === 0 && a.in_qty === 0;
+      const usePcReturn = neverMoved && !pcReturnEmitted.has(`${pc}::${vk}`);
+      if (usePcReturn) pcReturnEmitted.add(`${pc}::${vk}`);
+      writes.push({
+        movement_type: 'OUT', warehouse_id: wh ?? '', product_code: pc ?? '', variant_key: vk ?? '', product_name: pname,
+        qty: delta,
+        source_doc_type: usePcReturn ? 'PC_RETURN' : 'STOCK_TRANSFER',
+        source_doc_id: returnId, source_doc_no: returnNo,
+        ...(batch_no ? { batch_no } : {}),
+        performed_by: performedBy,
+        notes: usePcReturn ? 'Consignment goods returned to supplier — stock out' : 'PC Return resync: line qty increased / added.',
+      });
+    } else {
+      const unitCost = a.out_qty > 0 ? Math.round(a.out_total_cost / a.out_qty) : 0;
+      writes.push({
+        movement_type: 'IN', warehouse_id: wh ?? '', product_code: pc ?? '', variant_key: vk ?? '', product_name: pname,
+        qty: -delta, unit_cost_sen: unitCost,
+        source_doc_type: 'STOCK_TRANSFER',
+        source_doc_id: returnId, source_doc_no: cancelled ? `${returnNo}-CANCEL` : returnNo,
+        ...(batch_no ? { batch_no } : {}),
+        performed_by: performedBy,
+        notes: cancelled ? 'PC Return cancelled — stock back IN' : 'PC Return resync: line qty reduced / deleted.',
+      });
+    }
+  }
+
+  if (writes.length === 0) return [];
+  const res = await writeMovements(sb, writes);
+  try {
+    const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+    await recomputeSoStockAllocation(sb);
+  } catch { /* best-effort */ }
+  return res.ok ? [] : [res.reason ?? 'PC return inventory resync failed'];
 }
 
 const HEADER =
@@ -368,7 +445,8 @@ purchaseConsignmentReturns.post('/', async (c) => {
   }
 
   // Inventory OUT — pull the returned stock back out of its receive's warehouse.
-  await writePcReturnInventoryOut(sb, h.id);
+  // Self-healing resync (idempotent + best-effort).
+  try { await resyncPcReturnInventory(sb, h.id, user.id); } catch { /* best-effort */ }
 
   return c.json({ id: h.id, returnNumber: h.return_number }, 201);
 });
@@ -465,7 +543,8 @@ purchaseConsignmentReturns.post('/from-pc-receives', async (c) => {
   }
 
   // Inventory OUT — pull the returned stock back out of its receive's warehouse.
-  await writePcReturnInventoryOut(sb, h.id);
+  // Self-healing resync (idempotent + best-effort).
+  try { await resyncPcReturnInventory(sb, h.id, user.id); } catch { /* best-effort */ }
 
   return c.json({ id: h.id, returnNumber: h.return_number, pcReceiveCount: recvList.length, lineCount: rejectedItems.length }, 201);
 });
@@ -547,7 +626,8 @@ purchaseConsignmentReturns.post('/from-pc-receive', async (c) => {
   await recomputePcReturnTotals(sb, h.id);
 
   // Inventory OUT — pull the returned stock back out of its receive's warehouse.
-  await writePcReturnInventoryOut(sb, h.id);
+  // Self-healing resync (idempotent + best-effort).
+  try { await resyncPcReturnInventory(sb, h.id, user.id); } catch { /* best-effort */ }
 
   return c.json({ id: h.id, returnNumber: h.return_number }, 201);
 });
@@ -626,10 +706,11 @@ purchaseConsignmentReturns.patch('/:id/cancel', async (c) => {
     }
   } catch { /* best-effort */ }
 
-  // Inventory reversal (2026-06-05, now on-ledger) — the OUT pulled stock out of
-  // its receive's warehouse; cancelling puts it back IN. Best-effort.
+  // Inventory reversal (2026-06-05, now on-ledger) — the status is now CANCELLED,
+  // so the resync drives every bucket's net back to 0 (STOCK_TRANSFER IN puts the
+  // stock back). Best-effort.
   try {
-    await reverseMovements(sb, 'PC_RETURN', id, c.get('user')?.id ?? null);
+    await resyncPcReturnInventory(sb, id, c.get('user')?.id ?? null);
   } catch (e) { /* eslint-disable-next-line no-console */ console.error('[pc-return] cancel reversal failed:', e); }
 
   return c.json({ purchaseConsignmentReturn: { id, status: 'CANCELLED' } });
@@ -757,10 +838,12 @@ purchaseConsignmentReturns.post('/:id/items', async (c) => {
     }
   }
 
-  // Consume the receive line if this PR line is receive-linked (recount-from-live,
-  // off-ledger). Manual lines consume nothing.
+  // Consume the receive line if this PR line is receive-linked (recount-from-live).
+  // Manual lines consume nothing.
   if (receiveItemId) await adjustPcReceiveReturnedQty(sb, receiveItemId, qtyReturned);
   await recomputePcReturnTotals(sb, prId);
+  // Book the added line's stock OUT (self-healing resync). Best-effort.
+  try { await resyncPcReturnInventory(sb, prId, c.get('user')?.id ?? null); } catch { /* best-effort */ }
 
   return c.json({ item: data }, 201);
 });
@@ -828,6 +911,8 @@ purchaseConsignmentReturns.patch('/:id/items/:itemId', async (c) => {
   // off-ledger; helper clamps to [0, qty_accepted]).
   if (receiveItemId && delta !== 0) await adjustPcReceiveReturnedQty(sb, receiveItemId, delta);
   await recomputePcReturnTotals(sb, prId);
+  // Adjust inventory by the qty/variant delta (self-healing resync). Best-effort.
+  try { await resyncPcReturnInventory(sb, prId, c.get('user')?.id ?? null); } catch { /* best-effort */ }
 
   return c.json({ ok: true });
 });
@@ -849,5 +934,7 @@ purchaseConsignmentReturns.delete('/:id/items/:itemId', async (c) => {
     if (l.pc_receive_item_id) await adjustPcReceiveReturnedQty(sb, l.pc_receive_item_id, -(l.qty_returned ?? 0));
   }
   await recomputePcReturnTotals(sb, prId);
+  // Give the deleted line's stock back IN (self-healing resync). Best-effort.
+  try { await resyncPcReturnInventory(sb, prId, c.get('user')?.id ?? null); } catch { /* best-effort */ }
   return c.body(null, 204);
 });

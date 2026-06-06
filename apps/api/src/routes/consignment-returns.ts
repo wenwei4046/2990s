@@ -1,12 +1,12 @@
-// /consignment-returns — Consignment Return (CRN): the loaner comes back (or is
-// exchanged). A faithful clone of the Delivery Return API
-// (apps/api/src/routes/delivery-returns.ts), but with a VALUE-NEUTRAL loaner
-// inventory model instead of a receive-in.
+// /consignment-returns — Consignment Return (CRN): consignment goods come back.
+// A faithful clone of the Delivery Return API
+// (apps/api/src/routes/delivery-returns.ts).
 //
-// A Delivery Return ADDS stock (IN to the main warehouse — goods sold then
-// returned re-enter inventory). A Consignment Return instead TRANSFERS the
-// loaner back: consignment warehouse → shipping warehouse (value-neutral, goods
-// were always owned). Cancelling reverses that (shipping → consignment).
+// UNIFIED inventory model (Wei Siang 2026-06-06): a Consignment Return now books
+// a plain IN to the destination warehouse exactly like a Delivery Return — goods
+// physically re-enter inventory at the return line's snapshot cost, recorded as a
+// plain IN tagged CS_DR in the same stock ledger. Cancelling writes a balancing
+// OUT. (Superseded the earlier value-neutral transfer-from-hidden-warehouse model.)
 //
 // Tables: consignment_delivery_returns / _items (migration 0153). The DR's
 // delivery_order_id / do_item_id become consignment_do_id /
@@ -26,10 +26,9 @@ import { normalizePhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { defaultWarehouseId } from '../lib/inventory-movements';
+import { defaultWarehouseId, writeMovements, resolveWarehouseLotBatches } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
-import { consignmentWarehouseId, transferLoaner, reverseLoaner, type LoanerLine } from '../lib/consignment-loaner';
 
 export const consignmentReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
 consignmentReturns.use('*', supabaseAuth);
@@ -173,96 +172,120 @@ async function warehouseCodeMap(
   return out;
 }
 
-/* ── receiveLoanerForReturn — VALUE-NEUTRAL replacement for increaseInventoryForReturn ─
-   The DR adds stock IN (goods sold then returned). A Consignment Return instead
-   TRANSFERS the loaner back: consignment warehouse → each line's destination
-   warehouse (the CN line's ship-from). Goods stay owned — no COGS. IDEMPOTENT:
-   the CS_DR partial UNIQUE index (uq_inv_mov_cs_dr_source) makes it fire once per
-   return; we also pre-check for an existing CS_DR OUT row. Best-effort. */
-async function receiveLoanerForReturn(sb: any, returnId: string, performedBy: string | null): Promise<string[]> {
-  // Idempotency guard #1 — has this return already received the loaner back?
-  // The transfer's canonical leg is a CS_DR OUT (from the consignment warehouse).
-  const { count: existing } = await sb
-    .from('inventory_movements')
-    .select('id', { head: true, count: 'exact' })
-    .eq('source_doc_type', 'CS_DR')
+/* ── resyncReturnInventory — self-healing IN ledger for a Consignment Return ───
+   ONE function for the whole lifecycle (receive / add-line / edit-qty /
+   delete-line / cancel), mirroring resyncNoteInventory but IN-primary (a return
+   books stock back IN). It reconciles the return's CURRENT lines (the TARGET net
+   IN per warehouse/product/variant/batch bucket) against what inventory_movements
+   already record for this return, and writes only the DELTA:
+     • first-ever IN for a bucket   → CS_DR  (carries the "stock back IN" label +
+       the CS_DR partial-unique-index idempotency backstop)
+     • any later increase           → STOCK_TRANSFER IN (no unique index → no
+       collision with the CS_DR row)
+     • any decrease / give-back     → STOCK_TRANSFER OUT
+     • cancel → status CANCELLED → TARGET is empty → every bucket's net is driven
+       back to 0 via STOCK_TRANSFER OUT.
+   A return posts immediately on create — there is no SHIPPED_STATES gate; it is
+   "active" (books IN) whenever status !== 'CANCELLED'. Idempotent: a re-run finds
+   delta 0 everywhere and writes nothing. Best-effort. */
+async function resyncReturnInventory(sb: any, returnId: string, performedBy: string | null): Promise<string[]> {
+  const { data: header } = await sb.from('consignment_delivery_returns')
+    .select('return_number, status, warehouse_id').eq('id', returnId).maybeSingle();
+  if (!header) return [];
+  const status = ((header as { status: string | null }).status ?? '').toUpperCase();
+  const returnNo = (header as { return_number: string }).return_number ?? returnId;
+  const cancelled = status === 'CANCELLED';
+
+  // 1. TARGET net IN per bucket = sum of current lines (empty if cancelled).
+  type Bucket = { warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number; unit_cost_sen: number; batch_no: string | null };
+  const targetByBucket = new Map<string, Bucket>();
+  if (!cancelled) {
+    const { data: items } = await sb.from('consignment_delivery_return_items')
+      .select('id, consignment_do_item_id, item_code, description, qty_returned, unit_cost_centi, item_group, variants')
+      .eq('consignment_delivery_return_id', returnId);
+    const headerWarehouseId = (header as { warehouse_id: string | null }).warehouse_id ?? null;
+    const lineWh = await resolveReturnLineWarehouses(sb, (items ?? []) as Array<{ id: string; consignment_do_item_id?: string | null }>, headerWarehouseId);
+    const distinctWh = [...new Set(((items ?? []) as Array<{ id: string }>).map((it) => lineWh.get(it.id)).filter((x): x is string => !!x))];
+    const batchByWh = new Map<string, Map<string, string | null>>();
+    for (const wh of distinctWh) batchByWh.set(wh, await resolveWarehouseLotBatches(sb, wh));
+    for (const it of ((items ?? []) as Array<{ id: string; item_code: string; description: string | null; qty_returned: number; unit_cost_centi?: number | null; item_group?: string | null; variants?: VariantAttrs | null }>)) {
+      const qty = Number(it.qty_returned ?? 0);
+      if (qty <= 0) continue;
+      const wh = lineWh.get(it.id) ?? null;
+      if (!wh) continue;
+      const vk = computeVariantKey(it.item_group ?? null, it.variants ?? null);
+      const batch = batchByWh.get(wh)?.get(`${it.item_code}::${vk}`) ?? null;
+      const k = `${wh}::${it.item_code}::${vk}::${batch ?? ''}`;
+      const cur = targetByBucket.get(k);
+      if (cur) cur.qty += qty;
+      else targetByBucket.set(k, { warehouse_id: wh, product_code: it.item_code, variant_key: vk, product_name: it.description, qty, unit_cost_sen: Number(it.unit_cost_centi ?? 0), batch_no: batch });
+    }
+  }
+
+  // 2. CURRENT net IN per bucket from ALL this return's movements (CS_DR IN +
+  //    any prior STOCK_TRANSFER resync/cancel deltas).
+  const { data: movs } = await sb.from('inventory_movements')
+    .select('movement_type, warehouse_id, product_code, variant_key, batch_no, qty, total_cost_sen, product_name')
     .eq('source_doc_id', returnId)
-    .eq('movement_type', 'OUT');
-  if ((existing ?? 0) > 0) return [];
-
-  const consignWh = await consignmentWarehouseId(sb);
-  if (!consignWh) return ['consignment warehouse not configured (migration 0152)'];
-
-  const { data: header } = await sb.from('consignment_delivery_returns')
-    .select('return_number, warehouse_id').eq('id', returnId).maybeSingle();
-  const { data: items } = await sb.from('consignment_delivery_return_items')
-    .select('id, consignment_do_item_id, item_code, description, qty_returned, item_group, variants')
-    .eq('consignment_delivery_return_id', returnId);
-  if (!items || items.length === 0) return [];
-  const headerWarehouseId = (header as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
-  const returnNo = (header as { return_number: string } | null)?.return_number ?? returnId;
-
-  const lineWh = await resolveReturnLineWarehouses(sb, items as Array<{ id: string; consignment_do_item_id?: string | null }>, headerWarehouseId);
-
-  /* Group returned lines by DESTINATION warehouse — each transfers from the
-     consignment warehouse back to that destination. */
-  const byWarehouse = new Map<string, LoanerLine[]>();
-  for (const it of (items as Array<{ id: string; item_code: string; description: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null }>)) {
-    const qty = Number(it.qty_returned ?? 0);
-    if (qty <= 0) continue;
-    const toWh = lineWh.get(it.id) ?? null;
-    if (!toWh) continue; // no resolvable destination — skip rather than guess
-    const arr = byWarehouse.get(toWh) ?? [];
-    arr.push({
-      product_code: it.item_code,
-      variant_key: computeVariantKey(it.item_group ?? null, it.variants ?? null),
-      product_name: it.description,
-      qty,
-    });
-    byWarehouse.set(toWh, arr);
+    .in('source_doc_type', ['CS_DR', 'STOCK_TRANSFER']);
+  type Agg = { in_qty: number; out_qty: number; in_total_cost: number; product_name: string | null };
+  const aggByBucket = new Map<string, Agg>();
+  for (const m of (movs ?? []) as Array<{ movement_type: string; warehouse_id: string; product_code: string; variant_key: string | null; batch_no?: string | null; qty: number; total_cost_sen: number | null; product_name: string | null }>) {
+    const k = `${m.warehouse_id}::${m.product_code}::${m.variant_key ?? ''}::${m.batch_no ?? ''}`;
+    let a = aggByBucket.get(k);
+    if (!a) { a = { in_qty: 0, out_qty: 0, in_total_cost: 0, product_name: m.product_name }; aggByBucket.set(k, a); }
+    if (m.movement_type === 'IN') { a.in_qty += Number(m.qty ?? 0); a.in_total_cost += Number(m.total_cost_sen ?? 0); }
+    else if (m.movement_type === 'OUT') a.out_qty += Number(m.qty ?? 0);
+    if (!a.product_name) a.product_name = m.product_name;
   }
 
-  const errors: string[] = [];
-  for (const [toWh, lines] of byWarehouse) {
-    // consignment warehouse → destination warehouse; CS_DR source type.
-    const errs = await transferLoaner(sb, consignWh, toWh, lines, 'CS_DR', returnId, returnNo, performedBy);
-    errors.push(...errs);
+  // 3. delta = target − current_net_in. >0 → book more IN; <0 → give stock back OUT.
+  type MovOut = Parameters<typeof writeMovements>[1][number];
+  const writes: MovOut[] = [];
+  const csDrEmitted = new Set<string>(); // product::variant given a CS_DR this run (avoid 2nd-warehouse collision)
+  for (const k of new Set<string>([...targetByBucket.keys(), ...aggByBucket.keys()])) {
+    const t = targetByBucket.get(k);
+    const a = aggByBucket.get(k) ?? { in_qty: 0, out_qty: 0, in_total_cost: 0, product_name: null };
+    const delta = (t?.qty ?? 0) - (a.in_qty - a.out_qty);
+    if (delta === 0) continue;
+    const [wh, pc, vk, batchSeg] = k.split('::');
+    const batch_no = batchSeg || null;
+    const pname = t?.product_name ?? a.product_name ?? null;
+    if (delta > 0) {
+      // First IN for this product+variant → CS_DR (label + strict index guard);
+      // any later increase (or a 2nd warehouse for the same SKU) → STOCK_TRANSFER.
+      const neverMoved = a.in_qty === 0 && a.out_qty === 0;
+      const useCsDr = neverMoved && !csDrEmitted.has(`${pc}::${vk}`);
+      if (useCsDr) csDrEmitted.add(`${pc}::${vk}`);
+      writes.push({
+        movement_type: 'IN', warehouse_id: wh ?? '', product_code: pc ?? '', variant_key: vk ?? '', product_name: pname,
+        qty: delta, unit_cost_sen: t?.unit_cost_sen ?? 0,
+        source_doc_type: useCsDr ? 'CS_DR' : 'STOCK_TRANSFER',
+        source_doc_id: returnId, source_doc_no: returnNo,
+        ...(batch_no ? { batch_no } : {}),
+        performed_by: performedBy,
+        notes: useCsDr ? 'Consignment Return — stock back IN' : 'Consignment Return resync: line qty increased / added.',
+      });
+    } else {
+      writes.push({
+        movement_type: 'OUT', warehouse_id: wh ?? '', product_code: pc ?? '', variant_key: vk ?? '', product_name: pname,
+        qty: -delta,
+        source_doc_type: 'STOCK_TRANSFER',
+        source_doc_id: returnId, source_doc_no: cancelled ? `${returnNo}-CANCEL` : returnNo,
+        ...(batch_no ? { batch_no } : {}),
+        performed_by: performedBy,
+        notes: cancelled ? 'Consignment Return cancelled — stock out again' : 'Consignment Return resync: line qty reduced / deleted.',
+      });
+    }
   }
-  return errors;
-}
 
-/* ── reverseLoanerForReturn — reverse the return transfer on cancel ────────────
-   On cancel, send the loaner back OUT to the consignment warehouse: the exact
-   opposite of receiveLoanerForReturn. Idempotent + best-effort. */
-async function reverseLoanerForReturn(sb: any, returnId: string, performedBy: string | null): Promise<string[]> {
-  const consignWh = await consignmentWarehouseId(sb);
-  if (!consignWh) return [];
-
-  const { data: header } = await sb.from('consignment_delivery_returns')
-    .select('return_number, warehouse_id').eq('id', returnId).maybeSingle();
-  const returnNo = (header as { return_number: string } | null)?.return_number ?? returnId;
-  const headerWarehouseId = (header as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
-
-  const { data: items } = await sb.from('consignment_delivery_return_items')
-    .select('id, consignment_do_item_id').eq('consignment_delivery_return_id', returnId);
-  const lineWh = await resolveReturnLineWarehouses(sb, (items ?? []) as Array<{ id: string; consignment_do_item_id?: string | null }>, headerWarehouseId);
-
-  const toWarehouses = [...new Set([...lineWh.values()].filter((x): x is string => !!x))];
-  if (toWarehouses.length === 0) return [];
-
-  /* The forward transfer ran consignWh → destination(s). reverseLoaner derives
-     the per-bucket net-out from THIS return's CS_DR OUT rows (which left the
-     consignment warehouse) and runs the opposite transfer: pull the units back
-     out of the destination and IN @ the consignment warehouse. The CS_DR OUT
-     rows carry their destination in the paired STOCK_TRANSFER IN, but reverse
-     keys on the consignment-side OUT — so we pass fromWh = consignment warehouse
-     (where the canonical OUT left) and toWh = primary destination. */
-  const primaryToWh = toWarehouses[0]!;
-  // reverseLoaner(sourceType, id, no, fromWh, toWh): it pulls each bucket OUT of
-  // `toWh` and IN @ `fromWh`. The forward CS_DR canonical OUT left the
-  // consignment warehouse, so to undo it we pull back OUT of the destination
-  // (primaryToWh) and IN @ the consignment warehouse.
-  return reverseLoaner(sb, 'CS_DR', returnId, returnNo, consignWh, primaryToWh, performedBy);
+  if (writes.length === 0) return [];
+  const res = await writeMovements(sb, writes);
+  try {
+    const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+    await recomputeSoStockAllocation(sb);
+  } catch { /* best-effort */ }
+  return res.ok ? [] : [res.reason ?? 'consignment return inventory resync failed'];
 }
 
 /* Build one consignment_delivery_return_items insert row from a client line
@@ -482,10 +505,9 @@ consignmentReturns.post('/', async (c) => {
   if (iErr) { await sb.from('consignment_delivery_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
   await recomputeTotals(sb, h.id);
 
-  /* The loaner comes back → value-neutral transfer consignment warehouse →
-     shipping warehouse. Replaces the DR's increaseInventoryForReturn (IN to
-     main). Idempotent + best-effort. */
-  const movementErrors = await receiveLoanerForReturn(sb, h.id, user.id);
+  /* The loaner comes back → book a plain IN to the destination warehouse.
+     Self-healing resync (idempotent + best-effort). */
+  const movementErrors = await resyncReturnInventory(sb, h.id, user.id);
 
   return c.json({ id: h.id, returnNumber: h.return_number, movementErrors: movementErrors.length ? movementErrors : undefined }, 201);
 });
@@ -553,9 +575,8 @@ consignmentReturns.post('/:id/items', async (c) => {
   const { data, error } = await sb.from('consignment_delivery_return_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
-  /* Adding a return line transfers its loaner back too (idempotent at the
-     (return, product, variant) level). Best-effort. */
-  try { await receiveLoanerForReturn(sb, id, user?.id ?? null); } catch { /* best-effort */ }
+  /* Adding a return line books its IN too (self-healing resync). Best-effort. */
+  try { await resyncReturnInventory(sb, id, user?.id ?? null); } catch { /* best-effort */ }
   return c.json({ item: data }, 201);
 });
 
@@ -602,6 +623,8 @@ consignmentReturns.patch('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('consignment_delivery_return_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  /* Adjust inventory by the qty/variant delta (self-healing resync). Best-effort. */
+  try { await resyncReturnInventory(sb, id, c.get('user')?.id ?? null); } catch { /* best-effort */ }
   return c.json({ ok: true });
 });
 
@@ -610,6 +633,8 @@ consignmentReturns.delete('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('consignment_delivery_return_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  /* Give the deleted line's stock back OUT (self-healing resync). Best-effort. */
+  try { await resyncReturnInventory(sb, id, c.get('user')?.id ?? null); } catch { /* best-effort */ }
   return c.json({ ok: true });
 });
 
@@ -653,10 +678,10 @@ consignmentReturns.patch('/:id/status', async (c) => {
     data = updated as { id: string; status: string };
   }
 
-  /* Cancelling a Consignment Return REVERSES the return transfer: the loaner
-     goes back OUT to the consignment warehouse. Idempotent + best-effort. */
+  /* Cancelling a Consignment Return REVERSES the return IN: target net is now 0
+     so the resync writes a balancing OUT per bucket. Idempotent + best-effort. */
   if (body.status === 'CANCELLED') {
-    try { await reverseLoanerForReturn(sb, id, user.id); } catch { /* best-effort */ }
+    try { await resyncReturnInventory(sb, id, user.id); } catch { /* best-effort */ }
   }
 
   return c.json({ consignmentReturn: data });

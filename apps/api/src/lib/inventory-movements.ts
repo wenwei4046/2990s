@@ -112,6 +112,47 @@ export async function defaultWarehouseId(sb: any): Promise<string | null> {
 }
 
 /**
+ * Resolve the dye-lot batch each (product_code, variant_key) bucket should carry
+ * when shipping OUT of a warehouse, derived from the OPEN lots physically in that
+ * warehouse. For each bucket: carry the batch ONLY when the warehouse holds the
+ * stock under a SINGLE non-null batch (unambiguous — e.g. a showroom warehouse
+ * loaded by one Purchase Consignment Receive). Multi-batch or plain stock →
+ * un-batched (plain FIFO), never a guessed dye-lot. Mirrors how the sales-
+ * consignment ship used to pick its dye-lot; the OUT carries this so a sofa
+ * consumes the right lot + the movement shows its batch. Forward-compat: view
+ * absent → empty map → every line un-batched. Best-effort (never throws).
+ */
+export async function resolveWarehouseLotBatches(
+  sb: any,
+  warehouseId: string,
+): Promise<Map<string, string | null>> {
+  const byBucket = new Map<string, string | null>();
+  if (!warehouseId) return byBucket;
+  try {
+    const { data: lots, error } = await sb
+      .from('v_inventory_lots_open')
+      .select('product_code, variant_key, batch_no, qty_remaining')
+      .eq('warehouse_id', warehouseId)
+      .not('batch_no', 'is', null)
+      .gt('qty_remaining', 0);
+    if (!error) {
+      const batches = new Map<string, Set<string>>();
+      for (const r of (lots ?? []) as Array<{ product_code: string; variant_key: string | null; batch_no: string | null }>) {
+        if (!r.batch_no) continue;
+        const k = `${r.product_code}::${r.variant_key ?? ''}`;
+        const set = batches.get(k) ?? new Set<string>();
+        set.add(r.batch_no);
+        batches.set(k, set);
+      }
+      for (const [k, set] of batches.entries()) {
+        byBucket.set(k, set.size === 1 ? [...set][0]! : null);
+      }
+    }
+  } catch { /* view/column absent — every line un-batched (plain FIFO) */ }
+  return byBucket;
+}
+
+/**
  * Reverse EVERY inventory movement a document wrote, by posting an
  * opposite-direction movement (IN→OUT / OUT→IN) per original row. This is the
  * SAFE way to undo a posting: the FIFO trigger (migration 0095) treats the
