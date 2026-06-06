@@ -1,4 +1,4 @@
-﻿import { useMemo } from 'react';
+import { useMemo } from 'react';
 import { MonthCalendar } from './MonthCalendar';
 import { Field } from './Field';
 import type { HandoverForm } from '../../lib/handover-helpers';
@@ -81,6 +81,12 @@ export const TargetDateStep = ({
           onChange={onPickDelivery}
           minDate={earliestDate}
         />
+      )}
+
+      {form.deliveryDateLater && (
+        <p className={styles.methodHint}>
+          We'll contact the customer to confirm a delivery date before scheduling.
+        </p>
       )}
 
       {/* Process Date (factory start) — shown once a delivery date is picked.

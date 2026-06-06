@@ -1,4 +1,4 @@
-﻿/* customerType / buildingType / merchantProvider vocabularies now come from
+/* customerType / buildingType / merchantProvider vocabularies now come from
    so_dropdown_options (the SO Maintenance page) at runtime — see
    useSoDropdownValues() — so these are plain strings, not literal unions.
    PaymentMethod stays a closed union of internal CODES: the four methods
