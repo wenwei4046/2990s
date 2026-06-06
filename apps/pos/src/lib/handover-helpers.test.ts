@@ -26,7 +26,7 @@ const baseForm: HandoverForm = {
   processDate: '',
   specialInstructions: '',
   addons: {}, paymentMethod: '',
-  amountPaid: 0, additionalDeliveryFee: 0, crossCategorySourceSo: '',
+  amountPaid: 0, extraPayments: [], additionalDeliveryFee: 0, crossCategorySourceSo: '',
   paymentPreset: 'full', approvalCode: '',
   slipUploadSessionId: null, paymentRecorded: false,
   installmentMonths: null,
@@ -156,6 +156,48 @@ describe('validateConfirmPayment', () => {
     // 3070 basis) is BELOW the floor and must be rejected.
     expect(validateConfirmPayment({ ...base, amountPaid: 1785 }, 2990, 80, 500)).toBe(true);
     expect(validateConfirmPayment({ ...base, amountPaid: 1535 }, 2990, 80, 500)).toBe(false);
+  });
+
+  /* Split payment (Loo 2026-06-06) — extras count toward the floor/ceiling
+     and every extra row must be complete. */
+  describe('split payment', () => {
+    const okExtra = { method: 'cash' as const, amount: 1000, approvalCode: 'CR-1', merchantProvider: null, installmentMonths: null };
+    const base = {
+      ...baseForm, paymentMethod: 'transfer' as const, approvalCode: '123',
+      paymentRecorded: true, slipUploadSessionId: 'sess',
+    };
+    it('primary below 50% passes once extras lift the COLLECTED total over the floor', () => {
+      // total 2990 → floor 1495. Primary 800 alone fails; +1000 cash extra = 1800 passes.
+      expect(validateConfirmPayment({ ...base, amountPaid: 800 }, 2990, 0)).toBe(false);
+      expect(validateConfirmPayment({ ...base, amountPaid: 800, extraPayments: [okExtra] }, 2990, 0)).toBe(true);
+    });
+    it('collected total above the order total is rejected', () => {
+      expect(validateConfirmPayment(
+        { ...base, amountPaid: 2990, extraPayments: [okExtra] }, 2990, 0,
+      )).toBe(false);
+    });
+    it('an incomplete extra row blocks (no approval code / missing merchant / missing term)', () => {
+      expect(validateConfirmPayment(
+        { ...base, amountPaid: 800, extraPayments: [{ ...okExtra, approvalCode: '' }] }, 2990, 0,
+      )).toBe(false);
+      expect(validateConfirmPayment(
+        { ...base, amountPaid: 800, extraPayments: [{ ...okExtra, method: 'merchant' }] }, 2990, 0,
+      )).toBe(false);
+      expect(validateConfirmPayment(
+        { ...base, amountPaid: 800, extraPayments: [{ ...okExtra, method: 'merchant', merchantProvider: 'GHL' }] }, 2990, 0,
+      )).toBe(true);
+      expect(validateConfirmPayment(
+        { ...base, amountPaid: 800, extraPayments: [{ ...okExtra, method: 'installment' }] }, 2990, 0,
+      )).toBe(false);
+      expect(validateConfirmPayment(
+        { ...base, amountPaid: 800, extraPayments: [{ ...okExtra, method: 'installment', installmentMonths: 12 }] }, 2990, 0,
+      )).toBe(true);
+    });
+    it('a zero-amount primary is rejected even when extras cover the floor', () => {
+      expect(validateConfirmPayment(
+        { ...base, amountPaid: 0, extraPayments: [{ ...okExtra, amount: 2990 }] }, 2990, 0,
+      )).toBe(false);
+    });
   });
 });
 

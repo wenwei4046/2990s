@@ -1994,6 +1994,39 @@ mfgSalesOrders.post('/', async (c) => {
     }
   }
 
+  /* ── POS split payment (Loo 2026-06-06) — optional `payments[]` on create.
+     A handover deposit can now arrive as SEVERAL transactions (e.g. half
+     cash + half card). Validated STRICTLY (unlike the tolerant single-deposit
+     fallback below, a money row must never be silently dropped) and booked
+     atomically with the order: deposit_centi on the header = Σ rows, each row
+     lands in mfg_sales_order_payments as an is_deposit row. Absent payments[]
+     → the legacy single depositCenti/paymentMethod path runs unchanged, so
+     old PWA clients keep working. */
+  let posPayments: Array<{
+    method: 'merchant' | 'transfer' | 'cash' | 'installment';
+    amountCenti: number;
+    approvalCode?: string | null;
+    merchantProvider?: string | null;
+    installmentMonths?: number | null;
+  }> | null = null;
+  if (body.payments !== undefined) {
+    const parsed = z.array(z.object({
+      method:            z.enum(['merchant', 'transfer', 'cash', 'installment']),
+      amountCenti:       z.number().int().positive(),
+      approvalCode:      z.string().optional().nullable(),
+      merchantProvider:  z.string().trim().min(1).optional().nullable(),
+      installmentMonths: z.number().int().min(0).max(60).optional().nullable(),
+    })).min(1).max(10).safeParse(body.payments);
+    if (!parsed.success) {
+      await rollbackPwpClaims();
+      return c.json({ error: 'invalid_payments', issues: parsed.error.issues }, 400);
+    }
+    posPayments = parsed.data;
+  }
+  const posPaymentsTotalCenti = posPayments
+    ? posPayments.reduce((acc, p) => acc + p.amountCenti, 0)
+    : null;
+
   const { error: hErr } = await sb.from('mfg_sales_orders').insert({
     doc_no: docNo,
     transfer_to: (body.transferTo as string) ?? null,
@@ -2102,7 +2135,9 @@ mfgSalesOrders.post('/', async (c) => {
     approval_code:      (body.approvalCode as string) ?? null,
     payment_date:       (body.paymentDate as string) ?? null,
     // Clamped ≥ 0 — a negative deposit would deflate the live paid rollup.
-    deposit_centi:      Math.max(0, typeof body.depositCenti === 'number' ? body.depositCenti : 0),
+    // Split payment (Loo 2026-06-06): with payments[] the deposit IS the sum
+    // of the validated rows (each positive by schema), not the legacy field.
+    deposit_centi:      posPaymentsTotalCenti ?? Math.max(0, typeof body.depositCenti === 'number' ? body.depositCenti : 0),
     paid_centi:         typeof body.paidCenti === 'number' ? body.paidCenti : 0,
     /* PR #154 — Commander 2026-05-27: "我们的整个系统是没有 Draft 功能的，
        把 Draft 的功能去除掉, 我们 create 的全部都是 confirm 的". 2990 is a
@@ -2132,7 +2167,53 @@ mfgSalesOrders.post('/', async (c) => {
      deposits from balance payments. Method-scoped fields mirror the manual
      POST /:docNo/payments route. Best-effort: a ledger failure must never
      block the order (the header column still carries the deposit). */
-  {
+  if (posPayments) {
+    /* Split payment — book EVERY validated row. Best-effort like the single
+       path (the header already carries the Σ, so a ledger hiccup never blocks
+       the order); rows are schema-validated so nothing is silently dropped. */
+    const paidAt = (body.paymentDate as string) ?? new Date().toISOString().slice(0, 10);
+    for (const p of posPayments) {
+      const merchantLike = p.method === 'merchant' || p.method === 'installment';
+      const merchantProvider = merchantLike ? (p.merchantProvider ?? null) : null;
+      const installmentMonths = merchantLike
+        && typeof p.installmentMonths === 'number' && p.installmentMonths > 0
+        ? p.installmentMonths : null;
+      const { error: depErr } = await sb.from('mfg_sales_order_payments').insert({
+        so_doc_no:          docNo,
+        paid_at:            paidAt,
+        method:             p.method,
+        merchant_provider:  merchantProvider,
+        installment_months: installmentMonths,
+        approval_code:      p.approvalCode ?? null,
+        amount_centi:       p.amountCenti,
+        collected_by:       (body.salespersonId as string) ?? user.id,
+        created_by:         user.id,
+        is_deposit:         true,
+        note:               'POS split payment (auto-recorded at SO create)',
+      });
+      if (depErr) {
+        // eslint-disable-next-line no-console
+        console.error('[so-create] split-payment ledger insert failed:', depErr.message);
+        continue;
+      }
+      await recordSoAudit(sb, {
+        docNo,
+        action: 'ADD_PAYMENT',
+        actorId: user.id,
+        actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+        source: 'automation',
+        note: 'Auto: POS split payment recorded at SO create',
+        fieldChanges: [
+          { field: 'paidAt',      from: null, to: paidAt },
+          { field: 'method',      from: null, to: p.method },
+          { field: 'amountCenti', from: null, to: p.amountCenti },
+          ...(merchantProvider ? [{ field: 'merchantProvider', from: null, to: merchantProvider } satisfies FieldChange] : []),
+          ...(installmentMonths ? [{ field: 'installmentMonths', from: null, to: installmentMonths } satisfies FieldChange] : []),
+          ...(p.approvalCode ? [{ field: 'approvalCode', from: null, to: p.approvalCode } satisfies FieldChange] : []),
+        ],
+      });
+    }
+  } else {
     const depositCenti = typeof body.depositCenti === 'number' ? body.depositCenti : 0;
     /* Whitelist — the ledger's method vocabulary is closed; an arbitrary
        string must not reach Finance reports. Unknown method → header-only

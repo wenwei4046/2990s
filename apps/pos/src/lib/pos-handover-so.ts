@@ -102,6 +102,20 @@ export interface PosHandoffPayload {
   approvalCode?: string;
   /** Deposit / amount collected at handover in centi-MYR (sen). */
   depositCenti?: number;
+  /** Split payment (Loo 2026-06-06) — when the handover collected SEVERAL
+   *  transactions (e.g. half cash + half card), every transaction rides the
+   *  create payload and the server books each as an is_deposit ledger row
+   *  with deposit_centi = the sum. Strictly validated server-side (400
+   *  invalid_payments on a bad row). Omitted for the ordinary single
+   *  payment — the legacy depositCenti path then runs unchanged. */
+  payments?: Array<{
+    method: 'merchant' | 'transfer' | 'installment' | 'cash';
+    /** Centi-MYR. */
+    amountCenti: number;
+    approvalCode?: string;
+    merchantProvider?: string;
+    installmentMonths?: number;
+  }>;
 
   /* Delivery fee (migration 0133). POS handover opts the SO into the
    *  server-recomputed delivery fee (base + cross-category + special-model +
