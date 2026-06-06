@@ -27,7 +27,8 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { writeMovements, reverseMovements, defaultWarehouseId } from '../lib/inventory-movements';
 
 export const purchaseConsignmentReceives = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseConsignmentReceives.use('*', supabaseAuth);
@@ -57,11 +58,60 @@ async function postPcReceiveAndRollup(sb: any, receiveId: string): Promise<{ ok:
   if (error) return { ok: false, reason: error.message, status: 500 };
   if (!data) return { ok: false, reason: 'cannot_post', status: 409 };
 
+  // ON-LEDGER (2026-06-05) — book the received consignment stock INTO the
+  // receive's warehouse so it shows in Inventory. Idempotent + best-effort.
+  await writePcReceiveInventoryIn(sb, receiveId);
+
   return { ok: true };
+}
+
+/* Book a PC Receive's accepted lines as an inventory IN into the receive's
+   warehouse (the form "Receive Into"). Mirrors the GRN IN write. Idempotent:
+   skips if PC_RECEIVE movements already exist for this receive. The warehouse
+   the operator picked controls sellability/MRP — a showroom warehouse keeps it
+   out of normal sales (SO/MRP key per-warehouse). Best-effort. */
+async function writePcReceiveInventoryIn(sb: any, receiveId: string): Promise<void> {
+  try {
+    const { data: head } = await sb.from('purchase_consignment_receives')
+      .select('receive_number, warehouse_id').eq('id', receiveId).maybeSingle();
+    if (!head) return;
+    const { count: existing } = await sb.from('inventory_movements')
+      .select('id', { head: true, count: 'exact' })
+      .eq('source_doc_type', 'PC_RECEIVE').eq('source_doc_id', receiveId);
+    if ((existing ?? 0) > 0) return; // already booked (re-post)
+
+    const warehouseId = (head as { warehouse_id: string | null }).warehouse_id ?? (await defaultWarehouseId(sb));
+    if (!warehouseId) return;
+    const receiveNo = (head as { receive_number: string }).receive_number;
+
+    const { data: lines } = await sb.from('purchase_consignment_receive_items')
+      .select('material_code, material_name, qty_accepted, unit_price_centi, item_group, variants')
+      .eq('pc_receive_id', receiveId);
+    const movements = ((lines ?? []) as Array<{
+      material_code: string; material_name: string | null; qty_accepted: number | null;
+      unit_price_centi: number | null; item_group: string | null; variants: unknown;
+    }>)
+      .filter((it) => Number(it.qty_accepted ?? 0) > 0)
+      .map((it) => ({
+        movement_type: 'IN' as const,
+        warehouse_id: warehouseId,
+        product_code: it.material_code,
+        variant_key: computeVariantKey(it.item_group, (it.variants as VariantAttrs | null) ?? null),
+        product_name: it.material_name,
+        qty: Number(it.qty_accepted ?? 0),
+        unit_cost_sen: Number(it.unit_price_centi ?? 0),
+        source_doc_type: 'PC_RECEIVE' as const,
+        source_doc_id: receiveId,
+        source_doc_no: receiveNo,
+        performed_by: null,
+      }));
+    if (movements.length > 0) await writeMovements(sb, movements);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[pc-receive] inventory IN failed:', e); }
 }
 
 const HEADER =
   'id, receive_number, purchase_consignment_order_id, pc_order_no, supplier_id, received_at, delivery_note_ref, status, notes, ' +
+  'warehouse_id, ' +
   'currency, subtotal_centi, tax_centi, total_centi, ' +
   'posted_at, created_at, created_by, updated_at';
 const ITEM =
@@ -490,6 +540,7 @@ purchaseConsignmentReceives.post('/', async (c) => {
     received_at: (body.receivedAt as string) ?? new Date().toISOString().slice(0, 10),
     delivery_note_ref: (body.deliveryNoteRef as string) ?? null,
     notes: (body.notes as string) ?? null,
+    warehouse_id: (body.warehouseId as string | undefined) ?? null,
     status: 'POSTED',
     posted_at: new Date().toISOString(),
     created_by: user.id,
@@ -553,7 +604,7 @@ purchaseConsignmentReceives.post('/', async (c) => {
 // Pre-fills qty_received + qty_accepted with the outstanding qty per line.
 purchaseConsignmentReceives.post('/from-pcos', async (c) => {
   const sb = c.get('supabase'); const user = c.get('user');
-  let body: { purchaseConsignmentOrderIds?: string[]; deliveryNoteRef?: string; notes?: string };
+  let body: { purchaseConsignmentOrderIds?: string[]; deliveryNoteRef?: string; notes?: string; warehouseId?: string };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const pcoIds = body.purchaseConsignmentOrderIds ?? [];
   if (pcoIds.length === 0) return c.json({ error: 'pco_ids_required' }, 400);
@@ -600,6 +651,7 @@ purchaseConsignmentReceives.post('/from-pcos', async (c) => {
     received_at: new Date().toISOString().slice(0, 10),
     delivery_note_ref: body.deliveryNoteRef ?? null,
     notes: `Batch-converted from ${pcoList.length} PC Orders: ${pcoNumbersJoined}${body.notes ? ` · ${body.notes}` : ''}`,
+    warehouse_id: body.warehouseId ?? null,
     status: 'POSTED',
     posted_at: new Date().toISOString(),
     created_by: user.id,
@@ -717,10 +769,15 @@ purchaseConsignmentReceives.patch('/:id/cancel', async (c) => {
 
   // Recount received_qty on each linked PC Order item from live receive lines —
   // this cancelled receive's lines now drop out, auto-releasing the PC Order.
-  // NO inventory reversal (off-ledger). Best-effort.
   try {
     await recomputePcoReceived(sb, lineList.map((it) => it.pc_order_item_id));
   } catch { /* best-effort */ }
+
+  // Inventory reversal (2026-06-05, now on-ledger) — pull the received stock
+  // back OUT of the warehouse it was booked into. Best-effort.
+  try {
+    await reverseMovements(sb, 'PC_RECEIVE', id, c.get('user')?.id ?? null);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[pc-receive] cancel reversal failed:', e); }
 
   const { data } = await sb.from('purchase_consignment_receives').select(HEADER).eq('id', id).maybeSingle();
   return c.json({ receive: data ?? { id, status: 'CANCELLED' } });
