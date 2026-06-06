@@ -61,7 +61,7 @@ export interface SoDisplayGroup<T extends RawSoDisplayLine> {
     unitPriceCenti: number;
     discountCenti: number;
     totalCenti: number;
-    /** Lead line's remark, else the first non-empty remark in the group. */
+    /** First non-empty remark in cellIndex order across the group; null if none. */
     remark: string | null;
   };
 }

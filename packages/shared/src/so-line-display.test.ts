@@ -150,7 +150,20 @@ describe('groupSoLinesForDisplay — remark carry', () => {
         remark: 'left arm fabric swap', variants: { buildKey: 'build-1', cellIndex: 1 } },
     ];
     const groups = groupSoLinesForDisplay(lines);
+    expect(groups[0]!.kind).toBe('sofa-build');
     expect(groups[0]!.display!.remark).toBe('left arm fabric swap');
+  });
+
+  it('returns null when no line in the group has a remark', () => {
+    const lines = [
+      { item_code: 'BOOQIT-1A(LHF)', qty: 1, unit_price_centi: 100000, total_centi: 100000,
+        remark: null, variants: { buildKey: 'build-1', cellIndex: 0 } },
+      { item_code: 'BOOQIT-2A(RHF)', qty: 1, unit_price_centi: 200000, total_centi: 200000,
+        variants: { buildKey: 'build-1', cellIndex: 1 } },
+    ];
+    const groups = groupSoLinesForDisplay(lines);
+    expect(groups[0]!.kind).toBe('sofa-build');
+    expect(groups[0]!.display!.remark).toBeNull();
   });
 });
 
