@@ -1511,6 +1511,10 @@ export const mfgSalesOrderPayments = pgTable('mfg_sales_order_payments', {
   approvalCode:       text('approval_code'),                  // auth / slip / receipt no
   amountCenti:        integer('amount_centi').notNull(),
   accountSheet:       text('account_sheet'),                  // bank account / cashbook funds landed in
+  /* Migration 0159 (spec D4, 2026-06-06) — per-payment slip. R2 key resolved
+     from pending_slip_uploads at record time. NULL on legacy rows → UIs fall
+     back to the order-level mfg_sales_orders.slip_key. */
+  slipKey:            text('slip_key'),
   collectedBy:        uuid('collected_by').references(() => staff.id, { onDelete: 'set null' }),
   note:               text('note'),
   /* SO-SKU spec P2 (D5, migration 0155) — true on the auto-row the SO POST
