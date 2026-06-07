@@ -16,9 +16,11 @@
     "db:generate": "pnpm --filter @2990s/db generate",
     "db:push": "pnpm --filter @2990s/db push",
     "db:seed": "pnpm --filter @2990s/db seed",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "prepare": "husky"
   },
   "devDependencies": {
+    "husky": "^9.1.7",
     "prettier": "^3.4.2",
     "turbo": "^2.3.3",
     "typescript": "^5.7.2"

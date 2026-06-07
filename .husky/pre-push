@@ -1,0 +1,9 @@
+# Pre-push guard — run the full-workspace typecheck before code reaches the
+# remote (and CI/deploy). Catches the class of mistakes a bare commit can hide:
+# broken syntax, a stray byte in a file, a wrong/incompatible type. turbo caches
+# per-package, so unchanged packages are skipped and this is usually a few
+# seconds. Borrowed from Hookka ERP's husky setup (2990s had no git hooks).
+#
+# To bypass in an emergency: git push --no-verify
+echo "[pre-push] typecheck…"
+pnpm run typecheck
