@@ -2,6 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
 import { slipRoutes } from './slips';
 import type { Env, Variables } from '../env';
+import { r2HeadViaS3 } from '../lib/r2';
+
+// r2HeadViaS3 does a *signed S3 fetch* to the R2 endpoint. In the test sandbox
+// that real network call fails (no outbound TLS), so the confirm handler threw
+// → 500 instead of its 200/404/400 paths. Mock just this fn; presign +
+// buildSlipKey stay real for the /init tests.
+vi.mock('../lib/r2', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/r2')>();
+  return { ...actual, r2HeadViaS3: vi.fn() };
+});
 
 const baseEnv = {
   SLIPS: { put: vi.fn(), head: vi.fn(), delete: vi.fn() },
@@ -153,7 +163,8 @@ describe('POST /slips/:session/confirm', () => {
   });
 
   it('confirms when R2 size matches', async () => {
-    const env = { ...baseEnv, SLIPS: { head: vi.fn().mockResolvedValue({ size: 1024, etag: 'e' }), delete: vi.fn() } } as unknown as Env;
+    vi.mocked(r2HeadViaS3).mockResolvedValue({ size: 1024, etag: 'e' });
+    const env = { ...baseEnv, SLIPS: { head: vi.fn(), delete: vi.fn() } } as unknown as Env;
     const app = makeApp(supabase, env);
     const res = await app.request(`/slips/${sessionId}/confirm`, {
       method: 'POST',
@@ -165,7 +176,8 @@ describe('POST /slips/:session/confirm', () => {
   });
 
   it('returns 404 when R2 has no object', async () => {
-    const env = { ...baseEnv, SLIPS: { head: vi.fn().mockResolvedValue(null), delete: vi.fn() } } as unknown as Env;
+    vi.mocked(r2HeadViaS3).mockResolvedValue(null);
+    const env = { ...baseEnv, SLIPS: { head: vi.fn(), delete: vi.fn() } } as unknown as Env;
     const app = makeApp(supabase, env);
     const res = await app.request(`/slips/${sessionId}/confirm`, {
       method: 'POST',
@@ -177,8 +189,9 @@ describe('POST /slips/:session/confirm', () => {
   });
 
   it('returns 400 hash_mismatch when sizes differ + marks failed + delete R2', async () => {
+    vi.mocked(r2HeadViaS3).mockResolvedValue({ size: 9999, etag: 'e' });
     const r2Delete = vi.fn().mockResolvedValue(undefined);
-    const env = { ...baseEnv, SLIPS: { head: vi.fn().mockResolvedValue({ size: 9999, etag: 'e' }), delete: r2Delete } } as unknown as Env;
+    const env = { ...baseEnv, SLIPS: { head: vi.fn(), delete: r2Delete } } as unknown as Env;
     const app = makeApp(supabase, env);
     const res = await app.request(`/slips/${sessionId}/confirm`, {
       method: 'POST',
