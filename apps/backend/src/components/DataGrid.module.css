@@ -45,6 +45,15 @@
   background: var(--c-cream);
   flex-wrap: wrap;
 }
+/* Embedded (drill-down) mode — the toolbar is just the Columns pill (search +
+   footer are already suppressed). Make it a slim, borderless, transparent strip
+   so each expanded row reads tight, not like a stacked second toolbar.
+   Wei Siang 2026-06-08 ("展开后整个系统显得有点缭乱"). */
+.toolbarEmbedded {
+  padding: 2px 0;
+  background: transparent;
+  border-bottom: none;
+}
 .toolbarSpacer { flex: 1; }
 .searchWrap {
   display: inline-flex;

@@ -455,7 +455,10 @@ const buildDrilldownColumns = (paymentRefs: string): DataGridColumn<SoItem>[] =>
     searchValue: (it) => buildVariantSummary(it.item_group, it.variants),
   },
   {
-    key: 'uom', label: 'UOM', width: 70,
+    /* Default-hidden (Wei Siang 2026-06-08): the drill-down was too wide /
+       cluttered. UOM is almost always "UNIT" → noise. Still revealable via the
+       Columns button. */
+    key: 'uom', label: 'UOM', width: 70, defaultHidden: true,
     accessor: (it) => it.uom || 'UNIT',
     searchValue: (it) => it.uom || 'UNIT',
   },
@@ -491,31 +494,31 @@ const buildDrilldownColumns = (paymentRefs: string): DataGridColumn<SoItem>[] =>
     searchValue: (it) => (it.deliveries ?? []).map((d) => d.doNumber).join(' '),
   },
   {
-    key: 'unit_price', label: 'Unit Price', width: 100, align: 'right',
+    key: 'unit_price', label: 'Unit Price', width: 100, align: 'right', defaultHidden: true,
     accessor: (it) => fmtRm(Number(it.unit_price_centi ?? 0)),
     searchValue: (it) => String(it.unit_price_centi ?? 0),
     sortFn: (a, b) => Number(a.unit_price_centi ?? 0) - Number(b.unit_price_centi ?? 0),
   },
   {
-    key: 'total', label: 'Total', width: 100, align: 'right',
+    key: 'total', label: 'Total', width: 100, align: 'right', defaultHidden: true,
     accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{fmtRm(Number(it.total_centi ?? 0))}</span>,
     searchValue: (it) => String(it.total_centi ?? 0),
     sortFn: (a, b) => Number(a.total_centi ?? 0) - Number(b.total_centi ?? 0),
   },
   {
-    key: 'unit_cost', label: 'Unit Cost', width: 100, align: 'right',
+    key: 'unit_cost', label: 'Unit Cost', width: 100, align: 'right', defaultHidden: true,
     accessor: (it) => fmtRm(Number(it.unit_cost_centi ?? 0)),
     searchValue: (it) => String(it.unit_cost_centi ?? 0),
     sortFn: (a, b) => Number(a.unit_cost_centi ?? 0) - Number(b.unit_cost_centi ?? 0),
   },
   {
-    key: 'line_cost', label: 'Line Cost', width: 100, align: 'right',
+    key: 'line_cost', label: 'Line Cost', width: 100, align: 'right', defaultHidden: true,
     accessor: (it) => fmtRm(lineCostOf(it)),
     searchValue: (it) => String(lineCostOf(it)),
     sortFn: (a, b) => lineCostOf(a) - lineCostOf(b),
   },
   {
-    key: 'margin', label: 'Margin', width: 100, align: 'right',
+    key: 'margin', label: 'Margin', width: 100, align: 'right', defaultHidden: true,
     accessor: (it) => {
       const m = lineMarginOf(it);
       const c = m > 0 ? 'var(--c-secondary-a, #2F5D4F)' : m < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
@@ -559,7 +562,7 @@ const buildDrilldownColumns = (paymentRefs: string): DataGridColumn<SoItem>[] =>
     searchValue: (it) => `${it.coverage_po ?? ''} ${it.coverage_eta ?? ''}`.trim(),
   },
   {
-    key: 'payment', label: 'Payment', width: 160,
+    key: 'payment', label: 'Payment', width: 160, defaultHidden: true,
     accessor: () => <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-10)' }}>{paymentRefs || '—'}</span>,
     searchValue: () => paymentRefs,
   },
@@ -752,7 +755,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
 
   return (
     <div style={{
-      padding: 'var(--space-2) var(--space-3) var(--space-2) 40px',
+      padding: '0 var(--space-3) 4px 40px',
       background: 'var(--c-cream)',
     }}>
       {/* The drill-down is now the SAME configurable grid as the main list
@@ -763,7 +766,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
       <DataGrid<SoItem>
         rows={items}
         columns={columns}
-        storageKey="so-drilldown-grid.v1"
+        storageKey="so-drilldown-grid.v2"
         rowKey={(it) => it.id}
         embedded
         groupBanner={false}
