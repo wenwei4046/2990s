@@ -35,6 +35,7 @@ import {
 } from 'react';
 import { Search, Columns3, RotateCcw, Filter } from 'lucide-react';
 import { useDebouncedValue } from '../lib/hooks';
+import { SkeletonRows } from './Skeleton';
 import styles from './DataGrid.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -879,9 +880,7 @@ function DataGridInner<T>({
             </tr>
           </thead>
           <tbody className={styles.tbody}>
-            {isLoading && (
-              <tr><td className={styles.empty} colSpan={totalCols || 1}>Loading…</td></tr>
-            )}
+            {isLoading && <SkeletonRows cols={totalCols || 1} rows={12} />}
             {!isLoading && renderList.length === 0 && (
               <tr><td className={styles.empty} colSpan={totalCols || 1}>{emptyMessage}</td></tr>
             )}

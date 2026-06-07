@@ -61,6 +61,7 @@ import {
   type ProductSupplierRow,
 } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
+import { SkeletonRows } from '../components/Skeleton';
 import { FabricsTable } from '../components/FabricsTable';
 import { SofaComboTab } from '../components/SofaComboTab';
 import { FabricTracking } from './FabricTracking';
@@ -546,13 +547,7 @@ const SkuMasterTab = () => {
             </tr>
           </thead>
           <tbody>
-            {isLoading && (
-              <tr>
-                <td colSpan={colCount} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
-                  Loading products…
-                </td>
-              </tr>
-            )}
+            {isLoading && <SkeletonRows cols={colCount} rows={12} />}
             {!isLoading && rows.map((row) => (
               <ProductRow
                 key={row.id}

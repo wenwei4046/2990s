@@ -91,6 +91,26 @@ export const SkeletonTable = ({ rows = 5, cols = 4 }: SkeletonTableProps) => (
 );
 
 // ---------------------------------------------------------------------------
+// Table rows — <tr>/<td> based so they drop straight into a real <tbody>
+// (e.g. DataGrid's loading state). `cols` should match the grid's column count.
+// ---------------------------------------------------------------------------
+
+export const SkeletonRows = ({ cols, rows = 10 }: { cols: number; rows?: number }) => (
+  <>
+    {Array.from({ length: rows }).map((_, r) => (
+      <tr key={r} aria-hidden="true">
+        {Array.from({ length: Math.max(cols, 1) }).map((_, c) => (
+          <td key={c} style={{ padding: '6px 10px' }}>
+            {/* Vary widths a little so it reads as data, not a flat grid. */}
+            <Skeleton h={12} w={c === 0 ? 16 : `${55 + ((r * 7 + c * 13) % 40)}%`} />
+          </td>
+        ))}
+      </tr>
+    ))}
+  </>
+);
+
+// ---------------------------------------------------------------------------
 // Detail page — top bar + 2 cards. Used as Suspense fallback.
 // ---------------------------------------------------------------------------
 
