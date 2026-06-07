@@ -109,9 +109,9 @@ Each step lists: **Trigger → Who → System action → Controls enforced → R
     Delivery Date (`processing_after_delivery`).
   - **Sofa exclusivity (Rule 2)** — an SO containing a **sofa** may not also contain a
     **bedframe or mattress** (main products). Service/accessory add-ons are fine.
-    Violation → **`so_sofa_no_other_main`** (400).
-  - **Single mattress brand (Rule 3)** — all mattress lines on one SO must be the same
-    brand; mixed brands → **`so_mattress_one_brand`** (400). Split into separate SOs.
+    Violation → **`so_sofa_no_other_main`** (400). Mattresses and bedframes may mix
+    freely — including across brands (the old single-mattress-brand Rule 3 was removed
+    2026-06-07 by owner decision).
   - **Pricing trust boundary** — POS tablet roles (`sales`, `sales_executive`,
     `outlet_manager`) are held to the server-authoritative price with a >0.5% drift reject
     (`pricing_drift`, anti-tamper). Backend/office roles (admin, coordinator, …) may author
@@ -321,7 +321,7 @@ safe (atomic conditional update → exactly one reversal).
 | C1 | Customer name + **phone required** on every SO | SO create/edit | `customer_name_required` / `phone_required` (400) |
 | C2 | Item code must exist in catalog (reject, don't normalise) | SO / DO create | `unknown_item_code` (409) |
 | C3 | Sofa SO excludes bedframe/mattress | SO create | `so_sofa_no_other_main` (400) |
-| C4 | One mattress brand per SO | SO create | `so_mattress_one_brand` (400) |
+| C4 | *(retired 2026-06-07 — mattress brands may mix on one SO)* | — | — |
 | C5 | Dates not in the past; processing ≤ delivery | SO create/edit | `*_date_past` / `processing_after_delivery` (400) |
 | C6 | POS price drift > 0.5% rejected (anti-tamper) | SO create (POS roles) | `pricing_drift` (400) |
 | C7 | DO line qty ≤ SO remaining | DO create / add-line / qty-up | `over_remaining` (409) |
@@ -431,7 +431,7 @@ deliverable remaining. **See the Returns SOP** for the full return-to-credit flo
 |---|---------|--------------------------|
 | ☐ | **Phone on every SO** | No SO exists without a customer phone (C1). |
 | ☐ | **Item codes valid** | No SO/DO line carries an off-catalog code (C2). |
-| ☐ | **Sofa mix rules** | No SO mixes a sofa with a bedframe/mattress; one mattress brand per SO (C3, C4). |
+| ☐ | **Sofa mix rules** | No SO mixes a sofa with a bedframe/mattress (C3). |
 | ☐ | **POS price integrity** | POS-role SOs match server price within 0.5% (C6). |
 | ☐ | **No over-delivery** | Σ delivered per SO line ≤ ordered qty (C7). |
 | ☐ | **Sofa ships whole, one batch** | Every shipped sofa line had a bound covering batch; no partial sets (C9, C10). |
@@ -453,7 +453,6 @@ deliverable remaining. **See the Returns SOP** for the full return-to-credit flo
 | `phone_required` | SO has no phone | Add a phone number. |
 | `unknown_item_code` | Code not in catalog | Pick a catalog item; do not invent codes. |
 | `so_sofa_no_other_main` | Sofa + bedframe/mattress on one SO | Split into separate SOs. |
-| `so_mattress_one_brand` | Mixed mattress brands | Split brands into separate SOs. |
 | `over_remaining` | Qty exceeds SO/DO remaining | Reduce qty to the remaining shown. |
 | `short_stock` | Not enough at this warehouse | Switch warehouse / reduce qty, or grab-ship with confirmation. |
 | `sofa_no_batch` | No single batch covers the sofa set | Wait until one complete batch is received. |
