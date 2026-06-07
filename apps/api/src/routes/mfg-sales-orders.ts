@@ -1225,14 +1225,14 @@ mfgSalesOrders.post('/', async (c) => {
     }
     if (items.length > 0) {
       const lineCodes = items.map((it) => String(it.itemCode ?? '')).filter(Boolean);
-      const metaByCode = new Map<string, { category: string; branding: string | null }>();
+      const metaByCode = new Map<string, { category: string }>();
       if (lineCodes.length > 0) {
         const { data: meta } = await sb
           .from('mfg_products')
-          .select('code, category, branding')
+          .select('code, category')
           .in('code', lineCodes);
-        for (const m of (meta ?? []) as Array<{ code: string; category: string; branding: string | null }>) {
-          metaByCode.set(m.code, { category: m.category, branding: m.branding });
+        for (const m of (meta ?? []) as Array<{ code: string; category: string }>) {
+          metaByCode.set(m.code, { category: m.category });
         }
       }
       const normCat = (raw: string): string => {
@@ -1258,21 +1258,11 @@ mfgSalesOrders.post('/', async (c) => {
           reason: 'A sofa Sales Order cannot also contain a bedframe or mattress. Service and accessory items are fine.',
         }, 400);
       }
-      // Rule 3 — single mattress brand. Null/empty brand → 2990 house brand so
-      // two unbranded 2990 mattresses don't false-trip the guard.
-      const brands = new Set<string>();
-      items.forEach((it, i) => {
-        if (cats[i] !== 'MATTRESS') return;
-        const b = (metaByCode.get(String(it.itemCode ?? ''))?.branding ?? '').trim().toUpperCase() || '2990';
-        brands.add(b);
-      });
-      if (brands.size > 1) {
-        return c.json({
-          error: 'so_mattress_one_brand',
-          reason: 'All mattress lines in one Sales Order must be the same brand. Split different mattress brands into separate SOs.',
-          brands: [...brands],
-        }, 400);
-      }
+      /* Loo 2026-06-07 — mattress lines MAY mix brands on one SO. The old
+         Rule 3 (`so_mattress_one_brand`, #280) blocked e.g. a Happi.S +
+         2990 mattress in one order at the POS counter; the owner never set
+         that rule. Sofa exclusivity above is the only MAIN-mix gate.
+         Don't re-add a brand gate here. */
     }
   }
 
