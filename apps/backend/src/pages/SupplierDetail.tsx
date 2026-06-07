@@ -1848,7 +1848,7 @@ const ImportBindingsDialog = ({
         // Price matrix updates are wholesale (we send the merged matrix) so
         // partial CSVs don't wipe other categories' data.
         if (kind === 'sofa') {
-          let next: SofaPriceMatrix = { ...((binding.price_matrix ?? {}) as SofaPriceMatrix) };
+          const next: SofaPriceMatrix = { ...((binding.price_matrix ?? {}) as SofaPriceMatrix) };
           let changed = false;
           for (const h of sofaHeights) {
             const inner = { ...(next[h] ?? {}) } as { P1?: number; P2?: number; P3?: number };

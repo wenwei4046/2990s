@@ -1303,7 +1303,7 @@ const PhotoThumb = ({
     retriedRef.current = true;
     signedUrlCache.delete(photoKey);
     setSrc(null);
-    let cancelled = false;
+    const cancelled = false;
     loadSignedUrl(() => cancelled);
     // No cleanup return — this isn't an effect; the cancelled flag
     // is only meaningful if the component unmounts mid-fetch, which

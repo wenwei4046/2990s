@@ -1093,7 +1093,7 @@ const SO_DROPDOWN_FIELDS: Array<{ bodyKey: string; category: string }> = [
   { bodyKey: 'buildingType',                 category: 'building_type' },
   { bodyKey: 'emergencyContactRelationship', category: 'relationship' },
 ];
-// eslint-disable-next-line @typescript-eslint/no-explicit-any — same loose sb
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- same loose sb
 // typing the other loaders in this file use.
 async function validateSoDropdownFields(
   sb: any,

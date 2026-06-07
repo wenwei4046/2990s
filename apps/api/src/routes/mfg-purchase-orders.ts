@@ -686,7 +686,7 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   // Commander 2026-05-31 — pickSupplierId carries the per-pick supplier override
   // (MRP) through to effectiveSupplierId / the PO grouping key. null on the
   // legacy soItems path and the general picker (those have no per-pick supplier).
-  let pickedItems: Array<{ row: SoItem; qty: number; pickSupplierId: string | null }> = [];
+  const pickedItems: Array<{ row: SoItem; qty: number; pickSupplierId: string | null }> = [];
 
   if (body.picks && body.picks.length > 0) {
     const ids = body.picks.map((p) => p.soItemId);

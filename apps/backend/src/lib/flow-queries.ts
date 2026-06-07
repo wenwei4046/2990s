@@ -66,6 +66,8 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+// baseQuery is a custom-hook factory — only ever called from use* hooks below.
+// eslint-disable-next-line react-hooks/rules-of-hooks
 const baseQuery = <T>(key: string[], path: string) => useQuery({
   queryKey: key,
   queryFn: () => authedFetch<T>(path),

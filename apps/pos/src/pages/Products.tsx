@@ -831,7 +831,6 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
                     }}
                   >
                     {m.photo_url ? (
-                      // eslint-disable-next-line jsx-a11y/img-redundant-alt
                       <img
                         /* PR — Commander 2026-05-28: photo_url is a relative
                            proxy path; prefix VITE_API_URL so the browser

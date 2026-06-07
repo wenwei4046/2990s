@@ -977,7 +977,7 @@ export const MfgSalesOrdersList = () => {
     // Commander 2026-05-30 — "Issue Delivery Order" is ALWAYS shown in the menu
     // (so the operator never thinks the feature vanished). When there's nothing
     // left to deliver, tell them plainly instead of silently doing nothing.
-    if (!Boolean(row.has_undelivered) || ['CANCELLED', 'CLOSED', 'ON_HOLD'].includes(row.status)) {
+    if (!row.has_undelivered || ['CANCELLED', 'CLOSED', 'ON_HOLD'].includes(row.status)) {
       window.alert('Nothing to be converted — every line on this Sales Order is already delivered (or the order is closed / cancelled / on hold).');
       return;
     }
