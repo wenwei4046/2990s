@@ -9,7 +9,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
-import { useMfgSalesOrders } from '../lib/flow-queries';
+import { useMfgSalesOrdersSummary } from '../lib/flow-queries';
 import styles from './Dashboard.module.css';
 
 /* Phase C2 — Dashboard reads Sales Orders (mfg_sales_orders), not the legacy
@@ -63,7 +63,7 @@ const isToday = (iso: string | null | undefined): boolean => {
 
 export const Dashboard = () => {
   const { staff } = useAuth();
-  const salesOrders = useMfgSalesOrders(undefined);
+  const salesOrders = useMfgSalesOrdersSummary();
 
   const list = useMemo<ReadonlyArray<SoRow>>(
     () => (salesOrders.data?.salesOrders ?? []) as SoRow[],

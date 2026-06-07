@@ -19,7 +19,7 @@
 //       effective-date drawer.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from 'react';
 import {
   Download,
   Upload,
@@ -238,7 +238,12 @@ const SkuMasterTab = () => {
   const allRows = useMemo(() => products ?? [], [products]);
   const isSofaView = category === 'SOFA';
   const isMattressView = category === 'MATTRESS';
-  const sofaSizes = config.data?.data?.sofaSizes ?? ['24', '26', '28', '30', '32', '35'];
+  // Memoized so its reference is stable across renders — otherwise the fallback
+  // array literal would change every render and defeat ProductRow's React.memo.
+  const sofaSizes = useMemo(
+    () => config.data?.data?.sofaSizes ?? ['24', '26', '28', '30', '32', '35'],
+    [config.data],
+  );
 
   // PR #39 + #107 — distinct base_model values for the current category.
   // Commander 2026-05-26: "为什么 bedframe 没有像 sofa 那样". Extended from
@@ -288,12 +293,14 @@ const SkuMasterTab = () => {
   const visibleIds = useMemo(() => rows.map((r) => r.id), [rows]);
   const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
   const someSelected = !allSelected && visibleIds.some((id) => selectedIds.has(id));
-  const toggleRow = (id: string) =>
+  // Stable identity so it can be passed straight to the memoized ProductRow
+  // (no per-row inline closure → only the toggled row re-renders).
+  const toggleRow = useCallback((id: string) =>
     setSelectedIds((prev) => {
       const n = new Set(prev);
       if (n.has(id)) n.delete(id); else n.add(id);
       return n;
-    });
+    }), []);
   const toggleAllVisible = () =>
     setSelectedIds((prev) => {
       const n = new Set(prev);
@@ -557,7 +564,7 @@ const SkuMasterTab = () => {
                 tier={tier}
                 onOpenSuppliers={setSuppliersRow}
                 selected={selectedIds.has(row.id)}
-                onToggleSelected={() => toggleRow(row.id)}
+                onToggleSelected={toggleRow}
               />
             ))}
             {!isLoading && !error && rows.length === 0 && (
@@ -608,7 +615,7 @@ const SkuMasterTab = () => {
   );
 };
 
-const ProductRow = ({
+const ProductRow = memo(({
   row, editMode, isSofaView, isMattressView, sofaSizes, tier, onOpenSuppliers,
   selected, onToggleSelected,
 }: {
@@ -622,7 +629,7 @@ const ProductRow = ({
   /** PR #82 — multi-select state lives on SkuMasterTab; row just renders
       the checkbox + reports clicks. */
   selected:         boolean;
-  onToggleSelected: () => void;
+  onToggleSelected: (id: string) => void;
 }) => {
   // Local draft of the seat_height_prices array — buffers user edits before
   // committing on blur. Reset whenever the row's data changes upstream.
@@ -661,7 +668,7 @@ const ProductRow = ({
           type="checkbox"
           aria-label={`Select ${row.code}`}
           checked={selected}
-          onChange={onToggleSelected}
+          onChange={() => onToggleSelected(row.id)}
           style={{ cursor: 'pointer' }}
         />
       </td>
@@ -815,7 +822,8 @@ const ProductRow = ({
       <td className={styles.numCell}>{fmtUnit(row.unit_m3_milli)}</td>
     </tr>
   );
-};
+});
+ProductRow.displayName = 'ProductRow';
 
 /* Free-text branding input for Mattress rows. Commits on blur or Enter. */
 const BrandingInput = ({

@@ -350,6 +350,23 @@ const snapshotUnitCostSen = async (
 
 mfgSalesOrders.get('/', async (c) => {
   const sb = c.get('supabase');
+
+  /* Dashboard summary mode (`?summary=1`): the landing page only needs to bucket
+     SOs by status/proceeded_at and count "new today" — it does NOT need the
+     payment-totals view join or the per-line stock-status second query. Return
+     just those 6 columns so the Dashboard isn't paying for 500 fully-hydrated
+     rows + a line-item aggregation on first paint. Bucketing stays in the
+     frontend (single source of truth — no SQL duplication). */
+  if (c.req.query('summary')) {
+    const { data, error } = await sb
+      .from('mfg_sales_orders')
+      .select('doc_no, status, proceeded_at, local_total_centi, created_at, so_date')
+      .order('so_date', { ascending: false })
+      .limit(500);
+    if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+    return c.json({ salesOrders: data ?? [] });
+  }
+
   /* Follow-up #83 — read from the view that joins payments ledger totals so
      Balance column is live (= local_total − sum(payments)). Header column
      `balance_centi` is still in the SELECT for backward compat (the grid

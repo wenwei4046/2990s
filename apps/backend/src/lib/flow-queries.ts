@@ -354,6 +354,10 @@ export const useDeletePurchaseInvoiceItem = () => {
 
 /* ── Mfg Sales Order ─────────────────────────────────────────────────── */
 export const useMfgSalesOrders = (status?: string) => baseQuery<{ salesOrders: any[] }>(['mfg-sales-orders', status ?? 'all'], `/mfg-sales-orders${status ? `?status=${status}` : ''}`);
+/* Dashboard-only lightweight read: 6 columns, no payment-totals view, no
+   per-line stock-status pass. Separate cache key so it doesn't collide with the
+   full SO list. */
+export const useMfgSalesOrdersSummary = () => baseQuery<{ salesOrders: any[] }>(['mfg-sales-orders', 'summary'], `/mfg-sales-orders?summary=1`);
 export const useMfgSalesOrderDetail = (docNo: string | null) => useQuery({
   queryKey: ['mfg-sales-order-detail', docNo],
   queryFn: () => authedFetch<{ salesOrder: any; items: any[] }>(`/mfg-sales-orders/${docNo}`),

@@ -34,6 +34,7 @@ import {
   useState,
 } from 'react';
 import { Search, Columns3, RotateCcw, Filter } from 'lucide-react';
+import { useDebouncedValue } from '../lib/hooks';
 import styles from './DataGrid.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -435,15 +436,35 @@ function DataGridInner<T>({
   }, [columns, layout.order, effectiveHidden, expandable]);
 
   // ── Filtered + sorted + grouped rows ──────────────────────────────
+  /* Precompute one lowercased search blob per row (once per rows/columns
+     change) so a keystroke is a single substring test instead of
+     rows × columns work that re-builds each cell's search value (and, for
+     JSX cells, constructs React nodes) on every character. */
+  const searchBlobs = useMemo(() => {
+    const m = new Map<T, string>();
+    for (const row of rows) {
+      let blob = '';
+      for (const c of columns) {
+        const sv = c.searchValue ? c.searchValue(row) : coerceSearchString(c.accessor(row));
+        // '\n' separator so adjacent columns can't form a false cross-boundary match.
+        blob += `${sv.toLowerCase()}\n`;
+      }
+      m.set(row, blob);
+    }
+    return m;
+  }, [rows, columns]);
+
+  /* Debounce the value that drives filtering (the input itself stays bound to
+     `search`, so typing is instant) — keeps large lists responsive while
+     typing. Separate from the autocomplete debounce elsewhere. */
+  const debouncedSearch = useDebouncedValue(search, 150);
+
   const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
     const active = Object.entries(filters).filter(([, vals]) => vals.length > 0);
     if (!q && active.length === 0) return rows;
     return rows.filter((row) => {
-      if (q && !columns.some((c) => {
-        const sv = c.searchValue ? c.searchValue(row) : coerceSearchString(c.accessor(row));
-        return sv.toLowerCase().includes(q);
-      })) return false;
+      if (q && !(searchBlobs.get(row) ?? '').includes(q)) return false;
       for (const [colKey, vals] of active) {
         const c = columns.find((cc) => cc.key === colKey);
         if (!c) continue;
@@ -451,7 +472,7 @@ function DataGridInner<T>({
       }
       return true;
     });
-  }, [rows, columns, search, filters, colValue]);
+  }, [rows, columns, debouncedSearch, filters, filterColValue, searchBlobs]);
 
   // Distinct values for the currently-open filter dropdown.
   const filterValues = useMemo(() => {
@@ -531,7 +552,7 @@ function DataGridInner<T>({
 
     const walk = (node: Node, level: number, parentPath: string) => {
       for (const child of node.children.values()) {
-        const path = parentPath ? `${parentPath} ${child.value}` : child.value;
+        const path = parentPath ? `${parentPath}${child.value}` : child.value;
         const totalRows = collectRows(child).length;
         const collapsed = collapsedGroups.has(path);
         out.push({ kind: 'group', level, path, label: `${groupKeys[level]?.label ?? ''}: ${child.value}`, count: totalRows, collapsed });
