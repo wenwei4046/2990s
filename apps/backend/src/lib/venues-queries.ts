@@ -7,32 +7,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
-
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
-
-async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  if (!API_URL) throw new Error('VITE_API_URL is not set');
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) throw new Error('not_authenticated');
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      authorization: `Bearer ${token}`,
-      ...(init?.body ? { 'content-type': 'application/json' } : {}),
-    },
-  });
-  if (!res.ok) {
-    let detail = '';
-    try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
-    throw new Error(`${res.status} ${res.statusText}: ${detail}`);
-  }
-  if (res.status === 204) return undefined as T;
-  const text = await res.text();
-  if (!text) return undefined as T;
-  return JSON.parse(text) as T;
-}
+import { authedFetch } from './authed-fetch';
 
 export type VenueRow = {
   id: string;

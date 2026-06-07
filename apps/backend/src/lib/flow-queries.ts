@@ -6,65 +6,12 @@
 // Kept terse — each module has list/detail/create/status hooks.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { authedFetch } from './authed-fetch';
 import { supabase } from './supabase';
 
+// Direct multipart upload (useUploadSoItemPhoto) needs the raw token + URL —
+// authedFetch is JSON-only, so these stay for that one FormData POST.
 const API_URL = import.meta.env.VITE_API_URL;
-
-async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) throw new Error('not_authenticated');
-  const headers = {
-    ...(init?.headers ?? {}),
-    authorization: `Bearer ${token}`,
-    ...(init?.body ? { 'content-type': 'application/json' } : {}),
-  };
-  let res = await fetch(`${API_URL}${path}`, { ...init, headers });
-
-  /* Edge #J (systemic) — every ship path's server route returns HTTP 409
-     short_stock unless the JSON body carries confirmShortStock:true. Catch it
-     once here: prompt the operator "ship anyway?" and on confirm replay the
-     same request with confirmShortStock:true merged in. Doing it at the single
-     request chokepoint means no individual mutation hook has to opt in, so a
-     new ship endpoint can never regress to dumping the raw 409 at the user. */
-  if (res.status === 409 && typeof init?.body === 'string') {
-    const text = await res.clone().text();
-    if (text.includes('"short_stock"') && confirmShortStock(text)) {
-      const retryBody = JSON.stringify({ ...JSON.parse(init.body), confirmShortStock: true });
-      res = await fetch(`${API_URL}${path}`, { ...init, headers, body: retryBody });
-    }
-  }
-
-  /* Sofa whole-set HARD block (Wei Siang 2026-06-03) — a sofa set must ship as a
-     complete set from ONE production batch (one dye lot). If no single batch on
-     hand covers the whole set, it must NOT ship (it would split a dye lot or
-     strand an orphan half-set). Unlike short_stock there is NO "ship anyway"
-     retry. Surface the server's plain-English reason here at the single
-     chokepoint so every ship path (New DO, from-sos, Add-Line, MRP grab) shows
-     the same message instead of dumping the raw 409 JSON. */
-  if (res.status === 409) {
-    const text = await res.clone().text();
-    if (text.includes('"sofa_no_batch"')) {
-      let msg = "This sofa set can't ship yet — no single production batch on hand covers the whole set. Wait until one complete batch is received.";
-      try { const b = JSON.parse(text) as { message?: string }; if (b?.message) msg = b.message; } catch { /* keep fallback */ }
-      throw new Error(msg);
-    }
-    /* Type B — partial sofa set: must ship the whole set together. Hard block. */
-    if (text.includes('"sofa_partial_set"')) {
-      let msg = "A sofa set must ship whole from one batch — this delivery leaves part of the set behind. Include the rest of the set, or ship none of it.";
-      try { const b = JSON.parse(text) as { message?: string }; if (b?.message) msg = b.message; } catch { /* keep fallback */ }
-      throw new Error(msg);
-    }
-  }
-
-  if (!res.ok) {
-    let detail = '';
-    try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
-    throw new Error(`${res.status} ${res.statusText}: ${detail}`);
-  }
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
-}
 
 // baseQuery is a custom-hook factory — only ever called from use* hooks below.
 // eslint-disable-next-line react-hooks/rules-of-hooks
@@ -372,33 +319,6 @@ export const useCreateMfgSalesOrder = () => {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] }),
   });
 };
-
-/* Edge #J — render the shortage detail out of a 409 short_stock body and ask
-   the operator whether to ship anyway (stock goes negative). Returns true on
-   confirm. Called by authedFetch, which then replays the request with
-   confirmShortStock:true. Returns false (no ship) if the body can't be parsed. */
-function confirmShortStock(raw: string): boolean {
-  try {
-    const jsonStart = raw.indexOf('{');
-    const body = JSON.parse(raw.slice(jsonStart)) as {
-      shortages?: Array<{
-        itemCode: string; warehouseName: string | null;
-        needed: number; available: number; short: number;
-        alternatives?: Array<{ warehouseCode: string | null; warehouseName: string | null; available: number }>;
-      }>;
-    };
-    const lines = (body.shortages ?? []).map((s) => {
-      const alts = (s.alternatives ?? []).slice(0, 3)
-        .map((a) => `${a.warehouseCode ?? a.warehouseName ?? '?'} (${a.available})`)
-        .join(', ');
-      const altHint = alts ? `\n   Other warehouses: ${alts}` : '';
-      return `• ${s.itemCode}\n   At ${s.warehouseName ?? 'this warehouse'}: need ${s.needed}, available ${s.available} (short ${s.short})${altHint}`;
-    }).join('\n\n');
-    return window.confirm(`Stock not enough at the selected warehouse:\n\n${lines}\n\nShip anyway? (Stock will go negative.)`);
-  } catch {
-    return false;
-  }
-}
 
 /* Manual "Re-allocate stock to SOs now" — walks every active SO line and
    flips PENDING/READY against live inventory. Auto-advances SO header
