@@ -511,7 +511,40 @@ export const useUpdateMfgSalesOrderStatus = () => {
       authedFetch<{ salesOrder: unknown }>(`/mfg-sales-orders/${docNo}/status`, {
         method: 'PATCH', body: JSON.stringify({ status }),
       }),
-    onSuccess: (_, vars) => {
+    /* Optimistic update (TanStack canonical pattern): flip the status pill
+       instantly, then let the server confirm. cancel → snapshot → patch cache;
+       onError restores the snapshot (a server reject — e.g. a 409 ship guard —
+       cleanly reverts the pill); onSettled re-syncs from the server. Status is a
+       plain field with no client-side cascade, so this is safe to show eagerly. */
+    onMutate: async ({ docNo, status }) => {
+      const detailKey = ['mfg-sales-order-detail', docNo];
+      await qc.cancelQueries({ queryKey: ['mfg-sales-orders'] });
+      await qc.cancelQueries({ queryKey: detailKey });
+      const prevDetail = qc.getQueryData(detailKey);
+      const prevLists = qc.getQueriesData<{ salesOrders?: Array<Record<string, unknown>> }>({ queryKey: ['mfg-sales-orders'] });
+      // Patch the detail header status.
+      qc.setQueryData(detailKey, (old: unknown) => {
+        if (!old || typeof old !== 'object') return old;
+        const o = old as { salesOrder?: Record<string, unknown> };
+        if (!o.salesOrder) return old;
+        return { ...o, salesOrder: { ...o.salesOrder, status } };
+      });
+      // Patch every cached list row for this doc_no.
+      for (const [key, data] of prevLists) {
+        if (!data?.salesOrders) continue;
+        qc.setQueryData(key, {
+          ...data,
+          salesOrders: data.salesOrders.map((r) => (r.doc_no === docNo ? { ...r, status } : r)),
+        });
+      }
+      return { detailKey, prevDetail, prevLists };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (!ctx) return;
+      qc.setQueryData(ctx.detailKey, ctx.prevDetail);
+      for (const [key, data] of ctx.prevLists) qc.setQueryData(key, data);
+    },
+    onSettled: (_data, _err, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-status-changes', vars.docNo] });
