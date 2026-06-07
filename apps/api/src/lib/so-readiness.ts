@@ -21,6 +21,8 @@
 //                       pending → "/"-joined list of categories that ARE ready
 // ----------------------------------------------------------------------------
 
+import { isServiceLine } from '@2990s/shared';
+
 export const MAIN_CATEGORIES = new Set(['SOFA', 'BEDFRAME', 'MATTRESS']);
 
 /** Normalise a free-text item_group to one of the known buckets. */
@@ -36,6 +38,8 @@ export function normCategory(raw: string | null | undefined): string {
 
 export type ReadinessLine = {
   item_group: string | null;
+  /** Used to detect SERVICE lines (SVC- code) when item_group is ambiguous. */
+  item_code?: string | null;
   stock_status: 'PENDING' | 'READY' | string;
   cancelled?: boolean | null;
 };
@@ -71,6 +75,11 @@ export function summariseReadiness(lines: ReadinessLine[]): ReadinessSummary {
   let anyAccPending = false;
 
   for (const l of live) {
+    /* SERVICE lines (delivery fee / dispose / lift) have NO inventory — they
+       must never gate stock readiness nor show in the Stock Status pill.
+       Previously SERVICE fell into the accessory (`else`) bucket and a delivery
+       fee kept the SO showing "ACC". Skip them entirely. */
+    if (isServiceLine({ itemGroup: l.item_group, itemCode: l.item_code })) continue;
     const cat = normCategory(l.item_group);
     const isMain = MAIN_CATEGORIES.has(cat);
     /* stock_status 'READY' = fully allocated. 'PARTIAL' (Commander 2026-05-30

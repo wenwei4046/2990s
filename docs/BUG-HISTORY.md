@@ -4,6 +4,22 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-08-001 — SERVICE lines (delivery fee) counted as accessories in SO Stock Status
+
+**Symptom (Wei Siang):** SOs with a SERVICE line (e.g. `SVC-DELIVERY` / delivery fee) showed Stock Status stuck on "ACC" / accessory-ready forever, and the fee line itself got `stock_status = READY`. A service has no inventory and must not appear in stock readiness at all.
+
+**Root cause:** `summariseReadiness` (`so-readiness.ts`) only treated SOFA/BEDFRAME/MATTRESS as MAIN; **everything else — including SERVICE — fell into the `else` (accessory) bucket**, so a delivery-fee line was counted as a (ready) accessory in the readiness pill. Separately, `so-delivery-sync` stamped `stock_status = READY` on every shipped line, services included. (`so-stock-allocation` already skipped services → inconsistent per-line state.)
+
+**Fix:** (branch `fix/service-stock-status`)
+1. `summariseReadiness` `continue`s on `isServiceLine(...)` — services never count toward MAIN/ACC/pending nor the pill. `ReadinessLine` gained `item_code` so the SVC- code is detected even when `item_group` is mislabelled.
+2. List endpoint + `so-stock-allocation.ts` pass `item_code` through.
+3. `so-delivery-sync.ts` skips SERVICE when stamping `stock_status = READY` (delivery *coverage* still includes them — a fee still rides the DO).
+4. Real ACCESSORY lines unchanged. 4 unit tests added. Pill recomputes live → existing SOs fixed on next load (no backfill; stale `READY` on old service lines is now ignored).
+
+**Caught by:** Wei Siang spotted permanent "ACC Ready" on a mattress + delivery-fee SO.
+
+---
+
 ## BUG-2026-06-07-002 — Whole-stack audit batch (5 fixes)
 
 Three-agent frontend/backend/database audit; each finding re-verified at file:line before fixing (several agent-flagged items were dismissed as by-design or stale).

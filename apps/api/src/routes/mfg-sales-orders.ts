@@ -529,10 +529,10 @@ mfgSalesOrders.get('/', async (c) => {
        categories still pending. */
     const readinessByDoc = new Map<string, ReturnType<typeof summariseReadiness>>();
     {
-      const linesByDoc = new Map<string, Array<{ item_group: string | null; stock_status: string; cancelled: boolean }>>();
-      for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_group: string; stock_status: string; cancelled: boolean }>) {
+      const linesByDoc = new Map<string, Array<{ item_group: string | null; item_code: string | null; stock_status: string; cancelled: boolean }>>();
+      for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_group: string; item_code: string | null; stock_status: string; cancelled: boolean }>) {
         const arr = linesByDoc.get(it.doc_no) ?? [];
-        arr.push({ item_group: it.item_group, stock_status: it.stock_status, cancelled: it.cancelled });
+        arr.push({ item_group: it.item_group, item_code: it.item_code, stock_status: it.stock_status, cancelled: it.cancelled });
         linesByDoc.set(it.doc_no, arr);
       }
       for (const [docNo, ls] of linesByDoc) {

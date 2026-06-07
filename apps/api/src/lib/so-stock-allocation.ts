@@ -477,6 +477,7 @@ export async function recomputeSoStockAllocation(
          Auto-regress only when a MAIN line goes back to PENDING. */
       const readinessLines = docLines.map((l) => ({
         item_group: l.item_group,
+        item_code: l.item_code,
         stock_status: targetStatusById.get(l.id) ?? l.stock_status,
       }));
       const r = summariseReadiness(readinessLines);

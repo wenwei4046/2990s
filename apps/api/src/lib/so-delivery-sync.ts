@@ -15,6 +15,7 @@
 //     this module's async wrapper is the thin Supabase glue around it.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { isServiceLine } from '@2990s/shared';
 import { recordSoAudit } from './so-audit';
 
 export type SoLineQty = { id: string; qty: number };
@@ -92,10 +93,10 @@ export async function syncSoDeliveredFromDo(
       if (!canAdvance && !canRelease) continue;
 
       const { data: soItemsRaw } = await sb
-        .from('mfg_sales_order_items').select('id, qty')
+        .from('mfg_sales_order_items').select('id, qty, item_code, item_group')
         .eq('doc_no', docNo).eq('cancelled', false);
-      const soLines = ((soItemsRaw ?? []) as Array<{ id: string; qty: number }>)
-        .map((l) => ({ id: l.id, qty: Number(l.qty) }));
+      const soLines = ((soItemsRaw ?? []) as Array<{ id: string; qty: number; item_code: string | null; item_group: string | null }>)
+        .map((l) => ({ id: l.id, qty: Number(l.qty), item_code: l.item_code, item_group: l.item_group }));
       if (soLines.length === 0) continue;
 
       // Cumulative delivered qty per SO line across ALL non-cancelled DOs that
@@ -159,7 +160,11 @@ export async function syncSoDeliveredFromDo(
         if (!r.soItemId) continue;
         netByLine.set(r.soItemId, (netByLine.get(r.soItemId) ?? 0) - (r.qty ?? 0));
       }
-      const shippedLines = soLines.filter((l) => (netByLine.get(l.id) ?? 0) >= l.qty);
+      // SERVICE lines (delivery fee / dispose) have no inventory — never stamp a
+      // stock_status on them (they don't participate in stock readiness).
+      const shippedLines = soLines.filter((l) =>
+        !isServiceLine({ itemGroup: l.item_group, itemCode: l.item_code }) &&
+        (netByLine.get(l.id) ?? 0) >= l.qty);
       for (const l of shippedLines) {
         await sb.from('mfg_sales_order_items')
           .update({ stock_status: 'READY', stock_qty_ready: l.qty })
