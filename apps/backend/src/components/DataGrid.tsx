@@ -34,6 +34,7 @@ import {
   useState,
 } from 'react';
 import { Search, Columns3, RotateCcw, Filter } from 'lucide-react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useDebouncedValue } from '../lib/hooks';
 import { SkeletonRows } from './Skeleton';
 import styles from './DataGrid.module.css';
@@ -690,6 +691,105 @@ function DataGridInner<T>({
   const totalCols = visibleColumns.length;
   const groupedCount = layout.groupBy.length;
 
+  /* Windowed rendering for large FLAT lists only. Skipped when grouped or
+     expandable (variable row heights) or when the list is small — in those
+     cases the normal full map renders, byte-identical to before. So at today's
+     list sizes this is a no-op; it only kicks in past VIRTUAL_THRESHOLD rows. */
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const VIRTUAL_THRESHOLD = 25;
+  const canVirtualize = !isLoading && !embedded && groupedCount === 0 && !expandable && renderList.length > VIRTUAL_THRESHOLD;
+  const rowVirtualizer = useVirtualizer({
+    count: canVirtualize ? renderList.length : 0,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 30,
+    overscan: 14,
+  });
+  const virtualItems = canVirtualize ? rowVirtualizer.getVirtualItems() : [];
+  const padTop = virtualItems.length ? virtualItems[0]!.start : 0;
+  const padBottom = virtualItems.length
+    ? rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1]!.end
+    : 0;
+
+  /* One grid row (group banner OR data row + optional expansion). Extracted so
+     the normal path and the virtualized window render through the same code. */
+  const renderGridRow = (item: Render, idx: number) => {
+    if (item.kind === 'group') {
+      return (
+        <tr key={`g-${item.path}`} className={styles.groupRow} onClick={() => toggleGroup(item.path)}>
+          <td className={styles.groupRowCell} colSpan={totalCols || 1} style={{ paddingLeft: 8 + item.level * 16 }}>
+            <span className={styles.groupCaret}>{item.collapsed ? '>' : 'v'}</span>
+            {item.label}
+            <span className={styles.groupCount}>({item.count})</span>
+          </td>
+        </tr>
+      );
+    }
+    const row = item.row;
+    const key = rowKey(row);
+    const expandKey = expandable ? expansionId(row) : null;
+    const isExpanded = expandKey != null && expandedRows.has(expandKey);
+    return (
+      <Fragment key={`f-${key}-${idx}`}>
+        <tr
+          className={`${styles.tr} ${selectedKey === key ? styles.trSelected : ''}`}
+          style={{ ...(rowStyle?.(row)), ...(expandKey != null ? { cursor: 'pointer' } : {}) }}
+          onClick={() => { setSelectedKey(key); onRowClick?.(row); if (expandKey != null) toggleExpand(expandKey); }}
+          onDoubleClick={() => onRowDoubleClick?.(row)}
+          onContextMenu={(e) => {
+            if (!contextMenu) return;
+            const items = contextMenu(row);
+            if (!items || items.length === 0) return;
+            e.preventDefault();
+            setSelectedKey(key);
+            setRowCtx({ x: e.clientX, y: e.clientY, items });
+          }}
+        >
+          {visibleColumns.map((col) => {
+            const w = layout.widths[col.key] ?? col.width ?? 140;
+            if (col.key === '__expand__' && expandable && expandKey) {
+              return (
+                <td
+                  key={col.key}
+                  className={styles.td}
+                  style={{ width: w, maxWidth: w, padding: '4px 6px', textAlign: 'center' }}
+                >
+                  <button
+                    type="button"
+                    aria-label={isExpanded ? 'Collapse row' : 'Expand row'}
+                    onClick={(e) => { e.stopPropagation(); toggleExpand(expandKey); }}
+                    style={{
+                      background: 'transparent', border: 0, padding: 0, cursor: 'pointer',
+                      color: 'var(--c-burnt)', fontSize: 12, lineHeight: 1,
+                      display: 'inline-block',
+                      transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                      transition: 'transform 120ms ease',
+                    }}
+                  >&#9656;</button>
+                </td>
+              );
+            }
+            return (
+              <td
+                key={col.key}
+                className={`${styles.td} ${col.align === 'right' ? styles.tdAlignRight : ''}`}
+                style={{ width: w, maxWidth: w }}
+              >
+                {col.accessor(row)}
+              </td>
+            );
+          })}
+        </tr>
+        {isExpanded && expandable && (
+          <tr className={styles.tr} style={{ background: 'var(--c-cream)' }}>
+            <td colSpan={visibleColumns.length} style={{ padding: 0, borderTop: '1px solid var(--line)' }}>
+              {expandable.renderExpansion(row)}
+            </td>
+          </tr>
+        )}
+      </Fragment>
+    );
+  };
+
   return (
     <div className={`${styles.root} ${embedded ? styles.rootEmbedded : ''}`}>
       {/* Toolbar — caller's actions + global search + Columns popover.
@@ -825,7 +925,7 @@ function DataGridInner<T>({
       )}
 
       {/* Table */}
-      <div className={`${styles.scroll} ${embedded ? styles.scrollEmbedded : ''}`}>
+      <div ref={scrollRef} className={`${styles.scroll} ${embedded ? styles.scrollEmbedded : ''}`}>
         <table className={styles.table}>
           <thead className={`${styles.thead} ${embedded ? styles.theadEmbedded : ''}`}>
             <tr>
@@ -884,93 +984,21 @@ function DataGridInner<T>({
             {!isLoading && renderList.length === 0 && (
               <tr><td className={styles.empty} colSpan={totalCols || 1}>{emptyMessage}</td></tr>
             )}
-            {!isLoading && renderList.map((item, idx) => {
-              if (item.kind === 'group') {
-                return (
-                  <tr key={`g-${item.path}`} className={styles.groupRow} onClick={() => toggleGroup(item.path)}>
-                    <td className={styles.groupRowCell} colSpan={totalCols || 1} style={{ paddingLeft: 8 + item.level * 16 }}>
-                      <span className={styles.groupCaret}>{item.collapsed ? '>' : 'v'}</span>
-                      {item.label}
-                      <span className={styles.groupCount}>({item.count})</span>
-                    </td>
-                  </tr>
-                );
-              }
-              const row = item.row;
-              const key = rowKey(row);
-              const expandKey = expandable ? expansionId(row) : null;
-              const isExpanded = expandKey != null && expandedRows.has(expandKey);
-              return (
-                <Fragment key={`f-${key}-${idx}`}>
-                  <tr
-                    className={`${styles.tr} ${selectedKey === key ? styles.trSelected : ''}`}
-                    style={{ ...(rowStyle?.(row)), ...(expandKey != null ? { cursor: 'pointer' } : {}) }}
-                    /* Commander 2026-05-29 — on an expandable grid, clicking
-                       anywhere on the row toggles its expansion (not just the
-                       front caret). Interactive cells (links/buttons) stop
-                       propagation, so they still do their own thing. */
-                    onClick={() => { setSelectedKey(key); onRowClick?.(row); if (expandKey != null) toggleExpand(expandKey); }}
-                    onDoubleClick={() => onRowDoubleClick?.(row)}
-                    onContextMenu={(e) => {
-                      if (!contextMenu) return;
-                      const items = contextMenu(row);
-                      if (!items || items.length === 0) return;
-                      e.preventDefault();
-                      // Single-row select on right-click so toolbar state + the
-                      // menu's onClick handlers agree on which row is in play.
-                      setSelectedKey(key);
-                      setRowCtx({ x: e.clientX, y: e.clientY, items });
-                    }}
-                  >
-                    {visibleColumns.map((col) => {
-                      const w = layout.widths[col.key] ?? col.width ?? 140;
-                      /* Synthetic chevron column — render the rotate-on-expand
-                         caret. Stops propagation so toggling doesn't also
-                         select the row, which would force the entire visible
-                         rowset to re-render. */
-                      if (col.key === '__expand__' && expandable && expandKey) {
-                        return (
-                          <td
-                            key={col.key}
-                            className={styles.td}
-                            style={{ width: w, maxWidth: w, padding: '4px 6px', textAlign: 'center' }}
-                          >
-                            <button
-                              type="button"
-                              aria-label={isExpanded ? 'Collapse row' : 'Expand row'}
-                              onClick={(e) => { e.stopPropagation(); toggleExpand(expandKey); }}
-                              style={{
-                                background: 'transparent', border: 0, padding: 0, cursor: 'pointer',
-                                color: 'var(--c-burnt)', fontSize: 12, lineHeight: 1,
-                                display: 'inline-block',
-                                transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                                transition: 'transform 120ms ease',
-                              }}
-                            >&#9656;</button>
-                          </td>
-                        );
-                      }
-                      return (
-                        <td
-                          key={col.key}
-                          className={`${styles.td} ${col.align === 'right' ? styles.tdAlignRight : ''}`}
-                          style={{ width: w, maxWidth: w }}
-                        >
-                          {col.accessor(row)}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                  {isExpanded && expandable && (
-                    <tr className={styles.tr} style={{ background: 'var(--c-cream)' }}>
-                      <td colSpan={visibleColumns.length} style={{ padding: 0, borderTop: '1px solid var(--line)' }}>
-                        {expandable.renderExpansion(row)}
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              );
-            })}
+            {/* Small / grouped / expandable lists: render every row (unchanged). */}
+            {!isLoading && !canVirtualize && renderList.map((item, idx) => renderGridRow(item, idx))}
+            {/* Large flat lists: windowed — only the visible slice is in the DOM,
+               with spacer rows reserving the scroll height above and below. */}
+            {!isLoading && canVirtualize && (
+              <>
+                {padTop > 0 && (
+                  <tr aria-hidden="true"><td colSpan={totalCols || 1} style={{ height: padTop, padding: 0, border: 0 }} /></tr>
+                )}
+                {virtualItems.map((vi) => renderGridRow(renderList[vi.index]!, vi.index))}
+                {padBottom > 0 && (
+                  <tr aria-hidden="true"><td colSpan={totalCols || 1} style={{ height: padBottom, padding: 0, border: 0 }} /></tr>
+                )}
+              </>
+            )}
           </tbody>
         </table>
       </div>
