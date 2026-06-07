@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
@@ -9,6 +10,13 @@ export default defineConfig({
   envDir: '../../',
   server: { port: 6274, host: true, strictPort: false },
   preview: { port: 4274 },
+  // Component tests run under jsdom with Testing Library matchers. Pure-logic
+  // .test.ts files run fine here too (jsdom is a superset of the node globals).
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test-setup.ts'],
+  },
   build: {
     rollupOptions: {
       output: {

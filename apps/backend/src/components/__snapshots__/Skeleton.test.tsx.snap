@@ -1,0 +1,9 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Skeleton primitives > Skeleton renders a single sized shimmer bar (snapshot) 1`] = `
+<span
+  aria-hidden="true"
+  class="_block_de2255  "
+  style="width: 120px; height: 12px;"
+/>
+`;
