@@ -131,7 +131,7 @@ productModels.get('/:id', async (c) => {
   // without a second roundtrip. Cap at 200 (no Model exceeds ~30 today).
   const { data: skus } = await supabase
     .from('mfg_products')
-    .select('id, code, name, size_code, size_label, status, base_price_sen, price1_sen, cost_price_sen, unit_m3_milli')
+    .select('id, code, name, size_code, size_label, status, base_price_sen, price1_sen, cost_price_sen, unit_m3_milli, pos_active, one_shot, source_doc_no')
     .eq('model_id', id)
     .order('code')
     .limit(200);
