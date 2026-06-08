@@ -2,9 +2,11 @@
 // /purchase-consignment-orders — PC Orders to suppliers for goods held on
 // CONSIGNMENT (the supplier's stock parked at MY warehouse).
 //
-// OFF-LEDGER: a Purchase Consignment Order, like its receive/return children,
-// writes NO inventory_movements. The goods remain the supplier's until a future
-// settlement converts them into a real owned-stock GRN. This route is a faithful
+// ORDER-ONLY (no inventory): a Purchase Consignment Order itself writes NO
+// inventory_movements — it is just the order. (Its receive/return children ARE
+// on-ledger since 2026-06-05: the receive books an IN, the return an OUT.) The
+// goods remain the supplier's until a future settlement converts them into a
+// real owned-stock GRN. This route is a faithful
 // clone of /mfg-purchase-orders (apps/api/src/routes/mfg-purchase-orders.ts) with
 // the owned-PO pipeline stripped out:
 //   • DROPPED: the MRP shortage picker (/outstanding-so-items), the From-SO bulk
