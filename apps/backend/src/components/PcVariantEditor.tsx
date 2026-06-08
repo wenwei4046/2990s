@@ -4,7 +4,8 @@
 // bedframes, Fabrics + Seat Size/Leg for sofas, plus the Special Orders
 // checkbox row. Keeping all three forms on this one component is the whole
 // point — they must never drift apart again.
-import type { MaintenanceConfig } from '../lib/mfg-products-queries';
+import { useMemo } from 'react';
+import { useSpecialAddons, type MaintenanceConfig } from '../lib/mfg-products-queries';
 import type { FabricTrackingRow } from '../lib/fabric-queries';
 import styles from '../pages/SalesOrderDetail.module.css';
 
@@ -53,6 +54,21 @@ export const PcVariantEditor = ({
   maint: MaintenanceConfig;
 }) => {
   const specials = Array.isArray(variants.specials) ? (variants.specials as string[]) : [];
+
+  // Specials pool now comes from special_addons (Backend↔POS parity, Loo
+  // 2026-06-08), filtered by this line's category — replacing the legacy
+  // maint.specials / maint.sofaSpecials string pools. `code` shares the old
+  // value namespace so saved picks keep matching.
+  const specialAddonsQ = useSpecialAddons();
+  const specialsPool = useMemo(() => {
+    const cat = category === 'bedframe' ? 'BEDFRAME' : category === 'sofa' ? 'SOFA' : null;
+    if (!cat) return [];
+    return (specialAddonsQ.data ?? [])
+      .filter((r) => r.active && r.categories.includes(cat))
+      .slice()
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.code.localeCompare(b.code))
+      .map((r) => ({ value: r.code }));
+  }, [specialAddonsQ.data, category]);
 
   if (category === 'bedframe') {
     return (
@@ -108,7 +124,7 @@ export const PcVariantEditor = ({
           </label>
         </div>
         <SpecialsCheckboxes
-          pool={maint.specials}
+          pool={specialsPool}
           picked={specials}
           onChange={(arr) => onChange('specials', arr)}
         />
@@ -160,7 +176,7 @@ export const PcVariantEditor = ({
           <span />
         </div>
         <SpecialsCheckboxes
-          pool={maint.sofaSpecials}
+          pool={specialsPool}
           picked={specials}
           onChange={(arr) => onChange('specials', arr)}
         />
