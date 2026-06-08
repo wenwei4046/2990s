@@ -50,6 +50,7 @@ export const SalesOrderPrint = () => {
         <MetaRow order={data} />
         <PartiesRow order={data} />
         <ItemsTable order={data} />
+        {data.payments.length > 0 && <PaymentsBlock order={data} />}
         <div className={styles.afterItems}>
           <SignatureBlock order={data} />
           <TotalsBlock order={data} />
@@ -163,6 +164,36 @@ const ItemsTable = ({ order }: { order: PrintableSO }) => (
       ))}
     </tbody>
   </table>
+);
+
+/* Per-tender payment breakdown (Loo 2026-06-09). Shown whenever the SO has at
+   least one recorded payment so a customer who paid across several methods or
+   visits sees exactly what was paid, how, and how much — matching the backend
+   SO PDF's Payments table. Columns: Date · Method · Amount · Approval code. */
+const PaymentsBlock = ({ order }: { order: PrintableSO }) => (
+  <section className={styles.payments}>
+    <div className={styles.paymentsTitle}>Payments received</div>
+    <table className={styles.paymentsTable}>
+      <thead>
+        <tr>
+          <th className={styles.payColDate}>Date</th>
+          <th className={styles.payColMethod}>Method</th>
+          <th className={styles.payColAmount}>Amount</th>
+          <th className={styles.payColCode}>Approval code</th>
+        </tr>
+      </thead>
+      <tbody>
+        {order.payments.map((p) => (
+          <tr key={p.id}>
+            <td className={styles.payColDate}>{fmtIsoDate(p.date)}</td>
+            <td className={styles.payColMethod}>{p.methodLabel}</td>
+            <td className={styles.payColAmount}>{fmtMoney(p.amount)}</td>
+            <td className={styles.payColCode}>{p.approvalCode ?? '—'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </section>
 );
 
 const TotalsBlock = ({ order }: { order: PrintableSO }) => (

@@ -31,6 +31,20 @@ export interface PrintableLine {
   lineTotal: number; // MYR
 }
 
+/** One row of the SO payment ledger, flattened for the customer-facing doc
+ *  (Loo 2026-06-09 — show every tender + amount when a customer splits the
+ *  payment across methods/visits). Sourced from
+ *  GET /mfg-sales-orders/:docNo/payments. */
+export interface PrintablePayment {
+  id: string;
+  date: string | null; // paid_at (YYYY-MM-DD)
+  /** Flattened method label, identical to the backend SO PDF:
+   *  "Merchant (GHL) · 6m installment" / "Online (TNG)" / "Cash". */
+  methodLabel: string;
+  approvalCode: string | null;
+  amount: number; // MYR
+}
+
 export interface PrintableSO {
   id: string;
   date: string | null;
@@ -45,12 +59,36 @@ export interface PrintableSO {
   paid: number;
   total: number;
   balance: number;
+  /** Per-tender breakdown (deposit + every drawer payment). May be empty for
+   *  unpaid SOs or an older API build without the payments endpoint. */
+  payments: PrintablePayment[];
   signature: string | null; // data URL, ready for <img src>
   lines: PrintableLine[];
 }
 
 // mfg money columns are in centi (1/100 MYR), same as GET /mfg-sales-orders/mine.
 const centiToMyr = (c: number | null | undefined): number => (c ?? 0) / 100;
+
+/* Flatten a payment-ledger row to one human label. Mirrors the backend SO PDF
+   (apps/backend/src/lib/sales-order-pdf.ts → methodLabel) byte-for-byte so the
+   customer-facing print and the backend-issued PDF read identically. */
+function paymentMethodLabel(p: {
+  method?: string | null;
+  merchant_provider?: string | null;
+  online_type?: string | null;
+  installment_months?: number | null;
+}): string {
+  if (p.method === 'merchant') {
+    const base = p.merchant_provider ? `Merchant (${p.merchant_provider})` : 'Merchant';
+    return p.installment_months ? `${base} · ${p.installment_months}m installment` : base;
+  }
+  if (p.method === 'transfer') return p.online_type ? `Online (${p.online_type})` : 'Online';
+  if (p.method === 'installment') {
+    const base = p.merchant_provider ? `Installment (${p.merchant_provider})` : 'Installment';
+    return p.installment_months ? `${base} · ${p.installment_months}m` : base;
+  }
+  return 'Cash';
+}
 
 // Split a one-string address at the 5-digit Malaysian postcode into 2 lines
 // (street, then "postcode city state") rather than at every comma.
@@ -73,9 +111,14 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
       const token = session.data.session?.access_token;
       if (!token) throw new Error('not_authenticated');
 
-      const res = await fetch(`${API_URL}/mfg-sales-orders/${encodeURIComponent(docNo)}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
+      // Fetch the SO and its payment ledger together — the per-tender
+      // breakdown is a separate endpoint (GET /:docNo/payments), the same one
+      // the staff order drawer consumes.
+      const auth = { authorization: `Bearer ${token}` };
+      const [res, payRes] = await Promise.all([
+        fetch(`${API_URL}/mfg-sales-orders/${encodeURIComponent(docNo)}`, { headers: auth }),
+        fetch(`${API_URL}/mfg-sales-orders/${encodeURIComponent(docNo)}/payments`, { headers: auth }),
+      ]);
       if (!res.ok) throw new Error(`GET /mfg-sales-orders/${docNo} failed (${res.status})`);
       const body = (await res.json()) as {
         salesOrder: Record<string, any>;
@@ -85,6 +128,30 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
       const so = body.salesOrder ?? {};
       const items = body.items ?? [];
       const pwpCodes = body.pwpCodes ?? [];
+
+      /* Per-tender breakdown. Oldest-first reads like a receipt (deposit →
+         balance). A failure or an older API without the endpoint degrades to
+         an empty list — the doc still renders with the aggregate totals. */
+      let payments: PrintablePayment[] = [];
+      try {
+        if (payRes.ok) {
+          const payBody = (await payRes.json()) as { payments?: Record<string, any>[] };
+          payments = (payBody.payments ?? [])
+            .map((p) => ({
+              id: String(p.id),
+              date: typeof p.paid_at === 'string' ? p.paid_at : null,
+              methodLabel: paymentMethodLabel(p),
+              approvalCode:
+                typeof p.approval_code === 'string' && p.approval_code.trim()
+                  ? p.approval_code.trim()
+                  : null,
+              amount: centiToMyr(p.amount_centi),
+            }))
+            .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
+        }
+      } catch {
+        /* leave payments empty — totals block still shows Paid to date */
+      }
 
       // Bill-to address: address1..4 then "postcode city state". Skip blanks.
       const tail = [so.postcode, so.city, so.customer_state].filter(Boolean).join(' ');
@@ -189,6 +256,7 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
         paid,
         total,
         balance,
+        payments,
         signature,
         lines,
       };
