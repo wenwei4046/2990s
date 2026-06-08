@@ -81,7 +81,7 @@ const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: For
               )}
               {'pwp' in l.config && l.config.pwp && (
                 <div className={styles.itemDetail}>
-                  PWP price{'pwpTriggerLabel' in l.config && l.config.pwpTriggerLabel ? ` · 换购自 ${l.config.pwpTriggerLabel}` : ''}
+                  PWP price{'pwpTriggerLabel' in l.config && l.config.pwpTriggerLabel ? ` · from ${l.config.pwpTriggerLabel}` : ''}
                 </div>
               )}
             </div>

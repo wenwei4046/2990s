@@ -420,15 +420,19 @@
     padding: 0;
   }
   /* Hide everything outside the sales order page so other content
-     (topbar, auth gate spinners) doesn't end up on the printed page. */
+     (topbar, auth gate spinners) doesn't end up on the printed page.
+     NOTE: `sales-order-page` is a LITERAL global class on the <article>
+     (the JSX applies the string, not `styles.…`). In a .module.css the
+     selectors are hashed by default, so they MUST be wrapped in :global()
+     or they never match the element — which left the print blank. */
   body * {
     visibility: hidden;
   }
-  .sales-order-page,
-  .sales-order-page * {
+  :global(.sales-order-page),
+  :global(.sales-order-page) * {
     visibility: visible;
   }
-  .sales-order-page {
+  :global(.sales-order-page) {
     position: absolute;
     inset: 0;
   }

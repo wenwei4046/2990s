@@ -339,7 +339,16 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
   })();
 
   const addDraft = () => {
-    const d = newPaymentDraft(defaultStaffId);
+    /* Loo 2026-06-09 — seed the new row's amount with the OUTSTANDING balance
+       (grand total − already paid − amounts on other in-flight rows) so a full
+       balance payment is one click. On SO create the first row defaults to the
+       full total; a split second row defaults to the remainder. Mirrors the POS
+       Record-payment drawer + handover default. */
+    const paidNow =
+      persistedPayments.reduce((s, p) => s + (p.amount_centi || 0), 0) +
+      drafts.reduce((s, dr) => s + (dr.amountCenti || 0), 0);
+    const outstanding = Math.max(0, grandTotal - paidNow);
+    const d = { ...newPaymentDraft(defaultStaffId), amountCenti: outstanding };
     if (isSaved) {
       setSavedDrafts((prev) => [...prev, d]);
     } else {
