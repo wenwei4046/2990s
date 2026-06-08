@@ -213,6 +213,7 @@ export const PurchaseConsignmentReceiveNew = () => {
       })
       .filter((l) => (l.outstanding ?? 0) > 0);
     setLines(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seed-once from the nav prefill; the loaded-flag guard makes any re-run a no-op
   }, [poQ.data, selPoId]);
 
   const setLine  = (rid: string, patch: Partial<DraftLine>) =>

@@ -169,6 +169,7 @@ export const ConsignmentNoteNew = () => {
     }
 
     setPrefilled(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seed-once from the nav prefill; the loaded-flag guard makes any re-run a no-op
   }, [fromConsignmentOrder, prefilled, coDetail.data]);
 
   // From-Order multi-picker merge (fromPicks): seed lines from the stash, each

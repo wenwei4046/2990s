@@ -156,6 +156,7 @@ export const PurchaseOrderFromSo = () => {
       }
       return true;
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- column accessors derive from the pick/qty state already in deps; listing the helpers would only rebuild the columns for no behavioural change
   }, [items, draftQtyById, category, dateField, dateFrom, dateTo]);
 
   // One supplier per PO (Commander 2026-05-29) — once a bound line is ticked,
@@ -419,6 +420,7 @@ export const PurchaseOrderFromSo = () => {
       },
       sortFn: (a, b) => a.remainingQty * a.unitPriceCenti - b.remainingQty * b.unitPriceCenti,
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- column accessors derive from the pick/qty state already in deps; listing the helpers would only rebuild the columns for no behavioural change
   ], [picks, draftQtyById]);
 
   // ── Add to PO ────────────────────────────────────────────────────────

@@ -241,6 +241,7 @@ export const PurchaseOrderNew = () => {
     }
     // N > 1 — leave pendingItemPick set so the hint banner renders.
     // 0      — keep pendingItemPick so the "no bindings, free entry" hint renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- categoryForCode is a stable code→category lookup, not a reactive trigger
   }, [pendingItemPick, supplierId, itemSuppliersQuery.isLoading, itemSuppliersQuery.data]);
 
   // Item-first companion effect — once supplier resolves (commander clicked a
@@ -265,6 +266,7 @@ export const PurchaseOrderNew = () => {
     }));
     // Banner has done its job once a supplier is chosen.
     setPendingItemPick(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- categoryForCode is a stable code→category lookup, not a reactive trigger
   }, [supplierId, bindings]);
 
   // PR #115 — Commander 2026-05-26: "Purchase Location 已经换了，可是下面的

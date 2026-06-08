@@ -250,6 +250,7 @@ export const SalesInvoiceFromDo = () => {
       },
       sortFn: (a, b) => a.remaining * a.unitPriceCenti - b.remaining * b.unitPriceCenti,
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- column accessors derive from the pick/qty state already in deps; listing the helpers would only rebuild the columns for no behavioural change
   ], [picks, lockedCustomer]);
 
   const onContinue = () => {

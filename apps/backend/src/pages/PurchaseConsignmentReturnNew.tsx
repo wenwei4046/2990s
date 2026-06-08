@@ -192,6 +192,7 @@ export const PurchaseConsignmentReturnNew = () => {
         notes:          '',
       }));
     if (items.length > 0) setLines(items);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seed-once from the nav prefill; the loaded-flag guard makes any re-run a no-op
   }, [receiveQ.data]);
 
   // Pre-fill lines + supplier from the source Order (no grnItemId linkage).

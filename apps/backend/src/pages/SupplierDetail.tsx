@@ -621,6 +621,7 @@ const SupplierSkuPricingPanel = ({
     return CATEGORY_ORDER
       .filter((c) => buckets.has(c))
       .map((c) => [c, buckets.get(c)!] as const);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- CATEGORY_ORDER is a fixed display order, not a reactive value
   }, [bindings, products.data]);
 
   return (

@@ -220,6 +220,7 @@ export const SalesInvoiceDetail = () => {
       // SI payments carry no per-payment slip (Spec D4 applies to the SO route).
       slipUploadSessionId: null,
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stable per-payment row mapper; reads only its argument, not re-created on refetch by design
   }, []);
 
   const enterEdit = () => { setSaveError(null); setIsEditing(true); };

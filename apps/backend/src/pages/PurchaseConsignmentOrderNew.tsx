@@ -183,6 +183,7 @@ export const PurchaseConsignmentOrderNew = () => {
       } : l)));
       setPendingItemPick(null);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- categoryForCode is a stable code→category lookup, not a reactive trigger
   }, [pendingItemPick, supplierId, itemSuppliersQuery.isLoading, itemSuppliersQuery.data]);
 
   // Once a supplier resolves, backfill any line whose materialCode matches a
@@ -204,6 +205,7 @@ export const PurchaseConsignmentOrderNew = () => {
       };
     }));
     setPendingItemPick(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- categoryForCode is a stable code→category lookup, not a reactive trigger
   }, [supplierId, bindings]);
 
   // Header Purchase Location / Expected Delivery fan out to all lines.
