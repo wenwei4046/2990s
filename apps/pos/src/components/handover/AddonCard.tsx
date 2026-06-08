@@ -22,7 +22,11 @@ export const AddonCard = ({
 
   const priceLine = addon.kind === 'floors_items'
     ? `RM${addon.perFloorItem} per floor per item`
-    : `RM${addon.price} per ${addon.unit ?? 'piece'}`;
+    : addon.kind === 'flat'
+      // flat books exactly once (no qty control below) — a per-unit label
+      // here would promise per-piece pricing the SO never charges.
+      ? `RM${addon.price} · charged once`
+      : `RM${addon.price} per ${addon.unit ?? 'piece'}`;
 
   const badgeAmount = addon.kind === 'floors_items'
     ? (addon.perFloorItem ?? 0)
@@ -81,8 +85,11 @@ export const AddonCard = ({
               <input
                 type="number"
                 min={1}
+                max={99}
                 value={selection.qty ?? 1}
-                onChange={(e) => onChange({ ...selection, qty: Math.max(1, Number(e.target.value)) })}
+                // Mirror the server's MAX_ADDON_QTY=99 clamp so the tablet
+                // preview can't show a total the SO will silently cap.
+                onChange={(e) => onChange({ ...selection, qty: Math.min(99, Math.max(1, Number(e.target.value))) })}
               />
             </label>
           )}

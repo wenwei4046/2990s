@@ -129,6 +129,35 @@ describe('computeAddonServiceLines (§4.2 + D6)', () => {
     }]);
   });
 
+  /* Migration 0160 — a per-row service_sku wins over both the legacy
+     hardcoded map and the generic bucket, so admin-assigned SKUs aggregate
+     per add-on instead of all pooling under SVC-ADDON. */
+  it('a per-row serviceSku books under its own code (0160)', () => {
+    const rows: AddonRowInput[] = [
+      { id: 'dispose-old-wardrobe', kind: 'qty', price: 200, label: 'Dispose old wardrobe', enabled: true, serviceSku: 'SVC-DISPOSE-WARDROBE' },
+    ];
+    const lines = computeAddonServiceLines([{ id: 'dispose-old-wardrobe', qty: 2 }], rows);
+    expect(lines).toEqual([{
+      itemCode: 'SVC-DISPOSE-WARDROBE',
+      description: 'Dispose old wardrobe',
+      qty: 2, unitPriceSen: 20000, totalSen: 40000,
+    }]);
+  });
+
+  it('serviceSku overrides the legacy hardcoded map; blank falls through', () => {
+    const rows: AddonRowInput[] = [
+      // row-level SKU wins even where the legacy map has an entry
+      { id: 'dispose-mattress', kind: 'qty', price: 80, label: 'Dispose old mattress', enabled: true, serviceSku: 'SVC-DISPOSE-MATTRESS-V2' },
+      // blank/whitespace serviceSku is ignored → legacy map still applies
+      { id: 'dispose-bedframe', kind: 'qty', price: 80, label: 'Dispose old bedframe', enabled: true, serviceSku: '  ' },
+    ];
+    const lines = computeAddonServiceLines(
+      [{ id: 'dispose-mattress', qty: 1 }, { id: 'dispose-bedframe', qty: 1 }],
+      rows,
+    );
+    expect(lines.map((l) => l.itemCode)).toEqual(['SVC-DISPOSE-MATTRESS-V2', 'SVC-DISPOSE-BEDFRAME']);
+  });
+
   it('client cannot inflate or zero the price — amounts come from the rows', () => {
     // selection carries no price field at all; row price drives everything
     const lines = computeAddonServiceLines(
