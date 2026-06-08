@@ -588,6 +588,18 @@ export function NewModelDialog({
   // SKU generation produced zero rows, so we never leave an empty phantom model.
   const deleteMut   = useDeleteProductModel();
 
+  // (A) Wei Siang 2026-06-08 — optional one-step supplier assignment: pick a
+  // supplier + their code here and every generated SKU is bound to it in one
+  // batch, so the operator doesn't have to re-open "Supplier codes by Model".
+  const suppliersQ      = useSuppliers({ status: 'ACTIVE' });
+  const bindingsBatchMut = useCreateBindingsBatch();
+  const [supplierId,   setSupplierId]   = useState('');
+  const [supplierCode, setSupplierCode] = useState('');
+  const [supUnitPrice, setSupUnitPrice] = useState('');
+  const [supLeadDays,  setSupLeadDays]  = useState('7');
+  const [supMoq,       setSupMoq]       = useState('1');
+  const [supIsMain,    setSupIsMain]    = useState(false);
+
   // PR #87 — Commander 2026-05-26: bulk pickers should default to all-on so a
   // new Model is born offering every variant from the global pool; commander
   // toggles off what doesn't apply. Re-runs on pool change so a Maintenance
@@ -697,13 +709,14 @@ export function NewModelDialog({
       // skip generation (matches the existing "empty allowed_options = no
       // restriction" semantics — commander can pick later from detail page).
       let totalGenerated = 0;
+      let boundInserted  = 0;
       if (sharedSizes || sharedComps) {
         const results = await Promise.all(createdModels.map(async (m) => {
           try {
             const r = await generateMut.mutateAsync({ id: m.id });
-            return { model: m, generated: r.generated ?? 0, error: null as string | null };
+            return { model: m, generated: r.generated ?? 0, codes: r.codes ?? [], error: null as string | null };
           } catch (err) {
-            return { model: m, generated: 0, error: err instanceof Error ? err.message : String(err) };
+            return { model: m, generated: 0, codes: [] as string[], error: err instanceof Error ? err.message : String(err) };
           }
         }));
         totalGenerated = results.reduce((sum, r) => sum + r.generated, 0);
@@ -723,6 +736,49 @@ export function NewModelDialog({
             `nothing was left behind. Please check the sizes and try again.`,
           );
         }
+
+        // (A) Optional supplier binding — bind every freshly-generated SKU to
+        // the chosen supplier in ONE batch. materialCode is the AUTHORITATIVE
+        // server-returned code; the per-SKU supplier code reuses the proven
+        // composeSupplierSku (size-aware) so we never write the bare model code
+        // to every SKU (the duplicate-supplier-code bug from PR #206/#209).
+        // Best-effort: the SKUs are valid even if binding fails.
+        if (supplierId && supplierCode.trim()) {
+          const baseCode   = supplierCode.trim();
+          const priceCenti = Math.round((parseFloat(supUnitPrice) || 0) * 100);
+          const lead       = parseInt(supLeadDays, 10);
+          const moqN       = parseInt(supMoq, 10);
+          const allCodes   = results.flatMap((r) => r.codes);
+          const bindings: NewBinding[] = allCodes.map((code) => {
+            const sizeCode = (category === 'MATTRESS' || category === 'BEDFRAME')
+              ? (code.match(/\(([^)]+)\)\s*$/)?.[1] ?? null) : null;
+            const skuObj: Pick<MfgProductRow, 'code' | 'category' | 'size_code'> = { code, category, size_code: sizeCode };
+            return {
+              materialKind:   'mfg_product' as MaterialKind,
+              materialCode:   code,
+              materialName:   code,
+              supplierSku:    composeSupplierSku(baseCode, skuObj),
+              unitPriceCenti: priceCenti,
+              currency:       'MYR' as Currency,
+              leadTimeDays:   Number.isFinite(lead) ? lead : 7,
+              moq:            Number.isFinite(moqN) && moqN > 0 ? moqN : 1,
+              isMainSupplier: supIsMain,
+            };
+          });
+          if (bindings.length > 0) {
+            try {
+              const res = await bindingsBatchMut.mutateAsync({ supplierId, bindings });
+              boundInserted = res.inserted;
+            } catch (be) {
+              // eslint-disable-next-line no-alert
+              alert(
+                `SKUs were created, but binding them to the supplier failed: ` +
+                `${be instanceof Error ? be.message : String(be)}. ` +
+                `You can bind them later from “Supplier codes by Model”.`,
+              );
+            }
+          }
+        }
       }
 
       // Single-row + onCreated → chain into the caller's auto-generate flow
@@ -732,7 +788,8 @@ export function NewModelDialog({
       } else {
         // eslint-disable-next-line no-alert
         alert(`Created ${createdModels.length} Model${createdModels.length === 1 ? '' : 's'}` +
-          (totalGenerated > 0 ? ` · auto-generated ${totalGenerated} SKU${totalGenerated === 1 ? '' : 's'}.` : '.'));
+          (totalGenerated > 0 ? ` · auto-generated ${totalGenerated} SKU${totalGenerated === 1 ? '' : 's'}` : '') +
+          (boundInserted > 0 ? ` · bound ${boundInserted} to supplier` : '') + '.');
         onClose();
       }
     } catch (e2) {
@@ -877,6 +934,53 @@ export function NewModelDialog({
             })}
             onSetAll={(vs) => setPickedComps(new Set(vs))}
           />
+        )}
+
+        {/* (A) Optional supplier assignment — bind every generated SKU in one
+            step so the operator doesn't re-open "Supplier codes by Model". */}
+        {(category === 'SOFA' || category === 'BEDFRAME' || category === 'MATTRESS') && (
+          <div style={{ borderTop: '1px solid var(--line)', marginTop: 8, paddingTop: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+              <label className={styles.compactField} style={{ minWidth: 220 }}>
+                <span>Supplier (optional)</span>
+                <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+                  <option value="">— None —</option>
+                  {(suppliersQ.data ?? []).map((s) => (
+                    <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
+                  ))}
+                </select>
+              </label>
+              {supplierId && (
+                <>
+                  <label className={styles.compactField} style={{ minWidth: 150 }}>
+                    <span>Supplier code</span>
+                    <input type="text" value={supplierCode} onChange={(e) => setSupplierCode(e.target.value)} placeholder="e.g. 9055" />
+                  </label>
+                  <label className={styles.compactField} style={{ width: 120 }}>
+                    <span>Unit price (RM)</span>
+                    <input type="number" inputMode="decimal" min={0} step="0.01" value={supUnitPrice} onChange={(e) => setSupUnitPrice(e.target.value)} placeholder="0.00" />
+                  </label>
+                  <label className={styles.compactField} style={{ width: 90 }}>
+                    <span>Lead (days)</span>
+                    <input type="number" inputMode="numeric" min={0} value={supLeadDays} onChange={(e) => setSupLeadDays(e.target.value)} placeholder="7" />
+                  </label>
+                  <label className={styles.compactField} style={{ width: 80 }}>
+                    <span>MOQ</span>
+                    <input type="number" inputMode="numeric" min={1} value={supMoq} onChange={(e) => setSupMoq(e.target.value)} placeholder="1" />
+                  </label>
+                  <label className={styles.compactField} style={{ width: 70 }}>
+                    <span>Main</span>
+                    <input type="checkbox" checked={supIsMain} onChange={(e) => setSupIsMain(e.target.checked)} style={{ width: 16, height: 16 }} />
+                  </label>
+                </>
+              )}
+            </div>
+            {supplierId && supplierCode.trim() && (
+              <div style={{ fontSize: 'var(--fs-10)', color: 'var(--fg-muted)', marginTop: 4 }}>
+                Every generated SKU will be bound to this supplier with code “{supplierCode.trim()}” (auto-suffixed per size/variant).
+              </div>
+            )}
+          </div>
         )}
 
         {/* (D) Live preview — what the system will actually create. */}
