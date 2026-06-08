@@ -33,7 +33,7 @@ import {
   useGrnDetail,
 } from '../lib/flow-queries';
 import { useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
-import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
+import { useMfgProducts, useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
 import { MoneyInput } from '../components/MoneyInput';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import styles from './SalesOrderDetail.module.css';
@@ -121,6 +121,19 @@ export const PurchaseInvoiceNew = () => {
   // bedframe/sofa lines (same dropdown pools as New GRN / New PO).
   const maintQ = useMaintenanceConfig('master');
   const maint  = maintQ.data?.data ?? null;
+
+  // Special Orders pool from special_addons (Backend↔POS parity, Loo
+  // 2026-06-08), filtered by category — replaces legacy maint.specials /
+  // maint.sofaSpecials. `code` shares the old value namespace.
+  const specialAddonsQ = useSpecialAddons();
+  const specialsPools = useMemo(() => {
+    const rows = (specialAddonsQ.data ?? [])
+      .filter((r) => r.active)
+      .slice()
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.code.localeCompare(b.code));
+    const pick = (cat: string) => rows.filter((r) => r.categories.includes(cat)).map((r) => ({ value: r.code, priceSen: 0 }));
+    return { bedframe: pick('BEDFRAME'), sofa: pick('SOFA') };
+  }, [specialAddonsQ.data]);
 
   const [supplierInvoiceRef, setSupplierInvoiceRef] = useState<string>('');
   const [invoiceDate, setInvoiceDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
@@ -668,7 +681,7 @@ export const PurchaseInvoiceNew = () => {
                         <VariantSelect label="Leg Height" options={maint!.legHeights}
                           value={String(l.variants?.legHeight ?? '')} onChange={(v) => setVariant('legHeight', v)} />
                         {/* Total Heights auto-computed (see setVariant). */}
-                        <VariantSelect label="Special" options={maint!.specials}
+                        <VariantSelect label="Special" options={specialsPools.bedframe}
                           value={String(l.variants?.special ?? '')} onChange={(v) => setVariant('special', v)} />
                       </div>
                     ) : (
@@ -677,7 +690,7 @@ export const PurchaseInvoiceNew = () => {
                           value={String(l.variants?.seatHeight ?? '')} onChange={(v) => setVariant('seatHeight', v)} />
                         <VariantSelect label="Leg Height" options={maint!.sofaLegHeights}
                           value={String(l.variants?.legHeight ?? '')} onChange={(v) => setVariant('legHeight', v)} />
-                        <VariantSelect label="Special" options={maint!.sofaSpecials}
+                        <VariantSelect label="Special" options={specialsPools.sofa}
                           value={String(l.variants?.special ?? '')} onChange={(v) => setVariant('special', v)} />
                         <label className={styles.field}>
                           <span className={styles.fieldLabel}>Fabrics (free text)</span>

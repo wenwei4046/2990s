@@ -29,7 +29,7 @@ import {
   type MaterialKind,
   type OutstandingSoItem,
 } from '../lib/suppliers-queries';
-import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
+import { useMfgProducts, useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
 import { useWarehouses } from '../lib/inventory-queries';
 import {
@@ -192,6 +192,19 @@ export const PurchaseOrderNew = () => {
   const maint =
     supplierMaintQ.data?.data ?? masterMaintQ.data?.data ?? null;
   const fabrics = useFabricTrackings().data ?? [];
+
+  // Special Orders pool from special_addons (Backend↔POS parity, Loo
+  // 2026-06-08), filtered by category — replaces legacy maint.specials /
+  // maint.sofaSpecials. `code` shares the old value namespace.
+  const specialAddonsQ = useSpecialAddons();
+  const specialsPools = useMemo(() => {
+    const rows = (specialAddonsQ.data ?? [])
+      .filter((r) => r.active)
+      .slice()
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.code.localeCompare(b.code));
+    const pick = (cat: string) => rows.filter((r) => r.categories.includes(cat)).map((r) => ({ value: r.code, priceSen: 0 }));
+    return { bedframe: pick('BEDFRAME'), sofa: pick('SOFA') };
+  }, [specialAddonsQ.data]);
 
   /* PR #126 — Helper: look up an mfg_product by code → returns its category
      (lowercased). Used by both supplier-first and item-first flows to tag
@@ -1139,7 +1152,7 @@ export const PurchaseOrderNew = () => {
                               nothing to choose here. */}
                         </div>
                         <SpecialsCheckboxes
-                          pool={maint!.specials}
+                          pool={specialsPools.bedframe}
                           picked={Array.isArray(l.variants.specials) ? (l.variants.specials as string[]) : []}
                           onChange={(arr) => setVariant(l.rid, 'specials', arr)}
                         />
@@ -1192,7 +1205,7 @@ export const PurchaseOrderNew = () => {
                           <span />
                         </div>
                         <SpecialsCheckboxes
-                          pool={maint!.sofaSpecials}
+                          pool={specialsPools.sofa}
                           picked={Array.isArray(l.variants.specials) ? (l.variants.specials as string[]) : []}
                           onChange={(arr) => setVariant(l.rid, 'specials', arr)}
                         />

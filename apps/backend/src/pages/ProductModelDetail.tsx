@@ -26,7 +26,7 @@ import {
   useProductModel, useUpdateProductModel, useDeleteProductModel, useGenerateModelSkus,
   type AllowedOptions, type AllowedOptions as AOpts,
 } from '../lib/product-models-queries';
-import { useMaintenanceConfig, useUpdateMfgProductStatus } from '../lib/mfg-products-queries';
+import { useMaintenanceConfig, useUpdateMfgProductStatus, useSpecialAddons } from '../lib/mfg-products-queries';
 import { useFabricLibrary } from '../lib/queries';
 import { resolveSizeInfo } from '../lib/size-info';
 import { supabase } from '../lib/supabase';
@@ -92,6 +92,22 @@ export const ProductModelDetail = ({
   // option group for SOFA Models.
   const fabricLibQ = useFabricLibrary();
 
+  // Specials pool now comes from the Special Add-ons table (special_addons),
+  // not the legacy maintenance_config specials/sofaSpecials (Loo 2026-06-08 —
+  // Backend↔POS parity). The add-on `code` shares the same string namespace
+  // as the old maintenance values, so a Model's saved allowed_options.specials
+  // keep matching with no data migration. Filter by the Model's category +
+  // active, ordered like the Special Add-ons tab.
+  const specialAddonsQ = useSpecialAddons();
+  const specialsByCategory = useMemo(() => {
+    const rows = (specialAddonsQ.data ?? [])
+      .filter((r) => r.active)
+      .slice()
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.code.localeCompare(b.code));
+    const pick = (cat: string) => rows.filter((r) => r.categories.includes(cat)).map((r) => r.code);
+    return { bedframe: pick('BEDFRAME'), sofa: pick('SOFA') };
+  }, [specialAddonsQ.data]);
+
   const [branding, setBranding] = useState('');
   const [modelCode, setModelCode] = useState('');
   const [name, setName] = useState('');
@@ -135,13 +151,13 @@ export const ProductModelDetail = ({
     const sofaComps = cfg?.sofaCompartments ?? FALLBACK_SOFA_COMPARTMENTS;
     const sofaSizes = cfg?.sofaSizes ?? ['24', '26', '28', '30', '32', '35'];
     const sofaLegs  = (cfg?.sofaLegHeights ?? []).map((o) => o.value);
-    const sofaSpec  = (cfg?.sofaSpecials ?? []).map((o) => o.value);
+    const sofaSpec  = specialsByCategory.sofa;
     const bfSizes   = cfg?.bedframeSizes ?? FALLBACK_BEDFRAME_SIZES;
     const divan     = (cfg?.divanHeights ?? []).map((o) => o.value);
     const totalH    = (cfg?.totalHeights ?? []).map((o) => o.value);
     const gaps      = cfg?.gaps ?? [];
     const legs      = (cfg?.legHeights ?? []).map((o) => o.value);
-    const specials  = (cfg?.specials ?? []).map((o) => o.value);
+    const specials  = specialsByCategory.bedframe;
     const matSizes  = cfg?.mattressSizes ?? FALLBACK_MATTRESS_SIZES;
 
     if (data.model.category === 'SOFA') {
@@ -161,7 +177,7 @@ export const ProductModelDetail = ({
     }
     setAllowed(next);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.model?.id, data?.model?.updated_at, cfg]);
+  }, [data?.model?.id, data?.model?.updated_at, cfg, specialsByCategory]);
 
   if (isLoading) return <div className={styles.loading}>Loading model…</div>;
   if (error) {
@@ -438,7 +454,7 @@ export const ProductModelDetail = ({
             sofaCompartments={maintenance.data?.data?.sofaCompartments ?? FALLBACK_SOFA_COMPARTMENTS}
             sofaSizes={maintenance.data?.data?.sofaSizes ?? ['24', '26', '28', '30', '32', '35']}
             sofaLegHeights={(maintenance.data?.data?.sofaLegHeights ?? []).map((o) => o.value)}
-            sofaSpecials={(maintenance.data?.data?.sofaSpecials ?? []).map((o) => o.value)}
+            sofaSpecials={specialsByCategory.sofa}
             sofaFabrics={(fabricLibQ.data ?? []).filter((f) => f.active).map((f) => f.id)}
           />
         )}
@@ -452,7 +468,7 @@ export const ProductModelDetail = ({
             totalHeights={(maintenance.data?.data?.totalHeights ?? []).map((o) => o.value)}
             gaps={maintenance.data?.data?.gaps ?? []}
             legHeights={(maintenance.data?.data?.legHeights ?? []).map((o) => o.value)}
-            specials={(maintenance.data?.data?.specials ?? []).map((o) => o.value)}
+            specials={specialsByCategory.bedframe}
           />
         )}
 

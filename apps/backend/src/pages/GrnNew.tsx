@@ -27,7 +27,7 @@ import { Button } from '@2990s/design-system';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
 import { usePurchaseOrderDetail, usePurchaseOrders, useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
-import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
+import { useMfgProducts, useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
 import { useWarehouses } from '../lib/inventory-queries';
 import { useRacks } from '../lib/warehouse-queries';
 import { ItemGroupPill } from '../lib/category-badges';
@@ -144,6 +144,19 @@ export const GrnNew = () => {
   // PO Edit modal: divan/leg/total height, gap, special, seat size, fabric).
   const maintQ = useMaintenanceConfig('master');
   const maint  = maintQ.data?.data ?? null;
+
+  // Special Orders pool now comes from special_addons (Backend↔POS parity, Loo
+  // 2026-06-08), filtered by category — replacing the legacy maint.specials /
+  // maint.sofaSpecials pools. `code` shares the old value namespace.
+  const specialAddonsQ = useSpecialAddons();
+  const specialsPools = useMemo(() => {
+    const rows = (specialAddonsQ.data ?? [])
+      .filter((r) => r.active)
+      .slice()
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.code.localeCompare(b.code));
+    const pick = (cat: string) => rows.filter((r) => r.categories.includes(cat)).map((r) => ({ value: r.code, priceSen: 0 }));
+    return { bedframe: pick('BEDFRAME'), sofa: pick('SOFA') };
+  }, [specialAddonsQ.data]);
 
   const outstanding = useMemo(
     () => (poListQ.data ?? []).filter((po) => po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED'),
@@ -916,7 +929,7 @@ export const GrnNew = () => {
                             onChange={(v) => setVariant('legHeight', v)} />
                           {/* Total Heights removed — auto-computed from Divan +
                               Leg + Gap (see setVariant). */}
-                          <VariantSelect label="Special" options={maint!.specials}
+                          <VariantSelect label="Special" options={specialsPools.bedframe}
                             value={String(l.variants?.special ?? '')}
                             onChange={(v) => setVariant('special', v)} />
                         </div>
@@ -929,7 +942,7 @@ export const GrnNew = () => {
                           <VariantSelect label="Leg Height" options={maint!.sofaLegHeights}
                             value={String(l.variants?.legHeight ?? '')}
                             onChange={(v) => setVariant('legHeight', v)} />
-                          <VariantSelect label="Special" options={maint!.sofaSpecials}
+                          <VariantSelect label="Special" options={specialsPools.sofa}
                             value={String(l.variants?.special ?? '')}
                             onChange={(v) => setVariant('special', v)} />
                           <label className={styles.field}>

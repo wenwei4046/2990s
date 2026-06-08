@@ -1202,12 +1202,14 @@ const MAINTENANCE_TABS: {
   { key: 'totalHeights', label: 'Total Heights', description: 'Total height (Divan + Gap + Leg) surcharge pricing', priced: true, section: 'Bedframe' },
   { key: 'gaps', label: 'Gaps', description: 'Bedframe gap height options (inches)', priced: false, section: 'Bedframe' },
   { key: 'legHeights', label: 'Leg Heights', description: 'Bedframe leg height options with surcharge pricing', priced: true, section: 'Bedframe' },
-  { key: 'specials', label: 'Specials', description: 'Bedframe special order options with surcharge pricing', priced: true, section: 'Bedframe' },
+  // 'specials' retired 2026-06-08 (Loo) — bedframe special orders moved to the
+  // Special Add-ons tab (special_addons / Product Add-ons), shared with POS.
 
   // ── Sofa (commander-edited variant pools) ───────────────────────────────
   { key: 'sofaSizes', label: 'Sizes', description: 'Available sofa seat height sizes (inches)', priced: false, section: 'Sofa' },
   { key: 'sofaLegHeights', label: 'Leg Heights', description: 'Sofa leg height options with surcharge pricing', priced: true, section: 'Sofa' },
-  { key: 'sofaSpecials', label: 'Specials', description: 'Sofa special order options with surcharge pricing', priced: true, section: 'Sofa' },
+  // 'sofaSpecials' retired 2026-06-08 (Loo) — sofa special orders moved to the
+  // Special Add-ons tab (special_addons / Product Add-ons), shared with POS.
   // Quick Presets editor entry retired (Chairman 2026-06-02) — removed from the
   // Maintenance rail in both apps. The sofaQuickPresets DATA + the shared
   // DEFAULT_SOFA_QUICK_PRESETS fallback are kept (Sofa Combos reference preset
