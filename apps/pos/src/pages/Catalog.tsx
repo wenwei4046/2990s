@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router';
 import {
   Package,
@@ -48,8 +48,10 @@ const productInitial = (name: string): string =>
    drill-in → Back round trip: the card Link carries the active filters as nav
    state, and the configurator hands them back as `restoreCatalog` on return.
    Because it rides this one history transition (not sessionStorage), any OTHER
-   entry — New Order, deep link, cart-line edit — opens clean by design. */
-interface CatalogFilters { cat: string; brand: string; q: string }
+   entry — New Order, deep link, cart-line edit — opens clean by design.
+   scrollY = window scroll at the moment the card was tapped, so Back lands on
+   the SAME frame (e.g. scrolled down to the Bed-frame row), not the page top. */
+interface CatalogFilters { cat: string; brand: string; q: string; scrollY?: number }
 
 /** Group SKUs by Model so the grid renders one card per Model, not one per
  *  SKU. A Model with 6 sizes would otherwise spam the grid with 6 identical
@@ -158,6 +160,19 @@ export const Catalog = () => {
   const [query, setQuery] = useState<string>(restore?.q ?? '');
 
   const rows = catalog.data ?? [];
+
+  // Restore the scroll frame ONCE, after the cards have rendered (the list is
+  // async — restoring before it has height would scroll nowhere). rAF lets the
+  // grid lay out first. Runs only on a drill-in → Back (restore.scrollY set).
+  const didRestoreScroll = useRef(false);
+  useEffect(() => {
+    if (didRestoreScroll.current) return;
+    const y = restore?.scrollY;
+    if (y == null) { didRestoreScroll.current = true; return; }
+    if (rows.length === 0) return; // catalog still loading — wait for the next run
+    didRestoreScroll.current = true;
+    requestAnimationFrame(() => window.scrollTo(0, y));
+  }, [rows.length, restore]);
   const cards = useMemo(() => buildCards(rows), [rows]);
 
   /* Sofa-exclusivity (Commander 2026-05-30): a sofa is sold on its own ticket.
@@ -521,7 +536,15 @@ const ProductCard = ({ p, blocked = false, linkState }: { p: CatalogCard; blocke
   }
 
   return (
-    <Link to={`/configure/${p.leadSkuId}`} state={linkState} className={styles.card}>
+    <Link
+      to={`/configure/${p.leadSkuId}`}
+      state={linkState}
+      // Stamp the live scroll position the instant the card is tapped. Link runs
+      // this before it navigates and passes the SAME state object by reference,
+      // so the fresh scrollY travels with it (a render-time value would be stale).
+      onClick={() => { if (linkState) linkState.fromCatalog.scrollY = window.scrollY; }}
+      className={styles.card}
+    >
       {inner}
     </Link>
   );
