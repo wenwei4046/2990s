@@ -1,6 +1,6 @@
 import { Fragment, type ReactNode } from 'react';
 import {
-  findModule, cellBbox, cellEdges, edgeContacts, isWideArmSeat,
+  findModule, cellBbox, cellEdges, edgeContacts, isWideArmSeat, lCapEdgeOf,
   EDGE_W, EDGE_N, EDGE_E, EDGE_S,
   type Cell, type Depth, type Rot, type Bbox, type SofaModuleSpec, type EdgeIdx,
 } from '@2990s/shared';
@@ -352,6 +352,11 @@ export const renderSeamlessGroup = (
     const isConsole = m.id === 'Console';
     const isCorner = m.group === 'Corner';
     const wide = isWideArmSeat(m.id);
+    // L-Shape chaise: its arm lives on the rotation-aware OUTER cap edge, not on
+    // an 'arm'-typed edge (the chaise has none — both short ends are 'open').
+    // lCapEdgeOf is the SAME source analyzeSofa uses for closure, so the drawn
+    // arm always sits where the geometry says the chaise closes. -1 for non-L.
+    const lCap = lCapEdgeOf(m.id, it.c.rot);
     // Corner (CNR): its two 'arm'-labelled edges are the corner BACKREST
     // wrapping the bend (MODULE_EDGES_BASE tags the backed sides 'arm'), so
     // they draw as BAND — matching renderCornerSofa's wrapped band — never as
@@ -359,9 +364,9 @@ export const renderSeamlessGroup = (
     // ANY contiguous group: a partial corner-in-progress (2A + CNR awaiting
     // its chaise) and 4-piece corners (2A + 1NA + CNR + 1B) that the exact-3
     // corner composite can't represent (Loo 2026-06-04, video repro).
-    // NOTE: the L-Shape chaise is still NOT handled — it has no 'arm' edge for
-    // its foot cap, so groups containing one are excluded upstream and keep
-    // their real per-module art.
+    // The L-Shape chaise now JOINS too: it has no 'arm'-typed edge, so its outer
+    // arm is drawn from lCap (lCapEdgeOf) below instead. Groups containing one
+    // are no longer excluded upstream (Loo 2026-06-09, solid-arm-cap choice).
 
     if (isConsole) {
       // Interior console keeps its REAL art (cropped to its silhouette), same as
@@ -410,6 +415,14 @@ export const renderSeamlessGroup = (
           const s = strip(r, e, armW);
           arms.push(<rect key={`am${i}-${e}`} x={s.x} y={s.y} width={s.w} height={s.h} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />);
         }
+      }
+      // L-Shape OUTER CAP → hard arm panel (same primitive as a normal arm).
+      // The chaise has no 'arm' edge, so this is the only place its outer arm is
+      // drawn; lCap is rotation-aware and matches analyzeSofa's closure cap, so
+      // a joined 2A + L renders as one L-sofa with the arm at the chaise corner.
+      if (!isConsole && !isCorner && e === lCap) {
+        const s = strip(r, e, armW);
+        arms.push(<rect key={`lc${i}-${e}`} x={s.x} y={s.y} width={s.w} height={s.h} fill={SOFA_ARM} stroke={SOFA_INK} strokeWidth={swInner} />);
       }
       // OUTLINE on free (outer) edges (thick); module BOUNDARY on touching edges (thin).
       const [x1, y1, x2, y2] = edgeLine(r, e);

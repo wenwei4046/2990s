@@ -97,9 +97,9 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
   // wrapped band (Loo 2026-06-04, "should be link together"). Single
   // contiguous group only, so disjoint layouts still tile (matches the canvas).
   const group = !corner && !seamless && !closedPlainBundle && cells.length >= 2 && groupSofas(cells, depth).length === 1
-    // Exclude only the L-Shape chaise — it has no 'arm' edge for its foot cap;
-    // groups containing one keep real per-module art (matches canvas).
-    && !cells.some((c) => findModule(c.moduleId)?.group === 'L-Shape')
+    // The L-Shape chaise now joins too — renderSeamlessGroup draws its outer arm
+    // from the lCap edge (Loo 2026-06-09), so a group with one no longer falls
+    // back to detached per-module art. (Matches the canvas.)
     // Exclude any FREE accessory (STOOL — Console is the only accessory the
     // schematic renderer knows how to draw). A quick pick saved with a stool
     // keeps real per-module art; matches the canvas, where free stools are

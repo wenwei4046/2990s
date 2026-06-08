@@ -26,6 +26,12 @@ import {
   canMirror,
   SNAP_CM,
   representativeArtCode,
+  lCapEdgeOf,
+  cellEdges,
+  EDGE_W,
+  EDGE_N,
+  EDGE_E,
+  EDGE_S,
   type Cell,
   type SofaProductPricing,
 } from '../sofa-build';
@@ -1129,5 +1135,33 @@ describe('representativeArtCode — base art key for custom/one-shot codes', () 
   });
   it('passes through an unknown family unchanged (no representative)', () => {
     expect(representativeArtCode('Console')).toBe('Console');
+  });
+});
+
+describe('lCapEdgeOf — outer arm cap of an L-Shape chaise (rotation-aware)', () => {
+  it('L(RHF) caps on E, L(LHF) caps on W at rot 0', () => {
+    expect(lCapEdgeOf('L(RHF)', 0)).toBe(EDGE_E);
+    expect(lCapEdgeOf('L(LHF)', 0)).toBe(EDGE_W);
+  });
+  it('rotates the cap edge +1 index per 90° CW (same as rotateEdges)', () => {
+    expect(lCapEdgeOf('L(RHF)', 90)).toBe(EDGE_S);
+    expect(lCapEdgeOf('L(RHF)', 180)).toBe(EDGE_W);
+    expect(lCapEdgeOf('L(RHF)', 270)).toBe(EDGE_N);
+    expect(lCapEdgeOf('L(LHF)', 90)).toBe(EDGE_N);
+  });
+  it('the cap edge is the chaise’s only non-back/front open end (matches cellEdges)', () => {
+    // L(RHF) base edges = [open, back, open, front]; the W end mates with the
+    // main sofa, so the cap must be the OTHER open end (E). Cross-check that the
+    // resolved cap edge really is an 'open' edge in the rotated frame.
+    for (const rot of [0, 90, 180, 270] as const) {
+      const cap = lCapEdgeOf('L(RHF)', rot);
+      const edges = cellEdges({ id: 't', moduleId: 'L(RHF)', x: 0, y: 0, rot } as Cell);
+      expect(edges[cap as number]).toBe('open');
+    }
+  });
+  it('returns -1 for any non-L module', () => {
+    expect(lCapEdgeOf('2A(LHF)', 0)).toBe(-1);
+    expect(lCapEdgeOf('CNR', 90)).toBe(-1);
+    expect(lCapEdgeOf('Console', 0)).toBe(-1);
   });
 });
