@@ -244,6 +244,8 @@ const SkuMasterTab = () => {
   // PR #39 — Model filter chip row (visible only on Sofa view).
   // Distinct base_model values pulled from current rows. 'all' = no filter.
   const [modelFilter, setModelFilter] = useState<string>('all');
+  // One-shot filter — narrows the grid to one_shot=true rows only.
+  const [oneShotOnly, setOneShotOnly] = useState(false);
 
   const { data: products, isLoading, error } = useMfgProducts({
     category: category === 'all' ? undefined : category,
@@ -275,11 +277,17 @@ const SkuMasterTab = () => {
   }, [allRows, supportsModelFilter]);
 
   // Apply Model filter (only when current category supports it + a specific
-  // model is picked).
+  // model is picked), then apply the one-shot filter.
   const rows = useMemo(() => {
-    if (!supportsModelFilter || modelFilter === 'all') return allRows;
-    return allRows.filter((r) => r.base_model === modelFilter);
-  }, [allRows, supportsModelFilter, modelFilter]);
+    let base = allRows;
+    if (supportsModelFilter && modelFilter !== 'all') {
+      base = base.filter((r) => r.base_model === modelFilter);
+    }
+    if (oneShotOnly) {
+      base = base.filter((r) => r.one_shot === true);
+    }
+    return base;
+  }, [allRows, supportsModelFilter, modelFilter, oneShotOnly]);
 
   // Reset Model filter when leaving a category that doesn't support it
   useEffect(() => {
@@ -413,6 +421,13 @@ const SkuMasterTab = () => {
               {c.label}
             </CategoryChip>
           ))}
+          {/* One-shot filter chip — narrows to SKUs minted from a remark. */}
+          <CategoryChip
+            active={oneShotOnly}
+            onClick={() => setOneShotOnly((v) => !v)}
+          >
+            One-shot
+          </CategoryChip>
         </div>
 
         <div className={styles.actionsRow}>
@@ -726,14 +741,25 @@ const ProductRow = memo(({
           `name` column on mfg_products (commander calls it "description"
           in the UI). */}
       <td onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-        <EditableTextCell
-          value={row.name}
-          chipClassName={styles.nameCompact}
-          inline
-          ariaLabel="Edit description"
-          editable={editMode}
-          onSave={(val) => update.mutate({ id: row.id, name: val })}
-        />
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+          <EditableTextCell
+            value={row.name}
+            chipClassName={styles.nameCompact}
+            inline
+            ariaLabel="Edit description"
+            editable={editMode}
+            onSave={(val) => update.mutate({ id: row.id, name: val })}
+          />
+          {row.one_shot && (
+            <span
+              className={styles.catPill}
+              title={row.source_doc_no ? `One-shot from ${row.source_doc_no}` : 'One-shot SKU'}
+              style={{ fontSize: 'var(--fs-11)' }}
+            >
+              one-shot
+            </span>
+          )}
+        </span>
         {row.description && <div className={styles.nameSubCompact}>{row.description}</div>}
       </td>
       {isSofaView ? (
