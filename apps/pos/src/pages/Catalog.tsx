@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useLocation } from 'react-router';
 import {
   Package,
   Sofa,
@@ -41,6 +41,15 @@ const CAT_ICON: Record<string, LucideIcon> = {
 
 const productInitial = (name: string): string =>
   name?.trim()?.charAt(0)?.toUpperCase() ?? '?';
+
+/* Catalog filter restore (Loo 2026-06-09). Drilling into a product
+   (/configure/:id) unmounts this page, so plain useState resets the sidebar to
+   "All open" + clears the search on every Back. We restore them ONLY on the
+   drill-in → Back round trip: the card Link carries the active filters as nav
+   state, and the configurator hands them back as `restoreCatalog` on return.
+   Because it rides this one history transition (not sessionStorage), any OTHER
+   entry — New Order, deep link, cart-line edit — opens clean by design. */
+interface CatalogFilters { cat: string; brand: string; q: string }
 
 /** Group SKUs by Model so the grid renders one card per Model, not one per
  *  SKU. A Model with 6 sizes would otherwise spam the grid with 6 identical
@@ -139,9 +148,14 @@ export const Catalog = () => {
   useMfgCatalogRealtime();
   const allCategories = useCategoriesAll();
 
-  const [activeCat, setActiveCat] = useState<string>('all');
-  const [activeBranding, setActiveBranding] = useState<string>('all');
-  const [query, setQuery] = useState('');
+  // A drill-in → Back round trip hands the prior filters back via history state
+  // (set on the configurator's return nav). Present → restore that exact view;
+  // absent (New Order, deep link, refresh) → open clean on "All open".
+  const location = useLocation();
+  const restore = (location.state as { restoreCatalog?: CatalogFilters } | null)?.restoreCatalog ?? null;
+  const [activeCat, setActiveCat] = useState<string>(restore?.cat ?? 'all');
+  const [activeBranding, setActiveBranding] = useState<string>(restore?.brand ?? 'all');
+  const [query, setQuery] = useState<string>(restore?.q ?? '');
 
   const rows = catalog.data ?? [];
   const cards = useMemo(() => buildCards(rows), [rows]);
@@ -426,6 +440,7 @@ export const Catalog = () => {
                         key={p.modelKey}
                         p={p}
                         blocked={(hasSofa && p.categoryId !== 'sofa') || (hasNonSofa && p.categoryId === 'sofa')}
+                        linkState={{ fromCatalog: { cat: activeCat, brand: activeBranding, q: query } }}
                       />
                     ))}
                   </div>
@@ -449,7 +464,7 @@ export const Catalog = () => {
   );
 };
 
-const ProductCard = ({ p, blocked = false }: { p: CatalogCard; blocked?: boolean }) => {
+const ProductCard = ({ p, blocked = false, linkState }: { p: CatalogCard; blocked?: boolean; linkState?: { fromCatalog: CatalogFilters } }) => {
   // PR — Commander wanted a "Configure" affordance even when SKUs are not
   // wired into the production configurator yet. For now the card links to
   // the Configurator route using the lead SKU's id; the Configurator will
@@ -506,7 +521,7 @@ const ProductCard = ({ p, blocked = false }: { p: CatalogCard; blocked?: boolean
   }
 
   return (
-    <Link to={`/configure/${p.leadSkuId}`} className={styles.card}>
+    <Link to={`/configure/${p.leadSkuId}`} state={linkState} className={styles.card}>
       {inner}
     </Link>
   );

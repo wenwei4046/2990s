@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams, useLocation } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2, FlipHorizontal2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, matchComboSubset, comboChargedPrices, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
@@ -256,6 +256,14 @@ interface QuickPickItem {
 export const Configurator = () => {
   const { productId } = useParams<{ productId: string }>();
   const navigate = useNavigate();
+  // If the catalogue drilled into this product it stashed its active filters as
+  // history state; forward them back so any return-to-catalogue (Back / Cancel /
+  // after add-to-cart) lands on the SAME category/search the user left. Reached
+  // any other way (deep link, cart-line edit) → null → catalogue opens clean.
+  const location = useLocation();
+  const fromCatalog = (location.state as { fromCatalog?: unknown } | null)?.fromCatalog ?? null;
+  const backToCatalog = () =>
+    navigate('/catalog', fromCatalog ? { state: { restoreCatalog: fromCatalog } } : undefined);
   const product = useProduct(productId);
   const bundles = useProductBundles(productId);
   const compartments = useProductCompartments(productId);
@@ -1476,7 +1484,7 @@ export const Configurator = () => {
       <button
         type="button"
         className={styles.topbarBtnGhost}
-        onClick={() => navigate('/catalog')}
+        onClick={backToCatalog}
       >
         <X size={14} strokeWidth={1.75} />
         Cancel
@@ -1522,7 +1530,7 @@ export const Configurator = () => {
       <button
         type="button"
         className={styles.topbarBtnGhost}
-        onClick={() => navigate('/catalog')}
+        onClick={backToCatalog}
       >
         <X size={14} strokeWidth={1.75} />
         Cancel
@@ -1572,7 +1580,7 @@ export const Configurator = () => {
       <button
         type="button"
         className={styles.topbarBtnGhost}
-        onClick={() => navigate('/catalog')}
+        onClick={backToCatalog}
       >
         <X size={14} strokeWidth={1.75} />
         Cancel
@@ -1596,7 +1604,7 @@ export const Configurator = () => {
       <button
         type="button"
         className={styles.topbarBack}
-        onClick={() => navigate('/catalog')}
+        onClick={backToCatalog}
         aria-label="Back to catalog"
       >
         <ArrowLeft size={20} strokeWidth={1.75} />
@@ -1697,7 +1705,7 @@ export const Configurator = () => {
           <IconButton
             icon={<ArrowLeft size={20} strokeWidth={1.75} />}
             aria-label="Back"
-            onClick={() => navigate('/catalog')}
+            onClick={backToCatalog}
           />
           <div className={styles.title}>
             <span className="t-eyebrow">{p.category_id}</span>
@@ -1986,7 +1994,7 @@ export const Configurator = () => {
           productId={p.id}
           productName={p.name}
           flatPrice={p.flat_price}
-          onAdded={() => navigate('/catalog')}
+          onAdded={backToCatalog}
         />
       )}
 
