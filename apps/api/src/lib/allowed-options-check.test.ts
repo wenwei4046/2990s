@@ -48,6 +48,47 @@ describe('checkAllowedOptions — gaps', () => {
   });
 });
 
+describe('checkAllowedOptions — SOFA compartment via build cells (anchor-SKU bug)', () => {
+  // Telluc's anchor SKU is TELLUC-1S but its pool only allows 2A/L. A POS sofa
+  // is sent with itemCode = anchor + the real build in variants.cells. The gate
+  // must validate the CELLS, not the anchor's "1S" suffix — that wrongly blocked
+  // every Telluc 2A+L build with compartment "1S" (Loo, 2026-06-08).
+  const telluc: ProductForCheck = {
+    code: 'TELLUC-1S',          // anchor SKU — 1S is NOT in the pool
+    category: 'SOFA',
+    model_id: 'model-telluc',
+    size_code: null,
+  };
+  const tellucModel: ModelForCheck = {
+    id: 'model-telluc',
+    allowed_options: { compartments: ['2A(LHF)', '2A(RHF)', 'L(LHF)', 'L(RHF)'] },
+  };
+
+  it('allows a build whose cells are all in the pool, even when the anchor SKU is not', () => {
+    const variants = { cells: [{ moduleId: '2A(LHF)' }, { moduleId: 'L(RHF)' }] };
+    expect(checkAllowedOptions(telluc, tellucModel, variants)).toBeNull();
+  });
+
+  it('rejects the offending CELL (not the anchor) when a built module is out of pool', () => {
+    const variants = { cells: [{ moduleId: '2A(LHF)' }, { moduleId: '3S' }] };
+    expect(checkAllowedOptions(telluc, tellucModel, variants)).toEqual({
+      error: 'variant_not_allowed',
+      field: 'compartment',
+      value: '3S',
+      allowed: ['2A(LHF)', '2A(RHF)', 'L(LHF)', 'L(RHF)'],
+    });
+  });
+
+  it('falls back to the anchor-SKU suffix when no cells are sent (legacy line)', () => {
+    expect(checkAllowedOptions(telluc, tellucModel, null)).toEqual({
+      error: 'variant_not_allowed',
+      field: 'compartment',
+      value: '1S',
+      allowed: ['2A(LHF)', '2A(RHF)', 'L(LHF)', 'L(RHF)'],
+    });
+  });
+});
+
 describe('checkAllowedOptions — sanity (existing gates still hold)', () => {
   it('still gates leg_height', () => {
     const err = checkAllowedOptions(bedframe, modelWith({ leg_heights: ['No Leg', '4"'] }), { legHeight: '7"' });
