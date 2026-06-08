@@ -948,17 +948,20 @@ export const edgeContacts = (a: Cell, b: Cell, depth: Depth): EdgePair[] => {
 };
 
 /** Two cells form ONE sofa only when they share a contact along a *connectable*
- *  edge. A module's FRONT (the seating side) can never join to another module —
- *  you sit there; there is no fabric/arm panel to attach to. So a pair that only
- *  ever touches at a front edge (e.g. one piece shoved against the seat-front of
- *  another) is two separate sofas, not one "Whole sofa". Backs and sides ('arm'/
- *  'open') still link as before; only front contacts are rejected here. */
+ *  edge — i.e. a SIDE ('arm' or 'open'). A module can only seam to another along
+ *  its sides; its FRONT (seating side, where you sit) and its BACK (backrest)
+ *  have no panel to attach to. So pieces that only ever touch front-to-anything
+ *  (one shoved against another's seat-front) OR back-to-back (backrest against
+ *  backrest) are two separate sofas, not one "Whole sofa". Every valid layout
+ *  (straight run / L / U / corner) connects via sides, so nothing legit
+ *  regresses. */
 const hasConnectingContact = (a: Cell, b: Cell, depth: Depth): boolean => {
   const contacts = edgeContacts(a, b, depth);
   if (contacts.length === 0) return false;
   const ea = cellEdges(a);
   const eb = cellEdges(b);
-  return contacts.some(({ edgeA, edgeB }) => ea[edgeA] !== 'front' && eb[edgeB] !== 'front');
+  const connectable = (t: EdgeType | undefined): boolean => t === 'arm' || t === 'open';
+  return contacts.some(({ edgeA, edgeB }) => connectable(ea[edgeA]) && connectable(eb[edgeB]));
 };
 
 /** Union-find by edge contact. Returns array of cell groups (each its own sofa). */

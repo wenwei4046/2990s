@@ -285,15 +285,25 @@ describe('groupSofas', () => {
     expect(groupSofas(cells, '24')).toHaveLength(2);
   });
 
-  // A module's FRONT (seating side) can never join to another module — you sit
-  // there, there's no panel to attach to. Two pieces touching ONLY at a front
-  // edge are two separate sofas, not one "Whole sofa".
+  // A module's FRONT (seating side) and BACK (backrest) can never join to
+  // another module — there's no panel to attach to. Two pieces touching ONLY at
+  // a front edge (or back-to-back) are two separate sofas, not one "Whole sofa".
   it('does NOT join cells that only touch at a FRONT edge', () => {
     const cells: Cell[] = [
       // A faces up (rot 0) → its right edge (E) is 'open'.
       { id: 'a', moduleId: '1A(LHF)', x: 0,  y: 0, rot: 0 },
       // B faces left (rot 90) → its left edge (W) is 'front'. A's E abuts B's W.
       { id: 'b', moduleId: '1A(LHF)', x: 95, y: 0, rot: 90 },
+    ];
+    expect(groupSofas(cells, '24')).toHaveLength(2);
+  });
+
+  it('does NOT join cells that only touch BACK-to-BACK', () => {
+    const cells: Cell[] = [
+      // A faces down (rot 0) → its top edge (N) is 'back'.
+      { id: 'a', moduleId: '1A(LHF)', x: 0, y: 95, rot: 0 },
+      // B faces up (rot 180) → its bottom edge (S) is 'back'. A's N abuts B's S.
+      { id: 'b', moduleId: '1A(LHF)', x: 0, y: 0,  rot: 180 },
     ];
     expect(groupSofas(cells, '24')).toHaveLength(2);
   });
