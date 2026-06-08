@@ -28,6 +28,7 @@ import {
 import { IconButton } from '@2990s/design-system';
 import { groupSoLinesForDisplay } from '@2990s/shared/so-line-display';
 import { PAYMENT_METHOD_CODES } from '@2990s/shared/payment-methods';
+import { meetsProceedGate } from '@2990s/shared/order-rules';
 import { useAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import { Topbar } from '../components/Topbar';
@@ -1121,7 +1122,21 @@ const OrderDetail = ({ order, onClose }: {
   const dateOk = !!edited.deliveryDate;
   // Gate on the live ledger (paidSoFar), the recorded source of truth.
   const paidOk = order.total > 0 && paidSoFar / order.total >= 0.5;
-  const allOk = customerInfoOk && addressOk && dateOk && paidOk;
+  // Outstanding balance — once it hits zero the order is fully collected, so the
+  // "top up / record payment" form below is hidden (nothing left to collect).
+  const outstanding = Math.max(0, order.total - paidSoFar);
+  // The Move-to-Proceed gate. Shared with the server's create handler (which
+  // auto-stamps proceeded_at when a handover already arrives complete) so the
+  // manual button and the auto path can never drift.
+  const allOk = meetsProceedGate({
+    hasCustomerName: !!edited.customerName.trim(),
+    hasEmail: !!edited.customerEmail?.trim(),
+    hasAddress: !!edited.customerAddress?.trim(),
+    hasPostcode: !!edited.customerPostcode?.trim(),
+    hasDeliveryDate: dateOk,
+    paid: paidSoFar,
+    total: order.total,
+  });
 
   // Dirty check: any of the editable header fields changed. (Payment is now
   // recorded via its own action against the SO ledger, not folded into Save.)
@@ -1525,7 +1540,7 @@ const OrderDetail = ({ order, onClose }: {
                 </div>
               </div>
             )}
-            {editable && (
+            {editable && outstanding > 0 && (
               <>
                 <div className={styles.detailFieldGrid} style={{ marginTop: 12 }}>
                   <DetailField label="Method *" disabled={false}>
