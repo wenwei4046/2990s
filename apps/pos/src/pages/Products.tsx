@@ -90,7 +90,7 @@ import {
   type ProductSupplierRow,
 } from '../lib/products/mfg-products-queries';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
-import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useAddons, type AddonRow, type FabricLibraryRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, useAllAddons, useUpdateAddon, useCreateAddon, type AdminAddonRow } from '../lib/queries';
+import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useAddons, type AddonRow, type FabricLibraryRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, useAllAddons, useUpdateAddon, useCreateAddon, useDeleteAddon, type AdminAddonRow } from '../lib/queries';
 import {
   useProductModels,
   useProductModel,
@@ -4900,9 +4900,23 @@ const OrderAddonsManager = () => {
   const list    = useAllAddons();
   const update  = useUpdateAddon();
   const create  = useCreateAddon();
+  const del     = useDeleteAddon();
 
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+
+  const remove = async (row: AdminAddonRow) => {
+    if (!window.confirm(`Delete "${row.label}"? This permanently removes the add-on. If it's already on existing orders the delete is blocked — use the Off switch to retire it instead.`)) return;
+    setError(null);
+    try {
+      await del.mutateAsync(row.id);
+    } catch (e) {
+      const msg = String((e as { message?: string }).message ?? e);
+      setError(/foreign key|23503|still referenced/i.test(msg)
+        ? `"${row.label}" is used on existing orders — can't delete. Use the Off switch to retire it.`
+        : msg);
+    }
+  };
   const [draft, setDraft] = useState({
     label: '', id: '', description: '', icon: 'package',
     kind: 'qty' as 'qty' | 'flat' | 'floors_items', category: '',
@@ -5060,6 +5074,7 @@ const OrderAddonsManager = () => {
               <th style={{ padding: '6px 8px' }}>SKU code</th>
               <th style={{ padding: '6px 8px' }}>{'Price / rate (RM)'}</th>
               <th style={{ padding: '6px 8px' }}>Enabled</th>
+              <th style={{ padding: '6px 8px' }}></th>
             </tr>
           </thead>
           <tbody>
@@ -5109,6 +5124,14 @@ const OrderAddonsManager = () => {
                       style={{ fontSize: 'var(--fs-12)', padding: '3px 10px', borderRadius: 999, border: '1px solid var(--line)', cursor: canEdit ? 'pointer' : 'default', background: row.enabled ? 'var(--c-cream)' : 'transparent', fontWeight: row.enabled ? 600 : 400 }}>
                       {row.enabled ? 'On' : 'Off'}
                     </button>
+                  </td>
+                  <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {canEdit && (
+                      <button type="button" onClick={() => void remove(row)} disabled={del.isPending}
+                        style={{ fontSize: 'var(--fs-12)', background: 'none', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', padding: '3px 10px', cursor: 'pointer', color: 'var(--c-burnt, #A6471E)' }}>
+                        Delete
+                      </button>
+                    )}
                   </td>
                 </tr>
               );

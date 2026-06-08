@@ -343,6 +343,20 @@ export const useCreateAddon = () => {
   });
 };
 
+/* Hard delete (Loo 2026-06-08). `cart_items.addon_id` is a RESTRICT FK, so an
+ * add-on already used on an order can't be deleted — the caller surfaces that
+ * as "use Off to retire it". Unused/test rows delete cleanly. */
+export const useDeleteAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('addons').delete().eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => invalidateAddons(qc),
+  });
+};
+
 export const useProductBundles = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
