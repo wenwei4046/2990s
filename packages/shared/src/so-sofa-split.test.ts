@@ -104,3 +104,33 @@ describe('splitSofaBuildIntoModuleLines (§4.3, SO-2606-018 reference shape)', (
     expect(splitSofaBuildIntoModuleLines({ baseModel: 'ANNSA', cells: [{ nope: 1 }], buildUnitPriceSen: 1, buildUnitCostSen: 0, modulePrices: null })).toBeNull();
   });
 });
+
+describe('splitSofaBuildIntoModuleLines — evenSplitPrice (D4, one-shot path)', () => {
+  const cells = [{ moduleId: '1A(LHF)' }, { moduleId: 'L(RHF)' }];
+  const modulePrices = { '1A(LHF)': 100000, 'L(RHF)': 199000 };
+
+  it('splits SELLING evenly when evenSplitPrice=true (residue on last)', () => {
+    const split = splitSofaBuildIntoModuleLines({
+      baseModel: 'ANNSA', cells, buildUnitPriceSen: 349000, buildUnitCostSen: 0,
+      modulePrices, evenSplitPrice: true,
+    });
+    expect(split?.map((s) => s.unitPriceSen)).toEqual([174500, 174500]);
+  });
+
+  it('keeps COST on the catalog-weight split even when price is even', () => {
+    const split = splitSofaBuildIntoModuleLines({
+      baseModel: 'ANNSA', cells, buildUnitPriceSen: 349000, buildUnitCostSen: 100000,
+      modulePrices, evenSplitPrice: true,
+    });
+    const costs = split!.map((s) => s.unitCostSen);
+    expect(costs.reduce((a, b) => a + b, 0)).toBe(100000);
+    expect(costs[0]).not.toBe(costs[1]); // proportional, NOT even
+  });
+
+  it('default (no flag) still splits price proportionally', () => {
+    const split = splitSofaBuildIntoModuleLines({
+      baseModel: 'ANNSA', cells, buildUnitPriceSen: 299000, buildUnitCostSen: 0, modulePrices,
+    });
+    expect(split?.map((s) => s.unitPriceSen)).toEqual([100000, 199000]);
+  });
+});

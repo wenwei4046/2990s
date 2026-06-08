@@ -243,6 +243,20 @@ These are intentional changes from the prototype's current state. Anything not o
 
 **Not changed:** the sofa configurator/CustomBuilder visuals + snap math (red line #2), brand tokens, Lucide icons, the cost engine / inventory / accounting stack (already built).
 
+### §6 · One-shot custom compartments in the sofa palette
+
+**Approved on:** 2026-06-08 (Loo sign-off).
+**Status:** Implemented in `apps/pos/src/pages/CustomBuilder.tsx`.
+
+**2026-06-08 — One-shot custom compartments in the sofa palette (Loo sign-off).** The POS sofa configurator palette (`CustomBuilder.tsx`) may render a Model's *activated one-shot* custom compartments as additional selectable options, synthesizing their spec from the base family (`findModule`) and reusing the base compartment's existing PNG/SVG (`representativeArtCode`). Scope: additive palette membership + art fallback only. No change to snap math, the 22 plan-view PNGs, drag handling, geometry, or visuals.
+
+**What changed:**
+- `representativeArtCode` added to the `@2990s/shared` import and used as the final fallback in `resolveModuleArtSrc` — custom codes (e.g. `1A(LHF)(SEAT)(EXTEND)(40CM)`) resolve to their base art key (`1A(LHF)`) rather than a 404 PNG path.
+- After `customizerByNormId` is built, any normalised compartment codes that are not in the static `SOFA_MODULES` list are synthesized via `findModule` (which returns a `SofaModuleSpec` with base geometry and group). These synthesized specs are appended to `allModules` so they appear in their natural palette group.
+- The existing `customizerByNormId.has(m.id)` membership gate already admits them — no change to the filter logic.
+
+**Not changed:** snap math, the 22 plan-view PNGs, drag handling, geometry, canvas rendering, or any other part of `CustomBuilder.tsx`.
+
 ---
 
 ## What NOT to do

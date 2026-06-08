@@ -86,6 +86,9 @@ export function splitSofaBuildIntoModuleLines(args: {
   /** Module sell prices by normalized code (loadModelSofaModulePrices) —
    *  null/missing entries degrade to the equal-split fallback. */
   modulePrices: Record<string, number> | null;
+  /** D4 one-shot path: split the SELLING price EVENLY across modules (cost stays
+   *  on the catalog-weight split). Default false = legacy proportional split. */
+  evenSplitPrice?: boolean;
 }): SofaModuleLineSpec[] | null {
   const baseModel = (args.baseModel ?? '').trim().toUpperCase();
   if (!baseModel) return null;
@@ -110,7 +113,8 @@ export function splitSofaBuildIntoModuleLines(args: {
     const w = args.modulePrices?.[code];
     return typeof w === 'number' && w > 0 ? w : 0;
   });
-  const priceShares = distributeProportionally(args.buildUnitPriceSen, weights);
+  const priceWeights = args.evenSplitPrice ? codes.map(() => 1) : weights;
+  const priceShares = distributeProportionally(args.buildUnitPriceSen, priceWeights);
   const costShares = distributeProportionally(args.buildUnitCostSen, weights);
 
   return cells.map((cell, i) => ({

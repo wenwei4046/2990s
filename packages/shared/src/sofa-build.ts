@@ -278,6 +278,21 @@ const synthesizeModule = (id: string): SofaModuleSpec | undefined => {
 export const findModule = (id: string): SofaModuleSpec | undefined =>
   MODULE_BY_ID.get(id) ?? synthesizeModule(id);
 
+/**
+ * The asset key whose PNG/SVG a (possibly custom/one-shot) compartment code
+ * should draw. Standard codes return themselves; synthesized codes like
+ * '1A(LHF)(SEAT)(EXTEND)(40CM)' fall back to their base family representative
+ * ('1A(LHF)') so a one-shot variant reuses the base compartment art with no
+ * new asset + no maintenance-config write. Unknown families pass through.
+ */
+export const representativeArtCode = (code: string): string => {
+  const norm = normalizeCompartmentCode(code);
+  if (MODULE_BY_ID.has(norm)) return norm;
+  const s = parseCompartmentStructure(norm);
+  const rep = s ? familyRepresentative(s) : undefined;
+  return rep ?? norm;
+};
+
 export const isAccessoryModule = (id: string): boolean => findModule(id)?.accessory === true;
 
 /* ─── Compartment code canonicalizer (unified 2026-06-04) ──────────────

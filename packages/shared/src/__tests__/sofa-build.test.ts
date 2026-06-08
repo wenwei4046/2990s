@@ -25,6 +25,7 @@ import {
   mirrorModules,
   canMirror,
   SNAP_CM,
+  representativeArtCode,
   type Cell,
   type SofaProductPricing,
 } from '../sofa-build';
@@ -1113,5 +1114,20 @@ describe('isWideArmSeat (B-variant auto-convert guard, Loo 2026-06-03)', () => {
     // carries a 1B the auto-convert would otherwise overwrite. The guard must fire.
     expect(detectBundle(['2A(LHF)', '1B(RHF)'])?.id).toBe('3S');
     expect(['2A(LHF)', '1B(RHF)'].some(isWideArmSeat)).toBe(true);
+  });
+});
+
+describe('representativeArtCode — base art key for custom/one-shot codes', () => {
+  it('returns the code itself for a standard module', () => {
+    expect(representativeArtCode('1A(LHF)')).toBe('1A(LHF)');
+  });
+  it('falls back to the base family representative for a custom code', () => {
+    expect(representativeArtCode('1A(LHF)(SEAT)(EXTEND)(40CM)')).toBe('1A(LHF)');
+  });
+  it('handles armless / single-token families', () => {
+    expect(representativeArtCode('1NA(TALL)')).toBe('1NA');
+  });
+  it('passes through an unknown family unchanged (no representative)', () => {
+    expect(representativeArtCode('Console')).toBe('Console');
   });
 });

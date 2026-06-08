@@ -72,6 +72,10 @@ export type MfgProductRow = {
   seat_height_prices: SeatHeightPrice[] | null;
   default_variants: unknown;
   updated_at: string;
+  /** Migration 0161 — one-shot SKU minted from a remark + extra charge. */
+  one_shot?: boolean;
+  /** Migration 0161 — source SO doc number that triggered minting (e.g. 'SO-3012'). */
+  source_doc_no?: string | null;
   /** Commander 2026-05-29 — the SKU's Model allowed_options (sizes / leg_heights
       / divan_heights / total_heights / specials). Non-empty pool = restrict the
       SO variant dropdowns to those values; null / empty = no restriction.

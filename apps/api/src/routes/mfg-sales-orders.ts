@@ -3,10 +3,12 @@
 
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { createClient } from '@supabase/supabase-js';
 import { normalizePhone } from '@2990s/shared/phone';
 import {
   pickComboMatch, spreadComboTotal, splitSofaCode, sofaHeightKey,
   buildVariantSummary, comboChargedPrices, matchComboSubset, type SofaComboRow, type SofaPriceTier,
+  oneShotSofaCode, oneShotSimpleCode, remarkSlug,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
 /* SO-SKU spec P2 — every charge is a SKU line. Predicates from P1; the
@@ -22,6 +24,10 @@ import {
    (SO-2606-018 reference shape). Pure decomposition in shared; the build-level
    recompute + drift gate stay authoritative for the money. */
 import { splitSofaBuildIntoModuleLines } from '@2990s/shared/so-sofa-split';
+/* Task 5 — mint one-shot SKUs at SO create when a line carries an extra add-on
+   charge (gated by so_settings.pos_remark_extra_auto_sku). Pure code-resolution
+   + row-build lives in the lib; this route batches the DB collision check. */
+import { buildOneShotMints, type OneShotMintReq } from '../lib/one-shot-mint';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
@@ -1611,20 +1617,24 @@ mfgSalesOrders.post('/', async (c) => {
      Remarks themselves are always accepted (free text, no money). */
   const hasDeclaredExtra = items.some((it) =>
     Number((it.variants as { extraAddonAmountRM?: unknown } | null)?.extraAddonAmountRM ?? 0) > 0);
+  let autoSkuEnabled = false;
   if (hasDeclaredExtra) {
-    const { data: flagRow, error: flagErr } = await sb
-      .from('so_settings').select('enabled').eq('key', 'pos_product_remark').maybeSingle();
+    const { data: flagRows, error: flagErr } = await sb
+      .from('so_settings').select('key, enabled')
+      .in('key', ['pos_product_remark', 'pos_remark_extra_auto_sku']);
     if (flagErr) {
       await rollbackPwpClaims();
       return c.json({ error: 'lookup_failed', reason: flagErr.message }, 500);
     }
-    if (flagRow && (flagRow as { enabled: boolean }).enabled === false) {
+    const flags = new Map((flagRows ?? []).map((r) => [(r as { key: string }).key, (r as { enabled: boolean }).enabled]));
+    if (flags.get('pos_product_remark') === false) {
       await rollbackPwpClaims();
       return c.json({
         error: 'extra_amount_disabled',
         reason: 'Product-page extra charge is turned off in SO Maintenance.',
       }, 400);
     }
+    autoSkuEnabled = flags.get('pos_remark_extra_auto_sku') === true; // missing row → OFF
   }
 
   /* Subrequest diet (Loo 2026-06-06) — prefetch every line's fabric rows in
@@ -1717,6 +1727,21 @@ mfgSalesOrders.post('/', async (c) => {
     (body.customerState as string | null | undefined) ?? null,
   );
 
+  /* Task 5 — one-shot SKU mint accumulator. When pos_remark_extra_auto_sku is
+     ON and a line declares an extra add-on charge, we collect a mint request per
+     affected SO line (one per sofa module; one for non-sofa) here, then resolve
+     collision-free codes + insert the inactive mfg_products rows after the build
+     pass. The line rows are mutated in place to point at the minted codes. */
+  const oneShotReqs: OneShotMintReq[] = [];
+  const extraRMof = (it: { variants?: unknown }) =>
+    Math.max(0, Math.round(Number((it.variants as { extraAddonAmountRM?: unknown } | null)?.extraAddonAmountRM ?? 0)));
+  const remarkTextOf = (it: { variants?: unknown }) => {
+    const r = (it.variants as { remark?: unknown } | null)?.remark;
+    return typeof r === 'string' ? r.trim() : '';
+  };
+  const catOf = (g: string): 'SOFA' | 'BEDFRAME' | 'MATTRESS' | 'ACCESSORY' =>
+    g.includes('sofa') ? 'SOFA' : g.includes('bedframe') ? 'BEDFRAME' : g.includes('mattress') ? 'MATTRESS' : 'ACCESSORY';
+
   /* Task #114 — snapshot unit cost from mfg_products when client didn't.
      Build itemRows sequentially with Promise.all so the cost lookup runs
      in parallel across lines but each row still has its own awaited cost. */
@@ -1755,6 +1780,9 @@ mfgSalesOrders.post('/', async (c) => {
       others += lineTotal;
       othersCost += lineCost;
     }
+    /* Task 5 — the per-line declared extra add-on (whole RM), only honoured when
+       the auto-SKU flag is ON. Drives whether this line mints a one-shot SKU. */
+    const extraRM = autoSkuEnabled ? extraRMof(it) : 0;
     /* PR-E — Per-line cascade defaults. If the client sent a
        lineDeliveryDate it wins (and overridden=true unless explicitly
        false). Otherwise inherit the header date with overridden=false. */
@@ -1848,6 +1876,9 @@ mfgSalesOrders.post('/', async (c) => {
         buildUnitPriceSen: unit,
         buildUnitCostSen: unitCost,
         modulePrices,
+        // Task 5 (D4) — when this line mints one-shot SKUs (extra charge), the
+        // selling price is split EVENLY across modules; cost stays proportional.
+        evenSplitPrice: extraRM > 0,
       });
       if (split && split.length > 0) {
         const buildKey = `build-${idx + 1}`;
@@ -1864,7 +1895,7 @@ mfgSalesOrders.post('/', async (c) => {
           };
           const moduleLineTotal = (qty * s.unitPriceSen) - (i === 0 ? discount : 0);
           const moduleLineCost = qty * s.unitCostSen;
-          return {
+          const row = {
             ...baseRow,
             item_code: s.itemCode,
             description: s.description,
@@ -1884,8 +1915,50 @@ mfgSalesOrders.post('/', async (c) => {
             custom_specials:         i === 0 ? (recomputed?.custom_specials ?? null) : null,
             remark: i === 0 ? baseRow.remark : null,
           };
+          /* Task 5 — mint a one-shot SKU per module when an extra charge was
+             declared. The minted sell price = this module's catalog base + its
+             EVEN share of the extra (N = module count); the SO line is rewritten
+             to point at the minted code by buildOneShotMints later. */
+          if (extraRM > 0 && product?.base_model) {
+            const remarkText = remarkTextOf(it);
+            const n = split.length;
+            const baseSell = modulePrices?.[s.moduleCode] ?? 0;
+            const brand = (product as { branding?: string | null }).branding ?? null;
+            oneShotReqs.push({
+              row,
+              category: 'SOFA',
+              modelCode: product.base_model,
+              baseSkuCode: s.itemCode,
+              baseName: (brand ? `${String(brand).toUpperCase()} ` : '') + s.description,
+              modelId: (product as { model_id?: string | null }).model_id ?? null,
+              branding: brand,
+              compartment: s.moduleCode,
+              remarkText,
+              sellPriceSen: baseSell + Math.round((extraRM * 100) / n),
+            });
+          }
+          return row;
         });
       }
+    }
+    /* Task 5 — non-sofa (or non-splittable) line: mint a single one-shot SKU
+       when an extra charge was declared. unit_price_centi already carries the
+       D9 list price (base + extra, N=1) from the recompute, so reuse it as the
+       minted SKU's sell price. */
+    if (extraRM > 0 && lineProducts[idx]) {
+      const product = lineProducts[idx]!;
+      oneShotReqs.push({
+        row: baseRow,
+        category: catOf(group),
+        modelCode: (product as { base_model?: string | null }).base_model ?? '',
+        baseSkuCode: String((product as { code?: string }).code ?? baseRow.item_code),
+        baseName: String((product as { name?: string }).name ?? baseRow.description ?? baseRow.item_code),
+        modelId: (product as { model_id?: string | null }).model_id ?? null,
+        branding: (product as { branding?: string | null }).branding ?? null,
+        compartment: '',
+        remarkText: remarkTextOf(it),
+        sellPriceSen: Number(baseRow.unit_price_centi ?? 0), // base + extra (N=1)
+      });
     }
     return [baseRow];
   })).then((rows) => rows.flat());
@@ -2465,6 +2538,52 @@ mfgSalesOrders.post('/', async (c) => {
           ],
         });
       }
+    }
+  }
+
+  /* Task 5 — mint the one-shot SKUs (gated + collision-safe). Runs BEFORE the
+     item insert: buildOneShotMints mutates each accumulated row's item_code to
+     the minted code, and the insert below spreads those rows. Uses a service-
+     role client so the minted catalog rows land regardless of the caller's RLS.
+     Best-effort: a minted row is an inactive tombstone — an orphan (insert that
+     fails for a non-collision reason) is harmless and the SO line still carries
+     the code, so we never fail the SO on a mint error. */
+  if (oneShotReqs.length > 0) {
+    const admin = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    // Probe a few collision suffixes (n=1..3) per request in ONE query so the
+    // code buildOneShotMints picks is free even if a prior order already minted
+    // the same remark on the same module (mfg_products.code is NOT uniquely
+    // constrained, so a plain .insert() can't ON CONFLICT — we must pre-resolve).
+    const candidate = (r: OneShotMintReq, n: number) => r.category === 'SOFA'
+      ? oneShotSofaCode(r.modelCode, r.compartment, remarkSlug(r.remarkText), n)
+      : oneShotSimpleCode(r.baseSkuCode, remarkSlug(r.remarkText), n);
+    const probe = oneShotReqs.flatMap((r) => [1, 2, 3].map((n) => candidate(r, n)));
+    const { data: existing } = await admin.from('mfg_products').select('code').in('code', probe);
+    const taken = new Set((existing ?? []).map((x) => (x as { code: string }).code));
+    const nowIso = new Date().toISOString();
+    const idGen = () => {
+      const rand = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      return `mfg-${rand.replace(/-/g, '').slice(0, 12)}`;
+    };
+    const skuRows = buildOneShotMints(oneShotReqs, taken, docNo, idGen, nowIso).map((r) => ({
+      ...r,
+      // mfg_products.cost_price_sen is NOT NULL DEFAULT 0; the minted cost is
+      // unknown, so book 0 (the column default) rather than sending NULL — an
+      // explicit NULL would trip a 23502 and silently drop every mint.
+      cost_price_sen: r.cost_price_sen ?? 0,
+    }));
+    // Codes are pre-resolved free against the probe above, so a plain batched
+    // insert won't collide in practice. Best-effort: any residual error (e.g. a
+    // 23505 from an extremely rare 3+-order same-remark clash, or a transient
+    // fault) is logged but never fails the SO — the line already references the
+    // code and the SKU can be re-created from SKU Master.
+    const { error: skuErr } = await admin.from('mfg_products').insert(skuRows);
+    if (skuErr && skuErr.code !== '23505') {
+      // eslint-disable-next-line no-console
+      console.error(`[so-create] one-shot SKU mint failed for ${docNo}: ${skuErr.message}`);
     }
   }
 

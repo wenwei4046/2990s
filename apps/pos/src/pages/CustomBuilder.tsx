@@ -5,6 +5,7 @@ import { fmtRM, fabricTierAddon, type FabricTier } from '@2990s/shared';
 import {
   SOFA_MODULES,
   findModule,
+  representativeArtCode,
   moduleFootprint,
   cellBbox,
   cellsBbox,
@@ -338,7 +339,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       );
       if (hit?.imageUrl) return hit.imageUrl;
     }
-    return `${ASSET_BASE}/${moduleId}.png`;
+    return `${ASSET_BASE}/${representativeArtCode(moduleId)}.png`;
   }, [modelCustomizer]);
 
   // Force a re-render once a PNG's silhouette bbox finishes measuring so the
@@ -1044,8 +1045,20 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             const customizerByNormId = new Map(
               (modelCustomizer?.compartments ?? []).map((cc) => [cc.normalizedCode, cc] as const),
             );
+            // One-shot / custom compartments (activated in Modular) are NOT in the
+            // static SOFA_MODULES list. Synthesize their spec from the base family
+            // (findModule → base geometry) so they render in their natural group,
+            // reusing base art. Additive only — no snap-math / PNG change (Loo
+            // sign-off 2026-06-08, UI_REFERENCE deviation).
+            const stdIds = new Set(SOFA_MODULES.map((m) => m.id));
+            const customModuleSpecs = (modelCustomizer?.compartments ?? [])
+              .map((cc) => cc.normalizedCode)
+              .filter((nc) => !stdIds.has(nc))
+              .map((nc) => findModule(nc))
+              .filter((m): m is SofaModuleSpec => !!m);
+            const allModules = [...SOFA_MODULES, ...customModuleSpecs];
             return PALETTE_GROUPS.map((g) => {
-              const items = SOFA_MODULES.filter((m) => m.group === g).filter((m) => {
+              const items = allModules.filter((m) => m.group === g).filter((m) => {
                 if (modelCustomizer) {
                   return customizerByNormId.has(m.id);
                 }

@@ -59,6 +59,10 @@ export type ModelSkuRow = {
   price1_sen: number | null;
   cost_price_sen: number;
   unit_m3_milli: number;
+  /** Migration 0161 — whether this SKU was minted as a one-shot from a remark. */
+  pos_active?: boolean;
+  one_shot?: boolean;
+  source_doc_no?: string | null;
 };
 
 export function useProductModels(opts?: { category?: MfgCategory }) {
@@ -165,6 +169,28 @@ export function useGenerateModelSkus() {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['product-models', vars.id] });
       qc.invalidateQueries({ queryKey: ['mfg-products'] });
+    },
+  });
+}
+
+/** Migration 0161 — Activate a one-shot SKU so it surfaces in the POS catalog.
+ *  Calls POST /mfg-products/:id/activate-one-shot which sets pos_active=true and
+ *  (for SOFA) appends the compartment to the Model's allowed_options. */
+export function useActivateOneShot() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id }: { id: string }) => {
+      return authedFetch<{ ok: true }>(`/mfg-products/${id}/activate-one-shot`, {
+        method: 'POST',
+      });
+    },
+    onSuccess: (_, vars) => {
+      // Invalidate the detail query (skus list re-fetches and shows pos_active=true)
+      // and the flat mfg-products list (SKU Master reflects the change).
+      qc.invalidateQueries({ queryKey: ['mfg-products'] });
+      // We don't have the model_id here, so invalidate all product-model details.
+      qc.invalidateQueries({ queryKey: ['product-models'] });
+      void vars; // suppress unused-var warning
     },
   });
 }

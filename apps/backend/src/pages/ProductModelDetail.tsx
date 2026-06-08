@@ -24,6 +24,7 @@ import { ArrowLeft, ImagePlus, Layers, Save, Trash2, Wand2, X, Power, PowerOff }
 import { Button } from '@2990s/design-system';
 import {
   useProductModel, useUpdateProductModel, useDeleteProductModel, useGenerateModelSkus,
+  useActivateOneShot,
   type AllowedOptions, type AllowedOptions as AOpts,
 } from '../lib/product-models-queries';
 import { useMaintenanceConfig, useUpdateMfgProductStatus, useSpecialAddons } from '../lib/mfg-products-queries';
@@ -87,6 +88,7 @@ export const ProductModelDetail = ({
   const deleteMut = useDeleteProductModel();
   const generateMut = useGenerateModelSkus();
   const statusMut = useUpdateMfgProductStatus();
+  const activateOneShotMut = useActivateOneShot();
   const maintenance = useMaintenanceConfig('master');
   // Fabric library — pool of active fabric slugs displayed in the FABRICS
   // option group for SOFA Models.
@@ -600,6 +602,7 @@ export const ProductModelDetail = ({
                 <th>Name</th>
                 <th>Size</th>
                 <th>Status</th>
+                <th>POS</th>
                 <th style={{ textAlign: 'right' }}>Cost</th>
                 <th style={{ textAlign: 'right' }}>Price 2</th>
               </tr>
@@ -607,7 +610,20 @@ export const ProductModelDetail = ({
             <tbody>
               {data.skus.map((sku) => (
                 <tr key={sku.id}>
-                  <td><code>{sku.code}</code></td>
+                  <td>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <code>{sku.code}</code>
+                      {sku.one_shot && (
+                        <span
+                          className={styles.catPill}
+                          title={sku.source_doc_no ? `One-shot from ${sku.source_doc_no}` : 'One-shot SKU'}
+                          style={{ fontSize: 'var(--fs-11)' }}
+                        >
+                          one-shot
+                        </span>
+                      )}
+                    </span>
+                  </td>
                   <td>{sku.name}</td>
                   <td>{sku.size_label ?? sku.size_code ?? '—'}</td>
                   <td>
@@ -630,6 +646,30 @@ export const ProductModelDetail = ({
                     >
                       {sku.status}
                     </button>
+                  </td>
+                  <td>
+                    {/* One-shot SKUs start with pos_active=false and need an
+                        explicit Activate to surface in the POS catalog. */}
+                    {sku.one_shot ? (
+                      sku.pos_active === false ? (
+                        <button
+                          type="button"
+                          className={`${styles.statusPill} ${styles.inactive}`}
+                          style={{ cursor: 'pointer', border: '1px solid var(--line)' }}
+                          disabled={activateOneShotMut.isPending}
+                          onClick={() => activateOneShotMut.mutate({ id: sku.id })}
+                          title="Activate this one-shot SKU in POS"
+                        >
+                          Activate
+                        </button>
+                      ) : (
+                        <span className={`${styles.statusPill} ${styles.active}`}>
+                          Active in POS
+                        </span>
+                      )
+                    ) : (
+                      <span className={styles.statusPill}>—</span>
+                    )}
                   </td>
                   <td style={{ textAlign: 'right' }}>{formatRM(sku.cost_price_sen)}</td>
                   <td style={{ textAlign: 'right' }}>{formatRM(sku.base_price_sen ?? 0)}</td>
