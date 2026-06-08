@@ -584,6 +584,9 @@ export function NewModelDialog({
   const maintenance = useMaintenanceConfig('master');
   const createMut   = useCreateProductModel();
   const generateMut = useGenerateModelSkus();
+  // (B) Wei Siang 2026-06-08 — used to ROLL BACK a just-created model when its
+  // SKU generation produced zero rows, so we never leave an empty phantom model.
+  const deleteMut   = useDeleteProductModel();
 
   // PR #87 — Commander 2026-05-26: bulk pickers should default to all-on so a
   // new Model is born offering every variant from the global pool; commander
@@ -635,6 +638,20 @@ export function NewModelDialog({
         }
       }
     }
+    // (B) Wei Siang 2026-06-08 — a Model must be born with at least one SKU.
+    // For the sized/compartmented categories that auto-generate, block here if
+    // nothing is picked, so we never create a 0-SKU phantom that then blocks
+    // re-tries with a duplicate-code error. (ACCESSORY/SERVICE don't auto-gen
+    // and are intentionally created without size variants — left untouched.)
+    if (category === 'SOFA' && pickedComps.size === 0) {
+      setBatchError('Pick at least one compartment — a model with no SKUs can’t be created.');
+      return;
+    }
+    if ((category === 'MATTRESS' || category === 'BEDFRAME') && pickedSizes.size === 0) {
+      setBatchError('Pick at least one size — a model with no SKUs can’t be created.');
+      return;
+    }
+
     // Duplicate-code check inside the batch (server would reject the second
     // one, leaving a confusing half-success — easier to catch here first).
     const codes = rows.map((r) => r.modelCode.trim());
@@ -681,10 +698,31 @@ export function NewModelDialog({
       // restriction" semantics — commander can pick later from detail page).
       let totalGenerated = 0;
       if (sharedSizes || sharedComps) {
-        const results = await Promise.all(createdModels.map((m) =>
-          generateMut.mutateAsync({ id: m.id }).catch((err) => ({ generated: 0, _err: err })),
-        ));
-        totalGenerated = results.reduce((sum, r) => sum + (r.generated ?? 0), 0);
+        const results = await Promise.all(createdModels.map(async (m) => {
+          try {
+            const r = await generateMut.mutateAsync({ id: m.id });
+            return { model: m, generated: r.generated ?? 0, error: null as string | null };
+          } catch (err) {
+            return { model: m, generated: 0, error: err instanceof Error ? err.message : String(err) };
+          }
+        }));
+        totalGenerated = results.reduce((sum, r) => sum + r.generated, 0);
+
+        // (B) No phantoms — ALL-OR-NOTHING. Any model that ended up with zero
+        // SKUs (generation errored, or produced nothing) is deleted so it can't
+        // linger as an empty shell that blocks the next attempt with a
+        // duplicate-code 409. The failure is surfaced, never swallowed.
+        const failed = results.filter((r) => r.generated === 0);
+        if (failed.length > 0) {
+          await Promise.all(failed.map((r) => deleteMut.mutateAsync(r.model.id).catch(() => {})));
+          const codesFailed = failed.map((r) => r.model.model_code).join(', ');
+          const reason = failed.find((r) => r.error)?.error;
+          throw new Error(
+            `Couldn’t generate SKUs for ${codesFailed}${reason ? ` (${reason})` : ''}. ` +
+            `The empty model${failed.length === 1 ? '' : 's'} ${failed.length === 1 ? 'was' : 'were'} removed — ` +
+            `nothing was left behind. Please check the sizes and try again.`,
+          );
+        }
       }
 
       // Single-row + onCreated → chain into the caller's auto-generate flow
@@ -709,6 +747,31 @@ export function NewModelDialog({
   // single source.
   const sizesPool = _sizesPool;
   const compsPool = _compsPool;
+
+  // (D) Live preview (Wei Siang 2026-06-08) — show what the FIRST row will
+  // actually generate, so the operator types the SHORT name and SEES the
+  // system auto-build the full SKU code (branding + MATT/dash + size). Mirrors
+  // the server's code template + uppercase rule (product-models.ts generate-skus).
+  const up = (s: string) => s.toUpperCase();
+  const previewRow = rows[0];
+  const previewTotal = category === 'SOFA'
+    ? pickedComps.size
+    : (category === 'MATTRESS' || category === 'BEDFRAME') ? pickedSizes.size : 0;
+  const previewCodes: string[] = (() => {
+    const code = previewRow?.modelCode.trim() ?? '';
+    const brand = previewRow?.branding.trim() ?? '';
+    if (!code) return [];
+    if (category === 'MATTRESS') {
+      return Array.from(pickedSizes).slice(0, 2).map((sz) => up(`${brand ? brand + ' ' : ''}${code} MATT (${sz})`));
+    }
+    if (category === 'BEDFRAME') {
+      return Array.from(pickedSizes).slice(0, 2).map((sz) => up(`${code}-(${sz})`));
+    }
+    if (category === 'SOFA') {
+      return Array.from(pickedComps).slice(0, 2).map((cmp) => up(`${code}-${cmp}`));
+    }
+    return [];
+  })();
 
   return (
     <div className={styles.modalBackdrop} onClick={onClose}>
@@ -816,6 +879,29 @@ export function NewModelDialog({
           />
         )}
 
+        {/* (D) Live preview — what the system will actually create. */}
+        {previewCodes.length > 0 && (
+          <div style={{
+            fontSize: 'var(--fs-11)', color: 'var(--fg-muted)',
+            padding: '6px 2px', lineHeight: 1.5,
+          }}>
+            <span style={{
+              fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+              letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--c-burnt)',
+            }}>Will create → </span>
+            {previewCodes.map((c, i) => (
+              <span key={i}>
+                <code style={{ fontWeight: 700, color: 'var(--c-ink)' }}>{c}</code>
+                {i < previewCodes.length - 1 ? ', ' : ''}
+              </span>
+            ))}
+            {previewTotal > previewCodes.length && (
+              <span> … +{previewTotal - previewCodes.length} more</span>
+            )}
+            {previewTotal > 0 && <span> ({previewTotal} SKU{previewTotal === 1 ? '' : 's'} total)</span>}
+          </div>
+        )}
+
         {batchError && (
           <div className={styles.errorBanner}>{batchError}</div>
         )}
@@ -870,7 +956,7 @@ function ModelRowCard({
         <label className={styles.compactField}>
           <span>Branding</span>
           <input type="text" value={row.branding} onChange={(e) => onChange({ branding: e.target.value })}
-            placeholder={category === 'MATTRESS' ? '2990S' : ''} />
+            placeholder={category === 'MATTRESS' ? '2990' : ''} />
         </label>
 
         <label className={styles.compactField}>
@@ -879,7 +965,7 @@ function ModelRowCard({
             placeholder={
               category === 'SOFA'     ? '5530' :
               category === 'BEDFRAME' ? '1003' :
-              'AKKA-FIRM MATT'
+              'AKKA-FIRM'
             }
             required />
         </label>
@@ -888,9 +974,9 @@ function ModelRowCard({
           <span>Name *</span>
           <input type="text" value={row.name} onChange={(e) => onChange({ name: e.target.value })}
             placeholder={
-              category === 'SOFA'     ? 'SOFA 5530' :
-              category === 'BEDFRAME' ? 'HILTON BEDFRAME' :
-              '2990 AKKA-FIRM MATTRESS'
+              category === 'SOFA'     ? '5530' :
+              category === 'BEDFRAME' ? 'HILTON' :
+              'AKKA-FIRM'
             }
             required />
         </label>
