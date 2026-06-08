@@ -1,23 +1,21 @@
 // /purchase-consignment-receives — Consignment receiving step.
 // PC Order → PC Receive → PC Return.
 //
-// OFF-LEDGER: a Purchase Consignment Receive records the arrival of the
-// SUPPLIER'S goods at MY warehouse on consignment. The goods are NOT owned until
-// a future settlement, so this route writes ZERO inventory_movements. It only
-// records the consignment receipt + rolls received qty onto the PC Order line.
+// ON-LEDGER (since 2026-06-05): a Purchase Consignment Receive records the
+// arrival of the SUPPLIER'S goods at MY warehouse on consignment. We hold the
+// physical stock (settlement comes later), so it books an IN into the receive's
+// warehouse — reconciled by resyncReceiveInventory (below), self-healing on
+// create / line CRUD / cancel. (It originally shipped off-ledger; the IN ledger
+// was added 2026-06-05 so consigned stock shows in Inventory.)
 //
-// This is a clone of /grns (apps/api/src/routes/grns.ts) with EVERY inventory
-// side-effect removed:
-//   • DROPPED: the inventory-IN write (writeMovements), FIFO lot creation, the
-//     resolvePoBatchByItem dye-lot stamping, the rack placement
-//     (placeGrnLinesOnRacks), recomputeSoStockAllocation, the recost hook, and
-//     the cancel's inventory reversal (nothing to reverse — no movement was
-//     ever written). The downstream-consumption / negative-stock guards are
-//     likewise gone (there is no stock to consume).
-//   • KEPT: create (header + items, full variant), line CRUD, list, detail,
-//     status, the received-qty rollup onto the PC ORDER (recomputePcoReceived,
+// Cloned from /grns (apps/api/src/routes/grns.ts). It still differs from a plain
+// GRN in two ways:
+//   • Rollup target is the PC ORDER, not a PO (recomputePcoReceived,
 //     recount-from-live, like recomputePoReceived but pointed at
-//     purchase_consignment_orders), and the over-receipt cap vs the PC order line.
+//     purchase_consignment_orders), with the over-receipt cap vs the PC order line.
+//   • Inventory is reconciled by a single self-healing resync (resyncReceiveInventory)
+//     rather than GRN's per-step writeMovements + FIFO/rack/recost plumbing.
+//   • KEPT: create (header + items, full variant), line CRUD, list, detail, status.
 //
 // Tables: purchase_consignment_receives / purchase_consignment_receive_items
 //   (migration 0154). FK renames: receive→purchase_consignment_order_id /
@@ -34,10 +32,9 @@ export const purchaseConsignmentReceives = new Hono<{ Bindings: Env; Variables: 
 purchaseConsignmentReceives.use('*', supabaseAuth);
 
 /* ── Shared helper: post a PC Receive + roll up to PC Order items ──────────
-   OFF-LEDGER counterpart of postGrnAndRollup. Recounts received_qty onto the PC
-   ORDER lines (recompute-from-live), flips the receive to POSTED, and writes NO
-   inventory — no IN movement, no FIFO lot, no rack placement, no allocation
-   re-walk. */
+   Counterpart of postGrnAndRollup. Recounts received_qty onto the PC ORDER lines
+   (recompute-from-live) and flips the receive to POSTED; the inventory IN is then
+   booked by resyncReceiveInventory (called at the end of this helper). */
 async function postPcReceiveAndRollup(sb: any, receiveId: string): Promise<{ ok: true } | { ok: false; reason: string; status?: number }> {
   const { data: items } = await sb.from('purchase_consignment_receive_items')
     .select('pc_order_item_id')
@@ -49,7 +46,8 @@ async function postPcReceiveAndRollup(sb: any, receiveId: string): Promise<{ ok:
   await recomputePcoReceived(sb, touchedPcoItemIds);
 
   // Receives are created POSTED directly; this is idempotent on already-POSTED
-  // rows (matches any non-CLOSED status). No inventory IN is written.
+  // rows (matches any non-CLOSED status). The inventory IN is booked by the
+  // resync below.
   const { data, error } = await sb.from('purchase_consignment_receives').update({
     status: 'POSTED',
     posted_at: new Date().toISOString(),
@@ -390,8 +388,8 @@ purchaseConsignmentReceives.get('/', async (c) => {
 
 /* ── GET /outstanding-pco-items ──────────────────────────────────────────
    PC Order line items with remaining qty > 0, for the multi-select "Receive
-   from PC Orders" picker. Mirrors GRN /outstanding-po-items but off-ledger and
-   without the warehouse-lock plumbing (kept simple — no stock to place). */
+   from PC Orders" picker. Mirrors GRN /outstanding-po-items; this endpoint is a
+   read-only query (no inventory side-effects) without the warehouse-lock plumbing. */
 purchaseConsignmentReceives.get('/outstanding-pco-items', async (c) => {
   const sb = c.get('supabase');
   const { data: items, error } = await sb
@@ -717,7 +715,8 @@ purchaseConsignmentReceives.post('/', async (c) => {
     }
   }
 
-  // Roll up qty_accepted to PC Order items. NO inventory IN. Best-effort.
+  // Roll up qty_accepted to PC Order items + book the inventory IN (both inside
+  // postPcReceiveAndRollup). Best-effort.
   await postPcReceiveAndRollup(sb, h.id);
   // Populate header money rollups from the inserted lines.
   await recomputePcReceiveTotals(sb, h.id);
@@ -851,10 +850,10 @@ purchaseConsignmentReceives.patch('/:id/post', async (c) => {
 });
 
 /* ── PATCH /:id/cancel — cancel a PC Receive ────────────────────────────────
-   OFF-LEDGER: cancelling a PC Receive sets status='CANCELLED' and recounts
-   received_qty onto the parent PC Order lines (so this receive's lines drop out
-   and the PC Order re-opens). There is NO inventory reversal — the receive never
-   wrote an inventory_movement, so there is nothing to reverse. */
+   Cancelling a PC Receive sets status='CANCELLED' and recounts received_qty onto
+   the parent PC Order lines (so this receive's lines drop out and the PC Order
+   re-opens). Inventory is reversed too (on-ledger since 2026-06-05): the resync
+   drives the booked IN back to zero. */
 purchaseConsignmentReceives.patch('/:id/cancel', async (c) => {
   const id = c.req.param('id');
   const sb = c.get('supabase');
@@ -914,8 +913,8 @@ purchaseConsignmentReceives.patch('/:id/cancel', async (c) => {
    PC Receive CRUD (PATCH header + line add / edit / delete) — mirrors the GRN
    detail page editing. The editable line quantity is qty_received;
    line_total_centi = qty_received * unit_price_centi - discount_centi;
-   recomputePcReceiveTotals rolls the header subtotal/total. OFF-LEDGER: line
-   CRUD writes NO inventory — it only recounts received_qty onto the PC Order.
+   recomputePcReceiveTotals rolls the header subtotal/total. Line CRUD recounts
+   received_qty onto the PC Order AND resyncs the inventory IN (on-ledger).
    ════════════════════════════════════════════════════════════════════════ */
 
 /* ── PATCH /:id — header update ── */
@@ -1124,9 +1123,9 @@ purchaseConsignmentReceives.patch('/:id/items/:itemId', async (c) => {
 });
 
 /* ── DELETE /:id/items/:itemId — remove a line + roll back its PC Order receipt. ──
-   OFF-LEDGER: reads the line's pc_order_item_id BEFORE delete, then recounts the
-   PC Order's received_qty from live lines. NO inventory OUT (nothing was ever
-   written). Blocked by the child-lock (any downstream PC Return). */
+   Reads the line's pc_order_item_id BEFORE delete, then recounts the PC Order's
+   received_qty from live lines and resyncs inventory (the deleted line's IN is
+   driven back out). Blocked by the child-lock (any downstream PC Return). */
 purchaseConsignmentReceives.delete('/:id/items/:itemId', async (c) => {
   const receiveId = c.req.param('id'); const itemId = c.req.param('itemId');
   const sb = c.get('supabase');

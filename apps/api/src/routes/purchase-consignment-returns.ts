@@ -4,21 +4,22 @@
 // Closes the consignment loop: PC Order → PC Receive → (defect / oversupply /
 // wrong item) → PC Return → supplier credit note.
 //
-// OFF-LEDGER: a Purchase Consignment Return records returning the SUPPLIER'S
-// consigned goods (never owned by us), so it writes ZERO inventory_movements. It
-// only records the return + rolls the returned qty onto the PC Receive line
-// (which in turn re-opens the PC Order received_qty via recomputePcoReceived).
+// ON-LEDGER (since 2026-06-05): a Purchase Consignment Return ships the
+// SUPPLIER'S consigned goods back out of MY warehouse, so it books an OUT just
+// like a normal Purchase Return. Inventory is reconciled by resyncPcReturnInventory
+// (below), self-healing on create / line CRUD / post / complete / cancel (cancel
+// nets the OUT back to zero → an IN reversal). (It originally shipped off-ledger;
+// the OUT ledger was added 2026-06-05.)
 //
-// This is a clone of /purchase-returns (apps/api/src/routes/purchase-returns.ts)
-// with EVERY inventory side-effect removed:
-//   • DROPPED: writePurchaseReturnMovements (the OUT), writePrLineDeltaMovement
-//     (line-CRUD deltas), the cancel reversal reverseMovements, the dye-lot
-//     batch resolution, the per-line warehouse resolution, and
-//     recomputeSoStockAllocation. No inventory_movements are written or reversed.
+// Cloned from /purchase-returns (apps/api/src/routes/purchase-returns.ts). It
+// still differs from a plain PR in two ways:
+//   • Rollup target is the PC RECEIVE line (adjustPcReceiveReturnedQty,
+//     recount-from-live), which in turn re-opens the PC Order received_qty via
+//     recomputePcoReceived; the over-return cap is vs the PC Receive line.
+//   • Inventory is reconciled by a single self-healing resync (resyncPcReturnInventory)
+//     rather than PR's per-step writeMovements + reverseMovements plumbing.
 //   • KEPT: create (header + items), line CRUD, list, detail, status lifecycle
-//     (post/complete/cancel), the returned-qty rollup onto the PC RECEIVE
-//     (adjustPcReceiveReturnedQty, recount-from-live), and the over-return cap
-//     vs the PC Receive line.
+//     (post/complete/cancel).
 //
 // Tables: purchase_consignment_returns / purchase_consignment_return_items
 //   (migration 0154). FK renames: return→pc_receive_id / pc_order_id;
@@ -221,7 +222,8 @@ async function recomputePcReturnTotals(sb: any, prId: string) {
    (non-cancelled) PC return lines for this receive line, clamped to
    [0, qty_accepted]. A recount self-heals (no `cur + delta` drift). Returning
    goods then nets down the parent PC Order's received_qty via
-   recomputePcoReceived. NO inventory — off-ledger. */
+   recomputePcoReceived. This helper only moves the returned-qty rollup; the
+   inventory OUT is handled separately by resyncPcReturnInventory. */
 async function adjustPcReceiveReturnedQty(sb: any, receiveItemId: string, _delta?: number) {
   if (!receiveItemId) return;
   const { data: prLines } = await sb.from('purchase_consignment_return_items')
@@ -419,7 +421,7 @@ purchaseConsignmentReturns.post('/', async (c) => {
     return c.json({ error: 'no_returnable_qty', message: 'Every line is already fully returned (nothing left to return).' }, 400);
   }
 
-  // PC Return is created POSTED. NO inventory OUT is written.
+  // PC Return is created POSTED. The inventory OUT is booked by the resync below.
   const pcOrderId = (body.pcOrderId as string | undefined) ?? null;
   const pcReceiveId = (body.pcReceiveId as string | undefined) ?? null;
   const { data: header, error: hErr } = await sb.from('purchase_consignment_returns').insert({
@@ -447,7 +449,7 @@ purchaseConsignmentReturns.post('/', async (c) => {
 
   /* Consume each PC-receive-linked line's returned_qty (recount-from-live), which
      nets down the source receive line + PC Order received_qty. Manual lines (no
-     pc_receive_item_id) are skipped. NO inventory OUT. */
+     pc_receive_item_id) are skipped. (Inventory OUT is resynced separately below.) */
   for (const r of itemRows) {
     if (r.pc_receive_item_id) await adjustPcReceiveReturnedQty(sb, r.pc_receive_item_id, Number(r.qty_returned));
   }
@@ -672,10 +674,10 @@ purchaseConsignmentReturns.patch('/:id/complete', async (c) => {
 });
 
 /* ── PATCH /:id/cancel — cancel a PC Return ─────────────────────────────────
-   OFF-LEDGER: cancelling a PC Return sets status='CANCELLED' and releases the
-   PC-receive-line consumption (recount returned_qty from live, which re-opens
-   the PC Order received_qty). There is NO inventory reversal — the return never
-   wrote an inventory_movement. A COMPLETED return cannot be cancelled. */
+   Cancelling a PC Return sets status='CANCELLED' and releases the PC-receive-line
+   consumption (recount returned_qty from live, which re-opens the PC Order
+   received_qty). Inventory is reversed too (on-ledger since 2026-06-05): the
+   resync drives the booked OUT back to zero. A COMPLETED return cannot be cancelled. */
 purchaseConsignmentReturns.patch('/:id/cancel', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
 
@@ -705,7 +707,7 @@ purchaseConsignmentReturns.patch('/:id/cancel', async (c) => {
 
   // Release the PC-receive-line consumption: recount returned_qty for every
   // receive-linked line (the PR is now CANCELLED, so the recount excludes it).
-  // NO inventory reversal (off-ledger). Best-effort.
+  // (Inventory reversal is done separately just below.) Best-effort.
   try {
     const { data: relLines } = await sb.from('purchase_consignment_return_items')
       .select('qty_returned, pc_receive_item_id').eq('purchase_consignment_return_id', id);
@@ -728,8 +730,8 @@ purchaseConsignmentReturns.patch('/:id/cancel', async (c) => {
    PC Return CRUD (PATCH header + line add / edit / delete) — mirrors the PR
    detail page editing. The editable line quantity is qty_returned;
    line_refund_centi = qty_returned * unit_price_centi (no discount);
-   recomputePcReturnTotals rolls the header refund_centi. OFF-LEDGER: line CRUD
-   writes NO inventory — it only recounts returned_qty onto the PC Receive.
+   recomputePcReturnTotals rolls the header refund_centi. Line CRUD recounts
+   returned_qty onto the PC Receive AND resyncs the inventory OUT (on-ledger).
    ════════════════════════════════════════════════════════════════════════ */
 
 /* ── PATCH /:id — header update ── */
@@ -916,7 +918,8 @@ purchaseConsignmentReturns.patch('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('purchase_consignment_return_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   // Apply the consumption delta to the source receive line (recount-from-live,
-  // off-ledger; helper clamps to [0, qty_accepted]).
+  // qty rollup only; helper clamps to [0, qty_accepted]). The inventory OUT is
+  // resynced just below.
   if (receiveItemId && delta !== 0) await adjustPcReceiveReturnedQty(sb, receiveItemId, delta);
   await recomputePcReturnTotals(sb, prId);
   // Adjust inventory by the qty/variant delta (self-healing resync). Best-effort.
@@ -938,7 +941,8 @@ purchaseConsignmentReturns.delete('/:id/items/:itemId', async (c) => {
   if (line) {
     const l = line as { qty_returned: number; pc_receive_item_id: string | null };
     // Release: recount returned_qty from live (the deleted line is gone), which
-    // nets the receive line + PC Order back up. NO inventory reversal (off-ledger).
+    // nets the receive line + PC Order back up. (Inventory is given back IN by
+    // the resync just below.)
     if (l.pc_receive_item_id) await adjustPcReceiveReturnedQty(sb, l.pc_receive_item_id, -(l.qty_returned ?? 0));
   }
   await recomputePcReturnTotals(sb, prId);
