@@ -30,6 +30,7 @@ import { splitSofaBuildIntoModuleLines } from '@2990s/shared/so-sofa-split';
 import { buildOneShotMints, type OneShotMintReq } from '../lib/one-shot-mint';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
+import { rangeBoundsMy } from '../lib/my-time';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
 import { signSoItemPhotoUrl, soItemPhotoBindings, presign, type SlipMime } from '../lib/r2';
 import { slipBindings } from '../lib/slip';
@@ -638,7 +639,19 @@ mfgSalesOrders.get('/mine', async (c) => {
      proceeded_at (migration 0110) — selecting proceeded_at from the view 500s
      at runtime. The base table has every column incl. proceeded_at +
      deposit_centi. Paid is summed from the payments ledger separately below. */
-  const { data, error } = await sb
+  /* Board filters (POS My-orders toolbar):
+       ?q=   free-text → searches doc_no / debtor_name / phone across ALL dates
+             (the period is intentionally ignored — search is a global lookup).
+       ?from=&to=  YYYY-MM-DD (MY-local, `to` inclusive) → filter created_at
+             (order-placed date) to that period. Only applied when there's no q.
+     The default (no params) returns everything; the POS always passes the
+     current-month window, so the board mirrors the KPI cards. */
+  const q = (c.req.query('q') ?? '').trim();
+  const fromYmd = c.req.query('from') ?? null;
+  const toYmd = c.req.query('to') ?? null;
+  const LIMIT = 300;
+
+  let query = sb
     .from('mfg_sales_orders')
     .select(
       'doc_no, debtor_name, phone, email, address1, address2, city, postcode, customer_state, ' +
@@ -646,10 +659,28 @@ mfgSalesOrders.get('/mine', async (c) => {
       'proceeded_at, total_revenue_centi, line_count, deposit_centi',
     )
     .eq('salesperson_id', user.id)
-    .not('status', 'in', '("CANCELLED","ON_HOLD")')
+    .not('status', 'in', '("CANCELLED","ON_HOLD")');
+
+  if (q) {
+    const safe = escapeForOr(q);
+    if (safe) {
+      query = query.or(
+        `doc_no.ilike.%${safe}%,debtor_name.ilike.%${safe}%,phone.ilike.%${safe}%`,
+      );
+    }
+  } else {
+    const { startUtc, endUtc } = rangeBoundsMy(fromYmd, toYmd);
+    if (startUtc) query = query.gte('created_at', startUtc);
+    if (endUtc) query = query.lt('created_at', endUtc);
+  }
+
+  const { data, error } = await query
     .order('created_at', { ascending: false })
-    .limit(80);
+    .limit(LIMIT);
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  if ((data?.length ?? 0) >= LIMIT) {
+    console.log(`[/mine] ${LIMIT}-row cap hit for salesperson=${user.id} q=${q ? 'yes' : 'no'} from=${fromYmd ?? '-'} to=${toYmd ?? '-'}`);
+  }
 
   // Cast via `unknown` first — supabase-js types a view select as
   // GenericStringError[] until the schema cache materialises (same pattern as

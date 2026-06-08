@@ -20,8 +20,11 @@ import {
   Store,
   Loader2,
   FileText,
+  Search,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
-import { Button, IconButton } from '@2990s/design-system';
+import { IconButton } from '@2990s/design-system';
 import { groupSoLinesForDisplay } from '@2990s/shared/so-line-display';
 import { PAYMENT_METHOD_CODES } from '@2990s/shared/payment-methods';
 import { useAuth } from '../lib/auth';
@@ -133,9 +136,48 @@ interface MineSoRow {
   }> | null;
 }
 
-const useMyOrders = () =>
+/* ─── Period model (My-orders toolbar) ───────────────────────────────────
+   The board + the two KPI cards display ONE selected period — either a whole
+   calendar month (◀ June 2026 ▶) or a from–to date range. Search is separate:
+   a non-empty search query ignores the period and looks across all dates. */
+type Period =
+  | { mode: 'month'; year: number; month0: number }
+  | { mode: 'range'; from: string; to: string }; // YYYY-MM-DD ('' = open)
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+/** Current MY calendar month (live on today's date, Asia/Kuala_Lumpur ≈ UTC+8). */
+const currentMonthPeriod = (): Period => {
+  const nowMy = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  return { mode: 'month', year: nowMy.getUTCFullYear(), month0: nowMy.getUTCMonth() };
+};
+
+/** Period → MY-local YYYY-MM-DD window (`to` inclusive) the API expects. */
+const periodToWindow = (p: Period): { from: string | null; to: string | null } => {
+  if (p.mode === 'range') return { from: p.from || null, to: p.to || null };
+  const lastDay = new Date(Date.UTC(p.year, p.month0 + 1, 0)).getUTCDate();
+  return {
+    from: `${p.year}-${pad2(p.month0 + 1)}-01`,
+    to: `${p.year}-${pad2(p.month0 + 1)}-${pad2(lastDay)}`,
+  };
+};
+
+/** Stable cache-key fragment for a period. */
+const periodKey = (p: Period): string =>
+  p.mode === 'month' ? `m:${p.year}-${p.month0}` : `r:${p.from}_${p.to}`;
+
+const monthName = (year: number, month0: number): string =>
+  new Intl.DateTimeFormat('en-MY', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(year, month0, 1)));
+
+const useMyOrders = (period: Period, search: string) =>
   useQuery({
-    queryKey: ['my-orders'],
+    // Search ignores the period (global lookup); otherwise key by the period so
+    // each month / range caches on its own.
+    queryKey: ['my-orders', search.trim() ? `q:${search.trim()}` : `p:${periodKey(period)}`],
     // Reads the salesperson's own Backend Sales Orders via the API (the board
     // is unified onto mfg_sales_orders; the legacy retail `orders` table is no
     // longer used here). salesperson_id filtering + CANCELLED/ON_HOLD exclusion
@@ -145,7 +187,17 @@ const useMyOrders = () =>
       const session = await supabase.auth.getSession();
       const token = session.data.session?.access_token;
       if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/mfg-sales-orders/mine`, {
+      const params = new URLSearchParams();
+      const q = search.trim();
+      if (q) {
+        params.set('q', q);
+      } else {
+        const { from, to } = periodToWindow(period);
+        if (from) params.set('from', from);
+        if (to) params.set('to', to);
+      }
+      const qs = params.toString();
+      const res = await fetch(`${API_URL}/mfg-sales-orders/mine${qs ? `?${qs}` : ''}`, {
         headers: { authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error(`GET /mfg-sales-orders/mine failed (${res.status})`);
@@ -491,15 +543,169 @@ const laneIdFor = (o: MyOrderRow): LaneDef['id'] => {
   return 'proceed';
 };
 
+/* ─── Toolbar: search (left) + period picker (right) ─── */
+
+const OrderToolbar = ({
+  period,
+  setPeriod,
+  query,
+  setQuery,
+}: {
+  period: Period;
+  setPeriod: (p: Period) => void;
+  query: string;
+  setQuery: (q: string) => void;
+}) => {
+  // Live MY month — can't browse into the future, so clamp the stepper here.
+  const nowMy = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  const curYear = nowMy.getUTCFullYear();
+  const curMonth0 = nowMy.getUTCMonth();
+  const atCurrentMonth =
+    period.mode === 'month' &&
+    period.year === curYear &&
+    period.month0 === curMonth0;
+  const isDefault = atCurrentMonth;
+
+  const stepMonth = (delta: number) => {
+    if (period.mode !== 'month') return;
+    const d = new Date(Date.UTC(period.year, period.month0 + delta, 1));
+    setPeriod({ mode: 'month', year: d.getUTCFullYear(), month0: d.getUTCMonth() });
+  };
+
+  const toMonth = () =>
+    setPeriod(period.mode === 'month' ? period : currentMonthPeriod());
+  const toRange = () => {
+    if (period.mode === 'range') return;
+    const w = periodToWindow(period);
+    setPeriod({ mode: 'range', from: w.from ?? '', to: w.to ?? '' });
+  };
+
+  return (
+    <section className={styles.toolbar} aria-label="Search and period filter">
+      <div className={styles.searchBox}>
+        <Search size={18} strokeWidth={1.75} />
+        <input
+          type="search"
+          className={styles.searchInput}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search SO no., customer or phone"
+          aria-label="Search orders"
+        />
+        {query && (
+          <button
+            type="button"
+            className={styles.searchClear}
+            onClick={() => setQuery('')}
+            aria-label="Clear search"
+          >
+            <X size={16} strokeWidth={1.75} />
+          </button>
+        )}
+      </div>
+
+      <div className={styles.periodCtl}>
+        <div className={styles.modeToggle} role="tablist" aria-label="Period mode">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={period.mode === 'month'}
+            data-active={period.mode === 'month'}
+            onClick={toMonth}
+          >
+            Month
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={period.mode === 'range'}
+            data-active={period.mode === 'range'}
+            onClick={toRange}
+          >
+            Range
+          </button>
+        </div>
+
+        {period.mode === 'month' ? (
+          <div className={styles.monthStepper}>
+            <button
+              type="button"
+              onClick={() => stepMonth(-1)}
+              aria-label="Previous month"
+            >
+              <ChevronLeft size={18} strokeWidth={1.75} />
+            </button>
+            <span className={styles.monthLabel}>
+              {monthName(period.year, period.month0)}
+            </span>
+            <button
+              type="button"
+              onClick={() => stepMonth(1)}
+              disabled={atCurrentMonth}
+              aria-label="Next month"
+            >
+              <ChevronRight size={18} strokeWidth={1.75} />
+            </button>
+          </div>
+        ) : (
+          <div className={styles.rangeInputs}>
+            <input
+              type="date"
+              className={styles.dateInput}
+              value={period.from}
+              max={period.to || undefined}
+              onChange={(e) => setPeriod({ ...period, from: e.target.value })}
+              aria-label="From date"
+            />
+            <span className={styles.rangeDash}>–</span>
+            <input
+              type="date"
+              className={styles.dateInput}
+              value={period.to}
+              min={period.from || undefined}
+              onChange={(e) => setPeriod({ ...period, to: e.target.value })}
+              aria-label="To date"
+            />
+          </div>
+        )}
+
+        {!isDefault && (
+          <button
+            type="button"
+            className={styles.resetLink}
+            onClick={() => setPeriod(currentMonthPeriod())}
+          >
+            This month
+          </button>
+        )}
+      </div>
+    </section>
+  );
+};
+
 const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
-  const orders = useMyOrders();
-  const stats = useSalesStats();
+  const [period, setPeriod] = useState<Period>(currentMonthPeriod);
+  const [query, setQuery] = useState('');
+  // Debounce the search box so we don't refetch on every keystroke.
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query), 300);
+    return () => clearTimeout(t);
+  }, [query]);
+  const searching = debouncedQuery.trim().length > 0;
+
+  const orders = useMyOrders(period, debouncedQuery);
+  const stats = useSalesStats(periodToWindow(period));
   const staff = useStaff();
   useMyOrdersRealtime();
   const list = orders.data ?? [];
   const [active, setActive] = useState<MyOrderRow | null>(null);
 
   const staffName = staff.data?.name ?? stats.data?.staffName ?? 'Sales';
+  const periodLabel =
+    period.mode === 'month'
+      ? monthName(period.year, period.month0)
+      : stats.data?.monthLabel ?? 'the selected dates';
 
   // Keep the active drawer order in sync with refetches.
   useEffect(() => {
@@ -551,16 +757,30 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
 
       <SalesKpis stats={stats} staffName={staffName} />
 
+      <OrderToolbar
+        period={period}
+        setPeriod={setPeriod}
+        query={query}
+        setQuery={setQuery}
+      />
+
+      {searching && (
+        <p className={styles.searchHint}>
+          Showing search results across all dates.
+        </p>
+      )}
+
       {orders.isLoading ? (
         <p className={styles.empty}>Loading…</p>
       ) : orders.error ? (
         <p className={styles.empty}>Failed to load: {String(orders.error)}</p>
       ) : list.length === 0 ? (
         <div className={styles.empty}>
-          <p>No orders yet. Sales you place will appear here.</p>
-          <Link to="/catalog">
-            <Button variant="primary">Back to catalog</Button>
-          </Link>
+          {searching ? (
+            <p>No orders match “{debouncedQuery.trim()}”.</p>
+          ) : (
+            <p>No orders in {periodLabel}.</p>
+          )}
         </div>
       ) : (
         <div className={styles.lanes}>

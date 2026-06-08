@@ -1916,8 +1916,8 @@ const SALES_STAFF_CACHE_KEY = 'pos:sales-staff-cache';
 
 export interface SalesStatsRow {
   monthLabel:     string;
-  monthStart:     string;
-  monthEnd:       string;
+  monthStart:     string | null;
+  monthEnd:       string | null;
   staffName:      string;
   showroomTotal:  number;
   showroomCount:  number;
@@ -1925,17 +1925,23 @@ export interface SalesStatsRow {
   personalCount:  number;
 }
 
-export const useSalesStats = (enabled = true) =>
+/* `window` = the My-orders toolbar period (MY-local YYYY-MM-DD, `to` inclusive).
+   Omitted / empty → the server defaults to the current calendar month. The two
+   bounds are part of the query key so each selected period caches separately. */
+export const useSalesStats = (window?: { from: string | null; to: string | null }) =>
   useQuery({
-    enabled,
-    queryKey: ['pos', 'sales-stats'],
+    queryKey: ['pos', 'sales-stats', window?.from ?? null, window?.to ?? null],
     staleTime: 60_000,
     queryFn: async (): Promise<SalesStatsRow> => {
       if (!API_URL) throw new Error('VITE_API_URL is not set');
       const session = await supabase.auth.getSession();
       const token   = session.data.session?.access_token;
       if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/pos/sales-stats`, {
+      const params = new URLSearchParams();
+      if (window?.from) params.set('from', window.from);
+      if (window?.to)   params.set('to', window.to);
+      const qs = params.toString();
+      const res = await fetch(`${API_URL}/pos/sales-stats${qs ? `?${qs}` : ''}`, {
         headers: { authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error(`GET /pos/sales-stats failed (${res.status})`);

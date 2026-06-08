@@ -5,6 +5,7 @@ import type { Env, Variables } from '../env';
 import { supabaseAuth } from '../middleware/auth';
 import { pinRateLimiter, createPinRateLimiter } from '../lib/pin-rate-limit';
 import { hashPin, verifyPin } from '../lib/bcrypt';
+import { monthBoundsMy, rangeBoundsMy } from '../lib/my-time';
 
 export const pos = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -241,15 +242,22 @@ pos.get('/sales-stats', supabaseAuth, async (c) => {
     return c.json({ error: 'staff_not_found' }, 404);
   }
 
-  // Month bounds in Asia/Kuala_Lumpur (UTC+8, no DST). Workers run in UTC, so
-  // shift +8h to find "now" in MY, take the 1st of that month at MY midnight,
-  // then shift back -8h for the UTC instant. Same for the upper bound.
-  const nowUtc = new Date();
-  const nowMy  = new Date(nowUtc.getTime() + 8 * 60 * 60 * 1000);
-  const y = nowMy.getUTCFullYear();
-  const m = nowMy.getUTCMonth();
-  const monthStartUtc = new Date(Date.UTC(y, m, 1, 0, 0, 0) - 8 * 60 * 60 * 1000).toISOString();
-  const monthEndUtc   = new Date(Date.UTC(y, m + 1, 1, 0, 0, 0) - 8 * 60 * 60 * 1000).toISOString();
+  // Period window (Asia/Kuala_Lumpur, UTC+8, no DST), shared with the My-orders
+  // board so the two can't drift. The POS toolbar passes ?from=&to= (MY-local
+  // YYYY-MM-DD, `to` inclusive) to recompute the cards for the selected month /
+  // range; with no params we default to the current MY calendar month.
+  const fromYmd = c.req.query('from') ?? null;
+  const toYmd   = c.req.query('to') ?? null;
+  let bounds;
+  if (fromYmd || toYmd) {
+    bounds = rangeBoundsMy(fromYmd, toYmd);
+  } else {
+    const nowMy = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    bounds = monthBoundsMy(nowMy.getUTCFullYear(), nowMy.getUTCMonth());
+  }
+  const monthStartUtc = bounds.startUtc;
+  const monthEndUtc   = bounds.endUtc;
+  const monthLabel    = bounds.label;
 
   // Resolve which salespeople count toward the "Showroom" card. A viewer with a
   // showroom_id → that showroom's staff; a viewer with none (admin / owner /
@@ -273,31 +281,26 @@ pos.get('/sales-stats', supabaseAuth, async (c) => {
   let showroomQuery = adminClient
     .from('mfg_sales_orders')
     .select('total_revenue_centi')
-    .not('status', 'in', '("CANCELLED","ON_HOLD")')
-    .gte('created_at', monthStartUtc)
-    .lt('created_at', monthEndUtc);
+    .not('status', 'in', '("CANCELLED","ON_HOLD")');
+  if (monthStartUtc) showroomQuery = showroomQuery.gte('created_at', monthStartUtc);
+  if (monthEndUtc)   showroomQuery = showroomQuery.lt('created_at', monthEndUtc);
   if (showroomStaffIds) showroomQuery = showroomQuery.in('salesperson_id', showroomStaffIds);
   const { data: showroomRows, error: showroomErr } = await showroomQuery;
   if (showroomErr) return c.json({ error: 'fetch_failed', detail: showroomErr.message }, 500);
   const showroomCount = showroomRows?.length ?? 0;
   const showroomTotal = sumCentiToMyr(showroomRows as Array<{ total_revenue_centi: number | null }> | null);
 
-  const { data: personalRows, error: personalErr } = await adminClient
+  let personalQuery = adminClient
     .from('mfg_sales_orders')
     .select('total_revenue_centi')
     .eq('salesperson_id', user.id)
-    .not('status', 'in', '("CANCELLED","ON_HOLD")')
-    .gte('created_at', monthStartUtc)
-    .lt('created_at', monthEndUtc);
+    .not('status', 'in', '("CANCELLED","ON_HOLD")');
+  if (monthStartUtc) personalQuery = personalQuery.gte('created_at', monthStartUtc);
+  if (monthEndUtc)   personalQuery = personalQuery.lt('created_at', monthEndUtc);
+  const { data: personalRows, error: personalErr } = await personalQuery;
   if (personalErr) return c.json({ error: 'fetch_failed', detail: personalErr.message }, 500);
   const personalCount = personalRows?.length ?? 0;
   const personalTotal = sumCentiToMyr(personalRows as Array<{ total_revenue_centi: number | null }> | null);
-
-  const monthLabel = new Intl.DateTimeFormat('en-MY', {
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'Asia/Kuala_Lumpur',
-  }).format(nowUtc);
 
   return c.json({
     monthLabel,

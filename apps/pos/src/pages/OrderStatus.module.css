@@ -252,6 +252,175 @@
   .kpis { grid-template-columns: 1fr; }
 }
 
+/* ─── Toolbar (search + period picker) ─── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.searchBox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 320px;
+  min-width: 240px;
+  max-width: 460px;
+  padding: 0 14px;
+  height: 44px;
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  box-shadow: var(--shadow-1);
+  color: var(--fg-muted);
+}
+.searchBox:focus-within {
+  border-color: var(--c-orange);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--c-orange) 18%, transparent);
+}
+.searchInput {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  color: var(--c-ink);
+}
+.searchInput::placeholder { color: var(--fg-muted); }
+/* Hide the native search reveal/clear — we render our own ✕. */
+.searchInput::-webkit-search-cancel-button { display: none; }
+.searchClear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--c-ink) 7%, transparent);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.searchClear:hover { color: var(--c-ink); }
+
+.periodCtl {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.modeToggle {
+  display: inline-flex;
+  padding: 3px;
+  background: color-mix(in oklab, var(--c-ink) 6%, transparent);
+  border-radius: 999px;
+}
+.modeToggle button {
+  border: 0;
+  background: transparent;
+  padding: 7px 16px;
+  border-radius: 999px;
+  font-family: var(--font-button);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.modeToggle button[data-active='true'] {
+  background: #fff;
+  color: var(--c-burnt);
+  box-shadow: var(--shadow-1);
+}
+
+.monthStepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 44px;
+  padding: 0 6px;
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  box-shadow: var(--shadow-1);
+}
+.monthStepper button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--c-ink);
+  cursor: pointer;
+}
+.monthStepper button:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--c-orange) 12%, transparent);
+  color: var(--c-burnt);
+}
+.monthStepper button:disabled { color: var(--line-strong); cursor: not-allowed; }
+.monthLabel {
+  min-width: 116px;
+  text-align: center;
+  font-family: var(--font-button);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-ink);
+}
+
+.rangeInputs {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 12px;
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  box-shadow: var(--shadow-1);
+}
+.dateInput {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--c-ink);
+}
+.rangeDash { color: var(--fg-muted); }
+
+.resetLink {
+  border: 0;
+  background: transparent;
+  font-family: var(--font-button);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-burnt);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.resetLink:hover { color: var(--c-orange); }
+
+.searchHint {
+  margin: 0 0 var(--space-4);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+
+@media (max-width: 720px) {
+  .toolbar { flex-direction: column; align-items: stretch; }
+  .searchBox { max-width: none; }
+  .periodCtl { justify-content: space-between; }
+}
+
 /* ─── Shell ─── */
 .shell {
   min-height: 100vh;
