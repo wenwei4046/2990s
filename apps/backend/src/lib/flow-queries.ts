@@ -714,13 +714,30 @@ export const useSalesOrderAuditLog = (docNo: string | null) => useQuery({
 export const useOverrideMfgSoLinePrice = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ docNo, itemId, overridePriceSen, reason }: {
+    // verified-save (Wei Siang 2026-06-08): a line price override is money — read
+    // the line back (cache-bypassing) and confirm the new unit price actually
+    // landed before reporting success. The override writes unit_price_centi
+    // verbatim, so the comparison can't false-positive.
+    mutationFn: async ({ docNo, itemId, overridePriceSen, reason }: {
       docNo: string; itemId: string; overridePriceSen: number; reason?: string;
-    }) =>
-      authedFetch<{ ok: boolean; itemId: string; newPrice: number }>(
-        `/mfg-sales-orders/${docNo}/items/${itemId}/override`,
-        { method: 'POST', body: JSON.stringify({ overridePriceSen, reason }) },
-      ),
+    }) => {
+      const result = await verifiedSave<{ items: Array<{ id: string; unit_price_centi: number }> }>({
+        endpoint: `/mfg-sales-orders/${docNo}/items/${itemId}/override`,
+        method: 'POST',
+        body: { overridePriceSen, reason },
+        readback: () => readbackGet<{ items: Array<{ id: string; unit_price_centi: number }> }>(`/mfg-sales-orders/${docNo}`),
+        expect: { unit_price_centi: overridePriceSen },
+        accessor: (d) => d?.items?.find((it) => it.id === itemId)?.unit_price_centi,
+      });
+      if (!result.ok) {
+        throw new Error(friendlySaveMessage(result, {
+          noun: 'price override',
+          fieldNames: { unit_price_centi: 'Line price' },
+          fmt: (v) => (v == null ? '(blank)' : `RM${(Number(v) / 100).toFixed(2)}`),
+        }));
+      }
+      return { ok: true as const, itemId, newPrice: overridePriceSen };
+    },
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-price-overrides', vars.docNo] });
