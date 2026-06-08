@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 // exercise only the pure cart→SO-item transforms.
 vi.mock('./supabase', () => ({ supabase: { auth: { getSession: vi.fn() } } }));
 
-import { cartLineToSoItem, cartLinesToSoItems, pickSoItemCode } from './pos-handover-so';
+import { cartLineToSoItem, cartLinesToSoItems, pickSoItemCode, describePosHandoffError } from './pos-handover-so';
 import type { CartLine, CartConfig } from '../state/cart';
 import type { CatalogProduct } from './queries';
 
@@ -511,5 +511,40 @@ describe('pickSoItemCode', () => {
     const config: CartConfig = { kind: 'size', productId: 'mfg-rep', productName: 'Akka', sizeId: 'super-single', total: 1, summary: '' };
     const sibs = [{ code: '2990 AKKA-FIRM MATT (K)', size_code: 'K' }];
     expect(pickSoItemCode(config, base(), sibs)).toBe('REP-CODE');
+  });
+});
+
+describe('describePosHandoffError — variant_not_allowed legibility', () => {
+  // The 2026-06-08 handover failure showed only "Order placement failed:
+  // variant_not_allowed" — sales had no way to tell WHICH variant the Model
+  // rejected. The server's 400 already carries field/value/allowed; surface it.
+  it('names the rejected field, value, the Model SKU, and the allowed pool', () => {
+    const msg = describePosHandoffError({
+      error: 'variant_not_allowed',
+      field: 'leg_height',
+      value: '8"',
+      allowed: ['1"', '4"', '6"'],
+      itemCode: 'LOTTI-2A(LHF)',
+    });
+    expect(msg).toContain('LOTTI-2A(LHF)');
+    expect(msg).toContain('leg height');     // field rendered human-friendly
+    expect(msg).toContain('8"');             // the offending value
+    expect(msg).toContain('1", 4", 6"');     // the allowed pool, so staff can re-pick
+  });
+
+  it('still works when the allowed pool is absent (degrades gracefully)', () => {
+    const msg = describePosHandoffError({
+      error: 'variant_not_allowed',
+      field: 'fabric',
+      value: 'BF-07',
+    });
+    expect(msg).toContain('fabric');
+    expect(msg).toContain('BF-07');
+    expect(msg).not.toContain('undefined');
+  });
+
+  it('leaves non-variant errors untouched', () => {
+    expect(describePosHandoffError({ error: 'customer_name_required' }))
+      .toBe('Order placement failed: customer_name_required');
   });
 });

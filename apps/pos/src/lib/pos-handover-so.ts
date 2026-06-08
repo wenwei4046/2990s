@@ -185,7 +185,29 @@ export interface PosHandoffError {
   itemCode?: string;
   client?: number;
   server?: number;
+  /** variant_not_allowed detail (apps/api/src/lib/allowed-options-check.ts):
+   *  WHICH variant axis the line carried that the Model's allowed_options pool
+   *  rejects, the offending value, and the pool it had to be in. Surfaced so
+   *  sales can Edit the line to an allowed option instead of staring at the
+   *  bare code (the 2026-06-08 handover failure showed only the error name). */
+  field?: string;
+  value?: string;
+  allowed?: string[];
 }
+
+/** Human-friendly labels for the allowed-options axes the API gates on. Keep in
+ *  step with the `field` values returned by checkAllowedOptions (server). */
+const VARIANT_FIELD_LABELS: Record<string, string> = {
+  size_code:    'size',
+  compartment:  'compartment',
+  divan_height: 'divan height',
+  total_height: 'total height',
+  gap:          'gap',
+  leg_height:   'leg height',
+  seat_size:    'seat size',
+  specials:     'special add-on',
+  fabric:       'fabric',
+};
 
 export class PosHandoffApiError extends Error {
   payload: PosHandoffError;
@@ -202,6 +224,21 @@ export class PosHandoffApiError extends Error {
  *  can fix the line (Edit in cart) instead of staring at a bare error code —
  *  the 2026-06-04 handover failure showed only "variants_incomplete". */
 export const describePosHandoffError = (payload: PosHandoffError): string => {
+  /* variant_not_allowed names the offending axis + value + the Model's allowed
+     pool, so sales can Edit the line to a valid option (the 2026-06-08 failure
+     showed only "variant_not_allowed" — nobody could tell WHICH variant). The
+     server (allowed-options-check.ts) always sends field + value; allowed +
+     itemCode are best-effort. */
+  if (payload.error === 'variant_not_allowed' && payload.field) {
+    const label = VARIANT_FIELD_LABELS[payload.field] ?? payload.field;
+    const where = payload.itemCode ? `${payload.itemCode}: ` : '';
+    const pool = (payload.allowed ?? []).length > 0
+      ? ` — allowed: ${payload.allowed!.join(', ')}`
+      : '';
+    return `Order placement failed: variant_not_allowed — ${where}`
+      + `this Model doesn't allow ${label} "${payload.value ?? ''}"${pool}.`
+      + ` Edit the line and pick an allowed option.`;
+  }
   const detail = payload.reason ?? payload.message;
   const offenders = (payload.offenders ?? [])
     .map((o) => `${o.itemCode}: missing ${o.missing.join(', ')}`)
