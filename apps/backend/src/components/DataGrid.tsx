@@ -796,7 +796,7 @@ function DataGridInner<T>({
           Commander 2026-05-27 ("为什么不是跟houzs的一样"): Houzs surfaces
           column show/hide as a visible pill button. The right-click header
           menu is preserved (backwards compat — both write to layout.hidden). */}
-      <div className={`${styles.toolbar} ${embedded ? styles.toolbarEmbedded : ''}`}>
+      <div className={styles.toolbar}>
         {toolbar}
         <div className={styles.toolbarSpacer} />
         {!embedded && (
@@ -926,7 +926,7 @@ function DataGridInner<T>({
 
       {/* Table */}
       <div ref={scrollRef} className={`${styles.scroll} ${embedded ? styles.scrollEmbedded : ''}`}>
-        <table className={`${styles.table} ${embedded ? styles.tableEmbedded : ''}`}>
+        <table className={styles.table}>
           <thead className={`${styles.thead} ${embedded ? styles.theadEmbedded : ''}`}>
             <tr>
               {visibleColumns.map((col) => {
