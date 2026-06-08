@@ -62,8 +62,11 @@ export const CustomerNameSearch = ({
               >
                 <UserRound size={16} strokeWidth={1.75} className={styles.icon} aria-hidden />
                 <span className={styles.name}>{h.debtorName}</span>
+                {/* Loo 2026-06-09 — name + phone only. Dropping the "· last
+                    order SO-…" tail keeps each row on one tidy line on the
+                    narrow iPad column (phone already disambiguates same names). */}
                 <span className={styles.meta}>
-                  {h.phone ?? 'no phone'} · last order {h.lastDocNo}
+                  {h.phone ?? 'no phone'}
                 </span>
               </button>
             </li>
