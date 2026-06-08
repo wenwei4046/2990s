@@ -66,7 +66,7 @@ mfgProducts.get('/', async (c) => {
     .from('mfg_products')
     .select(
       'id, code, name, category, description, base_model, size_code, size_label, base_price_sen, price1_sen, sell_price_sen, pwp_price_sen, ' +
-        'unit_m3_milli, status, pos_active, included_addons, sku_code, model_id, ' +
+        'unit_m3_milli, status, pos_active, one_shot, source_doc_no, included_addons, sku_code, model_id, ' +
         'branding, sub_assemblies, pieces, seat_height_prices, default_variants, updated_at, ' +
         // Commander 2026-05-29 — surface the Model's allowed_options so the SO
         // line editor can hide variant choices the SKU doesn't allow (instead

@@ -112,6 +112,10 @@ export type MfgProductRow = {
   seat_height_prices: SeatHeightPrice[] | null;
   default_variants: unknown;
   updated_at: string;
+  /** Migration 0161 — one-shot SKU minted from a remark + extra charge. */
+  one_shot?: boolean;
+  /** Migration 0161 — source SO doc number that triggered minting (e.g. 'SO-3012'). */
+  source_doc_no?: string | null;
 };
 
 /* PR #216 — Commander 2026-05-27: parallel cost-side editor. Operation
