@@ -1928,9 +1928,12 @@ export interface SalesStatsRow {
 /* `window` = the My-orders toolbar period (MY-local YYYY-MM-DD, `to` inclusive).
    Omitted / empty → the server defaults to the current calendar month. The two
    bounds are part of the query key so each selected period caches separately. */
-export const useSalesStats = (window?: { from: string | null; to: string | null }) =>
+export const useSalesStats = (
+  window?: { from: string | null; to: string | null },
+  salesperson?: string | null,
+) =>
   useQuery({
-    queryKey: ['pos', 'sales-stats', window?.from ?? null, window?.to ?? null],
+    queryKey: ['pos', 'sales-stats', window?.from ?? null, window?.to ?? null, salesperson ?? null],
     staleTime: 60_000,
     queryFn: async (): Promise<SalesStatsRow> => {
       if (!API_URL) throw new Error('VITE_API_URL is not set');
@@ -1940,6 +1943,8 @@ export const useSalesStats = (window?: { from: string | null; to: string | null 
       const params = new URLSearchParams();
       if (window?.from) params.set('from', window.from);
       if (window?.to)   params.set('to', window.to);
+      // Owner-tier only: scope the Personal card to a chosen salesperson.
+      if (salesperson && salesperson !== 'all') params.set('salesperson', salesperson);
       const qs = params.toString();
       const res = await fetch(`${API_URL}/pos/sales-stats${qs ? `?${qs}` : ''}`, {
         headers: { authorization: `Bearer ${token}` },

@@ -23,6 +23,7 @@ import {
   Search,
   ChevronLeft,
   ChevronRight,
+  Users,
 } from 'lucide-react';
 import { IconButton } from '@2990s/design-system';
 import { groupSoLinesForDisplay } from '@2990s/shared/so-line-display';
@@ -43,7 +44,7 @@ import {
   usePaymentMethodLabels,
   useSoDropdownValues,
 } from '../lib/so-maintenance/so-dropdown-options-queries';
-import { useStaff } from '../lib/staff';
+import { useStaff, canViewAllSales, useSalesStaff } from '../lib/staff';
 import styles from './OrderStatus.module.css';
 
 const PIN_LEN = 6;
@@ -173,11 +174,16 @@ const monthName = (year: number, month0: number): string =>
     timeZone: 'UTC',
   }).format(new Date(Date.UTC(year, month0, 1)));
 
-const useMyOrders = (period: Period, search: string) =>
+const useMyOrders = (period: Period, search: string, salesperson: string | null) =>
   useQuery({
     // Search ignores the period (global lookup); otherwise key by the period so
-    // each month / range caches on its own.
-    queryKey: ['my-orders', search.trim() ? `q:${search.trim()}` : `p:${periodKey(period)}`],
+    // each month / range caches on its own. salesperson scopes the whole board
+    // (owner-tier only; ignored server-side for everyone else).
+    queryKey: [
+      'my-orders',
+      salesperson ?? 'self',
+      search.trim() ? `q:${search.trim()}` : `p:${periodKey(period)}`,
+    ],
     // Reads the salesperson's own Backend Sales Orders via the API (the board
     // is unified onto mfg_sales_orders; the legacy retail `orders` table is no
     // longer used here). salesperson_id filtering + CANCELLED/ON_HOLD exclusion
@@ -196,6 +202,7 @@ const useMyOrders = (period: Period, search: string) =>
         if (from) params.set('from', from);
         if (to) params.set('to', to);
       }
+      if (salesperson) params.set('salesperson', salesperson);
       const qs = params.toString();
       const res = await fetch(`${API_URL}/mfg-sales-orders/mine${qs ? `?${qs}` : ''}`, {
         headers: { authorization: `Bearer ${token}` },
@@ -550,11 +557,19 @@ const OrderToolbar = ({
   setPeriod,
   query,
   setQuery,
+  canSeeAll,
+  salesStaff,
+  salesperson,
+  setSalesperson,
 }: {
   period: Period;
   setPeriod: (p: Period) => void;
   query: string;
   setQuery: (q: string) => void;
+  canSeeAll: boolean;
+  salesStaff: { id: string; name: string }[];
+  salesperson: string;
+  setSalesperson: (s: string) => void;
 }) => {
   // Live MY month — can't browse into the future, so clamp the stepper here.
   const nowMy = new Date(Date.now() + 8 * 60 * 60 * 1000);
@@ -603,6 +618,25 @@ const OrderToolbar = ({
           </button>
         )}
       </div>
+
+      {canSeeAll && (
+        <label className={styles.spPicker}>
+          <Users size={16} strokeWidth={1.75} />
+          <select
+            className={styles.spSelect}
+            value={salesperson}
+            onChange={(e) => setSalesperson(e.target.value)}
+            aria-label="Filter by salesperson"
+          >
+            <option value="all">All salespeople</option>
+            {salesStaff.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
 
       <div className={styles.periodCtl}>
         <div className={styles.modeToggle} role="tablist" aria-label="Period mode">
@@ -694,9 +728,16 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
   }, [query]);
   const searching = debouncedQuery.trim().length > 0;
 
-  const orders = useMyOrders(period, debouncedQuery);
-  const stats = useSalesStats(periodToWindow(period));
+  // Owner-tier (super_admin / master_account) may view every salesperson's
+  // board via a filter; everyone else stays self-scoped (param sent as null).
   const staff = useStaff();
+  const canSeeAll = canViewAllSales(staff.data?.role);
+  const [salesperson, setSalesperson] = useState<string>('all'); // 'all' | staffId
+  const effectiveSalesperson = canSeeAll ? salesperson : null;
+  const salesStaff = useSalesStaff(canSeeAll);
+
+  const orders = useMyOrders(period, debouncedQuery, effectiveSalesperson);
+  const stats = useSalesStats(periodToWindow(period), effectiveSalesperson);
   useMyOrdersRealtime();
   const list = orders.data ?? [];
   const [active, setActive] = useState<MyOrderRow | null>(null);
@@ -762,6 +803,10 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
         setPeriod={setPeriod}
         query={query}
         setQuery={setQuery}
+        canSeeAll={canSeeAll}
+        salesStaff={salesStaff.data ?? []}
+        salesperson={salesperson}
+        setSalesperson={setSalesperson}
       />
 
       {searching && (

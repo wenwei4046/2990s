@@ -31,6 +31,7 @@ import { buildOneShotMints, type OneShotMintReq } from '../lib/one-shot-mint';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
 import { rangeBoundsMy } from '../lib/my-time';
+import { canViewAllSales } from '../lib/roles';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
 import { signSoItemPhotoUrl, soItemPhotoBindings, presign, type SlipMime } from '../lib/r2';
 import { slipBindings } from '../lib/slip';
@@ -651,15 +652,34 @@ mfgSalesOrders.get('/mine', async (c) => {
   const toYmd = c.req.query('to') ?? null;
   const LIMIT = 300;
 
-  let query = sb
+  /* ?salesperson=<id|all> — only owner-tier (super_admin / master_account) may
+     view OTHER salespeople. We verify the caller's role with a service-role
+     lookup; if they qualify we run the whole board on the service-role client
+     (so RLS can't clip another salesperson's rows/items/payments). Everyone
+     else: the param is ignored and they stay self-scoped on their own client. */
+  const wantSalesperson = c.req.query('salesperson') ?? null;
+  let client = sb;
+  let targetSalespersonId: string | null = user.id; // default: own orders only
+  if (wantSalesperson) {
+    const admin = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: me } = await admin.from('staff').select('role').eq('id', user.id).maybeSingle();
+    if (canViewAllSales((me as { role?: string } | null)?.role)) {
+      client = admin;
+      targetSalespersonId = wantSalesperson === 'all' ? null : wantSalesperson;
+    }
+  }
+
+  let query = client
     .from('mfg_sales_orders')
     .select(
       'doc_no, debtor_name, phone, email, address1, address2, city, postcode, customer_state, ' +
       'customer_delivery_date, internal_expected_dd, status, payment_method, approval_code, note, so_date, created_at, ' +
       'proceeded_at, total_revenue_centi, line_count, deposit_centi',
     )
-    .eq('salesperson_id', user.id)
     .not('status', 'in', '("CANCELLED","ON_HOLD")');
+  if (targetSalespersonId) query = query.eq('salesperson_id', targetSalespersonId);
 
   if (q) {
     const safe = escapeForOr(q);
@@ -679,7 +699,7 @@ mfgSalesOrders.get('/mine', async (c) => {
     .limit(LIMIT);
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   if ((data?.length ?? 0) >= LIMIT) {
-    console.log(`[/mine] ${LIMIT}-row cap hit for salesperson=${user.id} q=${q ? 'yes' : 'no'} from=${fromYmd ?? '-'} to=${toYmd ?? '-'}`);
+    console.log(`[/mine] ${LIMIT}-row cap hit caller=${user.id} target=${targetSalespersonId ?? 'all'} q=${q ? 'yes' : 'no'} from=${fromYmd ?? '-'} to=${toYmd ?? '-'}`);
   }
 
   // Cast via `unknown` first — supabase-js types a view select as
@@ -693,7 +713,7 @@ mfgSalesOrders.get('/mine', async (c) => {
   const docNos = rows.map((r) => r.doc_no).filter((x): x is string => !!x);
   const itemsByDoc = new Map<string, Array<{ item_code: string; description: string | null; qty: number; total_centi: number; variants: unknown; remark: string | null }>>();
   if (docNos.length > 0) {
-    const { data: itemRows } = await sb
+    const { data: itemRows } = await client
       .from('mfg_sales_order_items')
       .select('doc_no, item_code, description, qty, total_centi, variants, remark')
       .in('doc_no', docNos)
@@ -715,7 +735,7 @@ mfgSalesOrders.get('/mine', async (c) => {
   const paidLedgerByDoc = new Map<string, number>();
   const depositInLedger = new Set<string>();
   if (docNos.length > 0) {
-    const { data: payRows } = await sb
+    const { data: payRows } = await client
       .from('mfg_sales_order_payments')
       .select('so_doc_no, amount_centi, is_deposit')
       .in('so_doc_no', docNos);
