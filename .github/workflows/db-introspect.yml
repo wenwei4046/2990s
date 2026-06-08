@@ -1,0 +1,68 @@
+name: DB introspect (read-only)
+
+# Manual-only, READ-ONLY schema introspection against production Postgres.
+# Used to detect migration drift (columns/functions a manual migration may have
+# missed). Runs SELECTs against information_schema / pg_proc only — no writes.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  introspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Introspect schema
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then echo "::error::DATABASE_URL not set"; exit 1; fi
+          echo "::add-mask::$DATABASE_URL"
+
+          echo "===== AT-RISK COLUMN CHECKS ====="
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At <<'SQL'
+          SELECT c.k || ' => ' || (CASE WHEN EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema='public' AND table_name=c.t AND column_name=c.col
+          ) THEN 'PRESENT' ELSE 'MISSING' END)
+          FROM (VALUES
+            ('stock_transfer_lines.variant_key','stock_transfer_lines','variant_key'),
+            ('inventory_movements.variant_key','inventory_movements','variant_key'),
+            ('inventory_lots.variant_key','inventory_lots','variant_key'),
+            ('inventory_lot_consumptions.variant_key','inventory_lot_consumptions','variant_key'),
+            ('inventory_movements.batch_no','inventory_movements','batch_no'),
+            ('inventory_lots.batch_no','inventory_lots','batch_no'),
+            ('inventory_movements.reason_code','inventory_movements','reason_code'),
+            ('mfg_sales_order_items.warehouse_id','mfg_sales_order_items','warehouse_id'),
+            ('mfg_sales_order_items.allocated_batch_no','mfg_sales_order_items','allocated_batch_no'),
+            ('grn_items.rack_id','grn_items','rack_id'),
+            ('mfg_sales_orders.priority_rank','mfg_sales_orders','priority_rank'),
+            ('purchase_consignment_receives.warehouse_id','purchase_consignment_receives','warehouse_id')
+          ) AS c(k,t,col)
+          ORDER BY c.k;
+          SQL
+
+          echo ""
+          echo "===== AT-RISK TABLE EXISTENCE ====="
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At <<'SQL'
+          SELECT t || ' => ' || (CASE WHEN EXISTS (
+            SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=t
+          ) THEN 'PRESENT' ELSE 'MISSING' END)
+          FROM unnest(ARRAY[
+            'customer_credits','purchase_consignment_orders','purchase_consignment_order_items',
+            'purchase_consignment_receives','purchase_consignment_receive_items',
+            'purchase_consignment_returns','pos_carts','pos_pin_attempts','pwp_codes',
+            'so_settings','warehouse_racks','warehouse_rack_items','warehouse_rack_movements'
+          ]) AS t
+          ORDER BY t;
+          SQL
+
+          echo ""
+          echo "===== FIFO FUNCTION SIGNATURES ====="
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At <<'SQL'
+          SELECT proname || '(' || pg_get_function_identity_arguments(oid) || ')'
+          FROM pg_proc
+          WHERE proname IN ('fn_consume_fifo','fn_consume_fifo_batch','fn_inventory_movement_fifo')
+          ORDER BY proname, oid;
+          SQL
