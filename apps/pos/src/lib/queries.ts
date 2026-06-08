@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { sofaModulePricesFromSkus, normalizeCompartmentCode } from '@2990s/shared/sofa-build';
+import { sofaModulePricesFromSkus, normalizeCompartmentCode, representativeArtCode } from '@2990s/shared/sofa-build';
 import { comboChargedPrices, type MfgSeatHeightPrice } from '@2990s/shared';
 import { supabase } from './supabase';
 
@@ -1315,7 +1315,7 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
         // (defaulting to `sofa-modules/<CANONICAL_ID>.svg`) on read but
         // stored overrides may omit it.
         const norm = normalizeCompartmentCode(rawCode);
-        const imageKey = meta.imageKey ?? `sofa-modules/${norm}.svg`;
+        const imageKey = meta.imageKey ?? `sofa-modules/${representativeArtCode(rawCode)}.svg`;
         return {
           code:           rawCode,
           normalizedCode: norm,
