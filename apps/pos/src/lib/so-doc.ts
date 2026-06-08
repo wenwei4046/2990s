@@ -114,7 +114,12 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
       } catch { /* keep legal.ts fallback */ }
 
       const total = centiToMyr(so.total_revenue_centi);
-      const paid = centiToMyr(so.paid_centi ?? so.deposit_centi);
+      /* Received-to-date = the live payments-ledger rollup the API now returns
+         (paid_centi_total: deposit + every drawer payment). Fall back to the
+         legacy header columns only if an older API build omits it. This is why
+         the print showed "Deposit paid 0.00" before — paid_centi is deprecated
+         and a balance payment lands in the ledger, not the header. */
+      const paid = centiToMyr(so.paid_centi_total ?? so.paid_centi ?? so.deposit_centi);
       const balance = so.balance_centi != null ? centiToMyr(so.balance_centi) : Math.max(0, total - paid);
 
       const rawSig = typeof so.signature_b64 === 'string' ? so.signature_b64 : '';

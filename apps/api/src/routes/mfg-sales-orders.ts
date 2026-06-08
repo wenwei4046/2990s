@@ -991,10 +991,38 @@ mfgSalesOrders.get('/:docNo', async (c) => {
      second round-trip. 0 when no debtor / no credit history. */
   const debtorCode = (h.data as { debtor_code?: string | null }).debtor_code ?? null;
   const customerCreditCenti = debtorCode ? await getCustomerCreditBalance(sb, debtorCode) : 0;
+  /* Live paid rollup — same rule as the LIST route (lines ~678): sum the
+     payments ledger, and add the header deposit ONLY for legacy SOs whose
+     deposit never reached the ledger (is_deposit marker distinguishes them).
+     Without this the single-SO response carried only the deprecated
+     `paid_centi` (0 for a balance payment recorded via the drawer), so the
+     customer-facing print showed "Deposit paid 0.00" + a wrong balance even
+     though money had been collected (Loo 2026-06-09). */
+  let paidLedgerCenti = 0;
+  let depositInLedger = false;
+  {
+    const { data: payRows } = await sb
+      .from('mfg_sales_order_payments')
+      .select('amount_centi, is_deposit')
+      .eq('so_doc_no', docNo);
+    for (const p of (payRows ?? []) as Array<{ amount_centi: number; is_deposit?: boolean | null }>) {
+      paidLedgerCenti += p.amount_centi ?? 0;
+      if (p.is_deposit) depositInLedger = true;
+    }
+  }
+  const headerDepositCenti = typeof (h.data as { deposit_centi?: number }).deposit_centi === 'number'
+    ? (h.data as { deposit_centi: number }).deposit_centi : 0;
+  const totalRevenueCenti = typeof (h.data as { total_revenue_centi?: number }).total_revenue_centi === 'number'
+    ? (h.data as { total_revenue_centi: number }).total_revenue_centi : 0;
+  const paidCentiTotal = (depositInLedger ? 0 : headerDepositCenti) + paidLedgerCenti;
   const salesOrder = {
     ...(h.data as unknown as Record<string, unknown>),
     has_children: (doCount ?? 0) > 0 || (siCount ?? 0) > 0,
     customer_credit_centi: customerCreditCenti,
+    // Authoritative received-to-date + remaining balance for the detail page
+    // and the customer-facing print (so-doc.ts reads paid_centi_total).
+    paid_centi_total: paidCentiTotal,
+    balance_centi: Math.max(0, totalRevenueCenti - paidCentiTotal),
   };
   /* Per-line delivery breakdown so the SO views can show a "Delivered" column
      (which DO took how much, and the live balance) without a second round-trip.

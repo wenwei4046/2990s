@@ -766,6 +766,17 @@ const OrderDetail = ({ order, onClose }: {
   // Payment recorded this session (added on top of order.paid).
   const [paymentAdd, setPaymentAdd] = useState<string>('');
 
+  /* Loo 2026-06-09 — default the amount to the OUTSTANDING balance so the
+     operator can just confirm a full balance payment instead of typing it.
+     Resyncs when switching orders and after the board refetches a new paid
+     total (e.g. just after recording a payment → prefills the new remainder;
+     zero balance → blank). Keyed on paid/total so a same-order background
+     refetch with no money change can't blow away a custom amount mid-type. */
+  useEffect(() => {
+    const outstanding = Math.max(0, order.total - order.paid);
+    setPaymentAdd(outstanding > 0 ? String(outstanding) : '');
+  }, [order.id, order.total, order.paid]);
+
   // "Paid so far" = the order's recorded paid total from /mine (handover
   // deposit + any ledger payments). After recording a payment we invalidate
   // ['my-orders']; the board refetches and syncs the open drawer's order, so

@@ -1122,7 +1122,7 @@ export const Configurator = () => {
           </label>
           {sameCartCode && sameCartOk && (
             <p style={{ margin: '0 0 var(--space-1)', fontSize: 'var(--fs-12)', color: 'var(--c-burnt, #A6471E)' }}>
-              A PWP code from this cart is ready{pwpEval.triggerLabel ? ` (换购自 ${pwpEval.triggerLabel})` : ''} — tap Auto Fill.
+              A PWP code from this cart is ready{pwpEval.triggerLabel ? ` (from ${pwpEval.triggerLabel})` : ''} — tap Auto Fill.
             </p>
           )}
           <div style={{ display: 'flex', gap: 'var(--space-2)' }}>

@@ -173,7 +173,7 @@ const TotalsBlock = ({ order }: { order: PrintableSO }) => (
         <span className={styles.totalValue}>{fmtMoney(order.subtotal)}</span>
       </div>
       <div className={styles.totalRow}>
-        <span className={styles.totalLabel}>Deposit paid</span>
+        <span className={styles.totalLabel}>Paid to date</span>
         <span className={styles.totalValue}>{fmtMoney(order.paid)}</span>
       </div>
       <div className={styles.totalRow}>
