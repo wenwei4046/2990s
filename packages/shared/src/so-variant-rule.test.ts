@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { missingVariantAxes } from './so-variant-rule';
+import { canonicalizeVariants, missingVariantAxes } from './so-variant-rule';
 
 const missingKeys = (
   group: string | null | undefined,
@@ -70,5 +70,53 @@ describe('missingVariantAxes — categories without mandatory variants', () => {
     expect(missingKeys('SOFA', { depth: '24', sofaLegHeight: 'No Leg', fabricCode: 'CG-1' }))
       .toEqual([]);
     expect(missingKeys('Bedframe', {})).toEqual(['divanHeight', 'legHeight', 'gap', 'fabricCode']);
+  });
+});
+
+describe('canonicalizeVariants — POS sofa keys → editor canonical keys', () => {
+  it('REGRESSION 2026-06-08: a POS sofa line prefills the Edit modal (depth → seatHeight, sofaLegHeight → legHeight)', () => {
+    // The exact failure Loo hit: editing a POS-created sofa SO left Seat Height
+    // and Leg Height blank because the dropdowns read seatHeight / legHeight but
+    // the line stored depth / sofaLegHeight. fabricCode shares one key, so only
+    // those two axes were blank.
+    const out = canonicalizeVariants('sofa', {
+      depth: '24', sofaLegHeight: '1"', fabricCode: 'EZ-006', cells: [{ moduleId: '1A' }],
+    });
+    expect(out.seatHeight).toBe('24');
+    expect(out.legHeight).toBe('1"');
+    expect(out.fabricCode).toBe('EZ-006');
+    // alias keys removed so a later edit of the canonical value isn't shadowed
+    // by a stale alias in `depth ?? seatHeight` consumers.
+    expect('depth' in out).toBe(false);
+    expect('sofaLegHeight' in out).toBe(false);
+    // unrelated keys pass through untouched.
+    expect(out.cells).toEqual([{ moduleId: '1A' }]);
+  });
+
+  it('Backend-keyed sofa line is unchanged', () => {
+    const input = { seatHeight: '28', legHeight: '4"', fabricCode: 'BF-01' };
+    expect(canonicalizeVariants('sofa', input)).toEqual(input);
+  });
+
+  it('canonical value wins when both canonical and alias are present', () => {
+    const out = canonicalizeVariants('sofa', { seatHeight: '28', depth: '24', fabricCode: 'X' });
+    expect(out.seatHeight).toBe('28');
+    expect('depth' in out).toBe(false);
+  });
+
+  it('empty alias does not overwrite, and is still removed', () => {
+    const out = canonicalizeVariants('sofa', { depth: '  ', legHeight: '4"', fabricCode: 'X' });
+    expect('depth' in out).toBe(false);
+    expect('seatHeight' in out).toBe(false); // empty alias contributed nothing
+    expect(out.legHeight).toBe('4"');
+  });
+
+  it('bedframe / mattress / unknown / null pass through untouched', () => {
+    const bf = { divanHeight: '10"', legHeight: '4"', gap: '14"', fabricCode: 'BF-01' };
+    expect(canonicalizeVariants('bedframe', bf)).toEqual(bf);
+    expect(canonicalizeVariants('mattress', { size: 'Queen' })).toEqual({ size: 'Queen' });
+    expect(canonicalizeVariants('others', { foo: 'bar' })).toEqual({ foo: 'bar' });
+    expect(canonicalizeVariants('sofa', null)).toEqual({});
+    expect(canonicalizeVariants(null, null)).toEqual({});
   });
 });
