@@ -473,6 +473,139 @@ export const useSpecialAddons = () =>
     },
   });
 
+/* ─── Special Add-ons CRUD (Backend parity with the POS Special Add-ons tab,
+ * Loo 2026-06-08) — same /special-addons Worker routes the POS hooks call, so
+ * POS and Backend write the one shared table. Shapes mirror
+ * apps/pos/src/lib/queries.ts. */
+export interface SpecialAddonInput {
+  code: string;
+  label: string;
+  soDescription: string;
+  categories: string[];
+  sellingPriceSen: number;
+  costPriceSen: number;
+  optionGroups: SpecialAddonGroup[];
+  active: boolean;
+  sortOrder: number;
+}
+
+export const useCreateSpecialAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SpecialAddonInput) =>
+      authedFetch<{ id: string }>('/special-addons', { method: 'POST', body: JSON.stringify(input) }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-addons'] }); },
+  });
+};
+
+export const useUpdateSpecialAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: Partial<SpecialAddonInput> }) =>
+      authedFetch<void>(`/special-addons/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-addons'] }); },
+  });
+};
+
+export const useDeleteSpecialAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch<void>(`/special-addons/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-addons'] }); },
+  });
+};
+
+/* ─── Order Add-ons (whole-order one-time fees: Dispose, Lift access) ───────
+ * The `addons` table, written direct via supabase-js under RLS (SELECT all
+ * staff, write is_admin) — same as the POS Order Add-ons section. Distinct
+ * from the per-Model special_addons above. Mirrors apps/pos/src/lib/queries.ts
+ * (AdminAddonRow / useAllAddons / useCreateAddon / useUpdateAddon). */
+export interface AdminAddonRow {
+  id: string;
+  label: string;
+  description: string | null;
+  icon: string;
+  kind: 'qty' | 'floors_items' | 'flat';
+  category: string | null;
+  price: number;
+  perFloorItem: number | null;
+  unit: string | null;
+  defaultQty: number;
+  stock: number | null;
+  enabled: boolean;
+  showAtHandover: boolean;
+  /** Migration 0160 — per-add-on SERVICE SKU (SVC-*); NULL books under the
+   *  generic SVC-ADDON bucket. */
+  serviceSku: string | null;
+  sortOrder: number;
+}
+
+export const useAllAddons = () =>
+  useQuery({
+    queryKey: ['addons-all'],
+    staleTime: 60_000,
+    queryFn: async (): Promise<AdminAddonRow[]> => {
+      const { data, error } = await supabase
+        .from('addons')
+        .select('id, label, description, icon, kind, category, price, per_floor_item, unit, default_qty, stock, enabled, show_at_handover, service_sku, sort_order')
+        .order('sort_order');
+      if (error) throw error;
+      return (data ?? []).map((r: any) => ({
+        id: r.id, label: r.label, description: r.description, icon: r.icon, kind: r.kind,
+        category: r.category, price: r.price, perFloorItem: r.per_floor_item, unit: r.unit,
+        defaultQty: r.default_qty, stock: r.stock, enabled: r.enabled,
+        showAtHandover: r.show_at_handover ?? false, serviceSku: r.service_sku ?? null,
+        sortOrder: r.sort_order,
+      }));
+    },
+  });
+
+const invalidateBackendAddons = (qc: ReturnType<typeof useQueryClient>) => {
+  void qc.invalidateQueries({ queryKey: ['addons'] });
+  void qc.invalidateQueries({ queryKey: ['addons-all'] });
+};
+
+export const useUpdateAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, patch }: { id: string; patch: { price?: number; perFloorItem?: number | null; enabled?: boolean; showAtHandover?: boolean; serviceSku?: string | null } }) => {
+      const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (patch.price !== undefined)          update.price = patch.price;
+      if (patch.perFloorItem !== undefined)   update.per_floor_item = patch.perFloorItem;
+      if (patch.enabled !== undefined)        update.enabled = patch.enabled;
+      if (patch.showAtHandover !== undefined) update.show_at_handover = patch.showAtHandover;
+      if (patch.serviceSku !== undefined)     update.service_sku = patch.serviceSku;
+      const { error } = await supabase.from('addons').update(update).eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => invalidateBackendAddons(qc),
+  });
+};
+
+export const useCreateAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (row: {
+      id: string; label: string; description: string | null; icon: string;
+      kind: 'qty' | 'floors_items' | 'flat'; category: string | null;
+      price: number; perFloorItem: number | null; unit: string | null;
+      stock: number | null; enabled: boolean; showAtHandover: boolean;
+      serviceSku: string | null; sortOrder: number;
+    }) => {
+      const { error } = await supabase.from('addons').insert({
+        id: row.id, label: row.label, description: row.description, icon: row.icon,
+        kind: row.kind, category: row.category, price: row.price,
+        per_floor_item: row.perFloorItem, unit: row.unit, stock: row.stock,
+        enabled: row.enabled, show_at_handover: row.showAtHandover,
+        service_sku: row.serviceSku, sort_order: row.sortOrder,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => invalidateBackendAddons(qc),
+  });
+};
+
 /* ─── Model allowed_options by SKU code (SO-parity, Loo 2026-06-06) ────────
  * The SO line editor previously only knew a line's allowed_options when the
  * product was freshly picked this session (`picked` state) — EDITING an

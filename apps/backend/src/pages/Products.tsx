@@ -64,6 +64,7 @@ import { useFabricTrackings } from '../lib/fabric-queries';
 import { SkeletonRows } from '../components/Skeleton';
 import { FabricsTable } from '../components/FabricsTable';
 import { SofaComboTab } from '../components/SofaComboTab';
+import { SpecialAddonsTab } from '../components/SpecialAddonsTab';
 import { FabricTracking } from './FabricTracking';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/size-info';
 import { ProductModels, NewModelDialog } from './ProductModels';
@@ -72,7 +73,7 @@ import styles from './Products.module.css';
 
 const ICON_PROPS = { size: 16, strokeWidth: 1.75 } as const;
 
-type TopTab = 'sku' | 'modular' | 'maintenance' | 'combos' | 'fabric';
+type TopTab = 'sku' | 'modular' | 'special-addons' | 'maintenance' | 'combos' | 'fabric';
 
 
 export const Products = () => {
@@ -108,6 +109,19 @@ export const Products = () => {
               onClick={() => setTopTab('modular')}
             >
               Modular
+            </button>
+            {/* Special Add-ons — Backend parity with the POS tab (Loo
+                2026-06-08). Product Add-ons (special_addons) replaces the
+                legacy Maintenance > Specials editor; Order Add-ons mirrors
+                the POS order-fee manager. Same shared API as POS. */}
+            <button
+              type="button"
+              role="tab"
+              data-active={topTab === 'special-addons'}
+              className={styles.tabSwitchBtn}
+              onClick={() => setTopTab('special-addons')}
+            >
+              Special Add-ons
             </button>
             <button
               type="button"
@@ -149,6 +163,7 @@ export const Products = () => {
 
       {topTab === 'sku' && <SkuMasterTab />}
       {topTab === 'modular' && <ProductModels />}
+      {topTab === 'special-addons' && <SpecialAddonsTab />}
       {topTab === 'maintenance' && <MaintenanceTab />}
       {topTab === 'combos' && <SofaComboTab />}
       {topTab === 'fabric' && <FabricTracking />}
