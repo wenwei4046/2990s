@@ -184,7 +184,7 @@ export const SalesInvoiceDetail = () => {
   const deleteItem = useDeleteSalesInvoiceItem();
 
   const header = (detail.data?.salesInvoice as SiHeader | undefined) ?? null;
-  const items = (detail.data?.items as SiItem[] | undefined) ?? [];
+  const items = useMemo(() => (detail.data?.items as SiItem[] | undefined) ?? [], [detail.data]);
 
   // ── Payments (DRAFT-mode PaymentsTable + manual persistence) ──────────
   const paymentsQ = useSalesInvoicePayments(id ?? null);
@@ -630,7 +630,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   header, onSave, locked = false, isEditing = false,
 }, ref) => {
   const localities = useLocalities();
-  const localityRows = localities.data ?? [];
+  const localityRows = useMemo(() => localities.data ?? [], [localities.data]);
   const staffQ = useStaff();
   const staffList = (staffQ.data ?? []).filter((s) => s.active);
 

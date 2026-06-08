@@ -158,7 +158,7 @@ const SoLineCardInner = ({
      (pickedFabric below) — the Fabrics DROPDOWN now sources the selling-side
      fabric_colours, same as POS (SO-parity, Loo 2026-06-06). */
   const fabricsQ = useFabricTrackings();
-  const fabrics  = fabricsQ.data ?? [];
+  const fabrics = useMemo(() => fabricsQ.data ?? [], [fabricsQ.data]);
   const fabricColoursQ = useFabricColoursActive();
   const fabricLibQ     = useFabricLibrary();
   /* Special Add-ons (the per-Model system POS sells from + the server prices
@@ -216,7 +216,7 @@ const SoLineCardInner = ({
   const deletePhoto = useDeleteSoItemPhoto();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const photoUrls = draft.photoUrls ?? [];
-  const pendingFiles = draft.pendingPhotoFiles ?? [];
+  const pendingFiles = useMemo(() => draft.pendingPhotoFiles ?? [], [draft.pendingPhotoFiles]);
   const isSaved = Boolean(docNo) && Boolean(itemId);
   const canShowPhotos = Boolean(draft.itemCode);
   const canMutatePhotos = canShowPhotos && isSaved && isEditing;

@@ -169,7 +169,7 @@ export const DeliveryReturnDetail = () => {
   const deleteItem = useDeleteDeliveryReturnItem();
 
   const header = (detail.data?.deliveryReturn as DrHeader | undefined) ?? null;
-  const items = (detail.data?.items as DrItem[] | undefined) ?? [];
+  const items = useMemo(() => (detail.data?.items as DrItem[] | undefined) ?? [], [detail.data]);
 
   const [editingDrafts, setEditingDrafts] = useState<Record<string, SoLineDraft>>({});
   const [addingDraft, setAddingDraft] = useState<SoLineDraft | null>(null);
@@ -572,7 +572,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   header, onSave, locked = false, isEditing = false,
 }, ref) => {
   const localities = useLocalities();
-  const localityRows = localities.data ?? [];
+  const localityRows = useMemo(() => localities.data ?? [], [localities.data]);
   const staffQ = useStaff();
   const staffList = (staffQ.data ?? []).filter((s) => s.active);
 

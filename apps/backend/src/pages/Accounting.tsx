@@ -193,7 +193,7 @@ const GlTab = () => {
 /* ── Balances ────────────────────────────────────────────────────────── */
 const BalancesTab = () => {
   const q = useAccountBalances();
-  const rows = q.data?.balances ?? [];
+  const rows = useMemo(() => q.data?.balances ?? [], [q.data]);
 
   const grouped = useMemo(() => {
     const order = ['ASSET', 'LIABILITY', 'EQUITY', 'INCOME', 'EXPENSE'];
@@ -250,7 +250,7 @@ const BalancesTab = () => {
 /* ── AR Aging ────────────────────────────────────────────────────────── */
 const ArAgingTab = () => {
   const q = useArAging();
-  const rows = q.data?.arAging ?? [];
+  const rows = useMemo(() => q.data?.arAging ?? [], [q.data]);
   const totals = useMemo(() => bucketTotals<ArAgingRow>(rows), [rows]);
 
   return (
@@ -289,7 +289,7 @@ const ArAgingTab = () => {
 /* ── AP Aging ────────────────────────────────────────────────────────── */
 const ApAgingTab = () => {
   const q = useApAging();
-  const rows = q.data?.apAging ?? [];
+  const rows = useMemo(() => q.data?.apAging ?? [], [q.data]);
   const totals = useMemo(() => bucketTotals<ApAgingRow>(rows), [rows]);
 
   return (

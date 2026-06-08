@@ -321,7 +321,7 @@ const BalancesTab = ({
     search: search.trim() || undefined,
     category: category === 'all' ? undefined : category,
   });
-  const rows: InventoryProductTotal[] = data ?? [];
+  const rows: InventoryProductTotal[] = useMemo(() => data ?? [], [data]);
 
   /* Commander 2026-05-29 — bedframe/sofa must show their variant breakdown in
      the list itself ("点进去这个 variant 有哪几个种类"), not only in the drawer.
@@ -543,7 +543,7 @@ const BatchesTab = ({
   const { data, isLoading, error } = useInventoryBatches({
     warehouseId: warehouseId ?? undefined,
   });
-  const allBatches: InventoryBatch[] = data ?? [];
+  const allBatches: InventoryBatch[] = useMemo(() => data ?? [], [data]);
 
   /* Client-side search across batch no / supplier / component code+name. */
   const q = search.trim().toLowerCase();
@@ -1116,7 +1116,7 @@ const CogsTab = ({
     warehouseId: warehouseId ?? undefined,
     productCode: search.trim() || undefined,
   });
-  const cogs: CogsEntry[] = data ?? [];
+  const cogs: CogsEntry[] = useMemo(() => data ?? [], [data]);
   const totalCogs = useMemo(() => cogs.reduce((s, r) => s + r.total_cost_sen, 0), [cogs]);
 
   return (

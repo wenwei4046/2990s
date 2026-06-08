@@ -82,7 +82,7 @@ export const AuditLog = () => {
     return (id: string | null) => (id ? m.get(id) ?? '—' : '—');
   }, [staff.data]);
 
-  const serverRows = query.data?.rows ?? [];
+  const serverRows = useMemo(() => query.data?.rows ?? [], [query.data]);
   const rows = useMemo(
     () => serverRows.filter((r) => matchesSearch(r, search)),
     [serverRows, search],

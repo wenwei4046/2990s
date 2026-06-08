@@ -97,7 +97,7 @@ export const CreateGrnDrawer = ({ onClose }: { onClose: () => void }) => {
   const [qtyMap, setQtyMap] = useState<Record<string, number>>({});
   const create = useCreateGrn();
 
-  const items = poDetail.data?.items ?? [];
+  const items = useMemo(() => poDetail.data?.items ?? [], [poDetail.data]);
   const lineItems = useMemo(
     () => items.map((it: any) => ({ poi: it, qty: qtyMap[it.id] ?? Math.max(0, it.qty - (it.received_qty ?? 0)) })),
     [items, qtyMap],

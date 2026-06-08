@@ -40,7 +40,7 @@ const DeliveryAddressCardInner = forwardRef<CardHandle, Props>(({ header, isEdit
   useEffect(() => { setForm(initialFormFor(header)); }, [header]);
 
   const localities = useLocalities();
-  const localityRows = localities.data ?? [];
+  const localityRows = useMemo(() => localities.data ?? [], [localities.data]);
 
   const states = useMemo(() => distinctStates(localityRows), [localityRows]);
   const cities = useMemo(

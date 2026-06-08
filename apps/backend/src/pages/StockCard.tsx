@@ -107,7 +107,7 @@ export const StockCard = () => {
   // OUT rows store qty as a positive count but reduce on-hand; we subtract.
   // IN adds. ADJUSTMENT / TRANSFER carry a SIGNED qty (positive = found stock,
   // negative = write-off / transfer-out) — add as-is.
-  const movementsDesc = movementsQ.data ?? [];
+  const movementsDesc = useMemo(() => movementsQ.data ?? [], [movementsQ.data]);
   const movementsWithBalance = useMemo(() => {
     const asc = [...movementsDesc].slice().reverse();
     let running = 0;

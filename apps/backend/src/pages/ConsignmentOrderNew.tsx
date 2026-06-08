@@ -286,7 +286,7 @@ export const ConsignmentOrderNew = () => {
   }, [lines]);
 
   // ── Locality cascades ──────────────────────────────────────────────
-  const locRows = loc.data ?? [];
+  const locRows = useMemo(() => loc.data ?? [], [loc.data]);
   const states  = useMemo(() => distinctStates(locRows), [locRows]);
   const cities  = useMemo(() => state ? citiesInState(locRows, state) : [], [locRows, state]);
   const postcodes = useMemo(

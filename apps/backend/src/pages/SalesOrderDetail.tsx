@@ -330,7 +330,7 @@ export const SalesOrderDetail = () => {
   const uploadPhoto = useUploadSoItemPhoto();
 
   const header = (detail.data?.salesOrder as SoHeader | undefined) ?? null;
-  const items = (detail.data?.items as SoItem[] | undefined) ?? [];
+  const items = useMemo(() => (detail.data?.items as SoItem[] | undefined) ?? [], [detail.data]);
 
   /* Fix 2 (micro-perf) — Variant-completeness check memoized; derives only
      when items or the processing-date toggle changes. 2026-06-04: delegates
@@ -1387,7 +1387,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   // Agent + Branding kept (B2B-specific, commander 2026-05-26).
   // POS field "Salesperson" → Agent column on the SO.
   const localities = useLocalities();
-  const localityRows = localities.data ?? [];
+  const localityRows = useMemo(() => localities.data ?? [], [localities.data]);
   const staffQ = useStaff();
   const staffList = (staffQ.data ?? []).filter((s) => s.active);
   /* Commander 2026-05-27: Venue is locked to the picked salesperson's

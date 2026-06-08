@@ -159,7 +159,7 @@ export const ConsignmentReturnDetail = () => {
   const deleteItem = useDeleteConsignmentReturnItem();
 
   const header = (detail.data?.deliveryReturn as CrnHeader | undefined) ?? null;
-  const items = (detail.data?.items as CrnItem[] | undefined) ?? [];
+  const items = useMemo(() => (detail.data?.items as CrnItem[] | undefined) ?? [], [detail.data]);
 
   const [editingDrafts, setEditingDrafts] = useState<Record<string, SoLineDraft>>({});
   const [addingDraft, setAddingDraft] = useState<SoLineDraft | null>(null);
@@ -535,7 +535,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   header, onSave, locked = false, isEditing = false,
 }, ref) => {
   const localities = useLocalities();
-  const localityRows = localities.data ?? [];
+  const localityRows = useMemo(() => localities.data ?? [], [localities.data]);
   const staffQ = useStaff();
   const staffList = (staffQ.data ?? []).filter((s) => s.active);
 

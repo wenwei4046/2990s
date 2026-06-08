@@ -202,7 +202,7 @@ export const ConsignmentReturnNew = () => {
 
   const staffList = useMemo(() => (staffQ.data ?? []).filter((s) => s.active), [staffQ.data]);
 
-  const locRows = loc.data ?? [];
+  const locRows = useMemo(() => loc.data ?? [], [loc.data]);
   const states = useMemo(() => distinctStates(locRows), [locRows]);
   const cities = useMemo(() => (state ? citiesInState(locRows, state) : []), [locRows, state]);
   const postcodes = useMemo(() => ((state && city) ? postcodesInCity(locRows, state, city) : []), [locRows, state, city]);

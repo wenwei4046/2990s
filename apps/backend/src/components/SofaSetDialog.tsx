@@ -48,7 +48,7 @@ export const SofaSetDialog = ({
   onAdd:   (modules: SofaSetModule[]) => void;
 }) => {
   const productsQuery = useMfgProducts({ category: 'SOFA' });
-  const sofaProducts: MfgProductRow[] = productsQuery.data ?? [];
+  const sofaProducts: MfgProductRow[] = useMemo(() => productsQuery.data ?? [], [productsQuery.data]);
 
   // Distinct, sorted base_model list — feeds the model picker.
   const models = useMemo(() => {

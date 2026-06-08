@@ -221,7 +221,7 @@ export const DeliveryOrderDetail = () => {
   const deleteItem = useDeleteMfgDeliveryOrderItem();
 
   const header = (detail.data?.deliveryOrder as DoHeader | undefined) ?? null;
-  const items = (detail.data?.items as DoItem[] | undefined) ?? [];
+  const items = useMemo(() => (detail.data?.items as DoItem[] | undefined) ?? [], [detail.data]);
 
   /* SO-linked DOs: the only way to add a line is to pick one of the parent SO's
      still-undelivered lines (qty capped to remaining), so Add Line stays in
@@ -793,7 +793,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   header, onSave, locked = false, isEditing = false,
 }, ref) => {
   const localities = useLocalities();
-  const localityRows = localities.data ?? [];
+  const localityRows = useMemo(() => localities.data ?? [], [localities.data]);
   const staffQ = useStaff();
   const staffList = (staffQ.data ?? []).filter((s) => s.active);
   const driversQ = useDrivers();

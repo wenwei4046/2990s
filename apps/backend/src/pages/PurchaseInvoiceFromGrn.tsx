@@ -40,7 +40,7 @@ export const PurchaseInvoiceFromGrn = () => {
 
   const [picks, setPicks] = useState<Record<string, { picked: boolean; qty: number }>>({});
 
-  const items = itemsQ.data ?? [];
+  const items = useMemo(() => itemsQ.data ?? [], [itemsQ.data]);
 
   // Group by GRN doc no so the UI renders one card per GRN.
   const grouped = useMemo(() => {

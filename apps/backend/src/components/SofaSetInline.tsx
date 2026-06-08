@@ -44,7 +44,7 @@ export const SofaSetInline = ({
   onAdd: (modules: SofaSetModule[]) => void;
 }) => {
   const productsQuery = useMfgProducts({ category: 'SOFA' });
-  const sofaProducts: MfgProductRow[] = productsQuery.data ?? [];
+  const sofaProducts: MfgProductRow[] = useMemo(() => productsQuery.data ?? [], [productsQuery.data]);
 
   const models = useMemo(() => {
     const set = new Set<string>();

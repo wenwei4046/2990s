@@ -170,7 +170,7 @@ export const ConsignmentOrderDetail = () => {
   const uploadPhoto = useUploadConsignmentItemPhoto();
 
   const header = (detail.data?.salesOrder as ConsignmentHeader | undefined) ?? null;
-  const items = (detail.data?.items as ConsignmentItem[] | undefined) ?? [];
+  const items = useMemo(() => (detail.data?.items as ConsignmentItem[] | undefined) ?? [], [detail.data]);
 
   /* Per-line "Delivered" drill-down — which Consignment Note shipped how much
      (backend attaches `deliveries` per item via coLineDeliveries). */
@@ -690,7 +690,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   onDeliveryDateChange,
 }, ref) => {
   const localities = useLocalities();
-  const localityRows = localities.data ?? [];
+  const localityRows = useMemo(() => localities.data ?? [], [localities.data]);
   const staffQ = useStaff();
   const staffList = (staffQ.data ?? []).filter((s) => s.active);
   const { staff: currentStaff } = useAuth();
