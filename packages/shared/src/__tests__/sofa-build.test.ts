@@ -284,6 +284,19 @@ describe('groupSofas', () => {
     ];
     expect(groupSofas(cells, '24')).toHaveLength(2);
   });
+
+  // A module's FRONT (seating side) can never join to another module — you sit
+  // there, there's no panel to attach to. Two pieces touching ONLY at a front
+  // edge are two separate sofas, not one "Whole sofa".
+  it('does NOT join cells that only touch at a FRONT edge', () => {
+    const cells: Cell[] = [
+      // A faces up (rot 0) → its right edge (E) is 'open'.
+      { id: 'a', moduleId: '1A(LHF)', x: 0,  y: 0, rot: 0 },
+      // B faces left (rot 90) → its left edge (W) is 'front'. A's E abuts B's W.
+      { id: 'b', moduleId: '1A(LHF)', x: 95, y: 0, rot: 90 },
+    ];
+    expect(groupSofas(cells, '24')).toHaveLength(2);
+  });
 });
 
 /* Case 3 — cellEffectiveBbox extends FOOTREST 35cm when recliner open, on every rotation. */
