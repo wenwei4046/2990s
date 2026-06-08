@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation } from 'react-router';
+import { useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router';
 import {
   Package,
   Sofa,
@@ -42,16 +42,14 @@ const CAT_ICON: Record<string, LucideIcon> = {
 const productInitial = (name: string): string =>
   name?.trim()?.charAt(0)?.toUpperCase() ?? '?';
 
-/* Catalog filter restore (Loo 2026-06-09). Drilling into a product
-   (/configure/:id) unmounts this page, so plain useState resets the sidebar to
-   "All open" + clears the search on every Back. We restore them ONLY on the
-   drill-in → Back round trip: the card Link carries the active filters as nav
-   state, and the configurator hands them back as `restoreCatalog` on return.
-   Because it rides this one history transition (not sessionStorage), any OTHER
-   entry — New Order, deep link, cart-line edit — opens clean by design.
-   scrollY = window scroll at the moment the card was tapped, so Back lands on
-   the SAME frame (e.g. scrolled down to the Bed-frame row), not the page top. */
-interface CatalogFilters { cat: string; brand: string; q: string; scrollY?: number }
+/* Catalog filter persistence (Loo 2026-06-09). The category + brand live in the
+   URL search params (?cat=&brand=), NOT component state. That makes them part of
+   the history entry, so EITHER Back — the browser/swipe back OR the in-app ←
+   (which now does navigate(-1)) — pops to the exact catalogue URL and shows the
+   same category. Scroll is restored by <ScrollRestoration> in the router. A
+   plain /catalog (New Order, deep link) has no params → opens clean on "All
+   open". Search text stays component-local (transient). Replaces the earlier
+   nav-state approach, which only the in-app button could trigger. */
 
 /** Group SKUs by Model so the grid renders one card per Model, not one per
  *  SKU. A Model with 6 sizes would otherwise spam the grid with 6 identical
@@ -150,29 +148,25 @@ export const Catalog = () => {
   useMfgCatalogRealtime();
   const allCategories = useCategoriesAll();
 
-  // A drill-in → Back round trip hands the prior filters back via history state
-  // (set on the configurator's return nav). Present → restore that exact view;
-  // absent (New Order, deep link, refresh) → open clean on "All open".
-  const location = useLocation();
-  const restore = (location.state as { restoreCatalog?: CatalogFilters } | null)?.restoreCatalog ?? null;
-  const [activeCat, setActiveCat] = useState<string>(restore?.cat ?? 'all');
-  const [activeBranding, setActiveBranding] = useState<string>(restore?.brand ?? 'all');
-  const [query, setQuery] = useState<string>(restore?.q ?? '');
+  // Category + brand live in the URL so BOTH back paths (browser/swipe back and
+  // the in-app navigate(-1)) restore them; { replace: true } keeps a category
+  // click from spamming history. Search stays local (transient typing).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeCat = searchParams.get('cat') ?? 'all';
+  const activeBranding = searchParams.get('brand') ?? 'all';
+  const [query, setQuery] = useState('');
+
+  const setParam = (key: 'cat' | 'brand', value: string) =>
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value === 'all') next.delete(key);
+      else next.set(key, value);
+      return next;
+    }, { replace: true });
+  const setActiveCat = (c: string) => setParam('cat', c);
+  const setActiveBranding = (b: string) => setParam('brand', b);
 
   const rows = catalog.data ?? [];
-
-  // Restore the scroll frame ONCE, after the cards have rendered (the list is
-  // async — restoring before it has height would scroll nowhere). rAF lets the
-  // grid lay out first. Runs only on a drill-in → Back (restore.scrollY set).
-  const didRestoreScroll = useRef(false);
-  useEffect(() => {
-    if (didRestoreScroll.current) return;
-    const y = restore?.scrollY;
-    if (y == null) { didRestoreScroll.current = true; return; }
-    if (rows.length === 0) return; // catalog still loading — wait for the next run
-    didRestoreScroll.current = true;
-    requestAnimationFrame(() => window.scrollTo(0, y));
-  }, [rows.length, restore]);
   const cards = useMemo(() => buildCards(rows), [rows]);
 
   /* Sofa-exclusivity (Commander 2026-05-30): a sofa is sold on its own ticket.
@@ -233,8 +227,7 @@ export const Catalog = () => {
   }, [cards, activeCat, activeBranding, query, liveCats]);
 
   const resetFilters = () => {
-    setActiveCat('all');
-    setActiveBranding('all');
+    setSearchParams({}, { replace: true });
     setQuery('');
   };
 
@@ -455,7 +448,6 @@ export const Catalog = () => {
                         key={p.modelKey}
                         p={p}
                         blocked={(hasSofa && p.categoryId !== 'sofa') || (hasNonSofa && p.categoryId === 'sofa')}
-                        linkState={{ fromCatalog: { cat: activeCat, brand: activeBranding, q: query } }}
                       />
                     ))}
                   </div>
@@ -479,7 +471,7 @@ export const Catalog = () => {
   );
 };
 
-const ProductCard = ({ p, blocked = false, linkState }: { p: CatalogCard; blocked?: boolean; linkState?: { fromCatalog: CatalogFilters } }) => {
+const ProductCard = ({ p, blocked = false }: { p: CatalogCard; blocked?: boolean }) => {
   // PR — Commander wanted a "Configure" affordance even when SKUs are not
   // wired into the production configurator yet. For now the card links to
   // the Configurator route using the lead SKU's id; the Configurator will
@@ -536,15 +528,7 @@ const ProductCard = ({ p, blocked = false, linkState }: { p: CatalogCard; blocke
   }
 
   return (
-    <Link
-      to={`/configure/${p.leadSkuId}`}
-      state={linkState}
-      // Stamp the live scroll position the instant the card is tapped. Link runs
-      // this before it navigates and passes the SAME state object by reference,
-      // so the fresh scrollY travels with it (a render-time value would be stale).
-      onClick={() => { if (linkState) linkState.fromCatalog.scrollY = window.scrollY; }}
-      className={styles.card}
-    >
+    <Link to={`/configure/${p.leadSkuId}`} className={styles.card}>
       {inner}
     </Link>
   );

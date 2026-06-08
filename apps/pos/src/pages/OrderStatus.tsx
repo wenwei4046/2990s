@@ -940,7 +940,12 @@ const OrderTile = ({ order, onOpen }: {
   order: MyOrderRow;
   onOpen: (o: MyOrderRow) => void;
 }) => {
-  const paidPct = order.total > 0 ? Math.min(100, Math.round((order.paid / order.total) * 100)) : 0;
+  /* Loo 2026-06-09 — never round UP to 100% while a balance remains: 99.75%
+     paid must read 99% (and the bar stay short of full), not a misleading
+     "100% paid". Only a fully-cleared balance shows 100%. */
+  const paidPct = order.total > 0
+    ? (order.paid >= order.total ? 100 : Math.min(99, Math.floor((order.paid / order.total) * 100)))
+    : 0;
   const dateLabel = order.deliveryDate
     ? new Date(order.deliveryDate).toLocaleDateString('en-MY', { day: 'numeric', month: 'short' })
     : 'Date TBD';
@@ -1104,7 +1109,12 @@ const OrderDetail = ({ order, onClose }: {
      fold the typed amount into the bar: the amount field now autofills the
      outstanding balance (Loo 2026-06-09), so an optimistic preview would always
      read 100% before anything is recorded — and disagree with the order card. */
-  const paidPct = order.total > 0 ? Math.min(100, Math.round((paidSoFar / order.total) * 100)) : 0;
+  /* Never round UP to 100% while a balance remains (see card tile above) —
+     99.75% paid reads 99%, so the "100% collected" line and the full bar only
+     show when the balance is truly cleared. */
+  const paidPct = order.total > 0
+    ? (paidSoFar >= order.total ? 100 : Math.min(99, Math.floor((paidSoFar / order.total) * 100)))
+    : 0;
 
   const customerInfoOk = !!(edited.customerName.trim() && edited.customerEmail?.trim());
   const addressOk = !!(edited.customerAddress?.trim() && edited.customerPostcode?.trim());

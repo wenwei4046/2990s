@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams, useLocation } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2, FlipHorizontal2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, matchComboSubset, comboChargedPrices, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
@@ -256,14 +256,16 @@ interface QuickPickItem {
 export const Configurator = () => {
   const { productId } = useParams<{ productId: string }>();
   const navigate = useNavigate();
-  // If the catalogue drilled into this product it stashed its active filters as
-  // history state; forward them back so any return-to-catalogue (Back / Cancel /
-  // after add-to-cart) lands on the SAME category/search the user left. Reached
-  // any other way (deep link, cart-line edit) → null → catalogue opens clean.
-  const location = useLocation();
-  const fromCatalog = (location.state as { fromCatalog?: unknown } | null)?.fromCatalog ?? null;
-  const backToCatalog = () =>
-    navigate('/catalog', fromCatalog ? { state: { restoreCatalog: fromCatalog } } : undefined);
+  // Back / Cancel = go back one history entry, identical to the browser/swipe
+  // Back the user also uses — so it pops to the EXACT catalogue entry they came
+  // from (category lives in the URL, scroll is restored by <ScrollRestoration>),
+  // or to /cart when editing a cart line. Opened cold (deep link / first load,
+  // no in-app history to pop) → fall back to a fresh /catalogue.
+  const backToCatalog = () => {
+    const idx = (window.history.state?.idx ?? 0) as number;
+    if (idx > 0) navigate(-1);
+    else navigate('/catalog');
+  };
   const product = useProduct(productId);
   const bundles = useProductBundles(productId);
   const compartments = useProductCompartments(productId);
@@ -1378,6 +1380,7 @@ export const Configurator = () => {
       kind: 'sofa',
       productId: p.id,
       productName: p.name,
+      modelId: (p as { model_id?: string | null }).model_id ?? null,
       bundleId: pickedSofaRow.bundle.id,
       depth: activeDepth,
       // Snapshot the Model's upgrade so the invoice can show an auto-included
@@ -1426,6 +1429,7 @@ export const Configurator = () => {
       kind: 'sofa',
       productId: p.id,
       productName: p.name,
+      modelId: (p as { model_id?: string | null }).model_id ?? null,
       cells,
       depth: activeDepth,
       seatUpgradeLabel: p.seat_upgrade_label ?? null,
@@ -1804,6 +1808,7 @@ export const Configurator = () => {
             initialFabric={isEditing ? fabricSel : null}
             modelCustomizer={modelCustomizerForDepth}
             baseModel={p.base_model ?? undefined}
+            modelId={(p as { model_id?: string | null }).model_id ?? null}
             legBlock={sofaLegBlock}
             legHeight={sofaLegValue}
             legSurchargeRm={sofaLegSurcharge}

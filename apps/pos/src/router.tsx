@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate } from 'react-router';
+import { createBrowserRouter, Navigate, Outlet, ScrollRestoration } from 'react-router';
 import { Login } from './pages/Login';
 import { SetPassword } from './pages/SetPassword';
 import { ChangePin } from './pages/ChangePin';
@@ -17,7 +17,24 @@ import { NewOrder } from './pages/NewOrder';
 import { AuthGate } from './components/AuthGate';
 import { MaintainGate } from './components/MaintainGate';
 
+/* Root layout — hosts <ScrollRestoration> for the whole app. It restores window
+   scroll on history POP (the browser/swipe Back AND the configurator's in-app
+   navigate(-1)), so returning to a scrolled catalogue lands on the same frame;
+   PUSH navigations (drilling into a product) start at the top as usual. Scroll
+   is keyed per history entry (default getKey = location.key). */
+function RootLayout() {
+  return (
+    <>
+      <ScrollRestoration />
+      <Outlet />
+    </>
+  );
+}
+
 export const router = createBrowserRouter([
+  {
+    element: <RootLayout />,
+    children: [
   { path: '/login', element: <Login /> },
   /* Invited POS-side staff land here from the magic-link email. Must stay
      OUTSIDE the AuthGate wrapper — the user is authed via Supabase session
@@ -62,4 +79,6 @@ export const router = createBrowserRouter([
   { path: '/new-order', element: <AuthGate><MaintainGate><NewOrder /></MaintainGate></AuthGate> },
   { path: '/', element: <Navigate to="/catalog" replace /> },
   { path: '*', element: <Navigate to="/catalog" replace /> },
+    ],
+  },
 ]);
