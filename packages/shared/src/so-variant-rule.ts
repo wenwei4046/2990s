@@ -64,3 +64,35 @@ export function missingVariantAxes(
   const v = variants ?? {};
   return axes.filter((axis) => axis.aliases.every((k) => isEmpty(v[k])));
 }
+
+/** Rewrite POS-vocabulary alias keys to their canonical axis key for the given
+ *  category (sofa: depth → seatHeight, sofaLegHeight → legHeight). Returns a
+ *  shallow copy; unknown categories / keys pass through untouched.
+ *
+ *  Why this exists: the editor dropdowns read the canonical key (seatHeight /
+ *  legHeight) but a POS-created sofa line stores depth / sofaLegHeight, so the
+ *  Edit modal rendered those axes blank even though the line had them
+ *  (2026-06-08, Loo — sofa edit re-asks Seat/Leg). Apply it when seeding an
+ *  editable draft from a persisted line.
+ *
+ *  The alias key is REMOVED after copying so a subsequent edit of the canonical
+ *  value isn't shadowed by a stale alias in `alias ?? canonical` consumers
+ *  (e.g. mfg-sales-orders combo lookup = `depth ?? seatHeight`). Canonical wins
+ *  when both are present. */
+export function canonicalizeVariants(
+  itemGroup: string | null | undefined,
+  variants: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  const v: Record<string, unknown> = { ...(variants ?? {}) };
+  const axes = REQUIRED_VARIANT_AXES_BY_CATEGORY[(itemGroup ?? '').toLowerCase()];
+  if (!axes) return v;
+  for (const axis of axes) {
+    for (const alias of axis.aliases) {
+      if (alias === axis.key) continue;
+      if (!(alias in v)) continue;
+      if (isEmpty(v[axis.key]) && !isEmpty(v[alias])) v[axis.key] = v[alias];
+      delete v[alias];
+    }
+  }
+  return v;
+}

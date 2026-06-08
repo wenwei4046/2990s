@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
-import { buildVariantSummary, fmtDateOrDash, fmtDateTime, missingVariantAxes } from '@2990s/shared'; // Commander 2026-05-28
+import { buildVariantSummary, canonicalizeVariants, fmtDateOrDash, fmtDateTime, missingVariantAxes } from '@2990s/shared'; // Commander 2026-05-28
 import { PhoneInput } from '../components/PhoneInput';
 import {
   useMfgSalesOrderDetail,
@@ -307,7 +307,12 @@ const draftFromItem = (it: SoItem): SoLineDraft => ({
   unitPriceCenti: it.unit_price_centi ?? 0,
   discountCenti:  it.discount_centi ?? 0,
   unitCostCenti:  it.unit_cost_centi ?? 0,
-  variants:       (it.variants as Record<string, unknown>) ?? {},
+  // 2026-06-08 (Loo) — canonicalise POS-vocabulary sofa keys (depth →
+  // seatHeight, sofaLegHeight → legHeight) so the Edit modal's Seat/Leg
+  // dropdowns prefill a POS-created line instead of re-asking. fabricCode
+  // already shares one key; the 409 gate + variant summary were alias-aware,
+  // only this editor seam wasn't.
+  variants:       canonicalizeVariants(it.item_group, it.variants as Record<string, unknown> | null),
   remark:         it.remark ?? '',
   lineDeliveryDate:           it.line_delivery_date ?? null,
   lineDeliveryDateOverridden: it.line_delivery_date_overridden ?? false,
