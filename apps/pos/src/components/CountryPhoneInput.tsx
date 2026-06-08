@@ -52,7 +52,13 @@ export function CountryPhoneInput({
   };
 
   const selStyle: CSSProperties = {
-    flex: '0 0 auto',
+    /* Sits in the grid's first (auto) track. box-sizing keeps the native iOS
+       <select> — chrome + disclosure chevron included — inside its own column
+       so it can't bleed over the number input (the flex layout let it overlap
+       on iPad; Loo 2026-06-09). width:100% fills the auto track exactly. */
+    boxSizing: 'border-box',
+    width: '100%',
+    minWidth: 0,
     padding: '8px 6px',
     borderRadius: 8,
     border: '1px solid #d8d3c8',
@@ -62,7 +68,10 @@ export function CountryPhoneInput({
   };
 
   return (
-    <div style={{ display: 'flex', gap: 6, alignItems: 'stretch', minWidth: 0 }}>
+    /* Grid (not flex): the country select takes its content width, the number
+       input takes the rest and may shrink to 0. Deterministic on iOS, where the
+       native select's intrinsic flex width was unreliable and overlapped. */
+    <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: 6, alignItems: 'stretch', width: '100%', minWidth: 0 }}>
       <select
         aria-label="Country dial code"
         disabled={disabled}
@@ -89,7 +98,7 @@ export function CountryPhoneInput({
           setNational(n);
           emit(dial, n);
         }}
-        style={{ flex: 1, minWidth: 0, ...style }}
+        style={{ width: '100%', minWidth: 0, boxSizing: 'border-box', ...style }}
       />
     </div>
   );
