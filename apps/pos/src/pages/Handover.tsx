@@ -118,6 +118,14 @@ export const Handover = () => {
       sessionStorage.setItem(HANDOVER_FORM_SNAPSHOT_KEY, JSON.stringify(form));
     } catch { /* storage off */ }
   }, [form]);
+
+  /* iPad: every step change starts at the top. The handover is one tall,
+     document-scrolled column (no inner scroller), so after Continue the old
+     scroll offset would otherwise strand the operator near the bottom of the
+     new — often shorter — step (Loo 2026-06-09). Instant, both directions. */
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [idx]);
   const [serverError, setServerError] = useState<string | null>(null);
 
   /* Task #70 — Manufacturing SO handoff. The Sales Order is the single order
