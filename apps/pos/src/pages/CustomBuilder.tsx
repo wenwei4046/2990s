@@ -1003,13 +1003,13 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     //    (2A + CNR awaiting its chaise) or a 4+-piece corner (2A + 1NA + CNR +
     //    1B) that the exact-3 corner composite can't represent (Loo 2026-06-04,
     //    "should be link together"). renderSeamlessGroup draws the CNR's two
-    //    backed edges as wrapped band. Replaces the old per-module tiling that
-    //    left gaps at the seams. rot:0 — each cell's rotation is baked in.
-    //    EXCLUDE only the L-Shape chaise: it has no 'arm' edge for its foot
-    //    cap, so groups containing one keep their real per-module art.
+    //    backed edges as wrapped band, and the L-Shape chaise's outer arm from
+    //    its lCap edge — so an L now joins the run too instead of falling back
+    //    to detached per-module art (Loo 2026-06-09). Replaces the old
+    //    per-module tiling that left gaps at the seams. rot:0 — each cell's
+    //    rotation is baked in.
     const bbGroup = cellsBbox(runFilter, depth);
-    const hasLShape = runCells.some((c) => findModule(c.moduleId)?.group === 'L-Shape');
-    if (runCells.length >= 2 && bbGroup && !hasLShape) {
+    if (runCells.length >= 2 && bbGroup) {
       return [{ kind: 'group' as const, key: i, bb: bbGroup, rot: 0 as Rot, cells: runFilter, ids: runIds }];
     }
     return [];

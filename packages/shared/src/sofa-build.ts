@@ -845,6 +845,20 @@ export const cellEdges = (cell: Cell): EdgeType[] => {
   return rotateEdges(base, cell.rot);
 };
 
+/** The OUTER cap edge of an L-Shape chaise — the short end AWAY from the main
+ *  sofa, where the standalone chaise art bakes in its arm. Returns -1 for any
+ *  non-L module. The chaise carries NO 'arm'-typed edge (both short ends are
+ *  'open'), so closure (analyzeSofa) and the seamless renderer derive the arm
+ *  side from here instead: L(RHF) mates on W → cap on E; L(LHF) mates on E →
+ *  cap on W; CW rotation shifts the edge index +1 per 90° (same convention as
+ *  rotateEdges). Single source of truth so the two callers can't drift. */
+export const lCapEdgeOf = (moduleId: string, rot: Rot): EdgeIdx | -1 => {
+  if (!moduleId.startsWith('L(')) return -1;
+  const baseCap: EdgeIdx = moduleId === 'L(RHF)' ? EDGE_E : EDGE_W;
+  const steps = (((rot % 360) + 360) % 360) / 90;
+  return ((baseCap + steps) % 4) as EdgeIdx;
+};
+
 /* ─── Footprint + bbox ─────────────────────────────────────────────── */
 
 // Plan-view length grows with seat depth: 2.5cm per inch per cushion, anchored
@@ -1325,15 +1339,8 @@ export const analyzeSofa = (group: Cell[], depth: Depth): SofaAnalysis => {
     const isL = c.moduleId.startsWith('L(');
     const isAcc = isAccessoryModule(c.moduleId);
 
-    let lCapEdge: EdgeIdx | -1 = -1;
-    if (isL) {
-      // L(RHF) mates on W → outer cap on E. L(LHF) mates on E → outer cap on W.
-      // CW rotation rotates the edge index by +1 mod 4 per 90°.
-      const baseCap: EdgeIdx = c.moduleId === 'L(RHF)' ? EDGE_E : EDGE_W;
-      const r = ((c.rot % 360) + 360) % 360;
-      const steps = r / 90;
-      lCapEdge = ((baseCap + steps) % 4) as EdgeIdx;
-    }
+    // Outer cap of an L-chaise (rotation-aware) — shared with renderSeamlessGroup.
+    const lCapEdge = lCapEdgeOf(c.moduleId, c.rot);
 
     ([EDGE_W, EDGE_N, EDGE_E, EDGE_S] as EdgeIdx[]).forEach((e) => {
       const hasNeighbour = myContacts.some((co) => co.myEdge === e);
