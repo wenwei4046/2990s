@@ -121,10 +121,17 @@
   background: rgba(34, 31, 32, 0.05);
 }
 .sideItemActive {
-  background: var(--c-ink);
-  color: var(--fg-on-ink);
+  /* Burnt-orange brand pill (not near-black ink): on a glossy iPad under
+     showroom glare a near-black pill reflects to mid-grey and the cream label
+     washes out (Loo 2026-06-09 — "selected category text basically invisible").
+     A saturated burnt-orange stays clearly coloured under glare and cream-on-
+     burnt keeps strong contrast. On-brand: matches the active "01 CART" step,
+     the SOON badges, and the prototype's ink-theme active variant. */
+  background: var(--c-burnt);
+  color: var(--c-cream);
+  font-weight: var(--w-semibold);
 }
-.sideItemActive:hover { background: var(--c-ink); }
+.sideItemActive:hover { background: var(--c-burnt); }
 .sideItemTbc {
   color: var(--fg-soft);
   cursor: not-allowed;
@@ -149,7 +156,7 @@
 }
 .sideItemActive .sideCount {
   color: var(--c-cream);
-  opacity: 0.65;
+  opacity: 0.8;
 }
 .sidePill {
   font-family: var(--font-button);
