@@ -46,7 +46,34 @@ export function useStaff() {
 export const isGlobalCurator = (role: string | undefined): boolean =>
   role === 'master_account' || role === 'admin' || role === 'super_admin';
 
+/** POS roles allowed to view EVERY salesperson's orders + sales KPIs on the
+ *  My-orders board (and switch the salesperson filter). Owner tier only —
+ *  super_admin + master_account; plain `admin` is excluded (Loo 2026-06-09).
+ *  Must mirror the API's ALL_SALES_VIEWER_ROLES (apps/api/src/lib/roles.ts). */
+export const canViewAllSales = (role: string | undefined): boolean =>
+  role === 'super_admin' || role === 'master_account';
+
 export interface StaffOption { id: string; name: string; }
+
+const API_URL = import.meta.env.VITE_API_URL as string | undefined;
+
+/** Active salespeople (role='sales' with a PIN) for the My-orders salesperson
+ *  filter. Reuses the existing GET /pos/sales-staff (service-role, narrow
+ *  columns). Only fetched for view-all viewers. */
+export function useSalesStaff(enabled = true) {
+  return useQuery<StaffOption[]>({
+    queryKey: ['pos', 'sales-staff'],
+    enabled,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const res = await fetch(`${API_URL}/pos/sales-staff`);
+      if (!res.ok) throw new Error(`GET /pos/sales-staff failed (${res.status})`);
+      const rows = (await res.json()) as Array<{ id: string; name: string }>;
+      return rows.map((r) => ({ id: r.id, name: r.name }));
+    },
+  });
+}
 
 export function useAllStaff() {
   return useQuery<StaffOption[]>({

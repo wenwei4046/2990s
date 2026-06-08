@@ -307,6 +307,30 @@
 }
 .searchClear:hover { color: var(--c-ink); }
 
+.spPicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 12px;
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  box-shadow: var(--shadow-1);
+  color: var(--fg-muted);
+}
+.spSelect {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-family: var(--font-button);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-ink);
+  cursor: pointer;
+  max-width: 180px;
+}
+
 .periodCtl {
   display: flex;
   align-items: center;

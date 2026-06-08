@@ -6,6 +6,7 @@ import { supabaseAuth } from '../middleware/auth';
 import { pinRateLimiter, createPinRateLimiter } from '../lib/pin-rate-limit';
 import { hashPin, verifyPin } from '../lib/bcrypt';
 import { monthBoundsMy, rangeBoundsMy } from '../lib/my-time';
+import { canViewAllSales } from '../lib/roles';
 
 export const pos = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -235,7 +236,7 @@ pos.get('/sales-stats', supabaseAuth, async (c) => {
 
   const { data: staff, error: staffErr } = await adminClient
     .from('staff')
-    .select('name, showroom_id')
+    .select('name, role, showroom_id')
     .eq('id', user.id)
     .maybeSingle();
   if (staffErr || !staff) {
@@ -258,6 +259,23 @@ pos.get('/sales-stats', supabaseAuth, async (c) => {
   const monthStartUtc = bounds.startUtc;
   const monthEndUtc   = bounds.endUtc;
   const monthLabel    = bounds.label;
+
+  /* The "Personal" KPI card normally tracks the viewer. For owner-tier viewers
+     (super_admin / master_account) the My-orders board can filter to another
+     salesperson via ?salesperson=<id>; the personal card then follows that
+     person so they can read each salesperson's progress. 'all' / empty keeps
+     the viewer's own. Non-owner roles can't target others — param ignored. */
+  const wantSalesperson = c.req.query('salesperson') ?? null;
+  let personalId = user.id;
+  let personalName = staff.name as string;
+  if (wantSalesperson && wantSalesperson !== 'all' && canViewAllSales(staff.role as string)) {
+    const { data: target } = await adminClient
+      .from('staff').select('name').eq('id', wantSalesperson).maybeSingle();
+    if (target) {
+      personalId = wantSalesperson;
+      personalName = (target as { name: string }).name;
+    }
+  }
 
   // Resolve which salespeople count toward the "Showroom" card. A viewer with a
   // showroom_id → that showroom's staff; a viewer with none (admin / owner /
@@ -293,7 +311,7 @@ pos.get('/sales-stats', supabaseAuth, async (c) => {
   let personalQuery = adminClient
     .from('mfg_sales_orders')
     .select('total_revenue_centi')
-    .eq('salesperson_id', user.id)
+    .eq('salesperson_id', personalId)
     .not('status', 'in', '("CANCELLED","ON_HOLD")');
   if (monthStartUtc) personalQuery = personalQuery.gte('created_at', monthStartUtc);
   if (monthEndUtc)   personalQuery = personalQuery.lt('created_at', monthEndUtc);
@@ -306,7 +324,7 @@ pos.get('/sales-stats', supabaseAuth, async (c) => {
     monthLabel,
     monthStart: monthStartUtc,
     monthEnd:   monthEndUtc,
-    staffName:  staff.name,
+    staffName:  personalName,
     showroomTotal,
     showroomCount,
     personalTotal,

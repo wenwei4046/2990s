@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Recycle, ArrowUpFromLine, Wrench, Package } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { AddonRow } from '../../lib/queries';
@@ -19,6 +20,14 @@ export const AddonCard = ({
   onChange: (s: AddonSelection) => void;
 }) => {
   const Icon = ICON[addon.icon] ?? Package;
+
+  /* Qty editing: while the field has focus we let the user clear it and type
+     freely (draft string, can be '' / '0'); we only clamp to [1,99] on blur
+     (empty → 1). A keystroke-time clamp made the field snap back to 1 the
+     instant you backspaced, so you could never type a new number. When the
+     draft is null the field is controlled straight off selection.qty. */
+  const [qtyDraft, setQtyDraft] = useState<string | null>(null);
+  const qtyValue = qtyDraft ?? String(selection.qty ?? 1);
 
   const priceLine = addon.kind === 'floors_items'
     ? `RM${addon.perFloorItem} per floor per item`
@@ -86,10 +95,27 @@ export const AddonCard = ({
                 type="number"
                 min={1}
                 max={99}
-                value={selection.qty ?? 1}
-                // Mirror the server's MAX_ADDON_QTY=99 clamp so the tablet
-                // preview can't show a total the SO will silently cap.
-                onChange={(e) => onChange({ ...selection, qty: Math.min(99, Math.max(1, Number(e.target.value))) })}
+                value={qtyValue}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setQtyDraft(raw);
+                  // Push a live value only when it's already a valid qty, so the
+                  // preview total tracks typing — but never force it to 1 mid-edit
+                  // (that's what the old keystroke clamp did). Server caps at 99.
+                  const n = Number(raw);
+                  if (raw !== '' && Number.isFinite(n) && n >= 1) {
+                    onChange({ ...selection, qty: Math.min(99, Math.floor(n)) });
+                  }
+                }}
+                onBlur={() => {
+                  const n = Number(qtyDraft ?? '');
+                  const clamped =
+                    qtyDraft === '' || !Number.isFinite(n)
+                      ? 1
+                      : Math.min(99, Math.max(1, Math.floor(n)));
+                  onChange({ ...selection, qty: clamped });
+                  setQtyDraft(null); // back to controlled off selection.qty
+                }}
               />
             </label>
           )}
