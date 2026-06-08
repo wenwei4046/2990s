@@ -447,7 +447,7 @@ const buildDrilldownColumns = (paymentRefs: string): DataGridColumn<SoItem>[] =>
     searchValue: (it) => `${it.description ?? ''} ${buildVariantSummary(it.item_group, it.variants)}`.trim(),
   },
   {
-    key: 'description2', label: 'Description 2', width: 220, minWidth: 160,
+    key: 'description2', label: 'Description 2', width: 220, minWidth: 160, defaultHidden: true,
     accessor: (it) => {
       const summary = buildVariantSummary(it.item_group, it.variants);
       return summary ? <div>{summary}</div> : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
