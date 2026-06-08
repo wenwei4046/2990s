@@ -86,7 +86,7 @@ export const StockTransferDetail = () => {
   const onCancel = () => {
     if (!id) return;
     const proceed = window.confirm(
-      'Cancel this transfer? Inventory movements that were written on Post will NOT be reversed automatically — log a counter-transfer if you need to undo the stock movement.',
+      'Cancel this transfer? The paired stock movements (out of the source warehouse, into the destination) will be reversed automatically — the stock returns to where it started.',
     );
     if (!proceed) return;
     cancel.mutate(id, {

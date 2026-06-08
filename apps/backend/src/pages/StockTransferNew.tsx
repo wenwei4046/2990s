@@ -161,7 +161,7 @@ export const StockTransferNew = () => {
           </Button>
           <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending}>
             <Save {...ICON} />
-            {create.isPending ? 'Saving…' : 'Save Draft'}
+            {create.isPending ? 'Posting…' : 'Post Transfer'}
           </Button>
         </div>
       </div>
