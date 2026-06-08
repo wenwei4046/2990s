@@ -19,6 +19,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { createClient } from '@supabase/supabase-js';
 import { supabaseAuth } from '../middleware/auth';
+import { findModelUsage } from '../lib/sku-usage';
 import type { Env, Variables } from '../env';
 
 export const productModels = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -666,6 +667,17 @@ productModels.post('/:id/generate-skus', async (c) => {
 productModels.delete('/:id', async (c) => {
   const id = c.req.param('id');
   const supabase = c.get('supabase');
+  // (C) Wei Siang 2026-06-08 — lock USED models. If any SKU under this model has
+  // been sold / ordered / moved in stock, block the delete: removing it would
+  // orphan live order lines. Unused models (setup-phase typos) stay deletable.
+  const used = await findModelUsage(supabase, id);
+  if (used) {
+    return c.json({
+      error: 'model_in_use',
+      reason: `SKU “${used.code}” under this model is used in ${used.where}` +
+        `${used.doc ? ` (${used.doc})` : ''} — it can’t be deleted.`,
+    }, 409);
+  }
   const { error } = await supabase.from('product_models').delete().eq('id', id);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   return c.json({ ok: true });

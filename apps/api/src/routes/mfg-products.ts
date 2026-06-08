@@ -18,6 +18,7 @@
 import { Hono, type Context } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
+import { findSkuUsage } from '../lib/sku-usage';
 import type { Env, Variables } from '../env';
 
 export const mfgProducts = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -218,17 +219,30 @@ mfgProducts.delete('/:id', async (c) => {
   const force = c.req.query('force') === 'true';
   const supabase = c.get('supabase');
 
-  if (force) {
-    // Resolve the SKU code first — the side tables key off code, not id.
-    const { data: row, error: loadErr } = await supabase
-      .from('mfg_products')
-      .select('code')
-      .eq('id', id)
-      .maybeSingle();
-    if (loadErr) return c.json({ error: 'load_failed', reason: loadErr.message }, 500);
-    if (!row)    return c.json({ error: 'not_found' }, 404);
+  // Resolve the SKU code up front — needed for both the usage guard and the
+  // force-cleanup side tables (which key off code, not id).
+  const { data: row, error: loadErr } = await supabase
+    .from('mfg_products')
+    .select('code')
+    .eq('id', id)
+    .maybeSingle();
+  if (loadErr) return c.json({ error: 'load_failed', reason: loadErr.message }, 500);
+  if (!row)    return c.json({ error: 'not_found' }, 404);
+  const code = row.code;
 
-    const code = row.code;
+  // (C) Wei Siang 2026-06-08 — lock USED SKUs. If this SKU has been sold on an
+  // SO, ordered on a PO, or moved in stock, block the delete — NOT EVEN by
+  // force. Deleting it would orphan live order lines / wipe stock history.
+  // Unused SKUs (setup-phase typos) stay deletable.
+  const used = await findSkuUsage(supabase, code);
+  if (used) {
+    return c.json({
+      error: 'sku_in_use',
+      reason: `“${code}” is used in ${used.where}${used.doc ? ` (${used.doc})` : ''} and can’t be deleted.`,
+    }, 409);
+  }
+
+  if (force) {
     const cleanup: Array<{ table: string; column: string; value: string }> = [
       // Inventory side — stock lots + movements key off product_code.
       { table: 'inventory_stock_lots',         column: 'product_code',  value: code },
