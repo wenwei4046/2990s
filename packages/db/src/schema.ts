@@ -1857,6 +1857,11 @@ export const mfgProducts = pgTable('mfg_products', {
   // Dunlopillo / etc.). Shown as a dedicated column on the Mattress filter
   // view; available for other categories too if useful.
   branding:               text('branding'),
+  // 0161 — system-minted one-shot SKUs (remark + extra charge). one_shot marks
+  // the row for the SKU-Master badge/filter; source_doc_no links back to the SO
+  // that minted it. Born pos_active=false; an admin re-activates from Modular.
+  oneShot:                boolean('one_shot').notNull().default(false),
+  sourceDocNo:            text('source_doc_no'),
   pieces:                 jsonb('pieces'),                        // { count, names: string[] }
   seatHeightPrices:       jsonb('seat_height_prices'),            // [{height,priceSen,tier?,sellingPriceSen?}] — priceSen=COST (computeMfgLineCost, Backend-owned); sellingPriceSen=buyer SELLING per (height,tier) from the POS Edit-Price grid (Chairman 2026-06-01); resolveSeatHeightSelling reads it, falls back to flat sell_price_sen
   defaultVariants:        jsonb('default_variants'),              // {fabricCode,divanHeight,legHeight,gap,specials}
