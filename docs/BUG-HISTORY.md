@@ -4,6 +4,43 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-08-004 — Product Model bulk-create: phantom models + misleading placeholders + no used-delete lock
+
+Surfaced while Wei Siang created mattress models pre-launch. Branch `feat/product-model-create-hardening`. Three real defects fixed (B/C/D) + one feature (A).
+
+1. **(B) Bulk "New Models" left empty phantom models that blocked retries** — the modal created the `product_models` row, then generated SKUs in a SEPARATE step whose failure was **swallowed** (`generateMut.mutateAsync().catch(() => ({generated:0}))`) with no rollback. A transient SKU-gen failure (or unticking all sizes) left a 0-SKU model occupying the `model_code`; the next attempt collided with `409 duplicate_code` (`product_models_code_category_unique`). Wei Siang accumulated 4 empty `ANGGN-*` shells this way. **Fix (`9cefe36`):** require ≥1 size (MATTRESS/BEDFRAME) or compartment (SOFA) before Create; SKU-gen is now all-or-nothing — any model that yields 0 SKUs is deleted (rolled back) and the real error surfaced. ACCESSORY/SERVICE (no auto-gen) untouched.
+2. **(D) Form placeholders showed the OUTPUT, not the input** — `ProductModels.tsx` greys read `2990S` / `AKKA-FIRM MATT` / `2990 AKKA-FIRM MATTRESS`, i.e. the generated SKU form. Operators typed the full string; the SKU-name template (`{branding} {name} MATTRESS (dims)`) would then double the branding + "MATTRESS". Real AKKA-FIRM actually stores `branding=2990, model_code=AKKA-FIRM, name=AKKA-FIRM`. **Fix (`9cefe36`):** placeholders now show what to type (`2990` / `AKKA-FIRM` / `AKKA-FIRM` / `HILTON` / `5530`), plus a live "WILL CREATE → 2990 …​ MATT (K), … (N SKUs total)" preview mirroring the server code template.
+3. **(C) Used SKUs/Models were freely deletable (even force) → would orphan live order lines** — `DELETE /mfg-products/:id` had no order-usage check (and its "force" mode wiped `inventory_movements`, destroying stock history); `DELETE /product-models/:id` was a plain hard delete. Order lines store `item_code` as a text snapshot (no FK), so deleting a used SKU silently left orders referencing a vanished code. **Fix (`499742a`):** new shared `sku-usage.ts` (`findSkuUsage`/`findModelUsage`) — a SKU sold on an SO, ordered on a PO, or with any `inventory_movements` row is locked (409 `sku_in_use`/`model_in_use`), not even force-deletable. Unused setup-phase typos stay deletable.
+4. **(A, feature) Assign supplier + code during bulk create (`a6934f6`)** — optional supplier picker + their code (e.g. 9055) + price/lead/MOQ/main in the create modal; every generated SKU is bound in one batch. `materialCode` = authoritative server-returned code; per-SKU supplier code reuses `composeSupplierSku` (size_code parsed from the trailing `(K)`) so it never writes the bare model code to all SKUs (the PR #206/#209 dup-code bug). Best-effort — SKUs stay valid if binding errors.
+
+**Caught by:** Wei Siang hit `409 duplicate_code` retrying a mattress model; live DB probe found 4 zero-SKU phantoms; placeholder + delete-lock gaps surfaced in the same investigation. All verified live on prod.
+
+---
+
+## BUG-2026-06-08-003 — Stock Transfer create broken on prod (migration 0117 drift) + 2 misleading texts
+
+**Symptom (Wei Siang, pre-launch live test):** Posting a New Stock Transfer hung the page (blocking `window.alert`) and created nothing.
+
+**Root cause:** `POST /stock-transfers` returned `500 lines_insert_failed — "Could not find the 'variant_key' column of 'stock_transfer_lines'"`. Migration `0117_fifo_variant_aware_and_transfer_variant.sql` adds that column, but it was **never applied to prod** — there are TWO `0117_*` files (the other is `0117_personal_quick_picks.sql`) and only one of the pair was run during the manual one-file-at-a-time migration process. A direct prod-schema probe (publishable key + PostgREST) confirmed this was the **only** missing column across the whole inventory/supply-chain surface (all batch_no/variant/reason/warehouse columns + tables present).
+
+**Fix:** one idempotent DDL — `ALTER TABLE stock_transfer_lines ADD COLUMN IF NOT EXISTS variant_key TEXT NOT NULL DEFAULT '';` (applied by IT in the Supabase SQL editor — `DATABASE_URL` is not a repo secret, so the worker/CI can't run DDL). Also fixed two misleading UI texts (`0c1b21a`): the cancel-confirm wrongly said movements are NOT reversed (they are, via `reverseMovements`), and the submit button read "Save Draft" though transfers post immediately (DRAFT removed in mig 0078) — now "Post Transfer".
+
+**Caught by:** Pre-launch end-to-end live test of the supply chain (posting a real JAGER transfer Belakong→PJ).
+
+---
+
+## BUG-2026-06-08-002 — SO list drill-down too wide / cluttered
+
+**Symptom (Wei Siang):** Expanding a Sales Order row felt messy — the whole page scrolled sideways and a heavy toolbar bar sat under every expanded row.
+
+**Root cause:** the embedded drill-down grid showed all 15 columns by default and `DataGrid`'s `.table { min-width: 100% }` stretched the nested table to the very wide parent list, ballooning Description and pushing Qty/Transfer To/Stock off-screen; the embedded toolbar also rendered full chrome.
+
+**Fix (`1d70919`/`862eeb5`/`472f81a`):** default-hide the 5 money columns + Payment + UOM + Description 2 in the SO drill-down (revealable via Columns; storageKey bumped v1→v2), slim the embedded toolbar (borderless, transparent), and add `.tableEmbedded { min-width: 0 }` so the nested table sizes to its own columns left-aligned. Drill-down now fits on screen with the warehouse-relevant 7 columns.
+
+**Caught by:** Wei Siang screenshot of the expanded row.
+
+---
+
 ## BUG-2026-06-08-001 — SERVICE lines (delivery fee) counted as accessories in SO Stock Status
 
 **Symptom (Wei Siang):** SOs with a SERVICE line (e.g. `SVC-DELIVERY` / delivery fee) showed Stock Status stuck on "ACC" / accessory-ready forever, and the fee line itself got `stock_status = READY`. A service has no inventory and must not appear in stock readiness at all.
