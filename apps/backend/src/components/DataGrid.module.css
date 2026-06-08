@@ -317,6 +317,13 @@
   font-size: var(--fs-12);
   font-variant-numeric: tabular-nums;
 }
+/* Embedded (drill-down) mode — drop the `min-width: 100%` floor so the nested
+   table sizes to its own columns (~natural width) and stays LEFT-aligned,
+   instead of stretching to the very wide parent list and ballooning the
+   Description column. Wei Siang 2026-06-08. */
+.tableEmbedded {
+  min-width: 0;
+}
 
 .thead {
   position: sticky;

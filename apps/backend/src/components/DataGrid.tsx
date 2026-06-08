@@ -926,7 +926,7 @@ function DataGridInner<T>({
 
       {/* Table */}
       <div ref={scrollRef} className={`${styles.scroll} ${embedded ? styles.scrollEmbedded : ''}`}>
-        <table className={styles.table}>
+        <table className={`${styles.table} ${embedded ? styles.tableEmbedded : ''}`}>
           <thead className={`${styles.thead} ${embedded ? styles.theadEmbedded : ''}`}>
             <tr>
               {visibleColumns.map((col) => {
