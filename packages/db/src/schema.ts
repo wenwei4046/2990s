@@ -436,6 +436,13 @@ export const addons = pgTable('addons', {
      screen, replacing the frontend's hardcoded HANDOVER_ADDON_IDS allowlist.
      `enabled` keeps gating saleability everywhere; this flags WHERE it shows. */
   showAtHandover: boolean('show_at_handover').notNull().default(false),
+  /* Migration 0160 (Loo 2026-06-07) — per-add-on SERVICE SKU. When set, the
+     SO books this add-on under its own SVC-* line instead of the generic
+     SVC-ADDON bucket (computeAddonServiceLines reads it first; the legacy
+     ADDON_ID_TO_SERVICE_SKU map stays as fallback). Format-checked SVC-*;
+     the matching mfg_products SERVICE row is minted by the editor on save
+     so the Edge #4 "SKU must exist" gate keeps passing. */
+  serviceSku:   text('service_sku'),
   sortOrder:    integer('sort_order').notNull().default(0),
   updatedAt:    timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

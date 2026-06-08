@@ -2004,12 +2004,12 @@ mfgSalesOrders.post('/', async (c) => {
   if (addonSelections.length > 0) {
     const { data: addonRows } = await sb
       .from('addons')
-      .select('id, kind, price, per_floor_item, label, enabled')
+      .select('id, kind, price, per_floor_item, label, enabled, service_sku')
       .in('id', [...new Set(addonSelections.map((a) => a.id))]);
     addonServiceSpecs = computeAddonServiceLines(
       addonSelections,
-      ((addonRows ?? []) as Array<{ id: string; kind: string; price: number; per_floor_item: number | null; label: string | null; enabled: boolean | null }>)
-        .map((r) => ({ id: r.id, kind: r.kind, price: Number(r.price ?? 0), perFloorItem: r.per_floor_item, label: r.label, enabled: r.enabled })),
+      ((addonRows ?? []) as Array<{ id: string; kind: string; price: number; per_floor_item: number | null; label: string | null; enabled: boolean | null; service_sku: string | null }>)
+        .map((r) => ({ id: r.id, kind: r.kind, price: Number(r.price ?? 0), perFloorItem: r.per_floor_item, label: r.label, enabled: r.enabled, serviceSku: r.service_sku })),
     );
   }
   const serviceSpecs = [...feeServiceSpecs, ...addonServiceSpecs];

@@ -54,6 +54,10 @@ export interface AddonRowInput {
   perFloorItem?: number | null;
   label?:        string | null;
   enabled?:      boolean | null;
+  /** Migration 0160 — per-add-on SERVICE SKU. Wins over the legacy
+   *  ADDON_ID_TO_SERVICE_SKU map; NULL/blank falls through to it, then to
+   *  the generic SVC-ADDON. */
+  serviceSku?:   string | null;
 }
 
 /** POS addon id → dedicated SERVICE SKU code. Migration 0157 (Loo
@@ -140,10 +144,12 @@ export function computeAddonServiceLines(
     if (seen.has(sel.id)) continue;
     seen.add(sel.id);
     const row = rowById.get(sel.id);
-    // Dedicated SKU when mapped; generic SVC-ADDON otherwise (0157).
-    const itemCode = ADDON_ID_TO_SERVICE_SKU[sel.id] ?? SVC_ADDON;
     if (!row) continue;                       // unknown to the addons catalog
     if (row.enabled === false) continue;      // operator disabled it since
+    // Per-row SERVICE SKU first (0160), legacy hardcoded map next, generic
+    // SVC-ADDON otherwise (0157).
+    const itemCode =
+      (row.serviceSku ?? '').trim() || ADDON_ID_TO_SERVICE_SKU[sel.id] || SVC_ADDON;
     const label = (row.label ?? '').trim() || sel.id;
     if (row.kind === 'floors_items') {
       const floors = Math.max(0, Math.floor(sel.floorsCount ?? 0));

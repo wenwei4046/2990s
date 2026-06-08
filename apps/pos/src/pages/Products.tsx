@@ -4906,9 +4906,37 @@ const OrderAddonsManager = () => {
   const [draft, setDraft] = useState({
     label: '', id: '', description: '', icon: 'package',
     kind: 'qty' as 'qty' | 'flat' | 'floors_items', category: '',
-    price: '', perFloorItem: '', unit: '', enabled: true,
+    price: '', perFloorItem: '', unit: '', serviceSku: '', enabled: true,
   });
   const setD = (p: Partial<typeof draft>) => setDraft((d) => ({ ...d, ...p }));
+
+  /* Per-add-on SERVICE SKU (migration 0160). A custom SVC-* code books the
+     add-on under its own SERVICE line instead of the generic SVC-ADDON
+     bucket. The SO-create Edge #4 gate requires the code to exist in
+     mfg_products, so saving a code mints the SERVICE catalog row through the
+     same POST /mfg-products the SKU Master uses — its duplicate_code 409
+     just means the row is already there (idempotent). */
+  const mintSvc = useCreateMfgProduct();
+  const SVC_RE = /^SVC-[A-Z0-9-]+$/;
+  const SVC_FORMAT_MSG = 'SKU code must look like SVC-DISPOSE-WARDROBE (SVC- then capitals, digits, dashes).';
+  const ensureSvcCatalogRow = async (code: string, label: string): Promise<void> => {
+    try {
+      await mintSvc.mutateAsync({ code, name: label, category: 'SERVICE' });
+    } catch (e) {
+      const msg = String((e as Error).message ?? e);
+      if (!msg.includes('duplicate_code')) throw e; // already in the catalog = fine
+    }
+  };
+  const commitSku = async (row: AdminAddonRow, raw: string): Promise<void> => {
+    setError(null);
+    const svc = raw.trim().toUpperCase();
+    if ((svc || null) === (row.serviceSku ?? null)) return;
+    if (svc && !SVC_RE.test(svc)) { setError(SVC_FORMAT_MSG); return; }
+    try {
+      if (svc) await ensureSvcCatalogRow(svc, row.label);
+      update.mutate({ id: row.id, patch: { serviceSku: svc || null } }, { onError: (e) => setError(String((e as Error).message ?? e)) });
+    } catch (e) { setError(String((e as Error).message ?? e)); }
+  };
 
   /* Loo 2026-06-06 — ONE switch: Enabled and show_at_handover always move
      together (On = saleable AND shown at handover; Off = fully off). The two
@@ -4928,19 +4956,32 @@ const OrderAddonsManager = () => {
     if ((list.data ?? []).some((a) => a.id === id)) { setError(`ID "${id}" already exists.`); return; }
     const isFloors = draft.kind === 'floors_items';
     const rate = Math.round(Number(isFloors ? draft.perFloorItem : draft.price) || 0);
-    if (rate < 0) { setError('Price must be ≥ 0.'); return; }
+    /* > 0, not ≥ 0 — a 0 rate stores fine but computeAddonServiceLines skips
+       the line at SO create (unitSen <= 0 guard), so the charge would vanish
+       from the SO with no error: a silent undercharge. */
+    if (rate <= 0) {
+      setError(isFloors
+        ? 'Per floor·item rate must be above 0 — a 0 rate books nothing on the SO.'
+        : 'Price must be above 0 — a RM0 add-on books nothing on the SO.');
+      return;
+    }
+    const svc = draft.serviceSku.trim().toUpperCase();
+    if (svc && !SVC_RE.test(svc)) { setError(SVC_FORMAT_MSG); return; }
     const maxSort = (list.data ?? []).reduce((m, a) => Math.max(m, a.sortOrder), 0);
     try {
+      if (svc) await ensureSvcCatalogRow(svc, draft.label.trim());
       await create.mutateAsync({
         id, label: draft.label.trim(), description: draft.description.trim() || null,
         icon: draft.icon, kind: draft.kind, category: draft.category.trim() || null,
         price: isFloors ? 0 : rate, perFloorItem: isFloors ? rate : null,
-        unit: draft.unit.trim() || null, stock: null, enabled: draft.enabled,
+        // flat = charged once per order; a per-unit label would be misleading.
+        unit: draft.kind === 'flat' ? null : (draft.unit.trim() || null),
+        stock: null, enabled: draft.enabled,
         // ONE switch (Loo 2026-06-06): handover visibility follows Enabled.
-        showAtHandover: draft.enabled, sortOrder: maxSort + 1,
+        showAtHandover: draft.enabled, serviceSku: svc || null, sortOrder: maxSort + 1,
       });
       setCreating(false);
-      setDraft({ label: '', id: '', description: '', icon: 'package', kind: 'qty', category: '', price: '', perFloorItem: '', unit: '', enabled: true });
+      setDraft({ label: '', id: '', description: '', icon: 'package', kind: 'qty', category: '', price: '', perFloorItem: '', unit: '', serviceSku: '', enabled: true });
     } catch (e) { setError(String((e as Error).message ?? e)); }
   };
 
@@ -4975,13 +5016,28 @@ const OrderAddonsManager = () => {
               <input type="number" min={0} step={1} style={{ ...inputStyle, width: 140 }}
                 value={draft.kind === 'floors_items' ? draft.perFloorItem : draft.price}
                 onChange={(e) => draft.kind === 'floors_items' ? setD({ perFloorItem: e.target.value }) : setD({ price: e.target.value })} /></label>
-            <label><span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>Unit</span>
-              <input style={{ ...inputStyle, width: 120 }} value={draft.unit} onChange={(e) => setD({ unit: e.target.value })} placeholder="piece" /></label>
+            {/* flat = charged once per order; offering a per-unit label here
+                produced "RM89 per pillow" cards that always billed ×1. */}
+            {draft.kind !== 'flat' && (
+              <label><span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>Unit</span>
+                <input style={{ ...inputStyle, width: 120 }} value={draft.unit} onChange={(e) => setD({ unit: e.target.value })} placeholder="piece" /></label>
+            )}
+            <label><span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>SKU code</span>
+              <input style={{ ...inputStyle, width: 200, textTransform: 'uppercase' }} value={draft.serviceSku}
+                onChange={(e) => setD({ serviceSku: e.target.value.toUpperCase() })} placeholder="SVC-… (optional)" /></label>
             <label><span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 4 }}>Icon</span>
               <select style={{ ...inputStyle, width: 160 }} value={draft.icon} onChange={(e) => setD({ icon: e.target.value })}>
                 {OA_ICONS.map((i) => <option key={i} value={i}>{i}</option>)}
               </select></label>
           </div>
+          {draft.kind === 'flat' && (
+            <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', margin: '0 0 var(--space-3)' }}>
+              Flat fee is charged once per order — staff get no quantity field at checkout. Use “Per piece” for per-unit items.
+            </p>
+          )}
+          <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', margin: '0 0 var(--space-3)' }}>
+            SKU code gives this add-on its own SVC-* line on the SO (reports aggregate per code). Leave blank to book under the generic SVC-ADDON.
+          </p>
           <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
             <Button variant="primary" size="sm" onClick={() => void submitNew()} disabled={create.isPending}>{create.isPending ? 'Creating…' : 'Create'}</Button>
             <Button variant="ghost" size="sm" onClick={() => { setCreating(false); setError(null); }}>Cancel</Button>
@@ -5001,6 +5057,7 @@ const OrderAddonsManager = () => {
             <tr style={{ textAlign: 'left', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
               <th style={{ padding: '6px 8px' }}>Add-on</th>
               <th style={{ padding: '6px 8px' }}>Kind</th>
+              <th style={{ padding: '6px 8px' }}>SKU code</th>
               <th style={{ padding: '6px 8px' }}>{'Price / rate (RM)'}</th>
               <th style={{ padding: '6px 8px' }}>Enabled</th>
             </tr>
@@ -5017,17 +5074,31 @@ const OrderAddonsManager = () => {
                   <td style={{ padding: '6px 8px', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{isFloors ? 'floor·item' : row.kind}</td>
                   <td style={{ padding: '6px 8px' }}>
                     {canEdit ? (
-                      <input type="number" min={0} step={1} style={{ width: 100, padding: '4px 8px', fontSize: 'var(--fs-13)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)' }}
+                      <input style={{ width: 170, padding: '4px 8px', fontSize: 'var(--fs-12)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)', textTransform: 'uppercase' }}
+                        defaultValue={row.serviceSku ?? ''} placeholder="SVC-ADDON"
+                        onBlur={(e) => { void commitSku(row, e.target.value); }} />
+                    ) : (
+                      <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{row.serviceSku ?? 'SVC-ADDON'}</span>
+                    )}
+                  </td>
+                  <td style={{ padding: '6px 8px' }}>
+                    {canEdit ? (
+                      <input type="number" min={1} step={1} style={{ width: 100, padding: '4px 8px', fontSize: 'var(--fs-13)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)' }}
                         defaultValue={isFloors ? (row.perFloorItem ?? 0) : row.price}
                         onBlur={(e) => {
                           const n = Math.max(0, Math.round(Number(e.target.value) || 0));
-                          if (isFloors) { if (n !== (row.perFloorItem ?? 0)) commitField(row, { perFloorItem: n }); }
-                          else if (n !== row.price) commitField(row, { price: n });
+                          const current = isFloors ? (row.perFloorItem ?? 0) : row.price;
+                          if (n === current) return;
+                          /* Same > 0 rule as create — a 0 rate silently books
+                             nothing on the SO. Retire an add-on with Off. */
+                          if (n <= 0) { setError(`"${row.label}": rate must be above 0 — a 0 rate books nothing on the SO. Use the Off switch to retire it.`); return; }
+                          if (isFloors) commitField(row, { perFloorItem: n });
+                          else commitField(row, { price: n });
                         }} />
                     ) : (
                       <span style={{ fontSize: 'var(--fs-13)' }}>RM {(isFloors ? row.perFloorItem ?? 0 : row.price).toLocaleString('en-MY')}</span>
                     )}
-                    <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginLeft: 6 }}>{isFloors ? `per floor·${row.unit ?? 'item'}` : `per ${row.unit ?? 'piece'}`}</span>
+                    <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginLeft: 6 }}>{isFloors ? `per floor·${row.unit ?? 'item'}` : row.kind === 'flat' ? 'charged once' : `per ${row.unit ?? 'piece'}`}</span>
                   </td>
                   <td style={{ padding: '6px 8px' }}>
                     {/* ONE switch (Loo 2026-06-06): On = saleable + shown at
