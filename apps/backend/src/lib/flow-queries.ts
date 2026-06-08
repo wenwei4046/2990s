@@ -8,7 +8,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { authedFetch } from './authed-fetch';
 import { supabase } from './supabase';
-import { verifiedSave, readbackGet } from './verified-save';
+import { verifiedSave, readbackGet, friendlySaveMessage } from './verified-save';
 
 // Direct multipart upload (useUploadSoItemPhoto) needs the raw token + URL —
 // authedFetch is JSON-only, so these stay for that one FormData POST.
@@ -356,17 +356,10 @@ export const useUpdateMfgSalesOrderHeader = () => {
           accessor: (d, f) => d?.salesOrder?.[f],
         });
         if (!result.ok) {
-          if (result.reason === 'mismatch') {
-            throw new Error(
-              `Saved, but it didn't stick — ${result.diffs
-                .map((d) => `${d.field.replace(/_/g, ' ')} still shows "${d.actual ?? ''}"`)
-                .join('; ')}. Please re-enter and try again.`,
-            );
-          }
-          if (result.reason === 'http') {
-            throw new Error(`Save was rejected (HTTP ${result.status})${result.body ? `: ${result.body.slice(0, 160)}` : ''}.`);
-          }
-          throw new Error(`Save could not be confirmed (${result.details}). Please try again.`);
+          throw new Error(friendlySaveMessage(result, {
+            noun: 'customer details',
+            fieldNames: { debtor_name: 'Customer name', debtor_code: 'Customer code', agent: 'Agent', ref: 'Reference' },
+          }));
         }
         return { ok: true as const };
       }

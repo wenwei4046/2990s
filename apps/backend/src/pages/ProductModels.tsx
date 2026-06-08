@@ -729,11 +729,10 @@ export function NewModelDialog({
         if (failed.length > 0) {
           await Promise.all(failed.map((r) => deleteMut.mutateAsync(r.model.id).catch(() => {})));
           const codesFailed = failed.map((r) => r.model.model_code).join(', ');
-          const reason = failed.find((r) => r.error)?.error;
           throw new Error(
-            `Couldn’t generate SKUs for ${codesFailed}${reason ? ` (${reason})` : ''}. ` +
-            `The empty model${failed.length === 1 ? '' : 's'} ${failed.length === 1 ? 'was' : 'were'} removed — ` +
-            `nothing was left behind. Please check the sizes and try again.`,
+            `Could not create the SKUs for ${codesFailed}. ` +
+            `The empty model${failed.length === 1 ? ' was' : 's were'} removed so nothing was left behind. ` +
+            `Please check the sizes and press Create again.`,
           );
         }
 
@@ -769,12 +768,11 @@ export function NewModelDialog({
             try {
               const res = await bindingsBatchMut.mutateAsync({ supplierId, bindings });
               boundInserted = res.inserted;
-            } catch (be) {
+            } catch {
               // eslint-disable-next-line no-alert
               alert(
-                `SKUs were created, but binding them to the supplier failed: ` +
-                `${be instanceof Error ? be.message : String(be)}. ` +
-                `You can bind them later from “Supplier codes by Model”.`,
+                `The SKUs were created, but linking them to the supplier didn't go through. ` +
+                `You can link them later from “Supplier codes by Model”.`,
               );
             }
           }

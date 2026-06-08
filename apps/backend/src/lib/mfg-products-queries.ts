@@ -11,7 +11,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
 import { authedFetch } from './authed-fetch';
-import { verifiedSave, readbackGet } from './verified-save';
+import { verifiedSave, readbackGet, friendlySaveMessage } from './verified-save';
 
 const API_URL = import.meta.env.VITE_API_URL;
 if (!API_URL) {
@@ -291,18 +291,11 @@ export function useUpdateMfgProductPrices() {
       });
 
       if (!result.ok) {
-        const rm = (v: unknown) => (v == null ? '—' : `RM${(Number(v) / 100).toFixed(2)}`);
-        if (result.reason === 'mismatch') {
-          throw new Error(
-            `Price didn't save — ${result.diffs
-              .map((d) => `${d.field.replace('_sen', '').replace(/_/g, ' ')} still shows ${rm(d.actual)} (you set ${rm(d.expected)})`)
-              .join('; ')}. Please re-enter and try again.`,
-          );
-        }
-        if (result.reason === 'http') {
-          throw new Error(`Save was rejected (HTTP ${result.status})${result.body ? `: ${result.body.slice(0, 160)}` : ''}.`);
-        }
-        throw new Error(`Save could not be confirmed (${result.details}). Please check the price and try again.`);
+        throw new Error(friendlySaveMessage(result, {
+          noun: 'price',
+          fieldNames: { base_price_sen: 'Base price', price1_sen: 'Price 1', cost_price_sen: 'Cost price' },
+          fmt: (v) => (v == null ? '(blank)' : `RM${(Number(v) / 100).toFixed(2)}`),
+        }));
       }
       return { ok: true as const, changed: 1 };
     },

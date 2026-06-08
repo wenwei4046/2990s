@@ -108,6 +108,46 @@ export async function readbackGet<T>(path: string): Promise<T | null> {
   return (await res.json()) as T;
 }
 
+/** Turn a FAILED save into an operator-friendly, plain-language sentence — no
+ *  HTTP status codes, no raw response bodies, no database column names. Every
+ *  verifiedSave caller funnels its error through here so what the operator reads
+ *  is always plain English (Wei Siang 2026-06-08: "确保报错都是白话文"). */
+export function friendlySaveMessage(
+  result: Exclude<SaveResult<unknown>, { ok: true }>,
+  opts: { noun: string; fieldNames?: Record<string, string>; fmt?: (v: unknown) => string },
+): string {
+  const Noun = opts.noun.charAt(0).toUpperCase() + opts.noun.slice(1);
+  const label = (f: string) => opts.fieldNames?.[f] ?? f.replace(/_sen$/, '').replace(/_/g, ' ');
+  const fmt = opts.fmt ?? ((v: unknown) => (v == null || v === '' ? '(blank)' : `"${String(v)}"`));
+
+  if (result.reason === 'mismatch') {
+    const parts = result.diffs.map((d) => `${label(d.field)} still shows ${fmt(d.actual)} instead of ${fmt(d.expected)}`);
+    return `${Noun} not saved — ${parts.join('; ')}. Please key it in again and press Save.`;
+  }
+  if (result.reason === 'network') {
+    return `Couldn't confirm the ${opts.noun} saved — the connection may have dropped. Please check and press Save again.`;
+  }
+  // http — only surface the server's reason if it's already a plain sentence
+  // (hide raw JSON / SQL / error codes from the operator).
+  const reason = extractPlainReason(result.body);
+  return reason
+    ? `${Noun} not saved — ${reason}`
+    : `The ${opts.noun} couldn't be saved. Please try again — if it keeps happening, let IT know.`;
+}
+
+/** Pull a human-readable reason out of an API error body, or null if the body
+ *  is raw/technical (JSON, SQL, error codes) that an operator shouldn't see. */
+function extractPlainReason(body: string): string | null {
+  try {
+    const j = JSON.parse(body) as { reason?: unknown; message?: unknown };
+    const r = (typeof j.reason === 'string' ? j.reason : typeof j.message === 'string' ? j.message : '') as string;
+    if (r && r.length < 200 && !/violates|constraint|null value|column|relation|syntax|PGRST|\b\d{5}\b/i.test(r)) {
+      return r;
+    }
+  } catch { /* not JSON — fall through */ }
+  return null;
+}
+
 export async function verifiedSave<T>(args: VerifiedSaveArgs<T>): Promise<SaveResult<T>> {
   const fetcher = args.fetcher ?? authedFetcher;
 
