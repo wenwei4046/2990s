@@ -11,6 +11,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
 import { authedFetch } from './authed-fetch';
+import { verifiedSave, readbackGet } from './verified-save';
 
 const API_URL = import.meta.env.VITE_API_URL;
 if (!API_URL) {
@@ -269,10 +270,47 @@ export function useUpdateMfgProductPrices() {
       name?: string;
     }) => {
       const { id, ...body } = args;
-      return authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
+      // verified-save (Wei Siang 2026-06-08): a price PATCH that returns 200 can
+      // still LIE — a half-write or a stale cache can leave the old price in
+      // place. Money is load-bearing, so we read the row back (cache-bypassing)
+      // and confirm the price actually changed before reporting success. The
+      // money columns are stored verbatim (PATCH: base_price_sen = basePriceSen),
+      // so the comparison can't false-positive.
+      const expect: Record<string, unknown> = {};
+      if (body.basePriceSen !== undefined) expect.base_price_sen = body.basePriceSen;
+      if (body.price1Sen    !== undefined) expect.price1_sen     = body.price1Sen;
+      if (body.costPriceSen !== undefined) expect.cost_price_sen = body.costPriceSen;
+
+      const result = await verifiedSave<{ product: Record<string, unknown> }>({
+        endpoint: `/mfg-products/${id}`,
         method: 'PATCH',
-        body: JSON.stringify(body),
+        body,
+        readback: () => readbackGet<{ product: Record<string, unknown> }>(`/mfg-products/${id}`),
+        expect,
+        accessor: (d, f) => d?.product?.[f],
       });
+
+      if (!result.ok) {
+        const rm = (v: unknown) => (v == null ? '—' : `RM${(Number(v) / 100).toFixed(2)}`);
+        if (result.reason === 'mismatch') {
+          throw new Error(
+            `Price didn't save — ${result.diffs
+              .map((d) => `${d.field.replace('_sen', '').replace(/_/g, ' ')} still shows ${rm(d.actual)} (you set ${rm(d.expected)})`)
+              .join('; ')}. Please re-enter and try again.`,
+          );
+        }
+        if (result.reason === 'http') {
+          throw new Error(`Save was rejected (HTTP ${result.status})${result.body ? `: ${result.body.slice(0, 160)}` : ''}.`);
+        }
+        throw new Error(`Save could not be confirmed (${result.details}). Please check the price and try again.`);
+      }
+      return { ok: true as const, changed: 1 };
+    },
+    onError: (err) => {
+      // Surface a money-save failure LOUDLY — a silent miss would let the
+      // operator believe a price stuck when it didn't (verified-save).
+      // eslint-disable-next-line no-alert
+      window.alert(err instanceof Error ? err.message : String(err));
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mfg-products'] });
