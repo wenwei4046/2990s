@@ -606,6 +606,20 @@ export const useCreateAddon = () => {
   });
 };
 
+/* Hard delete (Loo 2026-06-08). `cart_items.addon_id` FK (RESTRICT) blocks
+ * deleting an add-on that's been used on an order — the caller surfaces that
+ * as "use Off to retire it". Unused/test rows delete cleanly. */
+export const useDeleteAddon = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('addons').delete().eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => invalidateBackendAddons(qc),
+  });
+};
+
 /* ─── Model allowed_options by SKU code (SO-parity, Loo 2026-06-06) ────────
  * The SO line editor previously only knew a line's allowed_options when the
  * product was freshly picked this session (`picked` state) — EDITING an
