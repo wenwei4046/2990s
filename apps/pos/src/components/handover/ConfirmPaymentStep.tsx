@@ -253,7 +253,10 @@ export const ConfirmPaymentStep = ({
         className={styles.presetPill}
         onClick={() => setExtras([
           ...extras,
-          { uid: Math.random().toString(36).slice(2, 10), method: 'cash', amount: 0, approvalCode: '', merchantProvider: null, installmentMonths: null, slipUploadSessionId: null },
+          /* Loo 2026-06-09 — seed the new split row with the OUTSTANDING balance
+             (total − everything collected so far) so a "rest on this method"
+             entry is one tap. Mirrors the amount-paid + Record-payment defaults. */
+          { uid: Math.random().toString(36).slice(2, 10), method: 'cash', amount: Math.max(0, total - collected), approvalCode: '', merchantProvider: null, installmentMonths: null, slipUploadSessionId: null },
         ])}
         style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
       >
