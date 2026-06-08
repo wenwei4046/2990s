@@ -148,6 +148,26 @@ export function usePostStockTake() {
   });
 }
 
+// Undo a POSTED take: reverses every ADJUSTMENT it wrote (stock returns to
+// pre-post) and marks the take CANCELLED + locked. Mirrors usePostStockTake's
+// inventory invalidation since stock levels change back.
+export function useReverseStockTake() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch<{
+        take: StockTakeRow;
+        movementsReversed: number;
+        movementErrors?: string[];
+      }>(`/stock-takes/${id}/reverse`, { method: 'PATCH', body: '{}' }),
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ['stock-takes'] });
+      qc.invalidateQueries({ queryKey: ['stock-takes', id] });
+      qc.invalidateQueries({ queryKey: ['inventory'] });
+    },
+  });
+}
+
 export function useCancelStockTake() {
   const qc = useQueryClient();
   return useMutation({

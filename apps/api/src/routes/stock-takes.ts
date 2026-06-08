@@ -21,6 +21,7 @@
 //   PATCH  /stock-takes/:id/lines      — bulk update counted_qty (OPEN only)
 //   PATCH  /stock-takes/:id/post       — OPEN → POSTED (writes ADJUSTMENT movements)
 //   PATCH  /stock-takes/:id/cancel     — OPEN → CANCELLED
+//   PATCH  /stock-takes/:id/reverse    — POSTED → CANCELLED (undo: reverses the ADJUSTMENT movements)
 //   DELETE /stock-takes/:id            — OPEN only
 // ----------------------------------------------------------------------------
 
@@ -290,6 +291,94 @@ stockTakes.patch('/:id/cancel', async (c) => {
   if (error) return c.json({ error: 'cancel_failed', reason: error.message }, 500);
   if (!data)  return c.json({ error: 'not_open' }, 409);
   return c.json({ take: data });
+});
+
+// ── Reverse POSTED → CANCELLED (undo a posted count) ──────────────────
+// Every other inventory module's cancel reverses its stock; a POSTED stock
+// take previously had no such path (cancel only accepted OPEN). This writes
+// the OPPOSITE signed ADJUSTMENT for every movement the post wrote, so stock
+// returns to exactly its pre-post level, then marks the take CANCELLED and
+// locked. To re-count, the commander starts a fresh take (same posture as a
+// cancelled DO/GRN/PR — the document is terminal, you make a new one).
+//
+// Cost note: the reversing ADJUSTMENT is qty-exact. A reversing increase is
+// re-valued at the variant's current weighted-average open-lot cost (the same
+// basis the forward post used for found stock); a reversing decrease is FIFO-
+// consumed at the real layers. For cycle-count-sized variances this is fully
+// consistent with how the forward adjustment itself was costed.
+//
+// Idempotency: status is flipped POSTED → CANCELLED FIRST (single-flight); a
+// second call sees a non-POSTED row and returns 409, so reversal rows are
+// written at most once.
+stockTakes.patch('/:id/reverse', async (c) => {
+  const sb = c.get('supabase');
+  const user = c.get('user');
+  const id = c.req.param('id');
+
+  // Flip status first so a concurrent reverse can't double-write movements.
+  const { data: cancelled, error: cErr } = await sb.from('stock_takes')
+    .update({ status: 'CANCELLED', cancelled_at: new Date().toISOString() })
+    .eq('id', id).eq('status', 'POSTED')
+    .select(HEADER).single();
+  if (cErr)       return c.json({ error: 'reverse_failed', reason: cErr.message }, 500);
+  if (!cancelled) return c.json({ error: 'not_posted' }, 409);
+
+  const header = cancelled as unknown as {
+    id: string; take_no: string; warehouse_id: string;
+  };
+
+  // Load the forward ADJUSTMENT movements this take wrote. (Reversal can only
+  // run once — the status gate above — so there are no prior reversal rows to
+  // filter out.)
+  const { data: movs, error: mLoadErr } = await sb.from('inventory_movements')
+    .select('warehouse_id, product_code, product_name, variant_key, batch_no, qty')
+    .eq('source_doc_type', 'STOCK_TAKE')
+    .eq('source_doc_id', id);
+  if (mLoadErr) {
+    return c.json({ error: 'reverse_movements_load_failed', reason: mLoadErr.message }, 500);
+  }
+
+  const reverseRows: Array<Record<string, unknown>> = [];
+  for (const m of (movs as Array<{
+    warehouse_id: string; product_code: string; product_name: string | null;
+    variant_key: string | null; batch_no: string | null; qty: number;
+  }>) ?? []) {
+    if (!m.qty) continue; // zero-variance lines wrote nothing; nothing to undo
+    reverseRows.push({
+      movement_type:   'ADJUSTMENT',
+      warehouse_id:    m.warehouse_id,
+      product_code:    m.product_code,
+      product_name:    m.product_name,
+      variant_key:     m.variant_key ?? '',
+      batch_no:        m.batch_no ?? null,
+      qty:             -m.qty,                          // flip the sign — undo
+      unit_cost_sen:   0,                               // trigger recomputes cost
+      source_doc_type: 'STOCK_TAKE',
+      source_doc_id:   header.id,
+      source_doc_no:   header.take_no,
+      reason_code:     'COUNT',
+      notes:           `Reversal of stock take ${header.take_no}`,
+      performed_by:    user.id,
+    });
+  }
+
+  const movementErrors: string[] = [];
+  if (reverseRows.length > 0) {
+    const { error: insErr } = await sb.from('inventory_movements').insert(reverseRows);
+    if (insErr) movementErrors.push(insErr.message);
+  }
+
+  /* Stock changed back — re-walk SO stock allocation (mirrors the post path). */
+  try {
+    const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+    await recomputeSoStockAllocation(sb);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] reverse-stock-take failed:', e); }
+
+  return c.json({
+    take: cancelled,
+    movementsReversed: movementErrors.length ? 0 : reverseRows.length,
+    movementErrors: movementErrors.length ? movementErrors : undefined,
+  });
 });
 
 // ── Delete OPEN ───────────────────────────────────────────────────────

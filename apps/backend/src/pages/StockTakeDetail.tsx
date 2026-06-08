@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import {
-  ArrowLeft, Save, X, Trash2, Send, Ban, AlertTriangle, Search, Wand2,
+  ArrowLeft, Save, X, Trash2, Send, Ban, AlertTriangle, Search, Wand2, Undo2,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { SkeletonDetailPage } from '../components/Skeleton';
@@ -22,6 +22,7 @@ import {
   useUpdateStockTakeLines,
   usePostStockTake,
   useCancelStockTake,
+  useReverseStockTake,
   useDeleteStockTake,
   type StockTakeStatus,
   type StockTakeLine,
@@ -94,9 +95,10 @@ export const StockTakeDetail = () => {
 
   const detail = useStockTakeDetail(id ?? null);
   const update = useUpdateStockTakeLines();
-  const post   = usePostStockTake();
-  const cancel = useCancelStockTake();
-  const del    = useDeleteStockTake();
+  const post    = usePostStockTake();
+  const cancel  = useCancelStockTake();
+  const reverse = useReverseStockTake();
+  const del     = useDeleteStockTake();
 
   const [lines,  setLines]  = useState<LineDraft[]>([]);
   const [search, setSearch] = useState<string>('');
@@ -109,8 +111,9 @@ export const StockTakeDetail = () => {
   }, [detail.data]);
 
   const status: StockTakeStatus | undefined = detail.data?.take.status;
-  const isDraft = status === 'OPEN';      // local var name kept for diff minimization; refers to OPEN state
-  const tone    = status ? STATUS_TONE[status] : null;
+  const isDraft  = status === 'OPEN';      // local var name kept for diff minimization; refers to OPEN state
+  const isPosted = status === 'POSTED';
+  const tone     = status ? STATUS_TONE[status] : null;
 
   const filteredLines = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -224,6 +227,32 @@ export const StockTakeDetail = () => {
     });
   };
 
+  const onReverse = () => {
+    if (!id) return;
+    const proceed = window.confirm(
+      'Undo this posted stock take?\n\n' +
+      'The stock changes it made will be reversed — every item goes back to the quantity it had before this count was posted. ' +
+      'This count will then be marked Cancelled and locked.\n\n' +
+      'To count again, start a new stock take.',
+    );
+    if (!proceed) return;
+    reverse.mutate(id, {
+      onSuccess: (res) => {
+        detail.refetch();
+        if (res.movementErrors && res.movementErrors.length > 0) {
+          window.alert(
+            `Undone, but reversing the stock changes failed:\n\n${res.movementErrors.join('\n')}\n\nFix manually via Stock Adjustments.`,
+          );
+        } else {
+          window.alert(
+            `Undone. ${res.movementsReversed} stock change${res.movementsReversed === 1 ? '' : 's'} reversed.`,
+          );
+        }
+      },
+      onError: (err) => window.alert(`Undo failed: ${err instanceof Error ? err.message : String(err)}`),
+    });
+  };
+
   const onDelete = () => {
     if (!id) return;
     if (!window.confirm('Delete this OPEN stock take permanently? The count sheet will be lost.')) return;
@@ -294,6 +323,11 @@ export const StockTakeDetail = () => {
                 <Send {...ICON} /> {post.isPending ? 'Posting…' : 'Post'}
               </Button>
             </>
+          )}
+          {isPosted && (
+            <Button variant="ghost" size="md" onClick={onReverse} disabled={reverse.isPending}>
+              <Undo2 {...ICON} /> {reverse.isPending ? 'Undoing…' : 'Undo'}
+            </Button>
           )}
           {!isDraft && (
             <Button variant="ghost" size="md" onClick={() => navigate('/inventory/stock-takes')}>
