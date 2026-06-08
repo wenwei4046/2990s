@@ -1913,7 +1913,12 @@ mfgSalesOrders.post('/', async (c) => {
             leg_price_sen:           i === 0 ? (recomputed?.leg_price_sen ?? 0) : 0,
             special_order_price_sen: i === 0 ? (recomputed?.special_order_sen ?? 0) : 0,
             custom_specials:         i === 0 ? (recomputed?.custom_specials ?? null) : null,
-            remark: i === 0 ? baseRow.remark : null,
+            /* Loo 2026-06-09 — the operator remark rides EVERY compartment line
+               of the sofa, not just the first. One sofa = one remark, so each
+               piece (and its printed SO line) carries the same note. Unlike the
+               breakdown columns above, the remark is not a build-level money
+               figure, so duplicating it across the set is not double-counting. */
+            remark: baseRow.remark,
           };
           /* Task 5 — mint a one-shot SKU per module when an extra charge was
              declared. The minted sell price = this module's catalog base + its

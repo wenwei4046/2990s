@@ -267,7 +267,31 @@ export const SalesOrderNew = () => {
   };
 
   const updateLine = (rid: string, patch: Partial<SoLineDraft>) =>
-    setLines((prev) => prev.map((l) => (l.rid === rid ? { ...l, ...patch } : l)));
+    setLines((prev) => {
+      const target = prev.find((l) => l.rid === rid);
+      /* Loo 2026-06-09 — sofa remark auto-fills every compartment. A POS sofa
+         is split into one line per compartment, all sharing variants.buildKey.
+         When the operator types a remark on any one compartment, mirror it onto
+         the other compartments of the SAME sofa so every piece carries the note.
+         Scoped by buildKey, so a second, different sofa keeps its own remark.
+         Only sofas that came in as a split build have a buildKey — manually
+         added stand-alone lines have none and never cascade. */
+      const bk =
+        target && 'remark' in patch
+          ? (target.variants as { buildKey?: unknown } | null)?.buildKey
+          : undefined;
+      const cascadeRemark = typeof bk === 'string' && bk !== '';
+      return prev.map((l) => {
+        if (l.rid === rid) return { ...l, ...patch };
+        if (
+          cascadeRemark &&
+          (l.variants as { buildKey?: unknown } | null)?.buildKey === bk
+        ) {
+          return { ...l, remark: patch.remark as string };
+        }
+        return l;
+      });
+    });
 
   /* PR-E — New lines seed their lineDeliveryDate from the current header
      deliveryDate (null until the user fills it in). The cascade effect
