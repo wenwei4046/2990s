@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { SkeletonDetailPage } from '../components/Skeleton';
 import {
   useDeliveryReturnDetail,
   useUpdateDeliveryReturnHeader,
@@ -309,7 +310,7 @@ export const DeliveryReturnDetail = () => {
   };
 
   if (detail.isLoading) {
-    return <div className={styles.page}><p className={styles.fieldLabel}>Loading…</p></div>;
+    return <SkeletonDetailPage />;
   }
   if (detail.isError || !header) {
     return (

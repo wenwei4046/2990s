@@ -44,6 +44,7 @@ import {
 } from '../lib/flow-queries';
 import { useSuppliers, useSupplierDetail, type SupplierRow } from '../lib/suppliers-queries';
 import { MoneyInput } from '../components/MoneyInput';
+import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
 
@@ -160,7 +161,7 @@ export const PurchaseInvoiceDetail = () => {
   }, [isLocked, isEditing]);
 
   if (detail.isLoading) {
-    return <div className={styles.page}><p className={styles.fieldLabel}>Loading…</p></div>;
+    return <SkeletonDetailPage />;
   }
   if (detail.isError || !pi) {
     return (

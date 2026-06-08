@@ -15,6 +15,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { SkeletonDetailPage } from '../components/Skeleton';
 import {
   ArrowLeft, Undo2, Pencil, Printer, Trash2, Save, Ban, ChevronDown,
 } from 'lucide-react';
@@ -120,7 +121,7 @@ export const PurchaseConsignmentReturnDetail = () => {
   }, [isLocked, isEditing]);
 
   if (detail.isLoading) {
-    return <div className={styles.page}><p className={styles.fieldLabel}>Loading…</p></div>;
+    return <SkeletonDetailPage />;
   }
   if (detail.isError || !pr) {
     return (

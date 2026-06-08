@@ -21,6 +21,7 @@ import {
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-29 — GRN shows the variant config like PO
 import { LoadingButton } from '../components/LoadingButton';
+import { SkeletonDetailPage } from '../components/Skeleton';
 import {
   useGrnDetail,
   usePostGrn,
@@ -660,7 +661,7 @@ export const SalesInvoiceDetail = () => {
    Shared helpers
    ════════════════════════════════════════════════════════════════════════ */
 
-const Loading = () => <div className={styles.page}><p className={styles.fieldLabel}>Loading…</p></div>;
+const Loading = () => <SkeletonDetailPage />;
 
 const NotFound = ({ back, error }: { back: string; error: unknown }) => (
   <div className={styles.page}>

@@ -30,6 +30,7 @@ import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary, canonicalizeVariants, fmtDateOrDash, fmtDateTime, missingVariantAxes } from '@2990s/shared'; // Commander 2026-05-28
 import { PhoneInput } from '../components/PhoneInput';
+import { SkeletonDetailPage } from '../components/Skeleton';
 import {
   useMfgSalesOrderDetail,
   useUpdateMfgSalesOrderHeader,
@@ -723,7 +724,7 @@ export const SalesOrderDetail = () => {
   const lockedStatuses: SoStatus[] = ['SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'];
 
   if (detail.isLoading) {
-    return <div className={styles.page}><p className={styles.fieldLabel}>Loading…</p></div>;
+    return <SkeletonDetailPage />;
   }
   if (detail.isError || !header) {
     return (

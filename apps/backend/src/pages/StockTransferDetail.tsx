@@ -13,6 +13,7 @@ import {
   ArrowLeft, ArrowRight, X, Ban,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { SkeletonDetailPage } from '../components/Skeleton';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   useWarehouses,
@@ -97,7 +98,7 @@ export const StockTransferDetail = () => {
 
   // ── Render ───────────────────────────────────────────────────────────
   if (detail.isLoading) {
-    return <div className={styles.page}><p className={styles.subtitle}>Loading…</p></div>;
+    return <SkeletonDetailPage />;
   }
   if (detail.error || !detail.data) {
     return (

@@ -19,6 +19,7 @@ import {
 } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { SkeletonDetailPage } from '../components/Skeleton';
 import {
   ArrowLeft, Pencil, Plus, Printer, Save, Undo2, ChevronDown, Ban, RotateCcw,
 } from 'lucide-react';
@@ -296,7 +297,7 @@ export const ConsignmentReturnDetail = () => {
   };
 
   if (detail.isLoading) {
-    return <div className={styles.page}><p className={styles.fieldLabel}>Loading…</p></div>;
+    return <SkeletonDetailPage />;
   }
   if (detail.isError || !header) {
     return (

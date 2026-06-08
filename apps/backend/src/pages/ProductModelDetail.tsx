@@ -32,6 +32,7 @@ import { useFabricLibrary } from '../lib/queries';
 import { resolveSizeInfo } from '../lib/size-info';
 import { supabase } from '../lib/supabase';
 import styles from './ProductModelDetail.module.css';
+import { SkeletonDetailPage } from '../components/Skeleton';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
@@ -181,7 +182,7 @@ export const ProductModelDetail = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.model?.id, data?.model?.updated_at, cfg, specialsByCategory]);
 
-  if (isLoading) return <div className={styles.loading}>Loading model…</div>;
+  if (isLoading) return <SkeletonDetailPage />;
   if (error) {
     return (
       <div className={styles.errorBanner}>
