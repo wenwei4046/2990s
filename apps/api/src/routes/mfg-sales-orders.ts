@@ -11,6 +11,11 @@ import {
   oneShotSofaCode, oneShotSimpleCode, remarkSlug,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
+/* POS auto-Proceed (Loo 2026-06-09) — when a handover arrives already complete
+   (customer + address + delivery date + ≥50% paid) we stamp proceeded_at at
+   create so the order lands in Proceed without a manual click. Same gate the
+   POS "Move to Proceed" button uses, so the two never drift. */
+import { meetsProceedGate } from '@2990s/shared/order-rules';
 /* SO-SKU spec P2 — every charge is a SKU line. Predicates from P1; the
    fee/addon → SERVICE-line decomposition builders are pure + shared. */
 import { isServiceLine, isDeliveryFeeServiceCode } from '@2990s/shared/service-sku';
@@ -2337,8 +2342,27 @@ mfgSalesOrders.post('/', async (c) => {
     }
   }
 
+  /* POS auto-Proceed (Loo 2026-06-09) — if this handover already satisfies the
+     same gate as the POS "Move to Proceed" button (customer name + email, a
+     delivery address line 1 + postcode, a delivery date, and ≥50% collected),
+     stamp proceeded_at now so the order skips Order Placed and lands directly in
+     Proceed. A "Fill in later" handover (blank address) fails the gate and stays
+     in Order Placed for the salesperson to complete + proceed manually. */
+  const depositTotalCenti = posPaymentsTotalCenti
+    ?? Math.max(0, typeof body.depositCenti === 'number' ? body.depositCenti : 0);
+  const autoProceed = meetsProceedGate({
+    hasCustomerName: !!customerName?.trim(),
+    hasEmail: typeof body.email === 'string' && !!body.email.trim(),
+    hasAddress: typeof body.address1 === 'string' && !!body.address1.trim(),
+    hasPostcode: typeof body.postcode === 'string' && !!body.postcode.trim(),
+    hasDeliveryDate: typeof body.customerDeliveryDate === 'string' && !!body.customerDeliveryDate.trim(),
+    paid: depositTotalCenti,
+    total: grandTotal,
+  });
+
   const { error: hErr } = await sb.from('mfg_sales_orders').insert({
     doc_no: docNo,
+    proceeded_at: autoProceed ? new Date().toISOString() : null,
     transfer_to: (body.transferTo as string) ?? null,
     so_date: (body.soDate as string) ?? new Date().toISOString().slice(0, 10),
     branding: (body.branding as string) ?? null,
