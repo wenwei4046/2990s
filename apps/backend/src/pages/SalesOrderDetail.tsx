@@ -487,8 +487,18 @@ export const SalesOrderDetail = () => {
   const stableDocNo = docNo ?? '';
   const handleHeaderSave = useCallback(
     (patch: Record<string, unknown>, cb?: { onSuccess?: () => void; onError?: (msg: string) => void }) => {
+      /* verified-save (Wei Siang 2026-06-08): confirm the customer-identity
+         fields actually persisted, so a stale-cache overwrite can't silently
+         discard the edit (BUG-2026-06-07-002 #5). Only verbatim-stored, readback-
+         present fields are checked (phone is E.164-normalised on store, so it's
+         excluded to avoid a false "didn't stick"). */
+      const VERIFY: Record<string, string> = {
+        debtorName: 'debtor_name', debtorCode: 'debtor_code', agent: 'agent', ref: 'ref',
+      };
+      const __verify: Record<string, unknown> = {};
+      for (const [k, col] of Object.entries(VERIFY)) if (k in patch) __verify[col] = patch[k];
       updateHeader.mutate(
-        { docNo: stableDocNo, ...patch },
+        { docNo: stableDocNo, ...patch, ...(Object.keys(__verify).length ? { __verify } : {}) },
         {
           onSuccess: () => cb?.onSuccess?.(),
           onError:   (e) => cb?.onError?.(e instanceof Error ? e.message : String(e)),

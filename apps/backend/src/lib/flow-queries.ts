@@ -8,6 +8,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { authedFetch } from './authed-fetch';
 import { supabase } from './supabase';
+import { verifiedSave, readbackGet } from './verified-save';
 
 // Direct multipart upload (useUploadSoItemPhoto) needs the raw token + URL —
 // authedFetch is JSON-only, so these stay for that one FormData POST.
@@ -338,10 +339,41 @@ export const useRecomputeSoAllocation = () => {
 export const useUpdateMfgSalesOrderHeader = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ docNo, ...body }: { docNo: string } & Record<string, unknown>) =>
-      authedFetch<{ ok: boolean }>(`/mfg-sales-orders/${docNo}`, {
+    // Pass `__verify` (a snake_case column → expected-value map) to run a
+    // verified save: PATCH, then read the header back (cache-bypassing) and
+    // confirm those fields actually persisted before reporting success. Used by
+    // the Customer card, which had a stale-cache overwrite class that silently
+    // discarded edits (BUG-2026-06-07-002 #5). Callers that omit __verify keep
+    // the plain PATCH behaviour unchanged.
+    mutationFn: async ({ docNo, __verify, ...body }: { docNo: string; __verify?: Record<string, unknown> } & Record<string, unknown>) => {
+      if (__verify && Object.keys(__verify).length > 0) {
+        const result = await verifiedSave<{ salesOrder: Record<string, unknown> }>({
+          endpoint: `/mfg-sales-orders/${docNo}`,
+          method: 'PATCH',
+          body,
+          readback: () => readbackGet<{ salesOrder: Record<string, unknown> }>(`/mfg-sales-orders/${docNo}`),
+          expect: __verify,
+          accessor: (d, f) => d?.salesOrder?.[f],
+        });
+        if (!result.ok) {
+          if (result.reason === 'mismatch') {
+            throw new Error(
+              `Saved, but it didn't stick — ${result.diffs
+                .map((d) => `${d.field.replace(/_/g, ' ')} still shows "${d.actual ?? ''}"`)
+                .join('; ')}. Please re-enter and try again.`,
+            );
+          }
+          if (result.reason === 'http') {
+            throw new Error(`Save was rejected (HTTP ${result.status})${result.body ? `: ${result.body.slice(0, 160)}` : ''}.`);
+          }
+          throw new Error(`Save could not be confirmed (${result.details}). Please try again.`);
+        }
+        return { ok: true as const };
+      }
+      return authedFetch<{ ok: boolean }>(`/mfg-sales-orders/${docNo}`, {
         method: 'PATCH', body: JSON.stringify(body),
-      }),
+      });
+    },
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
