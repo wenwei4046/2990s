@@ -21,6 +21,8 @@
 // No DB calls — caller pre-loads the model row via `loadModelForCode` so
 // tests can hit this without Supabase. ----------------------------------------
 
+import { normalizeCompartmentCode } from '@2990s/shared/sofa-build';
+
 export type AllowedOptionsLite = {
   sizes?:                 string[] | null;
   compartments?:          string[] | null;
@@ -62,6 +64,12 @@ export type VariantsLite = {
   gap?:           string | null;
   seatHeight?:    string | null;
   sofaLegHeight?: string | null;
+  /** SOFA multi-module build layout. When present the line's `itemCode` is only
+   *  the catalog ANCHOR SKU (e.g. TELLUC-1S) — the real built modules live here
+   *  and the server later splits them into per-module SO lines. The compartment
+   *  gate validates THESE, not the anchor's own suffix. Each entry is a cell
+   *  carrying a `moduleId` (`'2A(LHF)'`); other geometry keys (x/y/rot) ignored. */
+  cells?:         Array<{ moduleId?: string | null } | unknown> | null;
   specials?:      string[] | string | null;
   special?:       string[] | string | null;
   /** The chosen fabric colour code — fabricCode is the canonical field; colourId
@@ -127,19 +135,48 @@ export function checkAllowedOptions(
     };
   }
 
-  // SOFA — compartment is encoded in the SKU code suffix (commander's
-  // sofaCodeFormat = '{model_code}-{compartment}'). Empty / no-dash codes
-  // are skipped (orphan SKU, no compartment).
+  // SOFA — compartment validation.
+  //
+  // A POS sofa is sent as ONE line whose `itemCode` is only the catalog ANCHOR
+  // SKU (the Model's representative product, e.g. TELLUC-1S) — the ACTUAL build
+  // lives in `variants.cells[]`, which the server later splits into per-module
+  // SO lines ({MODEL}-{moduleId}). So when cells are present we must validate
+  // THOSE module codes against the pool, NOT the anchor's own suffix: the anchor
+  // can be a compartment the Model doesn't offer standalone (Telluc's anchor is
+  // 1S, but Telluc only allows 2A/L), which wrongly blocked EVERY Telluc 2A+L
+  // build with `compartment "1S"` even though the customer never picked 1S
+  // (Loo, 2026-06-08). Cells absent (legacy / hand-keyed single-SKU line) →
+  // fall back to the anchor suffix check (commander's sofaCodeFormat
+  // '{model_code}-{compartment}'; empty / no-dash codes are skipped).
   if (product.category === 'SOFA' && hasRestriction(opts.compartments)) {
-    const dashAt = product.code.indexOf('-');
-    const compartment = dashAt > 0 ? product.code.slice(dashAt + 1).trim() : '';
-    if (compartment && !opts.compartments.includes(compartment)) {
-      return {
-        error: 'variant_not_allowed',
-        field: 'compartment',
-        value: compartment,
-        allowed: opts.compartments,
-      };
+    const cells = Array.isArray((variants ?? {})?.cells) ? (variants ?? {})!.cells! : null;
+    if (cells && cells.length > 0) {
+      for (const raw of cells) {
+        const moduleId = raw && typeof raw === 'object'
+          ? String((raw as Record<string, unknown>).moduleId ?? '').trim()
+          : '';
+        if (!moduleId) continue;
+        const code = normalizeCompartmentCode(moduleId);
+        if (code && !opts.compartments.includes(code)) {
+          return {
+            error: 'variant_not_allowed',
+            field: 'compartment',
+            value: code,
+            allowed: opts.compartments,
+          };
+        }
+      }
+    } else {
+      const dashAt = product.code.indexOf('-');
+      const compartment = dashAt > 0 ? product.code.slice(dashAt + 1).trim() : '';
+      if (compartment && !opts.compartments.includes(compartment)) {
+        return {
+          error: 'variant_not_allowed',
+          field: 'compartment',
+          value: compartment,
+          allowed: opts.compartments,
+        };
+      }
     }
   }
 
