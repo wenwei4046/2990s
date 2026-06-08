@@ -254,6 +254,9 @@ interface CustomBuilderProps {
    *  it only appears in Quick Pick for this exact sofa Model. Empty/absent
    *  = wildcard (shows for all models). */
   baseModel?: string;
+  /** product_models.id of this sofa Model — snapshotted onto each built line
+   *  so the handover can resolve a special delivery fee / PWP eligibility. */
+  modelId?: string | null;
   /** Sofa leg-height (Loo 2026-06-03): the parent owns the state so the SAME
    *  picker shows in Quick Pick + Customize. `legBlock` is rendered in this
    *  rail; `legHeight`/`legSurchargeRm` feed each split group's snapshot + total. */
@@ -293,7 +296,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, legBlock, legHeight = null, legSurchargeRm = 0, legRequired = false, remarkBlock, remark = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [] }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, legBlock, legHeight = null, legSurchargeRm = 0, legRequired = false, remarkBlock, remark = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [] }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -893,6 +896,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         kind: 'sofa',
         productId,
         productName,
+        ...(modelId ? { modelId } : {}),
         cells: groupCells,
         depth,
         seatUpgradeLabel: pricing.seatUpgradeLabel ?? null,

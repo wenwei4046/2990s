@@ -1378,6 +1378,7 @@ export const Configurator = () => {
       kind: 'sofa',
       productId: p.id,
       productName: p.name,
+      modelId: (p as { model_id?: string | null }).model_id ?? null,
       bundleId: pickedSofaRow.bundle.id,
       depth: activeDepth,
       // Snapshot the Model's upgrade so the invoice can show an auto-included
@@ -1426,6 +1427,7 @@ export const Configurator = () => {
       kind: 'sofa',
       productId: p.id,
       productName: p.name,
+      modelId: (p as { model_id?: string | null }).model_id ?? null,
       cells,
       depth: activeDepth,
       seatUpgradeLabel: p.seat_upgrade_label ?? null,
@@ -1804,6 +1806,7 @@ export const Configurator = () => {
             initialFabric={isEditing ? fabricSel : null}
             modelCustomizer={modelCustomizerForDepth}
             baseModel={p.base_model ?? undefined}
+            modelId={(p as { model_id?: string | null }).model_id ?? null}
             legBlock={sofaLegBlock}
             legHeight={sofaLegValue}
             legSurchargeRm={sofaLegSurcharge}

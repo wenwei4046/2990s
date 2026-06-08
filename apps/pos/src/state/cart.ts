@@ -11,6 +11,12 @@ export interface SofaConfigSnapshot {
   kind: 'sofa';
   productId: string;
   productName: string;
+  /** product_models.id of the base sofa Model. Lets the handover resolve a
+   *  special delivery fee (model_special_delivery_fees) the SAME way the server
+   *  does — the productId→catalog fallback misses custom sofa builds, which is
+   *  how a Booqit cross-category followup showed RM125 on the tablet but the
+   *  server booked RM250 (Loo 2026-06-09). Also keeps PWP model matching honest. */
+  modelId?: string | null;
   bundleId?: string;     // set when Quick-Pick
   cells?: Cell[];        // set when Custom-build
   depth?: Depth;
