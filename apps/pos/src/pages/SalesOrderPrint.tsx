@@ -95,9 +95,28 @@ const MetaRow = ({ order }: { order: PrintableSO }) => {
         <div className={styles.metaValue}>
           {order.deliveryDate ? fmtIsoDate(order.deliveryDate) : 'To be confirmed'}
         </div>
-        <div className={styles.metaSub}>
-          Method: {order.paymentMethod ? paymentLabels[order.paymentMethod] ?? order.paymentMethod : '—'}
-        </div>
+        {/* Per-tender breakdown folded into this box (Loo 2026-06-09): method +
+            amount, one compact row each, no date. min-width:0 lets a long
+            method/approval code wrap instead of widening the box. Falls back to
+            the single declared method when no payments are recorded yet. */}
+        {order.payments.length > 0 ? (
+          <div className={styles.metaPayments}>
+            <div className={styles.metaPayCaption}>Payments received</div>
+            {order.payments.map((p) => (
+              <div key={p.id} className={styles.metaPayRow}>
+                <span className={styles.metaPayMethod}>
+                  {p.methodLabel}
+                  {p.approvalCode && <span className={styles.metaPayCode}> · {p.approvalCode}</span>}
+                </span>
+                <span className={styles.metaPayAmount}>{fmtMoney(p.amount)}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className={styles.metaSub}>
+            Method: {order.paymentMethod ? paymentLabels[order.paymentMethod] ?? order.paymentMethod : '—'}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -276,6 +276,59 @@
   line-height: 1.35;
 }
 
+/* ───── Per-tender payments, folded into the Delivery meta box ─────
+   Compact method + amount rows (no date). The method/approval-code span is
+   flex:1 with min-width:0 so a long label wraps INSIDE the box rather than
+   stretching it — the box keeps its grid width. */
+.metaPayments {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--line);
+}
+
+.metaPayCaption {
+  font-family: var(--font-button);
+  font-size: 7.5pt;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--c-burnt);
+  margin-bottom: 3px;
+}
+
+.metaPayRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.metaPayMethod {
+  flex: 1;
+  min-width: 0;          /* allow the label to wrap instead of widening the box */
+  font-size: 9pt;
+  color: #221F20;
+  line-height: 1.3;
+}
+
+.metaPayCode {
+  color: #6b6260;
+  font-family: var(--font-mono);
+  font-size: 7.5pt;
+  word-break: break-all;
+}
+
+.metaPayAmount {
+  flex: none;
+  white-space: nowrap;
+  font-family: var(--font-button);
+  font-weight: 700;
+  font-size: 9pt;
+  color: #221F20;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ───── After-items row: customer signature (LEFT) + totals (RIGHT) ───── */
 .afterItems {
   display: grid;
