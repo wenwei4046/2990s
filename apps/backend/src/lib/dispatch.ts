@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { humanApiError } from './authed-fetch';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
@@ -53,7 +54,7 @@ export async function patchDispatchPrep(orderId: string, payload: {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '<no body>');
-    throw new Error(`dispatch-prep failed (${res.status}): ${text}`);
+    throw new Error(humanApiError(res.status, text));
   }
 }
 
@@ -67,6 +68,6 @@ export async function patchOrderDo(orderId: string, doKey: string): Promise<void
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '<no body>');
-    throw new Error(`do PATCH failed (${res.status}): ${text}`);
+    throw new Error(humanApiError(res.status, text));
   }
 }

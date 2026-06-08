@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { humanApiError } from './authed-fetch';
 import type {
   SlipInitRequest,
   SlipInitResponse,
@@ -23,7 +24,7 @@ export async function fetchSlipUrl(orderId: string): Promise<SlipUrlResponse> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '<no body>');
-    throw new Error(`slip-url failed (${res.status}): ${text}`);
+    throw new Error(humanApiError(res.status, text));
   }
   return res.json() as Promise<SlipUrlResponse>;
 }
@@ -38,7 +39,7 @@ export async function fetchSoSlipUrl(docNo: string): Promise<SlipUrlResponse> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '<no body>');
-    throw new Error(`slip-url failed (${res.status}): ${text}`);
+    throw new Error(humanApiError(res.status, text));
   }
   return res.json() as Promise<SlipUrlResponse>;
 }
@@ -58,7 +59,7 @@ export async function fetchPaymentSlipUrl(
   );
   if (!res.ok) {
     const text = await res.text().catch(() => '<no body>');
-    throw new Error(`payment slip-url failed (${res.status}): ${text}`);
+    throw new Error(humanApiError(res.status, text));
   }
   return res.json() as Promise<SlipUrlResponse>;
 }
@@ -97,7 +98,7 @@ async function initSlipUpload(file: File): Promise<SlipInitResponse> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '<no body>');
-    throw new Error(`slip init failed (${res.status}): ${text}`);
+    throw new Error(humanApiError(res.status, text));
   }
   return res.json() as Promise<SlipInitResponse>;
 }
@@ -109,7 +110,7 @@ async function putToR2(putUrl: string, file: File): Promise<void> {
     body: file,
   });
   if (!res.ok) {
-    throw new Error(`R2 PUT failed (${res.status})`);
+    throw new Error(humanApiError(res.status, ''));
   }
 }
 
@@ -122,7 +123,7 @@ async function confirmUpload(sessionId: string): Promise<SlipConfirmResponse> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '<no body>');
-    throw new Error(`slip confirm failed (${res.status}): ${text}`);
+    throw new Error(humanApiError(res.status, text));
   }
   return res.json() as Promise<SlipConfirmResponse>;
 }
@@ -178,6 +179,6 @@ export async function patchOrderLane(orderId: string, lane: string): Promise<voi
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '<no body>');
-    throw new Error(`lane update failed (${res.status}): ${text}`);
+    throw new Error(humanApiError(res.status, text));
   }
 }

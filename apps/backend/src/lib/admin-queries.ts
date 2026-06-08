@@ -11,6 +11,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
+import { humanApiError } from './authed-fetch';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
@@ -155,7 +156,7 @@ export const useCreateStaff = () => {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '<no body>');
-        throw new Error(`createStaff failed (${res.status}): ${text}`);
+        throw new Error(humanApiError(res.status, text));
       }
       const json = (await res.json()) as {
         staff: {
@@ -208,7 +209,7 @@ export const useSetStaffPin = () => {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '<no body>');
-        throw new Error(`setStaffPin failed (${res.status}): ${text}`);
+        throw new Error(humanApiError(res.status, text));
       }
     },
     onSuccess: () => {
@@ -233,7 +234,7 @@ export const useResetTestData = () => {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '<no body>');
-        throw new Error(`resetTestData failed (${res.status}): ${text}`);
+        throw new Error(humanApiError(res.status, text));
       }
     },
     onSuccess: () => {
@@ -260,7 +261,7 @@ export const useResetTestDataKeepSo = () => {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '<no body>');
-        throw new Error(`resetTestDataKeepSo failed (${res.status}): ${text}`);
+        throw new Error(humanApiError(res.status, text));
       }
     },
     onSuccess: () => {

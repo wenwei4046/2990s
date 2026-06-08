@@ -89,8 +89,12 @@ interface ErrorFallbackProps {
 
 export const ErrorFallback = ({ error, errorInfo, onReset }: ErrorFallbackProps) => {
   const isDev = import.meta.env?.DEV ?? false;
-  const msg =
-    error?.message ?? 'An unexpected error occurred. You can try again or head back to the dashboard.';
+  // Operators must never see raw code/crash text (Wei Siang 2026-06-08). In
+  // production always show a single plain sentence; in dev show the real error
+  // message so developers can still diagnose.
+  const msg = isDev
+    ? (error?.message ?? 'An unexpected error occurred.')
+    : 'Something went wrong on this page. Please go back and try again — if it keeps happening, let IT know.';
 
   return (
     <div className={styles.wrap}>

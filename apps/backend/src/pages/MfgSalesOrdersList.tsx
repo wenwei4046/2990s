@@ -44,6 +44,7 @@ import {
 import { useStaff } from '../lib/admin-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import { supabase } from '../lib/supabase';
+import { humanApiError } from '../lib/authed-fetch';
 import { BrandingPill, badgeFor } from '../lib/category-badges';
 import { soStatusDisplay, type DeliveryState, type SoLifecycle } from '../lib/so-status';
 import styles from './MfgSalesOrdersList.module.css';
@@ -70,7 +71,7 @@ const useSoPaymentsForDrilldown = (docNo: string | null) => useQuery({
     const res = await fetch(`${import.meta.env.VITE_API_URL}/mfg-sales-orders/${docNo}/payments`, {
       headers: { authorization: `Bearer ${token}` },
     });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (!res.ok) throw new Error(humanApiError(res.status, await res.text().catch(() => '')));
     return (await res.json()) as { payments: SoPaymentRow[] };
   },
   enabled: Boolean(docNo),

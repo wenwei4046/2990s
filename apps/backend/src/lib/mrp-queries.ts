@@ -3,7 +3,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
-import { authedFetch } from './authed-fetch';
+import { authedFetch, humanApiError } from './authed-fetch';
 
 const API_URL = import.meta.env.VITE_API_URL;
 
@@ -141,7 +141,7 @@ export function useUpdateCategoryLeadTime() {
       if (!res.ok) {
         let detail = '';
         try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
-        throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+        throw new Error(humanApiError(res.status, detail));
       }
       return (await res.json()) as { ok: true; category: LeadCategory; leadDays: number };
     },

@@ -10,7 +10,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
-import { authedFetch } from './authed-fetch';
+import { authedFetch, humanApiError } from './authed-fetch';
 import { verifiedSave, readbackGet, friendlySaveMessage } from './verified-save';
 
 const API_URL = import.meta.env.VITE_API_URL;
@@ -797,7 +797,8 @@ export function useDeleteMaintenanceConfigRow() {
         },
       });
       if (!res.ok && res.status !== 204) {
-        throw new Error(`${res.status} ${res.statusText}`);
+        const body = await res.text().catch(() => '');
+        throw new Error(humanApiError(res.status, body));
       }
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['maintenance-config'] }),

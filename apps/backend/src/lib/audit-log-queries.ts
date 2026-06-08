@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from './supabase';
+import { humanApiError } from './authed-fetch';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
@@ -60,7 +61,7 @@ export const useAuditLog = (filters: AuditLogFilters) =>
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '<no body>');
-        throw new Error(`audit-log failed (${res.status}): ${text}`);
+        throw new Error(humanApiError(res.status, text));
       }
       return res.json() as Promise<AuditLogResponse>;
     },

@@ -6,7 +6,7 @@
 // Kept terse — each module has list/detail/create/status hooks.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { authedFetch } from './authed-fetch';
+import { authedFetch, humanApiError } from './authed-fetch';
 import { supabase } from './supabase';
 import { verifiedSave, readbackGet, friendlySaveMessage } from './verified-save';
 
@@ -595,7 +595,7 @@ export const useUploadSoItemPhoto = () => {
       if (!res.ok) {
         let detail = '';
         try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
-        throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+        throw new Error(humanApiError(res.status, detail));
       }
       return (await res.json()) as UploadSoItemPhotoResult;
     },

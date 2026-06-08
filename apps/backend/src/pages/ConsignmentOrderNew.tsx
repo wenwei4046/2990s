@@ -29,6 +29,7 @@ import {
   type DebtorSuggestion,
 } from '../lib/consignment-order-queries';
 import { supabase } from '../lib/supabase';
+import { humanApiError } from '../lib/authed-fetch';
 import { useStaff } from '../lib/admin-queries';
 import { useAuth } from '../lib/auth';
 import { useVenues } from '../lib/venues-queries';
@@ -354,7 +355,7 @@ export const ConsignmentOrderNew = () => {
       const res = await fetch(`${API_URL}/consignment-orders/${docNo}`, {
         headers: { authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      if (!res.ok) throw new Error(humanApiError(res.status, await res.text().catch(() => '')));
       const body = (await res.json()) as { items: Array<{ id: string; item_code: string }> };
       savedItems = body.items ?? [];
     } catch (e) {

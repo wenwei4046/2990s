@@ -79,10 +79,50 @@ export async function authedFetch<T>(path: string, init?: RequestInit): Promise<
   }
 
   if (!res.ok) {
-    let detail = '';
-    try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
-    throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+    let body = '';
+    try { body = await res.text(); } catch { /* ignore */ }
+    // Plain-language message for the operator (Wei Siang 2026-06-08: every error
+    // shown must be 白话文 — no HTTP codes, no raw JSON, no DB internals). The
+    // raw status/body are preserved on the error object for logging / Sentry.
+    const err = new Error(humanApiError(res.status, body)) as Error & { status?: number; body?: string };
+    err.status = res.status;
+    err.body = body;
+    throw err;
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** Build an operator-friendly message from an API failure. Surfaces the
+ *  server's own reason ONLY when it's already a plain sentence; otherwise maps
+ *  the HTTP status to plain words. Never leaks JSON / SQL / status codes. */
+const ERROR_CODE_MESSAGES: Record<string, string> = {
+  duplicate_code:   'That code is already in use. Please choose a different one.',
+  phone_required:   'A phone number is required.',
+  not_found:        'That item could no longer be found. Please refresh.',
+  forbidden:        "You don't have permission to do that.",
+  invalid_json:     'Something went wrong sending the request. Please try again.',
+};
+
+export function humanApiError(status: number, body: string): string {
+  try {
+    const j = JSON.parse(body) as { error?: unknown; reason?: unknown; message?: unknown };
+    // 1. Known error code → curated plain message.
+    if (typeof j.error === 'string') {
+      const mapped = ERROR_CODE_MESSAGES[j.error];
+      if (mapped) return mapped;
+    }
+    // 2. Server reason, but only if it's already a plain sentence (no internals).
+    const r = (typeof j.reason === 'string' ? j.reason : typeof j.message === 'string' ? j.message : '') as string;
+    if (r && r.length < 200 && !/violates|constraint|null value|column|relation|syntax|PGRST|\b\d{5}\b/i.test(r)) {
+      return r;
+    }
+  } catch { /* body wasn't JSON — fall through to the status map */ }
+  if (status === 401) return 'Your session has expired — please sign in again.';
+  if (status === 403) return "You don't have permission to do that.";
+  if (status === 404) return 'That item could no longer be found — it may have been changed or removed. Please refresh.';
+  if (status === 409) return 'That clashes with something already in the system. Please refresh and check.';
+  if (status === 400 || status === 422) return "Some of the details weren't accepted. Please check what you entered and try again.";
+  if (status >= 500) return 'The system hit a problem. Please try again — if it keeps happening, let IT know.';
+  return 'Something went wrong. Please try again.';
 }
