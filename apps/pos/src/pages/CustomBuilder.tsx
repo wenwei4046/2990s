@@ -393,10 +393,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   const spawnPos = useCallback((modId: string): { x: number; y: number } => {
     const m = findModule(modId);
     const fp = m ? moduleFootprint(m, 0, depth) : { w: 95, h: 95 };
-    const bb = cellsBbox(cells, depth);
-    if (!bb) return { x: roomW / 2 - fp.w / 2, y: roomH / 2 - fp.h / 2 };
-    return { x: Math.min(bb.x + bb.w, roomW - fp.w), y: bb.y };
-  }, [cells, depth, roomW, roomH]);
+    /* Loo 2026-06-09 — every tapped module drops at the EXACT center of the
+       room, regardless of what's already placed (previously the 2nd+ module
+       auto-rowed to the right of the existing bbox, drifting the sofa off
+       to one side). The operator then drags each piece into position. */
+    return { x: roomW / 2 - fp.w / 2, y: roomH / 2 - fp.h / 2 };
+  }, [depth, roomW, roomH]);
 
   const addCell = useCallback((modId: string) => {
     const pos = spawnPos(modId);
