@@ -2552,10 +2552,15 @@ mfgSalesOrders.post('/', async (c) => {
     const admin = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    const firstPass = oneShotReqs.map((r) => r.category === 'SOFA'
-      ? oneShotSofaCode(r.modelCode, r.compartment, remarkSlug(r.remarkText), 1)
-      : oneShotSimpleCode(r.baseSkuCode, remarkSlug(r.remarkText), 1));
-    const { data: existing } = await admin.from('mfg_products').select('code').in('code', firstPass);
+    // Probe a few collision suffixes (n=1..3) per request in ONE query so the
+    // code buildOneShotMints picks is free even if a prior order already minted
+    // the same remark on the same module (mfg_products.code is NOT uniquely
+    // constrained, so a plain .insert() can't ON CONFLICT — we must pre-resolve).
+    const candidate = (r: OneShotMintReq, n: number) => r.category === 'SOFA'
+      ? oneShotSofaCode(r.modelCode, r.compartment, remarkSlug(r.remarkText), n)
+      : oneShotSimpleCode(r.baseSkuCode, remarkSlug(r.remarkText), n);
+    const probe = oneShotReqs.flatMap((r) => [1, 2, 3].map((n) => candidate(r, n)));
+    const { data: existing } = await admin.from('mfg_products').select('code').in('code', probe);
     const taken = new Set((existing ?? []).map((x) => (x as { code: string }).code));
     const nowIso = new Date().toISOString();
     const idGen = () => {
@@ -2570,10 +2575,12 @@ mfgSalesOrders.post('/', async (c) => {
       // explicit NULL would trip a 23502 and silently drop every mint.
       cost_price_sen: r.cost_price_sen ?? 0,
     }));
+    // Codes are pre-resolved free against the probe above, so a plain batched
+    // insert won't collide in practice. Best-effort: any residual error (e.g. a
+    // 23505 from an extremely rare 3+-order same-remark clash, or a transient
+    // fault) is logged but never fails the SO — the line already references the
+    // code and the SKU can be re-created from SKU Master.
     const { error: skuErr } = await admin.from('mfg_products').insert(skuRows);
-    // 23505 = concurrent identical mint (idempotent — the row already exists with
-    // the same code). Other errors: log loudly (don't fail the SO — the line
-    // already references the code; the SKU can be re-created later).
     if (skuErr && skuErr.code !== '23505') {
       // eslint-disable-next-line no-console
       console.error(`[so-create] one-shot SKU mint failed for ${docNo}: ${skuErr.message}`);
