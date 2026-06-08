@@ -16,9 +16,11 @@
 // ----------------------------------------------------------------------------
 
 import { Hono, type Context } from 'hono';
+import { createClient } from '@supabase/supabase-js';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
 import { findSkuUsage } from '../lib/sku-usage';
+import { moduleCodeFromSku } from '@2990s/shared';
 import type { Env, Variables } from '../env';
 
 export const mfgProducts = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -503,6 +505,46 @@ mfgProducts.patch('/:id', async (c) => {
   }
 
   return c.json({ ok: true, changed: priceChanges.length });
+});
+
+// ── POST /:id/activate-one-shot ───────────────────────────────────────────────
+// Re-activate a one-shot SKU (minted from a remark + extra charge) so it is
+// selectable again in POS. Flips pos_active=true; for SOFA it also adds the
+// custom compartment code to the Model's allowed_options.compartments so the
+// configurator palette shows it (art/price auto-flow via the shared helpers).
+mfgProducts.post('/:id/activate-one-shot', async (c) => {
+  const gate = await requireRole(c, EDIT_ROLES);
+  if (!gate.ok) return gate.res;
+  const id = c.req.param('id');
+  const admin = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: sku, error: skuErr } = await admin
+    .from('mfg_products')
+    .select('id, code, category, base_model, model_id, one_shot')
+    .eq('id', id).maybeSingle();
+  if (skuErr) return c.json({ error: 'lookup_failed', reason: skuErr.message }, 500);
+  if (!sku || !(sku as { one_shot?: boolean }).one_shot) return c.json({ error: 'not_one_shot' }, 400);
+
+  const { error: upErr } = await admin.from('mfg_products').update({ pos_active: true }).eq('id', id);
+  if (upErr) return c.json({ error: 'activate_failed', reason: upErr.message }, 500);
+
+  const s = sku as { category: string; code: string; base_model: string | null; model_id: string | null };
+  if (s.category === 'SOFA' && s.model_id) {
+    const moduleCode = moduleCodeFromSku(s.code, s.base_model);
+    const { data: model } = await admin.from('product_models')
+      .select('allowed_options').eq('id', s.model_id).maybeSingle();
+    const opts = ((model as { allowed_options?: Record<string, unknown> } | null)?.allowed_options) ?? {};
+    const comps = Array.isArray((opts as { compartments?: unknown }).compartments)
+      ? ((opts as { compartments: unknown[] }).compartments).map(String) : [];
+    if (!comps.includes(moduleCode)) {
+      const next = { ...opts, compartments: [...comps, moduleCode] };
+      const { error: moErr } = await admin.from('product_models')
+        .update({ allowed_options: next }).eq('id', s.model_id);
+      if (moErr) return c.json({ error: 'allowed_options_update_failed', reason: moErr.message }, 500);
+    }
+  }
+  return c.json({ ok: true });
 });
 
 // ── GET /:id/price-history ────────────────────────────────────────────
