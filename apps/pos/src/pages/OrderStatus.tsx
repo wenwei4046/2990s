@@ -760,8 +760,13 @@ const OrderDetail = ({ order, onClose }: {
 
   // Local edit state. Resync ONLY when switching orders, not on background
   // refetches of the same order — otherwise typing would get blown away.
-  const [edited, setEdited] = useState<MyOrderRow>(order);
-  useEffect(() => { setEdited(order); }, [order.id]);
+  const [edited, setEdited] = useState<MyOrderRow>(() => ({ ...order, approvalCode: null }));
+  /* Resync on order switch. approvalCode is blanked every time: it is NOT a
+     header field (absent from `dirty` + buildPatch) — it only feeds the NEXT
+     payment's approval code. Seeding it from order.approval_code made a new
+     payment silently inherit the PREVIOUS payment's terminal ref (Loo
+     2026-06-09); the post-record onSuccess clears it for the same reason. */
+  useEffect(() => { setEdited({ ...order, approvalCode: null }); }, [order.id]);
 
   // Payment recorded this session (added on top of order.paid).
   const [paymentAdd, setPaymentAdd] = useState<string>('');
@@ -829,12 +834,12 @@ const OrderDetail = ({ order, onClose }: {
   const set = <K extends keyof MyOrderRow>(k: K, v: MyOrderRow[K]) =>
     setEdited((prev) => ({ ...prev, [k]: v }));
 
-  // Live ledger paid + a preview of the amount currently typed in the
-  // "Record payment" field (the POST hasn't fired yet, so show it optimistically
-  // on the progress bar). Once recorded + refetched, paidSoFar absorbs it.
   const additionalPaid = Math.max(0, Number(paymentAdd) || 0);
-  const effectivePaid = Math.min(order.total, paidSoFar + additionalPaid);
-  const paidPct = order.total > 0 ? Math.min(100, Math.round((effectivePaid / order.total) * 100)) : 0;
+  /* Progress reflects the RECORDED ledger total only (paidSoFar). We no longer
+     fold the typed amount into the bar: the amount field now autofills the
+     outstanding balance (Loo 2026-06-09), so an optimistic preview would always
+     read 100% before anything is recorded — and disagree with the order card. */
+  const paidPct = order.total > 0 ? Math.min(100, Math.round((paidSoFar / order.total) * 100)) : 0;
 
   const customerInfoOk = !!(edited.customerName.trim() && edited.customerEmail?.trim());
   const addressOk = !!(edited.customerAddress?.trim() && edited.customerPostcode?.trim());
@@ -1214,7 +1219,7 @@ const OrderDetail = ({ order, onClose }: {
             <div className={styles.detailKV}>
               <span>Paid so far</span>
               <span>
-                <span className={styles.detailItemPriceUnit}>RM</span>{fmtMoney(effectivePaid)}
+                <span className={styles.detailItemPriceUnit}>RM</span>{fmtMoney(paidSoFar)}
                 {' '}<em>/ {fmtMoney(order.total)}</em>
               </span>
             </div>
