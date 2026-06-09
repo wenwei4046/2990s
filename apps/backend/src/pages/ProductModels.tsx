@@ -834,6 +834,12 @@ export function NewModelDialog({
         className={`${styles.modal} ${styles.modalCompact}`}
         onClick={(e) => e.stopPropagation()}
         onSubmit={submit}
+        // noValidate: let THIS dialog's own validation (submit() → setBatchError)
+        // surface a clear in-dialog message. Without it, native `required` made the
+        // browser silently refuse to submit (no event, no error) when Model Code /
+        // Name were left blank — the operator saw the placeholder "5530" and thought
+        // the field was filled, clicked Create, and nothing happened (Wei Siang 2026-06-09).
+        noValidate
         style={{ maxHeight: '90vh', overflowY: 'auto' }}
       >
         {/* PR — Commander 2026-05-26: "做成长方形、大一点". Title + category
@@ -1065,9 +1071,9 @@ function ModelRowCard({
           <span>Model code *</span>
           <input type="text" value={row.modelCode} onChange={(e) => onChange({ modelCode: e.target.value })}
             placeholder={
-              category === 'SOFA'     ? '5530' :
-              category === 'BEDFRAME' ? '1003' :
-              'AKKA-FIRM'
+              category === 'SOFA'     ? 'e.g. 5530' :
+              category === 'BEDFRAME' ? 'e.g. 1003' :
+              'e.g. AKKA-FIRM'
             }
             required />
         </label>
@@ -1076,9 +1082,9 @@ function ModelRowCard({
           <span>Name *</span>
           <input type="text" value={row.name} onChange={(e) => onChange({ name: e.target.value })}
             placeholder={
-              category === 'SOFA'     ? '5530' :
-              category === 'BEDFRAME' ? 'HILTON' :
-              'AKKA-FIRM'
+              category === 'SOFA'     ? 'e.g. 5530' :
+              category === 'BEDFRAME' ? 'e.g. HILTON' :
+              'e.g. AKKA-FIRM'
             }
             required />
         </label>
