@@ -163,6 +163,12 @@ mfgProducts.post('/batch-import', async (c) => {
   let upserted = 0;
   const failures: Array<{ code: string; reason: string }> = [];
 
+  // Data-loss-safe upsert (Wei Siang). Only fields PRESENT and non-empty in
+  // the body row are written. On an ON CONFLICT update that means a column the
+  // operator left blank in the CSV is NOT touched — so re-importing an edited
+  // export can never zero a price or wipe a description. On a fresh INSERT,
+  // the omitted columns fall back to their DB defaults.
+  const hasVal = (v: unknown): boolean => v != null && v !== '';
   for (const r of list) {
     const code = String(r.code ?? '').trim();
     const name = String(r.name ?? '').trim();
@@ -171,27 +177,42 @@ mfgProducts.post('/batch-import', async (c) => {
       failures.push({ code, reason: 'missing code/name or invalid category' });
       continue;
     }
-    const rand = (typeof crypto !== 'undefined' && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const id = `mfg-${rand.replace(/-/g, '').slice(0, 12)}`;
-    const row: Record<string, unknown> = {
-      id,
-      code,
-      name,
-      category,
-      status: String(r.status ?? 'ACTIVE'),
-      description: (r.description as string) ?? null,
-      base_model: (r.base_model as string) ?? null,
-      size_label: (r.size_label as string) ?? null,
-      base_price_sen: r.base_price_sen == null || r.base_price_sen === '' ? null : Number(r.base_price_sen),
-      price1_sen: r.price1_sen == null || r.price1_sen === '' ? null : Number(r.price1_sen),
-      cost_price_sen: r.cost_price_sen == null || r.cost_price_sen === '' ? 0 : Number(r.cost_price_sen),
-      unit_m3_milli: r.unit_m3_milli == null || r.unit_m3_milli === '' ? 0 : Number(r.unit_m3_milli),
-      branding: (r.branding as string) ?? null,
-      /* PR #104 — see POST / above. */
-    };
-    const { error } = await supabase.from('mfg_products').upsert(row, { onConflict: 'code' });
+    const row: Record<string, unknown> = { code, name, category };
+
+    // String fields — include only when the cell actually has a value.
+    if (hasVal(r.status))      row.status = String(r.status);
+    if (hasVal(r.description)) row.description = String(r.description);
+    if (hasVal(r.base_model))  row.base_model = String(r.base_model);
+    if (hasVal(r.size_label))  row.size_label = String(r.size_label);
+    if (hasVal(r.branding))    row.branding = String(r.branding);
+
+    // Numeric (sen / milli) fields — include only when present. No ?? 0
+    // default, so a blank cell leaves the stored number untouched on update.
+    if (hasVal(r.base_price_sen)) row.base_price_sen = Number(r.base_price_sen);
+    if (hasVal(r.price1_sen))     row.price1_sen = Number(r.price1_sen);
+    if (hasVal(r.unit_m3_milli))  row.unit_m3_milli = Number(r.unit_m3_milli);
+
+    // Sofa per (size × tier) prices — JSONB array. Accept either camelCase
+    // (frontend import) or snake_case. Only written when non-empty.
+    const seat = (r.seatHeightPrices ?? r.seat_height_prices) as unknown;
+    if (Array.isArray(seat) && seat.length > 0) {
+      row.seat_height_prices = seat;
+    }
+
+    // Never rewrite the PK id on re-import: UPDATE an existing SKU by code (id +
+    // any omitted column left untouched), INSERT a brand-new SKU with a fresh id.
+    const { data: existing } = await supabase.from('mfg_products')
+      .select('id').eq('code', code).maybeSingle();
+    let error;
+    if (existing) {
+      ({ error } = await supabase.from('mfg_products').update(row).eq('code', code));
+    } else {
+      const rand = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const id = `mfg-${rand.replace(/-/g, '').slice(0, 12)}`;
+      ({ error } = await supabase.from('mfg_products').insert({ ...row, id }));
+    }
     if (error) {
       failures.push({ code, reason: error.message });
     } else {

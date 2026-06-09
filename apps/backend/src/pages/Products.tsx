@@ -44,6 +44,7 @@ import {
   useMfgProducts,
   useUpdateMfgProductPrices,
   useCreateMfgProduct,
+  useBatchImportMfgProducts,
   useDeleteMfgProduct,
   useMaintenanceConfig,
   useMaintenanceConfigHistory,
@@ -54,6 +55,8 @@ import {
   useDeleteSofaCompartmentPhoto,
   type MfgCategory,
   type MfgProductRow,
+  type BatchImportRow,
+  type BatchImportResult,
   type MaintenanceConfig,
   type PricedOption,
   type SeatHeightPrice,
@@ -441,7 +444,7 @@ const SkuMasterTab = () => {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <Button variant="ghost" size="md" onClick={() => exportSkusCsv(rows)}>
+          <Button variant="ghost" size="md" onClick={() => exportSkusCsv(rows, sofaSizes)}>
             <Download {...ICON_PROPS} />
             <span>Export SKUs</span>
           </Button>
@@ -635,7 +638,7 @@ const SkuMasterTab = () => {
         />
       )}
       {suppliersRow && <ProductSuppliersDrawer row={suppliersRow} onClose={() => setSuppliersRow(null)} />}
-      {importing && <ImportSkusDialog onClose={() => setImporting(false)} />}
+      {importing && <ImportSkusDialog sofaSizes={sofaSizes} onClose={() => setImporting(false)} />}
     </>
   );
 };
@@ -3633,25 +3636,93 @@ const MaintenanceHistoryDialog = ({
 // dropping them from the CSV export so commander's spreadsheet stays focused.
 // Schema columns + API field writers also stripped (apps/api/src/routes/
 // mfg-products.ts) so future imports don't resurrect the data.
-const CSV_COLUMNS = [
-  'code', 'name', 'category', 'description', 'base_model', 'size_label',
-  'base_price_sen', 'price1_sen', 'cost_price_sen',
-  'unit_m3_milli',
-  'status', 'branding',
-] as const;
+//
+// Sofa per-tier export (Wei Siang) — a sofa carries a price per (size × tier).
+// The CSV is LONG form: one row per sofa tier (PRICE_1 / PRICE_2 / PRICE_3),
+// with one money column per size. Non-sofa rows leave the size columns blank
+// and carry base_price_sen / price1_sen instead. The old cost_price_sen column
+// is dropped entirely — it was the zeroing trap on round-trip.
 
-function exportSkusCsv(rows: MfgProductRow[]): void {
-  const lines: string[] = [CSV_COLUMNS.join(',')];
+/** All three sofa price tiers, in display order. A missing tier on a stored
+ *  entry means legacy data → counted as PRICE_2. */
+const SOFA_TIERS: SofaPriceTier[] = ['PRICE_1', 'PRICE_2', 'PRICE_3'];
+
+/** Normalize a stored seat height to its bare size token so '28"' matches '28'. */
+const normalizeHeight = (h: unknown): string => String(h ?? '').replace('"', '').trim();
+
+/** Fixed leading + trailing columns. The per-size price columns are spliced
+ *  in between, derived from the live sofaSizes config at export time. */
+const CSV_HEAD_COLS = ['code', 'name', 'category', 'description', 'base_model', 'size_label', 'price_tier'] as const;
+const CSV_TAIL_COLS = ['base_price_sen', 'price1_sen', 'unit_m3_milli', 'status', 'branding'] as const;
+
+const priceColForSize = (size: string) => `price_${size}_sen`;
+
+function exportSkusCsv(rows: MfgProductRow[], sofaSizes: string[]): void {
+  const sizeCols = sofaSizes.map(priceColForSize);
+  const columns = [...CSV_HEAD_COLS, ...sizeCols, ...CSV_TAIL_COLS];
+
+  // RFC4180: quote if contains comma, quote, or newline.
+  const cell = (v: unknown): string => {
+    if (v == null) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const lines: string[] = [columns.join(',')];
+
   for (const r of rows) {
-    const cells = CSV_COLUMNS.map((col) => {
-      const v = (r as unknown as Record<string, unknown>)[col];
-      if (v == null) return '';
-      const s = String(v);
-      // RFC4180: quote if contains comma, quote, or newline
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    });
-    lines.push(cells.join(','));
+    const common: Record<string, unknown> = {
+      code:        r.code,
+      name:        r.name,
+      category:    r.category,
+      description: r.description,
+      base_model:  r.base_model,
+      size_label:  r.size_label,
+      unit_m3_milli: r.unit_m3_milli,
+      status:      r.status,
+      branding:    r.branding,
+    };
+
+    const emit = (extra: Record<string, unknown>) => {
+      const merged = { ...common, ...extra };
+      lines.push(columns.map((c) => cell(merged[c])).join(','));
+    };
+
+    if (r.category === 'SOFA') {
+      const entries = r.seat_height_prices ?? [];
+      // Group entries by effective tier (legacy/no-tier → PRICE_2).
+      const byTier = new Map<SofaPriceTier, Map<string, number>>();
+      for (const e of entries) {
+        const t = e.tier ?? 'PRICE_2';
+        let m = byTier.get(t);
+        if (!m) { m = new Map(); byTier.set(t, m); }
+        m.set(normalizeHeight(e.height), e.priceSen);
+      }
+      const tiersWithData = SOFA_TIERS.filter((t) => (byTier.get(t)?.size ?? 0) > 0);
+      if (tiersWithData.length === 0) {
+        // Sofa with no prices yet — still emit one row so the SKU appears.
+        emit({ price_tier: '' });
+      } else {
+        for (const t of tiersWithData) {
+          const m = byTier.get(t)!;
+          const sizeCells: Record<string, unknown> = {};
+          for (const size of sofaSizes) {
+            const p = m.get(normalizeHeight(size));
+            sizeCells[priceColForSize(size)] = p == null ? '' : p;
+          }
+          emit({ price_tier: t, ...sizeCells });
+        }
+      }
+    } else {
+      // Bedframe / mattress / accessory / service — flat base + price1.
+      emit({
+        price_tier:     '',
+        base_price_sen: r.base_price_sen ?? '',
+        price1_sen:     r.price1_sen ?? '',
+      });
+    }
   }
+
   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -3661,40 +3732,212 @@ function exportSkusCsv(rows: MfgProductRow[]): void {
   URL.revokeObjectURL(url);
 }
 
-const ImportSkusDialog = ({ onClose }: { onClose: () => void }) => (
-  <div className={styles.drawerBackdrop} onClick={onClose}>
-    <div
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        background: 'var(--c-cream)',
-        border: '1px solid var(--line-strong)',
-        borderRadius: 'var(--radius-xl)',
-        boxShadow: 'var(--shadow-3)',
-        width: 'min(560px, 95vw)',
-        padding: 'var(--space-5)',
-      }}
-    >
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
-        <h2 className={styles.drawerTitle}>Import SKUs</h2>
-        <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON_PROPS} /></button>
-      </header>
-      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
-        CSV import wires through the new POST /mfg-products endpoint one row at a time.
-        For bulk seeding (200+ rows at once) keep using the SQL seed file —
-        the row-by-row path here is meant for &lt;50 edits.
-      </p>
-      <input type="file" accept=".csv" style={{ marginTop: 'var(--space-3)' }}
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (!f) return;
-          alert(`CSV upload received: ${f.name} (${f.size} bytes). Server-side batch import endpoint TODO — for now use seed SQL.`);
-        }} />
-      <footer style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-4)' }}>
-        <Button variant="ghost" size="md" onClick={onClose}>Close</Button>
-      </footer>
+/* ─── Round-trip CSV parser (RFC4180) for the SKU import ───────────────────
+ * Generic header-keyed parser: returns one plain object per data row, keyed by
+ * the exact header text (lower-cased, trimmed). Handles quoted fields with
+ * embedded commas, quotes ("" escape), and CR/LF inside quotes. Strips a
+ * leading UTF-8 BOM so a file saved from Excel parses cleanly. (fabric-csv's
+ * parseCsv is fabric-specific — it requires a fabric_code column and remaps to
+ * fabric apiKeys — so we keep a small local parser here.) */
+function parseSkuCsv(text: string): Array<Record<string, string>> {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const grid: string[][] = [];
+  let row: string[] = [];
+  let cellStr = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { cellStr += '"'; i++; continue; }
+        inQuotes = false;
+      } else {
+        cellStr += ch;
+      }
+      continue;
+    }
+    if (ch === '"' && cellStr === '') { inQuotes = true; continue; }
+    if (ch === ',') { row.push(cellStr); cellStr = ''; continue; }
+    if (ch === '\r') continue;
+    if (ch === '\n') { row.push(cellStr); grid.push(row); row = []; cellStr = ''; continue; }
+    cellStr += ch;
+  }
+  if (cellStr !== '' || row.length > 0) { row.push(cellStr); grid.push(row); }
+
+  if (grid.length < 1) return [];
+  const header = (grid[0] ?? []).map((h) => h.trim().toLowerCase());
+  const out: Array<Record<string, string>> = [];
+  for (let r = 1; r < grid.length; r++) {
+    const cells = grid[r];
+    if (!cells || cells.every((c) => c.trim() === '')) continue;
+    const obj: Record<string, string> = {};
+    for (let c = 0; c < header.length; c++) {
+      const key = header[c];
+      if (!key) continue;
+      obj[key] = (cells[c] ?? '').trim();
+    }
+    out.push(obj);
+  }
+  return out;
+}
+
+const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose: () => void }) => {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<BatchImportResult | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const batchImport = useBatchImportMfgProducts();
+
+  const handleFile = async (file: File) => {
+    setBusy(true);
+    setResult(null);
+    setErrorMsg(null);
+    try {
+      const text = await file.text();
+      const parsed = parseSkuCsv(text);
+      if (parsed.length === 0) {
+        setErrorMsg('That file had no rows. Export a copy first, edit it, then import the same file.');
+        setBusy(false);
+        return;
+      }
+
+      // Group rows by code — a sofa with PRICE_1 / PRICE_2 / PRICE_3 rows
+      // becomes ONE product carrying all its size × tier prices.
+      const byCode = new Map<string, Array<Record<string, string>>>();
+      for (const p of parsed) {
+        const code = (p.code ?? '').trim();
+        if (!code) continue;
+        const list = byCode.get(code);
+        if (list) list.push(p); else byCode.set(code, [p]);
+      }
+
+      const rows: BatchImportRow[] = [];
+      for (const [code, group] of byCode) {
+        const first = group[0];
+        if (!first) continue;
+        // A field is only carried when its cell is non-empty, so a blank cell
+        // never overwrites existing data on the SKU.
+        const has = (v: string | undefined) => v != null && v !== '';
+        const out: BatchImportRow = {
+          code,
+          name:     first.name ?? '',
+          category: first.category ?? '',
+        };
+        if (has(first.description)) out.description = first.description;
+        if (has(first.base_model)) out.base_model = first.base_model;
+        if (has(first.size_label)) out.size_label = first.size_label;
+        if (has(first.status))     out.status = first.status;
+        if (has(first.branding))   out.branding = first.branding;
+
+        // base_price_sen / price1_sen — take the first row that filled them.
+        const baseRow = group.find((g) => has(g.base_price_sen));
+        if (baseRow) out.base_price_sen = Number(baseRow.base_price_sen);
+        const p1Row = group.find((g) => has(g.price1_sen));
+        if (p1Row) out.price1_sen = Number(p1Row.price1_sen);
+        const m3Row = group.find((g) => has(g.unit_m3_milli));
+        if (m3Row) out.unit_m3_milli = Number(m3Row.unit_m3_milli);
+
+        // Sofa per-size × per-tier prices, gathered across all of this code's
+        // tier rows. Each non-empty price_{size}_sen cell becomes one entry.
+        const seat: SeatHeightPrice[] = [];
+        for (const g of group) {
+          const tier = (g.price_tier ?? '').trim();
+          if (!tier) continue;
+          for (const size of sofaSizes) {
+            const raw = g[`price_${size}_sen`];
+            if (!has(raw)) continue;
+            const n = Number(raw);
+            if (!Number.isFinite(n)) continue;
+            seat.push({ height: size, priceSen: n, tier: tier as SofaPriceTier });
+          }
+        }
+        if (seat.length > 0) out.seatHeightPrices = seat;
+
+        rows.push(out);
+      }
+
+      if (rows.length === 0) {
+        setErrorMsg('No rows had a code. Every row needs a code, name, and category.');
+        setBusy(false);
+        return;
+      }
+
+      const res = await batchImport.mutateAsync(rows);
+      setResult(res);
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={styles.drawerBackdrop} onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: 'var(--c-cream)',
+          border: '1px solid var(--line-strong)',
+          borderRadius: 'var(--radius-xl)',
+          boxShadow: 'var(--shadow-3)',
+          width: 'min(560px, 95vw)',
+          padding: 'var(--space-5)',
+        }}
+      >
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
+          <h2 className={styles.drawerTitle}>Import SKUs</h2>
+          <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON_PROPS} /></button>
+        </header>
+        <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
+          Pick a CSV exported from this page. Edit the prices in Excel, save, and
+          import it back. A blank cell is left as it was — it never clears a price.
+          Up to 500 SKUs per file.
+        </p>
+        <input
+          type="file"
+          accept=".csv"
+          disabled={busy}
+          style={{ marginTop: 'var(--space-3)' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void handleFile(f);
+          }}
+        />
+
+        {busy && (
+          <p style={{ marginTop: 'var(--space-3)', fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
+            Importing…
+          </p>
+        )}
+
+        {errorMsg && (
+          <p style={{ marginTop: 'var(--space-3)', fontSize: 'var(--fs-13)', color: 'var(--c-danger, #b3261e)' }}>
+            {errorMsg}
+          </p>
+        )}
+
+        {result && (
+          <div style={{ marginTop: 'var(--space-3)', fontSize: 'var(--fs-13)' }}>
+            <div style={{ fontWeight: 600 }}>
+              Imported {result.upserted}{result.failed > 0 ? `, failed ${result.failed}` : ''}.
+            </div>
+            {result.failures.length > 0 && (
+              <ul style={{ marginTop: 'var(--space-2)', paddingLeft: '1.2em', color: 'var(--fg-muted)' }}>
+                {result.failures.slice(0, 5).map((f, i) => (
+                  <li key={i}>{f.code || '(no code)'}: {f.reason}</li>
+                ))}
+                {result.failures.length > 5 && <li>…and {result.failures.length - 5} more.</li>}
+              </ul>
+            )}
+          </div>
+        )}
+
+        <footer style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-4)' }}>
+          <Button variant="ghost" size="md" onClick={onClose}>Close</Button>
+        </footer>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 /* ════════════════════════════════════════════════════════════════════════
    PR #89 — Click-to-edit cell for SKU Master code + name columns.

@@ -414,6 +414,47 @@ export function useCreateMfgProduct() {
   });
 }
 
+/* ─── CSV round-trip import (Wei Siang) — bulk upsert by code ──────────────
+ * One body row per SKU. Each row carries ONLY the fields the spreadsheet
+ * filled in (blank cells are omitted, so the backend leaves those columns
+ * untouched on an existing SKU instead of zeroing them). Sofa rows attach
+ * `seatHeightPrices` (flat per size × tier). The endpoint upserts by code
+ * and returns { upserted, failed, failures: [{ code, reason }] }. */
+export type BatchImportRow = {
+  code: string;
+  name: string;
+  category: string;
+  description?: string;
+  base_model?: string;
+  size_label?: string;
+  status?: string;
+  branding?: string;
+  base_price_sen?: number;
+  price1_sen?: number;
+  unit_m3_milli?: number;
+  seatHeightPrices?: SeatHeightPrice[];
+};
+
+export type BatchImportResult = {
+  upserted: number;
+  failed: number;
+  failures: Array<{ code: string; reason: string }>;
+};
+
+export function useBatchImportMfgProducts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (rows: BatchImportRow[]) =>
+      authedFetch<BatchImportResult>(`/mfg-products/batch-import`, {
+        method: 'POST',
+        body: JSON.stringify({ rows }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mfg-products'] });
+    },
+  });
+}
+
 /* PR #82 (Commander 2026-05-26) — DELETE /mfg-products/:id. SKU Master
    multi-select delete fans out N parallel mutateAsync calls; per-row 404
    / 409 surface as a failed-mutation rejection the caller handles.
