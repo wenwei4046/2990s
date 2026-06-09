@@ -21,7 +21,7 @@ import {
 import { useMaintenanceConfig, useMfgProducts, type MfgCategory, type MfgProductRow } from '../lib/mfg-products-queries';
 import {
   useSuppliers, useCreateBindingsBatch,
-  type Currency, type MaterialKind, type NewBinding,
+  type Currency, type MaterialKind, type NewBinding, type SupplierRow,
 } from '../lib/suppliers-queries';
 import { resolveSizeInfo } from '../lib/size-info';
 import { SkuPreviewStrip } from './SupplierDetail';
@@ -554,6 +554,14 @@ type ModelRow = {
   name:        string;
   thicknessCm: string;  // MATTRESS only; ignored for other categories
   description: string;
+  // Per-model supplier (optional). Each row carries its own supplier so a bulk
+  // batch can map each Model to a different supplier in one pass.
+  supplierId:   string;
+  supplierCode: string;
+  supUnitPrice: string;
+  supLeadDays:  string;
+  supMoq:       string;
+  supIsMain:    boolean;
 };
 
 const emptyRow = (): ModelRow => ({
@@ -563,6 +571,12 @@ const emptyRow = (): ModelRow => ({
   name:        '',
   thicknessCm: '',
   description: '',
+  supplierId:   '',
+  supplierCode: '',
+  supUnitPrice: '',
+  supLeadDays:  '7',
+  supMoq:       '1',
+  supIsMain:    false,
 });
 
 export function NewModelDialog({
@@ -588,17 +602,12 @@ export function NewModelDialog({
   // SKU generation produced zero rows, so we never leave an empty phantom model.
   const deleteMut   = useDeleteProductModel();
 
-  // (A) Wei Siang 2026-06-08 — optional one-step supplier assignment: pick a
-  // supplier + their code here and every generated SKU is bound to it in one
-  // batch, so the operator doesn't have to re-open "Supplier codes by Model".
+  // (A) Wei Siang 2026-06-09 — optional one-step supplier assignment is now
+  // PER MODEL: each row carries its own supplier + code, and every SKU that
+  // row generates is bound to that row's supplier in one batch, so the
+  // operator doesn't have to re-open "Supplier codes by Model".
   const suppliersQ      = useSuppliers({ status: 'ACTIVE' });
   const bindingsBatchMut = useCreateBindingsBatch();
-  const [supplierId,   setSupplierId]   = useState('');
-  const [supplierCode, setSupplierCode] = useState('');
-  const [supUnitPrice, setSupUnitPrice] = useState('');
-  const [supLeadDays,  setSupLeadDays]  = useState('7');
-  const [supMoq,       setSupMoq]       = useState('1');
-  const [supIsMain,    setSupIsMain]    = useState(false);
 
   // PR #87 — Commander 2026-05-26: bulk pickers should default to all-on so a
   // new Model is born offering every variant from the global pool; commander
@@ -740,19 +749,24 @@ export function NewModelDialog({
           );
         }
 
-        // (A) Optional supplier binding — bind every freshly-generated SKU to
-        // the chosen supplier in ONE batch. materialCode is the AUTHORITATIVE
-        // server-returned code; the per-SKU supplier code reuses the proven
-        // composeSupplierSku (size-aware) so we never write the bare model code
-        // to every SKU (the duplicate-supplier-code bug from PR #206/#209).
-        // Best-effort: the SKUs are valid even if binding fails.
-        if (supplierId && supplierCode.trim()) {
-          const baseCode   = supplierCode.trim();
-          const priceCenti = Math.round((parseFloat(supUnitPrice) || 0) * 100);
-          const lead       = parseInt(supLeadDays, 10);
-          const moqN       = parseInt(supMoq, 10);
-          const allCodes   = results.flatMap((r) => r.codes);
-          const bindings: NewBinding[] = allCodes.map((code) => {
+        // (A) Optional PER-MODEL supplier binding — each row carries its own
+        // supplier + code. `results` and `rows` share the same order/length, so
+        // results[i] pairs with rows[i] (the source row holding the supplier
+        // config). materialCode is the AUTHORITATIVE server-returned code; the
+        // per-SKU supplier code reuses the proven composeSupplierSku (size-aware)
+        // so we never write the bare model code to every SKU (the
+        // duplicate-supplier-code bug from PR #206/#209). Best-effort: the SKUs
+        // are valid even if a binding call fails. Runs AFTER the phantom-cleanup
+        // throw, so it only executes when every model kept its SKUs.
+        for (let i = 0; i < results.length; i++) {
+          const r      = results[i];
+          const srcRow = rows[i];
+          if (!r || !srcRow || !srcRow.supplierId || !srcRow.supplierCode.trim()) continue;
+          const baseCode   = srcRow.supplierCode.trim();
+          const priceCenti = Math.round((parseFloat(srcRow.supUnitPrice) || 0) * 100);
+          const lead       = parseInt(srcRow.supLeadDays, 10);
+          const moqN       = parseInt(srcRow.supMoq, 10);
+          const bindings: NewBinding[] = r.codes.map((code) => {
             const sizeCode = (category === 'MATTRESS' || category === 'BEDFRAME')
               ? (code.match(/\(([^)]+)\)\s*$/)?.[1] ?? null) : null;
             const skuObj: Pick<MfgProductRow, 'code' | 'category' | 'size_code'> = { code, category, size_code: sizeCode };
@@ -765,20 +779,19 @@ export function NewModelDialog({
               currency:       'MYR' as Currency,
               leadTimeDays:   Number.isFinite(lead) ? lead : 7,
               moq:            Number.isFinite(moqN) && moqN > 0 ? moqN : 1,
-              isMainSupplier: supIsMain,
+              isMainSupplier: srcRow.supIsMain,
             };
           });
-          if (bindings.length > 0) {
-            try {
-              const res = await bindingsBatchMut.mutateAsync({ supplierId, bindings });
-              boundInserted = res.inserted;
-            } catch {
-              // eslint-disable-next-line no-alert
-              alert(
-                `The SKUs were created, but linking them to the supplier didn't go through. ` +
-                `You can link them later from “Supplier codes by Model”.`,
-              );
-            }
+          if (bindings.length === 0) continue;
+          try {
+            const res = await bindingsBatchMut.mutateAsync({ supplierId: srcRow.supplierId, bindings });
+            boundInserted += res.inserted;
+          } catch {
+            // eslint-disable-next-line no-alert
+            alert(
+              `The SKUs for ${r.model.model_code} were created, but linking them to the supplier didn't go through. ` +
+              `You can link them later from “Supplier codes by Model”.`,
+            );
           }
         }
       }
@@ -871,6 +884,7 @@ export function NewModelDialog({
             index={i}
             category={category}
             canRemove={rows.length > 1}
+            suppliers={suppliersQ.data ?? []}
             onChange={(patch) => updateRow(row.rid, patch)}
             onRemove={() => removeRow(row.rid)}
           />
@@ -944,53 +958,6 @@ export function NewModelDialog({
           />
         )}
 
-        {/* (A) Optional supplier assignment — bind every generated SKU in one
-            step so the operator doesn't re-open "Supplier codes by Model". */}
-        {(category === 'SOFA' || category === 'BEDFRAME' || category === 'MATTRESS') && (
-          <div style={{ borderTop: '1px solid var(--line)', marginTop: 8, paddingTop: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
-              <label className={styles.compactField} style={{ minWidth: 220 }}>
-                <span>Supplier (optional)</span>
-                <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
-                  <option value="">— None —</option>
-                  {(suppliersQ.data ?? []).map((s) => (
-                    <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
-                  ))}
-                </select>
-              </label>
-              {supplierId && (
-                <>
-                  <label className={styles.compactField} style={{ minWidth: 150 }}>
-                    <span>Supplier code</span>
-                    <input type="text" value={supplierCode} onChange={(e) => setSupplierCode(e.target.value)} placeholder="e.g. 9055" />
-                  </label>
-                  <label className={styles.compactField} style={{ width: 120 }}>
-                    <span>Unit price (RM)</span>
-                    <input type="number" inputMode="decimal" min={0} step="0.01" value={supUnitPrice} onChange={(e) => setSupUnitPrice(e.target.value)} placeholder="0.00" />
-                  </label>
-                  <label className={styles.compactField} style={{ width: 90 }}>
-                    <span>Lead (days)</span>
-                    <input type="number" inputMode="numeric" min={0} value={supLeadDays} onChange={(e) => setSupLeadDays(e.target.value)} placeholder="7" />
-                  </label>
-                  <label className={styles.compactField} style={{ width: 80 }}>
-                    <span>MOQ</span>
-                    <input type="number" inputMode="numeric" min={1} value={supMoq} onChange={(e) => setSupMoq(e.target.value)} placeholder="1" />
-                  </label>
-                  <label className={styles.compactField} style={{ width: 70 }}>
-                    <span>Main</span>
-                    <input type="checkbox" checked={supIsMain} onChange={(e) => setSupIsMain(e.target.checked)} style={{ width: 16, height: 16 }} />
-                  </label>
-                </>
-              )}
-            </div>
-            {supplierId && supplierCode.trim() && (
-              <div style={{ fontSize: 'var(--fs-10)', color: 'var(--fg-muted)', marginTop: 4 }}>
-                Every generated SKU will be bound to this supplier with code “{supplierCode.trim()}” (auto-suffixed per size/variant).
-              </div>
-            )}
-          </div>
-        )}
-
         {/* (D) Live preview — what the system will actually create. */}
         {previewCodes.length > 0 && (
           <div style={{
@@ -1041,12 +1008,13 @@ export function NewModelDialog({
    the bottom of the card shows the SKU shape this row + the shared sizes
    below will materialise. */
 function ModelRowCard({
-  row, index, category, canRemove, onChange, onRemove,
+  row, index, category, canRemove, suppliers, onChange, onRemove,
 }: {
   row:       ModelRow;
   index:     number;
   category:  MfgCategory;
   canRemove: boolean;
+  suppliers: SupplierRow[];
   onChange:  (patch: Partial<ModelRow>) => void;
   onRemove:  () => void;
 }) {
@@ -1116,6 +1084,52 @@ function ModelRowCard({
           </button>
         ) : (
           <span />
+        )}
+      </div>
+
+      {/* (A) Per-model supplier (optional) — each row maps to its own supplier;
+          every SKU this row generates is bound to it with a code auto-suffixed
+          per size/variant. Shown for every category (None = no binding). */}
+      <div style={{ borderTop: '1px solid var(--line)', marginTop: 8, paddingTop: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+          <label className={styles.compactField} style={{ minWidth: 220 }}>
+            <span>Supplier (optional)</span>
+            <select value={row.supplierId} onChange={(e) => onChange({ supplierId: e.target.value })}>
+              <option value="">— None —</option>
+              {suppliers.map((s) => (
+                <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
+              ))}
+            </select>
+          </label>
+          {row.supplierId && (
+            <>
+              <label className={styles.compactField} style={{ minWidth: 150 }}>
+                <span>Supplier code</span>
+                <input type="text" value={row.supplierCode} onChange={(e) => onChange({ supplierCode: e.target.value })} placeholder="e.g. 9055" />
+              </label>
+              <label className={styles.compactField} style={{ width: 120 }}>
+                <span>Unit price (RM)</span>
+                <input type="number" inputMode="decimal" min={0} step="0.01" value={row.supUnitPrice} onChange={(e) => onChange({ supUnitPrice: e.target.value })} placeholder="0.00" />
+              </label>
+              <label className={styles.compactField} style={{ width: 90 }}>
+                <span>Lead (days)</span>
+                <input type="number" inputMode="numeric" min={0} value={row.supLeadDays} onChange={(e) => onChange({ supLeadDays: e.target.value })} placeholder="7" />
+              </label>
+              <label className={styles.compactField} style={{ width: 80 }}>
+                <span>MOQ</span>
+                <input type="number" inputMode="numeric" min={1} value={row.supMoq} onChange={(e) => onChange({ supMoq: e.target.value })} placeholder="1" />
+              </label>
+              <label className={styles.compactField} style={{ width: 70 }}>
+                <span>Main</span>
+                <input type="checkbox" checked={row.supIsMain} onChange={(e) => onChange({ supIsMain: e.target.checked })} style={{ width: 16, height: 16 }} />
+              </label>
+            </>
+          )}
+        </div>
+        {row.supplierId && row.supplierCode.trim() && (
+          <div style={{ fontSize: 'var(--fs-10)', color: 'var(--fg-muted)', marginTop: 4 }}>
+            Every generated SKU for this model will be bound to this supplier with code “{row.supplierCode.trim()}” (auto-suffixed per size/variant).
+          </div>
         )}
       </div>
     </div>
