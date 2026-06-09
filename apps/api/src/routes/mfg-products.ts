@@ -20,7 +20,7 @@ import { createClient } from '@supabase/supabase-js';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
 import { findSkuUsage } from '../lib/sku-usage';
-import { moduleCodeFromSku } from '@2990s/shared';
+import { moduleCodeFromSku, normalizeSofaTier } from '@2990s/shared';
 import type { Env, Variables } from '../env';
 
 export const mfgProducts = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -196,7 +196,21 @@ mfgProducts.post('/batch-import', async (c) => {
     // (frontend import) or snake_case.
     type SeatEntry = { height: string; priceSen: number; tier?: string };
     const seatRaw = (r.seatHeightPrices ?? r.seat_height_prices) as unknown;
-    const incomingSeat = (Array.isArray(seatRaw) ? seatRaw : []) as SeatEntry[];
+    const rawSeat = (Array.isArray(seatRaw) ? seatRaw : []) as SeatEntry[];
+    // Recognise + canonicalise each price's tier (P2 / "Price 2" / 2 → PRICE_2).
+    // Missing tier = legacy → PRICE_2; an UNrecognisable one rejects the whole
+    // row so a mislabelled price can never land in the wrong tier.
+    let badTier: string | null = null;
+    const incomingSeat: SeatEntry[] = [];
+    for (const e of rawSeat) {
+      const t = (e.tier == null || e.tier === '') ? 'PRICE_2' : normalizeSofaTier(e.tier);
+      if (!t) { badTier = String(e.tier); break; }
+      incomingSeat.push({ ...e, tier: t });
+    }
+    if (badTier !== null) {
+      failures.push({ code, reason: `price tier "${badTier}" not recognized — use P1, P2, or P3` });
+      continue;
+    }
     const tierOf = (e: SeatEntry) => e.tier ?? 'PRICE_2';
 
     // Never rewrite the PK id on re-import: UPDATE an existing SKU by code (id +

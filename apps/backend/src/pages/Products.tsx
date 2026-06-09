@@ -38,6 +38,7 @@ import { Button } from '@2990s/design-system';
 import {
   SOFA_MODULES,
   resolveSofaQuickPresets,
+  normalizeSofaTier,
   type SofaQuickPreset,
 } from '@2990s/shared';
 import {
@@ -3797,6 +3798,9 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
       }
 
       const rows: BatchImportRow[] = [];
+      // SKUs skipped because a price row's tier couldn't be recognised — shown
+      // to the operator so a mislabelled price is never silently mis-filed.
+      const tierErrors: Array<{ code: string; reason: string }> = [];
       for (const [code, group] of byCode) {
         const first = group[0];
         if (!first) continue;
@@ -3823,18 +3827,27 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
         if (m3Row) out.unit_m3_milli = Number(m3Row.unit_m3_milli);
 
         // Sofa per-size × per-tier prices, gathered across all of this code's
-        // tier rows. Each non-empty price_{size}_sen cell becomes one entry.
+        // tier rows. A row that carries any price MUST name a recognisable tier
+        // (P1/P2/P3) — otherwise the SKU is skipped with a clear reason so a
+        // price never lands in the wrong tier.
         const seat: SeatHeightPrice[] = [];
+        let tierError: string | null = null;
         for (const g of group) {
-          const tier = (g.price_tier ?? '').trim();
-          if (!tier) continue;
+          const hasAnyPrice = sofaSizes.some((size) => has(g[`price_${size}_sen`]));
+          if (!hasAnyPrice) continue;
+          const t = normalizeSofaTier(g.price_tier);
+          if (!t) { tierError = (g.price_tier ?? '').trim() || '(blank)'; break; }
           for (const size of sofaSizes) {
             const raw = g[`price_${size}_sen`];
             if (!has(raw)) continue;
             const n = Number(raw);
             if (!Number.isFinite(n)) continue;
-            seat.push({ height: size, priceSen: n, tier: tier as SofaPriceTier });
+            seat.push({ height: size, priceSen: n, tier: t });
           }
+        }
+        if (tierError) {
+          tierErrors.push({ code, reason: `price tier "${tierError}" not recognized — use P1, P2, or P3` });
+          continue;
         }
         if (seat.length > 0) out.seatHeightPrices = seat;
 
@@ -3842,13 +3855,24 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
       }
 
       if (rows.length === 0) {
-        setErrorMsg('No rows had a code. Every row needs a code, name, and category.');
+        if (tierErrors.length > 0) {
+          setResult({ upserted: 0, failed: tierErrors.length, failures: tierErrors });
+        } else {
+          setErrorMsg('No rows had a code. Every row needs a code, name, and category.');
+        }
         setBusy(false);
         return;
       }
 
       const res = await batchImport.mutateAsync(rows);
-      setResult(res);
+      // Fold the client-side tier rejections into the result the operator sees.
+      setResult(tierErrors.length > 0
+        ? {
+            upserted: res.upserted,
+            failed: res.failed + tierErrors.length,
+            failures: [...tierErrors, ...(res.failures ?? [])],
+          }
+        : res);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
     } finally {
