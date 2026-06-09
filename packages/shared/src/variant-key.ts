@@ -42,6 +42,12 @@ export type VariantAttrs = {
    *  the key). Fixes the long-standing fabric/colour key mismatch. */
   colorCode?: string | null;
   colourCode?: string | null;
+  /** The GRN / Purchase-Invoice / Purchase-Return / Stock-Adjustment variant
+   *  editors store the fabric pick under `fabricColor` (schema's variants jsonb
+   *  key). Same physical attribute as fabricCode/colorCode — aliased here so a
+   *  sofa/bedframe RECEIVED with a fabric isn't keyed/summarised without it
+   *  (which left bedframe inbound stock un-matchable to its SO line). */
+  fabricColor?: string | null;
   seatHeight?: string | null; // sofa
   gap?: string | null; // bedframe
   divanHeight?: string | null; // bedframe
@@ -93,10 +99,12 @@ export function computeVariantKey(
   const parts: string[] = [];
 
   for (const k of ATTRS_BY_GROUP[group] ?? []) {
-    // Fabric is stored under any of fabricCode / colorCode / colourCode — treat
-    // them as one attribute so colour participates in the bucket identity.
+    // Fabric is stored under any of fabricCode / colorCode / colourCode /
+    // fabricColor (the GRN-family editors use fabricColor) — treat them as one
+    // attribute so colour participates in the bucket identity regardless of which
+    // form wrote the line.
     const raw = k === 'fabricCode'
-      ? (a.fabricCode ?? a.colorCode ?? a.colourCode)
+      ? (a.fabricCode ?? a.colorCode ?? a.colourCode ?? a.fabricColor)
       : (a[k] as unknown);
     const val = norm(raw);
     if (val) parts.push(`${k.toLowerCase()}=${val}`);

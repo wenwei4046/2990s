@@ -64,6 +64,20 @@ describe('computeVariantKey', () => {
     expect(olive).not.toBe(rust);
   });
 
+  it('treats fabricColor (GRN-family editor key) as the fabric attribute (alias)', () => {
+    // GRN / PI / PR / Stock-Adjustment store the fabric pick as fabricColor — it
+    // must bucket identically to the SO-side fabricCode so a received line and
+    // its sales-order line share one variant bucket.
+    const viaCode  = computeVariantKey('bedframe', { fabricCode: 'Olive', divanHeight: '10"', legHeight: '2', gap: '14' });
+    const viaColor = computeVariantKey('bedframe', { fabricColor: 'Olive', divanHeight: '10"', legHeight: '2', gap: '14' });
+    expect(viaColor).toBe(viaCode);
+    expect(viaColor).toContain('fabriccode=olive');
+
+    const sofaCode  = computeVariantKey('sofa', { fabricCode: 'AVANI01', seatHeight: '28', legHeight: '2' });
+    const sofaColor = computeVariantKey('sofa', { fabricColor: 'AVANI01', seatHeight: '28', legHeight: '2' });
+    expect(sofaColor).toBe(sofaCode);
+  });
+
   it('mattress / accessory ignore soft attributes (size lives in the product code)', () => {
     // Mattress carries no soft-attribute identity → empty key (only specials matter).
     expect(computeVariantKey('mattress', { fabricCode: 'X', seatHeight: '28' })).toBe('');

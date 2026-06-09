@@ -28,6 +28,16 @@ describe('missingVariantAxes — sofa', () => {
       .toEqual([]);
   });
 
+  it('fabric axis satisfied by the GRN-family fabricColor key (sofa + bedframe)', () => {
+    // GRN / PI / PR / Stock-Adjustment store fabric under fabricColor — it must
+    // satisfy the Fabrics axis, else a received sofa/bedframe never counts as
+    // fabric-complete even though the operator filled it.
+    expect(missingKeys('sofa', { seatHeight: '28', legHeight: '4"', fabricColor: 'AVANI01' }))
+      .toEqual([]);
+    expect(missingKeys('bedframe', { divanHeight: '10"', legHeight: '2', gap: '14', fabricColor: 'BF-01' }))
+      .toEqual([]);
+  });
+
   it('reports canonical keys when an axis has NO alias filled', () => {
     // Pre-#473 cart: no leg pick under either name → legHeight is genuinely
     // missing. Seat axis satisfied via depth.
