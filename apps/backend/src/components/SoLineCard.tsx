@@ -403,11 +403,22 @@ const SoLineCardInner = ({
     const colours = (Array.isArray(pool) && pool.length > 0)
       ? (fabricColoursQ.data ?? []).filter((c) => pool.includes(c.colourId))
       : (fabricColoursQ.data ?? []);
-    const opts = colours.map((c) => ({
-      value: c.colourId,
-      priceSen: 0,
-      display: `${c.colourId} · ${seriesLabel.get(c.fabricId) ?? c.fabricId}${c.label && c.label !== c.colourId ? ` (${c.label})` : ''}`,
-    }));
+    const opts = colours.map((c) => {
+      const series = seriesLabel.get(c.fabricId) ?? c.fabricId;
+      /* Drop the "· <series>" segment when the series name is just the code's
+         prefix (e.g. "BF-13 · BF") — it's redundant. A meaningful series label
+         (e.g. "Charcoal Grey") still shows. */
+      const seriesRedundant =
+        !series || c.colourId === series || c.colourId.startsWith(`${series}-`);
+      const colourSuffix = c.label && c.label !== c.colourId ? ` (${c.label})` : '';
+      return {
+        value: c.colourId,
+        priceSen: 0,
+        display: seriesRedundant
+          ? `${c.colourId}${colourSuffix}`
+          : `${c.colourId} · ${series}${colourSuffix}`,
+      };
+    });
     const current = String(draft.variants.fabricCode ?? '');
     if (current && !opts.some((o) => o.value === current)) {
       opts.unshift({ value: current, priceSen: 0, display: `${current} (current)` });
