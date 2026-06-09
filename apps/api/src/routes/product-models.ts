@@ -323,7 +323,7 @@ productModels.patch('/:id', async (c) => {
 //             JSONB on the SKU, not in the code). Code = `{model_code}-{compartment}`.
 //   BEDFRAME: one row per `sizes` value. Code = `{model_code}-({size_code})`.
 //   MATTRESS: same as BEDFRAME.
-//   ACCESSORY / SERVICE: not supported (no variant axis).
+//   ACCESSORY / SERVICE: one SKU, code = {model_code} (no variant axis).
 //
 // PR #66 — Standard size info per code. Mirrors commander's existing data:
 //   1003-(K) → "HILTON BEDFRAME (6FT) (183X190CM)"
@@ -579,6 +579,19 @@ productModels.post('/:id/generate-skus', async (c) => {
         size_label: label,
       });
     }
+  } else if (model.category === 'ACCESSORY' || model.category === 'SERVICE') {
+    // No variant axis — the Model itself IS the single SKU. Generate exactly one
+    // row whose code is the model code (Wei Siang 2026-06-09: accessories /
+    // services have no sizes, but must still produce one sellable SKU so they
+    // show up in the SKU Master, instead of leaving a 0-SKU phantom model).
+    const branding = (model.branding ?? '').trim();
+    const prefix   = branding ? `${branding} ` : '';
+    wanted.push({
+      code:       model.model_code,
+      name:       (modelName ? `${prefix}${modelName}` : `${prefix}${model.model_code}`).trim(),
+      size_code:  null,
+      size_label: null,
+    });
   } else {
     return c.json({ error: 'unsupported_category', reason: `Auto-generate not supported for ${model.category}.` }, 400);
   }

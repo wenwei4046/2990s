@@ -622,8 +622,12 @@ export function NewModelDialog({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category, _sizesPool.length, _compsPool.length]);
 
+  // ACCESSORY / SERVICE have no size/compartment axis — each Model is exactly one
+  // SKU (code = model code). They still auto-generate that single SKU so it lands
+  // in the SKU Master (Wei Siang 2026-06-09).
+  const isSingleSkuCat = category === 'ACCESSORY' || category === 'SERVICE';
   const sharedCount = (category === 'SOFA') ? pickedComps.size : pickedSizes.size;
-  const totalSkus   = rows.length * sharedCount;
+  const totalSkus   = isSingleSkuCat ? rows.length : rows.length * sharedCount;
 
   const updateRow = (rid: string, patch: Partial<ModelRow>) => {
     setRows((prev) => prev.map((r) => (r.rid === rid ? { ...r, ...patch } : r)));
@@ -710,7 +714,7 @@ export function NewModelDialog({
       // restriction" semantics — commander can pick later from detail page).
       let totalGenerated = 0;
       let boundInserted  = 0;
-      if (sharedSizes || sharedComps) {
+      if (sharedSizes || sharedComps || isSingleSkuCat) {
         const results = await Promise.all(createdModels.map(async (m) => {
           try {
             const r = await generateMut.mutateAsync({ id: m.id });
@@ -1019,9 +1023,11 @@ export function NewModelDialog({
           <Button variant="primary" size="md" type="submit" disabled={submitting}>
             {submitting
               ? 'Creating…'
-              : sharedCount > 0
-                ? `Create ${rows.length} × ${sharedCount} = ${totalSkus} SKUs`
-                : `Create ${rows.length} Model${rows.length === 1 ? '' : 's'}`}
+              : isSingleSkuCat
+                ? `Create ${rows.length} SKU${rows.length === 1 ? '' : 's'}`
+                : sharedCount > 0
+                  ? `Create ${rows.length} × ${sharedCount} = ${totalSkus} SKUs`
+                  : `Create ${rows.length} Model${rows.length === 1 ? '' : 's'}`}
           </Button>
         </footer>
       </form>
