@@ -47,7 +47,9 @@ export function buildVariantSummary(
   // 2026-06-03 — "all option selections must show in the SO description").
   const fabricParts = [str(variants.fabricCode), str(variants.colorCode)];
   if (isBedframe) fabricParts.push(str(variants.colourLabel));
-  const fabric = fabricParts.filter(Boolean).join(' ');
+  // Dedupe — when the colour label/code is just the fabric code again (e.g.
+  // BF-07 whose colour label is also "BF-07"), don't repeat it ("BF-07 BF-07").
+  const fabric = [...new Set(fabricParts.filter(Boolean))].join(' ');
   if (fabric) segments.push(fabric);
 
   // 2026-06-04 — POS handover sofa lines carry the leg pick as sofaLegHeight

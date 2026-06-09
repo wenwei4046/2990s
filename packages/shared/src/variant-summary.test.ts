@@ -41,6 +41,18 @@ describe('buildVariantSummary', () => {
     expect(summary).toBe('BF-01 Sand / DIVAN 10" + LEG 1" / GAP 10" / T.Heights 21"');
   });
 
+  it('bedframe does not repeat the fabric when the colour label is the code itself', () => {
+    // BF-07's colour label is also "BF-07" — must not render "BF-07 BF-07".
+    const summary = buildVariantSummary('bedframe', {
+      fabricCode: 'BF-07',
+      colourLabel: 'BF-07',
+      divanHeight: '10"',
+      legHeight: '2"',
+      gap: '9"',
+    });
+    expect(summary).toBe('BF-07 / DIVAN 10" + LEG 2" / GAP 9"');
+  });
+
   it('bedframe leg height carries the LEG label even without a colour', () => {
     const summary = buildVariantSummary('bedframe', {
       divanHeight: '10"',
