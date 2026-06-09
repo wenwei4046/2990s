@@ -193,20 +193,32 @@ mfgProducts.post('/batch-import', async (c) => {
     if (hasVal(r.unit_m3_milli))  row.unit_m3_milli = Number(r.unit_m3_milli);
 
     // Sofa per (size × tier) prices — JSONB array. Accept either camelCase
-    // (frontend import) or snake_case. Only written when non-empty.
-    const seat = (r.seatHeightPrices ?? r.seat_height_prices) as unknown;
-    if (Array.isArray(seat) && seat.length > 0) {
-      row.seat_height_prices = seat;
-    }
+    // (frontend import) or snake_case.
+    type SeatEntry = { height: string; priceSen: number; tier?: string };
+    const seatRaw = (r.seatHeightPrices ?? r.seat_height_prices) as unknown;
+    const incomingSeat = (Array.isArray(seatRaw) ? seatRaw : []) as SeatEntry[];
+    const tierOf = (e: SeatEntry) => e.tier ?? 'PRICE_2';
 
     // Never rewrite the PK id on re-import: UPDATE an existing SKU by code (id +
     // any omitted column left untouched), INSERT a brand-new SKU with a fresh id.
     const { data: existing } = await supabase.from('mfg_products')
-      .select('id').eq('code', code).maybeSingle();
+      .select('id, seat_height_prices').eq('code', code).maybeSingle();
     let error;
     if (existing) {
+      // Merge sofa prices BY TIER: the export ships one tier at a time, so an
+      // import must only replace the tiers it carries and leave the other tiers
+      // (P1/P2/P3) on the SKU untouched — never wipe them.
+      if (incomingSeat.length > 0) {
+        const incomingTiers = new Set(incomingSeat.map(tierOf));
+        const existingSeat = (Array.isArray((existing as { seat_height_prices?: unknown }).seat_height_prices)
+          ? (existing as { seat_height_prices: SeatEntry[] }).seat_height_prices
+          : []);
+        const kept = existingSeat.filter((e) => !incomingTiers.has(tierOf(e)));
+        row.seat_height_prices = [...kept, ...incomingSeat];
+      }
       ({ error } = await supabase.from('mfg_products').update(row).eq('code', code));
     } else {
+      if (incomingSeat.length > 0) row.seat_height_prices = incomingSeat;
       const rand = (typeof crypto !== 'undefined' && crypto.randomUUID)
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;

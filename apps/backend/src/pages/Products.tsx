@@ -444,7 +444,7 @@ const SkuMasterTab = () => {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <Button variant="ghost" size="md" onClick={() => exportSkusCsv(rows, sofaSizes)}>
+          <Button variant="ghost" size="md" onClick={() => exportSkusCsv(rows, sofaSizes, tier)}>
             <Download {...ICON_PROPS} />
             <span>Export SKUs</span>
           </Button>
@@ -3643,9 +3643,6 @@ const MaintenanceHistoryDialog = ({
 // and carry base_price_sen / price1_sen instead. The old cost_price_sen column
 // is dropped entirely — it was the zeroing trap on round-trip.
 
-/** All three sofa price tiers, in display order. A missing tier on a stored
- *  entry means legacy data → counted as PRICE_2. */
-const SOFA_TIERS: SofaPriceTier[] = ['PRICE_1', 'PRICE_2', 'PRICE_3'];
 
 /** Normalize a stored seat height to its bare size token so '28"' matches '28'. */
 const normalizeHeight = (h: unknown): string => String(h ?? '').replace('"', '').trim();
@@ -3657,7 +3654,7 @@ const CSV_TAIL_COLS = ['base_price_sen', 'price1_sen', 'unit_m3_milli', 'status'
 
 const priceColForSize = (size: string) => `price_${size}_sen`;
 
-function exportSkusCsv(rows: MfgProductRow[], sofaSizes: string[]): void {
+function exportSkusCsv(rows: MfgProductRow[], sofaSizes: string[], tier: SofaPriceTier): void {
   const sizeCols = sofaSizes.map(priceColForSize);
   const columns = [...CSV_HEAD_COLS, ...sizeCols, ...CSV_TAIL_COLS];
 
@@ -3689,30 +3686,19 @@ function exportSkusCsv(rows: MfgProductRow[], sofaSizes: string[]): void {
     };
 
     if (r.category === 'SOFA') {
-      const entries = r.seat_height_prices ?? [];
-      // Group entries by effective tier (legacy/no-tier → PRICE_2).
-      const byTier = new Map<SofaPriceTier, Map<string, number>>();
-      for (const e of entries) {
-        const t = e.tier ?? 'PRICE_2';
-        let m = byTier.get(t);
-        if (!m) { m = new Map(); byTier.set(t, m); }
-        m.set(normalizeHeight(e.height), e.priceSen);
+      // ONE row per sofa for the CURRENTLY SELECTED tier (the P1/P2/P3 toggle) —
+      // matches what the operator filters/edits on screen. Other tiers are left
+      // out of this file and preserved on re-import (backend merges by tier).
+      const m = new Map<string, number>();
+      for (const e of r.seat_height_prices ?? []) {
+        if ((e.tier ?? 'PRICE_2') === tier) m.set(normalizeHeight(e.height), e.priceSen);
       }
-      const tiersWithData = SOFA_TIERS.filter((t) => (byTier.get(t)?.size ?? 0) > 0);
-      if (tiersWithData.length === 0) {
-        // Sofa with no prices yet — still emit one row so the SKU appears.
-        emit({ price_tier: '' });
-      } else {
-        for (const t of tiersWithData) {
-          const m = byTier.get(t)!;
-          const sizeCells: Record<string, unknown> = {};
-          for (const size of sofaSizes) {
-            const p = m.get(normalizeHeight(size));
-            sizeCells[priceColForSize(size)] = p == null ? '' : p;
-          }
-          emit({ price_tier: t, ...sizeCells });
-        }
+      const sizeCells: Record<string, unknown> = {};
+      for (const size of sofaSizes) {
+        const p = m.get(normalizeHeight(size));
+        sizeCells[priceColForSize(size)] = p == null ? '' : p;
       }
+      emit({ price_tier: tier, ...sizeCells });
     } else {
       // Bedframe / mattress / accessory / service — flat base + price1.
       emit({
