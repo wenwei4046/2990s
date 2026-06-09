@@ -366,11 +366,44 @@ export function useStockAdjustment() {
       qtyDelta: number;
       reasonCode: string;
       notes?: string;
+      // Variant + batch (sofa/bedframe). On INCREASE the backend computes the
+      // variant_key from `variants`; on DECREASE the picker supplies the exact
+      // existing bucket via `variantKey` + `batchNo`.
+      itemGroup?: string | null;
+      variants?: Record<string, unknown> | null;
+      batchNo?: string | null;
+      variantKey?: string | null;
     }) => authedFetch<{ movement: { id: string } }>(`/inventory/adjustments`, {
       method: 'POST', body: JSON.stringify(body),
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inventory'] });
     },
+  });
+}
+
+// Open stock buckets for one SKU, grouped by (variant_key, batch_no) — powers
+// the DECREASE-adjustment picker so the operator takes stock from a real lot.
+export type InventoryBucket = {
+  warehouse_id: string;
+  variant_key: string;
+  batch_no: string | null;
+  product_name: string | null;
+  qty: number;
+};
+
+export function useInventoryBuckets(productCode: string | null, warehouseId: string | null) {
+  return useQuery({
+    queryKey: ['inventory', 'buckets', productCode, warehouseId],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (warehouseId) params.set('warehouseId', warehouseId);
+      return authedFetch<{ buckets: InventoryBucket[] }>(
+        `/inventory/buckets/${encodeURIComponent(productCode ?? '')}${params.toString() ? `?${params.toString()}` : ''}`,
+      ).then((r) => r.buckets);
+    },
+    enabled: Boolean(productCode && warehouseId),
+    staleTime: 15_000,
+    retry: 1,
   });
 }

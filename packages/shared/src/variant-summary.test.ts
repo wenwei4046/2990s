@@ -27,6 +27,16 @@ describe('buildVariantSummary', () => {
     expect(summary).not.toContain('LEG');
   });
 
+  it('shows the GRN-family fabricColor key as the fabric segment', () => {
+    // A sofa received via GRN/PI/PR stores its fabric under fabricColor; the
+    // summary must still surface it (was dropped before the alias fix).
+    const summary = buildVariantSummary('sofa', { fabricColor: 'AVANI01', seatHeight: '28' });
+    expect(summary).toContain('AVANI01');
+    // fabricCode still wins when both are present (canonical first).
+    expect(buildVariantSummary('sofa', { fabricCode: 'BF-17', fabricColor: 'AVANI01', seatHeight: '28' }))
+      .toContain('BF-17');
+  });
+
   it('bedframe summary labels the leg height and shows the chosen colour', () => {
     // Loo 2026-06-03: leg height must read as a labelled "LEG x" token (not a
     // bare number glued to the divan), and the picked colour must appear.

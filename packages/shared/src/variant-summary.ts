@@ -49,7 +49,10 @@ export function buildVariantSummary(
   if (isBedframe) fabricParts.push(str(variants.colourLabel));
   // Dedupe — when the colour label/code is just the fabric code again (e.g.
   // BF-07 whose colour label is also "BF-07"), don't repeat it ("BF-07 BF-07").
-  const fabric = [...new Set(fabricParts.filter(Boolean))].join(' ');
+  // GRN / PI / PR / Stock-Adjustment editors store the fabric under fabricColor;
+  // fall back to it when the SO-style keys are empty so received lines still show
+  // their fabric in the Description 2 summary.
+  const fabric = [...new Set(fabricParts.filter(Boolean))].join(' ') || str(variants.fabricColor);
   if (fabric) segments.push(fabric);
 
   // 2026-06-04 — POS handover sofa lines carry the leg pick as sofaLegHeight
