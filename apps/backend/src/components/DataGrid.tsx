@@ -348,11 +348,13 @@ function DataGridInner<T>({
   // and only falls back to searchValue — a broad multi-token blob — when the
   // cell is JSX with no clean value to offer, so the funnel is never blank.
   const filterColValue = useCallback((c: DataGridColumn<T>, row: T): string => {
-    if (c.filterValue) return c.filterValue(row);
-    if (c.groupValue) return c.groupValue(row);
+    // Always coerce to a string — a column callback may hand back undefined/null
+    // for some rows, and a non-string here can crash downstream string ops.
+    if (c.filterValue) return String(c.filterValue(row) ?? '');
+    if (c.groupValue) return String(c.groupValue(row) ?? '');
     const text = coerceSearchString(c.accessor(row));
     if (text) return text;
-    return c.searchValue ? c.searchValue(row) : '';
+    return String((c.searchValue ? c.searchValue(row) : '') ?? '');
   }, []);
 
   const toggleFilterValue = useCallback((colKey: string, val: string) => {
@@ -448,8 +450,12 @@ function DataGridInner<T>({
       let blob = '';
       for (const c of columns) {
         const sv = c.searchValue ? c.searchValue(row) : coerceSearchString(c.accessor(row));
-        // '\n' separator so adjacent columns can't form a false cross-boundary match.
-        blob += `${sv.toLowerCase()}\n`;
+        // Coerce defensively: a custom `searchValue` may return undefined/null or
+        // a non-string for some rows — that must NEVER crash the whole grid (it
+        // took the page down with "Cannot read properties of undefined (reading
+        // 'toLowerCase')"). '\n' separator so adjacent columns can't form a false
+        // cross-boundary match.
+        blob += `${String(sv ?? '').toLowerCase()}\n`;
       }
       m.set(row, blob);
     }
