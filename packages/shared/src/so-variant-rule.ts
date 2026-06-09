@@ -37,7 +37,9 @@ export const REQUIRED_VARIANT_AXES_BY_CATEGORY: Record<string, readonly VariantA
     { key: 'divanHeight', label: 'Divan Height', aliases: ['divanHeight'] },
     { key: 'legHeight',   label: 'Leg Height',   aliases: ['legHeight'] },
     { key: 'gap',         label: 'Gap',          aliases: ['gap'] },
-    { key: 'fabricCode',  label: 'Fabrics',      aliases: ['fabricCode'] },
+    // GRN-family editors store the fabric pick as fabricColor (see variant-key);
+    // accept it so a received line counts as fabric-complete.
+    { key: 'fabricCode',  label: 'Fabrics',      aliases: ['fabricCode', 'colorCode', 'colourCode', 'fabricColor'] },
   ],
   sofa: [
     // Backend coordinators fill seatHeight; the POS configurator captures the
@@ -45,7 +47,7 @@ export const REQUIRED_VARIANT_AXES_BY_CATEGORY: Record<string, readonly VariantA
     { key: 'seatHeight',  label: 'Seat Height',  aliases: ['seatHeight', 'depth'] },
     // Backend fills legHeight; POS sends sofaLegHeight (PR #473 leg picker).
     { key: 'legHeight',   label: 'Leg Height',   aliases: ['legHeight', 'sofaLegHeight'] },
-    { key: 'fabricCode',  label: 'Fabrics',      aliases: ['fabricCode'] },
+    { key: 'fabricCode',  label: 'Fabrics',      aliases: ['fabricCode', 'colorCode', 'colourCode', 'fabricColor'] },
   ],
 };
 

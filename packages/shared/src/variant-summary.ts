@@ -47,7 +47,10 @@ export function buildVariantSummary(
   // 2026-06-03 — "all option selections must show in the SO description").
   const fabricParts = [str(variants.fabricCode), str(variants.colorCode)];
   if (isBedframe) fabricParts.push(str(variants.colourLabel));
-  const fabric = fabricParts.filter(Boolean).join(' ');
+  // GRN / PI / PR / Stock-Adjustment editors store the fabric under fabricColor;
+  // fall back to it when the SO-style keys are empty so received lines still show
+  // their fabric in the Description 2 summary.
+  const fabric = fabricParts.filter(Boolean).join(' ') || str(variants.fabricColor);
   if (fabric) segments.push(fabric);
 
   // 2026-06-04 — POS handover sofa lines carry the leg pick as sofaLegHeight

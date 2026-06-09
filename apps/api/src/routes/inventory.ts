@@ -22,7 +22,12 @@
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
-import { isAdjustmentReasonCode } from '@2990s/shared';
+import {
+  isAdjustmentReasonCode,
+  computeVariantKey,
+  adjustmentIncreaseErrors,
+  type VariantAttrs,
+} from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
 import type { Env, Variables } from '../env';
@@ -645,13 +650,55 @@ inventory.post('/adjustments', async (c) => {
   const reasonCode = String(body.reasonCode ?? '');
   if (!isAdjustmentReasonCode(reasonCode)) return c.json({ error: 'reason_required' }, 400);
 
+  const warehouseId = String(body.warehouseId);
+  const productCode = String(body.productCode);
+  const itemGroup = (body.itemGroup as string | undefined) ?? null;
+  const variants = (body.variants as Record<string, unknown> | null | undefined) ?? null;
+  const batchNo = ((body.batchNo as string | undefined) ?? '').trim() || null;
+
+  // Resolve which stock bucket (variant_key + batch_no) this adjustment hits.
+  //   • INCREASE behaves like a mini-receipt: compute variant_key from the chosen
+  //     attributes (mirrors GRN) and gate on the shared variant+batch rule so the
+  //     found stock isn't stranded in the unclassified / no-batch bucket.
+  //   • DECREASE targets an EXISTING bucket the operator picked, so it arrives
+  //     with an explicit variantKey + batchNo; we only verify enough is on hand
+  //     (no orphan / negative bucket).
+  let variantKey: string;
+  if (qtyDelta > 0) {
+    const errs = adjustmentIncreaseErrors(itemGroup, variants, batchNo);
+    if (errs.length > 0) return c.json({ error: 'adjustment_incomplete', message: errs.join(' ') }, 422);
+    variantKey = body.variantKey != null
+      ? String(body.variantKey)
+      : computeVariantKey(itemGroup, (variants as VariantAttrs | null) ?? null);
+  } else {
+    variantKey = String(body.variantKey ?? '');
+    let avQ = sb.from('v_inventory_lots_open')
+      .select('qty_remaining')
+      .eq('warehouse_id', warehouseId)
+      .eq('product_code', productCode)
+      .eq('variant_key', variantKey);
+    avQ = batchNo == null ? avQ.is('batch_no', null) : avQ.eq('batch_no', batchNo);
+    const { data: openLots } = await avQ;
+    const available = ((openLots ?? []) as Array<{ qty_remaining: number | null }>)
+      .reduce((s, l) => s + Number(l.qty_remaining ?? 0), 0);
+    if (Math.abs(qtyDelta) > available) {
+      return c.json({
+        error: 'insufficient_bucket',
+        message: `Only ${available} on hand in that batch/variant — you can't take out ${Math.abs(qtyDelta)}.`,
+      }, 422);
+    }
+  }
+
   const { data, error } = await sb.from('inventory_movements').insert({
     movement_type: 'ADJUSTMENT',
-    warehouse_id: body.warehouseId,
-    product_code: body.productCode,
-    // Optional attribute-composition bucket (migration 0095). Adjustments
-    // target the '' (unclassified) bucket unless the caller specifies one.
-    variant_key: String(body.variantKey ?? ''),
+    warehouse_id: warehouseId,
+    product_code: productCode,
+    // Attribute-composition bucket (migration 0095) + dye-lot batch (0120). An
+    // increase computes these from the chosen attributes; a decrease carries the
+    // picked existing bucket. The FIFO trigger (0126) honours batch_no on
+    // ADJUSTMENT: +qty creates a batched lot, −qty consumes the batch FIFO.
+    variant_key: variantKey,
+    batch_no: batchNo,
     product_name: (body.productName as string) ?? null,
     qty: qtyDelta,
     unit_cost_sen: Number(body.unitCostSen ?? 0),
@@ -662,4 +709,43 @@ inventory.post('/adjustments', async (c) => {
   }).select('id').single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   return c.json({ movement: data }, 201);
+});
+
+/* ── Open stock buckets for one product (decrease-adjustment picker) ───────
+   Groups the OPEN lots (qty_remaining > 0) of one SKU by (variant_key, batch_no)
+   so a manual DECREASE adjustment can target the EXACT bucket it takes stock
+   from — never into a non-existent or wrong-attribute/-batch bucket. ?warehouseId
+   scopes to one warehouse. */
+inventory.get('/buckets/:productCode', async (c) => {
+  const sb = c.get('supabase');
+  const productCode = c.req.param('productCode');
+  const warehouseId = c.req.query('warehouseId');
+
+  let q = sb.from('v_inventory_lots_open')
+    .select('warehouse_id, variant_key, batch_no, product_name, qty_remaining')
+    .eq('product_code', productCode);
+  if (warehouseId) q = q.eq('warehouse_id', warehouseId);
+  const { data, error } = await q;
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+
+  type Lot = {
+    warehouse_id: string; variant_key: string | null; batch_no: string | null;
+    product_name: string | null; qty_remaining: number | null;
+  };
+  const byBucket = new Map<string, {
+    warehouse_id: string; variant_key: string; batch_no: string | null;
+    product_name: string | null; qty: number;
+  }>();
+  for (const l of (data ?? []) as Lot[]) {
+    const vk = l.variant_key ?? '';
+    const bn = l.batch_no ?? null;
+    const key = `${l.warehouse_id}|${vk}|${bn ?? ''}`;
+    const cur = byBucket.get(key);
+    if (cur) cur.qty += Number(l.qty_remaining ?? 0);
+    else byBucket.set(key, { warehouse_id: l.warehouse_id, variant_key: vk, batch_no: bn, product_name: l.product_name, qty: Number(l.qty_remaining ?? 0) });
+  }
+  const buckets = [...byBucket.values()]
+    .filter((b) => b.qty > 0)
+    .sort((a, b) => (a.batch_no ?? '').localeCompare(b.batch_no ?? '') || a.variant_key.localeCompare(b.variant_key));
+  return c.json({ buckets });
 });
