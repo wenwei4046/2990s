@@ -13,20 +13,53 @@
 
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Save, X, Minus, Plus, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Save, X, Minus, Plus, AlertTriangle, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { ADJUSTMENT_REASONS } from '@2990s/shared';
+import { ADJUSTMENT_REASONS, adjustmentIncreaseErrors } from '@2990s/shared';
 import {
   useWarehouses,
   useStockAdjustment,
   useInventoryProductBreakdown,
+  useInventoryBuckets,
 } from '../lib/inventory-queries';
-import { useMfgProducts } from '../lib/mfg-products-queries';
+import { useMfgProducts, useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
 type AdjustmentType = 'increase' | 'decrease';
+
+/* Total Height is AUTO-COMPUTED for bedframe = Divan + Leg + Gap (mirrors the
+   GRN / PO variant editor); it is never a manual pick. */
+const parseInches = (s: unknown): number => {
+  if (s == null) return 0;
+  const m = String(s).match(/(-?\d+(?:\.\d+)?)/);
+  return m && m[1] ? Number(m[1]) : 0;
+};
+
+/* Per-category dropdown — a small local copy of the GRN/PO variant picker so a
+   found sofa/bedframe carries the same attributes a real order line needs. */
+const VariantSelect = ({
+  label, options, value, onChange,
+}: {
+  label: string;
+  options: Array<{ value: string; priceSen: number }>;
+  value: string;
+  onChange: (v: string) => void;
+}) => (
+  <label className={styles.field}>
+    <span className={styles.fieldLabel}>{label}</span>
+    <span className={styles.selectWrap}>
+      <select className={styles.fieldSelect} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value=""></option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>{o.value}</option>
+        ))}
+      </select>
+      <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+    </span>
+  </label>
+);
 
 export const StockAdjustmentNew = () => {
   const navigate = useNavigate();
@@ -41,9 +74,38 @@ export const StockAdjustmentNew = () => {
   const [reasonCode, setReasonCode]   = useState<string>('');
   const [notes, setNotes]             = useState<string>('');
 
+  // ── Variant + batch (sofa / bedframe) ──────────────────────────────
+  // itemGroup is the picked SKU's category, lowercased. variants holds the
+  // chosen attribute values (same keys the GRN / PO store). batchNo is a plain
+  // text lot label. On DECREASE the picker fills variantKey + batchNo from an
+  // existing stock bucket instead of free entry.
+  const [itemGroup, setItemGroup]   = useState<string>('');
+  const [variants, setVariants]     = useState<Record<string, unknown>>({});
+  const [batchNo, setBatchNo]       = useState<string>('');
+  const [variantKey, setVariantKey] = useState<string>('');
+
   // ── Data ───────────────────────────────────────────────────────────
   const warehouses = useWarehouses();
   const allSkus    = useMfgProducts();
+
+  // Dropdown pools for the sofa / bedframe variant editor — same sources the
+  // GRN / PO forms use (divan/leg height, gap, seat size; specials by category).
+  const maintQ = useMaintenanceConfig('master');
+  const maint  = maintQ.data?.data ?? null;
+  const specialAddonsQ = useSpecialAddons();
+  const specialsPools = useMemo(() => {
+    const rows = (specialAddonsQ.data ?? [])
+      .filter((r) => r.active)
+      .slice()
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.code.localeCompare(b.code));
+    const pick = (cat: string) => rows.filter((r) => r.categories.includes(cat)).map((r) => ({ value: r.code, priceSen: 0 }));
+    return { bedframe: pick('BEDFRAME'), sofa: pick('SOFA') };
+  }, [specialAddonsQ.data]);
+
+  // Open stock buckets for the DECREASE "Take from" picker — only fires once
+  // both warehouse + SKU are set (enabled guard inside the hook).
+  const bucketsQ = useInventoryBuckets(productCode || null, warehouseId || null);
+  const buckets  = bucketsQ.data ?? [];
   // Drive the breakdown lookup off the picked code. The hook only fires
   // when productCode is non-empty (enabled guard inside the hook).
   const breakdown  = useInventoryProductBreakdown(productCode || null);
@@ -78,11 +140,62 @@ export const StockAdjustmentNew = () => {
     setProductCode(code);
     const sku = (allSkus.data ?? []).find((p) => p.code === code);
     if (sku) setProductName(sku.name);
+    // Category drives the variant editor below (only sofa / bedframe have one).
+    setItemGroup(sku?.category ? sku.category.toLowerCase() : '');
+    // Fresh SKU → clear any variant / batch / bucket carried from the last pick.
+    setVariants({});
+    setBatchNo('');
+    setVariantKey('');
   };
+
+  // Set one variant value; auto-compute bedframe Total Height = Divan + Leg + Gap.
+  const setVariant = (key: string, value: string) =>
+    setVariants((prev) => {
+      const next: Record<string, unknown> = { ...prev, [key]: value };
+      if (itemGroup === 'bedframe' && (key === 'divanHeight' || key === 'legHeight' || key === 'gap')) {
+        const d  = parseInches(next.divanHeight);
+        const lg = parseInches(next.legHeight);
+        const g  = parseInches(next.gap);
+        next.totalHeight = (d === 0 && lg === 0 && g === 0) ? '' : `${d + lg + g}"`;
+      }
+      return next;
+    });
+
+  // DECREASE — operator picks which existing lot to take from. Stores the exact
+  // bucket's variant_key + batch_no and caps the qty input to that bucket.
+  const hasVariantGroup = itemGroup === 'sofa' || itemGroup === 'bedframe';
+  const onPickBucket = (value: string) => {
+    if (!value) { setVariantKey(''); setBatchNo(''); return; }
+    const b = buckets.find((x) => `${x.variant_key} ${x.batch_no ?? ''}` === value);
+    if (!b) return;
+    setVariantKey(b.variant_key);
+    setBatchNo(b.batch_no ?? '');
+    // Cap the qty down so a decrease can't exceed the chosen lot.
+    setQty((q) => Math.min(q, b.qty));
+  };
+
+  // Qty ceiling for a DECREASE — the picked lot's quantity (null = uncapped).
+  const bucketQtyCap = useMemo(() => {
+    if (type !== 'decrease' || (!variantKey && !batchNo)) return null;
+    const b = buckets.find((x) => x.variant_key === variantKey && (x.batch_no ?? '') === batchNo);
+    return b ? b.qty : null;
+  }, [type, variantKey, batchNo, buckets]);
 
   const onSave = () => {
     if (!canSave) {
       window.alert('Fill Warehouse, SKU, Qty, and pick a Reason before saving.');
+      return;
+    }
+    // INCREASE gate — sofa / bedframe must carry their variant attributes (and
+    // sofa a batch number) before the found stock can be saved.
+    if (type === 'increase' && hasVariantGroup) {
+      const errs = adjustmentIncreaseErrors(itemGroup, variants, batchNo);
+      if (errs.length > 0) { window.alert(errs.join('\n')); return; }
+    }
+    // DECREASE gate — when there are open lots, the operator must say which one
+    // the stock comes out of (so the right variant/batch is reduced).
+    if (type === 'decrease' && buckets.length > 0 && !variantKey && !batchNo) {
+      window.alert('Pick which batch/variant to take the stock from.');
       return;
     }
     if (willGoNegative) {
@@ -91,6 +204,7 @@ export const StockAdjustmentNew = () => {
       );
       if (!proceed) return;
     }
+    const trimmedBatch = batchNo.trim();
     adjust.mutate(
       {
         warehouseId,
@@ -99,6 +213,12 @@ export const StockAdjustmentNew = () => {
         qtyDelta,
         reasonCode,
         notes: notes.trim() || undefined,
+        // Variant + batch. On INCREASE the backend computes variant_key from
+        // `variants`; on DECREASE the picker supplies the exact bucket.
+        itemGroup: hasVariantGroup ? itemGroup : undefined,
+        variants:  type === 'increase' && hasVariantGroup ? variants : undefined,
+        batchNo:   trimmedBatch || undefined,
+        variantKey: type === 'decrease' ? (variantKey || undefined) : undefined,
       },
       {
         onSuccess: () => navigate('/inventory/adjustments'),
@@ -252,17 +372,130 @@ export const StockAdjustmentNew = () => {
             </div>
           </div>
 
+          {/* INCREASE — variant editor + batch number for sofa / bedframe. The
+              found stock must carry the same attributes a real order line needs,
+              so it can be matched and allocated later. */}
+          {type === 'increase' && hasVariantGroup && maint && (
+            <div style={{
+              marginTop: 'var(--space-4)',
+              background: 'var(--c-cream)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-md)',
+              padding: 'var(--space-3)',
+            }}>
+              <div style={{
+                fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', fontWeight: 700,
+                letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--fg-muted)',
+                marginBottom: 'var(--space-2)',
+              }}>{itemGroup} Variants</div>
+              {itemGroup === 'bedframe' ? (
+                <div className={styles.formGrid4}>
+                  <VariantSelect label="Divan Height" options={maint.divanHeights}
+                    value={String(variants.divanHeight ?? '')}
+                    onChange={(v) => setVariant('divanHeight', v)} />
+                  <VariantSelect label="Gap"
+                    options={maint.gaps.map((g) => ({ value: g, priceSen: 0 }))}
+                    value={String(variants.gap ?? '')}
+                    onChange={(v) => setVariant('gap', v)} />
+                  <VariantSelect label="Leg Height" options={maint.legHeights}
+                    value={String(variants.legHeight ?? '')}
+                    onChange={(v) => setVariant('legHeight', v)} />
+                  {/* Fabric / Colour — stored as fabricCode (the key the variant
+                      bucket + the required-axis gate read). Free text. */}
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Fabric / Colour</span>
+                    <input className={styles.fieldInput}
+                      value={String(variants.fabricCode ?? '')}
+                      onChange={(e) => setVariant('fabricCode', e.target.value)} />
+                  </label>
+                  <VariantSelect label="Special" options={specialsPools.bedframe}
+                    value={String(variants.special ?? '')}
+                    onChange={(v) => setVariant('special', v)} />
+                </div>
+              ) : (
+                <div className={styles.formGrid4}>
+                  <VariantSelect label="Seat Size"
+                    options={maint.sofaSizes.map((s) => ({ value: s, priceSen: 0 }))}
+                    value={String(variants.seatHeight ?? '')}
+                    onChange={(v) => setVariant('seatHeight', v)} />
+                  <VariantSelect label="Leg Height" options={maint.sofaLegHeights}
+                    value={String(variants.legHeight ?? '')}
+                    onChange={(v) => setVariant('legHeight', v)} />
+                  <VariantSelect label="Special" options={specialsPools.sofa}
+                    value={String(variants.special ?? '')}
+                    onChange={(v) => setVariant('special', v)} />
+                  {/* Fabric — stored as fabricCode (the key the variant bucket +
+                      the required-axis gate read). Free text. */}
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Fabric / Colour</span>
+                    <input className={styles.fieldInput}
+                      value={String(variants.fabricCode ?? '')}
+                      onChange={(e) => setVariant('fabricCode', e.target.value)} />
+                  </label>
+                </div>
+              )}
+              {/* Batch Number — required for sofa (so the stock can be allocated
+                  to an order later); optional for bedframe. */}
+              <label className={`${styles.field} ${styles.fieldFull}`} style={{ marginTop: 'var(--space-3)' }}>
+                <span className={styles.fieldLabel}>Batch Number{itemGroup === 'sofa' ? ' *' : ''}</span>
+                <input
+                  type="text"
+                  value={batchNo}
+                  onChange={(e) => setBatchNo(e.target.value)}
+                  placeholder="Lot / batch label for this found stock"
+                  className={styles.fieldInput}
+                />
+                {itemGroup === 'sofa' && (
+                  <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                    Required — sofa stock can't be allocated to an order without a batch.
+                  </span>
+                )}
+              </label>
+            </div>
+          )}
+
+          {/* DECREASE — "Take from" picker. Pick which existing lot the stock
+              comes out of (so the right variant/batch is reduced), instead of
+              free variant entry. Shows only when warehouse + SKU are set. */}
+          {type === 'decrease' && warehouseId && productCode && (
+            <div style={{ marginTop: 'var(--space-4)' }}>
+              {bucketsQ.isLoading ? (
+                <span style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>Loading open stock…</span>
+              ) : buckets.length === 0 ? (
+                <span style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>No open stock to take from.</span>
+              ) : (
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>Take from *</span>
+                  <select
+                    value={variantKey || batchNo ? `${variantKey} ${batchNo}` : ''}
+                    onChange={(e) => onPickBucket(e.target.value)}
+                    className={styles.fieldInput}
+                  >
+                    <option value="">— Pick which batch / variant —</option>
+                    {buckets.map((b) => (
+                      <option key={`${b.variant_key} ${b.batch_no ?? ''}`} value={`${b.variant_key} ${b.batch_no ?? ''}`}>
+                        {(b.batch_no || 'No batch')} · {(b.variant_key || 'plain')} · {b.qty} PCS
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+          )}
+
           <div className={styles.formGrid2} style={{ marginTop: 'var(--space-4)' }}>
-            {/* Qty — absolute value */}
+            {/* Qty — absolute value. On DECREASE, capped to the chosen lot. */}
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Qty * (positive integer)</span>
               <input
                 type="number"
                 min={1}
+                max={bucketQtyCap ?? undefined}
                 step={1}
                 value={qty}
                 onChange={(e) => {
-                  const n = Math.max(0, Math.floor(Number(e.target.value) || 0));
+                  let n = Math.max(0, Math.floor(Number(e.target.value) || 0));
+                  if (bucketQtyCap != null) n = Math.min(bucketQtyCap, n);
                   setQty(n);
                 }}
                 className={styles.fieldInput}
