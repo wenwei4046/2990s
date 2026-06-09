@@ -445,7 +445,7 @@ const SkuMasterTab = () => {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <Button variant="ghost" size="md" onClick={() => exportSkusCsv(rows, sofaSizes, tier)}>
+          <Button variant="ghost" size="md" onClick={() => exportSkusCsv(rows, sofaSizes, tier, category)}>
             <Download {...ICON_PROPS} />
             <span>Export SKUs</span>
           </Button>
@@ -3655,7 +3655,7 @@ const CSV_TAIL_COLS = ['base_price_sen', 'price1_sen', 'unit_m3_milli', 'status'
 
 const priceColForSize = (size: string) => `price_${size}_sen`;
 
-function exportSkusCsv(rows: MfgProductRow[], sofaSizes: string[], tier: SofaPriceTier): void {
+function exportSkusCsv(rows: MfgProductRow[], sofaSizes: string[], tier: SofaPriceTier, category: MfgCategory | 'all'): void {
   const sizeCols = sofaSizes.map(priceColForSize);
   const columns = [...CSV_HEAD_COLS, ...sizeCols, ...CSV_TAIL_COLS];
 
@@ -3714,7 +3714,11 @@ function exportSkusCsv(rows: MfgProductRow[], sofaSizes: string[], tier: SofaPri
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `2990s-skus-${new Date().toISOString().slice(0, 10)}.csv`;
+  // Stamp the active category into the filename (e.g. 2990s-skus-bedframe-…csv)
+  // so a file's contents are obvious — the export only ever holds the rows
+  // currently filtered on screen (Wei Siang 2026-06-09).
+  const catTag = category === 'all' ? '' : `${category.toLowerCase()}-`;
+  a.download = `2990s-skus-${catTag}${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
