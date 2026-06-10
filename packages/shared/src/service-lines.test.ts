@@ -16,7 +16,7 @@ describe('buildDeliveryFeeServiceLines (§4.1 decomposition)', () => {
     const f = fee({ base: 15000, total: 15000 });
     const lines = buildDeliveryFeeServiceLines(f);
     expect(lines).toEqual([
-      { itemCode: 'SVC-DELIVERY', description: 'Delivery fee', qty: 1, unitPriceSen: 15000, totalSen: 15000 },
+      { itemCode: 'SVC-DELIVERY', description: 'Delivery fee', remark: null, qty: 1, unitPriceSen: 15000, totalSen: 15000 },
     ]);
   });
 
@@ -32,12 +32,20 @@ describe('buildDeliveryFeeServiceLines (§4.1 decomposition)', () => {
     expect(lines.reduce((s, l) => s + l.totalSen, 0)).toBe(f.total);
   });
 
-  it('cross-order follow-up → SVC-DELIVERY-CROSS carrying the source SO', () => {
+  it('cross-order follow-up → SVC-DELIVERY-CROSS, source SO in the REMARK (Loo 2026-06-10)', () => {
     const f = fee({ base: 5000, total: 5000, isFollowup: true });
     const lines = buildDeliveryFeeServiceLines(f, 'SO-2606-011');
     expect(lines).toHaveLength(1);
     expect(lines[0]!.itemCode).toBe('SVC-DELIVERY-CROSS');
-    expect(lines[0]!.description).toContain('SO-2606-011');
+    expect(lines[0]!.description).toBe('Cross-category delivery');
+    expect(lines[0]!.remark).toBe('Follow-up of SO-2606-011');
+  });
+
+  it('cross-order follow-up without a source doc → no remark', () => {
+    const f = fee({ base: 5000, total: 5000, isFollowup: true });
+    const lines = buildDeliveryFeeServiceLines(f);
+    expect(lines[0]!.description).toBe('Cross-category delivery');
+    expect(lines[0]!.remark).toBeNull();
   });
 
   it('additional operator fee → SVC-DELIVERY-ADD line', () => {
@@ -80,13 +88,14 @@ describe('computeAddonServiceLines (§4.2 + D6)', () => {
     expect(lines[0]).toMatchObject({ itemCode: 'SVC-DISPOSE-BEDFRAME', qty: 2, totalSen: 16000 });
   });
 
-  it('lift 5 floors × 2 items → chargeable (5−2)×2 = 6 units × RM100 (D6)', () => {
+  it('lift 5 floors × 2 items → chargeable (5−2)×2 = 6 units × RM100, math in the REMARK (D6 amended)', () => {
     const lines = computeAddonServiceLines([{ id: 'lift', floorsCount: 5, itemsCount: 2 }], ADDON_ROWS);
     expect(lines[0]).toMatchObject({
       itemCode: 'SVC-LIFT-CARRY', qty: 6, unitPriceSen: 10000, totalSen: 60000,
     });
-    expect(lines[0]!.description).toContain('5 floors × 2 items');
-    expect(lines[0]!.description).toContain('first 2 floors free');
+    expect(lines[0]!.description).toBe('Lift access — 3rd floor & above');
+    expect(lines[0]!.remark).toContain('5 floors × 2 items');
+    expect(lines[0]!.remark).toContain('first 2 floors free');
   });
 
   it('lift within the free band (≤2 floors) → no line', () => {

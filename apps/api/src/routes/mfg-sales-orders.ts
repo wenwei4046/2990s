@@ -2224,10 +2224,10 @@ mfgSalesOrders.post('/', async (c) => {
         item_code: spec.itemCode,
         description: spec.description,
         description2: null,
-        /* Spec 2026-06-06 — key parity with goods rows (PostgREST null-fills
-           missing keys, but the TS row type from baseRow now requires it).
-           Service lines carry no operator product-page remark. */
-        remark: null,
+        /* Loo 2026-06-10 — the order-specific detail (cross-order source SO,
+           lift floors×items math) rides in remark; description stays the
+           stable SKU wording so the line reads as the catalog service. */
+        remark: spec.remark ?? null,
         uom: 'UNIT',
         qty: spec.qty,
         unit_price_centi: spec.unitPriceSen,
