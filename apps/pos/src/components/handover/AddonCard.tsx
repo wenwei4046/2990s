@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Recycle, ArrowUpFromLine, Wrench, Package } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { MAX_LIFT_TIER_FLOOR } from '@2990s/shared/service-sku';
 import type { AddonRow } from '../../lib/queries';
 import type { AddonSelection } from '../../lib/handover-helpers';
 import styles from './AddonCard.module.css';
@@ -70,12 +71,16 @@ export const AddonCard = ({
           {addon.kind === 'floors_items' ? (
             <>
               <label className={styles.expandField}>
+                {/* Capped at the per-floor tier SKU ceiling (Loo 2026-06-11:
+                    we don't carry above the 5th floor) — keeps every order on
+                    a SVC-LIFT-CARRY-F* SKU instead of the legacy fallback. */}
                 <span>Floors</span>
                 <input
                   type="number"
                   min={0}
+                  max={MAX_LIFT_TIER_FLOOR}
                   value={selection.floorsCount ?? 0}
-                  onChange={(e) => onChange({ ...selection, floorsCount: Math.max(0, Number(e.target.value)) })}
+                  onChange={(e) => onChange({ ...selection, floorsCount: Math.min(MAX_LIFT_TIER_FLOOR, Math.max(0, Number(e.target.value))) })}
                 />
               </label>
               <label className={styles.expandField}>
