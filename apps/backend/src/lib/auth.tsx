@@ -34,6 +34,16 @@ export const posOnlyAllowedPath = (pathname: string): boolean =>
   pathname.startsWith('/mfg-sales-orders') &&
   !pathname.startsWith('/mfg-sales-orders/maintenance');
 
+/* TEMPORARY (Loo 2026-06-10, SO emergency hatch) — the POS selling roles that
+   create raw SOs through the hatch may hand-edit the selling unit price on
+   the SO line card. The new items they order this way often have no
+   sell_price_sen yet, so the locked field would book every line at RM 0.
+   The server trust boundary is UNCHANGED: lines the server can price
+   authoritatively still enforce the catalog price (>0.5% drift → 400); this
+   only unlocks the input. Remove with the hatch. */
+export const isHatchSales = (role: StaffRole | null | undefined): boolean =>
+  role === 'sales' || role === 'sales_executive' || role === 'outlet_manager';
+
 /* Admin-level roles — anywhere the UI gated on role === 'admin', it should
    ALSO accept super_admin. Use isAdminLevel() so the widening is in one
    place. (super_admin is a strict superset of admin.) */

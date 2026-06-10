@@ -50,7 +50,7 @@ import {
   fetchSoItemPhotoSignedUrl,
 } from '../lib/flow-queries';
 import { useDebouncedValue } from '../lib/hooks';
-import { useAuth, isAdminLevel } from '../lib/auth';
+import { useAuth, isAdminLevel, isHatchSales } from '../lib/auth';
 import { CATEGORY_BADGE } from '../lib/category-badges';
 import styles from './SoLineCard.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -169,9 +169,14 @@ const SoLineCardInner = ({
   /* SO-SKU spec P4 (D4, Loo 2026-06-05) — the unit price is LOCKED to the
      SKU Master sell price for everyone below admin. It auto-fills on pick and
      the server recompute is authoritative at save; only admin-level roles can
-     hand-edit (the audited /override route is gated server-side too). */
+     hand-edit (the audited /override route is gated server-side too).
+     TEMPORARY (Loo 2026-06-10, SO emergency hatch) — the POS selling roles
+     creating raw SOs through the hatch may also type the price: their new
+     items often carry no sell_price_sen, so the locked field booked RM 0
+     lines. The server still enforces the catalog price on lines it CAN price
+     (isHatchSales in lib/auth.tsx — remove with the hatch). */
   const { staff } = useAuth();
-  const canEditPrice = isAdminLevel(staff?.role);
+  const canEditPrice = isAdminLevel(staff?.role) || isHatchSales(staff?.role);
 
   const [search, setSearch] = useState(draft.description || draft.itemCode || '');
   const [picked, setPicked]         = useState<MfgProductRow | null>(null);
