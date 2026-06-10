@@ -14,14 +14,23 @@ import {
   ImageOff,
   Settings,
   Plus,
+  ExternalLink,
   type LucideIcon,
 } from 'lucide-react';
 import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow } from '../lib/queries';
-import { useStaff, isGlobalCurator } from '../lib/staff';
+import { useStaff, isGlobalCurator, isPosSalesRole } from '../lib/staff';
 import { useCart, cartHasSofa, cartHasNonSofa } from '../state/cart';
 import { Topbar } from '../components/Topbar';
 import { CustomerOrderFab } from '../components/CustomerOrderFab';
 import styles from './Catalog.module.css';
+
+/* TEMPORARY (goes with the Backend emergency hatch) — Backend portal origin
+   for the sales-side "Create Sales Order" link. Overridable per environment
+   via VITE_BACKEND_PORTAL_URL; defaults to the live CF Pages deployment (the
+   same value the API's wrangler.toml BACKEND_PORTAL_URL carries). */
+const BACKEND_PORTAL_URL =
+  (import.meta.env.VITE_BACKEND_PORTAL_URL as string | undefined) ??
+  'https://2990s-backend.pages.dev';
 
 // PR — Commander 2026-05-27: Catalog now reads `mfg_products` (Backend SKU
 // Master output) JOINed with `product_models` (photo + Model-level metadata).
@@ -327,6 +336,29 @@ export const Catalog = () => {
                 Quick Picks + Combos. Sales etc. don't see the section, and the
                 three routes are guarded in router.tsx (MaintainGate) so a
                 hand-typed URL can't bypass the hide. */}
+            {/* TEMPORARY (Loo 2026-06-10) — emergency hatch while the new POS
+                order flow stabilises: sales-side roles get a link to the
+                Backend's raw SO create form (new tab; Backend login is its own
+                session, so first use asks for email + password). The Backend's
+                POS-only block carves out the Sales Order module to match
+                (apps/backend/src/lib/auth.tsx posOnlyAllowedPath). Delete this
+                block + isPosSalesRole + the Backend carve-out together once
+                everyone creates orders from POS again. */}
+            {isPosSalesRole(staff?.role) && (
+              <>
+                <div className={styles.sideHeading}>Backend</div>
+                <a
+                  href={`${BACKEND_PORTAL_URL}/mfg-sales-orders/new`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={styles.sideItem}
+                >
+                  <ExternalLink size={16} strokeWidth={1.75} />
+                  <span className={styles.sideLabel}>Create Sales Order</span>
+                </a>
+              </>
+            )}
+
             {isGlobalCurator(staff?.role) && (
               <>
                 <div className={styles.sideHeading}>Maintain</div>

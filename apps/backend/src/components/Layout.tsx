@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useState } from 'react';
 import { Outlet, Navigate, useLocation } from 'react-router';
-import { useAuth, POS_ONLY_ROLES } from '../lib/auth';
+import { useAuth, POS_ONLY_ROLES, posOnlyAllowedPath } from '../lib/auth';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { CommandPalette } from './CommandPalette';
@@ -65,9 +65,15 @@ export const Layout = () => {
   if (!staff) return <Navigate to="/no-access" replace />;
 
   /* Migration 0086 — POS-only roles (sales / sales_executive / outlet_manager)
-     are blocked from the Backend portal at the route guard level. */
-  if (POS_ONLY_ROLES.has(staff.role)) {
-    return <Navigate to="/no-access" replace />;
+     are blocked from the Backend portal at the route guard level.
+     TEMPORARY (Loo 2026-06-10) — the Sales Order module is carved out as an
+     emergency raw-SO-creation hatch for salespeople while the new POS order
+     flow stabilises (posOnlyAllowedPath in lib/auth.tsx). Any other path —
+     including the default / → /dashboard landing — bounces them to the SO
+     create form instead of /no-access. Restore the hard block when the hatch
+     is retired. */
+  if (POS_ONLY_ROLES.has(staff.role) && !posOnlyAllowedPath(location.pathname)) {
+    return <Navigate to="/mfg-sales-orders/new" replace />;
   }
 
   const meta: RouteMeta = ROUTE_META[location.pathname] ?? { title: 'Backend', sub: '' };

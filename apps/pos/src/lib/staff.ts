@@ -53,6 +53,15 @@ export const isGlobalCurator = (role: string | undefined): boolean =>
 export const canViewAllSales = (role: string | undefined): boolean =>
   role === 'super_admin' || role === 'master_account';
 
+/** TEMPORARY (Loo 2026-06-10) — sales-side POS roles that see the emergency
+ *  "Create Sales Order" link in the Catalog sidebar, which opens the Backend
+ *  raw SO form (/mfg-sales-orders/new) in a new tab while the new POS order
+ *  flow stabilises. The Backend's POS-only block has a matching carve-out
+ *  (apps/backend/src/lib/auth.tsx posOnlyAllowedPath). Remove both together
+ *  once everyone creates orders from POS again. */
+export const isPosSalesRole = (role: string | undefined): boolean =>
+  role === 'sales' || role === 'sales_executive' || role === 'outlet_manager';
+
 export interface StaffOption { id: string; name: string; }
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
