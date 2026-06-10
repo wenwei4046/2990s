@@ -6,7 +6,7 @@ import { supabaseAuth } from '../middleware/auth';
 import { pinRateLimiter, createPinRateLimiter } from '../lib/pin-rate-limit';
 import { hashPin, verifyPin } from '../lib/bcrypt';
 import { monthBoundsMy, rangeBoundsMy } from '../lib/my-time';
-import { canViewAllSales } from '../lib/roles';
+import { canViewAllSales, isSelfScopedSales } from '../lib/roles';
 
 export const pos = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -116,6 +116,42 @@ pos.post('/pin-login', async (c) => {
     return c.json({ error: 'session_issue_failed', detail: linkErr?.message }, 500);
   }
   return c.json({ tokenHash: link.properties.hashed_token, email: staff.email }, 200);
+});
+
+/* POST /pos/backend-sso — TEMPORARY (Loo 2026-06-10, Backend SO emergency
+   hatch). Salespeople have no Backend password (POS signs them in via PIN →
+   magic-link token, see /pin-login above), so the POS "Create Sales Order"
+   button can't drop them on the Backend login page. This mints a one-time
+   magic-link token for the CALLER'S OWN email — same mechanism as /pin-login —
+   which the POS hands to the Backend's /sso page (`#token_hash=…`). verifyOtp
+   there creates a fresh, independent session (its own refresh-token family;
+   the POS tablet's session is untouched). Gated to the same roles that see
+   the button. Remove with the hatch (apps/backend posOnlyAllowedPath). */
+pos.post('/backend-sso', supabaseAuth, async (c) => {
+  const user = c.get('user');
+
+  const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  const { data: staff, error } = await adminClient
+    .from('staff')
+    .select('role, active, email')
+    .eq('id', user.id)
+    .maybeSingle();
+  if (error) return c.json({ error: 'fetch_failed', detail: error.message }, 500);
+  if (!staff?.active || !isSelfScopedSales(staff.role) || !staff.email) {
+    return c.json({ error: 'not_allowed' }, 403);
+  }
+
+  const { data: link, error: linkErr } = await adminClient.auth.admin.generateLink({
+    type: 'magiclink',
+    email: staff.email as string,
+  });
+  if (linkErr || !link?.properties?.hashed_token) {
+    return c.json({ error: 'session_issue_failed', detail: linkErr?.message }, 500);
+  }
+  return c.json({ tokenHash: link.properties.hashed_token }, 200);
 });
 
 // POST /pos/verify-pin — post-session PIN re-check used by the My Orders gate.
