@@ -3650,14 +3650,35 @@ const normalizeHeight = (h: unknown): string => String(h ?? '').replace('"', '')
 
 /** Fixed leading + trailing columns. The per-size price columns are spliced
  *  in between, derived from the live sofaSizes config at export time. */
-const CSV_HEAD_COLS = ['code', 'name', 'category', 'description', 'base_model', 'size_label', 'price_tier'] as const;
-const CSV_TAIL_COLS = ['base_price_sen', 'price1_sen', 'unit_m3_milli', 'status', 'branding'] as const;
-
-const priceColForSize = (size: string) => `price_${size}_sen`;
+// CSV money columns are written in plain RINGGIT (e.g. 1535, or 1535.50 when
+// there are cents) — never raw sen (153500 reads like "RM153,500") and never a
+// forced ".00" tail (the operator types whole-ringgit prices and doesn't want
+// to add decimals every time — Wei Siang 2026-06-09). Round-trip stays exact
+// because money is 2dp: import multiplies by 100 back to sen.
+const priceColForSize = (size: string) => `price_${size}`;
+/** sen → "1535" / "1535.50" (blank when unset, no trailing .00). */
+const senToRm = (sen: number | null | undefined): string => {
+  if (sen == null) return '';
+  const ringgit = Math.trunc(sen / 100);
+  const cents = Math.abs(sen % 100);
+  return cents === 0 ? String(ringgit) : `${ringgit}.${String(cents).padStart(2, '0')}`;
+};
 
 function exportSkusCsv(rows: MfgProductRow[], sofaSizes: string[], tier: SofaPriceTier, category: MfgCategory | 'all'): void {
+  // Columns are TAILORED to the category being exported, so an operator only
+  // sees cells they can actually fill (Wei Siang 2026-06-09):
+  //   • SOFA      → price_tier + one column per sofa size (the per-tier prices)
+  //   • non-SOFA  → base_price + price1 (flat pricing; no sofa size columns)
+  //   • All       → the union of both (mixed-category dump)
+  const wantSofa = category === 'all' || category === 'SOFA';
+  const wantFlat = category === 'all' || category !== 'SOFA';
   const sizeCols = sofaSizes.map(priceColForSize);
-  const columns = [...CSV_HEAD_COLS, ...sizeCols, ...CSV_TAIL_COLS];
+  const columns = [
+    'code', 'name', 'category', 'description', 'base_model', 'size_label',
+    ...(wantSofa ? ['price_tier', ...sizeCols] : []),
+    ...(wantFlat ? ['base_price', 'price1'] : []),
+    'unit_m3_milli', 'status', 'branding',
+  ];
 
   // RFC4180: quote if contains comma, quote, or newline.
   const cell = (v: unknown): string => {
@@ -3696,16 +3717,14 @@ function exportSkusCsv(rows: MfgProductRow[], sofaSizes: string[], tier: SofaPri
       }
       const sizeCells: Record<string, unknown> = {};
       for (const size of sofaSizes) {
-        const p = m.get(normalizeHeight(size));
-        sizeCells[priceColForSize(size)] = p == null ? '' : p;
+        sizeCells[priceColForSize(size)] = senToRm(m.get(normalizeHeight(size)));
       }
       emit({ price_tier: tier, ...sizeCells });
     } else {
       // Bedframe / mattress / accessory / service — flat base + price1.
       emit({
-        price_tier:     '',
-        base_price_sen: r.base_price_sen ?? '',
-        price1_sen:     r.price1_sen ?? '',
+        base_price: senToRm(r.base_price_sen),
+        price1:     senToRm(r.price1_sen),
       });
     }
   }
@@ -3822,11 +3841,20 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
         if (has(first.status))     out.status = first.status;
         if (has(first.branding))   out.branding = first.branding;
 
-        // base_price_sen / price1_sen — take the first row that filled them.
-        const baseRow = group.find((g) => has(g.base_price_sen));
-        if (baseRow) out.base_price_sen = Number(baseRow.base_price_sen);
-        const p1Row = group.find((g) => has(g.price1_sen));
-        if (p1Row) out.price1_sen = Number(p1Row.price1_sen);
+        // Money is read in RINGGIT (new export, e.g. 1535.00 → 153500 sen). A
+        // legacy `_sen` column is still honoured as a fallback so any file from
+        // an earlier export round-trips. Returns null when neither is present.
+        const senOf = (rm: string | undefined, sen: string | undefined): number | null => {
+          if (has(rm)) { const n = parseFloat(rm as string); return Number.isFinite(n) ? Math.round(n * 100) : null; }
+          if (has(sen)) { const n = Number(sen); return Number.isFinite(n) ? Math.round(n) : null; }
+          return null;
+        };
+
+        // base_price / price1 — take the first row that filled them.
+        const baseRow = group.find((g) => has(g.base_price) || has(g.base_price_sen));
+        if (baseRow) { const v = senOf(baseRow.base_price, baseRow.base_price_sen); if (v != null) out.base_price_sen = v; }
+        const p1Row = group.find((g) => has(g.price1) || has(g.price1_sen));
+        if (p1Row) { const v = senOf(p1Row.price1, p1Row.price1_sen); if (v != null) out.price1_sen = v; }
         const m3Row = group.find((g) => has(g.unit_m3_milli));
         if (m3Row) out.unit_m3_milli = Number(m3Row.unit_m3_milli);
 
@@ -3837,16 +3865,14 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
         const seat: SeatHeightPrice[] = [];
         let tierError: string | null = null;
         for (const g of group) {
-          const hasAnyPrice = sofaSizes.some((size) => has(g[`price_${size}_sen`]));
+          const hasAnyPrice = sofaSizes.some((size) => has(g[`price_${size}`]) || has(g[`price_${size}_sen`]));
           if (!hasAnyPrice) continue;
           const t = normalizeSofaTier(g.price_tier);
           if (!t) { tierError = (g.price_tier ?? '').trim() || '(blank)'; break; }
           for (const size of sofaSizes) {
-            const raw = g[`price_${size}_sen`];
-            if (!has(raw)) continue;
-            const n = Number(raw);
-            if (!Number.isFinite(n)) continue;
-            seat.push({ height: size, priceSen: n, tier: t });
+            const ps = senOf(g[`price_${size}`], g[`price_${size}_sen`]);
+            if (ps == null) continue;
+            seat.push({ height: size, priceSen: ps, tier: t });
           }
         }
         if (tierError) {
