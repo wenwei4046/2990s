@@ -15,3 +15,15 @@ export const ALL_SALES_VIEWER_ROLES = ['super_admin', 'master_account'] as const
 export function canViewAllSales(role: string | null | undefined): boolean {
   return role === 'super_admin' || role === 'master_account';
 }
+
+/* TEMPORARY (Loo 2026-06-10, Backend SO emergency hatch) — the POS selling
+   roles that reach the Backend Sales Order module through the hatch
+   (apps/backend/src/lib/auth.tsx posOnlyAllowedPath). On the Backend SO
+   list + detail they are scoped to their OWN orders (salesperson_id =
+   caller), mirroring the POS My-orders board. master_account is POS-only
+   too but belongs to the view-all tier above, and Backend-native roles
+   (coordinator / finance / admin / …) are untouched. Remove together with
+   the hatch. */
+export function isSelfScopedSales(role: string | null | undefined): boolean {
+  return role === 'sales' || role === 'sales_executive' || role === 'outlet_manager';
+}

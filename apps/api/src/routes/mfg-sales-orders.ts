@@ -36,7 +36,7 @@ import { buildOneShotMints, type OneShotMintReq } from '../lib/one-shot-mint';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
 import { rangeBoundsMy } from '../lib/my-time';
-import { canViewAllSales } from '../lib/roles';
+import { canViewAllSales, isSelfScopedSales } from '../lib/roles';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
 import { signSoItemPhotoUrl, soItemPhotoBindings, presign, type SlipMime } from '../lib/r2';
 import { slipBindings } from '../lib/slip';
@@ -363,6 +363,15 @@ const snapshotUnitCostSen = async (
 
 mfgSalesOrders.get('/', async (c) => {
   const sb = c.get('supabase');
+  const user = c.get('user');
+
+  /* TEMPORARY (Loo 2026-06-10, Backend SO emergency hatch) — POS selling
+     roles reaching this list through the hatch see ONLY their own orders
+     (salesperson_id = caller), like the POS My-orders board. One staff-role
+     lookup per request; Backend-native roles stay unfiltered. Remove with
+     the hatch (see lib/roles.ts isSelfScopedSales). */
+  const { data: caller } = await sb.from('staff').select('role').eq('id', user.id).maybeSingle();
+  const selfScopeId = isSelfScopedSales((caller as { role?: string } | null)?.role) ? user.id : null;
 
   /* Dashboard summary mode (`?summary=1`): the landing page only needs to bucket
      SOs by status/proceeded_at and count "new today" — it does NOT need the
@@ -371,11 +380,13 @@ mfgSalesOrders.get('/', async (c) => {
      rows + a line-item aggregation on first paint. Bucketing stays in the
      frontend (single source of truth — no SQL duplication). */
   if (c.req.query('summary')) {
-    const { data, error } = await sb
+    let sq = sb
       .from('mfg_sales_orders')
       .select('doc_no, status, proceeded_at, local_total_centi, created_at, so_date')
       .order('so_date', { ascending: false })
       .limit(500);
+    if (selfScopeId) sq = sq.eq('salesperson_id', selfScopeId);
+    const { data, error } = await sq;
     if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
     return c.json({ salesOrders: data ?? [] });
   }
@@ -386,6 +397,7 @@ mfgSalesOrders.get('/', async (c) => {
      falls back to it if the view's `balance_centi_live` is absent). */
   const LIST_COLS = `${HEADER}, proceeded_at, paid_total_centi, balance_centi_live`;
   let q = sb.from('mfg_sales_orders_with_payment_totals').select(LIST_COLS).order('so_date', { ascending: false }).limit(500);
+  if (selfScopeId) q = q.eq('salesperson_id', selfScopeId);
   const status = c.req.query('status'); if (status) q = q.eq('status', status);
   const debtor = c.req.query('debtor'); if (debtor) q = q.ilike('debtor_name', `%${debtor}%`);
   const { data, error } = await q;
@@ -1019,6 +1031,7 @@ mfgSalesOrders.get('/customer-search', async (c) => {
 
 mfgSalesOrders.get('/:docNo', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo');
+  const user = c.get('user');
   const [h, i] = await Promise.all([
     /* `${HEADER}, proceeded_at` — proceeded_at lives ONLY on the base table,
        NOT the mfg_sales_orders_with_payment_totals view that the LIST route
@@ -1030,6 +1043,21 @@ mfgSalesOrders.get('/:docNo', async (c) => {
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
+  /* TEMPORARY (Loo 2026-06-10, Backend SO emergency hatch) — self-scoped
+     selling roles may open only their OWN SO; another salesperson's doc_no
+     answers 404 (not 403) so it's indistinguishable from a nonexistent one.
+     POS reads its own orders through /mine, and the salesperson's own POS
+     print/detail fetches carry salesperson_id = caller, so those still pass.
+     Remove with the hatch (see lib/roles.ts isSelfScopedSales). */
+  {
+    const { data: caller } = await sb.from('staff').select('role').eq('id', user.id).maybeSingle();
+    if (
+      isSelfScopedSales((caller as { role?: string } | null)?.role) &&
+      (h.data as { salesperson_id?: string | null }).salesperson_id !== user.id
+    ) {
+      return c.json({ error: 'not_found' }, 404);
+    }
+  }
   /* Tier 2 downstream-lock — stamp has_children so the SO Detail page can lock
      once any non-cancelled DO / SI references it. */
   const [{ count: doCount }, { count: siCount }] = await Promise.all([
