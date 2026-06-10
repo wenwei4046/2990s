@@ -620,6 +620,19 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   const supplierByCode = (body.supplierByCode ?? {}) as Record<string, string>;
   const targetPoId = body.targetPoId as string | undefined;
 
+  /* Wei Siang 2026-06-11 — a SKU with NO supplier binding can still be PO'd:
+     the cost is keyed in later at Purchase Invoice time. All we truly need is
+     a SUPPLIER to put the line on. Resolve the append-target PO's supplier up
+     front so it can serve as the fallback for unbound SKUs (the PO-scoped
+     "Convert from SO" / "Add Line Item" pickers are locked to that supplier
+     anyway). */
+  let targetPoSupplierId: string | null = null;
+  if (targetPoId) {
+    const { data: tpo } = await supabase
+      .from('purchase_orders').select('supplier_id').eq('id', targetPoId).maybeSingle();
+    targetPoSupplierId = (tpo as { supplier_id?: string | null } | null)?.supplier_id ?? null;
+  }
+
   /* Commander 2026-05-28 — PO-from-SO redesign. expectedAt + purchaseLocationId
      are NO LONGER asked or required. They are derived per-line from the source
      SO instead:
@@ -813,6 +826,20 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       .from('suppliers').select('id').in('id', supplierIds);
     for (const s of (liveSuppliers ?? []) as Array<{ id: string }>) liveSupplierIds.add(s.id);
   }
+  /* Wei Siang 2026-06-11 — also validate suppliers named OUTSIDE bindings (a
+     per-pick supplierId, a supplierByCode override, or the append-target PO's
+     supplier), so an unbound SKU can ride a zero-priced pseudo-binding on one
+     of them instead of 400-ing the whole convert. */
+  const extraCandidates = [...new Set([
+    ...soItems.map((it) => it.pickSupplierId).filter((x): x is string => Boolean(x)),
+    ...Object.values(supplierByCode),
+    ...(targetPoSupplierId ? [targetPoSupplierId] : []),
+  ])].filter((id) => !liveSupplierIds.has(id));
+  if (extraCandidates.length > 0) {
+    const { data: extraLive } = await supabase
+      .from('suppliers').select('id').in('id', extraCandidates);
+    for (const s of (extraLive ?? []) as Array<{ id: string }>) liveSupplierIds.add(s.id);
+  }
 
   /* Group by material_code → the chosen supplier's binding. Commander
      2026-05-29: an explicit supplierByCode[itemCode] override (picked in the
@@ -864,7 +891,22 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       const exact = bindingByCodeSupplier.get(`${it.itemCode}|${chosen}`);
       if (exact) return exact;
     }
-    return mainByCode.get(it.itemCode) ?? null;
+    const main = mainByCode.get(it.itemCode);
+    if (main) return main;
+    /* Wei Siang 2026-06-11 — no live binding: don't block the PO. When the
+       line still names a supplier (per-pick / override / the append-target
+       PO), ride a zero-priced pseudo-binding: the line lands on that supplier
+       at cost 0 and the real price is keyed in at Purchase Invoice time.
+       Lines with NO resolvable supplier at all still fall through to the
+       missing_bindings 400 — a PO cannot exist without a supplier. */
+    const fallback = chosen ?? targetPoSupplierId;
+    if (fallback && liveSupplierIds.has(fallback)) {
+      return {
+        material_code: it.itemCode, supplier_id: fallback, supplier_sku: '',
+        unit_price_centi: 0, currency: 'MYR', price_matrix: null,
+      };
+    }
+    return null;
   };
 
   /* Phase 3 — resolve the fabric tier for each SO line's fabricCode (split
@@ -927,14 +969,15 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
      (the supplier's set deal) instead of the per-seat-size matrix. */
   const combosBySupplier = await loadSupplierSofaCombos(supabase, supplierIdsInvolved);
 
-  // Items with no LIVE supplier binding can't be PO'd. Uses the effective
-  // binding (per-pick → override → main) so the check matches what grouping
-  // will actually resolve.
+  // Items with NO resolvable supplier at all can't be PO'd (a PO must belong
+  // to a supplier). Unbound SKUs that DO name a supplier (per-pick / override /
+  // target PO) now pass on a zero-priced pseudo-binding — price keyed in at PI
+  // time (Wei Siang 2026-06-11).
   const noBinding = soItems.filter((it) => !effectiveBindingFor(it));
   if (noBinding.length > 0) {
     return c.json({
       error: 'missing_bindings',
-      message: 'Some items have no main supplier binding',
+      message: 'No supplier could be resolved for some items — bind a main supplier or pick one for them',
       itemCodes: [...new Set(noBinding.map((it) => it.itemCode))],
     }, 400);
   }
@@ -1540,10 +1583,12 @@ mfgPurchaseOrders.post('/:id/convert-from-so', async (c) => {
     return c.json({ error: 'po_not_editable', reason: `Cannot convert into a ${po.status} PO.` }, 409);
   }
 
-  // Read SO items (non-cancelled only).
+  // Read SO items (non-cancelled only). po_qty_picked rides along so this
+  // path converts only the UNPICKED remainder (F1 audit fix 2026-06-10 —
+  // it used to re-copy full qty on every call → double-ordering).
   const { data: soItems, error: soErr } = await sb
     .from('mfg_sales_order_items')
-    .select('id, item_code, description, description2, item_group, qty, unit_price_centi, discount_centi, unit_cost_centi, variants, uom, remark')
+    .select('id, item_code, description, description2, item_group, qty, po_qty_picked, unit_price_centi, discount_centi, unit_cost_centi, variants, uom, remark')
     .eq('doc_no', soDocNo)
     .eq('cancelled', false);
   if (soErr) return c.json({ error: 'so_load_failed', reason: soErr.message }, 500);
@@ -1571,36 +1616,117 @@ mfgPurchaseOrders.post('/:id/convert-from-so', async (c) => {
   type SoItem = {
     id: string;
     item_code: string; description: string | null; description2: string | null;
-    item_group: string | null; qty: number; unit_price_centi: number;
+    item_group: string | null; qty: number; po_qty_picked: number | null;
+    unit_price_centi: number;
     discount_centi: number | null; unit_cost_centi: number | null;
     variants: unknown; uom: string | null; remark: string | null;
   };
-  const toInsert = (wanted as SoItem[]).filter((r) => !existingSet.has(r.item_code));
+  const notOnPo = (wanted as SoItem[]).filter((r) => !existingSet.has(r.item_code));
+  /* F1 audit fix (2026-06-10) — convert ONLY the unpicked remainder. This path
+     used to re-copy the FULL qty on every call regardless of po_qty_picked,
+     so converting the same SO into a second PO double-ordered the supplier. */
+  const toInsert = notOnPo.filter((r) => (Number(r.qty ?? 0) - Number(r.po_qty_picked ?? 0)) > 0);
   if (toInsert.length === 0) {
-    return c.json({ copied: 0, skipped: wanted.length, reason: 'All matching SO items already exist on the PO.' });
+    return c.json({ copied: 0, skipped: wanted.length, reason: 'All matching SO items are already on a PO (or on this one).' });
   }
 
+  /* Supplier-cost pricing (F1 audit fix 2026-06-10) — this path used to copy
+     the SO line's SELLING price into the PO. Now each line is priced like the
+     From-SO picker: the PO supplier's binding price_matrix (P2; P1 when the
+     fabric resolves to PRICE_1) + the supplier's maintenance surcharges, via
+     computeMfgPoUnitCost; falls back to the flat binding price; unbound SKUs
+     ride at cost 0 (price keyed in at Purchase Invoice time — Wei Siang
+     2026-06-11). Sofa-combo redistribution stays exclusive to the From-SO
+     picker; this legacy append path prices per-module. */
+  const codesToPrice = toInsert.map((r) => r.item_code);
+  type BindLite = {
+    material_code: string; supplier_sku: string | null;
+    unit_price_centi: number; price_matrix: Record<string, unknown> | null;
+  };
+  const bindByCode = new Map<string, BindLite>();
+  if (codesToPrice.length > 0) {
+    const { data: binds } = await sb
+      .from('supplier_material_bindings')
+      .select('material_code, supplier_sku, unit_price_centi, price_matrix')
+      .eq('supplier_id', po.supplier_id)
+      .eq('material_kind', 'mfg_product')
+      .in('material_code', codesToPrice);
+    for (const b of (binds ?? []) as BindLite[]) {
+      if (!bindByCode.has(b.material_code)) bindByCode.set(b.material_code, b);
+    }
+  }
+  const { config: maintCfg } = await resolveMaintenanceConfigForSupplier(sb, po.supplier_id as string);
+  const fabCodes = [...new Set(
+    toInsert
+      .map((r) => String((r.variants as Record<string, unknown> | null)?.fabricCode ?? ''))
+      .filter(Boolean),
+  )];
+  type FabTier = { sofa: MfgFabricTier | null; bedframe: MfgFabricTier | null };
+  const tierByFabric = new Map<string, FabTier>();
+  if (fabCodes.length > 0) {
+    const { data: fabs } = await sb
+      .from('fabric_trackings')
+      .select('fabric_code, price_tier, sofa_price_tier, bedframe_price_tier')
+      .in('fabric_code', fabCodes);
+    for (const f of (fabs ?? []) as Array<{
+      fabric_code: string; price_tier: MfgFabricTier | null;
+      sofa_price_tier: MfgFabricTier | null; bedframe_price_tier: MfgFabricTier | null;
+    }>) {
+      tierByFabric.set(f.fabric_code, {
+        sofa: f.sofa_price_tier ?? f.price_tier ?? null,
+        bedframe: f.bedframe_price_tier ?? f.price_tier ?? null,
+      });
+    }
+  }
+  const supplierCostFor = (it: SoItem): { cost: number; supplierSku: string | null } => {
+    const b = bindByCode.get(it.item_code);
+    if (!b) return { cost: 0, supplierSku: null }; // unbound — key in at PI
+    const category = (it.item_group ?? '').toUpperCase() as
+      'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE' | '';
+    if (!category) return { cost: b.unit_price_centi, supplierSku: b.supplier_sku };
+    const variants = (it.variants ?? {}) as Record<string, unknown>;
+    const fc = String(variants.fabricCode ?? '');
+    const ft = fc ? (tierByFabric.get(fc) ?? null) : null;
+    const fabricTier = category === 'SOFA' ? (ft?.sofa ?? null)
+      : category === 'BEDFRAME' ? (ft?.bedframe ?? null) : null;
+    const specials = Array.isArray(variants.specials) ? (variants.specials as string[]) : [];
+    const cost = computeMfgPoUnitCost(
+      {
+        category,
+        priceMatrix:    (b.price_matrix ?? null) as PoPriceMatrix,
+        unitPriceCenti: b.unit_price_centi,
+        fabricTier,
+        seatSize:       category === 'SOFA' ? ((variants.seatHeight as string | undefined) ?? null) : null,
+        divanHeight:    (variants.divanHeight as string | undefined) ?? null,
+        legHeight:      category === 'BEDFRAME' ? ((variants.legHeight as string | undefined) ?? null) : null,
+        sofaLegHeight:  category === 'SOFA' ? ((variants.legHeight as string | undefined) ?? null) : null,
+        specials,
+      },
+      maintCfg ?? null,
+    ).unitPriceSen;
+    return { cost, supplierSku: b.supplier_sku };
+  };
+
   const rows = toInsert.map((it) => {
-    const qty = Number(it.qty ?? 1);
-    const unit = Number(it.unit_price_centi ?? 0);
-    const disc = Number(it.discount_centi ?? 0);
+    const remaining = Math.max(0, Number(it.qty ?? 0) - Number(it.po_qty_picked ?? 0));
+    const { cost, supplierSku } = supplierCostFor(it);
     return {
       purchase_order_id: poId,
       material_kind:    'mfg_product',
       material_code:    it.item_code,
       material_name:    it.description ?? it.item_code,
-      supplier_sku:     null,
-      qty,
-      unit_price_centi: unit,
-      line_total_centi: (qty * unit) - disc,
+      supplier_sku:     supplierSku,
+      qty:              remaining,
+      unit_price_centi: cost,
+      line_total_centi: remaining * cost,
       received_qty:     0,
       notes:            it.remark ?? null,
       item_group:       it.item_group ?? null,
       description:      it.description ?? null,
       description2:     it.description2 ?? null,
       uom:              it.uom ?? 'UNIT',
-      discount_centi:   disc,
-      unit_cost_centi:  Number(it.unit_cost_centi ?? 0),
+      discount_centi:   0,
+      unit_cost_centi:  cost,
       variants:         (it.variants as unknown) ?? null,
       // Release-on-delete link (migration 0098) — convert-from-SO now stamps the
       // source SO line too, so these lines drop the SO from the picker and get
