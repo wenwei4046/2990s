@@ -984,6 +984,29 @@ salesInvoices.patch('/:id/status', async (c) => {
       from: prevStatus, to: status,
     }, 409);
   }
+  /* Audit 2026-06-10 #13 (F3) — reopening a cancelled SI must RE-VALIDATE the
+     Pending pool. The cancel released this SI's qty (recounts exclude
+     CANCELLED), so another invoice may have billed the same DO lines since.
+     Without this check a reopen lands invoiced > delivered and double-books
+     revenue. The cancelled SI is excluded from the recount, so the live
+     remaining is exactly the headroom this reopen may claim. */
+  if (isReopen && status === 'SENT') {
+    const { data: reopenLines } = await sb
+      .from('sales_invoice_items')
+      .select('do_item_id, qty')
+      .eq('sales_invoice_id', id);
+    const linesForCheck = ((reopenLines ?? []) as Array<{ do_item_id: string | null; qty: number }>)
+      .filter((l) => l.do_item_id)
+      .map((l) => ({ doItemId: l.do_item_id as string, qty: l.qty }));
+    const over = await checkSiOverRemaining(sb, linesForCheck);
+    if (over) {
+      return c.json({
+        error: 'over_remaining',
+        message: 'Cannot reopen — the delivered quantity has since been invoiced elsewhere. The DO lines no longer have room for this invoice.',
+        lines: over.lines,
+      }, 409);
+    }
+  }
   // A money status may only be set on an already-active invoice (idempotent echo
   // of the ledger-derived state) — never as a from-cancelled reopen target.
   if (status !== 'CANCELLED' && status !== 'SENT' && !ACTIVE.has(prevStatus)) {

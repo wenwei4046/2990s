@@ -192,13 +192,24 @@ async function writeTransferMovements(
       ...(batchNo ? { batch_no: batchNo } : {}),
       performed_by:   userId,
       notes:          `Transfer to warehouse ${header.to_warehouse_id}`,
-    }).select('id, qty, unit_cost_sen, total_cost_sen').single();
+    }).select('id, qty').single();
     if (outErr || !outRow) {
       movementErrors.push(`OUT ${ln.product_code}: ${outErr?.message ?? 'no data'}`);
       continue;
     }
-    const outQty   = Number((outRow as { qty: number }).qty ?? ln.qty);
-    const outTotal = Number((outRow as { total_cost_sen: number | null }).total_cost_sen ?? 0);
+    /* Audit 2026-06-10 C-1 (CRITICAL) — the FIFO trigger is AFTER INSERT and
+       stamps total_cost_sen via a separate UPDATE, which INSERT…RETURNING can
+       NEVER see (RETURNING shows the row as inserted). Reading the cost off
+       the insert response therefore always read 0, so every transfer opened
+       the destination lot at 0 cost — inventory value silently destroyed on
+       each warehouse move. RE-QUERY the row post-insert (same pattern as
+       restampDoActualCost) so the IN carries the OUT's real consumed cost. */
+    const { data: outCosted } = await sb.from('inventory_movements')
+      .select('qty, total_cost_sen')
+      .eq('id', (outRow as { id: string }).id)
+      .single();
+    const outQty   = Number((outCosted as { qty: number } | null)?.qty ?? ln.qty);
+    const outTotal = Number((outCosted as { total_cost_sen: number | null } | null)?.total_cost_sen ?? 0);
     const inUnitCost = outQty > 0 ? Math.round(outTotal / outQty) : 0;
     const inOk = await writeMovements(sb, [{
       movement_type:  'IN',

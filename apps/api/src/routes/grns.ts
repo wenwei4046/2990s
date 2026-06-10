@@ -1352,6 +1352,17 @@ grns.post('/:id/items', async (c) => {
   // GRN child-lock: a GRN with any downstream PI/PR is read-only.
   const childLock = await grnHasDownstream(sb, grnId);
   if (childLock) return c.json(childLock, 409);
+  /* Audit 2026-06-10 #10 — line CRUD on a CANCELLED/CLOSED GRN was a silent
+     stock door: an added line writes its IN immediately, but a cancelled GRN's
+     reversal never runs again → ghost stock forever. Mirror prLineLock. */
+  const { data: grnGate } = await sb.from('grns').select('status').eq('id', grnId).maybeSingle();
+  const grnGateStatus = ((grnGate as { status?: string } | null)?.status ?? '').toUpperCase();
+  if (grnGateStatus === 'CANCELLED' || grnGateStatus === 'CLOSED') {
+    return c.json({
+      error: 'grn_locked',
+      message: `This GRN is ${grnGateStatus} — its lines can no longer be changed.`,
+    }, 409);
+  }
 
   const qtyReceived = Number(it.qty ?? 1);
   const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
@@ -1500,6 +1511,17 @@ grns.patch('/:id/items/:itemId', async (c) => {
   // GRN child-lock: a GRN with any downstream PI/PR is read-only.
   const childLock = await grnHasDownstream(sb, grnId);
   if (childLock) return c.json(childLock, 409);
+  /* Audit 2026-06-10 #10 — line CRUD on a CANCELLED/CLOSED GRN was a silent
+     stock door: an added line writes its IN immediately, but a cancelled GRN's
+     reversal never runs again → ghost stock forever. Mirror prLineLock. */
+  const { data: grnGate } = await sb.from('grns').select('status').eq('id', grnId).maybeSingle();
+  const grnGateStatus = ((grnGate as { status?: string } | null)?.status ?? '').toUpperCase();
+  if (grnGateStatus === 'CANCELLED' || grnGateStatus === 'CLOSED') {
+    return c.json({
+      error: 'grn_locked',
+      message: `This GRN is ${grnGateStatus} — its lines can no longer be changed.`,
+    }, 409);
+  }
 
   const { data: prev } = await sb.from('grn_items')
     .select('qty_received, qty_accepted, unit_price_centi, discount_centi, item_group, variants, purchase_order_item_id, material_code, material_name')
@@ -1692,6 +1714,17 @@ grns.delete('/:id/items/:itemId', async (c) => {
   // GRN child-lock: a GRN with any downstream PI/PR is read-only.
   const childLock = await grnHasDownstream(sb, grnId);
   if (childLock) return c.json(childLock, 409);
+  /* Audit 2026-06-10 #10 — line CRUD on a CANCELLED/CLOSED GRN was a silent
+     stock door: an added line writes its IN immediately, but a cancelled GRN's
+     reversal never runs again → ghost stock forever. Mirror prLineLock. */
+  const { data: grnGate } = await sb.from('grns').select('status').eq('id', grnId).maybeSingle();
+  const grnGateStatus = ((grnGate as { status?: string } | null)?.status ?? '').toUpperCase();
+  if (grnGateStatus === 'CANCELLED' || grnGateStatus === 'CLOSED') {
+    return c.json({
+      error: 'grn_locked',
+      message: `This GRN is ${grnGateStatus} — its lines can no longer be changed.`,
+    }, 409);
+  }
 
   // Read the line's PO link + accepted qty + variant/cost fields BEFORE deleting
   // so we can roll back the PO receipt AND reverse the inventory IN the GRN post

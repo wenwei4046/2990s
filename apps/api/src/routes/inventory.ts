@@ -30,6 +30,7 @@ import {
 } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
+import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
 import type { Env, Variables } from '../env';
 
 export const inventory = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -708,6 +709,11 @@ inventory.post('/adjustments', async (c) => {
     performed_by: user.id,
   }).select('id').single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  /* Audit 2026-06-10 #12 — every other stock-mutating path re-walks the SO
+     allocation; a manual adjustment was the one forgotten path. A write-off
+     left SO lines READY against vanished stock; a found-stock increase didn't
+     flip PENDING→READY until some unrelated document touched stock. */
+  try { await recomputeSoStockAllocation(sb); } catch { /* best-effort */ }
   return c.json({ movement: data }, 201);
 });
 

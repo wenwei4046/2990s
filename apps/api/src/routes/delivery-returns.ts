@@ -1238,6 +1238,16 @@ deliveryReturns.patch('/:id/status', async (c) => {
   if (body.status === 'CANCELLED' && prevStatus === 'CANCELLED') {
     return c.json({ deliveryReturn: { id, status: 'CANCELLED' } });
   }
+  /* Audit 2026-06-10 #3 (IMPORTANT) — a CANCELLED DR is FINAL. Un-cancelling
+     left the cancel's stock drain in place (resync only runs on the CANCELLED
+     transition), so the books said "returned" while the shelf stayed empty.
+     Raise a NEW Delivery Return instead. */
+  if (prevStatus === 'CANCELLED') {
+    return c.json({
+      error: 'dr_cancelled_final',
+      reason: 'A cancelled Delivery Return cannot be reactivated — its stock entry was already drained. Create a new return instead.',
+    }, 409);
+  }
 
   const now = new Date().toISOString();
   const ts: Record<string, string> = { updated_at: now, status: body.status };

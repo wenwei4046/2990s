@@ -2205,6 +2205,17 @@ deliveryOrdersMfg.patch('/:id/status', async (c) => {
   if (body.status === 'CANCELLED' && prevStatus === 'CANCELLED') {
     return c.json({ deliveryOrder: { id, status: 'CANCELLED' } });
   }
+  /* Audit 2026-06-10 #1 (CRITICAL) — a CANCELLED DO is FINAL. Un-cancelling
+     re-shipped goods with ZERO net stock deduction: the cancel's add-back
+     ADJUSTMENT rows stand while deductInventoryForDo no-ops (original DO OUT
+     rows still exist) → stock permanently inflated by the whole DO. Re-deliver
+     via a NEW DO instead. */
+  if (prevStatus === 'CANCELLED') {
+    return c.json({
+      error: 'do_cancelled_final',
+      reason: 'A cancelled Delivery Order cannot be reactivated — its stock was already returned. Create a new DO to deliver again.',
+    }, 409);
+  }
 
   /* Tier 2 downstream-lock — only the CANCELLED transition is gated. Other
      status transitions ride through untouched so the existing state machine
