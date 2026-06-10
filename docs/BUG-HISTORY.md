@@ -4,6 +4,24 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-11-001 — System audit batch: 6 inventory/costing guards (P1) + transfer zero-cost (P2) + PO convert double-order (F1)
+
+Fable-5 four-agent audit (inventory lifecycle / FIFO costing / consignment / cross-document) of 2026-06-10, key findings hand-verified at file:line before fixing. Commits `8378fee` (F1) + `3ea4ab5` (P1/P2).
+
+1. **(F1, IMPORTANT) PO detail "Convert from SO" double-ordered + carried the SELLING price** — `mfg-purchase-orders.ts /:id/convert-from-so` re-copied the FULL SO qty on every call (ignored `po_qty_picked` → converting the same SO into a second PO doubled the supplier order) and priced PO lines at the SO line’s customer selling price. **Fix (`8378fee`):** converts only the unpicked remainder (fully-picked lines skipped) and prices via the PO supplier’s binding `price_matrix` (P2/P1 by fabric tier) + supplier maintenance surcharges (`computeMfgPoUnitCost`); discount no longer copied. Same commit: `/from-sos` no longer 400s unbound SKUs when a supplier is resolvable (per-pick/override/target-PO) — zero-priced pseudo-binding, price keyed at PI time (Wei Siang’s rule).
+2. **(#1 CRITICAL) Cancelled DO could be reactivated** — `PATCH /delivery-orders/:id/status` allowed CANCELLED→DISPATCHED; the cancel’s add-back stood while `deductInventoryForDo` no-op’d (original OUT rows exist) → goods left twice, stock inflated by the whole DO forever. **Fix:** CANCELLED is final (409 `do_cancelled_final`); re-deliver via a new DO.
+3. **(#3) Cancelled DR could be reactivated** — un-cancel skipped `resyncInventoryForReturn`, so the books said "returned" while the cancel’s drain stayed. **Fix:** CANCELLED is final (409 `dr_cancelled_final`).
+4. **(#10) Line CRUD on a CANCELLED/CLOSED GRN** — add-line wrote its IN immediately; a cancelled GRN’s reversal never runs again → ghost stock. **Fix:** status gate on all three line routes (mirror of `prLineLock`).
+5. **(#13/F3) SI reopen skipped re-validation** — cancel released the Pending pool; another SI could bill the same DO lines; reopen then landed invoiced > delivered + double revenue. **Fix:** reopen-to-SENT re-runs `checkSiOverRemaining` over the SI’s DO-linked lines (409 `over_remaining`).
+6. **(#12) Manual stock adjustment never re-walked SO allocation** — the one stock-mutating path without `recomputeSoStockAllocation`; write-offs left SO lines READY against vanished stock. **Fix:** best-effort re-walk after the ADJUSTMENT insert.
+7. **(C-1 CRITICAL) Every stock transfer opened the destination lot at 0 cost** — `stock-transfers.ts` read `total_cost_sen` via `INSERT…RETURNING`, but the FIFO trigger is AFTER INSERT and stamps cost via a separate UPDATE that RETURNING can never see → `outTotal` always 0, destination lots valued at 0, COGS understated on every later ship from that warehouse. **Fix:** re-query the OUT movement post-insert (same pattern as `restampDoActualCost`). **Historic transfer lots created before this fix may still sit at 0 cost — needs a one-off SQL probe/backfill.**
+
+**Still open from the audit (logged, not yet fixed):** recost only re-prices GRN-sourced lots (derivative DR/cancel/transfer lots keep stale 0 cost — needs lot lineage design); stock-take posts variance against the create-time snapshot and is variant/batch-blind; consignment structural decisions (settlement path, dedicated-warehouse enforcement, CN negative-ship, CRN uncapped); MRP legacy-PO supply double-count; SI/DO race backstops (no partial unique indexes since 0109). Migrations 0126 + 0162 still pending manual apply on prod.
+
+**Caught by:** Wei Siang asked for a full in/out + FIFO + supply-chain audit on Fable 5; 4 parallel read-only agents + hand verification of the criticals.
+
+---
+
 ## BUG-2026-06-08-004 — Product Model bulk-create: phantom models + misleading placeholders + no used-delete lock
 
 Surfaced while Wei Siang created mattress models pre-launch. Branch `feat/product-model-create-hardening`. Three real defects fixed (B/C/D) + one feature (A).
