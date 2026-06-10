@@ -88,18 +88,52 @@ describe('computeAddonServiceLines (§4.2 + D6)', () => {
     expect(lines[0]).toMatchObject({ itemCode: 'SVC-DISPOSE-BEDFRAME', qty: 2, totalSen: 16000 });
   });
 
-  it('lift 5 floors × 2 items → chargeable (5−2)×2 = 6 units × RM100, math in the REMARK (D6 amended)', () => {
+  /* Loo 2026-06-10 (option B) — floors 1..5 book the per-floor tier SKU:
+     qty = pieces carried, unit = max(floors−2,0) × rate. */
+  it('lift 5 floors × 2 items → SVC-LIFT-CARRY-F5, qty 2 × RM300, math in the REMARK', () => {
     const lines = computeAddonServiceLines([{ id: 'lift', floorsCount: 5, itemsCount: 2 }], ADDON_ROWS);
     expect(lines[0]).toMatchObject({
-      itemCode: 'SVC-LIFT-CARRY', qty: 6, unitPriceSen: 10000, totalSen: 60000,
+      itemCode: 'SVC-LIFT-CARRY-F5', qty: 2, unitPriceSen: 30000, totalSen: 60000,
     });
-    expect(lines[0]!.description).toBe('Lift access — 3rd floor & above');
+    expect(lines[0]!.description).toBe('Lift access / stair carry — 5th floor');
     expect(lines[0]!.remark).toContain('5 floors × 2 items');
     expect(lines[0]!.remark).toContain('first 2 floors free');
   });
 
-  it('lift within the free band (≤2 floors) → no line', () => {
-    expect(computeAddonServiceLines([{ id: 'lift', floorsCount: 2, itemsCount: 3 }], ADDON_ROWS)).toEqual([]);
+  it('lift 4 floors × 3 items → F4 tier, qty 3 × RM200', () => {
+    const lines = computeAddonServiceLines([{ id: 'lift', floorsCount: 4, itemsCount: 3 }], ADDON_ROWS);
+    expect(lines[0]).toMatchObject({
+      itemCode: 'SVC-LIFT-CARRY-F4', qty: 3, unitPriceSen: 20000, totalSen: 60000,
+    });
+  });
+
+  it('lift free band (floors 1–2) STILL books an RM0 tier line — visible on the SO', () => {
+    const lines = computeAddonServiceLines([{ id: 'lift', floorsCount: 2, itemsCount: 3 }], ADDON_ROWS);
+    expect(lines[0]).toMatchObject({
+      itemCode: 'SVC-LIFT-CARRY-F2', qty: 3, unitPriceSen: 0, totalSen: 0,
+    });
+    expect(lines[0]!.description).toBe('Lift access / stair carry — 2nd floor');
+    expect(lines[0]!.remark).toBe('2 floors × 3 items (first 2 floors free)');
+  });
+
+  it('lift above the tier ceiling (>5 floors) falls back to the legacy single SKU', () => {
+    const lines = computeAddonServiceLines([{ id: 'lift', floorsCount: 7, itemsCount: 2 }], ADDON_ROWS);
+    expect(lines[0]).toMatchObject({
+      itemCode: 'SVC-LIFT-CARRY', qty: (7 - 2) * 2, unitPriceSen: 10000, totalSen: 100000,
+    });
+  });
+
+  it('lift with 0 items / 0 floors → no line', () => {
+    expect(computeAddonServiceLines([{ id: 'lift', floorsCount: 3, itemsCount: 0 }], ADDON_ROWS)).toEqual([]);
+    expect(computeAddonServiceLines([{ id: 'lift', floorsCount: 0, itemsCount: 3 }], ADDON_ROWS)).toEqual([]);
+  });
+
+  it('a custom floors_items addon with its own serviceSku keeps the legacy decomposition', () => {
+    const rows: AddonRowInput[] = [
+      { id: 'crane', kind: 'floors_items', price: 0, perFloorItem: 200, label: 'Crane hoist', enabled: true, serviceSku: 'SVC-CRANE' },
+    ];
+    const lines = computeAddonServiceLines([{ id: 'crane', floorsCount: 4, itemsCount: 1 }], rows);
+    expect(lines[0]).toMatchObject({ itemCode: 'SVC-CRANE', qty: 2, unitPriceSen: 20000 });
   });
 
   it('disabled / unknown addon ids are skipped', () => {

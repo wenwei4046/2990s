@@ -22,6 +22,9 @@ import {
   SVC_DISPOSE_BEDFRAME,
   SVC_LIFT_CARRY,
   SVC_ADDON,
+  MAX_LIFT_TIER_FLOOR,
+  svcLiftCarryTierSku,
+  svcLiftCarryTierName,
 } from './service-sku';
 
 /** One SERVICE line to append to a Sales Order. */
@@ -131,12 +134,20 @@ export function buildDeliveryFeeServiceLines(
  * (§4.2 + D6). The client's amounts are never trusted — prices come from the
  * addons table rows the caller just loaded.
  *   · qty kind (dispose-*)  → qty × price
- *   · floors_items (lift)   → qty = chargeable units (first 2 floors free),
- *                             unit = per_floor_item; the REMARK spells out
- *                             "X floors × Y items" so the math is auditable
- *                             on the printed SO (D6 as amended by Loo
- *                             2026-06-10 — moved from description to remark).
- * Disabled / unknown / zero-amount selections are skipped silently.
+ *   · floors_items (lift)   → per-floor TIER SKU (Loo 2026-06-10): floors
+ *                             1..MAX_LIFT_TIER_FLOOR book SVC-LIFT-CARRY-F{n}
+ *                             with qty = items and unit = max(floors−2,0) ×
+ *                             per_floor_item — so floors 1–2 still produce a
+ *                             visible RM0 line (the free band shows on the
+ *                             SO). Floors above the ceiling, or a custom
+ *                             floors_items addon with its own serviceSku,
+ *                             keep the legacy single-SKU decomposition
+ *                             (qty = chargeable units × per_floor_item).
+ *                             The REMARK spells out "X floors × Y items" so
+ *                             the math is auditable on the printed SO (D6 as
+ *                             amended 2026-06-10).
+ * Disabled / unknown / zero-amount selections are skipped silently (except
+ * the lift free band above, which books at RM0 by design).
  */
 export function computeAddonServiceLines(
   selections: AddonSelectionInput[],
@@ -161,17 +172,37 @@ export function computeAddonServiceLines(
     const label = (row.label ?? '').trim() || sel.id;
     if (row.kind === 'floors_items') {
       const floors = Math.max(0, Math.floor(sel.floorsCount ?? 0));
-      const items  = Math.max(0, Math.floor(sel.itemsCount ?? 0));
-      const units  = liftChargeableUnits(floors, items);
-      const unitSen = Math.round(Number(row.perFloorItem ?? 0) * 100);
-      if (units <= 0 || unitSen <= 0) continue;
+      const items  = Math.max(0, Math.min(MAX_LIFT_ITEMS, Math.floor(sel.itemsCount ?? 0)));
+      const rateSen = Math.round(Number(row.perFloorItem ?? 0) * 100);
+      const remark = `${floors} ${floors === 1 ? 'floor' : 'floors'} × ${items} ${items === 1 ? 'item' : 'items'} (first 2 floors free)`;
+      if (itemCode === SVC_LIFT_CARRY && floors >= 1 && floors <= MAX_LIFT_TIER_FLOOR) {
+        // Per-floor tier SKU (Loo 2026-06-10). qty = pieces carried; the
+        // floor is the SKU. Floors 1–2 book at RM0 on purpose — the free
+        // band must SHOW on the SO, not vanish.
+        if (items <= 0 || rateSen <= 0) continue;
+        const unitSen = Math.max(0, floors - 2) * rateSen;
+        lines.push({
+          itemCode: svcLiftCarryTierSku(floors),
+          description: svcLiftCarryTierName(floors),
+          remark,
+          qty: items,
+          unitPriceSen: unitSen,
+          totalSen: items * unitSen,
+        });
+        continue;
+      }
+      // Legacy decomposition — floors above the tier ceiling, or a custom
+      // floors_items addon with its own serviceSku (whose tier SKUs don't
+      // exist in the catalog; minting one here would 409 the order).
+      const units = liftChargeableUnits(floors, items);
+      if (units <= 0 || rateSen <= 0) continue;
       lines.push({
         itemCode,
         description: label,
-        remark: `${floors} floors × ${items} items (first 2 floors free)`,
+        remark,
         qty: units,
-        unitPriceSen: unitSen,
-        totalSen: units * unitSen,
+        unitPriceSen: rateSen,
+        totalSen: units * rateSen,
       });
     } else {
       // 'qty' (and a defensive 'flat' fallback: qty=1). Clamped to the
