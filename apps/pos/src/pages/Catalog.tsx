@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow } from '../lib/queries';
 import { useStaff, isGlobalCurator, isPosSalesRole } from '../lib/staff';
+import { supabase } from '../lib/supabase';
 import { useCart, cartHasSofa, cartHasNonSofa } from '../state/cart';
 import { Topbar } from '../components/Topbar';
 import { CustomerOrderFab } from '../components/CustomerOrderFab';
@@ -31,6 +32,7 @@ import styles from './Catalog.module.css';
 const BACKEND_PORTAL_URL =
   (import.meta.env.VITE_BACKEND_PORTAL_URL as string | undefined) ??
   'https://2990s-backend.pages.dev';
+const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
 // PR — Commander 2026-05-27: Catalog now reads `mfg_products` (Backend SKU
 // Master output) JOINed with `product_models` (photo + Model-level metadata).
@@ -172,6 +174,39 @@ export const Catalog = () => {
       else next.set(key, value);
       return next;
     }, { replace: true });
+
+  /* TEMPORARY (Backend emergency hatch) — fetch a one-time sign-in token and
+     open the Backend SO create form with it. The tab is opened synchronously
+     inside the click gesture (popup blockers kill window.open calls that
+     happen after an await), then pointed at /sso once the token arrives. */
+  const [ssoBusy, setSsoBusy] = useState(false);
+  const openBackendSo = async () => {
+    if (ssoBusy) return;
+    setSsoBusy(true);
+    const tab = window.open('', '_blank');
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const res = await fetch(`${API_URL}/pos/backend-sso`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`backend-sso failed (${res.status})`);
+      const body = (await res.json()) as { tokenHash?: string };
+      if (!body.tokenHash) throw new Error('backend-sso returned no token');
+      const url = `${BACKEND_PORTAL_URL}/sso#token_hash=${encodeURIComponent(body.tokenHash)}`;
+      if (tab) tab.location.replace(url);
+      else window.open(url, '_blank');
+    } catch (err) {
+      tab?.close();
+      console.error('[backend-sso]', err);
+      window.alert('Could not open the Backend order form. Please try again.');
+    } finally {
+      setSsoBusy(false);
+    }
+  };
   const setActiveCat = (c: string) => setParam('cat', c);
   const setActiveBranding = (b: string) => setParam('brand', b);
 
@@ -337,25 +372,30 @@ export const Catalog = () => {
                 three routes are guarded in router.tsx (MaintainGate) so a
                 hand-typed URL can't bypass the hide. */}
             {/* TEMPORARY (Loo 2026-06-10) — emergency hatch while the new POS
-                order flow stabilises: sales-side roles get a link to the
-                Backend's raw SO create form (new tab; Backend login is its own
-                session, so first use asks for email + password). The Backend's
-                POS-only block carves out the Sales Order module to match
-                (apps/backend/src/lib/auth.tsx posOnlyAllowedPath). Delete this
-                block + isPosSalesRole + the Backend carve-out together once
-                everyone creates orders from POS again. */}
+                order flow stabilises: sales-side roles get a button that opens
+                the Backend's raw SO create form ALREADY SIGNED IN (salespeople
+                have no Backend password). POST /pos/backend-sso mints a
+                one-time magic-link token for the signed-in salesperson; the
+                Backend's /sso page exchanges it for its own session. The
+                Backend's POS-only block carves out the Sales Order module to
+                match (apps/backend/src/lib/auth.tsx posOnlyAllowedPath).
+                Delete this block + openBackendSo + isPosSalesRole + the
+                Backend carve-out together once everyone creates orders from
+                POS again. */}
             {isPosSalesRole(staff?.role) && (
               <>
                 <div className={styles.sideHeading}>Backend</div>
-                <a
-                  href={`${BACKEND_PORTAL_URL}/mfg-sales-orders/new`}
-                  target="_blank"
-                  rel="noreferrer"
+                <button
+                  type="button"
                   className={styles.sideItem}
+                  onClick={() => void openBackendSo()}
+                  disabled={ssoBusy}
                 >
                   <ExternalLink size={16} strokeWidth={1.75} />
-                  <span className={styles.sideLabel}>Create Sales Order</span>
-                </a>
+                  <span className={styles.sideLabel}>
+                    {ssoBusy ? 'Opening…' : 'Create Sales Order'}
+                  </span>
+                </button>
               </>
             )}
 

@@ -3,6 +3,7 @@ import { createBrowserRouter, Navigate } from 'react-router';
 import { Layout, NoAccess } from './components/Layout';
 import { ErrorBoundaryRoot } from './components/ErrorBoundary';
 import { Login } from './pages/Login';
+import { Sso } from './pages/Sso';
 import { SetPassword } from './pages/SetPassword';
 import { Dashboard } from './pages/Dashboard';
 
@@ -159,6 +160,10 @@ export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
   { path: '/set-password', element: <SetPassword /> },
   { path: '/no-access', element: <NoAccess /> },
+  /* TEMPORARY (Loo 2026-06-10) — POS → Backend session handoff landing for
+     the SO emergency hatch. Outside <Layout/> so the auth guard doesn't
+     bounce the not-yet-signed-in visitor before verifyOtp runs. */
+  { path: '/sso', element: <Sso /> },
   {
     path: '/',
     element: <Layout />,
