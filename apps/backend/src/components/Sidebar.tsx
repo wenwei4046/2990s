@@ -29,7 +29,7 @@ import {
   Activity,
   Handshake,
 } from 'lucide-react';
-import { useAuth } from '../lib/auth';
+import { useAuth, POS_ONLY_ROLES } from '../lib/auth';
 import styles from './Sidebar.module.css';
 
 type NavLinkRow = {
@@ -73,6 +73,8 @@ const formatRole = (role?: string | null): string => {
     sales_executive: 'Sales Executive',
     outlet_manager:  'Outlet Manager',
     sales_director:  'Sales Director',
+    super_admin:     'Super Admin',
+    master_account:  'Master Account',
   };
   return map[role] ?? role;
 };
@@ -96,6 +98,13 @@ export const Sidebar = () => {
     !!staff && ['finance', 'coordinator', 'admin', 'super_admin'].includes(staff.role);
   const canSeeAdmin =
     !!staff && ['admin', 'sales_director', 'coordinator', 'super_admin'].includes(staff.role);
+
+  /* TEMPORARY (Loo 2026-06-10) — POS-only roles reach the Backend solely
+     through the Sales Order emergency hatch (Layout.tsx / posOnlyAllowedPath).
+     Their sidebar shows just the Sales Orders link; every other module link
+     would bounce them back to the SO create form anyway. Remove with the
+     hatch. */
+  const soOnly = !!staff && POS_ONLY_ROLES.has(staff.role);
 
   /* ── Top-level workspace links (outside Supply Chain Management) ── */
   const workspace: NavLinkRow[] = [
@@ -215,6 +224,16 @@ export const Sidebar = () => {
         <strong>{formatRole(staff?.role)}</strong>
       </div>
 
+      {soOnly ? (
+        <nav className={styles.nav}>
+          <div className={styles.navGroup}>Sales Order</div>
+          {renderLink({
+            to: '/mfg-sales-orders',
+            icon: <ClipboardList {...ICON_PROPS} />,
+            label: 'Sales Orders',
+          })}
+        </nav>
+      ) : (
       <nav className={styles.nav}>
         {/* Workspace */}
         <div className={styles.navGroup}>Workspace</div>
@@ -263,6 +282,7 @@ export const Sidebar = () => {
           </>
         )}
       </nav>
+      )}
 
       <div className={styles.footer}>
         {staff && (

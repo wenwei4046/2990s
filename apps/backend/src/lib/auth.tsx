@@ -24,6 +24,16 @@ export const POS_ONLY_ROLES: ReadonlySet<StaffRole> = new Set<StaffRole>([
   'sales', 'sales_executive', 'outlet_manager', 'master_account',
 ]);
 
+/* TEMPORARY (Loo 2026-06-10) — emergency hatch while the new POS order flow
+   stabilises: POS-only roles may use the Sales Order module (raw SO creation
+   at /mfg-sales-orders/new, plus the list/detail the create flow lands on).
+   The maintenance vocabulary editor stays blocked, as does every other module.
+   Remove this allow-list (and the POS Catalog sidebar link that points here)
+   when the hatch is retired. */
+export const posOnlyAllowedPath = (pathname: string): boolean =>
+  pathname.startsWith('/mfg-sales-orders') &&
+  !pathname.startsWith('/mfg-sales-orders/maintenance');
+
 /* Admin-level roles — anywhere the UI gated on role === 'admin', it should
    ALSO accept super_admin. Use isAdminLevel() so the widening is in one
    place. (super_admin is a strict superset of admin.) */
