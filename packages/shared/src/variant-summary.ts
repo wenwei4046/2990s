@@ -93,17 +93,25 @@ export function buildVariantSummary(
   // code — e.g. "SPECIAL: Right Drawer (10") + Back Cover". Read straight off
   // `variants` so no caller signature changes; missing → codes-only (old orders).
   const specials = specialsList(variants.specials ?? variants.special);
-  if (specials.length) {
-    const choicesMap =
-      variants.specialChoices && typeof variants.specialChoices === 'object'
-        ? (variants.specialChoices as Record<string, unknown>)
-        : null;
-    const rendered = specials.map((code) => {
-      const picked = choicesMap ? specialsList(choicesMap[code]) : [];
-      return picked.length ? `${code} (${picked.join(', ')})` : code;
-    });
-    segments.push(`SPECIAL: ${rendered.join(' + ')}`);
+  const choicesMap =
+    variants.specialChoices && typeof variants.specialChoices === 'object'
+      ? (variants.specialChoices as Record<string, unknown>)
+      : null;
+  const specialBits = specials.map((code) => {
+    const picked = choicesMap ? specialsList(choicesMap[code]) : [];
+    return picked.length ? `${code} (${picked.join(', ')})` : code;
+  });
+  // Loo 2026-06-11 — the POS product-page remark + extra charge is a FREE-TEXT
+  // Special Add-on, not a separate SKU (one-shot auto-mint retired, flag OFF).
+  // When the line declares an extra amount, render the remark in the same
+  // SPECIAL segment as the picked add-ons so Description 2 reads them together;
+  // a remark WITHOUT money stays a plain remark (its own column) only.
+  const extraRM = Math.round(Number(variants.extraAddonAmountRM ?? 0));
+  if (extraRM > 0) {
+    const remarkText = str(variants.remark);
+    specialBits.push(`${remarkText || 'Extra add-on'} (+RM${extraRM})`);
   }
+  if (specialBits.length) segments.push(`SPECIAL: ${specialBits.join(' + ')}`);
 
   return segments.filter(Boolean).join(' / ');
 }
