@@ -343,11 +343,11 @@ export const Configurator = () => {
   // TOTAL render without another lookup.
   const [fabricSel, setFabricSel] = useState<FabricSelection | null>(null);
   // Bedframe configurator selection (spec 2026-05-25) — colour + dimension
-  // options. Size reuses pickedSizeId; sizeOther is the optional special-size
-  // free text. The picker resolves labels/hex/surcharge so the snapshot + LIVE
-  // TOTAL render without another lookup.
+  // options. Size reuses pickedSizeId. The picker resolves labels/hex/surcharge
+  // so the snapshot + LIVE TOTAL render without another lookup.
+  // (The "Special size" free text was removed 2026-06-11, Loo — the product-page
+  // Remark covers it and surfaces everywhere; old lines keep variants.sizeOther.)
   const [bfSel, setBfSel] = useState<BedframeSelection>(emptyBedframeSelection);
-  const [bfSizeOther, setBfSizeOther] = useState('');
   // Special Add-ons (migration 0134) selections for sofa + mattress (bedframe
   // uses bfSel.specials). Lifted here so sofa survives Quick⇄Customize toggles.
   const [sofaSpecialSel, setSofaSpecialSel] = useState<SpecialSel[]>([]);
@@ -638,7 +638,6 @@ export const Configurator = () => {
       const leg = optById.get(cfg.legHeightId);
       const divan = cfg.divanHeightId ? optById.get(cfg.divanHeightId) : undefined;
       setPickedSizeId(cfg.sizeId);
-      setBfSizeOther(cfg.sizeOther ?? '');
       setBfSel({
         colourId: cfg.colourId,
         colourLabel: cRow?.label ?? cfg.colourLabel ?? null,
@@ -1208,7 +1207,7 @@ export const Configurator = () => {
 
   const handleAddBedframe = () => {
     if (!canAddBedframe || pickedSize == null || pickedSize.price == null || fabricSel == null || bfSel.legId == null) return;
-    const parts = [pickedSize.label + (bfSizeOther.trim() ? ` (${bfSizeOther.trim()})` : '')];
+    const parts = [pickedSize.label];
     if (fabricSel.fabricLabel) parts.push(fabricSel.fabricLabel);
     if (fabricSel.colourLabel) parts.push(fabricSel.colourLabel);
     if (bfSel.gapLabel) parts.push(`Gap ${bfSel.gapLabel}`);
@@ -1220,7 +1219,6 @@ export const Configurator = () => {
       productId: p.id,
       productName: p.name,
       sizeId: pickedSize.id,
-      ...(bfSizeOther.trim() ? { sizeOther: bfSizeOther.trim() } : {}),
       colourId: fabricSel.colourId,
       colourLabel: fabricSel.colourLabel,
       ...(fabricSel.colourHex ? { colourHex: fabricSel.colourHex } : {}),
@@ -1953,17 +1951,6 @@ export const Configurator = () => {
           <aside className={styles.rail}>
             <RailSection title="Size" sub={pickedSize ? `${pickedSize.label} · ${pickedSize.widthCm}×${pickedSize.lengthCm} cm` : undefined}>
               <SizeGrid rows={sizeRows} pickedId={pickedSizeId} onPick={setPickedSizeId} />
-              <label className={styles.sizeOtherField}>
-                <span className={styles.sizeOtherLabel}>Special size (optional)</span>
-                <input
-                  type="text"
-                  className={styles.sizeOtherInput}
-                  placeholder='e.g. 200 x 200'
-                  value={bfSizeOther}
-                  maxLength={60}
-                  onChange={(e) => setBfSizeOther(e.target.value)}
-                />
-              </label>
             </RailSection>
 
             {/* PWP redeem — shared bed frame + mattress section (see pwpRailSection). */}
