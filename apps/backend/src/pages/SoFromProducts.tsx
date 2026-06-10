@@ -220,6 +220,13 @@ export const SoFromProducts = () => {
   const runManual = () => {
     if (!manualCustomer.trim()) { window.alert('Enter a customer name first.'); return; }
     if (Boolean(manualProc) !== Boolean(manualDeliv)) { window.alert('Processing Date and Delivery Date must be set together (or both empty).'); return; }
+    // Loo 2026-06-11 — mirror the SO API's date gates (no past dates; factory
+    // start never after delivery) so a bad manual pick fails HERE, not as a
+    // per-SO 400 row in the batch result. The input `min` attr alone is
+    // bypassable (typed dates / a page left open across midnight).
+    if (manualProc && manualProc < todayMY()) { window.alert('Processing Date cannot be in the past — pick today or a future date.'); return; }
+    if (manualDeliv && manualDeliv < todayMY()) { window.alert('Delivery Date cannot be in the past — pick today or a future date.'); return; }
+    if (manualProc && manualDeliv && manualProc > manualDeliv) { window.alert('Processing Date cannot be later than the Delivery Date.'); return; }
     const specs: SoSpec[] = pickedManual.map(([code, v]) => {
       const p = products.find((x) => x.code === code)!;
       const group = (p.category.toLowerCase() as GenLine['itemGroup']);
