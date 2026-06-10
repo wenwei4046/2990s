@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { MonthCalendar } from './MonthCalendar';
 import { Field } from './Field';
-import type { HandoverForm } from '../../lib/handover-helpers';
+import { todayLocalIso, type HandoverForm } from '../../lib/handover-helpers';
 import { useCartLeadDays } from '../../lib/lead-times';
 import styles from '../../pages/Handover.module.css';
 
@@ -25,14 +25,10 @@ export const TargetDateStep = ({
   }, [leadDays]);
 
   // Today (Malaysia local) as ISO — the earliest a factory start (Process Date)
-  // can be, and the default we seed once a delivery date exists.
-  const todayIso = useMemo(() => {
-    const t = new Date();
-    const y = t.getFullYear();
-    const m = String(t.getMonth() + 1).padStart(2, '0');
-    const d = String(t.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  }, []);
+  // can be. Recomputed every render (NOT memoised): a PWA tablet left open
+  // across midnight would otherwise keep yesterday's date as the input `min`.
+  // The step gate in handover-helpers re-checks against a live today too.
+  const todayIso = todayLocalIso();
 
   // "For further notice" (UFN) — customer hasn't committed a date yet. Ticking
   // it clears the picked delivery + process dates so the SO API's "both dates or

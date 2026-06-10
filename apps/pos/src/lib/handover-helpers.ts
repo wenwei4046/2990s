@@ -160,13 +160,24 @@ export const validateAddress = (f: HandoverForm): boolean => {
 export const validateEmergency = (f: HandoverForm): boolean =>
   [f.emergencyName, f.emergencyRelation, f.emergencyPhone].every((v) => v.trim().length > 0);
 
-export const validateTargetDate = (f: HandoverForm): boolean => {
+/** Local-device today as ISO YYYY-MM-DD. POS tablets run on Malaysia local
+ *  time, so the no-past-dates rule compares device-local on purpose (the API
+ *  re-checks against Malaysia UTC+8 as the authority). */
+export const todayLocalIso = (): string => new Date().toLocaleDateString('en-CA');
+
+export const validateTargetDate = (f: HandoverForm, todayIso: string = todayLocalIso()): boolean => {
   // "For further notice" (UFN) — no dates committed yet; allowed.
   if (f.deliveryDateLater) return true;
   // Any other path commits a delivery date, so a Process Date must accompany it
   // (the SO API pairs them), and Process Date may not be later than delivery.
   if (f.deliveryDate.length === 0) return false;
   if (f.processDate.length === 0) return false;
+  // Loo 2026-06-11 — neither date may sit in the past (mirrors the API's
+  // processing_date_past / delivery_date_past 400s). The date inputs' `min`
+  // attribute goes stale on a tablet left open across midnight, and a server
+  // reject only surfaces at the FINAL Confirm — after the customer already
+  // signed. Gate the step here against a live "today" instead.
+  if (f.processDate < todayIso || f.deliveryDate < todayIso) return false;
   return f.processDate <= f.deliveryDate;
 };
 
@@ -239,14 +250,18 @@ const emergencyBlockers = (f: HandoverForm): string[] => {
   return b;
 };
 
-const targetDateBlockers = (f: HandoverForm): string[] => {
+const targetDateBlockers = (f: HandoverForm, todayIso: string = todayLocalIso()): string[] => {
   if (f.deliveryDateLater) return [];  // UFN — both dates left open
   const b: string[] = [];
   if (!f.deliveryDate) {
     b.push('Pick a delivery date, or check "As fast as possible" / "For further notice"');
     return b;
   }
+  // Loo 2026-06-11 — live no-past check (the input `min` attr alone goes stale
+  // across midnight); keeps the reject HERE instead of a 400 at final Confirm.
+  if (f.deliveryDate < todayIso) b.push('Delivery date cannot be in the past — pick today or later');
   if (!f.processDate) b.push('Pick a process (factory start) date');
+  else if (f.processDate < todayIso) b.push('Process date cannot be in the past — pick today or later');
   else if (f.processDate > f.deliveryDate) b.push('Process date cannot be later than the delivery date');
   return b;
 };

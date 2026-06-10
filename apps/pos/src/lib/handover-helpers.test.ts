@@ -78,21 +78,39 @@ describe('validateEmergency', () => {
 });
 
 describe('validateTargetDate', () => {
+  // Fixed "today" injected so the cases stay deterministic; the prod call
+  // site omits it and gets a live device-local today (no-past-dates rule).
+  const TODAY = '2026-06-01';
   it('passes when "For further notice" (UFN) — both dates left open', () => {
-    expect(validateTargetDate({ ...baseForm, deliveryDateLater: true })).toBe(true);
+    expect(validateTargetDate({ ...baseForm, deliveryDateLater: true }, TODAY)).toBe(true);
   });
   it('fails with no dates at all', () => {
-    expect(validateTargetDate(baseForm)).toBe(false);
+    expect(validateTargetDate(baseForm, TODAY)).toBe(false);
   });
   it('requires a Process Date once a delivery date is committed', () => {
-    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04' })).toBe(false);
-    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04', processDate: '2026-06-01' })).toBe(true);
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04' }, TODAY)).toBe(false);
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04', processDate: '2026-06-01' }, TODAY)).toBe(true);
   });
   it('rejects a Process Date later than the delivery date', () => {
-    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04', processDate: '2026-06-10' })).toBe(false);
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04', processDate: '2026-06-10' }, TODAY)).toBe(false);
   });
   it('allows Process Date equal to the delivery date', () => {
-    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04', processDate: '2026-06-04' })).toBe(true);
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04', processDate: '2026-06-04' }, TODAY)).toBe(true);
+  });
+  it('rejects a Process Date in the past (Loo 2026-06-11)', () => {
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04', processDate: '2026-05-30' }, TODAY)).toBe(false);
+  });
+  it('rejects a delivery date in the past (Loo 2026-06-11)', () => {
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-05-30', processDate: '2026-05-30' }, TODAY)).toBe(false);
+  });
+  it('allows both dates falling on today itself', () => {
+    expect(validateTargetDate({ ...baseForm, deliveryDate: TODAY, processDate: TODAY }, TODAY)).toBe(true);
+  });
+  it('defaults todayIso to the live device date when omitted', () => {
+    // A pair far in the past must fail against the real clock…
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2020-01-02', processDate: '2020-01-01' })).toBe(false);
+    // …while UFN stays exempt from date checks entirely.
+    expect(validateTargetDate({ ...baseForm, deliveryDateLater: true })).toBe(true);
   });
 });
 
