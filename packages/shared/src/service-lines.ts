@@ -28,6 +28,11 @@ import {
 export interface ServiceLineSpec {
   itemCode:     string;
   description:  string;
+  /** Dynamic per-order detail (cross-order source SO, lift floors×items math).
+   *  Lands in mfg_sales_order_lines.remark — Loo 2026-06-10: the description
+   *  stays the stable SKU wording; order-specific context belongs in the
+   *  Remark column (and prints as its own "Remark:" note line). */
+  remark?:      string | null;
   qty:          number;
   /** SEN per unit. */
   unitPriceSen: number;
@@ -90,7 +95,8 @@ export const liftChargeableUnits = (floorsCount: number, itemsCount: number): nu
  * Decompose a server-computed delivery fee into SERVICE lines (§4.1).
  *   · base       → SVC-DELIVERY, or SVC-DELIVERY-CROSS on a cross-order
  *                  follow-up (the base IS the reduced cross rate then; the
- *                  description carries the source SO for the audit trail)
+ *                  REMARK carries the source SO for the audit trail —
+ *                  Loo 2026-06-10, description stays the stable SKU wording)
  *   · crossCategory (same-order multi-category surcharge) → SVC-DELIVERY-CROSS
  *   · additional (operator free-form)                     → SVC-DELIVERY-ADD
  * Zero components produce no line; Σ lines === fee.total always.
@@ -100,16 +106,17 @@ export function buildDeliveryFeeServiceLines(
   crossCategorySourceDocNo?: string | null,
 ): ServiceLineSpec[] {
   const lines: ServiceLineSpec[] = [];
-  const push = (itemCode: string, description: string, amountSen: number) => {
+  const push = (itemCode: string, description: string, amountSen: number, remark?: string) => {
     if (amountSen <= 0) return;
-    lines.push({ itemCode, description, qty: 1, unitPriceSen: amountSen, totalSen: amountSen });
+    lines.push({ itemCode, description, remark: remark || null, qty: 1, unitPriceSen: amountSen, totalSen: amountSen });
   };
   if (fee.isFollowup) {
     const src = (crossCategorySourceDocNo ?? '').trim();
     push(
       SVC_DELIVERY_CROSS,
-      src ? `Cross-category delivery (follow-up of ${src})` : 'Cross-category delivery',
+      'Cross-category delivery',
       fee.base,
+      src ? `Follow-up of ${src}` : undefined,
     );
   } else {
     push(SVC_DELIVERY, fee.isSpecial ? 'Delivery fee (special model)' : 'Delivery fee', fee.base);
@@ -125,9 +132,10 @@ export function buildDeliveryFeeServiceLines(
  * addons table rows the caller just loaded.
  *   · qty kind (dispose-*)  → qty × price
  *   · floors_items (lift)   → qty = chargeable units (first 2 floors free),
- *                             unit = per_floor_item; description spells out
+ *                             unit = per_floor_item; the REMARK spells out
  *                             "X floors × Y items" so the math is auditable
- *                             on the printed SO (D6).
+ *                             on the printed SO (D6 as amended by Loo
+ *                             2026-06-10 — moved from description to remark).
  * Disabled / unknown / zero-amount selections are skipped silently.
  */
 export function computeAddonServiceLines(
@@ -159,7 +167,8 @@ export function computeAddonServiceLines(
       if (units <= 0 || unitSen <= 0) continue;
       lines.push({
         itemCode,
-        description: `${label} — ${floors} floors × ${items} items (first 2 floors free)`,
+        description: label,
+        remark: `${floors} floors × ${items} items (first 2 floors free)`,
         qty: units,
         unitPriceSen: unitSen,
         totalSen: units * unitSen,
