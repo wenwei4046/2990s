@@ -98,8 +98,8 @@ describe('buildVariantSummary', () => {
     expect(summary).toContain('SPECIAL: Extra add-on (+RM150)');
   });
 
-  it('a remark WITHOUT money stays out of the summary (plain remark only)', () => {
+  it('a remark WITHOUT money also renders in the SPECIAL segment, bare (Loo 2026-06-11)', () => {
     const summary = buildVariantSummary('bedframe', { divanHeight: '10"', remark: 'Deliver before noon' });
-    expect(summary).toBe('DIVAN 10"');
+    expect(summary).toBe('DIVAN 10" / SPECIAL: Deliver before noon');
   });
 });

@@ -103,13 +103,14 @@ export function buildVariantSummary(
   });
   // Loo 2026-06-11 — the POS product-page remark + extra charge is a FREE-TEXT
   // Special Add-on, not a separate SKU (one-shot auto-mint retired, flag OFF).
-  // When the line declares an extra amount, render the remark in the same
-  // SPECIAL segment as the picked add-ons so Description 2 reads them together;
-  // a remark WITHOUT money stays a plain remark (its own column) only.
+  // The remark renders in the same SPECIAL segment as the picked add-ons so
+  // Description 2 reads them together — with money it carries "(+RM…)",
+  // without money it's the bare text (Loo: a free remark is still an option).
   const extraRM = Math.round(Number(variants.extraAddonAmountRM ?? 0));
-  if (extraRM > 0) {
-    const remarkText = str(variants.remark);
-    specialBits.push(`${remarkText || 'Extra add-on'} (+RM${extraRM})`);
+  const remarkText = str(variants.remark);
+  if (remarkText || extraRM > 0) {
+    const bit = remarkText || 'Extra add-on';
+    specialBits.push(extraRM > 0 ? `${bit} (+RM${extraRM})` : bit);
   }
   if (specialBits.length) segments.push(`SPECIAL: ${specialBits.join(' + ')}`);
 
