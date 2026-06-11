@@ -8,6 +8,8 @@ compatibility_flags = ["nodejs_compat"]
 #   wrangler secret put SUPABASE_SERVICE_ROLE_KEY
 #   wrangler secret put R2_ACCESS_KEY_ID
 #   wrangler secret put R2_SECRET_ACCESS_KEY
+#   wrangler secret put ANTHROPIC_API_KEY     <- Scan Order OCR (routes/scan-so.ts);
+#                                                optional - endpoint 503s until set.
 [vars]
 SUPABASE_URL = "https://dolvxrchzbnqvahocwsu.supabase.co"
 

@@ -33,6 +33,7 @@ import { mfgPurchaseOrders } from './routes/mfg-purchase-orders';
 import { grns } from './routes/grns';
 import { purchaseInvoices } from './routes/purchase-invoices';
 import { mfgSalesOrders } from './routes/mfg-sales-orders';
+import { scanSo } from './routes/scan-so';
 import { stateWarehouseMappings } from './routes/state-warehouse-mappings';
 import { localities } from './routes/localities';
 import { soDropdownOptions } from './routes/so-dropdown-options';
@@ -113,6 +114,8 @@ app.route('/mfg-purchase-orders', mfgPurchaseOrders);
 app.route('/grns', grns);
 app.route('/purchase-invoices', purchaseInvoices);
 app.route('/mfg-sales-orders', mfgSalesOrders);
+// Scan Order — handwritten showroom slip OCR → New SO prefill.
+app.route('/scan-so', scanSo);
 app.route('/state-warehouse-mappings', stateWarehouseMappings);
 app.route('/localities', localities);
 app.route('/so-dropdown-options', soDropdownOptions);

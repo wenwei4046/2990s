@@ -46,6 +46,7 @@ import {
 } from '../lib/so-dropdown-options-queries';
 import { useStateWarehouseMappings } from '../lib/state-warehouse-queries';
 import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
+import { SCAN_PREFILL_KEY, type ScanPrefill } from '../components/ScanOrderModal';
 import {
   PaymentsTable, labelToApi, draftMethodFields, type PaymentDraft,
 } from '../components/PaymentsTable';
@@ -242,6 +243,45 @@ export const SalesOrderNew = () => {
     setCopySeeded(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [copyFromDocNo, copySeeded, copySource.data]);
+
+  /* Scan-Order prefill — ?fromScan=1 + sessionStorage handoff from
+     ScanOrderModal ("Scan Order" on the SO list). Same one-shot seeding
+     idea as copyFrom above, but via sessionStorage because the source is
+     an OCR'd handwritten slip, not an existing SO. The key is consumed
+     (removed) immediately so a refresh starts clean. Everything seeded
+     here is a DRAFT the operator reviews — normal pricing/validation
+     still runs on Save. */
+  const fromScan = searchParams.get('fromScan') === '1';
+  const [scanSeeded, setScanSeeded] = useState(false);
+  useEffect(() => {
+    if (!fromScan || scanSeeded) return;
+    setScanSeeded(true);
+    let payload: ScanPrefill | null = null;
+    try {
+      payload = JSON.parse(sessionStorage.getItem(SCAN_PREFILL_KEY) ?? 'null') as ScanPrefill | null;
+    } catch { payload = null; }
+    sessionStorage.removeItem(SCAN_PREFILL_KEY);
+    if (!payload) return;
+    if (payload.customerName) setDebtorName(payload.customerName);
+    if (payload.phone) setPhone(payload.phone);
+    if (payload.address1) setAddress1(payload.address1);
+    if (payload.note) setNote(payload.note);
+    if (payload.deliveryDate) setDeliveryDate(payload.deliveryDate);
+    if (payload.processingDate) setProcessingDate(payload.processingDate);
+    if (Array.isArray(payload.lines) && payload.lines.length > 0) {
+      const dd = payload.deliveryDate ?? null;
+      setLines(payload.lines.map((l) => ({
+        ...newLine(dd),
+        itemCode:       l.itemCode,
+        itemGroup:      l.itemGroup || 'others',
+        description:    l.description,
+        qty:            l.qty > 0 ? l.qty : 1,
+        unitPriceCenti: l.unitPriceCenti,
+        remark:         l.remark,
+      })));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromScan, scanSeeded]);
 
   // ── Payments draft state ───────────────────────────────────────────
   /* Task #105 — Same Houzs PaymentsTable used on Detail, but in DRAFT mode
