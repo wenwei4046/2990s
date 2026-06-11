@@ -44,10 +44,14 @@ export async function authedFetch<T>(path: string, init?: RequestInit): Promise<
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new Error('not_authenticated');
+  // Only stamp content-type: application/json for string bodies (JSON
+  // payloads). For FormData (multipart upload) the browser sets the
+  // boundary-aware content-type itself — overriding it here breaks the
+  // multipart parse on the Worker side (parseBody returns {} → 400).
   const headers = {
     ...(init?.headers ?? {}),
     authorization: `Bearer ${token}`,
-    ...(init?.body ? { 'content-type': 'application/json' } : {}),
+    ...(typeof init?.body === 'string' ? { 'content-type': 'application/json' } : {}),
   };
   let res = await fetch(`${API_URL}${path}`, { ...init, headers });
 

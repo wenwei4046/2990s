@@ -4,6 +4,18 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-11-003 — All Backend FormData uploads broken since 06-07: authedFetch stamped multipart bodies as JSON
+
+**Symptom (Loo):** Replacing a Model photo in SKU Master (MATTRESS · AKKA-FIRM) failed with the generic red caption "Some of the details weren't accepted. Please check what you entered and try again." Photos uploaded before 06-07 still displayed fine, which disguised the breakage as a per-row data problem.
+
+**Root cause:** The authedFetch consolidation `782dfb1` (2026-06-07) merged 24 per-module copies into `apps/backend/src/lib/authed-fetch.ts` but degraded the content-type guard from `typeof init.body === 'string'` to truthy `init?.body` — exactly the failure mode the pre-consolidation comment warned about ("overriding it here would break the multipart parse on the Worker side"). Every FormData POST went out as `content-type: application/json`; fetch's multipart boundary was lost; Hono's `parseBody()` only parses multipart/urlencoded so it returned `{}`; the photo route 400'd `file_field_required`; and `humanApiError` (the 白话文 layer from `589cb4e`) masked the code as the generic 400 sentence — double-blinding the diagnosis. **Affected:** Model hero photos (`product-models-queries.ts`) + sofa compartment photos (`mfg-products-queries.ts`) — the only two multipart callers routed through authedFetch. **Not affected:** SO item photos + consignment item photos (own fetch, auth header only), CategoryHeroUploader (raw File body + explicit mime), POS app (no multipart anywhere).
+
+**Fix (`fa054af`):** restore the string-only guard (`typeof init?.body === 'string'`) with the warning comment carried back in, + regression test `authed-fetch.test.ts` (FormData must NOT get a content-type stamp; string bodies must get application/json).
+
+**Caught by:** Loo hit it replacing a mattress photo 2026-06-11; root-caused by diffing the consolidated helper against the pre-consolidation copy (`git show 782dfb1~1:…/product-models-queries.ts`), whose comment documents the contract, then confirming hono 4.12.18 `parseBody` returns `{}` for non-multipart content-types.
+
+---
+
 ## BUG-2026-06-11-002 — Full-codebase audit batches 2+3 (commits f50c0e3, 486e870)
 
 Six-agent module-by-module sweep (full reports in docs/audit/2026-06-11-*.md). Fixed per Wei Siang's picks:
