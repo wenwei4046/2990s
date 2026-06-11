@@ -758,6 +758,10 @@ type DeliverableLine = {
   delivered: number;
   returned: number;
   remaining: number;
+  /** Position of this line within ITS SO (created_at order) — DO lines copy
+   *  the SO's listing order instead of shuffling by uuid (Loo 2026-06-12:
+   *  mains first + a sofa's modules left-to-right must survive onto the DO). */
+  lineSeq: number;
 };
 
 export async function soDeliverableRemaining(
@@ -767,7 +771,8 @@ export async function soDeliverableRemaining(
   const out = new Map<string, DeliverableLine>();
   if (soDocNos.length === 0) return out;
 
-  // 1. Load the non-cancelled SO lines of the requested SOs.
+  // 1. Load the non-cancelled SO lines of the requested SOs, in each SO's own
+  //    listing order (created_at — the order the create path persisted).
   const { data: soItems } = await sb
     .from('mfg_sales_order_items')
     .select(
@@ -775,7 +780,8 @@ export async function soDeliverableRemaining(
       'uom, qty, unit_price_centi, unit_cost_centi, discount_centi, variants',
     )
     .in('doc_no', soDocNos)
-    .eq('cancelled', false);
+    .eq('cancelled', false)
+    .order('created_at');
   const lines = (soItems ?? []) as Array<Record<string, unknown> & { id: string; doc_no: string; qty: number }>;
   if (lines.length === 0) return out;
   const soItemIds = lines.map((l) => l.id);
@@ -831,11 +837,15 @@ export async function soDeliverableRemaining(
     }
   }
 
-  // 4. Assemble per-line descriptors with the live remaining.
+  // 4. Assemble per-line descriptors with the live remaining. lineSeq counts
+  //    per SO so the picker / DO create can keep each SO's listing order.
+  const seqByDoc = new Map<string, number>();
   for (const l of lines) {
     const qty = Number(l.qty ?? 0);
     const delivered = deliveredBySoItem.get(l.id) ?? 0;
     const returned = returnedBySoItem.get(l.id) ?? 0;
+    const lineSeq = seqByDoc.get(l.doc_no) ?? 0;
+    seqByDoc.set(l.doc_no, lineSeq + 1);
     out.set(l.id, {
       soItemId: l.id,
       docNo: l.doc_no,
@@ -854,6 +864,7 @@ export async function soDeliverableRemaining(
       delivered,
       returned,
       remaining: qty - delivered + returned,
+      lineSeq,
     });
   }
   return out;
@@ -1601,7 +1612,10 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
   //    earliest-sorted picked line so the result is deterministic.
   const sortedPicks = pickedIds
     .map((id) => remainingMap.get(id)!)
-    .sort((a, b) => a.docNo.localeCompare(b.docNo) || a.soItemId.localeCompare(b.soItemId));
+    /* lineSeq = the SO's own listing order (mains first, sofa modules
+       left-to-right) so the DO reads like its SO; the uuid tiebreak only
+       guards determinism if two lines ever shared a seq. */
+    .sort((a, b) => a.docNo.localeCompare(b.docNo) || (a.lineSeq - b.lineSeq) || a.soItemId.localeCompare(b.soItemId));
   const firstSoDocNo = sortedPicks[0]!.docNo;
 
   /* Sofa batch guard — block any picked sofa line with no production PO (no

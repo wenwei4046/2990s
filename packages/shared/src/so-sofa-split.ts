@@ -20,7 +20,7 @@
 // Pure + shared so tests pin the distribution math.
 // ----------------------------------------------------------------------------
 
-import { normalizeCompartmentCode } from './sofa-build';
+import { normalizeCompartmentCode, orderSofaCellsLeftToRight, type Rot } from './sofa-build';
 
 export interface SofaSplitCell {
   moduleId: string;
@@ -89,24 +89,44 @@ export function splitSofaBuildIntoModuleLines(args: {
   /** D4 one-shot path: split the SELLING price EVENLY across modules (cost stays
    *  on the catalog-weight split). Default false = legacy proportional split. */
   evenSplitPrice?: boolean;
+  /** Seat depth (variants.depth, inches as string) — sizes the module
+   *  footprints for the left-to-right walk. Omitted → 24″ baseline; a wrong
+   *  depth only degrades the ORDER (walk falls back to a stable (x, y) sort),
+   *  never the money. */
+  depth?: string | null;
 }): SofaModuleLineSpec[] | null {
   const baseModel = (args.baseModel ?? '').trim().toUpperCase();
   if (!baseModel) return null;
   if (!Array.isArray(args.cells) || args.cells.length === 0) return null;
 
-  const cells: SofaSplitCell[] = [];
+  const parsed: SofaSplitCell[] = [];
   for (const raw of args.cells) {
     if (!raw || typeof raw !== 'object') return null; // malformed build → don't split
     const c = raw as Record<string, unknown>;
     const moduleId = typeof c.moduleId === 'string' ? c.moduleId.trim() : '';
     if (!moduleId) return null;
-    cells.push({
+    parsed.push({
       moduleId,
       x: typeof c.x === 'number' ? c.x : null,
       y: typeof c.y === 'number' ? c.y : null,
       rot: typeof c.rot === 'number' ? c.rot : null,
     });
   }
+
+  /* Left-to-right line order (Loo 2026-06-12): the SO's per-module lines —
+     and the cellIndex every display fold sorts by — follow the build's visual
+     walk, not the order the salesperson dragged modules onto the canvas.
+     Wrap each parsed cell so the orderer's output maps back 1:1; missing
+     geometry keeps the stored order (the orderer never guesses). */
+  const wrapped = parsed.map((src) => ({
+    src,
+    moduleId: src.moduleId,
+    x: src.x ?? Number.NaN,
+    y: src.y ?? Number.NaN,
+    rot: (src.rot ?? 0) as Rot,
+  }));
+  const cells = orderSofaCellsLeftToRight(wrapped, args.depth ?? '24')
+    .map((w) => (w as (typeof wrapped)[number]).src);
 
   const codes = cells.map((c) => normalizeCompartmentCode(c.moduleId));
   const weights = codes.map((code) => {

@@ -3,6 +3,7 @@ import {
   groupSoLinesForDisplay,
   pwpRewardNote,
   pwpTriggerNotes,
+  sortSoLinesByGroupRank,
   type SoPwpCodeRow,
   type SoPwpNote,
 } from '@2990s/shared/so-line-display';
@@ -200,8 +201,14 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
          stay per-SKU. PWP notes ride under the description: a reward line
          shows the voucher it consumed, a trigger line shows codes this SO
          issued (USED → short reference; unused → "not redeemed yet" 排法 A). */
+      /* Priority lines (Loo 2026-06-12): mains (sofa/mattress/bedframe)
+         lead, accessories follow, services close — render-time so SOs
+         booked before the create path persisted this order print right. */
       const groups = groupSoLinesForDisplay(
-        items.filter((it) => !it.cancelled) as Array<Record<string, any> & { item_code: string }>,
+        sortSoLinesByGroupRank(
+          items.filter((it) => !it.cancelled) as Array<Record<string, any> & { item_code: string }>,
+          (l) => l.item_group as string | null | undefined,
+        ),
       );
       const lines: PrintableLine[] = groups.map((g) => {
         const lead = g.lines[0]!;

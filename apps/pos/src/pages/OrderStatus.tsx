@@ -27,7 +27,7 @@ import {
   Pencil,
 } from 'lucide-react';
 import { IconButton } from '@2990s/design-system';
-import { groupSoLinesForDisplay } from '@2990s/shared/so-line-display';
+import { groupSoLinesForDisplay, sortSoLinesByGroupRank } from '@2990s/shared/so-line-display';
 import { REQUIRED_VARIANT_AXES_BY_CATEGORY } from '@2990s/shared/so-variant-rule';
 import { PAYMENT_METHOD_CODES } from '@2990s/shared/payment-methods';
 import { meetsProceedGate } from '@2990s/shared/order-rules';
@@ -228,7 +228,11 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
            groups from the P3 split) into ONE Model row with the combined
            price, matching the customer-facing SO print. Lines without a
            buildKey (legacy SOs, services, bedframes…) pass through 1:1. */
-        const items: OrderItem[] = groupSoLinesForDisplay(r.items ?? []).map((g) => {
+        const items: OrderItem[] = groupSoLinesForDisplay(
+          /* Priority lines (Loo 2026-06-12): mains first, services last —
+             same rank order as the customer print + Backend PDF. */
+          sortSoLinesByGroupRank(r.items ?? [], (l) => l.item_group),
+        ).map((g) => {
           /* TBC fill-in (Loo 2026-06-11) — the lead line is the edit target.
              SERVICE lines (fees / add-on SKUs) stay read-only; an older API
              without line ids hides the editor. PWP reward lines ARE editable

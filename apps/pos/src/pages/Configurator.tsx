@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2, FlipHorizontal2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, matchComboSubset, comboChargedPrices, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, matchComboSubset, comboChargedPrices, orderSofaCellsLeftToRight, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
 import { resolvePwp, type PwpLineInput } from '@2990s/shared/pwp';
 import { usePwpRules, useMyReservedPwpCodes, validatePwpCode } from '../lib/products/pwp-queries';
 import {
@@ -1330,9 +1330,24 @@ export const Configurator = () => {
     : null;
   // A mirrored pick can't reuse its stored label (it still names the un-flipped
   // hands), so rebuild the label from the flipped modules.
-  const qpDisplayLabel = pickedQP
-    ? (qpMirror ? buildComboLabel(effectiveQPModules!) : (pickedQP.label || buildComboLabel(pickedQP.modules)))
-    : '';
+  // Loo 2026-06-12: the topbar label (and the cart summary minted from it)
+  // lists the modules LEFT-TO-RIGHT off the laid-out cells — a stored pick's
+  // slot order (and any label minted from it at save time) renders an
+  // L-corner as "CNR + 1B(LHF) + 2A(RHF)" when the walk reads
+  // "1B(LHF) + CNR + 2A(RHF)". OR-set slots (Backend combo curation) can't
+  // be expressed as cells, so they keep the stored label / slot join.
+  const qpDisplayLabel = (() => {
+    if (!pickedQP || !effectiveQPModules) return '';
+    if (effectiveQPModules.every((slot) => slot.length <= 1)) {
+      const cells = cellsFromComboModules(effectiveQPModules, activeDepth);
+      if (cells.length > 0) {
+        return orderSofaCellsLeftToRight(cells, activeDepth)
+          .map((c) => c.moduleId)
+          .join(' + ');
+      }
+    }
+    return qpMirror ? buildComboLabel(effectiveQPModules) : (pickedQP.label || buildComboLabel(pickedQP.modules));
+  })();
   const qpPickPrice = effectiveQPModules ? (priceForLayout(effectiveQPModules) ?? 0) : 0;
 
   // Fabric-tier add-on (migration 0124): per-item flat Δ from the chosen

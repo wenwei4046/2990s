@@ -22,6 +22,7 @@
 // `useCreateMfgSalesOrder` (camelCase POST + 201 → { docNo }).
 
 import { useMutation } from '@tanstack/react-query';
+import { orderSofaCellsLeftToRight } from '@2990s/shared/sofa-build';
 import { supabase } from './supabase';
 import type { CartLine, CartConfig } from '../state/cart';
 import type { CatalogProduct } from './queries';
@@ -562,8 +563,10 @@ export const cartLineToSoItem = (
     const modelName = resolvedModelName ?? fallbackName;
     description = modelName;
     if (line.config.cells && line.config.cells.length > 0) {
-      const codes = [...line.config.cells]
-        .sort((a, b) => a.x - b.x || a.y - b.y)
+      // Left-to-right WALK (Loo 2026-06-12) — chaise wing first, then the
+      // corner, then across to the right arm; same order the server's P3
+      // split persists the per-module lines in.
+      const codes = orderSofaCellsLeftToRight(line.config.cells, line.config.depth ?? '24')
         .map((c) => c.moduleId)
         .filter(Boolean);
       if (codes.length > 0) description = `${modelName} · ${codes.join(' + ')}`;

@@ -30,6 +30,11 @@ import {
    (SO-2606-018 reference shape). Pure decomposition in shared; the build-level
    recompute + drift gate stay authoritative for the money. */
 import { splitSofaBuildIntoModuleLines } from '@2990s/shared/so-sofa-split';
+/* SO line ORDER rules (Loo 2026-06-12) — persisted row order: mains
+   (sofa/mattress/bedframe) first, accessories after, services last; within a
+   rank the cart order is preserved. Shared with the Backend PDF + POS print
+   so every surface ranks identically. */
+import { sortSoLinesByGroupRank } from '@2990s/shared/so-line-display';
 /* Task 5 — mint one-shot SKUs at SO create when a line carries an extra add-on
    charge (gated by so_settings.pos_remark_extra_auto_sku). Pure code-resolution
    + row-build lives in the lib; this route batches the DB collision check. */
@@ -2107,6 +2112,9 @@ mfgSalesOrders.post('/', async (c) => {
         // Task 5 (D4) — when this line mints one-shot SKUs (extra charge), the
         // selling price is split EVENLY across modules; cost stays proportional.
         evenSplitPrice: extraRM > 0,
+        // Left-to-right walk (Loo 2026-06-12) sizes footprints at the build's
+        // real seat depth so adjacency matches the canvas the cells came from.
+        depth: String((it.variants as { depth?: unknown } | null)?.depth ?? '24'),
       });
       if (split && split.length > 0) {
         const buildKey = `build-${idx + 1}`;
@@ -2194,7 +2202,12 @@ mfgSalesOrders.post('/', async (c) => {
       });
     }
     return [baseRow];
-  })).then((rows) => rows.flat());
+  })).then((rows) =>
+    /* Priority lines (Loo 2026-06-12): persist mains (sofa/mattress/bedframe)
+       ahead of accessories/others. Stable, so the cart order survives within a
+       rank and a split build's module rows stay contiguous (same item_group).
+       SERVICE rows are pushed after this array and stay last either way. */
+    sortSoLinesByGroupRank(rows.flat(), (r) => r.item_group as string | null | undefined));
 
   const margin = total - totalCost;
   const marginPctBasis = total > 0 ? Math.round((margin / total) * 10000) : 0;
