@@ -639,7 +639,7 @@ export const Configurator = () => {
       const divan = cfg.divanHeightId ? optById.get(cfg.divanHeightId) : undefined;
       setPickedSizeId(cfg.sizeId);
       setBfSel({
-        colourId: cfg.colourId,
+        colourId: cfg.colourId ?? null,
         colourLabel: cRow?.label ?? cfg.colourLabel ?? null,
         colourHex: cRow?.swatchHex ?? cfg.colourHex ?? null,
         colourSurcharge: cRow?.surcharge ?? 0,
@@ -1197,19 +1197,21 @@ export const Configurator = () => {
       </label>
     </RailSection>
   ) : null;
-  // Required: size (active+priced) + colour + leg always; gap/divan/total also
-  // for non-DIVAN. Specials are optional. Mirrors the server recompute's
-  // required-ness so a gated Add-to-Cart never produces a 400.
+  // Required: size (active+priced) + leg always; gap/divan/total also for
+  // non-DIVAN. Specials are optional. Fabric + colour are OPTIONAL at
+  // Add-to-Cart (Loo 2026-06-11, same as sofa) — the SO-side so-variant-rule
+  // still demands fabricCode before a Processing date / Proceed. Mirrors the
+  // server recompute's required-ness so a gated Add-to-Cart never 400s.
   const canAddBedframe =
     isBedframe && pickedSize != null && pickedSize.active && pickedSize.price != null &&
-    fabricSel != null && bfSel.legId != null &&
+    bfSel.legId != null &&
     (isDivan || (bfSel.gapId != null && bfSel.divanId != null));
 
   const handleAddBedframe = () => {
-    if (!canAddBedframe || pickedSize == null || pickedSize.price == null || fabricSel == null || bfSel.legId == null) return;
+    if (!canAddBedframe || pickedSize == null || pickedSize.price == null || bfSel.legId == null) return;
     const parts = [pickedSize.label];
-    if (fabricSel.fabricLabel) parts.push(fabricSel.fabricLabel);
-    if (fabricSel.colourLabel) parts.push(fabricSel.colourLabel);
+    if (fabricSel?.fabricLabel) parts.push(fabricSel.fabricLabel);
+    if (fabricSel?.colourLabel) parts.push(fabricSel.colourLabel);
     if (bfSel.gapLabel) parts.push(`Gap ${bfSel.gapLabel}`);
     if (bfSel.legLabel) parts.push(`Leg ${bfSel.legLabel}`);
     if (bfSel.divanLabel) parts.push(`Divan ${bfSel.divanLabel}`);
@@ -1219,11 +1221,14 @@ export const Configurator = () => {
       productId: p.id,
       productName: p.name,
       sizeId: pickedSize.id,
-      colourId: fabricSel.colourId,
-      colourLabel: fabricSel.colourLabel,
-      ...(fabricSel.colourHex ? { colourHex: fabricSel.colourHex } : {}),
-      fabricId: fabricSel.fabricId,
-      fabricLabel: fabricSel.fabricLabel,
+      // Optional since 2026-06-11: absent = customer confirms fabric later.
+      ...(fabricSel ? {
+        colourId: fabricSel.colourId,
+        colourLabel: fabricSel.colourLabel,
+        ...(fabricSel.colourHex ? { colourHex: fabricSel.colourHex } : {}),
+        fabricId: fabricSel.fabricId,
+        fabricLabel: fabricSel.fabricLabel,
+      } : {}),
       fabricTierDelta: bedframeFabricDelta,
       // PWP (换购, 0128) identity + grant. modelId/category let the cart re-resolve
       // PWP across lines; pwp/pwpTriggerLabel record the redemption for the invoice.
@@ -1978,6 +1983,8 @@ export const Configurator = () => {
                     category="BEDFRAME"
                     addonConfig={addonCfgQ.data ?? null}
                     enabledColourIds={bedframeFabricCodes}
+                    optional
+                    onClear={() => setFabricSel(null)}
                   />
                 }
                 specialAddons={bedframeSpecialAddons}
