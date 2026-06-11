@@ -66,6 +66,32 @@ describe('cartLineToSoItem', () => {
     });
   });
 
+  // Fabric optional at Add-to-Cart (Loo 2026-06-11) — a sofa line whose
+  // customer hasn't confirmed the fabric serializes WITHOUT fabricId /
+  // fabricCode / colourId, so the SO lands with the fabric axis open and the
+  // Processing-date 409 gate (so-variant-rule) holds it until it's filled.
+  it('sofa without fabric (confirm later) omits fabric keys from variants', () => {
+    const line: CartLine = {
+      key: 'cfg-nofab',
+      qty: 1,
+      config: {
+        kind: 'sofa',
+        productId: 'prod-1',
+        productName: 'Tanah Modular Sofa',
+        bundleId: 'bundle-3l',
+        depth: '39',
+        total: 5980,
+        summary: '3+L · Bundle',
+      },
+    };
+    const item = cartLinesToSoItems([line], [product()])[0]!;
+    expect(item.itemGroup).toBe('sofa');
+    expect(item.variants).toMatchObject({ bundleId: 'bundle-3l', depth: '39' });
+    expect(item.variants).not.toHaveProperty('fabricId');
+    expect(item.variants).not.toHaveProperty('fabricCode');
+    expect(item.variants).not.toHaveProperty('colourId');
+  });
+
   // Delivery-fee fix (2026-06-03): a mattress size line must classify as
   // 'mattress' from its own config.category even when the catalog is empty
   // (production `products` is empty + the size SKU id isn't a catalog card).
