@@ -30,11 +30,12 @@ import type { CSSProperties, DragEvent, JSX, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
-  Plus, X, Filter, Search, Wrench,
+  Plus, X, Filter, Search, Wrench, Camera,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ListingPickerDialog, type ListingChoice } from '../components/ListingPickerDialog';
+import { ScanOrderModal } from '../components/ScanOrderModal';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
@@ -921,6 +922,8 @@ export const MfgSalesOrdersList = () => {
   // ── Row handlers (no toolbar — every action lives on the row's
   //    right-click context menu, gated by status). ───────────────────
   const onNew = () => navigate('/mfg-sales-orders/new');
+  /* Scan Order — handwritten slip OCR → prefilled New SO (ScanOrderModal). */
+  const [showScan, setShowScan] = useState(false);
   const openDetail = (row: SoRow, edit = false) =>
     navigate(`/mfg-sales-orders/${row.doc_no}${edit ? '?edit=1' : ''}`);
 
@@ -1042,6 +1045,12 @@ export const MfgSalesOrdersList = () => {
           <Button variant="primary" size="sm" onClick={onNew}>
             <Plus size={14} strokeWidth={1.75} />
             <span>New Sales Order</span>
+          </Button>
+          {/* Scan Order — photo of a handwritten showroom slip → reviewed,
+              prefilled New SO. The modal never creates the SO itself. */}
+          <Button variant="secondary" size="sm" onClick={() => setShowScan(true)}>
+            <Camera size={14} strokeWidth={1.75} />
+            <span>Scan Order</span>
           </Button>
           {/* SO Maintenance moved out of the sidebar to live next to New Sales
               Order (commander 2026-05-28) — it's a SO-only config surface. */}
@@ -1188,6 +1197,8 @@ export const MfgSalesOrdersList = () => {
         detailListingAvailable={true}
         initial={outstandingOnly ? 'outstanding-listing' : 'listing'}
       />
+
+      {showScan && <ScanOrderModal onClose={() => setShowScan(false)} />}
 
       <DataGrid<SoRow>
         rows={rows}

@@ -8,6 +8,8 @@ compatibility_flags = ["nodejs_compat"]
 #   wrangler secret put SUPABASE_SERVICE_ROLE_KEY
 #   wrangler secret put R2_ACCESS_KEY_ID
 #   wrangler secret put R2_SECRET_ACCESS_KEY
+#   wrangler secret put ANTHROPIC_API_KEY     <- Scan Order OCR (routes/scan-so.ts);
+#                                                optional - endpoint 503s until set.
 [vars]
 SUPABASE_URL = "https://dolvxrchzbnqvahocwsu.supabase.co"
 
@@ -70,6 +72,13 @@ preview_bucket_name = "2990s-so-item-photos-preview"
 # bucket_name = "2990s-public"
 # preview_bucket_name = "2990s-public"
 
-# Cron triggers for the slip-orphan reaper (every 10 min).
+# Cron triggers:
+#   "*/10 * * * *" — slip-orphan reaper (every 10 min)
+#   "0 20 * * SUN" — weekly scan-SO salesperson-rule distill
+#                    (Sun 20:00 UTC = Mon 04:00 MYT; must match
+#                    WEEKLY_DISTILL_CRON in src/index.ts).
+#                    Day-of-week MUST be a name or 1-7 — Cloudflare rejects
+#                    "* * 0" with "invalid cron string" and the whole
+#                    `wrangler deploy` fails (hit 2026-06-12).
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["*/10 * * * *", "0 20 * * SUN"]

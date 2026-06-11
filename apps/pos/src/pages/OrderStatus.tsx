@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { IconButton } from '@2990s/design-system';
 import { groupSoLinesForDisplay, sortSoLinesByGroupRank } from '@2990s/shared/so-line-display';
+import { splitSofaCode } from '@2990s/shared';
 import { REQUIRED_VARIANT_AXES_BY_CATEGORY } from '@2990s/shared/so-variant-rule';
 import { PAYMENT_METHOD_CODES } from '@2990s/shared/payment-methods';
 import { meetsProceedGate } from '@2990s/shared/order-rules';
@@ -258,6 +259,28 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
             target.id != null &&
             String(target.item_group ?? '') !== 'service' &&
             !String(target.item_code).startsWith('SVC-');
+          /* Sofa exchange context (Loo 2026-06-12): the build's combined total
+             feeds the configurator's floor-rule preview; the current cells
+             (module code from the split line's SKU + x/y/rot) seed the canvas
+             on "Change to Same Model". */
+          const buildTotalCenti = g.kind === 'sofa-build' && g.display
+            ? g.display.totalCenti
+            : (lead.total_centi ?? 0);
+          const buildCells = g.kind === 'sofa-build'
+            ? g.lines
+                .map((l) => {
+                  const lv = (l.variants ?? {}) as Record<string, unknown>;
+                  return {
+                    moduleId: splitSofaCode(l.item_code).sizeCode || l.item_code,
+                    x: typeof lv.x === 'number' ? lv.x : 0,
+                    y: typeof lv.y === 'number' ? lv.y : 0,
+                    rot: typeof lv.rot === 'number' ? lv.rot : 0,
+                    cellIndex: typeof lv.cellIndex === 'number' ? lv.cellIndex : 0,
+                  };
+                })
+                .sort((a, b) => a.cellIndex - b.cellIndex)
+                .map(({ cellIndex: _i, ...c }) => c)
+            : undefined;
           const edit: TbcEditTarget | null = editableLine
             ? {
                 itemId: target.id!,
@@ -269,6 +292,8 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
                 variants: targetVariants,
                 isSofaBuild: g.kind === 'sofa-build',
                 isPwp: Boolean(targetVariants.pwp),
+                buildTotalCenti,
+                ...(buildCells ? { buildCells } : {}),
               }
             : null;
           return g.kind === 'sofa-build' && g.display

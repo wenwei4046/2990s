@@ -33,6 +33,7 @@ import { mfgPurchaseOrders } from './routes/mfg-purchase-orders';
 import { grns } from './routes/grns';
 import { purchaseInvoices } from './routes/purchase-invoices';
 import { mfgSalesOrders } from './routes/mfg-sales-orders';
+import { scanSo, distillAllSalespersonRules } from './routes/scan-so';
 import { stateWarehouseMappings } from './routes/state-warehouse-mappings';
 import { localities } from './routes/localities';
 import { soDropdownOptions } from './routes/so-dropdown-options';
@@ -113,6 +114,8 @@ app.route('/mfg-purchase-orders', mfgPurchaseOrders);
 app.route('/grns', grns);
 app.route('/purchase-invoices', purchaseInvoices);
 app.route('/mfg-sales-orders', mfgSalesOrders);
+// Scan Order — handwritten showroom slip OCR → New SO prefill.
+app.route('/scan-so', scanSo);
 app.route('/state-warehouse-mappings', stateWarehouseMappings);
 app.route('/localities', localities);
 app.route('/so-dropdown-options', soDropdownOptions);
@@ -152,12 +155,42 @@ app.onError((err, c) => {
   return c.json({ error: 'internal_error', message: err.message }, 500);
 });
 
+// Weekly scan-SO rule distillation: Sunday 20:00 UTC = Monday 04:00 MYT.
+// Must match the second entry in wrangler.toml [triggers] crons exactly —
+// event.cron is the literal trigger string. Day-of-week must be a NAME (or
+// 1-7): Cloudflare rejects "* * 0" as an invalid cron and the whole
+// `wrangler deploy` fails (hit 2026-06-12).
+const WEEKLY_DISTILL_CRON = '0 20 * * SUN';
+
 // CF Workers entrypoint with both fetch + scheduled handlers.
-// scheduled() runs on the cron triggers in wrangler.toml ("*/10 * * * *").
+// scheduled() runs on the cron triggers in wrangler.toml:
+//   "*/10 * * * *"  → slip-orphan reaper (every 10 min)
+//   "0 20 * * SUN"  → weekly per-salesperson scan-SO rule distill
 export default {
   fetch: app.fetch,
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+
+    if (event.cron === WEEKLY_DISTILL_CRON) {
+      ctx.waitUntil((async () => {
+        try {
+          const summary = await distillAllSalespersonRules(supabase, env.ANTHROPIC_API_KEY);
+          console.log(JSON.stringify({
+            ts: new Date().toISOString(),
+            event: 'scan_so_weekly_distill',
+            ...summary,
+          }));
+        } catch (err) {
+          console.error(JSON.stringify({
+            ts: new Date().toISOString(),
+            event: 'scan_so_weekly_distill_error',
+            message: err instanceof Error ? err.message : String(err),
+          }));
+        }
+      })());
+      return;
+    }
+
     const workerId = `cron-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
     ctx.waitUntil((async () => {
       try {

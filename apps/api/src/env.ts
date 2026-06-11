@@ -33,6 +33,11 @@ export interface Env {
   SUPABASE_SERVICE_ROLE_KEY: string;
   R2_ACCESS_KEY_ID: string;
   R2_SECRET_ACCESS_KEY: string;
+  // Scan Order (handwritten slip OCR, routes/scan-so.ts). OPTIONAL — when
+  // unset the /scan-so/extract endpoint answers 503 anthropic_key_missing
+  // instead of breaking the worker. Set via:
+  //   npx wrangler secret put ANTHROPIC_API_KEY
+  ANTHROPIC_API_KEY?: string;
 
   // R2 binding (Phase 4 slip workflow)
   SLIPS: R2Bucket;

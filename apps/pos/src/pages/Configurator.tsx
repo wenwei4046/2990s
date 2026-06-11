@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2, FlipHorizontal2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, matchComboSubset, comboChargedPrices, orderSofaCellsLeftToRight, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
@@ -38,11 +38,16 @@ import { useSoSettingEnabled } from '../lib/so-maintenance/so-settings-queries';
 import { useMyQuickPicks, useDeletePersonalQuickPick } from '../lib/personal-quick-picks';
 import {
   useCart,
+  type CartLine,
   type SofaConfigSnapshot,
   type SizeConfigSnapshot,
   type FlatConfigSnapshot,
   type BedframeConfigSnapshot,
 } from '../state/cart';
+/* TBC sofa exchange (Loo 2026-06-12) — "Confirm Change" marshals the build
+   exactly like the handover does and replaces the SO build server-side. */
+import { fetchItemCodeMap, cartLinesToSoItems } from '../lib/pos-handover-so';
+import { supabase } from '../lib/supabase';
 import { CustomBuilder } from './CustomBuilder';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import {
@@ -287,6 +292,9 @@ export const Configurator = () => {
   const backToCatalog = () => {
     const idx = (window.history.state?.idx ?? 0) as number;
     if (idx > 0) navigate(-1);
+    // Sofa exchange enters from My orders — a cold load (refresh) should
+    // fall back THERE, not to the catalogue.
+    else if (new URLSearchParams(window.location.search).get('swapDoc')) navigate('/my-orders');
     else navigate('/catalog');
   };
   const product = useProduct(productId);
@@ -444,6 +452,81 @@ export const Configurator = () => {
   // Defensive reset — edit always enters from /cart on a fresh mount, but if the
   // target key/product changes the one-shot guard shouldn't stay latched.
   useEffect(() => { hydratedRef.current = false; }, [editKey, productId]);
+
+  /* ── TBC sofa exchange (Loo 2026-06-12) ──────────────────────────────
+     Entered from My orders ("Change product" on a sofa build): ?swapDoc /
+     ?swapItem / ?swapTotal identify the SO build being replaced. The sofa
+     paths' primary button becomes "Confirm Change" and, instead of adding to
+     the cart, the build is marshalled exactly like the handover (real module
+     SKU codes via fetchItemCodeMap) and POSTed to tbc-swap-sofa, which
+     reprices it on the create path's authoritative engine. The floor rule
+     (bill never below the original SO total) is pre-checked here and
+     re-enforced server-side. */
+  const location = useLocation();
+  const swapDoc = searchParams.get('swapDoc');
+  const swapItemId = searchParams.get('swapItem');
+  const swapPrevTotalCenti = Math.max(0, Number(searchParams.get('swapTotal') ?? '0') || 0);
+  const isSwapMode = !!(swapDoc && swapItemId);
+  const [swapPending, setSwapPending] = useState(false);
+  const [swapError, setSwapError] = useState<string | null>(null);
+  // "Same Model" seeds the canvas with the SO build's current cells (passed
+  // via nav state — lost on a hard refresh, which simply starts blank).
+  const swapSeededRef = useRef(false);
+  useEffect(() => {
+    if (!isSwapMode || swapSeededRef.current) return;
+    const cellsIn = (location.state as { swapCells?: Array<{ moduleId: string; x: number; y: number; rot: number }> } | null)?.swapCells;
+    if (cellsIn && cellsIn.length > 0) {
+      setSofaCells(cellsIn.map((c) => ({
+        id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `c-${Math.random().toString(36).slice(2, 10)}`,
+        moduleId: c.moduleId, x: c.x, y: c.y, rot: c.rot,
+      } as Cell)));
+      setMode('custom');
+    }
+    swapSeededRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSwapMode]);
+  const confirmSwap = async (snapshot: SofaConfigSnapshot) => {
+    if (!swapDoc || !swapItemId || swapPending) return;
+    setSwapError(null);
+    if (snapshot.total * 100 < swapPrevTotalCenti) {
+      setSwapError(`This build (RM ${snapshot.total.toLocaleString('en-MY')}) is below the original build's RM ${Math.round(swapPrevTotalCenti / 100).toLocaleString('en-MY')} — the bill can't go below the original sales order total.`);
+      return;
+    }
+    setSwapPending(true);
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL as string | undefined;
+      if (!apiUrl) throw new Error('VITE_API_URL is not set');
+      const line: CartLine = { key: `swap-${swapItemId}`, qty: 1, config: snapshot };
+      const resolution = await fetchItemCodeMap([line]);
+      const [soItem] = cartLinesToSoItems([line], undefined, resolution);
+      const token = (await supabase.auth.getSession()).data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${apiUrl}/mfg-sales-orders/${swapDoc}/items/${swapItemId}/tbc-swap-sofa`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ item: soItem }),
+      });
+      if (!res.ok) {
+        let payload: Record<string, unknown> = { error: `http_${res.status}` };
+        try { payload = (await res.json()) as Record<string, unknown>; } catch { /* non-JSON */ }
+        const err = String(payload.error ?? '');
+        throw new Error(
+          err === 'so_total_below_original'
+            ? 'This build would bring the bill below the original sales order total.'
+            : err === 'pricing_drift'
+              ? 'The server priced this build differently — hard-refresh the app and try again.'
+              : String(payload.reason ?? payload.message ?? err ?? 'Exchange failed.'),
+        );
+      }
+      navigate('/my-orders');
+    } catch (e) {
+      setSwapError(e instanceof Error ? e.message : 'Exchange failed.');
+    } finally {
+      setSwapPending(false);
+    }
+  };
 
   // Per-line remark + extra charge (spec 2026-06-06, Loo) — keyed on the
   // product page, stored in the cart snapshot, lands on the SO line. The
@@ -1442,6 +1525,7 @@ export const Configurator = () => {
         ? `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${quickFlip}-facing · ${activeDepth}"${fabricSuffix}`
         : `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${activeDepth}"${fabricSuffix}`,
     };
+    if (isSwapMode) { void confirmSwap(snapshot); return; }
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
     navigate(isEditing ? '/cart' : '/catalog');
   };
@@ -1488,6 +1572,7 @@ export const Configurator = () => {
       total: qpPickPrice + sofaFabricDelta + sofaSpecialDelta + sofaLegSurcharge + effectiveExtraRm,
       summary: `${label} · ${activeDepth}"${fabricSuffix}`,
     };
+    if (isSwapMode) { void confirmSwap(snapshot); return; }
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
     navigate(isEditing ? '/cart' : '/catalog');
   };
@@ -1627,10 +1712,12 @@ export const Configurator = () => {
       <button
         type="button"
         className={styles.topbarBtnPrimary}
-        disabled={!canAddSofa}
+        disabled={!canAddSofa || swapPending}
         onClick={pickedQP ? handleAddQuickPick : handleAddSofa}
       >
-        {isEditing ? 'Save changes' : '+ Add to Cart'}
+        {isSwapMode
+          ? (swapPending ? 'Saving…' : 'Confirm Change')
+          : isEditing ? 'Save changes' : '+ Add to Cart'}
       </button>
     </span>
   ) : undefined;
@@ -1729,6 +1816,21 @@ export const Configurator = () => {
       centerSlot={sofaCenterSlot}
       rightSlot={sofaTopbarSlot ?? sizeTopbarSlot ?? bedframeTopbarSlot}
     />
+    {/* TBC sofa exchange — the only error surface in swap mode (the floor
+        rule + server rejects land here, above the canvas). */}
+    {isSwapMode && swapError && (
+      <div
+        role="alert"
+        style={{
+          position: 'fixed', top: 72, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 60, maxWidth: 620, padding: '10px 16px', borderRadius: 12,
+          background: '#fff', border: '1px solid #b3261e', color: '#b3261e',
+          fontFamily: 'var(--font-sans)', fontSize: 13, boxShadow: '0 4px 14px rgba(34,31,32,0.12)',
+        }}
+      >
+        {swapError}
+      </div>
+    )}
     <main
       className={isSofa && mode === 'quick' ? styles.sofaShell : (isSize || isBedframe) ? styles.shellWide : styles.shell}
       // Custom-build mode runs on a slightly warmer cream (#FAF6EC vs the app
@@ -1853,6 +1955,7 @@ export const Configurator = () => {
             remark={remarkCardEnabled ? lineRemark : ''}
             extraAmountRm={effectiveExtraRm}
             onAdded={() => navigate(isEditing ? '/cart' : '/catalog')}
+            {...(isSwapMode ? { onSwapConfirm: (snap) => { void confirmSwap(snap); }, swapPending } : {})}
           />
         )
       )}

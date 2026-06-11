@@ -11,6 +11,7 @@
 // floor rule applies.
 
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
 import { fmtRM, fabricTierAddon, type FabricTier } from '@2990s/shared';
@@ -48,6 +49,11 @@ export interface TbcEditTarget {
    *  pricing never touches the granted base) but the product can't be
    *  swapped: the voucher binds to the reward SKU. */
   isPwp: boolean;
+  /** Sofa exchange (Loo 2026-06-12) — the WHOLE build's combined total (the
+   *  floor-rule baseline the configurator pre-checks against) and the build's
+   *  current cells (seed the canvas on "Change to Same Model"). */
+  buildTotalCenti: number;
+  buildCells?: Array<{ moduleId: string; x: number; y: number; rot: number }>;
 }
 
 /* Resolve the SO line's mfg product row by CODE — the SO stores item_code,
@@ -85,9 +91,19 @@ type SwapCtx =
   | { kind: 'trigger'; category: string; modelIds: string[] | null }
   | { kind: 'locked'; reason: string };
 
-const useSwapContext = (docNo: string, target: TbcEditTarget) =>
+const useSwapContext = (
+  docNo: string,
+  target: TbcEditTarget,
+  /** The line's CURRENT product (category + model) — trigger detection is
+   *  RANGE-based (Loo 2026-06-12): a line counts as a trigger when its
+   *  product sits inside an anchoring rule's trigger set, with the
+   *  trigger_item_code stamp kept only as a fallback (stamps go stale when
+   *  the line was swapped before the restamp existed — SO-2606-009). */
+  lineProduct: { category: string; model_id: string | null } | null | undefined,
+) =>
   useQuery({
-    queryKey: ['tbc-swap-ctx', docNo, target.itemId, target.itemCode],
+    enabled: target.isPwp || lineProduct !== undefined,
+    queryKey: ['tbc-swap-ctx', docNo, target.itemId, target.itemCode, lineProduct?.category ?? '', lineProduct?.model_id ?? ''],
     staleTime: 30_000,
     queryFn: async (): Promise<SwapCtx> => {
       if (target.isPwp) {
@@ -101,20 +117,32 @@ const useSwapContext = (docNo: string, target: TbcEditTarget) =>
         return { kind: 'reward', category: d.reward_category, modelIds: d.eligible_reward_model_ids ?? [], promoType: d.type };
       }
       const { data: codes } = await supabase.from('pwp_codes')
-        .select('rule_id')
-        .eq('source_doc_no', docNo).eq('trigger_item_code', target.itemCode);
-      const anchors = (codes ?? []) as Array<{ rule_id: string | null }>;
+        .select('rule_id, trigger_item_code')
+        .eq('source_doc_no', docNo);
+      const allAnchors = (codes ?? []) as Array<{ rule_id: string | null; trigger_item_code: string | null }>;
+      if (allAnchors.length === 0) return { kind: 'free' };
+      const ruleIds = [...new Set(allAnchors.map((a) => a.rule_id).filter((r): r is string => !!r))];
+      const { data: ruleRows } = ruleIds.length > 0
+        ? await supabase.from('pwp_rules').select('id, trigger_category, trigger_eligible_model_ids').in('id', ruleIds)
+        : { data: [] };
+      const ruleById = new Map(
+        ((ruleRows ?? []) as Array<{ id: string; trigger_category: string; trigger_eligible_model_ids: string[] | null }>)
+          .map((r) => [r.id, r]),
+      );
+      const fitsTrigger = (rid: string | null): boolean => {
+        const r = rid ? ruleById.get(rid) : undefined;
+        if (!r || !lineProduct) return false;
+        const inCat = String(lineProduct.category).toUpperCase() === String(r.trigger_category).toUpperCase();
+        const models = r.trigger_eligible_model_ids ?? [];
+        return inCat && (models.length === 0 || (lineProduct.model_id != null && models.includes(lineProduct.model_id)));
+      };
+      // Anchored by THIS line: stamp match OR the line's product is in range.
+      const anchors = allAnchors.filter((a) => a.trigger_item_code === target.itemCode || fitsTrigger(a.rule_id));
       if (anchors.length === 0) return { kind: 'free' };
-      const ruleIds = [...new Set(anchors.map((a) => a.rule_id).filter((r): r is string => !!r))];
-      if (anchors.some((a) => !a.rule_id) || ruleIds.length === 0) {
+      if (anchors.some((a) => !a.rule_id || !ruleById.get(a.rule_id))) {
         return { kind: 'locked', reason: 'This item triggered a PWP voucher whose promotion no longer exists — the coordinator handles the exchange.' };
       }
-      const { data: ruleRows } = await supabase.from('pwp_rules')
-        .select('trigger_category, trigger_eligible_model_ids').in('id', ruleIds);
-      const rules = (ruleRows ?? []) as Array<{ trigger_category: string; trigger_eligible_model_ids: string[] | null }>;
-      if (rules.length < ruleIds.length) {
-        return { kind: 'locked', reason: 'This item triggered a PWP voucher whose promotion no longer exists — the coordinator handles the exchange.' };
-      }
+      const rules = anchors.map((a) => ruleById.get(a.rule_id!)!);
       const cats = [...new Set(rules.map((r) => String(r.trigger_category)))];
       if (cats.length > 1) {
         return { kind: 'locked', reason: 'This item anchors PWP promotions with different trigger ranges — the coordinator handles the exchange.' };
@@ -161,6 +189,36 @@ const useSwapCandidates = (q: string, ctx: SwapCtx | undefined) =>
       const { data, error } = await query.order('code').limit(8);
       if (error) throw error;
       return (data ?? []) as Array<{ code: string; name: string; category: string; sell_price_sen: number | null; pwp_price_sen: number | null }>;
+    },
+  });
+
+/* Sofa exchange (Loo 2026-06-12) — the Model chooser behind "Change product"
+   on a sofa build. One entry per base_model (active, POS-visible), with a
+   representative SKU id as the /configure/:id link target (any SKU of the
+   Model resolves to the same configurator page). */
+const useSofaSwapModels = (enabled: boolean) =>
+  useQuery({
+    enabled,
+    queryKey: ['tbc-sofa-swap-models'],
+    staleTime: 60_000,
+    queryFn: async (): Promise<Array<{ baseModel: string; configureId: string; name: string }>> => {
+      const { data, error } = await supabase
+        .from('mfg_products')
+        .select('id, base_model, product_models:model_id ( name, active )')
+        .eq('category', 'SOFA')
+        .eq('pos_active', true)
+        .eq('status', 'ACTIVE')
+        .order('code');
+      if (error) throw error;
+      const out = new Map<string, { baseModel: string; configureId: string; name: string }>();
+      for (const r of (data ?? []) as unknown as Array<{ id: string; base_model: string | null; product_models: { name: string; active: boolean } | Array<{ name: string; active: boolean }> | null }>) {
+        const base = (r.base_model ?? '').trim();
+        if (!base || out.has(base)) continue;
+        const m = Array.isArray(r.product_models) ? r.product_models[0] : r.product_models;
+        if (m && m.active === false) continue;
+        out.set(base, { baseModel: base, configureId: r.id, name: m?.name ?? base });
+      }
+      return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
     },
   });
 
@@ -359,7 +417,11 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
   /* ── Product swap ─────────────────────────────────────────────────── */
   const [swapOpen, setSwapOpen] = useState(false);
   const [swapQuery, setSwapQuery] = useState('');
-  const swapCtx = useSwapContext(docNo, target);
+  const swapCtx = useSwapContext(
+    docNo,
+    target,
+    product.isLoading ? undefined : (product.data ? { category: product.data.category, model_id: product.data.model_id } : null),
+  );
   const candidates = useSwapCandidates(swapQuery, swapCtx.data);
   const prevLineTotal = (target.qty * target.unitPriceCenti) - target.discountCenti;
   const swap = useMutation({
@@ -374,6 +436,30 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
 
   const isSofa = target.itemGroup === 'sofa';
   const isBedframe = target.itemGroup === 'bedframe';
+
+  /* ── Sofa exchange (Loo 2026-06-12) ─────────────────────────────────
+     A sofa build is exchanged in the CONFIGURATOR, not by a one-line swap:
+     "Change product" offers Same Model (canvas seeded with the current
+     build) or Other Model (pick the target sofa Model), the configurator's
+     primary button becomes "Confirm Change", and tbc-swap-sofa replaces the
+     whole build server-side with the same floor rule. */
+  const navigate = useNavigate();
+  const isSofaLine = isSofa || target.isSofaBuild;
+  const [sofaSwapOpen, setSofaSwapOpen] = useState(false);
+  const sofaModels = useSofaSwapModels(isSofaLine && sofaSwapOpen);
+  const currentBaseModel = (product.data?.base_model ?? '').trim();
+  const sameModelEntry =
+    (sofaModels.data ?? []).find((m) => m.baseModel === currentBaseModel)
+    ?? (product.data ? { baseModel: currentBaseModel, configureId: product.data.id, name: currentBaseModel || target.itemCode } : null);
+  const goConfigure = (configureId: string, sameModel: boolean) => {
+    const qs = `swapDoc=${encodeURIComponent(docNo)}&swapItem=${encodeURIComponent(target.itemId)}&swapTotal=${target.buildTotalCenti}`;
+    navigate(
+      `/configure/${configureId}?${qs}`,
+      sameModel && target.buildCells && target.buildCells.length > 0
+        ? { state: { swapCells: target.buildCells } }
+        : undefined,
+    );
+  };
 
   return (
     <div className={styles.editor}>
@@ -439,6 +525,11 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
       {error && <div className={styles.error}>{error}</div>}
 
       <div className={styles.actions}>
+        {isSofaLine && !target.isPwp && (
+          <Button variant="ghost" onClick={() => { setSofaSwapOpen((v) => !v); setError(null); }}>
+            {sofaSwapOpen ? 'Keep this sofa' : 'Change product'}
+          </Button>
+        )}
         {/* PWP lines swap too (Loo 2026-06-12) — within the promotion's own
             range; useSwapContext narrows the search, the server re-enforces. */}
         {!isSofa && !target.isSofaBuild && swapCtx.data?.kind !== 'locked' && (
@@ -456,6 +547,41 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
           {save.isPending ? 'Saving…' : 'Save changes'}
         </Button>
       </div>
+
+      {isSofaLine && sofaSwapOpen && (
+        <div className={styles.swapBlock}>
+          <div className={styles.swapEmpty}>
+            Exchange this sofa in the configurator — rebuild it, then tap Confirm Change.
+            The bill keeps the original total as its floor.
+          </div>
+          <button
+            type="button"
+            className={styles.swapRow}
+            disabled={!sameModelEntry}
+            onClick={() => sameModelEntry && goConfigure(sameModelEntry.configureId, true)}
+          >
+            <span className={styles.swapName}>Change to Same Model</span>
+            <span className={styles.swapMeta}>
+              {sameModelEntry ? `${sameModelEntry.name} — starts from the current build` : 'Loading…'}
+            </span>
+          </button>
+          <div className={styles.swapEmpty}>Change to Other Model</div>
+          {(sofaModels.data ?? []).filter((m) => m.baseModel !== currentBaseModel).map((m) => (
+            <button
+              key={m.baseModel}
+              type="button"
+              className={styles.swapRow}
+              onClick={() => goConfigure(m.configureId, false)}
+            >
+              <span className={styles.swapName}>{m.name}</span>
+              <span className={styles.swapMeta}>{m.baseModel}</span>
+            </button>
+          ))}
+          {sofaSwapOpen && !sofaModels.isLoading && (sofaModels.data ?? []).filter((m) => m.baseModel !== currentBaseModel).length === 0 && (
+            <div className={styles.swapEmpty}>No other sofa Models available.</div>
+          )}
+        </div>
+      )}
 
       {swapOpen && (
         <div className={styles.swapBlock}>
