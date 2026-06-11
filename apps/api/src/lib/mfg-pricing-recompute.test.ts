@@ -536,6 +536,69 @@ describe('recomputeFromSnapshot — declared extraAddonAmountRM (spec D1)', () =
   });
 });
 
+/* ── POS remark + extra → custom_specials (Loo 2026-06-12) ────────────────────
+   The POS product-page remark + extra charge is a free-text Special Add-on
+   (one-shot auto-mint retired, flag OFF). The recompute appends it to the
+   custom_specials composition so every specials surface (backend SO editor's
+   Special Orders accordion, Detail Listing "Specials" column, DO/SI copies)
+   lists it next to the picked add-ons. Display composition ONLY — the money
+   already rides the authoritative figure via the declared-extra fold (D1),
+   so this entry re-prices nothing. */
+describe('recomputeFromSnapshot — POS remark + extra in custom_specials', () => {
+  it('remark + extra → custom_specials carries the remark text with the extra as surcharge', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
+        unitPriceCenti: 319000,
+        variants: { remark: 'Customize to ensure no hanging back cushions.', extraAddonAmountRM: 200 } },
+      extraProduct, null, null,
+    );
+    expect(r.custom_specials).toEqual([
+      { description: 'Customize to ensure no hanging back cushions.', surchargeSen: 20000 },
+    ]);
+    expect(r.drift).toBe(false); // declared fold unchanged
+  });
+
+  it('remark with no extra → entry at RM 0 (a free remark is still an option)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
+        unitPriceCenti: 299000, variants: { remark: 'Loose back cushions' } },
+      extraProduct, null, null,
+    );
+    expect(r.custom_specials).toEqual([{ description: 'Loose back cushions', surchargeSen: 0 }]);
+  });
+
+  it('extra with no remark → labelled "Extra add-on"', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
+        unitPriceCenti: 309000, variants: { extraAddonAmountRM: 100 } },
+      extraProduct, null, null,
+    );
+    expect(r.custom_specials).toEqual([{ description: 'Extra add-on', surchargeSen: 10000 }]);
+  });
+
+  it('appends AFTER the picked special_addons codes (picks keep their order)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
+        unitPriceCenti: 319000,
+        variants: { specials: ['HB-STRAIGHT'], remark: 'Loose back cushions', extraAddonAmountRM: 200 } },
+      extraProduct, null, null,
+    );
+    expect(r.custom_specials).toEqual([
+      { description: 'HB-STRAIGHT', surchargeSen: 0 },
+      { description: 'Loose back cushions', surchargeSen: 20000 },
+    ]);
+  });
+
+  it('whitespace remark + no extra → custom_specials stays null (no phantom row)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
+        unitPriceCenti: 299000, variants: { remark: '   ' } },
+      extraProduct, null, null,
+    );
+    expect(r.custom_specials).toBeNull();
+  });
+});
+
 /* ── BUILD COST = Σ module costs (audit 2026-06-11 C2) ────────────────────────
    A multi-module configurator build arrives as ONE line whose itemCode is the
    FIRST module's SKU. The old cost path priced the whole build at that single

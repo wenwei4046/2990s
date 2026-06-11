@@ -337,12 +337,32 @@ export function recomputeFromSnapshot(
       : (category === 'BEDFRAME' || category === 'MATTRESS')
         ? effectiveConfig?.specials ?? []
         : [];
-  const customSpecials = specials.length
-    ? specials.map((s) => {
-        const hit = specialsPool.find((o) => o.value === s);
-        return { description: s, surchargeSen: hit?.sellingPriceSen ?? 0 };
-      })
-    : null;
+  const pickedSpecials = specials.map((s) => {
+    const hit = specialsPool.find((o) => o.value === s);
+    return { description: s, surchargeSen: hit?.sellingPriceSen ?? 0 };
+  });
+
+  /* Declared extra charge (spec 2026-06-06 D1) — whole MYR → sen, clamped ≥ 0.
+     Added to BOTH authoritative branches below, symmetric with the POS folding
+     the same amount into its submitted total. Never applied to the PWP base
+     (it stacks AFTER pwp/combo/fabric folds) and never to the cost path.
+     NaN-safe: a non-numeric variants value (Number('abc') = NaN) collapses to
+     0 instead of poisoning the authoritative figure → no false reject. */
+  const rawExtra = Number(variants.extraAddonAmountRM ?? 0);
+  const extraSen = (Number.isFinite(rawExtra) ? Math.max(0, Math.round(rawExtra)) : 0) * 100;
+
+  /* Loo 2026-06-12 — the POS product-page remark + extra charge is a free-text
+     Special Add-on (one-shot auto-mint retired, flag OFF). Append it to the
+     custom_specials composition so every specials surface (backend SO editor's
+     Special Orders accordion, Detail Listing "Specials" column, the DO/SI
+     copies) lists it next to the picked add-ons. Composition display ONLY —
+     the money rides the authoritative figure via the extraSen fold below;
+     this entry re-prices nothing. */
+  const remarkText = typeof variants.remark === 'string' ? variants.remark.trim() : '';
+  if (remarkText || extraSen > 0) {
+    pickedSpecials.push({ description: remarkText || 'Extra add-on', surchargeSen: extraSen });
+  }
+  const customSpecials = pickedSpecials.length ? pickedSpecials : null;
 
   /* D4 (Chairman 2026-05-30, Q1) — AUTHORITATIVE selling recompute + drift
      reject. The Master Account store (mfg_products.sell_price_sen, Phase-1
@@ -452,14 +472,8 @@ export function recomputeFromSnapshot(
     ? fabricTierAddon(category, sellingTier, fabricAddonConfig) * 100
     : 0;
 
-  /* Declared extra charge (spec 2026-06-06 D1) — whole MYR → sen, clamped ≥ 0.
-     Added to BOTH authoritative branches below, symmetric with the POS folding
-     the same amount into its submitted total. Never applied to the PWP base
-     (it stacks AFTER pwp/combo/fabric folds) and never to the cost path.
-     NaN-safe: a non-numeric variants value (Number('abc') = NaN) collapses to
-     0 instead of poisoning the authoritative figure → no false reject. */
-  const rawExtra = Number(variants.extraAddonAmountRM ?? 0);
-  const extraSen = (Number.isFinite(rawExtra) ? Math.max(0, Math.round(rawExtra)) : 0) * 100;
+  /* `extraSen` (declared extra charge, spec D1) is parsed above with the
+     custom_specials composition — it feeds BOTH authoritative branches below. */
 
   let drift: boolean;
   let unitToPersistSen: number;
