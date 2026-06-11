@@ -24,6 +24,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Users,
+  Pencil,
 } from 'lucide-react';
 import { IconButton } from '@2990s/design-system';
 import { groupSoLinesForDisplay } from '@2990s/shared/so-line-display';
@@ -34,6 +35,7 @@ import { supabase } from '../lib/supabase';
 import { Topbar } from '../components/Topbar';
 import { CountryPhoneInput } from '../components/CountryPhoneInput';
 import { SlipUploadStep } from '../components/SlipUploadStep';
+import { TbcLineEditor, type TbcEditTarget } from '../components/TbcLineEditor';
 import {
   MERCHANT_FALLBACK,
   INSTALLMENT_FALLBACK,
@@ -73,6 +75,10 @@ interface OrderItem {
   productName: string | null;
   productImage: string | null;
   remark: string | null;
+  /** TBC fill-in (Loo 2026-06-11) — the line's edit target when this row may
+   *  be completed from the drawer (own CONFIRMED order, not a SERVICE / PWP
+   *  line, API new enough to send line ids). null = read-only row. */
+  edit: TbcEditTarget | null;
 }
 
 interface MyOrderRow {
@@ -129,6 +135,12 @@ interface MineSoRow {
   line_count: number | null;
   paid_centi_total: number | null;
   items: Array<{
+    /** Optional — an older deployed API may not send these yet; the TBC
+     *  editor only renders when id is present. */
+    id?: string;
+    item_group?: string | null;
+    unit_price_centi?: number | null;
+    discount_centi?: number | null;
     item_code: string;
     description: string | null;
     qty: number | null;
@@ -215,23 +227,47 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
            groups from the P3 split) into ONE Model row with the combined
            price, matching the customer-facing SO print. Lines without a
            buildKey (legacy SOs, services, bedframes…) pass through 1:1. */
-        const items: OrderItem[] = groupSoLinesForDisplay(r.items ?? []).map((g) =>
-          g.kind === 'sofa-build' && g.display
+        const items: OrderItem[] = groupSoLinesForDisplay(r.items ?? []).map((g) => {
+          /* TBC fill-in (Loo 2026-06-11) — the lead line is the edit target.
+             SERVICE lines (fees / add-on SKUs) and PWP reward lines stay
+             read-only; an older API without line ids hides the editor. */
+          const lead = g.lines[0]!;
+          const leadVariants = (lead.variants ?? {}) as Record<string, unknown>;
+          const editableLine =
+            lead.id != null &&
+            String(lead.item_group ?? '') !== 'service' &&
+            !String(lead.item_code).startsWith('SVC-') &&
+            !leadVariants.pwp;
+          const edit: TbcEditTarget | null = editableLine
+            ? {
+                itemId: lead.id!,
+                itemCode: lead.item_code,
+                itemGroup: String(lead.item_group ?? 'others'),
+                qty: lead.qty ?? 1,
+                unitPriceCenti: lead.unit_price_centi ?? 0,
+                discountCenti: lead.discount_centi ?? 0,
+                variants: leadVariants,
+                isSofaBuild: g.kind === 'sofa-build',
+              }
+            : null;
+          return g.kind === 'sofa-build' && g.display
             ? {
                 qty: g.display.qty,
                 lineTotal: Math.round(g.display.totalCenti / 100),
                 productName: g.display.description,
                 productImage: null,
                 remark: g.display.remark,
+                edit,
               }
             : {
-                qty: g.lines[0]!.qty ?? 0,
-                lineTotal: Math.round((g.lines[0]!.total_centi ?? 0) / 100),
-                productName: g.lines[0]!.description ?? g.lines[0]!.item_code,
+                qty: lead.qty ?? 0,
+                lineTotal: Math.round((lead.total_centi ?? 0) / 100),
+                productName: lead.description ?? lead.item_code,
                 productImage: null,
-                remark: g.lines[0]!.remark ?? null,
-              },
-        );
+                remark: lead.remark ?? null,
+                edit,
+              };
+        });
         const total = Math.round((r.total_revenue_centi ?? 0) / 100);
         return {
           id: r.doc_no,
@@ -1028,6 +1064,10 @@ const OrderDetail = ({ order, onClose }: {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const editable = order.status === 'CONFIRMED' && !order.proceededAt;
+  /* TBC fill-in (Loo 2026-06-11) — which item row's editor is expanded. Reset
+     when switching orders (the index would point at another order's line). */
+  const [editLineIdx, setEditLineIdx] = useState<number | null>(null);
+  useEffect(() => { setEditLineIdx(null); }, [order.id]);
 
   // Local edit state. Resync ONLY when switching orders, not on background
   // refetches of the same order — otherwise typing would get blown away.
@@ -1333,21 +1373,41 @@ const OrderDetail = ({ order, onClose }: {
             </h4>
             <div className={styles.detailItems}>
               {order.items.map((it, i) => (
-                <div key={i} className={styles.detailItem}>
-                  <div
-                    className={styles.detailItemPhoto}
-                    style={it.productImage ? { backgroundImage: `url(${it.productImage})` } : undefined}
-                  >
-                    {!it.productImage && <Package size={16} strokeWidth={1.5} />}
+                <div key={i}>
+                  <div className={styles.detailItem}>
+                    <div
+                      className={styles.detailItemPhoto}
+                      style={it.productImage ? { backgroundImage: `url(${it.productImage})` } : undefined}
+                    >
+                      {!it.productImage && <Package size={16} strokeWidth={1.5} />}
+                    </div>
+                    <div className={styles.detailItemBody}>
+                      <div className={styles.detailItemName}>{it.productName ?? 'Product'}</div>
+                      {it.remark && <div className={styles.detailSectionMeta}>Remark: {it.remark}</div>}
+                    </div>
+                    {/* TBC fill-in (Loo 2026-06-11) — complete the customer's
+                        deferred picks (fabric / dimensions / add-ons) or swap
+                        the product. Same gate as the header fields. */}
+                    {editable && it.edit && (
+                      <IconButton
+                        icon={<Pencil size={16} strokeWidth={1.75} />}
+                        aria-label={`Edit ${it.productName ?? 'item'}`}
+                        onClick={() => setEditLineIdx(editLineIdx === i ? null : i)}
+                      />
+                    )}
+                    <div className={styles.detailItemQty}>×{it.qty}</div>
+                    <div className={styles.detailItemPrice}>
+                      <span className={styles.detailItemPriceUnit}>RM</span>{fmtMoney(it.lineTotal)}
+                    </div>
                   </div>
-                  <div className={styles.detailItemBody}>
-                    <div className={styles.detailItemName}>{it.productName ?? 'Product'}</div>
-                    {it.remark && <div className={styles.detailSectionMeta}>Remark: {it.remark}</div>}
-                  </div>
-                  <div className={styles.detailItemQty}>×{it.qty}</div>
-                  <div className={styles.detailItemPrice}>
-                    <span className={styles.detailItemPriceUnit}>RM</span>{fmtMoney(it.lineTotal)}
-                  </div>
+                  {editable && it.edit && editLineIdx === i && (
+                    <TbcLineEditor
+                      docNo={order.id}
+                      target={it.edit}
+                      onSaved={() => setEditLineIdx(null)}
+                      onClose={() => setEditLineIdx(null)}
+                    />
+                  )}
                 </div>
               ))}
             </div>

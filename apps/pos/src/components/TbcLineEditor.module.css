@@ -1,0 +1,95 @@
+/* TBC fill-in editor — sits inside the My-orders detail drawer, under the
+   line it edits. Matches the drawer's calm paper styling (brand tokens). */
+
+.editor {
+  grid-column: 1 / -1;
+  padding: 12px 14px 14px;
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin: 4px 0 10px;
+}
+
+.deltaNote {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--c-ink);
+  padding: 8px 0 0;
+}
+.deltaNoteBad {
+  color: var(--c-danger, #b3261e);
+}
+
+.error {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--c-danger, #b3261e);
+  padding: 8px 0 0;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+}
+.actionsSpacer { flex: 1; }
+
+.swapBlock {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.swapSearch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.swapSearch input {
+  border: none;
+  outline: none;
+  flex: 1;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--c-ink);
+  background: transparent;
+}
+.swapRow {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  padding: 8px 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.swapRow:hover:not(:disabled) { border-color: var(--line-strong); }
+.swapRow:disabled { opacity: 0.55; cursor: not-allowed; }
+.swapName {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-ink);
+}
+.swapMeta {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.swapEmpty {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--fg-muted);
+  padding: 6px 2px;
+}

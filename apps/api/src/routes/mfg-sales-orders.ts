@@ -9,6 +9,7 @@ import {
   pickComboMatch, spreadComboTotal, splitSofaCode, sofaHeightKey,
   buildVariantSummary, comboChargedPrices, matchComboSubset, type SofaComboRow, type SofaPriceTier,
   oneShotSofaCode, oneShotSimpleCode, remarkSlug,
+  fabricTierAddon,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
 /* POS auto-Proceed (Loo 2026-06-09) — when a handover arrives already complete
@@ -150,6 +151,42 @@ async function isPriceOverrideCaller(sb: any, userId: string | null | undefined)
   if (!userId) return false;
   const { data } = await sb.from('staff').select('role').eq('id', userId).maybeSingle();
   return !!data && PRICE_OVERRIDE_ROLES.includes(String(data.role));
+}
+
+/* TBC fill-in + hatch hardening (Loo 2026-06-11) — self-scoped selling roles
+   (lib/roles.ts isSelfScopedSales) may mutate only their OWN SO's lines.
+   Mirrors the detail GET's 404 (not 403) so another salesperson's doc_no is
+   indistinguishable from a nonexistent one. Backend-native roles pass. */
+async function selfScopedSalesBlocked(sb: any, userId: string, docNo: string): Promise<boolean> {
+  const { data: caller } = await sb.from('staff').select('role').eq('id', userId).maybeSingle();
+  if (!isSelfScopedSales((caller as { role?: string } | null)?.role)) return false;
+  const { data: so } = await sb.from('mfg_sales_orders').select('salesperson_id').eq('doc_no', docNo).maybeSingle();
+  return !so || (so as { salesperson_id?: string | null }).salesperson_id !== userId;
+}
+
+/* MAIN-mix composition (the PR #519 create rule, extended to line add / swap,
+   Loo 2026-06-11): SOFA is exclusive among the MAIN categories. Returns true
+   when replacing `excludeItemId`'s line (null = a pure add) with `newCode`
+   INTRODUCES a sofa × (bedframe | mattress) mix that did not exist before —
+   a pre-rule SO that already mixes stays editable (grandfathered). */
+async function soMainMixIntroduced(sb: any, docNo: string, excludeItemId: string | null, newCode: string): Promise<boolean> {
+  const { data: lines } = await sb.from('mfg_sales_order_items')
+    .select('id, item_code')
+    .eq('doc_no', docNo).eq('cancelled', false);
+  const rows = ((lines ?? []) as Array<{ id: string; item_code: string }>);
+  const cats = await loadProductsByCodes(sb, rows.map((r) => r.item_code).concat(newCode));
+  const mix = (codeList: string[]): boolean => {
+    let sofa = false, bedOrMatt = false;
+    for (const code of codeList) {
+      const cat = String(cats.get(code)?.category ?? '').toUpperCase();
+      if (cat === 'SOFA') sofa = true;
+      else if (cat === 'BEDFRAME' || cat === 'MATTRESS') bedOrMatt = true;
+    }
+    return sofa && bedOrMatt;
+  };
+  const beforeCodes = rows.map((r) => r.item_code);
+  const afterCodes = rows.filter((r) => r.id !== excludeItemId).map((r) => r.item_code).concat(newCode);
+  return mix(afterCodes) && !mix(beforeCodes);
 }
 
 /* PR — Commander 2026-05-28 — Server-side combo recompute.
@@ -730,17 +767,20 @@ mfgSalesOrders.get('/mine', async (c) => {
      fetch. Group non-cancelled lines by doc_no → each item the board needs:
      { item_code, description, qty, total_centi, variants }. */
   const docNos = rows.map((r) => r.doc_no).filter((x): x is string => !!x);
-  const itemsByDoc = new Map<string, Array<{ item_code: string; description: string | null; qty: number; total_centi: number; variants: unknown; remark: string | null }>>();
+  /* TBC fill-in (Loo 2026-06-11) — the editor needs the line id (mutation
+     target), item_group (which picker set to render) and unit/discount (the
+     floor-rule preview), so they ride the same fetch. */
+  const itemsByDoc = new Map<string, Array<{ id: string; item_code: string; item_group: string | null; description: string | null; qty: number; unit_price_centi: number; discount_centi: number; total_centi: number; variants: unknown; remark: string | null }>>();
   if (docNos.length > 0) {
     const { data: itemRows } = await client
       .from('mfg_sales_order_items')
-      .select('doc_no, item_code, description, qty, total_centi, variants, remark')
+      .select('id, doc_no, item_code, item_group, description, qty, unit_price_centi, discount_centi, total_centi, variants, remark')
       .in('doc_no', docNos)
       .eq('cancelled', false)
       .order('created_at', { ascending: true });
-    for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_code: string; description: string | null; qty: number; total_centi: number; variants: unknown; remark: string | null }>) {
+    for (const it of (itemRows ?? []) as Array<{ id: string; doc_no: string; item_code: string; item_group: string | null; description: string | null; qty: number; unit_price_centi: number; discount_centi: number; total_centi: number; variants: unknown; remark: string | null }>) {
       const arr = itemsByDoc.get(it.doc_no) ?? [];
-      arr.push({ item_code: it.item_code, description: it.description, qty: it.qty, total_centi: it.total_centi, variants: it.variants, remark: it.remark ?? null });
+      arr.push({ id: it.id, item_code: it.item_code, item_group: it.item_group ?? null, description: it.description, qty: it.qty, unit_price_centi: it.unit_price_centi, discount_centi: it.discount_centi, total_centi: it.total_centi, variants: it.variants, remark: it.remark ?? null });
       itemsByDoc.set(it.doc_no, arr);
     }
   }
@@ -3538,6 +3578,25 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   const childLock = await soHasDownstream(sb, docNo);
   if (childLock) return c.json(childLock, 409);
 
+  /* TBC fill-in (Loo 2026-06-11) — self-scoped selling roles only touch
+     their own SO. */
+  if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
+
+  /* Composition guard (Loo 2026-06-11) — the create-path MAIN-mix rule
+     (sofa never shares a bill with bedframe / mattress, PR #519) now also
+     holds when a line is ADDED later. Only a change that INTRODUCES the
+     violation is rejected — a pre-rule SO that already mixes is left
+     editable (grandfathered). */
+  {
+    const introduced = await soMainMixIntroduced(sb, docNo, null, it.itemCode as string);
+    if (introduced) {
+      return c.json({
+        error: 'so_sofa_no_other_main',
+        reason: 'A sofa cannot share a Sales Order with a bedframe or mattress.',
+      }, 400);
+    }
+  }
+
   /* PR-E — pull customer_delivery_date alongside debtor/agent/venue so a
      line added later still inherits the SO header's delivery date by
      default. Client can override by sending lineDeliveryDate explicitly. */
@@ -3735,6 +3794,22 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   const childLock = await soHasDownstream(sb, docNo);
   if (childLock) return c.json(childLock, 409);
 
+  /* TBC fill-in (Loo 2026-06-11) — self-scoped selling roles only touch
+     their own SO. */
+  if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
+
+  /* Composition guard (Loo 2026-06-11) — a product swap must not INTRODUCE a
+     sofa × (bedframe | mattress) mix (PR #519 create rule, now on swap too). */
+  if (it.itemCode !== undefined) {
+    const introduced = await soMainMixIntroduced(sb, docNo, itemId, it.itemCode as string);
+    if (introduced) {
+      return c.json({
+        error: 'so_sofa_no_other_main',
+        reason: 'A sofa cannot share a Sales Order with a bedframe or mattress.',
+      }, 400);
+    }
+  }
+
   /* Pricing trust boundary (Owner 2026-05-31, see isPosTabletCaller). */
   const posTablet = await isPosTabletCaller(sb, user.id);
 
@@ -3844,6 +3919,25 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       discount,
       max:      qty * unit,
     }, 422);
+  }
+  /* Total floor (Loo 2026-06-11) — a POS sales caller may never save a line
+     change that lowers the bill below the original sales order total. The
+     header total is Σ line totals, so per line: the new total (0 when
+     cancelling) must be ≥ the stored one. Backend / office roles stay free
+     to discount or correct downward. */
+  if (posTablet) {
+    const prevLineTotal = prev.cancelled ? 0 : ((prev.qty * prev.unit_price_centi) - prev.discount_centi);
+    const cancelledAfter = it.cancelled !== undefined ? Boolean(it.cancelled) : Boolean(prev.cancelled);
+    const newLineTotal = cancelledAfter ? 0 : ((qty * unit) - discount);
+    if (newLineTotal < prevLineTotal) {
+      return c.json({
+        error:    'so_total_below_original',
+        reason:   'Changes cannot reduce the bill below the original sales order total.',
+        itemCode: itemCodeAfter,
+        previous: prevLineTotal,
+        next:     newLineTotal,
+      }, 422);
+    }
   }
   /* Commander 2026-05-28 — cost snapshot on PATCH. Order of precedence:
        1. Client sent unitCostCenti > 0 → use it (explicit override).
@@ -3968,17 +4062,33 @@ mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
   const childLock = await soHasDownstream(sb, docNo);
   if (childLock) return c.json(childLock, 409);
 
+  /* TBC fill-in (Loo 2026-06-11) — self-scoped selling roles only touch
+     their own SO. */
+  if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
+
   // PR-D — capture the line snapshot before delete so the timeline can
   // show what was removed (item code + qty + unit price).
   // Task #93 — also fetch photo_urls so we can clean up R2 orphans
   // after the DB row is gone. We grab them BEFORE the delete because
   // the row is the source of truth for which keys belong to this line.
   const { data: prev } = await sb.from('mfg_sales_order_items')
-    .select('item_code, qty, unit_price_centi, total_centi, photo_urls')
+    .select('item_code, qty, unit_price_centi, total_centi, photo_urls, cancelled')
     .eq('id', itemId).maybeSingle();
   const prevTyped = prev as
-    | { item_code: string; qty: number; unit_price_centi: number; total_centi: number; photo_urls: string[] | null }
+    | { item_code: string; qty: number; unit_price_centi: number; total_centi: number; photo_urls: string[] | null; cancelled?: boolean }
     | null;
+
+  /* Total floor (Loo 2026-06-11) — removing a priced line lowers the bill
+     below the original sales order total, so POS sales callers may not
+     delete one (a cancelled / zero line is fine). Backend roles stay free. */
+  if (prevTyped && !prevTyped.cancelled && prevTyped.total_centi > 0
+      && await isPosTabletCaller(sb, user.id)) {
+    return c.json({
+      error:    'so_total_below_original',
+      reason:   'Removing a line would reduce the bill below the original sales order total.',
+      itemCode: prevTyped.item_code,
+    }, 422);
+  }
 
   const { error } = await sb.from('mfg_sales_order_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
@@ -4028,6 +4138,296 @@ mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
   catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-line-delete failed:', e); }
 
   return c.body(null, 204);
+});
+
+/* ───────────────────── TBC fill-in (Loo 2026-06-11) ──────────────────────
+   POS sales complete a customer's deferred picks (fabric / leg height / gap /
+   divan / special add-ons) on an EXISTING SO line, from My orders. Pricing is
+   a server-computed DELTA:
+
+       newUnitPrice = storedUnitPrice
+                    + (surcharges(nextVariants) − surcharges(prevVariants))
+                    + (fabricTierΔ(next) − fabricTierΔ(prev))
+
+   The stored deal (combo proration on split sofa lines, PWP bases, any
+   negotiated figure) is never re-derived — only the CHANGED options move the
+   bill. computeMfgLinePrice runs twice with identical base inputs, so every
+   constant term cancels; the selling fabric-tier Δ (migration 0124) rides
+   separately, mirroring recomputeFromSnapshot's authoritative branches.
+
+   Sofa builds (P3 per-module lines): the shared picks (fabric + leg) copy
+   onto EVERY line of the build (variants.buildKey) so so-variant-rule sees a
+   complete build, while the price delta lands ONCE on the requested line.
+
+   Floor rule: for POS tablet callers the delta may never be negative — the
+   bill only grows or stays equal vs the original sales order total. Backend
+   roles keep using SoLineCard / the generic PATCH. */
+
+const TBC_VARIANT_KEYS = [
+  'fabricId', 'fabricCode', 'fabricLabel', 'colourId', 'colourLabel', 'colourHex',
+  'sofaLegHeight',
+  'gap', 'gapLabel', 'legHeight', 'legHeightLabel', 'divanHeight', 'divanHeightLabel',
+  'specials', 'specialIds', 'specialLabels', 'specialChoices',
+] as const;
+/* Picks shared by every module line of a sofa build. */
+const TBC_BUILD_SHARED_KEYS = ['fabricId', 'fabricCode', 'fabricLabel', 'colourId', 'colourLabel', 'colourHex', 'sofaLegHeight'] as const;
+
+mfgSalesOrders.post('/:docNo/items/:itemId/tbc-update', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId'); const user = c.get('user');
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const patch = (body.variants ?? {}) as Record<string, unknown>;
+  if (Object.keys(patch).length === 0) return c.json({ error: 'variants_required' }, 400);
+  const badKey = Object.keys(patch).find((k) => !(TBC_VARIANT_KEYS as readonly string[]).includes(k));
+  if (badKey) return c.json({ error: 'invalid_variant_key', key: badKey, allowed: TBC_VARIANT_KEYS }, 400);
+
+  const childLock = await soHasDownstream(sb, docNo);
+  if (childLock) return c.json(childLock, 409);
+  if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
+
+  const { data: prev } = await sb.from('mfg_sales_order_items')
+    .select('id, item_code, item_group, qty, unit_price_centi, discount_centi, unit_cost_centi, variants, cancelled')
+    .eq('id', itemId).eq('doc_no', docNo).maybeSingle();
+  if (!prev) return c.json({ error: 'not_found' }, 404);
+  if (prev.cancelled) return c.json({ error: 'line_cancelled' }, 409);
+  const prevVariants = ((prev.variants ?? {}) as Record<string, unknown>);
+  /* A PWP reward line prices from the voucher grant, not the catalog — its
+     deal is coordinator territory, never the POS editor's. */
+  if (prevVariants.pwp) {
+    return c.json({ error: 'pwp_line_locked', reason: 'PWP reward lines are edited by the coordinator.' }, 409);
+  }
+
+  /* Merge — a present key overwrites; null / '' / [] clears the key (the
+     sales picked "Confirm later" again). */
+  const nextVariants: Record<string, unknown> = { ...prevVariants };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null || v === '' || (Array.isArray(v) && v.length === 0)
+        || (k === 'specialChoices' && typeof v === 'object' && v !== null && Object.keys(v as object).length === 0)) {
+      delete nextVariants[k];
+    } else {
+      nextVariants[k] = v;
+    }
+  }
+
+  /* allowed_options gate on the merged shape (same as the generic PATCH). */
+  {
+    const { product, model } = await loadProductAndModel(sb, prev.item_code);
+    const aoErr = checkAllowedOptions(product, model, nextVariants as Parameters<typeof checkAllowedOptions>[2]);
+    if (aoErr) return c.json({ ...aoErr, itemCode: prev.item_code }, 400);
+  }
+
+  const [cfg, prodLite, fabPrev, fabNext, tiersPrev, tiersNext, addonCfg, specialDefs] = await Promise.all([
+    loadMaintenanceConfig(sb),
+    loadProductByCode(sb, prev.item_code),
+    loadFabricByCode(sb, (prevVariants.fabricCode as string | undefined) ?? null),
+    loadFabricByCode(sb, (nextVariants.fabricCode as string | undefined) ?? null),
+    loadFabricSellingTiers(sb, (prevVariants.fabricId as string | undefined) ?? null),
+    loadFabricSellingTiers(sb, (nextVariants.fabricId as string | undefined) ?? null),
+    loadFabricTierAddonConfig(sb),
+    loadSpecialAddons(sb),
+  ]);
+  /* Two snapshots, identical base inputs — only `variants` (and its fabric
+     row) differ, so base / combo / PWP terms cancel in the difference. The
+     fabric-tier Δ inputs (sellingTiers / addonConfig) are deliberately NOT
+     passed: the Δ is applied once, below, never double-counted. */
+  const snap = (variants: Record<string, unknown>, fab: typeof fabPrev) =>
+    recomputeFromSnapshot(
+      {
+        itemCode:       prev.item_code,
+        itemGroup:      String(prev.item_group ?? 'others'),
+        qty:            Number(prev.qty),
+        unitPriceCenti: Number(prev.unit_price_centi),
+        variants:       variants as MfgItemForRecompute['variants'],
+      },
+      prodLite, fab, cfg, null, null, null, null, null, null, specialDefs, null,
+    );
+  const before = snap(prevVariants, fabPrev);
+  const after  = snap(nextVariants, fabNext);
+  const category = String(prodLite?.category ?? '').toUpperCase();
+  const tierDeltaCenti = (addonCfg && (category === 'SOFA' || category === 'BEDFRAME'))
+    ? (fabricTierAddon(category, (category === 'SOFA' ? tiersNext?.sofaTier : tiersNext?.bedframeTier) ?? null, addonCfg)
+     - fabricTierAddon(category, (category === 'SOFA' ? tiersPrev?.sofaTier : tiersPrev?.bedframeTier) ?? null, addonCfg)) * 100
+    : 0;
+  const sellingDeltaCenti = (after.breakdown.unitPriceSen - before.breakdown.unitPriceSen) + tierDeltaCenti;
+  const costDeltaCenti = after.unit_cost_sen - before.unit_cost_sen;
+
+  const posTablet = await isPosTabletCaller(sb, user.id);
+  if (posTablet && sellingDeltaCenti < 0) {
+    return c.json({
+      error:    'so_total_below_original',
+      reason:   'Changes cannot reduce the bill below the original sales order total.',
+      itemCode: prev.item_code,
+      deltaCenti: sellingDeltaCenti * Number(prev.qty),
+    }, 422);
+  }
+
+  const qty = Number(prev.qty);
+  const newUnit = Math.max(0, Number(prev.unit_price_centi) + sellingDeltaCenti);
+  const newTotal = (qty * newUnit) - Number(prev.discount_centi ?? 0);
+  const newUnitCost = Math.max(0, Number(prev.unit_cost_centi ?? 0) + costDeltaCenti);
+  const { error: upErr } = await sb.from('mfg_sales_order_items').update({
+    variants: nextVariants,
+    description2: buildVariantSummary(String(prev.item_group ?? ''), nextVariants) || null,
+    unit_price_centi: newUnit,
+    total_centi: newTotal,
+    total_inc_centi: newTotal,
+    balance_centi: newTotal,
+    unit_cost_centi: newUnitCost,
+    line_cost_centi: newUnitCost * qty,
+    line_margin_centi: newTotal - (newUnitCost * qty),
+    divan_price_sen: after.breakdown.divanSurchargeSen,
+    leg_price_sen: after.breakdown.legSurchargeSen,
+    special_order_price_sen: after.breakdown.specialsSurchargeSen,
+    custom_specials: after.custom_specials ?? null,
+  }).eq('id', itemId);
+  if (upErr) return c.json({ error: 'update_failed', reason: upErr.message }, 500);
+
+  /* Mirror the SHARED picks onto the rest of the sofa build — variants only;
+     the money landed once above. */
+  const buildKey = String(prev.item_group) === 'sofa' ? ((prevVariants.buildKey as string | undefined) ?? null) : null;
+  if (buildKey) {
+    const { data: rows } = await sb.from('mfg_sales_order_items')
+      .select('id, variants')
+      .eq('doc_no', docNo).eq('cancelled', false)
+      .filter('variants->>buildKey', 'eq', buildKey);
+    for (const row of ((rows ?? []) as Array<{ id: string; variants: Record<string, unknown> | null }>)) {
+      if (row.id === itemId) continue;
+      const merged: Record<string, unknown> = { ...((row.variants ?? {}) as Record<string, unknown>) };
+      for (const k of TBC_BUILD_SHARED_KEYS) {
+        if (!(k in patch)) continue;
+        const v = patch[k];
+        if (v === null || v === '') delete merged[k]; else merged[k] = v;
+      }
+      await sb.from('mfg_sales_order_items').update({
+        variants: merged,
+        description2: buildVariantSummary('sofa', merged) || null,
+      }).eq('id', row.id);
+    }
+  }
+
+  await recomputeTotals(sb, docNo);
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'UPDATE_LINE',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [
+      { field: 'itemCode', to: prev.item_code },
+      { field: 'tbcVariants', to: Object.keys(patch).join(', ') },
+      ...(sellingDeltaCenti !== 0
+        ? [{ field: 'unitPriceCenti', from: prev.unit_price_centi, to: newUnit } satisfies FieldChange]
+        : []),
+    ],
+  });
+
+  return c.json({ ok: true, unitPriceCenti: newUnit, deltaCenti: sellingDeltaCenti, totalCenti: newTotal });
+});
+
+/* TBC product swap (Loo 2026-06-11) — exchange a line for a DIFFERENT product
+   from My orders. Non-sofa ↔ non-sofa only (a sofa is a multi-line build).
+   The new line reprices from the catalog (sell_price_sen) with every option
+   reset to TBC; the floor rule keeps a POS sales caller from swapping the
+   bill downward. The composition guard keeps sofa exclusive on the SO. */
+mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId'); const user = c.get('user');
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const newCode = String(body.itemCode ?? '').trim();
+  if (!newCode) return c.json({ error: 'item_code_required' }, 400);
+
+  const childLock = await soHasDownstream(sb, docNo);
+  if (childLock) return c.json(childLock, 409);
+  if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
+
+  const { data: prev } = await sb.from('mfg_sales_order_items')
+    .select('id, item_code, item_group, qty, unit_price_centi, discount_centi, total_centi, variants, cancelled')
+    .eq('id', itemId).eq('doc_no', docNo).maybeSingle();
+  if (!prev) return c.json({ error: 'not_found' }, 404);
+  if (prev.cancelled) return c.json({ error: 'line_cancelled' }, 409);
+  const prevVariants = ((prev.variants ?? {}) as Record<string, unknown>);
+  if (prevVariants.pwp) {
+    return c.json({ error: 'pwp_line_locked', reason: 'PWP reward lines are edited by the coordinator.' }, 409);
+  }
+  if (String(prev.item_group) === 'sofa' || prevVariants.buildKey || prevVariants.cells) {
+    return c.json({ error: 'sofa_swap_not_supported', reason: 'A sofa build is exchanged by rebuilding the order, not by swapping one line.' }, 400);
+  }
+
+  const { data: prodRow } = await sb.from('mfg_products')
+    .select('code, name, category, status, pos_active, sell_price_sen, cost_price_sen')
+    .eq('code', newCode).maybeSingle();
+  const prod = prodRow as { code: string; name: string; category: string; status: string; pos_active: boolean; sell_price_sen: number | null; cost_price_sen: number | null } | null;
+  if (!prod) return c.json(unknownItemCodeResponse([newCode]), 409);
+  if (String(prod.category).toUpperCase() === 'SOFA') {
+    return c.json({ error: 'sofa_swap_not_supported', reason: 'A sofa build is added through the configurator, not a line swap.' }, 400);
+  }
+  if (prod.status !== 'ACTIVE' || !prod.pos_active) {
+    return c.json({ error: 'product_inactive', itemCode: newCode }, 409);
+  }
+  const sellSen = Math.max(0, Math.round(Number(prod.sell_price_sen ?? 0)));
+  if (sellSen <= 0) {
+    return c.json({ error: 'product_unpriced', reason: 'This product has no selling price yet — ask an admin to price it in the SKU Master.', itemCode: newCode }, 409);
+  }
+
+  /* Composition — a swap must not INTRODUCE a sofa × (bedframe|mattress) mix. */
+  if (await soMainMixIntroduced(sb, docNo, itemId, newCode)) {
+    return c.json({
+      error: 'so_sofa_no_other_main',
+      reason: 'A sofa cannot share a Sales Order with a bedframe or mattress.',
+    }, 400);
+  }
+
+  const qty = Number(prev.qty);
+  const discount = Number(prev.discount_centi ?? 0);
+  const newTotal = (qty * sellSen) - discount;
+  const prevTotal = Number(prev.total_centi ?? ((qty * Number(prev.unit_price_centi)) - discount));
+  if (newTotal < prevTotal && await isPosTabletCaller(sb, user.id)) {
+    return c.json({
+      error:    'so_total_below_original',
+      reason:   'Changes cannot reduce the bill below the original sales order total.',
+      itemCode: newCode,
+      previous: prevTotal,
+      next:     newTotal,
+    }, 422);
+  }
+
+  const newCost = Math.max(0, Math.round(Number(prod.cost_price_sen ?? 0)));
+  const { error: upErr } = await sb.from('mfg_sales_order_items').update({
+    item_code: newCode,
+    item_group: String(prod.category ?? 'others').toLowerCase(),
+    description: prod.name,
+    description2: null,
+    variants: null,
+    unit_price_centi: sellSen,
+    total_centi: newTotal,
+    total_inc_centi: newTotal,
+    balance_centi: newTotal,
+    unit_cost_centi: newCost,
+    line_cost_centi: newCost * qty,
+    line_margin_centi: newTotal - (newCost * qty),
+    divan_price_sen: 0,
+    leg_price_sen: 0,
+    special_order_price_sen: 0,
+    custom_specials: null,
+  }).eq('id', itemId);
+  if (upErr) return c.json({ error: 'update_failed', reason: upErr.message }, 500);
+
+  await recomputeTotals(sb, docNo);
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'UPDATE_LINE',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [
+      { field: 'itemCode', from: prev.item_code, to: newCode },
+      { field: 'unitPriceCenti', from: prev.unit_price_centi, to: sellSen },
+      { field: 'totalCenti', from: prev.total_centi, to: newTotal },
+    ],
+  });
+  /* Demand changed product → stock allocation may shift. Best-effort. */
+  try { await recomputeSoStockAllocation(sb); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-tbc-swap failed:', e); }
+
+  return c.json({ ok: true, itemCode: newCode, unitPriceCenti: sellSen, totalCenti: newTotal });
 });
 
 // ── Per-line photos — PR-F (migration 0076) ──────────────────────────
