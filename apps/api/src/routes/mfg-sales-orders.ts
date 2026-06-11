@@ -104,6 +104,45 @@ async function soHasDownstream(sb: any, soDocNo: string): Promise<{ error: strin
   return null;
 }
 
+/* ── SO processing-date lock (Owner 2026-06-12) ─────────────────────────────
+   Once the SO's processing day has PASSED (from midnight Malaysia time, UTC+8,
+   the day AFTER the processing date) the SO is LOCKED: locked orders are what
+   we PO to the supplier, so header edits, line add/edit/delete and price
+   overrides are all rejected with 409 so_locked_processing. Status transitions
+   (deliver / cancel flow), payments, PO/DO conversions and reads stay open.
+   The UI's "Processing Date" lives in internal_expected_dd (PR #140 renamed
+   only the label); legacy processing_date is honoured as a fallback. */
+const SO_PROCESSING_LOCKED_RESPONSE = {
+  error: 'so_locked_processing',
+  reason: 'Processing date has passed — this Sales Order is locked. (Locked orders are what we PO to the supplier.)',
+} as const;
+
+function soProcessingLocked(
+  header: { internal_expected_dd?: string | null; processing_date?: string | null } | null | undefined,
+): boolean {
+  if (!header) return false;
+  const proc = header.internal_expected_dd ?? header.processing_date ?? null;
+  if (!proc) return false;
+  const procYmd = String(proc).slice(0, 10);            // 'YYYY-MM-DD' (date or timestamp)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(procYmd)) return false;
+  /* "Today" in Malaysia: shift the UTC clock +8 h, read the calendar date.
+     Locked strictly AFTER the processing day — procYmd === today stays open. */
+  const todayMY = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  return procYmd < todayMY;
+}
+
+/* Shared route guard — fetches the two date columns and returns the 409 body
+   when locked, null when free. Callers that already hold the header row use
+   soProcessingLocked directly instead of re-querying. */
+async function soProcessingLockBlocked(sb: any, docNo: string): Promise<typeof SO_PROCESSING_LOCKED_RESPONSE | null> {
+  const { data } = await sb.from('mfg_sales_orders')
+    .select('internal_expected_dd, processing_date')
+    .eq('doc_no', docNo).maybeSingle();
+  return soProcessingLocked(data as { internal_expected_dd?: string | null; processing_date?: string | null } | null)
+    ? SO_PROCESSING_LOCKED_RESPONSE
+    : null;
+}
+
 /* Owner 2026-05-31 — Identity + value columns a downstream DO / SI snapshots.
    These are frozen on the SO header once a non-cancelled child exists; payment,
    remark and scheduling columns are intentionally NOT in this set so the shop
@@ -3077,6 +3116,12 @@ mfgSalesOrders.post('/:docNo/items/:itemId/override', async (c) => {
       message: 'Unit prices follow the SKU Master sell price. Only an admin can override a line price.',
     }, 403);
   }
+  /* Owner 2026-06-12 — processing-date lock: no price overrides once the
+     processing day has passed (the locked order is already PO'd). */
+  {
+    const procLock = await soProcessingLockBlocked(sb, docNo);
+    if (procLock) return c.json(procLock, 409);
+  }
   let body: { overridePriceSen?: number; reason?: string };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const newPrice = Number(body.overridePriceSen ?? 0);
@@ -3284,8 +3329,19 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
 
   // PR-D — snapshot the row before update so we can emit a field-level diff
   // in the audit log. Only fields actually in the patch body are compared.
-  const beforeCols = map.map(([, snake]) => snake).concat(['status']).join(', ');
+  const beforeCols = map.map(([, snake]) => snake).concat(['status', 'processing_date']).join(', ');
   const { data: before } = await sb.from('mfg_sales_orders').select(beforeCols).eq('doc_no', docNo).maybeSingle();
+
+  /* Owner 2026-06-12 — processing-date lock: once the processing day has
+     passed (midnight MYT after), the SO is what we PO to the supplier — every
+     header edit is rejected wholesale. Status transitions (/status route),
+     the payments ledger and PO/DO conversions do NOT come through this PATCH
+     and stay open. Sits AFTER the cancelled/downstream-agnostic validations
+     above but before any write. (`before` carries internal_expected_dd via
+     the map + processing_date appended above.) */
+  if (soProcessingLocked(before as unknown as { internal_expected_dd?: string | null; processing_date?: string | null } | null)) {
+    return c.json(SO_PROCESSING_LOCKED_RESPONSE, 409);
+  }
 
   /* proceeded_at is stamp-once (the POS "Proceed" marker). If the row already
      has a value, drop any incoming proceeded_at so a later header edit / repeat
@@ -3600,8 +3656,13 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   /* PR-E — pull customer_delivery_date alongside debtor/agent/venue so a
      line added later still inherits the SO header's delivery date by
      default. Client can override by sending lineDeliveryDate explicitly. */
-  const { data: header } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name, agent, branding, venue, customer_delivery_date, customer_state').eq('doc_no', docNo).maybeSingle();
+  const { data: header } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name, agent, branding, venue, customer_delivery_date, customer_state, internal_expected_dd, processing_date').eq('doc_no', docNo).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
+  /* Owner 2026-06-12 — processing-date lock: no line ADD once the processing
+     day has passed (the locked order is already PO'd to the supplier). */
+  if (soProcessingLocked(header as { internal_expected_dd?: string | null; processing_date?: string | null })) {
+    return c.json(SO_PROCESSING_LOCKED_RESPONSE, 409);
+  }
   /* Commander 2026-05-31 — a line added later inherits the SO state's warehouse
      by default (migration 0118). Explicit it.warehouseId override wins. */
   const addLineWarehouseId = (it.warehouseId as string | null | undefined)
@@ -3797,6 +3858,13 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   /* TBC fill-in (Loo 2026-06-11) — self-scoped selling roles only touch
      their own SO. */
   if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
+
+  /* Owner 2026-06-12 — processing-date lock: no line EDIT once the processing
+     day has passed (the locked order is already PO'd to the supplier). */
+  {
+    const procLock = await soProcessingLockBlocked(sb, docNo);
+    if (procLock) return c.json(procLock, 409);
+  }
 
   /* Composition guard (Loo 2026-06-11) — a product swap must not INTRODUCE a
      sofa × (bedframe | mattress) mix (PR #519 create rule, now on swap too). */
@@ -4066,6 +4134,13 @@ mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
      their own SO. */
   if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
 
+  /* Owner 2026-06-12 — processing-date lock: no line DELETE once the
+     processing day has passed (the locked order is already PO'd). */
+  {
+    const procLock = await soProcessingLockBlocked(sb, docNo);
+    if (procLock) return c.json(procLock, 409);
+  }
+
   // PR-D — capture the line snapshot before delete so the timeline can
   // show what was removed (item code + qty + unit price).
   // Task #93 — also fetch photo_urls so we can clean up R2 orphans
@@ -4184,6 +4259,13 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-update', async (c) => {
   const childLock = await soHasDownstream(sb, docNo);
   if (childLock) return c.json(childLock, 409);
   if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
+
+  /* Owner 2026-06-12 — processing-date lock: a TBC fill-in is still a line
+     EDIT (it changes what we PO to the supplier), so it locks too. */
+  {
+    const procLock = await soProcessingLockBlocked(sb, docNo);
+    if (procLock) return c.json(procLock, 409);
+  }
 
   const { data: prev } = await sb.from('mfg_sales_order_items')
     .select('id, item_code, item_group, qty, unit_price_centi, discount_centi, unit_cost_centi, variants, cancelled')
@@ -4340,6 +4422,13 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
   const childLock = await soHasDownstream(sb, docNo);
   if (childLock) return c.json(childLock, 409);
   if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
+
+  /* Owner 2026-06-12 — processing-date lock: a product swap is a line EDIT
+     (it changes what we PO to the supplier), so it locks too. */
+  {
+    const procLock = await soProcessingLockBlocked(sb, docNo);
+    if (procLock) return c.json(procLock, 409);
+  }
 
   const { data: prev } = await sb.from('mfg_sales_order_items')
     .select('id, item_code, item_group, qty, unit_price_centi, discount_centi, total_centi, variants, cancelled')

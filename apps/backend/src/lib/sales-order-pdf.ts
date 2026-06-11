@@ -295,9 +295,17 @@ export async function generateSalesOrderPdf(
 
   // ── ORDER REFERENCE / DELIVERY ESTIMATE meta blocks ──────────────
   /* Mirrors the POS printout's MetaRow: order ref + placed date on the left;
-     delivery estimate + processing date on the right. "To be confirmed"
-     when no delivery date is set yet — same wording as POS. */
-  const deliveryDate = header.customer_delivery_date ?? header.internal_expected_dd ?? null;
+     processing date + delivery estimate on the right. "To be confirmed"
+     when no delivery date is set yet — same wording as POS.
+
+     Owner 2026-06-12 — the Detail page's "Processing Date" lives in the
+     internal_expected_dd column (PR #140 renamed only the LABEL, not the
+     column); the legacy processing_date column stays null on UI-edited SOs,
+     which is why this printed "—" on an SO that clearly had one. Read the
+     UI's column first, legacy second. Delivery no longer falls back to
+     internal_expected_dd — that value IS the processing date. */
+  const processingDate = header.internal_expected_dd ?? header.processing_date ?? null;
+  const deliveryDate = header.customer_delivery_date ?? null;
   y = drawTwoColInfo(doc, y, 'ORDER REFERENCE', 'DELIVERY ESTIMATE',
     [
       header.doc_no,
@@ -306,20 +314,48 @@ export async function generateSalesOrderPdf(
       header.po_doc_no ? `Customer PO: ${header.po_doc_no}` : null,
     ],
     [
+      `Processing date: ${processingDate ? fmtDocDate(processingDate) : '—'}`,
       `Delivery date: ${deliveryDate ? fmtDocDate(deliveryDate) : 'To be confirmed'}`,
-      `Processing date: ${header.processing_date ? fmtDocDate(header.processing_date) : '—'}`,
     ],
   );
 
   // ── BILL TO / SOLD BY ─────────────────────────────────────────────
-  /* DELIVERY address rule (owner): ship_to_address wins; legacy address1-4
-     (+ "postcode city state" tail, like POS so-doc.ts) when blank. */
-  const addressLines = (header.ship_to_address ?? '').trim()
+  /* DELIVERY address rule (owner): ship_to_address wins; otherwise mirror
+     the Detail page's Customer card EXACTLY — Address line 1, Address line 2,
+     then ONE locality line "postcode city state" where city = city ?? address3
+     and postcode = postcode ?? address4 (the PR #39 POS column mapping; the
+     page never renders address3/address4 as raw lines).
+
+     Owner 2026-06-12 ("crossed address") — POS-composed rows already carry
+     the postcode/city/state INSIDE the address lines, so the old code printed
+     them twice (and city == state on KL doubled again). Each locality part is
+     appended ONLY when it doesn't already appear in the lines above, locality
+     parts are deduped against each other, and exact-duplicate lines drop. */
+  const baseAddressLines = (header.ship_to_address ?? '').trim()
     ? (header.ship_to_address as string).split('\n').map((s) => s.trim()).filter(Boolean)
-    : [
-        header.address1, header.address2, header.address3, header.address4,
-        [header.postcode, header.city, header.customer_state].filter(Boolean).join(' ') || null,
-      ].map((s) => (typeof s === 'string' ? s.trim() : '')).filter(Boolean);
+    : [header.address1, header.address2]
+        .map((s) => (typeof s === 'string' ? s.trim() : ''))
+        .filter(Boolean);
+  const addressHaystack = baseAddressLines.join(' ').toLowerCase();
+  const localityParts: string[] = [];
+  for (const part of [
+    (header.postcode ?? header.address4 ?? '').trim(),
+    (header.city ?? header.address3 ?? '').trim(),
+    (header.customer_state ?? '').trim(),
+  ]) {
+    if (!part) continue;
+    if (addressHaystack.includes(part.toLowerCase())) continue;   // already inside an address line
+    if (localityParts.some((p) => p.toLowerCase() === part.toLowerCase())) continue; // e.g. city == state (KL)
+    localityParts.push(part);
+  }
+  const seenAddressLines = new Set<string>();
+  const addressLines = [...baseAddressLines, localityParts.join(' ')].filter((l) => {
+    if (!l) return false;
+    const k = l.toLowerCase();
+    if (seenAddressLines.has(k)) return false;
+    seenAddressLines.add(k);
+    return true;
+  });
   /* Family / second contact = the emergency_contact_* trio (POS handover
      "Emergency" phase). The SO schema has NO phone2/contact-person column —
      this is the only second-contact field family, so it prints here. */
@@ -396,13 +432,19 @@ export async function generateSalesOrderPdf(
     theme: 'striped',
     styles: { fontSize: 8.5, cellPadding: 2, valign: 'top' },
     headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
+    /* Owner 2026-06-12 — money cells must stay on ONE line ("MYR 2,990.00",
+       never "MYR\n2,990.00"). The old fixed widths summed to 190 mm against
+       182 mm usable (A4 − 2×14 margins), so autotable shrank every column and
+       the money cells wrapped. Numeric columns: 8 pt + right-aligned + wide
+       enough for "MYR 123,456.78"; Description takes the leftover (~67 mm)
+       via 'auto' — it's the only column allowed to wrap. */
     columnStyles: {
-      0: { cellWidth: 26 },
-      1: { cellWidth: 86 },
-      2: { cellWidth: 16, halign: 'right' },
-      3: { cellWidth: 22, halign: 'right' },
-      4: { cellWidth: 18, halign: 'right' },
-      5: { cellWidth: 22, halign: 'right' },
+      0: { cellWidth: 22 },
+      1: { cellWidth: 'auto' },
+      2: { cellWidth: 17, halign: 'right', fontSize: 8 },
+      3: { cellWidth: 27, halign: 'right', fontSize: 8 },
+      4: { cellWidth: 22, halign: 'right', fontSize: 8 },
+      5: { cellWidth: 27, halign: 'right', fontSize: 8 },
     },
     margin: { left: margin, right: margin },
   });
