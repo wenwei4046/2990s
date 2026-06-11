@@ -1060,7 +1060,7 @@ mfgSalesOrders.get('/customer-search', async (c) => {
   const esc = q.replace(/[\\%_]/g, (m) => `\\${m}`);
   const { data, error } = await sb
     .from('mfg_sales_orders')
-    .select('doc_no, debtor_name, phone, email, customer_type, address1, address2, city, postcode, customer_state, building_type, created_at')
+    .select('doc_no, debtor_name, phone, email, customer_type, address1, address2, city, postcode, customer_state, building_type, emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, created_at')
     .ilike('debtor_name', `%${esc}%`)
     .neq('status', 'CANCELLED')
     .order('created_at', { ascending: false })
@@ -1071,7 +1071,10 @@ mfgSalesOrders.get('/customer-search', async (c) => {
     email: string | null; customer_type: string | null;
     address1: string | null; address2: string | null; city: string | null;
     postcode: string | null; customer_state: string | null;
-    building_type: string | null; created_at: string;
+    building_type: string | null;
+    emergency_contact_name: string | null; emergency_contact_phone: string | null;
+    emergency_contact_relationship: string | null;
+    created_at: string;
   };
   /* Per-identity COALESCE (Loo 2026-06-06 follow-up: "link them with address
      as well") — the newest order wins per FIELD, not per row. A customer whose
@@ -1086,6 +1089,18 @@ mfgSalesOrders.get('/customer-search', async (c) => {
     ['postcode', 'postcode'], ['customerState', 'customer_state'],
     ['buildingType', 'building_type'],
   ] as const;
+  /* Emergency contact coalesces as a GROUP, not per field (Loo 2026-06-12:
+     copy it over like the address) — name/phone/relationship describe ONE
+     person, so mixing the name from one order with the phone of another
+     would invent a contact that doesn't exist. The newest order carrying
+     any of the three wins all three. */
+  const hasEmergency = (e: Record<string, unknown>): boolean =>
+    Boolean(e.emergencyContactName || e.emergencyContactPhone || e.emergencyContactRelationship);
+  const emergencyOf = (r: Row) => ({
+    emergencyContactName:         r.emergency_contact_name,
+    emergencyContactPhone:        r.emergency_contact_phone,
+    emergencyContactRelationship: r.emergency_contact_relationship,
+  });
   for (const r of (data ?? []) as Row[]) {
     const name = (r.debtor_name ?? '').trim();
     if (!name) continue;
@@ -1094,6 +1109,9 @@ mfgSalesOrders.get('/customer-search', async (c) => {
     if (existing) {
       for (const [out, col] of FILL_FIELDS) {
         if (existing[out] == null || existing[out] === '') existing[out] = r[col];
+      }
+      if (!hasEmergency(existing) && hasEmergency(emergencyOf(r))) {
+        Object.assign(existing, emergencyOf(r));
       }
       continue;
     }
@@ -1108,6 +1126,7 @@ mfgSalesOrders.get('/customer-search', async (c) => {
       postcode:      r.postcode,
       customerState: r.customer_state,
       buildingType:  r.building_type,
+      ...emergencyOf(r),
       lastDocNo:     r.doc_no,
       lastOrderAt:   r.created_at,
     });
