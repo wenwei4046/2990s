@@ -36,6 +36,8 @@ import {
   comboChargedPrices,
   sofaModulePricesFromSkus,
   sofaModuleSellingPricesFromSkus,
+  sofaModuleCostPricesFromSkus,
+  normalizeCompartmentCode,
   type Cell,
   type SofaComboRow,
   type SofaModulePriceSen,
@@ -57,6 +59,12 @@ export type MfgItemVariants = {
   totalHeight?:   string | null;
   gap?:           string | null;             // no price contribution
   seatHeight?:    string | null;
+  /** POS sofa vocabulary for the seat size (so-variant-rule: `depth` ≡
+   *  `seatHeight`). The configurator sends `depth`; the Backend editor sends
+   *  `seatHeight`. BOTH must resolve seat-height cost rows (audit 2026-06-11
+   *  C2 — cost previously read only seatHeight, so POS builds always fell to
+   *  the flat base cost). */
+  depth?:         string | number | null;
   sofaLegHeight?: string | null;
   /** Multi-pick specials. HOOKKA-compatible: also accept a single string. */
   specials?:      string[] | string | null;
@@ -152,6 +160,18 @@ export type ProductRowLite = {
   branding?:          string | null;
 };
 
+/** One sofa module SKU's cost-relevant columns (audit 2026-06-11 C2). The
+ *  build-cost path resolves each module's cost from these the same way
+ *  `computeMfgLineCost` does (seat-height priceSen at the build's seat size +
+ *  fabric tier, else P1 flat, else base/cost price). */
+export type SofaModuleCostRowLite = {
+  code:               string;
+  base_price_sen:     number | null;
+  price1_sen:         number | null;
+  cost_price_sen:     number | null;
+  seat_height_prices: MfgSeatHeightPrice[] | null;
+};
+
 const toMfgCategory = (group: string, productCategory: string): MfgPricingProduct['category'] => {
   // Prefer the canonical product category from mfg_products. Fall back to
   // the item_group string when the product isn't found.
@@ -211,6 +231,13 @@ export function recomputeFromSnapshot(
    *  REPLACES config.specials/.sofaSpecials — so POS add-ons price from the
    *  special_addons table, not the legacy maintenance pool. null → legacy. */
   specialAddons: SpecialAddonDef[] | null = null,
+  /** COST fix (audit 2026-06-11 C2) — the Model's sofa module SKU rows (cost
+   *  columns + seat_height_prices), loaded by base_model. When present and the
+   *  line is a configurator BUILD (variants.cells), the line's COST is
+   *  recomputed as Σ per-module costs at the build's seat size + fabric tier,
+   *  instead of the first module SKU's flat cost. null / unresolvable → keep
+   *  the legacy single-SKU cost (never a regression). Selling path untouched. */
+  sofaModuleCostRows: SofaModuleCostRowLite[] | null = null,
 ): RecomputedLine {
   const category = toMfgCategory(item.itemGroup, product?.category ?? '');
   const variants = item.variants ?? {};
@@ -254,6 +281,15 @@ export function recomputeFromSnapshot(
     costPriceSen:     product?.cost_price_sen ?? null,
   };
 
+  /* Audit 2026-06-11 C2 — honour the POS `depth` vocabulary as the seat-size
+     source (so-variant-rule: depth ≡ seatHeight; sofaHeightKey reads
+     depth ?? seatHeight). POS configurator lines carry only `depth`, so
+     keying the cost on seatHeight alone always missed the seat-height cost
+     rows and fell to the flat base cost. */
+  const depthRaw = variants.depth;
+  const depthStr = depthRaw != null && String(depthRaw).trim() !== '' ? String(depthRaw).trim() : null;
+  const seatSizeKey = depthStr ?? variants.seatHeight ?? null;
+
   const pricingInput = {
     product:       pricingProduct,
     fabric:        fabricInput,
@@ -262,7 +298,7 @@ export function recomputeFromSnapshot(
     legHeight:     variants.legHeight ?? null,
     totalHeight:   variants.totalHeight ?? null,
     specials,
-    seatSize:      variants.seatHeight ?? null,
+    seatSize:      seatSizeKey,
     sofaLegHeight: variants.sofaLegHeight ?? null,
   };
 
@@ -353,6 +389,55 @@ export function recomputeFromSnapshot(
     : null;
   const canPriceSofa = Array.isArray(sofaCells) && sofaCells.length > 0 && sofaModulePrices != null;
 
+  /* ── BUILD COST = Σ module costs (audit 2026-06-11 C2) ─────────────────────
+     A multi-module configurator build arrives as ONE line whose itemCode is
+     the FIRST module's SKU, so `computeMfgLineCost` above priced the whole
+     build at one module's cost — margin overstated by ~(N−1)/N. When the
+     caller supplies the Model's module SKU cost rows, recompute the build's
+     base cost as Σ per-module costs at the build's seat size (depth, like the
+     selling side) + the line's fabric tier (P2 default / P1 — same resolver
+     chain as computeMfgLineCost via sofaModuleCostPricesFromSkus). Line-level
+     cost surcharges (sofa leg / specials) stay on top, counted ONCE per build.
+     Falls back to the legacy single-SKU cost when module costs are
+     unavailable or none of the build's modules is costed. */
+  let unitCostSen = costBreakdown.unitPriceSen;
+  let effectiveCostBreakdown = costBreakdown;
+  if (
+    category === 'SOFA' &&
+    Array.isArray(sofaCells) && sofaCells.length > 0 &&
+    sofaModuleCostRows && sofaModuleCostRows.length > 0
+  ) {
+    const buildSeatSize = seatSizeKey ?? '24'; // selling side defaults depth '24'
+    const costMap = sofaModuleCostPricesFromSkus(
+      sofaModuleCostRows.map((r) => ({
+        code:             r.code,
+        basePriceSen:     r.base_price_sen,
+        price1Sen:        r.price1_sen,
+        costPriceSen:     r.cost_price_sen,
+        seatHeightPrices: r.seat_height_prices,
+      })),
+      product?.base_model ?? null,
+      buildSeatSize,
+      fabricTier,
+    );
+    let modulesCostSen = 0;
+    for (const cell of sofaCells as Cell[]) {
+      const modId = String((cell as { moduleId?: unknown })?.moduleId ?? '').trim();
+      if (!modId) continue;
+      modulesCostSen += costMap[normalizeCompartmentCode(modId)] ?? 0;
+    }
+    if (modulesCostSen > 0) {
+      const costSurchargesSen = costBreakdown.unitPriceSen - costBreakdown.basePriceSen;
+      unitCostSen = modulesCostSen + costSurchargesSen;
+      effectiveCostBreakdown = {
+        ...costBreakdown,
+        basePriceSen: modulesCostSen,
+        unitPriceSen: unitCostSen,
+        lineTotalSen: unitCostSen * safeQty,
+      };
+    }
+  }
+
   // SELLING fabric-tier add-on (migration 0124). Per-item flat Δ (whole MYR →
   // ×100 centi) from the chosen fabric's per-context selling tier. Folded into
   // the AUTHORITATIVE sofa price below so the drift gate stays consistent with
@@ -438,9 +523,9 @@ export function recomputeFromSnapshot(
     custom_specials:   customSpecials,
     total_centi:       unitToPersistSen * safeQty,
     breakdown,
-    unit_cost_sen:     costBreakdown.unitPriceSen,
-    line_cost_sen:     costBreakdown.lineTotalSen,
-    costBreakdown,
+    unit_cost_sen:     unitCostSen,
+    line_cost_sen:     unitCostSen * safeQty,
+    costBreakdown:     effectiveCostBreakdown,
     drift,
   };
 }
@@ -549,6 +634,26 @@ export async function loadModelSofaModuleCosts(
     })),
     baseModel,
   );
+}
+
+/** Load a Model's sofa module SKU COST rows (audit 2026-06-11 C2). Sibling of
+ *  {@link loadModelSofaModuleCosts} but returns the RAW rows (flat cost columns
+ *  + seat_height_prices) so `recomputeFromSnapshot` can resolve each module's
+ *  cost at the LINE's own (seat size, fabric tier) — the tier varies per line,
+ *  so the resolution can't be baked into the load. Returns null when
+ *  base_model is absent (caller keeps the legacy single-SKU cost). */
+export async function loadModelSofaModuleCostRows(
+  sb: any,
+  baseModel: string | null | undefined,
+): Promise<SofaModuleCostRowLite[] | null> {
+  if (!baseModel) return null;
+  const { data } = await sb
+    .from('mfg_products')
+    .select('code, base_price_sen, price1_sen, cost_price_sen, seat_height_prices')
+    .eq('base_model', baseModel)
+    .eq('category', 'SOFA');
+  if (!data) return null;
+  return data as SofaModuleCostRowLite[];
 }
 
 /** Load a single fabric tracking row by code (tier-resolution data only). */
@@ -679,12 +784,15 @@ export async function recomputeOneLine(
     loadFabricSellingTiers(sb, item.variants?.fabricId ?? null),
     loadFabricTierAddonConfig(sb),
   ]);
-  const sofaModulePrices = product?.category === 'SOFA'
-    ? await loadModelSofaModulePrices(
-        sb,
-        product.base_model,
-        String((item.variants as { depth?: unknown } | null | undefined)?.depth ?? '24'),
-      )
-    : null;
-  return recomputeFromSnapshot(item, product, fabric, config, null, sofaModulePrices, sellingTiers, fabricAddonConfig);
+  const [sofaModulePrices, sofaModuleCostRows] = product?.category === 'SOFA'
+    ? await Promise.all([
+        loadModelSofaModulePrices(
+          sb,
+          product.base_model,
+          String((item.variants as { depth?: unknown } | null | undefined)?.depth ?? '24'),
+        ),
+        loadModelSofaModuleCostRows(sb, product.base_model),
+      ])
+    : [null, null];
+  return recomputeFromSnapshot(item, product, fabric, config, null, sofaModulePrices, sellingTiers, fabricAddonConfig, null, null, null, sofaModuleCostRows);
 }

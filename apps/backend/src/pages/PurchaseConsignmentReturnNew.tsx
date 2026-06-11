@@ -15,6 +15,7 @@
 // Purchase Consignment Order, OR free manual entry. Numbering is PCT-…
 // ----------------------------------------------------------------------------
 
+import { todayMyt } from '../lib/dates';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, Plus, Save, Trash2, X, ChevronDown } from 'lucide-react';
@@ -122,7 +123,7 @@ export const PurchaseConsignmentReturnNew = () => {
   const saving = create.isPending || post.isPending;
 
   const [supplierId, setSupplierId]   = useState<string>('');
-  const [returnDate, setReturnDate]   = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [returnDate, setReturnDate]   = useState<string>(() => todayMyt());
   const [reason, setReason]           = useState<string>('');
   const [notes, setNotes]             = useState<string>('');
   const [lines, setLines]             = useState<DraftLine[]>([]);

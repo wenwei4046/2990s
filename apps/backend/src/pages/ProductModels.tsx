@@ -27,6 +27,7 @@ import { resolveSizeInfo } from '../lib/size-info';
 import { SkuPreviewStrip } from './SupplierDetail';
 import { composeSupplierSku } from '../lib/supplier-sku-helpers';
 import { MultiSupplierPicker } from '../components/MultiSupplierPicker';
+import { MoneyInput } from '../components/MoneyInput';
 import styles from './ProductModels.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -1651,13 +1652,10 @@ function ModularAssignSupplierDialog({
                               />
                             </td>
                             <td style={{ ...tdStyle, textAlign: 'right' }}>
-                              <input
-                                type="number"
-                                step="0.01"
-                                value={(d.unitPriceCenti / 100).toFixed(2)}
-                                onChange={(e) => setDraft(d.key, {
-                                  unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0,
-                                })}
+                              <MoneyInput
+                                bare
+                                valueSen={d.unitPriceCenti}
+                                onCommit={(sen) => setDraft(d.key, { unitPriceCenti: sen ?? 0 })}
                                 style={{ ...inputStyle, width: 100, textAlign: 'right' }}
                               />
                             </td>

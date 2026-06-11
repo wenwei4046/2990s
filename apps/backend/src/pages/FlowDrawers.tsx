@@ -12,6 +12,7 @@
 // And renders the backdrop + drawer + form. Caller controls visibility.
 // ----------------------------------------------------------------------------
 
+import { todayMyt } from '../lib/dates';
 import { useMemo, useState } from 'react';
 import { X, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
@@ -212,7 +213,7 @@ export const CreatePurchaseInvoiceDrawer = ({ onClose }: { onClose: () => void }
   const suppliers = useSuppliers({ status: 'ACTIVE' });
   const [supplierId, setSupplierId] = useState<string | null>(null);
   const [supplierInvoiceRef, setSupplierInvoiceRef] = useState('');
-  const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().slice(0, 10));
+  const [invoiceDate, setInvoiceDate] = useState(todayMyt());
   const [dueDate, setDueDate] = useState('');
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<Array<{ materialCode: string; materialName: string; qty: number; unitPriceCenti: number }>>([]);
@@ -440,7 +441,7 @@ export const CreateSalesInvoiceDrawer = ({ onClose }: { onClose: () => void }) =
   const [deliveryOrderId, setDeliveryOrderId] = useState<string | null>(null);
   const [form, setForm] = useState({
     debtorCode: '', debtorName: '', soDocNo: '',
-    invoiceDate: new Date().toISOString().slice(0, 10),
+    invoiceDate: todayMyt(),
     dueDate: '', notes: '',
   });
   const [items, setItems] = useState<Array<{ itemCode: string; description: string; qty: number; unitPriceCenti: number; discountCenti: number; taxCenti: number }>>([

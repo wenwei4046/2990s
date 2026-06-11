@@ -224,17 +224,32 @@ export async function creditFromCancelledSi(
     return { credited: 0, reason: 'already_credited' };
   }
 
+  /* Audit 2026-06-11 H2 — an over-paid SI already booked its excess as a live
+     OVERPAY credit (reconcileSiOverpay, which skips CANCELLED invoices and so
+     never corrects it). Crediting the full paid_centi here would hand the
+     excess out twice, so the cancel credit is paid − Σ live OVERPAY entries
+     for this SI (net, never negative). */
+  const { data: overRows } = await sb
+    .from('customer_credits')
+    .select('amount_centi')
+    .eq('source_type', 'OVERPAY')
+    .eq('source_doc_no', args.siNumber);
+  const liveOverpay = ((overRows ?? []) as Array<{ amount_centi: number }>)
+    .reduce((s, r) => s + Number(r.amount_centi ?? 0), 0);
+  const creditCenti = Math.max(0, args.paidCenti - Math.max(0, liveOverpay));
+  if (creditCenti <= 0) return { credited: 0, reason: 'covered_by_overpay' };
+
   const r = await addCustomerCredit(sb, {
     debtorCode: args.debtorCode,
     debtorName: args.debtorName ?? null,
-    amountCenti: args.paidCenti,
+    amountCenti: creditCenti,
     sourceType: 'SI_CANCEL_REFUND',
     sourceDocNo: args.siNumber,
     sourceDocId: args.siId,
-    notes: `Cancelled invoice ${args.siNumber} carried ${args.paidCenti / 100} as customer credit.`,
+    notes: `Cancelled invoice ${args.siNumber} carried ${creditCenti / 100} as customer credit.`,
     createdBy: args.createdBy ?? null,
   });
-  return r.ok ? { credited: args.paidCenti } : { credited: 0, reason: r.reason };
+  return r.ok ? { credited: creditCenti } : { credited: 0, reason: r.reason };
 }
 
 /**

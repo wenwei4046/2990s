@@ -52,8 +52,10 @@ import {
   loadFabricSellingTiersByIds,
   loadFabricTierAddonConfig,
   loadModelSofaModulePrices,
+  loadModelSofaModuleCostRows,
   type MfgItemForRecompute,
   type RecomputedLine,
+  type SofaModuleCostRowLite,
 } from '../lib/mfg-pricing-recompute';
 /* PR #216 — per-Model variant chip enforcement (Commander 2026-05-27
    follow-up to PR #205). Reject POST/PATCH SO line items that carry a
@@ -1758,6 +1760,9 @@ mfgSalesOrders.post('/', async (c) => {
   const sellingTiersByFabricId = await loadFabricSellingTiersByIds(
     sb, items.map((it) => (it.variants as { fabricId?: string } | null)?.fabricId ?? null));
   const sofaModulePricesMemo = new Map<string, Promise<Record<string, number> | null>>();
+  // Audit 2026-06-11 C2 — module COST rows, memoized per base_model (the
+  // per-line seat size + fabric tier resolution happens inside the recompute).
+  const sofaModuleCostRowsMemo = new Map<string, Promise<SofaModuleCostRowLite[] | null>>();
   const recomputes: Array<RecomputedLine | null> = await Promise.all(items.map(async (it, idx) => {
     const itemCode = String(it.itemCode ?? '');
     if (!itemCode) return null;
@@ -1770,6 +1775,7 @@ mfgSalesOrders.post('/', async (c) => {
     // module-SKU sell_price_sen; load them so the drift gate reprices the build
     // from the same source the POS used. Non-sofa lines skip it.
     let sofaModulePrices: Record<string, number> | null = null;
+    let sofaModuleCostRows: SofaModuleCostRowLite[] | null = null;
     if (product?.category === 'SOFA') {
       const depth = String((it.variants as { depth?: unknown } | null)?.depth ?? '24');
       const memoKey = `${product.base_model ?? ''}|${depth}`;
@@ -1778,7 +1784,14 @@ mfgSalesOrders.post('/', async (c) => {
         pending = loadModelSofaModulePrices(sb, product.base_model, depth);
         sofaModulePricesMemo.set(memoKey, pending);
       }
-      sofaModulePrices = await pending;
+      // C2 — COST rows ride the same diet: one load per base_model.
+      const costKey = product.base_model ?? '';
+      let pendingCost = sofaModuleCostRowsMemo.get(costKey);
+      if (!pendingCost) {
+        pendingCost = loadModelSofaModuleCostRows(sb, product.base_model);
+        sofaModuleCostRowsMemo.set(costKey, pendingCost);
+      }
+      [sofaModulePrices, sofaModuleCostRows] = await Promise.all([pending, pendingCost]);
     }
     sofaModulePricesByIdx.set(idx, sofaModulePrices);
     const draft: MfgItemForRecompute = {
@@ -1792,7 +1805,7 @@ mfgSalesOrders.post('/', async (c) => {
     // sofa) or the reward combo ids (sofa). Else null → normal base / price.
     const pwpBaseSen = pwpBaseByIdx.get(idx) ?? null;
     const pwpSofaComboIds = pwpSofaByIdx.get(idx) ?? null;
-    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, pwpBaseSen, pwpSofaComboIds, cachedSpecialAddons);
+    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, pwpBaseSen, pwpSofaComboIds, cachedSpecialAddons, sofaModuleCostRows);
   }));
   /* Commander 2026-05-29 (system-wide) — the SELLING unit price is now
      operator-authored on every SO line. The product price tables are COST,
@@ -1829,6 +1842,30 @@ mfgSalesOrders.post('/', async (c) => {
           breakdown: r.breakdown,
         }, 400);
       }
+    }
+  }
+  /* Audit 2026-06-11 C-2 — discountCenti is client-authored and was NOT covered
+     by the drift gate: a tampered POS could submit the correct catalog unit
+     price (passing drift) then zero the line out with an arbitrary discount —
+     or inflate the total with a negative one. Reject any discount outside
+     [0, qty × unit] on every line (422, reject-don't-normalize). */
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (!it) continue;
+    const r = recomputes[i];
+    const qtyI = Number(it.qty ?? 1);
+    const unitI = r ? r.unit_price_sen : Number(it.unitPriceCenti ?? 0);
+    const discI = Number(it.discountCenti ?? 0);
+    if (!Number.isFinite(discI) || discI < 0 || discI > qtyI * unitI) {
+      await rollbackPwpClaims();  // don't burn a voucher on a rejected order
+      return c.json({
+        error:    'invalid_discount',
+        reason:   'discountCenti must be between 0 and qty × unit price.',
+        lineIdx:  i,
+        itemCode: String(it.itemCode ?? ''),
+        discount: discI,
+        max:      qtyI * unitI,
+      }, 422);
     }
   }
   /* Commander 2026-05-31 — per-line ship-from warehouse default. MRP +
@@ -2865,6 +2902,19 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
   const { data: prev } = await sb.from('mfg_sales_orders').select('status').eq('doc_no', docNo).maybeSingle();
   const fromStatus = (prev as { status: string } | null)?.status ?? null;
 
+  /* Audit 2026-06-11 C-1/H1 — a CANCELLED SO is FINAL (mirrors do_cancelled_final).
+     Un-cancelling left the Edge #B SO_CANCEL_REFUND customer credit standing while
+     the SO's deposit payments went live again — the same money existed twice
+     (there is no SO_REOPEN_CONTRA claw-back on the SO side). Re-order via a NEW
+     SO instead. Re-cancel (CANCELLED→CANCELLED) still rides through below and is
+     idempotent (creditFromCancelledSo no-ops on the source pair). */
+  if (fromStatus === 'CANCELLED' && body.status !== 'CANCELLED') {
+    return c.json({
+      error: 'so_cancelled_final',
+      reason: 'A cancelled Sales Order cannot be reactivated — its deposit was already converted to customer credit. Create a new SO instead.',
+    }, 409);
+  }
+
   /* Tier 2 downstream-lock — only the CANCELLED transition is gated (mirrors
      the GRN cancel guard). Other status transitions (CONFIRMED ↔ READY_TO_SHIP
      ↔ SHIPPED ↔ DELIVERED…) ride through untouched so the existing state
@@ -2998,6 +3048,17 @@ mfgSalesOrders.post('/:docNo/items/:itemId/override', async (c) => {
   if (!item) return c.json({ error: 'item_not_found' }, 404);
   const i = item as { id: string; doc_no: string; item_code: string; unit_price_centi: number; qty: number; discount_centi: number };
   if (i.doc_no !== docNo) return c.json({ error: 'item_doc_mismatch' }, 400);
+  /* Audit 2026-06-11 C-2 — the override recomputes total as qty × newPrice −
+     stored discount; reject an override price that would push the line total
+     negative (discount invariant: 0 ≤ discount ≤ qty × unit). */
+  if (Number(i.discount_centi ?? 0) > i.qty * newPrice) {
+    return c.json({
+      error:    'invalid_discount',
+      reason:   'Stored line discount exceeds qty × override price — the line total would go negative.',
+      discount: Number(i.discount_centi ?? 0),
+      max:      i.qty * newPrice,
+    }, 422);
+  }
 
   // Audit first (so we don't lose original even if the update fails)
   const originalPriceSen = i.unit_price_centi;
@@ -3330,7 +3391,13 @@ async function recomputeTotals(sb: any, docNo: string) {
       const groups = new Map<string, Row[]>();
       for (const r of sofaRows) {
         const { baseModel, sizeCode } = splitSofaCode(r.item_code);
-        if (!sizeCode.includes('-')) continue; // non-modular (e.g. BLATT-2S) → no combo
+        /* Audit 2026-06-11 I-1 — the old `sizeCode.includes('-')` gate was a
+           legacy dash-vocabulary sniff that skipped EVERY canonical parens
+           module (`1A(LHF)`) AND whole-unit codes (1S/2S/3S), making this
+           whole spread dead code since the 2026-06-04 vocabulary unification.
+           Module-set matching is pickComboMatch's job (it already rejects
+           non-matching sets); we only skip codes with no module token at all. */
+        if (!sizeCode) continue; // bare model code → nothing to match
         const key = baseModel.toUpperCase();
         const arr = groups.get(key) ?? [];
         arr.push(r); groups.set(key, arr);
@@ -3344,8 +3411,12 @@ async function recomputeTotals(sb: any, docNo: string) {
         if (heights.size !== 1) continue;
         const height = [...heights][0]!;
         if (!height) continue;
-        const named = combos.filter((cmb) => (cmb.baseModel ?? '').toUpperCase() === bm);
-        const pool = named.length > 0 ? named : combos;
+        /* Audit 2026-06-11 I2 — combos must match the SAME base model only
+           (owner rule: no cross-model fallback). Module codes are a shared
+           vocabulary, so falling back to ALL combos let a Model with no combos
+           silently take another Model's combo price as its set cost. */
+        const pool = combos.filter((cmb) => (cmb.baseModel ?? '').toUpperCase() === bm);
+        if (pool.length === 0) continue; // no combo named for this Model → no combo
         const match = pickComboMatch(
           { baseModel: '', modules: members.map((m) => splitSofaCode(m.item_code).sizeCode), customerId: null, tier, height },
           pool,
@@ -3353,7 +3424,15 @@ async function recomputeTotals(sb: any, docNo: string) {
         if (!match) continue;
         const matched = match.matchedIndices.map((i) => members[i]).filter((m): m is Row => !!m);
         if (matched.length === 0) continue;
-        const comboTotal = match.comboPriceCenti;
+        /* Audit 2026-06-11 I1 — the combo price is ONE set; line_cost_centi is
+           a LINE total (unit × qty). Owner rule: combo cost MUST multiply by
+           qty. Uniform qty q across the matched lines → q sets → comboTotal×q.
+           Mixed qtys → no clean set count → SKIP the combo and keep the
+           per-module costs (never under-book). */
+        const qtySet = new Set(matched.map((m) => Math.max(1, m.qty || 1)));
+        if (qtySet.size !== 1) continue;
+        const uniformQty = [...qtySet][0]!;
+        const comboTotal = match.comboPriceCenti * uniformQty;
         if (comboTotal <= 0) continue;
         const spread = spreadComboTotal(matched.map((m) => m.line_cost_centi || 0), comboTotal);
         for (let i = 0; i < matched.length; i++) {
@@ -3496,13 +3575,17 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     loadSpecialAddons(sb),
   ]);
   // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
-  const sofaModulePricesLite = productLite?.category === 'SOFA'
-    ? await loadModelSofaModulePrices(
-        sb,
-        productLite.base_model,
-        String((variantsObj as { depth?: unknown } | null)?.depth ?? '24'),
-      )
-    : null;
+  // Audit 2026-06-11 C2 — module COST rows so a build's cost = Σ module costs.
+  const [sofaModulePricesLite, sofaModuleCostRowsLite] = productLite?.category === 'SOFA'
+    ? await Promise.all([
+        loadModelSofaModulePrices(
+          sb,
+          productLite.base_model,
+          String((variantsObj as { depth?: unknown } | null)?.depth ?? '24'),
+        ),
+        loadModelSofaModuleCostRows(sb, productLite.base_model),
+      ])
+    : [null, null];
   const recomputed = recomputeFromSnapshot(
     {
       itemCode:       itemCodeStr,
@@ -3521,6 +3604,7 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     null,                // pwpBaseSen (resolved elsewhere for this single-item path)
     null,                // pwpSofaComboIds
     specialAddonsLite,
+    sofaModuleCostRowsLite,
   );
   /* Pricing trust boundary (Owner 2026-05-31, see isPosTabletCaller). POS tablet
      roles are drift-rejected + take the server price; Backend / office authors
@@ -3539,6 +3623,17 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   /* Carry the bound price-list figure out (costing-only Backend sends no real
      selling price). POS drift rejects above; Backend drift saves silently. */
   const unit = recomputed.unit_price_sen;
+  /* Audit 2026-06-11 C-2 — same discount gate as POST /: client-authored
+     discount must sit in [0, qty × unit] (422, reject-don't-normalize). */
+  if (!Number.isFinite(discount) || discount < 0 || discount > qty * unit) {
+    return c.json({
+      error:    'invalid_discount',
+      reason:   'discountCenti must be between 0 and qty × unit price.',
+      itemCode: itemCodeStr,
+      discount,
+      max:      qty * unit,
+    }, 422);
+  }
   const lineTotal = (qty * unit) - discount;
   // Commander 2026-05-28 — server-computed cost (base + Σ backend priceSen
   // surcharges) wins. Fall back to mfg_products.cost_price_sen / explicit
@@ -3692,13 +3787,17 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       loadSpecialAddons(sb),
     ]);
     // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
-    const sofaModulePricesPatch = prodLite?.category === 'SOFA'
-      ? await loadModelSofaModulePrices(
-          sb,
-          prodLite.base_model,
-          String((variantsAfter as { depth?: unknown } | null)?.depth ?? '24'),
-        )
-      : null;
+    // Audit 2026-06-11 C2 — module COST rows so a build's cost = Σ module costs.
+    const [sofaModulePricesPatch, sofaModuleCostRowsPatch] = prodLite?.category === 'SOFA'
+      ? await Promise.all([
+          loadModelSofaModulePrices(
+            sb,
+            prodLite.base_model,
+            String((variantsAfter as { depth?: unknown } | null)?.depth ?? '24'),
+          ),
+          loadModelSofaModuleCostRows(sb, prodLite.base_model),
+        ])
+      : [null, null];
     recomputedPatch = recomputeFromSnapshot(
       {
         itemCode:       itemCodeAfter,
@@ -3717,6 +3816,7 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       null,                // pwpBaseSen
       null,                // pwpSofaComboIds
       specialAddonsPatch,
+      sofaModuleCostRowsPatch,
     );
     if (posTablet && recomputedPatch.drift) {
       return c.json({
@@ -3733,6 +3833,18 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
      Backend sends no real selling price). POS drift rejects above; Backend
      drift saves silently. */
   const unit = recomputedPatch ? recomputedPatch.unit_price_sen : clientUnit;
+  /* Audit 2026-06-11 C-2 — same discount gate as POST /: the effective
+     (patch-else-stored) discount must sit in [0, qty × unit] against the
+     effective unit price (422, reject-don't-normalize). */
+  if (!Number.isFinite(discount) || discount < 0 || discount > qty * unit) {
+    return c.json({
+      error:    'invalid_discount',
+      reason:   'discountCenti must be between 0 and qty × unit price.',
+      itemCode: itemCodeAfter,
+      discount,
+      max:      qty * unit,
+    }, 422);
+  }
   /* Commander 2026-05-28 — cost snapshot on PATCH. Order of precedence:
        1. Client sent unitCostCenti > 0 → use it (explicit override).
        2. A recompute ran (variants/itemCode/price touched) AND produced a

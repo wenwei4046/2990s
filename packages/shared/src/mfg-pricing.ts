@@ -279,7 +279,7 @@ export function specialAddonsSurchargeSen(
  *  matchedTier }` so the caller can label `source` accurately even on a
  *  tier fallback. Returns null when the array is empty / undefined so the
  *  caller can fall back to basePriceSen. */
-const resolveSeatHeightSen = (
+export const resolveSeatHeightSen = (
   rows: MfgSeatHeightPrice[] | null | undefined,
   size: string | null | undefined,
   tier: MfgFabricTier | null | undefined,

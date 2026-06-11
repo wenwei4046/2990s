@@ -20,6 +20,7 @@
 // line → Receive & Post.
 // ----------------------------------------------------------------------------
 
+import { todayMyt } from '../lib/dates';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Plus, Save, Trash2, X, ArrowRightLeft, ChevronDown } from 'lucide-react';
@@ -167,7 +168,7 @@ export const GrnNew = () => {
   const post   = usePostGrn();
   const saving = create.isPending || post.isPending;
 
-  const [receivedAt, setReceivedAt]           = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [receivedAt, setReceivedAt]           = useState<string>(() => todayMyt());
   const [deliveryNoteRef, setDeliveryNoteRef] = useState<string>('');
   const [notes, setNotes]                     = useState<string>('');
   const [lines, setLines]                     = useState<DraftLine[]>([]);

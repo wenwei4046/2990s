@@ -20,6 +20,7 @@
 // numbering is PCR-…
 // ----------------------------------------------------------------------------
 
+import { todayMyt } from '../lib/dates';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, Plus, Save, Trash2, X, ChevronDown } from 'lucide-react';
@@ -124,7 +125,7 @@ export const PurchaseConsignmentReceiveNew = () => {
   const post   = usePostPurchaseConsignmentReceive();
   const saving = create.isPending || post.isPending;
 
-  const [receivedAt, setReceivedAt]           = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [receivedAt, setReceivedAt]           = useState<string>(() => todayMyt());
   const [deliveryNoteRef, setDeliveryNoteRef] = useState<string>('');
   const [notes, setNotes]                     = useState<string>('');
   const [lines, setLines]                     = useState<DraftLine[]>([]);

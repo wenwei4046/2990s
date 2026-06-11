@@ -27,6 +27,7 @@ import type { UseQueryResult } from '@tanstack/react-query';
 import type { DetailListingFilters, DetailListingRow } from '../lib/flow-queries';
 import styles from '../pages/SalesOrderDetailListing.module.css';
 import { fmtDocStamp } from '../lib/pdf-common';
+import { todayMyt } from '../lib/dates';
 
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -107,8 +108,8 @@ export function DetailListingShell<R extends DetailListingRow>({
   const [searchParams, setSearchParams] = useSearchParams();
   const outstandingOnly = searchParams.get('outstanding') === '1';
 
-  const today = new Date().toISOString().slice(0, 10);
-  const yearAgo = new Date(Date.now() - 365 * 86400 * 1000).toISOString().slice(0, 10);
+  const today = todayMyt();
+  const yearAgo = todayMyt(-365);
   const [docDateMode, setDocDateMode] = useState<DateMode>('range');
   const [dateFrom, setDateFrom] = useState(yearAgo);
   const [dateTo,   setDateTo]   = useState(today);

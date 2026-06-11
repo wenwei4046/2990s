@@ -15,6 +15,7 @@
 // dedicated `.itemsGrid` table column setup.
 // ----------------------------------------------------------------------------
 
+import { todayMyt } from '../lib/dates';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, Plus, Save, Trash2, X, ArrowRightLeft } from 'lucide-react';
@@ -144,7 +145,7 @@ export const PurchaseOrderNew = () => {
 
   // ── Header state ────────────────────────────────────────────────────
   const [supplierId, setSupplierId]   = useState<string>('');
-  const [poDate, setPoDate]           = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [poDate, setPoDate]           = useState<string>(() => todayMyt());
   const [expectedAt, setExpectedAt]   = useState<string>('');
   const [purchaseLocationId, setPurchaseLocationId] = useState<string>('');
   const [notes, setNotes]             = useState<string>('');

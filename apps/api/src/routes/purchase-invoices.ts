@@ -339,12 +339,18 @@ purchaseInvoices.post('/', async (c) => {
   const invoiceNumber = await nextNum(sb, 'PI');
   let subtotal = 0;
   const itemRows = items.map((it) => {
-    const qty = Number(it.qty ?? 0); const unit = Number(it.unitPriceCenti ?? 0); const total = qty * unit; subtotal += total;
+    /* PI discount unification (audit 2026-06-11 M3) — ONE rule on every PI
+       line write path: line_total_centi = qty × unit − discount, discount
+       stored. This path used to drop the client discount entirely (totals
+       overstated whenever the form sent one). */
+    const qty = Number(it.qty ?? 0); const unit = Number(it.unitPriceCenti ?? 0);
+    const discount = Number(it.discountCenti ?? 0) || 0;
+    const total = qty * unit - discount; subtotal += total;
     return {
       material_kind: it.materialKind,
       material_code: it.materialCode,
       material_name: it.materialName,
-      qty, unit_price_centi: unit, line_total_centi: total,
+      qty, unit_price_centi: unit, discount_centi: discount, line_total_centi: total,
       grn_item_id: (it.grnItemId as string | undefined) ?? null,
       notes: (it.notes as string | undefined) ?? null,
       // Commander 2026-05-29 — manual PI lines carry their category + variant
@@ -595,10 +601,19 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
   const invoiceDate = body.invoiceDate ?? new Date().toISOString().slice(0, 10);
   const created: Array<{ id: string; invoiceNumber: string; supplierId: string; grnCount: number; lineCount: number }> = [];
 
+  /* PI discount unification (audit 2026-06-11 M3) — ONE rule on every PI line
+     write path: line_total_centi = qty × unit − discount, discount stored.
+     The GRN line discount is pro-rated by billed qty over qty_accepted so a
+     line billed across multiple PIs never subtracts more than the full GRN
+     discount in total. (This path used to store the discount but exclude it
+     from line_total + subtotal.) */
+  const discFor = (row: ItemRow, qty: number) =>
+    Math.round(Number(row.discount_centi ?? 0) * qty / (Number(row.qty_accepted) || 1));
+
   for (const bucket of buckets.values()) {
     counter += 1;
     const invoiceNumber = `PI-${yymm}-${String(counter).padStart(3, '0')}`;
-    const subtotal = bucket.lines.reduce((s, { row, qty }) => s + qty * row.unit_price_centi, 0);
+    const subtotal = bucket.lines.reduce((s, { row, qty }) => s + (qty * row.unit_price_centi - discFor(row, qty)), 0);
 
     const { data: header, error: hErr } = await sb.from('purchase_invoices').insert({
       invoice_number: invoiceNumber,
@@ -629,7 +644,7 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
       material_name: row.material_name,
       qty,
       unit_price_centi: row.unit_price_centi,
-      line_total_centi: qty * row.unit_price_centi,
+      line_total_centi: qty * row.unit_price_centi - discFor(row, qty),
       item_group: row.item_group,
       description: row.description,
       description2: row.description2,
@@ -643,7 +658,7 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
       custom_specials: row.custom_specials,
       line_suffix: row.line_suffix,
       special_order_price_sen: row.special_order_price_sen ?? 0,
-      discount_centi: row.discount_centi ?? 0,
+      discount_centi: discFor(row, qty),
     }));
     const { error: iErr } = await sb.from('purchase_invoice_items').insert(rows);
     if (iErr) {
@@ -719,7 +734,14 @@ purchaseInvoices.post('/from-grn', async (c) => {
   if (lines.length === 0) return c.json({ error: 'nothing_to_invoice', message: 'GRN is fully invoiced' }, 400);
 
   const invoiceNumber = await nextNum(sb, 'PI');
-  const subtotal = lines.reduce((s, it) => s + (it._remaining * it.unit_price_centi - (it.discount_centi ?? 0)), 0);
+  /* PI discount unification (audit 2026-06-11 M3) — ONE rule on every PI line
+     write path: line_total_centi = qty × unit − discount, discount stored.
+     The GRN line discount is pro-rated by the billed (remaining) qty over
+     qty_accepted so a second /from-grn pass over a partially-billed line
+     can't subtract the full discount twice. */
+  const discFor = (it: GrnLine & { _remaining: number }) =>
+    Math.round(Number(it.discount_centi ?? 0) * it._remaining / (Number(it.qty_accepted) || 1));
+  const subtotal = lines.reduce((s, it) => s + (it._remaining * it.unit_price_centi - discFor(it)), 0);
 
   const { data: header, error: hErr } = await sb.from('purchase_invoices').insert({
     invoice_number: invoiceNumber,
@@ -747,7 +769,7 @@ purchaseInvoices.post('/from-grn', async (c) => {
     material_name: it.material_name,
     qty: it._remaining,
     unit_price_centi: it.unit_price_centi,
-    line_total_centi: it._remaining * it.unit_price_centi - (it.discount_centi ?? 0),
+    line_total_centi: it._remaining * it.unit_price_centi - discFor(it),
     item_group: it.item_group,
     description: it.description,
     description2: it.description2,
@@ -761,7 +783,7 @@ purchaseInvoices.post('/from-grn', async (c) => {
     custom_specials: it.custom_specials,
     line_suffix: it.line_suffix,
     special_order_price_sen: it.special_order_price_sen ?? 0,
-    discount_centi: it.discount_centi ?? 0,
+    discount_centi: discFor(it),
   }));
   const { error: insErr } = await sb.from('purchase_invoice_items').insert(rows);
   if (insErr) { await sb.from('purchase_invoices').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: insErr.message }, 500); }
@@ -945,6 +967,10 @@ purchaseInvoices.patch('/:id/items/:itemId', async (c) => {
   const qty = it.qty !== undefined ? Number(it.qty) : prevQty;
   const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : (prev as { unit_price_centi: number }).unit_price_centi;
   const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : ((prev as { discount_centi: number }).discount_centi ?? 0);
+  /* PI discount unification (audit 2026-06-11 M3) — this IS the canonical rule
+     (line_total_centi = qty × unit − discount, discount stored); all four
+     create paths now write the same way, so an edit no longer shifts a line's
+     total by a stored-but-previously-unapplied discount. */
   const lineTotal = (qty * unit) - discount;
 
   const updates: Record<string, unknown> = {

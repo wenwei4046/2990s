@@ -34,6 +34,7 @@
 // are also default-hidden.
 // ----------------------------------------------------------------------------
 
+import { todayMyt } from '../lib/dates';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
@@ -572,8 +573,8 @@ export const SalesOrderDetailListing = () => {
      visible row-set client-side off the same one-shot query. Date range
      is the only filter sent to the server (so the page can scale beyond
      ~2k lines once the SO table grows). */
-  const today = new Date().toISOString().slice(0, 10);
-  const yearAgo = new Date(Date.now() - 365 * 86400 * 1000).toISOString().slice(0, 10);
+  const today = todayMyt();
+  const yearAgo = todayMyt(-365);
   const [dateFrom, setDateFrom] = useState(yearAgo);
   const [dateTo,   setDateTo]   = useState(today);
   const [search,   setSearch]   = useState('');

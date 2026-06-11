@@ -30,6 +30,8 @@ import {
 import type { SlipUrlResponse } from '@2990s/shared/schemas';
 import { fetchPaymentSlipUrl } from '../lib/slip';
 import { SlipUploadField } from './SlipUploadField';
+import { MoneyInput } from './MoneyInput';
+import { todayMyt } from '../lib/dates';
 import {
   PAYMENT_METHOD_CODE_TO_VALUE,
   PAYMENT_METHOD_DEFAULT_LABELS,
@@ -162,7 +164,7 @@ export type PaymentDraft = {
 
 export const newPaymentDraft = (defaultStaffId = ''): PaymentDraft => ({
   uid: Math.random().toString(36).slice(2, 10),
-  paidAt: new Date().toISOString().slice(0, 10),
+  paidAt: todayMyt(),
   methodLabel: 'Cash',
   merchantProvider:       '',
   installmentMonthsLabel: '',
@@ -736,15 +738,13 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                   {/* L2 — Cash: no extra fields */}
                 </span>
                 <span className={paymentsStyles.cellRight}>
-                  <input
-                    type="number" min={0} step="0.01"
-                    className={paymentsStyles.inlineInputRight}
-                    value={d.amountCenti === 0 ? '' : (d.amountCenti / 100).toFixed(2)}
+                  <MoneyInput
+                    bare allowBlank
+                    valueSen={d.amountCenti === 0 ? null : d.amountCenti}
+                    inputClassName={paymentsStyles.inlineInputRight}
                     placeholder="0"
                     disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, {
-                      amountCenti: Math.round(Number(e.target.value) * 100) || 0,
-                    })}
+                    onCommit={(sen) => patchDraft(d.uid, { amountCenti: sen ?? 0 })}
                   />
                 </span>
                 <span className={paymentsStyles.cell}>

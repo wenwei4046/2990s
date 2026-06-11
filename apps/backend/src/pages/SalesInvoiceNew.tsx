@@ -17,6 +17,7 @@
 // invoice detail.
 // ----------------------------------------------------------------------------
 
+import { todayMyt } from '../lib/dates';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
@@ -86,7 +87,7 @@ export const SalesInvoiceNew = () => {
   const [buildingType, setBuildingType] = useState('');
   const [venue, setVenue] = useState('');
   const [venueId, setVenueId] = useState('');
-  const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [invoiceDate, setInvoiceDate] = useState(() => todayMyt());
   const [dueDate, setDueDate] = useState('');
   const [customerDeliveryDate, setCustomerDeliveryDate] = useState('');
   const [note, setNote] = useState('');

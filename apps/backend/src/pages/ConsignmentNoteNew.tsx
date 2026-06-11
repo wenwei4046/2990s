@@ -20,6 +20,7 @@
 // numbering is CN-YYMM-NNN.
 // ----------------------------------------------------------------------------
 
+import { todayMyt } from '../lib/dates';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
@@ -87,7 +88,7 @@ export const ConsignmentNoteNew = () => {
   const [customerSoNo, setCustomerSoNo] = useState('');
 
   // ── Delivery info ──
-  const [doDate, setDoDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [doDate, setDoDate] = useState(() => todayMyt());
   const [driverId, setDriverId] = useState('');
   const [driverName, setDriverName] = useState('');
   const [vehicle, setVehicle] = useState('');

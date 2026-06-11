@@ -17,6 +17,7 @@
 // 1:1; numbering is PCO-…
 // ----------------------------------------------------------------------------
 
+import { todayMyt } from '../lib/dates';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, Plus, Save, Trash2, X } from 'lucide-react';
@@ -122,7 +123,7 @@ export const PurchaseConsignmentOrderNew = () => {
 
   // ── Header state ────────────────────────────────────────────────────
   const [supplierId, setSupplierId]   = useState<string>('');
-  const [poDate, setPoDate]           = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [poDate, setPoDate]           = useState<string>(() => todayMyt());
   const [expectedAt, setExpectedAt]   = useState<string>('');
   const [purchaseLocationId, setPurchaseLocationId] = useState<string>('');
   const [notes, setNotes]             = useState<string>('');

@@ -2254,12 +2254,12 @@ const SkuFormDialog = ({
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Unit Price</span>
-              <input
-                type="number"
-                step="0.01"
-                className={styles.fieldInput}
-                value={(draft.unitPriceCenti / 100).toFixed(2)}
-                onChange={(e) => set('unitPriceCenti', Math.round(Number(e.target.value) * 100) || 0)}
+              <MoneyInput
+                bare
+                valueSen={draft.unitPriceCenti}
+                inputClassName={styles.fieldInput}
+                align="left"
+                onCommit={(sen) => set('unitPriceCenti', sen ?? 0)}
               />
             </label>
 
@@ -3022,13 +3022,10 @@ const ModelSkuPickerDialog = ({
                               />
                             </td>
                             <td className={styles.tableRight}>
-                              <input
-                                type="number"
-                                step="0.01"
-                                value={(d.unitPriceCenti / 100).toFixed(2)}
-                                onChange={(e) => setDraft(d.modelId, {
-                                  unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0,
-                                })}
+                              <MoneyInput
+                                bare
+                                valueSen={d.unitPriceCenti}
+                                onCommit={(sen) => setDraft(d.modelId, { unitPriceCenti: sen ?? 0 })}
                                 style={{ ...smallInputStyle, width: 100, textAlign: 'right' }}
                               />
                             </td>
@@ -3352,13 +3349,10 @@ const MultiSkuPickerDialog = ({
                           />
                         </td>
                         <td className={styles.tableRight}>
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={(d.unitPriceCenti / 100).toFixed(2)}
-                            onChange={(e) => setDraft(d.materialCode, {
-                              unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0,
-                            })}
+                          <MoneyInput
+                            bare
+                            valueSen={d.unitPriceCenti}
+                            onCommit={(sen) => setDraft(d.materialCode, { unitPriceCenti: sen ?? 0 })}
                             style={{ ...smallInputStyle, width: 100, textAlign: 'right' }}
                           />
                         </td>

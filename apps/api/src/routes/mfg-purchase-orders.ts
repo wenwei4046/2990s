@@ -1035,7 +1035,11 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     const b = effectiveBindingFor(it);
     if (!b) continue;
     const { baseModel, sizeCode } = splitSofaCode(it.itemCode);
-    if (!sizeCode.includes('-')) continue; // not a module (e.g. BLATT-2S) → no combo
+    /* Audit 2026-06-11 I-1 parity — the dash sniff was a legacy-vocabulary
+       relic that skipped every canonical parens module (`1A(LHF)`) and the
+       1S/2S/3S whole-unit codes. pickComboMatch rejects non-matching sets
+       itself; only skip codes with no module token at all. */
+    if (!sizeCode) continue; // bare model code → nothing to match
     const key = `${b.supplier_id}|${it.soDocNo}|${baseModel.toUpperCase()}`;
     const arr = sofaGroups.get(key) ?? [];
     arr.push(it);
@@ -1056,10 +1060,12 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     const height = [...heights][0]!;
     if (!height) continue;
     // Scope to this base model's combos (case-insensitive — products are
-    // BOOQIT-… while combos store "Booqit"); fall back to all of the supplier's
-    // combos if none match by name (different spelling), relying on module match.
-    const named = supplierCombos.filter((cmb) => (cmb.baseModel ?? '').toUpperCase() === baseModelU);
-    const rows = named.length > 0 ? named : supplierCombos;
+    // BOOQIT-… while combos store "Booqit"). Audit 2026-06-11 I2 — NO fallback
+    // to the supplier's other Models' combos (owner rule: a combo must match
+    // the same base model only; module codes are a shared vocabulary, so the
+    // old fallback let another Model's combo price become this set's cost).
+    const rows = supplierCombos.filter((cmb) => (cmb.baseModel ?? '').toUpperCase() === baseModelU);
+    if (rows.length === 0) continue; // no combo named for this Model → no combo
     const match = pickComboMatch(
       { baseModel: '', modules: members.map((m) => splitSofaCode(m.itemCode).sizeCode), customerId: null, tier, height },
       rows,
@@ -1075,6 +1081,15 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     // 1NA outside the matched subset keeps its own per-module cost (2200 + 1NA).
     const comboTotal = match.comboPriceCenti;
     if (comboTotal <= 0) continue; // no price for this height → keep base cost
+    /* Audit 2026-06-11 I1 — this spread works in PER-UNIT costs (the spread
+       results are stored as per-unit prices and re-multiplied by qty on the
+       PO line), so with a UNIFORM qty q the set books q × comboTotal — already
+       the owner's "combo cost × qty" rule, no multiplier needed here. MIXED
+       qtys however have no clean set count (e.g. 2A×2 + L×1 = one set + a
+       spare 2A): the extra units would book at the combo-discounted share
+       instead of full per-module cost → SKIP the combo (never under-book). */
+    const qtySet = new Set(matched.map((m) => Math.max(1, Number(m.qty) || 1)));
+    if (qtySet.size !== 1) continue;
     const baseUnits = matched.map((m) => baseCostByItem.get(m) ?? 0);
     const spread = spreadComboTotal(baseUnits, comboTotal);
     matched.forEach((m, i) => adjustedCostByItem.set(m, spread[i] ?? 0));

@@ -35,6 +35,7 @@ import {
   loadFabricSellingTiers,
   loadFabricTierAddonConfig,
   loadModelSofaModulePrices,
+  loadModelSofaModuleCostRows,
   type MfgItemForRecompute,
   type RecomputedLine,
 } from '../lib/mfg-pricing-recompute';
@@ -618,13 +619,17 @@ consignmentOrders.post('/', async (c) => {
       loadFabricByCode(sb, (it.variants as { fabricCode?: string } | null)?.fabricCode ?? null),
       loadFabricSellingTiers(sb, (it.variants as { fabricId?: string } | null)?.fabricId ?? null),
     ]);
-    const sofaModulePrices = product?.category === 'SOFA'
-      ? await loadModelSofaModulePrices(
-          sb,
-          product.base_model,
-          String((it.variants as { depth?: unknown } | null)?.depth ?? '24'),
-        )
-      : null;
+    // Audit 2026-06-11 C2 — module COST rows so a build's cost = Σ module costs.
+    const [sofaModulePrices, sofaModuleCostRows] = product?.category === 'SOFA'
+      ? await Promise.all([
+          loadModelSofaModulePrices(
+            sb,
+            product.base_model,
+            String((it.variants as { depth?: unknown } | null)?.depth ?? '24'),
+          ),
+          loadModelSofaModuleCostRows(sb, product.base_model),
+        ])
+      : [null, null];
     const draft: MfgItemForRecompute = {
       itemCode,
       itemGroup:      String(it.itemGroup ?? 'others'),
@@ -632,7 +637,7 @@ consignmentOrders.post('/', async (c) => {
       unitPriceCenti: Number(it.unitPriceCenti ?? 0),
       variants:       (it.variants as MfgItemForRecompute['variants']) ?? null,
     };
-    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, null, null, cachedSpecialAddons);
+    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, null, null, cachedSpecialAddons, sofaModuleCostRows);
   }));
 
   /* Task #114 — snapshot unit cost from mfg_products when client didn't. */
@@ -1126,7 +1131,12 @@ async function recomputeTotals(sb: any, docNo: string) {
       const groups = new Map<string, Row[]>();
       for (const r of sofaRows) {
         const { baseModel, sizeCode } = splitSofaCode(r.item_code);
-        if (!sizeCode.includes('-')) continue; // non-modular → no combo
+        /* Audit 2026-06-11 I-1 — the old `sizeCode.includes('-')` gate was a
+           legacy dash-vocabulary sniff that skipped EVERY canonical parens
+           module (`1A(LHF)`) AND whole-unit codes (1S/2S/3S) — dead code since
+           the 2026-06-04 vocabulary unification. pickComboMatch itself rejects
+           non-matching module sets; we only skip codes with no module token. */
+        if (!sizeCode) continue; // bare model code → nothing to match
         const key = baseModel.toUpperCase();
         const arr = groups.get(key) ?? [];
         arr.push(r); groups.set(key, arr);
@@ -1140,8 +1150,12 @@ async function recomputeTotals(sb: any, docNo: string) {
         if (heights.size !== 1) continue;
         const height = [...heights][0]!;
         if (!height) continue;
-        const named = combos.filter((cmb) => (cmb.baseModel ?? '').toUpperCase() === bm);
-        const pool = named.length > 0 ? named : combos;
+        /* Audit 2026-06-11 I2 — same-base-model combos ONLY (owner rule: no
+           cross-model fallback; module codes are a shared vocabulary, so the
+           old `named.length > 0 ? named : combos` fallback let another Model's
+           combo price leak in as this set's cost). */
+        const pool = combos.filter((cmb) => (cmb.baseModel ?? '').toUpperCase() === bm);
+        if (pool.length === 0) continue; // no combo named for this Model → no combo
         const match = pickComboMatch(
           { baseModel: '', modules: members.map((m) => splitSofaCode(m.item_code).sizeCode), customerId: null, tier, height },
           pool,
@@ -1149,7 +1163,13 @@ async function recomputeTotals(sb: any, docNo: string) {
         if (!match) continue;
         const matched = match.matchedIndices.map((i) => members[i]).filter((m): m is Row => !!m);
         if (matched.length === 0) continue;
-        const comboTotal = match.comboPriceCenti;
+        /* Audit 2026-06-11 I1 — combo price is ONE set; line_cost_centi is a
+           LINE total. Uniform qty q → q sets → comboTotal×q; mixed qtys →
+           SKIP (keep per-module costs, never under-book). */
+        const qtySet = new Set(matched.map((m) => Math.max(1, m.qty || 1)));
+        if (qtySet.size !== 1) continue;
+        const uniformQty = [...qtySet][0]!;
+        const comboTotal = match.comboPriceCenti * uniformQty;
         if (comboTotal <= 0) continue;
         const spread = spreadComboTotal(matched.map((m) => m.line_cost_centi || 0), comboTotal);
         for (let i = 0; i < matched.length; i++) {
@@ -1250,13 +1270,17 @@ consignmentOrders.post('/:docNo/items', async (c) => {
     loadFabricTierAddonConfig(sb),
     loadSpecialAddons(sb),
   ]);
-  const sofaModulePricesLite = productLite?.category === 'SOFA'
-    ? await loadModelSofaModulePrices(
-        sb,
-        productLite.base_model,
-        String((variantsObj as { depth?: unknown } | null)?.depth ?? '24'),
-      )
-    : null;
+  // Audit 2026-06-11 C2 — module COST rows so a build's cost = Σ module costs.
+  const [sofaModulePricesLite, sofaModuleCostRowsLite] = productLite?.category === 'SOFA'
+    ? await Promise.all([
+        loadModelSofaModulePrices(
+          sb,
+          productLite.base_model,
+          String((variantsObj as { depth?: unknown } | null)?.depth ?? '24'),
+        ),
+        loadModelSofaModuleCostRows(sb, productLite.base_model),
+      ])
+    : [null, null];
   const recomputed = recomputeFromSnapshot(
     {
       itemCode:       itemCodeStr,
@@ -1275,6 +1299,7 @@ consignmentOrders.post('/:docNo/items', async (c) => {
     null,                // pwpBaseSen
     null,                // pwpSofaComboIds
     specialAddonsLite,
+    sofaModuleCostRowsLite,
   );
   /* Backend authors the selling price; no drift rejection (no POS path). */
   const unit = recomputed.unit_price_sen;
@@ -1392,13 +1417,17 @@ consignmentOrders.patch('/:docNo/items/:itemId', async (c) => {
       loadFabricTierAddonConfig(sb),
       loadSpecialAddons(sb),
     ]);
-    const sofaModulePricesPatch = prodLite?.category === 'SOFA'
-      ? await loadModelSofaModulePrices(
-          sb,
-          prodLite.base_model,
-          String((variantsAfter as { depth?: unknown } | null)?.depth ?? '24'),
-        )
-      : null;
+    // Audit 2026-06-11 C2 — module COST rows so a build's cost = Σ module costs.
+    const [sofaModulePricesPatch, sofaModuleCostRowsPatch] = prodLite?.category === 'SOFA'
+      ? await Promise.all([
+          loadModelSofaModulePrices(
+            sb,
+            prodLite.base_model,
+            String((variantsAfter as { depth?: unknown } | null)?.depth ?? '24'),
+          ),
+          loadModelSofaModuleCostRows(sb, prodLite.base_model),
+        ])
+      : [null, null];
     recomputedPatch = recomputeFromSnapshot(
       {
         itemCode:       itemCodeAfter,
@@ -1417,6 +1446,7 @@ consignmentOrders.patch('/:docNo/items/:itemId', async (c) => {
       null,                // pwpBaseSen
       null,                // pwpSofaComboIds
       specialAddonsPatch,
+      sofaModuleCostRowsPatch,
     );
   }
   /* Carry the bound price-list figure out when a recompute ran. Backend drift

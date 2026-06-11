@@ -12,7 +12,7 @@ export { comboChargedPrices } from './sofa-combo-pricing';
 // One-way edge: mfg-pricing.ts imports nothing (fully self-contained), so this
 // does NOT create a cycle. resolveSeatHeightSelling powers the SELLING assembly
 // helper below; MfgSeatHeightPrice is the per-(height,tier) entry shape.
-import { resolveSeatHeightSelling, type MfgSeatHeightPrice } from './mfg-pricing';
+import { resolveSeatHeightSelling, resolveSeatHeightSen, type MfgSeatHeightPrice, type MfgFabricTier } from './mfg-pricing';
 
 /* ─── Public types ─────────────────────────────────────────────────── */
 
@@ -447,6 +447,44 @@ export const sofaModuleSellingPricesFromSkus = (
     const seat = resolveSeatHeightSelling(r.seatHeightPrices, depth, tier ?? 'PRICE_2');
     const sen = seat?.sellingPriceSen ?? r.sellPriceSen ?? 0;
     if (sen <= 0) continue;
+    map[normalizeCompartmentCode(moduleCodeFromSku(r.code, baseModel))] = sen;
+  }
+  return map;
+};
+
+/** Build the per-Model module→COST map (sen) for the chosen seat size + fabric
+ *  tier. COST sibling of {@link sofaModuleSellingPricesFromSkus} (audit
+ *  2026-06-11 C2 — a multi-module build's cost must be Σ module costs, not the
+ *  first module SKU's flat cost). For each module SKU, the cost resolves the
+ *  way `computeMfgLineCost`'s SOFA branch does:
+ *    1. seat_height_prices[].priceSen at (seatSize, tier) — with the cost-side
+ *       exact → PRICE_2 → any-tier fallback (resolveSeatHeightSen);
+ *    2. else price1_sen when the fabric tier is PRICE_1;
+ *    3. else flat base_price_sen, else cost_price_sen;
+ *    4. nothing priced → no entry (priced 0 at lookup, never a phantom cost).
+ *  Same normalized-code keying as the selling builder so a laid-out
+ *  `cell.moduleId` looks up directly. Never reads `sellingPriceSen`. */
+export const sofaModuleCostPricesFromSkus = (
+  rows: Array<{
+    code: string;
+    basePriceSen: number | null;
+    price1Sen?: number | null;
+    costPriceSen?: number | null;
+    seatHeightPrices?: MfgSeatHeightPrice[] | null;
+  }>,
+  baseModel: string | null | undefined,
+  seatSize: string | null | undefined,
+  tier: MfgFabricTier | null | undefined,
+): SofaModulePriceSen => {
+  const map: SofaModulePriceSen = {};
+  for (const r of rows) {
+    const seat = resolveSeatHeightSen(r.seatHeightPrices, seatSize, tier);
+    const sen = seat != null
+      ? seat.priceSen
+      : (tier === 'PRICE_1' && r.price1Sen != null && r.price1Sen > 0)
+        ? r.price1Sen
+        : (r.basePriceSen ?? r.costPriceSen ?? null);
+    if (sen == null || sen <= 0) continue;
     map[normalizeCompartmentCode(moduleCodeFromSku(r.code, baseModel))] = sen;
   }
   return map;

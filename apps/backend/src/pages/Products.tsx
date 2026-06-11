@@ -66,6 +66,8 @@ import {
 } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
 import { SkeletonRows } from '../components/Skeleton';
+import { MoneyInput } from '../components/MoneyInput';
+import { todayMyt } from '../lib/dates';
 import { FabricsTable } from '../components/FabricsTable';
 import { SofaComboTab } from '../components/SofaComboTab';
 import { SpecialAddonsTab } from '../components/SpecialAddonsTab';
@@ -1359,7 +1361,7 @@ export const MaintenanceTab = ({
 
   const handleSave = async () => {
     if (!draft) return;
-    const effectiveFrom = window.prompt('Effective from (YYYY-MM-DD)?', new Date().toISOString().slice(0, 10));
+    const effectiveFrom = window.prompt('Effective from (YYYY-MM-DD)?', todayMyt());
     if (!effectiveFrom) return;
     // Maintenance-is-master cascade (Loo 2026-06-04: "what maintenance change
     // all will follow"). Detect in-place compartment code RENAMES (same row,
@@ -2828,14 +2830,13 @@ const MaintenanceList = ({
             <span className={styles.maintRowPrice}>
               <span className={styles.maintRowRmPrefix}>{singleCostColumn ? 'Cost' : 'RM'}</span>
               {editMode ? (
-                <input
-                  type="number"
-                  step="0.01"
-                  value={(opt.priceSen / 100).toFixed(2)}
-                  onChange={(e) => {
+                <MoneyInput
+                  bare
+                  valueSen={opt.priceSen}
+                  onCommit={(sen) => {
                     const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
                     const list = next[listKey] as PricedOption[];
-                    list[i]!.priceSen = Math.round(Number(e.target.value) * 100);
+                    list[i]!.priceSen = sen ?? 0;
                     onChange(next);
                   }}
                   style={{
@@ -2864,15 +2865,13 @@ const MaintenanceList = ({
             {!singleCostColumn && (editMode ? (
               <span className={styles.maintRowPrice} title="Estimated raw cost (Operation)">
                 <span className={styles.maintRowRmPrefix}>COST RM</span>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={((opt.costSen ?? 0) / 100).toFixed(2)}
-                  onChange={(e) => {
+                <MoneyInput
+                  bare
+                  valueSen={opt.costSen ?? 0}
+                  onCommit={(sen) => {
                     const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
                     const list = next[listKey] as PricedOption[];
-                    const sen = Math.round(Number(e.target.value) * 100);
-                    if (sen > 0) {
+                    if (sen != null && sen > 0) {
                       list[i]!.costSen = sen;
                     } else {
                       delete list[i]!.costSen;
@@ -3844,8 +3843,22 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
         // Money is read in RINGGIT (new export, e.g. 1535.00 → 153500 sen). A
         // legacy `_sen` column is still honoured as a fallback so any file from
         // an earlier export round-trips. Returns null when neither is present.
+        // Excel round-trips add thousands separators / "RM " prefixes — strip
+        // those, then REJECT anything still non-numeric: parseFloat("1,535.00")
+        // silently truncates at the comma → RM 1.00 written with no warning.
+        // A bad money cell skips the whole SKU (reported like tier errors)
+        // rather than ever writing a corrupted price.
+        let moneyError: string | null = null;
         const senOf = (rm: string | undefined, sen: string | undefined): number | null => {
-          if (has(rm)) { const n = parseFloat(rm as string); return Number.isFinite(n) ? Math.round(n * 100) : null; }
+          if (has(rm)) {
+            const cleaned = (rm as string).trim().replace(/^RM\s*/i, '').replace(/[,\s]/g, '');
+            if (!/^\d+(\.\d+)?$/.test(cleaned)) {
+              moneyError ??= `price "${(rm as string).trim()}" is not a number — use digits only, e.g. 1535.00`;
+              return null;
+            }
+            const n = Number(cleaned);
+            return Number.isFinite(n) ? Math.round(n * 100) : null;
+          }
           if (has(sen)) { const n = Number(sen); return Number.isFinite(n) ? Math.round(n) : null; }
           return null;
         };
@@ -3877,6 +3890,10 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
         }
         if (tierError) {
           tierErrors.push({ code, reason: `price tier "${tierError}" not recognized — use P1, P2, or P3` });
+          continue;
+        }
+        if (moneyError) {
+          tierErrors.push({ code, reason: moneyError });
           continue;
         }
         if (seat.length > 0) out.seatHeightPrices = seat;

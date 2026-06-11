@@ -18,6 +18,7 @@
 // prefill convenience (mirrors DeliveryOrderNew's ?fromSo).
 // ----------------------------------------------------------------------------
 
+import { todayMyt } from '../lib/dates';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowRightLeft, ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
@@ -81,7 +82,7 @@ export const DeliveryReturnNew = () => {
   const [buildingType, setBuildingType] = useState('');
   const [venue, setVenue] = useState('');
   const [venueId, setVenueId] = useState('');
-  const [returnDate, setReturnDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [returnDate, setReturnDate] = useState(() => todayMyt());
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
 

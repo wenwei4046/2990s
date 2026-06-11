@@ -41,6 +41,7 @@ import {
 } from '../lib/sofa-combos-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { useSupplierDetail } from '../lib/suppliers-queries';
+import { todayMyt } from '../lib/dates';
 
 // Seat-height columns mirror the live Maintenance pool (Products → Maintenance
 // → Sofa → Sizes; config key `sofaSizes`). This fallback only shows if that
@@ -64,7 +65,8 @@ const fmtDate = (iso: string): string => {
   return `${d}/${m}/${y}`;
 };
 
-const todayIso = (): string => new Date().toISOString().slice(0, 10);
+// Malaysia calendar date — the UTC version returned YESTERDAY before 08:00 MYT.
+const todayIso = (): string => todayMyt();
 
 const ALL_MODULE_CODES = SOFA_MODULES.map((m) => m.id).sort();
 

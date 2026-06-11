@@ -21,6 +21,7 @@
 // the AP liability for paying the supplier.
 // ----------------------------------------------------------------------------
 
+import { todayMyt } from '../lib/dates';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Save, Trash2, X, ChevronDown, ArrowRightLeft } from 'lucide-react';
@@ -136,7 +137,7 @@ export const PurchaseInvoiceNew = () => {
   }, [specialAddonsQ.data]);
 
   const [supplierInvoiceRef, setSupplierInvoiceRef] = useState<string>('');
-  const [invoiceDate, setInvoiceDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [invoiceDate, setInvoiceDate] = useState<string>(() => todayMyt());
   const [dueDate, setDueDate]         = useState<string>('');
   /* Commander 2026-05-29 — "Bill date 都是 standard 的，放 30 天之内，根据这个
      supplier 的设定": Due Date auto-defaults to Invoice Date + the supplier's
@@ -257,7 +258,9 @@ export const PurchaseInvoiceNew = () => {
     const d = new Date(`${invoiceDate}T00:00:00`);
     if (Number.isNaN(d.getTime())) return;
     d.setDate(d.getDate() + supplierTermDays);
-    setDueDate(d.toISOString().slice(0, 10));
+    // d is LOCAL midnight + terms — format in local time; toISOString (UTC)
+    // would land on the previous calendar day for any UTC+ timezone.
+    setDueDate(d.toLocaleDateString('en-CA'));
   }, [invoiceDate, supplierTermDays, dueTouched]);
 
   // Commander 2026-05-29 — make the MANUAL item picker supplier-binding-aware,

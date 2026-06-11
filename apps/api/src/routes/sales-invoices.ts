@@ -870,8 +870,12 @@ async function recomputePaid(sb: any, salesInvoiceId: string) {
 salesInvoices.post('/:id/payments', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
 
-  const { data: doc } = await sb.from('sales_invoices').select('id').eq('id', id).maybeSingle();
+  const { data: doc } = await sb.from('sales_invoices').select('id, status').eq('id', id).maybeSingle();
   if (!doc) return c.json({ error: 'sales_invoice_not_found' }, 404);
+  /* Audit 2026-06-11 H3 — same CANCELLED guard as the legacy PATCH /:id/payment:
+     the SI_CANCEL_REFUND credit was sized to paid_centi at cancel time, so the
+     ledger must not move under it. */
+  if ((doc as { status?: string }).status === 'CANCELLED') return c.json({ error: 'not_payable', message: 'SI is cancelled' }, 409);
 
   let body: unknown;
   try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
@@ -915,6 +919,11 @@ salesInvoices.delete('/:id/payments/:paymentId', async (c) => {
   const { data: row } = await sb.from('sales_invoice_payments').select('sales_invoice_id').eq('id', paymentId).maybeSingle();
   if (!row) return c.json({ error: 'not_found' }, 404);
   if ((row as { sales_invoice_id: string }).sales_invoice_id !== id) return c.json({ error: 'payment_doc_mismatch' }, 400);
+  /* Audit 2026-06-11 H3 — deleting a payment on a CANCELLED SI leaves the
+     cancel-time SI_CANCEL_REFUND credit unbacked by cash (reconcileSiOverpay
+     skips cancelled invoices, so nothing re-balances it). 409 like POST. */
+  const { data: inv } = await sb.from('sales_invoices').select('status').eq('id', id).maybeSingle();
+  if ((inv as { status?: string } | null)?.status === 'CANCELLED') return c.json({ error: 'not_payable', message: 'SI is cancelled' }, 409);
   const { error } = await sb.from('sales_invoice_payments').delete().eq('id', paymentId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputePaid(sb, id);

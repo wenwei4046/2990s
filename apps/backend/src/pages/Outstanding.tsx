@@ -9,6 +9,7 @@
 // shows counts + value per module from the /outstanding/summary endpoint.
 // ----------------------------------------------------------------------------
 
+import { todayMyt } from '../lib/dates';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ClipboardList, FileText, Receipt, Truck, Undo2, ScrollText, PackagePlus } from 'lucide-react';
@@ -34,8 +35,8 @@ const fmtRm = (centi: number): string =>
   `RM ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export const Outstanding = () => {
-  const today = new Date().toISOString().slice(0, 10);
-  const yearAgo = new Date(Date.now() - 365 * 86400 * 1000).toISOString().slice(0, 10);
+  const today = todayMyt();
+  const yearAgo = todayMyt(-365);
 
   const [mode, setMode] = useState<OutstandingFilterMode>('outstanding');
   const [from, setFrom] = useState(yearAgo);

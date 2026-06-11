@@ -18,7 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import type { SofaComboRow } from '@2990s/shared';
-import { recomputeFromSnapshot, type ProductRowLite } from './mfg-pricing-recompute';
+import { recomputeFromSnapshot, type ProductRowLite, type SofaModuleCostRowLite } from './mfg-pricing-recompute';
 
 const mattress = (sell: number | null): ProductRowLite => ({
   code:               'MAT-Q',
@@ -533,5 +533,96 @@ describe('recomputeFromSnapshot — declared extraAddonAmountRM (spec D1)', () =
       extraProduct, null, null,
     );
     expect(withExtra.unit_cost_sen).toBe(without.unit_cost_sen);
+  });
+});
+
+/* ── BUILD COST = Σ module costs (audit 2026-06-11 C2) ────────────────────────
+   A multi-module configurator build arrives as ONE line whose itemCode is the
+   FIRST module's SKU. The old cost path priced the whole build at that single
+   SKU's flat cost (and never resolved seat-height cost rows because POS lines
+   carry `depth`, not `seatHeight`). With the Model's module cost rows passed
+   (12th arg), the build cost = Σ per-module costs at the build's seat size +
+   fabric tier. Selling path untouched. */
+describe('recomputeFromSnapshot — multi-module build COST (audit C2)', () => {
+  const cells = [
+    { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
+    { id: 'b', moduleId: 'L(RHF)',  x: 158, y: 0, rot: 0 },
+  ];
+  const variants = { cells, depth: '28' } as unknown as null;
+  // The submitted itemCode = FIRST module's SKU. Its flat cost (RM1000) alone
+  // was the old (buggy) whole-build cost.
+  const product: ProductRowLite = {
+    code: 'BOOQIT-2A(LHF)', category: 'SOFA', base_price_sen: 100000, price1_sen: null,
+    cost_price_sen: null, seat_height_prices: null, base_model: 'Booqit', sell_price_sen: null,
+  };
+  const costRows: SofaModuleCostRowLite[] = [
+    { code: 'BOOQIT-2A(LHF)', base_price_sen: 100000, price1_sen: null, cost_price_sen: null,
+      seat_height_prices: [{ height: '28', tier: 'PRICE_2', priceSen: 110000 }] },
+    { code: 'BOOQIT-L(RHF)',  base_price_sen: 80000,  price1_sen: null, cost_price_sen: null,
+      seat_height_prices: [{ height: '28', tier: 'PRICE_2', priceSen: 90000 }] },
+  ];
+
+  it('build cost = Σ per-module seat-height costs at the POS depth (not one SKU flat)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2A(LHF)', itemGroup: 'sofa', qty: 1, unitPriceCenti: 500000, variants },
+      product, null, null, [], null, null, null, null, null, null, costRows,
+    );
+    expect(r.unit_cost_sen).toBe(200000); // 110000 (2A@28) + 90000 (L@28)
+    expect(r.line_cost_sen).toBe(200000);
+  });
+
+  it('line_cost_sen multiplies by qty', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2A(LHF)', itemGroup: 'sofa', qty: 2, unitPriceCenti: 500000, variants },
+      product, null, null, [], null, null, null, null, null, null, costRows,
+    );
+    expect(r.unit_cost_sen).toBe(200000);
+    expect(r.line_cost_sen).toBe(400000);
+  });
+
+  it('module without a seat row falls to its flat base cost', () => {
+    const flatRows: SofaModuleCostRowLite[] = [
+      { code: 'BOOQIT-2A(LHF)', base_price_sen: 100000, price1_sen: null, cost_price_sen: null, seat_height_prices: null },
+      { code: 'BOOQIT-L(RHF)',  base_price_sen: 80000,  price1_sen: null, cost_price_sen: null, seat_height_prices: null },
+    ];
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2A(LHF)', itemGroup: 'sofa', qty: 1, unitPriceCenti: 500000, variants },
+      product, null, null, [], null, null, null, null, null, null, flatRows,
+    );
+    expect(r.unit_cost_sen).toBe(180000); // 100000 + 80000 flat
+  });
+
+  it('no cost rows passed (legacy caller) → keeps the single-SKU cost (back-compat)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2A(LHF)', itemGroup: 'sofa', qty: 1, unitPriceCenti: 500000, variants },
+      product, null, null, [], null,
+    );
+    expect(r.unit_cost_sen).toBe(100000); // old behavior preserved when rows unavailable
+  });
+
+  it('none of the build modules is costed → falls back to the single-SKU cost', () => {
+    const unrelatedRows: SofaModuleCostRowLite[] = [
+      { code: 'BOOQIT-1NA', base_price_sen: 60000, price1_sen: null, cost_price_sen: null, seat_height_prices: null },
+    ];
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2A(LHF)', itemGroup: 'sofa', qty: 1, unitPriceCenti: 500000, variants },
+      product, null, null, [], null, null, null, null, null, null, unrelatedRows,
+    );
+    expect(r.unit_cost_sen).toBe(100000);
+  });
+
+  it('honours `depth` as the seat-size source for a single-SKU sofa cost too', () => {
+    // No cells (manual module line). Previously seatSize read only seatHeight,
+    // so the seat-height cost row never resolved for a POS `depth` line.
+    const seatProduct: ProductRowLite = {
+      ...product,
+      seat_height_prices: [{ height: '28', tier: 'PRICE_2', priceSen: 123000 }],
+    };
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2A(LHF)', itemGroup: 'sofa', qty: 1, unitPriceCenti: 200000,
+        variants: { depth: '28' } as unknown as null },
+      seatProduct, null, null, [], null,
+    );
+    expect(r.unit_cost_sen).toBe(123000); // seat row @28 via depth (was 100000 flat)
   });
 });

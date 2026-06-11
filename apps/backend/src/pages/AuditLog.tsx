@@ -1,3 +1,4 @@
+import { todayMyt } from '../lib/dates';
 import { useMemo, useState } from 'react';
 import {
   Receipt, Download, FileSpreadsheet, ChevronsDown, ChevronsUp,
@@ -115,7 +116,7 @@ export const AuditLog = () => {
 
   const rowsToExport = () =>
     selected.size > 0 ? rows.filter((r) => selected.has(r.id)) : rows;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayMyt();
 
   const onExportXlsx = async () => {
     setExportOpen(false);
