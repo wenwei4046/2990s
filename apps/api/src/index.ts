@@ -157,13 +157,15 @@ app.onError((err, c) => {
 
 // Weekly scan-SO rule distillation: Sunday 20:00 UTC = Monday 04:00 MYT.
 // Must match the second entry in wrangler.toml [triggers] crons exactly —
-// event.cron is the literal trigger string.
-const WEEKLY_DISTILL_CRON = '0 20 * * 0';
+// event.cron is the literal trigger string. Day-of-week must be a NAME (or
+// 1-7): Cloudflare rejects "* * 0" as an invalid cron and the whole
+// `wrangler deploy` fails (hit 2026-06-12).
+const WEEKLY_DISTILL_CRON = '0 20 * * SUN';
 
 // CF Workers entrypoint with both fetch + scheduled handlers.
 // scheduled() runs on the cron triggers in wrangler.toml:
 //   "*/10 * * * *"  → slip-orphan reaper (every 10 min)
-//   "0 20 * * 0"    → weekly per-salesperson scan-SO rule distill
+//   "0 20 * * SUN"  → weekly per-salesperson scan-SO rule distill
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
