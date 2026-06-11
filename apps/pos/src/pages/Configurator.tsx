@@ -218,6 +218,29 @@ const cellsFromComboModules = (modules: readonly string[][], depth: Depth): Cell
   return cells;
 };
 
+/* Left-to-right Quick-Pick labels (Loo 2026-06-12). A stored pick's slot
+   order (and any label minted from it at save time) is the save-time canvas
+   order — an L-corner reads "CNR + 1B(LHF) + 2A(RHF)" when the walk order is
+   "1B(LHF) + CNR + 2A(RHF)". Lay the modules out exactly like the preview
+   does and walk them. OR-set slots (Backend combo curation) can't be
+   expressed as cells → null (caller keeps the stored label / slot join). */
+const qpWalkLabel = (modules: readonly string[][], depth: Depth): string | null => {
+  if (modules.some((slot) => slot.length > 1)) return null;
+  const cells = cellsFromComboModules(modules, depth);
+  if (cells.length === 0) return null;
+  return orderSofaCellsLeftToRight(cells, depth).map((c) => c.moduleId).join(' + ');
+};
+
+/* A curated human name ("Family corner") survives; a label that is just the
+   pick's module codes joined (the personal-pick default minted at save) is a
+   SEQUENCE and must re-read in walk order. */
+const qpLabelIsCodeJoin = (label: string | null | undefined, modules: readonly string[][]): boolean => {
+  if (!label || label.trim() === '') return true;
+  const toks = label.split('+').map((s) => s.trim()).filter(Boolean).sort();
+  const mods = modules.map((s) => s[0] ?? '').filter(Boolean).sort();
+  return toks.length === mods.length && toks.every((t, i) => t === mods[i]);
+};
+
 const quickPresetDims = (bundleId: string, depth: Depth): { w: number; d: number } => {
   const m = QUICK_PRESET_META[bundleId];
   if (!m) return { w: 0, d: 0 };
@@ -1328,25 +1351,16 @@ export const Configurator = () => {
   const effectiveQPModules = pickedQP
     ? (qpMirror ? mirrorModules(pickedQP.modules) : pickedQP.modules)
     : null;
-  // A mirrored pick can't reuse its stored label (it still names the un-flipped
-  // hands), so rebuild the label from the flipped modules.
-  // Loo 2026-06-12: the topbar label (and the cart summary minted from it)
-  // lists the modules LEFT-TO-RIGHT off the laid-out cells — a stored pick's
-  // slot order (and any label minted from it at save time) renders an
-  // L-corner as "CNR + 1B(LHF) + 2A(RHF)" when the walk reads
-  // "1B(LHF) + CNR + 2A(RHF)". OR-set slots (Backend combo curation) can't
-  // be expressed as cells, so they keep the stored label / slot join.
+  // Topbar label + the cart summary minted from it (Loo 2026-06-12): a
+  // curated human name survives; a code-sequence label re-reads in walk order
+  // (qpWalkLabel). A mirrored pick can't reuse its stored label either way
+  // (it still names the un-flipped hands), so it always re-derives.
   const qpDisplayLabel = (() => {
     if (!pickedQP || !effectiveQPModules) return '';
-    if (effectiveQPModules.every((slot) => slot.length <= 1)) {
-      const cells = cellsFromComboModules(effectiveQPModules, activeDepth);
-      if (cells.length > 0) {
-        return orderSofaCellsLeftToRight(cells, activeDepth)
-          .map((c) => c.moduleId)
-          .join(' + ');
-      }
+    if (qpMirror || qpLabelIsCodeJoin(pickedQP.label, pickedQP.modules)) {
+      return qpWalkLabel(effectiveQPModules, activeDepth) ?? buildComboLabel(effectiveQPModules);
     }
-    return qpMirror ? buildComboLabel(effectiveQPModules) : (pickedQP.label || buildComboLabel(pickedQP.modules));
+    return pickedQP.label!;
   })();
   const qpPickPrice = effectiveQPModules ? (priceForLayout(effectiveQPModules) ?? 0) : 0;
 
@@ -2591,7 +2605,12 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
             <div className={styles.qpGrid}>
               {items.map((item) => {
                 const priceRm = priceForLayout?.(item.modules) ?? null;
-                const label = item.label || buildComboLabel(item.modules);
+                /* Same label rule as the topbar: curated names survive,
+                   code-join labels re-read in walk order — otherwise the card
+                   under the topbar would show the rejected slot order. */
+                const label = qpLabelIsCodeJoin(item.label, item.modules)
+                  ? (qpWalkLabel(item.modules, depth) ?? buildComboLabel(item.modules))
+                  : item.label!;
                 const isPicked = item.id === pickedQuickPickId;
                 const canDelete = item.source === 'personal' || canDeleteGlobal;
                 return (
@@ -2600,7 +2619,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
                     type="button"
                     className={`${styles.qpCard} ${isPicked ? styles.qpCardPicked : ''}`}
                     onClick={() => onQuickPickSelect?.(item)}
-                    title={item.modules.map((s) => s[0] ?? '').join(' + ')}
+                    title={qpWalkLabel(item.modules, depth) ?? item.modules.map((s) => s[0] ?? '').join(' + ')}
                   >
                     <div className={styles.qpCardArt}>
                       <SofaCellsPreview cells={cellsFromComboModules(item.modules, depth)} depth={depth} />

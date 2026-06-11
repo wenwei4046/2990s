@@ -34,7 +34,7 @@ import { splitSofaBuildIntoModuleLines } from '@2990s/shared/so-sofa-split';
    (sofa/mattress/bedframe) first, accessories after, services last; within a
    rank the cart order is preserved. Shared with the Backend PDF + POS print
    so every surface ranks identically. */
-import { sortSoLinesByGroupRank } from '@2990s/shared/so-line-display';
+import { orderSofaModuleRowsWithinBuilds, sortSoLinesByGroupRank } from '@2990s/shared/so-line-display';
 /* Task 5 — mint one-shot SKUs at SO create when a line carries an extra add-on
    charge (gated by so_settings.pos_remark_extra_auto_sku). Pure code-resolution
    + row-build lives in the lib; this route batches the DB collision check. */
@@ -1198,7 +1198,19 @@ mfgSalesOrders.get('/:docNo', async (c) => {
      (which DO took how much, and the live balance) without a second round-trip.
      remaining/delivered come from the authoritative soDeliverableRemaining
      engine; the DO-number breakdown rides alongside from soLineDeliveries. */
-  const itemRows = (i.data ?? []) as unknown as Array<Record<string, unknown> & { id: string; qty?: number | null }>;
+  /* Rule-order the rows at READ (Loo 2026-06-12). The bulk insert gives every
+     line of an SO the same created_at, so the persisted order is NOT
+     recoverable from the timestamp once routine updates (stock_status flips,
+     recomputeTotals' combo spread) physically relocate rows. Rank
+     (mains → accessories → services) + each build's left-to-right walk are
+     re-derived from the rows themselves; within-rank residual order keeps the
+     read-back order (usually the cart order). */
+  const itemRows = orderSofaModuleRowsWithinBuilds(
+    sortSoLinesByGroupRank(
+      (i.data ?? []) as unknown as Array<Record<string, unknown> & { id: string; item_code: string; qty?: number | null }>,
+      (r) => r.item_group as string | null | undefined,
+    ),
+  );
   /* Coverage comes from the SAME allocation engine the MRP page uses (Wei Siang
      2026-05-31): stock first → earliest-ETA outstanding PO → shortage. A bare
      FK-only PO lookup missed stock-replenishment POs (raised without a per-line

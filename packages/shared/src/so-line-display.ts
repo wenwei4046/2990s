@@ -135,8 +135,13 @@ const orderSofaGroupLines = <T extends RawSoDisplayLine>(group: T[]): T[] => {
     if (x === null || y === null || !moduleId) return byCellIndex;
     wrapped.push({ row: l, moduleId, x, y, rot });
   }
+  // Coerce like the create-side split (String(depth)) — variants.depth is
+  // string today but the API accepts numeric depth in raw payloads.
   const d = readVariants(byCellIndex[0]!)?.depth;
-  const depth = typeof d === 'string' && d.trim() !== '' ? d : '24';
+  const depth =
+    typeof d === 'string' && d.trim() !== '' ? d
+    : typeof d === 'number' && Number.isFinite(d) ? String(d)
+    : '24';
   return orderSofaCellsLeftToRight(wrapped, depth)
     .map((w) => (w as (typeof wrapped)[number]).row);
 };

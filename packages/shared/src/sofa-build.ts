@@ -1096,12 +1096,21 @@ export const orderSofaCellsLeftToRight = (cells: Cell[], depth: Depth): Cell[] =
     const [a, b] = ends as [number, number];
     const handOf = (i: number): 'LHF' | 'RHF' | null =>
       parseCompartmentStructure(group[i]!.moduleId)?.orientation ?? null;
+    const handA = handOf(a);
+    const handB = handOf(b);
     const X_TIE = 1; // cm — same column ⇒ decide by code hand, then height
     const dx = centreX(group[a]!) - centreX(group[b]!);
     let start: number;
-    if (Math.abs(dx) > X_TIE) start = dx < 0 ? a : b;
-    else if (handOf(a) === 'LHF' && handOf(b) !== 'LHF') start = a;
-    else if (handOf(b) === 'LHF' && handOf(a) !== 'LHF') start = b;
+    // Hands are customer-facing truth (supplier convention): the LHF end IS
+    // the customer's left no matter how the build is rotated on the canvas —
+    // a north-facing (rot-180) build's canvas-left is the customer's RIGHT,
+    // where canvas x would mislead. Opposite hands at the two ends decide
+    // outright; geometry only arbitrates when the hands don't.
+    if (handA === 'LHF' && handB === 'RHF') start = a;
+    else if (handB === 'LHF' && handA === 'RHF') start = b;
+    else if (Math.abs(dx) > X_TIE) start = dx < 0 ? a : b;
+    else if (handA === 'LHF' && handB !== 'LHF') start = a;
+    else if (handB === 'LHF' && handA !== 'LHF') start = b;
     else start = centreY(group[a]!) <= centreY(group[b]!) ? a : b;
     const out: Cell[] = [];
     const seen = new Set<number>();

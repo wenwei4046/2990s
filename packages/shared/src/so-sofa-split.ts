@@ -123,7 +123,9 @@ export function splitSofaBuildIntoModuleLines(args: {
     moduleId: src.moduleId,
     x: src.x ?? Number.NaN,
     y: src.y ?? Number.NaN,
-    rot: (src.rot ?? 0) as Rot,
+    // Same normalization as the display fold so both walk entry points agree
+    // on degenerate stored rot (-90, 450, …).
+    rot: ((((src.rot ?? 0) % 360) + 360) % 360) as Rot,
   }));
   const cells = orderSofaCellsLeftToRight(wrapped, args.depth ?? '24')
     .map((w) => (w as (typeof wrapped)[number]).src);

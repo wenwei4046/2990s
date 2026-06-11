@@ -233,29 +233,42 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
              same rank order as the customer print + Backend PDF. */
           sortSoLinesByGroupRank(r.items ?? [], (l) => l.item_group),
         ).map((g) => {
-          /* TBC fill-in (Loo 2026-06-11) — the lead line is the edit target.
-             SERVICE lines (fees / add-on SKUs) stay read-only; an older API
-             without line ids hides the editor. PWP reward lines ARE editable
-             (Loo 2026-06-12 — their TBC picks must be completable too; the
-             server's delta pricing never touches the granted base) but they
-             can't swap products (voucher binding). */
+          /* TBC fill-in (Loo 2026-06-11) — SERVICE lines (fees / add-on SKUs)
+             stay read-only; an older API without line ids hides the editor.
+             PWP reward lines ARE editable (Loo 2026-06-12 — their TBC picks
+             must be completable too; the server's delta pricing never touches
+             the granted base) but they can't swap products (voucher binding). */
           const lead = g.lines[0]!;
-          const leadVariants = (lead.variants ?? {}) as Record<string, unknown>;
+          /* Edit target = the build's CARRIER row (lowest cellIndex — where
+             the create path stamped discount + breakdown columns), NOT the
+             display-walk lead: on SOs booked before 2026-06-12 they differ,
+             and tbc-update rewrites the breakdown columns on whichever line
+             it is pointed at — pointing it elsewhere would leave them
+             populated on TWO rows of one build. */
+          const cellIndexOf = (l: (typeof g.lines)[number]): number => {
+            const v = l.variants as Record<string, unknown> | null;
+            const idx = v && typeof v === 'object' ? (v as { cellIndex?: unknown }).cellIndex : undefined;
+            return typeof idx === 'number' && Number.isFinite(idx) ? idx : Number.MAX_SAFE_INTEGER;
+          };
+          const target = g.kind === 'sofa-build'
+            ? [...g.lines].sort((x, y) => cellIndexOf(x) - cellIndexOf(y))[0]!
+            : lead;
+          const targetVariants = (target.variants ?? {}) as Record<string, unknown>;
           const editableLine =
-            lead.id != null &&
-            String(lead.item_group ?? '') !== 'service' &&
-            !String(lead.item_code).startsWith('SVC-');
+            target.id != null &&
+            String(target.item_group ?? '') !== 'service' &&
+            !String(target.item_code).startsWith('SVC-');
           const edit: TbcEditTarget | null = editableLine
             ? {
-                itemId: lead.id!,
-                itemCode: lead.item_code,
-                itemGroup: String(lead.item_group ?? 'others'),
-                qty: lead.qty ?? 1,
-                unitPriceCenti: lead.unit_price_centi ?? 0,
-                discountCenti: lead.discount_centi ?? 0,
-                variants: leadVariants,
+                itemId: target.id!,
+                itemCode: target.item_code,
+                itemGroup: String(target.item_group ?? 'others'),
+                qty: target.qty ?? 1,
+                unitPriceCenti: target.unit_price_centi ?? 0,
+                discountCenti: target.discount_centi ?? 0,
+                variants: targetVariants,
                 isSofaBuild: g.kind === 'sofa-build',
-                isPwp: Boolean(leadVariants.pwp),
+                isPwp: Boolean(targetVariants.pwp),
               }
             : null;
           return g.kind === 'sofa-build' && g.display

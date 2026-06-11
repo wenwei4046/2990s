@@ -14,6 +14,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { normalizePhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
+import { orderSofaModuleRowsWithinBuilds, sortSoLinesByGroupRank } from '@2990s/shared/so-line-display';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
@@ -758,9 +759,10 @@ type DeliverableLine = {
   delivered: number;
   returned: number;
   remaining: number;
-  /** Position of this line within ITS SO (created_at order) — DO lines copy
-   *  the SO's listing order instead of shuffling by uuid (Loo 2026-06-12:
-   *  mains first + a sofa's modules left-to-right must survive onto the DO). */
+  /** Position of this line within ITS SO listing order (re-derived at read:
+   *  rank mains→accessories→services + each build's left-to-right walk) — DO
+   *  lines copy the SO's listing order instead of shuffling by uuid (Loo
+   *  2026-06-12: mains first + sofa modules left-to-right survive onto the DO). */
   lineSeq: number;
 };
 
@@ -771,8 +773,11 @@ export async function soDeliverableRemaining(
   const out = new Map<string, DeliverableLine>();
   if (soDocNos.length === 0) return out;
 
-  // 1. Load the non-cancelled SO lines of the requested SOs, in each SO's own
-  //    listing order (created_at — the order the create path persisted).
+  // 1. Load the non-cancelled SO lines of the requested SOs and re-derive
+  //    each SO's listing order from the rows themselves (Loo 2026-06-12:
+  //    mains → accessories → services, sofa modules left-to-right). The bulk
+  //    insert gives every line the same created_at, so the timestamp can't
+  //    recover the persisted order once routine updates relocate rows.
   const { data: soItems } = await sb
     .from('mfg_sales_order_items')
     .select(
@@ -782,8 +787,21 @@ export async function soDeliverableRemaining(
     .in('doc_no', soDocNos)
     .eq('cancelled', false)
     .order('created_at');
-  const lines = (soItems ?? []) as Array<Record<string, unknown> & { id: string; doc_no: string; qty: number }>;
-  if (lines.length === 0) return out;
+  const rawLines = (soItems ?? []) as Array<Record<string, unknown> & { id: string; doc_no: string; item_code: string; qty: number }>;
+  if (rawLines.length === 0) return out;
+  /* buildKey values are per-SO ('build-1', …) — the walk MUST run per doc;
+     keyed across docs it would mix two SOs' builds into one group. */
+  const orderByDoc = new Map<string, typeof rawLines>();
+  for (const l of rawLines) {
+    const arr = orderByDoc.get(l.doc_no) ?? [];
+    arr.push(l);
+    orderByDoc.set(l.doc_no, arr);
+  }
+  const lines = [...orderByDoc.values()].flatMap((docLines) =>
+    orderSofaModuleRowsWithinBuilds(
+      sortSoLinesByGroupRank(docLines, (r) => r.item_group as string | null | undefined),
+    ),
+  );
   const soItemIds = lines.map((l) => l.id);
 
   // 2. Σ delivered — DO lines linked by so_item_id whose parent DO is NOT

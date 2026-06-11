@@ -1278,6 +1278,17 @@ describe('orderSofaCellsLeftToRight', () => {
       .toEqual(['1B(LHF)', 'CNR', '2NA', 'CNR', '1B(RHF)']);
   });
 
+  it('north-facing (rot 180) build still reads from the customer LHF end', () => {
+    // Whole build rotated to face north: canvas-left is the customer's RIGHT,
+    // so canvas x must NOT pick the start — the opposite end hands decide.
+    const north: Cell[] = [
+      { moduleId: '2A(RHF)', x: 0,   y: 0, rot: 180 },
+      { moduleId: '1A(LHF)', x: 158, y: 0, rot: 180 },
+    ];
+    expect(orderSofaCellsLeftToRight(north, '24').map((c) => c.moduleId))
+      .toEqual(['1A(LHF)', '2A(RHF)']);
+  });
+
   it('orders disconnected pieces (free-standing stool) group-by-position', () => {
     const cells: Cell[] = [
       { moduleId: 'STOOL', x: 250, y: 0, rot: 0 },
