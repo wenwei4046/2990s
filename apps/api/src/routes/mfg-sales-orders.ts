@@ -4914,8 +4914,33 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
       .select('id, item_code, total_centi, variants, photo_urls, line_no').eq('id', itemId).maybeSingle();
     if (solo) oldLines = [solo as (typeof oldLines)[number]];
   }
+  /* PWP REWARD build (Loo 2026-06-12) — exchangeable: the new build
+     re-matches the voucher's reward combos. Matched -> priced at that
+     combo's PWP price and the voucher rides on (redeemed_item_code
+     re-points). Unmatched -> the build prices as a normal sale and the
+     voucher RELEASES back to AVAILABLE: the customer earned it off a
+     trigger that still stands, so deleting it would strip a paid-for
+     entitlement (the trigger-side path deletes when the JUSTIFICATION
+     dies instead). */
+  let rewardCtx: { code: string; comboIds: string[]; type: string } | null = null;
   if (oldLines.some((l) => ((l.variants ?? {}) as Record<string, unknown>).pwp)) {
-    return c.json({ error: 'pwp_line_locked', reason: 'A PWP reward sofa is exchanged by the coordinator (the reward is combo-bound).' }, 409);
+    const codeStr = String(
+      oldLines.map((l) => ((l.variants ?? {}) as Record<string, unknown>).pwpCode).find(Boolean) ?? '',
+    ).trim();
+    if (!codeStr) {
+      return c.json({ error: 'pwp_line_locked', reason: 'This PWP reward carries no voucher code — ask the coordinator to exchange it.' }, 409);
+    }
+    const { data: codeRow } = await sb.from('pwp_codes')
+      .select('code, reward_combo_ids, type, redeemed_doc_no')
+      .eq('code', codeStr).maybeSingle();
+    const ct = codeRow as { code: string; reward_combo_ids: string[] | null; type: string | null; redeemed_doc_no: string | null } | null;
+    if (!ct) {
+      return c.json({ error: 'pwp_line_locked', reason: 'This PWP voucher could not be found — ask the coordinator to exchange it.' }, 409);
+    }
+    if (ct.redeemed_doc_no && ct.redeemed_doc_no !== docNo) {
+      return c.json({ error: 'pwp_line_locked', reason: 'This voucher is redeemed on a different order — ask the coordinator to exchange it.' }, 409);
+    }
+    rewardCtx = { code: ct.code, comboIds: ct.reward_combo_ids ?? [], type: String(ct.type ?? 'pwp') };
   }
 
   /* New build validation — must be a real configurator build on a SOFA SKU. */
@@ -4955,12 +4980,33 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
   ]);
   const qty = Math.max(1, Math.floor(Number(item.qty ?? 1)));
   const clientUnit = Math.max(0, Math.round(Number(item.unitPriceCenti ?? 0)));
+  /* Does the NEW build match one of the voucher's reward combos? Same
+     matcher the engine + POS use. Matched -> the recompute charges those
+     combos' PWP prices (pwpSofaComboIds); unmatched -> normal selling. */
+  const rewardComboMatch = rewardCtx != null && (() => {
+    const comboByIdR = new Map((combos ?? []).map((cb) => [cb.id, cb]));
+    const mods = (newCells as Array<{ moduleId?: unknown }>)
+      .map((cl) => String(cl?.moduleId ?? '').trim()).filter(Boolean);
+    return rewardCtx.comboIds.some((id) => {
+      const cb = comboByIdR.get(id);
+      if (!cb) return false;
+      if (cb.baseModel && cb.baseModel !== (prodLite.base_model ?? '')) return false;
+      return matchComboSubset(mods, cb.modules) != null;
+    });
+  })();
   const recomputed = recomputeFromSnapshot(
     { itemCode: newCode, itemGroup: 'sofa', qty, unitPriceCenti: clientUnit, variants: newVariants as MfgItemForRecompute['variants'] },
-    prodLite, fabLite, cfg, combos, modulePrices, sellingTiers, fabricAddonCfg, null, null, specialDefs, moduleCostRows,
+    prodLite, fabLite, cfg, combos, modulePrices, sellingTiers, fabricAddonCfg,
+    null,
+    rewardComboMatch && rewardCtx ? rewardCtx.comboIds : null,
+    specialDefs, moduleCostRows,
   );
   const posTablet = await isPosTabletCaller(sb, user.id);
-  if (posTablet && recomputed.drift) {
+  /* Reward swaps skip the drift COMPARISON (the POS configurator prices the
+     build at normal selling — it has no voucher awareness); the persisted
+     figure is the server's authoritative PWP price either way, so a client
+     can still never author the money. */
+  if (posTablet && recomputed.drift && !rewardCtx) {
     return c.json({
       error: 'pricing_drift',
       reason: 'Client unitPriceCenti differs >0.5% from server compute.',
@@ -4984,6 +5030,14 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
       previous: oldBuildTotal,
       next: newBuildTotal,
     }, 422);
+  }
+
+  /* A still-matched reward keeps its voucher markers — they ride every
+     split line like at SO create. An unmatched one stays stripped (normal
+     sale; the voucher releases below). */
+  if (rewardCtx && rewardComboMatch) {
+    newVariants.pwp = true;
+    newVariants.pwpCode = rewardCtx.code;
   }
 
   /* Split into per-module lines (P3) — same decomposition as SO create. */
@@ -5101,7 +5155,9 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
         }, 409);
       }
     }
-    pwpNewlyTriggered = pwpRules.filter(ruleTriggeredByNewBuild);
+    /* Promo one-way (PWP-7615UAWC): a build that is still a REWARD must
+       never mint trigger vouchers of its own — free funding free, forever. */
+    pwpNewlyTriggered = (rewardCtx && rewardComboMatch) ? [] : pwpRules.filter(ruleTriggeredByNewBuild);
   }
   const baseRow = {
     doc_no: docNo,
@@ -5211,6 +5267,21 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
 
   /* ── PWP mutations (classified above, applied after the build landed) ── */
   const pwpMintedCodes: string[] = [];
+  let pwpVoucherReleased: string | null = null;
+  if (rewardCtx) {
+    if (rewardComboMatch) {
+      const { error } = await sb.from('pwp_codes')
+        .update({ redeemed_item_code: newLeadCode, updated_at: new Date().toISOString() })
+        .eq('code', rewardCtx.code);
+      if (error) console.error('[tbc-swap-sofa] reward code re-point failed:', error.message); // eslint-disable-line no-console
+    } else {
+      const { error } = await sb.from('pwp_codes')
+        .update({ status: 'AVAILABLE', redeemed_doc_no: null, redeemed_item_code: null, updated_at: new Date().toISOString() })
+        .eq('code', rewardCtx.code);
+      if (error) console.error('[tbc-swap-sofa] reward code release failed:', error.message); // eslint-disable-line no-console
+      else pwpVoucherReleased = rewardCtx.code;
+    }
+  }
   {
     // 1. Surviving vouchers re-point at the new lead SKU.
     if (pwpKeepCodes.length > 0) {
@@ -5317,6 +5388,10 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
         ? [{ field: 'pwpCodesDeleted', to: pwpDeleteCodes.join(', ') } satisfies FieldChange] : []),
       ...(pwpMintedCodes.length > 0
         ? [{ field: 'pwpCodesMinted', to: pwpMintedCodes.join(', ') } satisfies FieldChange] : []),
+      ...(rewardCtx && rewardComboMatch
+        ? [{ field: 'pwpRewardKept', to: rewardCtx.code } satisfies FieldChange] : []),
+      ...(pwpVoucherReleased
+        ? [{ field: 'pwpVoucherReleased', to: pwpVoucherReleased } satisfies FieldChange] : []),
     ],
   });
   try { await recomputeSoStockAllocation(sb); }
@@ -5331,6 +5406,8 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
       reverted: pwpRevertCodes.length,
       deleted: pwpDeleteCodes.length,
       minted: pwpMintedCodes,
+      rewardKept: rewardCtx && rewardComboMatch ? rewardCtx.code : null,
+      rewardReleased: pwpVoucherReleased,
     },
   });
 });
