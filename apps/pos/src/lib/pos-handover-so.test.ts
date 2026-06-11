@@ -274,6 +274,30 @@ describe('cartLineToSoItem', () => {
     expect(item.variants).not.toHaveProperty('fabricCode');
   });
 
+  // Everything-TBC (Loo 2026-06-11): gap / leg / divan may also be confirmed
+  // later. A bedframe line carrying only its size serializes with just sizeId
+  // (+ summary) - every dimension axis stays open for so-variant-rule to gate.
+  it('bedframe with all dimensions TBC serializes with only sizeId', () => {
+    const line: CartLine = {
+      key: 'cfg-bf-all-tbc',
+      qty: 1,
+      config: {
+        kind: 'bedframe',
+        productId: 'prod-bf',
+        productName: 'Rumah Bedframe',
+        sizeId: 'size-queen',
+        total: 3990,
+        summary: 'Queen',
+      },
+    };
+    const item = cartLinesToSoItems([line], [])[0]!;
+    expect(item.itemGroup).toBe('bedframe');
+    expect(item.variants).toMatchObject({ sizeId: 'size-queen' });
+    for (const k of ['legHeight', 'legHeightLabel', 'gap', 'divanHeight', 'colourId', 'fabricCode']) {
+      expect(item.variants).not.toHaveProperty(k);
+    }
+  });
+
   it('maps a size-priced mattress line', () => {
     const matt = product({
       id: 'prod-matt',

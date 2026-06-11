@@ -635,7 +635,7 @@ export const Configurator = () => {
       const cRow = bedframeColours.data.find((c) => c.id === cfg.colourId);
       const optById = new Map(bedframeOptions.data.map((o) => [o.id, o]));
       const gap = cfg.gapId ? optById.get(cfg.gapId) : undefined;
-      const leg = optById.get(cfg.legHeightId);
+      const leg = cfg.legHeightId ? optById.get(cfg.legHeightId) : undefined;
       const divan = cfg.divanHeightId ? optById.get(cfg.divanHeightId) : undefined;
       setPickedSizeId(cfg.sizeId);
       setBfSel({
@@ -646,7 +646,7 @@ export const Configurator = () => {
         gapId: cfg.gapId ?? null,
         gapLabel: gap?.value ?? cfg.gapLabel ?? null,
         gapSurcharge: gap?.surcharge ?? 0,
-        legId: cfg.legHeightId,
+        legId: cfg.legHeightId ?? null,
         legLabel: leg?.value ?? cfg.legHeightLabel ?? null,
         legSurcharge: leg?.surcharge ?? 0,
         divanId: cfg.divanHeightId ?? null,
@@ -1197,18 +1197,18 @@ export const Configurator = () => {
       </label>
     </RailSection>
   ) : null;
-  // Required: size (active+priced) + leg always; gap/divan/total also for
-  // non-DIVAN. Specials are optional. Fabric + colour are OPTIONAL at
-  // Add-to-Cart (Loo 2026-06-11, same as sofa) — the SO-side so-variant-rule
-  // still demands fabricCode before a Processing date / Proceed. Mirrors the
-  // server recompute's required-ness so a gated Add-to-Cart never 400s.
+  // Required: size (active+priced) only — it picks the SKU itself. Fabric +
+  // colour, gap, leg height and divan height are ALL optional at Add-to-Cart
+  // (Loo 2026-06-11) — the customer may confirm them later. The SO-side
+  // so-variant-rule still demands gap + legHeight + divanHeight + fabricCode
+  // before a Processing date / Proceed, so production never starts on an
+  // unconfirmed spec. Unpicked options add RM0 on both client and server
+  // (lookupSelling(null) = 0), so the drift gate stays aligned.
   const canAddBedframe =
-    isBedframe && pickedSize != null && pickedSize.active && pickedSize.price != null &&
-    bfSel.legId != null &&
-    (isDivan || (bfSel.gapId != null && bfSel.divanId != null));
+    isBedframe && pickedSize != null && pickedSize.active && pickedSize.price != null;
 
   const handleAddBedframe = () => {
-    if (!canAddBedframe || pickedSize == null || pickedSize.price == null || bfSel.legId == null) return;
+    if (!canAddBedframe || pickedSize == null || pickedSize.price == null) return;
     const parts = [pickedSize.label];
     if (fabricSel?.fabricLabel) parts.push(fabricSel.fabricLabel);
     if (fabricSel?.colourLabel) parts.push(fabricSel.colourLabel);
@@ -1244,8 +1244,7 @@ export const Configurator = () => {
       ...(remarkCardEnabled && lineRemark.trim() ? { remark: lineRemark.trim() } : {}),
       ...(effectiveExtraRm > 0 ? { extraAddonAmountRM: effectiveExtraRm } : {}),
       ...(bfSel.gapId ? { gapId: bfSel.gapId, gapLabel: bfSel.gapLabel } : {}),
-      legHeightId: bfSel.legId,
-      legHeightLabel: bfSel.legLabel,
+      ...(bfSel.legId ? { legHeightId: bfSel.legId, legHeightLabel: bfSel.legLabel } : {}),
       ...(bfSel.divanId ? { divanHeightId: bfSel.divanId, divanHeightLabel: bfSel.divanLabel } : {}),
       ...(bfSel.specials.length > 0
         ? {
@@ -1350,29 +1349,29 @@ export const Configurator = () => {
     id: o.value, kind: 'leg_height', value: o.value, surcharge: o.surcharge, sortOrder: i,
   }));
   const sofaLegSurcharge = sofaLegRows.find((o) => o.value === sofaLegValue)?.surcharge ?? 0;
-  // Leg height is COMPULSORY when the Model offers any (Loo 2026-06-03) — staff
-  // must pick one before Add-to-Cart, like fabric + colour.
-  const sofaLegRequired = sofaLegRows.length > 0;
-  const sofaLegBlock = sofaLegRequired ? (
+  // Leg height is OPTIONAL at Add-to-Cart (Loo 2026-06-11, reversing the
+  // 2026-06-03 compulsory rule) — the customer may confirm it later. The
+  // so-variant-rule legHeight axis still blocks a Processing date / Proceed
+  // until it's filled.
+  const sofaLegBlock = sofaLegRows.length > 0 ? (
     <OptionSelect
       label="Leg height"
-      required
       opts={sofaLegRows}
       selectedId={sofaLegValue}
       onPick={(o) => setSofaLegValue(o.value)}
+      onClear={() => setSofaLegValue(null)}
     />
   ) : null;
   const sofaTotal = (pickedQP
     ? qpPickPrice + sofaFabricDelta
     : (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? sofaFabricDelta : 0)) + sofaSpecialDelta + sofaLegSurcharge + effectiveExtraRm;
 
-  // Fabric + colour are OPTIONAL at Add-to-Cart (Loo 2026-06-11) — some
-  // customers can't confirm the fabric yet. The SO-side rule still demands
-  // fabricCode before a Processing date / Proceed (shared so-variant-rule,
-  // API 409 variants_incomplete), so the order can't reach production without
-  // it. A leg height — when the Model offers any — stays compulsory.
+  // Fabric + colour AND leg height are OPTIONAL at Add-to-Cart (Loo
+  // 2026-06-11) — some customers can't confirm them yet. The SO-side rule
+  // still demands fabricCode + legHeight before a Processing date / Proceed
+  // (shared so-variant-rule, API 409 variants_incomplete), so the order can't
+  // reach production unconfirmed.
   const canAddSofa =
-    (!sofaLegRequired || sofaLegValue != null) &&
     ((pickedSofaRow != null && pickedSofaRow.active && pickedSofaRow.price != null) ||
      (pickedQP != null && qpPickPrice > 0));
 
@@ -1821,7 +1820,6 @@ export const Configurator = () => {
             legBlock={sofaLegBlock}
             legHeight={sofaLegValue}
             legSurchargeRm={sofaLegSurcharge}
-            legRequired={sofaLegRequired}
             remarkBlock={remarkExtraRailSection}
             remark={remarkCardEnabled ? lineRemark : ''}
             extraAmountRm={effectiveExtraRm}

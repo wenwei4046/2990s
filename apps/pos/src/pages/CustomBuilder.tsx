@@ -263,9 +263,6 @@ interface CustomBuilderProps {
   legBlock?: ReactNode;
   legHeight?: string | null;
   legSurchargeRm?: number;
-  /** When true (the Model offers leg heights), a leg pick is compulsory before
-   *  Add-to-Cart (Loo 2026-06-03). */
-  legRequired?: boolean;
   /** Product-page remark + extra charge (spec 2026-06-06) — parent-owned, like
    *  legBlock/legHeight. remarkBlock renders in the left rail; remark/extra
    *  land on the FIRST seamless group's snapshot only (a canvas usually holds
@@ -296,7 +293,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, legBlock, legHeight = null, legSurchargeRm = 0, legRequired = false, remarkBlock, remark = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [] }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [] }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -855,7 +852,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // confirm it yet. The SO-side rule still demands fabricCode before a
   // Processing date / Proceed (shared so-variant-rule, API 409), so the order
   // can't reach production without it. Leg height stays compulsory.
-  const canAdd = cells.length > 0 && allClosed && (!legRequired || legHeight != null);
+  // Leg height is OPTIONAL at Add-to-Cart too (Loo 2026-06-11) — the SO-side
+  // so-variant-rule legHeight axis still blocks a Processing date / Proceed.
+  const canAdd = cells.length > 0 && allClosed;
 
   // Per-seat upgrade (F3) — this Model offers one named upgrade or none.
   // offersUpgrade gates the per-seat add button; footrest distinguishes
@@ -1721,11 +1720,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 ? 'Add modules to start'
                 : !allClosed
                   ? `Resolve · ${analyses.find((a) => !a.closed)?.reason ?? 'sofa not closed'}`
-                  : legRequired && legHeight == null
-                    ? 'Choose a leg height'
-                    : editingKey
-                      ? 'Save changes'
-                      : 'Add to cart'}
+                  : editingKey
+                    ? 'Save changes'
+                    : 'Add to cart'}
             </Button>
           </div>
         </footer>

@@ -172,15 +172,21 @@ export const BedframeOptions = ({ productId, isDivan, value, onChange, fabricBlo
       </div>
       )}
 
+      {/* Gap / leg / divan are OPTIONAL at Add-to-Cart (Loo 2026-06-11) — the
+          customer may confirm dimensions later. so-variant-rule still demands
+          them before a Processing date / Proceed. */}
       {!isDivan && (
-        <OptionSelect label="Mattress gap" required opts={byKind.gap ?? []} selectedId={value.gapId} onPick={pickGap} />
+        <OptionSelect label="Mattress gap" opts={byKind.gap ?? []} selectedId={value.gapId} onPick={pickGap}
+          onClear={() => onChange({ ...value, gapId: null, gapLabel: null, gapSurcharge: 0 })} />
       )}
 
-      <OptionSelect label="Leg height" required opts={byKind.leg_height ?? []} selectedId={value.legId} onPick={pickLeg} />
+      <OptionSelect label="Leg height" opts={byKind.leg_height ?? []} selectedId={value.legId} onPick={pickLeg}
+        onClear={() => onChange({ ...value, legId: null, legLabel: null, legSurcharge: 0 })} />
 
       {!isDivan && (
         <>
-          <OptionSelect label="Divan height" required opts={byKind.divan_height ?? []} selectedId={value.divanId} onPick={pickDivan} />
+          <OptionSelect label="Divan height" opts={byKind.divan_height ?? []} selectedId={value.divanId} onPick={pickDivan}
+            onClear={() => onChange({ ...value, divanId: null, divanLabel: null, divanSurcharge: 0 })} />
 
           {specialAddons.length > 0 && (
             <section className={styles.specialsBlock}>
@@ -248,27 +254,37 @@ interface OptionSelectProps {
   opts: BedframeOptionRow[];
   selectedId: string | null;
   onPick: (o: BedframeOptionRow) => void;
+  /** TBC mode (Loo 2026-06-11): the customer may confirm this dimension later.
+   *  The placeholder becomes a SELECTABLE "Confirm later" entry that clears the
+   *  pick via this callback, and the label shows "Optional" instead of
+   *  "Required". The SO-side so-variant-rule still demands gap / legHeight /
+   *  divanHeight before a Processing date, so production never starts on an
+   *  unconfirmed spec. */
+  onClear?: () => void;
 }
 
 // Single-select dropdown for one dimension option kind (gap / leg / divan).
 // Exported so the sofa configurator can reuse the IDENTICAL control for its
 // leg-height picker (Loo 2026-06-03) — same look, no new CSS.
-export const OptionSelect = ({ label, required, opts, selectedId, onPick }: OptionSelectProps) => (
+export const OptionSelect = ({ label, required, opts, selectedId, onPick, onClear }: OptionSelectProps) => (
   <div className={styles.row}>
     <span className={styles.rowLabel}>
-      {label} {required && <span className={styles.req}>Required</span>}
+      {label} {required
+        ? <span className={styles.req}>Required</span>
+        : onClear ? <span className={styles.opt}>Optional</span> : null}
     </span>
     <div className={styles.selectWrap}>
       <select
         className={styles.select}
         value={selectedId ?? ''}
         onChange={(e) => {
+          if (e.target.value === '') { onClear?.(); return; }
           const o = opts.find((x) => x.id === e.target.value);
           if (o) onPick(o);
         }}
         aria-label={label}
       >
-        <option value="" disabled>Choose</option>
+        <option value="" disabled={!onClear}>{onClear ? 'Confirm later' : 'Choose'}</option>
         {opts.map((o) => (
           <option key={o.id} value={o.id}>
             {o.value}{o.surcharge > 0 ? ` · +${fmtRM(o.surcharge)}` : ''}
