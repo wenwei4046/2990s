@@ -473,7 +473,7 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
       {error && <div className={styles.error}>{error}</div>}
 
       <div className={styles.actions}>
-        {isSofaLine && !target.isPwp && (
+        {isSofaLine && (
           <Button variant="ghost" onClick={() => { setSofaSwapOpen((v) => !v); setError(null); }}>
             {sofaSwapOpen ? 'Keep this sofa' : 'Change product'}
           </Button>
@@ -502,6 +502,13 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
             Exchange this sofa in the configurator — rebuild it, then tap Confirm Change.
             The bill keeps the original total as its floor.
           </div>
+          {target.isPwp && (
+            <div className={styles.swapEmpty}>
+              PWP reward — a build matching the voucher's reward combos keeps its
+              PWP price; anything else prices normally and the voucher returns
+              to the customer for a later redemption.
+            </div>
+          )}
           <button
             type="button"
             className={styles.swapRow}
