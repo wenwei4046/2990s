@@ -1,9 +1,9 @@
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
+  allocatePwpTriggerNotes,
   orderSofaModuleRowsWithinBuilds,
   pwpRewardNote,
-  pwpTriggerNotes,
   soLineGroupRank,
   type SoPwpCodeRow,
 } from '@2990s/shared/so-line-display';
@@ -399,7 +399,14 @@ export async function generateSalesOrderPdf(
   const orderedItems = orderSofaModuleRowsWithinBuilds(
     [...items].sort((a, b) => groupRank(a.item_group) - groupRank(b.item_group)),
   );
-  const tableRows = orderedItems.map((it) => {
+  /* Each issued voucher prints ONCE across the whole doc — two lines of the
+     same trigger SKU used to repeat the full list under both (SO-2606-013,
+     Loo 2026-06-12). */
+  const triggerNotesByLine = allocatePwpTriggerNotes(
+    orderedItems.map((it) => [it.item_code]),
+    pwpCodes,
+  );
+  const tableRows = orderedItems.map((it, itIdx) => {
     const desc2 = (it.description2 ?? '').trim();
     const remarkText = typeof it.remark === 'string' && it.remark.trim() !== '' ? it.remark.trim() : null;
     const specs = variantLine(it, fabricDescMap);
@@ -412,7 +419,7 @@ export async function generateSalesOrderPdf(
       remarkText !== null && (desc2.includes(remarkText) || (specs ?? '').includes(remarkText));
     const notes = [
       pwpRewardNote(it.variants),
-      ...pwpTriggerNotes([it.item_code], pwpCodes),
+      ...(triggerNotesByLine[itIdx] ?? []),
     ].filter((n): n is NonNullable<typeof n> => n != null).map((n) => n.text);
     /* Line 2 = description2 when present (remark stands in when there is no
        description2 AND the specs line doesn't already show it); a remark
