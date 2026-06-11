@@ -195,3 +195,64 @@ enforced server-side in the cited route.
   matrix, never the SO selling price).
 - Sofa lines ship only when ONE dye-lot batch covers the whole set
   (`sofa-set-coverage.ts` / `sofa-batch-guard.ts`).
+
+
+## Document Relationship Map (2026-06-11)
+
+> Live per-document graphs: every detail page's **Relationship Map** button (document-flow engine) renders the real links of that specific document. The diagrams below are the SYSTEM-level map.
+
+### Main flows
+
+```mermaid
+flowchart LR
+  subgraph CUSTOMER LINE [Customer line - internal codes only]
+    SO[Sales Order] -->|convert remaining| DO[Delivery Order]
+    DO -->|convert| SI[Sales Invoice]
+    DO -->|convert| DR[Delivery Return]
+  end
+  subgraph SUPPLIER LINE [Supplier line - DUAL codes + Fabric Converter]
+    SO -->|From-SO picker / qty - po_qty_picked| PO[Purchase Order]
+    PO -->|receive| GRN[Goods Receipt]
+    GRN -->|bill| PI[Purchase Invoice]
+    GRN -->|return| PR[Purchase Return]
+  end
+  subgraph CONSIGNMENT
+    CO[Consignment Order] --> CN[Consignment Note] --> CRN[Consignment Return]
+    PCO[PC Order] --> PCR[PC Receive] --> PCRT[PC Return]
+  end
+```
+
+### Stock & cost (FIFO)
+
+```mermaid
+flowchart LR
+  GRN -->|IN + cost| LOTS[(inventory lots FIFO)]
+  PCR -->|IN at agreement price| LOTS
+  DO -->|OUT consumes oldest| LOTS
+  CN -->|OUT CS_DO| LOTS
+  DR -->|IN back| LOTS
+  CRN -->|IN CS_DR| LOTS
+  PR -->|OUT to supplier| LOTS
+  XFER[Stock Transfer] -->|OUT from + IN to at consumed cost| LOTS
+  ADJ[Adjustment / Stock Take] -->|ADJUSTMENT| LOTS
+  PI -->|price correction recost| LOTS
+  LOTS -->|restamp actual COGS| DO
+  DO -->|cost copied| SI
+```
+
+### Quantity ledgers (what each link counts)
+
+```mermaid
+flowchart LR
+  SO -->|po_qty_picked| PO
+  SO -->|delivered = DO net of DR| DO
+  PO -->|received_qty = GRN - PR| GRN
+  GRN -->|invoiced_qty <= accepted - returned| PI
+  GRN -->|returned_qty| PR
+  DO -->|invoiced + returned <= delivered Pending pool| SI
+  DO -->|same pool| DR
+```
+
+### Code translation points
+- **SKU binding** (`supplier_material_bindings.supplier_sku`): applied on PO/GRN at write time (snapshot), PI/PR at print time. Never on customer-line docs.
+- **Fabric Converter** (`fabric_trackings.fabric_code -> supplier_code`): applied at print time on all four purchasing PDFs as `supplierColour (ourCode)`.
