@@ -4645,6 +4645,256 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
   return c.json({ ok: true, itemCode: newCode, unitPriceCenti: unitSen, totalCenti: newTotal });
 });
 
+/* TBC sofa exchange (Loo 2026-06-12) — replace a WHOLE sofa build from the
+   POS configurator's "Confirm Change". The new build arrives as ONE
+   handover-shaped sofa item (variants.cells + depth + fabric / leg /
+   specials); the server reprices it on the SAME authoritative path as SO
+   create (per-Model module sell prices + combos + fabric-tier Δ + special
+   add-ons, drift-gated for POS callers), splits it into per-module lines
+   (P3) under the OLD buildKey, inserts the new set, then removes the old —
+   so a failure can roll the inserts back without ever losing the build.
+   Floor rule: the new build total may not sit below the old one (sales).
+   PWP reward sofa builds stay coordinator-only (the reward is combo-bound). */
+mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId'); const user = c.get('user');
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const item = (body.item ?? null) as { itemCode?: unknown; qty?: unknown; unitPriceCenti?: unknown; description?: unknown; variants?: Record<string, unknown> | null } | null;
+  const newCode = String(item?.itemCode ?? '').trim();
+  if (!item || !newCode) return c.json({ error: 'item_code_required' }, 400);
+
+  const childLock = await soHasDownstream(sb, docNo);
+  if (childLock) return c.json(childLock, 409);
+  {
+    const procLock = await soProcessingLockBlocked(sb, docNo);
+    if (procLock) return c.json(procLock, 409);
+  }
+  if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
+
+  const { data: prevRow } = await sb.from('mfg_sales_order_items')
+    .select('id, item_code, item_group, qty, discount_centi, total_centi, variants, cancelled, line_date, debtor_code, debtor_name, agent, venue, branding, line_delivery_date, line_delivery_date_overridden, warehouse_id, remark')
+    .eq('id', itemId).eq('doc_no', docNo).maybeSingle();
+  const prev = prevRow as {
+    id: string; item_code: string; item_group: string; qty: number; discount_centi: number | null;
+    total_centi: number | null; variants: Record<string, unknown> | null; cancelled: boolean;
+    line_date: string | null; debtor_code: string | null; debtor_name: string | null; agent: string | null;
+    venue: string | null; branding: string | null; line_delivery_date: string | null;
+    line_delivery_date_overridden: boolean | null; warehouse_id: string | null; remark: string | null;
+  } | null;
+  if (!prev) return c.json({ error: 'not_found' }, 404);
+  if (prev.cancelled) return c.json({ error: 'line_cancelled' }, 409);
+  if (String(prev.item_group) !== 'sofa') {
+    return c.json({ error: 'sofa_swap_only', reason: 'This exchange path only replaces sofa builds.' }, 400);
+  }
+  const prevVariants = ((prev.variants ?? {}) as Record<string, unknown>);
+  const buildKey = (prevVariants.buildKey as string | undefined) ?? null;
+
+  /* The whole OLD build — every non-cancelled line sharing the buildKey
+     (legacy single-line sofas have no buildKey → just the requested line). */
+  let oldLines: Array<{ id: string; total_centi: number | null; variants: Record<string, unknown> | null; photo_urls: string[] | null }> = [];
+  if (buildKey) {
+    const { data: rows } = await sb.from('mfg_sales_order_items')
+      .select('id, total_centi, variants, photo_urls')
+      .eq('doc_no', docNo).eq('cancelled', false)
+      .filter('variants->>buildKey', 'eq', buildKey);
+    oldLines = ((rows ?? []) as typeof oldLines);
+  }
+  if (oldLines.length === 0) {
+    const { data: solo } = await sb.from('mfg_sales_order_items')
+      .select('id, total_centi, variants, photo_urls').eq('id', itemId).maybeSingle();
+    if (solo) oldLines = [solo as (typeof oldLines)[number]];
+  }
+  if (oldLines.some((l) => ((l.variants ?? {}) as Record<string, unknown>).pwp)) {
+    return c.json({ error: 'pwp_line_locked', reason: 'A PWP reward sofa is exchanged by the coordinator (the reward is combo-bound).' }, 409);
+  }
+
+  /* New build validation — must be a real configurator build on a SOFA SKU. */
+  {
+    const codeCheck = await validateItemCodes(sb, [newCode]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+  const newVariants: Record<string, unknown> = { ...((item.variants ?? {}) as Record<string, unknown>) };
+  /* A swap build is a normal sale — strip any PWP markers the configurator
+     PWP machinery could have left on the snapshot. */
+  delete newVariants.pwp; delete newVariants.pwpCode; delete newVariants.pwpTriggerLabel;
+  const newCells = newVariants.cells;
+  if (!Array.isArray(newCells) || newCells.length === 0) {
+    return c.json({ error: 'sofa_swap_requires_build', reason: 'Configure the sofa (its modules) before confirming the exchange.' }, 400);
+  }
+  const prodLite = await loadProductByCode(sb, newCode);
+  if (!prodLite || String(prodLite.category).toUpperCase() !== 'SOFA') {
+    return c.json({ error: 'sofa_swap_only', reason: 'The replacement must be a sofa.' }, 400);
+  }
+  {
+    const { product, model } = await loadProductAndModel(sb, newCode);
+    const aoErr = checkAllowedOptions(product, model, newVariants as Parameters<typeof checkAllowedOptions>[2]);
+    if (aoErr) return c.json({ ...aoErr, itemCode: newCode }, 400);
+  }
+
+  /* Authoritative reprice — the SAME inputs as SO create / item PATCH. */
+  const depth = String((newVariants as { depth?: unknown }).depth ?? '24');
+  const [cfg, fabLite, combos, sellingTiers, fabricAddonCfg, specialDefs, modulePrices, moduleCostRows] = await Promise.all([
+    loadMaintenanceConfig(sb),
+    loadFabricByCode(sb, (newVariants.fabricCode as string | undefined) ?? null),
+    loadActiveSofaCombos(sb),
+    loadFabricSellingTiers(sb, (newVariants.fabricId as string | undefined) ?? null),
+    loadFabricTierAddonConfig(sb),
+    loadSpecialAddons(sb),
+    loadModelSofaModulePrices(sb, prodLite.base_model, depth),
+    loadModelSofaModuleCostRows(sb, prodLite.base_model),
+  ]);
+  const qty = Math.max(1, Math.floor(Number(item.qty ?? 1)));
+  const clientUnit = Math.max(0, Math.round(Number(item.unitPriceCenti ?? 0)));
+  const recomputed = recomputeFromSnapshot(
+    { itemCode: newCode, itemGroup: 'sofa', qty, unitPriceCenti: clientUnit, variants: newVariants as MfgItemForRecompute['variants'] },
+    prodLite, fabLite, cfg, combos, modulePrices, sellingTiers, fabricAddonCfg, null, null, specialDefs, moduleCostRows,
+  );
+  const posTablet = await isPosTabletCaller(sb, user.id);
+  if (posTablet && recomputed.drift) {
+    return c.json({
+      error: 'pricing_drift',
+      reason: 'Client unitPriceCenti differs >0.5% from server compute.',
+      itemCode: newCode,
+      client: clientUnit,
+      server: recomputed.unit_price_sen,
+      breakdown: recomputed.breakdown,
+    }, 400);
+  }
+  const unit = recomputed.unit_price_sen;
+  const unitCost = recomputed.unit_cost_sen > 0
+    ? recomputed.unit_cost_sen
+    : await snapshotUnitCostSen(sb, newCode, 0);
+  const discount = Number(prev.discount_centi ?? 0);
+  const newBuildTotal = (qty * unit) - discount;
+  const oldBuildTotal = oldLines.reduce((s, l) => s + Number(l.total_centi ?? 0), 0);
+  if (posTablet && newBuildTotal < oldBuildTotal) {
+    return c.json({
+      error: 'so_total_below_original',
+      reason: 'Changes cannot reduce the bill below the original sales order total.',
+      previous: oldBuildTotal,
+      next: newBuildTotal,
+    }, 422);
+  }
+
+  /* Split into per-module lines (P3) — same decomposition as SO create. */
+  const split = splitSofaBuildIntoModuleLines({
+    baseModel: prodLite.base_model ?? null,
+    cells: newCells,
+    buildUnitPriceSen: unit,
+    buildUnitCostSen: unitCost,
+    modulePrices,
+  });
+  const newBuildKey = buildKey ?? `build-x${String(itemId).slice(0, 8)}`;
+  const baseRow = {
+    doc_no: docNo,
+    line_date: prev.line_date ?? new Date().toISOString().slice(0, 10),
+    debtor_code: prev.debtor_code,
+    debtor_name: prev.debtor_name,
+    agent: prev.agent,
+    item_group: 'sofa',
+    uom: 'UNIT',
+    qty,
+    venue: prev.venue,
+    branding: prev.branding,
+    line_delivery_date: prev.line_delivery_date,
+    line_delivery_date_overridden: Boolean(prev.line_delivery_date_overridden ?? false),
+    warehouse_id: prev.warehouse_id,
+    stock_status: 'PENDING',
+    remark: (newVariants.remark as string | undefined) ?? null,
+  };
+  let rows: Array<Record<string, unknown>>;
+  if (split && split.length > 0) {
+    const { cells: _cells, ...sharedVariants } = newVariants;
+    rows = split.map((s, i) => {
+      const moduleVariants: Record<string, unknown> = {
+        ...sharedVariants, buildKey: newBuildKey, cellIndex: s.cellIndex, x: s.x, y: s.y, rot: s.rot,
+      };
+      const moduleLineTotal = (qty * s.unitPriceSen) - (i === 0 ? discount : 0);
+      const moduleLineCost = qty * s.unitCostSen;
+      return {
+        ...baseRow,
+        item_code: s.itemCode,
+        description: s.description,
+        description2: buildVariantSummary('sofa', moduleVariants) || null,
+        unit_price_centi: s.unitPriceSen,
+        discount_centi: i === 0 ? discount : 0,
+        total_centi: moduleLineTotal,
+        total_inc_centi: moduleLineTotal,
+        balance_centi: moduleLineTotal,
+        variants: moduleVariants,
+        unit_cost_centi: s.unitCostSen,
+        line_cost_centi: moduleLineCost,
+        line_margin_centi: moduleLineTotal - moduleLineCost,
+        divan_price_sen: i === 0 ? recomputed.breakdown.divanSurchargeSen : 0,
+        leg_price_sen: i === 0 ? recomputed.breakdown.legSurchargeSen : 0,
+        special_order_price_sen: i === 0 ? recomputed.breakdown.specialsSurchargeSen : 0,
+        custom_specials: i === 0 ? (recomputed.custom_specials ?? null) : null,
+      };
+    });
+  } else {
+    /* Unknown base model — keep the legacy single-line shape (cells inline). */
+    const lineTotal = (qty * unit) - discount;
+    rows = [{
+      ...baseRow,
+      item_code: newCode,
+      description: String(item.description ?? newCode),
+      description2: buildVariantSummary('sofa', newVariants) || null,
+      unit_price_centi: unit,
+      discount_centi: discount,
+      total_centi: lineTotal,
+      total_inc_centi: lineTotal,
+      balance_centi: lineTotal,
+      variants: newVariants,
+      unit_cost_centi: unitCost,
+      line_cost_centi: unitCost * qty,
+      line_margin_centi: lineTotal - (unitCost * qty),
+      divan_price_sen: recomputed.breakdown.divanSurchargeSen,
+      leg_price_sen: recomputed.breakdown.legSurchargeSen,
+      special_order_price_sen: recomputed.breakdown.specialsSurchargeSen,
+      custom_specials: recomputed.custom_specials ?? null,
+    }];
+  }
+
+  /* Insert the NEW set first, then remove the OLD — an insert failure leaves
+     the order untouched; a delete failure rolls the inserts back. */
+  const { data: inserted, error: insErr } = await sb.from('mfg_sales_order_items').insert(rows).select('id');
+  if (insErr) return c.json({ error: 'insert_failed', reason: insErr.message }, 500);
+  const oldIds = oldLines.map((l) => l.id);
+  const { error: delErr } = await sb.from('mfg_sales_order_items').delete().in('id', oldIds);
+  if (delErr) {
+    const newIds = ((inserted ?? []) as Array<{ id: string }>).map((r) => r.id);
+    if (newIds.length > 0) await sb.from('mfg_sales_order_items').delete().in('id', newIds);
+    return c.json({ error: 'swap_failed', reason: delErr.message }, 500);
+  }
+
+  /* Old build photos → best-effort R2 cleanup (same as line DELETE). */
+  if (c.env.SO_ITEM_PHOTOS) {
+    for (const l of oldLines) {
+      for (const key of (l.photo_urls ?? [])) {
+        try { await c.env.SO_ITEM_PHOTOS.delete(key); }
+        catch (e) { console.warn('[tbc-swap-sofa] photo cleanup failed for', key, e); } // eslint-disable-line no-console
+      }
+    }
+  }
+
+  await recomputeTotals(sb, docNo);
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'UPDATE_LINE',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [
+      { field: 'itemCode', from: prev.item_code, to: split?.[0]?.itemCode ?? newCode },
+      { field: 'sofaBuild', from: `${oldLines.length} lines`, to: `${rows.length} lines` },
+      { field: 'totalCenti', from: oldBuildTotal, to: newBuildTotal },
+    ],
+  });
+  try { await recomputeSoStockAllocation(sb); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-tbc-swap-sofa failed:', e); }
+
+  return c.json({ ok: true, totalCenti: newBuildTotal, lines: rows.length });
+});
+
 // ── Per-line photos — PR-F (migration 0076) ──────────────────────────
 //
 // Commander 2026-05-27: customisation orders attach photos per line

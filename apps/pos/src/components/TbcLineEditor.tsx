@@ -11,6 +11,7 @@
 // floor rule applies.
 
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
 import { fmtRM, fabricTierAddon, type FabricTier } from '@2990s/shared';
@@ -48,6 +49,11 @@ export interface TbcEditTarget {
    *  pricing never touches the granted base) but the product can't be
    *  swapped: the voucher binds to the reward SKU. */
   isPwp: boolean;
+  /** Sofa exchange (Loo 2026-06-12) — the WHOLE build's combined total (the
+   *  floor-rule baseline the configurator pre-checks against) and the build's
+   *  current cells (seed the canvas on "Change to Same Model"). */
+  buildTotalCenti: number;
+  buildCells?: Array<{ moduleId: string; x: number; y: number; rot: number }>;
 }
 
 /* Resolve the SO line's mfg product row by CODE — the SO stores item_code,
@@ -183,6 +189,36 @@ const useSwapCandidates = (q: string, ctx: SwapCtx | undefined) =>
       const { data, error } = await query.order('code').limit(8);
       if (error) throw error;
       return (data ?? []) as Array<{ code: string; name: string; category: string; sell_price_sen: number | null; pwp_price_sen: number | null }>;
+    },
+  });
+
+/* Sofa exchange (Loo 2026-06-12) — the Model chooser behind "Change product"
+   on a sofa build. One entry per base_model (active, POS-visible), with a
+   representative SKU id as the /configure/:id link target (any SKU of the
+   Model resolves to the same configurator page). */
+const useSofaSwapModels = (enabled: boolean) =>
+  useQuery({
+    enabled,
+    queryKey: ['tbc-sofa-swap-models'],
+    staleTime: 60_000,
+    queryFn: async (): Promise<Array<{ baseModel: string; configureId: string; name: string }>> => {
+      const { data, error } = await supabase
+        .from('mfg_products')
+        .select('id, base_model, product_models:model_id ( name, active )')
+        .eq('category', 'SOFA')
+        .eq('pos_active', true)
+        .eq('status', 'ACTIVE')
+        .order('code');
+      if (error) throw error;
+      const out = new Map<string, { baseModel: string; configureId: string; name: string }>();
+      for (const r of (data ?? []) as unknown as Array<{ id: string; base_model: string | null; product_models: { name: string; active: boolean } | Array<{ name: string; active: boolean }> | null }>) {
+        const base = (r.base_model ?? '').trim();
+        if (!base || out.has(base)) continue;
+        const m = Array.isArray(r.product_models) ? r.product_models[0] : r.product_models;
+        if (m && m.active === false) continue;
+        out.set(base, { baseModel: base, configureId: r.id, name: m?.name ?? base });
+      }
+      return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
     },
   });
 
@@ -401,6 +437,30 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
   const isSofa = target.itemGroup === 'sofa';
   const isBedframe = target.itemGroup === 'bedframe';
 
+  /* ── Sofa exchange (Loo 2026-06-12) ─────────────────────────────────
+     A sofa build is exchanged in the CONFIGURATOR, not by a one-line swap:
+     "Change product" offers Same Model (canvas seeded with the current
+     build) or Other Model (pick the target sofa Model), the configurator's
+     primary button becomes "Confirm Change", and tbc-swap-sofa replaces the
+     whole build server-side with the same floor rule. */
+  const navigate = useNavigate();
+  const isSofaLine = isSofa || target.isSofaBuild;
+  const [sofaSwapOpen, setSofaSwapOpen] = useState(false);
+  const sofaModels = useSofaSwapModels(isSofaLine && sofaSwapOpen);
+  const currentBaseModel = (product.data?.base_model ?? '').trim();
+  const sameModelEntry =
+    (sofaModels.data ?? []).find((m) => m.baseModel === currentBaseModel)
+    ?? (product.data ? { baseModel: currentBaseModel, configureId: product.data.id, name: currentBaseModel || target.itemCode } : null);
+  const goConfigure = (configureId: string, sameModel: boolean) => {
+    const qs = `swapDoc=${encodeURIComponent(docNo)}&swapItem=${encodeURIComponent(target.itemId)}&swapTotal=${target.buildTotalCenti}`;
+    navigate(
+      `/configure/${configureId}?${qs}`,
+      sameModel && target.buildCells && target.buildCells.length > 0
+        ? { state: { swapCells: target.buildCells } }
+        : undefined,
+    );
+  };
+
   return (
     <div className={styles.editor}>
       {category && fabricRows.length > 0 && (
@@ -465,6 +525,11 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
       {error && <div className={styles.error}>{error}</div>}
 
       <div className={styles.actions}>
+        {isSofaLine && !target.isPwp && (
+          <Button variant="ghost" onClick={() => { setSofaSwapOpen((v) => !v); setError(null); }}>
+            {sofaSwapOpen ? 'Keep this sofa' : 'Change product'}
+          </Button>
+        )}
         {/* PWP lines swap too (Loo 2026-06-12) — within the promotion's own
             range; useSwapContext narrows the search, the server re-enforces. */}
         {!isSofa && !target.isSofaBuild && swapCtx.data?.kind !== 'locked' && (
@@ -482,6 +547,41 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
           {save.isPending ? 'Saving…' : 'Save changes'}
         </Button>
       </div>
+
+      {isSofaLine && sofaSwapOpen && (
+        <div className={styles.swapBlock}>
+          <div className={styles.swapEmpty}>
+            Exchange this sofa in the configurator — rebuild it, then tap Confirm Change.
+            The bill keeps the original total as its floor.
+          </div>
+          <button
+            type="button"
+            className={styles.swapRow}
+            disabled={!sameModelEntry}
+            onClick={() => sameModelEntry && goConfigure(sameModelEntry.configureId, true)}
+          >
+            <span className={styles.swapName}>Change to Same Model</span>
+            <span className={styles.swapMeta}>
+              {sameModelEntry ? `${sameModelEntry.name} — starts from the current build` : 'Loading…'}
+            </span>
+          </button>
+          <div className={styles.swapEmpty}>Change to Other Model</div>
+          {(sofaModels.data ?? []).filter((m) => m.baseModel !== currentBaseModel).map((m) => (
+            <button
+              key={m.baseModel}
+              type="button"
+              className={styles.swapRow}
+              onClick={() => goConfigure(m.configureId, false)}
+            >
+              <span className={styles.swapName}>{m.name}</span>
+              <span className={styles.swapMeta}>{m.baseModel}</span>
+            </button>
+          ))}
+          {sofaSwapOpen && !sofaModels.isLoading && (sofaModels.data ?? []).filter((m) => m.baseModel !== currentBaseModel).length === 0 && (
+            <div className={styles.swapEmpty}>No other sofa Models available.</div>
+          )}
+        </div>
+      )}
 
       {swapOpen && (
         <div className={styles.swapBlock}>
