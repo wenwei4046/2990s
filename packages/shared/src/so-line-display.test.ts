@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  allocatePwpTriggerNotes,
   groupSoLinesForDisplay,
   orderSofaModuleRowsWithinBuilds,
   pwpRewardNote,
@@ -255,5 +256,66 @@ describe('pwpTriggerNotes', () => {
     expect(pwpTriggerNotes(['BOOQIT-CNR'], codes)).toEqual([]);
     expect(pwpTriggerNotes(['ARRUS-F-Q'], [])).toEqual([]);
     expect(pwpTriggerNotes(['ARRUS-F-Q'], null)).toEqual([]);
+  });
+});
+
+describe('allocatePwpTriggerNotes — each voucher prints once (SO-2606-013)', () => {
+  const cd = (code: string, cartLineKey: string | null, trigger = 'ARRUS-F-K', status = 'AVAILABLE') =>
+    ({ code, status, trigger_item_code: trigger, redeemed_doc_no: null, cart_line_key: cartLineKey });
+
+  it('splits per-cart-line batches across lines of the same trigger SKU', () => {
+    // The SO-2606-013 shape: two qty-2 lines of the same SKU, 2 rules × 2 qty
+    // = 4 codes per earning cart line, 8 total — used to print 8 under BOTH.
+    const codes = [
+      cd('PWP-A1', 'cfg-line1'), cd('PWP-A2', 'cfg-line1'), cd('PWP-A3', 'cfg-line1'), cd('PWP-A4', 'cfg-line1'),
+      cd('PWP-B1', 'cfg-line2'), cd('PWP-B2', 'cfg-line2'), cd('PWP-B3', 'cfg-line2'), cd('PWP-B4', 'cfg-line2'),
+    ];
+    const out = allocatePwpTriggerNotes([['ARRUS-F-K'], ['ARRUS-F-K']], codes);
+    expect(out[0]!.map((n) => n.text)).toEqual([
+      'PWP voucher issued: PWP-A1 · not redeemed yet',
+      'PWP voucher issued: PWP-A2 · not redeemed yet',
+      'PWP voucher issued: PWP-A3 · not redeemed yet',
+      'PWP voucher issued: PWP-A4 · not redeemed yet',
+    ]);
+    expect(out[1]!.map((n) => n.text)).toEqual([
+      'PWP voucher issued: PWP-B1 · not redeemed yet',
+      'PWP voucher issued: PWP-B2 · not redeemed yet',
+      'PWP voucher issued: PWP-B3 · not redeemed yet',
+      'PWP voucher issued: PWP-B4 · not redeemed yet',
+    ]);
+  });
+
+  it('piles extra batches on the last matching line (never drops a code)', () => {
+    const codes = [cd('PWP-A1', 'k1'), cd('PWP-B1', 'k2'), cd('PWP-C1', 'k3')];
+    const out = allocatePwpTriggerNotes([['ARRUS-F-K'], ['ARRUS-F-K']], codes);
+    expect(out[0]!).toHaveLength(1);
+    expect(out[1]!).toHaveLength(2);
+  });
+
+  it('legacy null cart_line_key codes form one batch on the first matching line', () => {
+    const codes = [cd('PWP-A1', null), cd('PWP-B1', null)];
+    const out = allocatePwpTriggerNotes([['ARRUS-F-K'], ['ARRUS-F-K']], codes);
+    expect(out[0]!).toHaveLength(2);
+    expect(out[1]!).toHaveLength(0);
+  });
+
+  it('distinct trigger SKUs allocate independently; non-matching codes drop', () => {
+    const codes = [cd('PWP-A1', 'k1', 'ARRUS-F-K'), cd('PWP-B1', 'k2', 'CODY-Q'), cd('PWP-X1', 'k3', 'GHOST-SKU')];
+    const out = allocatePwpTriggerNotes([['ARRUS-F-K'], ['CODY-Q']], codes);
+    expect(out[0]!.map((n) => n.text)).toEqual(['PWP voucher issued: PWP-A1 · not redeemed yet']);
+    expect(out[1]!.map((n) => n.text)).toEqual(['PWP voucher issued: PWP-B1 · not redeemed yet']);
+  });
+
+  it('keeps the USED short-reference tone', () => {
+    const out = allocatePwpTriggerNotes(
+      [['ARRUS-F-K']],
+      [cd('PWP-A1', 'k1', 'ARRUS-F-K', 'USED')],
+    );
+    expect(out[0]!).toEqual([{ tone: 'used', text: 'PWP: PWP-A1' }]);
+  });
+
+  it('returns empty rows for empty/null codes', () => {
+    expect(allocatePwpTriggerNotes([['A'], ['B']], [])).toEqual([[], []]);
+    expect(allocatePwpTriggerNotes([['A'], ['B']], null)).toEqual([[], []]);
   });
 });

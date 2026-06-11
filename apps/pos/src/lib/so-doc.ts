@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import {
+  allocatePwpTriggerNotes,
   groupSoLinesForDisplay,
   pwpRewardNote,
-  pwpTriggerNotes,
   sortSoLinesByGroupRank,
   type SoPwpCodeRow,
   type SoPwpNote,
@@ -224,11 +224,18 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
         if (!r) return null;
         return shownAbove && shownAbove.includes(r) ? null : r;
       };
-      const lines: PrintableLine[] = groups.map((g) => {
+      /* Each issued voucher prints ONCE across the whole doc — two lines of
+         the same trigger SKU used to repeat the full list under both
+         (SO-2606-013, Loo 2026-06-12). */
+      const triggerNotesByLine = allocatePwpTriggerNotes(
+        groups.map((g) => g.lines.map((l) => l.item_code as string)),
+        pwpCodes,
+      );
+      const lines: PrintableLine[] = groups.map((g, gi) => {
         const lead = g.lines[0]!;
         const notes: SoPwpNote[] = [
           pwpRewardNote(lead.variants),
-          ...pwpTriggerNotes(g.lines.map((l) => l.item_code as string), pwpCodes),
+          ...(triggerNotesByLine[gi] ?? []),
         ].filter((n): n is SoPwpNote => n != null);
         if (g.kind === 'sofa-build' && g.display) {
           const d = g.display;

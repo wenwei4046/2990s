@@ -1324,8 +1324,11 @@ mfgSalesOrders.get('/:docNo', async (c) => {
   try {
     const { data: codeRows } = await sb
       .from('pwp_codes')
-      .select('code, status, trigger_item_code, redeemed_doc_no')
-      .eq('source_doc_no', docNo);
+      .select('code, status, trigger_item_code, redeemed_doc_no, cart_line_key')
+      .eq('source_doc_no', docNo)
+      // Deterministic batch order for allocatePwpTriggerNotes — codes earned
+      // by the first-added trigger line print on the first matching line.
+      .order('created_at', { ascending: true });
     pwpCodes = (codeRows ?? []) as Array<Record<string, unknown>>;
   } catch {
     pwpCodes = [];

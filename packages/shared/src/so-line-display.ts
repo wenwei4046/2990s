@@ -272,6 +272,9 @@ export interface SoPwpCodeRow {
   status: string; // RESERVED | USED | AVAILABLE
   trigger_item_code?: string | null;
   redeemed_doc_no?: string | null;
+  /** The POS cart line that earned this code — groups codes into per-trigger-line
+   *  batches for display allocation. Null on legacy codes. */
+  cart_line_key?: string | null;
 }
 
 export interface SoPwpNote {
@@ -296,8 +299,16 @@ export function pwpRewardNote(variants: unknown): SoPwpNote | null {
   return { tone: 'used', text: parts.join(' · ') };
 }
 
+const pwpTriggerNoteOf = (cd: SoPwpCodeRow): SoPwpNote =>
+  cd.status === 'USED'
+    ? { tone: 'used' as const, text: `PWP: ${cd.code}` }
+    : { tone: 'unused' as const, text: `PWP voucher issued: ${cd.code} · not redeemed yet` };
+
 /** Notes for a TRIGGER line: vouchers this SO issued off this item_code.
- *  USED → short reference; otherwise → 排法 A "issued, not redeemed yet". */
+ *  USED → short reference; otherwise → 排法 A "issued, not redeemed yet".
+ *  Per-line matcher — when the SAME item_code appears on several lines this
+ *  repeats the full voucher list under each; document renderers should use
+ *  allocatePwpTriggerNotes instead. */
 export function pwpTriggerNotes(
   itemCodes: string[],
   codes: SoPwpCodeRow[] | null | undefined,
@@ -306,9 +317,52 @@ export function pwpTriggerNotes(
   const mine = codes.filter(
     (cd) => !!cd.trigger_item_code && itemCodes.includes(cd.trigger_item_code),
   );
-  return mine.map((cd) =>
-    cd.status === 'USED'
-      ? { tone: 'used' as const, text: `PWP: ${cd.code}` }
-      : { tone: 'unused' as const, text: `PWP voucher issued: ${cd.code} · not redeemed yet` },
-  );
+  return mine.map(pwpTriggerNoteOf);
+}
+
+/**
+ * Document-level trigger-note allocation: each voucher prints exactly ONCE.
+ * (SO-2606-013, Loo 2026-06-12 — two lines of the same trigger SKU repeated
+ * the full 8-voucher list under BOTH lines.)
+ *
+ * `lineItemCodes` = per display line (in render order), the item_codes it
+ * covers (a folded sofa group passes all module codes). Codes are batched by
+ * trigger_item_code + cart_line_key (one batch per earning cart line, in the
+ * given code order — callers receive them created_at-ordered); the k-th batch
+ * of a trigger SKU lands on the k-th line carrying that SKU, extra batches
+ * pile on its last line, legacy null-key codes form one batch on the first.
+ * Returns one SoPwpNote[] per input line.
+ */
+export function allocatePwpTriggerNotes(
+  lineItemCodes: string[][],
+  codes: SoPwpCodeRow[] | null | undefined,
+): SoPwpNote[][] {
+  const out: SoPwpNote[][] = lineItemCodes.map(() => []);
+  if (!codes || codes.length === 0) return out;
+
+  // Batch by trigger SKU + earning cart line, preserving code order.
+  const batches = new Map<string, { trigger: string; rows: SoPwpCodeRow[] }>();
+  for (const cd of codes) {
+    const trigger = cd.trigger_item_code ?? '';
+    if (!trigger) continue;
+    const key = `${trigger}␟${cd.cart_line_key ?? ''}`;
+    const batch = batches.get(key) ?? { trigger, rows: [] };
+    batch.rows.push(cd);
+    batches.set(key, batch);
+  }
+
+  // k-th batch of a trigger → k-th line carrying that SKU (overflow → last).
+  const nextOrdinal = new Map<string, number>();
+  for (const { trigger, rows } of batches.values()) {
+    const matching: number[] = [];
+    lineItemCodes.forEach((codesOfLine, i) => {
+      if (codesOfLine.includes(trigger)) matching.push(i);
+    });
+    if (matching.length === 0) continue;
+    const ord = nextOrdinal.get(trigger) ?? 0;
+    nextOrdinal.set(trigger, ord + 1);
+    const lineIdx = matching[Math.min(ord, matching.length - 1)]!;
+    out[lineIdx]!.push(...rows.map(pwpTriggerNoteOf));
+  }
+  return out;
 }
