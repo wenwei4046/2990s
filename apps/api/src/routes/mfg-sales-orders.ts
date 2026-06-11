@@ -4436,17 +4436,14 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
   if (!prev) return c.json({ error: 'not_found' }, 404);
   if (prev.cancelled) return c.json({ error: 'line_cancelled' }, 409);
   const prevVariants = ((prev.variants ?? {}) as Record<string, unknown>);
-  if (prevVariants.pwp) {
-    return c.json({ error: 'pwp_line_locked', reason: 'PWP reward lines are edited by the coordinator.' }, 409);
-  }
   if (String(prev.item_group) === 'sofa' || prevVariants.buildKey || prevVariants.cells) {
     return c.json({ error: 'sofa_swap_not_supported', reason: 'A sofa build is exchanged by rebuilding the order, not by swapping one line.' }, 400);
   }
 
   const { data: prodRow } = await sb.from('mfg_products')
-    .select('code, name, category, status, pos_active, sell_price_sen, cost_price_sen')
+    .select('code, name, category, status, pos_active, sell_price_sen, cost_price_sen, pwp_price_sen, model_id')
     .eq('code', newCode).maybeSingle();
-  const prod = prodRow as { code: string; name: string; category: string; status: string; pos_active: boolean; sell_price_sen: number | null; cost_price_sen: number | null } | null;
+  const prod = prodRow as { code: string; name: string; category: string; status: string; pos_active: boolean; sell_price_sen: number | null; cost_price_sen: number | null; pwp_price_sen: number | null; model_id: string | null } | null;
   if (!prod) return c.json(unknownItemCodeResponse([newCode]), 409);
   if (String(prod.category).toUpperCase() === 'SOFA') {
     return c.json({ error: 'sofa_swap_not_supported', reason: 'A sofa build is added through the configurator, not a line swap.' }, 400);
@@ -4454,9 +4451,86 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
   if (prod.status !== 'ACTIVE' || !prod.pos_active) {
     return c.json({ error: 'product_inactive', itemCode: newCode }, 409);
   }
-  const sellSen = Math.max(0, Math.round(Number(prod.sell_price_sen ?? 0)));
-  if (sellSen <= 0) {
-    return c.json({ error: 'product_unpriced', reason: 'This product has no selling price yet — ask an admin to price it in the SKU Master.', itemCode: newCode }, 409);
+
+  /* ── PWP swap ranges (Loo 2026-06-12) ─────────────────────────────────
+     A line tied to a PWP (换购) promotion may only be exchanged WITHIN the
+     promotion's own range:
+       • REWARD line (variants.pwp + pwpCode) → only SKUs inside the code's
+         snapshotted reward set (reward_category + eligible_reward_model_ids,
+         [] = whole category), priced at the new SKU's PWP price — the deal
+         survives the exchange; redeemed_item_code is re-stamped after.
+       • TRIGGER line (this SO minted codes off it — pwp_codes.source_doc_no
+         = docNo, trigger_item_code = the line's SKU) → only SKUs inside
+         EVERY anchoring rule's trigger set (trigger_category +
+         trigger_eligible_model_ids); trigger_item_code is re-stamped after.
+     A code whose rule is gone can't be validated → locked (coordinator). */
+  const rewardPwpCode = prevVariants.pwp ? String(prevVariants.pwpCode ?? '').trim() : '';
+  let unitSen: number;
+  let variantsAfterSwap: Record<string, unknown> | null = null;
+  let triggerCodesToRestamp = false;
+  if (prevVariants.pwp) {
+    if (!rewardPwpCode) {
+      return c.json({ error: 'pwp_line_locked', reason: 'This PWP reward carries no voucher code — ask the coordinator to exchange it.' }, 409);
+    }
+    const { data: codeRow } = await sb.from('pwp_codes')
+      .select('code, reward_category, eligible_reward_model_ids, type')
+      .eq('code', rewardPwpCode).maybeSingle();
+    const codeTyped = codeRow as { code: string; reward_category: string; eligible_reward_model_ids: string[] | null; type: string } | null;
+    if (!codeTyped) {
+      return c.json({ error: 'pwp_line_locked', reason: 'This PWP voucher could not be found — ask the coordinator to exchange it.' }, 409);
+    }
+    const inCategory = String(prod.category).toUpperCase() === String(codeTyped.reward_category).toUpperCase();
+    const eligibleModels = codeTyped.eligible_reward_model_ids ?? [];
+    const inModels = eligibleModels.length === 0 || (prod.model_id != null && eligibleModels.includes(prod.model_id));
+    if (!inCategory || !inModels) {
+      return c.json({
+        error: 'pwp_swap_out_of_range',
+        reason: 'A PWP reward can only be exchanged for another item inside the promotion\'s reward range.',
+        itemCode: newCode,
+      }, 409);
+    }
+    const pwpSen = Math.max(0, Math.round(Number(prod.pwp_price_sen ?? 0)));
+    if (codeTyped.type !== 'promo' && pwpSen <= 0) {
+      return c.json({ error: 'pwp_reward_unpriced', reason: 'This item has no PWP price yet — ask an admin to set it in the SKU Master.', itemCode: newCode }, 409);
+    }
+    unitSen = pwpSen;  // 'promo' grants may redeem at 0 (free) — migration 0145
+    variantsAfterSwap = { pwp: true, pwpCode: rewardPwpCode };
+  } else {
+    const { data: triggerCodes } = await sb.from('pwp_codes')
+      .select('code, rule_id')
+      .eq('source_doc_no', docNo).eq('trigger_item_code', prev.item_code);
+    const anchors = (triggerCodes ?? []) as Array<{ code: string; rule_id: string | null }>;
+    if (anchors.length > 0) {
+      const ruleIds = [...new Set(anchors.map((a) => a.rule_id).filter((r): r is string => !!r))];
+      const { data: ruleRows } = ruleIds.length > 0
+        ? await sb.from('pwp_rules').select('id, trigger_category, trigger_eligible_model_ids').in('id', ruleIds)
+        : { data: [] };
+      const rules = (ruleRows ?? []) as Array<{ id: string; trigger_category: string; trigger_eligible_model_ids: string[] | null }>;
+      if (anchors.some((a) => !a.rule_id) || rules.length < ruleIds.length) {
+        return c.json({
+          error: 'pwp_trigger_swap_out_of_range',
+          reason: 'This item triggered a PWP voucher whose promotion no longer exists — ask the coordinator to exchange it.',
+        }, 409);
+      }
+      const fitsEveryRule = rules.every((r) => {
+        const inCat = String(prod.category).toUpperCase() === String(r.trigger_category).toUpperCase();
+        const models = r.trigger_eligible_model_ids ?? [];
+        return inCat && (models.length === 0 || (prod.model_id != null && models.includes(prod.model_id)));
+      });
+      if (!fitsEveryRule) {
+        return c.json({
+          error: 'pwp_trigger_swap_out_of_range',
+          reason: 'This item triggered a PWP voucher — it can only be exchanged for another item inside the promotion\'s trigger range.',
+          itemCode: newCode,
+        }, 409);
+      }
+      triggerCodesToRestamp = true;
+    }
+    const sellSen = Math.max(0, Math.round(Number(prod.sell_price_sen ?? 0)));
+    if (sellSen <= 0) {
+      return c.json({ error: 'product_unpriced', reason: 'This product has no selling price yet — ask an admin to price it in the SKU Master.', itemCode: newCode }, 409);
+    }
+    unitSen = sellSen;
   }
 
   /* Composition — a swap must not INTRODUCE a sofa × (bedframe|mattress) mix. */
@@ -4469,7 +4543,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
 
   const qty = Number(prev.qty);
   const discount = Number(prev.discount_centi ?? 0);
-  const newTotal = (qty * sellSen) - discount;
+  const newTotal = (qty * unitSen) - discount;
   const prevTotal = Number(prev.total_centi ?? ((qty * Number(prev.unit_price_centi)) - discount));
   if (newTotal < prevTotal && await isPosTabletCaller(sb, user.id)) {
     return c.json({
@@ -4487,8 +4561,8 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
     item_group: String(prod.category ?? 'others').toLowerCase(),
     description: prod.name,
     description2: null,
-    variants: null,
-    unit_price_centi: sellSen,
+    variants: variantsAfterSwap,
+    unit_price_centi: unitSen,
     total_centi: newTotal,
     total_inc_centi: newTotal,
     balance_centi: newTotal,
@@ -4502,6 +4576,21 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
   }).eq('id', itemId);
   if (upErr) return c.json({ error: 'update_failed', reason: upErr.message }, 500);
 
+  /* Re-stamp the voucher audit columns so the codes keep pointing at the
+     line's CURRENT SKU (best-effort — the line is already correct). */
+  if (rewardPwpCode) {
+    const { error: e1 } = await sb.from('pwp_codes')
+      .update({ redeemed_item_code: newCode })
+      .eq('code', rewardPwpCode).eq('redeemed_doc_no', docNo);
+    if (e1) console.error('[tbc-swap] reward code restamp failed:', e1.message); // eslint-disable-line no-console
+  }
+  if (triggerCodesToRestamp) {
+    const { error: e2 } = await sb.from('pwp_codes')
+      .update({ trigger_item_code: newCode })
+      .eq('source_doc_no', docNo).eq('trigger_item_code', prev.item_code);
+    if (e2) console.error('[tbc-swap] trigger code restamp failed:', e2.message); // eslint-disable-line no-console
+  }
+
   await recomputeTotals(sb, docNo);
   await recordSoAudit(sb, {
     docNo,
@@ -4510,15 +4599,16 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
     actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
     fieldChanges: [
       { field: 'itemCode', from: prev.item_code, to: newCode },
-      { field: 'unitPriceCenti', from: prev.unit_price_centi, to: sellSen },
+      { field: 'unitPriceCenti', from: prev.unit_price_centi, to: unitSen },
       { field: 'totalCenti', from: prev.total_centi, to: newTotal },
+      ...(rewardPwpCode ? [{ field: 'pwpCode', to: rewardPwpCode } satisfies FieldChange] : []),
     ],
   });
   /* Demand changed product → stock allocation may shift. Best-effort. */
   try { await recomputeSoStockAllocation(sb); }
   catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-tbc-swap failed:', e); }
 
-  return c.json({ ok: true, itemCode: newCode, unitPriceCenti: sellSen, totalCenti: newTotal });
+  return c.json({ ok: true, itemCode: newCode, unitPriceCenti: unitSen, totalCenti: newTotal });
 });
 
 // ── Per-line photos — PR-F (migration 0076) ──────────────────────────
