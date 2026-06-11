@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img" aria-label="2990's">
+  <rect width="240" height="240" rx="40" fill="#FFF9EB"/>
+  <text x="120" y="158" font-family="Archivo, 'Arial Black', system-ui, sans-serif" font-weight="900" font-stretch="80%" font-size="78" text-anchor="middle" fill="#A6471E">2990</text>
+  <circle cx="180" cy="78" r="14" fill="none" stroke="#A6471E" stroke-width="3"/>
+  <text x="180" y="84" font-family="Archivo, 'Arial Black', system-ui, sans-serif" font-weight="900" font-stretch="80%" font-size="17" text-anchor="middle" fill="#A6471E">S</text>
+</svg>
