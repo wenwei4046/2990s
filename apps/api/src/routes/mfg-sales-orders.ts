@@ -203,6 +203,25 @@ async function selfScopedSalesBlocked(sb: any, userId: string, docNo: string): P
   return !so || (so as { salesperson_id?: string | null }).salesperson_id !== userId;
 }
 
+/* POS line quantity (Loo 2026-06-12) — line qty is a money input the
+   unit-price drift gate does NOT cover: qty 0 zeroes a line for free, a
+   fraction / NaN corrupts total_centi math, and the discount ceiling is
+   qty × unit. An absent qty (defaults to 1 downstream) is fine; anything
+   else must be a positive integer. Returns the 422 payload, or null when
+   valid. Shared by POST /, POST /:docNo/items and PATCH /:docNo/items/:itemId. */
+function invalidQtyResponse(rawQty: unknown, itemCode: unknown, lineIdx = 0): Record<string, unknown> | null {
+  if (rawQty == null) return null;
+  const q = Number(rawQty);
+  if (Number.isInteger(q) && q >= 1) return null;
+  return {
+    error:    'invalid_qty',
+    reason:   'qty must be a positive whole number.',
+    lineIdx,
+    itemCode: String(itemCode ?? ''),
+    qty:      rawQty,
+  };
+}
+
 /* MAIN-mix composition (the PR #519 create rule, extended to line add / swap,
    Loo 2026-06-11): SOFA is exclusive among the MAIN categories. Returns true
    when replacing `excludeItemId`'s line (null = a pure add) with `newCode`
@@ -1358,25 +1377,11 @@ mfgSalesOrders.post('/', async (c) => {
     if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
   }
 
-  /* POS line quantity (Loo 2026-06-12) — qty is a money input the drift gate
-     does NOT cover (it authenticates the UNIT price only): qty 0 zeroes a
-     line for free, a fraction / NaN corrupts total_centi math, and the
-     discount ceiling below is qty × unit. Reject anything that is not a
-     positive integer; an absent qty still defaults to 1 downstream. Runs
-     before any PWP claim so a reject burns nothing. */
+  /* POS line quantity (Loo 2026-06-12) — see invalidQtyResponse. Runs before
+     any PWP claim so a reject burns nothing. */
   for (let i = 0; i < items.length; i++) {
-    const rawQty = items[i]?.qty;
-    if (rawQty == null) continue;
-    const q = Number(rawQty);
-    if (!Number.isInteger(q) || q < 1) {
-      return c.json({
-        error:    'invalid_qty',
-        reason:   'qty must be a positive whole number.',
-        lineIdx:  i,
-        itemCode: String(items[i]?.itemCode ?? ''),
-        qty:      rawQty,
-      }, 422);
-    }
+    const badQty = invalidQtyResponse(items[i]?.qty, items[i]?.itemCode, i);
+    if (badQty) return c.json(badQty, 422);
   }
 
   /* PR — Commander 2026-05-28 — SO composition rules, enforced on the CREATE
@@ -3694,6 +3699,10 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   const addLineWarehouseId = (it.warehouseId as string | null | undefined)
     ?? await deriveWarehouseIdFromState(sb, (header.customer_state as string | null) ?? null);
 
+  /* POS line quantity (Loo 2026-06-12) — same 422 gate as POST / (review
+     found the create-only gate left qty 0 free-line inserts open here). */
+  const badQty = invalidQtyResponse(it.qty, it.itemCode);
+  if (badQty) return c.json(badQty, 422);
   const qty = Number(it.qty ?? 1);
   const discount = Number(it.discountCenti ?? 0);
   // MFG-PRICING-ENGINE — Recompute unit price server-side. Same path as
@@ -3913,7 +3922,23 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     .select('qty, unit_price_centi, discount_centi, unit_cost_centi, item_code, item_group, description, description2, uom, variants, remark, cancelled')
     .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
+  /* POS line quantity (Loo 2026-06-12) — same 422 gate as POST /. */
+  const badQty = invalidQtyResponse(it.qty, prev.item_code);
+  if (badQty) return c.json(badQty, 422);
   const qty = it.qty !== undefined ? Number(it.qty) : prev.qty;
+  /* One code = one redemption = ONE unit (Loo 2026-06-12) — mirror of the
+     create-path claim-loop gate. A qty-only PATCH skips the recompute, so a
+     reward line bumped to qty N would book N units at the stored PWP grant
+     price off a single voucher (review blocker 2026-06-12). */
+  const prevPwp = (prev.variants ?? null) as { pwp?: boolean; pwpCode?: string | null } | null;
+  const prevIsReward = prevPwp?.pwp === true ||
+    (typeof prevPwp?.pwpCode === 'string' && prevPwp.pwpCode.trim() !== '');
+  if (prevIsReward && qty !== 1) {
+    return c.json({
+      error:  'pwp_reward_qty_locked',
+      reason: 'A PWP reward line redeems one unit per code — quantity stays 1.',
+    }, 422);
+  }
   const clientUnit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : prev.unit_price_centi;
   const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : prev.discount_centi;
 

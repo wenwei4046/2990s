@@ -621,6 +621,9 @@ export const Configurator = () => {
     const cfg = editingLine.config;
 
     if (cfg.kind === 'size') {
+      // Wait for the product row — the PWP re-arm below validates against the
+      // product's reward category/model, which are '' until the query lands.
+      if (product.data == null) return;
       setPickedSizeId(cfg.sizeId);
       const next: Record<string, number> = {};
       for (const e of cfg.addonExtras ?? []) next[e.addonId] = e.qty;
@@ -630,6 +633,17 @@ export const Configurator = () => {
         const choices = cfg.specialChoices?.[code] ?? [];
         return { id: code, label: addon?.label ?? cfg.specialLabels?.[i] ?? code, surcharge: addon ? specialSelSurchargeRM(addon, choices) : 0, choices };
       }));
+      // PWP (换购) — re-arm the redemption if this line had it (mirror of the
+      // bedframe branch below). Without this, editing a redeemed mattress
+      // dropped the voucher silently AND unlocked the quantity stepper at the
+      // full price (review 2026-06-12).
+      setUsePwp(cfg.pwp === true);
+      if (cfg.pwp && cfg.pwpCode) {
+        setInsertedCode(cfg.pwpCode); setInsertCodeInput(cfg.pwpCode);
+        void validatePwpCode({ code: cfg.pwpCode, rewardCategory: pwpRewardCategory, rewardModelId: pwpRewardModelId })
+          .then((res) => { if (res.valid && res.type) setInsertedCodeType(res.type); })
+          .catch(() => { /* keep 'pwp' default; server stays authoritative */ });
+      }
       setLineRemark(cfg.remark ?? '');
       setLineExtraRm(cfg.extraAddonAmountRM ?? 0);
       setLineQty(Math.max(1, editingLine.qty));
@@ -756,7 +770,7 @@ export const Configurator = () => {
     }
   }, [isEditing, editingLine, bedframeColours.data, bedframeOptions.data,
       productFabrics.data, sofaCustomizer.data, fabricLib.data, productId, derivedFabricRows,
-      sofaCombosQ.data]);
+      sofaCombosQ.data, product.data]);
 
   // Depth-aware per-Model module SELLING map (sen) at the current seat depth,
   // tier P1 (SOFA-SELLING Phase B; Chairman 2026-06-01: run at P1 — the default
