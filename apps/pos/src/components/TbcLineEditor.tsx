@@ -85,9 +85,19 @@ type SwapCtx =
   | { kind: 'trigger'; category: string; modelIds: string[] | null }
   | { kind: 'locked'; reason: string };
 
-const useSwapContext = (docNo: string, target: TbcEditTarget) =>
+const useSwapContext = (
+  docNo: string,
+  target: TbcEditTarget,
+  /** The line's CURRENT product (category + model) — trigger detection is
+   *  RANGE-based (Loo 2026-06-12): a line counts as a trigger when its
+   *  product sits inside an anchoring rule's trigger set, with the
+   *  trigger_item_code stamp kept only as a fallback (stamps go stale when
+   *  the line was swapped before the restamp existed — SO-2606-009). */
+  lineProduct: { category: string; model_id: string | null } | null | undefined,
+) =>
   useQuery({
-    queryKey: ['tbc-swap-ctx', docNo, target.itemId, target.itemCode],
+    enabled: target.isPwp || lineProduct !== undefined,
+    queryKey: ['tbc-swap-ctx', docNo, target.itemId, target.itemCode, lineProduct?.category ?? '', lineProduct?.model_id ?? ''],
     staleTime: 30_000,
     queryFn: async (): Promise<SwapCtx> => {
       if (target.isPwp) {
@@ -101,20 +111,32 @@ const useSwapContext = (docNo: string, target: TbcEditTarget) =>
         return { kind: 'reward', category: d.reward_category, modelIds: d.eligible_reward_model_ids ?? [], promoType: d.type };
       }
       const { data: codes } = await supabase.from('pwp_codes')
-        .select('rule_id')
-        .eq('source_doc_no', docNo).eq('trigger_item_code', target.itemCode);
-      const anchors = (codes ?? []) as Array<{ rule_id: string | null }>;
+        .select('rule_id, trigger_item_code')
+        .eq('source_doc_no', docNo);
+      const allAnchors = (codes ?? []) as Array<{ rule_id: string | null; trigger_item_code: string | null }>;
+      if (allAnchors.length === 0) return { kind: 'free' };
+      const ruleIds = [...new Set(allAnchors.map((a) => a.rule_id).filter((r): r is string => !!r))];
+      const { data: ruleRows } = ruleIds.length > 0
+        ? await supabase.from('pwp_rules').select('id, trigger_category, trigger_eligible_model_ids').in('id', ruleIds)
+        : { data: [] };
+      const ruleById = new Map(
+        ((ruleRows ?? []) as Array<{ id: string; trigger_category: string; trigger_eligible_model_ids: string[] | null }>)
+          .map((r) => [r.id, r]),
+      );
+      const fitsTrigger = (rid: string | null): boolean => {
+        const r = rid ? ruleById.get(rid) : undefined;
+        if (!r || !lineProduct) return false;
+        const inCat = String(lineProduct.category).toUpperCase() === String(r.trigger_category).toUpperCase();
+        const models = r.trigger_eligible_model_ids ?? [];
+        return inCat && (models.length === 0 || (lineProduct.model_id != null && models.includes(lineProduct.model_id)));
+      };
+      // Anchored by THIS line: stamp match OR the line's product is in range.
+      const anchors = allAnchors.filter((a) => a.trigger_item_code === target.itemCode || fitsTrigger(a.rule_id));
       if (anchors.length === 0) return { kind: 'free' };
-      const ruleIds = [...new Set(anchors.map((a) => a.rule_id).filter((r): r is string => !!r))];
-      if (anchors.some((a) => !a.rule_id) || ruleIds.length === 0) {
+      if (anchors.some((a) => !a.rule_id || !ruleById.get(a.rule_id))) {
         return { kind: 'locked', reason: 'This item triggered a PWP voucher whose promotion no longer exists — the coordinator handles the exchange.' };
       }
-      const { data: ruleRows } = await supabase.from('pwp_rules')
-        .select('trigger_category, trigger_eligible_model_ids').in('id', ruleIds);
-      const rules = (ruleRows ?? []) as Array<{ trigger_category: string; trigger_eligible_model_ids: string[] | null }>;
-      if (rules.length < ruleIds.length) {
-        return { kind: 'locked', reason: 'This item triggered a PWP voucher whose promotion no longer exists — the coordinator handles the exchange.' };
-      }
+      const rules = anchors.map((a) => ruleById.get(a.rule_id!)!);
       const cats = [...new Set(rules.map((r) => String(r.trigger_category)))];
       if (cats.length > 1) {
         return { kind: 'locked', reason: 'This item anchors PWP promotions with different trigger ranges — the coordinator handles the exchange.' };
@@ -359,7 +381,11 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
   /* ── Product swap ─────────────────────────────────────────────────── */
   const [swapOpen, setSwapOpen] = useState(false);
   const [swapQuery, setSwapQuery] = useState('');
-  const swapCtx = useSwapContext(docNo, target);
+  const swapCtx = useSwapContext(
+    docNo,
+    target,
+    product.isLoading ? undefined : (product.data ? { category: product.data.category, model_id: product.data.model_id } : null),
+  );
   const candidates = useSwapCandidates(swapQuery, swapCtx.data);
   const prevLineTotal = (target.qty * target.unitPriceCenti) - target.discountCenti;
   const swap = useMutation({

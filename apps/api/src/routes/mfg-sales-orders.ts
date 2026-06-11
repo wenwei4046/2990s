@@ -4467,7 +4467,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
   const rewardPwpCode = prevVariants.pwp ? String(prevVariants.pwpCode ?? '').trim() : '';
   let unitSen: number;
   let variantsAfterSwap: Record<string, unknown> | null = null;
-  let triggerCodesToRestamp = false;
+  let triggerCodesToRestamp: string[] = [];
   if (prevVariants.pwp) {
     if (!rewardPwpCode) {
       return c.json({ error: 'pwp_line_locked', reason: 'This PWP reward carries no voucher code — ask the coordinator to exchange it.' }, 409);
@@ -4496,35 +4496,69 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
     unitSen = pwpSen;  // 'promo' grants may redeem at 0 (free) — migration 0145
     variantsAfterSwap = { pwp: true, pwpCode: rewardPwpCode };
   } else {
-    const { data: triggerCodes } = await sb.from('pwp_codes')
-      .select('code, rule_id')
-      .eq('source_doc_no', docNo).eq('trigger_item_code', prev.item_code);
-    const anchors = (triggerCodes ?? []) as Array<{ code: string; rule_id: string | null }>;
+    /* Trigger detection is RANGE-based, not stamp-based (Loo 2026-06-12,
+       SO-2606-009): a code's trigger_item_code goes stale when the trigger
+       line was swapped BEFORE the restamp existed (HAPPI.S → ARRUS left the
+       stamp at HAPPI.S, so the exact-match lookup saw no anchor and let
+       ARRUS → FENRIR-bedframe through). The rule Loo set is positional —
+       once the order is placed, the TRIGGER line swaps only within the
+       trigger range — so a line counts as a trigger when its CURRENT product
+       sits inside an anchoring rule's trigger set (stamp match kept as a
+       fallback for products edited out of the rule afterwards). */
+    const { data: soCodes } = await sb.from('pwp_codes')
+      .select('code, rule_id, trigger_item_code')
+      .eq('source_doc_no', docNo);
+    const anchors = (soCodes ?? []) as Array<{ code: string; rule_id: string | null; trigger_item_code: string | null }>;
     if (anchors.length > 0) {
       const ruleIds = [...new Set(anchors.map((a) => a.rule_id).filter((r): r is string => !!r))];
       const { data: ruleRows } = ruleIds.length > 0
         ? await sb.from('pwp_rules').select('id, trigger_category, trigger_eligible_model_ids').in('id', ruleIds)
         : { data: [] };
       const rules = (ruleRows ?? []) as Array<{ id: string; trigger_category: string; trigger_eligible_model_ids: string[] | null }>;
-      if (anchors.some((a) => !a.rule_id) || rules.length < ruleIds.length) {
-        return c.json({
-          error: 'pwp_trigger_swap_out_of_range',
-          reason: 'This item triggered a PWP voucher whose promotion no longer exists — ask the coordinator to exchange it.',
-        }, 409);
-      }
-      const fitsEveryRule = rules.every((r) => {
-        const inCat = String(prod.category).toUpperCase() === String(r.trigger_category).toUpperCase();
+      const ruleById = new Map(rules.map((r) => [r.id, r]));
+      const fitsTrigger = (r: { trigger_category: string; trigger_eligible_model_ids: string[] | null } | undefined,
+                           p: { category?: string | null; model_id?: string | null } | null): boolean => {
+        if (!r || !p) return false;
+        const inCat = String(p.category ?? '').toUpperCase() === String(r.trigger_category).toUpperCase();
         const models = r.trigger_eligible_model_ids ?? [];
-        return inCat && (models.length === 0 || (prod.model_id != null && models.includes(prod.model_id)));
-      });
-      if (!fitsEveryRule) {
-        return c.json({
-          error: 'pwp_trigger_swap_out_of_range',
-          reason: 'This item triggered a PWP voucher — it can only be exchanged for another item inside the promotion\'s trigger range.',
-          itemCode: newCode,
-        }, 409);
+        return inCat && (models.length === 0 || (p.model_id != null && models.includes(p.model_id)));
+      };
+      const prevProd = await loadProductByCode(sb, prev.item_code);
+      /* Codes anchored by THIS line: stamp match, or the line's current
+         product sits inside the code's rule trigger set. */
+      const anchored = anchors.filter((a) =>
+        a.trigger_item_code === prev.item_code ||
+        fitsTrigger(a.rule_id ? ruleById.get(a.rule_id) : undefined, prevProd));
+      if (anchored.length > 0) {
+        if (anchored.some((a) => !a.rule_id || !ruleById.get(a.rule_id))) {
+          return c.json({
+            error: 'pwp_trigger_swap_out_of_range',
+            reason: 'This item triggered a PWP voucher whose promotion no longer exists — ask the coordinator to exchange it.',
+          }, 409);
+        }
+        const fitsEveryRule = anchored.every((a) => fitsTrigger(ruleById.get(a.rule_id!), prod));
+        if (!fitsEveryRule) {
+          return c.json({
+            error: 'pwp_trigger_swap_out_of_range',
+            reason: 'This item triggered a PWP voucher — it can only be exchanged for another item inside the promotion\'s trigger range.',
+            itemCode: newCode,
+          }, 409);
+        }
+        triggerCodesToRestamp = anchored.map((a) => a.code);
+      } else {
+        /* Self-heal an ORPHANED stamp (it points at a SKU no longer on the
+           SO — the legacy pre-restamp swaps left these): when the INCOMING
+           product fits the orphan's rule trigger set, adopt this line as the
+           trigger again. Lets a wrongly-escaped trigger line be swapped back
+           into range and re-knit the voucher. */
+        const { data: lineRows } = await sb.from('mfg_sales_order_items')
+          .select('item_code').eq('doc_no', docNo).eq('cancelled', false);
+        const liveCodes = new Set(((lineRows ?? []) as Array<{ item_code: string }>).map((r) => r.item_code));
+        const orphans = anchors.filter((a) =>
+          a.trigger_item_code != null && !liveCodes.has(a.trigger_item_code) &&
+          fitsTrigger(a.rule_id ? ruleById.get(a.rule_id) : undefined, prod));
+        triggerCodesToRestamp = orphans.map((a) => a.code);
       }
-      triggerCodesToRestamp = true;
     }
     const sellSen = Math.max(0, Math.round(Number(prod.sell_price_sen ?? 0)));
     if (sellSen <= 0) {
@@ -4584,10 +4618,10 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
       .eq('code', rewardPwpCode).eq('redeemed_doc_no', docNo);
     if (e1) console.error('[tbc-swap] reward code restamp failed:', e1.message); // eslint-disable-line no-console
   }
-  if (triggerCodesToRestamp) {
+  if (triggerCodesToRestamp.length > 0) {
     const { error: e2 } = await sb.from('pwp_codes')
       .update({ trigger_item_code: newCode })
-      .eq('source_doc_no', docNo).eq('trigger_item_code', prev.item_code);
+      .in('code', triggerCodesToRestamp);
     if (e2) console.error('[tbc-swap] trigger code restamp failed:', e2.message); // eslint-disable-line no-console
   }
 
