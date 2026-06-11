@@ -786,6 +786,7 @@ export async function soDeliverableRemaining(
     )
     .in('doc_no', soDocNos)
     .eq('cancelled', false)
+    .order('line_no', { ascending: true, nullsFirst: false })
     .order('created_at');
   const rawLines = (soItems ?? []) as Array<Record<string, unknown> & { id: string; doc_no: string; item_code: string; qty: number }>;
   if (rawLines.length === 0) return out;
@@ -1301,7 +1302,9 @@ deliveryOrdersMfg.get('/:id', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
   const [h, i] = await Promise.all([
     sb.from('delivery_orders').select(HEADER).eq('id', id).maybeSingle(),
-    sb.from('delivery_order_items').select(ITEM).eq('delivery_order_id', id).order('created_at'),
+    sb.from('delivery_order_items').select(ITEM).eq('delivery_order_id', id)
+      .order('line_no', { ascending: true, nullsFirst: false })
+      .order('created_at'),
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
@@ -1481,7 +1484,7 @@ deliveryOrdersMfg.post('/', async (c) => {
   const h = header as unknown as { id: string; do_number: string };
 
   if (items.length > 0) {
-    const rows = items.map((it) => buildItemRow(h.id, it));
+    const rows = items.map((it, lineNo) => buildItemRow(h.id, it, lineNo));
     const { error: iErr } = await sb.from('delivery_order_items').insert(rows);
     if (iErr) { await sb.from('delivery_orders').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
     await recomputeTotals(sb, h.id);
@@ -1502,8 +1505,9 @@ deliveryOrdersMfg.post('/', async (c) => {
 
 /* Build one delivery_order_items insert row from a client line payload.
    Shared by POST / (bulk create) and POST /:id/items (single add). Computes
-   line_total / line_cost / margin so recomputeTotals can roll them up. */
-function buildItemRow(deliveryOrderId: string, it: Record<string, unknown>) {
+   line_total / line_cost / margin so recomputeTotals can roll them up.
+   `lineNo` (0165) = the DO's listing position; omit/null for un-numbered. */
+function buildItemRow(deliveryOrderId: string, it: Record<string, unknown>, lineNo?: number | null) {
   const qty = Number(it.qty ?? 1);
   const unitPrice = Number(it.unitPriceCenti ?? 0);
   const discount = Number(it.discountCenti ?? 0);
@@ -1532,6 +1536,7 @@ function buildItemRow(deliveryOrderId: string, it: Record<string, unknown>) {
     notes: (it.notes as string) ?? null,
     line_delivery_date: (it.lineDeliveryDate as string | null) ?? null,
     line_delivery_date_overridden: Boolean(it.lineDeliveryDateOverridden ?? false),
+    ...(typeof lineNo === 'number' ? { line_no: lineNo } : {}),
   };
 }
 
@@ -1735,8 +1740,9 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
   const dh = doHeader as unknown as { id: string; do_number: string };
 
   // 3b. One DO line per pick — qty = the picked qty (NOT the full SO line qty).
-  //     Carry cost so margins survive.
-  const doRows = sortedPicks.map((line) => {
+  //     Carry cost so margins survive. line_no (0165) = the sortedPicks
+  //     position, i.e. the SO's listing order carried onto the DO.
+  const doRows = sortedPicks.map((line, lineNo) => {
     const qty = pickQtyById.get(line.soItemId)!;
     const unit = line.unitPriceCenti;
     const discount = line.discountCenti;
@@ -1747,6 +1753,7 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
     const variants = line.variants ?? null;
     return {
       delivery_order_id: dh.id,
+      line_no: lineNo,
       so_item_id: line.soItemId,
       item_code: line.itemCode,
       item_group: itemGroup,
@@ -1933,7 +1940,19 @@ deliveryOrdersMfg.post('/:id/items', async (c) => {
     if (partial.length > 0) return c.json(sofaIncompleteSetResponse(partial), 409);
   }
 
-  const row = buildItemRow(id, it);
+  /* 0165 — continue the DO's numbering; a pre-0165 DO (max NULL) stays
+     un-numbered so its lines keep one consistent ordering regime. */
+  const { data: maxNoRow } = await sb
+    .from('delivery_order_items')
+    .select('line_no')
+    .eq('delivery_order_id', id)
+    .order('line_no', { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+  const nextLineNo = typeof (maxNoRow as { line_no?: number | null } | null)?.line_no === 'number'
+    ? (maxNoRow as { line_no: number }).line_no + 1
+    : null;
+  const row = buildItemRow(id, it, nextLineNo);
   const { data, error } = await sb.from('delivery_order_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);

@@ -47,6 +47,10 @@ export type DoRemainingLine = {
   unitCostCenti: number;
   discountCenti: number;
   variants: unknown;
+  /** Position of this line within ITS DO listing order (line_no per 0165,
+   *  created_at for pre-0165 rows) — SI conversion copies the DO's order
+   *  instead of shuffling by uuid (Loo 2026-06-12 line-order rules). */
+  lineSeq: number;
 };
 
 /**
@@ -84,14 +88,18 @@ export async function doLineRemaining(
   const activeDoIds = [...headerById.keys()];
   if (activeDoIds.length === 0) return out;
 
-  // 2. Load the DO lines of the active DOs — `delivered` = each line's qty.
+  // 2. Load the DO lines of the active DOs — `delivered` = each line's qty —
+  //    in each DO's own listing order (line_no per 0165, NULLS LAST so
+  //    pre-0165 DOs fall back to created_at).
   const { data: doLines } = await sb
     .from('delivery_order_items')
     .select(
       'id, delivery_order_id, item_code, item_group, description, description2, uom, qty, ' +
       'unit_price_centi, unit_cost_centi, discount_centi, variants',
     )
-    .in('delivery_order_id', activeDoIds);
+    .in('delivery_order_id', activeDoIds)
+    .order('line_no', { ascending: true, nullsFirst: false })
+    .order('created_at');
   const lines = (doLines ?? []) as Array<Record<string, unknown> & {
     id: string; delivery_order_id: string; qty: number;
   }>;
@@ -146,12 +154,16 @@ export async function doLineRemaining(
   }
 
   // 5. Assemble per-line descriptors with the live Pending (remaining).
+  //    lineSeq counts per DO so SI conversion can keep each DO's listing order.
+  const seqByDo = new Map<string, number>();
   for (const l of lines) {
     const head = headerById.get(l.delivery_order_id);
     if (!head) continue;
     const delivered = Number(l.qty ?? 0);
     const invoiced = invoicedByDoItem.get(l.id) ?? 0;
     const returned = returnedByDoItem.get(l.id) ?? 0;
+    const lineSeq = seqByDo.get(l.delivery_order_id) ?? 0;
+    seqByDo.set(l.delivery_order_id, lineSeq + 1);
     out.set(l.id, {
       doItemId: l.id,
       deliveryOrderId: l.delivery_order_id,
@@ -171,6 +183,7 @@ export async function doLineRemaining(
       unitCostCenti: Number(l.unit_cost_centi ?? 0),
       discountCenti: Number(l.discount_centi ?? 0),
       variants: l.variants ?? null,
+      lineSeq,
     });
   }
   return out;
