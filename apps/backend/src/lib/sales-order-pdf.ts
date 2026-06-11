@@ -1,7 +1,6 @@
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
-  groupSoLinesForDisplay,
   pwpRewardNote,
   pwpTriggerNotes,
   type SoPwpCodeRow,
@@ -33,10 +32,11 @@ import { loadFabricDescriptionMap } from './supplier-doc-data';
 //      delivery date — "To be confirmed" when null, like POS)
 //   3. BILL TO / SOLD BY columns (delivery address = ship_to_address ??
 //      address1-4; phone; family/emergency contact; agent + sales location)
-//   4. Line items table: SKU | Description (variant detail second line —
-//      compartments · fabric / SEAT / LEG, fabric code enriched with the
-//      fabric_trackings description; PWP notes; remark) | Qty | Unit |
-//      Disc | Line Total
+//   4. Line items table: ONE ROW PER SO LINE ITEM (no sofa-build folding),
+//      ordered SOFA+MATTRESS → BEDFRAME → ACCESSORY → others → SERVICE last.
+//      SKU | Description (desc / description2 or remark / specs line —
+//      fabric code enriched with the fabric_trackings description; PWP
+//      notes after) | Qty | Unit | Disc | Line Total
 //   5. PAYMENTS RECEIVED ledger (mfg_sales_order_payments rows)
 //   6. Totals: SUBTOTAL / PAID TO DATE / TOTAL / BALANCE DUE
 //   7. Customer signature (stored signature_b64 image when present) +
@@ -164,15 +164,14 @@ const collectFabricCodes = (items: SoItem[]): string[] => {
   return [...codes];
 };
 
-/* Variant second line for a single (non-folded) item: the shared
-   buildVariantSummary (same string every grid shows — fabric / DIVAN+LEG /
-   GAP / SEAT / SPECIAL) with each fabric code enriched to
-   "EZ-001 — <fabric_description>" when the Fabric Tracking master knows it.
-   Falls back to the stored description2 snapshot when the line has no
-   variants object (legacy rows). */
+/* Specs line for an item: the shared buildVariantSummary (same string every
+   grid shows — fabric / DIVAN+LEG / GAP / SEAT / SPECIAL) with each fabric
+   code enriched to "EZ-001 — <fabric_description>" when the Fabric Tracking
+   master knows it. Returns '' when the line has no variants object —
+   description2 prints on its own line, so no fallback to it here. */
 const variantLine = (it: SoItem, fabricDescMap: Map<string, string>): string => {
   const v = it.variants;
-  if (!v || typeof v !== 'object') return (it.description2 ?? '').trim();
+  if (!v || typeof v !== 'object') return '';
   let mapped: Record<string, unknown> = v;
   for (const key of FABRIC_VARIANT_KEYS) {
     const raw = v[key];
@@ -184,7 +183,20 @@ const variantLine = (it: SoItem, fabricDescMap: Map<string, string>): string => 
       }
     }
   }
-  return buildVariantSummary(it.item_group ?? null, mapped) || (it.description2 ?? '').trim();
+  return buildVariantSummary(it.item_group ?? null, mapped);
+};
+
+/* Owner row-order rule (2026-06-12): SOFA + MATTRESS first (stored relative
+   order preserved), then BEDFRAME, then ACCESSORY, then any other group,
+   then SERVICE always LAST. Case-insensitive contains-match on item_group;
+   Array.prototype.sort is stable, so within-group order = stored order. */
+const groupRank = (itemGroup: string | null | undefined): number => {
+  const g = (itemGroup ?? '').toLowerCase();
+  if (g.includes('sofa') || g.includes('mattress')) return 0;
+  if (g.includes('bedframe')) return 1;
+  if (g.includes('accessor')) return 2;
+  if (g.includes('service')) return 4;
+  return 3;
 };
 
 /* Human-readable method label for the PDF Payments table.
@@ -339,49 +351,41 @@ export async function generateSalesOrderPdf(
   );
 
   // ── Line items table ─────────────────────────────────────────────
-  /* Loo 2026-06-05 — customer-facing fold: per-module sofa SKU lines
-     (variants.buildKey groups from the P3 split) render as ONE Model row with
-     the combined price; the persisted lines and every Backend grid stay
-     per-SKU. Second description line = compartments · fabric / SEAT / LEG
-     (composition + shared variant summary), matching the POS printout. PWP
-     notes ride inside the Description cell: a reward line shows the voucher
-     it consumed, a trigger line shows the codes this SO issued (USED → short
-     reference; otherwise "issued, not redeemed yet"). */
-  const groups = groupSoLinesForDisplay(items);
-  const tableRows = groups.map((g) => {
-    const lead = g.lines[0]!;
+  /* Owner correction 2026-06-12 — ONE ROW PER SO LINE ITEM, exactly the
+     items as stored ("有几个 SKU 就有几行"): no sofa-build folding, every
+     SKU prints its own qty / unit price / disc / line total. Rows ordered
+     by category (SOFA+MATTRESS → BEDFRAME → ACCESSORY → others → SERVICE
+     last), stable within each group. Description cell = up to 3 lines:
+       1. description ("SOFA BOOQIT 1B(LHF)")
+       2. description2 / remark (when present)
+       3. specs — fabric code — description / SEAT / LEG (variantLine)
+     PWP notes (reward voucher consumed / trigger codes issued) come after. */
+  const orderedItems = [...items].sort((a, b) => groupRank(a.item_group) - groupRank(b.item_group));
+  const tableRows = orderedItems.map((it) => {
+    const desc2 = (it.description2 ?? '').trim();
+    const remarkText = typeof it.remark === 'string' && it.remark.trim() !== '' ? it.remark.trim() : null;
+    const specs = variantLine(it, fabricDescMap);
     const notes = [
-      pwpRewardNote(lead.variants),
-      ...pwpTriggerNotes(g.lines.map((l) => l.item_code), pwpCodes),
+      pwpRewardNote(it.variants),
+      ...pwpTriggerNotes([it.item_code], pwpCodes),
     ].filter((n): n is NonNullable<typeof n> => n != null).map((n) => n.text);
-    /* Loo D3 — per-line operator remark prints as its own note line in the
-       Description cell. For a folded sofa build use the group's first remark;
-       otherwise the lead line's own remark. */
-    const remarkText = g.kind === 'sofa-build' && g.display
-      ? g.display.remark
-      : (typeof lead.remark === 'string' && lead.remark.trim() !== '' ? lead.remark : null);
-    if (remarkText) notes.push(`Remark: ${remarkText}`);
-    if (g.kind === 'sofa-build' && g.display) {
-      const d = g.display;
-      const sub = [d.composition, d.description2].filter(Boolean).join(' · ');
-      return [
-        d.itemCode,
-        [d.description, sub, ...notes].filter(Boolean).join('\n'),
-        `${d.qty} ${lead.uom}`,
-        fmtRm(d.unitPriceCenti, header.currency),
-        d.discountCenti > 0 ? fmtRm(d.discountCenti, header.currency) : '—',
-        fmtRm(d.totalCenti, header.currency),
-      ];
-    }
-    const sub = variantLine(lead, fabricDescMap);
-    const desc = [lead.description ?? lead.item_code, sub, ...notes].filter(Boolean).join('\n');
+    /* Line 2 = description2 when present (remark stands in when there is no
+       description2); a remark alongside a description2 still prints, as its
+       own note line after the specs. */
+    const lines = [
+      it.description ?? it.item_code,
+      desc2 || remarkText,
+      specs,
+      ...notes,
+      desc2 && remarkText ? `Remark: ${remarkText}` : null,
+    ].filter(Boolean);
     return [
-      lead.item_code,
-      desc,
-      String(lead.qty) + ' ' + lead.uom,
-      fmtRm(lead.unit_price_centi, header.currency),
-      lead.discount_centi > 0 ? fmtRm(lead.discount_centi, header.currency) : '—',
-      fmtRm(lead.total_centi, header.currency),
+      it.item_code,
+      lines.join('\n'),
+      `${it.qty} ${it.uom}`,
+      fmtRm(it.unit_price_centi, header.currency),
+      it.discount_centi > 0 ? fmtRm(it.discount_centi, header.currency) : '—',
+      fmtRm(it.total_centi, header.currency),
     ];
   });
 
