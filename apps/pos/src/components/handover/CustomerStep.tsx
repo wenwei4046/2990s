@@ -35,10 +35,11 @@ export const CustomerStep = ({
   const lockedToSelf = me.data?.role === 'sales';
 
   /* Returning-customer pick (Loo 2026-06-06) — autofill EVERYTHING the
-     snapshot carries: contact here, plus the Address step's fields so the
-     salesperson doesn't re-key them. All editable after. (Customer type is
-     NOT copied — it's auto-derived below from whether the identity is
-     recognised, per Loo's follow-up the same day.) */
+     snapshot carries: contact here, plus the Address step's fields and the
+     Emergency step's contact (Loo 2026-06-12) so the salesperson doesn't
+     re-key them. All editable after. (Customer type is NOT copied — it's
+     auto-derived below from whether the identity is recognised, per Loo's
+     follow-up the same day.) */
   const pickCustomer = (h: CustomerSearchHit) => {
     update('name', h.debtorName);
     if (h.phone) update('phone', h.phone);
@@ -49,6 +50,9 @@ export const CustomerStep = ({
     if (h.postcode) update('postcode', h.postcode);
     if (h.customerState) update('state', h.customerState);
     if (h.buildingType) update('buildingType', h.buildingType);
+    if (h.emergencyContactName) update('emergencyName', h.emergencyContactName);
+    if (h.emergencyContactPhone) update('emergencyPhone', h.emergencyContactPhone);
+    if (h.emergencyContactRelationship) update('emergencyRelation', h.emergencyContactRelationship);
   };
 
   /* Customer type is DERIVED, not picked (Loo 2026-06-06: "if there is the

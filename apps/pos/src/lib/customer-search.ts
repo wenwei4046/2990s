@@ -31,6 +31,12 @@ export interface CustomerSearchHit {
   postcode: string | null;
   customerState: string | null;
   buildingType: string | null;
+  /* The trio travels as a unit — the server coalesces emergency contact per
+     GROUP (newest order carrying any of the three wins all three), never
+     mixing one order's name with another's phone. */
+  emergencyContactName: string | null;
+  emergencyContactPhone: string | null;
+  emergencyContactRelationship: string | null;
   lastDocNo: string;
   lastOrderAt: string;
 }
