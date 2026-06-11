@@ -1,16 +1,26 @@
 // Purchase Invoice PDF — internal copy / for filing.
+// Dual-code layout (Commander): supplier code first, our code alongside.
+// purchase_invoice_items has NO supplier_sku column — resolved at print time
+// from supplier_material_bindings via the doc's supplier_id.
 import { drawHeader, drawTwoColInfo, fmtRm, safeName, fmtDocDate } from './pdf-common';
+import { loadSupplierDocData, supplierCodeFor, specsLine } from './supplier-doc-data';
 
 type PiHeader = {
   invoice_number: string; supplier_invoice_ref: string | null; status: string;
   invoice_date: string; due_date: string | null; currency: string;
   subtotal_centi: number; tax_centi: number; total_centi: number;
   paid_centi: number; notes: string | null;
+  supplier_id?: string | null;
   supplier?: { code: string; name: string };
 };
 type PiItem = {
   material_code: string; material_name: string;
   qty: number; unit_price_centi: number; line_total_centi: number;
+  /* Dual-code extras — optional so older call sites keep compiling. */
+  supplier_sku?: string | null;
+  item_group?: string | null;
+  description?: string | null;
+  variants?: Record<string, unknown> | null;
 };
 
 export async function generatePurchaseInvoicePdf(header: PiHeader, items: PiItem[]): Promise<void> {
@@ -39,28 +49,42 @@ export async function generatePurchaseInvoicePdf(header: PiHeader, items: PiItem
     [header.notes ?? null],
   );
 
-  const rows = items.map((it, idx) => [
-    String(idx + 1),
-    it.material_code,
-    it.material_name,
-    String(it.qty),
-    fmtRm(it.unit_price_centi, header.currency),
-    fmtRm(it.line_total_centi, header.currency),
-  ]);
+  // Codes note + dual-code lookups (no supplier_sku column on PI items —
+  // resolved live from the supplier's bindings; fabric via fabric_trackings).
+  doc.setFont('helvetica', 'italic'); doc.setFontSize(8); doc.setTextColor(80);
+  doc.text('Codes shown are SUPPLIER codes; our reference in second column.', margin, y);
+  doc.setFont('helvetica', 'normal'); doc.setTextColor(0);
+  y += 4;
+  const { skuMap, fabricMap } = await loadSupplierDocData(header.supplier_id, items);
+
+  const rows = items.map((it, idx) => {
+    const specs = specsLine(it, fabricMap);
+    const desc = it.description ?? it.material_name;
+    return [
+      String(idx + 1),
+      supplierCodeFor(it, skuMap),
+      it.material_code,
+      specs ? `${desc}\n${specs}` : desc,
+      String(it.qty),
+      fmtRm(it.unit_price_centi, header.currency),
+      fmtRm(it.line_total_centi, header.currency),
+    ];
+  });
   autoTable(doc, {
     startY: y,
-    head: [['#', 'Code', 'Description', 'Qty', 'Unit Price', 'Total']],
+    head: [['#', 'Supplier Code', 'Our Code', 'Description', 'Qty', 'Unit Price', 'Total']],
     body: rows,
     theme: 'striped',
     styles: { fontSize: 8.5, cellPadding: 2 },
     headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
     columnStyles: {
       0: { cellWidth: 8, halign: 'right' },
-      1: { cellWidth: 26 },
-      2: { cellWidth: 78 },
-      3: { cellWidth: 14, halign: 'right' },
-      4: { cellWidth: 28, halign: 'right' },
-      5: { cellWidth: 28, halign: 'right' },
+      1: { cellWidth: 26, fontStyle: 'bold' },
+      2: { cellWidth: 26 },
+      3: { cellWidth: 56 },
+      4: { cellWidth: 12, halign: 'right' },
+      5: { cellWidth: 27, halign: 'right' },
+      6: { cellWidth: 27, halign: 'right' },
     },
     margin: { left: margin, right: margin },
   });

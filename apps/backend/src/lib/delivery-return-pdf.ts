@@ -1,5 +1,5 @@
 // Delivery Return PDF — printable for the customer to sign on collection.
-import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate } from './pdf-common';
+import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate, fmtDocStamp } from './pdf-common';
 
 type DrHeader = {
   return_number: string; status: string; return_date: string;
@@ -29,7 +29,7 @@ export async function generateDeliveryReturnPdf(
     rightMeta: [
       { label: opts?.docNoLabel ?? 'DR No',  value: header.return_number },
       { label: 'Date',   value: fmtDocDate(header.return_date) },
-      { label: 'Status', value: header.status },
+      { label: 'Status', value: header.status.replace(/_/g, ' ') },
     ],
   });
 
@@ -75,7 +75,11 @@ export async function generateDeliveryReturnPdf(
   doc.text(opts?.totalLabel ?? 'TOTAL REFUND', totalsX, lastY + 2);
   doc.text(fmtRm(header.refund_centi), pageW - margin, lastY + 2, { align: 'right' });
 
-  drawSignatureBoxes(doc, lastY + 12, 'Customer Confirms Return', "2990's Home Received By");
+  const ty = drawSignatureBoxes(doc, lastY + 12, 'Customer Confirms Return', "2990's Home Received By");
+
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(110);
+  doc.text('Note: By signing above, both parties confirm the return of the items listed above.', margin, ty);
+  doc.text(`Generated ${fmtDocStamp()}`, pageW - margin, ty, { align: 'right' });
 
   doc.save(`${header.return_number}-${safeName(header.debtor_name)}.pdf`);
 }

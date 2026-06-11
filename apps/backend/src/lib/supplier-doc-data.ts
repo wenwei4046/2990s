@@ -1,0 +1,156 @@
+// ----------------------------------------------------------------------------
+// supplier-doc-data — print-time lookups for SUPPLIER-FACING purchasing docs
+// (PO / GRN / PI / PR PDFs).
+//
+// Owner's rule (Commander): the supplier must see THEIR codes (they can only
+// act on their own), and our internal codes stay visible too — BOTH on every
+// purchasing document. Fabric/colour must show the SUPPLIER's colour code with
+// our internal code alongside.
+//
+// Data sources (REUSED, no new backend routes):
+//   • supplier_material_bindings — via GET /suppliers/:id (the SupplierDetail
+//     page endpoint, returns { supplier, bindings }) → material_code →
+//     supplier_sku for material_kind='mfg_product'. Main binding wins.
+//   • fabric_trackings — via GET /fabric-tracking (the FabricTracking page
+//     endpoint) → fabric_code (internal) → supplier_code.
+//
+// All loaders are DEFENSIVE: any fetch failure returns an empty map so PDF
+// generation never dies on a lookup hiccup — the doc just falls back to '—' /
+// our internal codes.
+// ----------------------------------------------------------------------------
+
+import { buildVariantSummary } from '@2990s/shared';
+import { authedFetch } from './authed-fetch';
+
+/** Minimal line shape the PDF generators share. Extra fields welcome. */
+export type SupplierDocLine = {
+  material_code: string;
+  supplier_sku?: string | null;
+  item_group?: string | null;
+  variants?: Record<string, unknown> | null;
+};
+
+/* The variant keys that can carry an INTERNAL fabric/colour code. SO-keyed
+   lines use fabricCode/colorCode; GRN/PI/PR editors store fabricColor (see
+   buildVariantSummary in packages/shared). */
+const FABRIC_VARIANT_KEYS = ['fabricCode', 'colorCode', 'fabricColor'] as const;
+
+/**
+ * internal fabric_code → supplier_code, via the same /fabric-tracking endpoint
+ * the FabricTracking page queries. Only codes in `fabricCodes` are kept.
+ */
+export async function loadFabricSupplierMap(fabricCodes: string[]): Promise<Map<string, string>> {
+  const wanted = new Set(fabricCodes.map((c) => c.trim()).filter(Boolean));
+  if (wanted.size === 0) return new Map();
+  try {
+    const res = await authedFetch<{ fabrics: Array<{ fabric_code: string; supplier_code: string | null }> }>(
+      '/fabric-tracking',
+    );
+    const map = new Map<string, string>();
+    for (const f of res.fabrics ?? []) {
+      const sup = (f.supplier_code ?? '').trim();
+      if (sup && wanted.has(f.fabric_code)) map.set(f.fabric_code, sup);
+    }
+    return map;
+  } catch {
+    return new Map(); // lookup failure must never block the PDF
+  }
+}
+
+/**
+ * material_code → supplier_sku for ONE supplier, via the SupplierDetail page's
+ * GET /suppliers/:id (returns every binding for that supplier). Filters to
+ * material_kind='mfg_product' and the requested codes; when the same code is
+ * bound twice the main binding (is_main_supplier) wins.
+ */
+export async function loadSupplierSkuMap(
+  supplierId: string | null | undefined,
+  codes: string[],
+): Promise<Map<string, string>> {
+  const wanted = new Set(codes.map((c) => c.trim()).filter(Boolean));
+  if (!supplierId || wanted.size === 0) return new Map();
+  try {
+    const res = await authedFetch<{
+      bindings: Array<{
+        material_kind: string;
+        material_code: string;
+        supplier_sku: string | null;
+        is_main_supplier: boolean;
+      }>;
+    }>(`/suppliers/${supplierId}`);
+    const candidates = (res.bindings ?? [])
+      .filter((b) => b.material_kind === 'mfg_product'
+        && wanted.has(b.material_code)
+        && (b.supplier_sku ?? '').trim() !== '')
+      // Main binding first; first writer wins below.
+      .sort((a, b) => Number(b.is_main_supplier) - Number(a.is_main_supplier));
+    const map = new Map<string, string>();
+    for (const b of candidates) {
+      if (!map.has(b.material_code)) map.set(b.material_code, (b.supplier_sku ?? '').trim());
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+/** Collect every internal fabric code riding in the lines' variants JSONB. */
+export function collectFabricCodes(items: SupplierDocLine[]): string[] {
+  const codes = new Set<string>();
+  for (const it of items) {
+    const v = it.variants;
+    if (!v || typeof v !== 'object') continue;
+    for (const key of FABRIC_VARIANT_KEYS) {
+      const raw = v[key];
+      if (typeof raw === 'string' && raw.trim()) codes.add(raw.trim());
+    }
+  }
+  return [...codes];
+}
+
+/** Everything a purchasing-doc PDF needs, fetched in one parallel round. */
+export async function loadSupplierDocData(
+  supplierId: string | null | undefined,
+  items: SupplierDocLine[],
+): Promise<{ skuMap: Map<string, string>; fabricMap: Map<string, string> }> {
+  // Binding lookup only for lines that never snapshotted a supplier_sku
+  // (PI/PR lines have no supplier_sku column at all → all of them).
+  const missing = items
+    .filter((it) => !(it.supplier_sku ?? '').trim())
+    .map((it) => it.material_code);
+  const [skuMap, fabricMap] = await Promise.all([
+    loadSupplierSkuMap(supplierId, missing),
+    loadFabricSupplierMap(collectFabricCodes(items)),
+  ]);
+  return { skuMap, fabricMap };
+}
+
+/**
+ * The supplier-facing item code for a line: snapshotted supplier_sku first,
+ * then the live binding lookup, else '—' (our code has its own column).
+ */
+export function supplierCodeFor(it: SupplierDocLine, skuMap: Map<string, string>): string {
+  return (it.supplier_sku ?? '').trim() || skuMap.get(it.material_code) || '—';
+}
+
+/**
+ * Specs / variant summary where fabric segments show the SUPPLIER's colour
+ * code with our internal code alongside — `supplierColour (ourCode)` — when a
+ * fabric_trackings mapping exists; otherwise our code as-is.
+ */
+export function specsLine(it: SupplierDocLine, fabricMap: Map<string, string>): string {
+  const v = it.variants;
+  if (!v || typeof v !== 'object') return '';
+  let mapped: Record<string, unknown> = v;
+  for (const key of FABRIC_VARIANT_KEYS) {
+    const raw = v[key];
+    if (typeof raw === 'string') {
+      const sup = fabricMap.get(raw.trim());
+      if (sup) {
+        if (mapped === v) mapped = { ...v }; // clone once, on demand
+        mapped[key] = `${sup} (${raw.trim()})`;
+      }
+    }
+  }
+  return buildVariantSummary(it.item_group ?? null, mapped);
+}

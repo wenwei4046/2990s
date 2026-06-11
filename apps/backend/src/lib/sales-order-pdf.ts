@@ -5,7 +5,14 @@ import {
   pwpTriggerNotes,
   type SoPwpCodeRow,
 } from '@2990s/shared/so-line-display';
-import { fmtDocDate } from './pdf-common';
+import {
+  drawHeader,
+  drawTwoColInfo,
+  drawSignatureBoxes,
+  fmtDocDate,
+  fmtRm,
+  safeName,
+} from './pdf-common';
 
 // ----------------------------------------------------------------------------
 // Sales Order PDF generator — dynamic jspdf import so it doesn't bloat the
@@ -91,11 +98,6 @@ type SoPayment = {
   collected_by_name: string | null;
   note: string | null;
 };
-
-const fmtRm = (centi: number, currency: string): string =>
-  `${currency} ${(centi / 100).toLocaleString('en-MY', {
-    minimumFractionDigits: 2, maximumFractionDigits: 2,
-  })}`;
 
 /* Internal / machine keys the customer never needs: sofa-split grouping +
    geometry (buildKey/cellIndex/x/y/rot, P3), the raw cells array, the build
@@ -196,77 +198,38 @@ export async function generateSalesOrderPdf(
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 14;
-  let y = margin;
 
-  // ── Header ────────────────────────────────────────────────────────
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(16);
-  doc.text("2990's Home", margin, y);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  y += 5;
-  doc.text("HOOKKA Industries (Reg: 202301234567)", margin, y);
-  y += 4;
-  doc.text("Lot 12, Jalan Industri 5/3, Selangor, Malaysia", margin, y);
-  y += 4;
-  doc.text("Tel: +60 12-345-6789 · Email: hello@2990s.my", margin, y);
-
-  // Doc info — right aligned
-  let rightY = margin;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14);
-  doc.text(opts?.docTitle ?? 'SALES ORDER', pageW - margin, rightY, { align: 'right' });
-  rightY += 6;
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
-  doc.text(`${opts?.docNoLabel ?? 'Doc No'}: ${header.doc_no}`, pageW - margin, rightY, { align: 'right' });
-  rightY += 5;
-  doc.text(`Date:   ${fmtDocDate(header.so_date)}`, pageW - margin, rightY, { align: 'right' });
-  rightY += 5;
-  doc.text(`Status: ${header.status.replace(/_/g, ' ')}`, pageW - margin, rightY, { align: 'right' });
-
-  y = Math.max(y, rightY) + 6;
+  // ── Header (shared pdf-common layout) ─────────────────────────────
+  let y = drawHeader(doc, {
+    docTitle: opts?.docTitle ?? 'SALES ORDER',
+    rightMeta: [
+      { label: opts?.docNoLabel ?? 'Doc No', value: header.doc_no },
+      { label: 'Date',   value: fmtDocDate(header.so_date) },
+      { label: 'Status', value: header.status.replace(/_/g, ' ') },
+    ],
+  });
 
   // ── Customer block ───────────────────────────────────────────────
-  doc.setDrawColor(180);
-  doc.line(margin, y, pageW - margin, y);
-  y += 4;
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.text('BILL TO', margin, y);
-  doc.text('DETAILS', pageW / 2, y);
-  y += 4;
-  doc.setFont('helvetica', 'normal');
-
-  const leftLines = [
-    header.debtor_name,
-    header.debtor_code ? `Code: ${header.debtor_code}` : null,
-    header.address1,
-    header.address2,
-    header.address3,
-    header.address4,
-    /* Task #91 — pretty Malaysian format on customer-facing PDF. */
-    header.phone ? `Tel: ${formatPhone(header.phone)}` : null,
-  ].filter(Boolean) as string[];
-
-  const rightLines = [
-    header.agent ? `Agent: ${header.agent}` : null,
-    header.branding ? `Branding: ${header.branding}` : null,
-    header.venue ? `Venue: ${header.venue}` : null,
-    header.ref ? `Reference: ${header.ref}` : null,
-    header.po_doc_no ? `Customer PO: ${header.po_doc_no}` : null,
-    header.note ? `Note: ${header.note}` : null,
-  ].filter(Boolean) as string[];
-
-  const blockTop = y;
-  leftLines.forEach((line, i) => {
-    doc.text(String(line), margin, blockTop + i * 4);
-  });
-  rightLines.forEach((line, i) => {
-    doc.text(String(line), pageW / 2, blockTop + i * 4);
-  });
-  y = blockTop + Math.max(leftLines.length, rightLines.length) * 4 + 4;
+  y = drawTwoColInfo(doc, y, 'BILL TO', 'DETAILS',
+    [
+      header.debtor_name,
+      header.debtor_code ? `Code: ${header.debtor_code}` : null,
+      header.address1,
+      header.address2,
+      header.address3,
+      header.address4,
+      /* Task #91 — pretty Malaysian format on customer-facing PDF. */
+      header.phone ? `Tel: ${formatPhone(header.phone)}` : null,
+    ],
+    [
+      header.agent ? `Agent: ${header.agent}` : null,
+      header.branding ? `Branding: ${header.branding}` : null,
+      header.venue ? `Venue: ${header.venue}` : null,
+      header.ref ? `Reference: ${header.ref}` : null,
+      header.po_doc_no ? `Customer PO: ${header.po_doc_no}` : null,
+      header.note ? `Note: ${header.note}` : null,
+    ],
+  );
 
   // ── Line items table ─────────────────────────────────────────────
   /* Loo 2026-06-05 — customer-facing fold: per-module sofa SKU lines
@@ -446,19 +409,8 @@ export async function generateSalesOrderPdf(
   }
   ty += 4;
 
-  // ── Signature boxes ──────────────────────────────────────────────
-  if (ty > 240) { doc.addPage(); ty = margin; }
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.text('Customer Signature', margin, ty);
-  doc.text("2990's Home Authorised Signature", pageW / 2 + 5, ty);
-  ty += 2;
-  doc.setLineDashPattern([1.5, 1.5], 0);
-  doc.setDrawColor(120);
-  doc.rect(margin, ty, (pageW - margin * 2) / 2 - 5, 22);
-  doc.rect(pageW / 2 + 5, ty, (pageW - margin * 2) / 2 - 5, 22);
-  doc.setLineDashPattern([], 0);
-  ty += 28;
+  // ── Signature boxes (shared pdf-common layout) ───────────────────
+  ty = drawSignatureBoxes(doc, ty, 'Customer Signature', "2990's Home Authorised Signature");
 
   // ── T&C footer ────────────────────────────────────────────────────
   doc.setFont('helvetica', 'normal');
@@ -476,8 +428,7 @@ export async function generateSalesOrderPdf(
   });
 
   // Filename: SO-009001-DebtorName.pdf
-  const safeName = (header.debtor_name || 'customer').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 32);
-  const filename = `${header.doc_no}-${safeName}.pdf`;
+  const filename = `${header.doc_no}-${safeName(header.debtor_name || 'customer')}.pdf`;
 
   /* Follow-up #83 — Dispatch on action.
      - save:    write a real file (download)

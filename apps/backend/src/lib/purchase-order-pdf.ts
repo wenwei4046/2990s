@@ -31,6 +31,7 @@
 // ----------------------------------------------------------------------------
 
 import { fmtDocDate, fmtDocStamp } from './pdf-common';
+import { loadSupplierDocData, supplierCodeFor, specsLine } from './supplier-doc-data';
 
 const COMPANY = {
   name:    "2990'S HOME SDN BHD",
@@ -42,6 +43,9 @@ const COMPANY = {
 
 type PoHeader = {
   po_number:     string;
+  /** Supplier id — drives the print-time binding lookup for lines that never
+      snapshotted a supplier_sku. Optional: missing id → '—' fallback. */
+  supplier_id?:  string | null;
   status:        string;
   po_date:       string;
   expected_at:   string | null;
@@ -83,6 +87,11 @@ type PoItem = {
   uom?:           string | null;
   discount_centi?: number | null;
   delivery_date?: string | null;
+  /** Supplier-facing dual-code layout — variants drive the Specs column
+      (fabric shows the SUPPLIER's colour code with ours alongside). */
+  item_group?:    string | null;
+  description?:   string | null;
+  variants?:      Record<string, unknown> | null;
 };
 
 const fmtMoney = (centi: number, currency: string): string =>
@@ -178,53 +187,53 @@ export async function generatePurchaseOrderPdf(
     doc.text(String(val ?? ''), rightX + 35,               my);
     my += 4.5;
   });
-  y += blockH + 4;
+  y += blockH + 2;
+
+  // Owner's rule — supplier acts on THEIR codes; ours stay printed alongside.
+  doc.setFont('helvetica', 'italic'); doc.setFontSize(8); doc.setTextColor(80);
+  doc.text('Codes shown are SUPPLIER codes; our reference in second column.', leftX, y + 2);
+  doc.setFont('helvetica', 'normal'); doc.setTextColor(0);
+  y += 6;
 
   // ── Items table ──────────────────────────────────────────────────
-  // Each row carries two visual lines:
-  //   line 1: Item code  · Transferred SO date · UOM · Qty · Unit · Disc · Total
-  //   line 2: Description (no other columns; takes the description column)
-  // didDrawCell renders the description as a second line inside the cell so
-  // jspdf-autotable's row height adjusts naturally.
+  // Dual-code layout (Commander — supplier-facing purchasing docs):
+  //   Supplier Code (bold, FIRST — the code the supplier acts on)
+  //   Our Code (internal reference) · Description · Specs · Qty · Unit · Disc · Total
+  // Specs = variant summary where fabric shows `supplierColour (ourCode)` when
+  // the fabric_trackings mapping exists.
+  // Lines missing a snapshotted supplier_sku fall back to a live
+  // supplier_material_bindings lookup; still nothing → '—' (our code has its
+  // own column, so we never print our code in the supplier slot).
+  const { skuMap, fabricMap } = await loadSupplierDocData(header.supplier_id, items);
   type Row = [string, string, string, string, string, string, string, string];
-  const rows: Row[] = items.map((it, idx) => {
-    // PR #122 — Commander 2026-05-26: "我们在下单 PO 的时候，它的 item code
-    // 需要设置成我们的 internal code，但是去到 supplier 那边是能看到他们自
-    // 己的 code 的". UI keeps showing our material_code; the printed PO that
-    // gets emailed/posted to the supplier swaps to their SKU. Fall back to
-    // our code only when the line never bound a supplier SKU (free-text /
-    // one-off purchase).
-    const supplierFacingCode = it.supplier_sku?.trim() || it.material_code;
-    const itemAndDesc = `${supplierFacingCode}\n${it.material_name}`;
-    return [
-      String(idx + 1),
-      itemAndDesc,
-      it.delivery_date ? fmtDocDate(it.delivery_date) : '',
-      (it.uom ?? '').toUpperCase(),
-      String(it.qty),
-      fmtAmount(it.unit_price_centi),
-      it.discount_centi ? fmtAmount(it.discount_centi) : '',
-      fmtAmount(it.line_total_centi),
-    ];
-  });
+  const rows: Row[] = items.map((it) => [
+    supplierCodeFor(it, skuMap),
+    it.material_code,
+    it.description ?? it.material_name,
+    specsLine(it, fabricMap),
+    String(it.qty),
+    fmtAmount(it.unit_price_centi),
+    it.discount_centi ? fmtAmount(it.discount_centi) : '',
+    fmtAmount(it.line_total_centi),
+  ]);
 
   autoTable(doc, {
     startY: y,
-    head: [['#', 'Item / Description', 'Transferred SO', 'UOM', 'Qty', `U/Price ${header.currency}`, 'Disc.', `Total ${header.currency}`]],
+    head: [['Supplier Code', 'Our Code', 'Description', 'Specs', 'Qty', `U/Price ${header.currency}`, 'Disc.', `Total ${header.currency}`]],
     body: rows,
     theme: 'plain',
     styles: { fontSize: 9, cellPadding: { top: 1.5, right: 2, bottom: 1.5, left: 2 }, lineColor: [120, 120, 120], lineWidth: 0.1 },
     headStyles: { fontStyle: 'bold', halign: 'left', valign: 'middle', lineWidth: { top: 0.4, bottom: 0.4 } as never },
     bodyStyles: { valign: 'top' },
     columnStyles: {
-      0: { cellWidth: 8,  halign: 'right' },
-      1: { cellWidth: 64 },
-      2: { cellWidth: 22, halign: 'center' },
-      3: { cellWidth: 14, halign: 'center' },
-      4: { cellWidth: 12, halign: 'right' },
-      5: { cellWidth: 20, halign: 'right' },
-      6: { cellWidth: 16, halign: 'right' },
-      7: { cellWidth: 24, halign: 'right' },
+      0: { cellWidth: 26, fontStyle: 'bold' },
+      1: { cellWidth: 24 },
+      2: { cellWidth: 38 },
+      3: { cellWidth: 36 },
+      4: { cellWidth: 10, halign: 'right' },
+      5: { cellWidth: 18, halign: 'right' },
+      6: { cellWidth: 12, halign: 'right' },
+      7: { cellWidth: 18, halign: 'right' },
     },
     margin: { left: margin, right: margin },
   });

@@ -445,6 +445,10 @@ export const PurchaseOrderDetail = () => {
             <thead>
               <tr>
                 <th>Item</th>
+                {/* Supplier-facing dual-code rule (Commander) — the supplier's
+                    own code prints on every purchasing doc; surface the
+                    snapshotted line supplier_sku here too. */}
+                <th>Supplier Code</th>
                 <th>Group</th>
                 <th className={styles.tableRight}>Qty</th>
                 <th>Transfer To (GRN)</th>
@@ -476,6 +480,7 @@ export const PurchaseOrderDetail = () => {
                         return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
                       })()}
                     </td>
+                    <td style={{ fontFamily: 'var(--font-mono)' }}>{it.supplier_sku?.trim() || '—'}</td>
                     <td className={styles.muted}>{it.item_group ?? it.material_kind}</td>
 
                     {/* Commander 2026-05-29 (#194) — Qty / Unit / Disc / Delivery
