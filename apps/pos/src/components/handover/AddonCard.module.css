@@ -78,6 +78,33 @@
   background: #fff;
 }
 .expandField input:focus { outline: none; border-color: var(--c-burnt); }
+
+/* − / + flanking each count input — iPad shows no native number-spinner
+   arrows, so the buttons are the only tap way to step a count. Same look
+   as the cart-line qty stepper, sized up for the roomier handover card. */
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.stepBtn {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 50%;
+  background: var(--bg-alt);
+  font-size: var(--fs-16);
+  line-height: 1;
+  color: var(--c-ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.stepBtn:hover { background: var(--bg); }
+.stepBtn:active { transform: scale(0.98); }
+.stepBtn:disabled { opacity: 0.35; cursor: default; transform: none; }
 .check {
   width: 28px;
   height: 28px;
