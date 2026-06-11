@@ -4,6 +4,15 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-11-002 — Full-codebase audit batches 2+3 (commits f50c0e3, 486e870)
+
+Six-agent module-by-module sweep (full reports in docs/audit/2026-06-11-*.md). Fixed per Wei Siang's picks:
+**Batch 2 (f50c0e3):** SO cancelled FINAL (deposit credit no longer double-counts); POS discountCenti clamped server-side (422) on all SO line writes; overpaid-SI cancel credits paid−live-OVERPAY; SI payments blocked on CANCELLED; PI line discount unified (qty×unit−discount, GRN-prorated) across all 4 paths; sofa build COST = Σ ALL module costs at seat height (was first-module-only — margins inflated); master combo cost spread dead `sizeCode.includes('-')` gate removed (paren vocab + 1S/2S/3S now match) + combo×uniform-qty + NO cross-model fallback (owner rule); CSV import strips RM/commas + rejects bad cells; 7 reformat-on-keystroke money inputs → MoneyInput; todayMyt() helper replaces 25 UTC today-defaults (8am MYT date-shift).
+**Batch 3 (486e870):** mirror-hand combo SELLING double-charge fixed (subset-sum now uses mirror price fallback; pinned 3800 both orientations); SI/PI/PR/DR item PATCH+DELETE parent-scoped (cross-doc corruption door); computeVariantKey aliases depth/sofaLegHeight (POS↔Backend same stock bucket).
+**Deliberately NOT fixed (owner):** maintenance-config role gate; CO consignment protections. Remaining minors listed in docs/audit/. Payroll findings belong to the hookka-erp-testing repo (separate system).
+
+---
+
 ## BUG-2026-06-11-001 — System audit batch: 6 inventory/costing guards (P1) + transfer zero-cost (P2) + PO convert double-order (F1)
 
 Fable-5 four-agent audit (inventory lifecycle / FIFO costing / consignment / cross-document) of 2026-06-10, key findings hand-verified at file:line before fixing. Commits `8378fee` (F1) + `3ea4ab5` (P1/P2).
