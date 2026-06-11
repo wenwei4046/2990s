@@ -851,7 +851,11 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   const sofaFabricDelta = fabricSel && addonCfgQ.data
     ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data)
     : 0;
-  const canAdd = cells.length > 0 && allClosed && fabricSel != null && (!legRequired || legHeight != null);
+  // Fabric is OPTIONAL at Add-to-Cart (Loo 2026-06-11) — some customers can't
+  // confirm it yet. The SO-side rule still demands fabricCode before a
+  // Processing date / Proceed (shared so-variant-rule, API 409), so the order
+  // can't reach production without it. Leg height stays compulsory.
+  const canAdd = cells.length > 0 && allClosed && (!legRequired || legHeight != null);
 
   // Per-seat upgrade (F3) — this Model offers one named upgrade or none.
   // offersUpgrade gates the per-seat add button; footrest distinguishes
@@ -1123,6 +1127,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           category="SOFA"
           addonConfig={addonCfgQ.data ?? null}
           enabledColourIds={productId?.startsWith('mfg-') ? fabricCodes : null}
+          optional
+          onClear={() => setFabricSel(null)}
         />
         {legBlock}
         {remarkBlock}
@@ -1715,8 +1721,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 ? 'Add modules to start'
                 : !allClosed
                   ? `Resolve · ${analyses.find((a) => !a.closed)?.reason ?? 'sofa not closed'}`
-                  : !fabricSel
-                    ? 'Choose a fabric'
+                  : legRequired && legHeight == null
+                    ? 'Choose a leg height'
                     : editingKey
                       ? 'Save changes'
                       : 'Add to cart'}

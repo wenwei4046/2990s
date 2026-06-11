@@ -1361,19 +1361,21 @@ export const Configurator = () => {
     ? qpPickPrice + sofaFabricDelta
     : (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? sofaFabricDelta : 0)) + sofaSpecialDelta + sofaLegSurcharge + effectiveExtraRm;
 
-  // Sofas require a fabric + colour (G6) and — when offered — a leg height before
-  // Add-to-Cart.
+  // Fabric + colour are OPTIONAL at Add-to-Cart (Loo 2026-06-11) — some
+  // customers can't confirm the fabric yet. The SO-side rule still demands
+  // fabricCode before a Processing date / Proceed (shared so-variant-rule,
+  // API 409 variants_incomplete), so the order can't reach production without
+  // it. A leg height — when the Model offers any — stays compulsory.
   const canAddSofa =
-    fabricSel != null &&
     (!sofaLegRequired || sofaLegValue != null) &&
     ((pickedSofaRow != null && pickedSofaRow.active && pickedSofaRow.price != null) ||
      (pickedQP != null && qpPickPrice > 0));
 
   // Bundle Quick Pick → Add to Cart.
   const handleAddSofa = () => {
-    if (pickedSofaRow == null || pickedSofaRow.price == null || fabricSel == null) return;
+    if (pickedSofaRow == null || pickedSofaRow.price == null) return;
     const lShape = isLShapeBundle(pickedSofaRow.bundle.id);
-    const fabricSuffix = ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}`;
+    const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}` : '';
     const snapshot: SofaConfigSnapshot = {
       kind: 'sofa',
       productId: p.id,
@@ -1386,11 +1388,12 @@ export const Configurator = () => {
       seatUpgradeLabel: p.seat_upgrade_label ?? null,
       seatUpgradeFootrest: p.seat_upgrade_footrest ?? true,
       // Fabric + colour (spec 2026-05-24) — surcharge folded into total.
-      fabricId: fabricSel.fabricId,
-      colourId: fabricSel.colourId,
-      fabricLabel: fabricSel.fabricLabel,
-      colourLabel: fabricSel.colourLabel,
-      colourHex: fabricSel.colourHex ?? undefined,
+      // Optional since 2026-06-11: absent = customer confirms later.
+      fabricId: fabricSel?.fabricId,
+      colourId: fabricSel?.colourId,
+      fabricLabel: fabricSel?.fabricLabel,
+      colourLabel: fabricSel?.colourLabel,
+      colourHex: fabricSel?.colourHex ?? undefined,
       fabricTierDelta: sofaFabricDelta,
       ...(sofaSpecialSel.length > 0 ? {
         specialIds: sofaSpecialSel.map((s) => s.id),
@@ -1414,10 +1417,10 @@ export const Configurator = () => {
   // line carries the exact modular arrangement (and the engine reprices it,
   // applying any matched Combo, server-side on submit).
   const handleAddQuickPick = () => {
-    if (pickedQP == null || fabricSel == null || effectiveQPModules == null) return;
+    if (pickedQP == null || effectiveQPModules == null) return;
     const cells = cellsFromComboModules(effectiveQPModules, activeDepth);
     const label = qpDisplayLabel;
-    const fabricSuffix = ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}`;
+    const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}` : '';
     // PWP (换购) — stamp the line when this layout matches the applied reward
     // combo; total already reflects the PWP price (effectiveSofaPricing). The
     // server re-validates the code + locks the combo PWP price at Confirm.
@@ -1432,11 +1435,12 @@ export const Configurator = () => {
       depth: activeDepth,
       seatUpgradeLabel: p.seat_upgrade_label ?? null,
       seatUpgradeFootrest: p.seat_upgrade_footrest ?? true,
-      fabricId: fabricSel.fabricId,
-      colourId: fabricSel.colourId,
-      fabricLabel: fabricSel.fabricLabel,
-      colourLabel: fabricSel.colourLabel,
-      colourHex: fabricSel.colourHex ?? undefined,
+      // Optional since 2026-06-11: absent = customer confirms fabric later.
+      fabricId: fabricSel?.fabricId,
+      colourId: fabricSel?.colourId,
+      fabricLabel: fabricSel?.fabricLabel,
+      colourLabel: fabricSel?.colourLabel,
+      colourHex: fabricSel?.colourHex ?? undefined,
       fabricTierDelta: sofaFabricDelta,
       ...(isPwp && sofaPwpCode ? { pwp: true, pwpCode: sofaPwpCode } : {}),
       ...(sofaSpecialSel.length > 0 ? {
@@ -1784,6 +1788,8 @@ export const Configurator = () => {
                 category="SOFA"
                 addonConfig={addonCfgQ.data ?? null}
                 enabledColourIds={productId?.startsWith('mfg-') ? sofaFabricCodes : null}
+                optional
+                onClear={() => setFabricSel(null)}
               />
             }
             specialAddonsBlock={

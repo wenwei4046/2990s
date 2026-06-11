@@ -30,6 +30,15 @@
   padding: 12px 0;
 }
 
+/* Inline "Optional" note beside the Fabric eyebrow — same voice as the
+   Remark card's "Optional — prints on the sales order" hint. */
+.optionalHint {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-left: 10px;
+}
+
 .fabricRow {
   display: flex;
   gap: 8px;

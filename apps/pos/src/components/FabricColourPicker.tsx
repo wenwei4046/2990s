@@ -28,13 +28,20 @@ export interface FabricColourPickerProps {
   /** Per-Model enabled colour codes (allowed_options.fabrics). When provided,
    *  only these colours render under each series. null/undefined = no filter. */
   enabledColourIds?: string[] | null;
+  /** Sofa (Loo 2026-06-11): the customer may confirm fabric later, so the pick
+   *  is optional at Add-to-Cart — renders the "Optional" hint + a "Confirm
+   *  later" chip that clears the selection via onClear. The SO still demands a
+   *  fabricCode before a Processing date / Proceed (shared so-variant-rule).
+   *  Bedframe keeps fabric compulsory (its colour IS the fabric) — omit this. */
+  optional?: boolean;
+  onClear?: () => void;
 }
 
 // Fabric + Colour selection for a sofa. Fabric chips show a transparent
 // "+RM" surcharge (or "Included"); colour swatches belong to the chosen
 // fabric (spec 2026-05-24, G3). Controlled — the Configurator owns the state
 // so the topbar LIVE TOTAL + Add-to-Cart gate can read it.
-export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChange, category = 'SOFA', addonConfig = null, enabledColourIds = null }: FabricColourPickerProps) => {
+export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChange, category = 'SOFA', addonConfig = null, enabledColourIds = null, optional = false, onClear }: FabricColourPickerProps) => {
   const lib = useFabricLibrary();
   const colours = useFabricColours();
 
@@ -86,6 +93,7 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
       <section className={styles.block}>
         <header className={styles.head}>
           <span className={styles.eyebrow}>Fabric</span>
+          {optional && <span className={styles.optionalHint}>Optional — can be confirmed later</span>}
         </header>
         <div className={styles.fabricRow}>
           {fabrics.map((f) => {
@@ -111,6 +119,17 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
               </button>
             );
           })}
+          {optional && (
+            <button
+              type="button"
+              aria-pressed={fabricId == null}
+              className={`${styles.fabricChip} ${fabricId == null ? styles.fabricChipOn : ''}`}
+              onClick={() => onClear?.()}
+            >
+              <span className={styles.fabricName}>Confirm later</span>
+              <span className={styles.fabricMeta}>Customer to confirm</span>
+            </button>
+          )}
         </div>
       </section>
 
