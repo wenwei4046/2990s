@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { IconButton } from '@2990s/design-system';
 import { groupSoLinesForDisplay } from '@2990s/shared/so-line-display';
+import { REQUIRED_VARIANT_AXES_BY_CATEGORY } from '@2990s/shared/so-variant-rule';
 import { PAYMENT_METHOD_CODES } from '@2990s/shared/payment-methods';
 import { meetsProceedGate } from '@2990s/shared/order-rules';
 import { useAuth } from '../lib/auth';
@@ -327,6 +328,50 @@ const useMyOrdersRealtime = () => {
       void supabase.removeChannel(channel);
     };
   }, [qc]);
+};
+
+/* ─── Drawer-action error legibility (Loo 2026-06-11) ────────────────────
+   Save / Proceed PATCHes used to dump the raw 409 JSON into the foot strip
+   ("{"error":"variants_incomplete","offenders":[…]}"), which told a
+   salesperson nothing. authedFetch keeps the parsed body on the error and
+   describeSoActionError turns the known shapes into one plain sentence. */
+class SoApiError extends Error {
+  status: number;
+  payload: Record<string, unknown> | null;
+  constructor(status: number, payload: Record<string, unknown> | null) {
+    super(String(payload?.reason ?? payload?.message ?? payload?.error ?? `Request failed (${status})`));
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+/* Canonical axis key → human label across every category (divanHeight →
+   "Divan Height", fabricCode → "Fabrics", …) from the shared rule. */
+const VARIANT_AXIS_LABELS: Record<string, string> = Object.fromEntries(
+  Object.values(REQUIRED_VARIANT_AXES_BY_CATEGORY).flat().map((a) => [a.key, a.label]),
+);
+
+const describeSoActionError = (e: unknown): string => {
+  if (!(e instanceof SoApiError)) return e instanceof Error ? e.message : 'Request failed';
+  const p = e.payload ?? {};
+  const err = String(p.error ?? '');
+  if (err === 'variants_incomplete') {
+    const offenders = (p.offenders as Array<{ itemCode?: string; missing?: string[] }> | undefined) ?? [];
+    const detail = offenders
+      .map((o) => `${o.itemCode ?? 'item'} still needs ${(o.missing ?? []).map((k) => VARIANT_AXIS_LABELS[k] ?? k).join(', ')}`)
+      .join('; ');
+    return `Some items have picks the customer hasn't confirmed yet — ${detail}. `
+      + 'Tap the pencil on that item above to complete them, then set the dates and Proceed.';
+  }
+  if (err === 'so_total_below_original') {
+    return 'Changes cannot reduce the bill below the original sales order total.';
+  }
+  if (err === 'processing_delivery_must_pair') {
+    return 'Processing and Delivery dates must be set together (or both left empty).';
+  }
+  const reason = p.reason ?? p.message;
+  if (reason) return String(reason);
+  return err ? `${err.replaceAll('_', ' ')}.` : `Request failed (${e.status}).`;
 };
 
 const fmtMoney = (n: number) => n.toLocaleString('en-MY');
@@ -1228,9 +1273,12 @@ const OrderDetail = ({ order, onClose }: {
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...(init.headers ?? {}) },
     });
     if (!res.ok) {
-      let detail = '';
-      try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text().catch(() => ''); }
-      throw new Error(`${init.method ?? 'GET'} ${path} failed (${res.status})${detail ? `: ${detail}` : ''}`);
+      /* Keep the parsed body on the error so the foot strip can render a
+         HUMAN sentence (Loo 2026-06-11 — the raw JSON dump told a salesperson
+         nothing). describeSoActionError formats the known shapes. */
+      let payload: Record<string, unknown> | null = null;
+      try { payload = (await res.json()) as Record<string, unknown>; } catch { /* non-JSON body */ }
+      throw new SoApiError(res.status, payload);
     }
     return res;
   };
@@ -1679,7 +1727,7 @@ const OrderDetail = ({ order, onClose }: {
 
                 {paymentMutation.error && (
                   <p className={styles.detailFootError}>
-                    Payment failed: {String((paymentMutation.error as Error).message)}
+                    Payment failed: {describeSoActionError(paymentMutation.error)}
                   </p>
                 )}
                 <div className={styles.detailCta}>
@@ -1732,12 +1780,12 @@ const OrderDetail = ({ order, onClose }: {
               </div>
               {saveMutation.error && (
                 <p className={styles.detailFootError}>
-                  Save failed: {String((saveMutation.error as Error).message)}
+                  Save failed: {describeSoActionError(saveMutation.error)}
                 </p>
               )}
               {proceedMutation.error && (
                 <p className={styles.detailFootError}>
-                  Proceed failed: {String((proceedMutation.error as Error).message)}
+                  Proceed failed: {describeSoActionError(proceedMutation.error)}
                 </p>
               )}
               <div className={styles.detailCta}>
