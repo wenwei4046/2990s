@@ -270,6 +270,13 @@ interface CustomBuilderProps {
   remarkBlock?: ReactNode;
   remark?: string;
   extraAmountRm?: number;
+  /** TBC sofa exchange (Loo 2026-06-12) — when set, the footer button reads
+   *  "Confirm Change" and a SINGLE-group build is handed to this callback
+   *  instead of the cart (the Configurator then replaces the SO build via
+   *  tbc-swap-sofa). Multi-group canvases can't confirm: one sofa per
+   *  exchange. */
+  onSwapConfirm?: (snapshot: SofaConfigSnapshot) => void;
+  swapPending?: boolean;
 }
 
 // Cell ids must survive HMR (which resets module locals) and a future cells-
@@ -293,7 +300,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [] }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -854,7 +861,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // can't reach production without it. Leg height stays compulsory.
   // Leg height is OPTIONAL at Add-to-Cart too (Loo 2026-06-11) — the SO-side
   // so-variant-rule legHeight axis still blocks a Processing date / Proceed.
-  const canAdd = cells.length > 0 && allClosed;
+  // TBC sofa exchange: a swap replaces exactly ONE sofa, so a multi-group
+  // canvas can't confirm.
+  const canAdd = cells.length > 0 && allClosed
+    && (!onSwapConfirm || priceResult.groups.length === 1);
 
   // Per-seat upgrade (F3) — this Model offers one named upgrade or none.
   // offersUpgrade gates the per-seat add button; footrest distinguishes
@@ -923,6 +933,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         total: g.finalPrice + sofaFabricDelta + legSurchargeRm + (!usedEditKey ? extraAmountRm : 0),
         summary,
       };
+      /* TBC sofa exchange — hand the (single) build to the Configurator's
+         confirm instead of the cart. canAdd already pinned groups to 1. */
+      if (onSwapConfirm) { onSwapConfirm(snapshot); return; }
       addConfigured(snapshot, !usedEditKey && editingKey ? { editingKey } : undefined);
       usedEditKey = true;
     }
@@ -1715,14 +1728,18 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 Create Combo
               </Button>
             )}
-            <Button variant="primary" disabled={!canAdd} onClick={handleAdd}>
+            <Button variant="primary" disabled={!canAdd || swapPending} onClick={handleAdd}>
               {!cells.length
                 ? 'Add modules to start'
                 : !allClosed
                   ? `Resolve · ${analyses.find((a) => !a.closed)?.reason ?? 'sofa not closed'}`
-                  : editingKey
-                    ? 'Save changes'
-                    : 'Add to cart'}
+                  : onSwapConfirm && priceResult.groups.length !== 1
+                    ? 'One sofa per exchange'
+                    : onSwapConfirm
+                      ? (swapPending ? 'Saving…' : 'Confirm Change')
+                      : editingKey
+                        ? 'Save changes'
+                        : 'Add to cart'}
             </Button>
           </div>
         </footer>
