@@ -428,7 +428,10 @@ export const Configurator = () => {
   const remarkCardEnabled = useSoSettingEnabled('pos_product_remark');
   const [lineRemark, setLineRemark] = useState('');
   const [lineExtraRm, setLineExtraRm] = useState(0);
-  useEffect(() => { setLineRemark(''); setLineExtraRm(0); }, [editKey, productId]);
+  // Line quantity (Loo 2026-06-12) — mattress + bedframe only. The snapshot
+  // total stays PER-UNIT (server scales unit × qty); qty rides the cart line.
+  const [lineQty, setLineQty] = useState(1);
+  useEffect(() => { setLineRemark(''); setLineExtraRm(0); setLineQty(1); }, [editKey, productId]);
   // Effective extra (whole MYR, per unit) — 0 when the card is gated off, so a
   // mid-session toggle can never leave a hidden charge in the total. Declared up
   // here because the size/bedframe/sofa totals below fold it in.
@@ -629,6 +632,7 @@ export const Configurator = () => {
       }));
       setLineRemark(cfg.remark ?? '');
       setLineExtraRm(cfg.extraAddonAmountRM ?? 0);
+      setLineQty(Math.max(1, editingLine.qty));
       hydratedRef.current = true;
     } else if (cfg.kind === 'bedframe') {
       if (bedframeColours.data == null || bedframeOptions.data == null || fabricLib.data == null) return;
@@ -691,6 +695,7 @@ export const Configurator = () => {
       }
       setLineRemark(cfg.remark ?? '');
       setLineExtraRm(cfg.extraAddonAmountRM ?? 0);
+      setLineQty(Math.max(1, editingLine.qty));
       hydratedRef.current = true;
     } else if (cfg.kind === 'sofa') {
       // Wait for fabric data to be ready — for mfg products this means both
@@ -1197,6 +1202,46 @@ export const Configurator = () => {
       </label>
     </RailSection>
   ) : null;
+
+  /* Line quantity (Loo 2026-06-12) — mattress + bedframe rails only. The
+     effective qty pins to 1 while a PWP/promo code is applied: one code = one
+     redemption = one unit (the cart store + server claim loop enforce the same
+     rule). The LIVE TOTAL and the hint below show qty × the per-unit total;
+     the cart snapshot total stays per-unit. */
+  const qtyEffective = pwpActive ? 1 : lineQty;
+  const qtyUnitRm = isBedframe ? bedframeTotal : sizeTotal;
+  const quantityRailSection = (
+    <RailSection title="Quantity" sub={pwpActive ? 'PWP — one unit per code' : undefined}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', paddingTop: 'var(--space-2)' }}>
+        <span className={styles.stepper}>
+          <button
+            type="button"
+            className={styles.stepperBtn}
+            onClick={() => setLineQty((q) => Math.max(1, q - 1))}
+            disabled={pwpActive || qtyEffective <= 1}
+            aria-label="Decrease quantity"
+          >
+            <Minus size={12} strokeWidth={2} />
+          </button>
+          <span className={styles.stepperVal}>{qtyEffective}</span>
+          <button
+            type="button"
+            className={styles.stepperBtn}
+            onClick={() => setLineQty((q) => q + 1)}
+            disabled={pwpActive}
+            aria-label="Increase quantity"
+          >
+            <Plus size={12} strokeWidth={2} />
+          </button>
+        </span>
+        {qtyEffective > 1 && qtyUnitRm > 0 && (
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            {qtyEffective} × RM {qtyUnitRm.toLocaleString('en-MY')} = RM {(qtyEffective * qtyUnitRm).toLocaleString('en-MY')}
+          </span>
+        )}
+      </div>
+    </RailSection>
+  );
   // Required: size (active+priced) only — it picks the SKU itself. Fabric +
   // colour, gap, leg height and divan height are ALL optional at Add-to-Cart
   // (Loo 2026-06-11) — the customer may confirm them later. The SO-side
@@ -1258,7 +1303,7 @@ export const Configurator = () => {
       total: bedframeTotal,
       summary: parts.join(' · '),
     };
-    addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
+    addConfigured(snapshot, { ...(isEditing && editKey ? { editingKey: editKey } : {}), qty: qtyEffective });
     navigate(isEditing ? '/cart' : '/catalog');
   };
 
@@ -1299,7 +1344,7 @@ export const Configurator = () => {
         specialChoices: Object.fromEntries(mattressSpecialSel.map((s) => [s.id, s.choices ?? []])),
       } : {}),
     };
-    addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
+    addConfigured(snapshot, { ...(isEditing && editKey ? { editingKey: editKey } : {}), qty: qtyEffective });
     navigate(isEditing ? '/cart' : '/catalog');
   };
 
@@ -1484,10 +1529,10 @@ export const Configurator = () => {
         )}
       </span>
       <span className={styles.topbarTotal}>
-        <span className={styles.topbarTotalLbl}>LIVE TOTAL</span>
+        <span className={styles.topbarTotalLbl}>LIVE TOTAL{qtyEffective > 1 ? ` × ${qtyEffective}` : ''}</span>
         <span className={styles.topbarTotalAmt}>
           <sup>RM</sup>
-          {sizeTotal > 0 ? sizeTotal.toLocaleString('en-MY') : '—'}
+          {sizeTotal > 0 ? (sizeTotal * qtyEffective).toLocaleString('en-MY') : '—'}
         </span>
         <span className={styles.topbarTotalNote}>Delivery &amp; assembly included</span>
       </span>
@@ -1530,10 +1575,10 @@ export const Configurator = () => {
         )}
       </span>
       <span className={styles.topbarTotal}>
-        <span className={styles.topbarTotalLbl}>LIVE TOTAL</span>
+        <span className={styles.topbarTotalLbl}>LIVE TOTAL{qtyEffective > 1 ? ` × ${qtyEffective}` : ''}</span>
         <span className={styles.topbarTotalAmt}>
           <sup>RM</sup>
-          {bedframeTotal > 0 ? bedframeTotal.toLocaleString('en-MY') : '—'}
+          {bedframeTotal > 0 ? (bedframeTotal * qtyEffective).toLocaleString('en-MY') : '—'}
         </span>
         <span className={styles.topbarTotalNote}>Delivery &amp; assembly included</span>
       </span>
@@ -1848,6 +1893,9 @@ export const Configurator = () => {
               <SizeGrid rows={sizeRows} pickedId={pickedSizeId} onPick={setPickedSizeId} />
             </RailSection>
 
+            {/* Line quantity (Loo 2026-06-12) — shown once a size is picked. */}
+            {pickedSize && quantityRailSection}
+
             {/* Special Add-ons (migration 0134) — mattress add-ons (per-Model). */}
             {mattressSpecialAddons.length > 0 && (
               <RailSection title="Add-ons">
@@ -1961,6 +2009,9 @@ export const Configurator = () => {
             <RailSection title="Size" sub={pickedSize ? `${pickedSize.label} · ${pickedSize.widthCm}×${pickedSize.lengthCm} cm` : undefined}>
               <SizeGrid rows={sizeRows} pickedId={pickedSizeId} onPick={setPickedSizeId} />
             </RailSection>
+
+            {/* Line quantity (Loo 2026-06-12) — shown once a size is picked. */}
+            {pickedSize && quantityRailSection}
 
             {/* PWP redeem — shared bed frame + mattress section (see pwpRailSection). */}
             {isBedframe && pwpRailSection}

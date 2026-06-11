@@ -1358,6 +1358,27 @@ mfgSalesOrders.post('/', async (c) => {
     if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
   }
 
+  /* POS line quantity (Loo 2026-06-12) — qty is a money input the drift gate
+     does NOT cover (it authenticates the UNIT price only): qty 0 zeroes a
+     line for free, a fraction / NaN corrupts total_centi math, and the
+     discount ceiling below is qty × unit. Reject anything that is not a
+     positive integer; an absent qty still defaults to 1 downstream. Runs
+     before any PWP claim so a reject burns nothing. */
+  for (let i = 0; i < items.length; i++) {
+    const rawQty = items[i]?.qty;
+    if (rawQty == null) continue;
+    const q = Number(rawQty);
+    if (!Number.isInteger(q) || q < 1) {
+      return c.json({
+        error:    'invalid_qty',
+        reason:   'qty must be a positive whole number.',
+        lineIdx:  i,
+        itemCode: String(items[i]?.itemCode ?? ''),
+        qty:      rawQty,
+      }, 422);
+    }
+  }
+
   /* PR — Commander 2026-05-28 — SO composition rules, enforced on the CREATE
      path so the API matches what the SO Detail edit page already blocks.
      (Bug: the create path let through both "delivery date without a processing
@@ -1664,6 +1685,11 @@ mfgSalesOrders.post('/', async (c) => {
       pwpRejections.push({ idx, itemCode: String(it?.itemCode ?? ''), code, reason });
     if (seenPwpCodes.has(code)) { reject('code is already applied to another line on this order'); continue; }
     seenPwpCodes.add(code);
+    /* One code = one redemption = ONE unit (Loo 2026-06-12, POS line-quantity).
+       A reward line with qty > 1 would price every unit at the PWP grant off a
+       single voucher. The POS stepper + cart store pin reward lines to 1; this
+       is the authority. */
+    if (Number(it?.qty ?? 1) !== 1) { reject('a PWP reward line must be quantity 1'); continue; }
     const product = lineProducts[idx];
     if (!product) { reject('unknown item code'); continue; }
     if (pwpPrefetchFailed) { reject('could not verify the code — please try again'); continue; }

@@ -198,7 +198,7 @@ interface CartState {
    *  (deleted) only when the order is confirmed — NOT on load — so reviewing a
    *  quote never destroys the saved draft. Cleared on clear()/restore(). */
   sourceQuoteId: string | null;
-  addConfigured: (config: CartConfig, opts?: { editingKey?: string }) => string;
+  addConfigured: (config: CartConfig, opts?: { editingKey?: string; qty?: number }) => string;
   setQty: (key: string, qty: number) => void;
   remove: (key: string) => void;
   /** Strip a redeemed PWP/Promo voucher from a line and restore its original
@@ -222,6 +222,15 @@ interface CartState {
    (sofa_build → a sofa-configurator line, config.kind === 'sofa'), so kind is
    the reliable sofa signal. */
 const isSofaConfig = (c: CartConfig): boolean => c.kind === 'sofa';
+
+/* One code = one redemption = ONE unit (Loo 2026-06-12) — a line redeemed at
+   its PWP price carries a single voucher code, so its qty is pinned to 1
+   everywhere the store can change it. The server claim loop is the authority
+   (409); this clamp keeps the cart honest before checkout. */
+const isPwpReward = (c: CartConfig): boolean => (c as { pwp?: boolean }).pwp === true;
+
+const sanitizeQty = (config: CartConfig, qty: number | undefined, fallback = 1): number =>
+  isPwpReward(config) ? 1 : Math.max(1, Math.floor(qty ?? fallback));
 
 export const cartHasSofa = (lines: CartLine[]): boolean => lines.some((l) => isSofaConfig(l.config));
 export const cartHasNonSofa = (lines: CartLine[]): boolean => lines.some((l) => !isSofaConfig(l.config));
@@ -256,7 +265,11 @@ export const useCart = create<CartState>()((set, get) => ({
   addConfigured(config, opts) {
     const editingKey = opts?.editingKey;
     if (editingKey && get().lines.some((l) => l.key === editingKey)) {
-      set({ lines: get().lines.map((l) => (l.key === editingKey ? { ...l, config } : l)) });
+      set({
+        lines: get().lines.map((l) =>
+          l.key === editingKey ? { ...l, config, qty: sanitizeQty(config, opts?.qty, l.qty) } : l,
+        ),
+      });
       return editingKey;
     }
     // Sofa-exclusivity defense — the catalog disables conflicting cards so
@@ -267,7 +280,7 @@ export const useCart = create<CartState>()((set, get) => ({
       return '';
     }
     const key = `cfg-${Math.random().toString(36).slice(2, 9)}`;
-    set({ lines: [...get().lines, { key, qty: 1, config }] });
+    set({ lines: [...get().lines, { key, qty: sanitizeQty(config, opts?.qty), config }] });
     return key;
   },
 
@@ -276,7 +289,11 @@ export const useCart = create<CartState>()((set, get) => ({
       get().remove(key);
       return;
     }
-    set({ lines: get().lines.map((l) => (l.key === key ? { ...l, qty } : l)) });
+    set({
+      lines: get().lines.map((l) =>
+        l.key === key ? { ...l, qty: sanitizeQty(l.config, qty) } : l,
+      ),
+    });
   },
 
   remove(key) {

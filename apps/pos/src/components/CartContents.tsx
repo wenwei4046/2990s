@@ -221,6 +221,10 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit }: {
         type="button"
         className={styles.qtyBtn}
         onClick={() => onSetQty(line.key, line.qty + 1)}
+        // One code = one redemption = one unit — the store clamps too; this
+        // disable is the affordance (Loo 2026-06-12).
+        disabled={'pwp' in line.config && line.config.pwp === true}
+        title={'pwp' in line.config && line.config.pwp === true ? 'PWP — one unit per code' : undefined}
         aria-label="Increase quantity"
       >+</button>
     </div>
