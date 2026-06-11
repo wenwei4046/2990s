@@ -122,8 +122,11 @@ export interface BedframeConfigSnapshot {
   productName: string;
   sizeId: string;
   sizeOther?: string;
-  colourId: string;
-  colourLabel: string | null;
+  // Optional since 2026-06-11 (Loo): absent = customer confirms the fabric/
+  // colour later. The SO-side so-variant-rule still demands fabricCode before
+  // a Processing date / Proceed, mirroring the sofa rule.
+  colourId?: string;
+  colourLabel?: string | null;
   colourHex?: string;
   // Fabric (migration 0124) — bedframe picks a fabric, then its colour (above).
   fabricId?: string;

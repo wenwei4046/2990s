@@ -243,6 +243,37 @@ describe('cartLineToSoItem', () => {
     });
   });
 
+  // Fabric optional at Add-to-Cart (Loo 2026-06-11, same as sofa) — a bedframe
+  // line whose customer hasn't confirmed the fabric serializes WITHOUT
+  // colourId / fabricId / fabricCode, so the SO lands with the fabric axis
+  // open and the Processing-date 409 gate (so-variant-rule) holds it.
+  it('bedframe without fabric (confirm later) omits fabric keys from variants', () => {
+    const line: CartLine = {
+      key: 'cfg-bf-nofab',
+      qty: 1,
+      config: {
+        kind: 'bedframe',
+        productId: 'prod-bf',
+        productName: 'Rumah Bedframe',
+        sizeId: 'size-queen',
+        gapId: 'gap-6',
+        gapLabel: '6"',
+        legHeightId: 'leg-4',
+        legHeightLabel: '4"',
+        divanHeightId: 'divan-8',
+        divanHeightLabel: '8"',
+        total: 3990,
+        summary: 'Queen · Gap 6" · Leg 4"',
+      },
+    };
+    const item = cartLinesToSoItems([line], [])[0]!;
+    expect(item.itemGroup).toBe('bedframe');
+    expect(item.variants).toMatchObject({ sizeId: 'size-queen', legHeight: '4"', gap: '6"' });
+    expect(item.variants).not.toHaveProperty('colourId');
+    expect(item.variants).not.toHaveProperty('fabricId');
+    expect(item.variants).not.toHaveProperty('fabricCode');
+  });
+
   it('maps a size-priced mattress line', () => {
     const matt = product({
       id: 'prod-matt',

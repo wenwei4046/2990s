@@ -292,7 +292,7 @@ export const inferItemGroup = (
  *  apps/backend SoLineCard expects per category:
  *    sofa:     { bundleId?, cells?, depth?, fabricId?, fabricLabel?,
  *                colourId?, colourLabel?, seatUpgradeLabel?, seatUpgradeFootrest? }
- *    bedframe: { sizeId, sizeOther?, colourId, colourLabel?, gap?, gapLabel?,
+ *    bedframe: { sizeId, sizeOther?, colourId?, colourLabel?, gap?, gapLabel?,
  *                legHeight?, legHeightLabel?, divanHeight?, divanHeightLabel?,
  *                totalHeight?, totalHeightLabel?, specialIds?, specialLabels? }
  *    size:     { sizeId, addonExtras? }
@@ -341,10 +341,13 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     return Object.keys(v).length > 0 ? v : null;
   }
   if (config.kind === 'bedframe') {
+    // colourId optional since 2026-06-11 (fabric "confirm later", same as the
+    // sofa rule) — omitted fabric keys leave the SO's fabricCode axis open;
+    // so-variant-rule blocks any Processing date until a coordinator fills it.
     const v: Record<string, unknown> = {
       sizeId: config.sizeId,
-      colourId: config.colourId,
     };
+    if (config.colourId)              v.colourId = config.colourId;
     if (config.fabricId)              v.fabricId = config.fabricId;
     if (config.fabricLabel)           v.fabricLabel = config.fabricLabel;
     // PWP (换购) — the salesperson redeemed this bed frame at its PWP price via a
