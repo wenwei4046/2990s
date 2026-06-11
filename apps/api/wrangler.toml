@@ -74,8 +74,11 @@ preview_bucket_name = "2990s-so-item-photos-preview"
 
 # Cron triggers:
 #   "*/10 * * * *" — slip-orphan reaper (every 10 min)
-#   "0 20 * * 0"   — weekly scan-SO salesperson-rule distill
+#   "0 20 * * SUN" — weekly scan-SO salesperson-rule distill
 #                    (Sun 20:00 UTC = Mon 04:00 MYT; must match
-#                    WEEKLY_DISTILL_CRON in src/index.ts)
+#                    WEEKLY_DISTILL_CRON in src/index.ts).
+#                    Day-of-week MUST be a name or 1-7 — Cloudflare rejects
+#                    "* * 0" with "invalid cron string" and the whole
+#                    `wrangler deploy` fails (hit 2026-06-12).
 [triggers]
-crons = ["*/10 * * * *", "0 20 * * 0"]
+crons = ["*/10 * * * *", "0 20 * * SUN"]
