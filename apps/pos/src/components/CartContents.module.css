@@ -117,7 +117,13 @@
   font-size: var(--fs-16);
   cursor: pointer;
 }
-.qtyBtn:hover { background: var(--bg); }
+.qtyBtn:hover:not(:disabled) { background: var(--bg); }
+/* PWP reward lines pin qty 1 — the + is disabled and must LOOK it (tablet has
+   no hover/title; mirrors Configurator's .stepperBtn:disabled). */
+.qtyBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
 .qty {
   min-width: 24px;
   text-align: center;

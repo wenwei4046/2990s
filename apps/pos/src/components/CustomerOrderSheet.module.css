@@ -244,9 +244,16 @@
   transition: 120ms;
 }
 
-.itemQty button:hover {
+.itemQty button:hover:not(:disabled) {
   background: var(--bg);
   color: var(--fg);
+}
+
+/* PWP reward lines pin qty 1 — the + is disabled and must LOOK it (tablet has
+   no hover/title; mirrors Configurator's .stepperBtn:disabled). */
+.itemQty button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .itemQty span {

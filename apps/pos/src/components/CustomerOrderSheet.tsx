@@ -341,7 +341,14 @@ const CartItem = ({ line, product, mfgRow, onRemove, onDec, onInc, onEdit }: Car
             <Minus size={12} strokeWidth={2} />
           </button>
           <span>{line.qty}</span>
-          <button type="button" onClick={onInc} aria-label="Increase">
+          <button
+            type="button"
+            onClick={onInc}
+            // One code = one redemption = one unit — the store clamps too (Loo 2026-06-12).
+            disabled={'pwp' in line.config && line.config.pwp === true}
+            title={'pwp' in line.config && line.config.pwp === true ? 'PWP — one unit per code' : undefined}
+            aria-label="Increase"
+          >
             <Plus size={12} strokeWidth={2} />
           </button>
         </div>

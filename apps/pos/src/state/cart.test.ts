@@ -77,6 +77,67 @@ describe('revertPwp — restore price when a same-cart trigger leaves', () => {
   });
 });
 
+describe('line quantity (Loo 2026-06-12) — addConfigured qty + PWP reward pin', () => {
+  beforeEach(() => { useCart.getState().clear(); });
+
+  const sizeCfg = (): CartConfig =>
+    ({ kind: 'size', productId: 'm', productName: 'M', sizeId: 's', total: 2990, summary: 'King' } as unknown as CartConfig);
+  const rewardCfg = (): CartConfig =>
+    ({ kind: 'size', productId: 'm', productName: 'M', sizeId: 's',
+       pwp: true, pwpCode: 'PWP-LIVE0001', pwpOriginalTotal: 2990, total: 990, summary: 'King' } as unknown as CartConfig);
+
+  it('defaults to qty 1 when no qty is passed', () => {
+    useCart.getState().addConfigured(sizeCfg());
+    expect(useCart.getState().lines[0]!.qty).toBe(1);
+  });
+
+  it('stores the requested qty on a new line', () => {
+    useCart.getState().addConfigured(sizeCfg(), { qty: 3 });
+    expect(useCart.getState().lines[0]!.qty).toBe(3);
+  });
+
+  it('floors fractions and clamps non-positive qty to 1', () => {
+    const k1 = useCart.getState().addConfigured(sizeCfg(), { qty: 2.9 });
+    const k2 = useCart.getState().addConfigured(sizeCfg(), { qty: 0 });
+    const k3 = useCart.getState().addConfigured(sizeCfg(), { qty: -5 });
+    const byKey = new Map(useCart.getState().lines.map((l) => [l.key, l.qty]));
+    expect(byKey.get(k1)).toBe(2);
+    expect(byKey.get(k2)).toBe(1);
+    expect(byKey.get(k3)).toBe(1);
+  });
+
+  it('editing updates qty when provided, keeps it when omitted', () => {
+    const key = useCart.getState().addConfigured(sizeCfg(), { qty: 2 });
+    useCart.getState().addConfigured(sizeCfg(), { editingKey: key, qty: 4 });
+    expect(useCart.getState().lines[0]!.qty).toBe(4);
+    useCart.getState().addConfigured(sizeCfg(), { editingKey: key });
+    expect(useCart.getState().lines[0]!.qty).toBe(4);
+  });
+
+  it('a PWP reward line is pinned to 1 — addConfigured ignores a higher qty', () => {
+    useCart.getState().addConfigured(rewardCfg(), { qty: 3 });
+    expect(useCart.getState().lines[0]!.qty).toBe(1);
+  });
+
+  it('a PWP reward line is pinned to 1 — setQty cannot raise it', () => {
+    const key = useCart.getState().addConfigured(rewardCfg());
+    useCart.getState().setQty(key, 2);
+    expect(useCart.getState().lines[0]!.qty).toBe(1);
+  });
+
+  it('applying a reward config while editing clamps an existing qty > 1 back to 1', () => {
+    const key = useCart.getState().addConfigured(sizeCfg(), { qty: 2 });
+    useCart.getState().addConfigured(rewardCfg(), { editingKey: key });
+    expect(useCart.getState().lines[0]!.qty).toBe(1);
+  });
+
+  it('setQty below 1 still removes the line', () => {
+    const key = useCart.getState().addConfigured(sizeCfg(), { qty: 2 });
+    useCart.getState().setQty(key, 0);
+    expect(useCart.getState().lines).toHaveLength(0);
+  });
+});
+
 describe('cart category helpers', () => {
   it('cartHasSofa / cartHasNonSofa', () => {
     expect(cartHasSofa([line('sofa')])).toBe(true);
