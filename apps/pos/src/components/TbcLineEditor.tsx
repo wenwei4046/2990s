@@ -68,25 +68,99 @@ const useMfgProductByCode = (code: string) =>
     },
   });
 
-/* Swap-candidate search — active, POS-visible, non-sofa SKUs by code / name. */
-const useSwapCandidates = (q: string) =>
+/* ── PWP swap ranges (Loo 2026-06-12) ───────────────────────────────────
+   A line tied to a PWP (换购) promotion may only be exchanged WITHIN the
+   promotion's own range. The server enforces the same rule (tbc-swap); this
+   context just pre-filters the candidate search so sales never see an
+   out-of-range item.
+     reward  — the line IS a PWP reward → the code's snapshotted reward set.
+     trigger — this SO minted codes off the line → every anchoring rule's
+               trigger set (intersection of non-empty model lists).
+     locked  — the range can't be determined (rule deleted, code missing) →
+               coordinator only.
+     free    — no PWP involvement, the whole non-sofa catalog. */
+type SwapCtx =
+  | { kind: 'free' }
+  | { kind: 'reward'; category: string; modelIds: string[]; promoType: string }
+  | { kind: 'trigger'; category: string; modelIds: string[] | null }
+  | { kind: 'locked'; reason: string };
+
+const useSwapContext = (docNo: string, target: TbcEditTarget) =>
   useQuery({
-    enabled: q.trim().length >= 2,
-    queryKey: ['tbc-swap-candidates', q],
+    queryKey: ['tbc-swap-ctx', docNo, target.itemId, target.itemCode],
     staleTime: 30_000,
-    queryFn: async (): Promise<Array<{ code: string; name: string; category: string; sell_price_sen: number | null }>> => {
+    queryFn: async (): Promise<SwapCtx> => {
+      if (target.isPwp) {
+        const code = String(target.variants.pwpCode ?? '').trim();
+        if (!code) return { kind: 'locked', reason: 'This PWP reward carries no voucher code — the coordinator handles the exchange.' };
+        const { data } = await supabase.from('pwp_codes')
+          .select('reward_category, eligible_reward_model_ids, type')
+          .eq('code', code).maybeSingle();
+        const d = data as { reward_category: string; eligible_reward_model_ids: string[] | null; type: string } | null;
+        if (!d) return { kind: 'locked', reason: 'This PWP voucher could not be found — the coordinator handles the exchange.' };
+        return { kind: 'reward', category: d.reward_category, modelIds: d.eligible_reward_model_ids ?? [], promoType: d.type };
+      }
+      const { data: codes } = await supabase.from('pwp_codes')
+        .select('rule_id')
+        .eq('source_doc_no', docNo).eq('trigger_item_code', target.itemCode);
+      const anchors = (codes ?? []) as Array<{ rule_id: string | null }>;
+      if (anchors.length === 0) return { kind: 'free' };
+      const ruleIds = [...new Set(anchors.map((a) => a.rule_id).filter((r): r is string => !!r))];
+      if (anchors.some((a) => !a.rule_id) || ruleIds.length === 0) {
+        return { kind: 'locked', reason: 'This item triggered a PWP voucher whose promotion no longer exists — the coordinator handles the exchange.' };
+      }
+      const { data: ruleRows } = await supabase.from('pwp_rules')
+        .select('trigger_category, trigger_eligible_model_ids').in('id', ruleIds);
+      const rules = (ruleRows ?? []) as Array<{ trigger_category: string; trigger_eligible_model_ids: string[] | null }>;
+      if (rules.length < ruleIds.length) {
+        return { kind: 'locked', reason: 'This item triggered a PWP voucher whose promotion no longer exists — the coordinator handles the exchange.' };
+      }
+      const cats = [...new Set(rules.map((r) => String(r.trigger_category)))];
+      if (cats.length > 1) {
+        return { kind: 'locked', reason: 'This item anchors PWP promotions with different trigger ranges — the coordinator handles the exchange.' };
+      }
+      // The candidate must satisfy EVERY anchoring rule → intersect the
+      // non-empty model lists; null = no rule constrains models.
+      let modelIds: string[] | null = null;
+      for (const r of rules) {
+        const m = r.trigger_eligible_model_ids ?? [];
+        if (m.length === 0) continue;
+        modelIds = modelIds === null ? m : modelIds.filter((x) => m.includes(x));
+      }
+      if (modelIds !== null && modelIds.length === 0) {
+        return { kind: 'locked', reason: 'No product satisfies every PWP promotion this item triggered — the coordinator handles the exchange.' };
+      }
+      return { kind: 'trigger', category: cats[0]!, modelIds };
+    },
+  });
+
+/* Swap-candidate search — active, POS-visible, non-sofa SKUs by code / name,
+   narrowed to the PWP range when the context demands one. */
+const useSwapCandidates = (q: string, ctx: SwapCtx | undefined) =>
+  useQuery({
+    enabled: q.trim().length >= 2 && ctx != null && ctx.kind !== 'locked',
+    queryKey: ['tbc-swap-candidates', q, ctx],
+    staleTime: 30_000,
+    queryFn: async (): Promise<Array<{ code: string; name: string; category: string; sell_price_sen: number | null; pwp_price_sen: number | null }>> => {
       const term = q.trim().replace(/[%_,()]/g, ' ');
-      const { data, error } = await supabase
+      let query = supabase
         .from('mfg_products')
-        .select('code, name, category, sell_price_sen')
+        .select('code, name, category, sell_price_sen, pwp_price_sen, model_id')
         .eq('status', 'ACTIVE')
         .eq('pos_active', true)
         .neq('category', 'SOFA')
-        .or(`code.ilike.%${term}%,name.ilike.%${term}%`)
-        .order('code')
-        .limit(8);
+        .or(`code.ilike.%${term}%,name.ilike.%${term}%`);
+      if (ctx?.kind === 'reward') {
+        query = query.eq('category', ctx.category);
+        if (ctx.modelIds.length > 0) query = query.in('model_id', ctx.modelIds);
+        if (ctx.promoType !== 'promo') query = query.gt('pwp_price_sen', 0);
+      } else if (ctx?.kind === 'trigger') {
+        query = query.eq('category', ctx.category);
+        if (ctx.modelIds) query = query.in('model_id', ctx.modelIds);
+      }
+      const { data, error } = await query.order('code').limit(8);
       if (error) throw error;
-      return (data ?? []) as Array<{ code: string; name: string; category: string; sell_price_sen: number | null }>;
+      return (data ?? []) as Array<{ code: string; name: string; category: string; sell_price_sen: number | null; pwp_price_sen: number | null }>;
     },
   });
 
@@ -98,7 +172,10 @@ const friendlyError = (payload: Record<string, unknown>): string => {
   if (err === 'variant_not_allowed') {
     return `This Model doesn't allow ${String(payload.field ?? 'that option')} "${String(payload.value ?? '')}".`;
   }
-  if (err === 'pwp_line_locked') return 'PWP reward lines are edited by the coordinator.';
+  if (err === 'pwp_line_locked') return 'This PWP line is handled by the coordinator.';
+  if (err === 'pwp_swap_out_of_range') return 'A PWP reward can only be exchanged within the promotion\'s reward range.';
+  if (err === 'pwp_trigger_swap_out_of_range') return 'This item triggered a PWP voucher — it can only be exchanged within the promotion\'s trigger range.';
+  if (err === 'pwp_reward_unpriced') return 'That item has no PWP price yet — ask an admin to set it in the SKU Master.';
   if (err === 'product_unpriced') return 'That product has no selling price yet — ask an admin to price it first.';
   if (err === 'so_sofa_no_other_main') return 'A sofa cannot share a sales order with a bedframe or mattress.';
   if (err === 'so_has_children') return 'This order already has a delivery or invoice — lines are locked.';
@@ -282,7 +359,8 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
   /* ── Product swap ─────────────────────────────────────────────────── */
   const [swapOpen, setSwapOpen] = useState(false);
   const [swapQuery, setSwapQuery] = useState('');
-  const candidates = useSwapCandidates(swapQuery);
+  const swapCtx = useSwapContext(docNo, target);
+  const candidates = useSwapCandidates(swapQuery, swapCtx.data);
   const prevLineTotal = (target.qty * target.unitPriceCenti) - target.discountCenti;
   const swap = useMutation({
     mutationFn: async (code: string) =>
@@ -361,7 +439,9 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
       {error && <div className={styles.error}>{error}</div>}
 
       <div className={styles.actions}>
-        {!isSofa && !target.isSofaBuild && !target.isPwp && (
+        {/* PWP lines swap too (Loo 2026-06-12) — within the promotion's own
+            range; useSwapContext narrows the search, the server re-enforces. */}
+        {!isSofa && !target.isSofaBuild && swapCtx.data?.kind !== 'locked' && (
           <Button variant="ghost" onClick={() => { setSwapOpen((s) => !s); setError(null); }}>
             {swapOpen ? 'Keep this product' : 'Change product'}
           </Button>
@@ -379,6 +459,16 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
 
       {swapOpen && (
         <div className={styles.swapBlock}>
+          {swapCtx.data?.kind === 'reward' && (
+            <div className={styles.swapEmpty}>
+              PWP reward — showing items inside this promotion's reward range, at their PWP price.
+            </div>
+          )}
+          {swapCtx.data?.kind === 'trigger' && (
+            <div className={styles.swapEmpty}>
+              This item triggered a PWP voucher — showing items inside the promotion's trigger range.
+            </div>
+          )}
           <div className={styles.swapSearch}>
             <Search size={16} strokeWidth={1.75} aria-hidden />
             <input
@@ -389,28 +479,38 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
             />
           </div>
           {(candidates.data ?? []).map((p) => {
-            const sellSen = Math.max(0, Math.round(Number(p.sell_price_sen ?? 0)));
-            const newTotal = (target.qty * sellSen) - target.discountCenti;
+            // A reward swap charges the new SKU's PWP price; everything else
+            // the catalog selling price — mirrors the server's tbc-swap.
+            const isReward = swapCtx.data?.kind === 'reward';
+            const priceSen = isReward
+              ? Math.max(0, Math.round(Number(p.pwp_price_sen ?? 0)))
+              : Math.max(0, Math.round(Number(p.sell_price_sen ?? 0)));
+            const unpriced = isReward
+              ? (swapCtx.data?.kind === 'reward' && swapCtx.data.promoType !== 'promo' && priceSen <= 0)
+              : priceSen <= 0;
+            const newTotal = (target.qty * priceSen) - target.discountCenti;
             const below = newTotal < prevLineTotal;
             return (
               <button
                 key={p.code}
                 type="button"
                 className={styles.swapRow}
-                disabled={sellSen <= 0 || below || swap.isPending}
+                disabled={unpriced || below || swap.isPending}
                 onClick={() => { setError(null); swap.mutate(p.code); }}
               >
                 <span className={styles.swapName}>{p.name}</span>
                 <span className={styles.swapMeta}>
                   {p.code}
-                  {sellSen <= 0 ? ' · unpriced' : ` · ${fmtRM(Math.round(sellSen / 100))}`}
+                  {unpriced
+                    ? ' · unpriced'
+                    : ` · ${fmtRM(Math.round(priceSen / 100))}${isReward ? ' PWP' : ''}`}
                   {below ? ' · below original total' : ''}
                 </span>
               </button>
             );
           })}
           {swapQuery.trim().length >= 2 && (candidates.data ?? []).length === 0 && !candidates.isLoading && (
-            <div className={styles.swapEmpty}>No matching products.</div>
+            <div className={styles.swapEmpty}>No matching products in this range.</div>
           )}
         </div>
       )}
