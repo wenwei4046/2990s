@@ -4604,6 +4604,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
   const pwpDeleteCodes: string[] = [];
   const pwpRevertCodes: string[] = [];
   let rewardLinesToRevert: SwapRewardRevertLine[] = [];
+  const sofaRevertPlans: SofaRewardRevertUpdate[] = [];
   let pwpNewlyTriggered: SwapPwpRule[] = [];
   if (prevVariants.pwp) {
     if (!rewardPwpCode) {
@@ -4701,13 +4702,24 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
             .eq('doc_no', docNo).eq('cancelled', false)
             .filter('variants->>pwp', 'eq', 'true');
           const revertSet = new Set(pwpRevertCodes);
-          rewardLinesToRevert = ((pwpLines ?? []) as SwapRewardRevertLine[])
+          const allRevertLines = ((pwpLines ?? []) as SwapRewardRevertLine[])
             .filter((l) => revertSet.has(String(((l.variants ?? {}) as Record<string, unknown>).pwpCode ?? '')));
-          if (rewardLinesToRevert.some((l) => String(l.item_group) === 'sofa')) {
-            return c.json({
-              error: 'pwp_reward_sofa_revert_unsupported',
-              reason: 'The voucher this item triggered paid for a SOFA reward - ask the coordinator to exchange it.',
-            }, 409);
+          rewardLinesToRevert = allRevertLines.filter((l) => String(l.item_group) !== 'sofa');
+          /* Sofa rewards revert as a WHOLE build (read-only plan first - a
+             build that can't be safely repriced blocks before any write). */
+          const sofaRevertCodes = [...new Set(allRevertLines
+            .filter((l) => String(l.item_group) === 'sofa')
+            .map((l) => String(((l.variants ?? {}) as Record<string, unknown>).pwpCode ?? ''))
+            .filter(Boolean))];
+          for (const cdx of sofaRevertCodes) {
+            const plan = await planSofaRewardRevert(sb, docNo, cdx);
+            if (!plan.ok) {
+              return c.json({
+                error: 'pwp_reward_sofa_revert_unsupported',
+                reason: 'The sofa reward this voucher paid for cannot be auto-repriced - ask the coordinator to exchange it.',
+              }, 409);
+            }
+            sofaRevertPlans.push(...plan.updates);
           }
         }
       }
@@ -4781,6 +4793,16 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
   /* ── PWP mutations (classified above, applied after the line landed) —
      mirrors the sofa exchange (tbc-swap-sofa). ── */
   const pwpMintedCodes: string[] = [];
+  /* Sofa-reward builds revert via the pre-computed whole-build plan. */
+  for (const u of sofaRevertPlans) {
+    const { id: uid, ...cols } = u;
+    const { error } = await sb.from('mfg_sales_order_items').update({
+      ...cols,
+      total_inc_centi: cols.total_centi,
+      balance_centi: cols.total_centi,
+    }).eq('id', uid);
+    if (error) console.error('[tbc-swap] sofa reward revert failed for', uid, error.message); // eslint-disable-line no-console
+  }
   if (rewardLinesToRevert.length > 0 || pwpDeleteCodes.length > 0 || pwpRevertCodes.length > 0 || pwpNewlyTriggered.length > 0) {
     // Loaders only when the re-evaluation actually has work to do.
     const [cfgX, addonCfgX, specialDefsX] = await Promise.all([
@@ -4905,6 +4927,118 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
     },
   });
 });
+
+/* ── Sofa-reward revert plan (Loo 2026-06-12) ──
+   When a TRIGGER swap strands a SOFA reward on the same SO, the reward must
+   revert to its normal selling price — but a sofa lives as per-module split
+   lines whose PWP total was spread proportionally, so the revert is a
+   whole-build job: reconstruct the build from the split lines (module code
+   from the SKU, x/y/rot/cellIndex from variants), reprice it on the
+   authoritative engine WITHOUT the PWP grant, re-spread across the same
+   lines, strip the pwp markers. Planned READ-ONLY before any write — a
+   build that can't be safely repriced (no module prices / line-count
+   mismatch) returns ok:false and the caller blocks for the coordinator. */
+type SofaRewardRevertUpdate = {
+  id: string;
+  unit_price_centi: number;
+  total_centi: number;
+  line_margin_centi: number;
+  variants: Record<string, unknown>;
+  description2: string | null;
+  divan_price_sen: number;
+  leg_price_sen: number;
+  special_order_price_sen: number;
+  custom_specials: unknown;
+};
+async function planSofaRewardRevert(
+  sb: any,
+  docNo: string,
+  pwpCode: string,
+): Promise<{ ok: true; updates: SofaRewardRevertUpdate[] } | { ok: false }> {
+  const { data } = await sb.from('mfg_sales_order_items')
+    .select('id, item_code, item_group, qty, unit_price_centi, discount_centi, unit_cost_centi, line_cost_centi, variants')
+    .eq('doc_no', docNo).eq('cancelled', false)
+    .filter('variants->>pwpCode', 'eq', pwpCode);
+  type Row = {
+    id: string; item_code: string; item_group: string; qty: number;
+    unit_price_centi: number; discount_centi: number | null;
+    unit_cost_centi: number | null; line_cost_centi: number | null;
+    variants: Record<string, unknown> | null;
+  };
+  const lines = (((data ?? []) as Row[]))
+    .filter((l) => String(l.item_group) === 'sofa' && ((l.variants ?? {}) as Record<string, unknown>).pwp)
+    .sort((a, b) =>
+      Number(((a.variants ?? {}) as Record<string, unknown>).cellIndex ?? 0)
+      - Number(((b.variants ?? {}) as Record<string, unknown>).cellIndex ?? 0));
+  if (lines.length === 0) return { ok: true, updates: [] };
+
+  const lead = lines[0]!;
+  const leadV = ((lead.variants ?? {}) as Record<string, unknown>);
+  const baseModel = splitSofaCode(lead.item_code).baseModel;
+  if (!baseModel) return { ok: false };
+  const cells = lines.map((l) => {
+    const v = ((l.variants ?? {}) as Record<string, unknown>);
+    return {
+      moduleId: splitSofaCode(l.item_code).sizeCode || l.item_code,
+      x: typeof v.x === 'number' ? v.x : 0,
+      y: typeof v.y === 'number' ? v.y : 0,
+      rot: typeof v.rot === 'number' ? v.rot : 0,
+    };
+  });
+  const depth = String(leadV.depth ?? '24');
+  const [cfg, prodLite, fabLite, combos, sellingTiers, addonCfg, specialDefs, modulePrices] = await Promise.all([
+    loadMaintenanceConfig(sb),
+    loadProductByCode(sb, lead.item_code),
+    loadFabricByCode(sb, (leadV.fabricCode as string | undefined) ?? null),
+    loadActiveSofaCombos(sb),
+    loadFabricSellingTiers(sb, (leadV.fabricId as string | undefined) ?? null),
+    loadFabricTierAddonConfig(sb),
+    loadSpecialAddons(sb),
+    loadModelSofaModulePrices(sb, splitSofaCode(lead.item_code).baseModel, depth),
+  ]);
+  if (!prodLite || !modulePrices) return { ok: false };
+  const pricingVariants: Record<string, unknown> = { ...leadV, cells };
+  delete pricingVariants.pwp; delete pricingVariants.pwpCode; delete pricingVariants.pwpTriggerLabel;
+  delete pricingVariants.buildKey; delete pricingVariants.cellIndex;
+  delete pricingVariants.x; delete pricingVariants.y; delete pricingVariants.rot;
+  const rec = recomputeFromSnapshot(
+    { itemCode: lead.item_code, itemGroup: 'sofa', qty: Number(lead.qty), unitPriceCenti: 0, variants: pricingVariants as MfgItemForRecompute['variants'] },
+    prodLite, fabLite, cfg, combos, modulePrices, sellingTiers, addonCfg,
+    null, null,   // NO pwp grant — this IS the revert
+    specialDefs, null,
+  );
+  if (rec.unit_price_sen <= 0) return { ok: false };
+  const split = splitSofaBuildIntoModuleLines({
+    baseModel,
+    cells,
+    buildUnitPriceSen: rec.unit_price_sen,
+    buildUnitCostSen: 0,   // costs stay per-line as already booked
+    modulePrices,
+  });
+  if (!split || split.length !== lines.length) return { ok: false };
+  const updates: SofaRewardRevertUpdate[] = lines.map((l, i) => {
+    const v: Record<string, unknown> = { ...((l.variants ?? {}) as Record<string, unknown>) };
+    delete v.pwp; delete v.pwpCode; delete v.pwpTriggerLabel;
+    const unitSenI = split[i]!.unitPriceSen;
+    const lqty = Number(l.qty);
+    const ldisc = Number(l.discount_centi ?? 0);
+    const lTotal = (lqty * unitSenI) - ldisc;
+    const lCost = Number(l.line_cost_centi ?? (Number(l.unit_cost_centi ?? 0) * lqty));
+    return {
+      id: l.id,
+      unit_price_centi: unitSenI,
+      total_centi: lTotal,
+      line_margin_centi: lTotal - lCost,
+      variants: v,
+      description2: buildVariantSummary('sofa', v) || null,
+      divan_price_sen: i === 0 ? rec.breakdown.divanSurchargeSen : 0,
+      leg_price_sen: i === 0 ? rec.breakdown.legSurchargeSen : 0,
+      special_order_price_sen: i === 0 ? rec.breakdown.specialsSurchargeSen : 0,
+      custom_specials: i === 0 ? (rec.custom_specials ?? null) : null,
+    };
+  });
+  return { ok: true, updates };
+}
 
 /* TBC sofa exchange (Loo 2026-06-12) — replace a WHOLE sofa build from the
    POS configurator's "Confirm Change". The new build arrives as ONE
@@ -5130,6 +5264,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
   const pwpKeepCodes: string[] = [];
   const pwpDeleteCodes: string[] = [];
   const pwpRevertCodes: string[] = [];
+  const sofaRevertPlans: SofaRewardRevertUpdate[] = [];
   let pwpRules: PwpRuleRow[] = [];
   let pwpNewlyTriggered: PwpRuleRow[] = [];
   let rewardLinesToRevert: RewardRevertLine[] = [];
@@ -5197,13 +5332,24 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
         .eq('doc_no', docNo).eq('cancelled', false)
         .filter('variants->>pwp', 'eq', 'true');
       const revertSet = new Set(pwpRevertCodes);
-      rewardLinesToRevert = ((pwpLines ?? []) as RewardRevertLine[])
+      const allRevertLines = ((pwpLines ?? []) as RewardRevertLine[])
         .filter((l) => revertSet.has(String(((l.variants ?? {}) as Record<string, unknown>).pwpCode ?? '')));
-      if (rewardLinesToRevert.some((l) => String(l.item_group) === 'sofa')) {
-        return c.json({
-          error: 'pwp_reward_sofa_revert_unsupported',
-          reason: 'The voucher this sofa triggered paid for a SOFA reward — ask the coordinator to exchange it.',
-        }, 409);
+      rewardLinesToRevert = allRevertLines.filter((l) => String(l.item_group) !== 'sofa');
+      /* Sofa rewards revert as a WHOLE build (read-only plan first - a
+         build that can't be safely repriced blocks before any write). */
+      const sofaRevertCodes = [...new Set(allRevertLines
+        .filter((l) => String(l.item_group) === 'sofa')
+        .map((l) => String(((l.variants ?? {}) as Record<string, unknown>).pwpCode ?? ''))
+        .filter(Boolean))];
+      for (const cdx of sofaRevertCodes) {
+        const plan = await planSofaRewardRevert(sb, docNo, cdx);
+        if (!plan.ok) {
+          return c.json({
+            error: 'pwp_reward_sofa_revert_unsupported',
+            reason: 'The sofa reward this voucher paid for cannot be auto-repriced — ask the coordinator to exchange it.',
+          }, 409);
+        }
+        sofaRevertPlans.push(...plan.updates);
       }
     }
     /* Promo one-way (PWP-7615UAWC): a build that is still a REWARD must
@@ -5319,6 +5465,17 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
   /* ── PWP mutations (classified above, applied after the build landed) ── */
   const pwpMintedCodes: string[] = [];
   let pwpVoucherReleased: string | null = null;
+  /* Sofa-reward builds stranded by this exchange revert via the
+     pre-computed whole-build plan. */
+  for (const u of sofaRevertPlans) {
+    const { id: uid, ...cols } = u;
+    const { error } = await sb.from('mfg_sales_order_items').update({
+      ...cols,
+      total_inc_centi: cols.total_centi,
+      balance_centi: cols.total_centi,
+    }).eq('id', uid);
+    if (error) console.error('[tbc-swap-sofa] sofa reward revert failed for', uid, error.message); // eslint-disable-line no-console
+  }
   if (rewardCtx) {
     if (rewardComboMatch) {
       const { error } = await sb.from('pwp_codes')
