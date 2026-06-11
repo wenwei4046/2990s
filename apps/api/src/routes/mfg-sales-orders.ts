@@ -508,6 +508,7 @@ mfgSalesOrders.get('/', async (c) => {
       .in('doc_no', docNos)
       .eq('cancelled', false)
       .order('doc_no')
+      .order('line_no', { ascending: true, nullsFirst: false })
       .order('created_at', { ascending: true });
     const agg = new Map<string, Map<string, { total: number; ready: number }>>();
     /* Branding auto-derive (Commander 2026-05-28, refined PR #266): the SO list
@@ -821,6 +822,7 @@ mfgSalesOrders.get('/mine', async (c) => {
       .select('id, doc_no, item_code, item_group, description, qty, unit_price_centi, discount_centi, total_centi, variants, remark')
       .in('doc_no', docNos)
       .eq('cancelled', false)
+      .order('line_no', { ascending: true, nullsFirst: false })
       .order('created_at', { ascending: true });
     for (const it of (itemRows ?? []) as Array<{ id: string; doc_no: string; item_code: string; item_group: string | null; description: string | null; qty: number; unit_price_centi: number; discount_centi: number; total_centi: number; variants: unknown; remark: string | null }>) {
       const arr = itemsByDoc.get(it.doc_no) ?? [];
@@ -1125,7 +1127,11 @@ mfgSalesOrders.get('/:docNo', async (c) => {
        appending it only here means the detail page still gets the Proceed Date
        while the list view query stays valid. */
     sb.from('mfg_sales_orders').select(`${HEADER}, proceeded_at, signature_b64, slip_key, slip_state`).eq('doc_no', docNo).maybeSingle(),
-    sb.from('mfg_sales_order_items').select(ITEM).eq('doc_no', docNo).order('created_at'),
+    /* line_no = the persisted listing order (0165); NULLS LAST so pre-0165
+       docs fall back to created_at + the rule re-derive below. */
+    sb.from('mfg_sales_order_items').select(ITEM).eq('doc_no', docNo)
+      .order('line_no', { ascending: true, nullsFirst: false })
+      .order('created_at'),
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
@@ -2865,7 +2871,10 @@ mfgSalesOrders.post('/', async (c) => {
   }
 
   if (itemRows.length > 0) {
-    const rowsWithDoc = itemRows.map((r) => ({ ...r, doc_no: docNo }));
+    /* Migration 0165 — line_no makes the ranked/walked array order a
+       first-class column (created_at is identical across one bulk insert,
+       so it can never recover this order on read). */
+    const rowsWithDoc = itemRows.map((r, lineNo) => ({ ...r, doc_no: docNo, line_no: lineNo }));
     const { error: iErr } = await sb.from('mfg_sales_order_items').insert(rowsWithDoc);
     if (iErr) { await rollbackPwpClaims(); await sb.from('mfg_sales_orders').delete().eq('doc_no', docNo); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
     /* Commander 2026-05-29 — re-roll the header through recomputeTotals so a
@@ -3798,9 +3807,22 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   const lineDeliveryDateOverridden = hasExplicitLineDate
     ? (it.lineDeliveryDateOverridden === undefined ? true : Boolean(it.lineDeliveryDateOverridden))
     : Boolean(it.lineDeliveryDateOverridden ?? false);
+  /* 0165 — continue the doc's line numbering; a pre-0165 doc (max NULL)
+     stays un-numbered so its lines keep one consistent ordering regime. */
+  const { data: maxNoRow } = await sb
+    .from('mfg_sales_order_items')
+    .select('line_no')
+    .eq('doc_no', docNo)
+    .order('line_no', { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+  const nextLineNo = typeof (maxNoRow as { line_no?: number | null } | null)?.line_no === 'number'
+    ? (maxNoRow as { line_no: number }).line_no + 1
+    : null;
   const row = {
     doc_no: docNo,
     line_date: (it.lineDate as string) ?? new Date().toISOString().slice(0, 10),
+    ...(nextLineNo !== null ? { line_no: nextLineNo } : {}),
     debtor_code: header.debtor_code,
     debtor_name: header.debtor_name,
     agent: header.agent,
@@ -4716,17 +4738,17 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
 
   /* The whole OLD build — every non-cancelled line sharing the buildKey
      (legacy single-line sofas have no buildKey → just the requested line). */
-  let oldLines: Array<{ id: string; total_centi: number | null; variants: Record<string, unknown> | null; photo_urls: string[] | null }> = [];
+  let oldLines: Array<{ id: string; total_centi: number | null; variants: Record<string, unknown> | null; photo_urls: string[] | null; line_no?: number | null }> = [];
   if (buildKey) {
     const { data: rows } = await sb.from('mfg_sales_order_items')
-      .select('id, total_centi, variants, photo_urls')
+      .select('id, total_centi, variants, photo_urls, line_no')
       .eq('doc_no', docNo).eq('cancelled', false)
       .filter('variants->>buildKey', 'eq', buildKey);
     oldLines = ((rows ?? []) as typeof oldLines);
   }
   if (oldLines.length === 0) {
     const { data: solo } = await sb.from('mfg_sales_order_items')
-      .select('id, total_centi, variants, photo_urls').eq('id', itemId).maybeSingle();
+      .select('id, total_centi, variants, photo_urls, line_no').eq('id', itemId).maybeSingle();
     if (solo) oldLines = [solo as (typeof oldLines)[number]];
   }
   if (oldLines.some((l) => ((l.variants ?? {}) as Record<string, unknown>).pwp)) {
@@ -4878,6 +4900,20 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
       special_order_price_sen: recomputed.breakdown.specialsSurchargeSen,
       custom_specials: recomputed.custom_specials ?? null,
     }];
+  }
+
+  /* 0165 — the replacement build INHERITS the old build's position: new rows
+     number from the old set's lowest line_no (un-numbered docs stay NULL).
+     A different module count can overlap following numbers — ordering-only,
+     and the read-side rank/walk re-derive keeps the rules intact. */
+  {
+    const oldNos = oldLines
+      .map((l) => l.line_no)
+      .filter((n): n is number => typeof n === 'number');
+    if (oldNos.length > 0) {
+      const base = Math.min(...oldNos);
+      rows = rows.map((r, i) => ({ ...r, line_no: base + i }));
+    }
   }
 
   /* Insert the NEW set first, then remove the OLD — an insert failure leaves

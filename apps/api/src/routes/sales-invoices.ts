@@ -116,8 +116,9 @@ async function recomputeTotals(sb: any, salesInvoiceId: string) {
 
 /* Build one sales_invoice_items insert row from a client line payload.
    Shared by POST / (bulk create) and POST /:id/items (single add). Computes
-   line_total / line_cost / margin so recomputeTotals can roll them up. */
-function buildItemRow(salesInvoiceId: string, it: Record<string, unknown>) {
+   line_total / line_cost / margin so recomputeTotals can roll them up.
+   `lineNo` (0165) = the SI's listing position; omit/null for un-numbered. */
+function buildItemRow(salesInvoiceId: string, it: Record<string, unknown>, lineNo?: number | null) {
   const qty = Number(it.qty ?? 1);
   const unitPrice = Number(it.unitPriceCenti ?? 0);
   const discount = Number(it.discountCenti ?? 0);
@@ -146,6 +147,7 @@ function buildItemRow(salesInvoiceId: string, it: Record<string, unknown>) {
     line_margin_centi: lineTotal - lineCost,
     variants,
     notes: (it.notes as string) ?? null,
+    ...(typeof lineNo === 'number' ? { line_no: lineNo } : {}),
   };
 }
 
@@ -217,7 +219,9 @@ salesInvoices.get('/:id', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
   const [h, i] = await Promise.all([
     sb.from('sales_invoices').select(HEADER).eq('id', id).maybeSingle(),
-    sb.from('sales_invoice_items').select(ITEM).eq('sales_invoice_id', id).order('created_at'),
+    sb.from('sales_invoice_items').select(ITEM).eq('sales_invoice_id', id)
+      .order('line_no', { ascending: true, nullsFirst: false })
+      .order('created_at'),
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
@@ -309,7 +313,7 @@ salesInvoices.post('/', async (c) => {
   const h = header as unknown as { id: string; invoice_number: string; debtor_code: string | null; debtor_name: string | null; total_centi: number | null; paid_centi: number | null };
 
   if (items.length > 0) {
-    const rows = items.map((it) => buildItemRow(h.id, it));
+    const rows = items.map((it, lineNo) => buildItemRow(h.id, it, lineNo));
     const { error: iErr } = await sb.from('sales_invoice_items').insert(rows);
     if (iErr) { await sb.from('sales_invoices').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
     await recomputeTotals(sb, h.id);
@@ -449,7 +453,9 @@ salesInvoices.post('/from-dos', async (c) => {
   //    the earliest-sorted picked line so the result is deterministic.
   const sortedPicks = pickedIds
     .map((id) => remainingMap.get(id)!)
-    .sort((a, b) => a.doNumber.localeCompare(b.doNumber) || a.doItemId.localeCompare(b.doItemId));
+    /* lineSeq = the DO's own listing order so the SI reads like its DO; the
+       uuid tiebreak only guards determinism. */
+    .sort((a, b) => a.doNumber.localeCompare(b.doNumber) || (a.lineSeq - b.lineSeq) || a.doItemId.localeCompare(b.doItemId));
   const firstDoId = sortedPicks[0]!.deliveryOrderId;
   const distinctDoNumbers = [...new Set(sortedPicks.map((l) => l.doNumber))].sort();
 
@@ -524,7 +530,8 @@ salesInvoices.post('/from-dos', async (c) => {
 
   // 3b. One invoice line per pick — qty = the picked qty (NOT the full DO line
   //     qty), do_item_id set for the remaining-formula link. Carry cost.
-  const rows = sortedPicks.map((line) => buildItemRow(h.id, {
+  //     line_no (0165) = the sortedPicks position (the DO's listing order).
+  const rows = sortedPicks.map((line, lineNo) => buildItemRow(h.id, {
     doItemId: line.doItemId,
     itemCode: line.itemCode,
     itemGroup: line.itemGroup,
@@ -536,7 +543,7 @@ salesInvoices.post('/from-dos', async (c) => {
     discountCenti: line.discountCenti,
     unitCostCenti: line.unitCostCenti,
     variants: line.variants,
-  }));
+  }, lineNo));
   const { error: iErr } = await sb.from('sales_invoice_items').insert(rows);
   if (iErr) {
     // Roll the header back so we don't leave a headerless invoice.
@@ -604,17 +611,31 @@ salesInvoices.post('/:id/items/from-do/:doId', async (c) => {
   const { data: doItems } = await sb.from('delivery_order_items').select(
     'id, item_code, item_group, description, description2, uom, qty, ' +
     'unit_price_centi, discount_centi, unit_cost_centi, variants, notes',
-  ).eq('delivery_order_id', doId).order('created_at');
+  ).eq('delivery_order_id', doId)
+    .order('line_no', { ascending: true, nullsFirst: false })
+    .order('created_at');
 
   /* "Convert from DO" pulls the BALANCE, not the gross qty: cap each line to its
      live remaining-to-invoice and drop lines that are already fully invoiced /
      returned, so re-converting a partially-invoiced DO never double-bills. */
   const doLines = (doItems as Array<Record<string, unknown>> | null) ?? [];
   const remainingMap = await doRemainingByItemId(sb, doLines.map((it) => it.id as string));
+  /* 0165 — appended lines continue the SI's numbering (NULL base on a
+     pre-0165 invoice keeps it un-numbered). */
+  const { data: maxNoRow } = await sb
+    .from('sales_invoice_items')
+    .select('line_no')
+    .eq('sales_invoice_id', id)
+    .order('line_no', { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+  const baseLineNo = typeof (maxNoRow as { line_no?: number | null } | null)?.line_no === 'number'
+    ? (maxNoRow as { line_no: number }).line_no + 1
+    : null;
   const rows = doLines
     .map((it) => ({ it, remaining: remainingMap.get(it.id as string) ?? 0 }))
     .filter(({ remaining }) => remaining > 0)
-    .map(({ it, remaining }) => buildItemRow(id, {
+    .map(({ it, remaining }, idx) => buildItemRow(id, {
       doItemId: it.id,
       itemCode: it.item_code,
       itemGroup: it.item_group,
@@ -627,7 +648,7 @@ salesInvoices.post('/:id/items/from-do/:doId', async (c) => {
       unitCostCenti: it.unit_cost_centi,
       variants: it.variants,
       notes: it.notes,
-    }));
+    }, baseLineNo === null ? null : baseLineNo + idx));
   if (rows.length === 0) return c.json({ error: 'do_fully_invoiced' }, 409);
 
   const { error: iErr } = await sb.from('sales_invoice_items').insert(rows);
@@ -706,7 +727,19 @@ salesInvoices.post('/:id/items', async (c) => {
     if (over) return c.json(over, 409);
   }
 
-  const row = buildItemRow(id, it);
+  /* 0165 — continue the SI's numbering; a pre-0165 invoice (max NULL) stays
+     un-numbered so its lines keep one consistent ordering regime. */
+  const { data: maxNoRow } = await sb
+    .from('sales_invoice_items')
+    .select('line_no')
+    .eq('sales_invoice_id', id)
+    .order('line_no', { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+  const nextLineNo = typeof (maxNoRow as { line_no?: number | null } | null)?.line_no === 'number'
+    ? (maxNoRow as { line_no: number }).line_no + 1
+    : null;
+  const row = buildItemRow(id, it, nextLineNo);
   const { data, error } = await sb.from('sales_invoice_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);

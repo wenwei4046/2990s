@@ -1432,6 +1432,15 @@ export const mfgSalesOrderItems = pgTable('mfg_sales_order_items', {
      0091_so_item_stock_status.sql for the CHECK constraint + index. */
   stockStatus:       text('stock_status').notNull().default('PENDING'),
 
+  /* Migration 0165 (Loo 2026-06-12) — explicit per-SO line sequence. One bulk
+     insert gives every line the same created_at and row updates relocate heap
+     position, so the listing order (mains → accessories → services, sofa
+     modules left-to-right — PR #569) was unrecoverable from the timestamp.
+     Written by the create path (array index) and add-line (max+1, only when
+     the doc is already numbered); NULL on pre-0165 rows — reads order by
+     (line_no NULLS LAST, created_at) and re-derive the rule order for them. */
+  lineNo:            integer('line_no'),
+
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxDoc:       index('idx_mso_items_doc').on(t.docNo),
@@ -1600,6 +1609,9 @@ export const deliveryOrderItems = pgTable('delivery_order_items', {
   uom:                   text('uom').notNull().default('UNIT'),
   discountCenti:         integer('discount_centi').notNull().default(0),
   lineTotalCenti:        integer('line_total_centi').notNull().default(0),
+  /* Migration 0165 — per-DO line sequence; copies the SO's listing order at
+     /from-sos. NULL on pre-0165 rows (reads fall back to created_at). */
+  lineNo:            integer('line_no'),
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxDo: index('idx_do_items_do').on(t.deliveryOrderId),
@@ -1660,6 +1672,9 @@ export const salesInvoiceItems = pgTable('sales_invoice_items', {
   itemGroup:             text('item_group'),
   description2:          text('description2'),
   uom:                   text('uom').notNull().default('UNIT'),
+  /* Migration 0165 — per-SI line sequence; copies the DO's listing order at
+     convert. NULL on pre-0165 rows (reads fall back to created_at). */
+  lineNo:            integer('line_no'),
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxSi: index('idx_si_items_si').on(t.salesInvoiceId),
