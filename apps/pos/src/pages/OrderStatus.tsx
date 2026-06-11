@@ -230,15 +230,17 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
            buildKey (legacy SOs, services, bedframes…) pass through 1:1. */
         const items: OrderItem[] = groupSoLinesForDisplay(r.items ?? []).map((g) => {
           /* TBC fill-in (Loo 2026-06-11) — the lead line is the edit target.
-             SERVICE lines (fees / add-on SKUs) and PWP reward lines stay
-             read-only; an older API without line ids hides the editor. */
+             SERVICE lines (fees / add-on SKUs) stay read-only; an older API
+             without line ids hides the editor. PWP reward lines ARE editable
+             (Loo 2026-06-12 — their TBC picks must be completable too; the
+             server's delta pricing never touches the granted base) but they
+             can't swap products (voucher binding). */
           const lead = g.lines[0]!;
           const leadVariants = (lead.variants ?? {}) as Record<string, unknown>;
           const editableLine =
             lead.id != null &&
             String(lead.item_group ?? '') !== 'service' &&
-            !String(lead.item_code).startsWith('SVC-') &&
-            !leadVariants.pwp;
+            !String(lead.item_code).startsWith('SVC-');
           const edit: TbcEditTarget | null = editableLine
             ? {
                 itemId: lead.id!,
@@ -249,6 +251,7 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
                 discountCenti: lead.discount_centi ?? 0,
                 variants: leadVariants,
                 isSofaBuild: g.kind === 'sofa-build',
+                isPwp: Boolean(leadVariants.pwp),
               }
             : null;
           return g.kind === 'sofa-build' && g.display

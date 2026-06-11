@@ -44,6 +44,10 @@ export interface TbcEditTarget {
   discountCenti: number;
   variants: Record<string, unknown>;
   isSofaBuild: boolean;
+  /** PWP (换购) reward line — TBC picks are editable (the server's delta
+   *  pricing never touches the granted base) but the product can't be
+   *  swapped: the voucher binds to the reward SKU. */
+  isPwp: boolean;
 }
 
 /* Resolve the SO line's mfg product row by CODE — the SO stores item_code,
@@ -357,7 +361,7 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
       {error && <div className={styles.error}>{error}</div>}
 
       <div className={styles.actions}>
-        {!isSofa && !target.isSofaBuild && (
+        {!isSofa && !target.isSofaBuild && !target.isPwp && (
           <Button variant="ghost" onClick={() => { setSwapOpen((s) => !s); setError(null); }}>
             {swapOpen ? 'Keep this product' : 'Change product'}
           </Button>

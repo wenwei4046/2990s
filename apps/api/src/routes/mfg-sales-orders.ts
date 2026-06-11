@@ -4191,11 +4191,13 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-update', async (c) => {
   if (!prev) return c.json({ error: 'not_found' }, 404);
   if (prev.cancelled) return c.json({ error: 'line_cancelled' }, 409);
   const prevVariants = ((prev.variants ?? {}) as Record<string, unknown>);
-  /* A PWP reward line prices from the voucher grant, not the catalog — its
-     deal is coordinator territory, never the POS editor's. */
-  if (prevVariants.pwp) {
-    return c.json({ error: 'pwp_line_locked', reason: 'PWP reward lines are edited by the coordinator.' }, 409);
-  }
+  /* PWP reward lines ARE editable here (Loo 2026-06-12 — SO-2606-009's
+     FENRIR-(K) reward arrived all-TBC and could never be completed). Safe
+     because the delta below never re-derives the base: only the surcharge
+     difference + fabric-tier Δ move the price, exactly the components a PWP
+     line stacks on top of its granted base at create — and the
+     TBC_VARIANT_KEYS whitelist keeps pwp / pwpCode untouchable. Only the
+     product SWAP stays locked for PWP (it would break the voucher binding). */
 
   /* Merge — a present key overwrites; null / '' / [] clears the key (the
      sales picked "Confirm later" again). */
