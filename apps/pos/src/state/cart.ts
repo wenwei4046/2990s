@@ -133,7 +133,9 @@ export interface BedframeConfigSnapshot {
   fabricLabel?: string;
   fabricTierDelta?: number;
   gapId?: string;
-  legHeightId: string;
+  // Optional since 2026-06-11 (Loo): gap / leg / divan may also be confirmed
+  // later — so-variant-rule blocks a Processing date until they're filled.
+  legHeightId?: string;
   divanHeightId?: string;
   totalHeightId?: string;
   // Special Add-ons (migration 0134): specialIds now holds special_addons CODES
