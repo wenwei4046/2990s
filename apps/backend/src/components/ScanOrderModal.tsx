@@ -18,7 +18,7 @@
 // New SO form where pricing, variants and validation run as usual.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Camera, Loader2, Trash2, Upload, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
@@ -74,6 +74,7 @@ type ExtractedSlip = {
   lines: ExtractedLine[];
 };
 type CatalogSku = { code: string; name: string; category: string; baseModel: string | null };
+type RepRulesMeta = { salesperson: string; sampleCount: number };
 type ExtractResp = {
   success: boolean;
   data: {
@@ -81,8 +82,10 @@ type ExtractResp = {
     extracted: ExtractedSlip;
     warnings: Array<{ field: string; value: string; message: string; lineIdx?: number }>;
     catalog: { skus: CatalogSku[]; fabrics: Array<{ code: string; description: string | null }> };
+    meta?: { repRules?: RepRulesMeta | null };
   };
 };
+type SalespeopleResp = { success: boolean; data: { salespeople: string[] } };
 
 /* mfg_product_category → SO line item_group (SoLineCard lowercases the
    product category; SERVICE lines carry item_group='service'). */
@@ -122,6 +125,22 @@ export const ScanOrderModal = ({ onClose }: Props) => {
   const [extracting, setExtracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Salesperson — each rep has their own handwriting/notation habits, so the
+  // extractor learns PER REP (rules + few-shot filtered to this rep). Set it
+  // before Extract when known; left blank it's backfilled from the slip's
+  // SALES REPRESENTATIVE box after extraction.
+  const [salesperson, setSalesperson] = useState('');
+  const [knownReps, setKnownReps] = useState<string[]>([]);
+  const [repRules, setRepRules] = useState<RepRulesMeta | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    authedFetch<SalespeopleResp>('/scan-so/salespeople')
+      .then((r) => { if (alive) setKnownReps(r.data.salespeople); })
+      .catch(() => { /* datalist is a convenience — field stays free-text */ });
+    return () => { alive = false; };
+  }, []);
+
   // Review state (set after a successful extract).
   const [sampleId, setSampleId] = useState<string | null>(null);
   const [skus, setSkus] = useState<CatalogSku[]>([]);
@@ -160,6 +179,7 @@ export const ScanOrderModal = ({ onClose }: Props) => {
     try {
       const fd = new FormData();
       for (const f of files) fd.append('file', f);
+      if (salesperson.trim()) fd.append('salesperson', salesperson.trim());
       const resp = await authedFetch<ExtractResp>('/scan-so/extract', {
         method: 'POST',
         body: fd,
@@ -167,7 +187,10 @@ export const ScanOrderModal = ({ onClose }: Props) => {
       const d = resp.data;
       setSampleId(d.sampleId);
       setSkus(d.catalog.skus);
+      setRepRules(d.meta?.repRules ?? null);
       const ex = d.extracted;
+      // Blank salesperson → backfill from the slip's SALES REPRESENTATIVE box.
+      if (!salesperson.trim() && ex.salesRep) setSalesperson(ex.salesRep);
       setCustomerName(ex.customerName ?? '');
       setPhonesText(ex.phones.join(' / '));
       setAddress(ex.address ?? '');
@@ -238,9 +261,11 @@ export const ScanOrderModal = ({ onClose }: Props) => {
     };
     if (sampleId) {
       // Best-effort — the SO prefill must not be blocked by sample bookkeeping.
+      // salesperson rides along so the per-rep pool grows + rules re-distill.
+      const rep = (salesperson.trim() || salesRep.trim()) || null;
       authedFetch(`/scan-so/samples/${sampleId}/confirm`, {
         method: 'POST',
-        body: JSON.stringify({ corrected }),
+        body: JSON.stringify({ corrected, salesperson: rep }),
       }).catch(() => { /* few-shot is best-effort */ });
     }
 
@@ -313,6 +338,19 @@ export const ScanOrderModal = ({ onClose }: Props) => {
 
           {!inReview && (
             <>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>Salesperson (who wrote the slip)</span>
+                <input
+                  className={styles.input}
+                  list="scan-so-salespeople"
+                  value={salesperson}
+                  placeholder="Leave blank to auto-detect from the slip"
+                  onChange={(e) => setSalesperson(e.target.value)}
+                />
+              </label>
+              <datalist id="scan-so-salespeople">
+                {knownReps.map((r) => <option key={r} value={r} />)}
+              </datalist>
               <div
                 className={`${styles.dropZone} ${dragOver ? styles.dropZoneActive : ''}`}
                 onClick={() => fileInputRef.current?.click()}
@@ -355,6 +393,16 @@ export const ScanOrderModal = ({ onClose }: Props) => {
 
           {inReview && (
             <>
+              {repRules && (
+                <div>
+                  <span
+                    className={`${styles.chip} ${styles.chipGreen}`}
+                    title="This rep's distilled handwriting rules were applied to the extraction."
+                  >
+                    Rules: {repRules.salesperson} ({repRules.sampleCount} sample{repRules.sampleCount === 1 ? '' : 's'})
+                  </span>
+                </div>
+              )}
               <div className={styles.sectionLabel}>Customer</div>
               <div className={styles.grid2}>
                 <label className={styles.field}>

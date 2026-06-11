@@ -8,11 +8,19 @@
 //   • catalog injection pulls live from Supabase Postgres (mfg_products,
 //     fabric_trackings, maintenance config sofa sizes/leg heights);
 //   • few-shot pool = the 5 most recent operator-CONFIRMED so_scan_samples
-//     rows (no gold marking / per-customer distill in v1).
+//     rows, filtered to the slip's SALESPERSON first (fall back to global);
+//   • per-SALESPERSON learning (vs HOOKKA's per-customer): each rep has
+//     their own handwriting/notation habits that differ per product
+//     category, so a distilled rules block (so_scan_rules, organized by
+//     SOFA / MATTRESS / BEDFRAME / ACCESSORY / SERVICE sections) is
+//     regenerated from that rep's corrected samples after every confirm.
 //
 // Endpoints:
-//   POST /scan-so/extract              — multipart image(s)/pdf → JSON + sampleId
-//   POST /scan-so/samples/:id/confirm  — store operator-corrected JSON
+//   POST /scan-so/extract                     — multipart image(s)/pdf (+ salesperson field) → JSON + sampleId
+//   POST /scan-so/samples/:id/confirm         — store operator-corrected JSON (+ salesperson); auto-distills rep rules
+//   GET  /scan-so/salespeople                 — distinct reps seen across samples + rules (modal datalist)
+//   GET  /scan-so/rules/:salesperson          — view a rep's distilled rules
+//   POST /scan-so/rules/:salesperson/distill  — manually regenerate a rep's rules
 //
 // Setup:
 //   npx wrangler secret put ANTHROPIC_API_KEY
@@ -415,7 +423,255 @@ function isMissingTable(err: { code?: string; message?: string } | null): boolea
 }
 
 const TABLE_MISSING_MSG =
-  'so_scan_samples table missing — apply packages/db/migrations/0164_so_scan_samples.sql to this database.';
+  'scan-so tables missing — apply packages/db/migrations/0164_so_scan_samples.sql to this database.';
+
+// ===========================================================================
+// Per-SALESPERSON rule distillation — ported from HOOKKA's ocr-distill.ts
+// (per-customer, D1) and adapted to per-salesperson on Supabase, with the
+// rules ORGANIZED BY PRODUCT CATEGORY (each rep's notation differs between
+// sofa / mattress / bedframe slips).
+// ===========================================================================
+
+// `ilike` with no wildcards = case-insensitive exact match, BUT % and _ in
+// the value would still act as wildcards — escape them so a rep literally
+// named "A_B" can't match "AXB".
+function ilikeExact(v: string): string {
+  return v.replace(/([\\%_])/g, '\\$1');
+}
+
+const DISTILL_META_PROMPT = `You are reviewing operator-confirmed correct extractions of HANDWRITTEN showroom sale-order slips at 2990's Home, a Malaysian furniture retailer. ALL the examples below were written by ONE salesperson. Each salesperson has their own handwriting and notation habits, and those habits DIFFER per product category. Write a concise salesperson-specific OCR rule block so future extractions of this rep's slips apply their conventions automatically.
+
+ORGANIZE the rules into CATEGORY SECTIONS, in this order, skipping a section only when the rep has no examples in that category:
+SOFA:
+MATTRESS:
+BEDFRAME:
+ACCESSORY:
+SERVICE:
+You may end with a GENERAL: section for habits that span categories (header fields, dates, phone formats, deposit/total notation, salesperson signature style).
+
+Within each category section capture what is BESPOKE TO THIS REP:
+  • Shorthand patterns for that category's line items.
+  • How they write model names (repeated abbreviations, habitual misspellings, casing).
+  • How they write sizes (K/Q/King/Queen/6FT/5FT, sofa seat sizes, dimension notation).
+  • Fabric / colour code conventions and where on the row they write them.
+  • Price habits (unit price vs line total, "RM" omitted, thousands separators, rounding).
+  • Qty habits ("x2" vs "2pcs" vs a bare digit, what a blank qty means for this rep).
+
+DO NOT restate universal extraction rules that apply to every salesperson.
+DO NOT enumerate every line item from the examples.
+DO NOT write a generic OCR primer.
+DO write 100-400 words total: each section label exactly as above ("SOFA:", "MATTRESS:", …) on its own line, with short bullet points (•, -, *) underneath. No markdown headers, no fences, no preamble, no closing remarks.
+
+Output ONLY the rule text. The very first characters of your response must be a section label (e.g. "SOFA:"). Anything else will be stored verbatim into the prompt and corrupt downstream extractions.`;
+
+type DistillResult = {
+  status: 'distilled' | 'skipped' | 'error';
+  reason?: string;
+  rulesGenerated?: string;
+  sampleCount?: number;
+};
+
+/**
+ * Regenerate so_scan_rules for one salesperson from their latest ≤50
+ * corrected samples. REPLACES any existing rules row (regenerate-from-pool,
+ * not merge — same contract as HOOKKA's distillCustomerRules).
+ *
+ * Cheap-skip: fewer than 2 corrected samples → skip WITHOUT an Anthropic
+ * call, so the fire-and-forget trigger on /confirm is always safe.
+ */
+async function distillSalespersonRules(
+  svc: SupabaseClient,
+  apiKey: string | undefined,
+  salesperson: string,
+): Promise<DistillResult> {
+  const rep = salesperson.trim();
+  if (!rep) return { status: 'error', reason: 'Missing salesperson.' };
+  if (!apiKey) {
+    return {
+      status: 'error',
+      reason: 'ANTHROPIC_API_KEY not configured. Run: npx wrangler secret put ANTHROPIC_API_KEY',
+    };
+  }
+
+  const { data: rows, error: selErr } = await svc
+    .from('so_scan_samples')
+    .select('corrected')
+    .not('corrected', 'is', null)
+    .ilike('salesperson', ilikeExact(rep))
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (selErr) {
+    return { status: 'error', reason: isMissingTable(selErr) ? TABLE_MISSING_MSG : selErr.message };
+  }
+  const samples = (rows as Array<{ corrected: unknown }> | null) ?? [];
+  if (samples.length < 2) {
+    return {
+      status: 'skipped',
+      reason: `Need at least 2 corrected samples to distill rules; "${rep}" has ${samples.length}.`,
+      sampleCount: samples.length,
+    };
+  }
+
+  const examplesText = samples
+    .map((r, i) => `Example ${i + 1}:\n${JSON.stringify(r.corrected)}`)
+    .join('\n\n');
+  const userPayload =
+    `Salesperson: ${rep}\n\n` +
+    `Here are ${samples.length} confirmed correct extractions of this salesperson's slips (newest first). ` +
+    `Identify their per-category notation habits and write the rule block:\n\n` +
+    examplesText;
+
+  let distilledText = '';
+  let errorMsg: string | null = null;
+  try {
+    const resp = await fetch(ANTHROPIC_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 2048,
+        // Determinism: same sample pool → same distilled rules.
+        temperature: 0,
+        system: DISTILL_META_PROMPT,
+        messages: [{ role: 'user', content: [{ type: 'text', text: userPayload }] }],
+      }),
+    });
+    const bodyText = await resp.text();
+    if (!resp.ok) {
+      errorMsg = `Anthropic ${resp.status}: ${bodyText.slice(0, 500)}`;
+    } else {
+      let parsedResp: AnthropicResponse;
+      try {
+        parsedResp = JSON.parse(bodyText) as AnthropicResponse;
+      } catch {
+        errorMsg = `Anthropic returned non-JSON: ${bodyText.slice(0, 300)}`;
+        parsedResp = {};
+      }
+      if (parsedResp.error) {
+        errorMsg = `Anthropic: ${parsedResp.error.type}: ${parsedResp.error.message}`;
+      } else {
+        const firstText = parsedResp.content?.find((b) => b.type === 'text')?.text ?? '';
+        // Distill output is plain prose, not JSON — strip fences only.
+        // (Do NOT slice to first/last brace — that would truncate prose.)
+        let cleaned = firstText.trim();
+        const m = cleaned.match(/^```(?:\w+)?\s*\n?([\s\S]*?)\n?```\s*$/);
+        if (m?.[1]) cleaned = m[1].trim();
+        distilledText = cleaned;
+      }
+    }
+  } catch (e) {
+    errorMsg = `Network/fetch error: ${(e as Error).message}`;
+  }
+
+  if (errorMsg || !distilledText) {
+    return { status: 'error', reason: errorMsg ?? 'Claude returned empty rules.' };
+  }
+  // Soft cap — keep the injected prompt block bounded (same 32k ceiling as
+  // HOOKKA's distill).
+  if (distilledText.length > 32_000) distilledText = distilledText.slice(0, 32_000);
+
+  // Canonical PK casing: if a rules row already exists under a different
+  // casing ("aaron" vs "Aaron"), upsert onto THAT key instead of creating a
+  // case-variant duplicate.
+  let key = rep;
+  const { data: existing } = await svc
+    .from('so_scan_rules')
+    .select('salesperson')
+    .ilike('salesperson', ilikeExact(rep))
+    .limit(1)
+    .maybeSingle();
+  const existingKey = (existing as { salesperson: string } | null)?.salesperson;
+  if (existingKey) key = existingKey;
+
+  const { error: upErr } = await svc
+    .from('so_scan_rules')
+    .upsert(
+      {
+        salesperson: key,
+        rules: distilledText,
+        sample_count: samples.length,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'salesperson' },
+    );
+  if (upErr) {
+    return { status: 'error', reason: isMissingTable(upErr) ? TABLE_MISSING_MSG : upErr.message };
+  }
+
+  return { status: 'distilled', rulesGenerated: distilledText, sampleCount: samples.length };
+}
+
+// ===========================================================================
+// GET /scan-so/salespeople — distinct reps seen across samples + rules.
+// Feeds the modal's Salesperson datalist. Best-effort: tables missing →
+// empty list (the field is free-text anyway).
+// ===========================================================================
+scanSo.get('/salespeople', async (c) => {
+  const svc = serviceClient(c.env);
+  const seen = new Map<string, string>(); // UPPER(name) -> display casing
+  const add = (v: unknown) => {
+    if (typeof v !== 'string') return;
+    const t = v.trim();
+    if (t && !seen.has(t.toUpperCase())) seen.set(t.toUpperCase(), t);
+  };
+  try {
+    const [rulesRes, samplesRes] = await Promise.all([
+      svc.from('so_scan_rules').select('salesperson').limit(500),
+      svc
+        .from('so_scan_samples')
+        .select('salesperson')
+        .not('salesperson', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(500),
+    ]);
+    for (const r of (rulesRes.data as Array<{ salesperson: string | null }> | null) ?? []) add(r.salesperson);
+    for (const r of (samplesRes.data as Array<{ salesperson: string | null }> | null) ?? []) add(r.salesperson);
+  } catch {
+    /* best-effort */
+  }
+  const salespeople = Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+  return c.json({ success: true, data: { salespeople } });
+});
+
+// ===========================================================================
+// GET /scan-so/rules/:salesperson — view a rep's distilled rules.
+// ===========================================================================
+scanSo.get('/rules/:salesperson', async (c) => {
+  const rep = (c.req.param('salesperson') ?? '').trim();
+  if (!rep) return c.json({ error: 'bad_request', reason: 'Missing salesperson.' }, 400);
+  const svc = serviceClient(c.env);
+  const { data, error } = await svc
+    .from('so_scan_rules')
+    .select('salesperson, rules, sample_count, updated_at')
+    .ilike('salesperson', ilikeExact(rep))
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    if (isMissingTable(error)) return c.json({ error: 'table_missing', reason: TABLE_MISSING_MSG }, 503);
+    return c.json({ error: 'query_failed', reason: error.message }, 500);
+  }
+  if (!data) {
+    return c.json({ error: 'not_found', reason: `No distilled rules for "${rep}" yet.` }, 404);
+  }
+  return c.json({ success: true, data });
+});
+
+// ===========================================================================
+// POST /scan-so/rules/:salesperson/distill — manual regeneration.
+// ===========================================================================
+scanSo.post('/rules/:salesperson/distill', async (c) => {
+  const rep = (c.req.param('salesperson') ?? '').trim();
+  if (!rep) return c.json({ error: 'bad_request', reason: 'Missing salesperson.' }, 400);
+  const res = await distillSalespersonRules(serviceClient(c.env), c.env.ANTHROPIC_API_KEY, rep);
+  if (res.status === 'error') {
+    return c.json({ error: 'distill_failed', reason: res.reason }, 500);
+  }
+  return c.json({ success: true, data: res });
+});
 
 // ===========================================================================
 // POST /scan-so/extract
@@ -495,6 +751,13 @@ scanSo.post('/extract', async (c) => {
 
   const imageSha256 = firstBuffer ? await sha256Hex(firstBuffer) : null;
 
+  // Salesperson — operator-set in the modal BEFORE extract (free-text).
+  // When given, that rep's distilled rules + their own confirmed samples are
+  // injected; when blank, the AI's salesRep extraction backfills the sample
+  // row so the pool still grows per rep.
+  const repRaw = formData.get('salesperson');
+  const repGiven = typeof repRaw === 'string' ? repRaw.trim() : '';
+
   // Catalog via the user-scoped client (RLS applies, same visibility the
   // operator already has on the SKU master screens).
   const sb = c.get('supabase');
@@ -507,21 +770,77 @@ scanSo.post('/extract', async (c) => {
   // confirmed sample doesn't invalidate the cache.
   const cachedPrefix = `${SYSTEM_PROMPT}\n\nCATALOG\n=======\n${catalogText}`;
 
-  // Few-shot pool: 5 most recent operator-confirmed samples. Best-effort —
-  // table missing (migration not applied) just skips it.
   const svc = serviceClient(c.env);
+
+  // Per-rep distilled rules block (so_scan_rules). Injected AFTER the
+  // cache_control boundary so the catalog prefix stays cache-stable across
+  // reps. Best-effort — table missing just skips it.
+  let repRulesText = '';
+  let repRulesMeta: { salesperson: string; sampleCount: number } | null = null;
+  if (repGiven) {
+    try {
+      const { data: ruleRow } = await svc
+        .from('so_scan_rules')
+        .select('salesperson, rules, sample_count')
+        .ilike('salesperson', ilikeExact(repGiven))
+        .limit(1)
+        .maybeSingle();
+      const row = ruleRow as { salesperson: string; rules: string; sample_count: number | null } | null;
+      if (row && row.rules.trim() !== '') {
+        repRulesText =
+          `SALESPERSON-SPECIFIC RULES — this slip was written by ${row.salesperson}. ` +
+          `These rules were distilled from this rep's previously confirmed slips and are organized by ` +
+          `product category; apply the matching category section's conventions when reading their handwriting ` +
+          `(they complement, never override, the universal extraction rules and the never-invent-codes rule):\n\n` +
+          row.rules;
+        repRulesMeta = { salesperson: row.salesperson, sampleCount: row.sample_count ?? 0 };
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  // Few-shot pool: 5 most recent operator-confirmed samples — THIS REP's
+  // first, topped up with global recents (deduped by id). Best-effort —
+  // table missing (migration not applied) just skips it.
   let fewShotText = '';
   try {
-    const { data: rows } = await svc
-      .from('so_scan_samples')
-      .select('corrected')
-      .not('corrected', 'is', null)
-      .order('created_at', { ascending: false })
-      .limit(5);
-    const examples = (rows as Array<{ corrected: unknown }> | null) ?? [];
-    if (examples.length > 0) {
-      const blocks = examples
-        .map((r, i) => `Example ${i + 1} (operator-confirmed):\n${JSON.stringify(r.corrected)}`)
+    type FewShotRow = { id: string; corrected: unknown };
+    const picked: Array<{ corrected: unknown; mine: boolean }> = [];
+    const pickedIds = new Set<string>();
+    if (repGiven) {
+      const { data: repRows } = await svc
+        .from('so_scan_samples')
+        .select('id, corrected')
+        .not('corrected', 'is', null)
+        .ilike('salesperson', ilikeExact(repGiven))
+        .order('created_at', { ascending: false })
+        .limit(5);
+      for (const r of (repRows as FewShotRow[] | null) ?? []) {
+        picked.push({ corrected: r.corrected, mine: true });
+        pickedIds.add(r.id);
+      }
+    }
+    if (picked.length < 5) {
+      const { data: rows } = await svc
+        .from('so_scan_samples')
+        .select('id, corrected')
+        .not('corrected', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(5);
+      for (const r of (rows as FewShotRow[] | null) ?? []) {
+        if (picked.length >= 5) break;
+        if (pickedIds.has(r.id)) continue;
+        picked.push({ corrected: r.corrected, mine: false });
+        pickedIds.add(r.id);
+      }
+    }
+    if (picked.length > 0) {
+      const blocks = picked
+        .map((r, i) => {
+          const who = repGiven ? (r.mine ? ` — written by ${repGiven}, weigh heavily` : ' — another rep') : '';
+          return `Example ${i + 1} (operator-confirmed${who}):\n${JSON.stringify(r.corrected)}`;
+        })
         .join('\n\n');
       fewShotText =
         `FEW-SHOT EXAMPLES from previous slips, corrected by the operator. ` +
@@ -557,6 +876,9 @@ scanSo.post('/extract', async (c) => {
             role: 'user',
             content: [
               { type: 'text', text: cachedPrefix, cache_control: { type: 'ephemeral' } },
+              // Rep rules + few-shot live AFTER the cache boundary — they
+              // vary per salesperson/sample and must not bust the prefix.
+              ...(repRulesText ? [{ type: 'text', text: repRulesText }] : []),
               ...(fewShotText ? [{ type: 'text', text: fewShotText }] : []),
               ...fileBlocks,
               {
@@ -601,6 +923,9 @@ scanSo.post('/extract', async (c) => {
   }
 
   // Persist the sample row (status EXTRACTED, or FAILED with the error blob).
+  // salesperson = operator's pick, else the AI's salesRep detection — keeps
+  // the per-rep pool growing even when the operator forgets the field.
+  const sampleSalesperson = repGiven || (parsed?.salesRep ?? '').trim() || null;
   let sampleId: string | null = null;
   let sampleInsertError: string | null = null;
   try {
@@ -608,6 +933,7 @@ scanSo.post('/extract', async (c) => {
       .from('so_scan_samples')
       .insert({
         image_sha256: imageSha256,
+        salesperson: sampleSalesperson,
         extracted: parsed ?? { error: errorMsg, claudeText },
         status: parsed ? 'EXTRACTED' : 'FAILED',
       })
@@ -642,7 +968,7 @@ scanSo.post('/extract', async (c) => {
         skus: catalog.skus,
         fabrics: catalog.fabrics,
       },
-      meta: { cacheHit, cacheCreated, files: files.length, sampleInsertError },
+      meta: { cacheHit, cacheCreated, files: files.length, sampleInsertError, repRules: repRulesMeta },
     },
   });
 });
@@ -656,22 +982,29 @@ scanSo.post('/samples/:id/confirm', async (c) => {
   const id = c.req.param('id');
   if (!id) return c.json({ error: 'bad_request', reason: 'Missing sample id.' }, 400);
 
-  let body: { corrected?: unknown };
+  let body: { corrected?: unknown; salesperson?: unknown };
   try {
-    body = (await c.req.json()) as { corrected?: unknown };
+    body = (await c.req.json()) as { corrected?: unknown; salesperson?: unknown };
   } catch {
     return c.json({ error: 'bad_request', reason: 'Invalid JSON body.' }, 400);
   }
   if (body.corrected === undefined || body.corrected === null) {
     return c.json({ error: 'bad_request', reason: 'Missing `corrected`.' }, 400);
   }
+  const repGiven = typeof body.salesperson === 'string' ? body.salesperson.trim() : '';
 
   const svc = serviceClient(c.env);
   const { data: updated, error } = await svc
     .from('so_scan_samples')
-    .update({ corrected: body.corrected, status: 'CONFIRMED' })
+    .update({
+      corrected: body.corrected,
+      status: 'CONFIRMED',
+      // Operator-reviewed rep wins over whatever /extract stamped; blank
+      // leaves the extract-time value (operator pick or AI detection) alone.
+      ...(repGiven ? { salesperson: repGiven } : {}),
+    })
     .eq('id', id)
-    .select('id');
+    .select('id, salesperson');
 
   if (error) {
     if (isMissingTable(error)) {
@@ -682,5 +1015,24 @@ scanSo.post('/samples/:id/confirm', async (c) => {
   if (!updated || updated.length === 0) {
     return c.json({ error: 'not_found', reason: 'Sample not found.' }, 404);
   }
+
+  // Fire-and-forget rule distillation for this rep — one Claude call that
+  // REGENERATES so_scan_rules from their latest ≤50 corrected samples.
+  // distillSalespersonRules cheap-skips (<2 samples) without an API call,
+  // so firing on every confirm is safe. Never blocks/fails the confirm.
+  const rep = repGiven || ((updated[0] as { salesperson?: string | null }).salesperson ?? '').trim();
+  if (rep) {
+    const distillPromise = distillSalespersonRules(svc, c.env.ANTHROPIC_API_KEY, rep)
+      .then((r) => {
+        if (r.status === 'error') console.warn(`[scan-so distill] ${rep}: ${r.reason}`);
+      })
+      .catch((e) => console.warn(`[scan-so distill] ${rep} threw:`, (e as Error).message));
+    try {
+      c.executionCtx.waitUntil(distillPromise);
+    } catch {
+      /* non-Workers runtime (tests) — let the floating promise run */
+    }
+  }
+
   return c.json({ success: true });
 });
