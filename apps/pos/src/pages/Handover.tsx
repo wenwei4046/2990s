@@ -21,8 +21,10 @@ import {
   getStepBlockers,
   computeAddonTotal,
   loadHandoverFormSnapshot, clearHandoverFormSnapshot, HANDOVER_FORM_SNAPSHOT_KEY,
+  todayLocalIso,
   type HandoverForm, type AddonInfo,
 } from '../lib/handover-helpers';
+import { missingVariantAxes } from '@2990s/shared';
 import { Topbar } from '../components/Topbar';
 import { PhaseNav } from '../components/handover/PhaseNav';
 import { StepFooter } from '../components/handover/StepFooter';
@@ -208,6 +210,17 @@ export const Handover = () => {
   // resolved to nothing in production, where `products` is empty, and silently
   // showed RM 0.)
   const productById = new Map((catalog.data ?? []).map((p) => [p.id, p]));
+  /* TBC lines (Loo 2026-06-11) — items whose category-mandatory picks (fabric /
+     gap / leg / divan, shared so-variant-rule) are still open. A Processing
+     date would 409 variants_incomplete at the server, AFTER the customer has
+     signed — so the date step forces "For further notice" while any exist.
+     Plain compute (no hook): this sits below an early return. */
+  const tbcItemNames = Array.from(new Set(
+    cartLinesToSoItems(lines, catalog.data)
+      .filter((it) => missingVariantAxes(it.itemGroup, it.variants).length > 0)
+      .map((it) => it.description || it.itemCode),
+  ));
+  const hasTbcLines = tbcItemNames.length > 0;
   const DELIVERABLE_GROUPS = new Set(['sofa', 'mattress', 'bedframe']);
   const cartCategoryIds = lines
     .map((l) => inferItemGroup(l.config, productById.get(l.config.productId)))
@@ -255,7 +268,7 @@ export const Handover = () => {
     customer:  validateCustomer(form),
     address:   validateAddress(form),
     emergency: validateEmergency(form),
-    target:    validateTargetDate(form),
+    target:    validateTargetDate(form, todayLocalIso(), hasTbcLines),
     // Block this step when a linked SO number was typed but is invalid — the
     // server would reject the order, so catch it here with a clear message.
     addons:    validateAddonsPayment(form) && !linkInvalid,
@@ -349,7 +362,10 @@ export const Handover = () => {
         // expected_dd = the factory start (Process Date). The SO API requires
         // Process + Delivery to arrive together (or neither), so we only send the
         // date trio when BOTH are present — "For further notice" sends neither.
-        ...(targetDate && processDate
+        // TBC lines (Loo 2026-06-11): a restored form snapshot may still carry
+        // dates from before the cart turned TBC — strip them so the server's
+        // variants_incomplete 409 can't fire after the customer signed.
+        ...(targetDate && processDate && !hasTbcLines
           ? { targetDate, customerDeliveryDate: targetDate, internalExpectedDd: processDate }
           : {}),
         ...(signatureData ? { signatureB64: signatureData } : {}),
@@ -469,7 +485,7 @@ export const Handover = () => {
             {current.key === 'customer'  && <CustomerStep  form={form} update={update} />}
             {current.key === 'address'   && <AddressStep   form={form} update={update} localities={localities.data ?? []} />}
             {current.key === 'emergency' && <EmergencyStep form={form} update={update} />}
-            {current.key === 'target'    && <TargetDateStep form={form} update={update} />}
+            {current.key === 'target'    && <TargetDateStep form={form} update={update} tbcItemNames={tbcItemNames} />}
             {current.key === 'addons'    && (
               <AddonsPaymentStep
                 form={form}
@@ -502,7 +518,7 @@ export const Handover = () => {
               valid={validity[current.key]}
               submitting={handoffToSo.isPending}
               paymentRecorded={form.paymentRecorded}
-              blockers={getStepBlockers(current.key, form, subtotal, addonTotal, deliveryFee.total)}
+              blockers={getStepBlockers(current.key, form, subtotal, addonTotal, deliveryFee.total, hasTbcLines)}
               attempted={attempted}
               onPrev={goPrev}
               onNext={goNext}

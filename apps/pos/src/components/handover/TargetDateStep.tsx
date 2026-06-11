@@ -6,10 +6,15 @@ import { useCartLeadDays } from '../../lib/lead-times';
 import styles from '../../pages/Handover.module.css';
 
 export const TargetDateStep = ({
-  form, update,
+  form, update, tbcItemNames = [],
 }: {
   form: HandoverForm;
   update: <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) => void;
+  /** TBC lines (Loo 2026-06-11) — cart items whose picks (fabric / gap / leg /
+   *  divan) the customer hasn't confirmed yet. A Processing date means "ready
+   *  to build", so while any are open the order goes out "For further notice"
+   *  and dates are set from My orders once the picks are completed. */
+  tbcItemNames?: string[];
 }) => {
   const { days: leadDays } = useCartLeadDays();
 
@@ -53,9 +58,20 @@ export const TargetDateStep = ({
     }
   };
 
+  const hasTbc = tbcItemNames.length > 0;
+
   return (
     <section className={styles.stepBody}>
       <h3 className="subTitle">Delivery target date</h3>
+
+      {hasTbc && (
+        <p className={styles.methodHint}>
+          {tbcItemNames.join(', ')} still {tbcItemNames.length === 1 ? 'has' : 'have'} picks
+          the customer will confirm later (fabric or dimensions), so delivery and
+          process dates can't be set yet. Choose "For further notice" — once the
+          picks are completed in My orders, the dates go in there.
+        </p>
+      )}
 
       <div className="fieldRow">
         <label className={`highlightCard ${form.deliveryDateLater ? 'highlightCardActive' : ''}`}>
@@ -71,7 +87,7 @@ export const TargetDateStep = ({
         </label>
       </div>
 
-      {!form.deliveryDateLater && (
+      {!form.deliveryDateLater && !hasTbc && (
         <MonthCalendar
           value={form.deliveryDate}
           onChange={onPickDelivery}
@@ -88,7 +104,7 @@ export const TargetDateStep = ({
       {/* Process Date (factory start) — shown once a delivery date is picked.
           Hidden for "For further notice", where both dates stay open.
           Bounded today..deliveryDate. */}
-      {form.deliveryDate && !form.deliveryDateLater && (
+      {form.deliveryDate && !form.deliveryDateLater && !hasTbc && (
         <Field label="Process date (factory start)">
           <input
             type="date"
