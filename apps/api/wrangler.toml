@@ -72,6 +72,10 @@ preview_bucket_name = "2990s-so-item-photos-preview"
 # bucket_name = "2990s-public"
 # preview_bucket_name = "2990s-public"
 
-# Cron triggers for the slip-orphan reaper (every 10 min).
+# Cron triggers:
+#   "*/10 * * * *" — slip-orphan reaper (every 10 min)
+#   "0 20 * * 0"   — weekly scan-SO salesperson-rule distill
+#                    (Sun 20:00 UTC = Mon 04:00 MYT; must match
+#                    WEEKLY_DISTILL_CRON in src/index.ts)
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["*/10 * * * *", "0 20 * * 0"]

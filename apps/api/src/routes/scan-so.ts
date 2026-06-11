@@ -439,7 +439,9 @@ function ilikeExact(v: string): string {
   return v.replace(/([\\%_])/g, '\\$1');
 }
 
-const DISTILL_META_PROMPT = `You are reviewing operator-confirmed correct extractions of HANDWRITTEN showroom sale-order slips at 2990's Home, a Malaysian furniture retailer. ALL the examples below were written by ONE salesperson. Each salesperson has their own handwriting and notation habits, and those habits DIFFER per product category. Write a concise salesperson-specific OCR rule block so future extractions of this rep's slips apply their conventions automatically.
+const DISTILL_META_PROMPT = `You are reviewing extraction sessions of HANDWRITTEN showroom sale-order slips at 2990's Home, a Malaysian furniture retailer. ALL the examples below were written by ONE salesperson. Each example is a PAIR: what the AI initially extracted, followed by what the human operator corrected it to (the confirmed truth). Each salesperson has their own handwriting and notation habits, and those habits DIFFER per product category. Write a concise salesperson-specific OCR rule block so future extractions of this rep's slips apply their conventions automatically.
+
+DERIVE THE RULES FROM THE DIFFS: compare each "AI extracted" JSON against its "Operator corrected" JSON. Wherever they differ, the AI misread this rep's notation and the human fixed it — that diff is exactly how this rep's shorthand maps to catalog truth (e.g. AI read "BO315-2", operator corrected to "BO315-02" → this rep drops leading zeros in suffixes). Fields that the AI already got right need no rule. Prioritize recurring corrections across multiple pairs over one-off fixes.
 
 ORGANIZE the rules into CATEGORY SECTIONS, in this order, skipping a section only when the rep has no examples in that category:
 SOFA:
@@ -495,7 +497,7 @@ async function distillSalespersonRules(
 
   const { data: rows, error: selErr } = await svc
     .from('so_scan_samples')
-    .select('corrected')
+    .select('extracted, corrected')
     .not('corrected', 'is', null)
     .ilike('salesperson', ilikeExact(rep))
     .order('created_at', { ascending: false })
@@ -503,7 +505,7 @@ async function distillSalespersonRules(
   if (selErr) {
     return { status: 'error', reason: isMissingTable(selErr) ? TABLE_MISSING_MSG : selErr.message };
   }
-  const samples = (rows as Array<{ corrected: unknown }> | null) ?? [];
+  const samples = (rows as Array<{ extracted: unknown; corrected: unknown }> | null) ?? [];
   if (samples.length < 2) {
     return {
       status: 'skipped',
@@ -512,13 +514,27 @@ async function distillSalespersonRules(
     };
   }
 
+  // Feed extracted→corrected PAIRS so the model learns from the DIFFS (what
+  // the AI got wrong vs what the human fixed). Each side is truncated to keep
+  // the worst case (50 pairs) token-bounded; typical slip JSON is ~1-2k chars
+  // so truncation rarely fires.
+  const PAIR_SIDE_MAX = 4_000;
+  const sideText = (v: unknown): string => {
+    if (v === null || v === undefined) return '(not recorded)';
+    const s = JSON.stringify(v);
+    return s.length > PAIR_SIDE_MAX ? `${s.slice(0, PAIR_SIDE_MAX)}…(truncated)` : s;
+  };
   const examplesText = samples
-    .map((r, i) => `Example ${i + 1}:\n${JSON.stringify(r.corrected)}`)
+    .map(
+      (r, i) =>
+        `Example ${i + 1}:\nAI extracted: ${sideText(r.extracted)}\nOperator corrected: ${sideText(r.corrected)}`,
+    )
     .join('\n\n');
   const userPayload =
     `Salesperson: ${rep}\n\n` +
-    `Here are ${samples.length} confirmed correct extractions of this salesperson's slips (newest first). ` +
-    `Identify their per-category notation habits and write the rule block:\n\n` +
+    `Here are ${samples.length} extraction sessions for this salesperson's slips (newest first), ` +
+    `each as an AI-extracted → operator-corrected pair. Derive their per-category notation habits ` +
+    `from the diffs and write the rule block:\n\n` +
     examplesText;
 
   let distilledText = '';
@@ -603,6 +619,69 @@ async function distillSalespersonRules(
   }
 
   return { status: 'distilled', rulesGenerated: distilledText, sampleCount: samples.length };
+}
+
+/**
+ * Weekly cron entry point — regenerate rules for EVERY salesperson with ≥2
+ * corrected samples. Sequential (one Anthropic call at a time) and
+ * error-isolated per rep: one rep failing never blocks the rest. The
+ * per-confirm fire-and-forget distill remains the fast path; this weekly
+ * pass is the safety net that consolidates (e.g. confirms whose distill
+ * fetch died mid-flight).
+ */
+export async function distillAllSalespersonRules(
+  svc: SupabaseClient,
+  apiKey: string | undefined,
+): Promise<{ distilled: number; skipped: number; errors: number; reps: number }> {
+  const summary = { distilled: 0, skipped: 0, errors: 0, reps: 0 };
+
+  // Distinct salespeople with ≥2 corrected rows. Supabase has no DISTINCT
+  // aggregate over the REST API, so pull the (small) salesperson column and
+  // count client-side, case-insensitively (matching the ilike used by
+  // distillSalespersonRules).
+  const { data, error } = await svc
+    .from('so_scan_samples')
+    .select('salesperson')
+    .not('corrected', 'is', null)
+    .not('salesperson', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(5000);
+  if (error) {
+    console.error('[scan-so weekly distill] sample scan failed:', error.message);
+    summary.errors += 1;
+    return summary;
+  }
+
+  const counts = new Map<string, { display: string; n: number }>();
+  for (const row of (data as Array<{ salesperson: string | null }> | null) ?? []) {
+    const t = (row.salesperson ?? '').trim();
+    if (!t) continue;
+    const key = t.toUpperCase();
+    const cur = counts.get(key);
+    if (cur) cur.n += 1;
+    else counts.set(key, { display: t, n: 1 });
+  }
+  const reps = Array.from(counts.values())
+    .filter((r) => r.n >= 2)
+    .map((r) => r.display)
+    .sort((a, b) => a.localeCompare(b));
+  summary.reps = reps.length;
+
+  for (const rep of reps) {
+    try {
+      const res = await distillSalespersonRules(svc, apiKey, rep);
+      if (res.status === 'distilled') summary.distilled += 1;
+      else if (res.status === 'skipped') summary.skipped += 1;
+      else {
+        summary.errors += 1;
+        console.error(`[scan-so weekly distill] "${rep}" failed: ${res.reason}`);
+      }
+    } catch (e) {
+      summary.errors += 1;
+      console.error(`[scan-so weekly distill] "${rep}" threw: ${(e as Error).message}`);
+    }
+  }
+  return summary;
 }
 
 // ===========================================================================
