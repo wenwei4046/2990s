@@ -1,50 +1,54 @@
 // ----------------------------------------------------------------------------
-// Purchase Order PDF — AutoCount-style layout (PR #102, Commander 2026-05-26
-// showed the HOUZS Century printout: "这个是 PO 需要的").
+// Purchase Order PDF — AutoCount/DSL-style layout (PR #102 + 2026-06-12
+// rebuild to the owner's DSL reference printout).
 //
 // Layout:
 //
 //   ┌──────────────────────────────────────────────────────────────────┐
-//   │   <logo>     COMPANY NAME              ┌──────────────┐          │
-//   │              Address line 1            │              │          │
-//   │              Address line 2            │              │          │
-//   │              Tel: ... (KL/PG)          │              │          │
+//   │              2990 HOME SDN. BHD.   (centered letterhead)         │
+//   │              SSM 202501060667                                    │
+//   │              E-28-02 & E-28-03, Menara SUEZCAP 2, KL Gateway,    │
+//   │              No. 2, Jalan Kerinchi, …  59200 Kuala Lumpur …      │
 //   ├──────────────────────────────────────────────────────────────────┤
-//   │                  PURCHASE ORDER       No.: PO-XXXX               │
+//   │                       PURCHASE ORDER                             │
 //   ├──────────────────────────────────────────────────────────────────┤
-//   │  SUPPLIER NAME                  Your Ref No. :  ___              │
-//   │  Address line 1                 Terms        : C.O.D.            │
-//   │  Address line 2                 Date         : 2026-05-26        │
-//   │  Address line 3                 Delivery Date: 2026-06-02        │
-//   │  TEL : ___    FAX : ___         Purchase Location : C&C DISP     │
-//   │  Attn: ___                      S/O No.      : SO-2050           │
+//   │  SUPPLIER NAME                  PO No.       : PO-2606-001       │
+//   │  Address line 1                 Your Ref No. : SO-2605-014 (S/O) │
+//   │  Address line 2                 Terms        : NET 30            │
+//   │  TEL : …       FAX : …          Date         : 2026/06/12        │
+//   │  Attn: …                        Delivery Date: 2026/06/19        │
+//   │                                 Purchase Loc.: WH-KL · Main WH   │
 //   │                                 Page         : 1 of N            │
 //   ├──────────────────────────────────────────────────────────────────┤
-//   │  # | Item / Description    | Transf. SO | UOM | Qty | Unit | Disc| Total │
-//   │  1 | AK-AV DR ROL PACK PIL | 2025/01/03 | UNIT|  20 |23.00 |     | 460.00│
-//   │    | AVANTI DREAMY PILLOW  |            |     |     |      |     |       │
-//   │  ...                                                              │
+//   │ Item | Our Code | Description | Transf. SO | UOM | Qty | U/Price │
+//   │      |          |             |            |     |     | | Disc | Total
+//   │  (Item = SUPPLIER code, bold. Description = model + composition +
+//   │   supplier colour (our code) + variant attrs + remark + per-line
+//   │   delivery date.)
+//   ├──────────────────────────────────────────────────────────────────┤
+//   │ RINGGIT MALAYSIA … ONLY                          TOTAL  9,999.00 │
+//   │ E. & O.E.                                                        │
+//   │ Authorised Signature          Supplier Acknowledgement           │
 //   └──────────────────────────────────────────────────────────────────┘
 //
-// Company info is hard-coded for now (no /api/settings yet). Edit the
-// COMPANY constant below when 2990's signs off on the legal name + address.
+// Letterhead comes from pdf-common COMPANY (= apps/pos legal.ts, the real
+// registered entity). Page number prints on EVERY page header via the
+// autotable didDrawPage hook + jsPDF putTotalPages.
 // ----------------------------------------------------------------------------
 
-import { fmtDocDate, fmtDocStamp } from './pdf-common';
-import { loadSupplierDocData, supplierCodeFor, specsLine } from './supplier-doc-data';
-
-const COMPANY = {
-  name:    "2990'S HOME SDN BHD",
-  regNo:   '202301234567',                       // commander to confirm
-  address: ['Lot 12, Jalan Industri 5/3, 43300 Seri Kembangan, Selangor, Malaysia'],
-  tel:     'Tel: +60 12-345-6789',
-  email:   'procurement@2990s.my',
-} as const;
+import { COMPANY, amountInWordsMyr, fmtDocDate, fmtDocStamp } from './pdf-common';
+import {
+  loadSupplierDocData,
+  supplierCodeFor,
+  specsLine,
+  type SupplierRecord,
+} from './supplier-doc-data';
 
 type PoHeader = {
   po_number:     string;
   /** Supplier id — drives the print-time binding lookup for lines that never
-      snapshotted a supplier_sku. Optional: missing id → '—' fallback. */
+      snapshotted a supplier_sku AND the full supplier-master top-up (fax /
+      attention / payment terms). Optional: missing id → '—' fallback. */
   supplier_id?:  string | null;
   status:        string;
   po_date:       string;
@@ -87,11 +91,18 @@ type PoItem = {
   uom?:           string | null;
   discount_centi?: number | null;
   delivery_date?: string | null;
-  /** Supplier-facing dual-code layout — variants drive the Specs column
-      (fabric shows the SUPPLIER's colour code with ours alongside). */
+  notes?:         string | null;
+  /** Supplier-facing dual-code layout — variants drive the Specs segment
+      (fabric shows the SUPPLIER's colour code with ours alongside, plus
+      divan/leg/seat heights and D1-style specials via buildVariantSummary). */
   item_group?:    string | null;
   description?:   string | null;
+  description2?:  string | null;
   variants?:      Record<string, unknown> | null;
+  /** 2026-06-12 — "Transferred SO" column. GET /mfg-purchase-orders/:id
+      stamps each line's source SO doc_no (so_item_id → mfg_sales_order_items
+      → doc_no). Null for manually-added / MRP / consignment lines. */
+  so_doc_no?:     string | null;
 };
 
 const fmtMoney = (centi: number, currency: string): string =>
@@ -110,31 +121,34 @@ export async function generatePurchaseOrderPdf(
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 14;
+  const docTitle = opts?.docTitle ?? 'PURCHASE ORDER';
 
-  // ── Company header ────────────────────────────────────────────────
-  // Logo placeholder + centered name + centered address + tel.
+  /* Print-time lookups (all fail-soft): supplier SKU bindings + Fabric
+     Converter colour map + the FULL supplier master record (the PO detail
+     endpoint embeds only 7 fields — no fax / attention / payment_terms). */
+  const { skuMap, fabricMap, supplier: fullSupplier } = await loadSupplierDocData(header.supplier_id, items);
+
+  // ── Company letterhead (centered, AutoCount style) ────────────────
   let y = margin;
   doc.setFont('helvetica', 'bold'); doc.setFontSize(14);
-  const companyHeaderText = `${COMPANY.name} (${COMPANY.regNo})`;
-  doc.text(companyHeaderText, pageW / 2, y, { align: 'center' });
+  doc.text(COMPANY.name, pageW / 2, y, { align: 'center' });
   y += 5;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-  COMPANY.address.forEach((line) => {
+  doc.text(COMPANY.reg, pageW / 2, y, { align: 'center' });
+  y += 4;
+  for (const line of COMPANY.addressLines) {
     doc.text(line, pageW / 2, y, { align: 'center' });
     y += 4;
-  });
-  doc.text(`${COMPANY.tel}    ·    ${COMPANY.email}`, pageW / 2, y, { align: 'center' });
-  y += 6;
+  }
+  y += 2;
 
   doc.setDrawColor(0); doc.setLineWidth(0.4);
   doc.line(margin, y, pageW - margin, y);
   y += 6;
 
-  // ── Title bar: "PURCHASE ORDER" centered + "No.: PO-XXXX" right ──────
+  // ── Title bar ─────────────────────────────────────────────────────
   doc.setFont('helvetica', 'bold'); doc.setFontSize(15);
-  doc.text(opts?.docTitle ?? 'PURCHASE ORDER', pageW / 2, y, { align: 'center' });
-  doc.setFontSize(11);
-  doc.text(`No.  :  ${header.po_number}`, pageW - margin, y, { align: 'right' });
+  doc.text(docTitle, pageW / 2, y, { align: 'center' });
   y += 8;
 
   // ── Two-column block: supplier (left) + meta (right) ──────────────
@@ -142,49 +156,62 @@ export async function generatePurchaseOrderPdf(
   const rightX = pageW / 2 + 4;
   const colW   = pageW / 2 - margin - 4;
 
-  const s = header.supplier;
+  /* Embedded 7-field supplier first, full master record as the top-up for
+     anything the embed omits (fax / attention / payment_terms / area /
+     postcode / state / country). Both optional → '—' fallbacks. */
+  const s: Partial<SupplierRecord> = { ...(fullSupplier ?? {}), ...(header.supplier ?? {}) };
+  const sFull = fullSupplier ?? {};
   const supplierAddressLines = [
-    s?.address,
-    s?.area,
-    [s?.postcode, s?.state].filter(Boolean).join(' ').trim() || null,
-    s?.country,
+    s.address,
+    sFull.area,
+    [sFull.postcode, sFull.state].filter(Boolean).join(' ').trim() || null,
+    sFull.country,
   ].filter(Boolean) as string[];
 
   // Border boxes so it looks like AutoCount
   doc.setDrawColor(120); doc.setLineWidth(0.2);
-  const blockH = 38;
+  const blockH = 40;
   doc.rect(leftX,  y, colW, blockH);
   doc.rect(rightX, y, colW, blockH);
 
-  // LEFT: supplier name + address + phones + attn
+  // LEFT: supplier name + address + TEL/FAX + Attn
   doc.setFont('helvetica', 'bold');  doc.setFontSize(10);
-  doc.text(s?.name ?? '—', leftX + 2, y + 5);
+  doc.text(s.name ?? '—', leftX + 2, y + 5);
   doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
   let ly = y + 9;
   supplierAddressLines.forEach((line) => {
     doc.text(String(line), leftX + 2, ly);
     ly += 4;
   });
-  doc.text(`TEL : ${s?.phone ?? ''}      FAX : ${s?.fax ?? ''}`, leftX + 2, ly);
+  doc.text(`TEL : ${s.phone ?? sFull.mobile ?? ''}      FAX : ${sFull.fax ?? ''}`, leftX + 2, ly);
   ly += 4;
-  doc.text(`Attn: ${s?.attention ?? s?.contact_person ?? ''}`, leftX + 2, ly);
+  doc.text(`Attn: ${sFull.attention ?? s.contact_person ?? ''}`, leftX + 2, ly);
 
-  // RIGHT: meta block (Your Ref / Terms / Date / Delivery / Purchase Loc / S/O / Page)
+  /* RIGHT: meta block. "Your Ref No." = the source S/O No. (AutoCount keeps
+     the customer's reference here); falls back to per-line so_doc_no roll-up
+     when the header never carried one. Terms = supplier payment terms.
+     Page row is patched after pagination (we don't know N yet). */
+  const lineSoDocs = [...new Set(items.map((it) => (it.so_doc_no ?? '').trim()).filter(Boolean))];
+  const yourRef = header.your_ref_no
+    ?? header.source_so_doc_no
+    ?? (lineSoDocs.length > 0 ? lineSoDocs.join(', ') : '');
   doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
   const metaLines: Array<[string, string]> = [
-    ['Your Ref No.',      header.your_ref_no            ?? ''],
-    ['Terms',             s?.payment_terms              ?? ''],
+    ['PO No.',            header.po_number],
+    ['Your Ref No.',      yourRef],
+    ['Terms',             sFull.payment_terms ?? header.supplier?.payment_terms ?? ''],
     ['Date',              fmtDocDate(header.po_date)],
     ['Delivery Date',     header.expected_at ? fmtDocDate(header.expected_at) : ''],
     ['Purchase Location', header.purchase_location_name ?? ''],
-    ['S/O No.',           header.source_so_doc_no       ?? ''],
-    ['Page',              ''],                          // filled after pagination
+    ['Page',              ''],                          // patched after pagination
   ];
   let my = y + 5;
+  let pageRowY = 0;
   metaLines.forEach(([label, val]) => {
-    doc.text(label,            rightX + 2,                 my);
-    doc.text(':',              rightX + 32,                my);
-    doc.text(String(val ?? ''), rightX + 35,               my);
+    doc.text(label,             rightX + 2,  my);
+    doc.text(':',               rightX + 32, my);
+    doc.text(String(val ?? ''), rightX + 35, my);
+    if (label === 'Page') pageRowY = my;
     my += 4.5;
   });
   y += blockH + 2;
@@ -196,66 +223,108 @@ export async function generatePurchaseOrderPdf(
   y += 6;
 
   // ── Items table ──────────────────────────────────────────────────
-  // Dual-code layout (Commander — supplier-facing purchasing docs):
-  //   Supplier Code (bold, FIRST — the code the supplier acts on)
-  //   Our Code (internal reference) · Description · Specs · Qty · Unit · Disc · Total
-  // Specs = variant summary where fabric shows `supplierColour (ourCode)` when
-  // the fabric_trackings mapping exists.
-  // Lines missing a snapshotted supplier_sku fall back to a live
-  // supplier_material_bindings lookup; still nothing → '—' (our code has its
-  // own column, so we never print our code in the supplier slot).
-  const { skuMap, fabricMap } = await loadSupplierDocData(header.supplier_id, items);
-  type Row = [string, string, string, string, string, string, string, string];
-  const rows: Row[] = items.map((it) => [
-    supplierCodeFor(it, skuMap),
-    it.material_code,
-    it.description ?? it.material_name,
-    specsLine(it, fabricMap),
-    String(it.qty),
-    fmtAmount(it.unit_price_centi),
-    it.discount_centi ? fmtAmount(it.discount_centi) : '',
-    fmtAmount(it.line_total_centi),
-  ]);
+  // Dual-code DSL layout (Commander — supplier-facing purchasing docs):
+  //   Item        = SUPPLIER's code, bold, FIRST (the code they act on)
+  //   Our Code    = internal reference
+  //   Description = name/model + composition (description2) + Specs
+  //                 (supplier colour (our fabric code) via Fabric Converter +
+  //                 divan/leg/seat heights + D1 specials via
+  //                 buildVariantSummary inside specsLine) + line remark +
+  //                 per-line delivery date
+  //   Transf. SO | UOM | Qty | U/Price | Disc | Total
+  type Row = [string, string, string, string, string, string, string, string, string];
+  const rows: Row[] = items.map((it) => {
+    const descParts = [
+      it.description ?? it.material_name,
+      (it.description2 ?? '').trim() || null,
+      specsLine(it, fabricMap) || null,
+      (it.notes ?? '').trim() ? `Remark: ${(it.notes ?? '').trim()}` : null,
+      it.delivery_date ? `Delivery: ${fmtDocDate(it.delivery_date)}` : null,
+    ].filter(Boolean) as string[];
+    return [
+      supplierCodeFor(it, skuMap),
+      it.material_code,
+      // Dedupe consecutive identical segments (description2 often equals the
+      // live specs line) so the cell doesn't read the same string twice.
+      [...new Set(descParts)].join('\n'),
+      it.so_doc_no ?? '—',
+      (it.uom ?? 'UNIT').toUpperCase(),
+      String(it.qty),
+      fmtAmount(it.unit_price_centi),
+      it.discount_centi ? fmtAmount(it.discount_centi) : '',
+      fmtAmount(it.line_total_centi),
+    ];
+  });
+
+  /* Page-number on EVERY page header (didDrawPage) using the jsPDF
+     total-pages placeholder, resolved by putTotalPages below. */
+  const totalPagesExp = '{total_pages}';
+  const drawPageHeader = (pageNumber: number) => {
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(80);
+    doc.text(
+      `${header.po_number} · Page ${pageNumber} of ${totalPagesExp}`,
+      pageW - margin, 10, { align: 'right' },
+    );
+    doc.setTextColor(0);
+  };
 
   autoTable(doc, {
     startY: y,
-    head: [['Supplier Code', 'Our Code', 'Description', 'Specs', 'Qty', `U/Price ${header.currency}`, 'Disc.', `Total ${header.currency}`]],
+    head: [[
+      'Item', 'Our Code', 'Description', 'Transf. SO', 'UOM', 'Qty',
+      `U/Price ${header.currency}`, 'Disc.', `Total ${header.currency}`,
+    ]],
     body: rows,
     theme: 'plain',
-    styles: { fontSize: 9, cellPadding: { top: 1.5, right: 2, bottom: 1.5, left: 2 }, lineColor: [120, 120, 120], lineWidth: 0.1 },
+    styles: { fontSize: 8.5, cellPadding: { top: 1.5, right: 1.5, bottom: 1.5, left: 1.5 }, lineColor: [120, 120, 120], lineWidth: 0.1 },
     headStyles: { fontStyle: 'bold', halign: 'left', valign: 'middle', lineWidth: { top: 0.4, bottom: 0.4 } as never },
     bodyStyles: { valign: 'top' },
     columnStyles: {
-      0: { cellWidth: 26, fontStyle: 'bold' },
-      1: { cellWidth: 24 },
-      2: { cellWidth: 38 },
-      3: { cellWidth: 36 },
-      4: { cellWidth: 10, halign: 'right' },
-      5: { cellWidth: 18, halign: 'right' },
-      6: { cellWidth: 12, halign: 'right' },
-      7: { cellWidth: 18, halign: 'right' },
+      0: { cellWidth: 24, fontStyle: 'bold' },
+      1: { cellWidth: 22 },
+      2: { cellWidth: 56 },
+      3: { cellWidth: 20 },
+      4: { cellWidth: 12 },
+      5: { cellWidth: 10, halign: 'right' },
+      6: { cellWidth: 16, halign: 'right' },
+      7: { cellWidth: 12, halign: 'right' },
+      8: { cellWidth: 16, halign: 'right' },
     },
-    margin: { left: margin, right: margin },
+    margin: { left: margin, right: margin, top: 16 },
+    didDrawPage: (data) => drawPageHeader(data.pageNumber),
   });
 
-  let lastY = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y) + 4;
+  let lastY = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y) + 5;
 
-  // ── Totals (bottom right) ─────────────────────────────────────────
+  // ── Totals (right) + amount in words (left, AutoCount footer) ─────
+  if (lastY > 250) { doc.addPage(); drawPageHeader(doc.getNumberOfPages()); lastY = 20; }
   const totalsX = pageW - margin - 70;
-  const drawRow = (label: string, val: string, ty: number, bold = false, ruled = false) => {
-    if (ruled) { doc.setDrawColor(0); doc.line(totalsX, ty - 3, pageW - margin, ty - 3); }
+  const drawRow = (label: string, val: string, ry: number, bold = false, ruled = false) => {
+    if (ruled) { doc.setDrawColor(0); doc.line(totalsX, ry - 3, pageW - margin, ry - 3); }
     doc.setFont('helvetica', bold ? 'bold' : 'normal');
-    doc.text(label, totalsX,       ty);
-    doc.text(val,   pageW - margin, ty, { align: 'right' });
+    doc.text(label, totalsX,        ry);
+    doc.text(val,   pageW - margin, ry, { align: 'right' });
   };
   doc.setFontSize(9);
-  drawRow('Subtotal', fmtMoney(header.subtotal_centi, header.currency), lastY); lastY += 4;
+  let totY = lastY;
+  drawRow('Subtotal', fmtMoney(header.subtotal_centi, header.currency), totY); totY += 4;
   if (header.tax_centi > 0) {
-    drawRow('Tax',    fmtMoney(header.tax_centi,      header.currency), lastY); lastY += 4;
+    drawRow('Tax',    fmtMoney(header.tax_centi,      header.currency), totY); totY += 4;
   }
   doc.setFontSize(11);
-  drawRow('TOTAL',    fmtMoney(header.total_centi,    header.currency), lastY + 2, true, true);
-  lastY += 12;
+  drawRow('TOTAL',    fmtMoney(header.total_centi,    header.currency), totY + 2, true, true);
+
+  /* Amount in words — wrapped to the left half so a long amount never
+     collides with the totals column. */
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
+  const words = doc.splitTextToSize(amountInWordsMyr(header.total_centi), totalsX - margin - 6) as string[];
+  doc.text(words, margin, lastY);
+  doc.setFont('helvetica', 'normal');
+  let wordsY = lastY + words.length * 3.6 + 2;
+  doc.setFontSize(8); doc.setTextColor(110);
+  doc.text('E. & O.E.', margin, wordsY);
+  doc.setTextColor(0);
+  lastY = Math.max(totY + 8, wordsY + 6);
 
   // ── Notes / Remarks block (if present) ───────────────────────────
   if (header.notes) {
@@ -270,22 +339,21 @@ export async function generatePurchaseOrderPdf(
     lastY += 4;
   }
 
-  // ── Signature block (Page 1 only) ────────────────────────────────
-  if (lastY > 240) { doc.addPage(); lastY = margin; }
+  // ── Signature block ──────────────────────────────────────────────
+  if (lastY > 240) { doc.addPage(); drawPageHeader(doc.getNumberOfPages()); lastY = 20; }
   doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
   doc.setDrawColor(120); doc.setLineWidth(0.2);
   const sigW = (pageW - margin * 2) / 2 - 4;
   doc.rect(margin,            lastY, sigW, 24);
   doc.rect(margin + sigW + 8, lastY, sigW, 24);
-  doc.text("Authorised Signature (2990's Home)", margin + 2,             lastY + 21);
-  doc.text("Supplier Acknowledgement",           margin + sigW + 8 + 2,  lastY + 21);
+  doc.text(`Authorised Signature (${COMPANY.name})`, margin + 2,            lastY + 21);
+  doc.text('Supplier Acknowledgement',               margin + sigW + 8 + 2, lastY + 21);
   lastY += 28;
 
-  // ── Footer page numbers — patch back into the meta block + bottom ─
+  // ── Footer page numbers + meta-block "Page : 1 of N" patch ───────
   const pageCount = doc.getNumberOfPages();
   for (let p = 1; p <= pageCount; p += 1) {
     doc.setPage(p);
-    // Bottom footer
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
     doc.text(
       `Page ${p} of ${pageCount}    ·    Generated ${fmtDocStamp()}`,
@@ -293,33 +361,19 @@ export async function generatePurchaseOrderPdf(
     );
     doc.setTextColor(0);
   }
-  // Patch "Page : 1 of N" in the meta block on the first page (overwrite the
-  // blank we left earlier). Compute where the Page row lands.
-  doc.setPage(1);
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-  // The meta block's "Page" row is metaLines.length-th line at
-  // (rightX + 35, y_meta_start + (idx * 4.5)). We don't have y_meta_start
-  // anymore — recompute: header lines + title + 5 (offset) + 6 metaLines * 4.5.
-  // Simpler: just put it at the bottom-right of the meta box we drew.
-  // (The Page row was index 6 inside metaLines; y_meta_start = y - blockH - 4 + 5.)
-  // Easiest: re-render the Page line explicitly at the known coordinate.
-  // y at the point we entered the table = y (post block). y_meta_start = y - blockH + 5.
-  // Approximate the Page-row y by walking back.
-  const pageRowY = (() => {
-    // Title bar was at y (post-header) - 8 (advance) - 4 (meta block start) ≈ tricky
-    // Just emit a small "Page X of N" label at the top-right under the No. line
-    // — visually distinct from the meta box but it's good enough until commander
-    // wants the exact AutoCount slot. Trade-off documented.
-    return 0;
-  })();
-  if (pageRowY === 0) {
-    // Top-right small chip under the PO number.
-    doc.setFontSize(8); doc.setTextColor(80);
-    doc.text(`Page 1 of ${pageCount}`, pageW - margin, 25, { align: 'right' });
-    doc.setTextColor(0);
+  // Patch the meta block's reserved Page row on page 1 (exact AutoCount slot).
+  if (pageRowY > 0) {
+    doc.setPage(1);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+    doc.text(`1 of ${pageCount}`, rightX + 35, pageRowY);
+  }
+  /* Resolve the didDrawPage "{total_pages}" placeholder on every header. */
+  const docWithTotals = doc as unknown as { putTotalPages?: (exp: string) => unknown };
+  if (typeof docWithTotals.putTotalPages === 'function') {
+    docWithTotals.putTotalPages(totalPagesExp);
   }
 
   // ── Save ──────────────────────────────────────────────────────────
-  const safeName = (header.supplier?.name || 'supplier').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 32);
+  const safeName = (s.name || 'supplier').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 32);
   doc.save(`${header.po_number}-${safeName}.pdf`);
 }

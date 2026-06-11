@@ -182,6 +182,11 @@ export type PoItemRow = {
       GET /:id so the PO list expansion can show a "Received" column identical
       to the SO "Delivered" column. Cancelled GRNs excluded server-side. */
   receipts?: PoLineReceipt[];
+  /** Migration 0098 — source SO line this PO line was converted from. */
+  so_item_id?: string | null;
+  /** 2026-06-12 — stamped by GET /:id (so_item_id → SO doc_no) for the PO
+      PDF's "Transferred SO" column. Null for manual / MRP lines. */
+  so_doc_no?: string | null;
 };
 
 export type PoLineReceipt = { grnNumber: string; qty: number; status: string };

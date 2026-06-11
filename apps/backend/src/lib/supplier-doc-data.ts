@@ -30,6 +30,27 @@ export type SupplierDocLine = {
   variants?: Record<string, unknown> | null;
 };
 
+/** Full supplier master row (GET /suppliers/:id → `supplier`). The PO detail
+ *  endpoint embeds only a 7-field subset (no fax / attention / payment_terms),
+ *  so the PO PDF tops itself up from this record at print time — fail-soft. */
+export type SupplierRecord = {
+  id?: string;
+  code?: string | null;
+  name?: string | null;
+  contact_person?: string | null;
+  phone?: string | null;
+  mobile?: string | null;
+  fax?: string | null;
+  email?: string | null;
+  address?: string | null;
+  area?: string | null;
+  postcode?: string | null;
+  state?: string | null;
+  country?: string | null;
+  attention?: string | null;
+  payment_terms?: string | null;
+};
+
 /* The variant keys that can carry an INTERNAL fabric/colour code. SO-keyed
    lines use fabricCode/colorCode; GRN/PI/PR editors store fabricColor (see
    buildVariantSummary in packages/shared). */
@@ -50,6 +71,30 @@ export async function loadFabricSupplierMap(fabricCodes: string[]): Promise<Map<
     for (const f of res.fabrics ?? []) {
       const sup = (f.supplier_code ?? '').trim();
       if (sup && wanted.has(f.fabric_code)) map.set(f.fabric_code, sup);
+    }
+    return map;
+  } catch {
+    return new Map(); // lookup failure must never block the PDF
+  }
+}
+
+/**
+ * internal fabric_code → fabric_description, same /fabric-tracking endpoint.
+ * Used by the CUSTOMER-facing SO PDF so the printed line reads
+ * "EZ-001 — Easy Clean Velvet" instead of the bare code. Fail-soft: any
+ * fetch hiccup returns an empty map and the PDF prints codes as-is.
+ */
+export async function loadFabricDescriptionMap(fabricCodes: string[]): Promise<Map<string, string>> {
+  const wanted = new Set(fabricCodes.map((c) => c.trim()).filter(Boolean));
+  if (wanted.size === 0) return new Map();
+  try {
+    const res = await authedFetch<{ fabrics: Array<{ fabric_code: string; fabric_description: string | null }> }>(
+      '/fabric-tracking',
+    );
+    const map = new Map<string, string>();
+    for (const f of res.fabrics ?? []) {
+      const desc = (f.fabric_description ?? '').trim();
+      if (desc && wanted.has(f.fabric_code)) map.set(f.fabric_code, desc);
     }
     return map;
   } catch {
@@ -108,21 +153,41 @@ export function collectFabricCodes(items: SupplierDocLine[]): string[] {
   return [...codes];
 }
 
-/** Everything a purchasing-doc PDF needs, fetched in one parallel round. */
+/** Full supplier master record via GET /suppliers/:id. Fail-soft → null. */
+export async function loadSupplierRecord(
+  supplierId: string | null | undefined,
+): Promise<SupplierRecord | null> {
+  if (!supplierId) return null;
+  try {
+    const res = await authedFetch<{ supplier: SupplierRecord | null }>(`/suppliers/${supplierId}`);
+    return res.supplier ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Everything a purchasing-doc PDF needs, fetched in one parallel round.
+ *  `supplier` = the FULL master record (fax / attention / payment_terms …)
+ *  that the PO detail endpoint's 7-field embed omits; null on any failure. */
 export async function loadSupplierDocData(
   supplierId: string | null | undefined,
   items: SupplierDocLine[],
-): Promise<{ skuMap: Map<string, string>; fabricMap: Map<string, string> }> {
+): Promise<{
+  skuMap: Map<string, string>;
+  fabricMap: Map<string, string>;
+  supplier: SupplierRecord | null;
+}> {
   // Binding lookup only for lines that never snapshotted a supplier_sku
   // (PI/PR lines have no supplier_sku column at all → all of them).
   const missing = items
     .filter((it) => !(it.supplier_sku ?? '').trim())
     .map((it) => it.material_code);
-  const [skuMap, fabricMap] = await Promise.all([
+  const [skuMap, fabricMap, supplier] = await Promise.all([
     loadSupplierSkuMap(supplierId, missing),
     loadFabricSupplierMap(collectFabricCodes(items)),
+    loadSupplierRecord(supplierId),
   ]);
-  return { skuMap, fabricMap };
+  return { skuMap, fabricMap, supplier };
 }
 
 /**

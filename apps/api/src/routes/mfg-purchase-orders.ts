@@ -114,7 +114,10 @@ const ITEM_COLS =
   'gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, ' +
   'custom_specials, line_suffix, special_order_price_sen, variants, ' +
   /* PR #77 — per-line delivery date + ship-to warehouse */
-  'delivery_date, warehouse_id';
+  'delivery_date, warehouse_id, ' +
+  /* Migration 0098 — source SO line link. The detail route resolves it to a
+     per-line so_doc_no for the PO PDF's "Transferred SO" column. */
+  'so_item_id';
 
 // ── List ──────────────────────────────────────────────────────────────
 mfgPurchaseOrders.get('/', async (c) => {
@@ -360,7 +363,32 @@ mfgPurchaseOrders.get('/:id', async (c) => {
      (which GR took how much) identical to the SO "Delivered" column. */
   const itemRows = (itemsRes.data ?? []) as unknown as Array<Record<string, unknown> & { id: string }>;
   const receiptsMap = await poLineReceipts(supabase, itemRows.map((it) => it.id));
-  const items = itemRows.map((it) => ({ ...it, receipts: receiptsMap.get(it.id) ?? [] }));
+
+  /* 2026-06-12 — "Transferred SO" column on the PO PDF (DSL/AutoCount layout):
+     resolve each line's so_item_id (migration 0098) to the source SO doc_no.
+     Best-effort: a lookup failure leaves so_doc_no null, never blocks the
+     detail response. */
+  const soDocByItem = new Map<string, string>();
+  try {
+    const soItemIds = [...new Set(
+      itemRows.map((it) => it.so_item_id as string | null | undefined).filter(Boolean),
+    )] as string[];
+    if (soItemIds.length > 0) {
+      const { data: soLines } = await supabase
+        .from('mfg_sales_order_items')
+        .select('id, doc_no')
+        .in('id', soItemIds);
+      for (const r of (soLines ?? []) as Array<{ id: string; doc_no: string }>) {
+        soDocByItem.set(r.id, r.doc_no);
+      }
+    }
+  } catch { /* leave so_doc_no null */ }
+
+  const items = itemRows.map((it) => ({
+    ...it,
+    receipts: receiptsMap.get(it.id) ?? [],
+    so_doc_no: it.so_item_id ? soDocByItem.get(it.so_item_id as string) ?? null : null,
+  }));
 
   return c.json({ purchaseOrder, items });
 });

@@ -3,12 +3,76 @@
 // company header / footer across SI / PI / GRN / PR / DR PDFs.
 // ----------------------------------------------------------------------------
 
+/* Real letterhead — mirrors apps/pos/src/lib/legal.ts COMPANY_LEGAL
+   byte-for-byte (the POS SO printout is the legal record; if 2990's
+   incorporates a new entity or moves, edit legal.ts AND here together). */
 export const COMPANY = {
-  name: "2990's Home",
-  reg: 'HOOKKA Industries (Reg: 202301234567)',
-  address: 'Lot 12, Jalan Industri 5/3, Selangor, Malaysia',
-  tel: '+60 12-345-6789',
+  name: '2990 HOME SDN. BHD.',
+  reg: 'SSM 202501060667',
+  addressLines: [
+    'E-28-02 & E-28-03, Menara SUEZCAP 2, KL Gateway,',
+    'No. 2, Jalan Kerinchi, Gerbang Kerinchi Lestari,',
+    '59200 Kuala Lumpur, Wilayah Persekutuan KL',
+  ],
+  portalLabel: "2990's Portal",
 } as const;
+
+/* ── Amount in words (AutoCount footer convention) ─────────────────────
+   "RINGGIT MALAYSIA ONE THOUSAND TWO HUNDRED THIRTY-FOUR AND SEN
+    FIFTY-SIX ONLY" — integer ringgit + sen, both spelled out. */
+const ONES = [
+  'ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE',
+  'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN', 'FOURTEEN', 'FIFTEEN', 'SIXTEEN',
+  'SEVENTEEN', 'EIGHTEEN', 'NINETEEN',
+] as const;
+const TENS = [
+  '', '', 'TWENTY', 'THIRTY', 'FORTY', 'FIFTY', 'SIXTY', 'SEVENTY', 'EIGHTY', 'NINETY',
+] as const;
+
+const below1000ToWords = (n: number): string => {
+  const parts: string[] = [];
+  const h = Math.floor(n / 100);
+  const r = n % 100;
+  if (h > 0) parts.push(`${ONES[h]} HUNDRED`);
+  if (r >= 20) {
+    const t = TENS[Math.floor(r / 10)];
+    const o = r % 10;
+    parts.push(o > 0 ? `${t}-${ONES[o]}` : (t as string));
+  } else if (r > 0) {
+    parts.push(ONES[r] as string);
+  }
+  return parts.join(' ');
+};
+
+/** Spell a non-negative integer in English words (caps), up to billions. */
+export const intToWords = (n: number): string => {
+  const v = Math.max(0, Math.floor(n));
+  if (v === 0) return 'ZERO';
+  const scales: Array<[number, string]> = [
+    [1_000_000_000, 'BILLION'],
+    [1_000_000, 'MILLION'],
+    [1_000, 'THOUSAND'],
+  ];
+  const parts: string[] = [];
+  let rest = v;
+  for (const [div, label] of scales) {
+    if (rest >= div) {
+      parts.push(`${below1000ToWords(Math.floor(rest / div))} ${label}`);
+      rest %= div;
+    }
+  }
+  if (rest > 0) parts.push(below1000ToWords(rest));
+  return parts.join(' ');
+};
+
+/** Centi amount → "RINGGIT MALAYSIA … AND SEN … ONLY" (AutoCount footer). */
+export const amountInWordsMyr = (centi: number | null | undefined): string => {
+  const v = Math.max(0, Math.round(centi ?? 0));
+  const rm = Math.floor(v / 100);
+  const sen = v % 100;
+  const senPart = sen > 0 ? ` AND SEN ${intToWords(sen)}` : '';
+  return `RINGGIT MALAYSIA ${intToWords(rm)}${senPart} ONLY`;
+};
 
 export const fmtRm = (centi: number | null, currency = 'MYR'): string => {
   if (centi == null) return '—';
@@ -53,9 +117,11 @@ export function drawHeader(
   doc.setFont('helvetica', 'bold'); doc.setFontSize(16);
   doc.text(COMPANY.name, margin, y);
   doc.setFont('helvetica', 'normal'); doc.setFontSize(9); y += 5;
-  doc.text(COMPANY.reg, margin, y); y += 4;
-  doc.text(COMPANY.address, margin, y); y += 4;
-  doc.text(`Tel: ${COMPANY.tel}`, margin, y);
+  doc.text(COMPANY.reg, margin, y);
+  for (const line of COMPANY.addressLines) {
+    y += 4;
+    doc.text(line, margin, y);
+  }
 
   let rightY = margin;
   doc.setFont('helvetica', 'bold'); doc.setFontSize(14);

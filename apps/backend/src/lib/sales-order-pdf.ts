@@ -1,4 +1,5 @@
 import { formatPhone } from '@2990s/shared/phone';
+import { buildVariantSummary } from '@2990s/shared';
 import {
   groupSoLinesForDisplay,
   pwpRewardNote,
@@ -6,31 +7,42 @@ import {
   type SoPwpCodeRow,
 } from '@2990s/shared/so-line-display';
 import {
+  COMPANY,
   drawHeader,
   drawTwoColInfo,
-  drawSignatureBoxes,
   fmtDocDate,
   fmtRm,
   safeName,
 } from './pdf-common';
+import { loadFabricDescriptionMap } from './supplier-doc-data';
 
 // ----------------------------------------------------------------------------
 // Sales Order PDF generator — dynamic jspdf import so it doesn't bloat the
 // main bundle. ~430 kB on its own (gzipped 143 kB); rendered into a vendor
 // chunk by Vite's automatic chunk-splitter.
 //
+// 2026-06-12 REBUILD — layout mirrors the POS customer printout
+// (apps/pos/src/pages/SalesOrderPrint.tsx), the document the owner signed
+// off as the SO gold standard. INTERNAL + CUSTOMER-facing: our codes only,
+// NO supplier data ever.
+//
 // Layout (A4 portrait):
-//   1. Header: company name + reg + address (left), SO no / date / status (right)
-//   2. Customer block: debtor info + 4 addresses
-//   3. Line items table (autotable): item / variants / qty / unit / total
-//   4. Totals block: per-category + grand total
-//   5. Payments block (PR #163 / Followup #81): payments-ledger transactions
-//      table + paid/balance summary. Replaces the legacy single-row header
-//      payment fields (paid_centi, payment_method, merchant_provider,
-//      approval_code, payment_date) which were deprecated in PR-C when the
-//      payments ledger went live.
-//   6. Signature box (customer + company) — dashed boxes, matches POS PDFs
-//   7. Footer: T&C, page n of m
+//   1. Header: real letterhead (pdf-common COMPANY = legal.ts COMPANY_LEGAL)
+//      left; SALES ORDER + SO no / date / status right
+//   2. ORDER REFERENCE / DELIVERY ESTIMATE meta blocks (processing date +
+//      delivery date — "To be confirmed" when null, like POS)
+//   3. BILL TO / SOLD BY columns (delivery address = ship_to_address ??
+//      address1-4; phone; family/emergency contact; agent + sales location)
+//   4. Line items table: SKU | Description (variant detail second line —
+//      compartments · fabric / SEAT / LEG, fabric code enriched with the
+//      fabric_trackings description; PWP notes; remark) | Qty | Unit |
+//      Disc | Line Total
+//   5. PAYMENTS RECEIVED ledger (mfg_sales_order_payments rows)
+//   6. Totals: SUBTOTAL / PAID TO DATE / TOTAL / BALANCE DUE
+//   7. Customer signature (stored signature_b64 image when present) +
+//      name · phone, company authorised signature
+//   8. Numbered terms — RECEIPT_TERMS wording from apps/pos/src/lib/legal.ts
+//   9. Footer: doc no · portal label · page n of m
 // ----------------------------------------------------------------------------
 
 type SoHeader = {
@@ -60,6 +72,30 @@ type SoHeader = {
   line_count: number;
   currency: string;
   note: string | null;
+  /* 2026-06-12 rebuild — POS-printout parity fields. All optional: every
+     caller passes the raw GET /mfg-sales-orders/:docNo row verbatim, and the
+     Consignment Order reuse path (no such columns) simply omits them. */
+  sales_location?: string | null;
+  customer_po?: string | null;
+  processing_date?: string | null;
+  customer_delivery_date?: string | null;
+  internal_expected_dd?: string | null;
+  ship_to_address?: string | null;
+  email?: string | null;
+  city?: string | null;
+  postcode?: string | null;
+  customer_state?: string | null;
+  /* Second/family contact — the SO schema has no phone2/contact column; the
+     emergency_contact_* trio (POS handover "Emergency" phase) is the family
+     contact and prints as such. */
+  emergency_contact_name?: string | null;
+  emergency_contact_phone?: string | null;
+  emergency_contact_relationship?: string | null;
+  /* Authoritative received-to-date rollup stamped by GET /:docNo (ledger +
+     legacy header deposit). Falls back to summing `payments` when absent. */
+  paid_centi_total?: number | null;
+  /* POS handover customer signature (data-URL or bare base64 PNG). */
+  signature_b64?: string | null;
 };
 
 type SoItem = {
@@ -99,30 +135,61 @@ type SoPayment = {
   note: string | null;
 };
 
-/* Internal / machine keys the customer never needs: sofa-split grouping +
-   geometry (buildKey/cellIndex/x/y/rot, P3), the raw cells array, the build
-   summary (rendered via the folded row instead), and the PWP keys (rendered
-   as dedicated PWP note lines — see pwpRewardNote / pwpTriggerNotes). Also
-   'remark' (printed as its own "Remark:" note line below, not as a variant
-   pair) and 'extraAddonAmountRM' (an internal declared-extra money key — the
-   line price already includes it, so it must NEVER surface to the customer). */
-const VARIANT_KEYS_HIDDEN = new Set([
-  'buildKey', 'cellIndex', 'x', 'y', 'rot', 'cells', 'summary',
-  'pwp', 'pwpCode', 'pwpTriggerLabel', 'pwpOriginalTotal',
-  'remark', 'extraAddonAmountRM',
-]);
+/* Numbered T&C — copied verbatim from apps/pos/src/lib/legal.ts
+   RECEIPT_TERMS (the POS printout is the legal record; keep in sync). */
+const RECEIPT_TERMS: readonly string[] = [
+  'This sales order becomes a binding tax invoice once goods are delivered and full payment is reconciled.',
+  'Balance due is payable in full before delivery. Bank transfer, DuitNow QR, and cheque accepted.',
+  'Delivery date is best-effort and may shift ±3 working days subject to operation confirmation.',
+  'Stair-carry surcharges (if any) are billed on this sales order and are not invoiced separately on the DO.',
+  'Once the delivery date has been confirmed, any subsequent request to change or extend the date will incur a rescheduling surcharge.',
+];
 
-const variantSummary = (v: Record<string, unknown> | null): string => {
-  if (!v) return '';
-  return Object.entries(v)
-    .filter(([k, val]) => !VARIANT_KEYS_HIDDEN.has(k) && val != null && val !== '')
-    .map(([k, val]) => `${k}: ${val}`)
-    .join(', ');
+/* The variant keys that can carry an internal fabric code, mirrored from
+   supplier-doc-data's FABRIC_VARIANT_KEYS. The SO PDF maps each present code
+   to "CODE — fabric_trackings.fabric_description" (customer-readable). */
+const FABRIC_VARIANT_KEYS = ['fabricCode', 'colorCode', 'fabricColor'] as const;
+
+/** Collect internal fabric codes riding in the items' variants JSONB. */
+const collectFabricCodes = (items: SoItem[]): string[] => {
+  const codes = new Set<string>();
+  for (const it of items) {
+    const v = it.variants;
+    if (!v || typeof v !== 'object') continue;
+    for (const key of FABRIC_VARIANT_KEYS) {
+      const raw = v[key];
+      if (typeof raw === 'string' && raw.trim()) codes.add(raw.trim());
+    }
+  }
+  return [...codes];
+};
+
+/* Variant second line for a single (non-folded) item: the shared
+   buildVariantSummary (same string every grid shows — fabric / DIVAN+LEG /
+   GAP / SEAT / SPECIAL) with each fabric code enriched to
+   "EZ-001 — <fabric_description>" when the Fabric Tracking master knows it.
+   Falls back to the stored description2 snapshot when the line has no
+   variants object (legacy rows). */
+const variantLine = (it: SoItem, fabricDescMap: Map<string, string>): string => {
+  const v = it.variants;
+  if (!v || typeof v !== 'object') return (it.description2 ?? '').trim();
+  let mapped: Record<string, unknown> = v;
+  for (const key of FABRIC_VARIANT_KEYS) {
+    const raw = v[key];
+    if (typeof raw === 'string') {
+      const desc = fabricDescMap.get(raw.trim());
+      if (desc) {
+        if (mapped === v) mapped = { ...v }; // clone once, on demand
+        mapped[key] = `${raw.trim()} — ${desc}`;
+      }
+    }
+  }
+  return buildVariantSummary(it.item_group ?? null, mapped) || (it.description2 ?? '').trim();
 };
 
 /* Human-readable method label for the PDF Payments table.
-   - merchant → "Card (GHL)" or "Card (GHL) · 6m installment"
-   - transfer → "Bank Transfer"
+   - merchant → "Merchant (GHL)" or "Merchant (GHL) · 6m installment"
+   - transfer → "Online (TNG)" etc.
    - cash     → "Cash"
    Mirrors the on-screen METHOD_LABEL + provider/installment pill in
    SalesOrderDetail's PaymentCard but flattened to a single cell. */
@@ -195,11 +262,16 @@ export async function generateSalesOrderPdf(
   const { jsPDF } = await import('jspdf');
   const autoTable = (await import('jspdf-autotable')).default;
 
+  /* Fabric Tracking lookup (fail-soft, before any drawing): internal fabric
+     code → fabric_description so the customer reads "EZ-001 — <description>"
+     instead of a bare internal code. */
+  const fabricDescMap = await loadFabricDescriptionMap(collectFabricCodes(items));
+
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 14;
 
-  // ── Header (shared pdf-common layout) ─────────────────────────────
+  // ── Header (shared pdf-common letterhead) ─────────────────────────
   let y = drawHeader(doc, {
     docTitle: opts?.docTitle ?? 'SALES ORDER',
     rightMeta: [
@@ -209,24 +281,59 @@ export async function generateSalesOrderPdf(
     ],
   });
 
-  // ── Customer block ───────────────────────────────────────────────
-  y = drawTwoColInfo(doc, y, 'BILL TO', 'DETAILS',
+  // ── ORDER REFERENCE / DELIVERY ESTIMATE meta blocks ──────────────
+  /* Mirrors the POS printout's MetaRow: order ref + placed date on the left;
+     delivery estimate + processing date on the right. "To be confirmed"
+     when no delivery date is set yet — same wording as POS. */
+  const deliveryDate = header.customer_delivery_date ?? header.internal_expected_dd ?? null;
+  y = drawTwoColInfo(doc, y, 'ORDER REFERENCE', 'DELIVERY ESTIMATE',
+    [
+      header.doc_no,
+      `Placed: ${fmtDocDate(header.so_date)}`,
+      header.ref ? `Reference: ${header.ref}` : null,
+      header.po_doc_no ? `Customer PO: ${header.po_doc_no}` : null,
+    ],
+    [
+      `Delivery date: ${deliveryDate ? fmtDocDate(deliveryDate) : 'To be confirmed'}`,
+      `Processing date: ${header.processing_date ? fmtDocDate(header.processing_date) : '—'}`,
+    ],
+  );
+
+  // ── BILL TO / SOLD BY ─────────────────────────────────────────────
+  /* DELIVERY address rule (owner): ship_to_address wins; legacy address1-4
+     (+ "postcode city state" tail, like POS so-doc.ts) when blank. */
+  const addressLines = (header.ship_to_address ?? '').trim()
+    ? (header.ship_to_address as string).split('\n').map((s) => s.trim()).filter(Boolean)
+    : [
+        header.address1, header.address2, header.address3, header.address4,
+        [header.postcode, header.city, header.customer_state].filter(Boolean).join(' ') || null,
+      ].map((s) => (typeof s === 'string' ? s.trim() : '')).filter(Boolean);
+  /* Family / second contact = the emergency_contact_* trio (POS handover
+     "Emergency" phase). The SO schema has NO phone2/contact-person column —
+     this is the only second-contact field family, so it prints here. */
+  const familyContact = (header.emergency_contact_name ?? '').trim() || (header.emergency_contact_phone ?? '').trim()
+    ? [
+        'Family contact: ',
+        (header.emergency_contact_name ?? '').trim(),
+        (header.emergency_contact_phone ?? '').trim() ? ` · ${formatPhone((header.emergency_contact_phone ?? '').trim())}` : '',
+        (header.emergency_contact_relationship ?? '').trim() ? ` (${(header.emergency_contact_relationship ?? '').trim()})` : '',
+      ].join('')
+    : null;
+  y = drawTwoColInfo(doc, y, 'BILL TO', 'SOLD BY',
     [
       header.debtor_name,
       header.debtor_code ? `Code: ${header.debtor_code}` : null,
-      header.address1,
-      header.address2,
-      header.address3,
-      header.address4,
+      ...addressLines,
       /* Task #91 — pretty Malaysian format on customer-facing PDF. */
       header.phone ? `Tel: ${formatPhone(header.phone)}` : null,
+      header.email ? `Email: ${header.email}` : null,
+      familyContact,
     ],
     [
       header.agent ? `Agent: ${header.agent}` : null,
-      header.branding ? `Branding: ${header.branding}` : null,
+      header.sales_location ? `Sales location: ${header.sales_location}` : null,
       header.venue ? `Venue: ${header.venue}` : null,
-      header.ref ? `Reference: ${header.ref}` : null,
-      header.po_doc_no ? `Customer PO: ${header.po_doc_no}` : null,
+      header.branding ? `Branding: ${header.branding}` : null,
       header.note ? `Note: ${header.note}` : null,
     ],
   );
@@ -235,11 +342,13 @@ export async function generateSalesOrderPdf(
   /* Loo 2026-06-05 — customer-facing fold: per-module sofa SKU lines
      (variants.buildKey groups from the P3 split) render as ONE Model row with
      the combined price; the persisted lines and every Backend grid stay
-     per-SKU. PWP notes ride inside the Description cell: a reward line shows
-     the voucher it consumed, a trigger line shows the codes this SO issued
-     (USED → short reference; otherwise "issued, not redeemed yet"). */
+     per-SKU. Second description line = compartments · fabric / SEAT / LEG
+     (composition + shared variant summary), matching the POS printout. PWP
+     notes ride inside the Description cell: a reward line shows the voucher
+     it consumed, a trigger line shows the codes this SO issued (USED → short
+     reference; otherwise "issued, not redeemed yet"). */
   const groups = groupSoLinesForDisplay(items);
-  const tableRows = groups.map((g, idx) => {
+  const tableRows = groups.map((g) => {
     const lead = g.lines[0]!;
     const notes = [
       pwpRewardNote(lead.variants),
@@ -247,8 +356,7 @@ export async function generateSalesOrderPdf(
     ].filter((n): n is NonNullable<typeof n> => n != null).map((n) => n.text);
     /* Loo D3 — per-line operator remark prints as its own note line in the
        Description cell. For a folded sofa build use the group's first remark;
-       otherwise the lead line's own remark. Suppressed from variantSummary via
-       VARIANT_KEYS_HIDDEN so it never double-prints. */
+       otherwise the lead line's own remark. */
     const remarkText = g.kind === 'sofa-build' && g.display
       ? g.display.remark
       : (typeof lead.remark === 'string' && lead.remark.trim() !== '' ? lead.remark : null);
@@ -257,23 +365,19 @@ export async function generateSalesOrderPdf(
       const d = g.display;
       const sub = [d.composition, d.description2].filter(Boolean).join(' · ');
       return [
-        String(idx + 1),
         d.itemCode,
         [d.description, sub, ...notes].filter(Boolean).join('\n'),
-        lead.item_group.toUpperCase(),
         `${d.qty} ${lead.uom}`,
         fmtRm(d.unitPriceCenti, header.currency),
         d.discountCenti > 0 ? fmtRm(d.discountCenti, header.currency) : '—',
         fmtRm(d.totalCenti, header.currency),
       ];
     }
-    const vs = variantSummary(lead.variants);
-    const desc = [lead.description, vs, ...notes].filter(Boolean).join('\n');
+    const sub = variantLine(lead, fabricDescMap);
+    const desc = [lead.description ?? lead.item_code, sub, ...notes].filter(Boolean).join('\n');
     return [
-      String(idx + 1),
       lead.item_code,
       desc,
-      lead.item_group.toUpperCase(),
       String(lead.qty) + ' ' + lead.uom,
       fmtRm(lead.unit_price_centi, header.currency),
       lead.discount_centi > 0 ? fmtRm(lead.discount_centi, header.currency) : '—',
@@ -283,68 +387,32 @@ export async function generateSalesOrderPdf(
 
   autoTable(doc, {
     startY: y,
-    head: [['#', 'Item', 'Description', 'Group', 'Qty', 'Unit', 'Disc', 'Total']],
+    head: [['SKU', 'Description', 'Qty', 'Unit Price', 'Disc', 'Line Total']],
     body: tableRows,
     theme: 'striped',
     styles: { fontSize: 8.5, cellPadding: 2, valign: 'top' },
     headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
     columnStyles: {
-      0: { cellWidth: 8, halign: 'right' },
-      1: { cellWidth: 22 },
-      2: { cellWidth: 65 },
-      3: { cellWidth: 18 },
-      4: { cellWidth: 14, halign: 'right' },
+      0: { cellWidth: 26 },
+      1: { cellWidth: 86 },
+      2: { cellWidth: 16, halign: 'right' },
+      3: { cellWidth: 22, halign: 'right' },
+      4: { cellWidth: 18, halign: 'right' },
       5: { cellWidth: 22, halign: 'right' },
-      6: { cellWidth: 18, halign: 'right' },
-      7: { cellWidth: 22, halign: 'right' },
     },
     margin: { left: margin, right: margin },
   });
   // jspdf-autotable mutates doc by writing __lastAutoTable_finalY into internals.
   // Read it off the typed (any) shim so we know where to continue drawing.
-  const lastY = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y) + 4;
+  let ty = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y) + 6;
 
-  // ── Totals ────────────────────────────────────────────────────────
-  const totalsX = pageW - margin - 70;
-  doc.setFontSize(9);
-  const drawRow = (label: string, val: string, ty: number, bold = false) => {
-    doc.setFont('helvetica', bold ? 'bold' : 'normal');
-    doc.text(label, totalsX, ty);
-    doc.text(val, pageW - margin, ty, { align: 'right' });
-  };
-  let ty = lastY;
-  drawRow('Mattress / Sofa', fmtRm(header.mattress_sofa_centi, header.currency), ty); ty += 4;
-  drawRow('Bedframe',        fmtRm(header.bedframe_centi,       header.currency), ty); ty += 4;
-  drawRow('Accessories',     fmtRm(header.accessories_centi,    header.currency), ty); ty += 4;
-  drawRow('Others',          fmtRm(header.others_centi,         header.currency), ty); ty += 4;
-  /* SO-SKU spec P2 (D1) — delivery fee / dispose / lift now live as SERVICE
-     lines with their own bucket. Drawn only when non-zero so legacy SOs keep
-     their familiar 4-row totals block. */
-  {
-    const svc = (header as { service_centi?: number }).service_centi ?? 0;
-    if (svc > 0) { drawRow('Services', fmtRm(svc, header.currency), ty); ty += 4; }
-  }
-  ty += 1;
-  doc.setDrawColor(0);
-  doc.line(totalsX, ty - 2, pageW - margin, ty - 2);
-  doc.setFontSize(11);
-  drawRow('GRAND TOTAL', fmtRm(header.local_total_centi, header.currency), ty + 2, true);
-  ty += 12;
-
-  // ── Payments block (PR #163 / Followup #81) ──────────────────────
+  // ── PAYMENTS RECEIVED ledger ──────────────────────────────────────
   // Sources transactions from the payments ledger (mfg_sales_order_payments)
-  // instead of the legacy single-row header columns.
-  //
-  // Layout:
-  //   - "Payments" sub-heading
-  //   - Either a transactions table (Date · Method · Amount · Approval Code
-  //     · Collected By) or an empty-state line
-  //   - Summary line: Subtotal · Paid · Balance, plus the expected deposit
-  //     target on the header when set.
-  if (ty > 255) { doc.addPage(); ty = margin; }
+  // instead of the legacy single-row header columns (deprecated PR-C).
+  if (ty > 250) { doc.addPage(); ty = margin; }
   doc.setFontSize(10);
   doc.setFont('helvetica', 'bold');
-  doc.text('Payments', margin, ty);
+  doc.text('PAYMENTS RECEIVED', margin, ty);
   ty += 4;
 
   if (payments.length === 0) {
@@ -356,76 +424,132 @@ export async function generateSalesOrderPdf(
     ty += 6;
   } else {
     const payRows = payments.map((p) => [
-      p.paid_at,
+      fmtDocDate(p.paid_at),
       methodLabel(p),
-      fmtRm(p.amount_centi, header.currency),
       p.approval_code ?? '—',
       p.collected_by_name ?? '—',
+      fmtRm(p.amount_centi, header.currency),
     ]);
     autoTable(doc, {
       startY: ty,
-      head: [['Date', 'Method', 'Amount', 'Approval Code', 'Collected By']],
+      head: [['Date', 'Method', 'Approval Code', 'Collected By', 'Amount']],
       body: payRows,
       theme: 'striped',
       styles: { fontSize: 8.5, cellPadding: 2, valign: 'top' },
       headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
       columnStyles: {
         0: { cellWidth: 24 },
-        1: { cellWidth: 55 },
-        2: { cellWidth: 28, halign: 'right' },
-        3: { cellWidth: 32 },
-        4: { cellWidth: 'auto' },
+        1: { cellWidth: 60 },
+        2: { cellWidth: 32 },
+        3: { cellWidth: 'auto' },
+        4: { cellWidth: 28, halign: 'right' },
       },
       margin: { left: margin, right: margin },
     });
-    ty = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? ty) + 4;
+    ty = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? ty) + 6;
   }
 
-  // Summary line: Subtotal · Paid · Balance.
-  const paidCenti = payments.reduce((sum, p) => sum + (p.amount_centi || 0), 0);
+  // ── Totals: SUBTOTAL / PAID TO DATE / TOTAL / BALANCE DUE ─────────
+  /* POS-printout parity: the SO model has no separate subtotal — the grand
+     total stands in (add-ons ride inside the line totals). Paid-to-date
+     prefers the authoritative paid_centi_total stamped by GET /:docNo
+     (ledger + legacy header deposit), falling back to summing the rows. */
   const subtotalCenti = header.local_total_centi;
+  const paidCenti = typeof header.paid_centi_total === 'number'
+    ? header.paid_centi_total
+    : payments.reduce((sum, p) => sum + (p.amount_centi || 0), 0);
   const balanceCenti = Math.max(0, subtotalCenti - paidCenti);
-  doc.setFont('helvetica', 'bold');
+  if (ty > 240) { doc.addPage(); ty = margin; }
+  const totalsX = pageW - margin - 70;
   doc.setFontSize(9);
-  const summaryParts = [
-    `Subtotal: ${fmtRm(subtotalCenti, header.currency)}`,
-    `Paid: ${fmtRm(paidCenti, header.currency)}`,
-    `Balance: ${fmtRm(balanceCenti, header.currency)}`,
-  ];
-  doc.text(summaryParts.join('  ·  '), margin, ty);
-  ty += 4;
+  const drawRow = (label: string, val: string, ry: number, bold = false) => {
+    doc.setFont('helvetica', bold ? 'bold' : 'normal');
+    doc.text(label, totalsX, ry);
+    doc.text(val, pageW - margin, ry, { align: 'right' });
+  };
+  drawRow('Subtotal',     fmtRm(subtotalCenti, header.currency), ty);     ty += 4;
+  /* Standard-checklist tax line — the SO model carries no header tax (prices
+     are tax-inclusive / exempt), so this prints as a dash, not a number. */
+  drawRow('Tax',          '—',                                   ty);     ty += 4;
+  drawRow('Total',        fmtRm(subtotalCenti, header.currency), ty);     ty += 4;
+  drawRow('Paid to date', fmtRm(paidCenti,     header.currency), ty);     ty += 2;
+  doc.setDrawColor(0);
+  doc.line(totalsX, ty, pageW - margin, ty);
+  doc.setFontSize(11);
+  drawRow('BALANCE DUE', fmtRm(balanceCenti, header.currency), ty + 5, true);
+  ty += 12;
 
   // Expected-deposit line — only shown when the commander has set one
   // on the header. Keeps the "target vs. collected" distinction visible.
   if ((header.deposit_centi ?? 0) > 0) {
     doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
     doc.setTextColor(110);
     doc.text(
       `Expected deposit: ${fmtRm(header.deposit_centi ?? 0, header.currency)}`,
       margin, ty,
     );
     doc.setTextColor(0);
-    ty += 4;
+    ty += 5;
   }
+
+  // ── Signature boxes — customer (with stored POS signature) + company ──
+  if (ty > 225) { doc.addPage(); ty = margin; }
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
+  doc.text('Customer Signature', margin, ty);
+  doc.text(`${COMPANY.name} Authorised Signature`, pageW / 2 + 5, ty);
+  ty += 2;
+  doc.setLineDashPattern([1.5, 1.5], 0);
+  doc.setDrawColor(120);
+  const sigW = (pageW - margin * 2) / 2 - 5;
+  doc.rect(margin, ty, sigW, 22);
+  doc.rect(pageW / 2 + 5, ty, sigW, 22);
+  doc.setLineDashPattern([], 0);
+  /* POS handover signature (signature_b64) renders INSIDE the customer box —
+     same as the POS printout. Fail-soft: a malformed image just leaves the
+     box blank for a wet-ink signature. */
+  const rawSig = (header.signature_b64 ?? '').trim();
+  if (rawSig) {
+    try {
+      const dataUrl = rawSig.startsWith('data:') ? rawSig : `data:image/png;base64,${rawSig}`;
+      doc.addImage(dataUrl, 'PNG', margin + 2, ty + 1, sigW - 4, 20);
+    } catch { /* leave the box blank */ }
+  }
+  ty += 26;
+  // Name · phone under the customer box, mirroring SalesOrderPrint.tsx.
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(80);
+  doc.text(
+    [header.debtor_name, header.phone ? formatPhone(header.phone) : null].filter(Boolean).join(' · '),
+    margin, ty,
+  );
+  doc.setTextColor(0);
+  ty += 6;
+
+  // ── Numbered terms (POS RECEIPT_TERMS wording) ────────────────────
+  if (ty > 255) { doc.addPage(); ty = margin; }
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+  doc.text('Terms & Conditions', margin, ty);
   ty += 4;
-
-  // ── Signature boxes (shared pdf-common layout) ───────────────────
-  ty = drawSignatureBoxes(doc, ty, 'Customer Signature', "2990's Home Authorised Signature");
-
-  // ── T&C footer ────────────────────────────────────────────────────
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
   doc.setTextColor(110);
-  const tc = [
-    "Terms & Conditions:",
-    "1. All goods sold are not refundable. Returns subject to approval.",
-    "2. Goods remain property of 2990's Home until full payment received.",
-    "3. Customer acknowledges items received in good condition unless noted above.",
-    "4. Standard 12-month manufacturer warranty applies. Excludes wear-and-tear.",
-  ];
-  tc.forEach((line, i) => {
-    doc.text(line, margin, ty + i * 3.5);
+  RECEIPT_TERMS.forEach((t, i) => {
+    const wrapped = doc.splitTextToSize(`${i + 1}. ${t}`, pageW - margin * 2) as string[];
+    doc.text(wrapped, margin, ty);
+    ty += wrapped.length * 3.2 + 0.8;
   });
+  doc.setTextColor(0);
+
+  // ── Footer: doc no · portal label · page n of m on every page ────
+  const pageCount = doc.getNumberOfPages();
+  for (let p = 1; p <= pageCount; p += 1) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
+    doc.text(header.doc_no, margin, 290);
+    doc.text(`${COMPANY.portalLabel} · ${fmtDocDate(header.so_date)}`, pageW / 2, 290, { align: 'center' });
+    doc.text(`Page ${p} of ${pageCount}`, pageW - margin, 290, { align: 'right' });
+    doc.setTextColor(0);
+  }
 
   // Filename: SO-009001-DebtorName.pdf
   const filename = `${header.doc_no}-${safeName(header.debtor_name || 'customer')}.pdf`;

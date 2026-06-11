@@ -50,22 +50,22 @@ Dates via `fmtDocDate` (`2026/05/31`), money via `fmtRm`.
 
 | Doc | Purpose | Key data columns on the print | Extra blocks |
 |-----|---------|-------------------------------|--------------|
-| **SO** (`sales-order-pdf.ts`, route `apps/api/src/routes/mfg-sales-orders.ts`) | The order contract with the customer | # / Item / Description / Group / Qty / Unit / Disc / Total; per-category totals (Mattress-Sofa, Bedframe, Accessories, Others, Services) + grand total | **Payments ledger** table (Date · Method · Amount · Approval Code · Collected By) from `mfg_sales_order_payments`, with Subtotal · Paid · Balance summary + expected-deposit line; PWP voucher notes; sofa builds folded to ONE Model row (`groupSoLinesForDisplay`, `@2990s/shared/so-line-display`) |
+| **SO** (`sales-order-pdf.ts`, route `apps/api/src/routes/mfg-sales-orders.ts`) | The order contract with the customer. **Layout source (2026-06-12): the POS customer printout** (`apps/pos/src/pages/SalesOrderPrint.tsx`) — real letterhead, ORDER REFERENCE / DELIVERY ESTIMATE blocks, BILL TO (ship-to ?? address1-4, family contact) / SOLD BY, numbered `RECEIPT_TERMS`, portal footer | SKU / Description (second line = composition · fabric — fabric code enriched to "EZ-001 — description" from `fabric_trackings` — / SEAT / LEG; PWP notes; remark) / Qty / Unit Price / Disc / Line Total; SUBTOTAL · PAID TO DATE · TOTAL · BALANCE DUE | **PAYMENTS RECEIVED ledger** table (Date · Method · Approval Code · Collected By · Amount) from `mfg_sales_order_payments`; expected-deposit line; stored POS signature (`signature_b64`) inside the customer box; sofa builds folded to ONE Model row (`groupSoLinesForDisplay`, `@2990s/shared/so-line-display`) |
 | **DO** (`delivery-order-pdf.ts`, route `delivery-orders-mfg.ts`) | Signed proof-of-delivery; moves stock OUT | # / Item / Description / Qty / m³ / Unit Price | **Driver / Vehicle / Expected / Volume** logistics block (right column of the parties block); customer + driver signature boxes |
 | **SI** (`sales-invoice-pdf.ts`, route `sales-invoices.ts`) | Bill the customer for delivered goods; posts revenue JE | # / Item / Description / Qty / Unit Price / Disc / Total; Subtotal / Discount / Tax / Grand Total / Paid / Outstanding | Due-date + SO Ref in header meta |
 | **DR** (`delivery-return-pdf.ts`, route `delivery-returns.ts`) | Customer returns goods; stock back IN, SO re-opens | # / Item / Description / Qty / Condition / Unit Price / Refund; TOTAL REFUND | Reason block; customer-confirms-return signature |
 
-Variant display on the SO print is sanitised by `VARIANT_KEYS_HIDDEN`
-(`sales-order-pdf.ts`) — machine keys (buildKey/cells/PWP/extraAddonAmountRM etc.)
-never reach the customer. The variant values that DO print (e.g. `fabricCode:
-CG-002`) are OUR fabric codes from `fabric_trackings.fabric_code`, never the
-supplier's.
+Variant display on the SO print goes through the shared `buildVariantSummary`
+(2026-06-12 rebuild; it only reads the known display keys, so machine keys —
+buildKey/cells/PWP/extraAddonAmountRM etc. — never reach the customer). The
+fabric values that DO print are OUR codes from `fabric_trackings.fabric_code`,
+enriched with `fabric_description` ("EZ-001 — …") — never the supplier's code.
 
 ### 1.2 Supplier line — SO → PO → GRN → PI → PR
 
 | Doc | Purpose | Code vocabulary | Key data columns |
 |-----|---------|-----------------|------------------|
-| **PO** (`purchase-order-pdf.ts`, route `mfg-purchase-orders.ts`) | Order goods from the supplier. AutoCount-style layout (PR #102): centered company bar, boxed supplier + meta blocks, plain-ruled table | **DUAL** (2026-06-11): printed table = Supplier Code (bold, first) + Our Code side by side; `supplier_sku` from the line snapshot, fallback to the live main binding, else —. Fabric in Specs prints as supplierColour (ourCode) via Fabric Converter (`supplier-doc-data.ts`) | # / Item+Description / Transferred SO / UOM / Qty / U-Price / Disc / Total; Terms, Delivery Date, Purchase Location, S/O No. |
+| **PO** (`purchase-order-pdf.ts`, route `mfg-purchase-orders.ts`) | Order goods from the supplier. **Layout source (2026-06-12): the owner's DSL / AutoCount reference printout** — real centered letterhead, boxed supplier block (TEL/FAX/Attn from the full supplier master, fail-soft `loadSupplierRecord`), meta column PO No. / Your Ref No. (= source S/O No., per-line roll-up) / Terms / Date / Delivery Date / Purchase Location / Page x of y (every page via `didDrawPage` + `putTotalPages`), amount-in-words "RINGGIT MALAYSIA … ONLY" + E. & O.E. + Authorised Signature footer | **DUAL** (2026-06-11, kept): Item = Supplier Code (bold, first) + Our Code column; `supplier_sku` from the line snapshot, fallback to the live main binding, else —. Description carries composition + supplierColour (ourCode) via Fabric Converter + divan/leg/seat variant attrs (`specsLine`/`buildVariantSummary`) + remark + per-line delivery date | Item / Our Code / Description / Transf. SO (per-line `so_doc_no` from migration-0098 `so_item_id`) / UOM / Qty / U-Price / Disc / Total |
 | **GRN** (`grn-pdf.ts`, route `grns.ts`) | Record goods received against a PO; stock IN at PO cost, dye-lot `batch_no` = source PO number | OUR codes | # / Code / Description / Recv / Acc / Rej / Reason / Unit Price; DN Ref + PO Ref |
 | **PI** (`purchase-invoice-pdf.ts`, route `purchase-invoices.ts`) | Register the supplier's bill; posts Dr 1200 / Cr 2000 JE | OUR codes (supplier's own invoice no. shown as "Supplier Ref") | # / Code / Description / Qty / Unit Price / Total; Subtotal / Tax / Grand Total / Paid / Outstanding |
 | **PR** (`purchase-return-pdf.ts`, route `purchase-returns.ts`) | Send goods back to the supplier, request credit note | OUR codes | # / Code / Description / Qty / Unit Price / Refund / Reason; PO Ref + GRN Ref + Supplier CN |
