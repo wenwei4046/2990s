@@ -500,7 +500,7 @@ export const Mrp = () => {
     setDialog({ kind: 'confirm', picks, orderedCodes, count: picks.length, units });
   };
 
-  const basisLabel = dateBasis === 'processing' ? 'Processing' : dateBasis === 'soDate' ? 'SO Date' : dateBasis === 'orderBy' ? 'Order-by' : 'Delivery';
+  const basisLabel = dateBasis === 'processing' ? 'Processing Date' : dateBasis === 'soDate' ? 'SO Date' : dateBasis === 'orderBy' ? 'Order-by' : 'Delivery';
   const windowLabel = hasWindow ? `${basisLabel} ${dateFrom || '…'} → ${dateTo || '…'}` : '';
   const skuNoun = 'variants';
 
@@ -987,7 +987,7 @@ const OrderLines = ({ sku, selected, onToggleLine, lineSupplier, onLineSupplierC
         <th>SO No</th>
         <th>Warehouse</th>
         <th>Customer</th>
-        <th>Processing</th>
+        <th>Processing Date</th>
         <th>Delivery Date</th>
         <th className={styles.num}>Qty</th>
         <th>Coverage</th>

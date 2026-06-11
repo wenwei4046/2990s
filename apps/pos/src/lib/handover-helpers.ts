@@ -272,9 +272,9 @@ const targetDateBlockers = (f: HandoverForm, todayIso: string = todayLocalIso(),
   // Loo 2026-06-11 — live no-past check (the input `min` attr alone goes stale
   // across midnight); keeps the reject HERE instead of a 400 at final Confirm.
   if (f.deliveryDate < todayIso) b.push('Delivery date cannot be in the past — pick today or later');
-  if (!f.processDate) b.push('Pick a process (factory start) date');
-  else if (f.processDate < todayIso) b.push('Process date cannot be in the past — pick today or later');
-  else if (f.processDate > f.deliveryDate) b.push('Process date cannot be later than the delivery date');
+  if (!f.processDate) b.push('Pick a processing date (factory start)');
+  else if (f.processDate < todayIso) b.push('Processing date cannot be in the past — pick today or later');
+  else if (f.processDate > f.deliveryDate) b.push('Processing date cannot be later than the delivery date');
   return b;
 };
 

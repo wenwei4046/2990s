@@ -68,7 +68,7 @@ export const TargetDateStep = ({
         <p className={styles.methodHint}>
           {tbcItemNames.join(', ')} still {tbcItemNames.length === 1 ? 'has' : 'have'} picks
           the customer will confirm later (fabric or dimensions), so delivery and
-          process dates can't be set yet. Choose "For further notice" — once the
+          processing dates can't be set yet. Choose "For further notice" — once the
           picks are completed in My orders, the dates go in there.
         </p>
       )}
@@ -105,7 +105,7 @@ export const TargetDateStep = ({
           Hidden for "For further notice", where both dates stay open.
           Bounded today..deliveryDate. */}
       {form.deliveryDate && !form.deliveryDateLater && !hasTbc && (
-        <Field label="Process date (factory start)">
+        <Field label="Processing date (factory start)">
           <input
             type="date"
             value={form.processDate}

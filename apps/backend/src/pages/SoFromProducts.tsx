@@ -359,7 +359,7 @@ export const SoFromProducts = () => {
                     <th style={{ padding: '6px 10px' }}>Customer</th>
                     <th style={{ padding: '6px 10px' }}>Combo</th>
                     <th style={{ padding: '6px 10px' }}>Lines</th>
-                    <th style={{ padding: '6px 10px' }}>Processing</th>
+                    <th style={{ padding: '6px 10px' }}>Processing Date</th>
                     <th style={{ padding: '6px 10px' }}>Delivery</th>
                   </tr>
                 </thead>
