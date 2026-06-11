@@ -1,8 +1,10 @@
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
+  orderSofaModuleRowsWithinBuilds,
   pwpRewardNote,
   pwpTriggerNotes,
+  soLineGroupRank,
   type SoPwpCodeRow,
 } from '@2990s/shared/so-line-display';
 import {
@@ -188,16 +190,10 @@ const variantLine = (it: SoItem, fabricDescMap: Map<string, string>): string => 
 
 /* Owner row-order rule (2026-06-12): SOFA + MATTRESS first (stored relative
    order preserved), then BEDFRAME, then ACCESSORY, then any other group,
-   then SERVICE always LAST. Case-insensitive contains-match on item_group;
-   Array.prototype.sort is stable, so within-group order = stored order. */
-const groupRank = (itemGroup: string | null | undefined): number => {
-  const g = (itemGroup ?? '').toLowerCase();
-  if (g.includes('sofa') || g.includes('mattress')) return 0;
-  if (g.includes('bedframe')) return 1;
-  if (g.includes('accessor')) return 2;
-  if (g.includes('service')) return 4;
-  return 3;
-};
+   then SERVICE always LAST. Lifted to @2990s/shared/so-line-display
+   (soLineGroupRank) so the SO create path persists the same rank order this
+   PDF prints. */
+const groupRank = soLineGroupRank;
 
 /* Human-readable method label for the PDF Payments table.
    - merchant → "Merchant (GHL)" or "Merchant (GHL) · 6m installment"
@@ -396,7 +392,13 @@ export async function generateSalesOrderPdf(
        2. description2 / remark (when present)
        3. specs — fabric code — description / SEAT / LEG (variantLine)
      PWP notes (reward voucher consumed / trigger codes issued) come after. */
-  const orderedItems = [...items].sort((a, b) => groupRank(a.item_group) - groupRank(b.item_group));
+  /* Within a buildKey group the module rows print LEFT-TO-RIGHT (Loo
+     2026-06-12) — the create path persists that order on new SOs; the
+     in-place permute fixes SOs booked before it without moving any other
+     row. */
+  const orderedItems = orderSofaModuleRowsWithinBuilds(
+    [...items].sort((a, b) => groupRank(a.item_group) - groupRank(b.item_group)),
+  );
   const tableRows = orderedItems.map((it) => {
     const desc2 = (it.description2 ?? '').trim();
     const remarkText = typeof it.remark === 'string' && it.remark.trim() !== '' ? it.remark.trim() : null;

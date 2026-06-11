@@ -19,6 +19,7 @@ import {
   isAccessoryModule,
   isWideArmSeat,
   normalizeCompartmentCode,
+  orderSofaCellsLeftToRight,
   summarizeSofaCells,
   findDuplicateCombo,
   matchComboSubset,
@@ -1745,7 +1746,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         </footer>
         {saveComboOpen && (
           <SaveQuickPickModal
-            modules={[...cells].sort((a, b) => a.x - b.x || a.y - b.y).map((c) => c.moduleId)}
+            modules={orderSofaCellsLeftToRight(cells, depth).map((c) => c.moduleId)}
             depth={depth}
             baseModel={baseModel ?? ''}
             curator={canCurate}
@@ -1755,7 +1756,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         )}
         {createComboOpen && (
           <CreateComboModal
-            modules={[...cells].sort((a, b) => a.x - b.x || a.y - b.y).map((c) => c.moduleId)}
+            modules={orderSofaCellsLeftToRight(cells, depth).map((c) => c.moduleId)}
             depth={depth}
             currentPriceCenti={priceResult.total}
             baseModel={baseModel ?? ''}

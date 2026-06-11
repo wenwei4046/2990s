@@ -32,6 +32,7 @@ import {
   EDGE_N,
   EDGE_E,
   EDGE_S,
+  orderSofaCellsLeftToRight,
   type Cell,
   type SofaProductPricing,
 } from '../sofa-build';
@@ -1222,5 +1223,99 @@ describe('lCapEdgeOf — outer arm cap of an L-Shape chaise (rotation-aware)', (
     expect(lCapEdgeOf('2A(LHF)', 0)).toBe(-1);
     expect(lCapEdgeOf('CNR', 90)).toBe(-1);
     expect(lCapEdgeOf('Console', 0)).toBe(-1);
+  });
+});
+
+/* ─── orderSofaCellsLeftToRight (Loo 2026-06-12) ───────────────────────────
+   Compartment sequences read like the customer facing the sofa: leftmost arm
+   first, walked along the connected chain to the rightmost arm. */
+describe('orderSofaCellsLeftToRight', () => {
+  // The exact prod shape Loo circled (BOOQIT Quick Pick, 28"): the corner is
+  // laid out by cellsFromComboModules in slot order [CNR, 2A(RHF), 1B(LHF)] —
+  // CNR top-left, 2A top-right, 1B chaise hanging bottom-left (rot 270).
+  // At 28" the CNR is 105cm wide, so the 2A sits at x=105.
+  const CORNER_LHF_28: Cell[] = [
+    { id: 'cnr', moduleId: 'CNR',     x: 0,   y: 0,  rot: 0 },
+    { id: '2a',  moduleId: '2A(RHF)', x: 105, y: 0,  rot: 0 },
+    { id: '1b',  moduleId: '1B(LHF)', x: 0,   y: 95, rot: 270 },
+  ];
+
+  it('walks an L-corner chaise-first — NOT the naive (x, y) sort', () => {
+    expect(orderSofaCellsLeftToRight(CORNER_LHF_28, '28').map((c) => c.moduleId))
+      .toEqual(['1B(LHF)', 'CNR', '2A(RHF)']);
+  });
+
+  it('mirrored corner (RHF chaise right) starts at the left 2-seater', () => {
+    // cellsFromComboModules chaiseRight branch at 28": 2A w=178, CNR at 178,
+    // chaise at totalW − chaiseW = 283 − 95 = 188, rot 90.
+    const mirrored: Cell[] = [
+      { moduleId: '2A(LHF)', x: 0,   y: 0,  rot: 0 },
+      { moduleId: 'CNR',     x: 178, y: 0,  rot: 0 },
+      { moduleId: '1B(RHF)', x: 188, y: 95, rot: 90 },
+    ];
+    expect(orderSofaCellsLeftToRight(mirrored, '28').map((c) => c.moduleId))
+      .toEqual(['2A(LHF)', 'CNR', '1B(RHF)']);
+  });
+
+  it('straight run stored right-to-left comes back left-to-right', () => {
+    const cells: Cell[] = [
+      { moduleId: '2A(RHF)', x: 95, y: 0, rot: 0 },
+      { moduleId: '1A(LHF)', x: 0,  y: 0, rot: 0 },
+    ];
+    expect(orderSofaCellsLeftToRight(cells, '24').map((c) => c.moduleId))
+      .toEqual(['1A(LHF)', '2A(RHF)']);
+  });
+
+  it('U-shape walks left chaise → across the back → right chaise', () => {
+    const u: Cell[] = [
+      { moduleId: '1B(RHF)', x: 237, y: 95, rot: 90 },  // right chaise
+      { moduleId: 'CNR',     x: 0,   y: 0,  rot: 0 },   // NW corner
+      { moduleId: '2NA',     x: 95,  y: 0,  rot: 0 },   // back run
+      { moduleId: 'CNR',     x: 237, y: 0,  rot: 90 },  // NE corner
+      { moduleId: '1B(LHF)', x: 0,   y: 95, rot: 270 }, // left chaise
+    ];
+    expect(orderSofaCellsLeftToRight(u, '24').map((c) => c.moduleId))
+      .toEqual(['1B(LHF)', 'CNR', '2NA', 'CNR', '1B(RHF)']);
+  });
+
+  it('north-facing (rot 180) build still reads from the customer LHF end', () => {
+    // Whole build rotated to face north: canvas-left is the customer's RIGHT,
+    // so canvas x must NOT pick the start — the opposite end hands decide.
+    const north: Cell[] = [
+      { moduleId: '2A(RHF)', x: 0,   y: 0, rot: 180 },
+      { moduleId: '1A(LHF)', x: 158, y: 0, rot: 180 },
+    ];
+    expect(orderSofaCellsLeftToRight(north, '24').map((c) => c.moduleId))
+      .toEqual(['1A(LHF)', '2A(RHF)']);
+  });
+
+  it('orders disconnected pieces (free-standing stool) group-by-position', () => {
+    const cells: Cell[] = [
+      { moduleId: 'STOOL', x: 250, y: 0, rot: 0 },
+      { moduleId: '2S',    x: 0,   y: 0, rot: 0 },
+    ];
+    expect(orderSofaCellsLeftToRight(cells, '24').map((c) => c.moduleId))
+      .toEqual(['2S', 'STOOL']);
+  });
+
+  it('keeps the stored order when geometry is missing or a module is unknown', () => {
+    const noGeo: Cell[] = [
+      { moduleId: '2A(RHF)', x: Number.NaN, y: 0, rot: 0 },
+      { moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 },
+    ];
+    expect(orderSofaCellsLeftToRight(noGeo, '24').map((c) => c.moduleId))
+      .toEqual(['2A(RHF)', '1A(LHF)']);
+    const unknown: Cell[] = [
+      { moduleId: 'XWZ-99',  x: 200, y: 0, rot: 0 },
+      { moduleId: '1A(LHF)', x: 0,   y: 0, rot: 0 },
+    ];
+    expect(orderSofaCellsLeftToRight(unknown, '24').map((c) => c.moduleId))
+      .toEqual(['XWZ-99', '1A(LHF)']);
+  });
+
+  it('never reorders the input array in place', () => {
+    const input = [...CORNER_LHF_28];
+    orderSofaCellsLeftToRight(input, '28');
+    expect(input.map((c) => c.moduleId)).toEqual(['CNR', '2A(RHF)', '1B(LHF)']);
   });
 });

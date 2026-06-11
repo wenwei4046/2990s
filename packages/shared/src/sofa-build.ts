@@ -785,8 +785,7 @@ export const describeSofaLine = (cfg: SofaLineDescriptor): string => {
     if (candidate && closed && !hasAccessory && SINGLE_PIECE_BUNDLES.has(candidate.id)) {
       base = candidate.label;
     } else {
-      base = [...cells]
-        .sort((a, b) => a.x - b.x || a.y - b.y)
+      base = orderSofaCellsLeftToRight(cells, depth)
         .map((c) => c.moduleId)
         .join(' + ');
     }
@@ -1034,6 +1033,102 @@ export const groupSofas = (cells: Cell[], depth: Depth): Cell[][] => {
     groups.set(root, arr);
   });
   return Array.from(groups.values());
+};
+
+/* ─── Left-to-right cell order (Loo 2026-06-12) ────────────────────── */
+
+/**
+ * Canonical LEFT-TO-RIGHT order of a build's cells: wherever compartment
+ * codes appear as a sequence (configurator topbar, SO per-module lines, cart
+ * titles, customer print, DO/SI), they read like the customer facing the
+ * sofa — from the leftmost arm to the rightmost arm (1A(LHF) … 2A(RHF)).
+ * An L/U build is WALKED along its connected chain, so the left chaise wing
+ * comes first, then the corner, then across to the right arm. A naive (x, y)
+ * sort puts a top-left corner BEFORE the chaise hanging below it
+ * ("CNR + 1B(LHF) + 2A(RHF)") — the exact order Loo rejected; the walk yields
+ * "1B(LHF) + CNR + 2A(RHF)".
+ *
+ * Walk start: the chain endpoint with the smaller bbox-centre x; same column
+ * (vertical run) falls back to the LHF-coded end, then the higher end.
+ * Degraded inputs never invent an order: a branch/cycle (not buildable
+ * today) or a free-standing piece sorts stable-by-(x, y) within its group;
+ * groups follow each other leftmost-first; missing geometry or an unknown
+ * module keeps the stored order untouched.
+ */
+export const orderSofaCellsLeftToRight = (cells: Cell[], depth: Depth): Cell[] => {
+  if (cells.length <= 1) return cells.slice();
+  const boxes = new Map<Cell, Bbox>();
+  for (const c of cells) {
+    // Degenerate snapshots (legacy carts) can miss moduleId / coordinates —
+    // keep the stored order rather than guess.
+    if (typeof c.moduleId !== 'string' || !Number.isFinite(c.x) || !Number.isFinite(c.y)) {
+      return cells.slice();
+    }
+    const b = cellBbox(c, depth);
+    if (!b) return cells.slice(); // unknown module — keep the stored order
+    boxes.set(c, b);
+  }
+  const inputIdx = new Map<Cell, number>(cells.map((c, i) => [c, i]));
+  const centreX = (c: Cell): number => { const b = boxes.get(c)!; return b.x + b.w / 2; };
+  const centreY = (c: Cell): number => { const b = boxes.get(c)!; return b.y + b.h / 2; };
+
+  /** Stable visual fallback — the pre-walk (x, y) reading order. */
+  const readingSort = (group: Cell[]): Cell[] =>
+    [...group].sort((a, b) =>
+      (boxes.get(a)!.x - boxes.get(b)!.x) ||
+      (boxes.get(a)!.y - boxes.get(b)!.y) ||
+      (inputIdx.get(a)! - inputIdx.get(b)!));
+
+  const orderGroup = (group: Cell[]): Cell[] => {
+    if (group.length <= 1) return group;
+    const adj: number[][] = group.map(() => []);
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        if (hasConnectingContact(group[i]!, group[j]!, depth)) {
+          adj[i]!.push(j);
+          adj[j]!.push(i);
+        }
+      }
+    }
+    const ends = adj.flatMap((n, i) => (n.length <= 1 ? [i] : []));
+    const isChain = adj.every((n) => n.length <= 2) && ends.length === 2;
+    if (!isChain) return readingSort(group);
+    const [a, b] = ends as [number, number];
+    const handOf = (i: number): 'LHF' | 'RHF' | null =>
+      parseCompartmentStructure(group[i]!.moduleId)?.orientation ?? null;
+    const handA = handOf(a);
+    const handB = handOf(b);
+    const X_TIE = 1; // cm — same column ⇒ decide by code hand, then height
+    const dx = centreX(group[a]!) - centreX(group[b]!);
+    let start: number;
+    // Hands are customer-facing truth (supplier convention): the LHF end IS
+    // the customer's left no matter how the build is rotated on the canvas —
+    // a north-facing (rot-180) build's canvas-left is the customer's RIGHT,
+    // where canvas x would mislead. Opposite hands at the two ends decide
+    // outright; geometry only arbitrates when the hands don't.
+    if (handA === 'LHF' && handB === 'RHF') start = a;
+    else if (handB === 'LHF' && handA === 'RHF') start = b;
+    else if (Math.abs(dx) > X_TIE) start = dx < 0 ? a : b;
+    else if (handA === 'LHF' && handB !== 'LHF') start = a;
+    else if (handB === 'LHF' && handA !== 'LHF') start = b;
+    else start = centreY(group[a]!) <= centreY(group[b]!) ? a : b;
+    const out: Cell[] = [];
+    const seen = new Set<number>();
+    let cur: number | undefined = start;
+    while (cur !== undefined) {
+      seen.add(cur);
+      out.push(group[cur]!);
+      cur = adj[cur]!.find((n) => !seen.has(n));
+    }
+    return out.length === group.length ? out : readingSort(group);
+  };
+
+  return groupSofas(cells, depth)
+    .map((g) => ({ g, b: cellsBbox(g, depth)! }))
+    .sort((A, B) =>
+      (A.b.x - B.b.x) || (A.b.y - B.b.y) ||
+      (inputIdx.get(A.g[0]!)! - inputIdx.get(B.g[0]!)!))
+    .flatMap(({ g }) => orderGroup(g));
 };
 
 /* ─── Pricing ──────────────────────────────────────────────────────── */

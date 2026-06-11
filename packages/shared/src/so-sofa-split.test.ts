@@ -97,6 +97,30 @@ describe('splitSofaBuildIntoModuleLines (§4.3, SO-2606-018 reference shape)', (
     expect(lines[0]).toMatchObject({ cellIndex: 0, x: 2, y: 1, rot: 270 });
   });
 
+  it('orders module lines by the left-to-right walk (Loo 2026-06-12)', () => {
+    // SO-2606-020 shape at 28": stored slot order [CNR, 2A(RHF), 1B(LHF)],
+    // visual walk = chaise wing → corner → 2-seater. cellIndex is remapped to
+    // the walk and the rounding residue lands on the NEW last line.
+    const lines = splitSofaBuildIntoModuleLines({
+      baseModel: 'BOOQIT',
+      cells: [
+        { moduleId: 'CNR',     x: 0,   y: 0,  rot: 0 },
+        { moduleId: '2A(RHF)', x: 105, y: 0,  rot: 0 },
+        { moduleId: '1B(LHF)', x: 0,   y: 95, rot: 270 },
+      ],
+      buildUnitPriceSen: 311500,
+      buildUnitCostSen: 0,
+      modulePrices: null, // equal split → residue shows which line is LAST
+      depth: '28',
+    })!;
+    expect(lines.map((l) => l.itemCode)).toEqual([
+      'BOOQIT-1B(LHF)', 'BOOQIT-CNR', 'BOOQIT-2A(RHF)',
+    ]);
+    expect(lines.map((l) => l.cellIndex)).toEqual([0, 1, 2]);
+    expect(lines.map((l) => l.unitPriceSen)).toEqual([103833, 103833, 103834]);
+    expect(lines[0]).toMatchObject({ x: 0, y: 95, rot: 270 }); // geometry rides along
+  });
+
   it('returns null for non-splittable inputs (caller keeps the legacy line)', () => {
     expect(splitSofaBuildIntoModuleLines({ baseModel: '', cells: CELLS, buildUnitPriceSen: 1, buildUnitCostSen: 0, modulePrices: null })).toBeNull();
     expect(splitSofaBuildIntoModuleLines({ baseModel: 'ANNSA', cells: [], buildUnitPriceSen: 1, buildUnitCostSen: 0, modulePrices: null })).toBeNull();

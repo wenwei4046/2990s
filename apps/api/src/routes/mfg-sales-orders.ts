@@ -30,6 +30,11 @@ import {
    (SO-2606-018 reference shape). Pure decomposition in shared; the build-level
    recompute + drift gate stay authoritative for the money. */
 import { splitSofaBuildIntoModuleLines } from '@2990s/shared/so-sofa-split';
+/* SO line ORDER rules (Loo 2026-06-12) — persisted row order: mains
+   (sofa/mattress/bedframe) first, accessories after, services last; within a
+   rank the cart order is preserved. Shared with the Backend PDF + POS print
+   so every surface ranks identically. */
+import { orderSofaModuleRowsWithinBuilds, sortSoLinesByGroupRank } from '@2990s/shared/so-line-display';
 /* Task 5 — mint one-shot SKUs at SO create when a line carries an extra add-on
    charge (gated by so_settings.pos_remark_extra_auto_sku). Pure code-resolution
    + row-build lives in the lib; this route batches the DB collision check. */
@@ -1193,7 +1198,19 @@ mfgSalesOrders.get('/:docNo', async (c) => {
      (which DO took how much, and the live balance) without a second round-trip.
      remaining/delivered come from the authoritative soDeliverableRemaining
      engine; the DO-number breakdown rides alongside from soLineDeliveries. */
-  const itemRows = (i.data ?? []) as unknown as Array<Record<string, unknown> & { id: string; qty?: number | null }>;
+  /* Rule-order the rows at READ (Loo 2026-06-12). The bulk insert gives every
+     line of an SO the same created_at, so the persisted order is NOT
+     recoverable from the timestamp once routine updates (stock_status flips,
+     recomputeTotals' combo spread) physically relocate rows. Rank
+     (mains → accessories → services) + each build's left-to-right walk are
+     re-derived from the rows themselves; within-rank residual order keeps the
+     read-back order (usually the cart order). */
+  const itemRows = orderSofaModuleRowsWithinBuilds(
+    sortSoLinesByGroupRank(
+      (i.data ?? []) as unknown as Array<Record<string, unknown> & { id: string; item_code: string; qty?: number | null }>,
+      (r) => r.item_group as string | null | undefined,
+    ),
+  );
   /* Coverage comes from the SAME allocation engine the MRP page uses (Wei Siang
      2026-05-31): stock first → earliest-ETA outstanding PO → shortage. A bare
      FK-only PO lookup missed stock-replenishment POs (raised without a per-line
@@ -2107,6 +2124,9 @@ mfgSalesOrders.post('/', async (c) => {
         // Task 5 (D4) — when this line mints one-shot SKUs (extra charge), the
         // selling price is split EVENLY across modules; cost stays proportional.
         evenSplitPrice: extraRM > 0,
+        // Left-to-right walk (Loo 2026-06-12) sizes footprints at the build's
+        // real seat depth so adjacency matches the canvas the cells came from.
+        depth: String((it.variants as { depth?: unknown } | null)?.depth ?? '24'),
       });
       if (split && split.length > 0) {
         const buildKey = `build-${idx + 1}`;
@@ -2194,7 +2214,12 @@ mfgSalesOrders.post('/', async (c) => {
       });
     }
     return [baseRow];
-  })).then((rows) => rows.flat());
+  })).then((rows) =>
+    /* Priority lines (Loo 2026-06-12): persist mains (sofa/mattress/bedframe)
+       ahead of accessories/others. Stable, so the cart order survives within a
+       rank and a split build's module rows stay contiguous (same item_group).
+       SERVICE rows are pushed after this array and stay last either way. */
+    sortSoLinesByGroupRank(rows.flat(), (r) => r.item_group as string | null | undefined));
 
   const margin = total - totalCost;
   const marginPctBasis = total > 0 ? Math.round((margin / total) * 10000) : 0;

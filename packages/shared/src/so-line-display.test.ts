@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   groupSoLinesForDisplay,
+  orderSofaModuleRowsWithinBuilds,
   pwpRewardNote,
   pwpTriggerNotes,
+  soLineGroupRank,
+  sortSoLinesByGroupRank,
 } from './so-line-display';
 
 // Mirrors SO-2606-020 in prod — the SO Loo screenshotted. Three BOOQIT module
 // lines sharing buildKey build-1, residual cent on the last line, plus two
-// service lines.
+// service lines. The cellIndex order (CNR → 2A → 1B) is the pre-2026-06-12
+// canvas/slot order; the geometry walk re-reads it chaise-first.
 const so2606020 = [
   {
     item_code: 'BOOQIT-CNR', description: 'SOFA BOOQIT CNR',
@@ -51,7 +55,9 @@ describe('groupSoLinesForDisplay', () => {
     expect(sofa.display).toMatchObject({
       itemCode: 'BOOQIT',
       description: 'SOFA BOOQIT',
-      composition: '1B(LHF) + 2A(RHF) + CNR',
+      // Left-to-right walk (Loo 2026-06-12): chaise wing → corner → 2-seater,
+      // derived from the persisted x/y/rot — NOT the stored summary order.
+      composition: '1B(LHF) + CNR + 2A(RHF)',
       description2: 'EZ-003 / SEAT 28 / LEG 4"',
       qty: 1,
       unitPriceCenti: 311500, // MYR 3,115.00 — residual cent included
@@ -63,21 +69,24 @@ describe('groupSoLinesForDisplay', () => {
     expect(groups[2]!.lines[0]!.item_code).toBe('SVC-DISPOSE-MATTRESS');
   });
 
-  it('orders folded lines by cellIndex and keeps the lead first', () => {
+  it('orders folded lines by the left-to-right walk regardless of input order', () => {
     const shuffled = [so2606020[2]!, so2606020[0]!, so2606020[1]!];
     const groups = groupSoLinesForDisplay(shuffled);
     expect(groups).toHaveLength(1);
     expect(groups[0]!.lines.map((l) => l.item_code)).toEqual([
-      'BOOQIT-CNR', 'BOOQIT-2A(RHF)', 'BOOQIT-1B(LHF)',
+      'BOOQIT-1B(LHF)', 'BOOQIT-CNR', 'BOOQIT-2A(RHF)',
     ]);
   });
 
-  it('falls back to module codes when variants.summary is absent', () => {
-    const noSummary = so2606020.slice(0, 3).map((l) => ({
-      ...l,
-      variants: { ...(l.variants as Record<string, unknown>), summary: undefined },
-    }));
-    const groups = groupSoLinesForDisplay(noSummary);
+  it('falls back to cellIndex order when the geometry is incomplete', () => {
+    const noGeo = so2606020.slice(0, 3).map((l) => {
+      const { x: _x, y: _y, ...rest } = l.variants as Record<string, unknown>;
+      return { ...l, variants: rest };
+    });
+    const groups = groupSoLinesForDisplay(noGeo);
+    expect(groups[0]!.lines.map((l) => l.item_code)).toEqual([
+      'BOOQIT-CNR', 'BOOQIT-2A(RHF)', 'BOOQIT-1B(LHF)',
+    ]);
     expect(groups[0]!.display?.composition).toBe('CNR + 2A(RHF) + 1B(LHF)');
   });
 
@@ -164,6 +173,46 @@ describe('groupSoLinesForDisplay — remark carry', () => {
     const groups = groupSoLinesForDisplay(lines);
     expect(groups[0]!.kind).toBe('sofa-build');
     expect(groups[0]!.display!.remark).toBeNull();
+  });
+});
+
+describe('soLineGroupRank / sortSoLinesByGroupRank (Loo 2026-06-12 — priority lines)', () => {
+  it('ranks the mains first and services always last', () => {
+    expect(soLineGroupRank('sofa')).toBe(0);
+    expect(soLineGroupRank('mattress')).toBe(0);
+    expect(soLineGroupRank('bedframe')).toBe(1);
+    expect(soLineGroupRank('accessory')).toBe(2);
+    expect(soLineGroupRank('others')).toBe(3);
+    expect(soLineGroupRank('service')).toBe(4);
+    expect(soLineGroupRank(null)).toBe(3);
+  });
+
+  it('sorts stably — cart order survives within a rank', () => {
+    const rows = [
+      { item_code: 'SVC-DELIVERY', item_group: 'service' },
+      { item_code: 'PILLOW-1',     item_group: 'accessory' },
+      { item_code: 'ARRUS-F-Q',    item_group: 'mattress' },
+      { item_code: 'BOOQIT-CNR',   item_group: 'sofa' },
+      { item_code: 'FENRIR-K',     item_group: 'bedframe' },
+      { item_code: 'ARRUS-S-Q',    item_group: 'mattress' },
+    ];
+    expect(sortSoLinesByGroupRank(rows, (r) => r.item_group).map((r) => r.item_code)).toEqual([
+      'ARRUS-F-Q', 'BOOQIT-CNR', 'ARRUS-S-Q', 'FENRIR-K', 'PILLOW-1', 'SVC-DELIVERY',
+    ]);
+  });
+});
+
+describe('orderSofaModuleRowsWithinBuilds (per-SKU listings — Backend SO PDF)', () => {
+  it('permutes a build inside its own row slots; other rows never move', () => {
+    const rows = [
+      { item_code: 'ARRUS-F-Q', qty: 1, variants: null },
+      ...so2606020.slice(0, 3),
+      { item_code: 'SVC-DELIVERY', qty: 1, variants: null },
+    ];
+    const out = orderSofaModuleRowsWithinBuilds(rows);
+    expect(out.map((r) => r.item_code)).toEqual([
+      'ARRUS-F-Q', 'BOOQIT-1B(LHF)', 'BOOQIT-CNR', 'BOOQIT-2A(RHF)', 'SVC-DELIVERY',
+    ]);
   });
 });
 

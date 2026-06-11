@@ -9,9 +9,13 @@
 // inventory. This module is a pure RENDER-TIME fold — it never mutates lines.
 //
 // Grouping key: variants.buildKey (written by the SO create path per build,
-// e.g. "build-1") + variants.cellIndex for in-group order. Lines without a
-// buildKey (legacy pre-P3 SOs, services, bedframes, mattresses) pass through
-// 1:1 — legacy multi-row sofas CANNOT be grouped reliably (SO-2606-010 holds
+// e.g. "build-1"). In-group order is the LEFT-TO-RIGHT walk of the build's
+// persisted geometry (variants x/y/rot — Loo 2026-06-12: compartment codes
+// always read leftmost arm → rightmost arm, so SOs booked before the create
+// path ordered its lines still display correctly), falling back to
+// variants.cellIndex when geometry is missing. Lines without a buildKey
+// (legacy pre-P3 SOs, services, bedframes, mattresses) pass through 1:1 —
+// legacy multi-row sofas CANNOT be grouped reliably (SO-2606-010 holds
 // three different Models as separate single-module purchases), so we never
 // guess.
 //
@@ -25,6 +29,8 @@
 // the render half. The reward line carries variants.pwpCode/pwpTriggerLabel;
 // the trigger line is matched via pwp_codes.trigger_item_code at print time.
 // ----------------------------------------------------------------------------
+
+import { orderSofaCellsLeftToRight, type Rot } from './sofa-build';
 
 /** Minimal raw SO line shape (snake_case = the API row verbatim). Callers pass
  *  their richer row type; the fold preserves it via the generic. */
@@ -53,7 +59,7 @@ export interface SoDisplayGroup<T extends RawSoDisplayLine> {
     itemCode: string;
     /** 'SOFA BOOQIT' — module suffix dropped. */
     description: string;
-    /** '1B(LHF) + 2A(RHF) + CNR' — from variants.summary, else module codes. */
+    /** '1B(LHF) + CNR + 2A(RHF)' — module codes in left-to-right walk order. */
     composition: string | null;
     /** Shared per-line variant summary (e.g. 'EZ-003 / SEAT 28 / LEG 4"'). */
     description2: string | null;
@@ -61,7 +67,7 @@ export interface SoDisplayGroup<T extends RawSoDisplayLine> {
     unitPriceCenti: number;
     discountCenti: number;
     totalCenti: number;
-    /** First non-empty remark in cellIndex order across the group; null if none. */
+    /** First non-empty remark in display order across the group; null if none. */
     remark: string | null;
   };
 }
@@ -96,18 +102,48 @@ const modelTokenOf = (itemCode: string): string | null => {
 const moduleCodeOf = (itemCode: string): string =>
   itemCode.slice(itemCode.lastIndexOf('-') + 1);
 
-/** Composition from variants.summary's first ' · ' segment
- *  ("1B(LHF) + 2A(RHF) + CNR · 28\" · EZ/EZ-003 Light Brown" → the first part),
- *  falling back to the module codes in cellIndex order. */
+/** Composition = the module codes joined in the lines' (already left-to-right)
+ *  order. The stored variants.summary first segment is only a fallback — it
+ *  snapshots whatever order the POS topbar had at add time, which on
+ *  pre-2026-06-12 orders is the canvas/Quick-Pick slot order, not the walk. */
 const compositionOf = <T extends RawSoDisplayLine>(lines: T[]): string | null => {
+  const codes = lines.map((l) => moduleCodeOf(l.item_code)).filter(Boolean);
+  if (codes.length > 0) return codes.join(' + ');
   const v = readVariants(lines[0]!);
   const summary = v?.summary;
   if (typeof summary === 'string' && summary.trim() !== '') {
     const first = summary.split('·')[0]?.trim();
     if (first) return first;
   }
-  const codes = lines.map((l) => moduleCodeOf(l.item_code)).filter(Boolean);
-  return codes.length > 0 ? codes.join(' + ') : null;
+  return null;
+};
+
+/** Left-to-right order for one buildKey group's lines: rebuild each line's
+ *  cell from the geometry the P3 split persisted on variants (x/y/rot +
+ *  module code from the SKU suffix) and run the shared walk. Any line
+ *  missing geometry → the whole group falls back to cellIndex order (which
+ *  the create path also writes left-to-right since 2026-06-12). */
+const orderSofaGroupLines = <T extends RawSoDisplayLine>(group: T[]): T[] => {
+  const byCellIndex = [...group].sort((a, b) => readCellIndex(a) - readCellIndex(b));
+  const wrapped: Array<{ row: T; moduleId: string; x: number; y: number; rot: Rot }> = [];
+  for (const l of byCellIndex) {
+    const v = readVariants(l);
+    const x = typeof v?.x === 'number' && Number.isFinite(v.x) ? v.x : null;
+    const y = typeof v?.y === 'number' && Number.isFinite(v.y) ? v.y : null;
+    const rot = typeof v?.rot === 'number' ? ((((v.rot % 360) + 360) % 360) as Rot) : 0;
+    const moduleId = moduleCodeOf(l.item_code);
+    if (x === null || y === null || !moduleId) return byCellIndex;
+    wrapped.push({ row: l, moduleId, x, y, rot });
+  }
+  // Coerce like the create-side split (String(depth)) — variants.depth is
+  // string today but the API accepts numeric depth in raw payloads.
+  const d = readVariants(byCellIndex[0]!)?.depth;
+  const depth =
+    typeof d === 'string' && d.trim() !== '' ? d
+    : typeof d === 'number' && Number.isFinite(d) ? String(d)
+    : '24';
+  return orderSofaCellsLeftToRight(wrapped, depth)
+    .map((w) => (w as (typeof wrapped)[number]).row);
 };
 
 /**
@@ -150,7 +186,7 @@ export function groupSoLinesForDisplay<T extends RawSoDisplayLine>(
       continue;
     }
 
-    const ordered = [...group].sort((a, b) => readCellIndex(a) - readCellIndex(b));
+    const ordered = orderSofaGroupLines(group);
     for (const l of ordered) folded.add(l);
     const lead = ordered[0]!;
     out.push({
@@ -163,7 +199,10 @@ export function groupSoLinesForDisplay<T extends RawSoDisplayLine>(
         description2: lead.description2 ?? null,
         qty: 1,
         unitPriceCenti: ordered.reduce((s, l) => s + Number(l.unit_price_centi ?? 0), 0),
-        discountCenti: Number(lead.discount_centi ?? 0),
+        /* Summed, not lead-read: the discount is persisted on the CREATE
+           path's first line, which the left-to-right walk may no longer put
+           first. Only one line ever carries it, so Σ === the build figure. */
+        discountCenti: ordered.reduce((s, l) => s + Number(l.discount_centi ?? 0), 0),
         totalCenti: ordered.reduce((s, l) => s + Number(l.total_centi ?? 0), 0),
         remark: ordered.find((l) => typeof l.remark === 'string' && l.remark.trim() !== '')?.remark ?? null,
       },
@@ -171,6 +210,58 @@ export function groupSoLinesForDisplay<T extends RawSoDisplayLine>(
   }
   return out;
 }
+
+// ───────────────────── SO line ORDER rules (Loo 2026-06-12) ─────────────────
+// Priority lines: the MAINS — sofa, mattress, bedframe — lead every SO line
+// listing; accessories follow; SERVICE rows close the document. Within a rank
+// the stored order is preserved (stable sort). Shared so the CREATE path (the
+// persisted row order), the Backend SO PDF and the POS customer print all
+// rank identically.
+
+export const soLineGroupRank = (itemGroup: string | null | undefined): number => {
+  const g = (itemGroup ?? '').toLowerCase();
+  if (g.includes('sofa') || g.includes('mattress')) return 0;
+  if (g.includes('bedframe')) return 1;
+  if (g.includes('accessor')) return 2;
+  if (g.includes('service')) return 4;
+  return 3;
+};
+
+/** Stable category sort: mains → accessories → others → services. The
+ *  `groupOf` getter keeps this generic over row shapes (DB rows are
+ *  snake_case item_group, POS marshalling is camelCase itemGroup). */
+export const sortSoLinesByGroupRank = <T>(
+  lines: readonly T[],
+  groupOf: (line: T) => string | null | undefined,
+): T[] =>
+  lines
+    .map((l, i) => ({ l, i }))
+    .sort((a, b) =>
+      (soLineGroupRank(groupOf(a.l)) - soLineGroupRank(groupOf(b.l))) || (a.i - b.i))
+    .map((e) => e.l);
+
+/** Re-order each buildKey group's module rows left-to-right IN PLACE of the
+ *  slots the group already occupies — for per-SKU listings that don't fold
+ *  (the Backend SO PDF prints one row per module). Row count and the
+ *  positions of non-sofa rows are untouched; only a build's members permute
+ *  among their own positions. */
+export const orderSofaModuleRowsWithinBuilds = <T extends RawSoDisplayLine>(lines: T[]): T[] => {
+  const byKey = new Map<string, number[]>();
+  lines.forEach((l, i) => {
+    const key = readBuildKey(l);
+    if (!key) return;
+    const arr = byKey.get(key) ?? [];
+    arr.push(i);
+    byKey.set(key, arr);
+  });
+  const out = [...lines];
+  for (const positions of byKey.values()) {
+    if (positions.length <= 1) continue;
+    const ordered = orderSofaGroupLines(positions.map((i) => lines[i]!));
+    positions.forEach((pos, k) => { out[pos] = ordered[k]!; });
+  }
+  return out;
+};
 
 // ─────────────────────────────── PWP notes ──────────────────────────────────
 
