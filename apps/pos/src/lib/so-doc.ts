@@ -210,6 +210,20 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
           (l) => l.item_group as string | null | undefined,
         ),
       );
+      /* Option A (Loo 2026-06-12): since PR #553 the remark also renders
+         INSIDE Description 2's SPECIAL segment ("SPECIAL: <remark> (+RM750)"),
+         so the separate "Remark:" line printed the same text twice. Print it
+         only when the text above does NOT already contain the remark verbatim
+         — pre-#553 orders (persisted description2 without the SPECIAL remark)
+         keep their Remark line. */
+      const remarkUnlessShownAbove = (
+        remark: unknown,
+        shownAbove: string | null,
+      ): string | null => {
+        const r = typeof remark === 'string' ? remark.trim() : '';
+        if (!r) return null;
+        return shownAbove && shownAbove.includes(r) ? null : r;
+      };
       const lines: PrintableLine[] = groups.map((g) => {
         const lead = g.lines[0]!;
         const notes: SoPwpNote[] = [
@@ -218,12 +232,13 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
         ].filter((n): n is SoPwpNote => n != null);
         if (g.kind === 'sofa-build' && g.display) {
           const d = g.display;
+          const sub = [d.composition, d.description2].filter(Boolean).join(' · ') || null;
           return {
             sku: d.itemCode,
             description: d.description,
-            sub: [d.composition, d.description2].filter(Boolean).join(' · ') || null,
+            sub,
             notes,
-            remark: d.remark,
+            remark: remarkUnlessShownAbove(d.remark, sub),
             qty: d.qty,
             unitPrice: centiToMyr(d.unitPriceCenti),
             lineTotal: centiToMyr(d.totalCenti),
@@ -240,7 +255,7 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
           description: desc || ((lead.item_code as string) ?? ''),
           sub: null,
           notes,
-          remark: typeof lead.remark === 'string' && lead.remark.trim() !== '' ? lead.remark : null,
+          remark: remarkUnlessShownAbove(lead.remark, desc || null),
           qty,
           unitPrice,
           lineTotal,

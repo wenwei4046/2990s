@@ -403,19 +403,27 @@ export async function generateSalesOrderPdf(
     const desc2 = (it.description2 ?? '').trim();
     const remarkText = typeof it.remark === 'string' && it.remark.trim() !== '' ? it.remark.trim() : null;
     const specs = variantLine(it, fabricDescMap);
+    /* Option A (Loo 2026-06-12): since PR #553 the remark renders INSIDE the
+       SPECIAL segment — in the persisted description2 (post-#553 rows) and in
+       `specs` (recomputed at print, so even pre-#553 rows show it there). The
+       separate "Remark:" line printed the same text twice; show it only when
+       NEITHER line above already contains the remark verbatim. */
+    const remarkShownAbove =
+      remarkText !== null && (desc2.includes(remarkText) || (specs ?? '').includes(remarkText));
     const notes = [
       pwpRewardNote(it.variants),
       ...pwpTriggerNotes([it.item_code], pwpCodes),
     ].filter((n): n is NonNullable<typeof n> => n != null).map((n) => n.text);
     /* Line 2 = description2 when present (remark stands in when there is no
-       description2); a remark alongside a description2 still prints, as its
-       own note line after the specs. */
+       description2 AND the specs line doesn't already show it); a remark
+       alongside a description2 prints as its own note line after the specs
+       only when it isn't visible above. */
     const lines = [
       it.description ?? it.item_code,
-      desc2 || remarkText,
+      desc2 || (remarkShownAbove ? null : remarkText),
       specs,
       ...notes,
-      desc2 && remarkText ? `Remark: ${remarkText}` : null,
+      desc2 && remarkText && !remarkShownAbove ? `Remark: ${remarkText}` : null,
     ].filter(Boolean);
     return [
       it.item_code,
