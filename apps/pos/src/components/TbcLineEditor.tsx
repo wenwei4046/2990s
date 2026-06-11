@@ -80,30 +80,20 @@ const useMfgProductByCode = (code: string) =>
    context just pre-filters the candidate search so sales never see an
    out-of-range item.
      reward  — the line IS a PWP reward → the code's snapshotted reward set.
-     trigger — this SO minted codes off the line → every anchoring rule's
-               trigger set (intersection of non-empty model lists).
-     locked  — the range can't be determined (rule deleted, code missing) →
+     locked  — the reward range can't be determined (code missing) →
                coordinator only.
-     free    — no PWP involvement, the whole non-sofa catalog. */
+     free    — everything else. Trigger lines swap FREELY (Loo 2026-06-12):
+               the server re-evaluates the promotion after the swap
+               (reward reverts / voucher deletes / fresh vouchers mint)
+               instead of restricting the candidates. */
 type SwapCtx =
   | { kind: 'free' }
   | { kind: 'reward'; category: string; modelIds: string[]; promoType: string }
-  | { kind: 'trigger'; category: string; modelIds: string[] | null }
   | { kind: 'locked'; reason: string };
 
-const useSwapContext = (
-  docNo: string,
-  target: TbcEditTarget,
-  /** The line's CURRENT product (category + model) — trigger detection is
-   *  RANGE-based (Loo 2026-06-12): a line counts as a trigger when its
-   *  product sits inside an anchoring rule's trigger set, with the
-   *  trigger_item_code stamp kept only as a fallback (stamps go stale when
-   *  the line was swapped before the restamp existed — SO-2606-009). */
-  lineProduct: { category: string; model_id: string | null } | null | undefined,
-) =>
+const useSwapContext = (docNo: string, target: TbcEditTarget) =>
   useQuery({
-    enabled: target.isPwp || lineProduct !== undefined,
-    queryKey: ['tbc-swap-ctx', docNo, target.itemId, target.itemCode, lineProduct?.category ?? '', lineProduct?.model_id ?? ''],
+    queryKey: ['tbc-swap-ctx', docNo, target.itemId, target.itemCode],
     staleTime: 30_000,
     queryFn: async (): Promise<SwapCtx> => {
       if (target.isPwp) {
@@ -116,49 +106,9 @@ const useSwapContext = (
         if (!d) return { kind: 'locked', reason: 'This PWP voucher could not be found — the coordinator handles the exchange.' };
         return { kind: 'reward', category: d.reward_category, modelIds: d.eligible_reward_model_ids ?? [], promoType: d.type };
       }
-      const { data: codes } = await supabase.from('pwp_codes')
-        .select('rule_id, trigger_item_code')
-        .eq('source_doc_no', docNo);
-      const allAnchors = (codes ?? []) as Array<{ rule_id: string | null; trigger_item_code: string | null }>;
-      if (allAnchors.length === 0) return { kind: 'free' };
-      const ruleIds = [...new Set(allAnchors.map((a) => a.rule_id).filter((r): r is string => !!r))];
-      const { data: ruleRows } = ruleIds.length > 0
-        ? await supabase.from('pwp_rules').select('id, trigger_category, trigger_eligible_model_ids').in('id', ruleIds)
-        : { data: [] };
-      const ruleById = new Map(
-        ((ruleRows ?? []) as Array<{ id: string; trigger_category: string; trigger_eligible_model_ids: string[] | null }>)
-          .map((r) => [r.id, r]),
-      );
-      const fitsTrigger = (rid: string | null): boolean => {
-        const r = rid ? ruleById.get(rid) : undefined;
-        if (!r || !lineProduct) return false;
-        const inCat = String(lineProduct.category).toUpperCase() === String(r.trigger_category).toUpperCase();
-        const models = r.trigger_eligible_model_ids ?? [];
-        return inCat && (models.length === 0 || (lineProduct.model_id != null && models.includes(lineProduct.model_id)));
-      };
-      // Anchored by THIS line: stamp match OR the line's product is in range.
-      const anchors = allAnchors.filter((a) => a.trigger_item_code === target.itemCode || fitsTrigger(a.rule_id));
-      if (anchors.length === 0) return { kind: 'free' };
-      if (anchors.some((a) => !a.rule_id || !ruleById.get(a.rule_id))) {
-        return { kind: 'locked', reason: 'This item triggered a PWP voucher whose promotion no longer exists — the coordinator handles the exchange.' };
-      }
-      const rules = anchors.map((a) => ruleById.get(a.rule_id!)!);
-      const cats = [...new Set(rules.map((r) => String(r.trigger_category)))];
-      if (cats.length > 1) {
-        return { kind: 'locked', reason: 'This item anchors PWP promotions with different trigger ranges — the coordinator handles the exchange.' };
-      }
-      // The candidate must satisfy EVERY anchoring rule → intersect the
-      // non-empty model lists; null = no rule constrains models.
-      let modelIds: string[] | null = null;
-      for (const r of rules) {
-        const m = r.trigger_eligible_model_ids ?? [];
-        if (m.length === 0) continue;
-        modelIds = modelIds === null ? m : modelIds.filter((x) => m.includes(x));
-      }
-      if (modelIds !== null && modelIds.length === 0) {
-        return { kind: 'locked', reason: 'No product satisfies every PWP promotion this item triggered — the coordinator handles the exchange.' };
-      }
-      return { kind: 'trigger', category: cats[0]!, modelIds };
+      // Non-reward lines (including PWP triggers) swap freely — the server
+      // re-evaluates the promotion after the swap (Loo 2026-06-12).
+      return { kind: 'free' };
     },
   });
 
@@ -182,9 +132,6 @@ const useSwapCandidates = (q: string, ctx: SwapCtx | undefined) =>
         query = query.eq('category', ctx.category);
         if (ctx.modelIds.length > 0) query = query.in('model_id', ctx.modelIds);
         if (ctx.promoType !== 'promo') query = query.gt('pwp_price_sen', 0);
-      } else if (ctx?.kind === 'trigger') {
-        query = query.eq('category', ctx.category);
-        if (ctx.modelIds) query = query.in('model_id', ctx.modelIds);
       }
       const { data, error } = await query.order('code').limit(8);
       if (error) throw error;
@@ -232,7 +179,12 @@ const friendlyError = (payload: Record<string, unknown>): string => {
   }
   if (err === 'pwp_line_locked') return 'This PWP line is handled by the coordinator.';
   if (err === 'pwp_swap_out_of_range') return 'A PWP reward can only be exchanged within the promotion\'s reward range.';
-  if (err === 'pwp_trigger_swap_out_of_range') return 'This item triggered a PWP voucher — it can only be exchanged within the promotion\'s trigger range.';
+  if (err === 'pwp_trigger_cross_order') {
+    return String(payload.reason ?? 'This item triggered a voucher already redeemed on another order — the coordinator handles the exchange.');
+  }
+  if (err === 'pwp_reward_sofa_revert_unsupported') {
+    return 'The voucher this item triggered paid for a sofa reward — the coordinator handles the exchange.';
+  }
   if (err === 'pwp_reward_unpriced') return 'That item has no PWP price yet — ask an admin to set it in the SKU Master.';
   if (err === 'product_unpriced') return 'That product has no selling price yet — ask an admin to price it first.';
   if (err === 'so_sofa_no_other_main') return 'A sofa cannot share a sales order with a bedframe or mattress.';
@@ -417,11 +369,7 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
   /* ── Product swap ─────────────────────────────────────────────────── */
   const [swapOpen, setSwapOpen] = useState(false);
   const [swapQuery, setSwapQuery] = useState('');
-  const swapCtx = useSwapContext(
-    docNo,
-    target,
-    product.isLoading ? undefined : (product.data ? { category: product.data.category, model_id: product.data.model_id } : null),
-  );
+  const swapCtx = useSwapContext(docNo, target);
   const candidates = useSwapCandidates(swapQuery, swapCtx.data);
   const prevLineTotal = (target.qty * target.unitPriceCenti) - target.discountCenti;
   const swap = useMutation({
@@ -588,11 +536,6 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
           {swapCtx.data?.kind === 'reward' && (
             <div className={styles.swapEmpty}>
               PWP reward — showing items inside this promotion's reward range, at their PWP price.
-            </div>
-          )}
-          {swapCtx.data?.kind === 'trigger' && (
-            <div className={styles.swapEmpty}>
-              This item triggered a PWP voucher — showing items inside the promotion's trigger range.
             </div>
           )}
           <div className={styles.swapSearch}>
