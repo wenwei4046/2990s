@@ -165,9 +165,15 @@ export const validateEmergency = (f: HandoverForm): boolean =>
  *  re-checks against Malaysia UTC+8 as the authority). */
 export const todayLocalIso = (): string => new Date().toLocaleDateString('en-CA');
 
-export const validateTargetDate = (f: HandoverForm, todayIso: string = todayLocalIso()): boolean => {
+export const validateTargetDate = (f: HandoverForm, todayIso: string = todayLocalIso(), hasTbcLines = false): boolean => {
   // "For further notice" (UFN) — no dates committed yet; allowed.
   if (f.deliveryDateLater) return true;
+  /* TBC lines (Loo 2026-06-11) — a Processing date means "ready to build",
+     and the SO API 409s variants_incomplete when any line still has open
+     picks (fabric / gap / leg / divan). Force UFN here so sales learn at the
+     DATE step, not after the customer has already signed. Dates are set from
+     My orders once the picks are completed. */
+  if (hasTbcLines) return false;
   // Any other path commits a delivery date, so a Process Date must accompany it
   // (the SO API pairs them), and Process Date may not be later than delivery.
   if (f.deliveryDate.length === 0) return false;
@@ -250,8 +256,14 @@ const emergencyBlockers = (f: HandoverForm): string[] => {
   return b;
 };
 
-const targetDateBlockers = (f: HandoverForm, todayIso: string = todayLocalIso()): string[] => {
+const targetDateBlockers = (f: HandoverForm, todayIso: string = todayLocalIso(), hasTbcLines = false): string[] => {
   if (f.deliveryDateLater) return [];  // UFN — both dates left open
+  if (hasTbcLines) {
+    return [
+      'Some items still have picks to confirm (fabric / dimensions)',
+      'Choose "For further notice" — set dates from My orders later',
+    ];
+  }
   const b: string[] = [];
   if (!f.deliveryDate) {
     b.push('Pick a delivery date, or check "As fast as possible" / "For further notice"');
@@ -311,12 +323,13 @@ export const getStepBlockers = (
   subtotal: number,
   addonTotal: number,
   deliveryFeeTotal = 0,
+  hasTbcLines = false,
 ): string[] => {
   switch (key) {
     case 'customer': return customerBlockers(f);
     case 'address':  return addressBlockers(f);
     case 'emergency': return emergencyBlockers(f);
-    case 'target':   return targetDateBlockers(f);
+    case 'target':   return targetDateBlockers(f, todayLocalIso(), hasTbcLines);
     case 'addons':   return addonsPaymentBlockers(f);
     case 'confirm':  return confirmPaymentBlockers(f, subtotal, addonTotal, deliveryFeeTotal);
     case 'sign':     return signBlockers(f);

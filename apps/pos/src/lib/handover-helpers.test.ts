@@ -112,6 +112,15 @@ describe('validateTargetDate', () => {
     // …while UFN stays exempt from date checks entirely.
     expect(validateTargetDate({ ...baseForm, deliveryDateLater: true })).toBe(true);
   });
+  // TBC lines (Loo 2026-06-11) — open picks (fabric/gap/leg/divan) mean a
+  // Processing date would 409 variants_incomplete server-side; the step must
+  // force "For further notice" instead of letting the customer sign first.
+  it('blocks a valid date pair while the cart has TBC lines', () => {
+    expect(validateTargetDate({ ...baseForm, deliveryDate: '2026-06-04', processDate: '2026-06-01' }, TODAY, true)).toBe(false);
+  });
+  it('still allows "For further notice" with TBC lines', () => {
+    expect(validateTargetDate({ ...baseForm, deliveryDateLater: true }, TODAY, true)).toBe(true);
+  });
 });
 
 describe('validateAddonsPayment', () => {
