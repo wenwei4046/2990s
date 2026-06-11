@@ -957,9 +957,12 @@ purchaseInvoices.patch('/:id/items/:itemId', async (c) => {
   const lock = await piLocked(sb, piId);
   if (lock) return c.json(lock, 409);
 
+  /* Audit 2026-06-11 M10 — scope the line to THIS PI: a mismatched itemId
+     must 404, not edit another PI's line while the recompute / recost / GL
+     resync run against this one. */
   const { data: prev } = await sb.from('purchase_invoice_items')
     .select('qty, unit_price_centi, discount_centi, item_group, variants, grn_item_id')
-    .eq('id', itemId).maybeSingle();
+    .eq('id', itemId).eq('purchase_invoice_id', piId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
   const prevQty = (prev as { qty: number }).qty;
@@ -1043,8 +1046,11 @@ purchaseInvoices.delete('/:id/items/:itemId', async (c) => {
   if (lock) return c.json(lock, 409);
 
   // Read the line first so we can release its GRN-line consumption on delete.
+  // Audit 2026-06-11 M10 — scoped to THIS PI: a mismatched itemId must 404,
+  // not delete another PI's line while the recompute / GL resync run here.
   const { data: line } = await sb.from('purchase_invoice_items')
-    .select('qty, grn_item_id').eq('id', itemId).maybeSingle();
+    .select('qty, grn_item_id').eq('id', itemId).eq('purchase_invoice_id', piId).maybeSingle();
+  if (!line) return c.json({ error: 'not_found' }, 404);
   const { error } = await sb.from('purchase_invoice_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   if (line) {

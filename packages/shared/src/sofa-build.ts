@@ -1155,7 +1155,14 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
       for (let i = 0; i < group.length; i++) {
         if (!matchedSet.has(i)) continue;
         const cell = group[i]!;
-        subsetSum += compRow(pricing, cell.moduleId)?.price ?? 0;
+        // Mirror fallback — SAME lookup as the à-la-carte loop above (audit
+        // 2026-06-11 C1). Without it a matched cell priced only on the other
+        // hand counts in aLaCarteTotal but not here, so comboExtrasALaCarte
+        // (= aLaCarteTotal − subsetSum) wrongly re-charges that module ON TOP
+        // of the combo price — a mirrored build paid combo + module twice.
+        const row = compRow(pricing, cell.moduleId)
+          ?? compRow(pricing, mirrorCode(cell.moduleId));
+        subsetSum += row?.price ?? 0;
       }
       // Q2 (Chairman 2026-05-30): the Master Account combo price is the
       // canonical price for a matched set — apply it whenever it matches and is

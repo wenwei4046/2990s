@@ -49,9 +49,19 @@ export type VariantAttrs = {
    *  (which left bedframe inbound stock un-matchable to its SO line). */
   fabricColor?: string | null;
   seatHeight?: string | null; // sofa
+  /** POS configurator stores the sofa seat-size pick as `depth`
+   *  (so-variant-rule declares `depth` ≡ `seatHeight` — same physical axis).
+   *  Aliased here exactly like fabricColor so a POS-created sofa keys into the
+   *  SAME stock bucket as a Backend-keyed identical sofa. NOTE: rows written
+   *  before this fix may sit under legacy keys (POS sofas keyed without
+   *  seat/leg) — historical keys are NOT migrated. */
+  depth?: string | null; // sofa (POS vocabulary for seatHeight)
   gap?: string | null; // bedframe
   divanHeight?: string | null; // bedframe
   legHeight?: string | null; // sofa + bedframe
+  /** POS leg picker stores the sofa leg pick as `sofaLegHeight`
+   *  (so-variant-rule: `sofaLegHeight` ≡ `legHeight`). Same aliasing as depth. */
+  sofaLegHeight?: string | null; // sofa (POS vocabulary for legHeight)
   totalHeight?: string | null; // bedframe (derived from divan+leg+gap)
   /** Special-order config — labels/specs that change the physical item.
    *  Accepts strings or {code|label} objects; order-independent. */
@@ -102,10 +112,19 @@ export function computeVariantKey(
     // Fabric is stored under any of fabricCode / colorCode / colourCode /
     // fabricColor (the GRN-family editors use fabricColor) — treat them as one
     // attribute so colour participates in the bucket identity regardless of which
-    // form wrote the line.
+    // form wrote the line. Seat / leg get the same treatment for the POS sofa
+    // vocabulary (so-variant-rule axes): seatHeight ← depth, legHeight ←
+    // sofaLegHeight — otherwise a POS sofa and an identical Backend sofa land
+    // in different stock buckets (audit 2026-06-11 I3). Canonical key wins
+    // when both are present. Historical rows are NOT migrated — pre-fix stock
+    // may sit under legacy keys (POS sofas keyed without seat/leg).
     const raw = k === 'fabricCode'
       ? (a.fabricCode ?? a.colorCode ?? a.colourCode ?? a.fabricColor)
-      : (a[k] as unknown);
+      : k === 'seatHeight'
+        ? (a.seatHeight ?? a.depth)
+        : k === 'legHeight'
+          ? (a.legHeight ?? a.sofaLegHeight)
+          : (a[k] as unknown);
     const val = norm(raw);
     if (val) parts.push(`${k.toLowerCase()}=${val}`);
   }

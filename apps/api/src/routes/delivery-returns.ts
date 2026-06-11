@@ -1136,9 +1136,12 @@ deliveryReturns.patch('/:id/items/:itemId', async (c) => {
     if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
   }
 
+  /* Audit 2026-06-11 M10 — scope the line to THIS return: a mismatched itemId
+     must 404, not edit another DR's line while the recompute + stock resync
+     run against this one. */
   const { data: prev } = await sb.from('delivery_return_items')
     .select('qty_returned, unit_price_centi, discount_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes, condition, do_item_id')
-    .eq('id', itemId).maybeSingle();
+    .eq('id', itemId).eq('delivery_return_id', id).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
   /* P1 SO-SKU spec §4.6 — block edits that would TURN a return line into a
@@ -1201,6 +1204,14 @@ deliveryReturns.patch('/:id/items/:itemId', async (c) => {
 
 deliveryReturns.delete('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId'); const user = c.get('user');
+  /* Audit 2026-06-11 M10 — scope the line to THIS return: a mismatched itemId
+     must 404, not delete another DR's line while the recompute + stock resync
+     run against this one. */
+  {
+    const { data: line } = await sb.from('delivery_return_items')
+      .select('id').eq('id', itemId).eq('delivery_return_id', id).maybeSingle();
+    if (!line) return c.json({ error: 'not_found' }, 404);
+  }
   const { error } = await sb.from('delivery_return_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);

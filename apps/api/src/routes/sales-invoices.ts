@@ -739,9 +739,12 @@ salesInvoices.patch('/:id/items/:itemId', async (c) => {
     if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
   }
 
+  /* Audit 2026-06-11 M10 — scope the line to THIS invoice: a mismatched
+     itemId must 404, not edit another invoice's line while the recompute +
+     GL resync run against this one. */
   const { data: prev } = await sb.from('sales_invoice_items')
     .select('qty, unit_price_centi, discount_centi, tax_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes, do_item_id')
-    .eq('id', itemId).maybeSingle();
+    .eq('id', itemId).eq('sales_invoice_id', id).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
   const qty = it.qty !== undefined ? Number(it.qty) : Number(prev.qty);
@@ -799,6 +802,14 @@ salesInvoices.delete('/:id/items/:itemId', async (c) => {
     if (hd && ((hd as { status: string }).status ?? '').toUpperCase() === 'CANCELLED') {
       return c.json({ error: 'invoice_cancelled', message: 'This invoice is cancelled — reopen it before deleting lines.' }, 409);
     }
+  }
+  /* Audit 2026-06-11 M10 — scope the line to THIS invoice (same pattern as the
+     payment DELETE above): a mismatched itemId must 404, not delete another
+     invoice's line while the recompute + GL resync run against this one. */
+  {
+    const { data: line } = await sb.from('sales_invoice_items')
+      .select('id').eq('id', itemId).eq('sales_invoice_id', id).maybeSingle();
+    if (!line) return c.json({ error: 'not_found' }, 404);
   }
   const { error } = await sb.from('sales_invoice_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);

@@ -966,9 +966,12 @@ purchaseReturns.patch('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase');
   { const lock = await prLineLock(sb, prId); if (lock) return c.json(lock, 409); }
 
+  /* Audit 2026-06-11 M10 — scope the line to THIS PR: a mismatched itemId
+     must 404, not edit another PR's line while the GRN release / stock
+     movement / recompute run against this one. */
   const { data: prev } = await sb.from('purchase_return_items')
     .select('qty_returned, unit_price_centi, item_group, variants, grn_item_id, material_code, material_name')
-    .eq('id', itemId).maybeSingle();
+    .eq('id', itemId).eq('purchase_return_id', prId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
   // The editable quantity is qty_returned.
@@ -1058,8 +1061,13 @@ purchaseReturns.delete('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase');
   { const lock = await prLineLock(sb, prId); if (lock) return c.json(lock, 409); }
   // Read the line first so we can release its GRN-line consumption on delete.
+  // Audit 2026-06-11 M10 — scoped to THIS PR: a mismatched itemId must 404,
+  // not delete another PR's line while the GRN release / stock compensation
+  // run against this one.
   const { data: line } = await sb.from('purchase_return_items')
-    .select('qty_returned, grn_item_id, material_code, material_name, item_group, variants').eq('id', itemId).maybeSingle();
+    .select('qty_returned, grn_item_id, material_code, material_name, item_group, variants')
+    .eq('id', itemId).eq('purchase_return_id', prId).maybeSingle();
+  if (!line) return c.json({ error: 'not_found' }, 404);
   const { error } = await sb.from('purchase_return_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   if (line) {

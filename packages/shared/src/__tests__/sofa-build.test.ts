@@ -515,6 +515,42 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
     expect(g.finalPrice).toBe(1800);          // NOT 180000, NOT 18
   });
 
+  /* Audit 2026-06-11 C1 — combo match on a MIRRORED build whose modules are
+     priced on ONE hand only. The subset-sum must use the SAME mirror fallback
+     as the à-la-carte loop; before the fix subsetSum missed the mirrored
+     cells, so comboExtrasALaCarte re-charged them ON TOP of the combo price
+     (customer paid combo + module twice). */
+  it('mirrored one-hand-priced build pays the combo price ONLY (no double charge)', () => {
+    // Only the LHF hands carry a master price; RHF rows are absent.
+    const oneHand = comboPricing({
+      compartments: [
+        { compartmentId: '2A(LHF)', active: true, price: 2400 },
+        { compartmentId: 'L(LHF)',  active: true, price: 1900 },
+      ],
+      bundles: [],
+    });
+    // Un-flipped build: 2A(LHF) + L(RHF) (L resolves via mirror → L(LHF)).
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: 'L(RHF)',  x: 158, y: 0, rot: 0 },
+    ];
+    // Its mirror: L(LHF) + 2A(RHF) (2A resolves via mirror → 2A(LHF)).
+    const mirrored: Cell[] = [
+      { id: 'a', moduleId: 'L(LHF)',  x: 0,  y: 0, rot: 0 },
+      { id: 'b', moduleId: '2A(RHF)', x: 95, y: 0, rot: 0 },
+    ];
+    for (const build of [cells, mirrored]) {
+      const g = computeSofaPrice(build, '24', oneHand).groups[0]!;
+      expect(g.basis).toBe('combo');
+      expect(g.comboPrice).toBe(3800);
+      // Subset à-la-carte resolves BOTH cells via the mirror fallback…
+      expect(g.comboSubsetALaCarte).toBe(4300); // 2400 + 1900
+      // …so no matched cell leaks into "extras" (the double-charge bug).
+      expect(g.comboExtrasALaCarte).toBe(0);
+      expect(g.finalPrice).toBe(3800); // combo ONLY — was 5700 / 6200 pre-fix
+    }
+  });
+
   it('extra module WITHIN the same connected group stays at full price', () => {
     // 2A + L + a touching 1NA all in ONE group. Combo covers {2A, L}; the 1NA
     // is an extra inside the group → group base = combo 3800 + 1NA full 1200.
