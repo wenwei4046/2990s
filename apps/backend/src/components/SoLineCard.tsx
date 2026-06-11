@@ -115,6 +115,23 @@ export const stripClientOnlyFields = (
   return rest;
 };
 
+/* Loo 2026-06-12 — the POS product-page remark + extra charge is a free-text
+   Special Add-on (one-shot auto-mint retired, flag OFF 2026-06-11). Derive it
+   from the line's variants snapshot so the Special Orders accordion lists it
+   next to the configured special_addons picks. amountSen is ALREADY folded
+   into the unit price (POS submit + server recompute extraSen fold), so the
+   row is display-only — unticking it here would lie about the line total. */
+const posRemarkSpecialOf = (
+  variants: Record<string, unknown>,
+): { label: string; amountSen: number } | null => {
+  const r = variants.remark;
+  const text = typeof r === 'string' ? r.trim() : '';
+  const raw = Number(variants.extraAddonAmountRM ?? 0);
+  const amountSen = (Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0) * 100;
+  if (!text && amountSen <= 0) return null;
+  return { label: text || 'Extra add-on', amountSen };
+};
+
 /* ── Per-category badge swatches ──────────────────────────────────────
    2026-05-27: extracted to lib/category-badges.ts so MfgSalesOrdersList +
    SalesOrderDetailListing can share the same chip palette. Re-import here
@@ -188,7 +205,9 @@ const SoLineCardInner = ({
   // card (SO / DO / DR / consignment). Wei Siang 2026-06-06.
   const pickerWrapRef = useRef<HTMLDivElement>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
-  const [specialsOpen, setSpecialsOpen] = useState(false);
+  /* Auto-open when the line carries a POS remark/extra special (Loo
+     2026-06-12) so the coordinator sees it without a click. */
+  const [specialsOpen, setSpecialsOpen] = useState(() => posRemarkSpecialOf(draft.variants) != null);
   /* Commander 2026-05-30 — Unit Price is a free-typed field. Keep the raw
      typed text in local state so multi-digit entry (e.g. 1000) and
      clear-then-retype work without the value being reformatted to "x.00" on
@@ -519,12 +538,14 @@ const SoLineCardInner = ({
   const badge = CATEGORY_BADGE[category] ?? CATEGORY_BADGE.others!;
   const hasVariants = Boolean(draft.itemCode) && Boolean(maint) && (category === 'bedframe' || category === 'sofa');
   const specials = specialsList(draft.variants.specials ?? draft.variants.special);
+  const posRemarkSpecial = posRemarkSpecialOf(draft.variants);
   /* SO-parity (Loo 2026-06-06) — mattress lines can carry Special Add-ons too
      (POS prices MATTRESS specials since PR #456). Render JUST the accordion
      for them — no fabric/height grid. Hidden until a mattress Model has
-     specials ticked in Modular (none today) or the line already carries one. */
+     specials ticked in Modular (none today) or the line already carries one
+     (a configured pick OR the POS remark/extra special). */
   const hasMattressSpecials = Boolean(draft.itemCode) && category === 'mattress'
-    && (specialOptions.length > 0 || specials.length > 0);
+    && (specialOptions.length > 0 || specials.length > 0 || posRemarkSpecial != null);
 
   /* ── Render ─────────────────────────────────────────────────────── */
 
@@ -769,6 +790,7 @@ const SoLineCardInner = ({
             choices={specialChoicesMap}
             options={specialOptions}
             disabled={!isEditing}
+            posRemark={posRemarkSpecial}
             onToggleCode={toggleSpecial}
             onChoice={changeSpecialChoice}
           />
@@ -816,6 +838,7 @@ const SoLineCardInner = ({
             choices={specialChoicesMap}
             options={specialOptions}
             disabled={!isEditing}
+            posRemark={posRemarkSpecial}
             onToggleCode={toggleSpecial}
             onChoice={changeSpecialChoice}
           />
@@ -832,6 +855,7 @@ const SoLineCardInner = ({
             choices={specialChoicesMap}
             options={specialOptions}
             disabled={!isEditing}
+            posRemark={posRemarkSpecial}
             onToggleCode={toggleSpecial}
             onChoice={changeSpecialChoice}
           />
@@ -1111,7 +1135,7 @@ export function missingRequiredVariants(
    ────────────────────────────────────────────────────────────────────── */
 
 const SpecialsAccordion = ({
-  open, onToggle, picked, choices, options, onToggleCode, onChoice, disabled = false,
+  open, onToggle, picked, choices, options, onToggleCode, onChoice, disabled = false, posRemark = null,
 }: {
   open:     boolean;
   onToggle: () => void;
@@ -1127,6 +1151,10 @@ const SpecialsAccordion = ({
      charges via buildSpecialsPoolFromAddons. */
   options:  SpecialAddonRow[];
   disabled?: boolean;
+  /** Loo 2026-06-12 — the POS product-page remark + extra charge, shown as a
+      checked, read-only special row. The amount is already folded into the
+      line's unit price, so it renders "incl." and can't be unticked here. */
+  posRemark?: { label: string; amountSen: number } | null;
   onToggleCode: (code: string) => void;
   onChoice: (code: string, groupIdx: number, label: string) => void;
 }) => {
@@ -1155,14 +1183,38 @@ const SpecialsAccordion = ({
       >
         {open ? <ChevronDown {...SM_ICON} /> : <ChevronRight {...SM_ICON} />}
         <span>Special Orders</span>
-        <span className={styles.specialsCount}>({picked.length} selected)</span>
+        <span className={styles.specialsCount}>({picked.length + (posRemark ? 1 : 0)} selected)</span>
       </div>
       {open && (
         <div className={styles.specialsBody}>
-          {options.length === 0 && retired.length === 0 && (
+          {options.length === 0 && retired.length === 0 && !posRemark && (
             <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
               No specials configured.
             </span>
+          )}
+          {/* POS remark + extra charge — free-text Special Add-on keyed on the
+              POS product page. Always checked + locked: the amount is already
+              inside the unit price (POS fold + server recompute), so unticking
+              here would misstate the line total. Edit the text via the line's
+              Remarks field. */}
+          {posRemark && (
+            <label
+              className={styles.specialsItem}
+              title="From the POS product page — amount already included in the unit price"
+            >
+              <input
+                type="checkbox"
+                className={styles.specialsCheckbox}
+                checked
+                disabled
+              />
+              <div>
+                <div className={styles.specialsLabel}>{posRemark.label}</div>
+                <div className={styles.specialsSurcharge}>
+                  {posRemark.amountSen > 0 ? `+${fmtRm(posRemark.amountSen)} incl.` : 'RM 0'}
+                </div>
+              </div>
+            </label>
           )}
           {options.map((o) => {
             const on = picked.includes(o.code);
