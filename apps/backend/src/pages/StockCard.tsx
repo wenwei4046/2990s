@@ -30,6 +30,7 @@ import {
   type InventoryMovement,
   type InventoryLot,
 } from '../lib/inventory-queries';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Inventory.module.css';
 import chrome from './SalesOrderDetail.module.css';
 
@@ -121,6 +122,142 @@ export const StockCard = () => {
   }, [movementsDesc]);
 
   const lots: InventoryLot[] = lotsQ.data ?? [];
+
+  /* DataGrid conversion (dg-inventory rollout) — the Movements ledger renders
+     through the shared grid. Running Balance is precomputed per row above
+     (chronological), so it stays correct no matter how the grid re-sorts.
+     The Per-Warehouse Balance and FIFO Lots cards stay as plain tables —
+     small summary views with their own collapse toggle. */
+  type MovementRow = InventoryMovement & { runningBalance: number };
+  const movementColumns = useMemo<DataGridColumn<MovementRow>[]>(() => {
+    const whName = (id: string) => {
+      const wh = warehouses.find((w) => w.id === id);
+      return wh ? `${wh.code} · ${wh.name}` : '—';
+    };
+    const signedQty = (m: MovementRow) => m.movement_type === 'OUT' ? -m.qty : m.qty;
+    return [
+      {
+        key: 'date',
+        label: 'Date',
+        width: 130,
+        accessor: (m) => <span className={styles.numCellZero}>{fmtDateTime(m.created_at)}</span>,
+        searchValue: (m) => fmtDateTime(m.created_at),
+        filterValue: (m) => fmtDateTime(m.created_at),
+        sortFn: (a, b) => a.created_at.localeCompare(b.created_at),
+      },
+      {
+        key: 'type',
+        label: 'Type',
+        width: 110,
+        accessor: (m) => (
+          <span className={`${styles.movementPill} ${
+            m.movement_type === 'IN' ? styles.movementIn
+            : m.movement_type === 'OUT' ? styles.movementOut
+            : styles.movementAdj
+          }`}>
+            {m.movement_type === 'IN' && (
+              <ArrowDownLeft size={11} strokeWidth={2} style={{ marginRight: 4 }} />
+            )}
+            {m.movement_type === 'OUT' && (
+              <ArrowUpRight size={11} strokeWidth={2} style={{ marginRight: 4 }} />
+            )}
+            {m.movement_type}
+          </span>
+        ),
+        searchValue: (m) => m.movement_type,
+        filterValue: (m) => m.movement_type,
+        sortFn: (a, b) => a.movement_type.localeCompare(b.movement_type),
+      },
+      {
+        key: 'sourceDoc',
+        label: 'Source Doc',
+        width: 130,
+        accessor: (m) => {
+          const href = docHrefFor(m);
+          return m.source_doc_no ? (
+            href ? (
+              <Link to={href} className={styles.docLink}>{m.source_doc_no}</Link>
+            ) : (
+              <span className={styles.docLink}>{m.source_doc_no}</span>
+            )
+          ) : (
+            <span className={styles.numCellZero}>—</span>
+          );
+        },
+        searchValue: (m) => m.source_doc_no ?? '',
+        filterValue: (m) => m.source_doc_no ?? '—',
+        sortFn: (a, b) => (a.source_doc_no ?? '').localeCompare(b.source_doc_no ?? ''),
+      },
+      {
+        key: 'warehouse',
+        label: 'Warehouse',
+        width: 150,
+        accessor: (m) => whName(m.warehouse_id),
+        searchValue: (m) => whName(m.warehouse_id),
+        filterValue: (m) => whName(m.warehouse_id),
+      },
+      {
+        key: 'qty',
+        label: 'Qty',
+        width: 90,
+        align: 'right',
+        accessor: (m) => {
+          const qtySign = m.movement_type === 'IN'
+            ? '+'
+            : m.movement_type === 'OUT'
+              ? '−'
+              : m.qty > 0 ? '+' : m.qty < 0 ? '−' : '';
+          const qtyClass = m.qty > 0 ? styles.numCellPos
+            : m.qty < 0 ? styles.numCellNeg
+            : styles.numCellZero;
+          return (
+            <span className={`${styles.numCell} ${qtyClass}`}>
+              {qtySign}{Math.abs(m.qty).toLocaleString('en-MY')}
+            </span>
+          );
+        },
+        searchValue: (m) => String(m.qty),
+        filterValue: (m) => String(m.qty),
+        sortFn: (a, b) => signedQty(a) - signedQty(b),
+      },
+      {
+        key: 'unitCost',
+        label: 'Unit Cost',
+        width: 110,
+        align: 'right',
+        accessor: (m) => (
+          <span className={`${styles.numCell} ${styles.numCellZero}`}>
+            {m.unit_cost_sen && m.unit_cost_sen > 0 ? fmtRm(m.unit_cost_sen) : '—'}
+          </span>
+        ),
+        searchValue: () => '',
+        filterValue: (m) => m.unit_cost_sen && m.unit_cost_sen > 0 ? fmtRm(m.unit_cost_sen) : '—',
+        sortFn: (a, b) => (a.unit_cost_sen ?? 0) - (b.unit_cost_sen ?? 0),
+      },
+      {
+        key: 'running',
+        label: 'Running Balance',
+        width: 130,
+        align: 'right',
+        accessor: (m) => (
+          <span className={styles.numCell} style={{ fontWeight: 700 }}>
+            {m.runningBalance.toLocaleString('en-MY')}
+          </span>
+        ),
+        searchValue: (m) => String(m.runningBalance),
+        filterValue: (m) => String(m.runningBalance),
+        sortFn: (a, b) => a.runningBalance - b.runningBalance,
+      },
+      {
+        key: 'notes',
+        label: 'Notes',
+        width: 200,
+        accessor: (m) => <span className={styles.numCellZero}>{m.notes ?? '—'}</span>,
+        searchValue: (m) => m.notes ?? '',
+        filterValue: (m) => m.notes ?? '—',
+      },
+    ];
+  }, [warehouses]);
 
   // ── Stats (always reflect the active warehouse filter) ────────────────
   const productName =
@@ -264,92 +401,25 @@ export const StockCard = () => {
             Movements ({movementsWithBalance.length}{warehouseId ? ' · filtered' : ''})
           </h2>
         </header>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Type</th>
-              <th>Source Doc</th>
-              <th>Warehouse</th>
-              <th style={{ textAlign: 'right' }}>Qty</th>
-              <th style={{ textAlign: 'right' }}>Unit Cost</th>
-              <th style={{ textAlign: 'right' }}>Running Balance</th>
-              <th>Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            {movementsQ.isLoading && (
-              <tr><td colSpan={8} className={styles.emptyRow}>Loading…</td></tr>
-            )}
-            {!movementsQ.isLoading && movementsQ.error && (
-              <tr><td colSpan={8} className={styles.emptyRow}>
-                <div className={styles.bannerWarn}>
-                  <strong>Failed to load.</strong>{' '}
-                  {movementsQ.error instanceof Error
-                    ? movementsQ.error.message
-                    : String(movementsQ.error)}
-                </div>
-              </td></tr>
-            )}
-            {!movementsQ.isLoading && !movementsQ.error && movementsWithBalance.length === 0 && (
-              <tr><td colSpan={8} className={styles.emptyRow}>No movements for this SKU yet.</td></tr>
-            )}
-            {!movementsQ.isLoading && movementsWithBalance.map((m) => {
-              const wh = warehouses.find((w) => w.id === m.warehouse_id);
-              const href = docHrefFor(m);
-              const qtySign = m.movement_type === 'IN'
-                ? '+'
-                : m.movement_type === 'OUT'
-                  ? '−'
-                  : m.qty > 0 ? '+' : m.qty < 0 ? '−' : '';
-              const qtyClass = m.qty > 0 ? styles.numCellPos
-                : m.qty < 0 ? styles.numCellNeg
-                : styles.numCellZero;
-              return (
-                <tr key={m.id}>
-                  <td className={styles.numCellZero}>{fmtDateTime(m.created_at)}</td>
-                  <td>
-                    <span className={`${styles.movementPill} ${
-                      m.movement_type === 'IN' ? styles.movementIn
-                      : m.movement_type === 'OUT' ? styles.movementOut
-                      : styles.movementAdj
-                    }`}>
-                      {m.movement_type === 'IN' && (
-                        <ArrowDownLeft size={11} strokeWidth={2} style={{ marginRight: 4 }} />
-                      )}
-                      {m.movement_type === 'OUT' && (
-                        <ArrowUpRight size={11} strokeWidth={2} style={{ marginRight: 4 }} />
-                      )}
-                      {m.movement_type}
-                    </span>
-                  </td>
-                  <td>
-                    {m.source_doc_no ? (
-                      href ? (
-                        <Link to={href} className={styles.docLink}>{m.source_doc_no}</Link>
-                      ) : (
-                        <span className={styles.docLink}>{m.source_doc_no}</span>
-                      )
-                    ) : (
-                      <span className={styles.numCellZero}>—</span>
-                    )}
-                  </td>
-                  <td>{wh ? `${wh.code} · ${wh.name}` : '—'}</td>
-                  <td className={`${styles.numCell} ${qtyClass}`}>
-                    {qtySign}{Math.abs(m.qty).toLocaleString('en-MY')}
-                  </td>
-                  <td className={`${styles.numCell} ${styles.numCellZero}`}>
-                    {m.unit_cost_sen && m.unit_cost_sen > 0 ? fmtRm(m.unit_cost_sen) : '—'}
-                  </td>
-                  <td className={`${styles.numCell}`} style={{ fontWeight: 700 }}>
-                    {m.runningBalance.toLocaleString('en-MY')}
-                  </td>
-                  <td className={styles.numCellZero}>{m.notes ?? '—'}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        {!movementsQ.isLoading && movementsQ.error ? (
+          <div className={styles.bannerWarn} style={{ margin: 'var(--space-3)' }}>
+            <strong>Failed to load.</strong>{' '}
+            {movementsQ.error instanceof Error
+              ? movementsQ.error.message
+              : String(movementsQ.error)}
+          </div>
+        ) : (
+          <DataGrid<MovementRow>
+            rows={movementsWithBalance}
+            columns={movementColumns}
+            storageKey="dg-stockcard-movements"
+            rowKey={(m) => m.id}
+            searchPlaceholder="Search movements…"
+            groupBanner={false}
+            isLoading={movementsQ.isLoading}
+            emptyMessage="No movements for this SKU yet."
+          />
+        )}
       </section>
 
       {/* ── FIFO Lots ──────────────────────────────────────────────────── */}

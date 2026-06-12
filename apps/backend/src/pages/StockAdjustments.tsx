@@ -20,6 +20,7 @@ import {
   type InventoryMovement,
 } from '../lib/inventory-queries';
 import { adjustmentReasonLabel } from '@2990s/shared';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Inventory.module.css';
 
 const ICON    = { size: 14, strokeWidth: 1.75 } as const;
@@ -65,6 +66,87 @@ export const StockAdjustments = () => {
       (m.product_name ?? '').toLowerCase().includes(q),
     );
   }, [data, search]);
+
+  /* DataGrid conversion (dg-inventory rollout) — columns mirror the legacy
+     <table> 1:1. Memoized on wmap so the grid's memo actually hits. */
+  const columns = useMemo<DataGridColumn<InventoryMovement>[]>(() => [
+    {
+      key: 'date',
+      label: 'Date',
+      width: 130,
+      accessor: (m) => <span className={styles.numCellZero}>{fmtDateTime(m.created_at)}</span>,
+      searchValue: (m) => fmtDateTime(m.created_at),
+      filterValue: (m) => fmtDateTime(m.created_at),
+      sortFn: (a, b) => a.created_at.localeCompare(b.created_at),
+    },
+    {
+      key: 'warehouse',
+      label: 'Warehouse',
+      width: 150,
+      accessor: (m) => {
+        const w = wmap.get(m.warehouse_id);
+        return w ? `${w.code} · ${w.name}` : '—';
+      },
+    },
+    {
+      key: 'sku',
+      label: 'SKU',
+      width: 130,
+      accessor: (m) => <span className={styles.codeChip}>{m.product_code}</span>,
+      searchValue: (m) => m.product_code,
+      filterValue: (m) => m.product_code,
+      sortFn: (a, b) => a.product_code.localeCompare(b.product_code),
+    },
+    {
+      key: 'name',
+      label: 'Product Name',
+      width: 220,
+      accessor: (m) => m.product_name ?? '—',
+    },
+    {
+      key: 'qty',
+      label: 'Qty Delta',
+      width: 100,
+      align: 'right',
+      accessor: (m) => {
+        const qtyClass = m.qty > 0 ? styles.numCellPos : m.qty < 0 ? styles.numCellNeg : styles.numCellZero;
+        return (
+          <span className={`${styles.numCell} ${qtyClass}`}>
+            {m.qty > 0 ? '+' : ''}{m.qty.toLocaleString('en-MY')}
+          </span>
+        );
+      },
+      searchValue: (m) => String(m.qty),
+      filterValue: (m) => String(m.qty),
+      sortFn: (a, b) => a.qty - b.qty,
+    },
+    {
+      key: 'reason',
+      label: 'Reason',
+      width: 140,
+      accessor: (m) => m.reason_code ? adjustmentReasonLabel(m.reason_code) : '—',
+    },
+    {
+      key: 'notes',
+      label: 'Notes',
+      width: 200,
+      accessor: (m) => <span className={styles.numCellZero}>{m.notes ?? '—'}</span>,
+      searchValue: (m) => m.notes ?? '',
+      filterValue: (m) => m.notes ?? '—',
+    },
+    {
+      key: 'performedBy',
+      label: 'Performed By',
+      width: 110,
+      accessor: (m) => (
+        <span className={styles.numCellZero} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-11)' }}>
+          {m.performed_by ? m.performed_by.slice(0, 8) : '—'}
+        </span>
+      ),
+      searchValue: (m) => m.performed_by ?? '',
+      filterValue: (m) => m.performed_by ? m.performed_by.slice(0, 8) : '—',
+    },
+  ], [wmap]);
 
   return (
     <div className={styles.page}>
@@ -149,56 +231,16 @@ export const StockAdjustments = () => {
         </div>
       )}
 
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Warehouse</th>
-              <th>SKU</th>
-              <th>Product Name</th>
-              <th style={{ textAlign: 'right' }}>Qty Delta</th>
-              <th>Reason</th>
-              <th>Notes</th>
-              <th>Performed By</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading && (
-              <tr><td colSpan={8} className={styles.emptyRow}>Loading…</td></tr>
-            )}
-            {!isLoading && rows.length === 0 && (
-              <tr><td colSpan={8} className={styles.emptyRow}>
-                <div>No stock adjustments yet.</div>
-                <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
-                  Click "+ New Adjustment" to create one.
-                </div>
-              </td></tr>
-            )}
-            {!isLoading && rows.map((m) => {
-              const w = wmap.get(m.warehouse_id);
-              const qtyClass = m.qty > 0 ? styles.numCellPos : m.qty < 0 ? styles.numCellNeg : styles.numCellZero;
-              const sign = m.qty > 0 ? '+' : '';
-              return (
-                <tr key={m.id}>
-                  <td className={styles.numCellZero}>{fmtDateTime(m.created_at)}</td>
-                  <td>{w ? `${w.code} · ${w.name}` : '—'}</td>
-                  <td><span className={styles.codeChip}>{m.product_code}</span></td>
-                  <td>{m.product_name ?? '—'}</td>
-                  <td className={`${styles.numCell} ${qtyClass}`}>
-                    {sign}{m.qty.toLocaleString('en-MY')}
-                  </td>
-                  <td>{m.reason_code ? adjustmentReasonLabel(m.reason_code) : '—'}</td>
-                  <td className={styles.numCellZero}>{m.notes ?? '—'}</td>
-                  <td className={styles.numCellZero} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-11)' }}>
-                    {m.performed_by ? m.performed_by.slice(0, 8) : '—'}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <DataGrid<InventoryMovement>
+        rows={rows}
+        columns={columns}
+        storageKey="dg-stock-adjustments"
+        rowKey={(m) => m.id}
+        searchPlaceholder="Search adjustments…"
+        groupBanner={false}
+        isLoading={isLoading}
+        emptyMessage='No stock adjustments yet — click "+ New Adjustment" to create one.'
+      />
     </div>
   );
 };

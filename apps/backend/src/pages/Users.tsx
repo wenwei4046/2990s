@@ -19,8 +19,8 @@
 // not a shared device PIN.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
-import { Plus, X, ShieldCheck, RefreshCw } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
+import { Plus, X, RefreshCw } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useAuth, type StaffRole } from '../lib/auth';
 import { useToast } from '../components/Toast';
@@ -30,6 +30,7 @@ import {
 } from '../lib/users-queries';
 import { useVenues, type VenueRow } from '../lib/venues-queries';
 import { PinDrawer } from '../components/PinDrawer';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -101,18 +102,7 @@ export const Users = () => {
     });
   }, [users.data, filterRole, filterVenue, showInactive]);
 
-  if (!canRead) {
-    return (
-      <div className={styles.page}>
-        <div className={styles.bannerWarn}>
-          <strong>403 · No access.</strong>
-          <span>Users management is admin / sales director / coordinator only.</span>
-        </div>
-      </div>
-    );
-  }
-
-  const onToggleActive = (row: UserRow) => {
+  const onToggleActive = useCallback((row: UserRow) => {
     if (row.active) {
       if (!confirm(`Deactivate ${row.name}? They will lose Backend access immediately.`)) return;
       deactivate.mutate(row.id, {
@@ -125,7 +115,113 @@ export const Users = () => {
         onError: (e) => toast.error(`Reactivate failed: ${(e as Error).message}`),
       });
     }
-  };
+    // mutate fns are stable; toast comes from context and is stable too.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deactivate.mutate, update.mutate, toast]);
+
+  /* Shared DataGrid conversion (2026-06-12). Role / venue / show-inactive
+     filters above keep driving `rows`; the grid adds sort, per-column
+     filters, column show-hide / reorder / pin + a free-text search. Action
+     buttons stopPropagation so they never read as a row click. */
+  const columns = useMemo<DataGridColumn<UserRow>[]>(() => {
+    const cols: DataGridColumn<UserRow>[] = [
+      {
+        key: 'name',
+        label: 'Name',
+        width: 220,
+        accessor: (u) => (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: 28, height: 28, borderRadius: 999,
+              background: u.color, color: '#fff',
+              fontFamily: 'var(--font-button)', fontSize: 'var(--fs-12)', fontWeight: 700,
+            }}>{u.initials}</span>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <strong style={{ color: 'var(--c-ink)' }}>{u.name}</strong>
+              <span className={styles.bindingName}>{u.staff_code}</span>
+            </div>
+          </div>
+        ),
+        searchValue: (u) => `${u.name} ${u.staff_code}`,
+        filterValue: (u) => u.name,
+        sortFn: (a, b) => a.name.localeCompare(b.name),
+      },
+      {
+        key: 'email',
+        label: 'Email',
+        width: 220,
+        accessor: (u) => u.email ?? '—',
+      },
+      {
+        key: 'role',
+        label: 'Role',
+        width: 150,
+        accessor: (u) => <span className={styles.codeChip}>{ROLE_LABEL[u.role] ?? u.role}</span>,
+        searchValue: (u) => ROLE_LABEL[u.role] ?? u.role,
+        filterValue: (u) => ROLE_LABEL[u.role] ?? u.role,
+      },
+      {
+        key: 'venue',
+        label: 'Venue',
+        width: 140,
+        accessor: (u) => (u.venue_id ? (venueById.get(u.venue_id)?.name ?? '—') : '—'),
+        filterValue: (u) => (u.venue_id ? (venueById.get(u.venue_id)?.name ?? '—') : '—'),
+      },
+      {
+        key: 'lastSignIn',
+        label: 'Last sign-in',
+        width: 120,
+        accessor: (u) => formatLastSignIn(u.last_sign_in_at),
+        filterValue: (u) => formatLastSignIn(u.last_sign_in_at),
+        sortFn: (a, b) => (a.last_sign_in_at ?? '').localeCompare(b.last_sign_in_at ?? ''),
+      },
+      {
+        key: 'status',
+        label: 'Status',
+        width: 100,
+        accessor: (u) => (
+          <span className={`${styles.statusPill} ${u.active ? styles.statusActive : styles.statusInactive}`}>
+            {u.active ? 'Active' : 'Inactive'}
+          </span>
+        ),
+        searchValue: (u) => (u.active ? 'Active' : 'Inactive'),
+        filterValue: (u) => (u.active ? 'Active' : 'Inactive'),
+        sortFn: (a, b) => Number(a.active) - Number(b.active),
+      },
+    ];
+    if (canWrite) {
+      cols.push({
+        key: 'actions',
+        label: '',
+        width: 180,
+        align: 'right',
+        sortable: false,
+        groupable: false,
+        accessor: (u) => (
+          <span onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+            <Button variant="ghost" size="sm" onClick={() => setEditing(u)}>Edit</Button>
+            <Button variant="ghost" size="sm" onClick={() => onToggleActive(u)}>
+              {u.active ? 'Deactivate' : 'Reactivate'}
+            </Button>
+          </span>
+        ),
+        searchValue: () => '',
+      });
+    }
+    return cols;
+  }, [canWrite, venueById, onToggleActive]);
+
+  if (!canRead) {
+    return (
+      <div className={styles.page}>
+        <div className={styles.bannerWarn}>
+          <strong>403 · No access.</strong>
+          <span>Users management is admin / sales director / coordinator only.</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.page}>
@@ -174,67 +270,16 @@ export const Users = () => {
         </span>
       </div>
 
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Role</th>
-              <th>Venue</th>
-              <th>Last sign-in</th>
-              <th>Status</th>
-              {canWrite && <th />}
-            </tr>
-          </thead>
-          <tbody>
-            {users.isLoading && (
-              <tr><td colSpan={canWrite ? 7 : 6} className={styles.emptyRow}>Loading…</td></tr>
-            )}
-            {!users.isLoading && rows.length === 0 && (
-              <tr><td colSpan={canWrite ? 7 : 6} className={styles.emptyRow}>
-                <ShieldCheck size={28} strokeWidth={1.5} />
-                <div style={{ marginTop: 8 }}>No users match the filters.</div>
-              </td></tr>
-            )}
-            {!users.isLoading && rows.map((u) => (
-              <tr key={u.id}>
-                <td>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                    <span style={{
-                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                      width: 28, height: 28, borderRadius: 999,
-                      background: u.color, color: '#fff',
-                      fontFamily: 'var(--font-button)', fontSize: 'var(--fs-12)', fontWeight: 700,
-                    }}>{u.initials}</span>
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      <strong style={{ color: 'var(--c-ink)' }}>{u.name}</strong>
-                      <span className={styles.bindingName}>{u.staff_code}</span>
-                    </div>
-                  </div>
-                </td>
-                <td>{u.email ?? '—'}</td>
-                <td><span className={styles.codeChip}>{ROLE_LABEL[u.role] ?? u.role}</span></td>
-                <td>{u.venue_id ? (venueById.get(u.venue_id)?.name ?? '—') : '—'}</td>
-                <td>{formatLastSignIn(u.last_sign_in_at)}</td>
-                <td>
-                  <span className={`${styles.statusPill} ${u.active ? styles.statusActive : styles.statusInactive}`}>
-                    {u.active ? 'Active' : 'Inactive'}
-                  </span>
-                </td>
-                {canWrite && (
-                  <td style={{ textAlign: 'right' }}>
-                    <Button variant="ghost" size="sm" onClick={() => setEditing(u)}>Edit</Button>
-                    <Button variant="ghost" size="sm" onClick={() => onToggleActive(u)}>
-                      {u.active ? 'Deactivate' : 'Reactivate'}
-                    </Button>
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DataGrid
+        rows={rows}
+        columns={columns}
+        storageKey="dg-users"
+        rowKey={(u) => u.id}
+        searchPlaceholder="Search users…"
+        groupBanner={false}
+        isLoading={users.isLoading}
+        emptyMessage="No users match the filters."
+      />
 
       {inviting && (
         <InviteUserDrawer

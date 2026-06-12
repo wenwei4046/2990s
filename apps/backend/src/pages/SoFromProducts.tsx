@@ -28,9 +28,21 @@ import { Button } from '@2990s/design-system';
 import { fmtDateOrDash } from '@2990s/shared';
 import { useMfgProducts, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useCreateMfgSalesOrder } from '../lib/flow-queries';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
+
+/* DataGrid layout key for the product picker. The legacy list rendered one
+   sticky section per category — seed a default "group by Category" layout
+   ONCE (first visit only) to keep that read; afterwards the operator's own
+   layout persists. */
+const PICK_GRID_KEY = 'dg-so-from-products-pick';
+if (typeof window !== 'undefined' && window.localStorage.getItem(PICK_GRID_KEY) == null) {
+  try {
+    window.localStorage.setItem(PICK_GRID_KEY, JSON.stringify({ groupBy: ['category'] }));
+  } catch { /* storage full / disabled — grid just starts flat */ }
+}
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 const todayMY = (): string => new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
@@ -244,6 +256,92 @@ export const SoFromProducts = () => {
   const setQty = (code: string, qty: number) => setPicks((s) => ({ ...s, [code]: { picked: true, qty } }));
   const clearPicks = () => setPicks({});
 
+  /* Picker grid columns (owner request 2026-06-12). Checkbox + qty are
+     CONTROLLED off `picks`, so windowed rendering on long catalogs can't
+     drop in-progress state; both cells stop propagation so a click never
+     double-fires through the row. */
+  const pickColumns = useMemo<DataGridColumn<MfgProductRow>[]>(() => {
+    const stop = {
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      onDoubleClick: (e: React.MouseEvent) => e.stopPropagation(),
+    };
+    return [
+      {
+        key: 'pick',
+        label: '',
+        width: 36,
+        minWidth: 36,
+        sortable: false,
+        groupable: false,
+        accessor: (p) => (
+          <span {...stop} style={{ display: 'inline-flex' }}>
+            <input
+              type="checkbox"
+              aria-label={`Pick ${p.code}`}
+              checked={Boolean(picks[p.code]?.picked)}
+              onChange={() => togglePick(p.code)}
+              style={{ cursor: 'pointer' }}
+            />
+          </span>
+        ),
+        searchValue: () => '',
+      },
+      {
+        key: 'category',
+        label: 'Category',
+        width: 110,
+        accessor: (p) => p.category,
+        filterValue: (p) => p.category,
+        groupValue: (p) => p.category,
+      },
+      {
+        key: 'code',
+        label: 'Code',
+        width: 170,
+        accessor: (p) => (
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>{p.code}</span>
+        ),
+        searchValue: (p) => p.code,
+        filterValue: (p) => p.code,
+        sortFn: (a, b) => a.code.localeCompare(b.code),
+      },
+      {
+        key: 'name',
+        label: 'Name',
+        width: 280,
+        accessor: (p) => p.name,
+        filterValue: (p) => p.name,
+        sortFn: (a, b) => a.name.localeCompare(b.name),
+      },
+      {
+        key: 'qty',
+        label: 'Qty',
+        width: 80,
+        align: 'right',
+        sortable: false,
+        groupable: false,
+        accessor: (p) => {
+          const on = Boolean(picks[p.code]?.picked);
+          return (
+            <span {...stop} style={{ display: 'inline-flex' }}>
+              <input
+                type="number"
+                min={1}
+                value={on ? picks[p.code]!.qty : ''}
+                placeholder="1"
+                disabled={!on}
+                onChange={(e) => setQty(p.code, Math.max(1, Number(e.target.value) || 1))}
+                className={styles.fieldInput}
+                style={{ textAlign: 'right', padding: '3px 6px', fontSize: 'var(--fs-12)', width: 64 }}
+              />
+            </span>
+          );
+        },
+        searchValue: () => '',
+      },
+    ];
+  }, [picks]);
+
   const totalTest = counts.mattressOnly + counts.mattressBedframe + counts.sofaSet;
 
   return (
@@ -421,31 +519,23 @@ export const SoFromProducts = () => {
             </Button>
           </div>
 
-          <div style={{ marginTop: 'var(--space-3)', maxHeight: 360, overflow: 'auto', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)' }}>
-            {(['MATTRESS', 'BEDFRAME', 'SOFA', 'ACCESSORY'] as const).map((cat) => {
-              const list = products.filter((p) => p.category === cat);
-              if (list.length === 0) return null;
-              return (
-                <div key={cat}>
-                  <div style={{ position: 'sticky', top: 0, background: 'var(--c-cream)', padding: '6px 10px', fontSize: 'var(--fs-11)', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--fg-muted)', borderBottom: '1px solid var(--line)' }}>
-                    {cat} · {list.length}
-                  </div>
-                  {list.map((p) => {
-                    const on = Boolean(picks[p.code]?.picked);
-                    return (
-                      <div key={p.code} style={{ display: 'grid', gridTemplateColumns: '24px minmax(140px,1fr) 2fr 70px', gap: 'var(--space-2)', alignItems: 'center', padding: '4px 10px', borderBottom: '1px solid var(--line)', background: on ? 'rgba(213,90,40,0.04)' : 'transparent' }}>
-                        <input type="checkbox" checked={on} onChange={() => togglePick(p.code)} />
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>{p.code}</span>
-                        <span style={{ fontSize: 'var(--fs-12)' }}>{p.name}</span>
-                        <input type="number" min={1} value={on ? picks[p.code]!.qty : ''} placeholder="1" disabled={!on}
-                          onChange={(e) => setQty(p.code, Math.max(1, Number(e.target.value) || 1))}
-                          className={styles.fieldInput} style={{ textAlign: 'right', padding: '3px 6px', fontSize: 'var(--fs-12)' }} />
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
+          {/* DataGrid conversion (owner request 2026-06-12) — the browse list
+              rides the shared grid (sort / per-column filter / column
+              show-hide / reorder / persisted layout). Pick checkboxes + qty
+              inputs are controlled by `picks` exactly as before; the legacy
+              per-category sticky headers live on as a default group-by
+              Category (remove the chip for a flat list). */}
+          <div style={{ marginTop: 'var(--space-3)' }}>
+            <DataGrid
+              rows={products}
+              columns={pickColumns}
+              storageKey={PICK_GRID_KEY}
+              rowKey={(p) => p.code}
+              searchPlaceholder="Filter products…"
+              isLoading={prodQ.isLoading}
+              emptyMessage="No products in catalog."
+              rowStyle={(p) => (picks[p.code]?.picked ? { background: 'rgba(213,90,40,0.04)' } : undefined)}
+            />
           </div>
         </div>
       </section>

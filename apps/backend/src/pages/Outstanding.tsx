@@ -19,6 +19,7 @@ import {
   type OutstandingModule,
   type OutstandingFilterMode,
 } from '../lib/flow-queries';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Suppliers.module.css';
 
 const MODULES: { value: OutstandingModule; label: string; icon: React.ReactNode; route: (row: Record<string, unknown>) => string }[] = [
@@ -136,102 +137,138 @@ const FilterChip = ({ label, active, onClick }: { label: string; active: boolean
     }}>{label}</button>
 );
 
+/* ── DataGrid conversion (dg-inventory rollout) ──────────────────────────
+   Per-module column specs ported 1:1 from the legacy <table>. Each module
+   gets its own storageKey (columns differ per module, so a shared layout
+   would corrupt across tabs). Money (centi) + qty columns sort numerically
+   on the raw value; date columns sort on the raw ISO string. */
+type OutRow = Record<string, unknown>;
+
+type ColSpec = {
+  key: string;
+  label: string;
+  kind?: 'date' | 'money' | 'qty';
+};
+
+const MODULE_COLUMNS: Record<OutstandingModule, ColSpec[]> = {
+  po: [
+    { key: 'po_number', label: 'PO No' },
+    { key: 'po_date',   label: 'Date', kind: 'date' },
+    { key: 'expected_at', label: 'Expected', kind: 'date' },
+    { key: 'status',    label: 'Status' },
+    { key: 'qty_outstanding', label: 'Qty Outstanding', kind: 'qty' },
+    { key: 'total_centi', label: 'Total', kind: 'money' },
+  ],
+  grn: [
+    { key: 'grn_number', label: 'GRN No' },
+    { key: 'received_at', label: 'Date', kind: 'date' },
+    { key: 'status',    label: 'Status' },
+  ],
+  pi: [
+    { key: 'invoice_number', label: 'Invoice No' },
+    { key: 'invoice_date',   label: 'Date', kind: 'date' },
+    { key: 'due_date',       label: 'Due', kind: 'date' },
+    { key: 'total_centi',    label: 'Total', kind: 'money' },
+    { key: 'paid_centi',     label: 'Paid', kind: 'money' },
+    { key: 'outstanding_centi', label: 'Outstanding', kind: 'money' },
+    { key: 'status',         label: 'Status' },
+  ],
+  pr: [
+    { key: 'return_number', label: 'PR No' },
+    { key: 'return_date',   label: 'Date', kind: 'date' },
+    { key: 'status',        label: 'Status' },
+    { key: 'refund_centi',  label: 'Refund', kind: 'money' },
+  ],
+  so: [
+    { key: 'doc_no',     label: 'SO No' },
+    { key: 'so_date',    label: 'Date', kind: 'date' },
+    { key: 'debtor_name', label: 'Customer' },
+    { key: 'status',     label: 'Status' },
+    { key: 'total_revenue_centi', label: 'Total', kind: 'money' },
+  ],
+  do: [
+    { key: 'do_number',  label: 'DO No' },
+    { key: 'do_date',    label: 'Date', kind: 'date' },
+    { key: 'so_doc_no',  label: 'SO Ref' },
+    { key: 'debtor_name', label: 'Customer' },
+    { key: 'status',     label: 'Status' },
+  ],
+  si: [
+    { key: 'invoice_number', label: 'Invoice No' },
+    { key: 'invoice_date',   label: 'Date', kind: 'date' },
+    { key: 'due_date',       label: 'Due', kind: 'date' },
+    { key: 'debtor_name',    label: 'Customer' },
+    { key: 'total_centi',    label: 'Total', kind: 'money' },
+    { key: 'paid_centi',     label: 'Paid', kind: 'money' },
+    { key: 'outstanding_centi', label: 'Outstanding', kind: 'money' },
+    { key: 'status',         label: 'Status' },
+  ],
+};
+
+const cellText = (spec: ColSpec, r: OutRow): string => {
+  const v = r[spec.key];
+  if (spec.kind === 'money') return fmtRm(Number(v) || 0);
+  if (spec.kind === 'qty')   return Number(v).toLocaleString();
+  if (spec.kind === 'date')  return v ? String(v) : '—';
+  return String(v ?? '—');
+};
+
 const ModuleTable = ({
   module, rows, isLoading,
 }: {
   module: OutstandingModule;
-  rows: Array<Record<string, unknown>>;
+  rows: OutRow[];
   isLoading: boolean;
 }) => {
   const config = useMemo(() => MODULES.find((m) => m.value === module)!, [module]);
-  const columns: { key: string; label: string; format?: (v: unknown, r: Record<string, unknown>) => React.ReactNode }[] = (() => {
-    const dateFmt = (v: unknown) => v ? String(v) : '—';
-    switch (module) {
-      case 'po':  return [
-        { key: 'po_number', label: 'PO No' },
-        { key: 'po_date',   label: 'Date', format: dateFmt },
-        { key: 'expected_at', label: 'Expected', format: dateFmt },
-        { key: 'status',    label: 'Status' },
-        { key: 'qty_outstanding', label: 'Qty Outstanding', format: (v) => Number(v).toLocaleString() },
-        { key: 'total_centi', label: 'Total', format: (v) => fmtRm(Number(v) || 0) },
-      ];
-      case 'grn': return [
-        { key: 'grn_number', label: 'GRN No' },
-        { key: 'received_at', label: 'Date', format: dateFmt },
-        { key: 'status',    label: 'Status' },
-      ];
-      case 'pi':  return [
-        { key: 'invoice_number', label: 'Invoice No' },
-        { key: 'invoice_date',   label: 'Date', format: dateFmt },
-        { key: 'due_date',       label: 'Due', format: dateFmt },
-        { key: 'total_centi',    label: 'Total', format: (v) => fmtRm(Number(v) || 0) },
-        { key: 'paid_centi',     label: 'Paid',  format: (v) => fmtRm(Number(v) || 0) },
-        { key: 'outstanding_centi', label: 'Outstanding', format: (v) => fmtRm(Number(v) || 0) },
-        { key: 'status',         label: 'Status' },
-      ];
-      case 'pr':  return [
-        { key: 'return_number', label: 'PR No' },
-        { key: 'return_date',   label: 'Date', format: dateFmt },
-        { key: 'status',        label: 'Status' },
-        { key: 'refund_centi',  label: 'Refund', format: (v) => fmtRm(Number(v) || 0) },
-      ];
-      case 'so':  return [
-        { key: 'doc_no',     label: 'SO No' },
-        { key: 'so_date',    label: 'Date', format: dateFmt },
-        { key: 'debtor_name', label: 'Customer' },
-        { key: 'status',     label: 'Status' },
-        { key: 'total_revenue_centi', label: 'Total', format: (v) => fmtRm(Number(v) || 0) },
-      ];
-      case 'do':  return [
-        { key: 'do_number',  label: 'DO No' },
-        { key: 'do_date',    label: 'Date', format: dateFmt },
-        { key: 'so_doc_no',  label: 'SO Ref' },
-        { key: 'debtor_name', label: 'Customer' },
-        { key: 'status',     label: 'Status' },
-      ];
-      case 'si':  return [
-        { key: 'invoice_number', label: 'Invoice No' },
-        { key: 'invoice_date',   label: 'Date', format: dateFmt },
-        { key: 'due_date',       label: 'Due', format: dateFmt },
-        { key: 'debtor_name',    label: 'Customer' },
-        { key: 'total_centi',    label: 'Total', format: (v) => fmtRm(Number(v) || 0) },
-        { key: 'paid_centi',     label: 'Paid',  format: (v) => fmtRm(Number(v) || 0) },
-        { key: 'outstanding_centi', label: 'Outstanding', format: (v) => fmtRm(Number(v) || 0) },
-        { key: 'status',         label: 'Status' },
-      ];
-    }
-  })();
+
+  const columns = useMemo<DataGridColumn<OutRow>[]>(() => {
+    const cols: DataGridColumn<OutRow>[] = MODULE_COLUMNS[module].map((spec) => ({
+      key: spec.key,
+      label: spec.label,
+      width: spec.kind === 'money' || spec.kind === 'qty' ? 120 : 140,
+      align: spec.kind === 'money' || spec.kind === 'qty' ? 'right' : 'left',
+      accessor: (r) => cellText(spec, r),
+      searchValue: (r) => cellText(spec, r),
+      filterValue: (r) => cellText(spec, r),
+      sortFn: spec.kind === 'money' || spec.kind === 'qty'
+        ? (a, b) => (Number(a[spec.key]) || 0) - (Number(b[spec.key]) || 0)
+        : (a, b) => String(a[spec.key] ?? '').localeCompare(String(b[spec.key] ?? '')),
+    }));
+    cols.push({
+      key: '__open__',
+      label: '',
+      width: 80,
+      sortable: false,
+      groupable: false,
+      accessor: (r) => (
+        <Link to={config.route(r)} className={styles.docLink ?? ''}>
+          Open →
+        </Link>
+      ),
+      searchValue: () => '',
+      filterValue: () => '',
+    });
+    return cols;
+  }, [module, config]);
+
+  /* Rows can lack a stable id for some modules — pre-compute a row key that
+     falls back to doc_no then the index (matches the legacy <tr key>). */
+  const keyedRows = useMemo(
+    () => rows.map((r, i) => ({ ...r, __rk: String(r.id ?? r.doc_no ?? i) })),
+    [rows],
+  );
 
   return (
-    <div className={styles.tableCard}>
-      <table className={styles.table}>
-        <thead>
-          <tr>
-            {columns.map((c) => <th key={c.key}>{c.label}</th>)}
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {isLoading && <tr><td colSpan={columns.length + 1} className={styles.emptyRow}>Loading…</td></tr>}
-          {!isLoading && rows.length === 0 && (
-            <tr><td colSpan={columns.length + 1} className={styles.emptyRow}>No rows match the filters.</td></tr>
-          )}
-          {!isLoading && rows.map((r, i) => (
-            <tr key={String(r.id ?? r.doc_no ?? i)}>
-              {columns.map((c) => (
-                <td key={c.key}>
-                  {c.format ? c.format(r[c.key], r) : String(r[c.key] ?? '—')}
-                </td>
-              ))}
-              <td>
-                <Link to={config.route(r)} className={styles.docLink ?? ''}>
-                  Open →
-                </Link>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataGrid<OutRow & { __rk: string }>
+      rows={keyedRows}
+      columns={columns}
+      storageKey={`dg-outstanding-${module}`}
+      rowKey={(r) => r.__rk}
+      searchPlaceholder={`Search ${module.toUpperCase()} rows…`}
+      groupBanner={false}
+      isLoading={isLoading}
+      emptyMessage="No rows match the filters."
+    />
   );
 };

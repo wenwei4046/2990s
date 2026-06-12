@@ -23,7 +23,9 @@ import {
   useAccounts,
   type ArAgingRow,
   type ApAgingRow,
+  type JournalEntry,
 } from '../lib/flow-queries';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Suppliers.module.css';
 import { fmtDateOrDash } from '@2990s/shared';
 
@@ -82,58 +84,113 @@ const TabBtn = ({
 );
 
 /* ── Journal Entries ─────────────────────────────────────────────────── */
+
+/* JE status label — REVERSED wins over POSTED, then DRAFT. */
+const jeStatus = (r: JournalEntry): string =>
+  r.reversed ? 'REVERSED' : r.posted ? 'POSTED' : 'DRAFT';
+
+/* Shared DataGrid conversion (2026-06-12) — journal-entry LIST only; the
+   other Accounting tabs (GL / Balances / AR / AP) keep their legacy tables.
+   Static column spec at module scope so DataGrid's memo hits. */
+const JE_COLUMNS: DataGridColumn<JournalEntry>[] = [
+  {
+    key: 'jeNo',
+    label: 'JE No',
+    width: 140,
+    accessor: (r) => <span className={styles.codeChip}>{r.je_no}</span>,
+    searchValue: (r) => r.je_no,
+    filterValue: (r) => r.je_no,
+    sortFn: (a, b) => a.je_no.localeCompare(b.je_no),
+  },
+  {
+    key: 'date',
+    label: 'Date',
+    width: 110,
+    accessor: (r) => fmtDateOrDash(r.entry_date),
+    filterValue: (r) => fmtDateOrDash(r.entry_date),
+    sortFn: (a, b) => (a.entry_date ?? '').localeCompare(b.entry_date ?? ''),
+  },
+  {
+    key: 'source',
+    label: 'Source',
+    width: 110,
+    accessor: (r) => r.source_type,
+    filterValue: (r) => r.source_type,
+  },
+  {
+    key: 'doc',
+    label: 'Doc',
+    width: 140,
+    accessor: (r) => r.source_doc_no ?? '—',
+    filterValue: (r) => r.source_doc_no ?? '—',
+  },
+  {
+    key: 'debit',
+    label: 'Debit',
+    width: 130,
+    align: 'right',
+    accessor: (r) => fmt(r.total_debit_sen),
+    searchValue: () => '',
+    filterValue: (r) => fmt(r.total_debit_sen),
+    sortFn: (a, b) => a.total_debit_sen - b.total_debit_sen,
+  },
+  {
+    key: 'credit',
+    label: 'Credit',
+    width: 130,
+    align: 'right',
+    accessor: (r) => fmt(r.total_credit_sen),
+    searchValue: () => '',
+    filterValue: (r) => fmt(r.total_credit_sen),
+    sortFn: (a, b) => a.total_credit_sen - b.total_credit_sen,
+  },
+  {
+    key: 'status',
+    label: 'Status',
+    width: 110,
+    accessor: (r) => (
+      <span className={`${styles.statusPill} ${r.posted ? styles.statusActive : styles.statusInactive}`}>
+        {jeStatus(r)}
+      </span>
+    ),
+    searchValue: (r) => jeStatus(r),
+    filterValue: (r) => jeStatus(r),
+  },
+];
+
 const JeTab = () => {
   const [sourceType, setSourceType] = useState<string>('');
   const q = useJournalEntries(sourceType ? { sourceType } : undefined);
-  const rows = q.data?.journalEntries ?? [];
+  const rows = useMemo(() => q.data?.journalEntries ?? [], [q.data]);
 
   return (
-    <section className={styles.tableCard}>
-      <div className={styles.actionsRow} style={{ padding: 'var(--space-3) var(--space-4)' }}>
-        <select
-          value={sourceType}
-          onChange={(e) => setSourceType(e.target.value)}
-          className={styles.searchInput}
-          style={{ maxWidth: 200 }}>
-          <option value="">All sources</option>
-          <option value="SI">SI — Sales Invoice</option>
-          <option value="PI">PI — Purchase Invoice</option>
-          <option value="SI_PAYMENT">SI Payment</option>
-          <option value="PI_PAYMENT">PI Payment</option>
-          <option value="MANUAL">Manual</option>
-        </select>
-        <span className={styles.subtitle}>{rows.length} entries</span>
-      </div>
-      <table className={styles.table}>
-        <thead>
-          <tr>
-            <th>JE No</th><th>Date</th><th>Source</th><th>Doc</th>
-            <th style={{ textAlign: 'right' }}>Debit</th>
-            <th style={{ textAlign: 'right' }}>Credit</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 ? (
-            <tr><td colSpan={7} className={styles.emptyRow}>No entries.</td></tr>
-          ) : rows.map((r) => (
-            <tr key={r.id}>
-              <td><span className={styles.codeChip}>{r.je_no}</span></td>
-              <td>{fmtDateOrDash(r.entry_date)}</td>
-              <td>{r.source_type}</td>
-              <td>{r.source_doc_no ?? '—'}</td>
-              <td style={{ textAlign: 'right' }}>{fmt(r.total_debit_sen)}</td>
-              <td style={{ textAlign: 'right' }}>{fmt(r.total_credit_sen)}</td>
-              <td>
-                <span className={`${styles.statusPill} ${r.posted ? styles.statusActive : styles.statusInactive}`}>
-                  {r.reversed ? 'REVERSED' : r.posted ? 'POSTED' : 'DRAFT'}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
+    <DataGrid
+      rows={rows}
+      columns={JE_COLUMNS}
+      storageKey="dg-accounting-je"
+      rowKey={(r) => r.id}
+      searchPlaceholder="Filter visible entries…"
+      groupBanner={false}
+      isLoading={q.isLoading}
+      emptyMessage="No entries."
+      toolbar={
+        <>
+          <select
+            value={sourceType}
+            onChange={(e) => setSourceType(e.target.value)}
+            className={styles.searchInput}
+            style={{ maxWidth: 200 }}>
+            <option value="">All sources</option>
+            <option value="SI">SI — Sales Invoice</option>
+            <option value="PI">PI — Purchase Invoice</option>
+            <option value="SI_PAYMENT">SI Payment</option>
+            <option value="PI_PAYMENT">PI Payment</option>
+            <option value="MANUAL">Manual</option>
+          </select>
+          <span className={styles.subtitle}>{rows.length} entries</span>
+        </>
+      }
+    />
   );
 };
 

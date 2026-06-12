@@ -13,8 +13,10 @@ import { Button } from '@2990s/design-system';
 import { useWarehouses } from '../lib/inventory-queries';
 import {
   useStockTransfers,
+  type StockTransferRow,
   type StockTransferStatus,
 } from '../lib/stock-transfers-queries';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Inventory.module.css';
 
 const ICON    = { size: 14, strokeWidth: 1.75 } as const;
@@ -56,7 +58,105 @@ export const StockTransfers = () => {
     dateTo:           dateTo   || undefined,
   });
 
-  const rows = transfers ?? [];
+  const rows = useMemo<StockTransferRow[]>(() => transfers ?? [], [transfers]);
+
+  /* DataGrid conversion (dg-inventory rollout) — columns mirror the legacy
+     <table> 1:1. Single click still opens the detail page (onRowClick). */
+  const columns = useMemo<DataGridColumn<StockTransferRow>[]>(() => [
+    {
+      key: 'transferNo',
+      label: 'ST #',
+      width: 130,
+      accessor: (t) => (
+        <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{t.transfer_no}</span>
+      ),
+      searchValue: (t) => t.transfer_no,
+      filterValue: (t) => t.transfer_no,
+      sortFn: (a, b) => a.transfer_no.localeCompare(b.transfer_no),
+    },
+    {
+      key: 'date',
+      label: 'Date',
+      width: 110,
+      accessor: (t) => <span className={styles.numCellZero}>{fmtDate(t.transfer_date)}</span>,
+      searchValue: (t) => fmtDate(t.transfer_date),
+      filterValue: (t) => fmtDate(t.transfer_date),
+      sortFn: (a, b) => a.transfer_date.localeCompare(b.transfer_date),
+    },
+    {
+      key: 'fromTo',
+      label: 'From → To',
+      width: 160,
+      accessor: (t) => {
+        const fromW = t.from_warehouse ?? wmap.get(t.from_warehouse_id);
+        const toW   = t.to_warehouse   ?? wmap.get(t.to_warehouse_id);
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <strong>{fromW ? fromW.code : '—'}</strong>
+            <ArrowRight size={12} strokeWidth={1.75} style={{ color: 'var(--fg-muted)' }} />
+            <strong>{toW ? toW.code : '—'}</strong>
+          </span>
+        );
+      },
+      searchValue: (t) => {
+        const fromW = t.from_warehouse ?? wmap.get(t.from_warehouse_id);
+        const toW   = t.to_warehouse   ?? wmap.get(t.to_warehouse_id);
+        return `${fromW?.code ?? ''} ${toW?.code ?? ''}`;
+      },
+      filterValue: (t) => {
+        const fromW = t.from_warehouse ?? wmap.get(t.from_warehouse_id);
+        const toW   = t.to_warehouse   ?? wmap.get(t.to_warehouse_id);
+        return `${fromW?.code ?? '—'} → ${toW?.code ?? '—'}`;
+      },
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      width: 100,
+      accessor: (t) => {
+        const tone = STATUS_TONE[t.status];
+        return (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center',
+            padding: '2px 8px', borderRadius: 'var(--radius-pill)',
+            fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', fontWeight: 600,
+            background: tone.bg, color: tone.fg, letterSpacing: '0.02em',
+          }}>
+            {tone.label}
+          </span>
+        );
+      },
+      searchValue: (t) => STATUS_TONE[t.status].label,
+      filterValue: (t) => STATUS_TONE[t.status].label,
+      sortFn: (a, b) => a.status.localeCompare(b.status),
+    },
+    {
+      key: 'lines',
+      label: 'Lines',
+      width: 80,
+      align: 'right',
+      accessor: (t) => (
+        <span className={`${styles.numCell} ${styles.numCellZero}`}>
+          {(t.line_count ?? 0).toLocaleString('en-MY')}
+        </span>
+      ),
+      searchValue: (t) => String(t.line_count ?? 0),
+      filterValue: (t) => String(t.line_count ?? 0),
+      sortFn: (a, b) => (a.line_count ?? 0) - (b.line_count ?? 0),
+    },
+    {
+      key: 'createdBy',
+      label: 'Created By',
+      width: 110,
+      accessor: (t) => (
+        <span className={styles.numCellZero} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-11)' }}>
+          {t.created_by ? t.created_by.slice(0, 8) : '—'}
+        </span>
+      ),
+      searchValue: (t) => t.created_by ?? '',
+      filterValue: (t) => t.created_by ? t.created_by.slice(0, 8) : '—',
+    },
+  ], [wmap]);
 
   return (
     <div className={styles.page}>
@@ -173,71 +273,18 @@ export const StockTransfers = () => {
         </div>
       )}
 
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>ST #</th>
-              <th>Date</th>
-              <th>From → To</th>
-              <th>Status</th>
-              <th style={{ textAlign: 'right' }}>Lines</th>
-              <th>Created By</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading && (
-              <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>
-            )}
-            {!isLoading && rows.length === 0 && (
-              <tr><td colSpan={6} className={styles.emptyRow}>
-                <div>No stock transfers yet.</div>
-                <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
-                  Click "+ New Transfer" to create one.
-                </div>
-              </td></tr>
-            )}
-            {!isLoading && rows.map((t) => {
-              const tone = STATUS_TONE[t.status];
-              const fromW = t.from_warehouse ?? wmap.get(t.from_warehouse_id);
-              const toW   = t.to_warehouse   ?? wmap.get(t.to_warehouse_id);
-              return (
-                <tr key={t.id} style={{ cursor: 'pointer' }}
-                    onClick={() => navigate(`/inventory/transfers/${t.id}`)}>
-                  <td>
-                    <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{t.transfer_no}</span>
-                  </td>
-                  <td className={styles.numCellZero}>{fmtDate(t.transfer_date)}</td>
-                  <td>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                      <strong>{fromW ? fromW.code : '—'}</strong>
-                      <ArrowRight size={12} strokeWidth={1.75} style={{ color: 'var(--fg-muted)' }} />
-                      <strong>{toW ? toW.code : '—'}</strong>
-                    </span>
-                  </td>
-                  <td>
-                    <span style={{
-                      display: 'inline-flex', alignItems: 'center',
-                      padding: '2px 8px', borderRadius: 'var(--radius-pill)',
-                      fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', fontWeight: 600,
-                      background: tone.bg, color: tone.fg, letterSpacing: '0.02em',
-                    }}>
-                      {tone.label}
-                    </span>
-                  </td>
-                  <td className={`${styles.numCell} ${styles.numCellZero}`}>
-                    {(t.line_count ?? 0).toLocaleString('en-MY')}
-                  </td>
-                  <td className={styles.numCellZero}
-                      style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-11)' }}>
-                    {t.created_by ? t.created_by.slice(0, 8) : '—'}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <DataGrid<StockTransferRow>
+        rows={rows}
+        columns={columns}
+        storageKey="dg-stock-transfers"
+        rowKey={(t) => t.id}
+        searchPlaceholder="Search transfers…"
+        groupBanner={false}
+        isLoading={isLoading}
+        emptyMessage='No stock transfers yet — click "+ New Transfer" to create one.'
+        rowStyle={() => ({ cursor: 'pointer' })}
+        onRowClick={(t) => navigate(`/inventory/transfers/${t.id}`)}
+      />
     </div>
   );
 };

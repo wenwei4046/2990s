@@ -30,6 +30,7 @@ import {
   SupplyCategoryPicker,
   useSupplierCategoryPool,
 } from '../components/SupplyCategoryPicker';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -94,6 +95,83 @@ export const Suppliers = () => {
     }
     return all.filter((r) => supplierMatchesCategory(r.category, category));
   }, [data, category, pool]);
+
+  /* Shared DataGrid conversion (2026-06-12). Status + Supply Category chip
+     rows above stay as-is (they drive the server query / client pre-filter);
+     the grid adds sort, per-column filters, column show-hide / reorder / pin.
+     Row click still opens the supplier detail page. Payment Terms ships
+     default-hidden (low-value) — re-enable via the Columns popover. */
+  const columns = useMemo<DataGridColumn<SupplierRow>[]>(() => [
+    {
+      key: 'code',
+      label: 'Code',
+      width: 120,
+      accessor: (r) => <span className={styles.codeChip}>{r.code}</span>,
+      searchValue: (r) => r.code,
+      filterValue: (r) => r.code,
+      sortFn: (a, b) => a.code.localeCompare(b.code),
+    },
+    {
+      key: 'name',
+      label: 'Name',
+      width: 220,
+      accessor: (r) => r.name,
+      sortFn: (a, b) => a.name.localeCompare(b.name),
+    },
+    {
+      key: 'category',
+      label: 'Supply Category',
+      width: 170,
+      accessor: (r) => (
+        <span style={{ color: 'var(--fg-muted)' }}>
+          {displaySupplierCategories(r.category, pool) || '—'}
+        </span>
+      ),
+      searchValue: (r) => displaySupplierCategories(r.category, pool),
+      filterValue: (r) => displaySupplierCategories(r.category, pool) || '—',
+    },
+    {
+      key: 'contact',
+      label: 'Contact',
+      width: 150,
+      accessor: (r) => r.contact_person ?? '—',
+    },
+    {
+      key: 'phone',
+      label: 'Phone',
+      width: 150,
+      accessor: (r) => formatPhone(r.phone ?? r.whatsapp_number) || '—',
+      searchValue: (r) => `${r.phone ?? ''} ${r.whatsapp_number ?? ''} ${formatPhone(r.phone ?? r.whatsapp_number)}`,
+      filterValue: (r) => formatPhone(r.phone ?? r.whatsapp_number) || '—',
+    },
+    {
+      key: 'state',
+      label: 'State',
+      width: 110,
+      accessor: (r) => r.state ?? '—',
+      filterValue: (r) => r.state ?? '—',
+    },
+    {
+      key: 'terms',
+      label: 'Payment Terms',
+      width: 130,
+      accessor: (r) => r.payment_terms ?? '—',
+      filterValue: (r) => r.payment_terms ?? '—',
+      defaultHidden: true,
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      width: 110,
+      accessor: (r) => (
+        <span className={`${styles.statusPill} ${STATUS_CLASS[r.status]}`}>
+          {r.status}
+        </span>
+      ),
+      searchValue: (r) => r.status,
+      filterValue: (r) => r.status,
+    },
+  ], [pool]);
 
   return (
     <div className={styles.page}>
@@ -161,54 +239,17 @@ export const Suppliers = () => {
         </div>
       )}
 
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Code</th>
-              <th>Name</th>
-              <th>Supply Category</th>
-              <th>Contact</th>
-              <th>Phone</th>
-              <th>State</th>
-              <th>Payment Terms</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading && (
-              <tr>
-                <td colSpan={8} className={styles.emptyRow}>Loading…</td>
-              </tr>
-            )}
-            {!isLoading && rows.map((r) => (
-              <tr key={r.id} onClick={() => navigate(`/suppliers/${r.id}`)}>
-                <td><span className={styles.codeChip}>{r.code}</span></td>
-                <td>{r.name}</td>
-                <td style={{ color: 'var(--fg-muted)' }}>
-                  {/* Owner spec 2026-06-12 — show the supplier's own Supply
-                      Category list (suppliers.category, comma-joined), every
-                      value joined. Legacy uppercase enum values render with
-                      pool casing; legacy 'MIXED' renders as 'Mixed / Other'. */}
-                  {displaySupplierCategories(r.category, pool) || '—'}
-                </td>
-                <td>{r.contact_person ?? '—'}</td>
-                <td>{formatPhone(r.phone ?? r.whatsapp_number) || '—'}</td>
-                <td>{r.state ?? '—'}</td>
-                <td>{r.payment_terms ?? '—'}</td>
-                <td>
-                  <span className={`${styles.statusPill} ${STATUS_CLASS[r.status]}`}>
-                    {r.status}
-                  </span>
-                </td>
-              </tr>
-            ))}
-            {!isLoading && !error && rows.length === 0 && (
-              <tr><td colSpan={8} className={styles.emptyRow}>No suppliers yet.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      <DataGrid
+        rows={rows}
+        columns={columns}
+        storageKey="dg-suppliers"
+        rowKey={(r) => r.id}
+        searchPlaceholder="Filter visible suppliers…"
+        groupBanner={false}
+        isLoading={isLoading}
+        emptyMessage="No suppliers yet."
+        onRowClick={(r) => navigate(`/suppliers/${r.id}`)}
+      />
 
       {creating && (
         <SupplierCreateDrawer onClose={() => setCreating(false)} />

@@ -12,8 +12,10 @@ import { Button } from '@2990s/design-system';
 import { useWarehouses } from '../lib/inventory-queries';
 import {
   useStockTakes,
+  type StockTakeRow,
   type StockTakeStatus,
 } from '../lib/stock-takes-queries';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Inventory.module.css';
 
 const ICON    = { size: 14, strokeWidth: 1.75 } as const;
@@ -62,7 +64,124 @@ export const StockTakes = () => {
     dateTo:      dateTo   || undefined,
   });
 
-  const rows = takes ?? [];
+  const rows = useMemo<StockTakeRow[]>(() => takes ?? [], [takes]);
+
+  /* DataGrid conversion (dg-inventory rollout) — columns mirror the legacy
+     <table> 1:1. Single click still opens the detail page (onRowClick). */
+  const columns = useMemo<DataGridColumn<StockTakeRow>[]>(() => [
+    {
+      key: 'takeNo',
+      label: 'STK #',
+      width: 130,
+      accessor: (t) => (
+        <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{t.take_no}</span>
+      ),
+      searchValue: (t) => t.take_no,
+      filterValue: (t) => t.take_no,
+      sortFn: (a, b) => a.take_no.localeCompare(b.take_no),
+    },
+    {
+      key: 'date',
+      label: 'Date',
+      width: 110,
+      accessor: (t) => <span className={styles.numCellZero}>{fmtDate(t.take_date)}</span>,
+      searchValue: (t) => fmtDate(t.take_date),
+      filterValue: (t) => fmtDate(t.take_date),
+      sortFn: (a, b) => a.take_date.localeCompare(b.take_date),
+    },
+    {
+      key: 'warehouse',
+      label: 'Warehouse',
+      width: 170,
+      accessor: (t) => {
+        const wh = t.warehouse ?? wmap.get(t.warehouse_id);
+        return (
+          <>
+            <strong>{wh ? wh.code : '—'}</strong>
+            {wh && (
+              <span style={{ color: 'var(--fg-muted)', marginLeft: 6, fontSize: 'var(--fs-12)' }}>
+                {wh.name}
+              </span>
+            )}
+          </>
+        );
+      },
+      searchValue: (t) => {
+        const wh = t.warehouse ?? wmap.get(t.warehouse_id);
+        return wh ? `${wh.code} ${wh.name}` : '';
+      },
+      filterValue: (t) => {
+        const wh = t.warehouse ?? wmap.get(t.warehouse_id);
+        return wh ? `${wh.code} · ${wh.name}` : '—';
+      },
+    },
+    {
+      key: 'scope',
+      label: 'Scope',
+      width: 160,
+      accessor: (t) => <span style={{ fontSize: 'var(--fs-13)' }}>{scopeLabel(t.scope_type, t.scope_value)}</span>,
+      searchValue: (t) => scopeLabel(t.scope_type, t.scope_value),
+      filterValue: (t) => scopeLabel(t.scope_type, t.scope_value),
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      width: 100,
+      accessor: (t) => {
+        const tone = STATUS_TONE[t.status];
+        return (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center',
+            padding: '2px 8px', borderRadius: 'var(--radius-pill)',
+            fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', fontWeight: 600,
+            background: tone.bg, color: tone.fg, letterSpacing: '0.02em',
+          }}>
+            {tone.label}
+          </span>
+        );
+      },
+      searchValue: (t) => STATUS_TONE[t.status].label,
+      filterValue: (t) => STATUS_TONE[t.status].label,
+      sortFn: (a, b) => a.status.localeCompare(b.status),
+    },
+    {
+      key: 'lines',
+      label: 'Lines',
+      width: 80,
+      align: 'right',
+      accessor: (t) => (
+        <span className={`${styles.numCell} ${styles.numCellZero}`}>
+          {(t.line_count ?? 0).toLocaleString('en-MY')}
+        </span>
+      ),
+      searchValue: (t) => String(t.line_count ?? 0),
+      filterValue: (t) => String(t.line_count ?? 0),
+      sortFn: (a, b) => (a.line_count ?? 0) - (b.line_count ?? 0),
+    },
+    {
+      key: 'variance',
+      label: 'Variance Total',
+      width: 120,
+      align: 'right',
+      accessor: (t) => {
+        const variance = t.variance_total ?? 0;
+        const varianceColor = variance > 0
+          ? 'var(--c-secondary-a, #2F5D4F)'
+          : variance < 0
+            ? 'var(--c-festive-b, #B8331F)'
+            : 'var(--fg-muted)';
+        return (
+          <span className={`${styles.numCell} ${styles.numCellZero}`}
+                style={{ color: varianceColor, fontFamily: 'var(--font-mono)' }}>
+            {variance > 0 ? '+' : ''}{variance.toLocaleString('en-MY')}
+          </span>
+        );
+      },
+      searchValue: (t) => String(t.variance_total ?? 0),
+      filterValue: (t) => String(t.variance_total ?? 0),
+      sortFn: (a, b) => (a.variance_total ?? 0) - (b.variance_total ?? 0),
+    },
+  ], [wmap]);
 
   return (
     <div className={styles.page}>
@@ -162,81 +281,18 @@ export const StockTakes = () => {
         </div>
       )}
 
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>STK #</th>
-              <th>Date</th>
-              <th>Warehouse</th>
-              <th>Scope</th>
-              <th>Status</th>
-              <th style={{ textAlign: 'right' }}>Lines</th>
-              <th style={{ textAlign: 'right' }}>Variance Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading && (
-              <tr><td colSpan={7} className={styles.emptyRow}>Loading…</td></tr>
-            )}
-            {!isLoading && rows.length === 0 && (
-              <tr><td colSpan={7} className={styles.emptyRow}>
-                <div>No stock takes yet.</div>
-                <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
-                  Click "+ New Stock Take" to start a cycle count.
-                </div>
-              </td></tr>
-            )}
-            {!isLoading && rows.map((t) => {
-              const tone = STATUS_TONE[t.status];
-              const wh   = t.warehouse ?? wmap.get(t.warehouse_id);
-              const variance = t.variance_total ?? 0;
-              const varianceColor = variance > 0
-                ? 'var(--c-secondary-a, #2F5D4F)'
-                : variance < 0
-                  ? 'var(--c-festive-b, #B8331F)'
-                  : 'var(--fg-muted)';
-              return (
-                <tr key={t.id} style={{ cursor: 'pointer' }}
-                    onClick={() => navigate(`/inventory/stock-takes/${t.id}`)}>
-                  <td>
-                    <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{t.take_no}</span>
-                  </td>
-                  <td className={styles.numCellZero}>{fmtDate(t.take_date)}</td>
-                  <td>
-                    <strong>{wh ? wh.code : '—'}</strong>
-                    {wh && (
-                      <span style={{ color: 'var(--fg-muted)', marginLeft: 6, fontSize: 'var(--fs-12)' }}>
-                        {wh.name}
-                      </span>
-                    )}
-                  </td>
-                  <td style={{ fontSize: 'var(--fs-13)' }}>
-                    {scopeLabel(t.scope_type, t.scope_value)}
-                  </td>
-                  <td>
-                    <span style={{
-                      display: 'inline-flex', alignItems: 'center',
-                      padding: '2px 8px', borderRadius: 'var(--radius-pill)',
-                      fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', fontWeight: 600,
-                      background: tone.bg, color: tone.fg, letterSpacing: '0.02em',
-                    }}>
-                      {tone.label}
-                    </span>
-                  </td>
-                  <td className={`${styles.numCell} ${styles.numCellZero}`}>
-                    {(t.line_count ?? 0).toLocaleString('en-MY')}
-                  </td>
-                  <td className={`${styles.numCell} ${styles.numCellZero}`}
-                      style={{ color: varianceColor, fontFamily: 'var(--font-mono)' }}>
-                    {variance > 0 ? '+' : ''}{variance.toLocaleString('en-MY')}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <DataGrid<StockTakeRow>
+        rows={rows}
+        columns={columns}
+        storageKey="dg-stock-takes"
+        rowKey={(t) => t.id}
+        searchPlaceholder="Search stock takes…"
+        groupBanner={false}
+        isLoading={isLoading}
+        emptyMessage='No stock takes yet — click "+ New Stock Take" to start a cycle count.'
+        rowStyle={() => ({ cursor: 'pointer' })}
+        onRowClick={(t) => navigate(`/inventory/stock-takes/${t.id}`)}
+      />
     </div>
   );
 };

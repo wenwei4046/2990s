@@ -15,14 +15,15 @@
 // COGS auto-posted via DB trigger trg_inventory_movement_fifo (migration 0053).
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState, Fragment } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import {
-  Boxes, Search, ArrowUpRight, ArrowDownLeft, DollarSign, Star, X, Plus,
-  Warehouse as WarehouseIcon, ChevronRight, ChevronDown, Layers,
+  Search, ArrowUpRight, ArrowDownLeft, DollarSign, Star, X, Plus,
+  Warehouse as WarehouseIcon, ChevronRight, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatVariantKey } from '@2990s/shared';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import {
   useWarehouses,
   useInventoryProductTotals,
@@ -323,17 +324,6 @@ const BalancesTab = ({
   });
   const rows: InventoryProductTotal[] = useMemo(() => data ?? [], [data]);
 
-  /* Commander 2026-05-29 — bedframe/sofa must show their variant breakdown in
-     the list itself ("点进去这个 variant 有哪几个种类"), not only in the drawer.
-     Click the caret to expand a SKU into its attribute-composition rows. */
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const toggleExpand = (code: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(code)) next.delete(code); else next.add(code);
-      return next;
-    });
-
   const stats = useMemo(() => ({
     totalQty: rows.reduce((s, r) => s + (r.total_qty ?? 0), 0),
     distinctSku: rows.length,
@@ -368,114 +358,202 @@ const BalancesTab = ({
         </div>
       )}
 
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Product Code</th>
-              <th>Description</th>
-              <th>Category</th>
-              <th style={{ textAlign: 'right' }}>Stock</th>
-              <th style={{ textAlign: 'right' }}>Incoming</th>
-              <th style={{ textAlign: 'right' }}>Reserve 7d</th>
-              <th style={{ textAlign: 'right' }}>Reserve 14d</th>
-              <th style={{ textAlign: 'right' }}>Available</th>
-              <th style={{ textAlign: 'right' }}>Value</th>
-              <th style={{ textAlign: 'right' }}>Unit Cost</th>
-              <th>Age</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading && <tr><td colSpan={11} className={styles.emptyRow}>Loading…</td></tr>}
-            {!isLoading && rows.length === 0 && (
-              <tr><td colSpan={11} className={styles.emptyRow}>
-                <Boxes size={32} strokeWidth={1.5} />
-                <div style={{ marginTop: 8 }}>No SKUs match the filters.</div>
-              </td></tr>
-            )}
-            {!isLoading && rows.map((r) => {
-              const qtyClass = r.total_qty > 0 ? styles.numCellPos
-                : r.total_qty < 0 ? styles.numCellNeg
-                : styles.numCellZero;
-              /* Bedframe + sofa carry physical variants worth breaking out. */
-              const expandable = r.category === 'BEDFRAME' || r.category === 'SOFA';
-              const open = expanded.has(r.product_code);
-              return (
-                <Fragment key={r.product_code}>
-                  <tr
-                    onDoubleClick={() => onDrilldown(r.product_code, r.product_name)}
-                    title="Double-click to see per-warehouse breakdown"
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <td>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                        {expandable ? (
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); toggleExpand(r.product_code); }}
-                            onDoubleClick={(e) => e.stopPropagation()}
-                            title={open ? 'Hide variants' : 'Show variants'}
-                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'inline-flex', color: 'var(--fg-muted)' }}
-                            aria-label={open ? 'Hide variants' : 'Show variants'}
-                          >
-                            {open ? <ChevronDown {...ICON} /> : <ChevronRight {...ICON} />}
-                          </button>
-                        ) : <span style={{ width: 14, display: 'inline-block' }} />}
-                        <Link
-                          to={`/inventory/stock-card/${encodeURIComponent(r.product_code)}`}
-                          className={styles.codeChip}
-                          onClick={(e) => e.stopPropagation()}
-                          onDoubleClick={(e) => e.stopPropagation()}
-                          title="Open Stock Card"
-                          style={{ textDecoration: 'none' }}
-                        >
-                          {r.product_code}
-                        </Link>
-                      </span>
-                    </td>
-                    <td>
-                      {r.product_name}
-                      {r.branding && <span className={styles.numCellZero}> · {r.branding}</span>}
-                    </td>
-                    <td className={styles.numCellZero}>{r.category}</td>
-                    <td className={`${styles.numCell} ${qtyClass}`}>{r.total_qty.toLocaleString('en-MY')}</td>
-                    <td className={`${styles.numCell} ${r.incoming_qty > 0 ? styles.numCellPos : styles.numCellZero}`}>
-                      {r.incoming_qty > 0 ? `+${r.incoming_qty.toLocaleString('en-MY')}` : '—'}
-                    </td>
-                    <td className={`${styles.numCell} ${r.reserve_7d > 0 ? '' : styles.numCellZero}`}>
-                      {r.reserve_7d > 0 ? r.reserve_7d.toLocaleString('en-MY') : '—'}
-                    </td>
-                    <td className={`${styles.numCell} ${r.reserve_14d > 0 ? '' : styles.numCellZero}`}>
-                      {r.reserve_14d > 0 ? r.reserve_14d.toLocaleString('en-MY') : '—'}
-                    </td>
-                    <td className={`${styles.numCell} ${r.available_qty < 0 ? styles.numCellNeg : r.available_qty > 0 ? styles.numCellPos : styles.numCellZero}`}
-                      title="Stock − reserved (open SO demand)">
-                      {r.available_qty.toLocaleString('en-MY')}
-                    </td>
-                    <td className={`${styles.numCell} ${styles.numCellZero}`}>
-                      {r.total_value_sen > 0 ? fmtRm(r.total_value_sen) : '—'}
-                    </td>
-                    <td className={`${styles.numCell} ${styles.numCellZero}`}>
-                      {r.total_qty > 0 && r.total_value_sen > 0 ? fmtRm(Math.round(r.total_value_sen / r.total_qty)) : '—'}
-                    </td>
-                    <td className={styles.numCellZero} title={r.oldest_lot_at ?? undefined}>{fmtAgeDays(r.oldest_lot_at)}</td>
-                  </tr>
-                  {open && <SkuVariantRows code={r.product_code} />}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <DataGrid<InventoryProductTotal>
+        rows={rows}
+        columns={BALANCE_COLUMNS}
+        storageKey="dg-inventory-balances"
+        rowKey={(r) => r.product_code}
+        searchPlaceholder="Search SKUs…"
+        groupBanner={false}
+        isLoading={isLoading}
+        emptyMessage="No SKUs match the filters."
+        onRowDoubleClick={(r) => onDrilldown(r.product_code, r.product_name)}
+        rowStyle={() => ({ cursor: 'pointer' })}
+        /* Variant drill (Commander 2026-05-29, ported to DataGrid.expandable):
+           click a row / its chevron to expand the SKU into its attribute-
+           composition buckets. Lazy: only fetches when expanded. Double-click
+           still opens the per-warehouse breakdown drawer. */
+        expandable={{
+          renderExpansion: (r) => <SkuVariantPanel code={r.product_code} />,
+          rowExpansionKey: (r) => r.product_code,
+        }}
+      />
     </>
   );
 };
 
-/* Inline variant rows under an expanded bedframe/sofa SKU. Sums each attribute
-   composition (variant_key) across warehouses → one row per variant type, so
-   the list shows "what variants this SKU has" without opening the drawer
-   (Commander 2026-05-29). Lazy: only mounts (and fetches) when expanded. */
-const SkuVariantRows = ({ code }: { code: string }) => {
+/* DataGrid columns for the Balances tab — module scope so the grid's memo
+   gets a stable reference. Mirrors the legacy <table> 1:1; the chevron the
+   old markup hand-rolled is now DataGrid's synthetic expand column. */
+const BALANCE_COLUMNS: DataGridColumn<InventoryProductTotal>[] = [
+  {
+    key: 'code',
+    label: 'Product Code',
+    width: 160,
+    accessor: (r) => (
+      <Link
+        to={`/inventory/stock-card/${encodeURIComponent(r.product_code)}`}
+        className={styles.codeChip}
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        title="Open Stock Card"
+        style={{ textDecoration: 'none' }}
+      >
+        {r.product_code}
+      </Link>
+    ),
+    searchValue: (r) => r.product_code,
+    filterValue: (r) => r.product_code,
+    sortFn: (a, b) => a.product_code.localeCompare(b.product_code),
+  },
+  {
+    key: 'desc',
+    label: 'Description',
+    width: 240,
+    accessor: (r) => (
+      <>
+        {r.product_name}
+        {r.branding && <span className={styles.numCellZero}> · {r.branding}</span>}
+      </>
+    ),
+    searchValue: (r) => `${r.product_name} ${r.branding ?? ''}`,
+    filterValue: (r) => r.product_name,
+    sortFn: (a, b) => a.product_name.localeCompare(b.product_name),
+  },
+  {
+    key: 'category',
+    label: 'Category',
+    width: 100,
+    accessor: (r) => <span className={styles.numCellZero}>{r.category}</span>,
+    searchValue: (r) => r.category,
+    filterValue: (r) => r.category,
+  },
+  {
+    key: 'stock',
+    label: 'Stock',
+    width: 80,
+    align: 'right',
+    accessor: (r) => {
+      const qtyClass = r.total_qty > 0 ? styles.numCellPos
+        : r.total_qty < 0 ? styles.numCellNeg
+        : styles.numCellZero;
+      return <span className={`${styles.numCell} ${qtyClass}`}>{r.total_qty.toLocaleString('en-MY')}</span>;
+    },
+    searchValue: (r) => String(r.total_qty),
+    filterValue: (r) => String(r.total_qty),
+    sortFn: (a, b) => a.total_qty - b.total_qty,
+  },
+  {
+    key: 'incoming',
+    label: 'Incoming',
+    width: 90,
+    align: 'right',
+    accessor: (r) => (
+      <span className={`${styles.numCell} ${r.incoming_qty > 0 ? styles.numCellPos : styles.numCellZero}`}>
+        {r.incoming_qty > 0 ? `+${r.incoming_qty.toLocaleString('en-MY')}` : '—'}
+      </span>
+    ),
+    searchValue: () => '',
+    filterValue: (r) => String(r.incoming_qty),
+    sortFn: (a, b) => a.incoming_qty - b.incoming_qty,
+  },
+  {
+    key: 'reserve7',
+    label: 'Reserve 7d',
+    width: 90,
+    align: 'right',
+    accessor: (r) => (
+      <span className={`${styles.numCell} ${r.reserve_7d > 0 ? '' : styles.numCellZero}`}>
+        {r.reserve_7d > 0 ? r.reserve_7d.toLocaleString('en-MY') : '—'}
+      </span>
+    ),
+    searchValue: () => '',
+    filterValue: (r) => String(r.reserve_7d),
+    sortFn: (a, b) => a.reserve_7d - b.reserve_7d,
+  },
+  {
+    key: 'reserve14',
+    label: 'Reserve 14d',
+    width: 90,
+    align: 'right',
+    accessor: (r) => (
+      <span className={`${styles.numCell} ${r.reserve_14d > 0 ? '' : styles.numCellZero}`}>
+        {r.reserve_14d > 0 ? r.reserve_14d.toLocaleString('en-MY') : '—'}
+      </span>
+    ),
+    searchValue: () => '',
+    filterValue: (r) => String(r.reserve_14d),
+    sortFn: (a, b) => a.reserve_14d - b.reserve_14d,
+  },
+  {
+    key: 'available',
+    label: 'Available',
+    width: 90,
+    align: 'right',
+    accessor: (r) => (
+      <span
+        className={`${styles.numCell} ${r.available_qty < 0 ? styles.numCellNeg : r.available_qty > 0 ? styles.numCellPos : styles.numCellZero}`}
+        title="Stock − reserved (open SO demand)"
+      >
+        {r.available_qty.toLocaleString('en-MY')}
+      </span>
+    ),
+    searchValue: () => '',
+    filterValue: (r) => String(r.available_qty),
+    sortFn: (a, b) => a.available_qty - b.available_qty,
+  },
+  {
+    key: 'value',
+    label: 'Value',
+    width: 110,
+    align: 'right',
+    accessor: (r) => (
+      <span className={`${styles.numCell} ${styles.numCellZero}`}>
+        {r.total_value_sen > 0 ? fmtRm(r.total_value_sen) : '—'}
+      </span>
+    ),
+    searchValue: () => '',
+    filterValue: (r) => r.total_value_sen > 0 ? fmtRm(r.total_value_sen) : '—',
+    sortFn: (a, b) => a.total_value_sen - b.total_value_sen,
+  },
+  {
+    key: 'unitCost',
+    label: 'Unit Cost',
+    width: 100,
+    align: 'right',
+    accessor: (r) => (
+      <span className={`${styles.numCell} ${styles.numCellZero}`}>
+        {r.total_qty > 0 && r.total_value_sen > 0 ? fmtRm(Math.round(r.total_value_sen / r.total_qty)) : '—'}
+      </span>
+    ),
+    searchValue: () => '',
+    filterValue: (r) => r.total_qty > 0 && r.total_value_sen > 0 ? fmtRm(Math.round(r.total_value_sen / r.total_qty)) : '—',
+    sortFn: (a, b) => {
+      const ua = a.total_qty > 0 && a.total_value_sen > 0 ? a.total_value_sen / a.total_qty : 0;
+      const ub = b.total_qty > 0 && b.total_value_sen > 0 ? b.total_value_sen / b.total_qty : 0;
+      return ua - ub;
+    },
+  },
+  {
+    key: 'age',
+    label: 'Age',
+    width: 70,
+    accessor: (r) => (
+      <span className={styles.numCellZero} title={r.oldest_lot_at ?? undefined}>{fmtAgeDays(r.oldest_lot_at)}</span>
+    ),
+    searchValue: () => '',
+    filterValue: (r) => fmtAgeDays(r.oldest_lot_at),
+    /* Oldest lot first when ascending — null (no lots) sorts last. */
+    sortFn: (a, b) => (a.oldest_lot_at ?? '9999-12-31').localeCompare(b.oldest_lot_at ?? '9999-12-31'),
+  },
+];
+
+/* Variant breakdown panel inside a row's DataGrid expansion (was inline
+   <tr>s pre-DataGrid). Sums each attribute composition (variant_key) across
+   warehouses → one row per variant type, so the list shows "what variants
+   this SKU has" without opening the drawer (Commander 2026-05-29). Lazy:
+   only mounts (and fetches) when expanded. */
+const SkuVariantPanel = ({ code }: { code: string }) => {
   const bd = useInventoryProductBreakdown(code);
   const balances = (bd.data?.balances ?? []).filter((b) => b.product_code === code);
   const variants = useMemo(() => {
@@ -491,33 +569,37 @@ const SkuVariantRows = ({ code }: { code: string }) => {
       (formatVariantKey(a.vk) || 'Standard').localeCompare(formatVariantKey(b.vk) || 'Standard'));
   }, [balances]);
 
-  const rowStyle = { background: 'var(--c-cream)' } as const;
   if (bd.isLoading) {
-    return <tr style={rowStyle}><td /><td colSpan={10} className={styles.numCellZero}>Loading variants…</td></tr>;
+    return <div className={styles.numCellZero} style={{ padding: '8px 16px' }}>Loading variants…</div>;
   }
   if (variants.length === 0) {
-    return <tr style={rowStyle}><td /><td colSpan={10} className={styles.numCellZero}>No stock buckets yet.</td></tr>;
+    return <div className={styles.numCellZero} style={{ padding: '8px 16px' }}>No stock buckets yet.</div>;
   }
   return (
-    <>
-      {variants.map((v) => {
-        const qtyClass = v.qty > 0 ? styles.numCellPos : v.qty < 0 ? styles.numCellNeg : styles.numCellZero;
-        return (
-          <tr key={v.vk} style={rowStyle}>
-            <td />
-            <td style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span className={styles.numCellZero}>↳</span>
-              <span>{formatVariantKey(v.vk) || 'Standard'}</span>
-            </td>
-            <td />
-            <td className={`${styles.numCell} ${qtyClass}`}>{v.qty.toLocaleString('en-MY')}</td>
-            <td /><td /><td /><td />
-            <td className={`${styles.numCell} ${styles.numCellZero}`}>{v.value > 0 ? fmtRm(v.value) : '—'}</td>
-            <td /><td />
-          </tr>
-        );
-      })}
-    </>
+    <table className={styles.table} style={{ background: 'var(--c-cream)' }}>
+      <tbody>
+        {variants.map((v) => {
+          const qtyClass = v.qty > 0 ? styles.numCellPos : v.qty < 0 ? styles.numCellNeg : styles.numCellZero;
+          return (
+            <tr key={v.vk}>
+              <td style={{ width: 280 }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, paddingLeft: 22 }}>
+                  <span className={styles.numCellZero}>↳</span>
+                  <span>{formatVariantKey(v.vk) || 'Standard'}</span>
+                </span>
+              </td>
+              <td className={`${styles.numCell} ${qtyClass}`} style={{ width: 100, textAlign: 'right' }}>
+                {v.qty.toLocaleString('en-MY')}
+              </td>
+              <td className={`${styles.numCell} ${styles.numCellZero}`} style={{ width: 130, textAlign: 'right' }}>
+                {v.value > 0 ? fmtRm(v.value) : '—'}
+              </td>
+              <td />
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 };
 
@@ -557,14 +639,6 @@ const BatchesTab = ({
         (c.productName ?? '').toLowerCase().includes(q)),
     );
   }, [allBatches, q]);
-
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const toggleExpand = (key: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
-      return next;
-    });
 
   const stats = useMemo(() => ({
     batchCount: batches.length,
@@ -627,83 +701,132 @@ const BatchesTab = ({
         </div>
       )}
 
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Batch / PO</th>
-              <th>Warehouse</th>
-              <th>Supplier</th>
-              <th style={{ textAlign: 'right' }}>Components</th>
-              <th style={{ textAlign: 'right' }}>Modules</th>
-              <th>Received</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading && <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>}
-            {!isLoading && batches.length === 0 && (
-              <tr><td colSpan={6} className={styles.emptyRow}>
-                <Layers size={32} strokeWidth={1.5} />
-                <div style={{ marginTop: 8 }}>No open batches{q ? ' match the search' : ''}.</div>
-              </td></tr>
-            )}
-            {!isLoading && batches.map((b) => {
-              const key = `${b.warehouseId}|${b.batchNo}`;
-              const open = expanded.has(key);
-              return (
-                <Fragment key={key}>
-                  <tr onClick={() => toggleExpand(key)} style={{ cursor: 'pointer' }}
-                    title={open ? 'Hide components' : 'Show components'}>
-                    <td>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                        {open ? <ChevronDown {...ICON} /> : <ChevronRight {...ICON} />}
-                        <span className={styles.codeChip}>{b.batchNo}</span>
-                      </span>
-                    </td>
-                    <td>{b.warehouseName ?? '—'}</td>
-                    <td>{b.supplierName ?? <span className={styles.numCellZero}>—</span>}</td>
-                    <td className={`${styles.numCell} ${styles.numCellZero}`}>{b.components.length}</td>
-                    <td className={`${styles.numCell} ${b.totalRemaining > 0 ? styles.numCellPos : styles.numCellZero}`}>
-                      {b.totalRemaining.toLocaleString('en-MY')}
-                    </td>
-                    <td className={styles.numCellZero} title={b.receivedAt ?? undefined}>{fmtAgeDays(b.receivedAt)}</td>
-                  </tr>
-                  {open && b.components.map((c) => (
-                    <tr key={`${key}|${c.productCode}|${c.variantKey ?? ''}`} style={{ background: 'var(--c-cream)' }}>
-                      <td style={{ paddingLeft: 28 }}>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                          <span className={styles.numCellZero}>↳</span>
-                          <Link
-                            to={`/inventory/stock-card/${encodeURIComponent(c.productCode)}`}
-                            className={styles.codeChip}
-                            onClick={(e) => e.stopPropagation()}
-                            title="Open Stock Card"
-                            style={{ textDecoration: 'none' }}
-                          >
-                            {c.productCode}
-                          </Link>
-                        </span>
-                      </td>
-                      <td colSpan={2}>
-                        {c.productName ?? '—'}
-                        {c.variantKey && <span className={styles.numCellZero}> · {formatVariantKey(c.variantKey) || 'Standard'}</span>}
-                      </td>
-                      <td className={`${styles.numCell} ${styles.numCellZero}`}>{fmtRm(c.unitCostSen)}</td>
-                      <td className={`${styles.numCell} ${c.qtyRemaining > 0 ? styles.numCellPos : styles.numCellZero}`}>
-                        {c.qtyRemaining.toLocaleString('en-MY')}
-                      </td>
-                      <td className={styles.numCellZero} title={c.receivedAt ?? undefined}>{fmtAgeDays(c.receivedAt)}</td>
-                    </tr>
-                  ))}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <DataGrid<InventoryBatch>
+        rows={batches}
+        columns={BATCH_COLUMNS}
+        storageKey="dg-inventory-batches"
+        rowKey={(b) => `${b.warehouseId}|${b.batchNo}`}
+        searchPlaceholder="Search batches…"
+        groupBanner={false}
+        isLoading={isLoading}
+        emptyMessage={`No open batches${q ? ' match the search' : ''}.`}
+        rowStyle={() => ({ cursor: 'pointer' })}
+        /* Click a row / its chevron to expand the batch into its surviving
+           component SKUs — same behavior as the legacy click-to-expand rows. */
+        expandable={{
+          renderExpansion: (b) => <BatchComponentsPanel batch={b} />,
+          rowExpansionKey: (b) => `${b.warehouseId}|${b.batchNo}`,
+        }}
+      />
     </>
   );
 };
+
+/* DataGrid columns for the Batches tab — module scope for a stable
+   reference. Chevron comes from DataGrid's synthetic expand column. */
+const BATCH_COLUMNS: DataGridColumn<InventoryBatch>[] = [
+  {
+    key: 'batch',
+    label: 'Batch / PO',
+    width: 160,
+    accessor: (b) => <span className={styles.codeChip}>{b.batchNo}</span>,
+    /* Search must keep matching component SKUs inside the batch (legacy
+       page-level search semantics). */
+    searchValue: (b) =>
+      `${b.batchNo} ${b.supplierName ?? ''} ${b.components.map((c) => `${c.productCode} ${c.productName ?? ''}`).join(' ')}`,
+    filterValue: (b) => b.batchNo,
+    sortFn: (a, b) => a.batchNo.localeCompare(b.batchNo),
+  },
+  {
+    key: 'warehouse',
+    label: 'Warehouse',
+    width: 150,
+    accessor: (b) => b.warehouseName ?? '—',
+  },
+  {
+    key: 'supplier',
+    label: 'Supplier',
+    width: 170,
+    accessor: (b) => b.supplierName ?? <span className={styles.numCellZero}>—</span>,
+    searchValue: (b) => b.supplierName ?? '',
+    filterValue: (b) => b.supplierName ?? '—',
+  },
+  {
+    key: 'components',
+    label: 'Components',
+    width: 100,
+    align: 'right',
+    accessor: (b) => <span className={`${styles.numCell} ${styles.numCellZero}`}>{b.components.length}</span>,
+    searchValue: () => '',
+    filterValue: (b) => String(b.components.length),
+    sortFn: (a, b) => a.components.length - b.components.length,
+  },
+  {
+    key: 'modules',
+    label: 'Modules',
+    width: 90,
+    align: 'right',
+    accessor: (b) => (
+      <span className={`${styles.numCell} ${b.totalRemaining > 0 ? styles.numCellPos : styles.numCellZero}`}>
+        {b.totalRemaining.toLocaleString('en-MY')}
+      </span>
+    ),
+    searchValue: () => '',
+    filterValue: (b) => String(b.totalRemaining),
+    sortFn: (a, b) => a.totalRemaining - b.totalRemaining,
+  },
+  {
+    key: 'received',
+    label: 'Received',
+    width: 90,
+    accessor: (b) => (
+      <span className={styles.numCellZero} title={b.receivedAt ?? undefined}>{fmtAgeDays(b.receivedAt)}</span>
+    ),
+    searchValue: () => '',
+    filterValue: (b) => fmtAgeDays(b.receivedAt),
+    sortFn: (a, b) => (a.receivedAt ?? '9999-12-31').localeCompare(b.receivedAt ?? '9999-12-31'),
+  },
+];
+
+/* Component SKUs inside a batch — rendered in the row's DataGrid expansion
+   (was inline cream <tr>s pre-DataGrid). */
+const BatchComponentsPanel = ({ batch }: { batch: InventoryBatch }) => (
+  <table className={styles.table} style={{ background: 'var(--c-cream)' }}>
+    <tbody>
+      {batch.components.map((c) => (
+        <tr key={`${c.productCode}|${c.variantKey ?? ''}`}>
+          <td style={{ paddingLeft: 28, width: 190 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span className={styles.numCellZero}>↳</span>
+              <Link
+                to={`/inventory/stock-card/${encodeURIComponent(c.productCode)}`}
+                className={styles.codeChip}
+                onClick={(e) => e.stopPropagation()}
+                title="Open Stock Card"
+                style={{ textDecoration: 'none' }}
+              >
+                {c.productCode}
+              </Link>
+            </span>
+          </td>
+          <td>
+            {c.productName ?? '—'}
+            {c.variantKey && <span className={styles.numCellZero}> · {formatVariantKey(c.variantKey) || 'Standard'}</span>}
+          </td>
+          <td className={`${styles.numCell} ${styles.numCellZero}`} style={{ width: 110, textAlign: 'right' }}>
+            {fmtRm(c.unitCostSen)}
+          </td>
+          <td className={`${styles.numCell} ${c.qtyRemaining > 0 ? styles.numCellPos : styles.numCellZero}`} style={{ width: 90, textAlign: 'right' }}>
+            {c.qtyRemaining.toLocaleString('en-MY')}
+          </td>
+          <td className={styles.numCellZero} style={{ width: 90 }} title={c.receivedAt ?? undefined}>
+            {fmtAgeDays(c.receivedAt)}
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+);
 
 /* ════════════════════════════════════════════════════════════════════════
    Product breakdown drawer — AutoCount-style "Up To Date Cost" panel:

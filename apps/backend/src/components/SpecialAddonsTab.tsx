@@ -16,13 +16,21 @@
 // write permission, same as SkuMasterTab.
 // ----------------------------------------------------------------------------
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Button } from '@2990s/design-system';
 import {
   useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon,
   useAllAddons, useUpdateAddon, useCreateAddon, useDeleteAddon, useCreateMfgProduct,
   type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, type AdminAddonRow,
 } from '../lib/mfg-products-queries';
+import { DataGrid, type DataGridColumn } from './DataGrid';
+
+/* Stop-propagation wrapper for interactive cells inside the DataGrid —
+   keeps clicks on inputs / buttons from also firing the row click. */
+const stopProps = {
+  onClick: (e: React.MouseEvent) => e.stopPropagation(),
+  onDoubleClick: (e: React.MouseEvent) => e.stopPropagation(),
+};
 
 // RLS is the real write gate; the editor renders for everyone (server rejects).
 const canEdit = true;
@@ -148,6 +156,77 @@ const SpecialAddonsManager = () => {
   const rm = (sen: number) => `${sen < 0 ? '−' : '+'}RM ${Math.abs(senToRm(sen)).toLocaleString('en-MY')}`;
   const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' };
 
+  /* DataGrid columns (owner request 2026-06-12). `startEdit` / `remove` are
+     re-created per render, so the memo keys on them — correctness over the
+     memo bail-out (the list is a handful of rows). */
+  const saColumns = useMemo<DataGridColumn<SpecialAddonRow>[]>(() => [
+    {
+      key: 'addon',
+      label: 'Add-on',
+      width: 220,
+      accessor: (row) => (
+        <span>
+          <div style={{ fontWeight: 600, fontSize: 'var(--fs-13)' }}>{row.label}</div>
+          <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{row.soDescription || row.code}</div>
+        </span>
+      ),
+      searchValue: (row) => `${row.label} ${row.soDescription} ${row.code}`,
+      filterValue: (row) => row.label,
+      sortFn: (a, b) => a.label.localeCompare(b.label),
+    },
+    {
+      key: 'categories',
+      label: 'Categories',
+      width: 160,
+      accessor: (row) => row.categories.join(', ') || '—',
+      filterValue: (row) => row.categories.join(', ') || '—',
+    },
+    {
+      key: 'base',
+      label: 'Base',
+      width: 100,
+      align: 'right',
+      accessor: (row) => <span style={{ fontWeight: 600 }}>{rm(row.sellingPriceSen)}</span>,
+      searchValue: () => '',
+      filterValue: (row) => rm(row.sellingPriceSen),
+      sortFn: (a, b) => a.sellingPriceSen - b.sellingPriceSen,
+    },
+    {
+      key: 'followup',
+      label: 'Follow-up',
+      width: 220,
+      accessor: (row) => (
+        <span style={{ color: 'var(--fg-muted)' }}>
+          {row.optionGroups.length === 0 ? '—' : row.optionGroups.map((g) => `${g.label} (${g.choices.length})`).join(' · ')}
+        </span>
+      ),
+      searchValue: (row) => row.optionGroups.map((g) => g.label).join(' '),
+      filterValue: (row) => (row.optionGroups.length === 0 ? '—' : `${row.optionGroups.length} question${row.optionGroups.length === 1 ? '' : 's'}`),
+      sortFn: (a, b) => a.optionGroups.length - b.optionGroups.length,
+    },
+    {
+      key: 'actions',
+      label: '',
+      width: 150,
+      align: 'right',
+      sortable: false,
+      groupable: false,
+      accessor: (row) => (
+        <span {...stopProps} style={{ whiteSpace: 'nowrap' }}>
+          {canEdit && (
+            <>
+              <button type="button" onClick={() => startEdit(row)} style={{ fontSize: 'var(--fs-12)', background: 'none', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', padding: '3px 10px', cursor: 'pointer', marginRight: 6 }}>Edit</button>
+              <button type="button" onClick={() => void remove(row)} style={{ fontSize: 'var(--fs-12)', background: 'none', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', padding: '3px 10px', cursor: 'pointer', color: 'var(--c-burnt, #A6471E)' }}>Delete</button>
+            </>
+          )}
+          {!row.active && <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginLeft: 6 }}>off</span>}
+        </span>
+      ),
+      searchValue: () => '',
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [editing?.id]);
+
   return (
     <div style={{ padding: 'var(--space-5)', maxWidth: 860 }}>
       <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-4)' }}>
@@ -241,49 +320,25 @@ const SpecialAddonsManager = () => {
         </div>
       )}
 
-      {/* ── List ── */}
-      {list.isLoading ? (
-        <div style={{ color: 'var(--fg-muted)', marginTop: 'var(--space-3)' }}>Loading add-ons…</div>
-      ) : list.error ? (
+      {/* ── List — shared DataGrid (owner request 2026-06-12): sort /
+          per-column filter / column show-hide / reorder / persisted layout.
+          Edit + Delete keep working via stop-propagation cells. ── */}
+      {list.error ? (
         <div style={{ color: 'var(--c-burnt, #A6471E)', marginTop: 'var(--space-3)' }}>Failed to load: {String(list.error)}</div>
-      ) : (list.data ?? []).length === 0 ? (
-        <div style={{ color: 'var(--fg-muted)', marginTop: 'var(--space-3)' }}>No special add-ons yet.</div>
       ) : (
-        <table style={{ borderCollapse: 'collapse', width: '100%', marginTop: 'var(--space-3)' }}>
-          <thead>
-            <tr style={{ textAlign: 'left', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-              <th style={{ padding: '6px 8px' }}>Add-on</th>
-              <th style={{ padding: '6px 8px' }}>Categories</th>
-              <th style={{ padding: '6px 8px' }}>Base</th>
-              <th style={{ padding: '6px 8px' }}>Follow-up</th>
-              <th style={{ padding: '6px 8px' }}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {(list.data ?? []).map((row) => (
-              <tr key={row.id} style={{ borderTop: '1px solid var(--line)', opacity: row.active ? 1 : 0.5 }}>
-                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>
-                  <div style={{ fontWeight: 600 }}>{row.label}</div>
-                  <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{row.soDescription || row.code}</div>
-                </td>
-                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-12)' }}>{row.categories.join(', ') || '—'}</td>
-                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-13)', fontWeight: 600, whiteSpace: 'nowrap' }}>{rm(row.sellingPriceSen)}</td>
-                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-                  {row.optionGroups.length === 0 ? '—' : row.optionGroups.map((g) => `${g.label} (${g.choices.length})`).join(' · ')}
-                </td>
-                <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  {canEdit && (
-                    <>
-                      <button type="button" onClick={() => startEdit(row)} style={{ fontSize: 'var(--fs-12)', background: 'none', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', padding: '3px 10px', cursor: 'pointer', marginRight: 6 }}>Edit</button>
-                      <button type="button" onClick={() => void remove(row)} style={{ fontSize: 'var(--fs-12)', background: 'none', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', padding: '3px 10px', cursor: 'pointer', color: 'var(--c-burnt, #A6471E)' }}>Delete</button>
-                    </>
-                  )}
-                  {!row.active && <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginLeft: 6 }}>off</span>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div style={{ marginTop: 'var(--space-3)' }}>
+          <DataGrid
+            rows={list.data ?? []}
+            columns={saColumns}
+            storageKey="dg-special-addons-product"
+            rowKey={(r) => r.id}
+            searchPlaceholder="Filter add-ons…"
+            groupBanner={false}
+            isLoading={list.isLoading}
+            emptyMessage="No special add-ons yet."
+            rowStyle={(r) => (r.active ? undefined : { opacity: 0.5 })}
+          />
+        </div>
       )}
     </div>
   );
@@ -392,6 +447,124 @@ const OrderAddonsManager = () => {
 
   const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' };
 
+  /* DataGrid columns — inline editors commit on blur exactly as before.
+     Keyed on the commit helpers' upstream state so closures never go stale
+     (tiny list; memo bail-out is not the point here). */
+  const oaColumns = useMemo<DataGridColumn<AdminAddonRow>[]>(() => [
+    {
+      key: 'addon',
+      label: 'Add-on',
+      width: 200,
+      accessor: (row) => (
+        <span>
+          <div style={{ fontWeight: 600, fontSize: 'var(--fs-13)' }}>{row.label}</div>
+          <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{row.description || row.id}</div>
+        </span>
+      ),
+      searchValue: (row) => `${row.label} ${row.description ?? ''} ${row.id}`,
+      filterValue: (row) => row.label,
+      sortFn: (a, b) => a.label.localeCompare(b.label),
+    },
+    {
+      key: 'kind',
+      label: 'Kind',
+      width: 100,
+      accessor: (row) => (
+        <span style={{ color: 'var(--fg-muted)' }}>{row.kind === 'floors_items' ? 'floor·item' : row.kind}</span>
+      ),
+      searchValue: (row) => row.kind,
+      filterValue: (row) => (row.kind === 'floors_items' ? 'floor·item' : row.kind),
+    },
+    {
+      key: 'sku',
+      label: 'SKU code',
+      width: 190,
+      accessor: (row) => (
+        <span {...stopProps} style={{ display: 'inline-flex' }}>
+          {canEdit ? (
+            <input style={{ width: 170, padding: '4px 8px', fontSize: 'var(--fs-12)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)', textTransform: 'uppercase' }}
+              defaultValue={row.serviceSku ?? ''} placeholder="SVC-ADDON"
+              onBlur={(e) => { void commitSku(row, e.target.value); }} />
+          ) : (
+            <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{row.serviceSku ?? 'SVC-ADDON'}</span>
+          )}
+        </span>
+      ),
+      searchValue: (row) => row.serviceSku ?? '',
+      filterValue: (row) => row.serviceSku ?? 'SVC-ADDON',
+      sortFn: (a, b) => (a.serviceSku ?? '').localeCompare(b.serviceSku ?? ''),
+    },
+    {
+      key: 'price',
+      label: 'Price / rate (RM)',
+      width: 210,
+      accessor: (row) => {
+        const isFloors = row.kind === 'floors_items';
+        return (
+          <span {...stopProps} style={{ display: 'inline-flex', alignItems: 'center' }}>
+            {canEdit ? (
+              <input type="number" min={1} step={1} style={{ width: 100, padding: '4px 8px', fontSize: 'var(--fs-13)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)' }}
+                defaultValue={isFloors ? (row.perFloorItem ?? 0) : row.price}
+                onBlur={(e) => {
+                  const n = Math.max(0, Math.round(Number(e.target.value) || 0));
+                  const current = isFloors ? (row.perFloorItem ?? 0) : row.price;
+                  if (n === current) return;
+                  if (n <= 0) { setError(`"${row.label}": rate must be above 0 — a 0 rate books nothing on the SO. Use the Off switch to retire it.`); return; }
+                  if (isFloors) commitField(row, { perFloorItem: n });
+                  else commitField(row, { price: n });
+                }} />
+            ) : (
+              <span style={{ fontSize: 'var(--fs-13)' }}>RM {(isFloors ? row.perFloorItem ?? 0 : row.price).toLocaleString('en-MY')}</span>
+            )}
+            <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginLeft: 6 }}>{isFloors ? `per floor·${row.unit ?? 'item'}` : row.kind === 'flat' ? 'charged once' : `per ${row.unit ?? 'piece'}`}</span>
+          </span>
+        );
+      },
+      searchValue: () => '',
+      filterValue: (row) => String(row.kind === 'floors_items' ? (row.perFloorItem ?? 0) : row.price),
+      sortFn: (a, b) =>
+        (a.kind === 'floors_items' ? (a.perFloorItem ?? 0) : a.price)
+        - (b.kind === 'floors_items' ? (b.perFloorItem ?? 0) : b.price),
+    },
+    {
+      key: 'enabled',
+      label: 'Enabled',
+      width: 90,
+      accessor: (row) => (
+        <span {...stopProps} style={{ display: 'inline-flex' }}>
+          <button type="button" role="switch" aria-checked={row.enabled} disabled={!canEdit}
+            onClick={() => canEdit && commitField(row, { enabled: !row.enabled })}
+            style={{ fontSize: 'var(--fs-12)', padding: '3px 10px', borderRadius: 999, border: '1px solid var(--line)', cursor: canEdit ? 'pointer' : 'default', background: row.enabled ? 'var(--c-cream)' : 'transparent', fontWeight: row.enabled ? 600 : 400 }}>
+            {row.enabled ? 'On' : 'Off'}
+          </button>
+        </span>
+      ),
+      searchValue: (row) => (row.enabled ? 'On' : 'Off'),
+      filterValue: (row) => (row.enabled ? 'On' : 'Off'),
+      sortFn: (a, b) => Number(b.enabled) - Number(a.enabled),
+    },
+    {
+      key: 'actions',
+      label: '',
+      width: 90,
+      align: 'right',
+      sortable: false,
+      groupable: false,
+      accessor: (row) => (
+        <span {...stopProps} style={{ whiteSpace: 'nowrap' }}>
+          {canEdit && (
+            <button type="button" onClick={() => void remove(row)} disabled={del.isPending}
+              style={{ fontSize: 'var(--fs-12)', background: 'none', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', padding: '3px 10px', cursor: 'pointer', color: 'var(--c-burnt, #A6471E)' }}>
+              Delete
+            </button>
+          )}
+        </span>
+      ),
+      searchValue: () => '',
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [del.isPending, list.data]);
+
   return (
     <div style={{ padding: 'var(--space-5)', maxWidth: 820 }}>
       <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-4)' }}>
@@ -447,80 +620,25 @@ const OrderAddonsManager = () => {
         </div>
       )}
 
-      {list.isLoading ? (
-        <div style={{ color: 'var(--fg-muted)', marginTop: 'var(--space-3)' }}>Loading…</div>
-      ) : list.error ? (
+      {/* DataGrid conversion (owner request 2026-06-12) — the inline SKU /
+          price inputs, On-Off switch and Delete ride inside stop-propagation
+          cells; commit-on-blur semantics unchanged. */}
+      {list.error ? (
         <div style={{ color: 'var(--c-burnt, #A6471E)', marginTop: 'var(--space-3)' }}>Failed to load: {String(list.error)}</div>
-      ) : (list.data ?? []).length === 0 ? (
-        <div style={{ color: 'var(--fg-muted)', marginTop: 'var(--space-3)' }}>No order add-ons yet.</div>
       ) : (
-        <table style={{ borderCollapse: 'collapse', width: '100%', marginTop: 'var(--space-3)' }}>
-          <thead>
-            <tr style={{ textAlign: 'left', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-              <th style={{ padding: '6px 8px' }}>Add-on</th>
-              <th style={{ padding: '6px 8px' }}>Kind</th>
-              <th style={{ padding: '6px 8px' }}>SKU code</th>
-              <th style={{ padding: '6px 8px' }}>{'Price / rate (RM)'}</th>
-              <th style={{ padding: '6px 8px' }}>Enabled</th>
-              <th style={{ padding: '6px 8px' }}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {(list.data ?? []).map((row) => {
-              const isFloors = row.kind === 'floors_items';
-              return (
-                <tr key={row.id} style={{ borderTop: '1px solid var(--line)', opacity: row.enabled ? 1 : 0.55 }}>
-                  <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>
-                    <div style={{ fontWeight: 600 }}>{row.label}</div>
-                    <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{row.description || row.id}</div>
-                  </td>
-                  <td style={{ padding: '6px 8px', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{isFloors ? 'floor·item' : row.kind}</td>
-                  <td style={{ padding: '6px 8px' }}>
-                    {canEdit ? (
-                      <input style={{ width: 170, padding: '4px 8px', fontSize: 'var(--fs-12)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)', textTransform: 'uppercase' }}
-                        defaultValue={row.serviceSku ?? ''} placeholder="SVC-ADDON"
-                        onBlur={(e) => { void commitSku(row, e.target.value); }} />
-                    ) : (
-                      <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{row.serviceSku ?? 'SVC-ADDON'}</span>
-                    )}
-                  </td>
-                  <td style={{ padding: '6px 8px' }}>
-                    {canEdit ? (
-                      <input type="number" min={1} step={1} style={{ width: 100, padding: '4px 8px', fontSize: 'var(--fs-13)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)' }}
-                        defaultValue={isFloors ? (row.perFloorItem ?? 0) : row.price}
-                        onBlur={(e) => {
-                          const n = Math.max(0, Math.round(Number(e.target.value) || 0));
-                          const current = isFloors ? (row.perFloorItem ?? 0) : row.price;
-                          if (n === current) return;
-                          if (n <= 0) { setError(`"${row.label}": rate must be above 0 — a 0 rate books nothing on the SO. Use the Off switch to retire it.`); return; }
-                          if (isFloors) commitField(row, { perFloorItem: n });
-                          else commitField(row, { price: n });
-                        }} />
-                    ) : (
-                      <span style={{ fontSize: 'var(--fs-13)' }}>RM {(isFloors ? row.perFloorItem ?? 0 : row.price).toLocaleString('en-MY')}</span>
-                    )}
-                    <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginLeft: 6 }}>{isFloors ? `per floor·${row.unit ?? 'item'}` : row.kind === 'flat' ? 'charged once' : `per ${row.unit ?? 'piece'}`}</span>
-                  </td>
-                  <td style={{ padding: '6px 8px' }}>
-                    <button type="button" role="switch" aria-checked={row.enabled} disabled={!canEdit}
-                      onClick={() => canEdit && commitField(row, { enabled: !row.enabled })}
-                      style={{ fontSize: 'var(--fs-12)', padding: '3px 10px', borderRadius: 999, border: '1px solid var(--line)', cursor: canEdit ? 'pointer' : 'default', background: row.enabled ? 'var(--c-cream)' : 'transparent', fontWeight: row.enabled ? 600 : 400 }}>
-                      {row.enabled ? 'On' : 'Off'}
-                    </button>
-                  </td>
-                  <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    {canEdit && (
-                      <button type="button" onClick={() => void remove(row)} disabled={del.isPending}
-                        style={{ fontSize: 'var(--fs-12)', background: 'none', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', padding: '3px 10px', cursor: 'pointer', color: 'var(--c-burnt, #A6471E)' }}>
-                        Delete
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div style={{ marginTop: 'var(--space-3)' }}>
+          <DataGrid
+            rows={list.data ?? []}
+            columns={oaColumns}
+            storageKey="dg-special-addons-order"
+            rowKey={(r) => r.id}
+            searchPlaceholder="Filter order add-ons…"
+            groupBanner={false}
+            isLoading={list.isLoading}
+            emptyMessage="No order add-ons yet."
+            rowStyle={(r) => (r.enabled ? undefined : { opacity: 0.55 })}
+          />
+        </div>
       )}
     </div>
   );

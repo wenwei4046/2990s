@@ -4,8 +4,8 @@
 // back on without losing history (the FK on DO is ON DELETE SET NULL).
 // ----------------------------------------------------------------------------
 
-import { useState } from 'react';
-import { Plus, X, Truck } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Plus, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useDrivers,
@@ -13,6 +13,7 @@ import {
   useUpdateDriver,
   type DriverRow,
 } from '../lib/drivers-queries';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -22,6 +23,70 @@ export const Drivers = () => {
   const [creating, setCreating] = useState(false);
   const drivers = useDrivers({ includeInactive });
   const update = useUpdateDriver();
+  const updateMutate = update.mutate;
+
+  /* Shared DataGrid conversion (2026-06-12) — sort / per-column filter /
+     column show-hide / reorder / pin / persisted layout. The Active toggle
+     stays an inline checkbox; stopPropagation so it never reads as a row
+     click. IC Number ships default-hidden (low-value) — re-enable via the
+     Columns popover. */
+  const columns = useMemo<DataGridColumn<DriverRow>[]>(() => [
+    {
+      key: 'code',
+      label: 'Code',
+      width: 110,
+      accessor: (d) => <span className={styles.codeChip}>{d.driver_code}</span>,
+      searchValue: (d) => d.driver_code,
+      filterValue: (d) => d.driver_code,
+      sortFn: (a, b) => a.driver_code.localeCompare(b.driver_code),
+    },
+    {
+      key: 'name',
+      label: 'Name',
+      width: 200,
+      accessor: (d) => d.name,
+      sortFn: (a, b) => a.name.localeCompare(b.name),
+    },
+    {
+      key: 'phone',
+      label: 'Phone',
+      width: 160,
+      accessor: (d) => d.phone,
+    },
+    {
+      key: 'ic',
+      label: 'IC Number',
+      width: 150,
+      accessor: (d) => d.ic_number ?? '—',
+      defaultHidden: true,
+    },
+    {
+      key: 'vehicle',
+      label: 'Vehicle',
+      width: 170,
+      accessor: (d) => d.vehicle ?? '—',
+    },
+    {
+      key: 'active',
+      label: 'Active',
+      width: 130,
+      accessor: (d) => (
+        <label
+          onClick={(e) => e.stopPropagation()}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+        >
+          <input type="checkbox" checked={d.active}
+            onChange={(e) => updateMutate({ id: d.id, active: e.target.checked })} />
+          <span style={{ fontSize: 'var(--fs-12)', color: d.active ? 'var(--c-secondary-a)' : 'var(--fg-muted)' }}>
+            {d.active ? 'Active' : 'Inactive'}
+          </span>
+        </label>
+      ),
+      searchValue: (d) => (d.active ? 'Active' : 'Inactive'),
+      filterValue: (d) => (d.active ? 'Active' : 'Inactive'),
+      sortFn: (a, b) => Number(a.active) - Number(b.active),
+    },
+  ], [updateMutate]);
 
   return (
     <div className={styles.page}>
@@ -43,49 +108,16 @@ export const Drivers = () => {
         <p className={styles.eyebrow}>{drivers.data?.length ?? 0} drivers</p>
       </div>
 
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Code</th>
-              <th>Name</th>
-              <th>Phone</th>
-              <th>IC Number</th>
-              <th>Vehicle</th>
-              <th>Active</th>
-            </tr>
-          </thead>
-          <tbody>
-            {drivers.isLoading && (
-              <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>
-            )}
-            {!drivers.isLoading && (drivers.data ?? []).length === 0 && (
-              <tr><td colSpan={6} className={styles.emptyRow}>
-                <Truck size={28} strokeWidth={1.5} />
-                <div style={{ marginTop: 8 }}>No drivers yet.</div>
-              </td></tr>
-            )}
-            {!drivers.isLoading && (drivers.data ?? []).map((d) => (
-              <tr key={d.id}>
-                <td><span className={styles.codeChip}>{d.driver_code}</span></td>
-                <td>{d.name}</td>
-                <td>{d.phone}</td>
-                <td>{d.ic_number ?? '—'}</td>
-                <td>{d.vehicle ?? '—'}</td>
-                <td>
-                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <input type="checkbox" checked={d.active}
-                      onChange={(e) => update.mutate({ id: d.id, active: e.target.checked })} />
-                    <span style={{ fontSize: 'var(--fs-12)', color: d.active ? 'var(--c-secondary-a)' : 'var(--fg-muted)' }}>
-                      {d.active ? 'Active' : 'Inactive'}
-                    </span>
-                  </label>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DataGrid
+        rows={drivers.data ?? []}
+        columns={columns}
+        storageKey="dg-drivers"
+        rowKey={(d) => d.id}
+        searchPlaceholder="Search drivers…"
+        groupBanner={false}
+        isLoading={drivers.isLoading}
+        emptyMessage="No drivers yet."
+      />
 
       {creating && <CreateDriverDrawer onClose={() => setCreating(false)} />}
     </div>

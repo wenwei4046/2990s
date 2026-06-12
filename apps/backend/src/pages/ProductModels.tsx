@@ -9,8 +9,9 @@
 // Model layer. The plain SKU list lives on /products (SkuMasterTab).
 // ----------------------------------------------------------------------------
 
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ProductModelDetail } from './ProductModelDetail';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { Layers, Search, Plus, Trash2, Truck, X, ImageOff, Upload } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -33,6 +34,18 @@ import styles from './ProductModels.module.css';
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
 const CATEGORIES: MfgCategory[] = ['SOFA', 'BEDFRAME', 'MATTRESS', 'ACCESSORY', 'SERVICE'];
+
+/* DataGrid layout key for the Models list. The legacy page rendered one
+   table per category — to keep that read on first visit we seed a default
+   "group by Category" layout ONCE (only when no layout was ever stored).
+   After that, whatever the operator does (remove the group chip, hide
+   columns, …) persists and this seed never runs again. */
+const PM_GRID_KEY = 'dg-product-models';
+if (typeof window !== 'undefined' && window.localStorage.getItem(PM_GRID_KEY) == null) {
+  try {
+    window.localStorage.setItem(PM_GRID_KEY, JSON.stringify({ groupBy: ['category'] }));
+  } catch { /* storage full / disabled — grid just starts flat */ }
+}
 
 export const ProductModels = () => {
   const [filter, setFilter] = useState<MfgCategory | 'all'>('all');
@@ -70,16 +83,132 @@ export const ProductModels = () => {
     );
   }, [models, search]);
 
-  // Group by category for the section headers.
-  const grouped = useMemo(() => {
-    const map = new Map<MfgCategory, ProductModelRow[]>();
-    for (const m of filtered) {
-      const arr = map.get(m.category) ?? [];
-      arr.push(m);
-      map.set(m.category, arr);
-    }
-    return map;
-  }, [filtered]);
+  /* ── DataGrid conversion (owner request 2026-06-12) ─────────────────
+     The per-category <section> tables are replaced by ONE shared DataGrid
+     (sort / per-column filter / column show-hide / reorder / persisted
+     layout — same as the SKU Master conversion in Products.tsx). The old
+     category section headers are preserved as a default group-by Category
+     (seeded into localStorage on first visit only — see PM_GRID_KEY below);
+     remove the chip to get a flat list, and the choice persists. Bulk
+     select, the photo upload cell, code-chip click + row double-click →
+     detail drawer all ride along unchanged. */
+  const toggleOne = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  }, []);
+  // Select-all over the rows currently in view (replaces the old per-category
+  // header checkbox — same pattern as the SKU Master grid toolbar).
+  const allTicked = filtered.length > 0 && filtered.every((m) => selectedIds.has(m.id));
+  const someTicked = !allTicked && filtered.some((m) => selectedIds.has(m.id));
+  const toggleAllVisible = () => {
+    setSelectedIds((prev) => {
+      const n = new Set(prev);
+      if (allTicked) filtered.forEach((m) => n.delete(m.id));
+      else filtered.forEach((m) => n.add(m.id));
+      return n;
+    });
+  };
+
+  const gridColumns = useMemo<DataGridColumn<ProductModelRow>[]>(() => {
+    const stop = {
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      onDoubleClick: (e: React.MouseEvent) => e.stopPropagation(),
+    };
+    return [
+      {
+        key: 'sel',
+        label: '',
+        width: 36,
+        minWidth: 36,
+        sortable: false,
+        groupable: false,
+        accessor: (m) => (
+          <span {...stop} style={{ display: 'inline-flex' }}>
+            <input
+              type="checkbox"
+              aria-label={`Select ${m.model_code}`}
+              checked={selectedIds.has(m.id)}
+              onChange={() => toggleOne(m.id)}
+              style={{ cursor: 'pointer' }}
+            />
+          </span>
+        ),
+        searchValue: () => '',
+      },
+      {
+        key: 'photo',
+        label: 'Photo',
+        width: 64,
+        minWidth: 56,
+        sortable: false,
+        groupable: false,
+        accessor: (m) => <ModelPhotoCell model={m} />,
+        searchValue: () => '',
+        filterValue: (m) => (m.photo_url ? 'Has photo' : 'No photo'),
+      },
+      {
+        key: 'category',
+        label: 'Category',
+        width: 110,
+        accessor: (m) => m.category,
+        filterValue: (m) => m.category,
+        groupValue: (m) => m.category,
+      },
+      {
+        key: 'code',
+        label: 'Code',
+        width: 160,
+        accessor: (m) => (
+          <button
+            type="button"
+            className={styles.codeChipLink}
+            onClick={(e) => { e.stopPropagation(); setOpenModelId(m.id); }}
+            style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}
+          >
+            <code className={styles.codeChip}>{m.model_code}</code>
+          </button>
+        ),
+        searchValue: (m) => m.model_code,
+        filterValue: (m) => m.model_code,
+        sortFn: (a, b) => a.model_code.localeCompare(b.model_code),
+      },
+      {
+        key: 'name',
+        label: 'Name',
+        width: 240,
+        accessor: (m) => <span className={styles.nameText}>{m.name}</span>,
+        searchValue: (m) => m.name,
+        filterValue: (m) => m.name,
+        sortFn: (a, b) => a.name.localeCompare(b.name),
+      },
+      {
+        key: 'active',
+        label: 'Active',
+        width: 96,
+        accessor: (m) => (
+          <span className={`${styles.statusPill} ${m.active ? styles.active : styles.inactive}`}>
+            {m.active ? 'ACTIVE' : 'INACTIVE'}
+          </span>
+        ),
+        searchValue: (m) => (m.active ? 'ACTIVE' : 'INACTIVE'),
+        filterValue: (m) => (m.active ? 'ACTIVE' : 'INACTIVE'),
+        sortFn: (a, b) => Number(b.active) - Number(a.active),
+      },
+      {
+        key: 'description',
+        label: 'Description',
+        width: 240,
+        accessor: (m) => (
+          <span style={{ color: 'var(--fg-muted)' }}>{m.description ?? '—'}</span>
+        ),
+        searchValue: (m) => m.description ?? '',
+        filterValue: (m) => m.description ?? '—',
+      },
+    ];
+  }, [selectedIds, toggleOne]);
 
   return (
     <div className={styles.page}>
@@ -120,7 +249,6 @@ export const ProductModels = () => {
           Failed to load: {error instanceof Error ? error.message : String(error)}
         </div>
       )}
-      {isLoading && <div className={styles.loading}>Loading models…</div>}
 
       {/* PR #106 — Bulk-select toolbar. Sticky-ish strip that surfaces only
           when at least one Model is ticked; mirrors the SKU Master pattern
@@ -182,108 +310,40 @@ export const ProductModels = () => {
         </div>
       )}
 
-      {/* Grouped tables */}
-      {Array.from(grouped.entries()).map(([cat, rows]) => {
-        const allTicked = rows.every((m) => selectedIds.has(m.id));
-        const someTicked = rows.some((m) => selectedIds.has(m.id));
-        return (
-        <section key={cat} className={styles.section}>
-          <h2 className={styles.sectionTitle}>
-            {cat} <span className={styles.sectionCount}>· {rows.length}</span>
-          </h2>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th style={{ width: 32 }}>
-                  <input
-                    type="checkbox"
-                    aria-label={`Select all ${cat}`}
-                    checked={allTicked}
-                    ref={(el) => { if (el) el.indeterminate = !allTicked && someTicked; }}
-                    onChange={(e) => {
-                      const checked = e.target.checked;
-                      setSelectedIds((prev) => {
-                        const n = new Set(prev);
-                        rows.forEach((m) => {
-                          if (checked) n.add(m.id); else n.delete(m.id);
-                        });
-                        return n;
-                      });
-                    }}
-                  />
-                </th>
-                <th style={{ width: 64 }}>Photo</th>
-                <th>Code</th>
-                <th>Name</th>
-                <th>Active</th>
-                <th style={{ textAlign: 'right' }}>Description</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((m) => (
-                // PR #137 — Commander 2026-05-26: "我希望指向那个 row，就可以
-                // 通过双击点进去". Single-click was reverted in PR #110 because
-                // it fired on incidental scroll hovers; double-click is
-                // deliberate enough to read as intent. Row hover gets a
-                // pointer cursor + cream highlight so the affordance is
-                // visible.
-                <tr
-                  key={m.id}
-                  className={styles.modelRow}
-                  onDoubleClick={() => setOpenModelId(m.id)}
-                >
-                  <td>
-                    <input
-                      type="checkbox"
-                      aria-label={`Select ${m.model_code}`}
-                      checked={selectedIds.has(m.id)}
-                      onChange={() => setSelectedIds((prev) => {
-                        const n = new Set(prev);
-                        if (n.has(m.id)) n.delete(m.id); else n.add(m.id);
-                        return n;
-                      })}
-                    />
-                  </td>
-                  <td>
-                    {/* PR — Commander 2026-05-27: 48x48 thumb. Click empty
-                        slot → file picker; right-click filled thumb → remove
-                        photo. Hover state shows action affordance. */}
-                    <ModelPhotoCell model={m} />
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className={styles.codeChipLink}
-                      onClick={() => setOpenModelId(m.id)}
-                      style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}
-                    >
-                      <code className={styles.codeChip}>{m.model_code}</code>
-                    </button>
-                  </td>
-                  <td className={styles.nameText}>
-                    {m.name}
-                  </td>
-                  <td>
-                    <span className={`${styles.statusPill} ${m.active ? styles.active : styles.inactive}`}>
-                      {m.active ? 'ACTIVE' : 'INACTIVE'}
-                    </span>
-                  </td>
-                  <td style={{ textAlign: 'right', color: 'var(--fg-muted)' }}>
-                    {m.description ?? '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-        );
-      })}
-
-      {!isLoading && filtered.length === 0 && (
-        <div className={styles.empty}>
-          No models match. Try clearing filters, or click "+ New Model" to create one.
-        </div>
-      )}
+      {/* Shared DataGrid (owner request 2026-06-12) — replaces the per-
+          category section tables. Grouped by Category by default (seeded
+          once via PM_GRID_KEY); double-click a row — or click the code
+          chip — opens the detail drawer (PR #137 double-click semantics
+          preserved). The photo cell keeps its click-to-upload /
+          right-click-to-remove behaviour. */}
+      <DataGrid
+        rows={filtered}
+        columns={gridColumns}
+        storageKey={PM_GRID_KEY}
+        rowKey={(m) => m.id}
+        searchPlaceholder="Filter visible models…"
+        onRowDoubleClick={(m) => setOpenModelId(m.id)}
+        isLoading={isLoading}
+        emptyMessage='No models match. Try clearing filters, or click "+ New Model" to create one.'
+        toolbar={
+          <label
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              aria-label="Select all visible models"
+              checked={allTicked}
+              ref={(el) => { if (el) el.indeterminate = someTicked; }}
+              onChange={toggleAllVisible}
+              style={{ cursor: 'pointer' }}
+            />
+            <span>Select all</span>
+          </label>
+        }
+      />
 
       {creating && <NewModelDialog onClose={() => setCreating(false)} />}
 

@@ -1,5 +1,5 @@
 import { todayMyt } from '../lib/dates';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Receipt, Download, FileSpreadsheet, ChevronsDown, ChevronsUp,
   CreditCard, CalendarClock, QrCode, Banknote,
@@ -18,6 +18,7 @@ import { AuditLogFilterBar } from '../components/AuditLogFilterBar';
 import {
   exportCsv, exportXlsx, downloadBlob, type AuditExportRow,
 } from '../lib/audit-export';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './AuditLog.module.css';
 
 const defaultFilters = (): AuditLogFilters => ({ ...rangeForPreset('last30') });
@@ -93,12 +94,12 @@ export const AuditLog = () => {
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const toggleAll = () =>
     setSelected(allSelected ? new Set() : new Set(rows.map((r) => r.id)));
-  const toggleOne = (id: string) =>
+  const toggleOne = useCallback((id: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
-    });
+    }), []);
 
   const setPreset = (key: QuickRange) => setFilters({ ...filters, ...rangeForPreset(key) });
 
@@ -126,6 +127,141 @@ export const AuditLog = () => {
     downloadBlob(exportCsv(toExportRows(rowsToExport())),
       `2990s-audit-log-${today}.csv`, 'text/csv;charset=utf-8');
   };
+
+  /* Shared DataGrid conversion (2026-06-12). Hero / stats / quick-range
+     chips / AuditLogFilterBar stay as-is (they drive the server query +
+     the `rows` pre-filter); the grid adds sort, per-column filters, column
+     show-hide / reorder / pin + its own free-text search. Bulk select for
+     export keeps the external Set; checkboxes stopPropagation. Approval
+     code ships default-hidden (low-value) — Columns popover re-enables. */
+  const columns = useMemo<DataGridColumn<AuditLogRow>[]>(() => [
+    {
+      key: 'sel',
+      label: '',
+      width: 40,
+      minWidth: 36,
+      sortable: false,
+      groupable: false,
+      accessor: (r) => (
+        <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex' }}>
+          <input type="checkbox" checked={selected.has(r.id)}
+            onChange={() => toggleOne(r.id)} aria-label={`Select ${r.id}`} />
+        </span>
+      ),
+      searchValue: () => '',
+    },
+    {
+      key: 'when',
+      label: 'Date / time',
+      width: 110,
+      accessor: (r) => (
+        <>
+          <div className={styles.day}>{fmtDay(r.placedAt)}</div>
+          <div className={styles.clock}>{fmtClock(r.placedAt)}</div>
+        </>
+      ),
+      searchValue: (r) => `${fmtDay(r.placedAt)} ${fmtClock(r.placedAt)}`,
+      filterValue: (r) => fmtDay(r.placedAt),
+      sortFn: (a, b) => a.placedAt.localeCompare(b.placedAt),
+    },
+    {
+      key: 'so',
+      label: 'SO#',
+      width: 130,
+      accessor: (r) => <span className={styles.soPill}>{r.id}</span>,
+      searchValue: (r) => r.id,
+      filterValue: (r) => r.id,
+      sortFn: (a, b) => a.id.localeCompare(b.id),
+    },
+    {
+      key: 'customer',
+      label: 'Customer',
+      width: 180,
+      accessor: (r) => (
+        <>
+          <div className={styles.custName}>{r.customerName}</div>
+          {r.customerPhone && <div className={styles.custPhone}>{r.customerPhone}</div>}
+        </>
+      ),
+      searchValue: (r) => `${r.customerName} ${r.customerPhone ?? ''}`,
+      filterValue: (r) => r.customerName,
+      sortFn: (a, b) => a.customerName.localeCompare(b.customerName),
+    },
+    {
+      key: 'amount',
+      label: 'Amount',
+      width: 180,
+      align: 'right',
+      accessor: (r) => {
+        const badge = amountBadge(r.paid, r.total);
+        return (
+          <>
+            <div className={styles.amount}><sup>RM</sup>{fmtRM(r.paid).replace(/^RM\s?/, '')}</div>
+            {badge.kind === 'full'
+              ? <span className={`${styles.badge} ${styles.badgeFull}`}>Full payment</span>
+              : <span className={`${styles.badge} ${styles.badgeDeposit}`}>
+                  Deposit · {badge.pct}% of {badge.total.toLocaleString('en-MY')}
+                </span>}
+          </>
+        );
+      },
+      searchValue: (r) => String(r.paid),
+      filterValue: (r) => fmtRM(r.paid),
+      sortFn: (a, b) => a.paid - b.paid,
+    },
+    {
+      key: 'method',
+      label: 'Method · details',
+      width: 200,
+      accessor: (r) => {
+        const Icon = METHOD_ICON[r.paymentMethod] ?? CreditCard;
+        const detail = methodDetail(r);
+        return (
+          <div className={styles.method}>
+            <span className={`${styles.tile} ${METHOD_TILE[r.paymentMethod] ?? ''}`}>
+              <Icon size={18} strokeWidth={1.75} />
+            </span>
+            <span>
+              <strong className={styles.methodName}>{methodLabel(r.paymentMethod)}</strong>
+              {detail && <span className={styles.methodDetail}>{detail}</span>}
+            </span>
+          </div>
+        );
+      },
+      searchValue: (r) => `${methodLabel(r.paymentMethod)} ${methodDetail(r) ?? ''}`,
+      filterValue: (r) => methodLabel(r.paymentMethod),
+    },
+    {
+      key: 'approval',
+      label: 'Approval code',
+      width: 130,
+      accessor: (r) => <span className={styles.approvalCell}>{r.approvalCode ?? '—'}</span>,
+      searchValue: (r) => r.approvalCode ?? '',
+      filterValue: (r) => r.approvalCode ?? '—',
+      defaultHidden: true,
+    },
+    {
+      key: 'salesperson',
+      label: 'Salesperson',
+      width: 160,
+      accessor: (r) => (
+        <span className={styles.sp}>
+          <span className={styles.avatar}>{initials(staffName(r.salespersonId))}</span>
+          {staffName(r.salespersonId)}
+        </span>
+      ),
+      searchValue: (r) => staffName(r.salespersonId),
+      filterValue: (r) => staffName(r.salespersonId),
+    },
+  ], [selected, toggleOne, staffName]);
+
+  /* Selected-row tint — same look as the legacy .rowSelected class. */
+  const rowStyle = useCallback(
+    (r: AuditLogRow) => (selected.has(r.id)
+      ? { background: 'rgba(166,71,30,0.05)' }
+      : undefined),
+    [selected],
+  );
 
   return (
     <div className={styles.page}>
@@ -201,81 +337,33 @@ export const AuditLog = () => {
         />
       )}
 
-      <div className={styles.tableWrap}>
-        {query.isLoading && <div className={styles.empty}>Loading…</div>}
-        {query.error && <div className={styles.empty}>Failed to load: {String(query.error)}</div>}
-        {!query.isLoading && !query.error && rows.length === 0 && (
-          <div className={styles.empty}>
-            No payments match these filters. Try widening the date range, clearing a
-            filter, or changing your search.
-          </div>
-        )}
-        {!query.isLoading && !query.error && rows.length > 0 && (
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th className={styles.checkCol}>
-                  <input type="checkbox" checked={allSelected} onChange={toggleAll}
-                    aria-label="Select all" />
-                </th>
-                <th>Date / time</th>
-                <th>SO#</th>
-                <th>Customer</th>
-                <th className={styles.numCol}>Amount</th>
-                <th>Method · details</th>
-                <th>Approval code</th>
-                <th>Salesperson</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const badge = amountBadge(r.paid, r.total);
-                const Icon = METHOD_ICON[r.paymentMethod] ?? CreditCard;
-                const detail = methodDetail(r);
-                return (
-                  <tr key={r.id} className={selected.has(r.id) ? styles.rowSelected : ''}>
-                    <td className={styles.checkCol}>
-                      <input type="checkbox" checked={selected.has(r.id)}
-                        onChange={() => toggleOne(r.id)} aria-label={`Select ${r.id}`} />
-                    </td>
-                    <td><div className={styles.day}>{fmtDay(r.placedAt)}</div>
-                        <div className={styles.clock}>{fmtClock(r.placedAt)}</div></td>
-                    <td><span className={styles.soPill}>{r.id}</span></td>
-                    <td><div className={styles.custName}>{r.customerName}</div>
-                        {r.customerPhone && <div className={styles.custPhone}>{r.customerPhone}</div>}</td>
-                    <td className={styles.numCol}>
-                      <div className={styles.amount}><sup>RM</sup>{fmtRM(r.paid).replace(/^RM\s?/, '')}</div>
-                      {badge.kind === 'full'
-                        ? <span className={`${styles.badge} ${styles.badgeFull}`}>Full payment</span>
-                        : <span className={`${styles.badge} ${styles.badgeDeposit}`}>
-                            Deposit · {badge.pct}% of {badge.total.toLocaleString('en-MY')}
-                          </span>}
-                    </td>
-                    <td>
-                      <div className={styles.method}>
-                        <span className={`${styles.tile} ${METHOD_TILE[r.paymentMethod] ?? ''}`}>
-                          <Icon size={18} strokeWidth={1.75} />
-                        </span>
-                        <span>
-                          <strong className={styles.methodName}>{methodLabel(r.paymentMethod)}</strong>
-                          {detail && <span className={styles.methodDetail}>{detail}</span>}
-                        </span>
-                      </div>
-                    </td>
-                    <td className={styles.approvalCell}>{r.approvalCode ?? '—'}</td>
-                    <td>
-                      <span className={styles.sp}>
-                        <span className={styles.avatar}>{initials(staffName(r.salespersonId))}</span>
-                        {staffName(r.salespersonId)}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {query.error ? (
+        <div className={styles.tableWrap}>
+          <div className={styles.empty}>Failed to load: {String(query.error)}</div>
+        </div>
+      ) : (
+        <DataGrid
+          rows={rows}
+          columns={columns}
+          storageKey="dg-audit-log"
+          rowKey={(r) => r.id}
+          searchPlaceholder="Filter visible payments…"
+          groupBanner={false}
+          isLoading={query.isLoading}
+          emptyMessage="No payments match these filters. Try widening the date range, clearing a filter, or changing your search."
+          rowStyle={rowStyle}
+          toolbar={
+            <label style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', cursor: 'pointer',
+            }}>
+              <input type="checkbox" checked={allSelected} onChange={toggleAll}
+                aria-label="Select all" />
+              <span>Select all{selected.size > 0 ? ` (${selected.size})` : ''}</span>
+            </label>
+          }
+        />
+      )}
     </div>
   );
 };

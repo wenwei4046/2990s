@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Link } from 'react-router';
-import { ChevronRight, Search, Users } from 'lucide-react';
 import { fmtDate, fmtRM, daysAgo, formatPhone } from '@2990s/shared';
 import { useMfgSalesOrders } from '../lib/flow-queries';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Customers.module.css';
 
 /* ─── Aggregation ────────────────────────────────────────────────────────
@@ -105,29 +105,73 @@ const STATUS_LABEL: Record<string, string> = {
 const statusLabel = (status: string): string =>
   STATUS_LABEL[status] ?? status.replace(/_/g, ' ');
 
+/* ── DataGrid columns (shared-grid conversion 2026-06-12) ────────────────
+   Static spec — module scope keeps the reference stable so DataGrid's memo
+   hits. Row click expands the order history inline (same behaviour as the
+   old expandable <tr>), via the grid's `expandable` chevron column. */
+const CUSTOMER_COLUMNS: DataGridColumn<CustomerEntry>[] = [
+  {
+    key: 'name',
+    label: 'Customer',
+    width: 220,
+    accessor: (c) => <span className={styles.nameMain}>{c.name}</span>,
+    searchValue: (c) => c.name,
+    filterValue: (c) => c.name,
+    sortFn: (a, b) => a.name.localeCompare(b.name),
+  },
+  {
+    key: 'phone',
+    label: 'Phone',
+    width: 150,
+    accessor: (c) => c.phone
+      ? <span className={styles.phone}>{formatPhone(c.phone)}</span>
+      : <span className={styles.phoneEmpty}>—</span>,
+    // Raw + formatted so "0123456789" and "+60 12-345 6789" both match.
+    searchValue: (c) => c.phone ? `${c.phone} ${formatPhone(c.phone)}` : '',
+    filterValue: (c) => c.phone ? formatPhone(c.phone) : '—',
+  },
+  {
+    key: 'orders',
+    label: 'Orders',
+    width: 90,
+    align: 'right',
+    accessor: (c) => <span className={styles.countPill}>{c.orderCount}</span>,
+    searchValue: () => '',
+    filterValue: (c) => String(c.orderCount),
+    sortFn: (a, b) => a.orderCount - b.orderCount,
+  },
+  {
+    key: 'ltv',
+    label: 'Lifetime value',
+    width: 140,
+    align: 'right',
+    accessor: (c) => <span className={styles.lifetime}>{fmtRM(c.lifetimeValue)}</span>,
+    searchValue: () => '',
+    filterValue: (c) => fmtRM(c.lifetimeValue),
+    sortFn: (a, b) => a.lifetimeValue - b.lifetimeValue,
+  },
+  {
+    key: 'last',
+    label: 'Last order',
+    width: 190,
+    accessor: (c) => (
+      <span className={styles.lastSeen}>
+        {fmtDate(c.lastOrderAt)} · {daysAgo(c.lastOrderAt)}
+      </span>
+    ),
+    searchValue: (c) => fmtDate(c.lastOrderAt),
+    filterValue: (c) => fmtDate(c.lastOrderAt),
+    sortFn: (a, b) => a.lastOrderAt.localeCompare(b.lastOrderAt),
+  },
+];
+
 export const Customers = () => {
   const salesOrders = useMfgSalesOrders(undefined);
-  const [query, setQuery] = useState('');
-  const [expanded, setExpanded] = useState<string | null>(null);
 
   const customers = useMemo(
     () => aggregate((salesOrders.data?.salesOrders ?? []) as SoRow[]),
     [salesOrders.data],
   );
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return customers;
-    return customers.filter((c) => {
-      const nameMatch = c.name.toLowerCase().includes(q);
-      const phoneMatch = (c.phone ?? '').toLowerCase().includes(q);
-      return nameMatch || phoneMatch;
-    });
-  }, [customers, query]);
-
-  const toggleExpand = (key: string) => {
-    setExpanded((cur) => (cur === key ? null : key));
-  };
 
   return (
     <div className={styles.page}>
@@ -143,182 +187,82 @@ export const Customers = () => {
         </div>
       </header>
 
-      <div className={styles.toolbar}>
-        <label className={styles.search}>
-          <Search size={14} strokeWidth={1.75} aria-hidden />
-          <input
-            type="search"
-            placeholder="Search by phone or name…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label="Search customers"
-          />
-        </label>
-        <span className={styles.totalsCount}>
-          {filtered.length} {filtered.length === 1 ? 'customer' : 'customers'}
-          {query && customers.length !== filtered.length && (
-            <> · {customers.length} total</>
-          )}
-        </span>
-      </div>
-
-      <div className={styles.tableCard}>
-        {salesOrders.isLoading ? (
-          <div className={styles.empty}>Loading customers…</div>
-        ) : salesOrders.error ? (
+      {salesOrders.error ? (
+        <div className={styles.tableCard}>
           <div className={styles.empty}>Failed to load: {String(salesOrders.error)}</div>
-        ) : customers.length === 0 ? (
-          <div className={styles.empty}>
-            <Users size={28} strokeWidth={1.5} aria-hidden />
-            <p>No customers yet. Each Sales Order adds an entry here.</p>
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className={styles.empty}>
-            <p>No matches for "{query}".</p>
-          </div>
-        ) : (
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Customer</th>
-                <th>Phone</th>
-                <th className={styles.numericCol}>Orders</th>
-                <th className={styles.numericCol}>Lifetime value</th>
-                <th>Last order</th>
-                <th aria-label="Expand" />
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((c) => {
-                const isOpen = expanded === c.key;
-                return (
-                  <CustomerRow
-                    key={c.key}
-                    customer={c}
-                    isOpen={isOpen}
-                    onToggle={() => toggleExpand(c.key)}
-                  />
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
+        </div>
+      ) : (
+        <DataGrid
+          rows={customers}
+          columns={CUSTOMER_COLUMNS}
+          storageKey="dg-customers"
+          rowKey={(c) => c.key}
+          searchPlaceholder="Search by phone or name…"
+          groupBanner={false}
+          isLoading={salesOrders.isLoading}
+          emptyMessage="No customers yet. Each Sales Order adds an entry here."
+          expandable={{ renderExpansion: (c) => <CustomerHistory customer={c} /> }}
+          toolbar={
+            <span className={styles.totalsCount}>
+              {customers.length} {customers.length === 1 ? 'customer' : 'customers'}
+            </span>
+          }
+        />
+      )}
     </div>
   );
 };
 
-interface CustomerRowProps {
-  customer: CustomerEntry;
-  isOpen: boolean;
-  onToggle: () => void;
-}
-
-const CustomerRow = ({ customer, isOpen, onToggle }: CustomerRowProps) => {
-  const onKey = (e: React.KeyboardEvent<HTMLTableRowElement>) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      onToggle();
-    }
-  };
-
-  return (
-    <>
-      <tr
-        className={`${styles.summaryRow} ${isOpen ? styles.expanded : ''}`}
-        onClick={onToggle}
-        onKeyDown={onKey}
-        tabIndex={0}
-        role="button"
-        aria-expanded={isOpen}
-        aria-label={`${isOpen ? 'Collapse' : 'Expand'} order history for ${customer.name}`}
-      >
-        <td>
-          <div className={styles.nameCell}>
-            <span className={styles.nameMain}>{customer.name}</span>
-          </div>
-        </td>
-        <td>
-          {customer.phone
-            ? <span className={styles.phone}>{formatPhone(customer.phone)}</span>
-            : <span className={styles.phoneEmpty}>—</span>}
-        </td>
-        <td className={styles.numericCol}>
-          <span className={styles.countPill}>{customer.orderCount}</span>
-        </td>
-        <td className={styles.numericCol}>
-          <span className={styles.lifetime}>{fmtRM(customer.lifetimeValue)}</span>
-        </td>
-        <td>
-          <span className={styles.lastSeen}>
-            {fmtDate(customer.lastOrderAt)} · {daysAgo(customer.lastOrderAt)}
-          </span>
-        </td>
-        <td className={styles.chevronCell}>
-          <ChevronRight
-            size={16}
-            strokeWidth={1.75}
-            className={`${styles.chevron} ${isOpen ? styles.chevronOpen : ''}`}
-            aria-hidden
-          />
-        </td>
-      </tr>
-
-      {isOpen && (
-        <tr className={styles.historyRow}>
-          <td colSpan={6}>
-            <div className={styles.history}>
-              <div className={styles.historyHeading}>
-                Order history · {customer.orderCount}{' '}
-                {customer.orderCount === 1 ? 'order' : 'orders'}
-              </div>
-              <table className={styles.historyTable}>
-                <thead>
-                  <tr>
-                    <th>Order</th>
-                    <th>Placed</th>
-                    <th>Status</th>
-                    <th>Items</th>
-                    <th className={styles.numericCol}>Total</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {customer.orders.map((o) => {
-                    const lineCount = o.line_count ?? 0;
-                    return (
-                      <tr key={o.doc_no}>
-                        <td>
-                          <span className={styles.orderId}>{o.doc_no}</span>
-                        </td>
-                        <td>{fmtDate(soDateOf(o))}</td>
-                        <td>
-                          <span className={styles.lanePill}>
-                            {statusLabel(o.status)}
-                          </span>
-                        </td>
-                        <td>
-                          {lineCount} {lineCount === 1 ? 'item' : 'items'}
-                        </td>
-                        <td className={styles.numericCol}>{fmtRM((o.local_total_centi ?? 0) / 100)}</td>
-                        <td className={styles.numericCol}>
-                          <Link
-                            to={`/mfg-sales-orders/${o.doc_no}`}
-                            className={styles.openLink}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            Open
-                          </Link>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </td>
+/* Inline order-history panel rendered by the grid's expansion row. Same
+   markup as the legacy expandable <tr> body. */
+const CustomerHistory = ({ customer }: { customer: CustomerEntry }) => (
+  <div className={styles.history}>
+    <div className={styles.historyHeading}>
+      Order history · {customer.orderCount}{' '}
+      {customer.orderCount === 1 ? 'order' : 'orders'}
+    </div>
+    <table className={styles.historyTable}>
+      <thead>
+        <tr>
+          <th>Order</th>
+          <th>Placed</th>
+          <th>Status</th>
+          <th>Items</th>
+          <th className={styles.numericCol}>Total</th>
+          <th />
         </tr>
-      )}
-    </>
-  );
-};
+      </thead>
+      <tbody>
+        {customer.orders.map((o) => {
+          const lineCount = o.line_count ?? 0;
+          return (
+            <tr key={o.doc_no}>
+              <td>
+                <span className={styles.orderId}>{o.doc_no}</span>
+              </td>
+              <td>{fmtDate(soDateOf(o))}</td>
+              <td>
+                <span className={styles.lanePill}>
+                  {statusLabel(o.status)}
+                </span>
+              </td>
+              <td>
+                {lineCount} {lineCount === 1 ? 'item' : 'items'}
+              </td>
+              <td className={styles.numericCol}>{fmtRM((o.local_total_centi ?? 0) / 100)}</td>
+              <td className={styles.numericCol}>
+                <Link
+                  to={`/mfg-sales-orders/${o.doc_no}`}
+                  className={styles.openLink}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  Open
+                </Link>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+);
