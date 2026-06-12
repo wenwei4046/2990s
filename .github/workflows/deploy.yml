@@ -38,6 +38,15 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
 
+      # Auto-applies packages/db/migrations/*.sql numbered >= 0168 (plus the
+      # explicit backfill list inside the script) before anything ships.
+      # If the SUPABASE_DB_URL secret is not configured the script prints a
+      # notice and exits 0, so the deploy still proceeds.
+      - name: Apply DB migrations
+        run: node scripts/db-migrate.mjs
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
       - name: Deploy API to Workers
         working-directory: apps/api
         run: pnpm exec wrangler deploy
