@@ -299,11 +299,29 @@ describe('allocatePwpTriggerNotes — each voucher prints once (SO-2606-013)', (
     expect(out[1]!).toHaveLength(0);
   });
 
-  it('distinct trigger SKUs allocate independently; non-matching codes drop', () => {
+  it('distinct trigger SKUs allocate independently; non-matching codes fall back to the first line', () => {
     const codes = [cd('PWP-A1', 'k1', 'ARRUS-F-K'), cd('PWP-B1', 'k2', 'CODY-Q'), cd('PWP-X1', 'k3', 'GHOST-SKU')];
     const out = allocatePwpTriggerNotes([['ARRUS-F-K'], ['CODY-Q']], codes);
-    expect(out[0]!.map((n) => n.text)).toEqual(['PWP voucher issued: PWP-A1 · not redeemed yet']);
+    expect(out[0]!.map((n) => n.text)).toEqual([
+      'PWP voucher issued: PWP-A1 · not redeemed yet',
+      'PWP voucher issued: PWP-X1 · not redeemed yet',
+    ]);
     expect(out[1]!.map((n) => n.text)).toEqual(['PWP voucher issued: PWP-B1 · not redeemed yet']);
+  });
+
+  it('falls back to the first line when the trigger SKU is on no line (SO-2606-008 anchor drift)', () => {
+    // Real prod shape: the create path stamped the POS anchor SKU
+    // BOOQIT-1A(LHF), but the booked build is 1B+CNR+2A — the voucher must
+    // still print on the document, never silently vanish.
+    const codes = [cd('PWP-5246LGDK', 'cfg-i5266mx', 'BOOQIT-1A(LHF)')];
+    const out = allocatePwpTriggerNotes(
+      [['BOOQIT-1B(LHF)', 'BOOQIT-CNR', 'BOOQIT-2A(RHF)'], ['SVC-DELIVERY']],
+      codes,
+    );
+    expect(out[0]!.map((n) => n.text)).toEqual([
+      'PWP voucher issued: PWP-5246LGDK · not redeemed yet',
+    ]);
+    expect(out[1]!).toEqual([]);
   });
 
   it('keeps the USED short-reference tone', () => {

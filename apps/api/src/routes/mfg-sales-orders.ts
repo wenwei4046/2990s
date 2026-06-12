@@ -2040,6 +2040,14 @@ mfgSalesOrders.post('/', async (c) => {
      collision-free codes + insert the inactive mfg_products rows after the build
      pass. The line rows are mutated in place to point at the minted codes. */
   const oneShotReqs: OneShotMintReq[] = [];
+  /* PWP trigger re-stamp source (Loo 2026-06-12, SO-2606-008) — the first
+     BOOKED row per POS cart line. A sofa build's payload itemCode is the POS
+     ANCHOR SKU (the catalog card's mfg row), which the per-module split never
+     books onto the document — so the re-stamp below must read the lead MODULE
+     row instead of the raw payload. Row OBJECT references on purpose: the
+     one-shot mint pass rewrites item_code in place, and the reference keeps
+     the map pointing at the final booked SKU. */
+  const pwpLeadRowByCartKey = new Map<string, { item_code?: unknown }>();
   const extraRMof = (it: { variants?: unknown }) =>
     Math.max(0, Math.round(Number((it.variants as { extraAddonAmountRM?: unknown } | null)?.extraAddonAmountRM ?? 0)));
   const remarkTextOf = (it: { variants?: unknown }) => {
@@ -2194,7 +2202,7 @@ mfgSalesOrders.post('/', async (c) => {
         const buildKey = `build-${idx + 1}`;
         const { cells: _cells, ...sharedVariants } =
           ((it.variants as Record<string, unknown> | null) ?? {});
-        return split.map((s, i) => {
+        const moduleRows = split.map((s, i) => {
           const moduleVariants: Record<string, unknown> = {
             ...sharedVariants,
             buildKey,
@@ -2254,6 +2262,13 @@ mfgSalesOrders.post('/', async (c) => {
           }
           return row;
         });
+        {
+          const pwpKey = String((it as { cartLineKey?: string }).cartLineKey ?? '');
+          if (pwpKey && moduleRows[0] && !pwpLeadRowByCartKey.has(pwpKey)) {
+            pwpLeadRowByCartKey.set(pwpKey, moduleRows[0]);
+          }
+        }
+        return moduleRows;
       }
     }
     /* Task 5 — non-sofa (or non-splittable) line: mint a single one-shot SKU
@@ -2274,6 +2289,10 @@ mfgSalesOrders.post('/', async (c) => {
         remarkText: remarkTextOf(it),
         sellPriceSen: Number(baseRow.unit_price_centi ?? 0), // base + extra (N=1)
       });
+    }
+    {
+      const pwpKey = String((it as { cartLineKey?: string }).cartLineKey ?? '');
+      if (pwpKey && !pwpLeadRowByCartKey.has(pwpKey)) pwpLeadRowByCartKey.set(pwpKey, baseRow);
     }
     return [baseRow];
   })).then((rows) =>
@@ -2973,28 +2992,25 @@ mfgSalesOrders.post('/', async (c) => {
     }).eq('owner_staff_id', user.id).eq('status', 'RESERVED').in('cart_line_key', pwpCartLineKeys);
   }
 
-  /* Re-stamp trigger_item_code (Loo 2026-06-06, the (K)→(Q) drift) — the
-     snapshot is written ONCE at reserve time; a size edit keeps the cart line
-     key but books a new item_code, so the printed SO's trigger / unused-
+  /* Re-stamp trigger_item_code (Loo 2026-06-06, the (K)→(Q) drift; reworked
+     Loo 2026-06-12, SO-2606-008) — the snapshot is written ONCE at reserve
+     time as the cart line's ANCHOR SKU. The printed SO's trigger / unused-
      voucher annotations (matched by item_code in shared/so-line-display.ts)
-     silently drop. One batched read, then one update per distinct lead code
-     that actually drifted (a sofa SET splits one key across module rows —
-     the LEAD row's item_code is what the display group matches). Covers both
-     USED (claimed above — cart_line_key survives the claim) and AVAILABLE. */
+     need it to be a SKU that's actually ON the document, so re-stamp from
+     pwpLeadRowByCartKey: the first BOOKED row per cart line (a sofa build's
+     lead MODULE row — the payload anchor never lands post-split; one-shot
+     mints are reflected via the in-place row rewrite). One batched read, then
+     one update per distinct lead code that drifted. Covers both USED (claimed
+     above — cart_line_key survives the claim) and AVAILABLE. */
   if (pwpCartLineKeys.length > 0) {
-    const leadItemCodeByKey = new Map<string, string>();
-    for (const it of items) {
-      const k = String((it as { cartLineKey?: string } | null)?.cartLineKey ?? '');
-      const lineCode = String((it as { itemCode?: string } | null)?.itemCode ?? '');
-      if (k && lineCode && !leadItemCodeByKey.has(k)) leadItemCodeByKey.set(k, lineCode);
-    }
     const { data: stampRows } = await sb.from('pwp_codes')
       .select('code, cart_line_key, trigger_item_code')
       .eq('owner_staff_id', user.id)
       .in('cart_line_key', pwpCartLineKeys);
     const codesByLead = new Map<string, string[]>();
     for (const r of ((stampRows ?? []) as Array<{ code: string; cart_line_key: string | null; trigger_item_code: string | null }>)) {
-      const lead = r.cart_line_key ? leadItemCodeByKey.get(r.cart_line_key) : undefined;
+      const leadRow = r.cart_line_key ? pwpLeadRowByCartKey.get(r.cart_line_key) : undefined;
+      const lead = leadRow ? String(leadRow.item_code ?? '') : '';
       if (lead && r.trigger_item_code !== lead) {
         const arr = codesByLead.get(lead) ?? [];
         arr.push(r.code);
@@ -3002,9 +3018,11 @@ mfgSalesOrders.post('/', async (c) => {
       }
     }
     for (const [lead, codes] of codesByLead) {
-      await sb.from('pwp_codes')
+      const { error: stampErr } = await sb.from('pwp_codes')
         .update({ trigger_item_code: lead, updated_at: new Date().toISOString() })
         .in('code', codes);
+      // eslint-disable-next-line no-console
+      if (stampErr) console.error('[so-create] pwp trigger restamp failed:', lead, stampErr.message);
     }
   }
 

@@ -358,7 +358,15 @@ export function allocatePwpTriggerNotes(
     lineItemCodes.forEach((codesOfLine, i) => {
       if (codesOfLine.includes(trigger)) matching.push(i);
     });
-    if (matching.length === 0) continue;
+    /* No line carries the trigger SKU (SO-2606-008, Loo 2026-06-12) — the
+       voucher is real and redeemable, so it must still print rather than
+       silently vanish. Happens when the stamped trigger drifted from the
+       booked lines (the pre-fix create path stamped the POS sofa ANCHOR SKU,
+       which the per-module split never books). Fall back to the first line. */
+    if (matching.length === 0) {
+      if (out.length > 0) out[0]!.push(...rows.map(pwpTriggerNoteOf));
+      continue;
+    }
     const ord = nextOrdinal.get(trigger) ?? 0;
     nextOrdinal.set(trigger, ord + 1);
     const lineIdx = matching[Math.min(ord, matching.length - 1)]!;
