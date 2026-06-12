@@ -81,6 +81,7 @@ import { pickCrossCategoryMatch, type AutoMatchCandidate } from '../lib/cross-ca
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
 import { creditFromCancelledSo, getCustomerCreditBalance } from '../lib/customer-credits';
 import { summariseReadiness } from '../lib/so-readiness';
+import { nextMonthlyDocNo } from '../lib/doc-no';
 import { soDeliverableRemaining, soLineDeliveries, computeSoLifecycle, soCurrentDocNo } from './delivery-orders-mfg';
 import { computeMrp, mrpLineCoverage } from './mrp';
 import type { Env, Variables } from '../env';
@@ -427,17 +428,21 @@ const deriveWarehouseIdFromState = async (
 };
 
 const nextDocNo = async (sb: any): Promise<string> => {
-  // Format: SO-YYMM-NNN (counts within month) — matches PO/DO/GRN/SI/DR/PI/PRT.
+  // Format: SO-YYMM-NNN — matches PO/DO/GRN/SI/DR/PI/PRT.
   // Legacy SO-NNNNNN numbers stay as-is; only newly created SOs use this scheme.
+  // max+1 via nextMonthlyDocNo, NOT count+1 — see lib/doc-no.ts for why
+  // (2026-06-12: count+1 re-minted a surviving doc_no after a mid-month
+  // delete and jammed every SO create on the pkey).
   const yymm = (() => {
     const d = new Date();
     return `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
   })();
-  const { count } = await sb
+  const { data } = await sb
     .from('mfg_sales_orders')
-    .select('doc_no', { head: true, count: 'exact' })
+    .select('doc_no')
     .like('doc_no', `SO-${yymm}-%`);
-  return `SO-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
+  const existing = ((data ?? []) as Array<{ doc_no: string }>).map((r) => r.doc_no);
+  return nextMonthlyDocNo(`SO-${yymm}`, existing);
 };
 
 /* ─────────────────────────── Cost snapshot ────────────────────────────
