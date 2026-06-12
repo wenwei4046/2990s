@@ -27,7 +27,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Save, Trash2, X, ChevronDown, ArrowRightLeft } from 'lucide-react';
 import { ItemGroupPill } from '../lib/category-badges';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary } from '@2990s/shared';
+import { activeOptions, buildVariantSummary, maintPickerValues } from '@2990s/shared';
 import {
   useCreatePurchaseInvoice,
   usePostPurchaseInvoice,
@@ -677,11 +677,11 @@ export const PurchaseInvoiceNew = () => {
                     <div style={{ fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', fontWeight: 700, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--fg-muted)', marginBottom: 'var(--space-2)' }}>{l.itemGroup} Variants</div>
                     {l.itemGroup === 'bedframe' ? (
                       <div className={styles.formGrid4}>
-                        <VariantSelect label="Divan Height" options={maint!.divanHeights}
+                        <VariantSelect label="Divan Height" options={activeOptions(maint!.divanHeights, String(l.variants?.divanHeight ?? ''))}
                           value={String(l.variants?.divanHeight ?? '')} onChange={(v) => setVariant('divanHeight', v)} />
-                        <VariantSelect label="Gap" options={maint!.gaps.map((g) => ({ value: g, priceSen: 0 }))}
+                        <VariantSelect label="Gap" options={maintPickerValues(maint!.gaps, String(l.variants?.gap ?? '')).map((g) => ({ value: g, priceSen: 0 }))}
                           value={String(l.variants?.gap ?? '')} onChange={(v) => setVariant('gap', v)} />
-                        <VariantSelect label="Leg Height" options={maint!.legHeights}
+                        <VariantSelect label="Leg Height" options={activeOptions(maint!.legHeights, String(l.variants?.legHeight ?? ''))}
                           value={String(l.variants?.legHeight ?? '')} onChange={(v) => setVariant('legHeight', v)} />
                         {/* Total Heights auto-computed (see setVariant). */}
                         <VariantSelect label="Special" options={specialsPools.bedframe}
@@ -689,9 +689,9 @@ export const PurchaseInvoiceNew = () => {
                       </div>
                     ) : (
                       <div className={styles.formGrid4}>
-                        <VariantSelect label="Seat Size" options={maint!.sofaSizes.map((s) => ({ value: s, priceSen: 0 }))}
+                        <VariantSelect label="Seat Size" options={maintPickerValues(maint!.sofaSizes, String(l.variants?.seatHeight ?? '')).map((s) => ({ value: s, priceSen: 0 }))}
                           value={String(l.variants?.seatHeight ?? '')} onChange={(v) => setVariant('seatHeight', v)} />
-                        <VariantSelect label="Leg Height" options={maint!.sofaLegHeights}
+                        <VariantSelect label="Leg Height" options={activeOptions(maint!.sofaLegHeights, String(l.variants?.legHeight ?? ''))}
                           value={String(l.variants?.legHeight ?? '')} onChange={(v) => setVariant('legHeight', v)} />
                         <VariantSelect label="Special" options={specialsPools.sofa}
                           value={String(l.variants?.special ?? '')} onChange={(v) => setVariant('special', v)} />

@@ -26,6 +26,7 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { Plus, Pencil, Trash2, History, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
+  maintValues,
   SOFA_MODULES,
   type SofaPriceTier,
   buildComboLabel,
@@ -98,7 +99,11 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
   // truth, master scope), so a size added in Maintenance shows up here
   // automatically — even on the supplier-scoped purchasing view.
   const heightsCfgQ = useMaintenanceConfig('master');
-  const heights = heightsCfgQ.data?.data?.sofaSizes ?? HEIGHTS_FALLBACK;
+  // ALL values (not just active) — existing combos may be priced on a
+  // deactivated height and those columns must keep rendering.
+  const heights = heightsCfgQ.data?.data?.sofaSizes
+    ? maintValues(heightsCfgQ.data.data.sofaSizes)
+    : HEIGHTS_FALLBACK;
 
   const baseModels = useMemo(() => {
     const set = new Set<string>();

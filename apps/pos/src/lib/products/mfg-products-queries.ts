@@ -9,6 +9,7 @@
 // ----------------------------------------------------------------------------
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { MaintPoolEntry } from '@2990s/shared';
 import { supabase } from '../supabase';
 
 const API_URL = import.meta.env.VITE_API_URL;
@@ -138,23 +139,32 @@ export type PricedOption = {
    *  (which commander on Backend treats as cost benchmark). View-only on POS
    *  for non-director roles. */
   sellingPriceSen?: number;
+  /** Owner spec 2026-06-12 — inactive options hide from NEW-entry pickers
+   *  only; price/cost lookups keep resolving them for existing docs. */
+  active?: boolean;
 };
+
+/* Owner spec 2026-06-12 — string-pool entries are either a plain string
+ * (= active, historic shape) or { value, active } once toggled off on the
+ * Backend Maintenance tab. Unwrap via maintValues / maintActiveValues from
+ * @2990s/shared. */
+export type { MaintPoolEntry } from '@2990s/shared';
 
 export type MaintenanceConfig = {
   divanHeights:    PricedOption[];
   legHeights:      PricedOption[];
   totalHeights:    PricedOption[];
-  gaps:            string[];
+  gaps:            MaintPoolEntry[];
   specials:        PricedOption[];
   sofaLegHeights:  PricedOption[];
   sofaSpecials:    PricedOption[];
-  sofaSizes:       string[];
+  sofaSizes:       MaintPoolEntry[];
   // PR #50 — master pools that drive Model.allowed_options ticking + the
   // "+ Add Code" wizard. Optional on the wire because old maintenance rows
   // don't have them; the UI seeds defaults on first read.
-  bedframeSizes?:    string[];   // ['K','Q','S','SS','SK','SP'] — bedframe size codes
-  sofaCompartments?: string[];   // ['1A(LHF)','1A(RHF)','1NA',...] — sofa compartment codes
-  mattressSizes?:    string[];   // ['K','Q','S','SS']
+  bedframeSizes?:    MaintPoolEntry[];   // ['K','Q','S','SS','SK','SP'] — bedframe size codes
+  sofaCompartments?: MaintPoolEntry[];   // ['1A(LHF)','1A(RHF)','1NA',...] — sofa compartment codes
+  mattressSizes?:    MaintPoolEntry[];   // ['K','Q','S','SS']
   // PR #220 (Commander 2026-05-27): per-compartment design metadata — POS
   // module designs (image + description + default price) brought into the
   // Maintenance UI for back-office reference. Keyed by compartment code,

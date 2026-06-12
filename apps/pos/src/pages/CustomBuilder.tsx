@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type CSSProperties, type Dispatch, type PointerEvent, type ReactNode, type SetStateAction } from 'react';
 import { Trash2, RotateCw, Eraser, Maximize2, Minimize2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, fabricTierAddon, type FabricTier } from '@2990s/shared';
+import { fmtRM, fabricTierAddon, maintActiveValues, type FabricTier } from '@2990s/shared';
 import {
   SOFA_MODULES,
   findModule,
@@ -1903,7 +1903,11 @@ function CreateComboModal({
   // → Sofa → Sizes; key `sofaSizes`) — the SAME source the Backend Combo Pricing
   // "New Combo" panel uses, so this dialog offers every size that panel does.
   const heightsCfg = useMaintenanceConfig('master');
-  const heights = heightsCfg.data?.data?.sofaSizes ?? COMBO_HEIGHTS_FALLBACK;
+  // ACTIVE sizes only (owner spec 2026-06-12) — this dialog creates NEW
+  // combos, so deactivated seat sizes must not be offered.
+  const heights = heightsCfg.data?.data?.sofaSizes
+    ? maintActiveValues(heightsCfg.data.data.sofaSizes)
+    : COMBO_HEIGHTS_FALLBACK;
   // Seed the current seat depth with the live à-la-carte total (the price the
   // Master Admin is looking at); every other size starts blank — a blank size
   // means "no combo here" → that size uses the base price.

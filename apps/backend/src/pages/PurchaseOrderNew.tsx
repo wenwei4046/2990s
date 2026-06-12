@@ -31,7 +31,8 @@ import {
   type OutstandingSoItem,
 } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
-import { useFabricTrackings } from '../lib/fabric-queries';
+import { activeOptions, maintPickerValues } from '@2990s/shared';
+import { useFabricTrackings, fabricOptionLabel } from '../lib/fabric-queries';
 import { useWarehouses } from '../lib/inventory-queries';
 import {
   computeMfgPoUnitCost,
@@ -1109,9 +1110,9 @@ export const PurchaseOrderNew = () => {
                               onChange={(e) => setVariant(l.rid, 'fabricCode', e.target.value)}
                             >
                               <option value="" disabled>Select…</option>
-                              {fabrics.map((f) => (
+                              {fabrics.filter((f) => f.is_active !== false || f.fabric_code === String(l.variants.fabricCode ?? '')).map((f) => (
                                 <option key={f.id} value={f.fabric_code}>
-                                  {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
+                                  {fabricOptionLabel(f)}
                                 </option>
                               ))}
                             </select>
@@ -1124,7 +1125,7 @@ export const PurchaseOrderNew = () => {
                               onChange={(e) => setVariant(l.rid, 'gap', e.target.value)}
                             >
                               <option value="" disabled>Select…</option>
-                              {maint!.gaps.map((g) => (<option key={g} value={g}>{g}</option>))}
+                              {maintPickerValues(maint!.gaps, String(l.variants.gap ?? '')).map((g) => (<option key={g} value={g}>{g}</option>))}
                             </select>
                           </label>
                           <label className={styles.field}>
@@ -1135,7 +1136,7 @@ export const PurchaseOrderNew = () => {
                               onChange={(e) => setVariant(l.rid, 'divanHeight', e.target.value)}
                             >
                               <option value="" disabled>Select…</option>
-                              {maint!.divanHeights.map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
+                              {activeOptions(maint!.divanHeights, String(l.variants.divanHeight ?? '')).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
                             </select>
                           </label>
                           <label className={styles.field}>
@@ -1146,7 +1147,7 @@ export const PurchaseOrderNew = () => {
                               onChange={(e) => setVariant(l.rid, 'legHeight', e.target.value)}
                             >
                               <option value="" disabled>Select…</option>
-                              {maint!.legHeights.map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
+                              {activeOptions(maint!.legHeights, String(l.variants.legHeight ?? '')).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
                             </select>
                           </label>
                           {/* Total Heights — Commander 2026-05-29: removed the
@@ -1176,9 +1177,9 @@ export const PurchaseOrderNew = () => {
                               onChange={(e) => setVariant(l.rid, 'fabricCode', e.target.value)}
                             >
                               <option value="" disabled>Select…</option>
-                              {fabrics.map((f) => (
+                              {fabrics.filter((f) => f.is_active !== false || f.fabric_code === String(l.variants.fabricCode ?? '')).map((f) => (
                                 <option key={f.id} value={f.fabric_code}>
-                                  {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
+                                  {fabricOptionLabel(f)}
                                 </option>
                               ))}
                             </select>
@@ -1191,7 +1192,7 @@ export const PurchaseOrderNew = () => {
                               onChange={(e) => setVariant(l.rid, 'seatHeight', e.target.value)}
                             >
                               <option value="" disabled>Select…</option>
-                              {maint!.sofaSizes.map((s) => (<option key={s} value={s}>{s}</option>))}
+                              {maintPickerValues(maint!.sofaSizes, String(l.variants.seatHeight ?? '')).map((s) => (<option key={s} value={s}>{s}</option>))}
                             </select>
                           </label>
                           <label className={styles.field}>
@@ -1202,7 +1203,7 @@ export const PurchaseOrderNew = () => {
                               onChange={(e) => setVariant(l.rid, 'legHeight', e.target.value)}
                             >
                               <option value="" disabled>Select…</option>
-                              {maint!.sofaLegHeights.map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
+                              {activeOptions(maint!.sofaLegHeights, String(l.variants.legHeight ?? '')).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
                             </select>
                           </label>
                           <span />

@@ -145,14 +145,19 @@ type Catalog = {
 };
 
 // MaintenanceConfig option entries are either plain strings or
-// { value, priceSen? } objects — accept both (mirrors @2990s/shared
-// mfg-pricing MfgPricedOption).
+// { value, priceSen?, active? } objects — accept both (mirrors @2990s/shared
+// mfg-pricing MfgPricedOption / maintenance-pools MaintPoolEntry).
+// ACTIVE only (owner spec 2026-06-12): the scan-SO catalog feeds the OCR
+// prompt for NEW orders, so options toggled inactive in Products →
+// Maintenance must never re-enter via a scan. Plain strings = active;
+// objects are active unless `active === false`.
 function optionValues(arr: unknown): string[] {
   if (!Array.isArray(arr)) return [];
   return arr
     .map((x) => {
       if (typeof x === 'string') return x;
       if (x && typeof x === 'object' && 'value' in x) {
+        if ((x as { active?: unknown }).active === false) return '';
         const v = (x as { value?: unknown }).value;
         return typeof v === 'string' ? v : '';
       }
@@ -170,9 +175,12 @@ async function loadCatalog(sb: SupabaseClient): Promise<Catalog> {
       .order('category')
       .order('code')
       .limit(5000),
+    // Migration 0167 — ACTIVE fabrics only: a deactivated fabric must not
+    // re-enter on NEW scanned orders (existing docs keep their stored code).
     sb
       .from('fabric_trackings')
       .select('fabric_code, fabric_description')
+      .eq('is_active', true)
       .order('fabric_code')
       .limit(5000),
     sb
@@ -214,9 +222,8 @@ async function loadCatalog(sb: SupabaseClient): Promise<Catalog> {
   let sofaLegHeights: string[] = [];
   const cfg = (cfgRes.data as { config?: Record<string, unknown> } | null)?.config;
   if (cfg && typeof cfg === 'object') {
-    sofaSizes = Array.isArray(cfg.sofaSizes)
-      ? (cfg.sofaSizes as unknown[]).filter((x): x is string => typeof x === 'string')
-      : [];
+    // optionValues filters inactive entries (plain strings = active).
+    sofaSizes = optionValues(cfg.sofaSizes);
     sofaLegHeights = optionValues(cfg.sofaLegHeights);
   }
 

@@ -34,6 +34,7 @@ import {
   type MfgFabricTier,
 } from '@2990s/shared/mfg-pricing';
 import { missingVariantAxes } from '@2990s/shared/so-variant-rule';
+import { activeOptions, maintPickerValues } from '@2990s/shared';
 import {
   useMfgProducts,
   useMaintenanceConfig,
@@ -423,10 +424,24 @@ const SoLineCardInner = ({
      list still renders as "(current)" so the select doesn't blank out. */
   const fabricOptions = useMemo(() => {
     const seriesLabel = new Map((fabricLibQ.data ?? []).map((f) => [f.id, f.label]));
+    /* Dual-code display (owner 2026-06-12): "CG-015 · DC-151-03 — description".
+       The supplier's EXTERNAL code lives on fabric_trackings.supplier_code
+       (colourId == fabric_code). Display-only — the stored value stays the
+       internal colourId/fabric_code. */
+    const supplierCodeByFabric = new Map(
+      fabrics.map((f) => [f.fabric_code, f.supplier_code?.trim() || null] as const),
+    );
     const pool = allowOpts?.fabrics;
-    const colours = (Array.isArray(pool) && pool.length > 0)
+    /* Migration 0167 — fabric_trackings.is_active gates pickers for NEW
+       entries. A saved line whose fabric was deactivated still renders via
+       the "(current)" unshift below. */
+    const inactiveCodes = new Set(
+      fabrics.filter((f) => f.is_active === false).map((f) => f.fabric_code),
+    );
+    const colours = ((Array.isArray(pool) && pool.length > 0)
       ? (fabricColoursQ.data ?? []).filter((c) => pool.includes(c.colourId))
-      : (fabricColoursQ.data ?? []);
+      : (fabricColoursQ.data ?? [])
+    ).filter((c) => !inactiveCodes.has(c.colourId));
     const opts = colours.map((c) => {
       const series = seriesLabel.get(c.fabricId) ?? c.fabricId;
       /* Drop the "· <series>" segment when the series name is just the code's
@@ -435,20 +450,28 @@ const SoLineCardInner = ({
       const seriesRedundant =
         !series || c.colourId === series || c.colourId.startsWith(`${series}-`);
       const colourSuffix = c.label && c.label !== c.colourId ? ` (${c.label})` : '';
+      const ext = supplierCodeByFabric.get(c.colourId);
+      const codePart = ext ? `${c.colourId} · ${ext}` : c.colourId;
+      const descPart = seriesRedundant
+        ? colourSuffix.trim()
+        : `${series}${colourSuffix}`;
       return {
         value: c.colourId,
         priceSen: 0,
-        display: seriesRedundant
-          ? `${c.colourId}${colourSuffix}`
-          : `${c.colourId} · ${series}${colourSuffix}`,
+        display: descPart ? `${codePart} — ${descPart}` : codePart,
       };
     });
     const current = String(draft.variants.fabricCode ?? '');
     if (current && !opts.some((o) => o.value === current)) {
-      opts.unshift({ value: current, priceSen: 0, display: `${current} (current)` });
+      const ext = supplierCodeByFabric.get(current);
+      opts.unshift({
+        value: current,
+        priceSen: 0,
+        display: `${ext ? `${current} · ${ext}` : current} (current)`,
+      });
     }
     return opts;
-  }, [fabricColoursQ.data, fabricLibQ.data, allowOpts, draft.variants.fabricCode]);
+  }, [fabricColoursQ.data, fabricLibQ.data, fabrics, allowOpts, draft.variants.fabricCode]);
 
   /* Picking a colour writes the SAME variant keys the POS handover payload
      sends (pos-handover-so.ts buildVariants): fabricCode + colourId satisfy
@@ -754,21 +777,21 @@ const SoLineCardInner = ({
               label="Gaps" required
               value={String(draft.variants.gap ?? '')}
               disabled={!isEditing}
-              options={restrictS(maint!.gaps, allowOpts?.gaps).map((g) => ({ value: g, priceSen: 0 }))}
+              options={restrictS(maintPickerValues(maint!.gaps, String(draft.variants.gap ?? '')), allowOpts?.gaps).map((g) => ({ value: g, priceSen: 0 }))}
               onChange={(v) => setVariant('gap', v)}
             />
             <VariantSelect
               label="Divan Heights" required
               value={String(draft.variants.divanHeight ?? '')}
               disabled={!isEditing}
-              options={restrictP(maint!.divanHeights, allowOpts?.divan_heights)}
+              options={restrictP(activeOptions(maint!.divanHeights, String(draft.variants.divanHeight ?? '')), allowOpts?.divan_heights)}
               onChange={(v) => setVariant('divanHeight', v)}
             />
             <VariantSelect
               label="Leg Heights" required
               value={String(draft.variants.legHeight ?? '')}
               disabled={!isEditing}
-              options={restrictP(maint!.legHeights, allowOpts?.leg_heights)}
+              options={restrictP(activeOptions(maint!.legHeights, String(draft.variants.legHeight ?? '')), allowOpts?.leg_heights)}
               onChange={(v) => setVariant('legHeight', v)}
             />
           </div>
@@ -812,7 +835,7 @@ const SoLineCardInner = ({
               label="Seat Heights" required
               value={String(draft.variants.seatHeight ?? '')}
               disabled={!isEditing}
-              options={restrictS(maint!.sofaSizes, allowOpts?.sizes).map((s) => {
+              options={restrictS(maintPickerValues(maint!.sofaSizes, String(draft.variants.seatHeight ?? '')), allowOpts?.sizes).map((s) => {
                 const sh = picked?.seat_height_prices && Array.isArray(picked.seat_height_prices)
                   ? (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
                       .find((p) => p.height === s && p.tier === 'PRICE_2')
@@ -825,7 +848,7 @@ const SoLineCardInner = ({
               label="Leg Heights" required
               value={String(draft.variants.legHeight ?? '')}
               disabled={!isEditing}
-              options={restrictP(maint!.sofaLegHeights, allowOpts?.leg_heights)}
+              options={restrictP(activeOptions(maint!.sofaLegHeights, String(draft.variants.legHeight ?? '')), allowOpts?.leg_heights)}
               onChange={(v) => setVariant('legHeight', v)}
             />
             {/* Empty cell so the 4-col grid stays balanced */}

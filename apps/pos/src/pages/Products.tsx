@@ -64,6 +64,12 @@ import {
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
+  maintValues,
+  maintActiveValues,
+  maintEntryValue,
+  maintEntryActive,
+  maintEntryWithValue,
+  type MaintPoolEntry,
   SOFA_MODULES,
   resolveSofaQuickPresets,
   type SofaQuickPreset,
@@ -1008,12 +1014,15 @@ const ModelAllowedOptionsDrawer = ({
   const pricedValues = (arr: PricedOption[] | undefined): string[] =>
     (arr ?? []).map((p) => p.value);
 
+  // ACTIVE toggles (owner spec 2026-06-12) — Modular chips offer ACTIVE
+  // values only; already-ticked inactive values still render via the
+  // allowed_options union downstream.
   const sizePool: string[] = isSofa
-    ? (cfg.sofaSizes ?? ['24', '26', '28', '30', '32', '35'])
+    ? (cfg.sofaSizes ? maintActiveValues(cfg.sofaSizes) : ['24', '26', '28', '30', '32', '35'])
     : isMattress
-      ? (cfg.mattressSizes ?? [])
-      : (cfg.bedframeSizes ?? []);
-  const compartmentPool: string[] = isSofa ? (cfg.sofaCompartments ?? []) : [];
+      ? maintActiveValues(cfg.mattressSizes)
+      : maintActiveValues(cfg.bedframeSizes);
+  const compartmentPool: string[] = isSofa ? maintActiveValues(cfg.sofaCompartments) : [];
   const legHeightPool: string[]   = isSofa
     ? pricedValues(cfg.sofaLegHeights)
     : isBedframe
@@ -1417,7 +1426,9 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   const allRows = useMemo(() => products ?? [], [products]);
   const isSofaView = category === 'SOFA';
   const isMattressView = category === 'MATTRESS';
-  const sofaSizes = config.data?.data?.sofaSizes ?? ['24', '26', '28', '30', '32', '35'];
+  const sofaSizes = config.data?.data?.sofaSizes
+    ? maintValues(config.data.data.sofaSizes)
+    : ['24', '26', '28', '30', '32', '35'];
 
   // PR #39 + #107 — distinct base_model values for the current category.
   // Commander 2026-05-26: "为什么 bedframe 没有像 sofa 那样". Extended from
@@ -2586,9 +2597,12 @@ export const MaintenanceTab = ({
     // all carry the new name the moment the save lands. Master scope only —
     // supplier scopes are surcharge overlays, never the code authority.
     if (scope === 'master') {
-      const baseline =
-        resolved.data?.data?.sofaCompartments ?? masterFallback.data?.data?.sofaCompartments ?? [];
-      const next = draft.sofaCompartments ?? [];
+      // ACTIVE toggles — entries may be { value, active } objects; the rename
+      // cascade compares VALUES only (an active flip is not a rename).
+      const baseline = maintValues(
+        resolved.data?.data?.sofaCompartments ?? masterFallback.data?.data?.sofaCompartments,
+      );
+      const next = maintValues(draft.sofaCompartments);
       const renames: Array<{ from: string; to: string }> = [];
       const len = Math.min(baseline.length, next.length);
       for (let i = 0; i < len; i++) {
@@ -3069,8 +3083,10 @@ const SofaCompartmentsList = ({
   const updateCode = (idx: number, newVal: string) => {
     const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
     const arr  = next.sofaCompartments ?? [];
-    const old  = arr[idx];
-    arr[idx]   = newVal;
+    // ACTIVE toggles (owner spec 2026-06-12) — entries may be { value,
+    // active } objects; edits rewrite the value but preserve the flag.
+    const old  = arr[idx] != null ? maintEntryValue(arr[idx]!) : undefined;
+    if (arr[idx] != null) arr[idx] = maintEntryWithValue(arr[idx]!, newVal);
     next.sofaCompartments = arr;
     // Migrate the meta key alongside the code rename so the override
     // doesn't get orphaned. If the new code already has meta, leave it.
@@ -3087,7 +3103,8 @@ const SofaCompartmentsList = ({
 
   return (
     <div className={styles.maintList}>
-      {items.map((code, i) => {
+      {items.map((entry, i) => {
+        const code = maintEntryValue(entry);
         const resolved = resolveCompartmentMeta(code, meta[code]);
         const stored   = meta[code];
         const hasImage = Boolean(resolved.imageKey);
@@ -3420,7 +3437,7 @@ const SofaQuickPresetsList = ({
   const isUsingFallback = !stored || stored.length === 0;
 
   const compartmentPool: string[] = (config.sofaCompartments && config.sofaCompartments.length > 0)
-    ? config.sofaCompartments
+    ? maintActiveValues(config.sofaCompartments)
     : SOFA_MODULES.map((m) => m.id);
 
   const writeAll = (next: SofaQuickPreset[]) => {
@@ -3937,11 +3954,15 @@ const MaintenanceList = ({
     || listKey === 'bedframeSizes'
     || listKey === 'mattressSizes'
   ) {
-    const items = (config[listKey] as string[] | undefined) ?? [];
+    // ACTIVE toggles (owner spec 2026-06-12) — entries may be plain strings
+    // (= active) or { value, active: false } once toggled off on the Backend
+    // Maintenance tab. POS renders the VALUE and preserves the flag on edit;
+    // the Active checkbox itself lives on the Backend editor.
+    const items = (config[listKey] as MaintPoolEntry[] | undefined) ?? [];
 
     const removeAt = (idx: number) => {
       const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
-      const arr = (next[listKey] as string[] | undefined) ?? [];
+      const arr = (next[listKey] as MaintPoolEntry[] | undefined) ?? [];
       arr.splice(idx, 1);
       (next as Record<string, unknown>)[listKey] = arr;
       onChange(next);
@@ -3953,7 +3974,7 @@ const MaintenanceList = ({
       const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
       // Same defaulting story — the new pool keys (PR #50) may not exist on
       // old maintenance_config rows yet.
-      const arr = (next[listKey] as string[] | undefined) ?? [];
+      const arr = (next[listKey] as MaintPoolEntry[] | undefined) ?? [];
       arr.push(v);
       (next as Record<string, unknown>)[listKey] = arr;
       // add-only mode: POST immediately. editMode: stash in draft for the
@@ -3968,8 +3989,8 @@ const MaintenanceList = ({
        inline edit — added below. */
     const updateAt = (idx: number, newVal: string) => {
       const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
-      const arr = (next[listKey] as string[] | undefined) ?? [];
-      arr[idx] = newVal;
+      const arr = (next[listKey] as MaintPoolEntry[] | undefined) ?? [];
+      if (arr[idx] != null) arr[idx] = maintEntryWithValue(arr[idx]!, newVal);
       (next as Record<string, unknown>)[listKey] = arr;
       onChange(next);
     };
@@ -3991,7 +4012,8 @@ const MaintenanceList = ({
     };
     return (
       <div className={styles.maintList}>
-        {items.map((v, i) => {
+        {items.map((entry, i) => {
+          const v = maintEntryValue(entry);
           const labelOv = config.sizeLabels?.[v];
           const resolved = isSizeRow ? resolveSizeInfo(v, config) : null;
           return (

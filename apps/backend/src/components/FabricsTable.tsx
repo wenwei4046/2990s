@@ -22,6 +22,7 @@ import {
   useUpdateFabricSupplierCode,
   useUpdateFabricDescription,
   useUpdateFabricSeries,
+  useUpdateFabricActive,
   useDeleteFabric,
   type FabricTier,
   type FabricTierField,
@@ -58,6 +59,26 @@ const TierCell = ({ row, field, tier }: {
       title="Click to cycle PRICE_1 → 2 → 3"
     >
       {tierShort(tier)}
+    </button>
+  );
+};
+
+/* Migration 0167 — ACTIVE toggle (owner spec 2026-06-12). Yes/No click-to-
+   toggle. Inactive = hidden from NEW-entry fabric pickers (SO/CO variant
+   selects, scan-SO catalog); existing documents keep displaying the code. */
+const ActiveCell = ({ row }: { row: FabricTrackingRow }) => {
+  const update = useUpdateFabricActive();
+  const isActive = row.is_active !== false;
+  return (
+    <button
+      type="button"
+      className={styles.tierPicker}
+      onClick={() => update.mutate({ id: row.id, isActive: !isActive })}
+      disabled={update.isPending}
+      title="Inactive fabrics are hidden from pickers for new entries; existing documents keep showing them"
+      style={isActive ? undefined : { color: 'var(--fg-muted)', opacity: 0.7 }}
+    >
+      {isActive ? 'Yes' : 'No'}
     </button>
   );
 };
@@ -141,6 +162,15 @@ const FABRIC_COLUMNS: DataGridColumn<FabricTrackingRow>[] = [
     searchValue: (r) => tierShort(bedTier(r)),
     filterValue: (r) => tierShort(bedTier(r)),
     sortFn: (a, b) => tierShort(bedTier(a)).localeCompare(tierShort(bedTier(b))),
+  },
+  {
+    key: 'active',
+    label: 'Active',
+    width: 80,
+    accessor: (r) => <ActiveCell row={r} />,
+    searchValue: (r) => (r.is_active !== false ? 'Yes' : 'No'),
+    filterValue: (r) => (r.is_active !== false ? 'Yes' : 'No'),
+    sortFn: (a, b) => Number(b.is_active !== false) - Number(a.is_active !== false),
   },
   {
     key: 'actions',

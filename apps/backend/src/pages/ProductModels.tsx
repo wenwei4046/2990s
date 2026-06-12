@@ -12,12 +12,14 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ProductModelDetail } from './ProductModelDetail';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
-import { Layers, Search, Plus, Trash2, Truck, X, ImageOff, Upload } from 'lucide-react';
+import { Layers, Search, Plus, Trash2, Truck, X, ImageOff, Upload, Edit3 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { maintActiveValues } from '@2990s/shared';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   useProductModels, useCreateProductModel, useGenerateModelSkus, useDeleteProductModel,
-  useUploadProductModelPhoto, useDeleteProductModelPhoto, useBrandingPool,
-  type ProductModelRow,
+  useUpdateProductModel, useUploadProductModelPhoto, useDeleteProductModelPhoto, useBrandingPool,
+  type ProductModelRow, type AllowedOptions,
 } from '../lib/product-models-queries';
 import { useMaintenanceConfig, useMfgProducts, type MfgCategory, type MfgProductRow } from '../lib/mfg-products-queries';
 import {
@@ -57,6 +59,11 @@ export const ProductModels = () => {
   // dedicated route still exists for deep-links; this is just the Modular
   // entrypoint.
   const [openModelId, setOpenModelId] = useState<string | null>(null);
+  // Owner request 2026-06-12 — quick per-model Edit dialog (name / branding /
+  // description + allowed sizes & compartments) without opening the full
+  // detail drawer. PATCH /product-models/:id; for SOFA the server auto-creates
+  // SKUs for newly-activated compartments.
+  const [editModel, setEditModel] = useState<ProductModelRow | null>(null);
   // PR #106 — Commander 2026-05-26: showed Modular list with rows he didn't
   // recognize ("这些都没在我的 SKU 里面啊"). Multi-select + bulk delete so he
   // can sweep orphan Models (test entries, migration-0062 backfill leftovers)
@@ -207,6 +214,34 @@ export const ProductModels = () => {
         searchValue: (m) => m.description ?? '',
         filterValue: (m) => m.description ?? '—',
       },
+      {
+        // Owner request 2026-06-12 — per-model Edit action. Opens the quick
+        // edit dialog (delete / add behaviours stay where they are).
+        key: 'edit',
+        label: '',
+        width: 48,
+        minWidth: 44,
+        sortable: false,
+        groupable: false,
+        accessor: (m) => (
+          <span {...stop} style={{ display: 'inline-flex' }}>
+            <button
+              type="button"
+              aria-label={`Edit ${m.model_code}`}
+              title="Edit name / branding / description / allowed options"
+              onClick={() => setEditModel(m)}
+              style={{
+                background: 'transparent', border: 'none', padding: 4,
+                cursor: 'pointer', color: 'var(--fg-muted)',
+                display: 'inline-flex', alignItems: 'center',
+              }}
+            >
+              <Edit3 size={14} strokeWidth={1.75} />
+            </button>
+          </span>
+        ),
+        searchValue: () => '',
+      },
     ];
   }, [selectedIds, toggleOne]);
 
@@ -346,6 +381,11 @@ export const ProductModels = () => {
       />
 
       {creating && <NewModelDialog onClose={() => setCreating(false)} />}
+
+      {/* Owner request 2026-06-12 — quick per-model Edit dialog. */}
+      {editModel && (
+        <EditModelDialog model={editModel} onClose={() => setEditModel(null)} />
+      )}
 
       {/* PR — Commander 2026-05-27: bulk Assign-to-Supplier dialog. */}
       {assigningSupplier && (
@@ -687,10 +727,10 @@ export function NewModelDialog({
   // new Model is born offering every variant from the global pool; commander
   // toggles off what doesn't apply. Re-runs on pool change so a Maintenance
   // edit (e.g. adding SP to bedframe sizes) doesn't leave the dialog stale.
-  const _sizesPool = (category === 'MATTRESS'
+  const _sizesPool = maintActiveValues((category === 'MATTRESS'
     ? maintenance.data?.data?.mattressSizes
-    : maintenance.data?.data?.bedframeSizes) ?? [];
-  const _compsPool = maintenance.data?.data?.sofaCompartments ?? [];
+    : maintenance.data?.data?.bedframeSizes) ?? []);
+  const _compsPool = maintActiveValues(maintenance.data?.data?.sofaCompartments);
   useEffect(() => {
     if ((category === 'MATTRESS' || category === 'BEDFRAME') && _sizesPool.length > 0) {
       setPickedSizes(new Set(_sizesPool));
@@ -1397,6 +1437,212 @@ function InlineAllowedOptions({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   EditModelDialog — quick per-model Edit (owner request 2026-06-12).
+
+   The Modular tab's hierarchy rows had Add (+ New Model) and Delete but no
+   Edit. This dialog edits name / branding / description plus the allowed
+   sizes & compartments, reusing the same chip picker (InlineAllowedOptions)
+   the NewModelDialog uses and the same PATCH /product-models/:id the detail
+   drawer saves through — which, for SOFA, auto-creates SKUs for any
+   newly-activated compartments server-side. Other allowed_options keys
+   (leg_heights / divan_heights / gaps / specials / fabrics / thickness)
+   are preserved untouched via a merge on save.
+   ════════════════════════════════════════════════════════════════════════ */
+
+function EditModelDialog({
+  model, onClose,
+}: { model: ProductModelRow; onClose: () => void }) {
+  const updateMut   = useUpdateProductModel();
+  const maintenance = useMaintenanceConfig('master');
+  const brandingPool = useBrandingPool();
+  const qc = useQueryClient();
+
+  const cfg = maintenance.data?.data;
+  const isSofa      = model.category === 'SOFA';
+  const hasSizeAxis = isSofa || model.category === 'BEDFRAME' || model.category === 'MATTRESS';
+
+  /* Pools: Maintenance master pool ∪ the model's saved picks, so a saved
+     value that fell out of the pool still renders as a togglable chip
+     instead of silently disappearing (same posture as the SO line editor's
+     "(current)" fallback). Fallback literals mirror ProductModelDetail. */
+  const sizesPool = useMemo(() => {
+    const base = maintActiveValues(isSofa
+      ? cfg?.sofaSizes ?? ['24', '26', '28', '30', '32', '35']
+      : model.category === 'MATTRESS'
+        ? cfg?.mattressSizes ?? ['K', 'Q', 'S', 'SS']
+        : cfg?.bedframeSizes ?? ['K', 'Q', 'S', 'SS', 'SK', 'SP']);
+    return Array.from(new Set([...base, ...(model.allowed_options?.sizes ?? [])]));
+  }, [cfg, isSofa, model]);
+  const compsPool = useMemo(() => {
+    const base = maintActiveValues(cfg?.sofaCompartments);
+    return Array.from(new Set([...base, ...(model.allowed_options?.compartments ?? [])]));
+  }, [cfg, model]);
+
+  const [branding,    setBranding]    = useState(model.branding ?? '');
+  const [name,        setName]        = useState(model.name);
+  const [description, setDescription] = useState(model.description ?? '');
+  // Saved picks win; an EMPTY saved list means "no restriction" downstream, so
+  // it seeds as all-on — same mental model as ProductModelDetail (PR #87).
+  const [pickedSizes, setPickedSizes] = useState<Set<string>>(
+    () => new Set((model.allowed_options?.sizes?.length ? model.allowed_options.sizes : sizesPool)),
+  );
+  const [pickedComps, setPickedComps] = useState<Set<string>>(
+    () => new Set((model.allowed_options?.compartments?.length ? model.allowed_options.compartments : compsPool)),
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  /* When the model saved NO picks (= no restriction) the all-on seed above may
+     have run before the Maintenance config arrived (fallback pool). Re-seed
+     once the real pool lands so the chips reflect it — mirrors the fillIfEmpty
+     re-run in ProductModelDetail. Models WITH saved picks are never reseeded. */
+  useEffect(() => {
+    if (!cfg) return;
+    if (hasSizeAxis && !(model.allowed_options?.sizes?.length)) setPickedSizes(new Set(sizesPool));
+    if (isSofa && !(model.allowed_options?.compartments?.length)) setPickedComps(new Set(compsPool));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [Boolean(cfg)]);
+
+  const onSave = () => {
+    setError(null);
+    if (!name.trim()) { setError('Name is required.'); return; }
+    if (isSofa && pickedComps.size === 0) {
+      setError('Pick at least one compartment — a sofa model must offer at least one module.');
+      return;
+    }
+    if (hasSizeAxis && pickedSizes.size === 0) {
+      setError('Pick at least one size.');
+      return;
+    }
+    // Merge: only the keys this dialog edits change; everything else the
+    // detail drawer manages (leg heights, specials, fabrics, …) rides along.
+    const ao: AllowedOptions = { ...(model.allowed_options ?? {}) };
+    if (hasSizeAxis) ao.sizes = Array.from(pickedSizes);
+    if (isSofa)      ao.compartments = Array.from(pickedComps);
+    updateMut.mutate(
+      {
+        id:          model.id,
+        branding:    branding.trim() || null,
+        name:        name.trim(),
+        description: description.trim() || null,
+        ...(hasSizeAxis ? { allowedOptions: ao } : {}),
+      },
+      {
+        onSuccess: (res) => {
+          // The SOFA PATCH may have auto-created SKUs for newly-activated
+          // compartments — refresh the SKU Master too.
+          qc.invalidateQueries({ queryKey: ['mfg-products'] });
+          const created = (res as { autoCreatedSkus?: string[] }).autoCreatedSkus ?? [];
+          if (created.length > 0) {
+            // eslint-disable-next-line no-alert
+            alert(`Saved. ${created.length} new SKU${created.length === 1 ? '' : 's'} auto-created: ${created.join(', ')}`);
+          }
+          onClose();
+        },
+        onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+      },
+    );
+  };
+
+  return (
+    <div className={styles.modalBackdrop} onClick={onClose}>
+      <form
+        className={`${styles.modal} ${styles.modalCompact}`}
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={(e) => { e.preventDefault(); onSave(); }}
+        noValidate
+        style={{ maxHeight: '90vh', overflowY: 'auto' }}
+      >
+        <datalist id="branding-pool-edit-model">
+          {brandingPool.pool.map((b) => <option key={b} value={b} />)}
+        </datalist>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 'var(--space-4)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+            <h2 className={styles.modalTitle}>
+              Edit <code className={styles.codeChip}>{model.model_code}</code> · {model.category}
+            </h2>
+            <p className={styles.modalSub} style={{ margin: 0 }}>
+              Name, branding, description and allowed options. Model code stays
+              editable from the detail drawer.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            style={{ background: 'transparent', border: 'none', color: 'var(--fg-muted)', cursor: 'pointer', padding: 4, lineHeight: 0 }}
+          >
+            <X size={18} strokeWidth={1.75} />
+          </button>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '140px minmax(160px, 1fr) minmax(160px, 1.4fr)', gap: 'var(--space-3)' }}>
+          <label className={styles.compactField}>
+            <span>Branding</span>
+            <input
+              type="text"
+              list="branding-pool-edit-model"
+              value={branding}
+              onChange={(e) => setBranding(e.target.value)}
+              placeholder="optional"
+            />
+          </label>
+          <label className={styles.compactField}>
+            <span>Name *</span>
+            <input type="text" value={name} onChange={(e) => setName(e.target.value)} required />
+          </label>
+          <label className={styles.compactField}>
+            <span>Description</span>
+            <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="optional" />
+          </label>
+        </div>
+
+        {hasSizeAxis && (
+          <InlineAllowedOptions
+            label={isSofa ? 'Seat sizes (inches)' : 'Sizes'}
+            hint="Untick what this Model doesn't sell · pool from Maintenance"
+            options={sizesPool}
+            picked={pickedSizes}
+            onToggle={(v) => setPickedSizes((prev) => {
+              const n = new Set(prev);
+              if (n.has(v)) n.delete(v); else n.add(v);
+              return n;
+            })}
+            onSetAll={(vs) => setPickedSizes(new Set(vs))}
+            formatChip={isSofa ? undefined : (code) => {
+              const info = resolveSizeInfo(code, maintenance.data?.data);
+              return info.label && info.label !== code ? `${code} · ${info.label}` : code;
+            }}
+          />
+        )}
+        {isSofa && (
+          <InlineAllowedOptions
+            label="Compartments"
+            hint="Newly-ticked compartments auto-create their SKU in SKU Master on save"
+            options={compsPool}
+            picked={pickedComps}
+            onToggle={(v) => setPickedComps((prev) => {
+              const n = new Set(prev);
+              if (n.has(v)) n.delete(v); else n.add(v);
+              return n;
+            })}
+            onSetAll={(vs) => setPickedComps(new Set(vs))}
+          />
+        )}
+
+        {error && <div className={styles.errorBanner}>{error}</div>}
+
+        <footer className={styles.modalFooter}>
+          <Button variant="ghost" size="md" type="button" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" size="md" type="submit" disabled={updateMut.isPending}>
+            {updateMut.isPending ? 'Saving…' : 'Save changes'}
+          </Button>
+        </footer>
+      </form>
     </div>
   );
 }

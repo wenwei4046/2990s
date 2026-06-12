@@ -64,6 +64,8 @@ export type FabricTrackingRow = {
   lead_time_days: number;
   /* Migration 0063 — collection name (free text, e.g. "KOONA VELVET H2O"). */
   series: string | null;
+  /* Migration 0167 — Fabric Converter ACTIVE toggle (owner spec 2026-06-12). */
+  is_active?: boolean | null;
 };
 
 export function useFabricTrackings(opts?: {

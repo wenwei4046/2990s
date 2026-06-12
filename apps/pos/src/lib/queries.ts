@@ -687,6 +687,9 @@ export const useBedframeCustomizerData = (productId: string | undefined) =>
       const gapAllow = gate(allowed.gaps);
       for (const g of cfg.gaps ?? []) {
         const value = typeof g === 'string' ? g : g?.value;
+        // ACTIVE toggles (owner spec 2026-06-12) — inactive options never
+        // surface on NEW POS orders; saved orders display their stored value.
+        if (typeof g === 'object' && g !== null && (g as { active?: boolean }).active === false) continue;
         if (!value || (gapAllow && !gapAllow.has(value))) continue;
         rows.push({ id: value, kind: 'gap', value, surcharge: 0, sortOrder: order++ });
       }
@@ -700,6 +703,8 @@ export const useBedframeCustomizerData = (productId: string | undefined) =>
         const allow = gate(pool);
         for (const o of list ?? []) {
           if (!o?.value || (allow && !allow.has(o.value))) continue;
+          // ACTIVE toggles (owner spec 2026-06-12) — skip deactivated options.
+          if ((o as { active?: boolean }).active === false) continue;
           rows.push({
             id: o.value, kind, value: o.value,
             surcharge: Math.round(o.sellingPriceSen ?? 0) / 100,
@@ -757,7 +762,9 @@ export const useSofaLegHeights = (productId: string | undefined) =>
       const list = ((cfgRow?.config ?? {}) as { sofaLegHeights?: CfgPricedOption[] }).sofaLegHeights ?? [];
       const gate = allowedLegs ? new Set(allowedLegs) : null;
       return list
-        .filter((o) => o?.value && (!gate || gate.has(o.value)))
+        // ACTIVE toggles (owner spec 2026-06-12) — deactivated leg heights
+        // never surface on NEW POS orders.
+        .filter((o) => o?.value && (o as { active?: boolean }).active !== false && (!gate || gate.has(o.value)))
         .map((o) => ({ value: o.value, surcharge: Math.round(o.sellingPriceSen ?? 0) / 100 }));
     },
   });

@@ -15,7 +15,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, Save, X, Minus, Plus, AlertTriangle, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { ADJUSTMENT_REASONS, adjustmentIncreaseErrors } from '@2990s/shared';
+import { activeOptions, ADJUSTMENT_REASONS, adjustmentIncreaseErrors, maintPickerValues } from '@2990s/shared';
 import {
   useWarehouses,
   useStockAdjustment,
@@ -390,14 +390,14 @@ export const StockAdjustmentNew = () => {
               }}>{itemGroup} Variants</div>
               {itemGroup === 'bedframe' ? (
                 <div className={styles.formGrid4}>
-                  <VariantSelect label="Divan Height" options={maint.divanHeights}
+                  <VariantSelect label="Divan Height" options={activeOptions(maint.divanHeights, String(variants.divanHeight ?? ''))}
                     value={String(variants.divanHeight ?? '')}
                     onChange={(v) => setVariant('divanHeight', v)} />
                   <VariantSelect label="Gap"
-                    options={maint.gaps.map((g) => ({ value: g, priceSen: 0 }))}
+                    options={maintPickerValues(maint.gaps, String(variants.gap ?? '')).map((g) => ({ value: g, priceSen: 0 }))}
                     value={String(variants.gap ?? '')}
                     onChange={(v) => setVariant('gap', v)} />
-                  <VariantSelect label="Leg Height" options={maint.legHeights}
+                  <VariantSelect label="Leg Height" options={activeOptions(maint.legHeights, String(variants.legHeight ?? ''))}
                     value={String(variants.legHeight ?? '')}
                     onChange={(v) => setVariant('legHeight', v)} />
                   {/* Fabric / Colour — stored as fabricCode (the key the variant
@@ -415,10 +415,10 @@ export const StockAdjustmentNew = () => {
               ) : (
                 <div className={styles.formGrid4}>
                   <VariantSelect label="Seat Size"
-                    options={maint.sofaSizes.map((s) => ({ value: s, priceSen: 0 }))}
+                    options={maintPickerValues(maint.sofaSizes, String(variants.seatHeight ?? '')).map((s) => ({ value: s, priceSen: 0 }))}
                     value={String(variants.seatHeight ?? '')}
                     onChange={(v) => setVariant('seatHeight', v)} />
-                  <VariantSelect label="Leg Height" options={maint.sofaLegHeights}
+                  <VariantSelect label="Leg Height" options={activeOptions(maint.sofaLegHeights, String(variants.legHeight ?? ''))}
                     value={String(variants.legHeight ?? '')}
                     onChange={(v) => setVariant('legHeight', v)} />
                   <VariantSelect label="Special" options={specialsPools.sofa}

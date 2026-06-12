@@ -61,6 +61,7 @@ import { parseSupplierCategories, displaySupplierCategories } from '../lib/suppl
 import { SupplyCategoryPicker, useSupplierCategoryPool } from '../components/SupplyCategoryPicker';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { formatPhone } from '@2990s/shared/phone';
+import { maintValues } from '@2990s/shared/maintenance-pools';
 import { PhoneInput } from '../components/PhoneInput';
 import { MoneyInput } from '../components/MoneyInput';
 import styles from './SupplierDetail.module.css';
@@ -588,7 +589,9 @@ const SupplierSkuPricingPanel = ({
      one row per binding, per-category price-matrix columns). */
   const [importing, setImporting] = useState(false);
   const sofaConfig = useMaintenanceConfig('master');
-  const sofaHeights = (sofaConfig.data?.data?.sofaSizes ?? SOFA_HEIGHT_FALLBACK).map(String);
+  const sofaHeights = sofaConfig.data?.data?.sofaSizes
+    ? maintValues(sofaConfig.data.data.sofaSizes)
+    : SOFA_HEIGHT_FALLBACK.map(String);
   /* PR — Commander 2026-05-27 ("为什么 SKU Mapping 那边没有根据我的
      Product Maintenance 做出相对的排版呢"):
      Group bindings using the SAME sub-section labels the Product Maintenance
@@ -1167,7 +1170,9 @@ const SofaSkuMappingsTable = ({
   // two tables stay in lock-step when commander edits the size pool.
   const config = useMaintenanceConfig('master');
   const heights = useMemo(
-    () => (config.data?.data?.sofaSizes ?? SOFA_HEIGHT_FALLBACK).map(String),
+    () => (config.data?.data?.sofaSizes
+      ? maintValues(config.data.data.sofaSizes)
+      : SOFA_HEIGHT_FALLBACK.map(String)),
     [config.data],
   );
 

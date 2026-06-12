@@ -9,6 +9,7 @@
 // ----------------------------------------------------------------------------
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { MaintPoolEntry } from '@2990s/shared';
 import { supabase } from './supabase';
 import { authedFetch, humanApiError } from './authed-fetch';
 import { verifiedSave, readbackGet, friendlySaveMessage } from './verified-save';
@@ -66,6 +67,9 @@ export type MfgProductRow = {
      them). Columns still exist on the DB; UI / CSV no longer expose. */
   /** Free-text brand label — mainly used for MATTRESS SKUs. */
   branding: string | null;
+  /** 0166 — free-text SKU barcode (default-hidden SKU Master column; also
+      matched by the server-side SKU search). */
+  barcode?: string | null;
   sub_assemblies: unknown;
   pieces: unknown;
   /** Sofa-only: flat array of `{ height, priceSen, tier? }` from seat_height_prices
@@ -113,35 +117,43 @@ export type ModelAllowedOptions = {
  * show a `(+MYR …)` price suffix when `sellingPriceSen > 0` — so today, with
  * it unset, the dropdowns stay clean and variant surcharges contribute 0 to
  * the selling subtotal. Optional on the wire; older rows stay shape-identical. */
-export type PricedOption = { value: string; priceSen: number; costSen?: number; sellingPriceSen?: number };
+export type PricedOption = { value: string; priceSen: number; costSen?: number; sellingPriceSen?: number; active?: boolean };
+
+/* Owner spec 2026-06-12 — ACTIVE toggles on every Maintenance pool. String
+ * pool entries are either a plain string (= active, the historic shape) or
+ * { value, active } once toggled off. Pickers must filter via
+ * maintActiveValues / activeOptions (@2990s/shared); display enrichment and
+ * cost lookups keep reading EVERY entry via maintValues so documents that
+ * already carry an inactive value still resolve. */
+export type { MaintPoolEntry } from '@2990s/shared';
 
 export type MaintenanceConfig = {
   divanHeights:    PricedOption[];
   legHeights:      PricedOption[];
   totalHeights:    PricedOption[];
-  gaps:            string[];
+  gaps:            MaintPoolEntry[];
   specials:        PricedOption[];
   sofaLegHeights:  PricedOption[];
   sofaSpecials:    PricedOption[];
-  sofaSizes:       string[];
+  sofaSizes:       MaintPoolEntry[];
   // PR #50 — master pools that drive Model.allowed_options ticking + the
   // "+ Add Code" wizard. Optional on the wire because old maintenance rows
   // don't have them; the UI seeds defaults on first read.
-  bedframeSizes?:    string[];   // ['K','Q','S','SS','SK','SP'] — bedframe size codes
-  sofaCompartments?: string[];   // ['1A(LHF)','1A(RHF)','1NA',...] — sofa compartment codes
-  mattressSizes?:    string[];   // ['K','Q','S','SS']
+  bedframeSizes?:    MaintPoolEntry[];   // ['K','Q','S','SS','SK','SP'] — bedframe size codes
+  sofaCompartments?: MaintPoolEntry[];   // ['1A(LHF)','1A(RHF)','1NA',...] — sofa compartment codes
+  mattressSizes?:    MaintPoolEntry[];   // ['K','Q','S','SS']
   // BRANDING pool — simple value list (no prices) that feeds every Branding
   // input as a datalist (New SKU drawer, NewModelDialog bulk rows, SKU Master
   // inline edit, Model detail). Optional on the wire; when absent/empty the
   // UI falls back to DISTINCT branding values across mfg_products +
   // product_models (read-only suggestion — never silently written back).
-  brandings?:        string[];   // ['HILTON','SEALY','2990S',...]
+  brandings?:        MaintPoolEntry[];   // ['HILTON','SEALY','2990S',...]
   // SUPPLY CATEGORY pool (owner spec 2026-06-12) — simple value list that
   // feeds the Suppliers list filter chips + the supplier form's multi-select
   // Supply Category toggles. Optional on the wire; when absent/empty both
   // readers fall back to DEFAULT_SUPPLIER_CATEGORIES (Sofa / Bedframe /
   // Mattress / Accessory / Service) in lib/supplier-categories.ts.
-  supplierCategories?: string[]; // ['Sofa','Bedframe','Mattress',...]
+  supplierCategories?: MaintPoolEntry[]; // ['Sofa','Bedframe','Mattress',...]
   // PR #220 (Commander 2026-05-27): per-compartment design metadata — POS
   // module designs (image + description + default price) brought into the
   // Maintenance UI for back-office reference. Keyed by compartment code,
@@ -272,6 +284,8 @@ export function useUpdateMfgProductPrices() {
       costPriceSen?: number | null;
       seatHeightPrices?: SeatHeightPrice[];
       branding?: string | null;
+      /** 0166 — SKU barcode edit (SKU detail drawer). null clears. */
+      barcode?: string | null;
       subAssemblies?: string[];
       pieces?: { count: number; names: string[] } | null;
       defaultVariants?: Record<string, unknown>;
@@ -292,6 +306,9 @@ export function useUpdateMfgProductPrices() {
       if (body.basePriceSen !== undefined) expect.base_price_sen = body.basePriceSen;
       if (body.price1Sen    !== undefined) expect.price1_sen     = body.price1Sen;
       if (body.costPriceSen !== undefined) expect.cost_price_sen = body.costPriceSen;
+      // 0166 — barcode rides the same verified-save (server stores trimmed-or-null;
+      // callers send it already trimmed so the readback compare can't false-fail).
+      if (body.barcode      !== undefined) expect.barcode        = body.barcode;
 
       const result = await verifiedSave<{ product: Record<string, unknown> }>({
         endpoint: `/mfg-products/${id}`,
@@ -411,6 +428,8 @@ export type NewMfgProductInput = {
   productionTimeMinutes?: number;
   branding?: string;
   fabricColor?: string;
+  /** 0166 — optional SKU barcode on create. */
+  barcode?: string;
 };
 
 export function useCreateMfgProduct() {

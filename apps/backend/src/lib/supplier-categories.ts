@@ -11,6 +11,8 @@
 // list filter chips render from this pool + a synthetic "Mixed / Other" chip.
 // ----------------------------------------------------------------------------
 
+import { maintActiveValues, maintValues, type MaintPoolEntry } from '@2990s/shared';
+
 /** Default/fallback pool when the maintained list is empty. */
 export const DEFAULT_SUPPLIER_CATEGORIES = [
   'Sofa',
@@ -21,12 +23,19 @@ export const DEFAULT_SUPPLIER_CATEGORIES = [
 ] as const;
 
 /** Resolve the supply-category pool: maintained list when non-empty,
- *  otherwise the default five. */
+ *  otherwise the default five.
+ *  ACTIVE toggles (owner spec 2026-06-12): entries may be plain strings
+ *  (= active) or { value, active } — only ACTIVE values feed the filter
+ *  chips + form toggles. Suppliers already carrying an inactive value still
+ *  display it (displaySupplierCategories passes unknown values through).
+ *  The default-five fallback triggers only when the maintained list has no
+ *  entries AT ALL (not when every entry is merely inactive). */
 export function resolveSupplierCategoryPool(
-  maintained: string[] | undefined | null,
+  maintained: MaintPoolEntry[] | undefined | null,
 ): string[] {
-  const cleaned = (maintained ?? []).map((v) => v.trim()).filter(Boolean);
-  return cleaned.length > 0 ? cleaned : [...DEFAULT_SUPPLIER_CATEGORIES];
+  const all = maintValues(maintained).map((v) => v.trim()).filter(Boolean);
+  if (all.length === 0) return [...DEFAULT_SUPPLIER_CATEGORIES];
+  return maintActiveValues(maintained).map((v) => v.trim()).filter(Boolean);
 }
 
 /** Parse the stored comma-joined text into a clean list.

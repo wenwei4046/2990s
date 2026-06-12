@@ -19,7 +19,8 @@
     "./so-line-display": "./src/so-line-display.ts",
     "./format": "./src/format.ts",
     "./phone": "./src/phone.ts",
-    "./schemas": "./src/schemas/index.ts"
+    "./schemas": "./src/schemas/index.ts",
+    "./maintenance-pools": "./src/maintenance-pools.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

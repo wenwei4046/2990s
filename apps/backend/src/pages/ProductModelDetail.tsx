@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ArrowLeft, ImagePlus, Layers, Save, Trash2, Wand2, X, Power, PowerOff } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { maintActiveValues } from '@2990s/shared';
 import {
   useProductModel, useUpdateProductModel, useDeleteProductModel, useGenerateModelSkus,
   useActivateOneShot, useBrandingPool,
@@ -153,17 +154,17 @@ export const ProductModelDetail = ({
     };
     // Pull global pools the same way the panels do below so the auto-fill
     // matches what commander sees.
-    const sofaComps = cfg?.sofaCompartments ?? FALLBACK_SOFA_COMPARTMENTS;
-    const sofaSizes = cfg?.sofaSizes ?? ['24', '26', '28', '30', '32', '35'];
+    const sofaComps = maintActiveValues(cfg?.sofaCompartments ?? FALLBACK_SOFA_COMPARTMENTS);
+    const sofaSizes = maintActiveValues(cfg?.sofaSizes ?? ['24', '26', '28', '30', '32', '35']);
     const sofaLegs  = (cfg?.sofaLegHeights ?? []).map((o) => o.value);
     const sofaSpec  = specialsByCategory.sofa;
-    const bfSizes   = cfg?.bedframeSizes ?? FALLBACK_BEDFRAME_SIZES;
+    const bfSizes   = maintActiveValues(cfg?.bedframeSizes ?? FALLBACK_BEDFRAME_SIZES);
     const divan     = (cfg?.divanHeights ?? []).map((o) => o.value);
     const totalH    = (cfg?.totalHeights ?? []).map((o) => o.value);
-    const gaps      = cfg?.gaps ?? [];
+    const gaps      = maintActiveValues(cfg?.gaps);
     const legs      = (cfg?.legHeights ?? []).map((o) => o.value);
     const specials  = specialsByCategory.bedframe;
-    const matSizes  = cfg?.mattressSizes ?? FALLBACK_MATTRESS_SIZES;
+    const matSizes  = maintActiveValues(cfg?.mattressSizes ?? FALLBACK_MATTRESS_SIZES);
 
     if (data.model.category === 'SOFA') {
       fillIfEmpty('compartments', sofaComps);
@@ -460,8 +461,8 @@ export const ProductModelDetail = ({
           <SofaAllowedOptions
             allowed={allowed}
             onChange={setAllowed}
-            sofaCompartments={maintenance.data?.data?.sofaCompartments ?? FALLBACK_SOFA_COMPARTMENTS}
-            sofaSizes={maintenance.data?.data?.sofaSizes ?? ['24', '26', '28', '30', '32', '35']}
+            sofaCompartments={maintActiveValues(maintenance.data?.data?.sofaCompartments ?? FALLBACK_SOFA_COMPARTMENTS)}
+            sofaSizes={maintActiveValues(maintenance.data?.data?.sofaSizes ?? ['24', '26', '28', '30', '32', '35'])}
             sofaLegHeights={(maintenance.data?.data?.sofaLegHeights ?? []).map((o) => o.value)}
             sofaSpecials={specialsByCategory.sofa}
             sofaFabrics={(fabricLibQ.data ?? []).filter((f) => f.active).map((f) => f.id)}
@@ -472,10 +473,10 @@ export const ProductModelDetail = ({
           <BedframeAllowedOptions
             allowed={allowed}
             onChange={setAllowed}
-            sizes={maintenance.data?.data?.bedframeSizes ?? FALLBACK_BEDFRAME_SIZES}
+            sizes={maintActiveValues(maintenance.data?.data?.bedframeSizes ?? FALLBACK_BEDFRAME_SIZES)}
             divanHeights={(maintenance.data?.data?.divanHeights ?? []).map((o) => o.value)}
             totalHeights={(maintenance.data?.data?.totalHeights ?? []).map((o) => o.value)}
-            gaps={maintenance.data?.data?.gaps ?? []}
+            gaps={maintActiveValues(maintenance.data?.data?.gaps)}
             legHeights={(maintenance.data?.data?.legHeights ?? []).map((o) => o.value)}
             specials={specialsByCategory.bedframe}
           />
@@ -485,7 +486,7 @@ export const ProductModelDetail = ({
           <MattressAllowedOptions
             allowed={allowed}
             onChange={setAllowed}
-            sizes={maintenance.data?.data?.mattressSizes ?? FALLBACK_MATTRESS_SIZES}
+            sizes={maintActiveValues(maintenance.data?.data?.mattressSizes ?? FALLBACK_MATTRESS_SIZES)}
           />
         )}
 

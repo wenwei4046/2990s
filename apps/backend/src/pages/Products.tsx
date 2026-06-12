@@ -39,6 +39,13 @@ import {
   SOFA_MODULES,
   resolveSofaQuickPresets,
   normalizeSofaTier,
+  maintValues,
+  maintActiveValues,
+  maintEntryValue,
+  maintEntryActive,
+  maintEntryWithValue,
+  maintEntryWithActive,
+  type MaintPoolEntry,
   type SofaQuickPreset,
 } from '@2990s/shared';
 import {
@@ -270,8 +277,11 @@ const SkuMasterTab = () => {
   const isMattressView = category === 'MATTRESS';
   // Memoized so its reference is stable across renders — otherwise the fallback
   // array literal would change every render and defeat ProductRow's React.memo.
+  // ACTIVE-toggle note: the SKU grid renders a price column for EVERY size
+  // (maintValues, not maintActiveValues) — existing SKUs may carry prices on
+  // a deactivated size and those must stay visible/exportable.
   const sofaSizes = useMemo(
-    () => config.data?.data?.sofaSizes ?? ['24', '26', '28', '30', '32', '35'],
+    () => (config.data?.data?.sofaSizes ? maintValues(config.data.data.sofaSizes) : ['24', '26', '28', '30', '32', '35']),
     [config.data],
   );
 
@@ -613,6 +623,21 @@ const SkuMasterTab = () => {
       );
     }
     cols.push(
+      {
+        // 0166 — SKU barcode. Default-hidden: show it via the grid's column
+        // pill / right-click header menu. Edit from the SKU detail drawer
+        // (double-click a row) or set it when creating a SKU.
+        key: 'barcode',
+        label: 'Barcode',
+        width: 140,
+        defaultHidden: true,
+        accessor: (r) => r.barcode
+          ? <span className={styles.codeChip}>{r.barcode}</span>
+          : <span className={styles.priceEmpty}>—</span>,
+        searchValue: (r) => r.barcode ?? '',
+        filterValue: (r) => r.barcode ?? '—',
+        sortFn: (a, b) => (a.barcode ?? '').localeCompare(b.barcode ?? ''),
+      },
       {
         key: 'unit',
         label: 'Unit (m³)',
@@ -1640,7 +1665,7 @@ export const MaintenanceTab = ({
     // surcharge overlays, never the branding authority).
     if (
       scope === 'master'
-      && (copy.brandings ?? []).filter((b) => b.trim().length > 0).length === 0
+      && maintValues(copy.brandings).filter((b) => b.trim().length > 0).length === 0
       && brandingPool.distinct.length > 0
     ) {
       copy.brandings = [...brandingPool.distinct];
@@ -1666,9 +1691,12 @@ export const MaintenanceTab = ({
     // all carry the new name the moment the save lands. Master scope only —
     // supplier scopes are surcharge overlays, never the code authority.
     if (scope === 'master') {
-      const baseline =
-        resolved.data?.data?.sofaCompartments ?? masterFallback.data?.data?.sofaCompartments ?? [];
-      const next = draft.sofaCompartments ?? [];
+      // ACTIVE toggles — entries may be { value, active } objects now; the
+      // rename cascade compares VALUES only (an active flip is not a rename).
+      const baseline = maintValues(
+        resolved.data?.data?.sofaCompartments ?? masterFallback.data?.data?.sofaCompartments,
+      );
+      const next = maintValues(draft.sofaCompartments);
       const renames: Array<{ from: string; to: string }> = [];
       const len = Math.min(baseline.length, next.length);
       for (let i = 0; i < len; i++) {
@@ -2113,8 +2141,8 @@ const SofaCompartmentsList = ({
   const updateCode = (idx: number, newVal: string) => {
     const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
     const arr  = next.sofaCompartments ?? [];
-    const old  = arr[idx];
-    arr[idx]   = newVal;
+    const old  = arr[idx] != null ? maintEntryValue(arr[idx]!) : undefined;
+    if (arr[idx] != null) arr[idx] = maintEntryWithValue(arr[idx]!, newVal);
     next.sofaCompartments = arr;
     // Migrate the meta key alongside the code rename so the override
     // doesn't get orphaned. If the new code already has meta, leave it.
@@ -2129,9 +2157,22 @@ const SofaCompartmentsList = ({
     onChange(next);
   };
 
+  /* ACTIVE toggle (owner spec 2026-06-12) — inactive compartments stay in
+     the pool (old SKUs/docs keep displaying them) but disappear from every
+     NEW-entry picker. Re-activating collapses back to the plain string. */
+  const setActiveAt = (idx: number, active: boolean) => {
+    const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+    const arr  = next.sofaCompartments ?? [];
+    if (arr[idx] != null) arr[idx] = maintEntryWithActive(arr[idx]!, active);
+    next.sofaCompartments = arr;
+    onChange(next);
+  };
+
   return (
     <div className={styles.maintList}>
-      {items.map((code, i) => {
+      {items.map((entry, i) => {
+        const code = maintEntryValue(entry);
+        const entryIsActive = maintEntryActive(entry);
         const resolved = resolveCompartmentMeta(code, meta[code]);
         const stored   = meta[code];
         const hasImage = Boolean(resolved.imageKey);
@@ -2142,9 +2183,10 @@ const SofaCompartmentsList = ({
             {...dragRowProps(i)}
             style={{
               ...(dragRowProps(i).style ?? {}),
-              gridTemplateColumns: '32px 32px 56px 1fr auto auto',
+              gridTemplateColumns: '32px 32px 56px 1fr auto auto auto',
               gap: 'var(--space-3)',
               alignItems: 'center',
+              opacity: entryIsActive ? 1 : 0.55,
             }}
           >
             <button type="button" className={styles.maintRowIcon} title="History">
@@ -2377,6 +2419,31 @@ const SofaCompartmentsList = ({
                 </span>
               )}
             </div>
+            {/* ACTIVE toggle (owner spec 2026-06-12) — Yes/No checkbox per row.
+                Inactive = hidden from NEW-entry pickers; existing docs keep
+                displaying the value. */}
+            {editMode ? (
+              <label style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)',
+                color: 'var(--fg-soft)', cursor: 'pointer',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={entryIsActive}
+                  onChange={(e) => setActiveAt(i, e.target.checked)}
+                  title="Inactive options are hidden from pickers for new entries; existing documents keep showing them"
+                />
+                Active
+              </label>
+            ) : (
+              <span style={{
+                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)',
+                color: entryIsActive ? 'var(--c-green, #1a7a3a)' : 'var(--fg-muted)',
+              }}>
+                {entryIsActive ? 'Active' : 'Inactive'}
+              </span>
+            )}
             {editMode ? (
               <button
                 type="button"
@@ -2465,9 +2532,12 @@ const SofaQuickPresetsList = ({
 
   /* Master compartment pool — drives the modules chip picker. Includes the
      dash-form codes from sofaCompartments (commander's master pool); if
-     empty we fall back to SOFA_MODULES so the picker still works on day 1. */
+     empty we fall back to SOFA_MODULES so the picker still works on day 1.
+     ACTIVE only (owner spec 2026-06-12) — presets compose NEW combos, so
+     deactivated compartments must not be offered; existing presets that
+     already reference one keep displaying it via p.modules. */
   const compartmentPool: string[] = (config.sofaCompartments && config.sofaCompartments.length > 0)
-    ? config.sofaCompartments
+    ? maintActiveValues(config.sofaCompartments)
     : SOFA_MODULES.map((m) => m.id);
 
   const writeAll = (next: SofaQuickPreset[]) => {
@@ -2858,7 +2928,11 @@ const MaintenanceList = ({
     || listKey === 'brandings'
     || listKey === 'supplierCategories'
   ) {
-    const items = (config[listKey] as string[] | undefined) ?? [];
+    // ACTIVE toggles (owner spec 2026-06-12) — entries are plain strings
+    // (= active, the historic shape) or { value, active: false } once
+    // toggled off. The editor renders the VALUE everywhere and adds a
+    // Yes/No Active checkbox per row in edit mode.
+    const items = (config[listKey] as MaintPoolEntry[] | undefined) ?? [];
 
     // Brandings seed/fallback: pool empty → surface the DISTINCT branding
     // values across mfg_products + product_models as a read-only suggestion.
@@ -2867,12 +2941,12 @@ const MaintenanceList = ({
     const showBrandingSuggestions =
       listKey === 'brandings'
       && !editMode
-      && items.filter((b) => b.trim().length > 0).length === 0
+      && maintValues(items).filter((b) => b.trim().length > 0).length === 0
       && (brandingSuggestions?.length ?? 0) > 0;
 
     const removeAt = (idx: number) => {
       const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
-      const arr = (next[listKey] as string[] | undefined) ?? [];
+      const arr = (next[listKey] as MaintPoolEntry[] | undefined) ?? [];
       arr.splice(idx, 1);
       (next as Record<string, unknown>)[listKey] = arr;
       onChange(next);
@@ -2884,7 +2958,7 @@ const MaintenanceList = ({
       const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
       // Same defaulting story — the new pool keys (PR #50) may not exist on
       // old maintenance_config rows yet.
-      const arr = (next[listKey] as string[] | undefined) ?? [];
+      const arr = (next[listKey] as MaintPoolEntry[] | undefined) ?? [];
       arr.push(v);
       (next as Record<string, unknown>)[listKey] = arr;
       onChange(next);
@@ -2896,8 +2970,18 @@ const MaintenanceList = ({
        inline edit — added below. */
     const updateAt = (idx: number, newVal: string) => {
       const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
-      const arr = (next[listKey] as string[] | undefined) ?? [];
-      arr[idx] = newVal;
+      const arr = (next[listKey] as MaintPoolEntry[] | undefined) ?? [];
+      if (arr[idx] != null) arr[idx] = maintEntryWithValue(arr[idx]!, newVal);
+      (next as Record<string, unknown>)[listKey] = arr;
+      onChange(next);
+    };
+
+    /* ACTIVE toggle — re-activating collapses the entry back to the plain
+       string so untouched configs stay byte-identical on Save. */
+    const setActiveAt = (idx: number, active: boolean) => {
+      const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+      const arr = (next[listKey] as MaintPoolEntry[] | undefined) ?? [];
+      if (arr[idx] != null) arr[idx] = maintEntryWithActive(arr[idx]!, active);
       (next as Record<string, unknown>)[listKey] = arr;
       onChange(next);
     };
@@ -2939,11 +3023,22 @@ const MaintenanceList = ({
             ))}
           </>
         )}
-        {items.map((v, i) => {
+        {items.map((entry, i) => {
+          const v = maintEntryValue(entry);
+          const entryIsActive = maintEntryActive(entry);
           const labelOv = config.sizeLabels?.[v];
           const resolved = isSizeRow ? resolveSizeInfo(v, config) : null;
           return (
-          <div key={`${v}-${i}`} className={styles.maintRow} {...dragRowProps(i)}>
+          <div
+            key={`${v}-${i}`}
+            className={styles.maintRow}
+            {...dragRowProps(i)}
+            style={{
+              ...(dragRowProps(i).style ?? {}),
+              gridTemplateColumns: '32px 32px 1fr auto auto',
+              opacity: entryIsActive ? 1 : 0.55,
+            }}
+          >
             <button type="button" className={styles.maintRowIcon} title="History">
               <History {...ICON_PROPS} />
             </button>
@@ -3036,6 +3131,31 @@ const MaintenanceList = ({
                   : v
               )}
             </span>
+            {/* ACTIVE toggle (owner spec 2026-06-12) — inactive values are
+                hidden from NEW-entry pickers; documents/SKUs already carrying
+                the value keep displaying it. */}
+            {editMode ? (
+              <label style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)',
+                color: 'var(--fg-soft)', cursor: 'pointer',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={entryIsActive}
+                  onChange={(e) => setActiveAt(i, e.target.checked)}
+                  title="Inactive options are hidden from pickers for new entries; existing documents keep showing them"
+                />
+                Active
+              </label>
+            ) : (
+              <span style={{
+                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)',
+                color: entryIsActive ? 'var(--c-green, #1a7a3a)' : 'var(--fg-muted)',
+              }}>
+                {entryIsActive ? 'Active' : 'Inactive'}
+              </span>
+            )}
             {editMode ? (
               <button
                 type="button"
@@ -3126,7 +3246,15 @@ const MaintenanceList = ({
   return (
     <div className={styles.maintList}>
       {items.map((opt, i) => (
-        <div key={`${opt.value}-${i}`} className={styles.maintRow} {...dragRowProps(i)}>
+        <div
+          key={`${opt.value}-${i}`}
+          className={styles.maintRow}
+          {...dragRowProps(i)}
+          style={{
+            ...(dragRowProps(i).style ?? {}),
+            opacity: opt.active === false ? 0.55 : 1,
+          }}
+        >
           <button type="button" className={styles.maintRowIcon} title="History">
             <History {...ICON_PROPS} />
           </button>
@@ -3232,6 +3360,43 @@ const MaintenanceList = ({
                 </span>
               ) : null
             ))}
+            {/* ACTIVE toggle (owner spec 2026-06-12) — inactive options are
+                hidden from NEW-entry pickers (SO/PO/GRN/PI/PR/adjustment
+                variant selects); price/cost lookups still resolve them so
+                existing documents keep their values + surcharges. */}
+            {editMode ? (
+              <label style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)',
+                color: 'var(--fg-soft)', cursor: 'pointer',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={opt.active !== false}
+                  onChange={(e) => {
+                    const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+                    const list = next[listKey] as PricedOption[];
+                    if (e.target.checked) {
+                      // Re-activating drops the flag so untouched rows stay
+                      // shape-identical (avoids dirty diffs on save).
+                      delete list[i]!.active;
+                    } else {
+                      list[i]!.active = false;
+                    }
+                    onChange(next);
+                  }}
+                  title="Inactive options are hidden from pickers for new entries; existing documents keep showing them"
+                />
+                Active
+              </label>
+            ) : (
+              <span style={{
+                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)',
+                color: opt.active === false ? 'var(--fg-muted)' : 'var(--c-green, #1a7a3a)',
+              }}>
+                {opt.active === false ? 'Inactive' : 'Active'}
+              </span>
+            )}
             {editMode && (
               <button
                 type="button"
@@ -3582,13 +3747,13 @@ const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
   const [form, setForm] = useState<{
     code: string; name: string; category: Cat;
     description: string; baseModel: string; sizeLabel: string;
-    branding: string; fabricColor: string;
+    branding: string; fabricColor: string; barcode: string;
     basePrice: string; price1: string; costPrice: string;
     unitM3: string;
   }>({
     code: '', name: '', category: 'BEDFRAME',
     description: '', baseModel: '', sizeLabel: '',
-    branding: '', fabricColor: '',
+    branding: '', fabricColor: '', barcode: '',
     basePrice: '', price1: '', costPrice: '',
     unitM3: '',
   });
@@ -3623,6 +3788,7 @@ const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
       sizeLabel: form.sizeLabel.trim() || undefined,
       branding: form.branding.trim() || undefined,
       fabricColor: form.fabricColor.trim() || undefined,
+      barcode: form.barcode.trim() || undefined,
       basePriceSen: toSen(form.basePrice),
       price1Sen: isMattress || isService ? null : toSen(form.price1),
       costPriceSen: toSen(form.costPrice) ?? 0,
@@ -3664,6 +3830,8 @@ const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
             )}
             {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics". Key fabricColor unchanged. */}
             {isSofa && <Field label="Fabrics" value={form.fabricColor} onChange={(v) => set('fabricColor', v)} />}
+            {/* 0166 — optional SKU barcode (free text; scanner-friendly). */}
+            <Field label="Barcode" value={form.barcode} onChange={(v) => set('barcode', v)} placeholder="optional" />
             <Field label="Description" value={form.description} onChange={(v) => set('description', v)} fullWidth />
 
             <Field label={isMattress ? 'Price (RM)' : 'Base Price / Price 2 (RM)'}
@@ -3734,6 +3902,15 @@ const ProductSuppliersDrawer = ({
 }: { row: MfgProductRow; onClose: () => void }) => {
   const q = useMfgProductSuppliers(row.id);
   const suppliers = q.data?.suppliers ?? [];
+  // 0166 — editable SKU barcode. Local draft commits on blur / Enter via the
+  // shared PATCH hook (verified-save reads the row back before claiming OK).
+  const update = useUpdateMfgProductPrices();
+  const [barcodeDraft, setBarcodeDraft] = useState(row.barcode ?? '');
+  const commitBarcode = () => {
+    const t = barcodeDraft.trim();
+    if (t === (row.barcode ?? '').trim()) return;
+    update.mutate({ id: row.id, barcode: t.length ? t : null });
+  };
 
   return (
     <div className={styles.drawerBackdrop} onClick={onClose}>
@@ -3759,6 +3936,35 @@ const ProductSuppliersDrawer = ({
             <p style={{ marginTop: 4, fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
               {row.name}{row.description ? ` — ${row.description}` : ''}
             </p>
+            {/* 0166 — barcode lives on the SKU detail drawer (the SKU Master
+                grid column is read-only + default-hidden). Commits on blur. */}
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+              <span style={{
+                fontSize: 'var(--fs-11)', fontWeight: 700, textTransform: 'uppercase',
+                letterSpacing: '0.04em', color: 'var(--fg-muted)',
+              }}>
+                Barcode
+              </span>
+              <input
+                type="text"
+                value={barcodeDraft}
+                onChange={(e) => setBarcodeDraft(e.target.value)}
+                onBlur={commitBarcode}
+                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                placeholder="scan or type…"
+                disabled={update.isPending}
+                style={{
+                  width: 220,
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 'var(--fs-13)',
+                  background: 'var(--c-paper)',
+                  border: '1px solid var(--line-strong)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '3px 8px',
+                  outline: 'none',
+                }}
+              />
+            </label>
           </div>
           <button type="button" className={styles.iconBtn} onClick={onClose}>
             <X {...ICON_PROPS} />

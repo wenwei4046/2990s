@@ -37,6 +37,10 @@ export type FabricTrackingRow = {
   lead_time_days: number;
   /* Migration 0063 — collection name (free text, e.g. "KOONA VELVET H2O"). */
   series: string | null;
+  /* Migration 0167 — Fabric Converter ACTIVE toggle (owner spec 2026-06-12).
+     Inactive fabrics hide from NEW-entry pickers; existing docs keep their
+     code. Optional so the UI tolerates an API that predates the migration. */
+  is_active?: boolean | null;
 };
 
 /* SO-parity (Loo 2026-06-06) — the SELLING-side colour rows the POS fabric
@@ -52,6 +56,26 @@ export type FabricColourRow = {
   swatchHex: string | null;
   sortOrder: number;
 };
+
+/* ─── Fabric dual-code display (owner request 2026-06-12) ──────────────────
+ * Wherever a fabric is picked or displayed, show BOTH codes:
+ *   "CG-015 · DC-151-03 — description"
+ * internal fabric_code first, then the supplier's EXTERNAL code
+ * (fabric_trackings.supplier_code) when present. DISPLAY-ONLY — stored values
+ * remain the internal fabric_code everywhere. */
+export function fabricDualCode(internal: string, supplierCode?: string | null): string {
+  const ext = supplierCode?.trim();
+  return ext ? `${internal} · ${ext}` : internal;
+}
+
+/** Full dropdown label: dual code + " — description" (falls back to series). */
+export function fabricOptionLabel(
+  f: Pick<FabricTrackingRow, 'fabric_code' | 'supplier_code' | 'fabric_description' | 'series'>,
+): string {
+  const code = fabricDualCode(f.fabric_code, f.supplier_code);
+  const desc = f.fabric_description?.trim() || f.series?.trim() || '';
+  return desc ? `${code} — ${desc}` : code;
+}
 
 export const useFabricColoursActive = () =>
   useQuery({
@@ -150,6 +174,26 @@ export function useUpdateFabricSeries() {
         {
           method: 'PATCH',
           body: JSON.stringify({ series: args.series }),
+        },
+      );
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+  });
+}
+
+/* Migration 0167 — Active toggle on the Fabric Converter (owner spec
+   2026-06-12). Inactive = hidden from NEW-entry fabric pickers (SO/CO variant
+   selects, scan-SO catalog); rows stay on the converter + old docs keep
+   displaying the code. */
+export function useUpdateFabricActive() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: { id: string; isActive: boolean }) => {
+      return authedFetch<{ ok: true; isActive: boolean }>(
+        `/fabric-tracking/${args.id}/active`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ isActive: args.isActive }),
         },
       );
     },

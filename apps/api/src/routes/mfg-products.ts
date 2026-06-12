@@ -69,7 +69,7 @@ mfgProducts.get('/', async (c) => {
     .select(
       'id, code, name, category, description, base_model, size_code, size_label, base_price_sen, price1_sen, sell_price_sen, pwp_price_sen, ' +
         'unit_m3_milli, status, pos_active, one_shot, source_doc_no, included_addons, sku_code, model_id, ' +
-        'branding, sub_assemblies, pieces, seat_height_prices, default_variants, updated_at, ' +
+        'branding, barcode, sub_assemblies, pieces, seat_height_prices, default_variants, updated_at, ' +
         // Commander 2026-05-29 — surface the Model's allowed_options so the SO
         // line editor can hide variant choices the SKU doesn't allow (instead
         // of letting them be picked and failing on save with variant_not_allowed).
@@ -79,7 +79,9 @@ mfgProducts.get('/', async (c) => {
     .order('code', { ascending: true });
 
   if (category) q = q.eq('category', category);
-  if (search) { const s = escapeForOr(search); if (s) q = q.or(`code.ilike.%${s}%,name.ilike.%${s}%,description.ilike.%${s}%`); }
+  // 0166 — barcode rides the same OR-chain so a scanner blast into the SKU
+  // Master search box finds the row (escapeForOr keeps the grammar safe).
+  if (search) { const s = escapeForOr(search); if (s) q = q.or(`code.ilike.%${s}%,name.ilike.%${s}%,description.ilike.%${s}%,barcode.ilike.%${s}%`); }
 
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
@@ -134,6 +136,8 @@ mfgProducts.post('/', async (c) => {
     cost_price_sen: body.costPriceSen == null ? 0 : Number(body.costPriceSen),
     unit_m3_milli: body.unitM3Milli == null ? 0 : Number(body.unitM3Milli),
     branding: (body.branding as string) ?? null,
+    // 0166 — optional free-text barcode on create.
+    barcode: typeof body.barcode === 'string' && body.barcode.trim() ? body.barcode.trim() : null,
     /* PR #104 — fabric_usage_centi / production_time_minutes /
        fabric_color removed (not used by 2990's retail catalogue). */
   };
@@ -390,6 +394,8 @@ mfgProducts.patch('/:id', async (c) => {
        SKU Master. Unique-constraint on code → 23505 surfaces as 409. */
     code?: string;
     name?: string;
+    /** 0166 — free-text SKU barcode. Empty string clears to NULL. */
+    barcode?: string | null;
   };
   try {
     body = (await c.req.json()) as typeof body;
@@ -444,6 +450,11 @@ mfgProducts.patch('/:id', async (c) => {
   if (body.branding !== undefined) {
     const trimmed = typeof body.branding === 'string' ? body.branding.trim() : null;
     updates.branding = trimmed ? trimmed : null;
+  }
+  // 0166 — barcode edit from the SKU drawers. Trimmed; empty clears to NULL.
+  if (body.barcode !== undefined) {
+    const trimmed = typeof body.barcode === 'string' ? body.barcode.trim() : null;
+    updates.barcode = trimmed ? trimmed : null;
   }
   // PR #87 — per-SKU active toggle. Stored as 'ACTIVE' | 'INACTIVE' to match
   // the rest of the schema (matches mfg_products.status default in inserts).

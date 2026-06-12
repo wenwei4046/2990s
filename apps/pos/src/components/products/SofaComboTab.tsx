@@ -25,7 +25,7 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import { Plus, Pencil, Trash2, History, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { SOFA_MODULES, normalizeCompartmentCode, buildComboLabel, findDuplicateCombo } from '@2990s/shared';
+import { SOFA_MODULES, normalizeCompartmentCode, buildComboLabel, findDuplicateCombo, maintValues } from '@2990s/shared';
 import {
   useSofaCombos,
   useCreateSofaCombo,
@@ -99,7 +99,11 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
   // Seat-height columns = the live Maintenance Sizes pool (single source of
   // truth), so a size added in Maintenance shows up here automatically.
   const heightsCfgQ = useMaintenanceConfig('master');
-  const heights = heightsCfgQ.data?.data?.sofaSizes ?? HEIGHTS_FALLBACK;
+  // ALL values (not just active) — existing combos may be priced on a
+  // deactivated height and those columns must keep rendering.
+  const heights = heightsCfgQ.data?.data?.sofaSizes
+    ? maintValues(heightsCfgQ.data.data.sofaSizes)
+    : HEIGHTS_FALLBACK;
 
   const baseModels = useMemo(() => {
     const set = new Set<string>();
@@ -371,7 +375,7 @@ function ComposerModal({
   // entry. Falls back to SOFA_MODULES while the config query is loading.
   const maint = useMaintenanceConfig('master');
   const moduleCodes = useMemo(() => {
-    const pool = (maint.data?.data?.sofaCompartments ?? []).map(normalizeCompartmentCode);
+    const pool = maintValues(maint.data?.data?.sofaCompartments).map(normalizeCompartmentCode);
     return [...new Set(pool.length ? pool : ALL_MODULE_CODES)].sort();
   }, [maint.data]);
 

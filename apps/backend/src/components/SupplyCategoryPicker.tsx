@@ -13,6 +13,7 @@
 // ----------------------------------------------------------------------------
 
 import type { CSSProperties } from 'react';
+import { maintActiveValues } from '@2990s/shared';
 import { useMaintenanceConfig } from '../lib/mfg-products-queries';
 import {
   parseSupplierCategories,
@@ -24,7 +25,7 @@ import {
  *  falling back to the default five when unset/empty. */
 export function useSupplierCategoryPool(): string[] {
   const resolved = useMaintenanceConfig('master');
-  return resolveSupplierCategoryPool(resolved.data?.data?.supplierCategories);
+  return resolveSupplierCategoryPool(maintActiveValues(resolved.data?.data?.supplierCategories));
 }
 
 const chipStyle = (active: boolean): CSSProperties => ({

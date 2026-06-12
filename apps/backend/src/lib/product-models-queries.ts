@@ -5,6 +5,7 @@
 
 import { useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { maintActiveValues } from '@2990s/shared';
 import { supabase } from './supabase';
 import { useMaintenanceConfig, useMfgProducts, type MfgCategory } from './mfg-products-queries';
 import { authedFetch } from './authed-fetch';
@@ -101,7 +102,7 @@ export function useBrandingPool() {
   const models = useProductModels();
 
   const configPool = useMemo(
-    () => (cfg.data?.data?.brandings ?? []).map((b) => b.trim()).filter((b) => b.length > 0),
+    () => maintActiveValues(cfg.data?.data?.brandings).map((b) => b.trim()).filter((b) => b.length > 0),
     [cfg.data],
   );
 

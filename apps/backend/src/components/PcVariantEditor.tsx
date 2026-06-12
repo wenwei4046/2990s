@@ -5,8 +5,9 @@
 // checkbox row. Keeping all three forms on this one component is the whole
 // point — they must never drift apart again.
 import { useMemo } from 'react';
+import { activeOptions, maintPickerValues } from '@2990s/shared';
 import { useSpecialAddons, type MaintenanceConfig } from '../lib/mfg-products-queries';
-import type { FabricTrackingRow } from '../lib/fabric-queries';
+import { fabricOptionLabel, type FabricTrackingRow } from '../lib/fabric-queries';
 import styles from '../pages/SalesOrderDetail.module.css';
 
 const SpecialsCheckboxes = ({
@@ -43,6 +44,11 @@ const SpecialsCheckboxes = ({
     </div>
   );
 };
+
+/* ACTIVE fabrics only (owner spec 2026-06-12, fabric_trackings.is_active) —
+ * a line whose saved fabric was later deactivated still shows it. */
+const pickableFabrics = (fabrics: FabricTrackingRow[], current: string): FabricTrackingRow[] =>
+  fabrics.filter((f) => f.is_active !== false || f.fabric_code === current);
 
 export const PcVariantEditor = ({
   category, variants, onChange, fabrics, maint,
@@ -82,9 +88,9 @@ export const PcVariantEditor = ({
               onChange={(e) => onChange('fabricCode', e.target.value)}
             >
               <option value="" disabled>Select…</option>
-              {fabrics.map((f) => (
+              {pickableFabrics(fabrics, String(variants.fabricCode ?? '')).map((f) => (
                 <option key={f.id} value={f.fabric_code}>
-                  {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
+                  {fabricOptionLabel(f)}
                 </option>
               ))}
             </select>
@@ -97,7 +103,7 @@ export const PcVariantEditor = ({
               onChange={(e) => onChange('gap', e.target.value)}
             >
               <option value="" disabled>Select…</option>
-              {maint.gaps.map((g) => (<option key={g} value={g}>{g}</option>))}
+              {maintPickerValues(maint.gaps, String(variants.gap ?? '')).map((g) => (<option key={g} value={g}>{g}</option>))}
             </select>
           </label>
           <label className={styles.field}>
@@ -108,7 +114,7 @@ export const PcVariantEditor = ({
               onChange={(e) => onChange('divanHeight', e.target.value)}
             >
               <option value="" disabled>Select…</option>
-              {maint.divanHeights.map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
+              {activeOptions(maint.divanHeights, String(variants.divanHeight ?? '')).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
             </select>
           </label>
           <label className={styles.field}>
@@ -119,7 +125,7 @@ export const PcVariantEditor = ({
               onChange={(e) => onChange('legHeight', e.target.value)}
             >
               <option value="" disabled>Select…</option>
-              {maint.legHeights.map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
+              {activeOptions(maint.legHeights, String(variants.legHeight ?? '')).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
             </select>
           </label>
         </div>
@@ -144,9 +150,9 @@ export const PcVariantEditor = ({
               onChange={(e) => onChange('fabricCode', e.target.value)}
             >
               <option value="" disabled>Select…</option>
-              {fabrics.map((f) => (
+              {pickableFabrics(fabrics, String(variants.fabricCode ?? '')).map((f) => (
                 <option key={f.id} value={f.fabric_code}>
-                  {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
+                  {fabricOptionLabel(f)}
                 </option>
               ))}
             </select>
@@ -159,7 +165,7 @@ export const PcVariantEditor = ({
               onChange={(e) => onChange('seatHeight', e.target.value)}
             >
               <option value="" disabled>Select…</option>
-              {maint.sofaSizes.map((s) => (<option key={s} value={s}>{s}</option>))}
+              {maintPickerValues(maint.sofaSizes, String(variants.seatHeight ?? '')).map((s) => (<option key={s} value={s}>{s}</option>))}
             </select>
           </label>
           <label className={styles.field}>
@@ -170,7 +176,7 @@ export const PcVariantEditor = ({
               onChange={(e) => onChange('legHeight', e.target.value)}
             >
               <option value="" disabled>Select…</option>
-              {maint.sofaLegHeights.map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
+              {activeOptions(maint.sofaLegHeights, String(variants.legHeight ?? '')).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
             </select>
           </label>
           <span />

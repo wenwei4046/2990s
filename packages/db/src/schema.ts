@@ -1872,6 +1872,9 @@ export const mfgProducts = pgTable('mfg_products', {
   // Dunlopillo / etc.). Shown as a dedicated column on the Mattress filter
   // view; available for other categories too if useful.
   branding:               text('branding'),
+  // 0166 — free-text SKU barcode (owner request 2026-06-12). Default-hidden
+  // SKU Master column; matched by the SKU Master server-side search.
+  barcode:                text('barcode'),
   // 0161 — system-minted one-shot SKUs (remark + extra charge). one_shot marks
   // the row for the SKU-Master badge/filter; source_doc_no links back to the SO
   // that minted it. Born pos_active=false; an admin re-activates from Modular.
@@ -2202,6 +2205,10 @@ export const fabricTrackings = pgTable('fabric_trackings', {
   leadTimeDays:         integer('lead_time_days').notNull().default(0),
   // Migration 0063 — collection name (free text, e.g. "KOONA VELVET H2O").
   series:               text('series'),
+  // Migration 0167 — Fabric Converter ACTIVE toggle (owner spec 2026-06-12).
+  // Inactive fabrics stay on the converter + keep resolving for existing
+  // documents, but are hidden from NEW-entry fabric pickers.
+  isActive:             boolean('is_active').notNull().default(true),
 }, (t) => ({
   idxCode:   index('idx_fabric_trackings_code').on(t.fabricCode),
   idxTier:   index('idx_fabric_trackings_tier').on(t.priceTier),
@@ -2550,17 +2557,22 @@ export const inventoryLotConsumptions = pgTable('inventory_lot_consumptions', {
   idxConsumed: index('idx_inv_cons_consumed').on(t.consumedAt),
 }));
 
-/* MaintenanceConfig — the JSON blob shape stored in maintenanceConfigHistory.config */
-export type PricedOption = { value: string; priceSen: number };
+/* MaintenanceConfig — the JSON blob shape stored in maintenanceConfigHistory.config.
+   Owner spec 2026-06-12: entries may carry `active?: boolean` (absent = active).
+   String pools keep the historic plain-string shape for active entries and use
+   { value, active: false } when toggled off. Pickers filter on active;
+   cost/price lookups never do. */
+export type PricedOption = { value: string; priceSen: number; active?: boolean };
+export type MaintPoolEntry = string | { value: string; active?: boolean };
 export type MaintenanceConfig = {
-  divanHeights:   PricedOption[];   // Bedframe
-  legHeights:     PricedOption[];   // Bedframe
-  totalHeights:   PricedOption[];   // Bedframe (Divan + Gap + Leg)
-  gaps:           string[];         // Bedframe — no surcharge
-  specials:       PricedOption[];   // Bedframe
-  sofaLegHeights: PricedOption[];   // Sofa
-  sofaSpecials:   PricedOption[];   // Sofa
-  sofaSizes:      string[];         // Sofa — no surcharge
+  divanHeights:   PricedOption[];     // Bedframe
+  legHeights:     PricedOption[];     // Bedframe
+  totalHeights:   PricedOption[];     // Bedframe (Divan + Gap + Leg)
+  gaps:           MaintPoolEntry[];   // Bedframe — no surcharge
+  specials:       PricedOption[];     // Bedframe
+  sofaLegHeights: PricedOption[];     // Sofa
+  sofaSpecials:   PricedOption[];     // Sofa
+  sofaSizes:      MaintPoolEntry[];   // Sofa — no surcharge
 };
 
 /* ════════════════════════════════════════════════════════════════════════

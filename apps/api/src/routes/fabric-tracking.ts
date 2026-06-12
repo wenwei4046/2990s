@@ -107,6 +107,8 @@ fabricTracking.post('/', async (c) => {
     /* Migration 0063 — collection name. */
     series: (body.series as string) ?? null,
     price_centi: typeof body.priceCenti === 'number' ? body.priceCenti : 0,
+    /* Migration 0167 — ACTIVE toggle; new fabrics default true. */
+    is_active: typeof body.isActive === 'boolean' ? body.isActive : true,
   };
 
   const sb = c.get('supabase');
@@ -249,7 +251,7 @@ fabricTracking.get('/', async (c) => {
         'sofa_price_tier, bedframe_price_tier, price_centi, soh_centi, ' +
         'po_outstanding_centi, last_month_usage_centi, one_week_usage_centi, ' +
         'two_weeks_usage_centi, one_month_usage_centi, shortage_centi, ' +
-        'reorder_point_centi, supplier, supplier_code, lead_time_days, series',
+        'reorder_point_centi, supplier, supplier_code, lead_time_days, series, is_active',
     )
     .order('fabric_code', { ascending: true });
 
@@ -264,6 +266,38 @@ fabricTracking.get('/', async (c) => {
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   return c.json({ fabrics: data ?? [] });
+});
+
+/* Migration 0167 — ACTIVE toggle from the Fabric Converter table (owner spec
+   2026-06-12). Inactive fabrics are hidden from NEW-entry fabric pickers
+   (SO/CO variant selects, scan-SO catalog injection); existing documents keep
+   displaying the code, and the converter still lists the row. */
+fabricTracking.patch('/:id/active', async (c) => {
+  const id = c.req.param('id');
+  let body: { isActive?: unknown };
+  try { body = (await c.req.json()) as typeof body; }
+  catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  if (typeof body.isActive !== 'boolean') {
+    return c.json({ error: 'is_active_boolean_required' }, 400);
+  }
+
+  const supabase = c.get('supabase');
+  const { error } = await supabase
+    .from('fabric_trackings')
+    .update({ is_active: body.isActive })
+    .eq('id', id);
+
+  if (error) {
+    if (error.code === '42501' || /permission denied/i.test(error.message)) {
+      return c.json({ error: 'forbidden', reason: error.message }, 403);
+    }
+    if (/column .* does not exist/i.test(error.message)) {
+      return c.json({ error: 'migration_pending', reason: 'Run migration 0167 against Supabase.' }, 500);
+    }
+    return c.json({ error: 'update_failed', reason: error.message }, 500);
+  }
+  return c.json({ ok: true, isActive: body.isActive });
 });
 
 /* Migration 0063 — Inline-edit Series cell from the Fabric Converter table. */

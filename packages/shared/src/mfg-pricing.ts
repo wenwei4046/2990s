@@ -49,16 +49,23 @@ export type MfgPricedOption = {
    *  surcharges contribute 0 to selling until a director sets a real value
    *  (Commander 2026-05-28: "这些价钱都是 costing，不是卖价"). */
   sellingPriceSen?: number;
+  /** Owner spec 2026-06-12 — inactive options are hidden from NEW-entry
+   *  pickers only. Cost/selling lookups below intentionally IGNORE this flag
+   *  so documents that already carry the value keep resolving. */
+  active?: boolean;
 };
+/** String-pool entry — plain string (= active) or { value, active }.
+ *  See @2990s/shared maintenance-pools.ts. */
+import type { MaintPoolEntry } from './maintenance-pools';
 export type MaintenanceConfig = {
   divanHeights:   MfgPricedOption[];
   legHeights:     MfgPricedOption[];
   totalHeights:   MfgPricedOption[];
-  gaps:           string[];
+  gaps:           MaintPoolEntry[];
   specials:       MfgPricedOption[];
   sofaLegHeights: MfgPricedOption[];
   sofaSpecials:   MfgPricedOption[];
-  sofaSizes:      string[];
+  sofaSizes:      MaintPoolEntry[];
 };
 
 /** Fabric tier — same enum HOOKKA stores on fabric_trackings. PRICE_3 is a
