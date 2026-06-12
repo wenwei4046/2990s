@@ -136,6 +136,12 @@ export type MaintenanceConfig = {
   // UI falls back to DISTINCT branding values across mfg_products +
   // product_models (read-only suggestion — never silently written back).
   brandings?:        string[];   // ['HILTON','SEALY','2990S',...]
+  // SUPPLY CATEGORY pool (owner spec 2026-06-12) — simple value list that
+  // feeds the Suppliers list filter chips + the supplier form's multi-select
+  // Supply Category toggles. Optional on the wire; when absent/empty both
+  // readers fall back to DEFAULT_SUPPLIER_CATEGORIES (Sofa / Bedframe /
+  // Mattress / Accessory / Service) in lib/supplier-categories.ts.
+  supplierCategories?: string[]; // ['Sofa','Bedframe','Mattress',...]
   // PR #220 (Commander 2026-05-27): per-compartment design metadata — POS
   // module designs (image + description + default price) brought into the
   // Maintenance UI for back-office reference. Keyed by compartment code,

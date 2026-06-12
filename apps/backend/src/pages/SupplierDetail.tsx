@@ -57,6 +57,8 @@ import {
   PAYMENT_TERMS_OPTIONS,
 } from '../lib/localities-queries';
 import { composeSupplierSku, looksAmbiguous } from '../lib/supplier-sku-helpers';
+import { parseSupplierCategories, displaySupplierCategories } from '../lib/supplier-categories';
+import { SupplyCategoryPicker, useSupplierCategoryPool } from '../components/SupplyCategoryPicker';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { formatPhone } from '@2990s/shared/phone';
 import { PhoneInput } from '../components/PhoneInput';
@@ -156,6 +158,22 @@ const SUPPLIER_CATEGORY_LABEL: Record<SupplierCategory, string> = {
 const isSupplierCategory = (v: string | null | undefined): v is SupplierCategory =>
   typeof v === 'string' && (SUPPLIER_CATEGORIES as readonly string[]).includes(v);
 
+/** Owner spec 2026-06-12 — suppliers.category is now a comma-joined Supply
+ *  Category list ("Sofa, Bedframe"). Derive the single canonical gating
+ *  category for the Pricing/Combo/Fabric tab filters:
+ *    • exactly ONE value that matches a canonical category (any casing,
+ *      legacy uppercase 'SOFA' included) → that category;
+ *    • two or more values → 'MIXED' (every section surfaces);
+ *    • one unknown value → 'MIXED';
+ *    • empty/null → null (default behaviour, everything shows). */
+function deriveGatingCategory(text: string | null | undefined): SupplierCategory | null {
+  const list = parseSupplierCategories(text);
+  if (list.length === 0) return null;
+  if (list.length >= 2) return 'MIXED';
+  const up = list[0]!.toUpperCase();
+  return isSupplierCategory(up) ? up : 'MIXED';
+}
+
 /** Section allow-list per supplier category. Returns undefined when the
  *  category is MIXED or null — show every section (default behaviour). */
 function maintenanceSectionsForCategory(
@@ -207,9 +225,7 @@ export const SupplierDetail = () => {
   //   Combo Pricing — supplier-scoped Sofa Combo deals (feeds PO auto-pricing
   //                   in a later phase).
   const [activeTab, setActiveTab] = useState<SupplierDetailTab>('overview');
-  const supplierCategory: SupplierCategory | null = isSupplierCategory(supplier?.category)
-    ? supplier!.category
-    : null;
+  const supplierCategory: SupplierCategory | null = deriveGatingCategory(supplier?.category);
   /* Commander 2026-05-29 — surface the Products config tabs on the supplier,
      scoped to what the supplier actually supplies:
        • Combo Pricing  → SOFA suppliers (sofa module-set deals)
@@ -2439,6 +2455,9 @@ const SupplierInfoCard = ({
   onClose: () => void;
 }) => {
   const update = useUpdateSupplier();
+  // Owner spec 2026-06-12 — maintained Supply Category pool, for rendering
+  // the stored comma-joined list with canonical casing.
+  const categoryPool = useSupplierCategoryPool();
   /* PR #40 — full master record form (Commander 2026-05-26 AutoCount parity) */
   const [form, setForm] = useState({
     code: supplier.code,                                     // Credit Account
@@ -2521,12 +2540,8 @@ const SupplierInfoCard = ({
             <InfoCell label="Company Name" value={supplier.name} />
             <InfoCell label="Supplier Type" value={supplier.supplier_type ?? '—'} />
             <InfoCell
-              label="Category"
-              value={
-                isSupplierCategory(supplier.category)
-                  ? SUPPLIER_CATEGORY_LABEL[supplier.category]
-                  : supplier.category ?? '—'
-              }
+              label="Supply Category"
+              value={displaySupplierCategories(supplier.category, categoryPool) || '—'}
             />
             <InfoCell label="TIN Number" value={supplier.tin_number ?? '—'} />
             <InfoCell label="Business Reg No" value={supplier.business_reg_no ?? '—'} />
@@ -2567,10 +2582,17 @@ const SupplierInfoCard = ({
             <EditField label="Credit Account *" value={form.code} onChange={(v) => setF('code', v)} />
             <EditField label="Company Name *" value={form.name} onChange={(v) => setF('name', v)} />
             <EditField label="Supplier Type" value={form.supplierType} onChange={(v) => setF('supplierType', v)} placeholder="Matrix / Distributor / Maker" />
-            {/* PR #208 — Category is now a constrained dropdown. Commander
-                picks SOFA / BEDFRAME / MATTRESS / ACCESSORY / SERVICE / MIXED;
-                the Pricing tab filters its maintenance sub-tabs off this. */}
-            <SupplierCategorySelect value={form.category} onChange={(v) => setF('category', v)} />
+            {/* Owner spec 2026-06-12 — Supply Category is a multi-select chip
+                toggle fed by the maintained pool (a supplier can supply
+                multiple categories; stored comma-joined). The Pricing tab
+                still gates its maintenance sub-tabs off the derived single
+                category (multi → every section shows). */}
+            <SupplyCategoryPicker
+              value={form.category}
+              onChange={(v) => setF('category', v)}
+              fieldClassName={styles.field}
+              labelClassName={styles.fieldLabel}
+            />
             <EditField label="TIN Number" value={form.tinNumber} onChange={(v) => setF('tinNumber', v)} />
             <EditField label="Business Reg No" value={form.businessRegNo} onChange={(v) => setF('businessRegNo', v)} />
             {/* Contact */}
@@ -3641,34 +3663,9 @@ const smallInputStyle: React.CSSProperties = {
 
 /* ════════════════════════════════════════════════════════════════════════
    PR #47 — Country + State + Payment Terms dropdowns (commander 2026-05-26)
-   PR #208 — Supplier category dropdown (canonical: SOFA / BEDFRAME / ...)
+   (Supply Category moved to the shared multi-select SupplyCategoryPicker —
+   owner spec 2026-06-12.)
    ════════════════════════════════════════════════════════════════════════ */
-
-const SupplierCategorySelect = ({
-  value, onChange,
-}: { value: string; onChange: (v: string) => void }) => (
-  <label className={styles.field}>
-    <span className={styles.fieldLabel}>Category</span>
-    {/* PR — Commander 2026-05-27: wrap with selectWrap + custom Lucide
-        chevron so the dropdown matches SO Detail. */}
-    <span className={styles.selectWrap}>
-      <select className={styles.fieldSelect} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">— Pick category —</option>
-        {SUPPLIER_CATEGORIES.map((c) => (
-          <option key={c} value={c}>{SUPPLIER_CATEGORY_LABEL[c]}</option>
-        ))}
-      </select>
-      <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
-    </span>
-    {/* PR — Commander 2026-05-27: this field is used by the Pricing tab to
-        decide which maintenance sub-sections to surface. The visible
-        Category column on the Suppliers list auto-derives from the
-        supplier's assigned SKUs (suppliers_with_derived_category view). */}
-    <span style={{ fontSize: 'var(--fs-10)', color: 'var(--fg-muted)', marginTop: 2 }}>
-      Used for surcharge filter only — Category column auto-derives from assigned SKUs.
-    </span>
-  </label>
-);
 
 const CountrySelect = ({ value, onChange }: { value: string; onChange: (v: string) => void }) => (
   <label className={styles.field}>

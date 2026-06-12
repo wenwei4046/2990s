@@ -21,6 +21,15 @@ import {
   type SupplierRow,
   type SupplierStatus,
 } from '../lib/suppliers-queries';
+import {
+  displaySupplierCategories,
+  supplierIsMixedOrOther,
+  supplierMatchesCategory,
+} from '../lib/supplier-categories';
+import {
+  SupplyCategoryPicker,
+  useSupplierCategoryPool,
+} from '../components/SupplyCategoryPicker';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -32,19 +41,14 @@ const STATUS_CHIPS: { value: 'all' | SupplierStatus; label: string }[] = [
   { value: 'BLOCKED', label: 'Blocked' },
 ];
 
-// PR #208 — Commander 2026-05-27: filter the suppliers list by what they
-// supply. Categories are canonical (see migration 0086); MIXED catches
-// fabric / hardware / multi-category resellers.
-type SupplierCategoryFilter = 'all' | 'SOFA' | 'BEDFRAME' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE' | 'MIXED';
-const CATEGORY_CHIPS: { value: SupplierCategoryFilter; label: string }[] = [
-  { value: 'all',       label: 'All categories' },
-  { value: 'SOFA',      label: 'Sofa' },
-  { value: 'BEDFRAME',  label: 'Bedframe' },
-  { value: 'MATTRESS',  label: 'Mattress' },
-  { value: 'ACCESSORY', label: 'Accessory' },
-  { value: 'SERVICE',   label: 'Service' },
-  { value: 'MIXED',     label: 'Mixed / Other' },
-];
+// Supply Category filter (owner spec 2026-06-12, replacing PR #208's fixed
+// enum). Chips render from the maintained Supply Category pool
+// (MaintenanceConfig.supplierCategories, fallback Sofa/Bedframe/Mattress/
+// Accessory/Service) + a synthetic "Mixed / Other" chip. 'all' and the
+// mixed sentinel can't collide with pool values (pool entries are trimmed
+// non-empty user strings; these are namespaced).
+const FILTER_ALL = '__all__';
+const FILTER_MIXED = '__mixed__';
 
 const STATUS_CLASS: Record<SupplierStatus, string> = {
   ACTIVE: styles.statusActive ?? '',
@@ -55,10 +59,9 @@ const STATUS_CLASS: Record<SupplierStatus, string> = {
 export const Suppliers = () => {
   const navigate = useNavigate();
   const [status, setStatus] = useState<'all' | SupplierStatus>('all');
-  // PR #208 — supplier category filter (commander 2026-05-27). Client-side
-  // since the server doesn't yet expose ?category= and the list is small
-  // (< a few hundred rows).
-  const [category, setCategory] = useState<SupplierCategoryFilter>('all');
+  // Supply Category filter — client-side since the server doesn't expose
+  // ?category= and the list is small (< a few hundred rows).
+  const [category, setCategory] = useState<string>(FILTER_ALL);
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);
 
@@ -67,15 +70,30 @@ export const Suppliers = () => {
     search: search.trim() || undefined,
   });
 
-  /* PR — Commander 2026-05-27: filter against derived_category (auto-derived
-     from assigned SKUs), not the manually-picked `category` field. The
-     server returns `derived_category` from the suppliers_with_derived_category
-     view (migration 0088). */
+  // Maintained Supply Category pool (fallback: the default five).
+  const pool = useSupplierCategoryPool();
+  const categoryChips: { value: string; label: string }[] = useMemo(
+    () => [
+      { value: FILTER_ALL, label: 'All supply categories' },
+      ...pool.map((p) => ({ value: p, label: p })),
+      { value: FILTER_MIXED, label: 'Mixed / Other' },
+    ],
+    [pool],
+  );
+
+  /* Owner spec 2026-06-12 — filter against the supplier's own Supply
+     Category list (suppliers.category, comma-joined, parsed on read). A
+     chip matches when the supplier's list INCLUDES it — a sofa+bedframe
+     supplier appears under BOTH chips. "Mixed / Other" = ≥2 categories OR
+     a value outside the maintained pool. */
   const rows = useMemo(() => {
     const all = data ?? [];
-    if (category === 'all') return all;
-    return all.filter((r) => (r.derived_category ?? '').toUpperCase() === category);
-  }, [data, category]);
+    if (category === FILTER_ALL) return all;
+    if (category === FILTER_MIXED) {
+      return all.filter((r) => supplierIsMixedOrOther(r.category, pool));
+    }
+    return all.filter((r) => supplierMatchesCategory(r.category, category));
+  }, [data, category, pool]);
 
   return (
     <div className={styles.page}>
@@ -114,10 +132,11 @@ export const Suppliers = () => {
         </div>
       </div>
 
-      {/* PR #208 — category filter chips. Client-side filter on the in-memory
-          list (small dataset). Hides nothing when "All categories" is on. */}
+      {/* Supply Category filter chips — rendered from the maintained pool +
+          "Mixed / Other". Client-side filter on the in-memory list (small
+          dataset). Hides nothing when "All supply categories" is on. */}
       <div className={styles.statusChips} style={{ marginTop: 'var(--space-2)' }}>
-        {CATEGORY_CHIPS.map((c) => (
+        {categoryChips.map((c) => (
           <StatusChip
             key={c.value}
             active={category === c.value}
@@ -148,7 +167,7 @@ export const Suppliers = () => {
             <tr>
               <th>Code</th>
               <th>Name</th>
-              <th>Category</th>
+              <th>Supply Category</th>
               <th>Contact</th>
               <th>Phone</th>
               <th>State</th>
@@ -167,14 +186,11 @@ export const Suppliers = () => {
                 <td><span className={styles.codeChip}>{r.code}</span></td>
                 <td>{r.name}</td>
                 <td style={{ color: 'var(--fg-muted)' }}>
-                  {/* PR — Commander 2026-05-27: auto-derived from assigned SKUs
-                      (suppliers_with_derived_category view in migration 0088).
-                      The manual `category` field stays on the edit form for the
-                      Pricing tab's surcharge filter — this column shows the
-                      truth derived from what the supplier actually supplies. */}
-                  {r.derived_category
-                    ? (CATEGORY_CHIPS.find((c) => c.value === r.derived_category)?.label ?? r.derived_category)
-                    : '—'}
+                  {/* Owner spec 2026-06-12 — show the supplier's own Supply
+                      Category list (suppliers.category, comma-joined), every
+                      value joined. Legacy uppercase enum values render with
+                      pool casing; legacy 'MIXED' renders as 'Mixed / Other'. */}
+                  {displaySupplierCategories(r.category, pool) || '—'}
                 </td>
                 <td>{r.contact_person ?? '—'}</td>
                 <td>{formatPhone(r.phone ?? r.whatsapp_number) || '—'}</td>
@@ -319,7 +335,17 @@ const SupplierFields = ({
       <Field label="Credit Account *" value={(form.code as string) ?? ''} onChange={(v) => onChange('code', v)} />
       <Field label="Company Name *" value={(form.name as string) ?? ''} onChange={(v) => onChange('name', v)} />
       <Field label="Supplier Type" value={(form.supplierType as string) ?? ''} onChange={(v) => onChange('supplierType', v)} />
-      <Field label="Category" value={(form.category as string) ?? ''} onChange={(v) => onChange('category', v)} />
+      {/* Owner spec 2026-06-12 — Supply Category is a multi-select chip
+          toggle fed by the maintained pool; stored comma-joined in the
+          existing `category` text column. */}
+      <div className={styles.formGridFull}>
+        <SupplyCategoryPicker
+          value={(form.category as string) ?? ''}
+          onChange={(v) => onChange('category', v)}
+          fieldClassName={styles.field}
+          labelClassName={styles.fieldLabel}
+        />
+      </div>
       <Field label="TIN Number" value={(form.tinNumber as string) ?? ''} onChange={(v) => onChange('tinNumber', v)} />
       <Field label="Business Reg No" value={(form.businessRegNo as string) ?? ''} onChange={(v) => onChange('businessRegNo', v)} />
     </div>

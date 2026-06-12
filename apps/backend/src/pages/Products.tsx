@@ -1487,6 +1487,7 @@ type MaintenanceListKey =
   | 'sofaQuickPresets' // PR (Commander 2026-05-28) — module-composition presets
   | 'mattressSizes'    // PR #50 — Mattress size pool (K/Q/S/SS)
   | 'brandings'        // Branding pool (HILTON/SEALY/2990S/...) — feeds Branding datalists
+  | 'supplierCategories' // Supply Category pool — feeds Suppliers list chips + supplier form toggles
   | 'fabrics';
 
 // PR #208 — exported so SupplierDetail can pass a `sectionFilter` prop to
@@ -1530,6 +1531,10 @@ const MAINTENANCE_TABS: {
   { key: 'mattressSizes',    label: 'Mattress Sizes',    description: 'Mattress sizes — edit code · label · dimensions. Used in generated SKU names + width/length placeholders.', priced: false, section: 'Products Maintenance' },
   { key: 'sofaCompartments', label: 'Sofa Compartments', description: 'Sofa compartment pool (1A(LHF), 1A(RHF), 1NA, 2A(LHF), ...). Models tick which they offer.', priced: false, section: 'Products Maintenance' },
   { key: 'brandings',        label: 'Brandings',         description: 'Branding pool (e.g. HILTON, SEALY, 2990S). Feeds every Branding input — New SKU, bulk New Models rows, SKU Master inline edit, Model detail.', priced: false, section: 'Products Maintenance' },
+  // Supply Category pool (owner spec 2026-06-12) — drives the Suppliers list
+  // filter chips and the supplier create/edit form's multi-select toggles.
+  // Empty pool falls back to Sofa / Bedframe / Mattress / Accessory / Service.
+  { key: 'supplierCategories', label: 'Supplier Categories', description: 'Supply Category pool (e.g. Sofa, Bedframe, Mattress). Feeds the Suppliers list filter chips + the supplier form’s Supply Category toggles. Empty = default five (Sofa / Bedframe / Mattress / Accessory / Service).', priced: false, section: 'Products Maintenance' },
 ];
 
 /**
@@ -2851,6 +2856,7 @@ const MaintenanceList = ({
     || listKey === 'bedframeSizes'
     || listKey === 'mattressSizes'
     || listKey === 'brandings'
+    || listKey === 'supplierCategories'
   ) {
     const items = (config[listKey] as string[] | undefined) ?? [];
 
