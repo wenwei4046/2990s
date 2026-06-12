@@ -48,7 +48,7 @@ import { useStateWarehouseMappings } from '../lib/state-warehouse-queries';
 import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
 import { SCAN_PREFILL_KEY, type ScanPrefill } from '../components/ScanOrderModal';
 import {
-  PaymentsTable, labelToApi, draftMethodFields, type PaymentDraft,
+  PaymentsTable, labelToApi, draftMethodFields, newPaymentDraft, type PaymentDraft,
 } from '../components/PaymentsTable';
 import { formatPhone } from '@2990s/shared/phone';
 import styles from './SalesOrderDetail.module.css';
@@ -268,6 +268,24 @@ export const SalesOrderNew = () => {
     if (payload.note) setNote(payload.note);
     if (payload.deliveryDate) setDeliveryDate(payload.deliveryDate);
     if (payload.processingDate) setProcessingDate(payload.processingDate);
+    /* SO-Maintenance matches from the scan (2026-06-12) — both land in
+       normal editable selects, same as a manual pick. */
+    if (payload.customerType) setCustomerType(payload.customerType);
+    if (payload.buildingType) setBuildingType(payload.buildingType);
+    /* Matched payment → ONE draft row in the Payments table (visible,
+       editable, deletable — flushed only on Create, and only when it
+       carries an amount + slip like any manually-added draft). */
+    if (payload.payment?.methodValue) {
+      const p = payload.payment;
+      setPaymentDrafts([{
+        ...newPaymentDraft(),
+        methodLabel:            p.methodValue,
+        merchantProvider:       p.bankValue || '',
+        installmentMonthsLabel: p.installmentLabel || '',
+        onlineType:             p.onlineTypeValue || '',
+        amountCenti:            p.depositCenti > 0 ? p.depositCenti : 0,
+      }]);
+    }
     if (Array.isArray(payload.lines) && payload.lines.length > 0) {
       const dd = payload.deliveryDate ?? null;
       setLines(payload.lines.map((l) => ({

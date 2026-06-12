@@ -102,11 +102,40 @@ type CatalogSku = {
   baseModel: string | null;
 };
 type CatalogFabric = { code: string; description: string | null };
+
+// SO Maintenance vocabularies (so_dropdown_options, migration 0081) — the
+// option groups the SO Maintenance page edits. ACTIVE rows only; injected
+// into the cached prompt prefix as allowed-values lists so the OCR can map
+// handwritten payment notes ("mbb 12 EPP") to exact maintenance values.
+const OPTION_CATEGORIES = [
+  'payment_method',     // L1 method — locked four: Merchant / Online / Installment / Cash
+  'payment_merchant',   // L2 merchant banks (MBB / CIMB / Public / …)
+  'online_type',        // L2 online sub-types (Bank Transfer / TNG / Cheque / DuitNow)
+  'installment_plan',   // L2 plans (One-off / 3 / 6 / 12 / 24 / 36 months)
+  'customer_type',      // New / Existing
+  'building_type',      // Condo / Landed / …
+  'venue',              // showroom / roadshow venues
+] as const;
+type OptionCategory = (typeof OPTION_CATEGORIES)[number];
+type CatalogOption = { value: string; label: string };
+type CatalogOptions = Record<OptionCategory, CatalogOption[]>;
+
+const emptyOptions = (): CatalogOptions => ({
+  payment_method:   [],
+  payment_merchant: [],
+  online_type:      [],
+  installment_plan: [],
+  customer_type:    [],
+  building_type:    [],
+  venue:            [],
+});
+
 type Catalog = {
   skus: CatalogSku[];
   fabrics: CatalogFabric[];
   sofaSizes: string[];
   sofaLegHeights: string[];
+  options: CatalogOptions;
 };
 
 // MaintenanceConfig option entries are either plain strings or
@@ -127,7 +156,7 @@ function optionValues(arr: unknown): string[] {
 }
 
 async function loadCatalog(sb: SupabaseClient): Promise<Catalog> {
-  const [prodRes, fabRes, cfgRes] = await Promise.all([
+  const [prodRes, fabRes, cfgRes, optRes] = await Promise.all([
     sb
       .from('mfg_products')
       .select('code, name, category, base_model')
@@ -147,6 +176,16 @@ async function loadCatalog(sb: SupabaseClient): Promise<Catalog> {
       .order('effective_from', { ascending: false })
       .limit(1)
       .maybeSingle(),
+    // SO Maintenance vocab — ACTIVE rows only (the maintenance page's
+    // soft-deleted options must never re-enter via OCR).
+    sb
+      .from('so_dropdown_options')
+      .select('category, value, label')
+      .eq('active', true)
+      .order('category', { ascending: true })
+      .order('sort_order', { ascending: true })
+      .order('label', { ascending: true })
+      .limit(2000),
   ]);
 
   const skus: CatalogSku[] = ((prodRes.data as Array<{
@@ -175,7 +214,16 @@ async function loadCatalog(sb: SupabaseClient): Promise<Catalog> {
     sofaLegHeights = optionValues(cfg.sofaLegHeights);
   }
 
-  return { skus, fabrics, sofaSizes, sofaLegHeights };
+  const options = emptyOptions();
+  for (const row of (optRes.data as Array<{
+    category: string; value: string; label: string;
+  }> | null) ?? []) {
+    if ((OPTION_CATEGORIES as readonly string[]).includes(row.category)) {
+      options[row.category as OptionCategory].push({ value: row.value, label: row.label });
+    }
+  }
+
+  return { skus, fabrics, sofaSizes, sofaLegHeights, options };
 }
 
 function formatCatalog(c: Catalog): string {
@@ -207,8 +255,27 @@ function formatCatalog(c: Catalog): string {
   lines.push('');
   lines.push('=== SOFA LEG HEIGHTS ===');
   lines.push(c.sofaLegHeights.join(', ') || '—');
+  lines.push('');
 
-  return lines.join('\n');
+  // SO Maintenance allowed-values lists — the OPTION MATCHING rules in the
+  // system prompt reference these section names. value | label per row;
+  // the VALUE (left side) is what option matches must return.
+  const optionSection = (title: string, cat: OptionCategory) => {
+    lines.push(`=== ${title} (allowed values: value | label) ===`);
+    const rows = c.options[cat];
+    if (rows.length === 0) lines.push('—');
+    for (const o of rows) lines.push(`${o.value} | ${o.label}`);
+    lines.push('');
+  };
+  optionSection('PAYMENT METHODS',   'payment_method');
+  optionSection('MERCHANT BANKS',    'payment_merchant');
+  optionSection('ONLINE TYPES',      'online_type');
+  optionSection('INSTALLMENT PLANS', 'installment_plan');
+  optionSection('CUSTOMER TYPES',    'customer_type');
+  optionSection('BUILDING TYPES',    'building_type');
+  optionSection('VENUES',            'venue');
+
+  return lines.join('\n').trimEnd();
 }
 
 // ===========================================================================
@@ -254,6 +321,20 @@ For EVERY handwritten row in the item table output one lines[] entry:
 
 Delivery fees, disposal fees and lift/stair-carry charges written as rows ARE line items — match them against the SERVICE SKUS section.
 
+OPTION MATCHING (SO Maintenance vocabularies)
+=============================================
+The catalog ends with ALLOWED VALUES lists (PAYMENT METHODS, MERCHANT BANKS, ONLINE TYPES, INSTALLMENT PLANS, CUSTOMER TYPES, BUILDING TYPES, VENUES). Each list row is "value | label" — a match must return the VALUE (left side), copied character-for-character. NEVER invent a value outside the list; when you cannot find a defensible match, return null for that field and keep the raw handwriting in paymentMethod / location / remarks so nothing is lost. Use the same confidence scale as skuMatch.
+
+Map the slip's handwritten notes to these fields:
+- paymentMethodMatch — the top-level method, one of PAYMENT METHODS. Card machine / credit-card terminal / EPP / a bank name with a term → "Merchant". Bank transfer / TNG / DuitNow / cheque → "Online". Cash → "Cash". An in-house installment arrangement → "Installment".
+- bankMatch — one of MERCHANT BANKS when a bank is named ("mbb"/"maybank" → MBB-like value, "pbb"/"public bank" → the Public-bank value). Usually accompanies a Merchant method.
+- onlineTypeMatch — one of ONLINE TYPES when the transfer channel is named (TNG / DuitNow / cheque / bank transfer). Only meaningful when the method is Online.
+- installmentPlanMatch — one of INSTALLMENT PLANS when a term is written ("12 EPP", "x12", "12 bln" → the 12-month value; paid-in-full / no term → the One-off value only when the slip explicitly says so, else null).
+- customerTypeMatch — one of CUSTOMER TYPES when the slip marks new/existing (header checkbox or note).
+- buildingTypeMatch — one of BUILDING TYPES when the slip notes condo / landed / apartment etc.
+- locationMatch — one of VENUES when the written showroom/venue/branch clearly matches a list entry. Still report the raw text in the location field.
+Example: a payment note "mbb 12 EPP dep 1500" → paymentMethodMatch.value = the Merchant value, bankMatch.value = the MBB value, installmentPlanMatch.value = the 12-month value, depositRm = 1500, paymentMethod = "mbb 12 EPP dep 1500".
+
 OUTPUT
 ======
 Return STRICT JSON, no markdown fences, no prose:
@@ -269,6 +350,13 @@ Return STRICT JSON, no markdown fences, no prose:
   "depositRm": number | null,
   "totalRm": number | null,
   "remarks": string | null,
+  "paymentMethodMatch": { "value": string, "confidence": number, "reason": string } | null,
+  "bankMatch": { "value": string, "confidence": number, "reason": string } | null,
+  "onlineTypeMatch": { "value": string, "confidence": number, "reason": string } | null,
+  "installmentPlanMatch": { "value": string, "confidence": number, "reason": string } | null,
+  "customerTypeMatch": { "value": string, "confidence": number, "reason": string } | null,
+  "buildingTypeMatch": { "value": string, "confidence": number, "reason": string } | null,
+  "locationMatch": { "value": string, "confidence": number, "reason": string } | null,
   "lines": [{
     "rawText": string,
     "qtyGuess": number,
@@ -283,6 +371,8 @@ Return STRICT JSON, no markdown fences, no prose:
 // Types
 // ===========================================================================
 type SkuMatch = { code: string; confidence: number; reason: string };
+// SO-Maintenance option match — value is the so_dropdown_options row VALUE.
+type OptionMatch = { value: string; confidence: number; reason: string };
 type ExtractedLine = {
   rawText: string;
   qtyGuess: number;
@@ -303,6 +393,15 @@ type ExtractedSlip = {
   depositRm: number | null;
   totalRm: number | null;
   remarks: string | null;
+  // SO Maintenance vocab matches (active so_dropdown_options values only —
+  // validateSlip clears anything outside the live lists).
+  paymentMethodMatch: OptionMatch | null;
+  bankMatch: OptionMatch | null;
+  onlineTypeMatch: OptionMatch | null;
+  installmentPlanMatch: OptionMatch | null;
+  customerTypeMatch: OptionMatch | null;
+  buildingTypeMatch: OptionMatch | null;
+  locationMatch: OptionMatch | null;
   lines: ExtractedLine[];
 };
 
@@ -329,6 +428,21 @@ function normalizeSlip(raw: unknown): ExtractedSlip {
     if (typeof m.code !== 'string' || m.code.trim() === '') return null;
     return {
       code: m.code,
+      confidence: typeof m.confidence === 'number' ? Math.max(0, Math.min(1, m.confidence)) : 0,
+      reason: typeof m.reason === 'string' ? m.reason : '',
+    };
+  };
+  // Option matches use { value } instead of { code } — tolerate Claude
+  // returning either key.
+  const optionMatch = (v: unknown): OptionMatch | null => {
+    if (!v || typeof v !== 'object') return null;
+    const m = v as Record<string, unknown>;
+    const value = typeof m.value === 'string' && m.value.trim() !== ''
+      ? m.value
+      : typeof m.code === 'string' && m.code.trim() !== '' ? m.code : null;
+    if (value === null) return null;
+    return {
+      value,
       confidence: typeof m.confidence === 'number' ? Math.max(0, Math.min(1, m.confidence)) : 0,
       reason: typeof m.reason === 'string' ? m.reason : '',
     };
@@ -363,6 +477,13 @@ function normalizeSlip(raw: unknown): ExtractedSlip {
     depositRm: num(r.depositRm),
     totalRm: num(r.totalRm),
     remarks: str(r.remarks),
+    paymentMethodMatch:   optionMatch(r.paymentMethodMatch),
+    bankMatch:            optionMatch(r.bankMatch),
+    onlineTypeMatch:      optionMatch(r.onlineTypeMatch),
+    installmentPlanMatch: optionMatch(r.installmentPlanMatch),
+    customerTypeMatch:    optionMatch(r.customerTypeMatch),
+    buildingTypeMatch:    optionMatch(r.buildingTypeMatch),
+    locationMatch:        optionMatch(r.locationMatch),
     lines,
   };
 }
@@ -406,6 +527,40 @@ function validateSlip(slip: ExtractedSlip, catalog: Catalog): Warning[] {
       }
     }
   });
+
+  // SO-Maintenance option matches — same never-invent enforcement: a value
+  // outside the ACTIVE allowed list is cleared (case-insensitive snap to the
+  // canonical casing on hit).
+  const optionFields: Array<{
+    field: keyof Pick<ExtractedSlip,
+      'paymentMethodMatch' | 'bankMatch' | 'onlineTypeMatch' | 'installmentPlanMatch' |
+      'customerTypeMatch' | 'buildingTypeMatch' | 'locationMatch'>;
+    category: OptionCategory;
+  }> = [
+    { field: 'paymentMethodMatch',   category: 'payment_method' },
+    { field: 'bankMatch',            category: 'payment_merchant' },
+    { field: 'onlineTypeMatch',      category: 'online_type' },
+    { field: 'installmentPlanMatch', category: 'installment_plan' },
+    { field: 'customerTypeMatch',    category: 'customer_type' },
+    { field: 'buildingTypeMatch',    category: 'building_type' },
+    { field: 'locationMatch',        category: 'venue' },
+  ];
+  for (const { field, category } of optionFields) {
+    const m = slip[field];
+    if (!m) continue;
+    const canon = new Map(catalog.options[category].map((o) => [o.value.toUpperCase(), o.value]));
+    const hit = canon.get(m.value.toUpperCase());
+    if (hit) {
+      m.value = hit;
+    } else {
+      warnings.push({
+        field,
+        value: m.value,
+        message: `Suggested ${category.replace(/_/g, ' ')} not in the SO Maintenance list — cleared; pick manually.`,
+      });
+      slip[field] = null;
+    }
+  }
   return warnings;
 }
 
@@ -1042,10 +1197,12 @@ scanSo.post('/extract', async (c) => {
       extracted: parsed,
       warnings,
       // Slim catalog so the modal's SKU/fabric pickers work without a second
-      // round-trip.
+      // round-trip. `options` = the SO Maintenance allowed-values lists the
+      // matches were validated against (feeds the modal's review selects).
       catalog: {
         skus: catalog.skus,
         fabrics: catalog.fabrics,
+        options: catalog.options,
       },
       meta: { cacheHit, cacheCreated, files: files.length, sampleInsertError, repRules: repRulesMeta },
     },

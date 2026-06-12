@@ -39,6 +39,19 @@ export type ScanPrefillLine = {
   remark:         string;        // rawText + notes so nothing on the slip is lost
 };
 
+/* SO-Maintenance-matched payment block → seeds ONE PaymentDraft row in the
+   New SO Payments table (visible + editable + deletable there — no hidden
+   writes). methodValue is the payment_method row VALUE (the immutable key
+   PaymentsTable's methodLabel select stores: Merchant / Online /
+   Installment / Cash); bank / plan / online sub-type are the L2 picks. */
+export type ScanPrefillPayment = {
+  methodValue:      string;
+  bankValue:        string;        // payment_merchant value ('' = none)
+  installmentLabel: string;        // installment_plan value, e.g. '12 months'
+  onlineTypeValue:  string;        // online_type value ('' = none)
+  depositCenti:     number;        // deposit on slip ×100 (0 = operator fills)
+};
+
 export type ScanPrefill = {
   customerName:   string;
   phone:          string;        // first phone, raw string
@@ -46,6 +59,9 @@ export type ScanPrefill = {
   note:           string;        // remarks + location + extra phones + non-date delivery text
   deliveryDate:   string | null; // only when a clean YYYY-MM-DD
   processingDate: string | null;
+  customerType:   string;        // customer_type value matched to SO Maintenance ('' = none)
+  buildingType:   string;        // building_type value matched to SO Maintenance ('' = none)
+  payment:        ScanPrefillPayment | null;
   lines:          ScanPrefillLine[];
 };
 
@@ -59,6 +75,9 @@ type ExtractedLine = {
   fabricMatch: SkuMatch | null;
   notes: string | null;
 };
+/* SO-Maintenance option match — value is a so_dropdown_options row VALUE,
+   already validated server-side against the ACTIVE list. */
+type OptionMatch = { value: string; confidence: number; reason: string };
 type ExtractedSlip = {
   customerName: string | null;
   address: string | null;
@@ -71,9 +90,30 @@ type ExtractedSlip = {
   depositRm: number | null;
   totalRm: number | null;
   remarks: string | null;
+  paymentMethodMatch: OptionMatch | null;
+  bankMatch: OptionMatch | null;
+  onlineTypeMatch: OptionMatch | null;
+  installmentPlanMatch: OptionMatch | null;
+  customerTypeMatch: OptionMatch | null;
+  buildingTypeMatch: OptionMatch | null;
+  locationMatch: OptionMatch | null;
   lines: ExtractedLine[];
 };
 type CatalogSku = { code: string; name: string; category: string; baseModel: string | null };
+type CatalogOption = { value: string; label: string };
+type CatalogOptions = {
+  payment_method:   CatalogOption[];
+  payment_merchant: CatalogOption[];
+  online_type:      CatalogOption[];
+  installment_plan: CatalogOption[];
+  customer_type:    CatalogOption[];
+  building_type:    CatalogOption[];
+  venue:            CatalogOption[];
+};
+const EMPTY_OPTIONS: CatalogOptions = {
+  payment_method: [], payment_merchant: [], online_type: [],
+  installment_plan: [], customer_type: [], building_type: [], venue: [],
+};
 type RepRulesMeta = { salesperson: string; sampleCount: number };
 type ExtractResp = {
   success: boolean;
@@ -81,7 +121,11 @@ type ExtractResp = {
     sampleId: string | null;
     extracted: ExtractedSlip;
     warnings: Array<{ field: string; value: string; message: string; lineIdx?: number }>;
-    catalog: { skus: CatalogSku[]; fabrics: Array<{ code: string; description: string | null }> };
+    catalog: {
+      skus: CatalogSku[];
+      fabrics: Array<{ code: string; description: string | null }>;
+      options?: CatalogOptions;
+    };
     meta?: { repRules?: RepRulesMeta | null };
   };
 };
@@ -157,6 +201,18 @@ export const ScanOrderModal = ({ onClose }: Props) => {
   const [remarks, setRemarks] = useState('');
   const [lines, setLines] = useState<LineEdit[] | null>(null);
 
+  // SO-Maintenance matched picks — value '' = no match. Selects are fed by
+  // the allowed lists the extract response returns (active options only),
+  // so the operator can only confirm/override within the maintenance vocab.
+  const [optionLists, setOptionLists] = useState<CatalogOptions>(EMPTY_OPTIONS);
+  const [pmValue,       setPmValue]       = useState('');
+  const [bankValue,     setBankValue]     = useState('');
+  const [onlineValue,   setOnlineValue]   = useState('');
+  const [planValue,     setPlanValue]     = useState('');
+  const [custTypeValue, setCustTypeValue] = useState('');
+  const [bldgTypeValue, setBldgTypeValue] = useState('');
+  const [venueValue,    setVenueValue]    = useState('');
+
   const skuByCode = useMemo(
     () => new Map(skus.map((s) => [s.code.toUpperCase(), s])),
     [skus],
@@ -202,6 +258,14 @@ export const ScanOrderModal = ({ onClose }: Props) => {
       setDepositRm(ex.depositRm != null ? String(ex.depositRm) : '');
       setTotalRm(ex.totalRm != null ? String(ex.totalRm) : '');
       setRemarks(ex.remarks ?? '');
+      setOptionLists(d.catalog.options ?? EMPTY_OPTIONS);
+      setPmValue(ex.paymentMethodMatch?.value ?? '');
+      setBankValue(ex.bankMatch?.value ?? '');
+      setOnlineValue(ex.onlineTypeMatch?.value ?? '');
+      setPlanValue(ex.installmentPlanMatch?.value ?? '');
+      setCustTypeValue(ex.customerTypeMatch?.value ?? '');
+      setBldgTypeValue(ex.buildingTypeMatch?.value ?? '');
+      setVenueValue(ex.locationMatch?.value ?? '');
       setLines(ex.lines.map((l, i) => ({
         rid: `sl${i}-${Math.random().toString(36).slice(2, 7)}`,
         rawText: l.rawText,
@@ -236,6 +300,8 @@ export const ScanOrderModal = ({ onClose }: Props) => {
 
     // Corrected blob mirrors the extracted slip shape so future few-shot
     // examples teach the extractor the conventions the operator wants.
+    const optMatch = (v: string): OptionMatch | null =>
+      v ? { value: v, confidence: 1, reason: 'operator-confirmed' } : null;
     const corrected: ExtractedSlip = {
       customerName: customerName || null,
       address: address || null,
@@ -248,6 +314,13 @@ export const ScanOrderModal = ({ onClose }: Props) => {
       depositRm: depositRm.trim() === '' ? null : Number(depositRm) || null,
       totalRm: totalRm.trim() === '' ? null : Number(totalRm) || null,
       remarks: remarks || null,
+      paymentMethodMatch:   optMatch(pmValue),
+      bankMatch:            optMatch(bankValue),
+      onlineTypeMatch:      optMatch(onlineValue),
+      installmentPlanMatch: optMatch(planValue),
+      customerTypeMatch:    optMatch(custTypeValue),
+      buildingTypeMatch:    optMatch(bldgTypeValue),
+      locationMatch:        optMatch(venueValue),
       lines: edited.map((l) => ({
         rawText: l.rawText,
         qtyGuess: l.qty,
@@ -272,6 +345,9 @@ export const ScanOrderModal = ({ onClose }: Props) => {
     const noteParts: string[] = [];
     if (remarks) noteParts.push(remarks);
     if (location) noteParts.push(`Venue/location on slip: ${location}`);
+    /* New SO's Venue cell is LOCKED to the salesperson's home venue, so a
+       matched venue has no input cell — it rides in the Note instead. */
+    if (venueValue && venueValue !== location) noteParts.push(`Venue matched (SO Maintenance): ${venueValue}`);
     if (phones.length > 1) noteParts.push(`Other phone(s): ${phones.slice(1).join(', ')}`);
     if (deliveryDate && !ISO_DATE_RE.test(deliveryDate)) noteParts.push(`Delivery: ${deliveryDate}`);
     if (paymentMethod) noteParts.push(`Payment method on slip: ${paymentMethod}`);
@@ -287,6 +363,21 @@ export const ScanOrderModal = ({ onClose }: Props) => {
       note: noteParts.join('\n'),
       deliveryDate: ISO_DATE_RE.test(deliveryDate) ? deliveryDate : null,
       processingDate: ISO_DATE_RE.test(processingDate) ? processingDate : null,
+      customerType: custTypeValue,
+      buildingType: bldgTypeValue,
+      /* Matched method → ONE editable payment-draft row in New SO's
+         Payments table. Deposit lands as the row amount (the slip's deposit
+         was actually collected — Spec D4 still requires its slip upload
+         before save; the operator can zero/delete the row instead). */
+      payment: pmValue
+        ? {
+            methodValue:      pmValue,
+            bankValue:        bankValue,
+            installmentLabel: planValue,
+            onlineTypeValue:  onlineValue,
+            depositCenti:     Math.round((Number(depositRm) || 0) * 100),
+          }
+        : null,
       lines: edited.map((l) => {
         const sku = skuByCode.get(l.code.toUpperCase());
         const remarkParts = [l.rawText && `Slip: ${l.rawText}`, l.notes].filter(Boolean) as string[];
@@ -305,6 +396,27 @@ export const ScanOrderModal = ({ onClose }: Props) => {
     onClose();
     navigate('/mfg-sales-orders/new?fromScan=1');
   };
+
+  /* SO-Maintenance matched-value select — operator confirms/overrides within
+     the allowed list only ('' = no match → field stays out of the prefill). */
+  const optSelect = (
+    label: string,
+    value: string,
+    onChange: (v: string) => void,
+    opts: CatalogOption[],
+  ) => (
+    <label className={styles.field}>
+      <span className={styles.fieldLabel}>{label}</span>
+      <select className={styles.input} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">— no match —</option>
+        {opts.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label === o.value ? o.label : `${o.label} (${o.value})`}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
 
   const confidenceChip = (l: LineEdit) => {
     if (!l.code) return <span className={`${styles.chip} ${styles.chipGrey}`}>no match</span>;
@@ -425,6 +537,9 @@ export const ScanOrderModal = ({ onClose }: Props) => {
                   <span className={styles.fieldLabel}>Sales rep on slip</span>
                   <input className={styles.input} value={salesRep} onChange={(e) => setSalesRep(e.target.value)} />
                 </label>
+                {optSelect('Venue (matched — goes to Note)', venueValue, setVenueValue, optionLists.venue)}
+                {optSelect('Customer type (matched)', custTypeValue, setCustTypeValue, optionLists.customer_type)}
+                {optSelect('Building type (matched)', bldgTypeValue, setBldgTypeValue, optionLists.building_type)}
               </div>
 
               <div className={styles.sectionLabel}>Dates &amp; money</div>
@@ -438,9 +553,13 @@ export const ScanOrderModal = ({ onClose }: Props) => {
                   <input className={styles.input} value={processingDate} onChange={(e) => setProcessingDate(e.target.value)} />
                 </label>
                 <label className={styles.field}>
-                  <span className={styles.fieldLabel}>Payment method</span>
+                  <span className={styles.fieldLabel}>Payment notes (as written)</span>
                   <input className={styles.input} value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} />
                 </label>
+                {optSelect('Payment method (matched)', pmValue, setPmValue, optionLists.payment_method)}
+                {optSelect('Merchant bank (matched)', bankValue, setBankValue, optionLists.payment_merchant)}
+                {optSelect('Online type (matched)', onlineValue, setOnlineValue, optionLists.online_type)}
+                {optSelect('Installment plan (matched)', planValue, setPlanValue, optionLists.installment_plan)}
                 <label className={styles.field}>
                   <span className={styles.fieldLabel}>Deposit (RM)</span>
                   <input className={styles.input} value={depositRm} onChange={(e) => setDepositRm(e.target.value)} inputMode="decimal" />
