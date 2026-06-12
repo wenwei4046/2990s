@@ -4,8 +4,8 @@ import { clearHandoverFormSnapshot } from '../lib/handover-helpers';
 
 /**
  * Cart line snapshot. The `total` field is what we display in the cart and
- * what the POS submits to POST /orders. The server recomputes the total from
- * current pricing tables and rejects with 409 if it drifts more than 0.5%.
+ * what the POS submits to POST /mfg-sales-orders. The server recomputes the
+ * total from current pricing tables and rejects if it drifts more than 0.5%.
  */
 export interface SofaConfigSnapshot {
   kind: 'sofa';

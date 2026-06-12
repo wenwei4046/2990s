@@ -2,7 +2,7 @@ import { todayMyt } from '../lib/dates';
 import { useMemo, useState } from 'react';
 import {
   Receipt, Download, FileSpreadsheet, ChevronsDown, ChevronsUp,
-  ChevronRight, CreditCard, CalendarClock, QrCode, Banknote,
+  CreditCard, CalendarClock, QrCode, Banknote,
 } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import {
@@ -15,7 +15,6 @@ import {
 } from '../lib/audit-log-view';
 import { useShowrooms, useStaff } from '../lib/admin-queries';
 import { AuditLogFilterBar } from '../components/AuditLogFilterBar';
-import { OrderDrawer } from '../components/OrderDrawer';
 import {
   exportCsv, exportXlsx, downloadBlob, type AuditExportRow,
 } from '../lib/audit-export';
@@ -62,13 +61,11 @@ export const AuditLog = () => {
   const [filtersOpen, setFiltersOpen] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exportOpen, setExportOpen] = useState(false);
-  const [drawerOrderId, setDrawerOrderId] = useState<string | null>(null);
 
   const query = useAuditLog(filters);
-  // Audit-log realtime channel removed (perf-router-realtime-sidebar) — it
-  // duplicated useOrdersRealtime's `orders` subscription. Page falls back to
-  // staleTime-driven refetch on focus / manual refresh; opening Orders or
-  // Dashboard already keeps the cache fresh via the surviving channel.
+  // No realtime channel — page falls back to staleTime-driven refetch on
+  // focus / manual refresh. (The legacy orders-table subscription went away
+  // with the /orders route cleanup, 2026-06-12.)
   const showrooms = useShowrooms();
   const staff = useStaff();
 
@@ -228,7 +225,6 @@ export const AuditLog = () => {
                 <th>Method · details</th>
                 <th>Approval code</th>
                 <th>Salesperson</th>
-                <th aria-label="Open" />
               </tr>
             </thead>
             <tbody>
@@ -273,12 +269,6 @@ export const AuditLog = () => {
                         {staffName(r.salespersonId)}
                       </span>
                     </td>
-                    <td>
-                      <button type="button" className={styles.openBtn}
-                        onClick={() => setDrawerOrderId(r.id)} aria-label={`Open ${r.id}`}>
-                        <ChevronRight size={18} strokeWidth={1.75} />
-                      </button>
-                    </td>
                   </tr>
                 );
               })}
@@ -286,8 +276,6 @@ export const AuditLog = () => {
           </table>
         )}
       </div>
-
-      <OrderDrawer orderId={drawerOrderId} onClose={() => setDrawerOrderId(null)} />
     </div>
   );
 };

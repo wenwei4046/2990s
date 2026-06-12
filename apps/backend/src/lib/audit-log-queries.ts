@@ -68,8 +68,7 @@ export const useAuditLog = (filters: AuditLogFilters) =>
     staleTime: 30_000,
   });
 
-// useAuditLogRealtime removed (perf-router-realtime-sidebar). It duplicated
-// useOrdersRealtime's subscription on `public.orders` — two WebSocket channels
-// for the same underlying table. AuditLog now relies on staleTime-driven
-// refetch; if a live feed is needed later, fold it into useOrdersRealtime's
-// single channel rather than reopening a second one.
+// useAuditLogRealtime removed (perf-router-realtime-sidebar); the legacy
+// orders-table realtime channel it duplicated was itself deleted with the
+// /orders route cleanup (2026-06-12). AuditLog relies on staleTime-driven
+// refetch on focus / manual refresh.

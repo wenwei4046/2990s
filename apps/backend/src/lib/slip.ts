@@ -16,21 +16,8 @@ async function getToken(): Promise<string> {
   return token;
 }
 
-export async function fetchSlipUrl(orderId: string): Promise<SlipUrlResponse> {
-  if (!API_URL) throw new Error('VITE_API_URL is not set');
-  const token = await getToken();
-  const res = await fetch(`${API_URL}/orders/${encodeURIComponent(orderId)}/slip-url`, {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '<no body>');
-    throw new Error(humanApiError(res.status, text));
-  }
-  return res.json() as Promise<SlipUrlResponse>;
-}
-
 /** Presigned GET URL for a manufacturing Sales Order's payment slip (P1,
- *  migration 0143). Mirrors fetchSlipUrl but hits the SO route keyed by docNo. */
+ *  migration 0143). Hits the SO route keyed by docNo. */
 export async function fetchSoSlipUrl(docNo: string): Promise<SlipUrlResponse> {
   if (!API_URL) throw new Error('VITE_API_URL is not set');
   const token = await getToken();
@@ -167,18 +154,4 @@ export async function uploadSlipFull(opts: UploadSlipOptions): Promise<UploadSli
   opts.onProgress?.('confirm');
   await confirmUpload(init.uploadSessionId);
   return { uploadSessionId: init.uploadSessionId, r2Key: init.r2Key };
-}
-
-export async function patchOrderLane(orderId: string, lane: string): Promise<void> {
-  if (!API_URL) throw new Error('VITE_API_URL is not set');
-  const token = await getToken();
-  const res = await fetch(`${API_URL}/orders/${encodeURIComponent(orderId)}/lane`, {
-    method: 'PATCH',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ lane }),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '<no body>');
-    throw new Error(humanApiError(res.status, text));
-  }
 }

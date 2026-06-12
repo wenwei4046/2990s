@@ -79,7 +79,7 @@ You don't need to read them top-to-bottom every session, but `UI_REFERENCE.md` M
 │   └── api/                        ← Hono on CF Workers → api.{domain} — @2990s/api
 │       └── src/
 │           ├── index.ts            ← route mounting
-│           ├── routes/             ← ~56 route modules (orders, mfg-sales-orders,
+│           ├── routes/             ← ~55 route modules (mfg-sales-orders,
 │           │                          delivery-orders-mfg, sales-invoices, grns,
 │           │                          purchase-invoices, inventory, accounting,
 │           │                          suppliers, mrp, outstanding, document-flow, …)
@@ -155,12 +155,12 @@ The ERP is SAP-Business-One-style: documents reference upstream documents, and `
 
 ## Server-side pricing recompute — NON-NEGOTIABLE
 
-`POST /orders` (`apps/api/src/routes/orders.ts`) MUST re-derive the total from current pricing tables before persisting, using the **shared** pricing code:
-- `computeOrderTotal` — line recompute. Sofa lines: sum compartments per `config.modules`, add recliner upgrades per seat, OR substitute bundle price if `detectBundle` matches AND bundle is cheaper. Mattress/bedframe lines: lookup `product_size_variants(product_id, size_id).price`. Addons from `addons`; fabric tiers + Sofa Combos + PWP applied per the shared helpers.
-- `computeDeliveryFee` — category-aware base + cross-category (special-model overrides).
-- `pricingDriftExceeds` — if the client total differs from the server total by **> 0.5%**, **REJECT** with HTTP 400 and the diff. Don't trust the POS bundle. The "honest pricing" promise breaks the moment a tampered POS submits `total: 0`.
+`POST /mfg-sales-orders` (`apps/api/src/routes/mfg-sales-orders.ts`) MUST re-derive every line price from current pricing tables before persisting, using the **shared** pricing code:
+- `computeMfgLinePrice` / `computeMfgLineCost` (`mfg-pricing.ts`) — per-line recompute from (product, fabric, variants) against the MaintenanceConfig; sofa cells, combos, fabric-tier Δ, PWP and extras all resolve server-side.
+- `computeSoDeliveryFee` (`pricing.ts`) — delivery fee: base + special-model overrides + cross-category (sofa × mattress/bedframe only; mattress + bedframe = one category) + cross-order follow-up link.
+- `mfgPricingDriftExceeds` (`mfg-pricing.ts`) — if the client total differs from the server total by **> 0.5%**, **REJECT** with the diff. Don't trust the POS bundle. The "honest pricing" promise breaks the moment a tampered POS submits `total: 0`.
 
-The pure functions live in `packages/shared/src/pricing.ts` (+ `sofa-build.ts`, `sofa-combo-pricing.ts`, `fabric-tier-addon.ts`, `mfg-pricing.ts`) so client and server run the same code. The manufacturing SO path uses `mfg-pricing` (`computeMfgLinePrice` / `computeMfgLineCost`, MaintenanceConfig per scope).
+The pure functions live in `packages/shared/src/` (`mfg-pricing.ts`, `pricing.ts`, `sofa-build.ts`, `sofa-combo-pricing.ts`, `fabric-tier-addon.ts`) so client and server run the same code. (The original retail `POST /orders` recompute chain — `computeOrderTotal` / `computeDeliveryFee` / `pricingDriftExceeds` — was deleted with the legacy `/orders` route on 2026-06-12; the rule lives on unchanged on the mfg path.)
 
 ---
 
@@ -183,7 +183,7 @@ The original Phase 0–6 plan is effectively **complete and shipped** — the ap
 | 0 · Scaffold | pnpm workspace, 3 apps, design-system, Supabase, Wrangler, GH Actions | ✅ done |
 | 1 · Catalog | SKU Master pricing editor, POS catalog reads from API | ✅ done |
 | 1.5 · Sofa config per-Model | `modulePriceFor` / `bundlePriceFor` / `reclinerPriceFor` from product pricing | ✅ done |
-| 2 · Order placement | configurator → cart → handover → confirm; `POST /orders` recompute; realtime | ✅ done |
+| 2 · Order placement | configurator → cart → handover → confirm; server recompute (legacy `POST /orders`, since removed — live path is `POST /mfg-sales-orders`); realtime | ✅ done |
 | 3 · Order lifecycle | order board, drawer, lane transitions, history audit | ✅ done |
 | 4 · Slip + dispatch + delivery | R2 upload, dispatch, driver assignment | ✅ done |
 | 5 · Hardening | RLS, customer directory, audit log | ✅ done |
@@ -208,7 +208,7 @@ The original Phase 0–6 plan is effectively **complete and shipped** — the ap
 1. **Don't modify the prototype** to "fix" something unless explicitly asked. It's the canonical design spec. Approved deviations go through the `UI_REFERENCE.md` protocol.
 2. **Don't redesign the sofa configurator UI.** Loo finalised it through multiple design reviews. The 22 plan-view PNGs and the snap math are not negotiable.
 3. **Don't substitute the stack** (§Stack). Tailwind, shadcn, react-dnd, Next.js — all rejected with reasons. Use the existing CSS classes + design-system tokens.
-4. **Don't skip server-side pricing recompute** on `POST /orders`. The whole brand promise depends on it.
+4. **Don't skip server-side pricing recompute** on `POST /mfg-sales-orders`. The whole brand promise depends on it.
 5. **Real SKUs are seeded via the Backend SKU Master**, not invented in code. The catalog is now seeded in prod (sofas / mattresses / bedframes); the Models in `prototype/pos-data.jsx` remain reference/test data only. Don't re-seed or overwrite prod catalog without an explicit ask.
 6. **Don't expose the Backend portal to non-staff.** RLS is restrictive by default; verify before any change that could widen access.
 

@@ -6,7 +6,6 @@ import { Catalog } from './pages/Catalog';
 import { Configurator } from './pages/Configurator';
 import { Cart } from './pages/Cart';
 import { Handover } from './pages/Handover';
-import { Confirmed } from './pages/Confirmed';
 import { HandoverConfirmed } from './pages/HandoverConfirmed';
 import { OrderStatus } from './pages/OrderStatus';
 import { Quotes } from './pages/Quotes';
@@ -46,10 +45,9 @@ export const router = createBrowserRouter([
   { path: '/configure/:productId', element: <AuthGate><Configurator /></AuthGate> },
   { path: '/cart', element: <AuthGate><Cart /></AuthGate> },
   { path: '/handover', element: <AuthGate><Handover /></AuthGate> },
-  { path: '/confirmed/:orderId', element: <AuthGate><Confirmed /></AuthGate> },
-  /* Task #70 — Manufacturing SO handover thank-you. Distinct from /confirmed
-     (which reads from the legacy retail `orders` table) — this route shows
-     the docNo straight after POST /mfg-sales-orders without a DB round trip. */
+  /* Task #70 — Manufacturing SO handover thank-you. Shows the docNo straight
+     after POST /mfg-sales-orders without a DB round trip. (The legacy retail
+     /confirmed/:orderId page was removed with the /orders cleanup 2026-06-12.) */
   { path: '/handover-confirmed/:docNo', element: <AuthGate><HandoverConfirmed /></AuthGate> },
   { path: '/my-orders', element: <AuthGate><OrderStatus /></AuthGate> },
   { path: '/quotes', element: <AuthGate><Quotes /></AuthGate> },

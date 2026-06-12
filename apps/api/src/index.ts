@@ -6,7 +6,6 @@ import type { ScheduledEvent, ExecutionContext } from '@cloudflare/workers-types
 import type { Env, Variables } from './env';
 import { health } from './routes/health';
 import { products } from './routes/products';
-import { orders } from './routes/orders';
 import { slipRoutes } from './routes/slips';
 import { quotes } from './routes/quotes';
 import { admin } from './routes/admin';
@@ -84,7 +83,6 @@ app.use('*', async (c, next) => {
 
 app.route('/health', health);
 app.route('/products', products);
-app.route('/orders', orders);
 app.route('/quotes', quotes);
 app.route('/admin', admin);
 app.route('/admin/audit-log', auditLog);
