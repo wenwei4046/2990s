@@ -537,6 +537,16 @@ describe('computeSoDeliveryFee — special models + cross-order link', () => {
       .toMatchObject({ base: 250, crossCategory: 175, total: 425 });
   });
 
+  it('sofa + mattress → 250 + 175 = 425', () => {
+    expect(computeSoDeliveryFee(input({ categoryIds: ['sofa', 'mattress'] }), cfg))
+      .toMatchObject({ base: 250, crossCategory: 175, total: 425 });
+  });
+
+  it('mattress + bedframe = ONE category (Loo 2026-06-12) → base only, 250', () => {
+    expect(computeSoDeliveryFee(input({ categoryIds: ['mattress', 'bedframe'] }), cfg))
+      .toMatchObject({ base: 250, crossCategory: 0, total: 250 });
+  });
+
   it('cross-category billed once across 3 categories → 425', () => {
     expect(computeSoDeliveryFee(input({ categoryIds: ['sofa', 'bedframe', 'mattress'] }), cfg).total).toBe(425);
   });

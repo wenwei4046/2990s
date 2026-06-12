@@ -11,7 +11,9 @@ export const fabricTierAddonConfig = new Hono<{ Bindings: Env; Variables: Variab
 
 fabricTierAddonConfig.use('*', supabaseAuth);
 
-const WRITE_ROLES = new Set(['admin', 'coordinator', 'master_account']);
+// super_admin added 2026-06-12 — the role (mig 0162) postdates this route (0124).
+// RLS counterpart: migration 0166 adds super_admin to the UPDATE policy.
+const WRITE_ROLES = new Set(['admin', 'super_admin', 'coordinator', 'master_account']);
 
 const patchSchema = z.object({
   sofaTier2Delta:     z.number().int().nonnegative().optional(),
@@ -62,7 +64,10 @@ fabricTierAddonConfig.patch('/', async (c) => {
   if (parsed.data.bedframeTier2Delta !== undefined) patch.bedframe_tier2_delta = parsed.data.bedframeTier2Delta;
   if (parsed.data.bedframeTier3Delta !== undefined) patch.bedframe_tier3_delta = parsed.data.bedframeTier3Delta;
 
-  const { error } = await supabase.from('fabric_tier_addon_config').update(patch).eq('id', 1);
+  // .select() so an RLS USING-filter (0 rows touched) surfaces as an error
+  // instead of a phantom ok:true — exactly how the super_admin gap hid for days.
+  const { data: updated, error } = await supabase.from('fabric_tier_addon_config').update(patch).eq('id', 1).select('id');
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  if (!updated || updated.length === 0) return c.json({ error: 'update_failed', reason: 'rls_blocked_zero_rows' }, 403);
   return c.json({ ok: true });
 });
