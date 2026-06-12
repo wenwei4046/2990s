@@ -15,7 +15,7 @@ import { Layers, Search, Plus, Trash2, Truck, X, ImageOff, Upload } from 'lucide
 import { Button } from '@2990s/design-system';
 import {
   useProductModels, useCreateProductModel, useGenerateModelSkus, useDeleteProductModel,
-  useUploadProductModelPhoto, useDeleteProductModelPhoto,
+  useUploadProductModelPhoto, useDeleteProductModelPhoto, useBrandingPool,
   type ProductModelRow,
 } from '../lib/product-models-queries';
 import { useMaintenanceConfig, useMfgProducts, type MfgCategory, type MfgProductRow } from '../lib/mfg-products-queries';
@@ -607,6 +607,9 @@ export function NewModelDialog({
   const [submitting,  setSubmitting]  = useState(false);
 
   const maintenance = useMaintenanceConfig('master');
+  // Branding datalist — maintenance Brandings pool first, DISTINCT fallback
+  // across products + models. Datalist keeps free text possible.
+  const brandingPool = useBrandingPool();
   const createMut   = useCreateProductModel();
   const generateMut = useGenerateModelSkus();
   // (B) Wei Siang 2026-06-08 — used to ROLL BACK a just-created model when its
@@ -875,6 +878,10 @@ export function NewModelDialog({
         noValidate
         style={{ maxHeight: '90vh', overflowY: 'auto' }}
       >
+        {/* Shared datalist for every row card's Branding input. */}
+        <datalist id="branding-pool-model-rows">
+          {brandingPool.pool.map((b) => <option key={b} value={b} />)}
+        </datalist>
         {/* PR — Commander 2026-05-26: "做成长方形、大一点". Title + category
             side-by-side so the header doesn't burn three rows before the
             first Model card. Sub line is shrunk into a single sentence. */}
@@ -1054,6 +1061,7 @@ function ModelRowCard({
         <label className={styles.compactField}>
           <span>Branding</span>
           <input type="text" value={row.branding} onChange={(e) => onChange({ branding: e.target.value })}
+            list="branding-pool-model-rows"
             placeholder={category === 'MATTRESS' ? '2990' : ''} />
         </label>
 

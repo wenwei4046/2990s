@@ -130,6 +130,12 @@ export type MaintenanceConfig = {
   bedframeSizes?:    string[];   // ['K','Q','S','SS','SK','SP'] — bedframe size codes
   sofaCompartments?: string[];   // ['1A(LHF)','1A(RHF)','1NA',...] — sofa compartment codes
   mattressSizes?:    string[];   // ['K','Q','S','SS']
+  // BRANDING pool — simple value list (no prices) that feeds every Branding
+  // input as a datalist (New SKU drawer, NewModelDialog bulk rows, SKU Master
+  // inline edit, Model detail). Optional on the wire; when absent/empty the
+  // UI falls back to DISTINCT branding values across mfg_products +
+  // product_models (read-only suggestion — never silently written back).
+  brandings?:        string[];   // ['HILTON','SEALY','2990S',...]
   // PR #220 (Commander 2026-05-27): per-compartment design metadata — POS
   // module designs (image + description + default price) brought into the
   // Maintenance UI for back-office reference. Keyed by compartment code,

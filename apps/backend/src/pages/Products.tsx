@@ -65,6 +65,7 @@ import {
   type ProductSupplierRow,
 } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { SkeletonRows } from '../components/Skeleton';
 import { MoneyInput } from '../components/MoneyInput';
 import { todayMyt } from '../lib/dates';
@@ -74,6 +75,7 @@ import { SpecialAddonsTab } from '../components/SpecialAddonsTab';
 import { FabricTracking } from './FabricTracking';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/size-info';
 import { ProductModels, NewModelDialog } from './ProductModels';
+import { useBrandingPool } from '../lib/product-models-queries';
 import { useQueryClient } from '@tanstack/react-query';
 import styles from './Products.module.css';
 
@@ -258,6 +260,10 @@ const SkuMasterTab = () => {
     search: search.trim() || undefined,
   });
   const config = useMaintenanceConfig('master');
+  // Branding datalist options for the inline Mattress branding edit — pool
+  // first, DISTINCT fallback. Rendered ONCE below (datalist#branding-pool-sku-master)
+  // so every row's BrandingInput can reference it.
+  const brandingPool = useBrandingPool();
 
   const allRows = useMemo(() => products ?? [], [products]);
   const isSofaView = category === 'SOFA';
@@ -414,8 +420,227 @@ const SkuMasterTab = () => {
       ? 6
       : 7);
 
+  /* ── DataGrid conversion (owner request 2026-06-12) ─────────────────
+     Normal viewing renders through the shared DataGrid (sorting, per-column
+     filters, column show/hide, reorder/pin, layout persistence). Edit
+     Prices mode keeps the legacy table below — DataGrid can't host the
+     inline price-edit cells (PriceInput / BrandingInput draft buffers live
+     on the memoized ProductRow), so the legacy markup stays the editor.
+     Category chips / search / Export / Import / bulk actions above are
+     untouched and drive both views. */
+  const gridColumns = useMemo<DataGridColumn<MfgProductRow>[]>(() => {
+    const stop = {
+      onClick: (e: React.MouseEvent) => e.stopPropagation(),
+      onDoubleClick: (e: React.MouseEvent) => e.stopPropagation(),
+    };
+    const cols: DataGridColumn<MfgProductRow>[] = [
+      {
+        key: 'sel',
+        label: '',
+        width: 36,
+        minWidth: 36,
+        sortable: false,
+        groupable: false,
+        accessor: (r) => (
+          <span {...stop} style={{ display: 'inline-flex' }}>
+            <input
+              type="checkbox"
+              aria-label={`Select ${r.code}`}
+              checked={selectedIds.has(r.id)}
+              onChange={() => toggleRow(r.id)}
+              style={{ cursor: 'pointer' }}
+            />
+          </span>
+        ),
+        searchValue: () => '',
+      },
+      {
+        key: 'code',
+        label: 'Product Code',
+        width: 180,
+        accessor: (r) => (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <button
+              type="button"
+              aria-label={`View suppliers for ${r.code}`}
+              title="View suppliers carrying this SKU"
+              onClick={(e) => { e.stopPropagation(); setSuppliersRow(r); }}
+              style={{
+                background: 'transparent', border: 'none', padding: 0, margin: 0,
+                cursor: 'pointer', color: 'var(--fg-muted)',
+                display: 'inline-flex', alignItems: 'center',
+              }}
+            >
+              <Truck size={13} strokeWidth={1.75} />
+            </button>
+            <span className={styles.codeChip}>{r.code}</span>
+          </span>
+        ),
+        searchValue: (r) => r.code,
+        filterValue: (r) => r.code,
+        sortFn: (a, b) => a.code.localeCompare(b.code),
+      },
+      {
+        key: 'desc',
+        label: 'Description',
+        width: 240,
+        accessor: (r) => (
+          <span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+              <span className={styles.nameCompact}>{r.name}</span>
+              {r.one_shot && (
+                <span
+                  className={styles.catPill}
+                  title={r.source_doc_no ? `One-shot from ${r.source_doc_no}` : 'One-shot SKU'}
+                  style={{ fontSize: 'var(--fs-11)' }}
+                >
+                  one-shot
+                </span>
+              )}
+            </span>
+            {r.description && <div className={styles.nameSubCompact}>{r.description}</div>}
+          </span>
+        ),
+        searchValue: (r) => `${r.name} ${r.description ?? ''}${r.one_shot ? ' one-shot' : ''}`,
+        filterValue: (r) => r.name,
+        sortFn: (a, b) => a.name.localeCompare(b.name),
+      },
+    ];
+    if (isSofaView) {
+      cols.push({
+        key: 'model',
+        label: 'Model',
+        width: 120,
+        accessor: (r) => r.base_model ?? '—',
+        filterValue: (r) => r.base_model ?? '—',
+      });
+      for (const s of sofaSizes) {
+        cols.push({
+          key: `size-${s}`,
+          label: s,
+          width: 110,
+          align: 'right',
+          accessor: (r) => {
+            const sen = priceForHeightTier(r.seat_height_prices, s, tier);
+            return <span className={sen ? styles.price : styles.priceEmpty}>{fmtRm(sen)}</span>;
+          },
+          searchValue: () => '',
+          filterValue: (r) => fmtRm(priceForHeightTier(r.seat_height_prices, s, tier)),
+          sortFn: (a, b) =>
+            (priceForHeightTier(a.seat_height_prices, s, tier) ?? -1)
+            - (priceForHeightTier(b.seat_height_prices, s, tier) ?? -1),
+        });
+      }
+    } else if (isMattressView) {
+      cols.push(
+        {
+          key: 'branding',
+          label: 'Branding',
+          width: 130,
+          accessor: (r) => r.branding
+            ? <span className={styles.catPill}>{r.branding}</span>
+            : <span className={styles.priceEmpty}>—</span>,
+          searchValue: (r) => r.branding ?? '',
+          filterValue: (r) => r.branding ?? '—',
+        },
+        {
+          key: 'size',
+          label: 'Size',
+          width: 120,
+          accessor: (r) => r.size_label ?? '—',
+          filterValue: (r) => r.size_label ?? '—',
+        },
+        {
+          key: 'price',
+          label: 'Price',
+          width: 120,
+          align: 'right',
+          accessor: (r) => (
+            <span className={r.base_price_sen ? styles.price : styles.priceEmpty}>
+              {fmtRm(r.base_price_sen)}
+            </span>
+          ),
+          searchValue: () => '',
+          filterValue: (r) => fmtRm(r.base_price_sen),
+          sortFn: (a, b) => (a.base_price_sen ?? -1) - (b.base_price_sen ?? -1),
+        },
+      );
+    } else {
+      cols.push(
+        {
+          key: 'category',
+          label: 'Category',
+          width: 110,
+          accessor: (r) => <span className={styles.catPill}>{r.category}</span>,
+          searchValue: (r) => r.category,
+          filterValue: (r) => r.category,
+        },
+        {
+          key: 'size',
+          label: 'Size',
+          width: 120,
+          accessor: (r) => r.size_label ?? '—',
+          filterValue: (r) => r.size_label ?? '—',
+        },
+        {
+          key: 'price2',
+          label: 'Price 2',
+          width: 110,
+          align: 'right',
+          accessor: (r) => (
+            <span className={r.base_price_sen ? styles.price : styles.priceEmpty}>
+              {fmtRm(r.base_price_sen)}
+            </span>
+          ),
+          searchValue: () => '',
+          filterValue: (r) => fmtRm(r.base_price_sen),
+          sortFn: (a, b) => (a.base_price_sen ?? -1) - (b.base_price_sen ?? -1),
+        },
+        {
+          key: 'price1',
+          label: 'Price 1',
+          width: 110,
+          align: 'right',
+          accessor: (r) => (
+            <span className={r.price1_sen ? styles.price : styles.priceEmpty}>
+              {fmtRm(r.price1_sen)}
+            </span>
+          ),
+          searchValue: () => '',
+          filterValue: (r) => fmtRm(r.price1_sen),
+          sortFn: (a, b) => (a.price1_sen ?? -1) - (b.price1_sen ?? -1),
+        },
+      );
+    }
+    cols.push(
+      {
+        key: 'unit',
+        label: 'Unit (m³)',
+        width: 90,
+        align: 'right',
+        accessor: (r) => fmtUnit(r.unit_m3_milli),
+        filterValue: (r) => fmtUnit(r.unit_m3_milli),
+        sortFn: (a, b) => a.unit_m3_milli - b.unit_m3_milli,
+      },
+      {
+        key: 'status',
+        label: 'Status',
+        width: 90,
+        accessor: (r) => r.status,
+        filterValue: (r) => r.status,
+      },
+    );
+    return cols;
+  }, [isSofaView, isMattressView, sofaSizes, tier, selectedIds, toggleRow]);
+
+  const gridStorageKey = `dg-products-sku-${isSofaView ? 'sofa' : isMattressView ? 'mattress' : 'default'}`;
+
   return (
     <>
+      {/* Shared datalist for the per-row inline Branding edit (Mattress view). */}
+      <datalist id="branding-pool-sku-master">
+        {brandingPool.pool.map((b) => <option key={b} value={b} />)}
+      </datalist>
       <div className={styles.headerRow}>
         <div className={styles.categoryChips}>
           {CATEGORIES.map((c) => (
@@ -535,6 +760,44 @@ const SkuMasterTab = () => {
         </div>
       )}
 
+      {!editMode && (
+        /* Normal viewing — shared DataGrid (sort / filter / column show-hide /
+           reorder / pin / persisted layout). Double-click a row — or the truck
+           icon — opens the Suppliers drawer, same as the legacy table. The
+           select-all checkbox lives in the grid toolbar; row checkboxes feed
+           the same bulk Delete as Edit Prices mode. */
+        <DataGrid
+          rows={rows}
+          columns={gridColumns}
+          storageKey={gridStorageKey}
+          rowKey={(r) => r.id}
+          searchPlaceholder="Filter visible products…"
+          onRowDoubleClick={(r) => setSuppliersRow(r)}
+          groupBanner={false}
+          isLoading={isLoading}
+          emptyMessage="No products yet. Run the seed import if you just migrated the schema."
+          toolbar={
+            <label
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                aria-label="Select all visible SKUs"
+                checked={allSelected}
+                ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                onChange={toggleAllVisible}
+                style={{ cursor: 'pointer' }}
+              />
+              <span>Select all</span>
+            </label>
+          }
+        />
+      )}
+
+      {editMode && (
       <div className={styles.tableCard}>
         {/* PR — viewport-fill scroll wrapper (matches DataGrid .scroll). The
             SKU table used to leave dead space below it; now it stretches to
@@ -621,6 +884,7 @@ const SkuMasterTab = () => {
           </div>
         )}
       </div>
+      )}
 
       {newSkuOpen && <NewSkuDrawer onClose={() => setNewSkuOpen(false)} />}
       {newModelOpen && (
@@ -802,6 +1066,7 @@ const ProductRow = memo(({
             {editMode ? (
               <BrandingInput
                 value={draftBranding ?? row.branding ?? ''}
+                listId="branding-pool-sku-master"
                 onCommit={(v) => {
                   setDraftBranding(v);
                   update.mutate({ id: row.id, branding: v });
@@ -867,13 +1132,17 @@ const ProductRow = memo(({
 });
 ProductRow.displayName = 'ProductRow';
 
-/* Free-text branding input for Mattress rows. Commits on blur or Enter. */
+/* Free-text branding input for Mattress rows. Commits on blur or Enter.
+   `listId` points at the shared branding-pool <datalist> (rendered once in
+   SkuMasterTab) so the pool suggests values without blocking free text. */
 const BrandingInput = ({
   value,
   onCommit,
+  listId,
 }: {
   value: string;
   onCommit: (v: string | null) => void;
+  listId?: string;
 }) => {
   const [local, setLocal] = useState<string>(value);
   const commit = () => {
@@ -884,6 +1153,7 @@ const BrandingInput = ({
   return (
     <input
       type="text"
+      list={listId}
       value={local}
       onChange={(e) => setLocal(e.target.value)}
       onBlur={commit}
@@ -1216,6 +1486,7 @@ type MaintenanceListKey =
   | 'sofaSpecials'
   | 'sofaQuickPresets' // PR (Commander 2026-05-28) — module-composition presets
   | 'mattressSizes'    // PR #50 — Mattress size pool (K/Q/S/SS)
+  | 'brandings'        // Branding pool (HILTON/SEALY/2990S/...) — feeds Branding datalists
   | 'fabrics';
 
 // PR #208 — exported so SupplierDetail can pass a `sectionFilter` prop to
@@ -1258,6 +1529,7 @@ const MAINTENANCE_TABS: {
   { key: 'bedframeSizes',    label: 'Bedframe Sizes',    description: 'Bedframe sizes — edit code · label · dimensions (e.g. K · 6FT · 183X190CM). Used in generated SKU names.', priced: false, section: 'Products Maintenance' },
   { key: 'mattressSizes',    label: 'Mattress Sizes',    description: 'Mattress sizes — edit code · label · dimensions. Used in generated SKU names + width/length placeholders.', priced: false, section: 'Products Maintenance' },
   { key: 'sofaCompartments', label: 'Sofa Compartments', description: 'Sofa compartment pool (1A(LHF), 1A(RHF), 1NA, 2A(LHF), ...). Models tick which they offer.', priced: false, section: 'Products Maintenance' },
+  { key: 'brandings',        label: 'Brandings',         description: 'Branding pool (e.g. HILTON, SEALY, 2990S). Feeds every Branding input — New SKU, bulk New Models rows, SKU Master inline edit, Model detail.', priced: false, section: 'Products Maintenance' },
 ];
 
 /**
@@ -1295,6 +1567,11 @@ export const MaintenanceTab = ({
   const history = useMaintenanceConfigHistory(scope);
   const save = useSaveMaintenanceConfig();
   const renameCompartment = useRenameSofaCompartment();
+  // BRANDING pool — `distinct` (DISTINCT branding across mfg_products +
+  // product_models) is the read-only suggestion shown when the pool is empty
+  // AND the one-click seed for the Edit draft (see startEdit). The pool
+  // itself never gets written without an explicit Save.
+  const brandingPool = useBrandingPool();
 
   // PR #208 — when the supplier scope has no row yet, fall through to the
   // master config so commander can see what's there before deciding to
@@ -1350,7 +1627,20 @@ export const MaintenanceTab = ({
     // edits a copy; save writes back to `scope`.
     const seed = resolved.data?.data ?? masterFallback.data?.data ?? null;
     if (!seed) return;
-    setDraft(JSON.parse(JSON.stringify(seed)) as MaintenanceConfig);
+    const copy = JSON.parse(JSON.stringify(seed)) as MaintenanceConfig;
+    // Brandings one-click seed: when the master pool is empty, pre-fill the
+    // EDIT DRAFT from the distinct branding values across products + models so
+    // a single Save adopts them. Editor-only — config is never written until
+    // commander explicitly Saves. Master scope only (supplier scopes are
+    // surcharge overlays, never the branding authority).
+    if (
+      scope === 'master'
+      && (copy.brandings ?? []).filter((b) => b.trim().length > 0).length === 0
+      && brandingPool.distinct.length > 0
+    ) {
+      copy.brandings = [...brandingPool.distinct];
+    }
+    setDraft(copy);
     setEditMode(true);
   };
 
@@ -1541,6 +1831,7 @@ export const MaintenanceTab = ({
           onChange={(next) => setDraft(next)}
           priced={active.priced}
           singleCostColumn={singleCostColumn}
+          brandingSuggestions={brandingPool.distinct}
         />
       </section>
 
@@ -2450,6 +2741,7 @@ const MaintenanceList = ({
   onChange,
   priced,
   singleCostColumn = false,
+  brandingSuggestions,
 }: {
   listKey: MaintenanceListKey;
   config: MaintenanceConfig;
@@ -2457,6 +2749,9 @@ const MaintenanceList = ({
   onChange: (next: MaintenanceConfig) => void;
   priced: boolean;
   singleCostColumn?: boolean;
+  /** DISTINCT branding values across products + models — rendered as a
+      read-only suggestion list when the Brandings pool is empty. */
+  brandingSuggestions?: string[];
 }) => {
   // Empty draft state for the "add new" row at the bottom of the list when
   // edit mode is on. Kept local so toggling tabs cancels in-flight adds.
@@ -2555,8 +2850,19 @@ const MaintenanceList = ({
     || listKey === 'sofaSizes'
     || listKey === 'bedframeSizes'
     || listKey === 'mattressSizes'
+    || listKey === 'brandings'
   ) {
     const items = (config[listKey] as string[] | undefined) ?? [];
+
+    // Brandings seed/fallback: pool empty → surface the DISTINCT branding
+    // values across mfg_products + product_models as a read-only suggestion.
+    // Hitting Edit seeds these into the draft (see MaintenanceTab.startEdit)
+    // so one Save adopts them — nothing is silently written to config.
+    const showBrandingSuggestions =
+      listKey === 'brandings'
+      && !editMode
+      && items.filter((b) => b.trim().length > 0).length === 0
+      && (brandingSuggestions?.length ?? 0) > 0;
 
     const removeAt = (idx: number) => {
       const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
@@ -2607,6 +2913,26 @@ const MaintenanceList = ({
     };
     return (
       <div className={styles.maintList}>
+        {showBrandingSuggestions && (
+          <>
+            <p className={styles.stateInfo} style={{ marginBottom: 8 }}>
+              Pool is empty — showing {brandingSuggestions!.length} suggested
+              value{brandingSuggestions!.length === 1 ? '' : 's'} found on existing
+              products + models. Hit <strong>Edit</strong> then <strong>Save</strong> to
+              adopt them into the pool.
+            </p>
+            {brandingSuggestions!.map((v, i) => (
+              <div key={v} className={styles.maintRow} style={{ opacity: 0.7 }}>
+                <span className={styles.maintRowIcon} />
+                <span className={styles.maintRowIdx}>{i + 1}</span>
+                <span className={styles.maintRowValue}>{v}</span>
+                <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', fontWeight: 600 }}>
+                  suggested
+                </span>
+              </div>
+            ))}
+          </>
+        )}
         {items.map((v, i) => {
           const labelOv = config.sizeLabels?.[v];
           const resolved = isSizeRow ? resolveSizeInfo(v, config) : null;
@@ -3240,6 +3566,9 @@ const FabricsMaintenancePanel = () => {
 
 const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
   const create = useCreateMfgProduct();
+  // Branding datalist — maintenance pool first, DISTINCT fallback. Free text
+  // stays possible (datalist, not a hard select) so legacy values aren't blocked.
+  const brandingPool = useBrandingPool();
   type Cat = 'BEDFRAME' | 'SOFA' | 'ACCESSORY' | 'MATTRESS' | 'SERVICE';
   /* 2990 is a trading company — no in-house manufacturing. Production-time
      tracking dropped (was HOOKKA legacy). DB column production_time_minutes
@@ -3319,7 +3648,14 @@ const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
             </label>
             <Field label="Size Label" value={form.sizeLabel} onChange={(v) => set('sizeLabel', v)} />
             {isSofa && <Field label="Base Model" value={form.baseModel} onChange={(v) => set('baseModel', v)} />}
-            {isMattress && <Field label="Branding" value={form.branding} onChange={(v) => set('branding', v)} placeholder="e.g. Sealy" />}
+            {isMattress && (
+              <>
+                <Field label="Branding" value={form.branding} onChange={(v) => set('branding', v)} placeholder="e.g. Sealy" list="branding-pool-new-sku" />
+                <datalist id="branding-pool-new-sku">
+                  {brandingPool.pool.map((b) => <option key={b} value={b} />)}
+                </datalist>
+              </>
+            )}
             {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics". Key fabricColor unchanged. */}
             {isSofa && <Field label="Fabrics" value={form.fabricColor} onChange={(v) => set('fabricColor', v)} />}
             <Field label="Description" value={form.description} onChange={(v) => set('description', v)} fullWidth />
@@ -3346,12 +3682,14 @@ const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
 };
 
 const Field = ({
-  label, value, onChange, type, step, placeholder, fullWidth,
+  label, value, onChange, type, step, placeholder, fullWidth, list,
 }: {
   label: string; value: string;
   onChange: (v: string) => void;
   type?: string; step?: string; placeholder?: string;
   fullWidth?: boolean;
+  /** Optional <datalist> id — caller renders the datalist itself. */
+  list?: string;
 }) => (
   <label className={`${styles.field} ${fullWidth ? styles.formGridFull : ''}`}>
     <span className={styles.fieldLabel}>{label}</span>
@@ -3362,6 +3700,7 @@ const Field = ({
       className={styles.fieldInput}
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      list={list}
     />
   </label>
 );

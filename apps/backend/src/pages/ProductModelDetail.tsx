@@ -24,7 +24,7 @@ import { ArrowLeft, ImagePlus, Layers, Save, Trash2, Wand2, X, Power, PowerOff }
 import { Button } from '@2990s/design-system';
 import {
   useProductModel, useUpdateProductModel, useDeleteProductModel, useGenerateModelSkus,
-  useActivateOneShot,
+  useActivateOneShot, useBrandingPool,
   type AllowedOptions, type AllowedOptions as AOpts,
 } from '../lib/product-models-queries';
 import { useMaintenanceConfig, useUpdateMfgProductStatus, useSpecialAddons } from '../lib/mfg-products-queries';
@@ -91,6 +91,8 @@ export const ProductModelDetail = ({
   const statusMut = useUpdateMfgProductStatus();
   const activateOneShotMut = useActivateOneShot();
   const maintenance = useMaintenanceConfig('master');
+  // Branding datalist — maintenance Brandings pool first, DISTINCT fallback.
+  const brandingPool = useBrandingPool();
   // Fabric library — pool of active fabric slugs displayed in the FABRICS
   // option group for SOFA Models.
   const fabricLibQ = useFabricLibrary();
@@ -345,8 +347,12 @@ export const ProductModelDetail = ({
           </label>
           <label className={styles.field}>
             <span className="t-eyebrow">Branding (optional)</span>
+            <datalist id="branding-pool-model-detail">
+              {brandingPool.pool.map((b) => <option key={b} value={b} />)}
+            </datalist>
             <input
               type="text"
+              list="branding-pool-model-detail"
               value={branding}
               onChange={(e) => setBranding(e.target.value)}
               placeholder={

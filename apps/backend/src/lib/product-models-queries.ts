@@ -3,9 +3,10 @@
 // Sister file to mfg-products-queries.ts — same authedFetch + cache conventions.
 // ----------------------------------------------------------------------------
 
+import { useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
-import type { MfgCategory } from './mfg-products-queries';
+import { useMaintenanceConfig, useMfgProducts, type MfgCategory } from './mfg-products-queries';
 import { authedFetch } from './authed-fetch';
 
 const API_URL = import.meta.env.VITE_API_URL;
@@ -77,6 +78,56 @@ export function useProductModels(opts?: { category?: MfgCategory }) {
     retry: 1,
     retryDelay: 800,
   });
+}
+
+/**
+ * BRANDING pool resolver — single source for every Branding input.
+ *
+ * Resolution order:
+ *   1. Maintenance pool (maintenance_config master row, `brandings: string[]`)
+ *      — edited on Products & Maintenance > Maintenance > Products Maintenance
+ *      > Brandings.
+ *   2. Fallback when the pool is empty/absent: DISTINCT non-null branding
+ *      values across mfg_products + product_models (case-insensitive dedupe,
+ *      first-seen casing wins, A→Z). Read-only suggestion — nothing is ever
+ *      written back to config without an explicit Save.
+ *
+ * Consumers feed the result into a <datalist> so free text stays possible
+ * (legacy values are never hard-blocked).
+ */
+export function useBrandingPool() {
+  const cfg = useMaintenanceConfig('master');
+  const products = useMfgProducts();
+  const models = useProductModels();
+
+  const configPool = useMemo(
+    () => (cfg.data?.data?.brandings ?? []).map((b) => b.trim()).filter((b) => b.length > 0),
+    [cfg.data],
+  );
+
+  const distinct = useMemo(() => {
+    const seen = new Map<string, string>(); // UPPER → first-seen original casing
+    const collect = (b: string | null | undefined) => {
+      const t = (b ?? '').trim();
+      if (!t) return;
+      const k = t.toUpperCase();
+      if (!seen.has(k)) seen.set(k, t);
+    };
+    for (const p of products.data ?? []) collect(p.branding);
+    for (const m of models.data ?? []) collect(m.branding);
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+  }, [products.data, models.data]);
+
+  return {
+    /** What dropdowns should offer: pool when set, else the distinct fallback. */
+    pool: configPool.length > 0 ? configPool : distinct,
+    /** True when the maintenance pool itself has values. */
+    fromConfig: configPool.length > 0,
+    /** The raw maintenance pool (may be empty). */
+    configPool,
+    /** DISTINCT branding values across products + models (suggestion seed). */
+    distinct,
+  };
 }
 
 export function useProductModel(id: string | undefined) {

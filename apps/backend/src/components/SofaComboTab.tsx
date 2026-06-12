@@ -444,19 +444,25 @@ function ComposerModal({
     const own = modulesByBaseModel[baseModel];
     return own && own.length > 0 ? own : ALL_MODULE_CODES;
   }, [modulesByBaseModel, baseModel]);
-  // NEW-combo base-model options. Sourced from the SAME map that drives the
-  // Module-slot chip filter (`modulesByBaseModel`) so every selectable model
-  // reliably re-renders chips on pick — and a chosen value can never be a
-  // free-typed string the chip filter wouldn't recognise (the old
+  // Base-model options (New AND Edit). Sourced from the SAME map that drives
+  // the Module-slot chip filter (`modulesByBaseModel`) so every selectable
+  // model reliably re-renders chips on pick — and a chosen value can never be
+  // a free-typed string the chip filter wouldn't recognise (the old
   // <input list> footgun the commander hit: "选了 model 就不能 drop 掉了吗").
-  // The leading blank option lets the operator clear / re-pick.
-  const baseModelOptions = useMemo(
-    () => Object.keys(modulesByBaseModel).sort(),
-    [modulesByBaseModel],
-  );
+  // The leading blank option lets the operator clear / re-pick. When editing a
+  // combo whose base model no longer has SKUs in master, keep it selectable so
+  // the prefilled value doesn't render as a phantom blank.
+  const baseModelOptions = useMemo(() => {
+    const set = new Set(Object.keys(modulesByBaseModel));
+    if (editing?.baseModel) set.add(editing.baseModel);
+    return [...set].sort();
+  }, [modulesByBaseModel, editing?.baseModel]);
   // OR-set per slot (PR combo-or-per-slot): ordered slots, each a SET of
   // alternative codes joined by OR. e.g. [['2A(LHF)','2A(RHF)'],['L(LHF)','L(RHF)']].
-  const [modules, setModules] = useState<string[][]>(editing?.modules ?? []);
+  // Deep-copied when editing so chip toggles never mutate the cached rule.
+  const [modules, setModules] = useState<string[][]>(
+    () => (editing?.modules ?? []).map((slot) => [...slot]),
+  );
   const [tier, setTier] = useState<SofaPriceTier | ''>(editing?.tier ?? 'PRICE_2');
   const [label, setLabel] = useState(editing?.label ?? '');
   const [effectiveFrom, setEffectiveFrom] = useState(editing?.effectiveFrom ?? todayIso());
@@ -469,6 +475,24 @@ function ComposerModal({
     return seed;
   });
   const [notes, setNotes] = useState(editing?.notes ?? '');
+
+  // Composition identity — order-independent canonical key (matching is
+  // order-independent; codes within a slot are an OR-set). Used only to tell
+  // the operator when an edit re-points to a DIFFERENT logical combo: same
+  // key → PUT (new effective row on the same rule, PWP carried forward);
+  // different key / base model → POST (a brand-new rule; old one stays in
+  // history untouched).
+  const compositionChanged = useMemo(() => {
+    if (!editing) return false;
+    const key = (slots: string[][]): string =>
+      JSON.stringify(
+        slots
+          .map((slot) => [...new Set(slot.map((c) => c.trim()).filter(Boolean))].sort())
+          .filter((slot) => slot.length > 0)
+          .sort((a, b) => a.join('|').localeCompare(b.join('|'))),
+      );
+    return baseModel !== editing.baseModel || key(modules) !== key(editing.modules);
+  }, [editing, baseModel, modules]);
 
   // Ordered positional slots (Hookka-style), each an OR-set of codes. A slot
   // toggles codes on/off — the built sofa matches if each module fills a
@@ -509,12 +533,38 @@ function ComposerModal({
       }
     }
 
+    // Label auto-derives from modules when blank. If the field still holds the
+    // OLD composition's auto label and the modules changed, drop it so the new
+    // row re-derives — a label the user actually typed is kept as-is.
+    const trimmedLabel = label.trim();
+    const finalLabel =
+      !trimmedLabel
+      || (editing && compositionChanged && trimmedLabel === buildComboLabel(editing.modules))
+        ? null
+        : trimmedLabel;
+
     try {
-      if (editing) {
+      if (editing && !compositionChanged) {
+        // Same composition → PUT keeps the original tuple (and carries the
+        // POS-side PWP prices forward on the new effective row).
         await update.mutateAsync({
           id: editing.id,
           pricesByHeight,
-          label: label || null,
+          label: finalLabel,
+          effectiveFrom,
+          notes: notes || null,
+        });
+      } else if (editing) {
+        // Composition changed → append a brand-new rule for the edited
+        // module set / base model. The old rule's rows stay in history.
+        await create.mutateAsync({
+          baseModel,
+          modules: orderedModules,
+          tier: editing.tier,           // tier is locked in edit mode
+          customerId: editing.customerId,
+          supplierId: supplierId ?? editing.supplierId ?? null,
+          pricesByHeight,
+          label: finalLabel,
           effectiveFrom,
           notes: notes || null,
         });
@@ -526,7 +576,7 @@ function ComposerModal({
           customerId: null,  // B2C: always null = applies to all customers
           supplierId: supplierId ?? null,  // supplier scope when set, else sales-side
           pricesByHeight,
-          label: label || null,
+          label: finalLabel,
           effectiveFrom,
           notes: notes || null,
         });
@@ -541,100 +591,100 @@ function ComposerModal({
     <ModalShell title={editing ? 'Edit combo' : 'New combo'} onClose={onClose}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <Field label="Base model">
-          {editing ? (
-            <input
-              value={
-                supplierCodeByBaseModel[baseModel]
-                  ? `${baseModel} · ${supplierCodeByBaseModel[baseModel]}`
-                  : baseModel
-              }
-              readOnly
-              style={readonlyInputStyle}
-            />
-          ) : (
-            <select
-              value={baseModel}
-              onChange={(e) => setBaseModel(e.target.value)}
-              style={selectStyle}
-            >
-              <option value="">— Select base model —</option>
-              {baseModelOptions.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-          )}
+          {/* Editable in BOTH modes (commander 2026-06-12: edit must allow
+              changing the composition). Picking a different model reloads the
+              compartment chip pool via `slotCodes`. */}
+          <select
+            value={baseModel}
+            onChange={(e) => setBaseModel(e.target.value)}
+            style={selectStyle}
+          >
+            <option value="">— Select base model —</option>
+            {baseModelOptions.map((m) => (
+              <option key={m} value={m}>
+                {supplierCodeByBaseModel[m] ? `${m} · ${supplierCodeByBaseModel[m]}` : m}
+              </option>
+            ))}
+          </select>
         </Field>
 
         <Field label={`Modules (${modules.filter((s) => s.some((c) => c.trim())).length} slot${modules.length === 1 ? '' : 's'})`}>
-          {editing ? (
-            <div style={{ ...readonlyInputStyle, padding: 8 }}>
-              {buildComboLabel(modules) || '—'}
+          {/* SAME slot picker for New and Edit (commander 2026-06-12). Edit
+              prefills from the combo's stored slots; add/remove/re-tick away. */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{
+              fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)',
+              color: 'var(--fg-muted)', padding: '2px 0',
+            }}>
+              Each slot is an OR-set — tick every module that may fill it
+              (e.g. <strong>1A(LHF)</strong> OR <strong>1A(RHF)</strong>). A built
+              sofa matches when each piece fills a distinct slot and the piece
+              count equals the slot count.
             </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {modules.length === 0 ? (
               <div style={{
-                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)',
+                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)',
                 color: 'var(--fg-muted)', padding: '2px 0',
               }}>
-                Each slot is an OR-set — tick every module that may fill it
-                (e.g. <strong>1A(LHF)</strong> OR <strong>1A(RHF)</strong>). A built
-                sofa matches when each piece fills a distinct slot and the piece
-                count equals the slot count.
+                No slots yet — add the first one.
               </div>
-              {modules.length === 0 ? (
-                <div style={{
-                  fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)',
-                  color: 'var(--fg-muted)', padding: '2px 0',
+            ) : (
+              modules.map((slot, idx) => (
+                <div key={idx} style={{
+                  display: 'flex', flexDirection: 'column', gap: 4,
+                  padding: 8, border: '1px solid var(--line)',
+                  borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)',
                 }}>
-                  No slots yet — add the first one.
-                </div>
-              ) : (
-                modules.map((slot, idx) => (
-                  <div key={idx} style={{
-                    display: 'flex', flexDirection: 'column', gap: 4,
-                    padding: 8, border: '1px solid var(--line)',
-                    borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)',
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={slotNumberStyle}>Module {idx + 1}</span>
-                      <span style={{
-                        flex: 1, fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)',
-                        color: slot.length ? 'var(--c-ink)' : 'var(--fg-muted)',
-                      }}>
-                        {slot.length ? slot.join(' / ') : 'pick one or more (OR)'}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => removeSlot(idx)}
-                        title={`Remove Module ${idx + 1}`}
-                        style={iconBtnStyle}
-                      >
-                        <X size={14} strokeWidth={1.75} />
-                      </button>
-                    </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      {slotCodes.map((c) => {
-                        const on = slot.includes(c);
-                        return (
-                          <button
-                            type="button"
-                            key={c}
-                            onClick={() => toggleSlotCode(idx, c)}
-                            style={on ? moduleChipOn : moduleChipOff}
-                          >
-                            {c}
-                          </button>
-                        );
-                      })}
-                    </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={slotNumberStyle}>Module {idx + 1}</span>
+                    <span style={{
+                      flex: 1, fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)',
+                      color: slot.length ? 'var(--c-ink)' : 'var(--fg-muted)',
+                    }}>
+                      {slot.length ? slot.join(' / ') : 'pick one or more (OR)'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeSlot(idx)}
+                      title={`Remove Module ${idx + 1}`}
+                      style={iconBtnStyle}
+                    >
+                      <X size={14} strokeWidth={1.75} />
+                    </button>
                   </div>
-                ))
-              )}
-              <div>
-                <Button variant="ghost" onClick={addSlot}>
-                  <Plus {...ICON_PROPS} style={{ marginRight: 6 }} /> Add Module
-                </Button>
-              </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                    {slotCodes.map((c) => {
+                      const on = slot.includes(c);
+                      return (
+                        <button
+                          type="button"
+                          key={c}
+                          onClick={() => toggleSlotCode(idx, c)}
+                          style={on ? moduleChipOn : moduleChipOff}
+                        >
+                          {c}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))
+            )}
+            <div>
+              <Button variant="ghost" onClick={addSlot}>
+                <Plus {...ICON_PROPS} style={{ marginRight: 6 }} /> Add Module
+              </Button>
             </div>
-          )}
+            {compositionChanged && (
+              <div style={{
+                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)',
+                color: 'var(--c-red, #c0392b)', padding: '2px 0',
+              }}>
+                Modules no longer match the original combo — saving creates a new
+                rule for this module set; the old rule stays in history.
+              </div>
+            )}
+          </div>
         </Field>
 
         <Field label="Tier">
@@ -827,13 +877,6 @@ const inputStyle: CSSProperties = {
   padding: '6px 8px',
   outline: 'none',
   width: '100%',
-};
-
-const readonlyInputStyle: CSSProperties = {
-  ...inputStyle,
-  background: 'var(--c-paper)',
-  color: 'var(--fg-soft)',
-  cursor: 'not-allowed',
 };
 
 const chipStyleStrong: CSSProperties = {

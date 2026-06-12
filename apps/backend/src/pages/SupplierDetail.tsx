@@ -19,7 +19,7 @@
 //   DELETE /suppliers/:id/bindings/:bindingId
 // ----------------------------------------------------------------------------
 
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, Building2, Clock, AlertTriangle, CheckCircle2,
@@ -57,6 +57,7 @@ import {
   PAYMENT_TERMS_OPTIONS,
 } from '../lib/localities-queries';
 import { composeSupplierSku, looksAmbiguous } from '../lib/supplier-sku-helpers';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { formatPhone } from '@2990s/shared/phone';
 import { PhoneInput } from '../components/PhoneInput';
 import { MoneyInput } from '../components/MoneyInput';
@@ -89,6 +90,29 @@ const fmtDate = (iso: string | null): string => {
 
 const fmtRm = (centi: number): string =>
   `RM ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/* ────────────────────────────────────────────────────────────────────────
+   usePersistedOpen — collapsible-panel state persisted per panel in
+   localStorage. '1' = open, '0' = collapsed; absent = defaultOpen.
+   Used by the Supplier Info card, the SKU Mappings card and each per-
+   category SKU group so commander's collapse choices survive reloads.
+   ──────────────────────────────────────────────────────────────────────── */
+function usePersistedOpen(storageKey: string, defaultOpen = true): [boolean, () => void] {
+  const [open, setOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return defaultOpen;
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      return raw == null ? defaultOpen : raw === '1';
+    } catch { return defaultOpen; }
+  });
+  const toggle = useCallback(() => {
+    setOpen((v) => {
+      try { window.localStorage.setItem(storageKey, v ? '0' : '1'); } catch { /* quota */ }
+      return !v;
+    });
+  }, [storageKey]);
+  return [open, toggle];
+}
 
 type DeliveryDelta = { label: string; tone: 'ok' | 'late' | 'neutral' };
 
@@ -624,10 +648,23 @@ const SupplierSkuPricingPanel = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- CATEGORY_ORDER is a fixed display order, not a reactive value
   }, [bindings, products.data]);
 
+  /* Collapsible panel — click the SKU Mappings header bar to fold every
+     category group away. Persisted per panel in localStorage. */
+  const [open, toggleOpen] = usePersistedOpen('panel-supplier-sku-mappings');
+
   return (
     <section className={styles.card} style={{ marginTop: 'var(--space-3)' }}>
-      <header className={styles.cardHeader}>
+      <header
+        className={styles.cardHeader}
+        onClick={toggleOpen}
+        aria-expanded={open}
+        title={open ? 'Click to collapse' : 'Click to expand'}
+        style={{ cursor: 'pointer', userSelect: 'none' }}
+      >
         <h2 className={styles.cardTitle}>
+          {open
+            ? <ChevronDown {...SM_ICON} style={{ color: 'var(--fg-muted)' }} />
+            : <ChevronRight {...SM_ICON} style={{ color: 'var(--fg-muted)' }} />}
           <Package {...ICON} style={{ color: 'var(--c-burnt)' }} />
           SKU Mappings
           <span className={styles.cardTitleCount}>
@@ -638,7 +675,8 @@ const SupplierSkuPricingPanel = ({
                 : `(${byCategory.length} categories · ${bindings.length} codes)`}
           </span>
         </h2>
-        <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+        {/* stopPropagation so the toolbar buttons don't toggle the collapse. */}
+        <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
           {/* PR — Commander 2026-05-27: one-click cleanup for the legacy
               literal-"5539" rows from before the per-SKU auto-suffix fix.
               Surfaces a count + button when ≥2 bindings share an ambiguous
@@ -683,7 +721,7 @@ const SupplierSkuPricingPanel = ({
           onClose={() => setImporting(false)}
         />
       )}
-      {bindings.length === 0 ? (
+      {open && (bindings.length === 0 ? (
         <div className={styles.cardBody}>
           <p className={styles.emptyRow}>No SKU mappings yet for this supplier.</p>
         </div>
@@ -698,11 +736,12 @@ const SupplierSkuPricingPanel = ({
               supplierId={id}
               bindings={rows}
               groupKind={groupKindFromCategory(category)}
+              storageKey={`dg-supplier-bindings-${category.toLowerCase()}`}
               onEdit={(b) => setSkuDialog({ mode: 'edit', binding: b })}
             />
           </CategorySection>
         ))
-      )}
+      ))}
     </section>
   );
 };
@@ -782,7 +821,9 @@ const CategorySection = ({
   count: number;
   children: React.ReactNode;
 }) => {
-  const [open, setOpen] = useState(true);
+  /* Collapse state now persists per panel in localStorage (owner request
+     2026-06-12 — same treatment as the Supplier Info / SKU Mappings bars). */
+  const [open, toggleOpen] = usePersistedOpen(`panel-skumap-${label}`);
   /* PR — Commander 2026-05-27: switched from inline-style fs-12/700 eyebrow
      to the .subGroupHead class (fs-9/700 letter-spacing 0.12em). Matches the
      other card eyebrows on this page. */
@@ -790,7 +831,7 @@ const CategorySection = ({
     <div style={{ borderTop: '1px solid var(--line)' }}>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggleOpen}
         aria-expanded={open}
         className={styles.subGroupHead}
         style={{ borderBottom: open ? '1px solid var(--line)' : 'none' }}
@@ -840,6 +881,7 @@ const SkuMappingsTable = ({
   supplierId,
   bindings,
   groupKind,
+  storageKey,
   onEdit,
 }: {
   supplierId: string;
@@ -848,6 +890,10 @@ const SkuMappingsTable = ({
    *  the parent group label so Sofa Compartments / Bedframe Sizes / etc.
    *  match the Products Maintenance shape. */
   groupKind: SkuGroupKind;
+  /** Unique localStorage key for the DataGrid column-layout persistence —
+   *  one per category section so e.g. Accessories and Services keep
+   *  independent layouts. */
+  storageKey: string;
   onEdit: (b: BindingRow) => void;
 }) => {
   if (bindings.length === 0) {
@@ -863,6 +909,7 @@ const SkuMappingsTable = ({
       <SofaSkuMappingsTable
         supplierId={supplierId}
         bindings={bindings}
+        storageKey={storageKey}
         onEdit={onEdit}
       />
     );
@@ -872,6 +919,7 @@ const SkuMappingsTable = ({
       <BedframeSkuMappingsTable
         supplierId={supplierId}
         bindings={bindings}
+        storageKey={storageKey}
         onEdit={onEdit}
       />
     );
@@ -881,19 +929,134 @@ const SkuMappingsTable = ({
     <DefaultSkuMappingsTable
       supplierId={supplierId}
       bindings={bindings}
+      storageKey={storageKey}
       onEdit={onEdit}
     />
   );
 };
 
-/* PR — Commander 2026-05-28: shared scroll wrapper so the three SKU
-   mapping table variants (sofa / bedframe / default) don't clip their
-   right-hand MAIN + ACTIONS columns when the cards get narrow. Lets the
-   inner table keep its natural width (set via .tableSofa / .tableBedframe
-   / .tableDefault min-widths) and scrolls horizontally inside. */
-const TableScroll = ({ children }: { children: React.ReactNode }) => (
-  <div className={styles.tableScroll}>{children}</div>
+/* ────────────────────────────────────────────────────────────────────────
+   DataGrid conversion (owner request 2026-06-12) — the three SKU mapping
+   table variants now render through the shared DataGrid, gaining sorting,
+   per-column filters, column show/hide, reorder/pin and layout persistence.
+   Inline cell editors (supplier SKU, prices), the Main star and the row
+   Edit/Delete actions are preserved inside cell accessors; CellStop keeps
+   clicks in those editors from bubbling into the grid's row handlers
+   (mirrors the old td-level stopPropagation).
+   ──────────────────────────────────────────────────────────────────────── */
+
+const CellStop = ({ children }: { children: React.ReactNode }) => (
+  <span
+    onClick={(e) => e.stopPropagation()}
+    onDoubleClick={(e) => e.stopPropagation()}
+    style={{ display: 'inline-flex', alignItems: 'center' }}
+  >
+    {children}
+  </span>
 );
+
+const bindingRowKey = (b: BindingRow) => b.id;
+
+/** Leading columns shared by all three binding grids. */
+function bindingHeadColumns(
+  supplierId: string,
+  update: ReturnType<typeof useUpdateBinding>,
+): DataGridColumn<BindingRow>[] {
+  return [
+    {
+      key: 'code',
+      label: 'Internal Code',
+      width: 150,
+      accessor: (b) => <span className={styles.codeCell}>{b.material_code}</span>,
+      searchValue: (b) => b.material_code,
+      filterValue: (b) => b.material_code,
+      sortFn: (a, b) => a.material_code.localeCompare(b.material_code),
+    },
+    {
+      key: 'name',
+      label: 'Internal Description',
+      width: 220,
+      accessor: (b) => b.material_name,
+    },
+    {
+      key: 'sku',
+      label: 'Supplier SKU',
+      width: 150,
+      accessor: (b) => (
+        <CellStop>
+          <InlineSupplierSku binding={b} supplierId={supplierId} update={update} />
+        </CellStop>
+      ),
+      searchValue: (b) => b.supplier_sku,
+      filterValue: (b) => b.supplier_sku,
+      sortFn: (a, b) => a.supplier_sku.localeCompare(b.supplier_sku),
+    },
+  ];
+}
+
+/** Trailing columns shared by all three binding grids — lead / MOQ / price-
+ *  matrix indicator / main-supplier star / row actions. */
+function bindingTailColumns(
+  supplierId: string,
+  update: ReturnType<typeof useUpdateBinding>,
+  remove: ReturnType<typeof useDeleteBinding>,
+  onEdit: (b: BindingRow) => void,
+): DataGridColumn<BindingRow>[] {
+  return [
+    {
+      key: 'lead',
+      label: 'Lead',
+      width: 70,
+      align: 'right',
+      accessor: (b) => `${b.lead_time_days}d`,
+      filterValue: (b) => `${b.lead_time_days}d`,
+      sortFn: (a, b) => a.lead_time_days - b.lead_time_days,
+    },
+    {
+      key: 'moq',
+      label: 'MOQ',
+      width: 70,
+      align: 'right',
+      accessor: (b) => String(b.moq),
+      sortFn: (a, b) => a.moq - b.moq,
+    },
+    {
+      key: 'matrix',
+      label: 'Matrix',
+      width: 70,
+      accessor: (b) => (b.price_matrix ? 'Yes' : '—'),
+      filterValue: (b) => (b.price_matrix ? 'Yes' : '—'),
+      sortFn: (a, b) => Number(Boolean(a.price_matrix)) - Number(Boolean(b.price_matrix)),
+    },
+    {
+      key: 'main',
+      label: 'Main',
+      width: 90,
+      accessor: (b) => (
+        <CellStop>
+          <MainStarCell binding={b} supplierId={supplierId} update={update} />
+        </CellStop>
+      ),
+      searchValue: (b) => (b.is_main_supplier ? 'main' : ''),
+      filterValue: (b) => (b.is_main_supplier ? 'Main' : '—'),
+      sortFn: (a, b) => Number(a.is_main_supplier) - Number(b.is_main_supplier),
+    },
+    {
+      key: 'actions',
+      label: 'Actions',
+      width: 90,
+      align: 'right',
+      sortable: false,
+      groupable: false,
+      accessor: (b) => (
+        <CellStop>
+          <RowActionsCell binding={b} supplierId={supplierId} remove={remove} onEdit={onEdit} />
+        </CellStop>
+      ),
+      searchValue: () => '',
+    },
+  ];
+}
 
 /* ────────────────────────────────────────────────────────────────────────
    Default (mattress / accessory / service / other) — single Unit Price col.
@@ -903,59 +1066,47 @@ const TableScroll = ({ children }: { children: React.ReactNode }) => (
 const DefaultSkuMappingsTable = ({
   supplierId,
   bindings,
+  storageKey,
   onEdit,
 }: {
   supplierId: string;
   bindings: BindingRow[];
+  storageKey: string;
   onEdit: (b: BindingRow) => void;
 }) => {
   const update = useUpdateBinding();
   const remove = useDeleteBinding();
 
+  const columns = useMemo<DataGridColumn<BindingRow>[]>(() => [
+    ...bindingHeadColumns(supplierId, update),
+    {
+      key: 'price',
+      label: 'Unit Price',
+      width: 130,
+      align: 'right',
+      accessor: (b) => (
+        <CellStop>
+          <InlineUnitPrice binding={b} supplierId={supplierId} update={update} />
+        </CellStop>
+      ),
+      searchValue: (b) => fmtCurrency(b.unit_price_centi, b.currency),
+      filterValue: (b) => fmtCurrency(b.unit_price_centi, b.currency),
+      sortFn: (a, b) => a.unit_price_centi - b.unit_price_centi,
+    },
+    ...bindingTailColumns(supplierId, update, remove, onEdit),
+  ], [supplierId, update, remove, onEdit]);
+
   return (
-    <TableScroll>
-    <table className={`${styles.table} ${styles.tableDefault}`}>
-      <thead>
-        <tr>
-          <th>Internal Code</th>
-          <th>Internal Description</th>
-          <th>Supplier SKU</th>
-          <th className={styles.tableRight}>Unit Price</th>
-          <th className={styles.tableRight}>Lead</th>
-          <th className={styles.tableRight}>MOQ</th>
-          <th>Main</th>
-          <th className={styles.tableRight}>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {bindings.map((b) => (
-          <tr
-            key={b.id}
-            onDoubleClick={() => onEdit(b)}
-            title="Double-click to edit"
-            style={{ cursor: 'pointer' }}
-          >
-            <td className={styles.codeCell}>{b.material_code}</td>
-            <td>{b.material_name}</td>
-            <td className={styles.codeCell} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-              <InlineSupplierSku binding={b} supplierId={supplierId} update={update} />
-            </td>
-            <td className={styles.priceCell} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-              <InlineUnitPrice binding={b} supplierId={supplierId} update={update} />
-            </td>
-            <td className={`${styles.tableRight} ${styles.muted}`}>{b.lead_time_days}d</td>
-            <td className={`${styles.tableRight} ${styles.muted}`}>{b.moq}</td>
-            <td>
-              <MainStarCell binding={b} supplierId={supplierId} update={update} />
-            </td>
-            <td>
-              <RowActionsCell binding={b} supplierId={supplierId} remove={remove} onEdit={onEdit} />
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-    </TableScroll>
+    <DataGrid
+      rows={bindings}
+      columns={columns}
+      storageKey={storageKey}
+      rowKey={bindingRowKey}
+      searchPlaceholder="Search mappings…"
+      onRowDoubleClick={onEdit}
+      groupBanner={false}
+      emptyMessage="No SKU mappings yet for this supplier."
+    />
   );
 };
 
@@ -983,10 +1134,12 @@ const SOFA_HEIGHT_FALLBACK = ['24', '26', '28', '30', '32', '35'];
 const SofaSkuMappingsTable = ({
   supplierId,
   bindings,
+  storageKey,
   onEdit,
 }: {
   supplierId: string;
   bindings: BindingRow[];
+  storageKey: string;
   onEdit: (b: BindingRow) => void;
 }) => {
   const update = useUpdateBinding();
@@ -997,7 +1150,40 @@ const SofaSkuMappingsTable = ({
   // → Sofa Compartments). Same source the Products page reads from, so the
   // two tables stay in lock-step when commander edits the size pool.
   const config = useMaintenanceConfig('master');
-  const heights = (config.data?.data?.sofaSizes ?? SOFA_HEIGHT_FALLBACK).map(String);
+  const heights = useMemo(
+    () => (config.data?.data?.sofaSizes ?? SOFA_HEIGHT_FALLBACK).map(String),
+    [config.data],
+  );
+
+  const columns = useMemo<DataGridColumn<BindingRow>[]>(() => [
+    ...bindingHeadColumns(supplierId, update),
+    ...heights.map<DataGridColumn<BindingRow>>((h) => ({
+      key: `h-${h}`,
+      label: `${h}"`,
+      width: 110,
+      align: 'right',
+      accessor: (b) => (
+        <CellStop>
+          <InlineSofaMatrixCell
+            binding={b}
+            supplierId={supplierId}
+            update={update}
+            height={h}
+            tier={selectedTier}
+          />
+        </CellStop>
+      ),
+      searchValue: () => '',
+      filterValue: (b) => {
+        const sen = readSofaCell(b.price_matrix, h, selectedTier);
+        return sen == null ? '—' : fmtCurrency(sen, b.currency);
+      },
+      sortFn: (a, b) =>
+        (readSofaCell(a.price_matrix, h, selectedTier) ?? -1)
+        - (readSofaCell(b.price_matrix, h, selectedTier) ?? -1),
+    })),
+    ...bindingTailColumns(supplierId, update, remove, onEdit),
+  ], [supplierId, update, remove, onEdit, heights, selectedTier]);
 
   return (
     <div>
@@ -1043,64 +1229,16 @@ const SofaSkuMappingsTable = ({
         </span>
       </div>
 
-      <TableScroll>
-      <table className={`${styles.table} ${styles.tableSofa}`}>
-        <thead>
-          <tr>
-            <th>Internal Code</th>
-            <th>Internal Description</th>
-            <th>Supplier SKU</th>
-            {heights.map((h) => (
-              <th key={h} className={styles.tableRight}>{h}"</th>
-            ))}
-            <th className={styles.tableRight}>Lead</th>
-            <th className={styles.tableRight}>MOQ</th>
-            <th>Main</th>
-            <th className={styles.tableRight}>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {bindings.map((b) => (
-            <tr
-              key={b.id}
-              onDoubleClick={() => onEdit(b)}
-              title="Double-click to edit"
-              style={{ cursor: 'pointer' }}
-            >
-              <td className={styles.codeCell}>{b.material_code}</td>
-              <td>{b.material_name}</td>
-              <td className={styles.codeCell} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-                <InlineSupplierSku binding={b} supplierId={supplierId} update={update} />
-              </td>
-              {heights.map((h) => (
-                <td
-                  key={h}
-                  className={styles.priceCell}
-                  onClick={(e) => e.stopPropagation()}
-                  onDoubleClick={(e) => e.stopPropagation()}
-                >
-                  <InlineSofaMatrixCell
-                    binding={b}
-                    supplierId={supplierId}
-                    update={update}
-                    height={h}
-                    tier={selectedTier}
-                  />
-                </td>
-              ))}
-              <td className={`${styles.tableRight} ${styles.muted}`}>{b.lead_time_days}d</td>
-              <td className={`${styles.tableRight} ${styles.muted}`}>{b.moq}</td>
-              <td>
-                <MainStarCell binding={b} supplierId={supplierId} update={update} />
-              </td>
-              <td>
-                <RowActionsCell binding={b} supplierId={supplierId} remove={remove} onEdit={onEdit} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      </TableScroll>
+      <DataGrid
+        rows={bindings}
+        columns={columns}
+        storageKey={storageKey}
+        rowKey={bindingRowKey}
+        searchPlaceholder="Search mappings…"
+        onRowDoubleClick={onEdit}
+        groupBanner={false}
+        emptyMessage="No SKU mappings yet for this supplier."
+      />
     </div>
   );
 };
@@ -1115,81 +1253,57 @@ const SofaSkuMappingsTable = ({
 const BedframeSkuMappingsTable = ({
   supplierId,
   bindings,
+  storageKey,
   onEdit,
 }: {
   supplierId: string;
   bindings: BindingRow[];
+  storageKey: string;
   onEdit: (b: BindingRow) => void;
 }) => {
   const update = useUpdateBinding();
   const remove = useDeleteBinding();
 
+  const columns = useMemo<DataGridColumn<BindingRow>[]>(() => [
+    ...bindingHeadColumns(supplierId, update),
+    ...(['P1', 'P2'] as const).map<DataGridColumn<BindingRow>>((tier) => ({
+      key: `price-${tier}`,
+      label: tier === 'P1' ? 'Price 1' : 'Price 2',
+      width: 120,
+      align: 'right',
+      accessor: (b) => (
+        <CellStop>
+          <InlineBedframeMatrixCell
+            binding={b}
+            supplierId={supplierId}
+            update={update}
+            tier={tier}
+          />
+        </CellStop>
+      ),
+      searchValue: () => '',
+      filterValue: (b) => {
+        const sen = readBedframeCell(b.price_matrix, tier);
+        return sen == null ? '—' : fmtCurrency(sen, b.currency);
+      },
+      sortFn: (a, b) =>
+        (readBedframeCell(a.price_matrix, tier) ?? -1)
+        - (readBedframeCell(b.price_matrix, tier) ?? -1),
+    })),
+    ...bindingTailColumns(supplierId, update, remove, onEdit),
+  ], [supplierId, update, remove, onEdit]);
+
   return (
-    <TableScroll>
-    <table className={`${styles.table} ${styles.tableBedframe}`}>
-      <thead>
-        <tr>
-          <th>Internal Code</th>
-          <th>Internal Description</th>
-          <th>Supplier SKU</th>
-          <th className={styles.tableRight}>Price 1</th>
-          <th className={styles.tableRight}>Price 2</th>
-          <th className={styles.tableRight}>Lead</th>
-          <th className={styles.tableRight}>MOQ</th>
-          <th>Main</th>
-          <th className={styles.tableRight}>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {bindings.map((b) => (
-          <tr
-            key={b.id}
-            onDoubleClick={() => onEdit(b)}
-            title="Double-click to edit"
-            style={{ cursor: 'pointer' }}
-          >
-            <td className={styles.codeCell}>{b.material_code}</td>
-            <td>{b.material_name}</td>
-            <td className={styles.codeCell} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-              <InlineSupplierSku binding={b} supplierId={supplierId} update={update} />
-            </td>
-            <td
-              className={styles.priceCell}
-              onClick={(e) => e.stopPropagation()}
-              onDoubleClick={(e) => e.stopPropagation()}
-            >
-              <InlineBedframeMatrixCell
-                binding={b}
-                supplierId={supplierId}
-                update={update}
-                tier="P1"
-              />
-            </td>
-            <td
-              className={styles.priceCell}
-              onClick={(e) => e.stopPropagation()}
-              onDoubleClick={(e) => e.stopPropagation()}
-            >
-              <InlineBedframeMatrixCell
-                binding={b}
-                supplierId={supplierId}
-                update={update}
-                tier="P2"
-              />
-            </td>
-            <td className={`${styles.tableRight} ${styles.muted}`}>{b.lead_time_days}d</td>
-            <td className={`${styles.tableRight} ${styles.muted}`}>{b.moq}</td>
-            <td>
-              <MainStarCell binding={b} supplierId={supplierId} update={update} />
-            </td>
-            <td>
-              <RowActionsCell binding={b} supplierId={supplierId} remove={remove} onEdit={onEdit} />
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-    </TableScroll>
+    <DataGrid
+      rows={bindings}
+      columns={columns}
+      storageKey={storageKey}
+      rowKey={bindingRowKey}
+      searchPlaceholder="Search mappings…"
+      onRowDoubleClick={onEdit}
+      groupBanner={false}
+      emptyMessage="No SKU mappings yet for this supplier."
+    />
   );
 };
 
@@ -2359,25 +2473,47 @@ const SupplierInfoCard = ({
     });
   };
 
+  /* Collapsible panel — click the header bar to fold the whole info grid
+     away (chevron flips). Persisted per panel in localStorage. Entering
+     edit mode force-expands so the form is never hidden mid-edit. */
+  const [open, toggleOpen] = usePersistedOpen('panel-supplier-info');
+  const bodyVisible = open || editing;
+
   return (
     <section className={styles.card}>
-      <header className={styles.cardHeader}>
-        <h2 className={styles.cardTitle}>Supplier Info</h2>
-        {!editing ? (
-          <Button variant="ghost" size="sm" onClick={onEdit}>
-            <Pencil {...ICON} />
-            <span>Edit</span>
-          </Button>
-        ) : (
-          <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
-            <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-            <Button variant="primary" size="sm" onClick={save} disabled={update.isPending}>
-              <Save {...ICON} />
-              <span>{update.isPending ? 'Saving…' : 'Save'}</span>
+      <header
+        className={styles.cardHeader}
+        onClick={toggleOpen}
+        aria-expanded={bodyVisible}
+        title={bodyVisible ? 'Click to collapse' : 'Click to expand'}
+        style={{ cursor: 'pointer', userSelect: 'none' }}
+      >
+        <h2 className={styles.cardTitle}>
+          {bodyVisible
+            ? <ChevronDown {...SM_ICON} style={{ color: 'var(--fg-muted)' }} />
+            : <ChevronRight {...SM_ICON} style={{ color: 'var(--fg-muted)' }} />}
+          Supplier Info
+        </h2>
+        {/* stopPropagation so the Edit / Save / Cancel buttons don't also
+            toggle the collapse state. */}
+        <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+          {!editing ? (
+            <Button variant="ghost" size="sm" onClick={onEdit}>
+              <Pencil {...ICON} />
+              <span>Edit</span>
             </Button>
-          </span>
-        )}
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+              <Button variant="primary" size="sm" onClick={save} disabled={update.isPending}>
+                <Save {...ICON} />
+                <span>{update.isPending ? 'Saving…' : 'Save'}</span>
+              </Button>
+            </>
+          )}
+        </span>
       </header>
+      {bodyVisible && (
       <div className={styles.cardBody}>
         {!editing ? (
           <div className={styles.infoGrid}>
@@ -2466,6 +2602,7 @@ const SupplierInfoCard = ({
           </div>
         )}
       </div>
+      )}
     </section>
   );
 };
