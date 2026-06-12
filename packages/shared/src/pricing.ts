@@ -545,6 +545,13 @@ export const computeDeliveryFee = (
  * docs/superpowers/specs/2026-06-02-delivery-fee-special-and-crossorder-design.md
  */
 
+/* Cross-category rule (Loo 2026-06-12): mattress + bedframe count as ONE
+ * delivery category — the bedroom set travels together. Only sofa mixed with
+ * a mattress and/or bedframe trips the surcharge; mattress + bedframe alone
+ * does NOT. Keys are the lowercase item_groups both callers already send. */
+const tripsCrossCategory = (categories: ReadonlySet<string>): boolean =>
+  categories.has('sofa') && (categories.has('mattress') || categories.has('bedframe'));
+
 export interface SpecialModelDeliveryFee {
   /** Standalone special transport fee (e.g. RM 500). Replaces the normal base
    *  when any special model is in the cart; highest wins. */
@@ -557,7 +564,8 @@ export interface SpecialModelDeliveryFee {
 export interface SoDeliveryFeeInput {
   /** Distinct DELIVERABLE category keys in the cart (sofa / mattress / bedframe).
    *  Duplicates + empties ignored. The caller excludes accessories / others —
-   *  they don't trip cross-category delivery. */
+   *  they don't trip cross-category delivery. Mattress + bedframe count as one
+   *  category: only sofa × (mattress|bedframe) trips the surcharge. */
   categoryIds: string[];
   /** One entry per SPECIAL model present in the cart. Empty when none. */
   specialModels: SpecialModelDeliveryFee[];
@@ -588,7 +596,9 @@ export const computeSoDeliveryFee = (
   input:  SoDeliveryFeeInput,
   config: DeliveryFeeConfig,
 ): SoDeliveryFeeResult => {
-  const categories = new Set(input.categoryIds.filter((id): id is string => Boolean(id)));
+  const categories = new Set(
+    input.categoryIds.filter((id): id is string => Boolean(id)).map((id) => id.toLowerCase()),
+  );
   const additional = Math.max(0, input.additionalFee);
   const specials   = input.specialModels ?? [];
   const hasSpecial = specials.length > 0;
@@ -611,13 +621,13 @@ export const computeSoDeliveryFee = (
   }
 
   // Standalone / first SO. Special standalone fee (highest) overrides the normal
-  // base; the in-order cross-category surcharge stacks when ≥2 deliverable
-  // categories share this cart.
+  // base; the in-order cross-category surcharge stacks only when sofa shares
+  // the cart with a mattress / bedframe (mattress + bedframe = one category).
   let base = config.baseFee;
   if (hasSpecial) {
     const specialStandalone = Math.max(...specials.map((s) => Math.max(0, s.standaloneFee)));
     if (specialStandalone > 0) base = specialStandalone;
   }
-  const crossCategory = categories.size >= 2 ? config.crossCategoryFee : 0;
+  const crossCategory = tripsCrossCategory(categories) ? config.crossCategoryFee : 0;
   return { base, crossCategory, additional, total: base + crossCategory + additional, isSpecial: hasSpecial, isFollowup: false };
 };

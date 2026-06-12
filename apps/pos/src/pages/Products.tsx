@@ -500,15 +500,16 @@ const DeliveryFeeTab = ({ mode }: { mode: ProductsMode }) => {
           Delivery fees
         </h2>
         <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', margin: '0 0 var(--space-5)', maxWidth: 560, lineHeight: 1.5 }}>
-          Every order is charged the base fee. Orders mixing ≥2 product categories
-          (e.g. sofa + mattress) also pay the cross-category surcharge — flat, once.
+          Every order is charged the base fee. Orders mixing a sofa with a mattress
+          or bed frame also pay the cross-category surcharge — flat, once. Mattress
+          + bed frame count as one category (no surcharge between them).
           Lead times set the minimum days before a delivery date can be picked.
           Changes apply to NEW orders only.
         </p>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(220px, 1fr))', gap: 'var(--space-5)' }}>
           {numberField('df-base', 'Base fee (RM)', 'Charged on every order. Whole RM (no sen).', baseFee, setBaseFee)}
-          {numberField('df-cross', 'Cross-category surcharge (RM)', 'Added once, flat, when an order has ≥2 distinct product categories.', crossCategoryFee, setCrossCategoryFee)}
+          {numberField('df-cross', 'Cross-category surcharge (RM)', 'Added once, flat, when an order mixes a sofa with a mattress / bed frame. Mattress + bed frame = one category.', crossCategoryFee, setCrossCategoryFee)}
           {numberField('df-mattress', 'Mattress + bed frame lead time (days)', 'Min days before a delivery date when the cart has a mattress or bed frame.', mattressDays, setMattressDays)}
           {numberField('df-sofa', 'Sofa lead time (days)', 'Min days when the cart has a sofa. Mixed carts use the larger lead time.', sofaDays, setSofaDays)}
         </div>
@@ -4627,6 +4628,11 @@ const FabricPricingPanel = () => {
       <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
         {canEdit ? 'Click a tier to cycle Price 1 → 2 → 3. Sofa and bedframe are independent.' : 'Read-only — only Master Admin can change fabric tiers.'}
       </p>
+      {updateTier.isError && (
+        <div role="alert" style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }}>
+          Tier change failed: {String((updateTier.error as Error)?.message ?? updateTier.error)}
+        </div>
+      )}
       {fabrics.isLoading ? (
         <div style={{ color: 'var(--fg-muted)' }}>Loading fabrics…</div>
       ) : (fabrics.data ?? []).length === 0 ? (
