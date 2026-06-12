@@ -791,12 +791,14 @@ export const Configurator = () => {
         }),
       });
       // Bedframe colour now comes from the chosen fabric (migration 0124) —
-      // hydrate fabricSel from the snapshot so editing pre-selects it.
-      if (cfg.fabricId && cfg.colourId) {
+      // hydrate fabricSel from the snapshot so editing pre-selects it. A KIV
+      // line (Loo 2026-06-12) has fabricId but NO colourId — hydrate it too,
+      // or editing the line would silently drop the fabric (and its tier Δ).
+      if (cfg.fabricId) {
         const libRow = (fabricLib.data ?? []).find((f) => f.id === cfg.fabricId);
         setFabricSel({
-          fabricId: cfg.fabricId, colourId: cfg.colourId,
-          fabricLabel: cfg.fabricLabel ?? '', colourLabel: cfg.colourLabel ?? '',
+          fabricId: cfg.fabricId, colourId: cfg.colourId ?? null,
+          fabricLabel: cfg.fabricLabel ?? '', colourLabel: cfg.colourId ? (cfg.colourLabel ?? '') : null,
           colourHex: cfg.colourHex ?? null, surcharge: 0,
           sofaTier: libRow?.sofaTier ?? null, bedframeTier: libRow?.bedframeTier ?? null,
         });
@@ -829,14 +831,16 @@ export const Configurator = () => {
       // combos loaded; defer the one-shot hydrate until they arrive.
       if (cfg.pwp && cfg.pwpCode && sofaCombosQ.data == null) return;
       setActiveDepth(cfg.depth ?? '24');
-      if (cfg.fabricId && cfg.colourId) {
+      // KIV line (Loo 2026-06-12): fabricId without colourId still hydrates —
+      // the fabric tier Δ is part of the saved price and must survive an edit.
+      if (cfg.fabricId) {
         const pf = derivedFabricRows.find((f) => f.fabricId === cfg.fabricId);
         const libRow = (fabricLib.data ?? []).find((f) => f.id === cfg.fabricId);
         setFabricSel({
           fabricId: cfg.fabricId,
-          colourId: cfg.colourId,
+          colourId: cfg.colourId ?? null,
           fabricLabel: cfg.fabricLabel ?? '',
-          colourLabel: cfg.colourLabel ?? '',
+          colourLabel: cfg.colourId ? (cfg.colourLabel ?? '') : null,
           colourHex: cfg.colourHex ?? null,
           surcharge: pf?.surcharge ?? 0,
           sofaTier: libRow?.sofaTier ?? null,
@@ -1377,6 +1381,7 @@ export const Configurator = () => {
     const parts = [pickedSize.label];
     if (fabricSel?.fabricLabel) parts.push(fabricSel.fabricLabel);
     if (fabricSel?.colourLabel) parts.push(fabricSel.colourLabel);
+    else if (fabricSel) parts.push('Colour KIV');
     if (bfSel.gapLabel) parts.push(`Gap ${bfSel.gapLabel}`);
     if (bfSel.legLabel) parts.push(`Leg ${bfSel.legLabel}`);
     if (bfSel.divanLabel) parts.push(`Divan ${bfSel.divanLabel}`);
@@ -1387,12 +1392,16 @@ export const Configurator = () => {
       productName: p.name,
       sizeId: pickedSize.id,
       // Optional since 2026-06-11: absent = customer confirms fabric later.
+      // Colour KIV (Loo 2026-06-12): fabric committed (tier Δ charged), colour
+      // keys omitted — the SO's Fabrics axis stays open for the later fill-in.
       ...(fabricSel ? {
-        colourId: fabricSel.colourId,
-        colourLabel: fabricSel.colourLabel,
-        ...(fabricSel.colourHex ? { colourHex: fabricSel.colourHex } : {}),
         fabricId: fabricSel.fabricId,
         fabricLabel: fabricSel.fabricLabel,
+        ...(fabricSel.colourId ? {
+          colourId: fabricSel.colourId,
+          colourLabel: fabricSel.colourLabel,
+          ...(fabricSel.colourHex ? { colourHex: fabricSel.colourHex } : {}),
+        } : {}),
       } : {}),
       fabricTierDelta: bedframeFabricDelta,
       // PWP (换购, 0128) identity + grant. modelId/category let the cart re-resolve
@@ -1550,7 +1559,7 @@ export const Configurator = () => {
   const handleAddSofa = () => {
     if (pickedSofaRow == null || pickedSofaRow.price == null) return;
     const lShape = isLShapeBundle(pickedSofaRow.bundle.id);
-    const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}` : '';
+    const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel ?? 'Colour KIV'}` : '';
     const snapshot: SofaConfigSnapshot = {
       kind: 'sofa',
       productId: p.id,
@@ -1563,11 +1572,12 @@ export const Configurator = () => {
       seatUpgradeLabel: p.seat_upgrade_label ?? null,
       seatUpgradeFootrest: p.seat_upgrade_footrest ?? true,
       // Fabric + colour (spec 2026-05-24) — surcharge folded into total.
-      // Optional since 2026-06-11: absent = customer confirms later.
+      // Optional since 2026-06-11: absent = customer confirms later. Colour
+      // KIV (Loo 2026-06-12): fabric set, colour keys omitted until filled.
       fabricId: fabricSel?.fabricId,
-      colourId: fabricSel?.colourId,
+      colourId: fabricSel?.colourId ?? undefined,
       fabricLabel: fabricSel?.fabricLabel,
-      colourLabel: fabricSel?.colourLabel,
+      colourLabel: fabricSel?.colourLabel ?? undefined,
       colourHex: fabricSel?.colourHex ?? undefined,
       fabricTierDelta: sofaFabricDelta,
       ...(sofaSpecialSel.length > 0 ? {
@@ -1596,7 +1606,7 @@ export const Configurator = () => {
     if (pickedQP == null || effectiveQPModules == null) return;
     const cells = cellsFromComboModules(effectiveQPModules, activeDepth);
     const label = qpDisplayLabel;
-    const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}` : '';
+    const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel ?? 'Colour KIV'}` : '';
     // PWP (换购) — stamp the line when this layout matches the applied reward
     // combo; total already reflects the PWP price (effectiveSofaPricing). The
     // server re-validates the code + locks the combo PWP price at Confirm.
@@ -1612,10 +1622,11 @@ export const Configurator = () => {
       seatUpgradeLabel: p.seat_upgrade_label ?? null,
       seatUpgradeFootrest: p.seat_upgrade_footrest ?? true,
       // Optional since 2026-06-11: absent = customer confirms fabric later.
+      // Colour KIV (Loo 2026-06-12): fabric set, colour keys omitted until filled.
       fabricId: fabricSel?.fabricId,
-      colourId: fabricSel?.colourId,
+      colourId: fabricSel?.colourId ?? undefined,
       fabricLabel: fabricSel?.fabricLabel,
-      colourLabel: fabricSel?.colourLabel,
+      colourLabel: fabricSel?.colourLabel ?? undefined,
       colourHex: fabricSel?.colourHex ?? undefined,
       fabricTierDelta: sofaFabricDelta,
       ...(isPwp && sofaPwpCode ? { pwp: true, pwpCode: sofaPwpCode } : {}),
@@ -1698,7 +1709,7 @@ export const Configurator = () => {
         </span>
         {(fabricSel || bfSel.legLabel) && (
           <span className={styles.topbarChipSub}>
-            {[fabricSel?.fabricLabel, fabricSel?.colourLabel, bfSel.legLabel ? `Leg ${bfSel.legLabel}` : null].filter(Boolean).join(' · ')}
+            {[fabricSel?.fabricLabel, fabricSel ? (fabricSel.colourLabel ?? 'Colour KIV') : null, bfSel.legLabel ? `Leg ${bfSel.legLabel}` : null].filter(Boolean).join(' · ')}
           </span>
         )}
       </span>

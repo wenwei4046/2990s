@@ -52,7 +52,13 @@ export function buildVariantSummary(
   // GRN / PI / PR / Stock-Adjustment editors store the fabric under fabricColor;
   // fall back to it when the SO-style keys are empty so received lines still show
   // their fabric in the Description 2 summary.
-  const fabric = [...new Set(fabricParts.filter(Boolean))].join(' ') || str(variants.fabricColor);
+  // Colour KIV (Loo 2026-06-12): the customer committed to a fabric SERIES
+  // (variants.fabricId/fabricLabel — its tier add-on is already charged) but
+  // confirms the colour later, so there's no fabricCode yet. Surface the
+  // series + the open colour so the doc line reads the true state.
+  const fabric = [...new Set(fabricParts.filter(Boolean))].join(' ')
+    || str(variants.fabricColor)
+    || (str(variants.fabricLabel) ? `${str(variants.fabricLabel)} COLOUR KIV` : '');
   if (fabric) segments.push(fabric);
 
   // 2026-06-04 — POS handover sofa lines carry the leg pick as sofaLegHeight

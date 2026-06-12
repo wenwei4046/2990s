@@ -92,6 +92,35 @@ describe('cartLineToSoItem', () => {
     expect(item.variants).not.toHaveProperty('colourId');
   });
 
+  // Colour KIV (Loo 2026-06-12) — the customer commits to the fabric SERIES
+  // (the tier add-on is already in the line total) but confirms the colour
+  // later. The SO line must carry fabricId/fabricLabel (the server prices the
+  // tier Δ from fabricId) and NO colourId/fabricCode, so so-variant-rule keeps
+  // the Fabrics axis open until the My-orders fill-in.
+  it('sofa with fabric committed but colour KIV sends fabricId without fabricCode', () => {
+    const line: CartLine = {
+      key: 'cfg-kiv',
+      qty: 1,
+      config: {
+        kind: 'sofa',
+        productId: 'prod-1',
+        productName: 'Tanah Modular Sofa',
+        bundleId: 'bundle-3l',
+        depth: '39',
+        fabricId: 'fab-ez',
+        fabricLabel: 'EZ',
+        fabricTierDelta: 125,
+        total: 6105,
+        summary: '3+L · Bundle · EZ/Colour KIV',
+      },
+    };
+    const item = cartLinesToSoItems([line], [product()])[0]!;
+    expect(item.variants).toMatchObject({ fabricId: 'fab-ez', fabricLabel: 'EZ' });
+    expect(item.variants).not.toHaveProperty('fabricCode');
+    expect(item.variants).not.toHaveProperty('colourId');
+    expect(item.variants).not.toHaveProperty('colourLabel');
+  });
+
   // Delivery-fee fix (2026-06-03): a mattress size line must classify as
   // 'mattress' from its own config.category even when the catalog is empty
   // (production `products` is empty + the size SKU id isn't a catalog card).
@@ -271,6 +300,36 @@ describe('cartLineToSoItem', () => {
     expect(item.variants).toMatchObject({ sizeId: 'size-queen', legHeight: '4"', gap: '6"' });
     expect(item.variants).not.toHaveProperty('colourId');
     expect(item.variants).not.toHaveProperty('fabricId');
+    expect(item.variants).not.toHaveProperty('fabricCode');
+  });
+
+  // Colour KIV (Loo 2026-06-12, same as sofa) — fabric SERIES committed (tier
+  // Δ charged even on an Included tier, in case the pick later moves to a paid
+  // one), colour confirmed later: fabricId/fabricLabel ride, colour keys stay
+  // off so the Fabrics axis remains open for the My-orders fill-in.
+  it('bedframe with fabric committed but colour KIV sends fabricId without fabricCode', () => {
+    const line: CartLine = {
+      key: 'cfg-bf-kiv',
+      qty: 1,
+      config: {
+        kind: 'bedframe',
+        productId: 'prod-bf',
+        productName: 'Rumah Bedframe',
+        sizeId: 'size-queen',
+        fabricId: 'fab-bf',
+        fabricLabel: 'BF',
+        fabricTierDelta: 0,
+        legHeightId: 'leg-4',
+        legHeightLabel: '4"',
+        total: 3990,
+        summary: 'Queen · BF · Colour KIV · Leg 4"',
+      },
+    };
+    const item = cartLinesToSoItems([line], [])[0]!;
+    expect(item.itemGroup).toBe('bedframe');
+    expect(item.variants).toMatchObject({ fabricId: 'fab-bf', fabricLabel: 'BF', legHeight: '4"' });
+    expect(item.variants).not.toHaveProperty('colourId');
+    expect(item.variants).not.toHaveProperty('colourLabel');
     expect(item.variants).not.toHaveProperty('fabricCode');
   });
 

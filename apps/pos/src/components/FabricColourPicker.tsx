@@ -5,9 +5,13 @@ import styles from './FabricColourPicker.module.css';
 
 export interface FabricSelection {
   fabricId: string;
-  colourId: string;
+  /** null = colour KIV (Loo 2026-06-12): the customer confirmed the fabric
+   *  SERIES — so its tier add-on is charged now — but picks the colour later
+   *  from My orders. The SO lands with fabricId but no colourId/fabricCode,
+   *  so so-variant-rule keeps the Fabrics axis open until it's filled. */
+  colourId: string | null;
   fabricLabel: string;
-  colourLabel: string;
+  colourLabel: string | null;
   colourHex: string | null;
   surcharge: number;
   // SELLING tiers (migration 0124) — drive the per-item fabric-tier add-on.
@@ -85,6 +89,18 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
     });
   };
 
+  // Colour KIV (Loo 2026-06-12): keep the chosen fabric — its tier add-on is
+  // already in the price — but leave the colour to a later My-orders fill-in.
+  const pickColourKiv = () => {
+    const f = fabrics.find((x) => x.id === fabricId);
+    if (!f) return;
+    onChange({
+      fabricId: f.id, colourId: null, fabricLabel: f.label, colourLabel: null,
+      colourHex: null, surcharge: f.surcharge,
+      sofaTier: f.sofaTier ?? null, bedframeTier: f.bedframeTier ?? null,
+    });
+  };
+
   if (lib.isLoading || colours.isLoading) return <p className={styles.muted}>Loading fabrics…</p>;
   if (fabrics.length === 0) return <p className={styles.muted}>No fabrics enabled for this Model.</p>;
 
@@ -136,7 +152,24 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
       <section className={styles.block}>
         <header className={styles.head}>
           <span className={styles.eyebrow}>Colour</span>
+          {optional && fabricId != null && <span className={styles.optionalHint}>Can be KIV — confirmed later</span>}
         </header>
+        {/* KIV chip (Loo 2026-06-12) — the customer commits to the fabric
+            SERIES (tier add-on charged now) but confirms the colour later.
+            The order waits in My orders until the colour is filled in. */}
+        {optional && fabricId != null && (
+          <div className={styles.fabricRow} style={{ marginBottom: 10 }}>
+            <button
+              type="button"
+              aria-pressed={colourId == null}
+              className={`${styles.fabricChip} ${colourId == null ? styles.fabricChipOn : ''}`}
+              onClick={() => pickColourKiv()}
+            >
+              <span className={styles.fabricName}>KIV</span>
+              <span className={styles.fabricMeta}>Colour to confirm later</span>
+            </button>
+          </div>
+        )}
         <div className={styles.colourRow}>
           {coloursForFabric.map((c) => {
             const on = c.colourId === colourId;

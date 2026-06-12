@@ -102,4 +102,30 @@ describe('buildVariantSummary', () => {
     const summary = buildVariantSummary('bedframe', { divanHeight: '10"', remark: 'Deliver before noon' });
     expect(summary).toBe('DIVAN 10" / SPECIAL: Deliver before noon');
   });
+
+  /* Colour KIV (Loo 2026-06-12) — the customer commits to a fabric SERIES
+     (tier add-on charged) but confirms the colour later: variants carry
+     fabricId + fabricLabel and NO fabricCode. The doc line must surface the
+     series + the open colour instead of silently dropping the fabric. */
+  it('sofa with a fabric series but no colour reads "<series> COLOUR KIV"', () => {
+    const summary = buildVariantSummary('sofa', {
+      fabricId: 'aaaa-bbbb', fabricLabel: 'EZ', depth: '24', sofaLegHeight: '6"',
+    });
+    expect(summary).toBe('EZ COLOUR KIV / SEAT 24 / LEG 6"');
+  });
+
+  it('bedframe with a fabric series but no colour reads "<series> COLOUR KIV"', () => {
+    const summary = buildVariantSummary('bedframe', {
+      fabricId: 'aaaa-bbbb', fabricLabel: 'BF', divanHeight: '10"', legHeight: '2"',
+    });
+    expect(summary).toBe('BF COLOUR KIV / DIVAN 10" + LEG 2"');
+  });
+
+  it('a filled colour wins over the KIV fallback (fabricLabel rides along)', () => {
+    const summary = buildVariantSummary('sofa', {
+      fabricId: 'aaaa-bbbb', fabricLabel: 'EZ', fabricCode: 'EZ-003', seatHeight: '28',
+    });
+    expect(summary).toBe('EZ-003 / SEAT 28');
+    expect(summary).not.toContain('KIV');
+  });
 });
