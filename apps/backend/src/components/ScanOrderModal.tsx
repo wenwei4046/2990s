@@ -126,7 +126,7 @@ type ExtractResp = {
       fabrics: Array<{ code: string; description: string | null }>;
       options?: CatalogOptions;
     };
-    meta?: { repRules?: RepRulesMeta | null };
+    meta?: { repRules?: RepRulesMeta | null; sharedAliases?: boolean };
   };
 };
 type SalespeopleResp = { success: boolean; data: { salespeople: string[] } };
@@ -176,6 +176,7 @@ export const ScanOrderModal = ({ onClose }: Props) => {
   const [salesperson, setSalesperson] = useState('');
   const [knownReps, setKnownReps] = useState<string[]>([]);
   const [repRules, setRepRules] = useState<RepRulesMeta | null>(null);
+  const [sharedAliases, setSharedAliases] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -244,6 +245,7 @@ export const ScanOrderModal = ({ onClose }: Props) => {
       setSampleId(d.sampleId);
       setSkus(d.catalog.skus);
       setRepRules(d.meta?.repRules ?? null);
+      setSharedAliases(Boolean(d.meta?.sharedAliases));
       const ex = d.extracted;
       // Blank salesperson → backfill from the slip's SALES REPRESENTATIVE box.
       if (!salesperson.trim() && ex.salesRep) setSalesperson(ex.salesRep);
@@ -511,7 +513,7 @@ export const ScanOrderModal = ({ onClose }: Props) => {
                     className={`${styles.chip} ${styles.chipGreen}`}
                     title="This rep's distilled handwriting rules were applied to the extraction."
                   >
-                    Rules: {repRules.salesperson} ({repRules.sampleCount} sample{repRules.sampleCount === 1 ? '' : 's'})
+                    Rules: {sharedAliases ? 'Shared aliases + ' : ''}{repRules.salesperson} ({repRules.sampleCount} sample{repRules.sampleCount === 1 ? '' : 's'})
                   </span>
                 </div>
               )}

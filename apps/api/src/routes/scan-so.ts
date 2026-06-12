@@ -13,7 +13,13 @@
 //     their own handwriting/notation habits that differ per product
 //     category, so a distilled rules block (so_scan_rules, organized by
 //     SOFA / MATTRESS / BEDFRAME / ACCESSORY / SERVICE sections) is
-//     regenerated from that rep's corrected samples after every confirm.
+//     regenerated from that rep's corrected samples after every confirm;
+//   • PLUS a GLOBAL shared alias layer (reserved so_scan_rules row
+//     '__GLOBAL__'): a product-name/fabric-code alias dictionary distilled
+//     from the latest corrected samples ACROSS ALL reps ("Bamboo Cruise" /
+//     "Cruise" / "B.Cruise" → one SKU), injected into EVERY scan so one
+//     rep's corrections teach all reps. Refreshed on every confirm
+//     (fire-and-forget) and weekly (before the per-rep pass).
 //
 // Endpoints:
 //   POST /scan-so/extract                     — multipart image(s)/pdf (+ salesperson field) → JSON + sampleId
@@ -594,6 +600,13 @@ function ilikeExact(v: string): string {
   return v.replace(/([\\%_])/g, '\\$1');
 }
 
+// Reserved so_scan_rules key for the GLOBAL shared product-alias dictionary
+// (cross-rep: "Bamboo Cruise" vs "Cruise" → one SKU). Just a row — no
+// migration. The /salespeople listing filters it out; the weekly cron and
+// rep enumeration must never treat it as a salesperson.
+const GLOBAL_ALIAS_KEY = '__GLOBAL__';
+const isGlobalKey = (v: string): boolean => v.trim().toUpperCase() === GLOBAL_ALIAS_KEY;
+
 const DISTILL_META_PROMPT = `You are reviewing extraction sessions of HANDWRITTEN showroom sale-order slips at 2990's Home, a Malaysian furniture retailer. ALL the examples below were written by ONE salesperson. Each example is a PAIR: what the AI initially extracted, followed by what the human operator corrected it to (the confirmed truth). Each salesperson has their own handwriting and notation habits, and those habits DIFFER per product category. Write a concise salesperson-specific OCR rule block so future extractions of this rep's slips apply their conventions automatically.
 
 DERIVE THE RULES FROM THE DIFFS: compare each "AI extracted" JSON against its "Operator corrected" JSON. Wherever they differ, the AI misread this rep's notation and the human fixed it — that diff is exactly how this rep's shorthand maps to catalog truth (e.g. AI read "BO315-2", operator corrected to "BO315-02" → this rep drops leading zeros in suffixes). Fields that the AI already got right need no rule. Prioritize recurring corrections across multiple pairs over one-off fixes.
@@ -628,6 +641,74 @@ type DistillResult = {
   sampleCount?: number;
 };
 
+// Feed extracted→corrected PAIRS so the model learns from the DIFFS (what
+// the AI got wrong vs what the human fixed). Each side is truncated to keep
+// the worst case token-bounded; typical slip JSON is ~1-2k chars so
+// truncation rarely fires. Shared by per-rep rules + global alias distills.
+const PAIR_SIDE_MAX = 4_000;
+function pairExamplesText(samples: Array<{ extracted: unknown; corrected: unknown }>): string {
+  const sideText = (v: unknown): string => {
+    if (v === null || v === undefined) return '(not recorded)';
+    const s = JSON.stringify(v);
+    return s.length > PAIR_SIDE_MAX ? `${s.slice(0, PAIR_SIDE_MAX)}…(truncated)` : s;
+  };
+  return samples
+    .map(
+      (r, i) =>
+        `Example ${i + 1}:\nAI extracted: ${sideText(r.extracted)}\nOperator corrected: ${sideText(r.corrected)}`,
+    )
+    .join('\n\n');
+}
+
+// One prose-distill Claude call (temperature 0, fences stripped). Returns
+// the cleaned text or an error string — never throws.
+async function claudeDistillCall(
+  apiKey: string,
+  system: string,
+  userPayload: string,
+): Promise<{ text: string; error: string | null }> {
+  try {
+    const resp = await fetch(ANTHROPIC_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 2048,
+        // Determinism: same sample pool → same distilled output.
+        temperature: 0,
+        system,
+        messages: [{ role: 'user', content: [{ type: 'text', text: userPayload }] }],
+      }),
+    });
+    const bodyText = await resp.text();
+    if (!resp.ok) {
+      return { text: '', error: `Anthropic ${resp.status}: ${bodyText.slice(0, 500)}` };
+    }
+    let parsedResp: AnthropicResponse;
+    try {
+      parsedResp = JSON.parse(bodyText) as AnthropicResponse;
+    } catch {
+      return { text: '', error: `Anthropic returned non-JSON: ${bodyText.slice(0, 300)}` };
+    }
+    if (parsedResp.error) {
+      return { text: '', error: `Anthropic: ${parsedResp.error.type}: ${parsedResp.error.message}` };
+    }
+    const firstText = parsedResp.content?.find((b) => b.type === 'text')?.text ?? '';
+    // Distill output is plain prose, not JSON — strip fences only.
+    // (Do NOT slice to first/last brace — that would truncate prose.)
+    let cleaned = firstText.trim();
+    const m = cleaned.match(/^```(?:\w+)?\s*\n?([\s\S]*?)\n?```\s*$/);
+    if (m?.[1]) cleaned = m[1].trim();
+    return { text: cleaned, error: null };
+  } catch (e) {
+    return { text: '', error: `Network/fetch error: ${(e as Error).message}` };
+  }
+}
+
 /**
  * Regenerate so_scan_rules for one salesperson from their latest ≤50
  * corrected samples. REPLACES any existing rules row (regenerate-from-pool,
@@ -643,6 +724,8 @@ async function distillSalespersonRules(
 ): Promise<DistillResult> {
   const rep = salesperson.trim();
   if (!rep) return { status: 'error', reason: 'Missing salesperson.' };
+  // Reserved key → the GLOBAL alias distill, never a per-rep rules pass.
+  if (isGlobalKey(rep)) return distillGlobalAliases(svc, apiKey);
   if (!apiKey) {
     return {
       status: 'error',
@@ -669,74 +752,16 @@ async function distillSalespersonRules(
     };
   }
 
-  // Feed extracted→corrected PAIRS so the model learns from the DIFFS (what
-  // the AI got wrong vs what the human fixed). Each side is truncated to keep
-  // the worst case (50 pairs) token-bounded; typical slip JSON is ~1-2k chars
-  // so truncation rarely fires.
-  const PAIR_SIDE_MAX = 4_000;
-  const sideText = (v: unknown): string => {
-    if (v === null || v === undefined) return '(not recorded)';
-    const s = JSON.stringify(v);
-    return s.length > PAIR_SIDE_MAX ? `${s.slice(0, PAIR_SIDE_MAX)}…(truncated)` : s;
-  };
-  const examplesText = samples
-    .map(
-      (r, i) =>
-        `Example ${i + 1}:\nAI extracted: ${sideText(r.extracted)}\nOperator corrected: ${sideText(r.corrected)}`,
-    )
-    .join('\n\n');
   const userPayload =
     `Salesperson: ${rep}\n\n` +
     `Here are ${samples.length} extraction sessions for this salesperson's slips (newest first), ` +
     `each as an AI-extracted → operator-corrected pair. Derive their per-category notation habits ` +
     `from the diffs and write the rule block:\n\n` +
-    examplesText;
+    pairExamplesText(samples);
 
-  let distilledText = '';
-  let errorMsg: string | null = null;
-  try {
-    const resp = await fetch(ANTHROPIC_URL, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: CLAUDE_MODEL,
-        max_tokens: 2048,
-        // Determinism: same sample pool → same distilled rules.
-        temperature: 0,
-        system: DISTILL_META_PROMPT,
-        messages: [{ role: 'user', content: [{ type: 'text', text: userPayload }] }],
-      }),
-    });
-    const bodyText = await resp.text();
-    if (!resp.ok) {
-      errorMsg = `Anthropic ${resp.status}: ${bodyText.slice(0, 500)}`;
-    } else {
-      let parsedResp: AnthropicResponse;
-      try {
-        parsedResp = JSON.parse(bodyText) as AnthropicResponse;
-      } catch {
-        errorMsg = `Anthropic returned non-JSON: ${bodyText.slice(0, 300)}`;
-        parsedResp = {};
-      }
-      if (parsedResp.error) {
-        errorMsg = `Anthropic: ${parsedResp.error.type}: ${parsedResp.error.message}`;
-      } else {
-        const firstText = parsedResp.content?.find((b) => b.type === 'text')?.text ?? '';
-        // Distill output is plain prose, not JSON — strip fences only.
-        // (Do NOT slice to first/last brace — that would truncate prose.)
-        let cleaned = firstText.trim();
-        const m = cleaned.match(/^```(?:\w+)?\s*\n?([\s\S]*?)\n?```\s*$/);
-        if (m?.[1]) cleaned = m[1].trim();
-        distilledText = cleaned;
-      }
-    }
-  } catch (e) {
-    errorMsg = `Network/fetch error: ${(e as Error).message}`;
-  }
+  const call = await claudeDistillCall(apiKey, DISTILL_META_PROMPT, userPayload);
+  let distilledText = call.text;
+  const errorMsg = call.error;
 
   if (errorMsg || !distilledText) {
     return { status: 'error', reason: errorMsg ?? 'Claude returned empty rules.' };
@@ -776,8 +801,109 @@ async function distillSalespersonRules(
   return { status: 'distilled', rulesGenerated: distilledText, sampleCount: samples.length };
 }
 
+// ===========================================================================
+// GLOBAL shared product-alias dictionary — stored under the reserved
+// '__GLOBAL__' so_scan_rules row. Cross-rep learning: the SAME product gets
+// written differently by different reps ("Bamboo Cruise" / "Cruise" /
+// "B.Cruise" → one SKU), so one rep's corrections should teach everyone.
+// Per-rep STYLE notes stay in the per-rep rule rows; this is aliases only.
+// ===========================================================================
+const GLOBAL_ALIAS_META_PROMPT = `You are reviewing extraction sessions of HANDWRITTEN showroom sale-order slips at 2990's Home, a Malaysian furniture retailer. The examples below were written by MANY DIFFERENT salespeople. Each example is a PAIR: what the AI initially extracted, followed by what the human operator corrected it to (the confirmed truth).
+
+Your ONLY job is to build a SHARED PRODUCT-NAME ALIAS DICTIONARY that benefits every salesperson. The same product gets written many different ways across reps ("Bamboo Cruise", "Cruise", "B.Cruise" all mean one SKU). DERIVE THE ALIASES FROM THE DIFFS: wherever the operator corrected a line's skuMatch or fabricMatch, that line's rawText shows how the product was written and the corrected code is the catalog truth — record that variant → code mapping. rawText spellings the AI already matched correctly also confirm aliases worth recording when they differ from the catalog name.
+
+ORGANIZE the dictionary into CATEGORY SECTIONS, in this order, skipping a section only when there are no aliases for it:
+SOFA:
+MATTRESS:
+BEDFRAME:
+ACCESSORY:
+SERVICE:
+You may end with a FABRICS: section for fabric/colour-code shorthand aliases (how reps abbreviate fabric codes → the exact fabric code).
+
+Within each section write one bullet per alias group:
+  • "<variant 1>", "<variant 2>", … → <exact catalog code or base model> (short qualifier only when needed, e.g. "size variant still required")
+Use ONLY codes / base models that appear in the operator-corrected JSON — NEVER invent a code.
+
+DO NOT write per-salesperson style notes (handwriting habits, qty/price/date/phone notation, signature styles) — those live in separate per-rep rule files.
+DO NOT restate universal extraction rules.
+DO NOT enumerate every line item from the examples.
+DO write 100-400 words total: each section label exactly as above ("SOFA:", "MATTRESS:", …) on its own line, with short bullet points (•, -, *) underneath. No markdown headers, no fences, no preamble, no closing remarks.
+
+Output ONLY the dictionary text. The very first characters of your response must be a section label (e.g. "SOFA:"). Anything else will be stored verbatim into the prompt and corrupt downstream extractions.`;
+
 /**
- * Weekly cron entry point — regenerate rules for EVERY salesperson with ≥2
+ * Regenerate the '__GLOBAL__' shared alias dictionary from the latest ≤80
+ * corrected samples ACROSS ALL salespeople. REPLACES the existing row
+ * (regenerate-from-pool, not merge — same contract as the per-rep distill).
+ *
+ * Cheap-skip: fewer than 2 corrected samples total → skip WITHOUT an
+ * Anthropic call, so the fire-and-forget trigger on /confirm is always safe.
+ */
+async function distillGlobalAliases(
+  svc: SupabaseClient,
+  apiKey: string | undefined,
+): Promise<DistillResult> {
+  if (!apiKey) {
+    return {
+      status: 'error',
+      reason: 'ANTHROPIC_API_KEY not configured. Run: npx wrangler secret put ANTHROPIC_API_KEY',
+    };
+  }
+
+  const { data: rows, error: selErr } = await svc
+    .from('so_scan_samples')
+    .select('extracted, corrected')
+    .not('corrected', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(80);
+  if (selErr) {
+    return { status: 'error', reason: isMissingTable(selErr) ? TABLE_MISSING_MSG : selErr.message };
+  }
+  const samples = (rows as Array<{ extracted: unknown; corrected: unknown }> | null) ?? [];
+  if (samples.length < 2) {
+    return {
+      status: 'skipped',
+      reason: `Need at least 2 corrected samples to distill the shared alias dictionary; have ${samples.length}.`,
+      sampleCount: samples.length,
+    };
+  }
+
+  const userPayload =
+    `Here are ${samples.length} extraction sessions across ALL salespeople (newest first), ` +
+    `each as an AI-extracted → operator-corrected pair. Build the shared product-name alias ` +
+    `dictionary from the diffs:\n\n` +
+    pairExamplesText(samples);
+
+  const call = await claudeDistillCall(apiKey, GLOBAL_ALIAS_META_PROMPT, userPayload);
+  let distilledText = call.text;
+  if (call.error || !distilledText) {
+    return { status: 'error', reason: call.error ?? 'Claude returned empty aliases.' };
+  }
+  // Soft cap — keep the injected prompt block bounded (same ceiling as the
+  // per-rep distill).
+  if (distilledText.length > 32_000) distilledText = distilledText.slice(0, 32_000);
+
+  const { error: upErr } = await svc
+    .from('so_scan_rules')
+    .upsert(
+      {
+        salesperson: GLOBAL_ALIAS_KEY,
+        rules: distilledText,
+        sample_count: samples.length,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'salesperson' },
+    );
+  if (upErr) {
+    return { status: 'error', reason: isMissingTable(upErr) ? TABLE_MISSING_MSG : upErr.message };
+  }
+
+  return { status: 'distilled', rulesGenerated: distilledText, sampleCount: samples.length };
+}
+
+/**
+ * Weekly cron entry point — refresh the '__GLOBAL__' shared alias dictionary
+ * FIRST, then regenerate rules for EVERY salesperson with ≥2
  * corrected samples. Sequential (one Anthropic call at a time) and
  * error-isolated per rep: one rep failing never blocks the rest. The
  * per-confirm fire-and-forget distill remains the fast path; this weekly
@@ -789,6 +915,21 @@ export async function distillAllSalespersonRules(
   apiKey: string | undefined,
 ): Promise<{ distilled: number; skipped: number; errors: number; reps: number }> {
   const summary = { distilled: 0, skipped: 0, errors: 0, reps: 0 };
+
+  // Shared alias dictionary first — it benefits every rep's scans and its
+  // sample pool (all corrected rows) is a superset of any rep's.
+  try {
+    const g = await distillGlobalAliases(svc, apiKey);
+    if (g.status === 'distilled') summary.distilled += 1;
+    else if (g.status === 'skipped') summary.skipped += 1;
+    else {
+      summary.errors += 1;
+      console.error(`[scan-so weekly distill] __GLOBAL__ aliases failed: ${g.reason}`);
+    }
+  } catch (e) {
+    summary.errors += 1;
+    console.error(`[scan-so weekly distill] __GLOBAL__ aliases threw: ${(e as Error).message}`);
+  }
 
   // Distinct salespeople with ≥2 corrected rows. Supabase has no DISTINCT
   // aggregate over the REST API, so pull the (small) salesperson column and
@@ -811,6 +952,8 @@ export async function distillAllSalespersonRules(
   for (const row of (data as Array<{ salesperson: string | null }> | null) ?? []) {
     const t = (row.salesperson ?? '').trim();
     if (!t) continue;
+    // Belt-and-braces: the reserved global key is never a salesperson.
+    if (isGlobalKey(t)) continue;
     const key = t.toUpperCase();
     const cur = counts.get(key);
     if (cur) cur.n += 1;
@@ -850,7 +993,10 @@ scanSo.get('/salespeople', async (c) => {
   const add = (v: unknown) => {
     if (typeof v !== 'string') return;
     const t = v.trim();
-    if (t && !seen.has(t.toUpperCase())) seen.set(t.toUpperCase(), t);
+    // The reserved '__GLOBAL__' alias row lives in so_scan_rules but is NOT
+    // a salesperson — keep it out of the modal datalist.
+    if (!t || isGlobalKey(t)) return;
+    if (!seen.has(t.toUpperCase())) seen.set(t.toUpperCase(), t);
   };
   try {
     const [rulesRes, samplesRes] = await Promise.all([
@@ -1006,6 +1152,33 @@ scanSo.post('/extract', async (c) => {
 
   const svc = serviceClient(c.env);
 
+  // GLOBAL shared product-alias dictionary ('__GLOBAL__' so_scan_rules row)
+  // — injected for EVERY scan regardless of salesperson, AFTER the cache
+  // boundary and BEFORE the per-rep rules block. Best-effort: row/table
+  // missing just skips it.
+  let globalAliasText = '';
+  let globalAliasApplied = false;
+  try {
+    const { data: gRow } = await svc
+      .from('so_scan_rules')
+      .select('rules')
+      .eq('salesperson', GLOBAL_ALIAS_KEY)
+      .limit(1)
+      .maybeSingle();
+    const g = gRow as { rules: string } | null;
+    if (g && g.rules.trim() !== '') {
+      globalAliasText =
+        `SHARED PRODUCT ALIASES (all salespeople) — distilled from every rep's previously ` +
+        `corrected slips: common handwritten product-name variants and fabric-code shorthands ` +
+        `mapped to exact catalog codes. Use them to resolve ambiguous handwriting (they ` +
+        `complement, never override, the catalog and the never-invent-codes rule):\n\n` +
+        g.rules;
+      globalAliasApplied = true;
+    }
+  } catch {
+    /* best-effort */
+  }
+
   // Per-rep distilled rules block (so_scan_rules). Injected AFTER the
   // cache_control boundary so the catalog prefix stays cache-stable across
   // reps. Best-effort — table missing just skips it.
@@ -1110,8 +1283,11 @@ scanSo.post('/extract', async (c) => {
             role: 'user',
             content: [
               { type: 'text', text: cachedPrefix, cache_control: { type: 'ephemeral' } },
-              // Rep rules + few-shot live AFTER the cache boundary — they
-              // vary per salesperson/sample and must not bust the prefix.
+              // Global aliases + rep rules + few-shot live AFTER the cache
+              // boundary — they vary per distill/salesperson/sample and must
+              // not bust the prefix. Order: shared aliases → rep rules →
+              // few-shot examples.
+              ...(globalAliasText ? [{ type: 'text', text: globalAliasText }] : []),
               ...(repRulesText ? [{ type: 'text', text: repRulesText }] : []),
               ...(fewShotText ? [{ type: 'text', text: fewShotText }] : []),
               ...fileBlocks,
@@ -1204,7 +1380,14 @@ scanSo.post('/extract', async (c) => {
         fabrics: catalog.fabrics,
         options: catalog.options,
       },
-      meta: { cacheHit, cacheCreated, files: files.length, sampleInsertError, repRules: repRulesMeta },
+      meta: {
+        cacheHit,
+        cacheCreated,
+        files: files.length,
+        sampleInsertError,
+        repRules: repRulesMeta,
+        sharedAliases: globalAliasApplied,
+      },
     },
   });
 });
@@ -1252,22 +1435,33 @@ scanSo.post('/samples/:id/confirm', async (c) => {
     return c.json({ error: 'not_found', reason: 'Sample not found.' }, 404);
   }
 
-  // Fire-and-forget rule distillation for this rep — one Claude call that
-  // REGENERATES so_scan_rules from their latest ≤50 corrected samples.
-  // distillSalespersonRules cheap-skips (<2 samples) without an API call,
-  // so firing on every confirm is safe. Never blocks/fails the confirm.
+  // Fire-and-forget rule distillation — REGENERATES so_scan_rules for this
+  // rep (latest ≤50 of their corrected samples) AND the '__GLOBAL__' shared
+  // alias dictionary (latest ≤80 corrected samples across ALL reps). Both
+  // cheap-skip (<2 samples) without an API call, so firing on every confirm
+  // is safe. Sequential to keep it to one Anthropic call at a time. Never
+  // blocks/fails the confirm.
   const rep = repGiven || ((updated[0] as { salesperson?: string | null }).salesperson ?? '').trim();
-  if (rep) {
-    const distillPromise = distillSalespersonRules(svc, c.env.ANTHROPIC_API_KEY, rep)
-      .then((r) => {
+  const distillPromise = (async () => {
+    if (rep && !isGlobalKey(rep)) {
+      try {
+        const r = await distillSalespersonRules(svc, c.env.ANTHROPIC_API_KEY, rep);
         if (r.status === 'error') console.warn(`[scan-so distill] ${rep}: ${r.reason}`);
-      })
-      .catch((e) => console.warn(`[scan-so distill] ${rep} threw:`, (e as Error).message));
-    try {
-      c.executionCtx.waitUntil(distillPromise);
-    } catch {
-      /* non-Workers runtime (tests) — let the floating promise run */
+      } catch (e) {
+        console.warn(`[scan-so distill] ${rep} threw:`, (e as Error).message);
+      }
     }
+    try {
+      const g = await distillGlobalAliases(svc, c.env.ANTHROPIC_API_KEY);
+      if (g.status === 'error') console.warn(`[scan-so distill] __GLOBAL__ aliases: ${g.reason}`);
+    } catch (e) {
+      console.warn('[scan-so distill] __GLOBAL__ aliases threw:', (e as Error).message);
+    }
+  })();
+  try {
+    c.executionCtx.waitUntil(distillPromise);
+  } catch {
+    /* non-Workers runtime (tests) — let the floating promise run */
   }
 
   return c.json({ success: true });
