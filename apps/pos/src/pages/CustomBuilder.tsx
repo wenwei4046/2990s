@@ -899,7 +899,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // Single source of truth for sofa-line labels — see summarizeSofaCells.
       // Note this is also re-derived at cart-render time, so updating the
       // rule here propagates to existing cart items too.
-      const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}` : '';
+      const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel ?? 'Colour KIV'}` : '';
       const summary = summarizeSofaCells(groupCells, depth, pricing.seatUpgradeLabel) + fabricSuffix;
       // PWP (换购, Phase 2) — flag the line whose build matches the applied reward
       // combo; its `total` already reflects the combo's PWP price (the parent
@@ -916,10 +916,11 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         seatUpgradeLabel: pricing.seatUpgradeLabel ?? null,
         // Fabric + colour applies to each sofa line in the build; the tier Δ
         // (migration 0124) folds onto each line (the server adds the same Δ).
+        // Colour KIV (Loo 2026-06-12): fabric set, colour keys omitted until filled.
         fabricId: fabricSel?.fabricId,
-        colourId: fabricSel?.colourId,
+        colourId: fabricSel?.colourId ?? undefined,
         fabricLabel: fabricSel?.fabricLabel,
-        colourLabel: fabricSel?.colourLabel,
+        colourLabel: fabricSel?.colourLabel ?? undefined,
         colourHex: fabricSel?.colourHex ?? undefined,
         fabricTierDelta: sofaFabricDelta,
         ...(isPwpGroup && pwpCode ? { pwp: true, pwpCode } : {}),
