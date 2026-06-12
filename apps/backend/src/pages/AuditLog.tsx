@@ -13,7 +13,7 @@ import {
   rangeForPreset, presetForRange, amountBadge, matchesSearch,
   methodLabel, methodDetail, initials, type QuickRange,
 } from '../lib/audit-log-view';
-import { useShowrooms, useStaff } from '../lib/admin-queries';
+import { useStaff } from '../lib/admin-queries';
 import { AuditLogFilterBar } from '../components/AuditLogFilterBar';
 import {
   exportCsv, exportXlsx, downloadBlob, type AuditExportRow,
@@ -46,12 +46,11 @@ const fmtClock = (iso: string) => {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
 
+// The four live method codes (shared/payment-methods.ts vocabulary).
 const METHOD_ICON: Record<string, typeof CreditCard> = {
-  credit: CreditCard, debit: CreditCard, installment: CalendarClock, transfer: QrCode,
-  merchant: CreditCard, cash: Banknote,
+  installment: CalendarClock, transfer: QrCode, merchant: CreditCard, cash: Banknote,
 };
 const METHOD_TILE: Record<string, string | undefined> = {
-  credit: styles.tileCredit, debit: styles.tileDebit,
   installment: styles.tileInstallment, transfer: styles.tileTransfer,
   merchant: styles.tileMerchant, cash: styles.tileCash,
 };
@@ -67,14 +66,8 @@ export const AuditLog = () => {
   // No realtime channel — page falls back to staleTime-driven refetch on
   // focus / manual refresh. (The legacy orders-table subscription went away
   // with the /orders route cleanup, 2026-06-12.)
-  const showrooms = useShowrooms();
   const staff = useStaff();
 
-  const showroomName = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const s of showrooms.data ?? []) m.set(s.id, s.name);
-    return (id: string) => m.get(id) ?? '—';
-  }, [showrooms.data]);
   const staffName = useMemo(() => {
     const m = new Map<string, string>();
     for (const s of staff.data ?? []) m.set(s.id, s.name);
@@ -105,8 +98,9 @@ export const AuditLog = () => {
 
   const toExportRows = (input: AuditLogRow[]): AuditExportRow[] =>
     input.map((r) => ({
-      id: r.id, placedAt: r.placedAt, showroomName: showroomName(r.showroomId),
-      customerName: r.customerName, total: r.total, paid: r.paid,
+      docNo: r.docNo, placedAt: r.placedAt, paidAt: r.paidAt,
+      venueName: r.venueName ?? '—',
+      customerName: r.customerName, total: r.total, paid: r.paid, isDeposit: r.isDeposit,
       paymentMethod: r.paymentMethod, merchantProvider: r.merchantProvider, installmentMonths: r.installmentMonths,
       approvalCode: r.approvalCode, salespersonName: staffName(r.salespersonId),
       keyedByName: staffName(r.staffId), slipUploaded: r.slipUploaded,
@@ -168,10 +162,10 @@ export const AuditLog = () => {
       key: 'so',
       label: 'SO#',
       width: 130,
-      accessor: (r) => <span className={styles.soPill}>{r.id}</span>,
-      searchValue: (r) => r.id,
-      filterValue: (r) => r.id,
-      sortFn: (a, b) => a.id.localeCompare(b.id),
+      accessor: (r) => <span className={styles.soPill}>{r.docNo}</span>,
+      searchValue: (r) => r.docNo,
+      filterValue: (r) => r.docNo,
+      sortFn: (a, b) => a.docNo.localeCompare(b.docNo),
     },
     {
       key: 'customer',
@@ -200,7 +194,7 @@ export const AuditLog = () => {
             {badge.kind === 'full'
               ? <span className={`${styles.badge} ${styles.badgeFull}`}>Full payment</span>
               : <span className={`${styles.badge} ${styles.badgeDeposit}`}>
-                  Deposit · {badge.pct}% of {badge.total.toLocaleString('en-MY')}
+                  {r.isDeposit ? 'Deposit' : 'Partial'} · {badge.pct}% of {badge.total.toLocaleString('en-MY')}
                 </span>}
           </>
         );

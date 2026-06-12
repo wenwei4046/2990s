@@ -3,12 +3,14 @@ import { exportCsv, type AuditExportRow } from './audit-export';
 
 const sampleRows: AuditExportRow[] = [
   {
-    id: 'SO-2990',
-    placedAt: '2026-05-22T10:14:00Z',
-    showroomName: 'Showroom KL',
+    docNo: 'SO-2606-001',
+    placedAt: '2026-06-11T10:14:00Z',
+    paidAt: '2026-06-11',
+    venueName: 'Showroom KL',
     customerName: 'Tan Wei Ming',
     total: 5980,
     paid: 5980,
+    isDeposit: false,
     paymentMethod: 'transfer',
     merchantProvider: null,
     installmentMonths: null,
@@ -18,12 +20,14 @@ const sampleRows: AuditExportRow[] = [
     slipUploaded: true,
   },
   {
-    id: 'SO-2991',
-    placedAt: '2026-05-22T11:30:00Z',
-    showroomName: 'Showroom KL',
+    docNo: 'SO-2606-002',
+    placedAt: '2026-06-11T11:30:00Z',
+    paidAt: '2026-06-11',
+    venueName: 'Showroom KL',
     customerName: 'Lim Mei Ling, "VIP"',
     total: 12500,
     paid: 3000,
+    isDeposit: true,
     paymentMethod: 'merchant',
     merchantProvider: 'GHL',
     installmentMonths: null,
@@ -35,16 +39,18 @@ const sampleRows: AuditExportRow[] = [
 ];
 
 const row: AuditExportRow = {
-  id: 'SO-2057', placedAt: '2026-05-21T15:01:00Z', showroomName: 'Showroom KL',
-  customerName: 'Hafiz Rahman', total: 6819, paid: 4466,
+  docNo: 'SO-2057', placedAt: '2026-05-21T15:01:00Z', paidAt: '2026-05-21',
+  venueName: 'Showroom KL',
+  customerName: 'Hafiz Rahman', total: 6819, paid: 4466, isDeposit: false,
   paymentMethod: 'installment', merchantProvider: null, installmentMonths: 12, approvalCode: 'CONTRACT-1',
   salespersonName: 'Rafiq Lim', keyedByName: 'Mei Lin Chua', slipUploaded: false,
 };
 
 describe('exportCsv columns', () => {
-  it('includes Paid (RM) and Installment (months) headers', () => {
+  it('includes Paid (RM), Paid date and Installment (months) headers', () => {
     const header = exportCsv([]).replace(/^﻿/, '').split('\n')[0]!;
     expect(header).toContain('Paid (RM)');
+    expect(header).toContain('Paid date');
     expect(header).toContain('Installment (months)');
   });
   it('writes the paid amount and term in the data row', () => {
@@ -58,7 +64,7 @@ describe('exportCsv', () => {
   it('produces a UTF-8 BOM + header row + escaped data rows', () => {
     const csv = exportCsv(sampleRows);
     expect(csv.charCodeAt(0)).toBe(0xFEFF);
-    expect(csv).toMatch(/SO#,Date,Showroom,Customer,Amount \(RM\),Paid \(RM\),Method,Merchant,Installment \(months\),Approval code,Salesperson,Keyed by,Slip uploaded/);
+    expect(csv).toMatch(/SO#,Keyed at,Paid date,Venue,Customer,SO total \(RM\),Paid \(RM\),Deposit,Method,Merchant,Installment \(months\),Approval code,Salesperson,Keyed by,Slip uploaded/);
     expect(csv).toContain('"Lim Mei Ling, ""VIP"""');
     expect(csv).not.toMatch(/null/i);
     expect(csv).toMatch(/Yes/);
@@ -90,9 +96,9 @@ describe('exportXlsx', () => {
     const sheet = wb.Sheets['Payments'];
     expect(sheet).toBeDefined();
     expect(sheet!['A1'].v).toBe('SO#');
-    expect(sheet!['E1'].v).toBe('Amount (RM)');
-    expect(sheet!['A2'].v).toBe('SO-2990');
-    expect(typeof sheet!['E2'].v).toBe('number');
-    expect(sheet!['E2'].v).toBe(5980);
+    expect(sheet!['F1'].v).toBe('SO total (RM)');
+    expect(sheet!['A2'].v).toBe('SO-2606-001');
+    expect(typeof sheet!['F2'].v).toBe('number');
+    expect(sheet!['F2'].v).toBe(5980);
   });
 });
