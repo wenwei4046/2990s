@@ -889,9 +889,10 @@ mfgSalesOrders.get('/mine', async (c) => {
 });
 
 /* P1 (Owner 2026-06-03, migration 0143) — presign a short-lived GET URL for an
-   SO's payment slip so the Backend SO detail page can display the proof. Mirrors
-   the legacy /orders/:id/slip-url route. Auth is router-level (same as the SO
-   detail GET); RLS governs which SOs the caller can read. */
+   SO's payment slip so the Backend SO detail page can display the proof.
+   (Mirrored the legacy /orders/:id/slip-url route, removed 2026-06-12.) Auth is
+   router-level (same as the SO detail GET); RLS governs which SOs the caller
+   can read. */
 function mimeFromKey(key: string): SlipMime {
   const ext = key.split('.').pop()?.toLowerCase();
   switch (ext) {
@@ -1611,7 +1612,7 @@ mfgSalesOrders.post('/', async (c) => {
      client's choice (defaults false → cascade-tracked). */
   const headerDeliveryDate = (body.customerDeliveryDate as string | null | undefined) ?? null;
   /* MFG-PRICING-ENGINE — Server-side recompute (Commander 2026-05-27
-     non-negotiable, mirrors `POST /orders` for POS). Load the master
+     non-negotiable; the honest-pricing red line). Load the master
      maintenance config once, then for each line item recompute the
      unit price from (product, fabric, variants). Drift > 0.5% rejects
      the request with HTTP 400. Manual override path (mfgSoPriceOverrides)

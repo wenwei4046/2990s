@@ -50,7 +50,6 @@ import {
 import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
 import { PaymentsTable } from '../components/PaymentsTable';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
-import { SlipSection } from '../components/SlipSection';
 import { fetchSoSlipUrl } from '../lib/slip';
 import {
   useLocalities,

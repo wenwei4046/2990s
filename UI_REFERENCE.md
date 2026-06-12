@@ -80,7 +80,7 @@ The flows are not redesignable without permission. Every step in the prototype m
 - Sofa "closed" detection: `analyzeSofa` in `pos-sofa-config.jsx`. Don't reimplement.
 - Bundle auto-detection: `detectBundle` in same file. When a custom build's signature matches a Quick Pick (e.g. `1A+2A` = 3-Seater), price by bundle if cheaper.
 - Recliner upgrade: per-seat, only on 1A/2A/1NA/2NA modules. Toggle adds RM 990 (default; configurable per Model).
-- Cart line-item shape: see `order-bridge.jsx` `buildBackendOrder()`. The production API contract for `POST /orders` mirrors this exactly.
+- Cart line-item shape: see `order-bridge.jsx` `buildBackendOrder()`. (Historical: the retail `POST /orders` contract mirrored this exactly; the live order create is `POST /mfg-sales-orders`, which carries the same cart-line concepts.)
 
 ### 4. Copy fidelity
 
@@ -161,7 +161,7 @@ The sofa configurator is the most complex UI in the prototype. It deserves a ded
 
 When porting this to React + Vite + RR7:
 - Keep `pos-sofa-config.jsx` as the authoritative reference. Treat it as design doc, not legacy code to refactor.
-- Lift the pure functions (`detectBundle`, `analyzeSofa`, `groupSofas`, `findSnap`, `hasArmConflict`, `quickPresetDims`) into `packages/shared/src/sofa-build.ts` so both POS client and API can use them (the API needs `analyzeSofa` to reject unclosed sofas in `POST /orders`).
+- Lift the pure functions (`detectBundle`, `analyzeSofa`, `groupSofas`, `findSnap`, `hasArmConflict`, `quickPresetDims`) into `packages/shared/src/sofa-build.ts` so both POS client and API can use them (the API needs `analyzeSofa` to reject unclosed sofas at order create — today `POST /mfg-sales-orders`).
 - The drag-drop system uses raw pointer events with refs. **Don't substitute react-dnd** — the snap math is in absolute coordinates and any abstraction will fight it.
 
 ---

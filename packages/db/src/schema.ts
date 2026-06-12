@@ -89,8 +89,8 @@ export const orderItemKind = pgEnum('order_item_kind', [
 // 'pending' / 'uploaded' rows past expires_at; 'promoted' rows are safe.
 export const slipUploadStatus = pgEnum('slip_upload_status', [
   'pending',    // presigned PUT issued; client has not confirmed upload
-  'uploaded',   // client confirmed; awaiting POST /orders to promote
-  'promoted',   // POST /orders succeeded; row is safe to delete after grace window
+  'uploaded',   // client confirmed; awaiting the order create (POST /mfg-sales-orders) to promote
+  'promoted',   // order create succeeded; row is safe to delete after grace window
   'failed',     // client abandoned or hash mismatch; reaper deletes R2 object too
 ]);
 
@@ -776,8 +776,8 @@ export const orderSlipEvents = pgTable('order_slip_events', {
 
 /* ─────────────────────────── Pending slip uploads (orphan reaper) ───── */
 // §11.1 Issue 3 + Codex P1.6: presigned PUT issues a row here BEFORE the
-// client uploads. POST /orders promotes the row (status='promoted') in the
-// same transaction. Cron Worker (every 10 min) leases unpromoted rows past
+// client uploads. The order create (POST /mfg-sales-orders) promotes the row
+// (status='promoted'). Cron Worker (every 10 min) leases unpromoted rows past
 // expires_at — claimedBy + leaseExpiresAt prevent two reapers racing —
 // and deletes the R2 object atomically.
 //
