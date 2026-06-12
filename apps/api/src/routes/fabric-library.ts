@@ -9,7 +9,9 @@ export const fabricLibrary = new Hono<{ Bindings: Env; Variables: Variables }>()
 
 fabricLibrary.use('*', supabaseAuth);
 
-const WRITE_ROLES = new Set(['admin', 'coordinator', 'master_account']);
+// super_admin added 2026-06-12 — the role (mig 0162) postdates this route (0124);
+// without it Loo's tier clicks 403'd while the POS UI showed the buttons enabled.
+const WRITE_ROLES = new Set(['admin', 'super_admin', 'coordinator', 'master_account']);
 const VALID_TIER_FIELDS = new Set(['sofaTier', 'bedframeTier']);
 const VALID_TIERS = new Set(['PRICE_1', 'PRICE_2', 'PRICE_3']);
 const TIER_FIELD_TO_COL: Record<string, string> = { sofaTier: 'sofa_tier', bedframeTier: 'bedframe_tier' };
@@ -30,12 +32,15 @@ fabricLibrary.patch('/:id/tier', async (c) => {
   if (!body.tier  || !VALID_TIERS.has(body.tier))        return c.json({ error: 'invalid_tier',  allowed: [...VALID_TIERS] }, 400);
 
   const col = TIER_FIELD_TO_COL[body.field]!;
-  const { error } = await supabase.from('fabric_library').update({ [col]: body.tier }).eq('id', id);
+  // .select() so an RLS USING-filter (0 rows touched) surfaces as an error
+  // instead of a phantom ok:true.
+  const { data: updated, error } = await supabase.from('fabric_library').update({ [col]: body.tier }).eq('id', id).select('id');
   if (error) {
     if (error.code === '42501' || /permission denied/i.test(error.message)) {
       return c.json({ error: 'forbidden', reason: error.message }, 403);
     }
     return c.json({ error: 'update_failed', reason: error.message }, 500);
   }
+  if (!updated || updated.length === 0) return c.json({ error: 'update_failed', reason: 'not_found_or_rls_blocked' }, 404);
   return c.json({ ok: true });
 });
