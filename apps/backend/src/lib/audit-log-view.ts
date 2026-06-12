@@ -1,3 +1,4 @@
+import { PAYMENT_METHOD_DEFAULT_LABELS } from '@2990s/shared/payment-methods';
 import type { AuditLogRow } from './audit-log-queries';
 
 export type QuickRange = 'today' | 'yesterday' | 'last7' | 'last30' | 'last90';
@@ -42,17 +43,15 @@ export function amountBadge(paid: number, total: number): AmountBadge {
 export function matchesSearch(row: AuditLogRow, q: string): boolean {
   const needle = q.trim().toLowerCase();
   if (!needle) return true;
-  return row.id.toLowerCase().includes(needle)
+  return row.docNo.toLowerCase().includes(needle)
     || row.customerName.toLowerCase().includes(needle)
     || (row.approvalCode?.toLowerCase().includes(needle) ?? false);
 }
 
-const METHOD_LABELS: Record<string, string> = {
-  credit: 'Credit card', debit: 'Debit card',
-  installment: 'Installment', transfer: 'Bank transfer', merchant: 'Merchant', cash: 'Cash',
-};
+// Labels come from the shared payment-method vocabulary (PR #501 — the
+// maintenance table is the live label source; these are its seed mirrors).
 export function methodLabel(method: string): string {
-  return METHOD_LABELS[method] ?? method;
+  return (PAYMENT_METHOD_DEFAULT_LABELS as Record<string, string>)[method] ?? method;
 }
 
 export function methodDetail(row: AuditLogRow): string | null {

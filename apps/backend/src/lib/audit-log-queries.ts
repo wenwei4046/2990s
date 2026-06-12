@@ -13,22 +13,34 @@ export interface AuditLogFilters {
   amountMax?: number;
 }
 
+/** One row per mfg_sales_order_payments entry (repointed 2026-06-12 from the
+ *  dead legacy `orders` table). Money fields are RM (server divides centi). */
 export interface AuditLogRow {
+  /** Payment uuid — the unique row key (NOT the SO number). */
   id: string;
+  /** SO number, e.g. 'SO-2606-001' — what the grid's SO# column shows. */
+  docNo: string;
+  /** When the payment was keyed in (created_at, timestamptz). */
   placedAt: string;
+  /** Finance date the money landed (paid_at, YYYY-MM-DD). */
+  paidAt: string;
   customerName: string;
   customerPhone: string | null;
+  /** SO grand total (local_total_centi ÷ 100). */
   total: number;
+  /** THIS payment's amount (amount_centi ÷ 100). */
   paid: number;
+  isDeposit: boolean;
   paymentMethod: string;
   installmentMonths: number | null;
   merchantProvider: string | null;
   approvalCode: string | null;
   slipKey: string | null;
   slipUploaded: boolean;
-  showroomId: string;
+  venueName: string | null;
   salespersonId: string | null;
-  staffId: string;
+  /** Who recorded the payment (created_by). */
+  staffId: string | null;
 }
 
 interface AuditLogResponse {

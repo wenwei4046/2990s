@@ -1,10 +1,13 @@
 export interface AuditExportRow {
-  id: string;
+  docNo: string;
   placedAt: string;
-  showroomName: string;
+  /** Finance date the money landed (paid_at, YYYY-MM-DD). */
+  paidAt: string;
+  venueName: string;
   customerName: string;
   total: number;
   paid: number;
+  isDeposit: boolean;
   paymentMethod: string;
   merchantProvider: string | null;
   installmentMonths: number | null;
@@ -15,8 +18,8 @@ export interface AuditExportRow {
 }
 
 const HEADERS = [
-  'SO#', 'Date', 'Showroom', 'Customer',
-  'Amount (RM)', 'Paid (RM)', 'Method', 'Merchant', 'Installment (months)',
+  'SO#', 'Keyed at', 'Paid date', 'Venue', 'Customer',
+  'SO total (RM)', 'Paid (RM)', 'Deposit', 'Method', 'Merchant', 'Installment (months)',
   'Approval code', 'Salesperson', 'Keyed by', 'Slip uploaded',
 ] as const;
 
@@ -42,12 +45,14 @@ export function exportCsv(rows: AuditExportRow[]): string {
   const lines: string[] = [HEADERS.join(',')];
   for (const r of rows) {
     lines.push([
-      csvEscape(r.id),
+      csvEscape(r.docNo),
       csvEscape(fmtDate(r.placedAt)),
-      csvEscape(r.showroomName),
+      csvEscape(r.paidAt),
+      csvEscape(r.venueName),
       csvEscape(r.customerName),
       csvEscape(r.total),
       csvEscape(r.paid),
+      csvEscape(r.isDeposit ? 'Yes' : 'No'),
       csvEscape(r.paymentMethod),
       csvEscape(r.merchantProvider ?? ''),
       csvEscape(r.installmentMonths ?? ''),
@@ -66,8 +71,9 @@ export async function exportXlsx(rows: AuditExportRow[]): Promise<Uint8Array> {
   const data: (string | number)[][] = [HEADERS.slice()];
   for (const r of rows) {
     data.push([
-      r.id, fmtDate(r.placedAt), r.showroomName, r.customerName,
-      r.total, r.paid, r.paymentMethod, r.merchantProvider ?? '', r.installmentMonths ?? '',
+      r.docNo, fmtDate(r.placedAt), r.paidAt, r.venueName, r.customerName,
+      r.total, r.paid, r.isDeposit ? 'Yes' : 'No',
+      r.paymentMethod, r.merchantProvider ?? '', r.installmentMonths ?? '',
       r.approvalCode ?? '', r.salespersonName, r.keyedByName,
       r.slipUploaded ? 'Yes' : 'No',
     ]);
@@ -82,8 +88,8 @@ export async function exportXlsx(rows: AuditExportRow[]): Promise<Uint8Array> {
   };
   const ws = XLSX.utils.aoa_to_sheet(data) as ReturnType<typeof XLSX.utils.aoa_to_sheet> & WsMeta;
   ws['!cols'] = [
-    { wch: 10 }, { wch: 18 }, { wch: 14 }, { wch: 22 },
-    { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 18 },
+    { wch: 14 }, { wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 22 },
+    { wch: 13 }, { wch: 12 }, { wch: 9 }, { wch: 12 }, { wch: 10 }, { wch: 18 },
     { wch: 16 }, { wch: 18 }, { wch: 18 }, { wch: 14 },
   ];
   ws['!freeze'] = { xSplit: 0, ySplit: 1 };

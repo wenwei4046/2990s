@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Hono } from 'hono';
 import type { Env, Variables } from '../env';
 
@@ -17,20 +17,28 @@ const baseEnv = {
   ALLOWED_ORIGINS: '*',
 } as unknown as Env;
 
+/** Shape of a mocked mfg_sales_order_payments row WITH the embedded SO. */
 type FakeRow = {
   id: string;
-  placed_at: string;
-  customer_name: string;
-  customer_phone: string | null;
-  total: number;
-  paid: number;
-  payment_method: string;
+  so_doc_no: string;
+  paid_at: string;
+  created_at: string;
+  method: string;
+  merchant_provider: string | null;
   installment_months: number | null;
   approval_code: string | null;
+  amount_centi: number;
   slip_key: string | null;
-  showroom_id: string;
-  salesperson_id: string | null;
-  staff_id: string;
+  is_deposit: boolean;
+  created_by: string | null;
+  so: {
+    debtor_name: string;
+    phone: string | null;
+    salesperson_id: string | null;
+    local_total_centi: number;
+    slip_key: string | null;
+    venue: { name: string } | null;
+  } | null;
 };
 
 function buildApp(callerRole: string | null, rows: FakeRow[] = []) {
@@ -48,10 +56,11 @@ function buildApp(callerRole: string | null, rows: FakeRow[] = []) {
           }),
         };
       }
-      if (table === 'orders') {
+      if (table === 'mfg_sales_order_payments') {
         const builder: any = {
           select: () => builder,
           gte: () => builder,
+          lte: () => builder,
           lt:  () => builder,
           in:  () => builder,
           eq:  () => builder,
@@ -77,6 +86,30 @@ function buildApp(callerRole: string | null, rows: FakeRow[] = []) {
   return app;
 }
 
+const paymentRow = (over: Partial<FakeRow> = {}): FakeRow => ({
+  id: 'b1f5d0aa-0000-0000-0000-000000000001',
+  so_doc_no: 'SO-2606-001',
+  paid_at: '2026-06-11',
+  created_at: '2026-06-11T10:14:00Z',
+  method: 'transfer',
+  merchant_provider: null,
+  installment_months: null,
+  approval_code: 'BNK-784512',
+  amount_centi: 299_000,
+  slip_key: 'slips/SO-2606-001/abc.jpg',
+  is_deposit: true,
+  created_by: 'staff-1',
+  so: {
+    debtor_name: 'Tan Wei Ming',
+    phone: '+60 12 345 6789',
+    salesperson_id: 'sp-1',
+    local_total_centi: 598_000,
+    slip_key: null,
+    venue: { name: 'Showroom KL' },
+  },
+  ...over,
+});
+
 describe('GET /admin/audit-log', () => {
   it('returns 403 for sales role', async () => {
     const app = buildApp('sales');
@@ -98,38 +131,46 @@ describe('GET /admin/audit-log', () => {
     expect(body).toMatchObject({ rows: [], count: 0 });
   });
 
-  it('returns 200 for finance and admin roles', async () => {
-    for (const role of ['finance', 'admin']) {
+  it('returns 200 for finance, admin AND super_admin roles', async () => {
+    for (const role of ['finance', 'admin', 'super_admin']) {
       const app = buildApp(role, []);
       const res = await app.request('/admin/audit-log', {}, baseEnv);
       expect(res.status).toBe(200);
     }
   });
 
-  it('maps DB rows to the audit-log shape', async () => {
-    const app = buildApp('coordinator', [{
-      id: 'SO-2990',
-      placed_at: '2026-05-22T10:14:00Z',
-      customer_name: 'Tan Wei Ming',
-      customer_phone: null,
-      total: 5980,
-      paid: 5980,
-      payment_method: 'transfer',
-      installment_months: null,
-      approval_code: 'BNK-784512',
-      slip_key: 'slips/SO-2990/abc.jpg',
-      showroom_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-      salesperson_id: 'sp-1',
-      staff_id: 'staff-1',
-    }]);
+  it('maps a payments-ledger row (joined SO) to the audit-log shape, centi → RM', async () => {
+    const app = buildApp('coordinator', [paymentRow()]);
     const res = await app.request('/admin/audit-log', {}, baseEnv);
     const body = await res.json() as any;
     expect(body.count).toBe(1);
     expect(body.rows[0]).toMatchObject({
-      id: 'SO-2990',
+      id: 'b1f5d0aa-0000-0000-0000-000000000001',
+      docNo: 'SO-2606-001',
+      placedAt: '2026-06-11T10:14:00Z',
+      paidAt: '2026-06-11',
+      customerName: 'Tan Wei Ming',
       total: 5980,
+      paid: 2990,
+      isDeposit: true,
       paymentMethod: 'transfer',
       approvalCode: 'BNK-784512',
+      slipUploaded: true,
+      venueName: 'Showroom KL',
+      salespersonId: 'sp-1',
+      staffId: 'staff-1',
+    });
+  });
+
+  it('falls back to the SO-level slip_key for pre-0159 rows', async () => {
+    const app = buildApp('coordinator', [paymentRow({
+      slip_key: null,
+      so: { ...paymentRow().so!, slip_key: 'slips/SO-2606-001/header.jpg' },
+    })]);
+    const res = await app.request('/admin/audit-log', {}, baseEnv);
+    const body = await res.json() as any;
+    expect(body.rows[0]).toMatchObject({
+      slipKey: 'slips/SO-2606-001/header.jpg',
       slipUploaded: true,
     });
   });
@@ -140,20 +181,24 @@ describe('GET /admin/audit-log', () => {
     expect(res.status).toBe(400);
   });
 
-  it('returns paid, customerPhone, installmentMonths', async () => {
-    const app = buildApp('coordinator', [{
-      id: 'SO-2991', placed_at: '2026-05-21T15:01:00Z',
-      customer_name: 'Hafiz Rahman', customer_phone: '+60 11 998 7766',
-      total: 6819, paid: 4466,
-      payment_method: 'installment', installment_months: 12,
-      approval_code: 'CONTRACT-1', slip_key: null,
-      showroom_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-      salesperson_id: 'sp-1', staff_id: 'staff-1',
-    }]);
+  it('rejects a legacy payment-method value', async () => {
+    const app = buildApp('coordinator');
+    const res = await app.request('/admin/audit-log?paymentMethod=credit', {}, baseEnv);
+    expect(res.status).toBe(400);
+  });
+
+  it('returns installment details and a missing venue as null', async () => {
+    const app = buildApp('coordinator', [paymentRow({
+      method: 'installment',
+      installment_months: 12,
+      amount_centi: 446_600,
+      is_deposit: false,
+      so: { ...paymentRow().so!, venue: null },
+    })]);
     const res = await app.request('/admin/audit-log', {}, baseEnv);
     const body = await res.json() as any;
     expect(body.rows[0]).toMatchObject({
-      paid: 4466, customerPhone: '+60 11 998 7766', installmentMonths: 12,
+      paid: 4466, installmentMonths: 12, isDeposit: false, venueName: null,
     });
   });
 });

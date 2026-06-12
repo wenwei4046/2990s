@@ -1,5 +1,11 @@
+// /admin/audit-log — Finance's payment audit trail. Repointed (2026-06-12)
+// from the dead legacy `orders` table to the LIVE payments ledger:
+// one row per mfg_sales_order_payments entry, joined to its SO header for
+// customer / salesperson / venue / order-total context. Money returns as RM
+// (centi ÷ 100); slip falls back to the SO-level slip_key for pre-0159 rows.
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { PAYMENT_METHOD_CODES } from '@2990s/shared/payment-methods';
 import type { Env, Variables } from '../env';
 import { supabaseAuth } from '../middleware/auth';
 
@@ -7,16 +13,16 @@ export const auditLog = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 auditLog.use('*', supabaseAuth);
 
-const ALLOWED_ROLES = new Set(['coordinator', 'finance', 'admin']);
-const PAYMENT_METHODS = ['credit', 'debit', 'installment', 'transfer', 'merchant', 'cash'] as const;
+// super_admin added with the repoint — the role (mig 0162) postdates this
+// route, and the owner was 403'ing on his own audit log.
+const ALLOWED_ROLES = new Set(['coordinator', 'finance', 'admin', 'super_admin']);
 
 const QuerySchema = z.object({
   from:           z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to:             z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   salespersonId:  z.union([z.string().uuid(), z.array(z.string().uuid())]).optional(),
   staffId:        z.union([z.string().uuid(), z.array(z.string().uuid())]).optional(),
-  paymentMethod:  z.union([z.enum(PAYMENT_METHODS), z.array(z.enum(PAYMENT_METHODS))]).optional(),
-  showroomId:     z.union([z.string().uuid(), z.array(z.string().uuid())]).optional(),
+  paymentMethod:  z.union([z.enum(PAYMENT_METHOD_CODES), z.array(z.enum(PAYMENT_METHOD_CODES))]).optional(),
   amountMin:      z.coerce.number().int().nonnegative().optional(),
   amountMax:      z.coerce.number().int().nonnegative().optional(),
   slipUploaded:   z.enum(['true', 'false']).optional(),
@@ -48,7 +54,7 @@ auditLog.get('/', async (c) => {
     const v = c.req.query(key);
     if (v !== undefined) flat[key] = v;
   }
-  for (const key of ['salespersonId', 'staffId', 'paymentMethod', 'showroomId']) {
+  for (const key of ['salespersonId', 'staffId', 'paymentMethod']) {
     const vs = c.req.queries(key);
     if (vs && vs.length > 0) flat[key] = vs.length === 1 ? (vs[0] as string) : vs;
   }
@@ -71,53 +77,65 @@ auditLog.get('/', async (c) => {
   }
 
   const supabase = c.get('supabase');
+  // !inner join: every payment row carries its SO header (FK NOT NULL), and
+  // it lets the salesperson filter apply on the embedded resource.
   let qb = supabase
-    .from('orders')
+    .from('mfg_sales_order_payments')
     .select(
-      'id, placed_at, customer_name, customer_phone, total, paid, payment_method, installment_months, merchant_provider, approval_code, slip_key, showroom_id, salesperson_id, staff_id',
+      'id, so_doc_no, paid_at, created_at, method, merchant_provider, installment_months, ' +
+      'approval_code, amount_centi, slip_key, is_deposit, created_by, ' +
+      'so:mfg_sales_orders!inner(debtor_name, phone, salesperson_id, local_total_centi, slip_key, venue:venues(name))',
     )
-    .gte('placed_at', fromIso);
+    .gte('created_at', fromIso);
 
-  if (toIso) qb = qb.lt('placed_at', toIso);
+  if (toIso) qb = qb.lt('created_at', toIso);
 
   const salespersonIds = toArray(q.salespersonId);
-  if (salespersonIds) qb = qb.in('salesperson_id', salespersonIds);
+  if (salespersonIds) qb = qb.in('so.salesperson_id', salespersonIds);
 
+  // "Keyed by" — who recorded the payment row.
   const staffIds = toArray(q.staffId);
-  if (staffIds) qb = qb.in('staff_id', staffIds);
+  if (staffIds) qb = qb.in('created_by', staffIds);
 
   const methods = toArray(q.paymentMethod);
-  if (methods) qb = qb.in('payment_method', methods);
+  if (methods) qb = qb.in('method', methods);
 
-  const showroomIds = toArray(q.showroomId);
-  if (showroomIds) qb = qb.in('showroom_id', showroomIds);
+  // Amount bounds are whole RM on the wire; the ledger stores centi.
+  if (q.amountMin !== undefined) qb = qb.gte('amount_centi', q.amountMin * 100);
+  if (q.amountMax !== undefined) qb = qb.lte('amount_centi', q.amountMax * 100);
 
-  if (q.amountMin !== undefined) qb = qb.gte('total', q.amountMin);
-  if (q.amountMax !== undefined) qb = qb.lte('total', q.amountMax);
-
+  // Per-payment slip only — the SO-level fallback can't be filtered cheaply.
   if (q.slipUploaded === 'true')  qb = qb.not('slip_key', 'is', null);
   if (q.slipUploaded === 'false') qb = qb.is('slip_key', null);
 
-  const { data, error } = await qb.order('placed_at', { ascending: false }).limit(1000);
+  const { data, error } = await qb.order('created_at', { ascending: false }).limit(1000);
   if (error) return c.json({ error: 'db_query_failed', detail: error.message }, 500);
 
-  const rows = (data ?? []).map((r: any) => ({
-    id: r.id,
-    placedAt: r.placed_at,
-    customerName: r.customer_name,
-    customerPhone: r.customer_phone,
-    total: r.total,
-    paid: r.paid,
-    paymentMethod: r.payment_method,
-    installmentMonths: r.installment_months,
-    merchantProvider: r.merchant_provider,
-    approvalCode: r.approval_code,
-    slipKey: r.slip_key,
-    slipUploaded: r.slip_key !== null,
-    showroomId: r.showroom_id,
-    salespersonId: r.salesperson_id,
-    staffId: r.staff_id,
-  }));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows = (data ?? []).map((r: any) => {
+    const so = r.so ?? {};
+    const slipKey = r.slip_key ?? so.slip_key ?? null;
+    return {
+      id: r.id,                       // payment uuid — unique row key
+      docNo: r.so_doc_no,             // SO# shown in the grid
+      placedAt: r.created_at,         // when the payment was keyed in
+      paidAt: r.paid_at,              // Finance date the money landed
+      customerName: so.debtor_name ?? '—',
+      customerPhone: so.phone ?? null,
+      total: (so.local_total_centi ?? 0) / 100,
+      paid: r.amount_centi / 100,
+      isDeposit: r.is_deposit === true,
+      paymentMethod: r.method,
+      installmentMonths: r.installment_months,
+      merchantProvider: r.merchant_provider,
+      approvalCode: r.approval_code,
+      slipKey,
+      slipUploaded: slipKey !== null,
+      venueName: so.venue?.name ?? null,
+      salespersonId: so.salesperson_id ?? null,
+      staffId: r.created_by ?? null,
+    };
+  });
 
   return c.json({ rows, count: rows.length });
 });

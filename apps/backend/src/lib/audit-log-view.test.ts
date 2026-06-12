@@ -8,11 +8,13 @@ import type { AuditLogRow } from './audit-log-queries';
 const FIXED = new Date('2026-05-23T08:00:00Z');
 
 const row = (over: Partial<AuditLogRow> = {}): AuditLogRow => ({
-  id: 'SO-2057', placedAt: '2026-05-21T15:01:00Z',
+  id: 'b1f5d0aa-0000-0000-0000-000000000001', docNo: 'SO-2057',
+  placedAt: '2026-05-21T15:01:00Z', paidAt: '2026-05-21',
   customerName: 'Hafiz Rahman', customerPhone: '+60 11 998 7766',
-  total: 6819, paid: 4466, paymentMethod: 'installment', installmentMonths: 12,
+  total: 6819, paid: 4466, isDeposit: false,
+  paymentMethod: 'installment', installmentMonths: 12,
   approvalCode: 'CONTRACT-1', merchantProvider: null, slipKey: null, slipUploaded: false,
-  showroomId: 'sh', salespersonId: 'sp', staffId: 'st', ...over,
+  venueName: 'Showroom KL', salespersonId: 'sp', staffId: 'st', ...over,
 });
 
 describe('rangeForPreset', () => {
@@ -62,15 +64,20 @@ describe('matchesSearch', () => {
     expect(matchesSearch(row(), 'contract-1')).toBe(true);
     expect(matchesSearch(row(), 'nope')).toBe(false);
   });
+  it('does NOT match on the payment uuid (SO# is the search key)', () => {
+    expect(matchesSearch(row(), 'b1f5d0aa')).toBe(false);
+  });
 });
 
 describe('methodLabel + methodDetail', () => {
-  it('labels each method', () => {
-    expect(methodLabel('credit')).toBe('Credit card');
-    expect(methodLabel('debit')).toBe('Debit card');
+  it('labels the four live method codes from the shared vocabulary', () => {
     expect(methodLabel('installment')).toBe('Installment');
-    expect(methodLabel('transfer')).toBe('Bank transfer');
+    expect(methodLabel('transfer')).toBe('Bank transfer / DuitNow');
     expect(methodLabel('merchant')).toBe('Merchant');
+    expect(methodLabel('cash')).toBe('Cash');
+  });
+  it('falls back to the raw code for an unknown method', () => {
+    expect(methodLabel('credit')).toBe('credit');
   });
   it('shows the term for installment and provider for merchant', () => {
     expect(methodDetail(row({ paymentMethod: 'installment', installmentMonths: 12 }))).toBe('12 months');
