@@ -555,15 +555,30 @@ type ModelRow = {
   name:        string;
   thicknessCm: string;  // MATTRESS only; ignored for other categories
   description: string;
-  // Per-model supplier (optional). Each row carries its own supplier so a bulk
-  // batch can map each Model to a different supplier in one pass.
+  // Per-model suppliers (optional). Each row carries its own supplier LIST so
+  // a bulk batch can map each Model to multiple suppliers (an SKU can have
+  // 2-3 suppliers, each with their own supplier code) in one pass.
+  suppliers: SupplierEntry[];
+};
+
+// One supplier binding config per model row — a model can carry several.
+type SupplierEntry = {
   supplierId:   string;
   supplierCode: string;
-  supUnitPrice: string;
-  supLeadDays:  string;
-  supMoq:       string;
-  supIsMain:    boolean;
+  unitPrice:    string;
+  leadDays:     string;
+  moq:          string;
+  isMain:       boolean;
 };
+
+const emptySupplierEntry = (): SupplierEntry => ({
+  supplierId:   '',
+  supplierCode: '',
+  unitPrice:    '',
+  leadDays:     '7',
+  moq:          '1',
+  isMain:       false,
+});
 
 const emptyRow = (): ModelRow => ({
   rid:         `r${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -572,12 +587,7 @@ const emptyRow = (): ModelRow => ({
   name:        '',
   thicknessCm: '',
   description: '',
-  supplierId:   '',
-  supplierCode: '',
-  supUnitPrice: '',
-  supLeadDays:  '7',
-  supMoq:       '1',
-  supIsMain:    false,
+  suppliers:   [emptySupplierEntry()],
 });
 
 export function NewModelDialog({
@@ -750,49 +760,54 @@ export function NewModelDialog({
           );
         }
 
-        // (A) Optional PER-MODEL supplier binding — each row carries its own
-        // supplier + code. `results` and `rows` share the same order/length, so
+        // (A) Optional PER-MODEL supplier bindings — each row carries its own
+        // supplier LIST (an SKU can have 2-3 suppliers, each with their own
+        // code). `results` and `rows` share the same order/length, so
         // results[i] pairs with rows[i] (the source row holding the supplier
-        // config). materialCode is the AUTHORITATIVE server-returned code; the
+        // configs). materialCode is the AUTHORITATIVE server-returned code; the
         // per-SKU supplier code reuses the proven composeSupplierSku (size-aware)
         // so we never write the bare model code to every SKU (the
         // duplicate-supplier-code bug from PR #206/#209). Best-effort: the SKUs
-        // are valid even if a binding call fails. Runs AFTER the phantom-cleanup
-        // throw, so it only executes when every model kept its SKUs.
+        // are valid even if a binding call fails. One bindingsBatchMut per
+        // (model, supplier) pair. Runs AFTER the phantom-cleanup throw, so it
+        // only executes when every model kept its SKUs.
         for (let i = 0; i < results.length; i++) {
           const r      = results[i];
           const srcRow = rows[i];
-          if (!r || !srcRow || !srcRow.supplierId || !srcRow.supplierCode.trim()) continue;
-          const baseCode   = srcRow.supplierCode.trim();
-          const priceCenti = Math.round((parseFloat(srcRow.supUnitPrice) || 0) * 100);
-          const lead       = parseInt(srcRow.supLeadDays, 10);
-          const moqN       = parseInt(srcRow.supMoq, 10);
-          const bindings: NewBinding[] = r.codes.map((code) => {
-            const sizeCode = (category === 'MATTRESS' || category === 'BEDFRAME')
-              ? (code.match(/\(([^)]+)\)\s*$/)?.[1] ?? null) : null;
-            const skuObj: Pick<MfgProductRow, 'code' | 'category' | 'size_code'> = { code, category, size_code: sizeCode };
-            return {
-              materialKind:   'mfg_product' as MaterialKind,
-              materialCode:   code,
-              materialName:   code,
-              supplierSku:    composeSupplierSku(baseCode, skuObj),
-              unitPriceCenti: priceCenti,
-              currency:       'MYR' as Currency,
-              leadTimeDays:   Number.isFinite(lead) ? lead : 7,
-              moq:            Number.isFinite(moqN) && moqN > 0 ? moqN : 1,
-              isMainSupplier: srcRow.supIsMain,
-            };
-          });
-          if (bindings.length === 0) continue;
-          try {
-            const res = await bindingsBatchMut.mutateAsync({ supplierId: srcRow.supplierId, bindings });
-            boundInserted += res.inserted;
-          } catch {
-            // eslint-disable-next-line no-alert
-            alert(
-              `The SKUs for ${r.model.model_code} were created, but linking them to the supplier didn't go through. ` +
-              `You can link them later from “Supplier codes by Model”.`,
-            );
+          if (!r || !srcRow) continue;
+          for (const sup of srcRow.suppliers) {
+            if (!sup.supplierId || !sup.supplierCode.trim()) continue;
+            const baseCode   = sup.supplierCode.trim();
+            const priceCenti = Math.round((parseFloat(sup.unitPrice) || 0) * 100);
+            const lead       = parseInt(sup.leadDays, 10);
+            const moqN       = parseInt(sup.moq, 10);
+            const bindings: NewBinding[] = r.codes.map((code) => {
+              const sizeCode = (category === 'MATTRESS' || category === 'BEDFRAME')
+                ? (code.match(/\(([^)]+)\)\s*$/)?.[1] ?? null) : null;
+              const skuObj: Pick<MfgProductRow, 'code' | 'category' | 'size_code'> = { code, category, size_code: sizeCode };
+              return {
+                materialKind:   'mfg_product' as MaterialKind,
+                materialCode:   code,
+                materialName:   code,
+                supplierSku:    composeSupplierSku(baseCode, skuObj),
+                unitPriceCenti: priceCenti,
+                currency:       'MYR' as Currency,
+                leadTimeDays:   Number.isFinite(lead) ? lead : 7,
+                moq:            Number.isFinite(moqN) && moqN > 0 ? moqN : 1,
+                isMainSupplier: sup.isMain,
+              };
+            });
+            if (bindings.length === 0) continue;
+            try {
+              const res = await bindingsBatchMut.mutateAsync({ supplierId: sup.supplierId, bindings });
+              boundInserted += res.inserted;
+            } catch {
+              // eslint-disable-next-line no-alert
+              alert(
+                `The SKUs for ${r.model.model_code} were created, but linking them to one of the suppliers didn't go through. ` +
+                `You can link them later from “Supplier codes by Model”.`,
+              );
+            }
           }
         }
       }
@@ -1088,48 +1103,90 @@ function ModelRowCard({
         )}
       </div>
 
-      {/* (A) Per-model supplier (optional) — each row maps to its own supplier;
-          every SKU this row generates is bound to it with a code auto-suffixed
-          per size/variant. Shown for every category (None = no binding). */}
+      {/* (A) Per-model suppliers (optional) — each row maps to its own list of
+          suppliers (an SKU can have 2-3, each with their own supplier code);
+          every SKU this row generates is bound to each filled entry with a
+          code auto-suffixed per size/variant. Only one entry can be Main.
+          Shown for every category (None = no binding). */}
       <div style={{ borderTop: '1px solid var(--line)', marginTop: 8, paddingTop: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
-          <label className={styles.compactField} style={{ minWidth: 220 }}>
-            <span>Supplier (optional)</span>
-            <select value={row.supplierId} onChange={(e) => onChange({ supplierId: e.target.value })}>
-              <option value="">— None —</option>
-              {suppliers.map((s) => (
-                <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
-              ))}
-            </select>
-          </label>
-          {row.supplierId && (
-            <>
-              <label className={styles.compactField} style={{ minWidth: 150 }}>
-                <span>Supplier code</span>
-                <input type="text" value={row.supplierCode} onChange={(e) => onChange({ supplierCode: e.target.value })} placeholder="e.g. 9055" />
+        {row.suppliers.map((sup, si) => {
+          const patchSup = (patch: Partial<SupplierEntry>) => {
+            onChange({
+              suppliers: row.suppliers.map((s, j) => {
+                if (j === si) return { ...s, ...patch };
+                // Only one Main per model — ticking this entry unticks the rest.
+                return patch.isMain ? { ...s, isMain: false } : s;
+              }),
+            });
+          };
+          return (
+            <div key={si} style={{ display: 'flex', alignItems: 'flex-end', gap: 'var(--space-3)', flexWrap: 'wrap', marginTop: si > 0 ? 6 : 0 }}>
+              <label className={styles.compactField} style={{ minWidth: 220 }}>
+                <span>{si === 0 ? 'Supplier (optional)' : `Supplier ${si + 1}`}</span>
+                <select value={sup.supplierId} onChange={(e) => patchSup({ supplierId: e.target.value })}>
+                  <option value="">— None —</option>
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
+                  ))}
+                </select>
               </label>
-              <label className={styles.compactField} style={{ width: 120 }}>
-                <span>Unit price (RM)</span>
-                <input type="number" inputMode="decimal" min={0} step="0.01" value={row.supUnitPrice} onChange={(e) => onChange({ supUnitPrice: e.target.value })} placeholder="0.00" />
-              </label>
-              <label className={styles.compactField} style={{ width: 90 }}>
-                <span>Lead (days)</span>
-                <input type="number" inputMode="numeric" min={0} value={row.supLeadDays} onChange={(e) => onChange({ supLeadDays: e.target.value })} placeholder="7" />
-              </label>
-              <label className={styles.compactField} style={{ width: 80 }}>
-                <span>MOQ</span>
-                <input type="number" inputMode="numeric" min={1} value={row.supMoq} onChange={(e) => onChange({ supMoq: e.target.value })} placeholder="1" />
-              </label>
-              <label className={styles.compactField} style={{ width: 70 }}>
-                <span>Main</span>
-                <input type="checkbox" checked={row.supIsMain} onChange={(e) => onChange({ supIsMain: e.target.checked })} style={{ width: 16, height: 16 }} />
-              </label>
-            </>
-          )}
-        </div>
-        {row.supplierId && row.supplierCode.trim() && (
+              {sup.supplierId && (
+                <>
+                  <label className={styles.compactField} style={{ minWidth: 150 }}>
+                    <span>Supplier code</span>
+                    <input type="text" value={sup.supplierCode} onChange={(e) => patchSup({ supplierCode: e.target.value })} placeholder="e.g. 9055" />
+                  </label>
+                  <label className={styles.compactField} style={{ width: 120 }}>
+                    <span>Unit price (RM)</span>
+                    <input type="number" inputMode="decimal" min={0} step="0.01" value={sup.unitPrice} onChange={(e) => patchSup({ unitPrice: e.target.value })} placeholder="0.00" />
+                  </label>
+                  <label className={styles.compactField} style={{ width: 90 }}>
+                    <span>Lead (days)</span>
+                    <input type="number" inputMode="numeric" min={0} value={sup.leadDays} onChange={(e) => patchSup({ leadDays: e.target.value })} placeholder="7" />
+                  </label>
+                  <label className={styles.compactField} style={{ width: 80 }}>
+                    <span>MOQ</span>
+                    <input type="number" inputMode="numeric" min={1} value={sup.moq} onChange={(e) => patchSup({ moq: e.target.value })} placeholder="1" />
+                  </label>
+                  <label className={styles.compactField} style={{ width: 70 }}>
+                    <span>Main</span>
+                    <input type="checkbox" checked={sup.isMain} onChange={(e) => patchSup({ isMain: e.target.checked })} style={{ width: 16, height: 16 }} />
+                  </label>
+                </>
+              )}
+              {row.suppliers.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => onChange({ suppliers: row.suppliers.filter((_, j) => j !== si) })}
+                  title="Remove this supplier"
+                  className={styles.compactRowClose}
+                  style={{ alignSelf: 'center' }}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => onChange({ suppliers: [...row.suppliers, emptySupplierEntry()] })}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            marginTop: 6, padding: 0, border: 'none', background: 'transparent',
+            color: 'var(--c-orange)', fontFamily: 'var(--font-sans)',
+            fontSize: 'var(--fs-12)', fontWeight: 600, cursor: 'pointer',
+          }}
+        >
+          + Add supplier
+        </button>
+        {row.suppliers.some((s) => s.supplierId && s.supplierCode.trim()) && (
           <div style={{ fontSize: 'var(--fs-10)', color: 'var(--fg-muted)', marginTop: 4 }}>
-            Every generated SKU for this model will be bound to this supplier with code “{row.supplierCode.trim()}” (auto-suffixed per size/variant).
+            Every generated SKU for this model will be bound to {
+              row.suppliers.filter((s) => s.supplierId && s.supplierCode.trim()).length === 1
+                ? `this supplier with code “${row.suppliers.find((s) => s.supplierId && s.supplierCode.trim())!.supplierCode.trim()}”`
+                : `each filled supplier with its own code (${row.suppliers.filter((s) => s.supplierId && s.supplierCode.trim()).map((s) => `“${s.supplierCode.trim()}”`).join(', ')})`
+            } (auto-suffixed per size/variant).
           </div>
         )}
       </div>
