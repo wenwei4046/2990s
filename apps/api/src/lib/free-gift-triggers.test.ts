@@ -154,19 +154,17 @@ describe('buildFreeGiftTriggers', () => {
     expect(triggers).toHaveLength(0);
   });
 
-  // 6b. BUG DOCUMENTATION: the guard `(!line.baseModel || x.combo.baseModel === line.baseModel)`
-  // means a null-baseModel (wildcard) combo is NEVER matched when line.baseModel is truthy.
-  // The intent (per the module comment "a combo with a null base_model") was for null to be a
-  // wildcard, but the condition evaluates `null === 'ANNSA'` → false, so the match is skipped.
-  // This test documents the current (broken) behaviour. Fix: add `|| x.combo.baseModel === null`.
-  it('BUG: fails to match a null-baseModel (wildcard) combo when sofa line has a base_model', () => {
+  // 6b. Wildcard is LINE-side only: mfg_products.base_model is nullable, so a
+  // sofa line whose product has no base_model matches any same-shape gifting
+  // combo (the `!line.baseModel` branch). (sofa_combo_pricing.base_model is
+  // NOT NULL — a combo never carries the wildcard, so only the line side can.)
+  it('wildcard-matches a combo when the sofa line has no base_model', () => {
     const triggers = buildFreeGiftTriggers(
-      [sofaLine({ baseModel: 'ANNSA' })],
-      [matchingCombo({ baseModel: null })],
+      [sofaLine({ baseModel: null })],
+      [matchingCombo({ baseModel: 'ANNSA' })],
     );
-    // Currently returns 0 — the null-baseModel wildcard is not applied.
-    // When the bug is fixed this should become 1.
-    expect(triggers).toHaveLength(0);
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0]!.triggerKind).toBe('combo');
   });
 
   // 7. Combos with empty defaultFreeGifts are pruned → no trigger
