@@ -1208,6 +1208,21 @@ const OrderDetail = ({ order, onClose }: {
     return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
   }, []);
 
+  /* Un-proceed gate (Loo 2026-06-13) — a proceeded SO can be pulled back to the
+     editable "Order placed" lane so its details can be fixed, then re-proceeded.
+     Allowed only while the processing date hasn't passed — mirrors the server's
+     soProcessingLocked (procYmd < todayMY → locked; empty / today / future stay
+     open), so the button hides in the normal case where a PATCH would 409
+     so_locked_processing. The server stays authoritative (it also honours the
+     legacy processing_date fallback) and 409s — surfaced inline — if ever beaten.
+     Only the SALES "Proceed" marker is reversible: orders the coordinator has
+     pushed into a real production status (IN_PRODUCTION / READY_TO_SHIP /
+     SHIPPED) keep the lock. */
+  const processingPassed =
+    !!order.processingDate && order.processingDate.slice(0, 10) < todayMY;
+  const canUnproceed =
+    order.status === 'CONFIRMED' && !!order.proceededAt && !processingPassed;
+
   // Cascading dropdowns (state → city → postcode) sourced from my_localities.
   const localities = useLocalities();
   const states = useMemo(() => {
@@ -1424,12 +1439,34 @@ const OrderDetail = ({ order, onClose }: {
     },
   });
 
+  /* Un-proceed (Loo 2026-06-13) — clear proceeded_at so a proceeded SO drops
+     back to the editable "Order placed" lane. Send ONLY { proceededAt: null }
+     (a minimal body skips the unrelated phone / dropdown / variant guards). We
+     deliberately do NOT onClose: the board refetches, the open drawer re-syncs
+     the active order, `editable` flips true, and this same drawer re-renders
+     with the editable form + Save / Move to Proceed — so the salesperson edits
+     in place and re-proceeds (the 3-step move-back → edit → proceed flow). The
+     server allows the explicit null clear (the stamp-once guard still refuses a
+     non-null re-stamp) and 409s if the processing date has already passed. */
+  const unproceedMutation = useMutation({
+    mutationFn: async () => {
+      await authedFetch(`/mfg-sales-orders/${order.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ proceededAt: null }),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['my-orders'] });
+    },
+  });
+
   const onSave = () => saveMutation.mutate();
   const onRecordPayment = () => { if (additionalPaid > 0 && paySlipSession !== null) paymentMutation.mutate(); };
   const onProceed = () => {
     if (!allOk) return;
     proceedMutation.mutate();
   };
+  const onUnproceed = () => unproceedMutation.mutate();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -1855,7 +1892,34 @@ const OrderDetail = ({ order, onClose }: {
               </div>
             </>
           )}
-          {!editable && (
+          {/* Un-proceed (Loo 2026-06-13) — a proceeded SO is locked for the
+              coordinator, but the salesperson can pull it back to "Order placed"
+              to fix details, as long as the processing date hasn't passed. After
+              this the drawer flips editable (Save / Move to Proceed reappear). */}
+          {!editable && canUnproceed && (
+            <>
+              {unproceedMutation.error && (
+                <p className={styles.detailFootError}>
+                  Couldn’t move back: {describeSoActionError(unproceedMutation.error)}
+                </p>
+              )}
+              <div className={styles.detailCta}>
+                <span className={styles.detailCtaHint}>
+                  Move back to edit · only before the processing date
+                </span>
+                <button
+                  type="button"
+                  className={styles.detailSaveBtn}
+                  onClick={onUnproceed}
+                  disabled={unproceedMutation.isPending}
+                >
+                  <ArrowLeft size={14} strokeWidth={1.75} />
+                  {unproceedMutation.isPending ? 'Moving…' : 'Move to Order placed'}
+                </button>
+              </div>
+            </>
+          )}
+          {!editable && !canUnproceed && (
             <span className={styles.detailFootInfo}>
               {LANES[2]?.matches.includes(order.status)
                 ? 'Delivered · managed in backend'

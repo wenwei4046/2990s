@@ -1131,6 +1131,17 @@
   justify-content: flex-end;
   margin-top: 4px;
 }
+/* In-row instruction beside a CTA (e.g. the un-proceed button) — muted but NOT
+   italic, so it reads as an instruction tied to the button rather than a
+   standalone status aside (that's what .detailFootInfo is for). marginRight:auto
+   pushes the button to the right edge. */
+.detailCtaHint {
+  margin-right: auto;
+  align-self: center;
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+}
 .detailSaveBtn,
 .detailProceedBtn {
   display: inline-flex;
