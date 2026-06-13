@@ -165,6 +165,17 @@ export type MaintenanceConfig = {
   bedframeSizes?:    MaintPoolEntry[];   // ['K','Q','S','SS','SK','SP'] — bedframe size codes
   sofaCompartments?: MaintPoolEntry[];   // ['1A(LHF)','1A(RHF)','1NA',...] — sofa compartment codes
   mattressSizes?:    MaintPoolEntry[];   // ['K','Q','S','SS']
+  // BRANDING pool — simple value list (no prices). Mirror of the Backend
+  // MaintenanceConfig field: POS reads the same /maintenance-config blob, so
+  // surfacing it here keeps the POS Maintenance tab's Products Maintenance group
+  // in parity with Backend (and an admin edit on either side stays in sync).
+  // Optional on the wire; absent/empty = empty pool.
+  brandings?:        MaintPoolEntry[];   // ['HILTON','SEALY','2990S',...]
+  // SUPPLY CATEGORY pool (owner spec 2026-06-12) — simple value list. Mirror of
+  // the Backend field; on Backend it feeds the Suppliers list filter chips + the
+  // supplier form's Supply Category toggles. POS has no Suppliers page, but
+  // surfaces the pool for view/edit parity. Optional; absent/empty = empty pool.
+  supplierCategories?: MaintPoolEntry[]; // ['Sofa','Bedframe','Mattress',...]
   // PR #220 (Commander 2026-05-27): per-compartment design metadata — POS
   // module designs (image + description + default price) brought into the
   // Maintenance UI for back-office reference. Keyed by compartment code,

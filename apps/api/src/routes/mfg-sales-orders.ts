@@ -3457,11 +3457,17 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     return c.json(SO_PROCESSING_LOCKED_RESPONSE, 409);
   }
 
-  /* proceeded_at is stamp-once (the POS "Proceed" marker). If the row already
-     has a value, drop any incoming proceeded_at so a later header edit / repeat
-     proceed never overwrites the original sales-side timestamp. */
-  if (updates['proceeded_at'] !== undefined && before
-      && (before as unknown as Record<string, unknown>)['proceeded_at']) {
+  /* proceeded_at is stamp-once for the FORWARD move (the POS "Proceed" marker):
+     once set, a later header edit / repeat proceed must NOT overwrite the
+     original sales-side timestamp, so a non-null re-stamp on an already-
+     proceeded row is dropped. An explicit `null`, though, is the POS
+     "Move to Order placed" un-proceed (Loo 2026-06-13) — it clears the marker
+     so the SO drops back to the editable Order-placed lane, so null passes
+     through. The processing-date lock above already 409s this once the
+     processing day has passed (a locked SO is what we PO to the supplier and
+     can't be pulled back). */
+  if (updates['proceeded_at'] !== undefined && updates['proceeded_at'] !== null
+      && before && (before as unknown as Record<string, unknown>)['proceeded_at']) {
     delete updates['proceeded_at'];
   }
 

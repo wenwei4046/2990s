@@ -65,6 +65,30 @@ export default defineConfig(({ command, mode }) => {
       }),
     ],
     envDir: '../../',
+    build: {
+      // Code-splitting (perf, 2026-06-13): without this the POS bundled into a
+      // single ~1.2 MB chunk. Route components are lazy() in router.tsx; this
+      // additionally carves the big node_modules vendors into their own chunks
+      // so they cache across deploys (app code churns far more often than React /
+      // Supabase / TanStack do) and download in parallel.
+      rollupOptions: {
+        output: {
+          manualChunks(id: string) {
+            if (!id.includes('node_modules')) return undefined;
+            if (
+              id.includes('/react-dom/') || id.includes('/react/') ||
+              id.includes('/scheduler/') || id.includes('/react-router/')
+            ) return 'react-vendor';
+            if (id.includes('/@supabase/')) return 'supabase';
+            if (id.includes('/@tanstack/')) return 'query';
+            if (id.includes('/lucide-react/')) return 'icons';
+            if (id.includes('/react-hook-form/')) return 'forms';
+            if (id.includes('/zod/')) return 'zod';
+            return 'vendor';
+          },
+        },
+      },
+    },
     server: { port: 6273, host: true, strictPort: false },
     preview: { port: 4273 },
   };

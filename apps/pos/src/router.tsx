@@ -1,31 +1,58 @@
+import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, Outlet, ScrollRestoration } from 'react-router';
 import { Login } from './pages/Login';
 import { SetPassword } from './pages/SetPassword';
-import { ChangePin } from './pages/ChangePin';
 import { Catalog } from './pages/Catalog';
-import { Configurator } from './pages/Configurator';
-import { Cart } from './pages/Cart';
-import { Handover } from './pages/Handover';
-import { HandoverConfirmed } from './pages/HandoverConfirmed';
-import { OrderStatus } from './pages/OrderStatus';
-import { Quotes } from './pages/Quotes';
-import { SalesOrderPrint } from './pages/SalesOrderPrint';
-import { Products } from './pages/Products';
-import { SalesOrderMaintenance } from './pages/SalesOrderMaintenance';
-import { NewOrder } from './pages/NewOrder';
 import { AuthGate } from './components/AuthGate';
 import { MaintainGate } from './components/MaintainGate';
+
+/* Code-splitting (perf, 2026-06-13) — the POS shipped as ONE ~1.2 MB JS chunk
+   because every page was imported eagerly here, so the Configurator (sofa snap
+   math), the ~2.8k-LOC Products editor, SO Maintenance, etc. all had to
+   download + parse before the catalogue (the landing route) could paint. Only
+   the auth entry (Login / SetPassword) and the catalogue stay eager; every
+   other route is lazy() and loads on demand behind the <Suspense> in
+   RootLayout. The PWA still precaches the split chunks in the background after
+   first paint, so navigation stays instant once installed. */
+const ChangePin = lazy(() => import('./pages/ChangePin').then((m) => ({ default: m.ChangePin })));
+const Configurator = lazy(() => import('./pages/Configurator').then((m) => ({ default: m.Configurator })));
+const Cart = lazy(() => import('./pages/Cart').then((m) => ({ default: m.Cart })));
+const Handover = lazy(() => import('./pages/Handover').then((m) => ({ default: m.Handover })));
+const HandoverConfirmed = lazy(() => import('./pages/HandoverConfirmed').then((m) => ({ default: m.HandoverConfirmed })));
+const OrderStatus = lazy(() => import('./pages/OrderStatus').then((m) => ({ default: m.OrderStatus })));
+const Quotes = lazy(() => import('./pages/Quotes').then((m) => ({ default: m.Quotes })));
+const SalesOrderPrint = lazy(() => import('./pages/SalesOrderPrint').then((m) => ({ default: m.SalesOrderPrint })));
+const Products = lazy(() => import('./pages/Products').then((m) => ({ default: m.Products })));
+const SalesOrderMaintenance = lazy(() => import('./pages/SalesOrderMaintenance').then((m) => ({ default: m.SalesOrderMaintenance })));
+const NewOrder = lazy(() => import('./pages/NewOrder').then((m) => ({ default: m.NewOrder })));
 
 /* Root layout — hosts <ScrollRestoration> for the whole app. It restores window
    scroll on history POP (the browser/swipe Back AND the configurator's in-app
    navigate(-1)), so returning to a scrolled catalogue lands on the same frame;
    PUSH navigations (drilling into a product) start at the top as usual. Scroll
    is keyed per history entry (default getKey = location.key). */
+/* Shown while a lazy() route chunk downloads. Deliberately minimal — chunks are
+   small + edge-cached (and SW-precached once installed), so this rarely shows
+   for more than a frame. */
+function RouteFallback() {
+  return (
+    <div style={{
+      minHeight: '60vh', display: 'grid', placeItems: 'center',
+      fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13, 0.8125rem)', color: 'var(--fg-muted)',
+    }}>
+      Loading…
+    </div>
+  );
+}
+
 function RootLayout() {
   return (
     <>
       <ScrollRestoration />
-      <Outlet />
+      {/* One Suspense boundary covers every lazy() route element below. */}
+      <Suspense fallback={<RouteFallback />}>
+        <Outlet />
+      </Suspense>
     </>
   );
 }

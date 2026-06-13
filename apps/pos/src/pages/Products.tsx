@@ -1681,8 +1681,8 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
           <strong>Failed to load products.</strong>{' '}
           {error instanceof Error ? error.message : String(error)}
           <div style={{ marginTop: 6, fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            If this is a fresh deploy: run <code>pnpm db:push</code> + import
-            <code> seeds/hookka-products-import.sql</code> against Supabase.
+            If this keeps happening, sign out and back in — your session may
+            have expired — or let IT know.
           </div>
         </div>
       )}
@@ -2430,6 +2430,8 @@ type MaintenanceListKey =
   | 'sofaSpecials'
   | 'sofaQuickPresets' // PR (Commander 2026-05-28) — module-composition presets
   | 'mattressSizes'    // PR #50 — Mattress size pool (K/Q/S/SS)
+  | 'brandings'        // Branding pool (HILTON/SEALY/2990S/...) — mirror of Backend pool
+  | 'supplierCategories' // Supply Category pool — mirror of Backend pool (parity)
   | 'fabrics'
   | 'fabricPricing'    // migration 0124 — POS selling fabric-tier add-on editor
   | 'productAddons'    // migration 0134 — Special Add-ons (Product) manager
@@ -2486,6 +2488,11 @@ const MAINTENANCE_TABS: {
   { key: 'bedframeSizes',    label: 'Bedframe Sizes',    description: 'Bedframe sizes — edit code · label · dimensions (e.g. K · 6FT · 183X190CM). Used in generated SKU names.', priced: false, section: 'Products Maintenance' },
   { key: 'mattressSizes',    label: 'Mattress Sizes',    description: 'Mattress sizes — edit code · label · dimensions. Used in generated SKU names + width/length placeholders.', priced: false, section: 'Products Maintenance' },
   { key: 'sofaCompartments', label: 'Sofa Compartments', description: 'Sofa compartment pool (1A(LHF), 1A(RHF), 1NA, 2A(LHF), ...). Models tick which they offer.', priced: false, section: 'Products Maintenance' },
+  // Brandings + Supplier Categories — mirror of the Backend Products Maintenance
+  // group (owner spec 2026-06-12). Same maintenance_config blob, rendered here
+  // as plain string pools so the POS Maintenance tab matches Backend's rail.
+  { key: 'brandings',        label: 'Brandings',         description: 'Branding pool (e.g. HILTON, SEALY, 2990S). Feeds every Branding input — New SKU, bulk New Models rows, SKU Master inline edit, Model detail.', priced: false, section: 'Products Maintenance' },
+  { key: 'supplierCategories', label: 'Supplier Categories', description: 'Supply Category pool (e.g. Sofa, Bedframe, Mattress). Feeds the Suppliers list filter chips + the supplier form’s Supply Category toggles. Empty = default five (Sofa / Bedframe / Mattress / Accessory / Service).', priced: false, section: 'Products Maintenance' },
 ];
 
 /**
@@ -2530,6 +2537,27 @@ export const MaintenanceTab = ({
   const history = useMaintenanceConfigHistory(scope);
   const save = useSaveMaintenanceConfig();
   const renameCompartment = useRenameSofaCompartment();
+
+  // Brandings empty-state suggestions — mirror of the Backend useBrandingPool
+  // `distinct`: DISTINCT non-null branding across mfg_products + product_models
+  // (case-insensitive dedupe, first-seen casing wins, A→Z). Shown read-only when
+  // the Brandings pool is empty (parity with Backend) and one-click seeded into
+  // the Edit draft (startEdit) so a single admin Save adopts them. The pool is
+  // never written without an explicit Save.
+  const brandingProducts = useMfgProducts();
+  const brandingModels = useProductModels();
+  const brandingDistinct = useMemo(() => {
+    const seen = new Map<string, string>(); // UPPER → first-seen original casing
+    const collect = (b: string | null | undefined) => {
+      const t = (b ?? '').trim();
+      if (!t) return;
+      const k = t.toUpperCase();
+      if (!seen.has(k)) seen.set(k, t);
+    };
+    for (const p of brandingProducts.data ?? []) collect(p.branding);
+    for (const m of brandingModels.data ?? []) collect(m.branding);
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+  }, [brandingProducts.data, brandingModels.data]);
 
   // PR #208 — when the supplier scope has no row yet, fall through to the
   // master config so commander can see what's there before deciding to
@@ -2588,7 +2616,19 @@ export const MaintenanceTab = ({
     // edits a copy; save writes back to `scope`.
     const seed = resolved.data?.data ?? masterFallback.data?.data ?? null;
     if (!seed) return;
-    setDraft(JSON.parse(JSON.stringify(seed)) as MaintenanceConfig);
+    const copy = JSON.parse(JSON.stringify(seed)) as MaintenanceConfig;
+    // Brandings one-click seed — mirror of Backend: when the master pool is
+    // empty, pre-fill the EDIT DRAFT from the DISTINCT branding values so a
+    // single Save adopts them. Editor-only; config is never written until the
+    // explicit Save. Master scope only (supplier scopes never author brandings).
+    if (
+      scope === 'master'
+      && maintValues(copy.brandings).filter((b) => b.trim().length > 0).length === 0
+      && brandingDistinct.length > 0
+    ) {
+      copy.brandings = [...brandingDistinct];
+    }
+    setDraft(copy);
     setEditMode(true);
   };
 
@@ -2813,6 +2853,9 @@ export const MaintenanceTab = ({
           onChange={(next) => setDraft(next)}
           onQuickAdd={handleQuickAdd}
           priced={active.priced}
+          /* Brandings empty-state DISTINCT suggestions (parity with Backend);
+             only consumed by the 'brandings' string-pool branch. */
+          brandingSuggestions={brandingDistinct}
         />
       </section>
 
@@ -3835,6 +3878,7 @@ const MaintenanceList = ({
   onChange,
   onQuickAdd,
   priced,
+  brandingSuggestions,
 }: {
   listKey: MaintenanceListKey;
   config: MaintenanceConfig;
@@ -3848,6 +3892,9 @@ const MaintenanceList = ({
   onQuickAdd?: (next: MaintenanceConfig) => void;
   onChange: (next: MaintenanceConfig) => void;
   priced: boolean;
+  /** DISTINCT branding values (products + models) shown read-only when the
+      Brandings pool is empty. Parity with the Backend Maintenance editor. */
+  brandingSuggestions?: string[];
 }) => {
   /* When the bottom add row is visible — either because admin is in
      editMode or because sales_director is in add-only mode. */
@@ -3965,12 +4012,25 @@ const MaintenanceList = ({
     || listKey === 'sofaSizes'
     || listKey === 'bedframeSizes'
     || listKey === 'mattressSizes'
+    || listKey === 'brandings'
+    || listKey === 'supplierCategories'
   ) {
     // ACTIVE toggles (owner spec 2026-06-12) — entries may be plain strings
     // (= active) or { value, active: false } once toggled off on the Backend
     // Maintenance tab. POS renders the VALUE and preserves the flag on edit;
     // the Active checkbox itself lives on the Backend editor.
     const items = (config[listKey] as MaintPoolEntry[] | undefined) ?? [];
+
+    // Brandings seed/fallback (parity with Backend): pool empty + not editing →
+    // surface the DISTINCT branding values across products + models as a
+    // read-only suggestion. Hitting Edit seeds them into the draft (see
+    // MaintenanceTab.startEdit) so one Save adopts them — nothing is silently
+    // written to config.
+    const showBrandingSuggestions =
+      listKey === 'brandings'
+      && !editMode
+      && maintValues(items).filter((b) => b.trim().length > 0).length === 0
+      && (brandingSuggestions?.length ?? 0) > 0;
 
     const removeAt = (idx: number) => {
       const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
@@ -4024,6 +4084,26 @@ const MaintenanceList = ({
     };
     return (
       <div className={styles.maintList}>
+        {showBrandingSuggestions && (
+          <>
+            <p className={styles.stateInfo} style={{ marginBottom: 8 }}>
+              Pool is empty — showing {brandingSuggestions!.length} suggested
+              value{brandingSuggestions!.length === 1 ? '' : 's'} found on existing
+              products + models. Hit <strong>Edit</strong> then <strong>Save</strong> to
+              adopt them into the pool.
+            </p>
+            {brandingSuggestions!.map((v, i) => (
+              <div key={v} className={styles.maintRow} style={{ opacity: 0.7 }}>
+                <span className={styles.maintRowIcon} />
+                <span className={styles.maintRowIdx}>{i + 1}</span>
+                <span className={styles.maintRowValue}>{v}</span>
+                <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', fontWeight: 600 }}>
+                  suggested
+                </span>
+              </div>
+            ))}
+          </>
+        )}
         {items.map((entry, i) => {
           const v = maintEntryValue(entry);
           const labelOv = config.sizeLabels?.[v];
