@@ -16,6 +16,7 @@ import {
   safeName,
 } from './pdf-common';
 import { loadFabricDescriptionMap } from './supplier-doc-data';
+import { composeSoLineDescription } from './so-line-description';
 
 // ----------------------------------------------------------------------------
 // Sales Order PDF generator — dynamic jspdf import so it doesn't bloat the
@@ -407,31 +408,23 @@ export async function generateSalesOrderPdf(
     pwpCodes,
   );
   const tableRows = orderedItems.map((it, itIdx) => {
-    const desc2 = (it.description2 ?? '').trim();
-    const remarkText = typeof it.remark === 'string' && it.remark.trim() !== '' ? it.remark.trim() : null;
-    const specs = variantLine(it, fabricDescMap);
-    /* Option A (Loo 2026-06-12): since PR #553 the remark renders INSIDE the
-       SPECIAL segment — in the persisted description2 (post-#553 rows) and in
-       `specs` (recomputed at print, so even pre-#553 rows show it there). The
-       separate "Remark:" line printed the same text twice; show it only when
-       NEITHER line above already contains the remark verbatim. */
-    const remarkShownAbove =
-      remarkText !== null && (desc2.includes(remarkText) || (specs ?? '').includes(remarkText));
     const notes = [
       pwpRewardNote(it.variants),
       ...(triggerNotesByLine[itIdx] ?? []),
     ].filter((n): n is NonNullable<typeof n> => n != null).map((n) => n.text);
-    /* Line 2 = description2 when present (remark stands in when there is no
-       description2 AND the specs line doesn't already show it); a remark
-       alongside a description2 prints as its own note line after the specs
-       only when it isn't visible above. */
-    const lines = [
-      it.description ?? it.item_code,
-      desc2 || (remarkShownAbove ? null : remarkText),
-      specs,
-      ...notes,
-      desc2 && remarkText && !remarkShownAbove ? `Remark: ${remarkText}` : null,
-    ].filter(Boolean);
+    /* Description cell — the stored description2 and the recomputed `specs`
+       (variantLine) are both buildVariantSummary outputs, so on a variant line
+       they fully overlap. composeSoLineDescription prints the variant summary
+       ONCE (the fresh, fabric-expanded `specs` preferred over the stored
+       description2) so a split-sofa module line no longer shows SEAT/SPECIAL
+       twice (Loo 2026-06-13); it also keeps the legacy remark dedup. */
+    const lines = composeSoLineDescription({
+      description: it.description ?? it.item_code,
+      description2: (it.description2 ?? '').trim(),
+      specs: variantLine(it, fabricDescMap) ?? '',
+      remark: typeof it.remark === 'string' ? it.remark : null,
+      notes,
+    });
     return [
       it.item_code,
       lines.join('\n'),
