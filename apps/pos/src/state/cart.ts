@@ -108,6 +108,10 @@ export interface FlatConfigSnapshot {
   kind: 'flat';
   productId: string;
   productName: string;
+  /** UPPERCASE mfg category ('ACCESSORY' / 'SERVICE'), stamped by the
+   *  configurator so inferItemGroup buckets the SO line into accessories_centi
+   *  instead of falling through to 'others'. */
+  category?: string;
   total: number;
   summary: string;       // e.g. "Flat price"
 }
@@ -235,9 +239,20 @@ const sanitizeQty = (config: CartConfig, qty: number | undefined, fallback = 1):
 export const cartHasSofa = (lines: CartLine[]): boolean => lines.some((l) => isSofaConfig(l.config));
 export const cartHasNonSofa = (lines: CartLine[]): boolean => lines.some((l) => !isSofaConfig(l.config));
 
-/** Reason string if adding `config` would mix a sofa with non-sofa products
- *  (either direction), else null. Editing a line in place (editingKey) never
- *  conflicts — the line's category doesn't change. */
+/** A MAIN non-sofa line = mattress (`size`) or bedframe — the only categories a
+ *  sofa cannot share a Sales Order with. Accessories (`flat`, ACCESSORY/SERVICE)
+ *  are universal add-ons that ride on any order. Mirrors the server's MAIN set
+ *  ({SOFA,BEDFRAME,MATTRESS}; accessory excluded — see apps/api/.../
+ *  mfg-sales-orders.ts Rule 2 "so_sofa_no_other_main"). */
+const isMainNonSofaConfig = (c: CartConfig): boolean =>
+  c.kind === 'size' || c.kind === 'bedframe';
+export const cartHasMainNonSofa = (lines: CartLine[]): boolean =>
+  lines.some((l) => isMainNonSofaConfig(l.config));
+
+/** Reason string if adding `config` would put a sofa on the same order as a
+ *  mattress/bedframe (either direction), else null. Accessories never conflict —
+ *  they pair with a sofa OR a mattress/bedframe (Loo 2026-06-13). Editing a line
+ *  in place (editingKey) never conflicts — the line's category doesn't change. */
 export const cartCategoryConflict = (
   lines: CartLine[],
   config: CartConfig,
@@ -245,13 +260,17 @@ export const cartCategoryConflict = (
 ): string | null => {
   if (editingKey) return null;
   if (isSofaConfig(config)) {
-    return cartHasNonSofa(lines)
-      ? 'Sofas are placed on their own order. Finish or clear the current items before adding a sofa.'
+    return cartHasMainNonSofa(lines)
+      ? 'Sofas are placed on their own order. Finish or clear the mattress/bedframe items before adding a sofa.'
       : null;
   }
-  return cartHasSofa(lines)
-    ? 'Your cart has a sofa. Sofas are placed on their own order — finish or clear it before adding other products.'
-    : null;
+  if (isMainNonSofaConfig(config)) {
+    return cartHasSofa(lines)
+      ? 'Your cart has a sofa. Sofas are placed on their own order — finish or clear it before adding a mattress or bedframe.'
+      : null;
+  }
+  // Accessory / universal add-on (flat) — pairs with anything.
+  return null;
 };
 
 // In-memory store. Persistence moved off localStorage to the DB (pos_carts,
