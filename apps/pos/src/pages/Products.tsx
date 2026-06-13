@@ -79,7 +79,6 @@ import {
 import {
   useMfgProducts,
   useUpdateMfgProductPrices,
-  useUpdateMfgProductGifts,
   useUpdateMfgProductDefaultGifts,
   useCreateMfgProduct,
   useDeleteMfgProduct,
@@ -2446,7 +2445,7 @@ const ModelFilterRail = ({
                     padding: 'var(--space-2)',
                     textAlign: 'center',
                   }}>
-                    No models match "{search}".
+                    No models match “{search}”.
                   </p>
                 )}
                 {filteredOverflow.map((m) => (
@@ -5238,7 +5237,7 @@ const OrderAddonsManager = () => {
           </div>
           {draft.kind === 'flat' && (
             <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', margin: '0 0 var(--space-3)' }}>
-              Flat fee is charged once per order — staff get no quantity field at checkout. Use "Per piece" for per-unit items.
+              Flat fee is charged once per order — staff get no quantity field at checkout. Use “Per piece” for per-unit items.
             </p>
           )}
           <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', margin: '0 0 var(--space-3)' }}>
