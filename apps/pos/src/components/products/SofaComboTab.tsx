@@ -379,12 +379,22 @@ function ComposerModal({
     return [...new Set(pool.length ? pool : ALL_MODULE_CODES)].sort();
   }, [maint.data]);
 
+  const accessoryProductsQ = useMfgProducts({ category: 'ACCESSORY' });
+
   const [baseModel, setBaseModel] = useState(editing?.baseModel ?? '');
   // OR-set per slot (PR combo-or-per-slot): ordered slots, each a SET of
   // alternative codes joined by OR. e.g. [['2A(LHF)','2A(RHF)'],['L(LHF)','L(RHF)']].
   const [modules, setModules] = useState<string[][]>(editing?.modules ?? []);
   const [label, setLabel] = useState(editing?.label ?? '');
   const [effectiveFrom, setEffectiveFrom] = useState(editing?.effectiveFrom ?? todayIso());
+  // 0170 — Default free gifts: accessory items granted when this combo is the sofa build.
+  const [giftDraft, setGiftDraft] = useState<{ giftProductId: string; qty: number; campaignName: string }[]>(
+    () => (editing?.defaultFreeGifts ?? []).map((g) => ({
+      giftProductId: g.giftProductId,
+      qty: g.qty,
+      campaignName: g.campaignName ?? '',
+    })),
+  );
   // The base grid on this page is the SELLING price (Chairman 2026-06-02 — show
   // 卖家 base, not cost). Seeded from the combo's sellingPricesByHeight.
   const [prices, setPrices] = useState<Record<string, string>>(() => {
@@ -464,6 +474,9 @@ function ComposerModal({
           pricesByHeight: editing.pricesByHeight ?? {},
           sellingPricesByHeight,
           pwpPricesByHeight,
+          defaultFreeGifts: giftDraft
+            .filter((g) => g.giftProductId)
+            .map((g) => ({ giftProductId: g.giftProductId, qty: Math.max(1, g.qty), campaignName: g.campaignName.trim() || null })),
           label: label || null,
           effectiveFrom,
           notes: notes || null,
@@ -648,6 +661,67 @@ function ComposerModal({
             />
           </Field>
         </div>
+
+        {/* 0170 — Default free gifts: accessory items auto-added at RM 0 when
+            this combo is the cart's sofa build (trigger by combo, D9). */}
+        <Field label="Default free gift (accessory, optional)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {giftDraft.length === 0 ? (
+              <div style={{
+                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)',
+                color: 'var(--fg-muted)', padding: '2px 0',
+              }}>
+                No free gifts — click Add gift to attach one.
+              </div>
+            ) : (
+              giftDraft.map((g, idx) => (
+                <div key={idx} style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 60px 1fr auto',
+                  gap: 6,
+                  alignItems: 'center',
+                }}>
+                  <select
+                    value={g.giftProductId}
+                    onChange={(e) => setGiftDraft((cur) => cur.map((row, i) => i === idx ? { ...row, giftProductId: e.target.value } : row))}
+                    style={selectStyle}
+                  >
+                    <option value="">Choose accessory…</option>
+                    {(accessoryProductsQ.data ?? []).map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="number"
+                    min={1}
+                    value={g.qty}
+                    onChange={(e) => setGiftDraft((cur) => cur.map((row, i) => i === idx ? { ...row, qty: Math.max(1, Number(e.target.value) || 1) } : row))}
+                    style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+                  />
+                  <input
+                    value={g.campaignName}
+                    onChange={(e) => setGiftDraft((cur) => cur.map((row, i) => i === idx ? { ...row, campaignName: e.target.value } : row))}
+                    placeholder="Campaign name (optional)"
+                    style={inputStyle}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setGiftDraft((cur) => cur.filter((_, i) => i !== idx))}
+                    title="Remove gift"
+                    style={iconBtnStyle}
+                  >
+                    <X size={14} strokeWidth={1.75} />
+                  </button>
+                </div>
+              ))
+            )}
+            <div>
+              <Button variant="ghost" onClick={() => setGiftDraft((cur) => [...cur, { giftProductId: '', qty: 1, campaignName: '' }])}>
+                <Plus {...ICON_PROPS} style={{ marginRight: 6 }} /> Add gift
+              </Button>
+            </div>
+          </div>
+        </Field>
 
         <Field label="Notes (optional)">
           <textarea
