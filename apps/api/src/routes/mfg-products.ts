@@ -20,7 +20,7 @@ import { createClient } from '@supabase/supabase-js';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
 import { findSkuUsage } from '../lib/sku-usage';
-import { moduleCodeFromSku, normalizeSofaTier } from '@2990s/shared';
+import { moduleCodeFromSku, normalizeSofaTier, parseDefaultFreeGifts } from '@2990s/shared';
 import type { Env, Variables } from '../env';
 
 export const mfgProducts = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -390,6 +390,8 @@ mfgProducts.patch('/:id', async (c) => {
     /** D7 (Phase 3) — permanent free gifts ({addonId, qty}[]). Master Account
         sets; Configurator renders "× N INCLUDED". Display-only, no inventory. */
     includedAddons?: Array<{ addonId: string; qty: number }>;
+    /** 0170 — Default Free Gift (accessory). [{giftProductId, qty, campaignName?}]. */
+    defaultFreeGifts?: Array<{ giftProductId: string; qty: number; campaignName?: string | null }>;
     /* PR #89 (Commander 2026-05-26) — inline edit of SKU code + name from
        SKU Master. Unique-constraint on code → 23505 surfaces as 409. */
     code?: string;
@@ -468,6 +470,11 @@ mfgProducts.patch('/:id', async (c) => {
   // D7 — permanent free gifts (display-only). Master Account sets the array.
   if (Array.isArray(body.includedAddons)) {
     updates.included_addons = body.includedAddons;
+  }
+  // 0170 — Default Free Gift (accessory). Coerce via the shared parser so a
+  // malformed entry can never poison the column.
+  if (Array.isArray(body.defaultFreeGifts)) {
+    updates.default_free_gifts = parseDefaultFreeGifts(body.defaultFreeGifts);
   }
   /* PR #89 — code + name inline edit from SKU Master. code is unique;
      duplicate triggers 23505 below. Both trimmed; empty rejected to keep

@@ -26,7 +26,7 @@
 import { Hono, type Context } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { canonicalizeComboModulesForStorage, comboSlotsKey, sofaComboCostSen, type ComboSlots } from '@2990s/shared';
+import { canonicalizeComboModulesForStorage, comboSlotsKey, sofaComboCostSen, parseDefaultFreeGifts, type ComboSlots } from '@2990s/shared';
 import { loadModelSofaModuleCosts } from '../lib/mfg-pricing-recompute';
 
 export const sofaCombos = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -72,6 +72,7 @@ type Row = {
   prices_by_height: Record<string, number | null>;
   selling_prices_by_height: Record<string, number | null>;
   pwp_prices_by_height: Record<string, number | null> | null;
+  default_free_gifts: Array<{ giftProductId: string; qty: number; campaignName?: string | null }> | null;
   label: string | null;
   effective_from: string;
   deleted_at: string | null;
@@ -92,6 +93,7 @@ function rowToWire(r: Row) {
     pricesByHeight: r.prices_by_height ?? {},
     sellingPricesByHeight: r.selling_prices_by_height ?? {},
     pwpPricesByHeight: r.pwp_prices_by_height ?? {},
+    defaultFreeGifts: r.default_free_gifts ?? [],
     label: r.label,
     effectiveFrom: r.effective_from,
     deletedAt: r.deleted_at,
@@ -170,7 +172,7 @@ sofaCombos.get('/', async (c) => {
   let q = supabase
     .from('sofa_combo_pricing')
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, default_free_gifts, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .order('base_model', { ascending: true })
@@ -260,7 +262,7 @@ sofaCombos.get('/history', async (c) => {
   let q = supabase
     .from('sofa_combo_pricing')
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, default_free_gifts, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .eq('base_model', baseModel)
@@ -317,6 +319,7 @@ sofaCombos.post('/', async (c) => {
     pricesByHeight?: unknown;
     sellingPricesByHeight?: unknown;
     pwpPricesByHeight?: unknown;
+    defaultFreeGifts?: Array<{ giftProductId: string; qty: number; campaignName?: string | null }>;
     label?: string | null;
     effectiveFrom?: string;
     notes?: string | null;
@@ -416,13 +419,16 @@ sofaCombos.post('/', async (c) => {
       prices_by_height: prices,
       selling_prices_by_height: sellingPrices,
       pwp_prices_by_height: pwpPrices ?? {},
+      default_free_gifts: Array.isArray(body.defaultFreeGifts)
+        ? parseDefaultFreeGifts(body.defaultFreeGifts)
+        : [],
       label: body.label ?? null,
       effective_from: effectiveFrom,
       notes: body.notes ?? null,
       created_by: user.id,
     })
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, default_free_gifts, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .single();
@@ -450,7 +456,7 @@ sofaCombos.put('/:id', async (c) => {
 
   const { data: orig, error: findErr } = await supabase
     .from('sofa_combo_pricing')
-    .select('base_model, modules, tier, customer_id, supplier_id, pwp_prices_by_height')
+    .select('base_model, modules, tier, customer_id, supplier_id, pwp_prices_by_height, default_free_gifts')
     .eq('id', id)
     .maybeSingle();
   if (findErr) return c.json({ error: 'load_failed', reason: findErr.message }, 500);
@@ -460,6 +466,7 @@ sofaCombos.put('/:id', async (c) => {
     pricesByHeight?: unknown;
     sellingPricesByHeight?: unknown;
     pwpPricesByHeight?: unknown;
+    defaultFreeGifts?: Array<{ giftProductId: string; qty: number; campaignName?: string | null }>;
     label?: string | null;
     effectiveFrom?: string;
     notes?: string | null;
@@ -517,13 +524,16 @@ sofaCombos.put('/:id', async (c) => {
       prices_by_height: prices,
       selling_prices_by_height: sellingPrices,
       pwp_prices_by_height: pwpPrices,
+      default_free_gifts: Array.isArray(body.defaultFreeGifts)
+        ? parseDefaultFreeGifts(body.defaultFreeGifts)
+        : ((orig as { default_free_gifts: Array<{ giftProductId: string; qty: number; campaignName?: string | null }> | null }).default_free_gifts ?? []),
       label: body.label ?? null,
       effective_from: effectiveFrom,
       notes: body.notes ?? null,
       created_by: user.id,
     })
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, default_free_gifts, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .single();
