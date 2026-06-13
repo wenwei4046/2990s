@@ -234,7 +234,7 @@ export const Suppliers = () => {
           <strong>Failed to load suppliers.</strong>{' '}
           {error instanceof Error ? error.message : String(error)}
           <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>
-            If first deploy: apply migration 0041 against Supabase.
+            If this keeps happening, sign out and back in — your session may have expired — or let IT know.
           </span>
         </div>
       )}

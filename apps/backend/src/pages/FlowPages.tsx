@@ -327,7 +327,7 @@ export const Grns = () => {
         <FilterPill label={`PO ${poIdFilter.slice(0, 8)}…`} onClear={clearFilter} />
       )}
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} GRN`}</p>
-      {error && !isLoading && <ErrorBanner error={error} hint="If first deploy: apply migration 0042 against Supabase." />}
+      {error && !isLoading && <ErrorBanner error={error} hint="If this keeps happening, sign out and back in (your session may have expired), or let IT know." />}
 
       {selectedIds.size > 0 && (
         <div style={{

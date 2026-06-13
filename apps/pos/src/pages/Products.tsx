@@ -1669,8 +1669,8 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
           <strong>Failed to load products.</strong>{' '}
           {error instanceof Error ? error.message : String(error)}
           <div style={{ marginTop: 6, fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            If this is a fresh deploy: run <code>pnpm db:push</code> + import
-            <code> seeds/hookka-products-import.sql</code> against Supabase.
+            If this keeps happening, sign out and back in — your session may
+            have expired — or let IT know.
           </div>
         </div>
       )}
