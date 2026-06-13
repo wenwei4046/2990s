@@ -61,6 +61,8 @@ import {
   Layers,
   ImageOff,
   Gift,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -707,7 +709,14 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const arr = (models ?? []).filter((m) => m.active);
+    // Show INACTIVE flat-category models too (accessory/service) so an admin can
+    // re-enable one from POS — the "Show in POS" on/off lives in the drawer, and
+    // toggling it off must not make the card vanish (you'd never get it back).
+    // Other categories stay active-only here; their inactive models are managed
+    // from the Backend portal.
+    const arr = (models ?? []).filter(
+      (m) => m.active || m.category === 'ACCESSORY' || m.category === 'SERVICE',
+    );
     if (!q) return arr;
     return arr.filter(
       (m) =>
@@ -758,8 +767,8 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
         {isLoading
           ? 'Loading models…'
           : canEditAllowed
-            ? `${rows.length} active model${rows.length === 1 ? '' : 's'} · Click a card to edit Allowed Options`
-            : `${rows.length} active model${rows.length === 1 ? '' : 's'} · Model-level allowed options & specs are managed from the Backend portal`}
+            ? `${rows.length} model${rows.length === 1 ? '' : 's'} · Click a card to edit Allowed Options`
+            : `${rows.length} model${rows.length === 1 ? '' : 's'} · Model-level allowed options & specs are managed from the Backend portal`}
       </p>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
@@ -811,6 +820,7 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
                     borderRadius: 'var(--radius-md)',
                     padding: 'var(--space-3)',
                     background: 'var(--c-cream)',
+                    opacity: m.active ? 1 : 0.6,
                     display: 'flex',
                     gap: 'var(--space-3)',
                     alignItems: 'flex-start',
@@ -865,6 +875,18 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
                     >
                       {m.name}
                     </div>
+                    {!m.active && (
+                      <span style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                        marginTop: 3, padding: '1px 8px',
+                        borderRadius: 'var(--radius-pill, 999px)',
+                        border: '1px solid var(--line-strong)',
+                        fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)',
+                        fontWeight: 600, color: 'var(--fg-muted)',
+                      }}>
+                        <EyeOff size={11} strokeWidth={1.75} /> Hidden from POS
+                      </span>
+                    )}
                     {m.model_code && (
                       <div
                         style={{
@@ -978,9 +1000,15 @@ const ModelAllowedOptionsDrawer = ({
   /* Draft of the allowed_options under edit. Initialised once when the row
      resolves; the chip toggles mutate this draft, Save writes it back. */
   const [draft, setDraft] = useState<AllowedOptions | null>(null);
+  // Model-level POS visibility (product_models.active). For flat categories
+  // (accessory/service) this on/off IS the whole drawer — there are no option
+  // pools to tick. Catalog card visibility is model-level via this flag
+  // (apps/api/.../product-models.ts PATCH). Initialised with the draft below.
+  const [activeDraft, setActiveDraft] = useState<boolean | null>(null);
   useEffect(() => {
     if (model.data?.model && draft == null) {
       setDraft(JSON.parse(JSON.stringify(model.data.model.allowed_options ?? {})) as AllowedOptions);
+      setActiveDraft(model.data.model.active);
     }
   }, [model.data, draft]);
 
@@ -1071,7 +1099,10 @@ const ModelAllowedOptionsDrawer = ({
 
   const onSave = () => {
     if (!draft) return;
-    updateModel.mutate({ id: modelId, allowedOptions: draft }, { onSuccess: () => onClose() });
+    updateModel.mutate(
+      { id: modelId, allowedOptions: draft, ...(activeDraft != null ? { active: activeDraft } : {}) },
+      { onSuccess: () => onClose() },
+    );
   };
 
   return (
@@ -1083,10 +1114,50 @@ const ModelAllowedOptionsDrawer = ({
       </p>
 
       {isFlatCategory ? (
-        <p className={styles.eyebrow}>
-          No configurable options for {m.category.toLowerCase()} models — SKU rows
-          track everything directly.
-        </p>
+        <>
+          <p className={styles.eyebrow}>
+            No configurable options for {m.category.toLowerCase()} models — the price
+            is set in SKU Master and there are no variants to tick. Use the switch
+            below to decide whether POS staff can sell it.
+          </p>
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: 'var(--space-3)', marginTop: 'var(--space-4)', padding: 'var(--space-3)',
+            border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md, 10px)',
+            background: 'var(--c-paper)',
+          }}>
+            <div>
+              <div style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', fontWeight: 600, color: 'var(--c-ink)' }}>
+                Show in POS
+              </div>
+              <div className={styles.eyebrow} style={{ marginTop: 2 }}>
+                {activeDraft
+                  ? 'On — sales staff can add this to an order.'
+                  : 'Off — hidden from the POS catalog.'}
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={!!activeDraft}
+              aria-label="Show in POS"
+              onClick={() => setActiveDraft((v) => !v)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '8px 16px', borderRadius: 'var(--radius-pill, 999px)',
+                border: '1px solid var(--line-strong)', cursor: 'pointer',
+                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
+                background: activeDraft ? 'var(--c-ink)' : 'transparent',
+                color: activeDraft ? 'var(--c-paper)' : 'var(--c-ink)',
+              }}
+            >
+              {activeDraft
+                ? <Eye size={14} strokeWidth={1.75} />
+                : <EyeOff size={14} strokeWidth={1.75} />}
+              {activeDraft ? 'On' : 'Off'}
+            </button>
+          </div>
+        </>
       ) : (
         <>
           {sizePool.length > 0 && (
