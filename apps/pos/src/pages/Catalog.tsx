@@ -20,7 +20,7 @@ import {
 import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow } from '../lib/queries';
 import { useStaff, isGlobalCurator, isPosSalesRole } from '../lib/staff';
 import { supabase } from '../lib/supabase';
-import { useCart, cartHasSofa, cartHasNonSofa } from '../state/cart';
+import { useCart, cartHasSofa, cartHasMainNonSofa } from '../state/cart';
 import { Topbar } from '../components/Topbar';
 import { CustomerOrderFab } from '../components/CustomerOrderFab';
 import styles from './Catalog.module.css';
@@ -219,7 +219,9 @@ export const Catalog = () => {
      (cartCategoryConflict) + the Sales Order backend rule. */
   const cartLines = useCart((s) => s.lines);
   const hasSofa = cartHasSofa(cartLines);
-  const hasNonSofa = cartHasNonSofa(cartLines);
+  // Accessories pair with anything, so only mattress/bedframe ("MAIN non-sofa")
+  // constrains a sofa — mirrors cartCategoryConflict + the server rule.
+  const hasMainNonSofa = cartHasMainNonSofa(cartLines);
 
   // Categories come from the categories table directly (not derived from
   // products) so TBC ones still render even with zero products. Brandings
@@ -456,7 +458,7 @@ export const Catalog = () => {
               </span>
             </div>
 
-            {(hasSofa || hasNonSofa) && (
+            {(hasSofa || hasMainNonSofa) && (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 8,
                 padding: '10px 14px', marginBottom: 12,
@@ -468,8 +470,8 @@ export const Catalog = () => {
                 <Sofa size={16} strokeWidth={1.75} />
                 <span>
                   {hasSofa
-                    ? 'Sofa order — sofas are sold on their own ticket. Add more sofas, or check out / clear the cart to switch categories.'
-                    : 'This order has other products. Sofas are placed separately — check out or clear the cart to start a sofa order.'}
+                    ? "Sofa order — sofas don't share an order with mattresses or bedframes (accessories are fine). Check out or clear the cart to switch categories."
+                    : 'This order has a mattress or bedframe. Sofas are placed separately — check out or clear the cart to start a sofa order.'}
                 </span>
               </div>
             )}
@@ -519,7 +521,10 @@ export const Catalog = () => {
                       <ProductCard
                         key={p.modelKey}
                         p={p}
-                        blocked={(hasSofa && p.categoryId !== 'sofa') || (hasNonSofa && p.categoryId === 'sofa')}
+                        blocked={
+                          (p.categoryId === 'sofa' && hasMainNonSofa) ||
+                          ((p.categoryId === 'mattress' || p.categoryId === 'bedframe') && hasSofa)
+                        }
                       />
                     ))}
                   </div>
