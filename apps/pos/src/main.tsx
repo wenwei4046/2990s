@@ -7,6 +7,7 @@ import './main.css';
 import { AuthProvider } from './lib/auth';
 import { CartSync } from './lib/cart-sync';
 import { PwpCodeSync } from './lib/pwp-code-sync';
+import { FreeGiftSync } from './lib/free-gift-sync';
 import { UpdatePrompt } from './components/UpdatePrompt';
 import { isSessionExpiredError, handleSessionExpired } from './lib/session-recovery';
 import { router } from './router';
@@ -47,6 +48,9 @@ createRoot(rootEl).render(
         {/* PWP voucher reconciler: reserve codes for trigger lines, free on
             trigger-remove. Beside CartSync so it survives navigation. */}
         <PwpCodeSync />
+        {/* Default Free Gift reconciler (0170): auto-add RM 0 accessory gifts
+            for trigger lines. Local only — no server codes. */}
+        <FreeGiftSync />
         {/* "A new version is ready · Refresh" toast on deploy (PWA prompt
             mode). Beside the syncs so it survives navigation. */}
         <UpdatePrompt />
