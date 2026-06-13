@@ -2382,9 +2382,10 @@ export const soDropdownOptions = pgTable('so_dropdown_options', {
 }));
 
 /* Migration 0158 (Loo 2026-06-06) — SO Maintenance feature toggles. One row
-   per switch; seeded: 'pos_product_remark' (POS product-page remark + extra
-   charge card, default ON). Read by POS/Backend UIs AND the SO create path
-   (the extra-amount gate). */
+   per switch. The first switch ('pos_product_remark') was DROPPED in migration
+   0169 (Loo 2026-06-13) — the POS product-page remark + special add-on is now
+   always on. The table + /so-settings route stay, dormant, for any future
+   toggle. */
 export const soSettings = pgTable('so_settings', {
   key:       text('key').primaryKey(),
   enabled:   boolean('enabled').notNull().default(true),

@@ -536,20 +536,21 @@ describe('recomputeFromSnapshot — declared extraAddonAmountRM (spec D1)', () =
   });
 });
 
-/* ── POS remark + extra → custom_specials (Loo 2026-06-12) ────────────────────
-   The POS product-page remark + extra charge is a free-text Special Add-on
-   (one-shot auto-mint retired, flag OFF). The recompute appends it to the
-   custom_specials composition so every specials surface (backend SO editor's
-   Special Orders accordion, Detail Listing "Specials" column, DO/SI copies)
-   lists it next to the picked add-ons. Display composition ONLY — the money
-   already rides the authoritative figure via the declared-extra fold (D1),
-   so this entry re-prices nothing. */
-describe('recomputeFromSnapshot — POS remark + extra in custom_specials', () => {
-  it('remark + extra → custom_specials carries the remark text with the extra as surcharge', () => {
+/* ── POS special add-on (note + extra) → custom_specials (Loo 2026-06-13) ─────
+   The POS product-page "special add-on" (variants.extraAddonNote + the declared
+   extraAddonAmountRM) is a free-text Special Add-on. The recompute appends it to
+   the custom_specials composition so every specials surface (backend SO editor's
+   Special Orders accordion, Detail Listing "Specials" column, DO/SI copies) lists
+   it next to the picked add-ons. Display composition ONLY — the money already
+   rides the authoritative figure via the declared-extra fold (D1), so this entry
+   re-prices nothing. The item remark (variants.remark) is a SEPARATE field: it
+   lands on mfg_sales_order_items.remark only and never enters custom_specials. */
+describe('recomputeFromSnapshot — POS special add-on (note + extra) in custom_specials', () => {
+  it('note + extra → custom_specials carries the note text with the extra as surcharge', () => {
     const r = recomputeFromSnapshot(
       { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
         unitPriceCenti: 319000,
-        variants: { remark: 'Customize to ensure no hanging back cushions.', extraAddonAmountRM: 200 } },
+        variants: { extraAddonNote: 'Customize to ensure no hanging back cushions.', extraAddonAmountRM: 200 } },
       extraProduct, null, null,
     );
     expect(r.custom_specials).toEqual([
@@ -558,16 +559,16 @@ describe('recomputeFromSnapshot — POS remark + extra in custom_specials', () =
     expect(r.drift).toBe(false); // declared fold unchanged
   });
 
-  it('remark with no extra → entry at RM 0 (a free remark is still an option)', () => {
+  it('note with no extra → entry at RM 0 (a free note is still an option)', () => {
     const r = recomputeFromSnapshot(
       { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
-        unitPriceCenti: 299000, variants: { remark: 'Loose back cushions' } },
+        unitPriceCenti: 299000, variants: { extraAddonNote: 'Loose back cushions' } },
       extraProduct, null, null,
     );
     expect(r.custom_specials).toEqual([{ description: 'Loose back cushions', surchargeSen: 0 }]);
   });
 
-  it('extra with no remark → labelled "Extra add-on"', () => {
+  it('extra with no note → labelled "Extra add-on"', () => {
     const r = recomputeFromSnapshot(
       { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
         unitPriceCenti: 309000, variants: { extraAddonAmountRM: 100 } },
@@ -580,7 +581,7 @@ describe('recomputeFromSnapshot — POS remark + extra in custom_specials', () =
     const r = recomputeFromSnapshot(
       { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
         unitPriceCenti: 319000,
-        variants: { specials: ['HB-STRAIGHT'], remark: 'Loose back cushions', extraAddonAmountRM: 200 } },
+        variants: { specials: ['HB-STRAIGHT'], extraAddonNote: 'Loose back cushions', extraAddonAmountRM: 200 } },
       extraProduct, null, null,
     );
     expect(r.custom_specials).toEqual([
@@ -589,10 +590,19 @@ describe('recomputeFromSnapshot — POS remark + extra in custom_specials', () =
     ]);
   });
 
-  it('whitespace remark + no extra → custom_specials stays null (no phantom row)', () => {
+  it('whitespace note + no extra → custom_specials stays null (no phantom row)', () => {
     const r = recomputeFromSnapshot(
       { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
-        unitPriceCenti: 299000, variants: { remark: '   ' } },
+        unitPriceCenti: 299000, variants: { extraAddonNote: '   ' } },
+      extraProduct, null, null,
+    );
+    expect(r.custom_specials).toBeNull();
+  });
+
+  it('the item remark (variants.remark) never enters custom_specials (Loo 2026-06-13)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'AKKA-FIRM-K', itemGroup: 'mattress', qty: 1,
+        unitPriceCenti: 299000, variants: { remark: 'Loose back cushions' } },
       extraProduct, null, null,
     );
     expect(r.custom_specials).toBeNull();

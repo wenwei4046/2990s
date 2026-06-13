@@ -1888,30 +1888,22 @@ mfgSalesOrders.post('/', async (c) => {
   /* P3 — keep each sofa item's module price map so the split below distributes
      the build total with the SAME weights the drift gate priced from. */
   const sofaModulePricesByIdx = new Map<number, Record<string, number> | null>();
-  /* Spec 2026-06-06 (D5) — the POS product-page extra charge is feature-
-     gated in SO Maintenance (so_settings.pos_product_remark). When OFF, a
-     line that still declares an extra is rejected EXPLICITLY (never silently
-     dropped or silently charged — CF-cap lesson: surface, don't swallow).
-     Remarks themselves are always accepted (free text, no money). */
+  /* Loo 2026-06-13 — the POS product-page remark + special add-on (note + extra
+     charge) is always available; the pos_product_remark gate was removed. The
+     only flag still read here is the retired pos_remark_extra_auto_sku (one-shot
+     mint, OFF by default); resolve it just for the lines that declare an extra. */
   const hasDeclaredExtra = items.some((it) =>
     Number((it.variants as { extraAddonAmountRM?: unknown } | null)?.extraAddonAmountRM ?? 0) > 0);
   let autoSkuEnabled = false;
   if (hasDeclaredExtra) {
     const { data: flagRows, error: flagErr } = await sb
       .from('so_settings').select('key, enabled')
-      .in('key', ['pos_product_remark', 'pos_remark_extra_auto_sku']);
+      .in('key', ['pos_remark_extra_auto_sku']);
     if (flagErr) {
       await rollbackPwpClaims();
       return c.json({ error: 'lookup_failed', reason: flagErr.message }, 500);
     }
     const flags = new Map((flagRows ?? []).map((r) => [(r as { key: string }).key, (r as { enabled: boolean }).enabled]));
-    if (flags.get('pos_product_remark') === false) {
-      await rollbackPwpClaims();
-      return c.json({
-        error: 'extra_amount_disabled',
-        reason: 'Product-page extra charge is turned off in SO Maintenance.',
-      }, 400);
-    }
     autoSkuEnabled = flags.get('pos_remark_extra_auto_sku') === true; // missing row → OFF
   }
 
