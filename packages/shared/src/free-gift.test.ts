@@ -25,6 +25,14 @@ describe('parseDefaultFreeGifts', () => {
     expect(parseDefaultFreeGifts(null)).toEqual([]);
     expect(parseDefaultFreeGifts('x')).toEqual([]);
   });
+  it('parseDefaultFreeGifts drops Infinity qty and null-coerces whitespace campaignName', () => {
+    expect(parseDefaultFreeGifts([
+      { giftProductId: 'p', qty: Infinity },
+      { giftProductId: 'q', qty: 1, campaignName: '   ' },
+    ])).toEqual([
+      { giftProductId: 'q', qty: 1, campaignName: null },
+    ]);
+  });
 });
 
 describe('computeDesiredFreeGifts', () => {
@@ -46,6 +54,23 @@ describe('computeDesiredFreeGifts', () => {
     expect(computeDesiredFreeGifts([
       { triggerKey: 'k', triggerRef: 'r', triggerKind: 'product', triggerQty: 1, gifts: [] },
     ])).toEqual([]);
+  });
+  it('computeDesiredFreeGifts does not mutate its input', () => {
+    const triggers: FreeGiftTrigger[] = [
+      { triggerKey: 'k', triggerRef: 'r', triggerKind: 'product', triggerQty: 3,
+        gifts: [{ giftProductId: 'p', qty: 1, campaignName: null }] },
+    ];
+    const snapshot = JSON.stringify(triggers);
+    computeDesiredFreeGifts(triggers);
+    expect(JSON.stringify(triggers)).toEqual(snapshot);
+  });
+  it('computeDesiredFreeGifts emits one row per trigger for the same gift product', () => {
+    const triggers: FreeGiftTrigger[] = [
+      { triggerKey: 't0', triggerRef: 'a', triggerKind: 'product', triggerQty: 1, gifts: [{ giftProductId: 'g', qty: 1, campaignName: null }] },
+      { triggerKey: 't1', triggerRef: 'b', triggerKind: 'product', triggerQty: 1, gifts: [{ giftProductId: 'g', qty: 1, campaignName: null }] },
+    ];
+    const desired = computeDesiredFreeGifts(triggers);
+    expect(desired.map((d) => d.key)).toEqual([freeGiftLineKey('t0', 0), freeGiftLineKey('t1', 0)]);
   });
 });
 
@@ -80,5 +105,24 @@ describe('validateFreeGiftClaims', () => {
     );
     expect(res.rejected).toEqual([]);
     expect(res.valid.sort()).toEqual([0, 1]);
+  });
+  it('rejects qty 0, negative, and NaN as invalid_qty without poisoning later claims', () => {
+    const triggers: FreeGiftTrigger[] = [
+      { triggerKey: 't0', triggerRef: 'a', triggerKind: 'product', triggerQty: 2,
+        gifts: [{ giftProductId: 'g', qty: 2, campaignName: null }] }, // allowance 4
+    ];
+    const res = validateFreeGiftClaims(
+      [
+        { idx: 0, giftProductId: 'g', qty: 0 },
+        { idx: 1, giftProductId: 'g', qty: -3 },
+        { idx: 2, giftProductId: 'g', qty: NaN },
+        { idx: 3, giftProductId: 'g', qty: 4 },  // must still be honoured
+      ],
+      triggers,
+    );
+    expect(res.valid).toEqual([3]);
+    expect(res.rejected.map((r) => [r.idx, r.reason])).toEqual([
+      [0, 'invalid_qty'], [1, 'invalid_qty'], [2, 'invalid_qty'],
+    ]);
   });
 });

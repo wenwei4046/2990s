@@ -10,12 +10,16 @@ export interface DefaultFreeGift {
   /** count PER qualifying trigger unit (>= 1). */
   qty: number;
   /** free-text; null/blank => the line shows "Free gift". */
-  campaignName?: string | null;
+  campaignName: string | null;
 }
 
 /** A trigger present in the cart/order, with the gifts it grants. */
 export interface FreeGiftTrigger {
-  /** cart line key (client) or a stable per-line ref (server). */
+  /**
+   * cart line key (client) or a stable per-line ref (server).
+   * MUST be unique per trigger line within a single call — the reconciler
+   * keys gift lines off this value.
+   */
   triggerKey: string;
   /** product id ('product') or combo id ('combo'). */
   triggerRef: string;
@@ -44,12 +48,16 @@ export interface FreeGiftLineClaim {
 export interface FreeGiftRejection {
   idx: number;
   giftProductId: string;
-  reason: 'no_trigger' | 'qty_exceeds_allowance';
+  reason: 'no_trigger' | 'qty_exceeds_allowance' | 'invalid_qty';
 }
 
 /** Deterministic cart-line key so the reconciler can find/replace a gift line. */
 export const freeGiftLineKey = (triggerKey: string, entryIndex: number): string =>
   `gift-${triggerKey}-${entryIndex}`;
+
+/** Gift qty = configured-per-trigger × the trigger line's qty, each floored at 1. */
+const scaleGiftQty = (giftQty: number, triggerQty: number): number =>
+  Math.max(1, giftQty) * Math.max(1, triggerQty);
 
 /** Coerce raw jsonb into clean DefaultFreeGift[] (drops malformed entries). */
 export function parseDefaultFreeGifts(raw: unknown): DefaultFreeGift[] {
@@ -77,7 +85,7 @@ export function computeDesiredFreeGifts(triggers: FreeGiftTrigger[]): DesiredFre
         key: freeGiftLineKey(t.triggerKey, i),
         triggerKey: t.triggerKey,
         giftProductId: g.giftProductId,
-        qty: Math.max(1, g.qty) * Math.max(1, t.triggerQty),
+        qty: scaleGiftQty(g.qty, t.triggerQty),
         campaignName: g.campaignName ?? null,
       });
     });
@@ -99,13 +107,17 @@ export function validateFreeGiftClaims(
   for (const t of triggers) {
     for (const g of t.gifts) {
       const cur = allowance.get(g.giftProductId) ?? 0;
-      allowance.set(g.giftProductId, cur + Math.max(1, g.qty) * Math.max(1, t.triggerQty));
+      allowance.set(g.giftProductId, cur + scaleGiftQty(g.qty, t.triggerQty));
     }
   }
   const valid: number[] = [];
   const rejected: FreeGiftRejection[] = [];
   const remaining = new Map(allowance);
   for (const claim of claims) {
+    if (!Number.isFinite(claim.qty) || claim.qty < 1) {
+      rejected.push({ idx: claim.idx, giftProductId: claim.giftProductId, reason: 'invalid_qty' });
+      continue;
+    }
     if (!allowance.has(claim.giftProductId)) {
       rejected.push({ idx: claim.idx, giftProductId: claim.giftProductId, reason: 'no_trigger' });
       continue;
