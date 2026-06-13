@@ -53,6 +53,7 @@ import {
 import { useDebouncedValue } from '../lib/hooks';
 import { useAuth, isAdminLevel, isHatchSales } from '../lib/auth';
 import { CATEGORY_BADGE } from '../lib/category-badges';
+import { posRemarkSpecialOf } from '../lib/pos-remark-special';
 import styles from './SoLineCard.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -116,22 +117,10 @@ export const stripClientOnlyFields = (
   return rest;
 };
 
-/* Loo 2026-06-12 — the POS product-page remark + extra charge is a free-text
-   Special Add-on (one-shot auto-mint retired, flag OFF 2026-06-11). Derive it
-   from the line's variants snapshot so the Special Orders accordion lists it
-   next to the configured special_addons picks. amountSen is ALREADY folded
-   into the unit price (POS submit + server recompute extraSen fold), so the
-   row is display-only — unticking it here would lie about the line total. */
-const posRemarkSpecialOf = (
-  variants: Record<string, unknown>,
-): { label: string; amountSen: number } | null => {
-  const r = variants.remark;
-  const text = typeof r === 'string' ? r.trim() : '';
-  const raw = Number(variants.extraAddonAmountRM ?? 0);
-  const amountSen = (Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0) * 100;
-  if (!text && amountSen <= 0) return null;
-  return { label: text || 'Extra add-on', amountSen };
-};
+/* posRemarkSpecialOf — the POS "special add-on" row (note + folded extra) for
+   the Special Orders accordion — lives in ../lib/pos-remark-special (pure +
+   unit-tested). Loo 2026-06-13: it reads variants.extraAddonNote, NOT the item
+   remark (variants.remark), which is now a separate field. */
 
 /* ── Per-category badge swatches ──────────────────────────────────────
    2026-05-27: extracted to lib/category-badges.ts so MfgSalesOrdersList +
@@ -1215,11 +1204,11 @@ const SpecialsAccordion = ({
               No specials configured.
             </span>
           )}
-          {/* POS remark + extra charge — free-text Special Add-on keyed on the
-              POS product page. Always checked + locked: the amount is already
-              inside the unit price (POS fold + server recompute), so unticking
-              here would misstate the line total. Edit the text via the line's
-              Remarks field. */}
+          {/* POS special add-on (note + extra charge) keyed on the POS product
+              page (variants.extraAddonNote). Always checked + locked: the amount
+              is already inside the unit price (POS fold + server recompute), so
+              unticking here would misstate the line total. This is separate from
+              the line's Remarks field, which is the item remark. */}
           {posRemark && (
             <label
               className={styles.specialsItem}
