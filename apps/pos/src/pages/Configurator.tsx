@@ -2205,6 +2205,7 @@ export const Configurator = () => {
           productId={p.id}
           productName={p.name}
           flatPrice={p.flat_price}
+          category={p.category_id ? p.category_id.toUpperCase() : undefined}
           onAdded={backToCatalog}
         />
       )}
@@ -2463,26 +2464,57 @@ interface FlatAddToCartProps {
   productId: string;
   productName: string;
   flatPrice: number;
+  /** UPPERCASE mfg category, stamped onto the cart snapshot for SO bucketing. */
+  category?: string;
   onAdded: () => void;
 }
 
-const FlatAddToCart = ({ productId, productName, flatPrice, onAdded }: FlatAddToCartProps) => {
+const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded }: FlatAddToCartProps) => {
   const addConfigured = useCart((s) => s.addConfigured);
+  const [qty, setQty] = useState(1);
   const handleAdd = () => {
     const snapshot: FlatConfigSnapshot = {
       kind: 'flat',
       productId,
       productName,
-      total: flatPrice,
+      category,
+      total: flatPrice,       // PER-UNIT — the server scales unit × qty.
       summary: 'Flat price',
     };
-    addConfigured(snapshot);
+    addConfigured(snapshot, { qty });
     onAdded();
   };
   return (
     <div className={styles.flatCard}>
       <span className="t-eyebrow">Flat price</span>
       <PriceTag amount={flatPrice} size="lg" />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', paddingTop: 'var(--space-2)' }}>
+        <span className={styles.stepper}>
+          <button
+            type="button"
+            className={styles.stepperBtn}
+            onClick={() => setQty((q) => Math.max(1, q - 1))}
+            disabled={qty <= 1}
+            aria-label="Decrease quantity"
+          >
+            <Minus size={12} strokeWidth={2} />
+          </button>
+          <span className={styles.stepperVal}>{qty}</span>
+          <button
+            type="button"
+            className={styles.stepperBtn}
+            onClick={() => setQty((q) => q + 1)}
+            aria-label="Increase quantity"
+          >
+            <Plus size={12} strokeWidth={2} />
+          </button>
+        </span>
+        {qty > 1 && flatPrice > 0 && (
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            {qty} × RM {flatPrice.toLocaleString('en-MY')} = RM {(qty * flatPrice).toLocaleString('en-MY')}
+          </span>
+        )}
+      </div>
       <Button variant="primary" onClick={handleAdd}>Add to cart</Button>
     </div>
   );
