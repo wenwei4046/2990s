@@ -3356,11 +3356,19 @@ async function redetectCrossCategoryDelivery(
   sb: any, docNo: string, newName: string, newPhone: string | null,
 ): Promise<{ isFollowup: boolean; sourceDocNo: string | null; total: number } | null> {
   const { data: lineRows } = await sb.from('mfg_sales_order_items')
-    .select('item_code, item_group, total_centi')
+    .select('item_code, item_group, total_centi, line_no')
     .eq('doc_no', docNo).eq('cancelled', false);
-  const lines = (lineRows ?? []) as Array<{ item_code: string; item_group: string | null; total_centi: number | null }>;
+  const lines = (lineRows ?? []) as Array<{ item_code: string; item_group: string | null; total_centi: number | null; line_no: number | null }>;
   const deliveryLines = lines.filter((l) => isDeliveryFeeServiceCode(l.item_code));
   if (deliveryLines.length === 0) return null; // no delivery fee → nothing to re-detect
+
+  // The rebuilt SVC-DELIVERY* lines append AFTER the kept lines (services sort
+  // last anyway, but a numbered line_no keeps the order stable + matches create).
+  const keptMaxLineNo = Math.max(
+    -1,
+    ...lines.filter((l) => !isDeliveryFeeServiceCode(l.item_code))
+      .map((l) => (typeof l.line_no === 'number' ? l.line_no : -1)),
+  );
 
   // Operator free-form fee — preserved across the recompute.
   const additionalSen = deliveryLines
@@ -3434,11 +3442,14 @@ async function redetectCrossCategoryDelivery(
   const h = (hdr ?? {}) as { debtor_name?: string | null; venue?: string | null; customer_delivery_date?: string | null };
 
   // Replace the SVC-DELIVERY* lines: delete the old, insert the recomputed.
-  await sb.from('mfg_sales_order_items').delete()
+  const { error: delErr } = await sb.from('mfg_sales_order_items').delete()
     .eq('doc_no', docNo).in('item_code', [SVC_DELIVERY, SVC_DELIVERY_CROSS, SVC_DELIVERY_ADD]);
+  if (delErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] delivery line delete failed:', delErr.message); }
   if (specs.length > 0) {
     const lineDateToday = new Date().toISOString().slice(0, 10);
-    const rows = specs.map((spec) => ({
+    const rows = specs.map((spec, i) => ({
+      doc_no: docNo,                                    // ⚠️ NOT NULL — omitting it silently dropped the line (the bug)
+      line_no: keptMaxLineNo >= 0 ? keptMaxLineNo + 1 + i : null,
       line_date: lineDateToday,
       debtor_name: h.debtor_name ?? newName,
       item_group: 'service',
@@ -3468,7 +3479,8 @@ async function redetectCrossCategoryDelivery(
       venue: h.venue ?? null,
       stock_status: 'READY',
     }));
-    await sb.from('mfg_sales_order_items').insert(rows);
+    const { error: insErr } = await sb.from('mfg_sales_order_items').insert(rows);
+    if (insErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] delivery line insert failed:', insErr.message); }
   }
 
   await sb.from('mfg_sales_orders').update({
