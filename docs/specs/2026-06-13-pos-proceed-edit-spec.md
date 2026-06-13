@@ -72,16 +72,32 @@ inline sentence; payment is unaffected.
 
 ## 4. POS changes — `apps/pos/src/pages/OrderStatus.tsx`
 
-### 4.1 Editable flags (replace the single `editable`)
+### 4.1 Editable flags — extract a pure, testable helper
+
+New pure helper `apps/pos/src/lib/so-edit-scope.ts` (unit-testable, keeps the
+component logic-free):
 
 ```ts
-const isDeliveredLane = ['DELIVERED','INVOICED','CLOSED'].includes(order.status);
-const editablePlaced  = order.status === 'CONFIRMED' && !order.proceededAt; // Order placed
-// Proceed lane = everything that isn't Order-placed and isn't Delivered.
-const editableProceed = !editablePlaced && !isDeliveredLane;               // D5
-const canEditDetails  = editablePlaced || editableProceed; // customer + address + payment
-// items + dates + Move-to-Proceed stay gated on editablePlaced.
+export type SoEditScope = {
+  isDeliveredLane: boolean;
+  editablePlaced: boolean;   // Order placed — items + dates + everything
+  editableProceed: boolean;  // Proceed lane — customer/address/payment only
+  canEditDetails: boolean;   // editablePlaced || editableProceed
+};
+export function getSoEditScope(input: { status: string; proceededAt: string | null }): SoEditScope {
+  const isDeliveredLane = ['DELIVERED', 'INVOICED', 'CLOSED'].includes(input.status);
+  const editablePlaced  = input.status === 'CONFIRMED' && !input.proceededAt;
+  // Proceed lane = anything that isn't Order-placed and isn't Delivered
+  // (CONFIRMED+proceeded, IN_PRODUCTION, READY_TO_SHIP, SHIPPED). D5.
+  // ON_HOLD / CANCELLED never reach the board (excluded server-side in /mine).
+  const editableProceed = !isDeliveredLane && !editablePlaced;
+  return { isDeliveredLane, editablePlaced, editableProceed, canEditDetails: editablePlaced || editableProceed };
+}
 ```
+
+In `OrderDetail`: `const scope = getSoEditScope(order); const { editablePlaced,
+canEditDetails } = scope;`. (items + dates + Move-to-Proceed stay on
+`editablePlaced`; customer/address/payment on `canEditDetails`.)
 
 - `editable` (items, dates, Move-to-Proceed, pencil) → **rename usages that mean
   "Order placed only" to `editablePlaced`** (no behavior change there).
@@ -183,34 +199,86 @@ change trips `so_identity_locked` (409) and we never reach the strip — correct
 > new customer. The PWP strip only fires when the resolved id actually differs
 > from the stored non-null id, so a no-op edit can't strip anything.
 
-### 5.3 `stripPwpForCustomerChange` helper (new, near recomputeTotals)
+### 5.3 PWP strip on customer change — reuse the tbc-swap revert machinery
+
+**⚠ Correction to an earlier assumption.** A PWP reward line does NOT store its
+discount in `discount_centi`. The create path passes `pwpBaseSen` into
+`recomputeFromSnapshot`, so the **PWP grant price is baked into
+`unit_price_centi`** (verified line 1970-2076: `unit = recomputed.unit_price_sen`
+with the pwp grant; `discount = client discountCenti`, usually 0). The reward
+line is marked by **`variants.pwp === true`** (+ `variants.pwpCode`). Therefore
+"recalculate to normal" must **re-derive the full price WITHOUT the PWP grant** —
+not zero a discount.
+
+The codebase already does exactly this in `tbc-swap` when a trigger line is
+swapped and strands a reward (lines 4839-4925). **Reuse that proven pattern.**
+
+**Pure, unit-tested core** — new file `apps/api/src/lib/pwp-customer-change.ts`:
+
+```ts
+// Decide what to do with each of an SO's PWP vouchers when its customer changes.
+export type PwpVoucherRow = {
+  code: string; status: string; source_doc_no: string | null; redeemed_doc_no: string | null;
+};
+export function classifyPwpVouchersForCustomerChange(
+  codes: PwpVoucherRow[], docNo: string,
+): { deleteCodes: string[]; releaseCodes: string[] } {
+  const deleteCodes: string[] = [];
+  const releaseCodes: string[] = [];
+  for (const c of codes) {
+    const mintedHere = c.source_doc_no === docNo;
+    const redeemedHere = c.redeemed_doc_no === docNo;
+    if (redeemedHere && mintedHere) deleteCodes.push(c.code);        // same-order promo → gone
+    else if (redeemedHere && !mintedHere) releaseCodes.push(c.code); // cross-order voucher → back to its real owner
+    else if (mintedHere && c.status === 'AVAILABLE') deleteCodes.push(c.code); // minted here for old customer → gone
+    // else: unrelated to this SO → leave it
+  }
+  return { deleteCodes, releaseCodes };
+}
+```
+
+**Strip flow inside PATCH `/:docNo`** — `stripPwpForCustomerChange(sb, docNo, user)`,
+defined near `planSofaRewardRevert` (line 4986). **Plan read-only first, then write**
+(mirrors tbc-swap):
 
 ```
-1. reward lines: mfg_sales_order_items where doc_no = docNo, not cancelled,
-   variants->>'pwpCode' is not null.
-   For each: clear variants.pwpCode, set discount_centi = 0,
-   total_centi = unit_price_centi * qty  (unit_price_centi is the FULL price;
-   discount_centi held the PWP delta — verified at create insert ~2138/2228).
-2. vouchers (pwp_codes) for this SO:
-   a. status='USED' AND redeemed_doc_no = docNo  → release: status='AVAILABLE',
-      redeemed_doc_no = null  (the voucher returns to whoever owns it — the old
-      customer still earned it elsewhere). updated_at bumped.
-   b. status='AVAILABLE' AND source_doc_no = docNo  → void: status='VOID'
-      (free-text status, no CHECK constraint, no migration; keeps an audit trail
-      and removes it from AVAILABLE circulation). updated_at bumped.
-   c. A code that is BOTH minted and used by this same SO (same-order promo,
-      source_doc_no = redeemed_doc_no = docNo) → void (case b wins over a).
-3. recomputeTotals(sb, docNo).  Stripping a discount only RAISES the total, so
-   the so_total_below_original POS guard is never tripped.
-4. recordSoAudit(action='CUSTOMER_CHANGED', fieldChanges incl. customer_id +
-   a pwp summary {rewardsReset, vouchersReleased, vouchersVoided}).
+PLAN (read-only, before the header UPDATE):
+  - load non-cancelled lines with variants.pwp === true.
+  - sofa reward builds: for each distinct variants.pwpCode among sofa lines,
+    call planSofaRewardRevert(sb, docNo, pwpCode). If ANY returns {ok:false}
+    (can't safely reprice) → PATCH returns 409 { error:'pwp_strip_failed',
+    reason:'This order’s sofa PWP can’t be auto-repriced — ask the
+    coordinator.' } and NOTHING is written (customer_id not changed).
+
+APPLY (after the header UPDATE succeeds):
+  1. Non-sofa reward lines: same block as tbc-swap 4849-4880 —
+     strip {pwp, pwpCode, pwpTriggerLabel} from variants, load
+     [loadProductByCode, loadFabricByCode, loadFabricSellingTiers] +
+     [loadMaintenanceConfig, loadFabricTierAddonConfig, loadSpecialAddons],
+     recomputeFromSnapshot(draft{unitPriceCenti:0, variants}, prod, fab, cfg,
+       null, null, tiers, addonCfg, null, null, specialDefs, null) → revertUnit,
+     update unit_price_centi/total_*/balance/margin/breakdown/description2.
+  2. Sofa reward builds: apply the planSofaRewardRevert updates (already computed).
+  3. Vouchers: classifyPwpVouchersForCustomerChange(codes, docNo) →
+       delete deleteCodes (sb.from('pwp_codes').delete().in('code', …)),
+       release releaseCodes (update {status:'AVAILABLE', redeemed_doc_no:null,
+       updated_at}). (delete, not VOID — matches Loo’s tbc-swap precedent
+       “dead vouchers go”, so no new status value / no migration.)
+  4. recomputeTotals(sb, docNo). Stripping a grant only RAISES the total → the
+     so_total_below_original POS guard is never tripped.
+  5. recordSoAudit(action:'UPDATE_DETAILS', fieldChanges:[customer_id from→to,
+     {field:'pwpStripped', to:`${rewardsReset} line(s)`},
+     {field:'pwpCodesDeleted', to: deleteCodes.join(', ')},
+     {field:'pwpCodesReleased', to: releaseCodes.join(', ')}]).
 ```
 
-PATCH returns `{ ok, docNo, pwpStripped: boolean, rewardsReset, vouchersReleased,
-vouchersVoided, newCustomerId }` so the POS can show the notice.
+PATCH returns `{ ok, docNo, pwpStripped:boolean, rewardsReset, vouchersDeleted,
+vouchersReleased, newCustomerId }` so the POS can show the notice.
 
-> Note: cancellation idempotency — the helper is safe to re-run (a second call
-> finds no `pwpCode` lines and no matching vouchers → no-ops).
+> Idempotent: a re-run finds no `variants.pwp` lines and no matching vouchers → no-ops.
+> Reuse, don't refactor: PWP code is incident-prone (many memory entries) — do
+> NOT restructure tbc-swap; the strip REPLICATES its non-sofa block and CALLS the
+> existing `planSofaRewardRevert`.
 
 ### 5.4 `hasPwp` on `/mine` (optional, for the pre-save confirm)
 
@@ -229,19 +297,27 @@ reusing the drawer's `GET /:docNo` `pwpCodes` instead.
 
 ## 7. Tests
 
-- **shared/api unit** (vitest): `stripPwpForCustomerChange` —
-  (a) reward line reprices full + discount cleared;
-  (b) USED-on-this-SO voucher → AVAILABLE, redeemed_doc_no null;
-  (c) AVAILABLE-minted-by-this-SO voucher → VOID;
-  (d) same-order promo voucher → VOID;
-  (e) totals recomputed up; (f) idempotent re-run no-ops;
-  (g) null old customer → backfill, no strip; (h) same customer → no strip.
-- **api**: field-scoped processing lock — date change after proc date 409s;
-  customer/address change after proc date passes (no DO/SI) succeeds; with DO/SI
-  → `so_identity_locked`.
-- **pos** (vitest + RTL): drawer in `IN_PRODUCTION` shows editable customer/address
-  + payment + Save, items pencil hidden, dates disabled; Delivered lane fully
-  locked. Pre-save confirm fires when hasPwp + phone changed.
+The DB-coupled apply logic (Supabase query builders) is not unit-tested — like
+the rest of the route file. Extract the **decision logic** into pure helpers and
+unit-test those (vitest); the price re-derivation rides the already-tested
+`recomputeFromSnapshot` (`apps/api/src/lib/mfg-pricing-recompute.test.ts`).
+
+- **api lib unit** — `apps/api/src/lib/pwp-customer-change.test.ts` for
+  `classifyPwpVouchersForCustomerChange`:
+  (a) redeemed+minted here (same-order promo) → delete;
+  (b) redeemed here, minted elsewhere (cross-order) → release;
+  (c) minted here + AVAILABLE (unused, old customer) → delete;
+  (d) unrelated code (other SO) → untouched;
+  (e) empty input → empty result.
+- **pos lib unit** — `apps/pos/src/lib/so-edit-scope.test.ts` for `getSoEditScope`:
+  CONFIRMED+!proceeded → placed; CONFIRMED+proceeded → proceed (canEditDetails,
+  !placed); IN_PRODUCTION/READY_TO_SHIP/SHIPPED → proceed; DELIVERED/INVOICED/
+  CLOSED → delivered (no edit).
+- **manual / staging verification** (DB-coupled, can't unit-test): field-scoped
+  processing lock (date change after proc date → 409 `so_locked_processing`;
+  customer/address change after proc date with no DO/SI → ok; with DO/SI →
+  `so_identity_locked`); end-to-end customer-change-strip on a seeded PWP SO
+  (reward reprices up, vouchers deleted/released, totals raised).
 - Run full `pnpm typecheck && pnpm test && pnpm lint && pnpm build`
   (build hits build-guard → `ALLOW_LOCAL_API_URL=1` per #590 memory).
 
