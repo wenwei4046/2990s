@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { summarizeSofaCells, type Cell, type Depth } from '@2990s/shared';
+import { summarizeSofaCells, type Cell, type Depth, type DesiredFreeGift } from '@2990s/shared';
 import { clearHandoverFormSnapshot } from '../lib/handover-helpers';
 
 /**
@@ -120,6 +120,12 @@ export interface FlatConfigSnapshot {
    *  configurator so inferItemGroup buckets the SO line into accessories_centi
    *  instead of falling through to 'others'. */
   category?: string;
+  // 0170 — Default Free Gift markers. A gift line is a flat line at total 0,
+  // its qty derived by the reconciler (entry.qty × trigger.qty), linked to its
+  // trigger by freeGiftTriggerKey so removing the trigger removes the gift.
+  isFreeGift?: boolean;
+  freeGiftTriggerKey?: string;
+  freeGiftCampaign?: string | null;
   total: number;
   summary: string;       // e.g. "Flat price"
 }
@@ -221,6 +227,8 @@ interface CartState {
    *  price. Called when the same-cart trigger leaves the cart (its reserved
    *  code is freed) so a reward never lingers at the PWP price with a dead code. */
   revertPwp: (key: string) => void;
+  /** 0170 — make the cart's free-gift lines match `desired` (add/update/remove). */
+  reconcileFreeGifts(desired: DesiredFreeGift[], nameById: Map<string, string>): void;
   /** Swap a reward line's voucher code in place (price unchanged). Used by the
    *  PWP reconciler when the server re-minted a trigger's codes (e.g. after a
    *  failed order burned + replaced them) and the line's snapshot went stale. */
@@ -348,6 +356,43 @@ export const useCart = create<CartState>()((set, get) => ({
         return { ...l, config: next as CartConfig };
       }),
     });
+  },
+
+  reconcileFreeGifts(desired, nameById) {
+    const want = new Map(desired.map((d) => [d.key, d]));
+    const current = get().lines;
+    const isGift = (l: CartLine): boolean =>
+      (l.config as { isFreeGift?: boolean }).isFreeGift === true;
+
+    // Keep non-gift lines untouched; update gift lines that are still wanted;
+    // drop gift lines no longer wanted.
+    const kept = current.flatMap((l) => {
+      if (!isGift(l)) return [l];
+      const d = want.get(l.key);
+      if (!d) return [];                       // trigger gone → remove
+      want.delete(l.key);                      // mark as satisfied
+      const cfg = l.config as FlatConfigSnapshot;
+      return [{ ...l, qty: d.qty, config: { ...cfg, productName: nameById.get(d.giftProductId) ?? cfg.productName, freeGiftCampaign: d.campaignName, total: 0 } }];
+    });
+
+    // Add any still-wanted gift lines that weren't already present.
+    const added = [...want.values()].map((d) => ({
+      key: d.key,
+      qty: d.qty,
+      config: {
+        kind: 'flat' as const,
+        productId: d.giftProductId,
+        productName: nameById.get(d.giftProductId) ?? d.giftProductId,
+        category: 'ACCESSORY',
+        isFreeGift: true,
+        freeGiftTriggerKey: d.triggerKey,
+        freeGiftCampaign: d.campaignName,
+        total: 0,
+        summary: 'Free gift',
+      } satisfies FlatConfigSnapshot,
+    }));
+
+    set({ lines: [...kept, ...added] });
   },
 
   setPwpCode(key, code) {

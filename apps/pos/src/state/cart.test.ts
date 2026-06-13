@@ -8,6 +8,7 @@ import {
   type CartLine,
   type CartConfig,
 } from './cart';
+import { freeGiftLineKey, type DesiredFreeGift } from '@2990s/shared';
 
 // Minimal config fixture — cartCategoryConflict only reads `config.kind`, so
 // the per-kind detail fields are irrelevant here (cast past the union).
@@ -161,5 +162,59 @@ describe('cart category helpers', () => {
     expect(cartHasMainNonSofa([line('bedframe')])).toBe(true);
     expect(cartHasMainNonSofa([line('flat')])).toBe(false);   // accessory
     expect(cartHasMainNonSofa([line('sofa')])).toBe(false);
+  });
+});
+
+const reset = () => useCart.setState({ lines: [] });
+
+describe('reconcileFreeGifts', () => {
+  beforeEach(reset);
+
+  const nameById = new Map([['mfg-pillow', 'Memory Pillow']]);
+
+  it('adds a gift line at RM 0 with the campaign + derived qty', () => {
+    const desired: DesiredFreeGift[] = [
+      { key: freeGiftLineKey('t0', 0), triggerKey: 't0', giftProductId: 'mfg-pillow', qty: 4, campaignName: 'Raya Campaign' },
+    ];
+    useCart.getState().reconcileFreeGifts(desired, nameById);
+    const lines = useCart.getState().lines;
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.key).toBe(freeGiftLineKey('t0', 0));
+    expect(lines[0]!.qty).toBe(4);
+    const cfg = lines[0]!.config as { isFreeGift?: boolean; total: number; freeGiftCampaign?: string | null; productId: string };
+    expect(cfg.isFreeGift).toBe(true);
+    expect(cfg.total).toBe(0);
+    expect(cfg.freeGiftCampaign).toBe('Raya Campaign');
+    expect(cfg.productId).toBe('mfg-pillow');
+  });
+
+  it('updates qty when the desired qty changes', () => {
+    const mk = (qty: number): DesiredFreeGift[] => [
+      { key: freeGiftLineKey('t0', 0), triggerKey: 't0', giftProductId: 'mfg-pillow', qty, campaignName: null },
+    ];
+    useCart.getState().reconcileFreeGifts(mk(2), nameById);
+    useCart.getState().reconcileFreeGifts(mk(6), nameById);
+    expect(useCart.getState().lines).toHaveLength(1);
+    expect(useCart.getState().lines[0]!.qty).toBe(6);
+  });
+
+  it('removes a gift line whose trigger no longer desires it', () => {
+    useCart.getState().reconcileFreeGifts(
+      [{ key: freeGiftLineKey('t0', 0), triggerKey: 't0', giftProductId: 'mfg-pillow', qty: 2, campaignName: null }],
+      nameById,
+    );
+    useCart.getState().reconcileFreeGifts([], nameById);
+    expect(useCart.getState().lines).toHaveLength(0);
+  });
+
+  it('never touches non-gift lines', () => {
+    useCart.setState({ lines: [{ key: 'cfg-x', qty: 1, config: { kind: 'flat', productId: 'mfg-mat', productName: 'Mat', total: 1990, summary: 'Flat price' } }] });
+    useCart.getState().reconcileFreeGifts(
+      [{ key: freeGiftLineKey('cfg-x', 0), triggerKey: 'cfg-x', giftProductId: 'mfg-pillow', qty: 1, campaignName: null }],
+      nameById,
+    );
+    const lines = useCart.getState().lines;
+    expect(lines).toHaveLength(2);
+    expect(lines.find((l) => l.key === 'cfg-x')!.config.total).toBe(1990);
   });
 });
