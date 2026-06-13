@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2, FlipHorizontal2 } from 'lucide-react';
+import { ArrowLeft, Hourglass, X, Plus, Minus, Package, Trash2, FlipHorizontal2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, matchComboSubset, comboChargedPrices, orderSofaCellsLeftToRight, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
 import { resolvePwp, type PwpLineInput } from '@2990s/shared/pwp';
@@ -1150,19 +1150,6 @@ export const Configurator = () => {
     return m;
   }, [addons.data]);
 
-  // Pillows that ship FREE with this Model (configured in Backend SKU Master
-  // → products.included_addons jsonb). Lookup full addon details for display.
-  const includedPillows = useMemo(() => {
-    const arr = (product.data?.included_addons ?? []) as { addonId: string; qty: number }[];
-    return arr
-      .map((entry) => {
-        const addon = addonsById.get(entry.addonId);
-        if (!addon) return null;
-        return { addon, qty: entry.qty };
-      })
-      .filter((v): v is { addon: AddonRow; qty: number } => v != null);
-  }, [product.data, addonsById]);
-
   // Addon extras the staff can attach (e.g. extra pillows beyond the free
   // pair). Filter to category=pillow for mattress configurator.
   const pillowAddOns = useMemo(
@@ -2115,33 +2102,6 @@ export const Configurator = () => {
                 <span className={styles.seriesEyebrow}>{formatSeries(p.series_id)}</span>
               )}
             </RailSection>
-
-            {includedPillows.length > 0 && (
-              <RailSection
-                title="Pillows · included free"
-                sub={`${includedPillows.reduce((s, x) => s + x.qty, 0)} complimentary`}
-              >
-                <p className={styles.aboutText}>
-                  Every {p.category_id} comes with {includedPillows.reduce((s, x) => s + x.qty, 0)}{' '}
-                  {includedPillows.length === 1 ? includedPillows[0]!.addon.label.toLowerCase() : ''}
-                  {' '}pillow{includedPillows.reduce((s, x) => s + x.qty, 0) > 1 ? 's' : ''}.
-                </p>
-                {includedPillows.map(({ addon, qty }) => (
-                  <div key={addon.id} className={styles.pillowRow}>
-                    <span className={styles.pillowIcon}>
-                      <Sparkles size={16} strokeWidth={1.75} />
-                    </span>
-                    <span className={styles.pillowMeta}>
-                      <span className={styles.pillowName}>{addon.label}</span>
-                      {addon.description && (
-                        <span className={styles.pillowDesc}>{addon.description}</span>
-                      )}
-                    </span>
-                    <span className={styles.includedPill}>× {qty} INCLUDED</span>
-                  </div>
-                ))}
-              </RailSection>
-            )}
 
             {pillowAddOns.length > 0 && (
               <RailSection title="Add-on · need more pillows?" sub="Add extras at piece price">

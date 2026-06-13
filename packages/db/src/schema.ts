@@ -1864,6 +1864,7 @@ export const mfgProducts = pgTable('mfg_products', {
   pwpPriceSen:            integer('pwp_price_sen').notNull().default(0), // PWP (换购) SELLING base price — migration 0128. Used INSTEAD of sell_price_sen when this line is a valid PWP reward (fabric Δ still stacks on top). 0 = no PWP price set. Sofa column reserved/unused. Cost path never reads it.
   posActive:              boolean('pos_active').notNull().default(true), // 0111 (D5): selling-only POS catalog visibility. Master Account writes; POS catalog read filters. SEPARATE from `status` (cost/PO).
   includedAddons:         jsonb('included_addons').notNull().default([]), // 0113 (D7): permanent free gifts ({addonId, qty}[]). Master Account sets; Configurator renders "× N INCLUDED". DISPLAY-ONLY — no inventory/cost deduction.
+  defaultFreeGifts:       jsonb('default_free_gifts').notNull().default([]), // 0170 — accessory free gifts ([{giftProductId, qty, campaignName?}]). Non-sofa trigger. Auto-added at RM 0 in POS cart; server grants base 0.
   productionTimeMinutes:  integer('production_time_minutes').notNull().default(0),
   subAssemblies:          jsonb('sub_assemblies'),                // string[] e.g. ['Divan','Headboard']
   skuCode:                text('sku_code'),
@@ -1933,6 +1934,7 @@ export const sofaComboPricing = pgTable('sofa_combo_pricing', {
   // the Backend cost side gets no such column (cost is identical regardless of
   // selling price). {} = no PWP price set → never overrides → zero price change.
   pwpPricesByHeight: jsonb('pwp_prices_by_height').notNull().default({}),  // { "<inch>": centi|null } — PWP SELLING (POS)
+  defaultFreeGifts: jsonb('default_free_gifts').notNull().default([]),  // 0170 — accessory free gifts granted when this combo is the cart's sofa build (trigger by combo, D9).
   label:           text('label'),                                         // null = auto-build from modules
   effectiveFrom:   date('effective_from').notNull(),
   deletedAt:       timestamp('deleted_at', { withTimezone: true }),

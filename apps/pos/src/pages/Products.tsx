@@ -79,7 +79,7 @@ import {
 import {
   useMfgProducts,
   useUpdateMfgProductPrices,
-  useUpdateMfgProductGifts,
+  useUpdateMfgProductDefaultGifts,
   useCreateMfgProduct,
   useDeleteMfgProduct,
   useMaintenanceConfig,
@@ -2004,7 +2004,7 @@ const ProductRow = ({
               padding: 0,
               margin: 0,
               cursor: 'pointer',
-              color: (row.included_addons?.length ?? 0) > 0 ? 'var(--c-orange)' : 'var(--fg-muted)',
+              color: (row.default_free_gifts?.length ?? 0) > 0 ? 'var(--c-orange)' : 'var(--fg-muted)',
               display: 'inline-flex',
               alignItems: 'center',
             }}
@@ -5533,41 +5533,48 @@ const fmtRmCenti = (centi: number): string =>
   `RM ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /* ────────────────────────────────────────────────────────────────────────
-   D7 (Phase 3) — Free-gifts editor. Master Account sets the permanent free
-   add-ons included with a SKU (e.g. a mattress ships with 2 pillows). Writes
-   mfg_products.included_addons ({addonId, qty}[]); the POS Configurator renders
-   "× N INCLUDED". DISPLAY-ONLY — no inventory or cost deduction (D7).
+   0170 — Default Free Gift editor. Admin sets which ACCESSORY SKUs are
+   auto-added to the POS cart at RM 0 when a product is placed on an SO.
+   Writes mfg_products.default_free_gifts ([{giftProductId, qty, campaignName}]).
    ──────────────────────────────────────────────────────────────────────── */
+type DraftGift = { giftProductId: string; qty: number; campaignName: string };
+
 const ProductGiftsDrawer = ({
   row, onClose,
 }: { row: MfgProductRow; onClose: () => void }) => {
-  const addons = useAddons();
-  const update = useUpdateMfgProductGifts();
-  const [gifts, setGifts] = useState<{ addonId: string; qty: number }[]>(row.included_addons ?? []);
-  const [pickAddon, setPickAddon] = useState('');
-  const [pickQty, setPickQty] = useState(1);
+  const accessories = useMfgProducts({ category: 'ACCESSORY' });
+  const updateDefaultGifts = useUpdateMfgProductDefaultGifts();
 
-  const addonsById = useMemo(() => {
-    const m = new Map<string, AddonRow>();
-    for (const a of addons.data ?? []) m.set(a.id, a);
-    return m;
-  }, [addons.data]);
+  const [draft, setDraft] = useState<DraftGift[]>(() =>
+    (row.default_free_gifts ?? []).map((g) => ({
+      giftProductId: g.giftProductId,
+      qty: g.qty,
+      campaignName: g.campaignName ?? '',
+    })),
+  );
 
-  const persist = (next: { addonId: string; qty: number }[]) => {
-    setGifts(next);
-    update.mutate({ id: row.id, includedAddons: next });
+  const setRow = (i: number, patch: Partial<DraftGift>) =>
+    setDraft((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+
+  const addRow = () =>
+    setDraft((prev) => [...prev, { giftProductId: '', qty: 1, campaignName: '' }]);
+
+  const removeRow = (i: number) =>
+    setDraft((prev) => prev.filter((_, idx) => idx !== i));
+
+  const save = async () => {
+    await updateDefaultGifts.mutateAsync({
+      id: row.id,
+      defaultFreeGifts: draft
+        .filter((g) => g.giftProductId)
+        .map((g) => ({
+          giftProductId: g.giftProductId,
+          qty: Math.max(1, g.qty),
+          campaignName: g.campaignName.trim() || null,
+        })),
+    });
+    onClose();
   };
-  const addGift = () => {
-    if (!pickAddon) return;
-    const existing = gifts.find((g) => g.addonId === pickAddon);
-    const next = existing
-      ? gifts.map((g) => (g.addonId === pickAddon ? { ...g, qty: g.qty + pickQty } : g))
-      : [...gifts, { addonId: pickAddon, qty: pickQty }];
-    persist(next);
-    setPickAddon('');
-    setPickQty(1);
-  };
-  const removeGift = (addonId: string) => persist(gifts.filter((g) => g.addonId !== addonId));
 
   const inputStyle = {
     padding: '8px 10px',
@@ -5576,6 +5583,8 @@ const ProductGiftsDrawer = ({
     borderRadius: 'var(--radius-md)',
     background: 'var(--c-cream)',
   } as const;
+
+  const accessoryList = accessories.data ?? [];
 
   return (
     <div className={styles.drawerBackdrop} onClick={onClose}>
@@ -5586,7 +5595,7 @@ const ProductGiftsDrawer = ({
           border: '1px solid var(--line-strong)',
           borderRadius: 'var(--radius-xl)',
           boxShadow: 'var(--shadow-3)',
-          width: 'min(520px, 95vw)',
+          width: 'min(560px, 95vw)',
           maxHeight: '85vh',
           display: 'flex',
           flexDirection: 'column',
@@ -5596,11 +5605,10 @@ const ProductGiftsDrawer = ({
           <div>
             <h2 className={styles.drawerTitle}>
               <Gift {...ICON_PROPS} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-              Free gifts · <span className={styles.codeChip}>{row.code}</span>
+              Default free gift · <span className={styles.codeChip}>{row.code}</span>
             </h2>
             <p style={{ marginTop: 4, fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
-              Included free with this SKU — shown as “× N INCLUDED” in the configurator.
-              Display-only; no stock is deducted.
+              Accessory SKUs auto-added at RM 0 when this product is placed on a sales order.
             </p>
           </div>
           <button type="button" className={styles.iconBtn} onClick={onClose}>
@@ -5609,47 +5617,89 @@ const ProductGiftsDrawer = ({
         </header>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)' }}>
-          {gifts.length === 0 && (
+          {draft.length === 0 && (
             <div style={{ textAlign: 'center', padding: 'var(--space-5)', color: 'var(--fg-muted)' }}>
               <Gift size={32} strokeWidth={1.5} />
-              <div style={{ marginTop: 8 }}>No free gifts on this SKU yet.</div>
+              <div style={{ marginTop: 8 }}>No default free gifts configured for this SKU.</div>
             </div>
           )}
-          {gifts.map((g) => {
-            const a = addonsById.get(g.addonId);
-            return (
-              <div
-                key={g.addonId}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0', borderBottom: '1px solid var(--line-strong)' }}
-              >
-                <span style={{ flex: 1, fontWeight: 600 }}>{a?.label ?? g.addonId}</span>
-                <span style={{ fontSize: 'var(--fs-12)', fontWeight: 700, color: 'var(--c-orange)', whiteSpace: 'nowrap' }}>× {g.qty} FREE</span>
-                <button type="button" className={styles.iconBtn} onClick={() => removeGift(g.addonId)} aria-label={`Remove ${a?.label ?? 'gift'}`}>
-                  <X size={14} strokeWidth={1.75} />
-                </button>
-              </div>
-            );
-          })}
 
-          <div style={{ display: 'flex', gap: 8, marginTop: 'var(--space-4)', alignItems: 'center' }}>
-            <select value={pickAddon} onChange={(e) => setPickAddon(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
-              <option value="">Pick an add-on…</option>
-              {(addons.data ?? []).filter((a) => a.enabled).map((a) => (
-                <option key={a.id} value={a.id}>{a.label}</option>
-              ))}
-            </select>
-            <input
-              type="number"
-              min={1}
-              max={20}
-              value={pickQty}
-              onChange={(e) => setPickQty(Math.min(20, Math.max(1, Math.floor(Number(e.target.value) || 1))))}
-              style={{ ...inputStyle, width: 64 }}
-              aria-label="Quantity"
-            />
-            <Button variant="primary" onClick={addGift} disabled={!pickAddon || update.isPending}>Add</Button>
+          {draft.map((g, i) => (
+            <div
+              key={i}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 64px 1fr auto',
+                gap: 8,
+                alignItems: 'center',
+                padding: '10px 0',
+                borderBottom: '1px solid var(--line-strong)',
+              }}
+            >
+              {/* Accessory picker */}
+              <select
+                value={g.giftProductId}
+                onChange={(e) => setRow(i, { giftProductId: e.target.value })}
+                style={{ ...inputStyle }}
+                aria-label="Gift accessory"
+              >
+                <option value="">Choose accessory…</option>
+                {accessoryList.map((a) => (
+                  <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
+                ))}
+              </select>
+
+              {/* Qty stepper */}
+              <input
+                type="number"
+                min={1}
+                value={g.qty}
+                onChange={(e) => setRow(i, { qty: Math.max(1, Math.floor(Number(e.target.value) || 1)) })}
+                style={{ ...inputStyle, textAlign: 'center' }}
+                aria-label="Quantity"
+              />
+
+              {/* Campaign name */}
+              <input
+                type="text"
+                value={g.campaignName}
+                onChange={(e) => setRow(i, { campaignName: e.target.value })}
+                placeholder="Campaign name (optional)"
+                style={{ ...inputStyle }}
+                aria-label="Campaign name"
+              />
+
+              {/* Remove */}
+              <button
+                type="button"
+                className={styles.iconBtn}
+                onClick={() => removeRow(i)}
+                aria-label="Remove gift row"
+              >
+                <X size={14} strokeWidth={1.75} />
+              </button>
+            </div>
+          ))}
+
+          <div style={{ marginTop: 'var(--space-4)' }}>
+            <Button variant="ghost" size="md" onClick={addRow}>
+              <Plus size={14} strokeWidth={1.75} style={{ marginRight: 4 }} />
+              Add gift
+            </Button>
           </div>
         </div>
+
+        <footer className={styles.drawerFooter}>
+          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+          <Button
+            variant="primary"
+            size="md"
+            onClick={save}
+            disabled={updateDefaultGifts.isPending}
+          >
+            {updateDefaultGifts.isPending ? 'Saving…' : 'Save'}
+          </Button>
+        </footer>
       </div>
     </div>
   );

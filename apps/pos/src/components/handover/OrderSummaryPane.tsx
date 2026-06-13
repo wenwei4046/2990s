@@ -84,6 +84,11 @@ const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: For
                   PWP price{'pwpTriggerLabel' in l.config && l.config.pwpTriggerLabel ? ` · from ${l.config.pwpTriggerLabel}` : ''}
                 </div>
               )}
+              {'isFreeGift' in l.config && l.config.isFreeGift && (
+                <div className={styles.itemDetail}>
+                  {('freeGiftCampaign' in l.config && l.config.freeGiftCampaign) ? l.config.freeGiftCampaign : 'Free gift'}
+                </div>
+              )}
             </div>
             <div className={styles.itemPrice}>
               <span className={styles.itemPriceUnit}>RM</span>

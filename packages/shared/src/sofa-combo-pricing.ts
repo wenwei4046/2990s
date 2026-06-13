@@ -56,6 +56,13 @@ export interface SofaComboRow {
   label?: string | null;
   effectiveFrom: string;        // ISO date 'YYYY-MM-DD'
   deletedAt?: string | null;
+  /** Default Free Gift (migration 0170, D9) — raw jsonb [{giftProductId, qty,
+   *  campaignName?}]. When a cart's sofa build matches this combo, the combo is a
+   *  trigger granting these accessory gifts. SELECTING/passthrough only — the
+   *  pricing engine never reads it; the SO-create handler parses it via
+   *  parseDefaultFreeGifts to build the free-gift trigger map. Optional: most
+   *  combos / legacy snapshots carry none. */
+  defaultFreeGifts?: unknown;
 }
 
 export interface PickComboArgs {
