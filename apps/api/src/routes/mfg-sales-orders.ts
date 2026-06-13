@@ -892,12 +892,17 @@ mfgSalesOrders.get('/mine', async (c) => {
     const docNo = r.doc_no ?? '';
     const deposit = typeof r.deposit_centi === 'number' ? r.deposit_centi : 0;
     const ledger = paidLedgerByDoc.get(docNo) ?? 0;
+    const soItems = itemsByDoc.get(docNo) ?? [];
     return {
       ...r,
       // Total received = ledger payments (+ header deposit only when the
       // ledger doesn't already carry it as an is_deposit row).
       paid_centi_total: (depositInLedger.has(docNo) ? 0 : deposit) + ledger,
-      items: itemsByDoc.get(docNo) ?? [],
+      /* Loo 2026-06-13 — does this SO carry a PWP promo? The drawer uses it to
+         warn before a Save that re-points the order to a different customer
+         (which strips the PWP). Derived from the items already fetched. */
+      has_pwp: soItems.some((it) => Boolean((it.variants as { pwp?: unknown } | null)?.pwp)),
+      items: soItems,
     };
   });
 

@@ -111,6 +111,9 @@ interface MyOrderRow {
   staffInitials: string | null;
   pieces: number;
   firstImage: string | null;
+  /* Does this SO carry a PWP promo? Used to warn before a Save that re-points
+     the order to a different customer (which strips the PWP). */
+  hasPwp: boolean;
   items: OrderItem[];
 }
 
@@ -137,6 +140,7 @@ interface MineSoRow {
   total_revenue_centi: number | null;
   line_count: number | null;
   paid_centi_total: number | null;
+  has_pwp?: boolean | null;
   items: Array<{
     /** Optional — an older deployed API may not send these yet; the TBC
      *  editor only renders when id is present. */
@@ -346,6 +350,7 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
           staffInitials: null,
           pieces: r.line_count ?? items.reduce((s, it) => s + it.qty, 0),
           firstImage: null,
+          hasPwp: r.has_pwp ?? false,
           items,
         };
       });
@@ -414,6 +419,15 @@ const describeSoActionError = (e: unknown): string => {
   }
   if (err === 'processing_delivery_must_pair') {
     return 'Processing and Delivery dates must be set together (or both left empty).';
+  }
+  if (err === 'so_locked_processing') {
+    return 'The processing date has passed — dates and items are locked. Customer, address and payment can still be updated.';
+  }
+  if (err === 'so_identity_locked') {
+    return 'This order already has a delivery order / invoice — customer and address are locked. Payment can still be updated.';
+  }
+  if (err === 'pwp_strip_failed') {
+    return 'This order has a sofa PWP promo that can’t be auto-repriced for a new customer — ask the coordinator.';
   }
   const reason = p.reason ?? p.message;
   if (reason) return String(reason);
@@ -1472,7 +1486,20 @@ const OrderDetail = ({ order, onClose }: {
     },
   });
 
-  const onSave = () => saveMutation.mutate();
+  const onSave = () => {
+    /* Warn before a customer change on a PWP order — the server will strip the
+       promo and reprice to normal (Loo 2026-06-13). Name OR phone is the
+       customer-resolution key, so a change to either is what re-points it. */
+    const nameOrPhoneChanged =
+      edited.customerName !== order.customerName || edited.customerPhone !== order.customerPhone;
+    if (order.hasPwp && nameOrPhoneChanged) {
+      const ok = window.confirm(
+        'Changing the customer will remove this order’s PWP promo and reprice it to normal. Continue?',
+      );
+      if (!ok) return;
+    }
+    saveMutation.mutate();
+  };
   const onRecordPayment = () => { if (additionalPaid > 0 && paySlipSession !== null) paymentMutation.mutate(); };
   const onProceed = () => {
     if (!allOk) return;
