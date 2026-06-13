@@ -1008,6 +1008,9 @@ const ModelAllowedOptionsDrawer = ({
   const isSofa     = m.category === 'SOFA';
   const isBedframe = m.category === 'BEDFRAME';
   const isMattress = m.category === 'MATTRESS';
+  // Flat categories have no variants — they're sold straight at the SKU Master
+  // price, so the option pickers (sizes/compartments/etc.) don't apply.
+  const isFlatCategory = m.category === 'ACCESSORY' || m.category === 'SERVICE';
 
   /* Master pool sources (drawn from MaintenanceConfig). For lists keyed as
      PricedOption[], we project just the .value field for the chip text. */
@@ -1079,47 +1082,56 @@ const ModelAllowedOptionsDrawer = ({
         first if you don't see what you need.
       </p>
 
-      {sizePool.length > 0 && (
-        <AllowedOptionsSection
-          label={isSofa ? 'Seat sizes (inches)' : 'Sizes'}
-          pool={sizePool}
-          isTicked={(v) => isTicked('sizes', v)}
-          onToggle={(v) => toggle('sizes', v)}
-        />
-      )}
-      {isSofa && compartmentPool.length > 0 && (
-        <AllowedOptionsSection
-          label="Compartments"
-          pool={compartmentPool}
-          isTicked={(v) => isTicked('compartments', v)}
-          onToggle={(v) => toggle('compartments', v)}
-        />
-      )}
-      {legHeightPool.length > 0 && (
-        <AllowedOptionsSection
-          label="Leg heights"
-          pool={legHeightPool}
-          isTicked={(v) => isTicked('leg_heights', v)}
-          onToggle={(v) => toggle('leg_heights', v)}
-        />
-      )}
-      {specialAddonPool.length > 0 && (
-        <AllowedOptionsSection
-          label="Special Add-ons"
-          pool={specialAddonPool}
-          isTicked={(v) => isTicked('specials', v)}
-          onToggle={(v) => toggle('specials', v)}
-        />
-      )}
+      {isFlatCategory ? (
+        <p className={styles.eyebrow}>
+          No configurable options for {m.category.toLowerCase()} models — SKU rows
+          track everything directly.
+        </p>
+      ) : (
+        <>
+          {sizePool.length > 0 && (
+            <AllowedOptionsSection
+              label={isSofa ? 'Seat sizes (inches)' : 'Sizes'}
+              pool={sizePool}
+              isTicked={(v) => isTicked('sizes', v)}
+              onToggle={(v) => toggle('sizes', v)}
+            />
+          )}
+          {isSofa && compartmentPool.length > 0 && (
+            <AllowedOptionsSection
+              label="Compartments"
+              pool={compartmentPool}
+              isTicked={(v) => isTicked('compartments', v)}
+              onToggle={(v) => toggle('compartments', v)}
+            />
+          )}
+          {legHeightPool.length > 0 && (
+            <AllowedOptionsSection
+              label="Leg heights"
+              pool={legHeightPool}
+              isTicked={(v) => isTicked('leg_heights', v)}
+              onToggle={(v) => toggle('leg_heights', v)}
+            />
+          )}
+          {specialAddonPool.length > 0 && (
+            <AllowedOptionsSection
+              label="Special Add-ons"
+              pool={specialAddonPool}
+              isTicked={(v) => isTicked('specials', v)}
+              onToggle={(v) => toggle('specials', v)}
+            />
+          )}
 
-      {(isSofa || isBedframe) && (
-        <FabricAllowedSection
-          series={(fabricLib.data ?? []).map((f) => ({ id: f.id, label: f.label }))}
-          coloursBySeries={coloursBySeries}
-          isTicked={(code) => isTicked('fabrics', code)}
-          onToggle={(code) => toggle('fabrics', code)}
-          onSetAll={setFabricsBulk}
-        />
+          {(isSofa || isBedframe) && (
+            <FabricAllowedSection
+              series={(fabricLib.data ?? []).map((f) => ({ id: f.id, label: f.label }))}
+              coloursBySeries={coloursBySeries}
+              isTicked={(code) => isTicked('fabrics', code)}
+              onToggle={(code) => toggle('fabrics', code)}
+              onSetAll={setFabricsBulk}
+            />
+          )}
+        </>
       )}
 
       <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 'var(--space-5)' }}>
