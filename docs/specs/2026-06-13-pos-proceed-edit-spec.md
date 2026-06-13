@@ -3,6 +3,11 @@
 > 2026-06-13 · author: Claude (with Loo)
 > Branch: `feat/pos-proceed-status-edit` · worktree base: `origin/main` @ c1310c4 (has #589 un-proceed + #590)
 
+> **⚠️ REVISION 2 (2026-06-13, after #592 went live) — the customer-change
+> behavior in §2 D1/§5.3 was REVERSED by Loo after testing.** The PWP "strip to
+> normal" was wrong. The corrected behavior is at the bottom of this file under
+> **"Revision 2"** — read that, not the original §5.3, for what actually shipped.
+
 ## 1. Goal
 
 In the POS **My orders** drawer, a Sales Order that has already been **Proceeded**
@@ -335,3 +340,67 @@ unit-test those (vitest); the price re-derivation rides the already-tested
   DO/SI snapshots).
 - No payment editing in the Delivered lane (kept locked; possible later ask).
 - No change to the un-proceed flow (#589) or the create-path PWP logic.
+
+---
+
+## Revision 2 — corrected customer-change behavior (2026-06-13, post-#592 bug fix)
+
+Two bugs surfaced once #592 was live; Loo corrected the design:
+
+**Bug 1 — PWP was wrongly stripped.** `upsert_customer_by_name_phone` keys on
+(name, phone), so editing *just the name* resolves to a new `customer_id`, which
+the strip read as a customer swap and repriced the PWP reward to normal. **A
+customer/name edit must NOT touch PWP product prices.** PWP only re-prices on an
+*item* change (`tbc-swap`).
+
+**Bug 2 — cross-category delivery fee was not re-detected.** It's a SERVICE line
+whose rate depends on the customer's other orders. A customer change must
+re-evaluate it.
+
+### Corrected behavior (what shipped in the fix)
+
+On a Save with `recustomer:true` where **name or phone changed**:
+
+1. **Re-resolve `customer_id`** from name+phone (unchanged), written before the
+   identity lock (a DO/SI still 409s a reassignment).
+2. **PWP product lines: MAINTAINED.** No strip. The strip helpers
+   (`planPwpStrip`/`applyPwpStrip`) and `pwp-customer-change.ts` + its test are
+   **deleted**.
+3. **Minted vouchers follow the order** (Loo D-rev2): `repointMintedVouchers`
+   sets `customer_id = newCustomerId` on every `pwp_codes` row with
+   `source_doc_no = docNo`.
+4. **Cross-category delivery fee RE-DETECTED** (`redetectCrossCategoryDelivery`),
+   **symmetric** (Loo D-rev2 — can upgrade plain→cross or downgrade cross→plain):
+   - Only runs when the SO already carries a delivery fee (has `SVC-DELIVERY*` lines).
+   - Recover the operator's free-form `additional` fee from the existing
+     `SVC-DELIVERY-ADD` line; categories from the goods lines; special-model fees
+     from their `model_id`s.
+   - **Auto-match** the new customer's eligible cross-category source SO with the
+     same `pickCrossCategoryMatch` the handover Auto-match button uses, **self-
+     excluding THIS SO** (so changing *back* to the original customer restores
+     the discount — neither the candidate scan nor the already-used set counts
+     this SO).
+   - Recompute via `computeSoDeliveryFee({…, isCrossCategoryFollowup})`, rebuild
+     the `SVC-DELIVERY*` lines (delete the old, insert the new), update header
+     `cross_category_source_doc_no` + `delivery_fee_centi`, `recomputeTotals`.
+   - No eligible source → plain delivery fee, link cleared.
+5. Best-effort (header already saved; failure logged, not surfaced). The
+   `pwp_strip_failed` error path is removed.
+
+### Decisions added in Revision 2
+- **D-rev1** — PWP product price maintained on a customer/name edit (never strip).
+- **D-rev2a** — cross-category re-detect is **symmetric** (upgrade + downgrade).
+- **D-rev2b** — minted vouchers (`source_doc_no = docNo`) re-point to the new customer.
+
+### POS changes (Revision 2)
+- Drop the "remove PWP" pre-save confirm + the `hasPwp`/`has_pwp` plumbing.
+- Save notice now reads "delivery fee re-detected (cross-category / standalone)".
+- Remove the `pwp_strip_failed` error message.
+
+### Tests (Revision 2)
+- The re-detect orchestration is DB-coupled (not unit-tested); it reuses the
+  already-tested pure functions (`computeSoDeliveryFee`, `buildDeliveryFeeServiceLines`,
+  `pickCrossCategoryMatch`).
+- Manual/staging: change customer on an SO with a cross-category delivery →
+  drops to plain fee; change back → restores cross; PWP reward price unchanged
+  throughout.
