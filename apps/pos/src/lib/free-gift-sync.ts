@@ -25,9 +25,9 @@ import {
  *     effect is safe to depend on `lines` without causing infinite loops.
  *
  * Sofa matcher: for each sofa line we call matchComboSubset(modules, combo.modules)
- * for every combo that has defaultFreeGifts. The FIRST matching combo wins
- * (arbitrary tie-break — free-gift combos rarely overlap). No pricing needed.
- * useSofaCombos({ customerId: null }) fetches ALL combos (master scope).
+ * for every combo that has defaultFreeGifts. EVERY matching combo adds its own
+ * gift set independently — each gets a unique trigger key `{line.key}:{combo.id}`.
+ * No pricing needed. useSofaCombos({ customerId: null }) fetches ALL combos (master scope).
  */
 export function useFreeGiftSync(): void {
   const { user } = useAuth();
