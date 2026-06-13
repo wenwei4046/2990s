@@ -32,6 +32,7 @@ import { splitSofaCode } from '@2990s/shared';
 import { REQUIRED_VARIANT_AXES_BY_CATEGORY } from '@2990s/shared/so-variant-rule';
 import { PAYMENT_METHOD_CODES } from '@2990s/shared/payment-methods';
 import { meetsProceedGate } from '@2990s/shared/order-rules';
+import { getSoEditScope } from '../lib/so-edit-scope';
 import { useAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import { Topbar } from '../components/Topbar';
@@ -110,6 +111,9 @@ interface MyOrderRow {
   staffInitials: string | null;
   pieces: number;
   firstImage: string | null;
+  /* Does this SO carry a PWP promo? Used to warn before a Save that re-points
+     the order to a different customer (which strips the PWP). */
+  hasPwp: boolean;
   items: OrderItem[];
 }
 
@@ -136,6 +140,7 @@ interface MineSoRow {
   total_revenue_centi: number | null;
   line_count: number | null;
   paid_centi_total: number | null;
+  has_pwp?: boolean | null;
   items: Array<{
     /** Optional — an older deployed API may not send these yet; the TBC
      *  editor only renders when id is present. */
@@ -345,6 +350,7 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
           staffInitials: null,
           pieces: r.line_count ?? items.reduce((s, it) => s + it.qty, 0),
           firstImage: null,
+          hasPwp: r.has_pwp ?? false,
           items,
         };
       });
@@ -413,6 +419,15 @@ const describeSoActionError = (e: unknown): string => {
   }
   if (err === 'processing_delivery_must_pair') {
     return 'Processing and Delivery dates must be set together (or both left empty).';
+  }
+  if (err === 'so_locked_processing') {
+    return 'The processing date has passed — dates and items are locked. Customer, address and payment can still be updated.';
+  }
+  if (err === 'so_identity_locked') {
+    return 'This order already has a delivery order / invoice — customer and address are locked. Payment can still be updated.';
+  }
+  if (err === 'pwp_strip_failed') {
+    return 'This order has a sofa PWP promo that can’t be auto-repriced for a new customer — ask the coordinator.';
   }
   const reason = p.reason ?? p.message;
   if (reason) return String(reason);
@@ -1153,7 +1168,10 @@ const OrderDetail = ({ order, onClose }: {
 }) => {
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  const editable = order.status === 'CONFIRMED' && !order.proceededAt;
+  /* Edit scope by lane (Loo 2026-06-13). editablePlaced = Order placed
+     (items + dates + everything); canEditDetails = customer/address/payment,
+     editable across the whole Proceed lane (incl. production statuses). */
+  const { editablePlaced, canEditDetails } = getSoEditScope(order);
   /* TBC fill-in (Loo 2026-06-11) — which item row's editor is expanded. Reset
      when switching orders (the index would point at another order's line). */
   const [editLineIdx, setEditLineIdx] = useState<number | null>(null);
@@ -1369,16 +1387,24 @@ const OrderDetail = ({ order, onClose }: {
     },
   });
 
-  // Header edit → PATCH /mfg-sales-orders/:docNo.
+  /* Header edit → PATCH /mfg-sales-orders/:docNo. `recustomer: true` (Loo
+     2026-06-13) opts this Save into server-side customer re-resolution: if the
+     edited name+phone resolve to a DIFFERENT customer, the server strips this
+     SO's PWP promo back to normal and returns the strip summary below. */
   const saveMutation = useMutation({
-    mutationFn: async () => {
-      await authedFetch(`/mfg-sales-orders/${order.id}`, {
+    mutationFn: async (): Promise<{
+      pwpStripped?: boolean; rewardsReset?: number;
+      vouchersDeleted?: number; vouchersReleased?: number;
+    }> => {
+      const res = await authedFetch(`/mfg-sales-orders/${order.id}`, {
         method: 'PATCH',
-        body: JSON.stringify(buildPatch()),
+        body: JSON.stringify({ ...buildPatch(), recustomer: true }),
       });
+      return (await res.json()) as { pwpStripped?: boolean; rewardsReset?: number };
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['my-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['so-payments', order.id] });
     },
   });
 
@@ -1443,9 +1469,9 @@ const OrderDetail = ({ order, onClose }: {
      back to the editable "Order placed" lane. Send ONLY { proceededAt: null }
      (a minimal body skips the unrelated phone / dropdown / variant guards). We
      deliberately do NOT onClose: the board refetches, the open drawer re-syncs
-     the active order, `editable` flips true, and this same drawer re-renders
-     with the editable form + Save / Move to Proceed — so the salesperson edits
-     in place and re-proceeds (the 3-step move-back → edit → proceed flow). The
+     the active order, `editablePlaced` flips true, and this same drawer
+     re-renders with the dates + items unlocked + Move to Proceed — so the
+     salesperson edits in place and re-proceeds (move-back → edit → proceed). The
      server allows the explicit null clear (the stamp-once guard still refuses a
      non-null re-stamp) and 409s if the processing date has already passed. */
   const unproceedMutation = useMutation({
@@ -1460,7 +1486,20 @@ const OrderDetail = ({ order, onClose }: {
     },
   });
 
-  const onSave = () => saveMutation.mutate();
+  const onSave = () => {
+    /* Warn before a customer change on a PWP order — the server will strip the
+       promo and reprice to normal (Loo 2026-06-13). Name OR phone is the
+       customer-resolution key, so a change to either is what re-points it. */
+    const nameOrPhoneChanged =
+      edited.customerName !== order.customerName || edited.customerPhone !== order.customerPhone;
+    if (order.hasPwp && nameOrPhoneChanged) {
+      const ok = window.confirm(
+        'Changing the customer will remove this order’s PWP promo and reprice it to normal. Continue?',
+      );
+      if (!ok) return;
+    }
+    saveMutation.mutate();
+  };
   const onRecordPayment = () => { if (additionalPaid > 0 && paySlipSession !== null) paymentMutation.mutate(); };
   const onProceed = () => {
     if (!allOk) return;
@@ -1518,7 +1557,7 @@ const OrderDetail = ({ order, onClose }: {
                     {/* TBC fill-in (Loo 2026-06-11) — complete the customer's
                         deferred picks (fabric / dimensions / add-ons) or swap
                         the product. Same gate as the header fields. */}
-                    {editable && it.edit && (
+                    {editablePlaced && it.edit && (
                       <IconButton
                         icon={<Pencil size={16} strokeWidth={1.75} />}
                         aria-label={`Edit ${it.productName ?? 'item'}`}
@@ -1530,7 +1569,7 @@ const OrderDetail = ({ order, onClose }: {
                       <span className={styles.detailItemPriceUnit}>RM</span>{fmtMoney(it.lineTotal)}
                     </div>
                   </div>
-                  {editable && it.edit && editLineIdx === i && (
+                  {editablePlaced && it.edit && editLineIdx === i && (
                     <TbcLineEditor
                       docNo={order.id}
                       target={it.edit}
@@ -1565,28 +1604,28 @@ const OrderDetail = ({ order, onClose }: {
               </span>
             </h4>
             <div className={styles.detailFieldGrid}>
-              <DetailField label="Full name *" disabled={!editable}>
+              <DetailField label="Full name *" disabled={!canEditDetails}>
                 <input
                   type="text"
                   value={edited.customerName}
                   onChange={(e) => set('customerName', e.target.value)}
-                  disabled={!editable}
+                  disabled={!canEditDetails}
                   placeholder="Customer's full name"
                 />
               </DetailField>
-              <DetailField label="Phone" disabled={!editable}>
+              <DetailField label="Phone" disabled={!canEditDetails}>
                 <CountryPhoneInput
                   value={edited.customerPhone ?? ''}
                   onChange={(next) => set('customerPhone', next)}
-                  disabled={!editable}
+                  disabled={!canEditDetails}
                 />
               </DetailField>
-              <DetailField label="Email *" span={2} disabled={!editable}>
+              <DetailField label="Email *" span={2} disabled={!canEditDetails}>
                 <input
                   type="email"
                   value={edited.customerEmail ?? ''}
                   onChange={(e) => set('customerEmail', e.target.value)}
-                  disabled={!editable}
+                  disabled={!canEditDetails}
                   placeholder="customer@example.com"
                 />
               </DetailField>
@@ -1601,25 +1640,25 @@ const OrderDetail = ({ order, onClose }: {
               </span>
             </h4>
             <div className={styles.detailFieldGrid}>
-              <DetailField label="Address line 1 *" span={2} disabled={!editable}>
+              <DetailField label="Address line 1 *" span={2} disabled={!canEditDetails}>
                 <input
                   type="text"
                   value={edited.customerAddress ?? ''}
                   onChange={(e) => set('customerAddress', e.target.value)}
-                  disabled={!editable}
+                  disabled={!canEditDetails}
                   placeholder="Unit, street, area"
                 />
               </DetailField>
-              <DetailField label="Address line 2" span={2} disabled={!editable}>
+              <DetailField label="Address line 2" span={2} disabled={!canEditDetails}>
                 <input
                   type="text"
                   value={edited.customerAddressLine2 ?? ''}
                   onChange={(e) => set('customerAddressLine2', e.target.value)}
-                  disabled={!editable}
+                  disabled={!canEditDetails}
                   placeholder="Apt, floor, building (optional)"
                 />
               </DetailField>
-              <DetailField label="State *" disabled={!editable}>
+              <DetailField label="State *" disabled={!canEditDetails}>
                 <select
                   value={edited.customerState ?? ''}
                   onChange={(e) => {
@@ -1630,13 +1669,13 @@ const OrderDetail = ({ order, onClose }: {
                       customerPostcode: null,
                     }));
                   }}
-                  disabled={!editable}
+                  disabled={!canEditDetails}
                 >
                   <option value="">Select state…</option>
                   {states.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
               </DetailField>
-              <DetailField label="City *" disabled={!editable || !edited.customerState}>
+              <DetailField label="City *" disabled={!canEditDetails || !edited.customerState}>
                 <select
                   value={edited.customerCity ?? ''}
                   onChange={(e) => {
@@ -1646,17 +1685,17 @@ const OrderDetail = ({ order, onClose }: {
                       customerPostcode: null,
                     }));
                   }}
-                  disabled={!editable || !edited.customerState}
+                  disabled={!canEditDetails || !edited.customerState}
                 >
                   <option value="">{edited.customerState ? 'Select city…' : 'Pick state first'}</option>
                   {cities.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </DetailField>
-              <DetailField label="Postcode *" disabled={!editable || !edited.customerCity}>
+              <DetailField label="Postcode *" disabled={!canEditDetails || !edited.customerCity}>
                 <select
                   value={edited.customerPostcode ?? ''}
                   onChange={(e) => set('customerPostcode', e.target.value || null)}
-                  disabled={!editable || !edited.customerCity}
+                  disabled={!canEditDetails || !edited.customerCity}
                 >
                   <option value="">
                     {!edited.customerState ? 'Pick state first'
@@ -1666,22 +1705,24 @@ const OrderDetail = ({ order, onClose }: {
                   {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
               </DetailField>
-              <DetailField label="Processing date" disabled={!editable}>
+              {/* Dates feed production scheduling — locked in Proceed (D4); edit
+                  them by un-proceeding back to Order placed first. */}
+              <DetailField label="Processing date" disabled={!editablePlaced}>
                 <input
                   type="date"
                   value={edited.processingDate ?? ''}
                   onChange={(e) => set('processingDate', e.target.value || null)}
-                  disabled={!editable}
+                  disabled={!editablePlaced}
                   min={todayMY}
                   max={edited.deliveryDate ?? undefined}
                 />
               </DetailField>
-              <DetailField label="Delivery date" disabled={!editable}>
+              <DetailField label="Delivery date" disabled={!editablePlaced}>
                 <input
                   type="date"
                   value={edited.deliveryDate ?? ''}
                   onChange={(e) => set('deliveryDate', e.target.value || null)}
-                  disabled={!editable}
+                  disabled={!editablePlaced}
                   min={minDeliveryDate}
                 />
               </DetailField>
@@ -1730,7 +1771,7 @@ const OrderDetail = ({ order, onClose }: {
                 </div>
               </div>
             )}
-            {editable && outstanding > 0 && (
+            {canEditDetails && outstanding > 0 && (
               <>
                 <div className={styles.detailFieldGrid} style={{ marginTop: 12 }}>
                   <DetailField label="Method *" disabled={false}>
@@ -1852,14 +1893,19 @@ const OrderDetail = ({ order, onClose }: {
               View SO / PDF
             </Link>
           </div>
-          {editable && (
+          {/* Customer / address / payment edit (Loo 2026-06-13) — the Save
+              button shows across the whole Proceed lane (canEditDetails). The
+              proceed CHECKLIST + Move-to-Proceed stay on Order placed only. */}
+          {canEditDetails && (
             <>
-              <div className={styles.detailChecklist}>
-                <ChecklistItem ok={customerInfoOk} label="Customer info" />
-                <ChecklistItem ok={addressOk} label="Delivery address" />
-                <ChecklistItem ok={dateOk} label="Delivery date" />
-                <ChecklistItem ok={paidOk} label="≥ 50% paid" />
-              </div>
+              {editablePlaced && (
+                <div className={styles.detailChecklist}>
+                  <ChecklistItem ok={customerInfoOk} label="Customer info" />
+                  <ChecklistItem ok={addressOk} label="Delivery address" />
+                  <ChecklistItem ok={dateOk} label="Delivery date" />
+                  <ChecklistItem ok={paidOk} label="≥ 50% paid" />
+                </div>
+              )}
               {saveMutation.error && (
                 <p className={styles.detailFootError}>
                   Save failed: {describeSoActionError(saveMutation.error)}
@@ -1870,6 +1916,11 @@ const OrderDetail = ({ order, onClose }: {
                   Proceed failed: {describeSoActionError(proceedMutation.error)}
                 </p>
               )}
+              {saveMutation.data?.pwpStripped ? (
+                <p className={styles.detailFootInfo}>
+                  Customer changed · PWP promo removed, {saveMutation.data.rewardsReset ?? 0} line(s) repriced to normal.
+                </p>
+              ) : null}
               <div className={styles.detailCta}>
                 <button
                   type="button"
@@ -1880,23 +1931,25 @@ const OrderDetail = ({ order, onClose }: {
                   <Save size={14} strokeWidth={1.75} />
                   {saveMutation.isPending ? 'Saving…' : 'Save changes'}
                 </button>
-                <button
-                  type="button"
-                  className={styles.detailProceedBtn}
-                  onClick={onProceed}
-                  disabled={!allOk || saveMutation.isPending || proceedMutation.isPending}
-                >
-                  Move to Proceed
-                  <ArrowRight size={14} strokeWidth={1.75} />
-                </button>
+                {editablePlaced && (
+                  <button
+                    type="button"
+                    className={styles.detailProceedBtn}
+                    onClick={onProceed}
+                    disabled={!allOk || saveMutation.isPending || proceedMutation.isPending}
+                  >
+                    Move to Proceed
+                    <ArrowRight size={14} strokeWidth={1.75} />
+                  </button>
+                )}
               </div>
             </>
           )}
           {/* Un-proceed (Loo 2026-06-13) — a proceeded SO is locked for the
               coordinator, but the salesperson can pull it back to "Order placed"
-              to fix details, as long as the processing date hasn't passed. After
-              this the drawer flips editable (Save / Move to Proceed reappear). */}
-          {!editable && canUnproceed && (
+              to fix DATES / ITEMS, as long as the processing date hasn't passed.
+              After this the drawer flips to Order-placed (dates + items editable). */}
+          {!editablePlaced && canUnproceed && (
             <>
               {unproceedMutation.error && (
                 <p className={styles.detailFootError}>
@@ -1919,7 +1972,7 @@ const OrderDetail = ({ order, onClose }: {
               </div>
             </>
           )}
-          {!editable && !canUnproceed && (
+          {!canEditDetails && !canUnproceed && (
             <span className={styles.detailFootInfo}>
               {LANES[2]?.matches.includes(order.status)
                 ? 'Delivered · managed in backend'
