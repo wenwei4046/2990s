@@ -217,4 +217,22 @@ describe('reconcileFreeGifts', () => {
     expect(lines).toHaveLength(2);
     expect(lines.find((l) => l.key === 'cfg-x')!.config.total).toBe(1990);
   });
+
+  it('is idempotent — a second identical reconcile does not change the lines reference', () => {
+    const desired: DesiredFreeGift[] = [
+      { key: freeGiftLineKey('t0', 0), triggerKey: 't0', giftProductId: 'mfg-pillow', qty: 2, campaignName: 'Raya Campaign' },
+    ];
+    useCart.getState().reconcileFreeGifts(desired, nameById);
+    const ref1 = useCart.getState().lines;
+    useCart.getState().reconcileFreeGifts(desired, nameById);
+    const ref2 = useCart.getState().lines;
+    expect(ref2).toBe(ref1); // same array reference → no re-render / no effect loop
+  });
+
+  it('preserves non-gift line references on a no-op reconcile', () => {
+    useCart.setState({ lines: [{ key: 'cfg-x', qty: 1, config: { kind: 'flat', productId: 'mfg-mat', productName: 'Mat', total: 1990, summary: 'Flat price' } }] });
+    const before = useCart.getState().lines;
+    useCart.getState().reconcileFreeGifts([], nameById); // nothing to do
+    expect(useCart.getState().lines).toBe(before); // unchanged reference
+  });
 });

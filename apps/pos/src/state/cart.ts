@@ -364,15 +364,23 @@ export const useCart = create<CartState>()((set, get) => ({
     const isGift = (l: CartLine): boolean =>
       (l.config as { isFreeGift?: boolean }).isFreeGift === true;
 
-    // Keep non-gift lines untouched; update gift lines that are still wanted;
-    // drop gift lines no longer wanted.
+    let changed = false;
+
+    // Keep non-gift lines untouched (same reference); update gift lines still
+    // wanted only when their derived values differ; drop gift lines no longer
+    // wanted.
     const kept = current.flatMap((l) => {
       if (!isGift(l)) return [l];
       const d = want.get(l.key);
-      if (!d) return [];                       // trigger gone → remove
-      want.delete(l.key);                      // mark as satisfied
+      if (!d) { changed = true; return []; }       // trigger gone → remove
+      want.delete(l.key);                          // mark as satisfied
       const cfg = l.config as FlatConfigSnapshot;
-      return [{ ...l, qty: d.qty, config: { ...cfg, productName: nameById.get(d.giftProductId) ?? cfg.productName, freeGiftCampaign: d.campaignName, total: 0 } }];
+      const name = nameById.get(d.giftProductId) ?? cfg.productName;
+      if (l.qty === d.qty && cfg.total === 0 && cfg.freeGiftCampaign === d.campaignName && cfg.productName === name) {
+        return [l];                                // unchanged → keep same object
+      }
+      changed = true;
+      return [{ ...l, qty: d.qty, config: { ...cfg, productName: name, freeGiftCampaign: d.campaignName, total: 0 } }];
     });
 
     // Add any still-wanted gift lines that weren't already present.
@@ -391,7 +399,9 @@ export const useCart = create<CartState>()((set, get) => ({
         summary: 'Free gift',
       } satisfies FlatConfigSnapshot,
     }));
+    if (added.length > 0) changed = true;
 
+    if (!changed) return;                          // idempotent — no reference churn, no effect loop
     set({ lines: [...kept, ...added] });
   },
 
