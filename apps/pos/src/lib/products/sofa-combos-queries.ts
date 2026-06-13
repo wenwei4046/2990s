@@ -48,6 +48,8 @@ export type SofaComboRule = {
   sellingPricesByHeight: Record<string, number | null>;
   /** PWP (换购) selling price per height (Phase 2). {} = unset. POS-only. */
   pwpPricesByHeight?: Record<string, number | null>;
+  /** 0170 — accessory free gifts granted when this combo is the cart's sofa build (trigger by combo, D9). */
+  defaultFreeGifts?: { giftProductId: string; qty: number; campaignName?: string | null }[];
   label: string | null;
   effectiveFrom: string;
   deletedAt: string | null;
@@ -141,7 +143,7 @@ export function useUpdateSofaCombo() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
-      id, pricesByHeight, sellingPricesByHeight, pwpPricesByHeight, label, effectiveFrom, notes,
+      id, pricesByHeight, sellingPricesByHeight, pwpPricesByHeight, defaultFreeGifts, label, effectiveFrom, notes,
     }: {
       id: string;
       /** Existing COST, passed back UNCHANGED (the PUT requires the field) so an
@@ -149,6 +151,7 @@ export function useUpdateSofaCombo() {
       pricesByHeight: Record<string, number | null>;
       sellingPricesByHeight?: Record<string, number | null>;
       pwpPricesByHeight?: Record<string, number | null>;
+      defaultFreeGifts?: { giftProductId: string; qty: number; campaignName?: string | null }[];
       label?: string | null;
       effectiveFrom: string;
       notes?: string | null;
@@ -159,6 +162,7 @@ export function useUpdateSofaCombo() {
           pricesByHeight, label, effectiveFrom, notes,
           ...(sellingPricesByHeight !== undefined ? { sellingPricesByHeight } : {}),
           ...(pwpPricesByHeight !== undefined ? { pwpPricesByHeight } : {}),
+          ...(defaultFreeGifts !== undefined ? { defaultFreeGifts } : {}),
         }),
       }),
     onSuccess: () => {

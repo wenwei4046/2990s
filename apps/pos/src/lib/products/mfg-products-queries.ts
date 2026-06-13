@@ -96,6 +96,7 @@ export type MfgProductRow = {
   status: 'ACTIVE' | 'INACTIVE';   // COST/PO side — NOT showroom visibility (use pos_active)
   pos_active: boolean;             // D5 — selling-only POS catalog visibility (Master Account writes)
   included_addons: { addonId: string; qty: number }[]; // D7 — permanent free gifts (display-only)
+  default_free_gifts: { giftProductId: string; qty: number; campaignName?: string | null }[]; // 0170 — accessory free gifts (auto-added at RM 0)
   sku_code: string | null;
   /** PR — supplier-mapping-by-model: optional FK to product_models.id so the
       supplier mapping picker can group SKUs by Model client-side. NULL for
@@ -343,6 +344,27 @@ export function useUpdateMfgProductGifts() {
       return authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
         method: 'PATCH',
         body: JSON.stringify({ includedAddons }),
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mfg-products'] });
+    },
+  });
+}
+
+/** 0170 — Default Free Gift (accessory). Writes mfg_products.default_free_gifts
+ *  ([{giftProductId, qty, campaignName?}]). POS auto-adds the gift at RM 0. */
+export function useUpdateMfgProductDefaultGifts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: {
+      id: string;
+      defaultFreeGifts: { giftProductId: string; qty: number; campaignName?: string | null }[];
+    }) => {
+      const { id, defaultFreeGifts } = args;
+      return authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ defaultFreeGifts }),
       });
     },
     onSuccess: () => {
