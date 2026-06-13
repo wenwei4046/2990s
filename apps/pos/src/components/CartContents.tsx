@@ -208,6 +208,11 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit }: {
           PWP price{'pwpTriggerLabel' in line.config && line.config.pwpTriggerLabel ? ` · from ${line.config.pwpTriggerLabel}` : ''}
         </div>
       )}
+      {'isFreeGift' in line.config && line.config.isFreeGift && (
+        <div className={styles.lineSummary}>
+          {('freeGiftCampaign' in line.config && line.config.freeGiftCampaign) ? line.config.freeGiftCampaign : 'Free gift'}
+        </div>
+      )}
     </div>
     <div className={styles.qtyBox}>
       <button
@@ -223,8 +228,8 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit }: {
         onClick={() => onSetQty(line.key, line.qty + 1)}
         // One code = one redemption = one unit — the store clamps too; this
         // disable is the affordance (Loo 2026-06-12).
-        disabled={'pwp' in line.config && line.config.pwp === true}
-        title={'pwp' in line.config && line.config.pwp === true ? 'PWP — one unit per code' : undefined}
+        disabled={('pwp' in line.config && line.config.pwp === true) || ('isFreeGift' in line.config && line.config.isFreeGift === true)}
+        title={('isFreeGift' in line.config && line.config.isFreeGift === true) ? 'Free gift — quantity follows the qualifying item' : ('pwp' in line.config && line.config.pwp === true ? 'PWP — one unit per code' : undefined)}
         aria-label="Increase quantity"
       >+</button>
     </div>
