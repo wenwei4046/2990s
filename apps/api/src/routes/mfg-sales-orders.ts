@@ -166,6 +166,16 @@ const SO_IDENTITY_LOCK_COLS = new Set<string>([
   'emergency_contact_name', 'emergency_contact_phone', 'emergency_contact_relationship',
 ]);
 
+/* Owner 2026-06-12 + Loo 2026-06-13 — after the processing date passes the SO is
+   what we PO to the supplier, so only the PRODUCTION-SCHEDULE columns freeze on
+   the header PATCH. Customer / delivery-address / payment fields don't feed the
+   supplier PO and stay editable in the Proceed lane (POS "edit in Proceed").
+   Items have their own per-route processing lock, so only these two date columns
+   belong here. Keyed by DB column name. */
+const SO_PROCESSING_LOCK_COLS = new Set<string>([
+  'internal_expected_dd', 'customer_delivery_date',
+]);
+
 /* Loose equality for the lock diff — null / undefined / '' all collapse so a
    UI re-sending an empty field as '' does not read as a change from null. */
 function norm(v: unknown): string {
@@ -3454,7 +3464,17 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
      above but before any write. (`before` carries internal_expected_dd via
      the map + processing_date appended above.) */
   if (soProcessingLocked(before as unknown as { internal_expected_dd?: string | null; processing_date?: string | null } | null)) {
-    return c.json(SO_PROCESSING_LOCKED_RESPONSE, 409);
+    /* Field-scoped (Loo 2026-06-13) — only a genuine change to a production-
+       schedule date column is rejected; customer / address / payment header
+       fields stay editable in the Proceed lane. `before` carries every patched
+       column via the map snapshot above. */
+    const beforeRowProc = before as unknown as Record<string, unknown>;
+    const changedSchedule = [...SO_PROCESSING_LOCK_COLS].filter(
+      (col) => col in updates && norm(updates[col]) !== norm(beforeRowProc[col]),
+    );
+    if (changedSchedule.length > 0) {
+      return c.json(SO_PROCESSING_LOCKED_RESPONSE, 409);
+    }
   }
 
   /* proceeded_at is stamp-once for the FORWARD move (the POS "Proceed" marker):
