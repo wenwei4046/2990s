@@ -1,8 +1,9 @@
 // ----------------------------------------------------------------------------
 // POS SO Settings hooks — /so-settings feature toggles (migration 0158).
-// useSoSettingEnabled('pos_product_remark') gates the product-page
-// "Remark & extra charge" card. Fallback while in flight = enabled (the
-// seed default) so the card never flashes off for a working store.
+// DORMANT since 2026-06-13: the only switch ('pos_product_remark') was removed
+// (migration 0169) when the product-page remark + special add-on went always-on.
+// These hooks stay for any future POS feature toggle. useSoSettingEnabled's
+// fallback while in flight = enabled (so a future switch never flashes off).
 // ----------------------------------------------------------------------------
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../supabase';

@@ -80,8 +80,13 @@ export type MfgItemVariants = {
    *  line actually gets the PWP base. */
   pwp?:           boolean | null;
   /** Per-line operator remark keyed on the POS product page (spec 2026-06-06).
-   *  Not priced — persisted to mfg_sales_order_items.remark by the route. */
+   *  Not priced — persisted to mfg_sales_order_items.remark by the route. Since
+   *  2026-06-13 this is the ITEM remark ONLY; it no longer drives custom_specials. */
   remark?:        string | null;
+  /** Special add-on note keyed on the POS product page (Loo 2026-06-13) — the
+   *  free-text label for the declared extra charge. Drives the custom_specials
+   *  composition; never priced (the money rides extraAddonAmountRM). */
+  extraAddonNote?: string | null;
   /** Declared extra charge keyed on the POS product page, WHOLE MYR (spec D1).
    *  The POS folds it into the line's selling price; the recompute adds the
    *  same amount to the authoritative figure so the drift gate stays exact.
@@ -351,16 +356,17 @@ export function recomputeFromSnapshot(
   const rawExtra = Number(variants.extraAddonAmountRM ?? 0);
   const extraSen = (Number.isFinite(rawExtra) ? Math.max(0, Math.round(rawExtra)) : 0) * 100;
 
-  /* Loo 2026-06-12 — the POS product-page remark + extra charge is a free-text
-     Special Add-on (one-shot auto-mint retired, flag OFF). Append it to the
-     custom_specials composition so every specials surface (backend SO editor's
-     Special Orders accordion, Detail Listing "Specials" column, the DO/SI
-     copies) lists it next to the picked add-ons. Composition display ONLY —
-     the money rides the authoritative figure via the extraSen fold below;
-     this entry re-prices nothing. */
-  const remarkText = typeof variants.remark === 'string' ? variants.remark.trim() : '';
-  if (remarkText || extraSen > 0) {
-    pickedSpecials.push({ description: remarkText || 'Extra add-on', surchargeSen: extraSen });
+  /* Loo 2026-06-13 — the POS product-page "special add-on" (note + extra charge)
+     is a free-text Special Add-on. Append its NOTE to the custom_specials
+     composition so every specials surface (backend SO editor's Special Orders
+     accordion, Detail Listing "Specials" column, the DO/SI copies) lists it next
+     to the picked add-ons. Composition display ONLY — the money rides the
+     authoritative figure via the extraSen fold below; this entry re-prices
+     nothing. The item remark (variants.remark) is SEPARATE: it lands on
+     mfg_sales_order_items.remark via the route and never enters custom_specials. */
+  const noteText = typeof variants.extraAddonNote === 'string' ? variants.extraAddonNote.trim() : '';
+  if (noteText || extraSen > 0) {
+    pickedSpecials.push({ description: noteText || 'Extra add-on', surchargeSen: extraSen });
   }
   const customSpecials = pickedSpecials.length ? pickedSpecials : null;
 

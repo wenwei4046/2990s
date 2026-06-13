@@ -264,12 +264,14 @@ interface CustomBuilderProps {
   legBlock?: ReactNode;
   legHeight?: string | null;
   legSurchargeRm?: number;
-  /** Product-page remark + extra charge (spec 2026-06-06) — parent-owned, like
-   *  legBlock/legHeight. remarkBlock renders in the left rail; remark/extra
-   *  land on the FIRST seamless group's snapshot only (a canvas usually holds
-   *  one sofa; the extra must never multiply across groups). */
+  /** Product-page item remark + special add-on (note + extra charge) — parent-
+   *  owned, like legBlock/legHeight. remarkBlock renders in the left rail;
+   *  remark / extraAddonNote / extra land on the FIRST seamless group's snapshot
+   *  only (a canvas usually holds one sofa; the extra must never multiply across
+   *  groups). remark → variants.remark; extraAddonNote → variants.extraAddonNote. */
   remarkBlock?: ReactNode;
   remark?: string;
+  extraAddonNote?: string;
   extraAmountRm?: number;
   /** TBC sofa exchange (Loo 2026-06-12) — when set, the footer button reads
    *  "Confirm Change" and a SINGLE-group build is handed to this callback
@@ -301,7 +303,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -931,6 +933,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         // lead group — it flips after addConfigured below) so the extra never
         // multiplies across groups.
         ...(!usedEditKey && remark.trim() ? { remark: remark.trim() } : {}),
+        ...(!usedEditKey && extraAddonNote.trim() ? { extraAddonNote: extraAddonNote.trim() } : {}),
         ...(!usedEditKey && extraAmountRm > 0 ? { extraAddonAmountRM: extraAmountRm } : {}),
         total: g.finalPrice + sofaFabricDelta + legSurchargeRm + (!usedEditKey ? extraAmountRm : 0),
         summary,

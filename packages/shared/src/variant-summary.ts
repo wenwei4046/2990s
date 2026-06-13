@@ -107,15 +107,17 @@ export function buildVariantSummary(
     const picked = choicesMap ? specialsList(choicesMap[code]) : [];
     return picked.length ? `${code} (${picked.join(', ')})` : code;
   });
-  // Loo 2026-06-11 — the POS product-page remark + extra charge is a FREE-TEXT
-  // Special Add-on, not a separate SKU (one-shot auto-mint retired, flag OFF).
-  // The remark renders in the same SPECIAL segment as the picked add-ons so
-  // Description 2 reads them together — with money it carries "(+RM…)",
-  // without money it's the bare text (Loo: a free remark is still an option).
+  // Loo 2026-06-13 — the POS product-page "special add-on" (note + extra charge,
+  // variants.extraAddonNote + extraAddonAmountRM) is a FREE-TEXT Special Add-on.
+  // Its NOTE renders in the same SPECIAL segment as the picked add-ons so
+  // Description 2 reads them together — with money it carries "(+RM…)", without
+  // money it's the bare note (a free note is still an option). The item remark
+  // (variants.remark) is a SEPARATE field and does NOT belong here — it prints as
+  // its own "Remark:" line off the mfg_sales_order_items.remark column.
   const extraRM = Math.round(Number(variants.extraAddonAmountRM ?? 0));
-  const remarkText = str(variants.remark);
-  if (remarkText || extraRM > 0) {
-    const bit = remarkText || 'Extra add-on';
+  const noteText = str(variants.extraAddonNote);
+  if (noteText || extraRM > 0) {
+    const bit = noteText || 'Extra add-on';
     specialBits.push(extraRM > 0 ? `${bit} (+RM${extraRM})` : bit);
   }
   if (specialBits.length) segments.push(`SPECIAL: ${specialBits.join(' + ')}`);

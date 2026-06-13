@@ -3,6 +3,7 @@ import {
   cartCategoryConflict,
   cartHasSofa,
   cartHasNonSofa,
+  cartHasMainNonSofa,
   useCart,
   type CartLine,
   type CartConfig,
@@ -28,10 +29,18 @@ describe('sofa-exclusivity — cartCategoryConflict', () => {
     expect(cartCategoryConflict([line('sofa', 'a'), line('sofa', 'b')], cfg('sofa'))).toBeNull();
   });
 
-  it('a sofa in the cart blocks every other category', () => {
+  it('a sofa in the cart blocks mattress + bedframe', () => {
     expect(cartCategoryConflict([line('sofa')], cfg('size'))).toBeTruthy();      // mattress
     expect(cartCategoryConflict([line('sofa')], cfg('bedframe'))).toBeTruthy();  // bedframe
-    expect(cartCategoryConflict([line('sofa')], cfg('flat'))).toBeTruthy();      // flat-priced
+  });
+
+  it('accessories (flat) pair with a sofa — and with anything', () => {
+    // Accessory added to a sofa cart is allowed (universal add-on).
+    expect(cartCategoryConflict([line('sofa')], cfg('flat'))).toBeNull();
+    // Sofa added to an accessory-only cart is allowed.
+    expect(cartCategoryConflict([line('flat')], cfg('sofa'))).toBeNull();
+    // Accessory never conflicts, even alongside mattress + bedframe.
+    expect(cartCategoryConflict([line('size'), line('bedframe')], cfg('flat'))).toBeNull();
   });
 
   it('a non-sofa cart blocks adding a sofa', () => {
@@ -145,5 +154,12 @@ describe('cart category helpers', () => {
     expect(cartHasNonSofa([line('sofa')])).toBe(false);
     expect(cartHasNonSofa([line('size')])).toBe(true);
     expect(cartHasNonSofa([line('sofa'), line('size')])).toBe(true);
+  });
+
+  it('cartHasMainNonSofa — only mattress/bedframe count, not accessories', () => {
+    expect(cartHasMainNonSofa([line('size')])).toBe(true);
+    expect(cartHasMainNonSofa([line('bedframe')])).toBe(true);
+    expect(cartHasMainNonSofa([line('flat')])).toBe(false);   // accessory
+    expect(cartHasMainNonSofa([line('sofa')])).toBe(false);
   });
 });

@@ -509,8 +509,8 @@ describe('cartLinesToSoItems', () => {
   });
 });
 
-describe('pos-handover-so — remark + extraAddonAmountRM threading', () => {
-  it('threads remark + declared extra into variants and folds extra into the price', () => {
+describe('pos-handover-so — remark + special add-on (note + extra) threading', () => {
+  it('threads item remark + special add-on note + declared extra into variants and folds extra into the price', () => {
     const line: CartLine = {
       key: 'cfg-test1', qty: 1,
       config: {
@@ -518,12 +518,17 @@ describe('pos-handover-so — remark + extraAddonAmountRM threading', () => {
         total: 3190,                       // 2990 base + 200 extra, folded at Add-to-Cart
         summary: 'King',
         remark: 'deliver before CNY',
+        extraAddonNote: 'reinforced base',
         extraAddonAmountRM: 200,
       },
     };
     const item = cartLineToSoItem(line, new Map());
     expect(item.unitPriceCenti).toBe(319000);
-    expect(item.variants).toMatchObject({ remark: 'deliver before CNY', extraAddonAmountRM: 200 });
+    expect(item.variants).toMatchObject({
+      remark: 'deliver before CNY',
+      extraAddonNote: 'reinforced base',
+      extraAddonAmountRM: 200,
+    });
   });
 
   it('per-unit semantics: qty multiplies the extra (unit price carries it once)', () => {
@@ -596,17 +601,18 @@ describe('pos-handover-so — remark + extraAddonAmountRM threading', () => {
     expect(item.variants).toMatchObject({ remark: 'deliver to 2nd floor, no lift', extraAddonAmountRM: 200 });
   });
 
-  it('whitespace-only remark and zero extra are omitted from variants', () => {
+  it('whitespace-only remark / note and zero extra are omitted from variants', () => {
     const line: CartLine = {
       key: 'cfg-test3', qty: 1,
       config: {
         kind: 'size', productId: 'mfg-1', productName: '2990 AKKA-FIRM', sizeId: 'king',
-        total: 2990, summary: 'King', remark: '   ', extraAddonAmountRM: 0,
+        total: 2990, summary: 'King', remark: '   ', extraAddonNote: '  ', extraAddonAmountRM: 0,
       },
     };
     const item = cartLineToSoItem(line, new Map());
     const v = (item.variants ?? {}) as Record<string, unknown>;
     expect('remark' in v).toBe(false);
+    expect('extraAddonNote' in v).toBe(false);
     expect('extraAddonAmountRM' in v).toBe(false);
   });
 });
