@@ -4,7 +4,7 @@ vi.mock('./supabase', () => ({
   supabase: { auth: { getSession: async () => ({ data: { session: { access_token: 'tok' } } }) } },
 }));
 
-import { authedFetch } from './authed-fetch';
+import { authedFetch, humanApiError } from './authed-fetch';
 
 const okJson = { ok: true, status: 200, json: async () => ({}), text: async () => '{}' } as unknown as Response;
 
@@ -37,5 +37,33 @@ describe('authedFetch content-type stamping', () => {
     await authedFetch('/orders', { method: 'POST', body: JSON.stringify({ a: 1 }) });
     const headers = calls[0]!.init.headers as Record<string, string>;
     expect(headers['content-type']).toBe('application/json');
+  });
+});
+
+describe('humanApiError — never leaks raw internals', () => {
+  it('does NOT surface the raw GoTrue session_not_found body the auth middleware forwards', () => {
+    // The API auth middleware returns 401 with the raw GoTrue text in `reason`.
+    const body = JSON.stringify({
+      error: 'unauthorized',
+      reason: JSON.stringify({
+        code: 403, error_code: 'session_not_found',
+        msg: 'Session from session_id claim in JWT does not exist',
+      }),
+      status: 403,
+    });
+    const msg = humanApiError(401, body);
+    expect(msg).toBe('Your session has expired — please sign in again.');
+    expect(msg).not.toContain('session_not_found');
+    expect(msg).not.toContain('{');
+  });
+
+  it('still surfaces a genuine plain-sentence server reason', () => {
+    expect(humanApiError(400, JSON.stringify({ reason: 'A phone number is required.' })))
+      .toBe('A phone number is required.');
+  });
+
+  it('maps a known error code to its curated message', () => {
+    expect(humanApiError(409, JSON.stringify({ error: 'duplicate_code' })))
+      .toBe('That code is already in use. Please choose a different one.');
   });
 });
