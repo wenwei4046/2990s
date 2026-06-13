@@ -19,7 +19,10 @@ import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pr
 import { meetsProceedGate } from '@2990s/shared/order-rules';
 /* SO-SKU spec P2 — every charge is a SKU line. Predicates from P1; the
    fee/addon → SERVICE-line decomposition builders are pure + shared. */
-import { isServiceLine, isDeliveryFeeServiceCode } from '@2990s/shared/service-sku';
+import {
+  isServiceLine, isDeliveryFeeServiceCode,
+  SVC_DELIVERY, SVC_DELIVERY_CROSS, SVC_DELIVERY_ADD,
+} from '@2990s/shared/service-sku';
 import {
   buildDeliveryFeeServiceLines,
   computeAddonServiceLines,
@@ -44,7 +47,6 @@ import { escapeForOr } from '../lib/postgrest-search';
 import { rangeBoundsMy } from '../lib/my-time';
 import { canViewAllSales, isSelfScopedSales } from '../lib/roles';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
-import { classifyPwpVouchersForCustomerChange, type PwpVoucherRow } from '../lib/pwp-customer-change';
 /* TBC sofa exchange PWP re-evaluation (Loo 2026-06-12) — reuse the voucher
    generator + model-list matcher from the reserve route. */
 import { genCode, inList } from './pwp-codes';
@@ -898,10 +900,6 @@ mfgSalesOrders.get('/mine', async (c) => {
       // Total received = ledger payments (+ header deposit only when the
       // ledger doesn't already carry it as an is_deposit row).
       paid_centi_total: (depositInLedger.has(docNo) ? 0 : deposit) + ledger,
-      /* Loo 2026-06-13 — does this SO carry a PWP promo? The drawer uses it to
-         warn before a Save that re-points the order to a different customer
-         (which strips the PWP). Derived from the items already fetched. */
-      has_pwp: soItems.some((it) => Boolean((it.variants as { pwp?: unknown } | null)?.pwp)),
       items: soItems,
     };
   });
@@ -3319,120 +3317,158 @@ mfgSalesOrders.post('/:docNo/items/:itemId/override', async (c) => {
 });
 
 // ── PATCH header — edit debtor info, addresses, note, etc. ───────────
-/* ── PWP strip on a customer change (Loo 2026-06-13) ───────────────────────────
-   When a Save re-points an SO to a DIFFERENT customer, its PWP promo must be
-   undone: reward lines reprice to their NORMAL price (no PWP grant) and the SO's
-   vouchers are deleted / released. Plans the sofa reverts READ-ONLY first
-   (planSofaRewardRevert returns ok:false for a build it can't safely reprice) so
-   the PATCH can 409 before touching the header. Replicates the proven tbc-swap
-   revert block (non-sofa, lines ~4849-4880) and CALLS the existing
-   planSofaRewardRevert (sofa) — PWP code is incident-prone, so it is reused, not
-   restructured. */
-type PwpStripPlan = {
-  nonSofa: Array<{ id: string; item_code: string; item_group: string; qty: number; discount_centi: number; unit_cost_centi: number; variants: Record<string, unknown> }>;
-  sofaUpdates: SofaRewardRevertUpdate[];
-};
-async function planPwpStrip(sb: any, docNo: string): Promise<{ ok: true; plan: PwpStripPlan } | { ok: false }> {
-  const { data } = await sb.from('mfg_sales_order_items')
-    .select('id, item_code, item_group, qty, discount_centi, unit_cost_centi, variants')
-    .eq('doc_no', docNo).eq('cancelled', false);
-  type Row = { id: string; item_code: string; item_group: string; qty: number; discount_centi: number | null; unit_cost_centi: number | null; variants: Record<string, unknown> | null };
-  const rows = ((data ?? []) as Row[]).filter((r) => ((r.variants ?? {}) as Record<string, unknown>).pwp);
-  const nonSofa = rows
-    .filter((r) => String(r.item_group) !== 'sofa')
-    .map((r) => ({
-      id: r.id, item_code: r.item_code, item_group: String(r.item_group),
-      qty: Number(r.qty), discount_centi: Number(r.discount_centi ?? 0),
-      unit_cost_centi: Number(r.unit_cost_centi ?? 0),
-      variants: (r.variants ?? {}) as Record<string, unknown>,
-    }));
-  // One revert plan per distinct sofa-build pwpCode.
-  const sofaCodes = Array.from(new Set(
-    rows.filter((r) => String(r.item_group) === 'sofa')
-        .map((r) => String(((r.variants ?? {}) as Record<string, unknown>).pwpCode ?? '').trim())
-        .filter(Boolean),
-  ));
-  const sofaUpdates: SofaRewardRevertUpdate[] = [];
-  for (const code of sofaCodes) {
-    const res = await planSofaRewardRevert(sb, docNo, code);
-    if (!res.ok) return { ok: false };
-    sofaUpdates.push(...res.updates);
-  }
-  return { ok: true, plan: { nonSofa, sofaUpdates } };
+/* ── Customer change on an existing SO (Loo 2026-06-13, bug-fix round 2) ───────
+   When a Save re-points an SO to a different customer:
+     • PWP PRODUCT lines are MAINTAINED — a customer/name edit must not re-price
+       a reward. Only an ITEM change re-prices PWP (tbc-swap). So there is NO
+       strip here.
+     • the SO's MINTED vouchers (source_doc_no = docNo) follow the order — their
+       customer_id is re-pointed to the new customer.
+     • the cross-category DELIVERY fee (a SERVICE line whose rate depends on the
+       customer's other orders) is RE-DETECTED — see redetectCrossCategoryDelivery. */
+async function repointMintedVouchers(sb: any, docNo: string, newCustomerId: string | null): Promise<number> {
+  if (!newCustomerId) return 0;
+  const { data } = await sb.from('pwp_codes')
+    .update({ customer_id: newCustomerId, updated_at: new Date().toISOString() })
+    .eq('source_doc_no', docNo)
+    .select('code');
+  return ((data ?? []) as Array<{ code: string }>).length;
 }
 
-async function applyPwpStrip(
-  sb: any, docNo: string, plan: PwpStripPlan,
-): Promise<{ rewardsReset: number; deleteCodes: string[]; releaseCodes: string[] }> {
-  let rewardsReset = 0;
-  // 1. Non-sofa reward lines → revert to normal (tbc-swap 4849-4880 pattern).
-  if (plan.nonSofa.length > 0) {
-    const [cfgX, addonCfgX, specialDefsX] = await Promise.all([
-      loadMaintenanceConfig(sb), loadFabricTierAddonConfig(sb), loadSpecialAddons(sb),
-    ]);
-    for (const line of plan.nonSofa) {
-      const v: Record<string, unknown> = { ...line.variants };
-      delete v.pwp; delete v.pwpCode; delete v.pwpTriggerLabel;
-      const [rp, rfab, rtiers] = await Promise.all([
-        loadProductByCode(sb, line.item_code),
-        loadFabricByCode(sb, (v.fabricCode as string | undefined) ?? null),
-        loadFabricSellingTiers(sb, (v.fabricId as string | undefined) ?? null),
-      ]);
-      const rec = recomputeFromSnapshot(
-        { itemCode: line.item_code, itemGroup: line.item_group, qty: line.qty, unitPriceCenti: 0, variants: v as MfgItemForRecompute['variants'] },
-        rp, rfab, cfgX, null, null, rtiers, addonCfgX, null, null, specialDefsX, null,
-      );
-      const revertUnit = rec.unit_price_sen > 0 ? rec.unit_price_sen : 0;
-      if (revertUnit <= 0) continue; // can't reprice (rare) — leave the line as-is
-      const lTotal = (line.qty * revertUnit) - line.discount_centi;
-      await sb.from('mfg_sales_order_items').update({
-        variants: v,
-        description2: buildVariantSummary(line.item_group, v) || null,
-        unit_price_centi: revertUnit,
-        total_centi: lTotal,
-        total_inc_centi: lTotal,
-        balance_centi: lTotal,
-        line_margin_centi: lTotal - (line.unit_cost_centi * line.qty),
-        divan_price_sen: rec.breakdown.divanSurchargeSen,
-        leg_price_sen: rec.breakdown.legSurchargeSen,
-        special_order_price_sen: rec.breakdown.specialsSurchargeSen,
-        custom_specials: rec.custom_specials ?? null,
-      }).eq('id', line.id);
-      rewardsReset++;
+/* Re-detect the cross-category delivery fee against a (re-resolved) customer.
+   Auto-matches the new customer's eligible source SO with the SAME logic as the
+   handover Auto-match button (pickCrossCategoryMatch), self-excluding THIS SO so
+   changing BACK to the original customer restores the discount. Recomputes the
+   fee on the authoritative computeSoDeliveryFee (preserving the operator's
+   free-form additional fee, recovered from the existing SVC-DELIVERY-ADD line)
+   and rebuilds the SVC-DELIVERY* lines. No eligible source → plain delivery fee.
+   Only runs when the SO already carries a delivery fee. Best-effort. */
+async function redetectCrossCategoryDelivery(
+  sb: any, docNo: string, newName: string, newPhone: string | null,
+): Promise<{ isFollowup: boolean; sourceDocNo: string | null; total: number } | null> {
+  const { data: lineRows } = await sb.from('mfg_sales_order_items')
+    .select('item_code, item_group, total_centi')
+    .eq('doc_no', docNo).eq('cancelled', false);
+  const lines = (lineRows ?? []) as Array<{ item_code: string; item_group: string | null; total_centi: number | null }>;
+  const deliveryLines = lines.filter((l) => isDeliveryFeeServiceCode(l.item_code));
+  if (deliveryLines.length === 0) return null; // no delivery fee → nothing to re-detect
+
+  // Operator free-form fee — preserved across the recompute.
+  const additionalSen = deliveryLines
+    .filter((l) => l.item_code === SVC_DELIVERY_ADD)
+    .reduce((s, l) => s + Number(l.total_centi ?? 0), 0);
+
+  // Deliverable categories (sofa / mattress / bedframe) + their special-model fees.
+  const DELIVERABLE = new Set(['sofa', 'mattress', 'bedframe']);
+  const categoryIds = lines
+    .map((l) => String(l.item_group ?? '').toLowerCase())
+    .filter((g) => DELIVERABLE.has(g));
+  const goodsCodes = [...new Set(
+    lines.filter((l) => DELIVERABLE.has(String(l.item_group ?? '').toLowerCase())).map((l) => l.item_code),
+  )];
+  const specialModels: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
+  if (goodsCodes.length > 0) {
+    const { data: prodRows } = await sb.from('mfg_products').select('code, model_id').in('code', goodsCodes);
+    const modelIds = [...new Set(
+      ((prodRows ?? []) as Array<{ model_id: string | null }>).map((p) => p.model_id).filter((m): m is string => Boolean(m)),
+    )];
+    if (modelIds.length > 0) {
+      const { data: specialRows } = await sb.from('model_special_delivery_fees')
+        .select('standalone_fee, cross_cat_followup_fee').in('model_id', modelIds);
+      for (const r of (specialRows ?? []) as Array<{ standalone_fee?: number; cross_cat_followup_fee?: number }>) {
+        specialModels.push({
+          standaloneFee: Number(r.standalone_fee ?? 0) * 100,
+          crossCategoryFollowupFee: Number(r.cross_cat_followup_fee ?? 0) * 100,
+        });
+      }
     }
   }
-  // 2. Sofa reward builds → apply pre-computed revert updates.
-  for (const u of plan.sofaUpdates) {
-    await sb.from('mfg_sales_order_items').update({
-      unit_price_centi: u.unit_price_centi,
-      total_centi: u.total_centi,
-      total_inc_centi: u.total_centi,
-      balance_centi: u.total_centi,
-      line_margin_centi: u.line_margin_centi,
-      variants: u.variants,
-      description2: u.description2,
-      divan_price_sen: u.divan_price_sen,
-      leg_price_sen: u.leg_price_sen,
-      special_order_price_sen: u.special_order_price_sen,
-      custom_specials: u.custom_specials ?? null,
-    }).eq('id', u.id);
+
+  const { data: dcfg } = await sb.from('delivery_fee_config').select('base_fee, cross_category_fee').eq('id', 1).single();
+  const cfgSen = {
+    baseFee: Number((dcfg as { base_fee?: number } | null)?.base_fee ?? 0) * 100,
+    crossCategoryFee: Number((dcfg as { cross_category_fee?: number } | null)?.cross_category_fee ?? 0) * 100,
+  };
+
+  // Auto-match the new customer for an eligible cross-category source SO.
+  let sourceDocNo: string | null = null;
+  const normPhone = newPhone ? (normalizePhone(newPhone) ?? newPhone) : null;
+  if (newName && normPhone) {
+    const { data: candRows } = await sb.from('mfg_sales_orders')
+      .select('doc_no, debtor_name, created_at')
+      .eq('phone', normPhone).neq('status', 'CANCELLED').neq('doc_no', docNo)
+      .order('created_at', { ascending: false }).limit(50);
+    const candidates: AutoMatchCandidate[] = ((candRows ?? []) as Array<{ doc_no: string; debtor_name: string | null }>)
+      .map((r) => ({ docNo: r.doc_no, debtorName: r.debtor_name }));
+    if (candidates.length > 0) {
+      const { data: usedRows } = await sb.from('mfg_sales_orders')
+        .select('cross_category_source_doc_no')
+        .in('cross_category_source_doc_no', candidates.map((x) => x.docNo))
+        .neq('doc_no', docNo); // self-excluded: this SO's own link must not burn its own source
+      const used = ((usedRows ?? []) as Array<{ cross_category_source_doc_no: string | null }>)
+        .map((r) => r.cross_category_source_doc_no).filter((v): v is string => !!v);
+      const match = pickCrossCategoryMatch(candidates, newName, used);
+      if (match) sourceDocNo = match.docNo;
+    }
   }
-  if (plan.sofaUpdates.length > 0) rewardsReset += plan.sofaUpdates.length;
-  // 3. Vouchers — classify, then delete (dead) / release (cross-order).
-  const { data: codeRows } = await sb.from('pwp_codes')
-    .select('code, status, source_doc_no, redeemed_doc_no')
-    .or(`source_doc_no.eq.${docNo},redeemed_doc_no.eq.${docNo}`);
-  const { deleteCodes, releaseCodes } = classifyPwpVouchersForCustomerChange(
-    ((codeRows ?? []) as PwpVoucherRow[]), docNo,
+
+  const isFollowup = !!sourceDocNo;
+  const fee = computeSoDeliveryFee(
+    { categoryIds, specialModels, isCrossCategoryFollowup: isFollowup, additionalFee: additionalSen },
+    cfgSen,
   );
-  if (deleteCodes.length > 0) await sb.from('pwp_codes').delete().in('code', deleteCodes);
-  if (releaseCodes.length > 0) {
-    await sb.from('pwp_codes')
-      .update({ status: 'AVAILABLE', redeemed_doc_no: null, updated_at: new Date().toISOString() })
-      .in('code', releaseCodes);
+  const specs = buildDeliveryFeeServiceLines(fee, sourceDocNo);
+
+  // Header context for the rebuilt service rows.
+  const { data: hdr } = await sb.from('mfg_sales_orders')
+    .select('debtor_name, venue, customer_delivery_date').eq('doc_no', docNo).maybeSingle();
+  const h = (hdr ?? {}) as { debtor_name?: string | null; venue?: string | null; customer_delivery_date?: string | null };
+
+  // Replace the SVC-DELIVERY* lines: delete the old, insert the recomputed.
+  await sb.from('mfg_sales_order_items').delete()
+    .eq('doc_no', docNo).in('item_code', [SVC_DELIVERY, SVC_DELIVERY_CROSS, SVC_DELIVERY_ADD]);
+  if (specs.length > 0) {
+    const lineDateToday = new Date().toISOString().slice(0, 10);
+    const rows = specs.map((spec) => ({
+      line_date: lineDateToday,
+      debtor_name: h.debtor_name ?? newName,
+      item_group: 'service',
+      item_code: spec.itemCode,
+      description: spec.description,
+      description2: null,
+      remark: spec.remark ?? null,
+      uom: 'UNIT',
+      qty: spec.qty,
+      unit_price_centi: spec.unitPriceSen,
+      discount_centi: 0,
+      total_centi: spec.totalSen,
+      total_inc_centi: spec.totalSen,
+      balance_centi: spec.totalSen,
+      variants: null,
+      unit_cost_centi: 0,
+      line_cost_centi: 0,
+      line_margin_centi: spec.totalSen,
+      divan_price_sen: 0,
+      leg_price_sen: 0,
+      special_order_price_sen: 0,
+      custom_specials: null,
+      line_delivery_date: h.customer_delivery_date ?? null,
+      line_delivery_date_overridden: false,
+      warehouse_id: null,
+      branding: null,
+      venue: h.venue ?? null,
+      stock_status: 'READY',
+    }));
+    await sb.from('mfg_sales_order_items').insert(rows);
   }
+
+  await sb.from('mfg_sales_orders').update({
+    cross_category_source_doc_no: sourceDocNo,
+    delivery_fee_centi: fee.total,
+    updated_at: new Date().toISOString(),
+  }).eq('doc_no', docNo);
   await recomputeTotals(sb, docNo);
-  return { rewardsReset, deleteCodes, releaseCodes };
+  return { isFollowup, sourceDocNo, total: fee.total };
 }
 
 mfgSalesOrders.patch('/:docNo', async (c) => {
@@ -3638,13 +3674,15 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   /* Loo 2026-06-13 — POS "Save" opt-in (recustomer:true). Re-resolve customer_id
      from the edited name+phone exactly as create does, and write it into
      `updates` BEFORE the identity lock below so a DO/SI still freezes a customer
-     reassignment. A genuine change to a DIFFERENT existing customer also flags
-     this SO's PWP for a strip-to-normal (planned + applied after the lock). A
-     null→id resolve is a legacy backfill, not a swap → no strip. */
+     reassignment. PWP product lines are NOT touched (only an item swap re-prices
+     those). When the identity changed we re-detect the cross-category delivery
+     fee + re-point this SO's minted vouchers AFTER the write (see below). */
   const beforeRowAll = before as unknown as Record<string, unknown> | null;
   const oldCustomerId = (beforeRowAll?.['customer_id'] as string | null) ?? null;
   let resolvedNewCustomerId: string | null = null;
-  let pwpStripNeeded = false;
+  let customerIdentityChanged = false; // name or phone changed → re-detect cross-category
+  let reNewName = '';
+  let reNewPhone: string | null = null;
   if (body['recustomer'] === true) {
     const nm = typeof body['debtorName'] === 'string' ? (body['debtorName'] as string).trim()
              : typeof body['customerName'] === 'string' ? (body['customerName'] as string).trim()
@@ -3654,6 +3692,9 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     const nameChanged = nm !== ((beforeRowAll?.['debtor_name'] as string | null) ?? '');
     const phoneChanged = ph !== null && norm(ph) !== norm(beforeRowAll?.['phone']);
     if ((nameChanged || phoneChanged) && nm && ph) {
+      customerIdentityChanged = true;
+      reNewName = nm;
+      reNewPhone = ph;
       const { data: rid } = await sb.rpc('upsert_customer_by_name_phone', {
         p_name: nm, p_phone: ph,
         p_email: typeof body['email'] === 'string' && (body['email'] as string).trim() ? (body['email'] as string).trim() : null,
@@ -3661,7 +3702,6 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
       resolvedNewCustomerId = (rid as string | null) ?? null;
       if (resolvedNewCustomerId) {
         updates['customer_id'] = resolvedNewCustomerId; // visible to the identity lock below
-        pwpStripNeeded = !!oldCustomerId && resolvedNewCustomerId !== oldCustomerId;
       }
     }
   }
@@ -3690,28 +3730,25 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     }
   }
 
-  /* Plan the PWP strip READ-ONLY now — after the identity lock (so a DO/SI 409s
-     first) and before the header write (so a sofa build we can't reprice 409s
-     before anything changes). */
-  let pwpStripPlan: PwpStripPlan | null = null;
-  if (pwpStripNeeded) {
-    const planned = await planPwpStrip(sb, docNo);
-    if (!planned.ok) {
-      return c.json({ error: 'pwp_strip_failed', reason: 'This order’s sofa PWP can’t be auto-repriced — ask the coordinator.' }, 409);
-    }
-    pwpStripPlan = planned.plan;
-  }
-
   const { data, error } = await sb.from('mfg_sales_orders').update(updates).eq('doc_no', docNo).select('doc_no').maybeSingle();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'not_found' }, 404);
 
-  /* Apply the planned PWP strip now the header (incl. the new customer_id) is
-     written: reward lines reprice to normal, vouchers delete/release, totals
-     recompute (recomputeTotals inside). */
-  let pwpStripResult: { rewardsReset: number; deleteCodes: string[]; releaseCodes: string[] } | null = null;
-  if (pwpStripPlan) {
-    pwpStripResult = await applyPwpStrip(sb, docNo, pwpStripPlan);
+  /* Customer identity changed → the minted vouchers follow the order, and the
+     cross-category delivery fee re-detects against the new customer. PWP PRODUCT
+     prices are deliberately UNTOUCHED. Best-effort: the header is already saved;
+     a failure here is logged, not surfaced. */
+  let crossCategoryRedetect: { isFollowup: boolean; sourceDocNo: string | null; total: number } | null = null;
+  if (customerIdentityChanged) {
+    try {
+      if (resolvedNewCustomerId && resolvedNewCustomerId !== oldCustomerId) {
+        await repointMintedVouchers(sb, docNo, resolvedNewCustomerId);
+      }
+      crossCategoryRedetect = await redetectCrossCategoryDelivery(sb, docNo, reNewName, reNewPhone);
+    } catch (e) {
+      /* eslint-disable-next-line no-console */
+      console.error('[mfg-so] customer-change re-detect failed:', e);
+    }
   }
 
   /* PR-E — Master-follower cascade. When the header's
@@ -3759,12 +3796,11 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   return c.json({
     ok: true,
     docNo,
-    ...(pwpStripResult ? {
-      pwpStripped: true,
-      rewardsReset: pwpStripResult.rewardsReset,
-      vouchersDeleted: pwpStripResult.deleteCodes.length,
-      vouchersReleased: pwpStripResult.releaseCodes.length,
-      newCustomerId: resolvedNewCustomerId,
+    ...(crossCategoryRedetect ? {
+      deliveryRedetected: true,
+      crossCategory: crossCategoryRedetect.isFollowup,
+      crossCategorySourceDocNo: crossCategoryRedetect.sourceDocNo,
+      deliveryFeeCenti: crossCategoryRedetect.total,
     } : {}),
   });
 });

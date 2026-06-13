@@ -111,9 +111,6 @@ interface MyOrderRow {
   staffInitials: string | null;
   pieces: number;
   firstImage: string | null;
-  /* Does this SO carry a PWP promo? Used to warn before a Save that re-points
-     the order to a different customer (which strips the PWP). */
-  hasPwp: boolean;
   items: OrderItem[];
 }
 
@@ -140,7 +137,6 @@ interface MineSoRow {
   total_revenue_centi: number | null;
   line_count: number | null;
   paid_centi_total: number | null;
-  has_pwp?: boolean | null;
   items: Array<{
     /** Optional — an older deployed API may not send these yet; the TBC
      *  editor only renders when id is present. */
@@ -350,7 +346,6 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
           staffInitials: null,
           pieces: r.line_count ?? items.reduce((s, it) => s + it.qty, 0),
           firstImage: null,
-          hasPwp: r.has_pwp ?? false,
           items,
         };
       });
@@ -425,9 +420,6 @@ const describeSoActionError = (e: unknown): string => {
   }
   if (err === 'so_identity_locked') {
     return 'This order already has a delivery order / invoice — customer and address are locked. Payment can still be updated.';
-  }
-  if (err === 'pwp_strip_failed') {
-    return 'This order has a sofa PWP promo that can’t be auto-repriced for a new customer — ask the coordinator.';
   }
   const reason = p.reason ?? p.message;
   if (reason) return String(reason);
@@ -1389,18 +1381,19 @@ const OrderDetail = ({ order, onClose }: {
 
   /* Header edit → PATCH /mfg-sales-orders/:docNo. `recustomer: true` (Loo
      2026-06-13) opts this Save into server-side customer re-resolution: if the
-     edited name+phone resolve to a DIFFERENT customer, the server strips this
-     SO's PWP promo back to normal and returns the strip summary below. */
+     edited name+phone resolve to a different customer, the server re-points this
+     SO's minted PWP vouchers + RE-DETECTS the cross-category delivery fee
+     (auto-match → cross rate, or plain fee) and returns the summary below. PWP
+     PRODUCT prices are maintained — only an item swap re-prices those. */
   const saveMutation = useMutation({
     mutationFn: async (): Promise<{
-      pwpStripped?: boolean; rewardsReset?: number;
-      vouchersDeleted?: number; vouchersReleased?: number;
+      deliveryRedetected?: boolean; crossCategory?: boolean; deliveryFeeCenti?: number;
     }> => {
       const res = await authedFetch(`/mfg-sales-orders/${order.id}`, {
         method: 'PATCH',
         body: JSON.stringify({ ...buildPatch(), recustomer: true }),
       });
-      return (await res.json()) as { pwpStripped?: boolean; rewardsReset?: number };
+      return (await res.json()) as { deliveryRedetected?: boolean; crossCategory?: boolean };
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['my-orders'] });
@@ -1486,20 +1479,7 @@ const OrderDetail = ({ order, onClose }: {
     },
   });
 
-  const onSave = () => {
-    /* Warn before a customer change on a PWP order — the server will strip the
-       promo and reprice to normal (Loo 2026-06-13). Name OR phone is the
-       customer-resolution key, so a change to either is what re-points it. */
-    const nameOrPhoneChanged =
-      edited.customerName !== order.customerName || edited.customerPhone !== order.customerPhone;
-    if (order.hasPwp && nameOrPhoneChanged) {
-      const ok = window.confirm(
-        'Changing the customer will remove this order’s PWP promo and reprice it to normal. Continue?',
-      );
-      if (!ok) return;
-    }
-    saveMutation.mutate();
-  };
+  const onSave = () => saveMutation.mutate();
   const onRecordPayment = () => { if (additionalPaid > 0 && paySlipSession !== null) paymentMutation.mutate(); };
   const onProceed = () => {
     if (!allOk) return;
@@ -1916,9 +1896,10 @@ const OrderDetail = ({ order, onClose }: {
                   Proceed failed: {describeSoActionError(proceedMutation.error)}
                 </p>
               )}
-              {saveMutation.data?.pwpStripped ? (
+              {saveMutation.data?.deliveryRedetected ? (
                 <p className={styles.detailFootInfo}>
-                  Customer changed · PWP promo removed, {saveMutation.data.rewardsReset ?? 0} line(s) repriced to normal.
+                  Customer changed · delivery fee re-detected
+                  {saveMutation.data.crossCategory ? ' (cross-category applied)' : ' (standalone rate)'}.
                 </p>
               ) : null}
               <div className={styles.detailCta}>
