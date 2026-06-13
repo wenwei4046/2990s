@@ -498,6 +498,9 @@ function ComposerModal({
           // auto-detect COST from module SKUs, so selling and cost stay decoupled.
           sellingPricesByHeight,
           pwpPricesByHeight,
+          defaultFreeGifts: giftDraft
+            .filter((g) => g.giftProductId)
+            .map((g) => ({ giftProductId: g.giftProductId, qty: Math.max(1, g.qty), campaignName: g.campaignName.trim() || null })),
           label: label || null,
           effectiveFrom,
           notes: notes || null,

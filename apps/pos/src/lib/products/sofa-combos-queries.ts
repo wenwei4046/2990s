@@ -72,6 +72,7 @@ export type NewSofaCombo = {
   /** Optional COST override — normally omitted so the server auto-detects it. */
   pricesByHeight?: Record<string, number | null>;
   pwpPricesByHeight?: Record<string, number | null>;
+  defaultFreeGifts?: { giftProductId: string; qty: number; campaignName?: string | null }[];
   label?: string | null;
   effectiveFrom: string;
   notes?: string | null;
