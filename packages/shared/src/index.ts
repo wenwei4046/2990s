@@ -19,3 +19,4 @@ export * from './service-lines'; // 2026-06-05 — fee/addon → SERVICE line bu
 export * from './so-sofa-split'; // 2026-06-05 — sofa build → per-module line split (SO-SKU spec P3)
 export * from './one-shot-sku'; // 2026-06-08 — one-shot SKU code/name helpers (remark → auto-SKU)
 export * from './maintenance-pools'; // 2026-06-12 — maintenance option ACTIVE toggles (picker-level filter)
+export * from './free-gift'; // 2026-06-14 — default free gift pure module (parse/desired/validate)
