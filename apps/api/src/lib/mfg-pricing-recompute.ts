@@ -163,6 +163,13 @@ export type ProductRowLite = {
    *  onto each SO line at create so the Detail Listing's Branding column lights
    *  per line. Optional: legacy/test snapshots may omit it. */
   branding?:          string | null;
+  /** Default Free Gift (migration 0170) — jsonb [{giftProductId, qty,
+   *  campaignName?}]. The SO-create handler reads this to build the free-gift
+   *  trigger map: a non-sofa product whose default_free_gifts is non-empty is a
+   *  trigger for an accessory gift line. SELECTING-only here (the recompute math
+   *  never reads it); parsed via parseDefaultFreeGifts. Optional: legacy/test
+   *  snapshots may omit it. */
+  default_free_gifts?: unknown;
 };
 
 /** One sofa module SKU's cost-relevant columns (audit 2026-06-11 C2). The
@@ -555,7 +562,7 @@ export async function loadProductByCode(sb: any, code: string): Promise<ProductR
   if (!code) return null;
   const { data } = await sb
     .from('mfg_products')
-    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, pwp_price_sen, model_id, base_model, branding')
+    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, pwp_price_sen, model_id, base_model, branding, default_free_gifts')
     .eq('code', code)
     .maybeSingle();
   if (!data) return null;
@@ -572,7 +579,7 @@ export async function loadProductsByCodes(sb: any, codes: Array<string | null | 
   if (uniq.length === 0) return new Map();
   const { data } = await sb
     .from('mfg_products')
-    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, pwp_price_sen, model_id, base_model, branding')
+    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, pwp_price_sen, model_id, base_model, branding, default_free_gifts')
     .in('code', uniq);
   return new Map((((data as ProductRowLite[]) ?? [])).map((r) => [r.code, r]));
 }

@@ -10,6 +10,8 @@ import {
   buildVariantSummary, comboChargedPrices, matchComboSubset, type SofaComboRow, type SofaPriceTier,
   oneShotSofaCode, oneShotSimpleCode, remarkSlug,
   fabricTierAddon,
+  parseDefaultFreeGifts, validateFreeGiftClaims,
+  type FreeGiftTrigger, type FreeGiftLineClaim,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
 /* POS auto-Proceed (Loo 2026-06-09) — when a handover arrives already complete
@@ -279,7 +281,7 @@ async function soMainMixIntroduced(sb: any, docNo: string, excludeItemId: string
 async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
   const { data } = await sb
     .from('sofa_combo_pricing')
-    .select('id, base_model, modules, tier, customer_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, effective_from, deleted_at')
+    .select('id, base_model, modules, tier, customer_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, effective_from, deleted_at, default_free_gifts')
     .is('deleted_at', null)
     .is('customer_id', null)   // 2990 B2C — default-scope rows only
     .is('supplier_id', null);  // sales-side only — never auto-price a SO from a supplier's purchasing combos
@@ -289,6 +291,7 @@ async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
     selling_prices_by_height: Record<string, number | null>;
     pwp_prices_by_height: Record<string, number | null> | null;
     label: string | null; effective_from: string; deleted_at: string | null;
+    default_free_gifts: unknown;
   }>).map((r) => ({
     id: r.id, baseModel: r.base_model, modules: r.modules ?? [],
     tier: r.tier, customerId: r.customer_id,
@@ -298,6 +301,9 @@ async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
     // only when a sofa-reward line redeems a valid PWP code (see recompute).
     pwpPricesByHeight: r.pwp_prices_by_height ?? {},
     label: r.label, effectiveFrom: r.effective_from, deletedAt: r.deleted_at,
+    // Default Free Gift (migration 0170, D9) — passthrough jsonb; the SO-create
+    // handler parses it to build the per-combo free-gift trigger.
+    defaultFreeGifts: r.default_free_gifts ?? [],
   }));
 }
 
@@ -1712,6 +1718,15 @@ mfgSalesOrders.post('/', async (c) => {
   }
   const pwpBaseByIdx = new Map<number, number>();            // non-sofa idx → pwp_price_sen
   const pwpSofaByIdx = new Map<number, string[]>();          // sofa idx → granted reward combo ids
+  /* Default Free Gift (migration 0170) — a line tagged variants.freeGift is
+     priced to RM 0 ONLY when the order also carries a real qualifying trigger
+     (a non-sofa product's default_free_gifts, or a sofa build matching a combo's
+     default_free_gifts — D9). Validated below, after PWP settles; an ineligible
+     gift is rejected 409 free_gift_not_eligible. The grant rides the SAME 0-base
+     path PWP uses (pwpBaseSen = 0 ⇒ free), so recomputeFromSnapshot needs no new
+     parameter. Honest-pricing (CLAUDE.md): a gift with no trigger reprices to the
+     accessory's real sell_price_sen → a tampered "free" client price drifts. */
+  const freeGiftBaseByIdx = new Map<number, number>();       // gift line idx → granted base (always 0)
   const claimedPwpCodes: Array<{ code: string; prevStatus: string }> = [];
   /* Loo 2026-06-05 (VALOR / PW-Test-voucher incident) — a line that CARRIES a
      pwpCode but fails the grant used to be silently repriced at full price,
@@ -1899,6 +1914,102 @@ mfgSalesOrders.post('/', async (c) => {
     }, 409);
   }
 
+  /* Default Free Gift validation (migration 0170, D9) — runs AFTER PWP settles
+     (so a gift never collides with a voucher) and BEFORE the recompute pass (so
+     a granted gift can ride the pwpBaseSen = 0 path). A line tagged
+     `variants.freeGift` is granted base 0 ONLY when the order ALSO carries a real
+     qualifying trigger: a NON-sofa product whose default_free_gifts grants the
+     claimed gift product, OR a SOFA line whose build matches a combo carrying
+     default_free_gifts (D9). Triggers and claims are pure data fed to the shared
+     validateFreeGiftClaims; ANY ineligible gift → 409 free_gift_not_eligible
+     (after rollbackPwpClaims so nothing burns). Honest-pricing: a rejected /
+     un-granted gift reprices to the accessory's real sell_price_sen below, so a
+     tampered "free" client price drifts → 400. */
+  {
+    // Combos that actually grant gifts — filter once so the sofa matcher only
+    // tries combos with a non-empty default_free_gifts.
+    const giftingCombos = cachedCombos
+      .map((c) => ({ combo: c, gifts: parseDefaultFreeGifts(c.defaultFreeGifts) }))
+      .filter((x) => x.gifts.length > 0);
+
+    const triggers: FreeGiftTrigger[] = [];
+    for (let idx = 0; idx < items.length; idx++) {
+      const it = items[idx];
+      const variants = (it?.variants as Record<string, unknown> | null) ?? null;
+      // A gift line is NEVER a trigger (one-way) — skip it.
+      if (variants?.freeGift) continue;
+      const product = lineProducts[idx] ?? null;
+      const triggerQty = Number(it?.qty ?? 1);
+
+      if (String(product?.category ?? '').toUpperCase() === 'SOFA') {
+        // SOFA trigger (D9) — the build matches a gifting combo's slots. Reuse
+        // the SAME module extraction + matcher the pricing/PWP paths use: build
+        // module codes come from variants.cells[].moduleId.
+        const built = extractSofaComboLookupArgs(
+          String(it?.itemGroup ?? 'sofa'),
+          variants,
+        )?.modules ?? [];
+        if (built.length === 0) continue;
+        // Scope to this Model's combos (mirrors the recompute/PWP base_model
+        // filter) so a same-shape combo from another Model can't grant a gift.
+        const match = giftingCombos.find(
+          (x) =>
+            (!product?.base_model || x.combo.baseModel === product.base_model) &&
+            matchComboSubset(built, x.combo.modules) != null,
+        );
+        if (match) {
+          triggers.push({
+            triggerKey:  `idx-${idx}`,
+            triggerRef:  match.combo.id,
+            triggerKind: 'combo',
+            triggerQty,
+            gifts:       match.gifts,
+          });
+        }
+      } else {
+        // NON-sofa product trigger — its own default_free_gifts.
+        const gifts = parseDefaultFreeGifts(product?.default_free_gifts);
+        if (gifts.length > 0) {
+          triggers.push({
+            triggerKey:  `idx-${idx}`,
+            triggerRef:  product?.code ?? `idx-${idx}`,
+            triggerKind: 'product',
+            triggerQty,
+            gifts,
+          });
+        }
+      }
+    }
+
+    const claims: FreeGiftLineClaim[] = [];
+    for (let idx = 0; idx < items.length; idx++) {
+      const it = items[idx];
+      const variants = (it?.variants as Record<string, unknown> | null) ?? null;
+      const fg = variants?.freeGift;
+      if (!fg) continue;
+      const fgObj = (fg && typeof fg === 'object') ? (fg as Record<string, unknown>) : null;
+      const giftProductId = String(
+        fgObj?.giftProductId ?? String(it?.itemCode ?? ''),
+      );
+      claims.push({ idx, giftProductId, qty: Number(it?.qty ?? 1) });
+    }
+
+    if (claims.length > 0) {
+      const { valid, rejected } = validateFreeGiftClaims(claims, triggers);
+      if (rejected.length > 0) {
+        await rollbackPwpClaims();
+        return c.json({
+          error: 'free_gift_not_eligible',
+          reason: rejected
+            .map((r) => `line ${r.idx + 1}: ${r.giftProductId} — ${r.reason}`)
+            .join('; '),
+          offendersFreeGift: rejected,
+        }, 409);
+      }
+      for (const idx of valid) freeGiftBaseByIdx.set(idx, 0);
+    }
+  }
+
   /* P3 — keep each sofa item's module price map so the split below distributes
      the build total with the SAME weights the drift gate priced from. */
   const sofaModulePricesByIdx = new Map<number, Record<string, number> | null>();
@@ -1973,7 +2084,10 @@ mfgSalesOrders.post('/', async (c) => {
     };
     // PWP grant for this line when its code was claimed: a per-SKU base (non-
     // sofa) or the reward combo ids (sofa). Else null → normal base / price.
-    const pwpBaseSen = pwpBaseByIdx.get(idx) ?? null;
+    // Default Free Gift (migration 0170) — a validated gift line falls back to a
+    // 0 base on the SAME pwpBaseSen path (0 ⇒ free), so no recompute signature
+    // change. PWP always wins if both somehow apply (a gift is non-sofa, no code).
+    const pwpBaseSen = pwpBaseByIdx.get(idx) ?? freeGiftBaseByIdx.get(idx) ?? null;
     const pwpSofaComboIds = pwpSofaByIdx.get(idx) ?? null;
     return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, pwpBaseSen, pwpSofaComboIds, cachedSpecialAddons, sofaModuleCostRows);
   }));
