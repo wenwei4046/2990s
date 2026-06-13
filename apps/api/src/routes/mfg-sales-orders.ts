@@ -2242,11 +2242,20 @@ mfgSalesOrders.post('/', async (c) => {
             divan_price_sen:         i === 0 ? (recomputed?.divan_price_sen ?? 0) : 0,
             leg_price_sen:           i === 0 ? (recomputed?.leg_price_sen ?? 0) : 0,
             special_order_price_sen: i === 0 ? (recomputed?.special_order_sen ?? 0) : 0,
-            custom_specials:         i === 0 ? (recomputed?.custom_specials ?? null) : null,
+            /* Loo 2026-06-13 — custom_specials is the DISPLAY composition of the
+               line's specials (incl. the POS special add-on note), NOT a money
+               figure: the money lives in unit_price_centi (split across modules)
+               + the i===0 breakdown columns above. So, like the remark below, it
+               rides EVERY module line of a split sofa — each row of the internal
+               Detail Listing then shows the same specials, matching the per-module
+               SoLineCard editor and the every-line description2. The customer
+               print folds the build into one line and never reads custom_specials,
+               so this can't double on the invoice. */
+            custom_specials:         recomputed?.custom_specials ?? null,
             /* Loo 2026-06-09 — the operator remark rides EVERY compartment line
                of the sofa, not just the first. One sofa = one remark, so each
                piece (and its printed SO line) carries the same note. Unlike the
-               breakdown columns above, the remark is not a build-level money
+               i===0 breakdown columns above, the remark is not a build-level money
                figure, so duplicating it across the set is not double-counting. */
             remark: baseRow.remark,
           };
