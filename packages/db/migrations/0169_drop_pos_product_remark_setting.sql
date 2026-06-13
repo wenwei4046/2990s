@@ -1,0 +1,11 @@
+-- 0169_drop_pos_product_remark_setting.sql
+-- Loo 2026-06-13 — the POS product-page remark + special add-on (note + extra
+-- charge) is now ALWAYS available; the `pos_product_remark` feature toggle was
+-- removed end-to-end:
+--   • POS Configurator no longer gates the fields on it (both always render),
+--   • the SO create path (mfg-sales-orders) no longer reads it, and
+--   • the SO Maintenance "POS settings" section was deleted (POS + Backend).
+-- Drop the seeded row so nothing references a dead switch. The `so_settings`
+-- table and the /so-settings route stay in place — dormant, reserved for any
+-- future POS feature toggle.
+DELETE FROM so_settings WHERE key = 'pos_product_remark';

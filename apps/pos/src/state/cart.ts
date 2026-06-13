@@ -51,9 +51,13 @@ export interface SofaConfigSnapshot {
   // the build against the code's reward combos + marks the code USED at Confirm.
   pwp?: boolean;
   pwpCode?: string;
-  /** Per-line remark keyed on the product page (spec 2026-06-06). Rides the
-   *  SO variants → mfg_sales_order_items.remark. */
+  /** Per-line ITEM remark keyed on the product page (spec 2026-06-06). Rides the
+   *  SO variants → mfg_sales_order_items.remark. Item remark ONLY since 2026-06-13
+   *  — the special add-on note is a separate field (extraAddonNote below). */
   remark?: string;
+  /** Special add-on note keyed on the product page (Loo 2026-06-13) — the free-text
+   *  label for the extra charge. Rides variants.extraAddonNote → custom_specials. */
+  extraAddonNote?: string;
   /** Extra charge keyed on the product page, whole MYR PER UNIT (spec D1).
    *  Already folded into `total`; also declared in variants so the server
    *  drift gate adds the same amount to its authoritative figure.
@@ -80,9 +84,13 @@ export interface SizeConfigSnapshot {
   // Original (non-PWP) total — so the cart can auto-revert the price if the
   // same-cart trigger is removed and this line's reserved code is freed.
   pwpOriginalTotal?: number;
-  /** Per-line remark keyed on the product page (spec 2026-06-06). Rides the
-   *  SO variants → mfg_sales_order_items.remark. */
+  /** Per-line ITEM remark keyed on the product page (spec 2026-06-06). Rides the
+   *  SO variants → mfg_sales_order_items.remark. Item remark ONLY since 2026-06-13
+   *  — the special add-on note is a separate field (extraAddonNote below). */
   remark?: string;
+  /** Special add-on note keyed on the product page (Loo 2026-06-13) — the free-text
+   *  label for the extra charge. Rides variants.extraAddonNote → custom_specials. */
+  extraAddonNote?: string;
   /** Extra charge keyed on the product page, whole MYR PER UNIT (spec D1).
    *  Already folded into `total`; also declared in variants so the server
    *  drift gate adds the same amount to its authoritative figure.
@@ -165,9 +173,13 @@ export interface BedframeConfigSnapshot {
   // Original (non-PWP) total — auto-revert source when the same-cart trigger
   // (and its reserved code) is removed from the cart.
   pwpOriginalTotal?: number;
-  /** Per-line remark keyed on the product page (spec 2026-06-06). Rides the
-   *  SO variants → mfg_sales_order_items.remark. */
+  /** Per-line ITEM remark keyed on the product page (spec 2026-06-06). Rides the
+   *  SO variants → mfg_sales_order_items.remark. Item remark ONLY since 2026-06-13
+   *  — the special add-on note is a separate field (extraAddonNote below). */
   remark?: string;
+  /** Special add-on note keyed on the product page (Loo 2026-06-13) — the free-text
+   *  label for the extra charge. Rides variants.extraAddonNote → custom_specials. */
+  extraAddonNote?: string;
   /** Extra charge keyed on the product page, whole MYR PER UNIT (spec D1).
    *  Already folded into `total`; also declared in variants so the server
    *  drift gate adds the same amount to its authoritative figure.

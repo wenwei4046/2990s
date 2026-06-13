@@ -34,7 +34,6 @@ import {
   type BedframeOptionRow,
 } from '../lib/queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
-import { useSoSettingEnabled } from '../lib/so-maintenance/so-settings-queries';
 import { useMyQuickPicks, useDeletePersonalQuickPick } from '../lib/personal-quick-picks';
 import {
   useCart,
@@ -528,20 +527,22 @@ export const Configurator = () => {
     }
   };
 
-  // Per-line remark + extra charge (spec 2026-06-06, Loo) — keyed on the
-  // product page, stored in the cart snapshot, lands on the SO line. The
-  // card is feature-gated in SO Maintenance (pos_product_remark).
-  const remarkCardEnabled = useSoSettingEnabled('pos_product_remark');
+  // Per-line ITEM remark + special add-on (note + extra charge) — keyed on the
+  // product page, stored in the cart snapshot, lands on the SO line (Loo
+  // 2026-06-13). Two separate fields now: lineRemark → variants.remark (the SO's
+  // "Remark:" line); lineExtraNote + lineExtraRm → the special add-on
+  // (variants.extraAddonNote + extraAddonAmountRM → custom_specials). The old
+  // pos_product_remark gate is removed — both fields always show.
   const [lineRemark, setLineRemark] = useState('');
+  const [lineExtraNote, setLineExtraNote] = useState('');
   const [lineExtraRm, setLineExtraRm] = useState(0);
   // Line quantity (Loo 2026-06-12) — mattress + bedframe only. The snapshot
   // total stays PER-UNIT (server scales unit × qty); qty rides the cart line.
   const [lineQty, setLineQty] = useState(1);
-  useEffect(() => { setLineRemark(''); setLineExtraRm(0); setLineQty(1); }, [editKey, productId]);
-  // Effective extra (whole MYR, per unit) — 0 when the card is gated off, so a
-  // mid-session toggle can never leave a hidden charge in the total. Declared up
-  // here because the size/bedframe/sofa totals below fold it in.
-  const effectiveExtraRm = remarkCardEnabled ? Math.max(0, Math.min(99999, Math.round(lineExtraRm || 0))) : 0;
+  useEffect(() => { setLineRemark(''); setLineExtraNote(''); setLineExtraRm(0); setLineQty(1); }, [editKey, productId]);
+  // Effective extra (whole MYR, per unit). Declared up here because the
+  // size/bedframe/sofa totals below fold it in.
+  const effectiveExtraRm = Math.max(0, Math.min(99999, Math.round(lineExtraRm || 0)));
 
   // Bedframe colour + option libraries (also used by <BedframeOptions>; React
   // Query dedupes). The parent needs them to rebuild bfSel labels + surcharges
@@ -751,6 +752,7 @@ export const Configurator = () => {
           .catch(() => { /* keep 'pwp' default; server stays authoritative */ });
       }
       setLineRemark(cfg.remark ?? '');
+      setLineExtraNote(cfg.extraAddonNote ?? '');
       setLineExtraRm(cfg.extraAddonAmountRM ?? 0);
       setLineQty(Math.max(1, editingLine.qty));
       hydratedRef.current = true;
@@ -816,6 +818,7 @@ export const Configurator = () => {
           .catch(() => { /* keep 'pwp' default; server stays authoritative */ });
       }
       setLineRemark(cfg.remark ?? '');
+      setLineExtraNote(cfg.extraAddonNote ?? '');
       setLineExtraRm(cfg.extraAddonAmountRM ?? 0);
       setLineQty(Math.max(1, editingLine.qty));
       hydratedRef.current = true;
@@ -875,6 +878,7 @@ export const Configurator = () => {
       }));
       setSofaLegValue(cfg.sofaLegHeight ?? null);
       setLineRemark(cfg.remark ?? '');
+      setLineExtraNote(cfg.extraAddonNote ?? '');
       setLineExtraRm(cfg.extraAddonAmountRM ?? 0);
       hydratedRef.current = true;
     }
@@ -1296,10 +1300,42 @@ export const Configurator = () => {
     </RailSection>
   );
 
-  // Remark + extra-charge card (effectiveExtraRm computed near the state, above,
-  // so the totals can fold it in). Gated off in SO Maintenance → null.
-  const remarkExtraRailSection = remarkCardEnabled ? (
-    <RailSection title="Remark & extra charge" sub="Optional — prints on the sales order">
+  // Special add-on (note + extra charge) — Loo 2026-06-13. The description + amount
+  // feed variants.extraAddonNote + extraAddonAmountRM → custom_specials (a charged
+  // special add-on on the SO). Rendered directly below the SPECIAL ADD-ON chips.
+  const specialAddonRailSection = (
+    <RailSection title="Special add-on" sub="Optional — adds a charged item to the sales order">
+      <label className={styles.sizeOtherField}>
+        <span className={styles.sizeOtherLabel}>Description</span>
+        <textarea
+          className={styles.sizeOtherInput}
+          rows={2}
+          placeholder="What's the add-on for…"
+          value={lineExtraNote}
+          maxLength={300}
+          onChange={(e) => setLineExtraNote(e.target.value)}
+          style={{ resize: 'vertical' }}
+        />
+      </label>
+      <label className={styles.sizeOtherField}>
+        <span className={styles.sizeOtherLabel}>Amount (RM)</span>
+        <input
+          className={styles.sizeOtherInput}
+          type="number"
+          min={0}
+          step={1}
+          placeholder="0"
+          value={lineExtraRm || ''}
+          onChange={(e) => setLineExtraRm(Math.max(0, Math.min(99999, Math.round(Number(e.target.value) || 0))))}
+        />
+      </label>
+    </RailSection>
+  );
+  // Item remark — Loo 2026-06-13. A plain per-line remark → variants.remark →
+  // mfg_sales_order_items.remark; prints as the SO's "Remark:" line. Separate from
+  // the special add-on note above; sits directly below it.
+  const remarkRailSection = (
+    <RailSection title="Remark" sub="Optional — prints on the sales order">
       <label className={styles.sizeOtherField}>
         <span className={styles.sizeOtherLabel}>Remark</span>
         <textarea
@@ -1312,20 +1348,16 @@ export const Configurator = () => {
           style={{ resize: 'vertical' }}
         />
       </label>
-      <label className={styles.sizeOtherField}>
-        <span className={styles.sizeOtherLabel}>Extra add-on amount (RM)</span>
-        <input
-          className={styles.sizeOtherInput}
-          type="number"
-          min={0}
-          step={1}
-          placeholder="0"
-          value={lineExtraRm || ''}
-          onChange={(e) => setLineExtraRm(Math.max(0, Math.min(99999, Math.round(Number(e.target.value) || 0))))}
-        />
-      </label>
     </RailSection>
-  ) : null;
+  );
+  // Combined pair (special add-on, then item remark) — rendered right after the
+  // SPECIAL ADD-ON chips on each product rail.
+  const remarkExtraRailSection = (
+    <>
+      {specialAddonRailSection}
+      {remarkRailSection}
+    </>
+  );
 
   /* Line quantity (Loo 2026-06-12) — mattress + bedframe rails only. The
      effective qty pins to 1 while a PWP/promo code is applied: one code = one
@@ -1415,7 +1447,8 @@ export const Configurator = () => {
       // Per-line remark + extra charge (spec 2026-06-06). The extra is already
       // folded into bedframeTotal (and pwpOriginalTotal) — declared here only so
       // the server's drift gate adds the same per-unit amount.
-      ...(remarkCardEnabled && lineRemark.trim() ? { remark: lineRemark.trim() } : {}),
+      ...(lineRemark.trim() ? { remark: lineRemark.trim() } : {}),
+      ...(lineExtraNote.trim() ? { extraAddonNote: lineExtraNote.trim() } : {}),
       ...(effectiveExtraRm > 0 ? { extraAddonAmountRM: effectiveExtraRm } : {}),
       ...(bfSel.gapId ? { gapId: bfSel.gapId, gapLabel: bfSel.gapLabel } : {}),
       ...(bfSel.legId ? { legHeightId: bfSel.legId, legHeightLabel: bfSel.legLabel } : {}),
@@ -1462,7 +1495,8 @@ export const Configurator = () => {
       // Per-line remark + extra charge (spec 2026-06-06). The extra is already
       // folded into sizeTotal (and pwpOriginalTotal) — declared here only so the
       // server's drift gate adds the same per-unit amount.
-      ...(remarkCardEnabled && lineRemark.trim() ? { remark: lineRemark.trim() } : {}),
+      ...(lineRemark.trim() ? { remark: lineRemark.trim() } : {}),
+      ...(lineExtraNote.trim() ? { extraAddonNote: lineExtraNote.trim() } : {}),
       ...(effectiveExtraRm > 0 ? { extraAddonAmountRM: effectiveExtraRm } : {}),
       total: sizeTotal,
       summary: `${pickedSize.label}${extraSummary}`,
@@ -1587,7 +1621,8 @@ export const Configurator = () => {
       } : {}),
       ...(sofaLegValue ? { sofaLegHeight: sofaLegValue } : {}),
       // Per-line remark + extra charge (spec 2026-06-06) — folded into total once.
-      ...(remarkCardEnabled && lineRemark.trim() ? { remark: lineRemark.trim() } : {}),
+      ...(lineRemark.trim() ? { remark: lineRemark.trim() } : {}),
+      ...(lineExtraNote.trim() ? { extraAddonNote: lineExtraNote.trim() } : {}),
       ...(effectiveExtraRm > 0 ? { extraAddonAmountRM: effectiveExtraRm } : {}),
       total: pickedSofaRow.price + sofaFabricDelta + sofaSpecialDelta + sofaLegSurcharge + effectiveExtraRm,
       summary: lShape
@@ -1637,7 +1672,8 @@ export const Configurator = () => {
       } : {}),
       ...(sofaLegValue ? { sofaLegHeight: sofaLegValue } : {}),
       // Per-line remark + extra charge (spec 2026-06-06) — folded into total once.
-      ...(remarkCardEnabled && lineRemark.trim() ? { remark: lineRemark.trim() } : {}),
+      ...(lineRemark.trim() ? { remark: lineRemark.trim() } : {}),
+      ...(lineExtraNote.trim() ? { extraAddonNote: lineExtraNote.trim() } : {}),
       ...(effectiveExtraRm > 0 ? { extraAddonAmountRM: effectiveExtraRm } : {}),
       total: qpPickPrice + sofaFabricDelta + sofaSpecialDelta + sofaLegSurcharge + effectiveExtraRm,
       summary: `${label} · ${activeDepth}"${fabricSuffix}`,
@@ -2022,7 +2058,8 @@ export const Configurator = () => {
             legHeight={sofaLegValue}
             legSurchargeRm={sofaLegSurcharge}
             remarkBlock={remarkExtraRailSection}
-            remark={remarkCardEnabled ? lineRemark : ''}
+            remark={lineRemark}
+            extraAddonNote={lineExtraNote}
             extraAmountRm={effectiveExtraRm}
             onAdded={() => navigate(isEditing ? '/cart' : '/catalog')}
             {...(isSwapMode ? { onSwapConfirm: (snap) => { void confirmSwap(snap); }, swapPending } : {})}
@@ -2060,10 +2097,13 @@ export const Configurator = () => {
               </RailSection>
             )}
 
+            {/* Special add-on (note + extra charge) + item remark — directly below
+                the Add-ons chips (Loo 2026-06-13). */}
+            {pickedSize && remarkExtraRailSection}
+
             {/* PWP redeem — shared bed frame + mattress section. Shown once a size
                 is picked (it prices off the size's PWP price). */}
             {pickedSize && pwpRailSection}
-            {pickedSize && remarkExtraRailSection}
 
             <RailSection title={`About this ${p.category_id}`}>
               {p.detail ? (
@@ -2172,7 +2212,6 @@ export const Configurator = () => {
 
             {/* PWP redeem — shared bed frame + mattress section (see pwpRailSection). */}
             {isBedframe && pwpRailSection}
-            {remarkExtraRailSection}
 
             <RailSection title="Build">
               <BedframeOptions
@@ -2196,6 +2235,10 @@ export const Configurator = () => {
                 specialAddons={bedframeSpecialAddons}
               />
             </RailSection>
+
+            {/* Special add-on (note + extra charge) + item remark — directly below
+                the Build section's SPECIAL ADD-ON chips (Loo 2026-06-13). */}
+            {remarkExtraRailSection}
           </aside>
         </div>
       )}
