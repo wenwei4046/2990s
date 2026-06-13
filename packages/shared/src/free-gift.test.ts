@@ -4,7 +4,9 @@ import {
   computeDesiredFreeGifts,
   validateFreeGiftClaims,
   freeGiftLineKey,
+  diffFreeGiftLines,
   type FreeGiftTrigger,
+  type ExistingGiftLine,
 } from './free-gift';
 
 describe('parseDefaultFreeGifts', () => {
@@ -124,5 +126,60 @@ describe('validateFreeGiftClaims', () => {
     expect(res.rejected.map((r) => [r.idx, r.reason])).toEqual([
       [0, 'invalid_qty'], [1, 'invalid_qty'], [2, 'invalid_qty'],
     ]);
+  });
+});
+
+describe('diffFreeGiftLines', () => {
+  const d = (giftProductId: string, qty: number, campaignName: string | null = null) =>
+    ({ key: `k-${giftProductId}-${qty}`, triggerKey: 't', giftProductId, qty, campaignName });
+  const e = (id: string, giftProductId: string, qty: number, campaignName: string | null = null): ExistingGiftLine =>
+    ({ id, giftProductId, qty, campaignName });
+
+  it('no-op when an existing gift line already matches the desired total', () => {
+    const diff = diffFreeGiftLines([d('pillow', 2, 'Raya')], [e('L1', 'pillow', 2, 'Raya')]);
+    expect(diff.toInsert).toEqual([]);
+    expect(diff.toDeleteIds).toEqual([]);
+  });
+
+  it('no-op when multiple existing lines already sum to the desired total', () => {
+    const diff = diffFreeGiftLines([d('pillow', 2)], [e('L1', 'pillow', 1), e('L2', 'pillow', 1)]);
+    expect(diff.toInsert).toEqual([]);
+    expect(diff.toDeleteIds).toEqual([]);
+  });
+
+  it('inserts a gift line when a trigger is added (no existing gift)', () => {
+    const diff = diffFreeGiftLines([d('pillow', 4, 'Raya')], []);
+    expect(diff.toDeleteIds).toEqual([]);
+    expect(diff.toInsert).toEqual([{ giftProductId: 'pillow', campaignName: 'Raya', qty: 4 }]);
+  });
+
+  it('deletes all gift lines for a bucket when the trigger is gone (desired 0)', () => {
+    const diff = diffFreeGiftLines([], [e('L1', 'pillow', 2), e('L2', 'pillow', 1)]);
+    expect(diff.toInsert).toEqual([]);
+    expect(diff.toDeleteIds.sort()).toEqual(['L1', 'L2']);
+  });
+
+  it('collapses to a single line at the new total when the qty changed', () => {
+    const diff = diffFreeGiftLines([d('pillow', 4)], [e('L1', 'pillow', 2)]);
+    expect(diff.toDeleteIds).toEqual(['L1']);
+    expect(diff.toInsert).toEqual([{ giftProductId: 'pillow', campaignName: null, qty: 4 }]);
+  });
+
+  it('treats different campaigns as separate buckets', () => {
+    const diff = diffFreeGiftLines(
+      [d('pillow', 2, 'Raya')],
+      [e('L1', 'pillow', 2, 'Deepavali')],
+    );
+    expect(diff.toDeleteIds).toEqual(['L1']);                                  // old campaign bucket gone
+    expect(diff.toInsert).toEqual([{ giftProductId: 'pillow', campaignName: 'Raya', qty: 2 }]); // new campaign bucket added
+  });
+
+  it('handles a mix: one bucket stable, one added, one removed', () => {
+    const diff = diffFreeGiftLines(
+      [d('pillow', 2), d('bolster', 1)],
+      [e('L1', 'pillow', 2), e('L9', 'oldgift', 3)],
+    );
+    expect(diff.toInsert).toEqual([{ giftProductId: 'bolster', campaignName: null, qty: 1 }]);
+    expect(diff.toDeleteIds).toEqual(['L9']);
   });
 });

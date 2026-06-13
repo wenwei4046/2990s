@@ -93,6 +93,66 @@ export function computeDesiredFreeGifts(triggers: FreeGiftTrigger[]): DesiredFre
   return desired;
 }
 
+/** A persisted free-gift SO line, for reconciling a placed order. */
+export interface ExistingGiftLine {
+  id: string;
+  giftProductId: string;
+  campaignName: string | null;
+  qty: number;
+}
+
+export interface FreeGiftLineDiff {
+  /** New gift lines to insert (one per changed/added bucket). */
+  toInsert: { giftProductId: string; campaignName: string | null; qty: number }[];
+  /** Existing gift line ids to delete. */
+  toDeleteIds: string[];
+}
+
+const giftBucketKey = (giftProductId: string, campaignName: string | null): string =>
+  `${giftProductId} ${campaignName ?? ''}`;
+
+/**
+ * Reconcile a placed SO's existing free-gift lines against the desired set,
+ * bucketed by (giftProductId, campaignName). Idempotent: when a bucket's
+ * existing total qty already equals the desired total, it is left untouched
+ * (no churn). When a bucket's total changed, it is collapsed to a single line
+ * at the new desired total (delete the bucket's existing lines, insert one at
+ * the desired qty); a bucket with desired 0 is just deleted.
+ */
+export function diffFreeGiftLines(
+  desired: DesiredFreeGift[],
+  existing: ExistingGiftLine[],
+): FreeGiftLineDiff {
+  const desiredByBucket = new Map<string, { giftProductId: string; campaignName: string | null; qty: number }>();
+  for (const d of desired) {
+    const k = giftBucketKey(d.giftProductId, d.campaignName);
+    const cur = desiredByBucket.get(k);
+    if (cur) cur.qty += d.qty;
+    else desiredByBucket.set(k, { giftProductId: d.giftProductId, campaignName: d.campaignName, qty: d.qty });
+  }
+  const existingByBucket = new Map<string, { ids: string[]; qty: number; giftProductId: string; campaignName: string | null }>();
+  for (const e of existing) {
+    const k = giftBucketKey(e.giftProductId, e.campaignName);
+    const cur = existingByBucket.get(k);
+    if (cur) { cur.ids.push(e.id); cur.qty += e.qty; }
+    else existingByBucket.set(k, { ids: [e.id], qty: e.qty, giftProductId: e.giftProductId, campaignName: e.campaignName });
+  }
+
+  const toInsert: FreeGiftLineDiff['toInsert'] = [];
+  const toDeleteIds: string[] = [];
+  const keys = new Set<string>([...desiredByBucket.keys(), ...existingByBucket.keys()]);
+  for (const k of keys) {
+    const d = desiredByBucket.get(k);
+    const ex = existingByBucket.get(k);
+    const desiredQty = d?.qty ?? 0;
+    const existingQty = ex?.qty ?? 0;
+    if (desiredQty === existingQty) continue;          // idempotent no-op
+    if (ex) toDeleteIds.push(...ex.ids);               // bucket changed → drop existing
+    if (desiredQty > 0 && d) toInsert.push({ giftProductId: d.giftProductId, campaignName: d.campaignName, qty: desiredQty });
+  }
+  return { toInsert, toDeleteIds };
+}
+
 /**
  * Server-side eligibility. Each claimed gift line must be covered by the order's
  * triggers: the gift product must be granted by some trigger, and the TOTAL
