@@ -1988,9 +1988,11 @@ mfgSalesOrders.post('/', async (c) => {
       const fg = variants?.freeGift;
       if (!fg) continue;
       const fgObj = (fg && typeof fg === 'object') ? (fg as Record<string, unknown>) : null;
-      const giftProductId = String(
-        fgObj?.giftProductId ?? String(it?.itemCode ?? ''),
-      );
+      // giftProductId is an mfg_products.id (set by the POS marshaller). No
+      // itemCode (SKU) fallback — a SKU would never match the UUID-keyed trigger
+      // config, so an empty id fails honestly as `no_trigger` rather than
+      // masquerading as ineligibility.
+      const giftProductId = String(fgObj?.giftProductId ?? '');
       claims.push({ idx, giftProductId, qty: Number(it?.qty ?? 1) });
     }
 
