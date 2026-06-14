@@ -76,6 +76,13 @@ export const Layout = () => {
     return <Navigate to="/mfg-sales-orders/new" replace />;
   }
 
+  /* HR / commission carries salary data — admin + super_admin only. The
+     sidebar already hides the group and the API rejects non-admins (403),
+     this is the route-level backstop for a direct URL hit. */
+  if (location.pathname.startsWith('/hr') && !['admin', 'super_admin'].includes(staff.role)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
   const meta: RouteMeta = ROUTE_META[location.pathname] ?? { title: 'Backend', sub: '' };
 
   return (

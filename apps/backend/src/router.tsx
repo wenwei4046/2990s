@@ -106,6 +106,8 @@ const Warehouses = lazyRetry(() => import('./pages/Warehouses').then(m => ({ def
 const Warehouse = lazyRetry(() => import('./pages/Warehouse').then(m => ({ default: m.Warehouse })));
 // Migration 0086 — Users management page (admin / sales_director / coordinator).
 const Users = lazyRetry(() => import('./pages/Users').then(m => ({ default: m.Users })));
+const HrCommission = lazyRetry(() => import('./pages/HrCommission').then(m => ({ default: m.HrCommission })));
+const HrSettings = lazyRetry(() => import('./pages/HrSettings').then(m => ({ default: m.HrSettings })));
 const PurchaseOrderDetail = lazyRetry(() => import('./pages/PurchaseOrderDetail').then(m => ({ default: m.PurchaseOrderDetail })));
 const PurchaseOrderNew = lazyRetry(() => import('./pages/PurchaseOrderNew').then(m => ({ default: m.PurchaseOrderNew })));
 const PurchaseOrderFromSo = lazyRetry(() => import('./pages/PurchaseOrderFromSo').then(m => ({ default: m.PurchaseOrderFromSo })));
@@ -283,6 +285,9 @@ export const router = createBrowserRouter([
       { path: 'audit-log', element: <AuditLog /> },
       { path: 'customers', element: <Customers /> },
       { path: 'settings', element: <Settings /> },
+      // HR — commission calculator + settings (admin + super_admin only).
+      { path: 'hr/commission', element: <HrCommission /> },
+      { path: 'hr/settings', element: <HrSettings /> },
       // Migration 0086 — Users management (invite + edit + deactivate).
       { path: 'users', element: <Users /> },
       // Admin observability dashboard (ported from HOOKKA, 2026-05-29).

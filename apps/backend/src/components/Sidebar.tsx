@@ -28,6 +28,7 @@ import {
   ListTree,
   Activity,
   Handshake,
+  Wallet,
 } from 'lucide-react';
 import { useAuth, POS_ONLY_ROLES } from '../lib/auth';
 import styles from './Sidebar.module.css';
@@ -98,6 +99,8 @@ export const Sidebar = () => {
     !!staff && ['finance', 'coordinator', 'admin', 'super_admin'].includes(staff.role);
   const canSeeAdmin =
     !!staff && ['admin', 'sales_director', 'coordinator', 'super_admin'].includes(staff.role);
+  // HR / commission carries salary data — admin + super_admin only.
+  const canSeeHr = !!staff && ['admin', 'super_admin'].includes(staff.role);
 
   /* TEMPORARY (Loo 2026-06-10) — POS-only roles reach the Backend solely
      through the Sales Order emergency hatch (Layout.tsx / posOnlyAllowedPath).
@@ -272,6 +275,15 @@ export const Sidebar = () => {
         {/* Reference */}
         <div className={styles.navGroup}>Reference</div>
         {reference.map(renderLink)}
+
+        {/* HR (gated: admin + super_admin only) */}
+        {canSeeHr && (
+          <>
+            <div className={styles.navGroup}>HR</div>
+            {renderLink({ to: '/hr/commission', icon: <Wallet {...ICON_PROPS} />, label: 'Commission' })}
+            {renderLink({ to: '/hr/settings', icon: <SlidersHorizontal {...ICON_PROPS} />, label: 'HR Settings' })}
+          </>
+        )}
 
         {/* Administration (gated) */}
         {canSeeAdmin && (
