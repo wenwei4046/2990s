@@ -169,6 +169,7 @@ export const PurchaseConsignmentReceiveDetail = () => {
   };
   const itemsSubtotal = visibleItems.reduce((s, it) => s + lineTotalOf(it), 0);
   const grandTotal = itemsSubtotal + (grn.tax_centi ?? 0);
+  const totalQty = visibleItems.reduce((s, it) => s + (isEditing ? lineOf(it).qty : (it.qty_received ?? 0)), 0);
 
   const headerView = headerDraft ?? headerSnapshot(grn);
 
@@ -522,6 +523,10 @@ export const PurchaseConsignmentReceiveDetail = () => {
         </header>
         <div className={styles.cardBody}>
           <div className={styles.totalsGrid}>
+            <div className={styles.totalRow}>
+              <span className={styles.totalLabel}>Total qty</span>
+              <span className={styles.totalValue}>{totalQty}</span>
+            </div>
             <div className={styles.totalRow}>
               <span className={styles.totalLabel}>Subtotal</span>
               <span className={styles.totalValue}>{fmtRm(itemsSubtotal, grn.currency)}</span>

@@ -225,6 +225,10 @@ export const PurchaseConsignmentReceiveNew = () => {
     () => lines.reduce((s, l) => s + l.qtyReceived * l.unitPriceCenti, 0),
     [lines],
   );
+  const totalQty = useMemo(
+    () => lines.reduce((s, l) => s + (Number(l.qtyReceived) || 0), 0),
+    [lines],
+  );
 
   // ── Mode + resolved supplier / header order. ───────────────────────────
   const po       = poQ.data?.purchaseOrder;
@@ -515,10 +519,10 @@ export const PurchaseConsignmentReceiveNew = () => {
                   ? 'Loading order items…'
                   : lines.length === 0
                     ? 'No outstanding lines on this order (all qty already received)'
-                    : `${lines.length} line${lines.length === 1 ? '' : 's'} · subtotal ${fmtRm(subtotalCenti, currency)}`)
+                    : `${lines.length} line${lines.length === 1 ? '' : 's'} · ${totalQty} qty · subtotal ${fmtRm(subtotalCenti, currency)}`)
               : lines.length === 0
                 ? 'Manual receipt — pick a supplier above, then add items below'
-                : `${lines.length} line${lines.length === 1 ? '' : 's'} · subtotal ${fmtRm(subtotalCenti, currency)}`}
+                : `${lines.length} line${lines.length === 1 ? '' : 's'} · ${totalQty} qty · subtotal ${fmtRm(subtotalCenti, currency)}`}
             {isManual && supplierId && (
               <span style={{ display: 'block', marginTop: 2, color: 'var(--c-burnt)' }}>
                 {bindings.length > 0
@@ -767,6 +771,10 @@ export const PurchaseConsignmentReceiveNew = () => {
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <section className={styles.card} style={{ maxWidth: 360, width: '100%' }}>
           <div className={styles.cardBody}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-14)', marginBottom: 'var(--space-2)' }}>
+              <span>Total qty</span>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>{totalQty}</span>
+            </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-14)', marginBottom: 'var(--space-2)' }}>
               <span>Subtotal</span>
               <span style={{ fontFamily: 'var(--font-mono)' }}>{fmtRm(subtotalCenti, currency)}</span>
