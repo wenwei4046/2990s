@@ -1,7 +1,8 @@
 // ----------------------------------------------------------------------------
-// ChangePin — a salesperson changes their OWN 6-digit POS PIN (self-service,
-// WS2 2026-05-31). Only role==='sales' has a PIN; anyone else is bounced to the
-// catalog. Calls PATCH /pos/my-pin (server scopes the update to the caller).
+// ChangePin — a passcode-login staff member changes their OWN 6-digit POS PIN
+// (self-service, WS2 2026-05-31). Passcode roles (sales / sales_executive /
+// outlet_manager) have a PIN; anyone else is bounced to the catalog. Calls
+// PATCH /pos/my-pin (server scopes the update to the caller).
 // Reuses the SetPassword card styling.
 // ----------------------------------------------------------------------------
 import { useState, type FormEvent } from 'react';
@@ -9,7 +10,7 @@ import { Navigate, useNavigate } from 'react-router';
 import { Button } from '@2990s/design-system';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
-import { useStaff } from '../lib/staff';
+import { useStaff, isPasscodeLoginRole } from '../lib/staff';
 import styles from './SetPassword.module.css';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -26,8 +27,8 @@ export const ChangePin = () => {
 
   if (loading || staffLoading) return <div className={styles.shell}>Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
-  // Only sales log in by PIN — no one else has a PIN to change.
-  if (staff && staff.role !== 'sales') return <Navigate to="/catalog" replace />;
+  // Only passcode-login roles have a PIN to change.
+  if (staff && !isPasscodeLoginRole(staff.role)) return <Navigate to="/catalog" replace />;
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();

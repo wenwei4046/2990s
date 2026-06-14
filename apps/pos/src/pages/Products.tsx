@@ -131,10 +131,11 @@ import styles from './Products.module.css';
 export type ProductsMode = 'view' | 'add-only' | 'full';
 
 function productsMode(role: string | undefined): ProductsMode {
-  // master_account = POS-only selling editor (D1). super_admin is an additive
-  // superset of admin (was previously falling through to 'view' — a bug).
-  if (role === 'admin' || role === 'super_admin' || role === 'master_account') return 'full';
-  if (role === 'sales_director') return 'add-only';
+  // sales_director is the POS selling-side master (inherits the retired
+  // master_account, 2026-06-15) and now has FULL edit (Loo 2026-06-15) — the
+  // old add-only tightening is lifted. super_admin is an additive superset of
+  // admin. The 'add-only' mode is now unreachable (kept for type stability).
+  if (role === 'admin' || role === 'super_admin' || role === 'sales_director') return 'full';
   return 'view'; // sales / sales_executive / outlet_manager / coordinator / finance / anything else
 }
 

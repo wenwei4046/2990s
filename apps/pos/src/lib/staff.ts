@@ -44,14 +44,22 @@ export function useStaff() {
  *  Quick Pick saves it to their personal per-device store. One source of truth
  *  so the curator predicate can't drift between Configurator + CustomBuilder. */
 export const isGlobalCurator = (role: string | undefined): boolean =>
-  role === 'master_account' || role === 'admin' || role === 'super_admin';
+  role === 'sales_director' || role === 'admin' || role === 'super_admin';
 
 /** POS roles allowed to view EVERY salesperson's orders + sales KPIs on the
- *  My-orders board (and switch the salesperson filter). Owner tier only —
- *  super_admin + master_account; plain `admin` is excluded (Loo 2026-06-09).
- *  Must mirror the API's ALL_SALES_VIEWER_ROLES (apps/api/src/lib/roles.ts). */
+ *  My-orders board (and switch the salesperson filter): super_admin,
+ *  sales_director, and outlet_manager (2026-06-15). Plain `admin` is excluded
+ *  (Loo 2026-06-09). Must mirror the API's ALL_SALES_VIEWER_ROLES /
+ *  canViewAllSales (apps/api/src/lib/roles.ts). */
 export const canViewAllSales = (role: string | undefined): boolean =>
-  role === 'super_admin' || role === 'master_account';
+  role === 'super_admin' || role === 'sales_director' || role === 'outlet_manager';
+
+/** POS roles that log in by PASSCODE (the 6-digit PIN) and can self-service
+ *  change it. Mirrors the API's PIN_LOGIN_ROLES / isPinLoginRole
+ *  (apps/api/src/lib/roles.ts). 2026-06-15: widened from {sales} to the three
+ *  POS frontline roles. */
+export const isPasscodeLoginRole = (role: string | undefined): boolean =>
+  role === 'sales' || role === 'sales_executive' || role === 'outlet_manager';
 
 /** TEMPORARY (Loo 2026-06-10) — sales-side POS roles that see the emergency
  *  "Create Sales Order" link in the Catalog sidebar, which opens the Backend
