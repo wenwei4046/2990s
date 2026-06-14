@@ -143,6 +143,20 @@ export const modelSpecialDeliveryFees = pgTable('model_special_delivery_fees', {
   updatedBy:           uuid('updated_by'),                            // references staff(id)
 });
 
+/* ──────────────── Per-Model fabric-tier Δ overrides ─────────────────── */
+// Migration 0172. A row gives a Model its own selling fabric-tier add-on Δ
+// (whole MYR) that REPLACES the global fabric_tier_addon_config (0124) for that
+// Model; NULL on a tier = inherit the global. Per-Model (not per-SKU/combo) —
+// covers all of the Model's builds incl. 大套 combos. RLS: read for any staff;
+// write for admin/super_admin/coordinator/master_account. Selling-only.
+export const modelFabricTierOverrides = pgTable('model_fabric_tier_overrides', {
+  modelId:    uuid('model_id').primaryKey().references(() => productModels.id, { onDelete: 'cascade' }),
+  tier2Delta: integer('tier2_delta'),   // NULL = inherit global P2
+  tier3Delta: integer('tier3_delta'),   // NULL = inherit global P3
+  updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:  uuid('updated_by'),        // references staff(id)
+});
+
 /* ─────────────────────────── Venues ─────────────────────────────────── */
 // Migration 0086 (2026-05-27). Parallel concept to showrooms — venues are
 // where the sales force (sales / sales_executive / outlet_manager) actually
