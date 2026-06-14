@@ -1,5 +1,5 @@
 // /pwp-rules — purchase-with-purchase (换购优惠) rules CRUD. Read by any staff;
-// written by admin/super_admin/coordinator/master_account (server check + RLS,
+// written by admin/super_admin/coordinator/sales_director (server check + RLS,
 // migration 0128). A rule: buying a TRIGGER (eligible model in trigger_category)
 // unlocks REWARD models (eligible list in reward_category) at their pwp_price_sen.
 // Pricing itself is enforced server-side in mfg-sales-orders (shared resolvePwp).
@@ -14,7 +14,7 @@ export const pwpRules = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 pwpRules.use('*', supabaseAuth);
 
-const WRITE_ROLES = new Set(['admin', 'super_admin', 'coordinator', 'master_account']);
+const WRITE_ROLES = new Set(['admin', 'super_admin', 'coordinator', 'sales_director']);
 
 const CATEGORY = z.enum(['SOFA', 'BEDFRAME', 'ACCESSORY', 'MATTRESS', 'SERVICE']);
 

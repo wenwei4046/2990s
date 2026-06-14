@@ -131,7 +131,33 @@ describe('POST /admin/staff — role-based admin-set credential (WS2 2026-05-31)
     expect(insertedRow.pin_hash).toBeNull();
   });
 
-  it('sales role without a PIN → 400 (pin_required_for_sales)', async () => {
+  it('sales_executive (passcode role) with a PIN, no staffCode/initials → 201, auto-coded', async () => {
+    createUserMock.mockResolvedValue({ data: { user: { id: 'u-se' } }, error: null });
+    let insertedRow: any = null;
+    adminFromMock.mockImplementation((table: string) => ({
+      insert: (row: any) => {
+        if (table === 'staff') insertedRow = row;
+        return { select: () => ({ maybeSingle: async () => ({ data: { ...row, id: 'u-se' }, error: null }) }) };
+      },
+    }));
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Kah Wai', role: 'sales_executive',
+        email: 'kw@2990s.my', color: '#2F5D4F', pin: '482917',
+        showroomId: SHOWROOM_ID,
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(201);
+    // Passcode role → bcrypt pin_hash; auto staff_code + initials filled in.
+    expect(typeof insertedRow.pin_hash).toBe('string');
+    expect(insertedRow.staff_code).toBe('2990S-001');
+    expect(insertedRow.initials).toBe('KW');
+  });
+
+  it('passcode role without a PIN → 400 (pin_required_for_passcode_role)', async () => {
     const app = buildApp('admin');
     const res = await app.request('/admin/staff', {
       method: 'POST',
@@ -142,11 +168,11 @@ describe('POST /admin/staff — role-based admin-set credential (WS2 2026-05-31)
       }),
     }, baseEnv);
     expect(res.status).toBe(400);
-    expect(JSON.stringify(await res.json())).toContain('pin_required_for_sales');
+    expect(JSON.stringify(await res.json())).toContain('pin_required_for_passcode_role');
     expect(createUserMock).not.toHaveBeenCalled();
   });
 
-  it('non-sales role without a password → 400 (password_required_for_non_sales)', async () => {
+  it('password role without a password → 400 (password_required_for_password_role)', async () => {
     const app = buildApp('admin');
     const res = await app.request('/admin/staff', {
       method: 'POST',
@@ -157,7 +183,7 @@ describe('POST /admin/staff — role-based admin-set credential (WS2 2026-05-31)
       }),
     }, baseEnv);
     expect(res.status).toBe(400);
-    expect(JSON.stringify(await res.json())).toContain('password_required_for_non_sales');
+    expect(JSON.stringify(await res.json())).toContain('password_required_for_password_role');
     expect(createUserMock).not.toHaveBeenCalled();
   });
 

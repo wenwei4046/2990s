@@ -27,3 +27,12 @@ export function canViewAllSales(role: string | null | undefined): boolean {
 export function isSelfScopedSales(role: string | null | undefined): boolean {
   return role === 'sales' || role === 'sales_executive';
 }
+
+/* Roles that log in by PASSCODE (the 6-digit PIN) on the POS LockScreen.
+   2026-06-15: widened from {sales} so Salesperson (sales_executive) and Outlet
+   manager log in by passcode too. Keep in lock-step with admin.ts POS_PIN_ROLES
+   (staff creation / PIN reset) — both must list the same roles. */
+export const PIN_LOGIN_ROLES = ['sales', 'sales_executive', 'outlet_manager'] as const;
+export function isPinLoginRole(role: string | null | undefined): boolean {
+  return role === 'sales' || role === 'sales_executive' || role === 'outlet_manager';
+}

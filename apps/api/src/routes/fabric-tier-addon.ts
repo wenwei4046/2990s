@@ -1,6 +1,6 @@
 // /fabric-tier-addon — the singleton config (4 whole-MYR Δ values) for the POS
 // selling fabric-tier add-on. Mirrors delivery-fees.ts. Read by any staff;
-// written by admin/coordinator/master_account (server check + RLS, migration 0124).
+// written by admin/coordinator/sales_director (server check + RLS, migration 0124).
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { supabaseAuth } from '../middleware/auth';
@@ -13,7 +13,7 @@ fabricTierAddonConfig.use('*', supabaseAuth);
 
 // super_admin added 2026-06-12 — the role (mig 0162) postdates this route (0124).
 // RLS counterpart: migration 0166 adds super_admin to the UPDATE policy.
-const WRITE_ROLES = new Set(['admin', 'super_admin', 'coordinator', 'master_account']);
+const WRITE_ROLES = new Set(['admin', 'super_admin', 'coordinator', 'sales_director']);
 
 const patchSchema = z.object({
   sofaTier2Delta:     z.number().int().nonnegative().optional(),

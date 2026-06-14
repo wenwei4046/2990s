@@ -32,14 +32,14 @@ type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 // mfg_products has NO RLS — this app-layer gate is the only thing stopping a
 // junior salesperson from rewriting SKU prices/data via a direct API call (the
 // POS productsMode client gate is bypassable). Mirrors sofa-combos.ts.
-//   EDIT/DELETE: the POS "full" set {admin, super_admin, master_account} +
-//                backend coordinator.
-//   CREATE: the above + sales_director (POS add-only mode lets a director ADD
-//           new SKUs but not edit existing — Chairman 2026-05-28
-//           "只有 sales director 可以添加,不能 edit").
+//   EDIT/DELETE: the POS "full" set {admin, super_admin, sales_director} +
+//                backend coordinator. sales_director is the POS selling-side
+//                master (inherits the retired master_account, 2026-06-15) and
+//                now has FULL edit (Loo 2026-06-15), not the old add-only.
+//   CREATE: same set (sales_director is already a full editor).
 // GET stays open — the POS salesperson must read the catalogue to price builds.
-const EDIT_ROLES   = new Set(['admin', 'super_admin', 'coordinator', 'master_account']);
-const CREATE_ROLES = new Set([...EDIT_ROLES, 'sales_director']);
+const EDIT_ROLES   = new Set(['admin', 'super_admin', 'coordinator', 'sales_director']);
+const CREATE_ROLES = new Set([...EDIT_ROLES]);
 
 async function requireRole(c: AppContext, allowed: Set<string>): Promise<{ ok: true } | { ok: false; res: Response }> {
   const supabase = c.get('supabase');

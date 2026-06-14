@@ -5,6 +5,7 @@ import { normalizePhone } from '@2990s/shared/phone';
 import type { Env, Variables } from '../env';
 import { supabaseAuth } from '../middleware/auth';
 import { hashPin } from '../lib/bcrypt';
+import { nextStaffCode, extractInitials } from '../lib/staff-code';
 
 /* 2026-05-31 (WS2) — role-based registration. The Master Admin sets the
    initial credential at create time:
@@ -39,17 +40,27 @@ const STAFF_ROLES = [
   'master_account',
 ] as const;
 
-/* Roles that log in by PIN — must stay in lock-step with the PIN consumers
-   (/pos/pin-login, /pos/verify-pin, /pos/sales-staff) and the create branch,
-   all of which are hard-scoped to role==='sales'. Keeping this set wider would
-   let admin PIN-reset write a dead PIN onto a password-only role (the staff
-   member could never actually sign in by it). Spec §0.3: only 'sales' uses PIN. */
-const POS_PIN_ROLES = new Set<string>(['sales']);
+/* Roles that log in by PASSCODE (the 6-digit PIN) on the POS — must stay in
+   lock-step with the PIN consumers (/pos/pin-login, /pos/verify-pin,
+   /pos/sales-staff) and the create branch. 2026-06-15: widened from {sales}
+   to the three POS frontline roles so Salesperson + Outlet manager log in by
+   passcode like the legacy sales role. */
+const POS_PIN_ROLES = new Set<string>(['sales', 'sales_executive', 'outlet_manager']);
+
+/* Login-method role groups for staff registration (2026-06-15). PASSCODE roles
+   get an admin-set 6-digit passcode (== PIN); PASSWORD roles get an admin-set
+   email + password. Every active role belongs to exactly one group. */
+const PASSCODE_LOGIN_ROLES = POS_PIN_ROLES;
+const PASSWORD_LOGIN_ROLES = new Set<string>([
+  'super_admin', 'admin', 'sales_director', 'coordinator', 'finance', 'showroom_lead',
+]);
 
 /* Roles allowed to invite + update + deactivate other staff. coordinator
-   listed in the GET list (see STAFF_LIST_ROLES) but cannot mutate. */
-const STAFF_WRITE_ROLES = new Set<string>(['admin', 'super_admin', 'sales_director']);
-const STAFF_LIST_ROLES  = new Set<string>(['admin', 'super_admin', 'sales_director', 'coordinator']);
+   listed in the GET list (see STAFF_LIST_ROLES) but cannot mutate. 2026-06-15:
+   sales_director dropped — it is now a Sales-Order-desk role with no staff
+   management. */
+const STAFF_WRITE_ROLES = new Set<string>(['admin', 'super_admin']);
+const STAFF_LIST_ROLES  = new Set<string>(['admin', 'super_admin', 'coordinator']);
 
 /* Roles that are is_coordinator_or_above() in RLS — they legitimately carry a
    NULL showroom ("oversee all showrooms" per CLAUDE.md) and are NOT showroom-
@@ -64,7 +75,7 @@ const COORDINATOR_OR_ABOVE_ROLES = new Set<string>(['coordinator', 'finance', 'a
    surfaced as `staff_showroom_missing` 400 on "Confirm payment" (BUG-2026-06-03:
    4 of 5 sales staff had been onboarded with NULL showroom). Derived as the
    complement of COORDINATOR_OR_ABOVE_ROLES so it can't drift as roles are added.
-   Per Loo (2026-06-03) this includes sales_director + master_account — with one
+   Per Loo (2026-06-03) this includes sales_director — with one
    live showroom that is a no-op; revisit if a director must oversee 2+ showrooms
    (then promote it into is_coordinator_or_above() instead of pinning a showroom). */
 const SHOWROOM_SCOPED_ROLES = new Set<string>(
@@ -78,11 +89,14 @@ const SHOWROOM_SCOPED_ROLES = new Set<string>(
    role === 'sales' (admin sets the initial 6-digit PIN); `password` is required
    for every other role (admin sets the initial password). */
 const CreateStaffBodySchema = z.object({
-  staffCode:  z.string().trim().min(1).max(16),
+  /* staffCode + initials are auto-generated server-side when omitted (the new
+     registration form no longer collects them). Still accepted if a caller
+     supplies them explicitly (back-compat). */
+  staffCode:  z.string().trim().min(1).max(16).optional(),
   name:       z.string().trim().min(1).max(80),
   role:       z.enum(STAFF_ROLES),
   email:      z.string().trim().toLowerCase().email(),
-  initials:   z.string().trim().min(1).max(4),
+  initials:   z.string().trim().min(1).max(4).optional(),
   color:      z.string().regex(/^#[0-9a-fA-F]{6}$/, 'must be 6-digit hex like #FF7733'),
   showroomId: z.string().uuid().nullable().optional(),
   venueId:    z.string().uuid().nullable().optional(),
@@ -90,8 +104,8 @@ const CreateStaffBodySchema = z.object({
   pin:        z.string().regex(/^\d{6}$/).optional(),
   password:   z.string().min(8).max(72).optional(),
 })
-  .refine((d) => d.role !== 'sales' || !!d.pin, { message: 'pin_required_for_sales', path: ['pin'] })
-  .refine((d) => d.role === 'sales' || !!d.password, { message: 'password_required_for_non_sales', path: ['password'] })
+  .refine((d) => !PASSCODE_LOGIN_ROLES.has(d.role) || !!d.pin, { message: 'pin_required_for_passcode_role', path: ['pin'] })
+  .refine((d) => !PASSWORD_LOGIN_ROLES.has(d.role) || !!d.password, { message: 'password_required_for_password_role', path: ['password'] })
   /* A POS-selling role (SHOWROOM_SCOPED_ROLES) cannot be onboarded without a
      showroom — see the set comment above. This is the upstream guard that stops
      the staff_showroom_missing class of bug at the source. */
@@ -125,36 +139,46 @@ admin.post('/staff', async (c) => {
   }
   const input = parsed.data;
 
-  // staff_code uniqueness pre-flight (cheap, friendlier than the unique-constraint
-  // violation that would surface at INSERT time).
+  // initials auto-derive from the name when not supplied (new form omits it).
+  const initials = input.initials ?? extractInitials(input.name);
+  // PASSCODE roles get an admin-set 6-digit passcode (== PIN); others a password.
+  const isPinUser = POS_PIN_ROLES.has(input.role);
+
   const userScoped = c.get('supabase');
-  const { data: codeClash } = await userScoped
-    .from('staff')
-    .select('id')
-    .eq('staff_code', input.staffCode)
-    .maybeSingle();
-  if (codeClash) {
-    return c.json({ error: 'staff_code_taken', staffCode: input.staffCode }, 409);
+
+  // Resolve staff_code: explicit (with clash pre-flight) or auto-generated as the
+  // next "2990S-NNN". The pre-flight stays for an explicit code; auto codes lean
+  // on the UNIQUE constraint + a one-shot regenerate retry at INSERT time.
+  let staffCode: string;
+  const autoCode = !input.staffCode;
+  if (input.staffCode) {
+    staffCode = input.staffCode;
+    const { data: codeClash } = await userScoped
+      .from('staff').select('id').eq('staff_code', staffCode).maybeSingle();
+    if (codeClash) return c.json({ error: 'staff_code_taken', staffCode }, 409);
+  } else {
+    const { data: codeRows } = await userScoped.from('staff').select('staff_code');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    staffCode = nextStaffCode((codeRows ?? []).map((r: any) => r.staff_code));
   }
 
   const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // 2026-05-31 (WS2) — admin-set credential, NOT a magic-link invite. Sales log
-  // in by PIN (admin sets it; the account carries a random password they never
-  // use); every other role logs in with the admin-set email + password. The
-  // account is created confirmed with `password_set: true` so the portal never
-  // routes them through /set-password.
-  const isSales = input.role === 'sales';
+  // 2026-05-31 (WS2) — admin-set credential, NOT a magic-link invite. Passcode
+  // roles log in by PIN (admin sets it; the account carries a random password
+  // they never use); every other role logs in with the admin-set email +
+  // password. The account is created confirmed with `password_set: true` so the
+  // portal never routes them through /set-password.
   const email = input.email;
-  const password = isSales ? crypto.randomUUID() : (input.password as string);
+  const password = isPinUser ? crypto.randomUUID() : (input.password as string);
   const { data: created, error: createErr } = await adminClient.auth.admin.createUser({
     email,
     password,
     email_confirm: true,
     user_metadata: {
-      staff_code:   input.staffCode,
+      staff_code:   staffCode,
       name:         input.name,
       role:         input.role,
       password_set: true,
@@ -165,41 +189,50 @@ admin.post('/staff', async (c) => {
   }
   const userId = created.user.id;
 
-  // Sales log in by PIN — hash the admin-set 6-digit PIN (required-by-refine for
-  // sales). Other roles have no PIN.
-  const pinHash = isSales ? await hashPin(input.pin as string) : null;
+  // Passcode roles log in by PIN — hash the admin-set 6-digit PIN (required-by-
+  // refine). Password roles have no PIN.
+  const pinHash = isPinUser ? await hashPin(input.pin as string) : null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let newStaff: any = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let insertErr: any = null;
-  try {
-    const result = await adminClient
-      .from('staff')
-      .insert({
-        id:           userId,
-        staff_code:   input.staffCode,
-        name:         input.name,
-        role:         input.role,
-        showroom_id:  input.showroomId ?? null,
-        /* Migration 0086 — venue_id for sales-side roles. NULL is fine for
-           admin / coordinator / finance and for sales_director (cross-venue). */
-        venue_id:     input.venueId ?? null,
-        email,
-        /* Task #91 — staff phone normalized to E.164 storage form. */
-        phone:        input.phone ? (normalizePhone(input.phone) ?? input.phone) : null,
-        initials:     input.initials,
-        color:        input.color,
-        active:       true,
-        /* Sales log in by PIN (admin-set, hashed above); other roles have none. */
-        pin_hash:     pinHash,
-      })
-      .select('id, staff_code, name, role, showroom_id, venue_id, email, phone, initials, color, active')
-      .maybeSingle();
-    newStaff = result.data;
-    insertErr = result.error;
-  } catch (thrown) {
-    insertErr = { message: String((thrown as Error).message ?? thrown) };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const result = await adminClient
+        .from('staff')
+        .insert({
+          id:           userId,
+          staff_code:   staffCode,
+          name:         input.name,
+          role:         input.role,
+          showroom_id:  input.showroomId ?? null,
+          /* Migration 0086 — venue_id for sales-side roles. NULL is fine for
+             admin / coordinator / finance and for sales_director (cross-venue). */
+          venue_id:     input.venueId ?? null,
+          email,
+          /* Task #91 — staff phone normalized to E.164 storage form. */
+          phone:        input.phone ? (normalizePhone(input.phone) ?? input.phone) : null,
+          initials,
+          color:        input.color,
+          active:       true,
+          /* Passcode roles log in by PIN (admin-set, hashed above); others none. */
+          pin_hash:     pinHash,
+        })
+        .select('id, staff_code, name, role, showroom_id, venue_id, email, phone, initials, color, active')
+        .maybeSingle();
+      newStaff = result.data;
+      insertErr = result.error;
+    } catch (thrown) {
+      insertErr = { message: String((thrown as Error).message ?? thrown) };
+    }
+    // Retry once for an auto-generated staff_code that raced into a UNIQUE clash.
+    const clashed = !!insertErr && /duplicate|unique|23505/i.test(String(insertErr.message ?? insertErr.code ?? ''));
+    if (newStaff || !clashed || !autoCode || attempt === 1) break;
+    const { data: codeRows2 } = await userScoped.from('staff').select('staff_code');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    staffCode = nextStaffCode([...(codeRows2 ?? []).map((r: any) => r.staff_code), staffCode]);
+    insertErr = null;
   }
 
   if (insertErr || !newStaff) {

@@ -9,7 +9,7 @@
 //   POST   /sofa-quick-picks             — create (Master Admin curates)
 //   DELETE /sofa-quick-picks/:id         — soft-delete
 //
-// Writes are role-gated to master_account + backend admins (the global layer is
+// Writes are role-gated to sales_director + backend admins (the global layer is
 // Master-Admin-curated). The personal layer lives client-side in
 // apps/pos/src/state/quickpicks.ts (localStorage) and never touches this route.
 // ----------------------------------------------------------------------------
@@ -26,7 +26,7 @@ export const sofaQuickPicks = new Hono<{ Bindings: Env; Variables: Variables }>(
 sofaQuickPicks.use('*', supabaseAuth);
 
 // Master Admin curates the global layer; backend admins may also manage it.
-const WRITE_ROLES = new Set(['admin', 'super_admin', 'master_account']);
+const WRITE_ROLES = new Set(['admin', 'super_admin', 'sales_director']);
 
 type Row = {
   id: string;
