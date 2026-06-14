@@ -14,7 +14,7 @@ export function nextStaffCode(existing: ReadonlyArray<string | null | undefined>
   for (const code of existing) {
     if (!code) continue;
     const m = STAFF_CODE_RE.exec(code);
-    if (m) max = Math.max(max, parseInt(m[1], 10));
+    if (m) max = Math.max(max, parseInt(m[1] ?? '0', 10));
   }
   return `2990S-${String(max + 1).padStart(3, '0')}`;
 }
