@@ -29,17 +29,61 @@ import {
   type UserRow, type InviteUserBody, type UpdateUserBody,
 } from '../lib/users-queries';
 import { useVenues, type VenueRow } from '../lib/venues-queries';
+import { useShowrooms } from '../lib/admin-queries';
 import { PinDrawer } from '../components/PinDrawer';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-/* Roles that need a venue picker on the invite dialog. Sales directors
-   are cross-venue so the picker is hidden for them. */
+/* Roles that need a venue picker on the invite dialog. Only the on-floor POS
+   selling roles are venue-scoped; everyone else is cross-venue. */
 const VENUE_SCOPED_ROLES: ReadonlySet<StaffRole> = new Set<StaffRole>([
+  'sales_executive', 'outlet_manager',
+]);
+
+/* Roles that log in by a 6-digit passcode (POS counter). Their credential is
+   sent to the API as `pin`. Kept in lock-step with the API's
+   PASSCODE_LOGIN_ROLES set. */
+const PASSCODE_LOGIN_ROLES: ReadonlySet<StaffRole> = new Set<StaffRole>([
   'sales', 'sales_executive', 'outlet_manager',
 ]);
+
+/* Roles that log in by email + password (Backend). Their credential is sent
+   to the API as `password`. Kept in lock-step with the API's
+   PASSWORD_LOGIN_ROLES set. */
+const PASSWORD_LOGIN_ROLES: ReadonlySet<StaffRole> = new Set<StaffRole>([
+  'super_admin', 'admin', 'sales_director', 'coordinator', 'finance', 'showroom_lead',
+]);
+
+/* Roles that SELL through the POS and therefore must belong to a showroom
+   server-side. The invite form has no showroom picker, so for any of these we
+   stamp `showroomId` from the primary showroom (see DEFAULT_SHOWROOM_ID). */
+const SHOWROOM_SCOPED_ROLES: ReadonlySet<StaffRole> = new Set<StaffRole>([
+  'sales', 'sales_executive', 'outlet_manager', 'sales_director',
+]);
+
+/* Fallback when the showrooms query hasn't loaded — the primary "Showroom KL"
+   UUID (CLAUDE.md §Showroom). The form prefers the first active showroom from
+   useShowrooms() and only falls back to this. */
+const DEFAULT_SHOWROOM_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+
+/* Brand-aligned avatar swatches. Default 2990s green (#2F5D4F) first. */
+const COLOR_PALETTE: readonly string[] = [
+  '#2F5D4F', // 2990s green (default)
+  '#E86B3A', // burnt orange
+  '#B5482E', // terracotta
+  '#C7973F', // ochre
+  '#7A8450', // olive
+  '#3C6E71', // teal
+  '#284B63', // deep blue
+  '#6D597A', // muted plum
+  '#9B5DE5', // violet
+  '#5A6470', // slate
+];
+
+/* Default avatar colour — the first (and brand-primary) swatch. */
+const DEFAULT_COLOR = '#2F5D4F';
 
 /* Pretty labels for the role pill. Sentence-case per 2990s brand voice. */
 const ROLE_LABEL: Record<StaffRole, string> = {
@@ -55,13 +99,10 @@ const ROLE_LABEL: Record<StaffRole, string> = {
   master_account:  'Master account',
 };
 
-/* Role options shown in the invite dropdown. We drop showroom_lead from
-   the inviter UI — it's a legacy slot still in the enum but commander said
-   "keep but not user-facing". Still surfaces on rows for existing users. */
+/* Role options shown in the invite dropdown. master_account is retired from
+   the inviter UI (kept in ROLE_LABEL so existing rows still render). */
 const INVITE_ROLES: StaffRole[] = [
-  'sales_executive', 'outlet_manager', 'sales_director',
-  'coordinator', 'finance', 'admin', 'super_admin',
-  'sales', 'master_account',
+  'super_admin', 'admin', 'sales_director', 'outlet_manager', 'sales_executive',
 ];
 
 const formatLastSignIn = (iso: string | null): string => {
@@ -73,8 +114,8 @@ const formatLastSignIn = (iso: string | null): string => {
 export const Users = () => {
   const { staff } = useAuth();
   const toast = useToast();
-  const canWrite = staff?.role === 'admin' || staff?.role === 'sales_director' || staff?.role === 'super_admin';
-  const canRead  = canWrite || staff?.role === 'coordinator';
+  const canWrite = staff?.role === 'admin' || staff?.role === 'super_admin';
+  const canRead  = canWrite || staff?.role === 'coordinator' || staff?.role === 'sales_director';
 
   const users  = useUsers();
   const venues = useVenues({ includeInactive: false });
@@ -305,55 +346,58 @@ const InviteUserDrawer = ({
 }: { venues: VenueRow[]; onClose: () => void }) => {
   const toast = useToast();
   const invite = useInviteUser();
+  const showrooms = useShowrooms();
   const [form, setForm] = useState<{
-    staffCode: string; name: string; email: string;
-    role: StaffRole; venueId: string; initials: string;
-    color: string; pin: string; confirmPin: string; password: string;
+    name: string; email: string;
+    role: StaffRole; venueId: string;
+    color: string; passcode: string; confirmPasscode: string; password: string;
   }>({
-    staffCode: '', name: '', email: '',
-    role: 'sales_executive', venueId: '', initials: '',
-    color: '#2F5D4F', pin: '', confirmPin: '', password: '',
+    name: '', email: '',
+    role: 'sales_executive', venueId: '',
+    color: DEFAULT_COLOR, passcode: '', confirmPasscode: '', password: '',
   });
   const set = <K extends keyof typeof form>(k: K, v: typeof form[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
 
-  const needsVenue = VENUE_SCOPED_ROLES.has(form.role);
-  // WS2: sales log in by PIN (admin sets it); every other role logs in with an
-  // admin-set email + password.
-  const isSales = form.role === 'sales';
+  const needsVenue   = VENUE_SCOPED_ROLES.has(form.role);
+  const usesPasscode = PASSCODE_LOGIN_ROLES.has(form.role);
+  const usesPassword = PASSWORD_LOGIN_ROLES.has(form.role);
+
+  /* Showroom-scoped roles must carry a showroom server-side, but the form has
+     no showroom picker. Default to the first active showroom, falling back to
+     the primary "Showroom KL" UUID if the query hasn't loaded. */
+  const primaryShowroomId =
+    (showrooms.data ?? []).find((s) => s.active)?.id ?? DEFAULT_SHOWROOM_ID;
 
   const submit = () => {
-    if (!form.staffCode.trim()) { toast.error('Staff code required.'); return; }
-    if (!form.name.trim())      { toast.error('Name required.'); return; }
-    if (!form.initials.trim())  { toast.error('Initials required.'); return; }
-    if (!form.email.trim())     { toast.error('Email required.'); return; }
+    if (!form.name.trim())  { toast.error('Name required.'); return; }
+    if (!form.email.trim()) { toast.error('Email required.'); return; }
     if (needsVenue && !form.venueId) {
       toast.error('Pick a venue for this role.');
       return;
     }
-    if (isSales) {
-      if (!/^\d{6}$/.test(form.pin)) { toast.error('Set a 6-digit PIN for this salesperson.'); return; }
-      if (form.pin !== form.confirmPin) { toast.error('PINs do not match.'); return; }
-    } else if (form.password.length < 8) {
+    if (usesPasscode) {
+      if (!/^\d{6}$/.test(form.passcode))     { toast.error('Set a 6-digit passcode.'); return; }
+      if (form.passcode !== form.confirmPasscode) { toast.error('Passcodes do not match.'); return; }
+    } else if (usesPassword && form.password.length < 8) {
       toast.error('Set a password (at least 8 characters).');
       return;
     }
 
     const body: InviteUserBody = {
-      staffCode: form.staffCode.trim(),
-      name:      form.name.trim(),
-      role:      form.role,
-      email:     form.email.trim().toLowerCase(),
-      initials:  form.initials.trim().toUpperCase().slice(0, 4),
-      color:     form.color,
+      name:   form.name.trim(),
+      role:   form.role,
+      email:  form.email.trim().toLowerCase(),
+      color:  form.color,
       ...(needsVenue ? { venueId: form.venueId } : {}),
-      ...(isSales ? { pin: form.pin } : { password: form.password }),
+      ...(SHOWROOM_SCOPED_ROLES.has(form.role) ? { showroomId: primaryShowroomId } : {}),
+      ...(usesPasscode ? { pin: form.passcode } : { password: form.password }),
     };
 
     invite.mutate(body, {
       onSuccess: (r) => {
-        toast.success(isSales
-          ? `${r.staff.name} created — they log in with their PIN.`
+        toast.success(usesPasscode
+          ? `${r.staff.name} created — they log in with their passcode.`
           : `${r.staff.name} created — they log in with email + password.`);
         onClose();
       },
@@ -373,8 +417,6 @@ const InviteUserDrawer = ({
         </header>
         <div className={styles.drawerBody}>
           <div className={styles.formGrid}>
-            <Field label="Staff code *" value={form.staffCode}
-              onChange={(v) => set('staffCode', v.toUpperCase())} placeholder="e.g. SE-04" />
             <Field label="Full name *" value={form.name}
               onChange={(v) => set('name', v)} placeholder="e.g. Lim Wei Siang" />
             <Field label="Email *" value={form.email}
@@ -400,36 +442,31 @@ const InviteUserDrawer = ({
                 </select>
               </label>
             )}
-            <Field label="Initials *" value={form.initials}
-              onChange={(v) => set('initials', v.toUpperCase().slice(0, 4))} placeholder="WS" />
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Avatar colour</span>
-              <input type="color" className={styles.fieldInput} value={form.color}
-                onChange={(e) => set('color', e.target.value)}
-                style={{ height: 38, padding: 2 }} />
-            </label>
-            {/* WS2 credential: PIN for sales (POS login), password for everyone else. */}
-            {isSales ? (
+            <div className={styles.formGridFull}>
+              <ColourSwatchField value={form.color} onChange={(c) => set('color', c)} />
+            </div>
+            {/* Credential: passcode for POS counter roles, password for Backend roles. */}
+            {usesPasscode ? (
               <>
                 <label className={styles.field}>
-                  <span className={styles.fieldLabel}>PIN * (6 digits)</span>
+                  <span className={styles.fieldLabel}>Passcode * (6 digits)</span>
                   <input className={styles.fieldInput} inputMode="numeric" maxLength={6}
-                    value={form.pin}
-                    onChange={(e) => set('pin', e.target.value.replace(/\D/g, ''))}
-                    placeholder="6-digit PIN" />
+                    value={form.passcode}
+                    onChange={(e) => set('passcode', e.target.value.replace(/\D/g, ''))}
+                    placeholder="6-digit passcode" />
                 </label>
                 <label className={styles.field}>
-                  <span className={styles.fieldLabel}>Confirm PIN *</span>
+                  <span className={styles.fieldLabel}>Confirm passcode *</span>
                   <input className={styles.fieldInput} inputMode="numeric" maxLength={6}
-                    value={form.confirmPin}
-                    onChange={(e) => set('confirmPin', e.target.value.replace(/\D/g, ''))}
-                    placeholder="Re-enter PIN" />
+                    value={form.confirmPasscode}
+                    onChange={(e) => set('confirmPasscode', e.target.value.replace(/\D/g, ''))}
+                    placeholder="Re-enter passcode" />
                 </label>
               </>
             ) : (
               <label className={styles.field}>
                 <span className={styles.fieldLabel}>Password *</span>
-                <input className={styles.fieldInput} value={form.password}
+                <input className={styles.fieldInput} type="password" value={form.password}
                   onChange={(e) => set('password', e.target.value)}
                   placeholder="At least 8 characters" />
               </label>
@@ -439,10 +476,11 @@ const InviteUserDrawer = ({
             fontSize: 'var(--fs-12)', color: 'var(--fg-muted)',
             background: 'var(--c-paper)', padding: 'var(--space-3)',
             borderRadius: 'var(--radius-md)', border: '1px solid var(--line)',
+            marginTop: 'var(--space-3)',
           }}>
-            {isSales
-              ? 'Sales staff log in with their PIN on the POS. Set their starting PIN above — they can change it themselves later.'
-              : 'This person logs in with their email + the password above on the Backend. They can change it after signing in.'}
+            {usesPasscode
+              ? 'This person logs in with their 6-digit passcode on the POS. Set their starting passcode above — they can change it themselves later. Staff code and initials are generated automatically.'
+              : 'This person logs in with their email + the password above on the Backend. They can change it after signing in. Staff code and initials are generated automatically.'}
           </p>
         </div>
         <footer className={styles.drawerFooter}>
@@ -466,7 +504,6 @@ const EditUserDrawer = ({
     name:     row.name,
     role:     row.role,
     venueId:  row.venue_id ?? '',
-    initials: row.initials,
     color:    row.color,
     phone:    row.phone ?? '',
   });
@@ -479,7 +516,6 @@ const EditUserDrawer = ({
     const patch: UpdateUserBody = {};
     if (form.name     !== row.name)            patch.name     = form.name.trim();
     if (form.role     !== row.role)            patch.role     = form.role;
-    if (form.initials !== row.initials)        patch.initials = form.initials;
     if (form.color    !== row.color)           patch.color    = form.color;
     if ((form.phone || null) !== row.phone)    patch.phone    = form.phone.trim() || null;
     if (needsVenue) {
@@ -511,7 +547,10 @@ const EditUserDrawer = ({
               <span className={styles.fieldLabel}>Role</span>
               <select className={styles.fieldSelect} value={form.role}
                 onChange={(e) => set('role', e.target.value as StaffRole)}>
-                {INVITE_ROLES.concat(form.role === 'showroom_lead' ? ['showroom_lead'] : [])
+                {/* Union the row's current role in so a legacy-role user
+                    (e.g. sales / coordinator / master_account) stays editable
+                    even though it's no longer in the inviter list. */}
+                {INVITE_ROLES.concat(INVITE_ROLES.includes(row.role) ? [] : [row.role])
                   .map((r) => (
                     <option key={r} value={r}>{ROLE_LABEL[r] ?? r}</option>
                   ))}
@@ -529,13 +568,9 @@ const EditUserDrawer = ({
                 </select>
               </label>
             )}
-            <Field label="Initials" value={form.initials}
-              onChange={(v) => set('initials', v.toUpperCase().slice(0, 4))} />
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Avatar colour</span>
-              <input type="color" className={styles.fieldInput} value={form.color}
-                onChange={(e) => set('color', e.target.value)} style={{ height: 38, padding: 2 }} />
-            </label>
+            <div className={styles.formGridFull}>
+              <ColourSwatchField value={form.color} onChange={(c) => set('color', c)} />
+            </div>
             <Field label="Phone" value={form.phone}
               onChange={(v) => set('phone', v)} placeholder="+60 12-345-6789" />
           </div>
@@ -576,3 +611,43 @@ const Field = ({
       onChange={(e) => onChange(e.target.value)} />
   </label>
 );
+
+/* Avatar-colour picker: a row of clickable brand swatches. The selected swatch
+   gets a ring; a legacy colour outside the palette still surfaces as a chip so
+   it stays selectable. */
+const ColourSwatchField = ({
+  value, onChange,
+}: { value: string; onChange: (v: string) => void }) => {
+  const normalized = value.toLowerCase();
+  const inPalette = COLOR_PALETTE.some((c) => c.toLowerCase() === normalized);
+  const swatches = inPalette ? COLOR_PALETTE : [...COLOR_PALETTE, value];
+  return (
+    <div className={styles.field}>
+      <span className={styles.fieldLabel}>Avatar colour</span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', paddingTop: 2 }}>
+        {swatches.map((c) => {
+          const selected = c.toLowerCase() === normalized;
+          return (
+            <button
+              key={c}
+              type="button"
+              aria-label={`Avatar colour ${c}`}
+              aria-pressed={selected}
+              title={c}
+              onClick={() => onChange(c)}
+              style={{
+                width: 40, height: 40,
+                borderRadius: 'var(--radius-md)',
+                background: c,
+                cursor: 'pointer',
+                padding: 0,
+                border: selected ? '2px solid var(--c-ink)' : '1px solid var(--line)',
+                boxShadow: selected ? '0 0 0 2px var(--c-paper), 0 0 0 4px var(--c-ink)' : 'none',
+              }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+};

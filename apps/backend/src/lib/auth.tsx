@@ -34,6 +34,32 @@ export const posOnlyAllowedPath = (pathname: string): boolean =>
   pathname.startsWith('/mfg-sales-orders') &&
   !pathname.startsWith('/mfg-sales-orders/maintenance');
 
+/* Sales-Order-desk roles (2026-06-15) — sign into the Backend but are confined
+   to the Sales Order group + HR (view). sales_director is a POS power role with
+   limited Backend reach: it manages Sales Orders / Delivery Orders / Sales
+   Invoices / Delivery Returns + views HR commission, but cannot reach
+   Procurement / Warehouse / Finance / Users / Settings or the SO maintenance
+   vocabulary editor. Distinct from the POS-only hatch (those are routed to the
+   raw SO create form only). */
+export const SALES_DESK_ROLES: ReadonlySet<StaffRole> = new Set<StaffRole>(['sales_director']);
+
+export const isSalesDesk = (role: StaffRole | null | undefined): boolean =>
+  !!role && SALES_DESK_ROLES.has(role);
+
+/* Paths a Sales-Order-desk role may reach. Mirrors the Sidebar "Sales Order"
+   group (+ HR). The SO maintenance vocabulary editor stays blocked. */
+export const salesDeskAllowedPath = (pathname: string): boolean => {
+  if (pathname.startsWith('/mfg-sales-orders/maintenance')) return false;
+  return (
+    pathname.startsWith('/mfg-sales-orders') ||
+    pathname.startsWith('/mfg-delivery-orders') ||
+    pathname.startsWith('/sales-invoices') ||
+    pathname.startsWith('/delivery-returns') ||
+    pathname.startsWith('/reports/sales-order-detail-listing') ||
+    pathname.startsWith('/hr')
+  );
+};
+
 /* TEMPORARY (Loo 2026-06-10, SO emergency hatch) — the POS selling roles that
    create raw SOs through the hatch may hand-edit the selling unit price on
    the SO line card. The new items they order this way often have no

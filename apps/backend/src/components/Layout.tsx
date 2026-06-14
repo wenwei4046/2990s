@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useState } from 'react';
 import { Outlet, Navigate, useLocation } from 'react-router';
-import { useAuth, POS_ONLY_ROLES, posOnlyAllowedPath } from '../lib/auth';
+import { useAuth, POS_ONLY_ROLES, posOnlyAllowedPath, isSalesDesk, salesDeskAllowedPath } from '../lib/auth';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { CommandPalette } from './CommandPalette';
@@ -76,10 +76,17 @@ export const Layout = () => {
     return <Navigate to="/mfg-sales-orders/new" replace />;
   }
 
-  /* HR / commission carries salary data — admin + super_admin only. The
-     sidebar already hides the group and the API rejects non-admins (403),
-     this is the route-level backstop for a direct URL hit. */
-  if (location.pathname.startsWith('/hr') && !['admin', 'super_admin'].includes(staff.role)) {
+  /* Sales-Order-desk roles (sales_director, 2026-06-15) — confined to the Sales
+     Order group + HR. Any other path bounces to the SO list (the desk landing).
+     The Sidebar hides everything else; this is the direct-URL backstop. */
+  if (isSalesDesk(staff.role) && !salesDeskAllowedPath(location.pathname)) {
+    return <Navigate to="/mfg-sales-orders" replace />;
+  }
+
+  /* HR / commission carries salary data — admin + super_admin (edit) plus
+     sales_director (view only; API rejects HR mutations for it with 403). The
+     sidebar gates the group too; this is the route-level backstop. */
+  if (location.pathname.startsWith('/hr') && !['admin', 'super_admin', 'sales_director'].includes(staff.role)) {
     return <Navigate to="/dashboard" replace />;
   }
 

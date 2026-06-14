@@ -5,6 +5,7 @@ import { ErrorBoundaryRoot } from './components/ErrorBoundary';
 import { Login } from './pages/Login';
 import { Sso } from './pages/Sso';
 import { SetPassword } from './pages/SetPassword';
+import { ChangePassword } from './pages/ChangePassword';
 import { Dashboard } from './pages/Dashboard';
 
 // Commander 2026-05-29 — "Failed to fetch dynamically imported module": after
@@ -161,6 +162,7 @@ const SalesInvoiceDetail = lazyRetry(() => import('./pages/SalesInvoiceDetail').
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
   { path: '/set-password', element: <SetPassword /> },
+  { path: '/change-password', element: <ChangePassword /> },
   { path: '/no-access', element: <NoAccess /> },
   /* TEMPORARY (Loo 2026-06-10) — POS → Backend session handoff landing for
      the SO emergency hatch. Outside <Layout/> so the auth guard doesn't
