@@ -23,7 +23,7 @@
 import { todayMyt } from '../lib/dates';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, ArrowRightLeft, Plus, Save, Trash2, X, ChevronDown } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, ListChecks, Plus, Save, Trash2, X, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
@@ -132,6 +132,10 @@ export const PurchaseConsignmentReceiveNew = () => {
   const [warehouseId, setWarehouseId]         = useState<string>('');
   const warehousesQ = useWarehouses();
   const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
+  // Multi-select item picker (purchaser 2026-06: "multiple select to choose item").
+  const [pickerOpen, setPickerOpen]     = useState(false);
+  const [pickerSel, setPickerSel]       = useState<Set<string>>(new Set());
+  const [pickerSearch, setPickerSearch] = useState('');
 
   // From-Order multi-picker merge (fromPicks) — the operator chose specific PC
   // Order lines + quantities on /purchase-consignment-receive/from-pc-order. The
@@ -305,6 +309,46 @@ export const PurchaseConsignmentReceiveNew = () => {
       itemGroup:      categoryForCode(b.material_code) ?? null,
     });
   };
+
+  // Append one manual line per checked SKU — prefilled from the supplier binding
+  // (price) or the SKU master, deduped against lines already on the receipt.
+  const addPickedItems = (codes: string[]) => {
+    if (codes.length === 0) return;
+    const mk = (code: string): DraftLine => {
+      const b = supplierId ? bindings.find((x) => x.material_code === code) : undefined;
+      const sku = (allSkusQ.data ?? []).find((p) => p.code === code);
+      return {
+        rid:                 `m${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${code}`,
+        purchaseOrderItemId: null,
+        materialKind:        'mfg_product',
+        materialCode:        code,
+        materialName:        b?.material_name ?? sku?.name ?? code,
+        itemGroup:           categoryForCode(code) ?? (sku?.category ? sku.category.toLowerCase() : null),
+        variants:            null,
+        outstanding:         null,
+        qtyReceived:         1,
+        qtyAccepted:         1,
+        qtyRejected:         0,
+        unitPriceCenti:      b?.unit_price_centi ?? 0,
+        notes:               '',
+      };
+    };
+    setLines((prev) => {
+      const kept = prev.filter((l) => l.materialCode.trim() !== '');
+      const existing = new Set(kept.map((l) => l.materialCode));
+      const fresh = codes.filter((c) => !existing.has(c)).map(mk);
+      return [...kept, ...fresh];
+    });
+  };
+
+  const pickerItems = useMemo(() => {
+    const q = pickerSearch.trim().toLowerCase();
+    const base = (supplierId && bindings.length > 0)
+      ? bindings.map((b) => ({ code: b.material_code, name: b.material_name, sub: `${b.supplier_sku ?? ''} · ${fmtRm(b.unit_price_centi, b.currency)}` }))
+      : (allSkusQ.data ?? []).map((p) => ({ code: p.code, name: p.name, sub: p.category }));
+    if (!q) return base;
+    return base.filter((it) => it.code.toLowerCase().includes(q) || it.name.toLowerCase().includes(q));
+  }, [supplierId, bindings, allSkusQ.data, pickerSearch]);
 
   const canSave = !!supplierId && lines.length > 0 &&
     lines.every((l) => l.qtyReceived >= 0);
@@ -741,28 +785,34 @@ export const PurchaseConsignmentReceiveNew = () => {
           )}
 
           {isManual && (
-            <button
-              type="button"
-              onClick={addEmptyManualLine}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                width: '100%',
-                padding: '12px 14px',
-                border: '1px dashed var(--c-orange)',
-                borderRadius: 'var(--radius-md)',
-                background: 'transparent',
-                color: 'var(--c-orange)',
-                fontFamily: 'var(--font-sans)',
-                fontSize: 'var(--fs-13)',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              <Plus {...ICON} /> Add another item
-            </button>
+            <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+              <button
+                type="button"
+                onClick={() => { setPickerSel(new Set()); setPickerSearch(''); setPickerOpen(true); }}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  flex: 1, padding: '12px 14px',
+                  border: '1px solid var(--c-orange)', borderRadius: 'var(--radius-md)',
+                  background: 'rgba(232, 107, 58, 0.08)', color: 'var(--c-burnt)',
+                  fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                <ListChecks {...ICON} /> Pick items (multi-select)
+              </button>
+              <button
+                type="button"
+                onClick={addEmptyManualLine}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  flex: 1, padding: '12px 14px',
+                  border: '1px dashed var(--c-orange)', borderRadius: 'var(--radius-md)',
+                  background: 'transparent', color: 'var(--c-orange)',
+                  fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                <Plus {...ICON} /> Add another item
+              </button>
+            </div>
           )}
         </div>
       </section>
@@ -786,6 +836,63 @@ export const PurchaseConsignmentReceiveNew = () => {
           </div>
         </section>
       </div>
+
+      {pickerOpen && (
+        <div
+          onClick={() => setPickerOpen(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(34,31,32,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 'var(--space-4)' }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: 'var(--c-paper)', borderRadius: 'var(--radius-lg)', width: '100%', maxWidth: 560, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 32px rgba(0,0,0,0.18)' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'var(--space-4)', borderBottom: '1px solid var(--line)' }}>
+              <h3 style={{ margin: 0, fontSize: 'var(--fs-16)' }}>Pick items to receive</h3>
+              <button type="button" onClick={() => setPickerOpen(false)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)', display: 'inline-flex' }}><X {...ICON} /></button>
+            </div>
+            <div style={{ padding: 'var(--space-3) var(--space-4)' }}>
+              <input
+                type="text" autoFocus value={pickerSearch}
+                onChange={(e) => setPickerSearch(e.target.value)}
+                placeholder="Search by code or name…"
+                className={styles.fieldInput}
+                style={{ width: '100%' }}
+              />
+            </div>
+            <div style={{ overflowY: 'auto', padding: '0 var(--space-4)', flex: 1 }}>
+              {pickerItems.length === 0 ? (
+                <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)', padding: 'var(--space-3) 0' }}>
+                  {supplierId ? 'No items match.' : 'Pick a supplier in the header first.'}
+                </p>
+              ) : pickerItems.map((it) => {
+                const on = pickerSel.has(it.code);
+                const already = lines.some((l) => l.materialCode === it.code);
+                return (
+                  <label key={it.code} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: '8px 0', borderBottom: '1px solid var(--line)', cursor: already ? 'default' : 'pointer', opacity: already ? 0.5 : 1 }}>
+                    <input
+                      type="checkbox" checked={on} disabled={already}
+                      onChange={() => setPickerSel((s) => { const n = new Set(s); if (n.has(it.code)) n.delete(it.code); else n.add(it.code); return n; })}
+                    />
+                    <span style={{ display: 'flex', flexDirection: 'column' }}>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{it.code}{already ? ' · added' : ''}</span>
+                      <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{it.name}{it.sub ? ` · ${it.sub}` : ''}</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)', padding: 'var(--space-4)', borderTop: '1px solid var(--line)' }}>
+              <Button variant="ghost" size="md" onClick={() => setPickerOpen(false)}>Cancel</Button>
+              <Button
+                variant="primary" size="md" disabled={pickerSel.size === 0}
+                onClick={() => { addPickedItems([...pickerSel]); setPickerSel(new Set()); setPickerSearch(''); setPickerOpen(false); }}
+              >
+                Add {pickerSel.size > 0 ? `${pickerSel.size} ` : ''}item{pickerSel.size === 1 ? '' : 's'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {dialog && (
         <ActionResultDialog
