@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { ArrowLeft, Bookmark, KeyRound, ListOrdered, LogOut, ShoppingBag } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { useAuth } from '../lib/auth';
-import { useStaff } from '../lib/staff';
+import { useStaff, isPasscodeLoginRole } from '../lib/staff';
 import { useCart, cartItemCount, cartSubtotal } from '../state/cart';
 import styles from './Topbar.module.css';
 
@@ -111,7 +111,7 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: Topba
             </span>
           </span>
         )}
-        {staff?.role === 'sales' && (
+        {isPasscodeLoginRole(staff?.role) && (
           <Link to="/change-pin" className={styles.iconBtn} aria-label="Change PIN" title="Change PIN">
             <KeyRound size={18} strokeWidth={1.75} />
           </Link>

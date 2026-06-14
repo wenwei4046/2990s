@@ -47,6 +47,7 @@ function chainable(rows: any[], error: any = null) {
   const obj: any = {};
   obj.select = () => obj;
   obj.eq = () => obj;
+  obj.in = () => obj;
   obj.not = () => obj;
   obj.order = async () => ({ data: rows, error });
   return obj;

@@ -11,7 +11,7 @@ fabricLibrary.use('*', supabaseAuth);
 
 // super_admin added 2026-06-12 — the role (mig 0162) postdates this route (0124);
 // without it Loo's tier clicks 403'd while the POS UI showed the buttons enabled.
-const WRITE_ROLES = new Set(['admin', 'super_admin', 'coordinator', 'master_account']);
+const WRITE_ROLES = new Set(['admin', 'super_admin', 'coordinator', 'sales_director']);
 const VALID_TIER_FIELDS = new Set(['sofaTier', 'bedframeTier']);
 const VALID_TIERS = new Set(['PRICE_1', 'PRICE_2', 'PRICE_3']);
 const TIER_FIELD_TO_COL: Record<string, string> = { sofaTier: 'sofa_tier', bedframeTier: 'bedframe_tier' };

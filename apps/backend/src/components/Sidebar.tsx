@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { NavLink } from 'react-router';
+import { NavLink, Link } from 'react-router';
 import {
   LayoutDashboard,
   FileSpreadsheet,
@@ -29,8 +29,9 @@ import {
   Activity,
   Handshake,
   Wallet,
+  KeyRound,
 } from 'lucide-react';
-import { useAuth, POS_ONLY_ROLES } from '../lib/auth';
+import { useAuth, POS_ONLY_ROLES, SALES_DESK_ROLES } from '../lib/auth';
 import styles from './Sidebar.module.css';
 
 type NavLinkRow = {
@@ -98,9 +99,13 @@ export const Sidebar = () => {
   const canSeeAuditLog =
     !!staff && ['finance', 'coordinator', 'admin', 'super_admin'].includes(staff.role);
   const canSeeAdmin =
-    !!staff && ['admin', 'sales_director', 'coordinator', 'super_admin'].includes(staff.role);
-  // HR / commission carries salary data — admin + super_admin only.
-  const canSeeHr = !!staff && ['admin', 'super_admin'].includes(staff.role);
+    !!staff && ['admin', 'coordinator', 'super_admin'].includes(staff.role);
+  // HR / commission carries salary data — admin + super_admin (edit) + sales_director (view).
+  const canSeeHr = !!staff && ['admin', 'super_admin', 'sales_director'].includes(staff.role);
+
+  /* Sales-Order-desk (sales_director, 2026-06-15) — Backend reach limited to the
+     Sales Order group + HR. Renders a trimmed sidebar (see below). */
+  const isDesk = !!staff && SALES_DESK_ROLES.has(staff.role);
 
   /* TEMPORARY (Loo 2026-06-10) — POS-only roles reach the Backend solely
      through the Sales Order emergency hatch (Layout.tsx / posOnlyAllowedPath).
@@ -236,6 +241,16 @@ export const Sidebar = () => {
             label: 'Sales Orders',
           })}
         </nav>
+      ) : isDesk ? (
+        <nav className={styles.nav}>
+          {/* Sales-Order-desk (sales_director): Sales Order group + HR only. */}
+          <div className={styles.navGroup}>Sales Order</div>
+          {(supplyChain.find((s) => s.id === 'so')?.items ?? []).map(renderLink)}
+          {/* sales_director gets the HR Commission view only (HrSettings is
+              admin-only and bounces it back to Commission). */}
+          <div className={styles.navGroup}>HR</div>
+          {renderLink({ to: '/hr/commission', icon: <Wallet {...ICON_PROPS} />, label: 'Commission' })}
+        </nav>
       ) : (
       <nav className={styles.nav}>
         {/* Workspace */}
@@ -308,6 +323,10 @@ export const Sidebar = () => {
             </div>
           </div>
         )}
+        <Link to="/change-password" className={styles.signOut}>
+          <KeyRound size={16} strokeWidth={1.75} />
+          <span className={styles.navLabel}>Change password</span>
+        </Link>
         <button onClick={() => void signOut()} className={styles.signOut} type="button">
           <LogOut size={16} strokeWidth={1.75} />
           <span className={styles.navLabel}>Sign out</span>

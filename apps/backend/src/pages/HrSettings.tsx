@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Navigate } from 'react-router';
 import { Plus, Trash2 } from 'lucide-react';
 import {
   useHrProfiles, useCreateHrProfile, useUpdateHrProfile, useDeleteHrProfile,
@@ -6,6 +7,7 @@ import {
   useHrItemKpi, useCreateHrItemKpi, useDeleteHrItemKpi,
   useHrPickers, type HrPickerRef,
 } from '../lib/hr-queries';
+import { useAuth, isAdminLevel } from '../lib/auth';
 import styles from './Hr.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -50,7 +52,16 @@ const CentiField = ({ label, centi, onSave }: { label: string; centi: number; on
   );
 };
 
+/* HR rate/profile editing is admin + super_admin only. sales_director gets the
+   HR Commission view (read-only) but is bounced from the settings editor — the
+   API rejects its mutations with 403 anyway (2026-06-15). */
 export const HrSettings = () => {
+  const { staff } = useAuth();
+  if (staff && !isAdminLevel(staff.role)) return <Navigate to="/hr/commission" replace />;
+  return <HrSettingsInner />;
+};
+
+const HrSettingsInner = () => {
   const profiles = useHrProfiles();
   const pickers = useHrPickers();
   const createProfile = useCreateHrProfile();

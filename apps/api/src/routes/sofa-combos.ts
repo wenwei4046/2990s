@@ -37,14 +37,14 @@ type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 // Combo pricing is staff-curated, not open to every authenticated user. Writers:
 //   · coordinator — Backend SofaComboTab COST entry + supplier-scoped PO combos
-//   · master_account — POS Create Combo (SELLING)
+//   · sales_director — POS Create Combo (SELLING)
 //   · admin / super_admin — full backend access
 // Mirrors delivery-fees.ts WRITE_ROLES (the cost-sell-split precedent) + the
 // admin superset. sofa_combo_pricing has no RLS, so this app-layer gate is the
 // only thing stopping a salesperson from rewriting combo prices (Phase 5
 // review — closes the pre-existing ungated-write gap). GET stays open (the POS
 // salesperson must read combos to price builds); only writes are gated.
-const WRITE_ROLES = new Set(['admin', 'super_admin', 'coordinator', 'master_account']);
+const WRITE_ROLES = new Set(['admin', 'super_admin', 'coordinator', 'sales_director']);
 
 async function requireWriteRole(c: AppContext): Promise<{ ok: true } | { ok: false; res: Response }> {
   const supabase = c.get('supabase');

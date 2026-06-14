@@ -29,18 +29,20 @@ export type UserRow = {
 };
 
 export type InviteUserBody = {
-  staffCode: string;
+  /** Optional — the API auto-generates a "2990S-NNN" staff code when omitted. */
+  staffCode?: string;
   name: string;
   role: StaffRole;
   email: string;
-  initials: string;
+  /** Optional — the API derives initials from the name when omitted. */
+  initials?: string;
   color: string;
   showroomId?: string | null;
   venueId?: string | null;
   phone?: string | null;
-  /** WS2: 6-digit PIN — required by the API when role==='sales'. */
+  /** 6-digit passcode — sent for passcode-login roles (sales / sales_executive / outlet_manager). */
   pin?: string;
-  /** WS2: initial password — required by the API for every non-sales role. */
+  /** Initial password — sent for password-login roles (admin / super_admin / sales_director / …). */
   password?: string;
 };
 

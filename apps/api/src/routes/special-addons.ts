@@ -1,6 +1,6 @@
 // /special-addons — Special Add-ons CRUD (Chairman 2026-06-02). Read by any
 // staff (POS configurator + Modular need it); written by admin/super_admin/
-// coordinator/master_account (server check + RLS, migration 0133).
+// coordinator/sales_director (server check + RLS, migration 0133).
 //
 // A special add-on = a per-Model product add-on priced on top of the product
 // (selling surcharge + 0..N follow-up choice groups), shown as an SO line
@@ -19,7 +19,7 @@ export const specialAddons = new Hono<{ Bindings: Env; Variables: Variables }>()
 
 specialAddons.use('*', supabaseAuth);
 
-const WRITE_ROLES = new Set(['admin', 'super_admin', 'coordinator', 'master_account']);
+const WRITE_ROLES = new Set(['admin', 'super_admin', 'coordinator', 'sales_director']);
 
 const CATEGORY = z.enum(['SOFA', 'BEDFRAME', 'ACCESSORY', 'MATTRESS', 'SERVICE']);
 

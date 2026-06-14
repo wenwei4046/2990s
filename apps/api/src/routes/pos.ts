@@ -6,7 +6,7 @@ import { supabaseAuth } from '../middleware/auth';
 import { pinRateLimiter, createPinRateLimiter } from '../lib/pin-rate-limit';
 import { hashPin, verifyPin } from '../lib/bcrypt';
 import { monthBoundsMy, rangeBoundsMy } from '../lib/my-time';
-import { canViewAllSales, isSelfScopedSales } from '../lib/roles';
+import { canViewAllSales, isSelfScopedSales, isPinLoginRole, PIN_LOGIN_ROLES } from '../lib/roles';
 
 export const pos = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -26,12 +26,12 @@ pos.get('/sales-staff', async (c) => {
 
   // Service-role select bypasses RLS — narrow columns to exactly what we return
   // so no PII leaks even if a future contributor forgets the JS whitelist.
-  // Server-side: role='sales' AND active=true AND pin_hash IS NOT NULL,
+  // Server-side: role ∈ PIN_LOGIN_ROLES AND active=true AND pin_hash IS NOT NULL,
   // optionally narrowed to a single showroom.
   let builder = adminClient
     .from('staff')
     .select('id, staff_code, name, initials, color')
-    .eq('role', 'sales')
+    .in('role', PIN_LOGIN_ROLES as unknown as string[])
     .eq('active', true);
   if (showroomId) {
     builder = builder.eq('showroom_id', showroomId);
@@ -91,7 +91,7 @@ pos.post('/pin-login', async (c) => {
 
   // Single error code covers: not_found, inactive, wrong role, no PIN set.
   // Avoids leaking PIN-set status to a probing caller.
-  const loginnable = staff && staff.active && staff.role === 'sales' && staff.pin_hash;
+  const loginnable = staff && staff.active && isPinLoginRole(staff.role) && staff.pin_hash;
   if (!loginnable) {
     return c.json({ error: 'staff_not_loginnable' }, 401);
   }
@@ -235,15 +235,15 @@ pos.patch('/my-pin', supabaseAuth, async (c) => {
   const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  // Look up the caller's OWN row (scoped to their id). Only an active sales
-  // member may set a PIN.
+  // Look up the caller's OWN row (scoped to their id). Only an active
+  // passcode-login member may set a PIN.
   const { data: staff, error } = await adminClient
     .from('staff')
     .select('role, active')
     .eq('id', user.id)
     .maybeSingle();
   if (error) return c.json({ error: 'fetch_failed', detail: error.message }, 500);
-  if (!staff || !staff.active || staff.role !== 'sales') {
+  if (!staff || !staff.active || !isPinLoginRole(staff.role)) {
     return c.json({ error: 'not_a_pin_user' }, 403);
   }
 

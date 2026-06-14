@@ -16,20 +16,30 @@ hr.use('*', supabaseAuth);
 
 type HrContext = Context<{ Bindings: Env; Variables: Variables }>;
 
+// Editing salary config / profiles / item-KPI stays admin-only.
 const ADMIN_ROLES = new Set(['admin', 'super_admin']);
+// Viewing HR (commission, KPI, profiles) is allowed for sales_director too —
+// it sees every salesperson's KPI + commission but cannot change the rates
+// (2026-06-15). Mutations remain ADMIN_ROLES.
+const HR_VIEW_ROLES = new Set(['admin', 'super_admin', 'sales_director']);
 
-// Salary data is admin-only. Returns the userId on success, or a 403/500 response.
-async function requireAdmin(
+async function requireHrRole(
   c: HrContext,
+  allowed: Set<string>,
 ): Promise<{ ok: true; userId: string } | { ok: false; res: Response }> {
   const userId = c.get('user').id;
   const supabase = c.get('supabase');
   const { data, error } = await supabase.from('staff').select('role, active').eq('id', userId).maybeSingle();
   if (error) return { ok: false, res: c.json({ error: 'role_lookup_failed', reason: error.message }, 500) };
   if (!data || !data.active) return { ok: false, res: c.json({ error: 'forbidden', reason: 'no_active_staff' }, 403) };
-  if (!ADMIN_ROLES.has(data.role)) return { ok: false, res: c.json({ error: 'forbidden', reason: 'hr_admin_only' }, 403) };
+  if (!allowed.has(data.role)) return { ok: false, res: c.json({ error: 'forbidden', reason: 'hr_admin_only' }, 403) };
   return { ok: true, userId };
 }
+
+// Mutating HR data (config/profiles/item-KPI write) — admin + super_admin only.
+const requireAdmin = (c: HrContext) => requireHrRole(c, ADMIN_ROLES);
+// Reading HR data (GET) — admin + super_admin + sales_director (view-only).
+const requireHrView = (c: HrContext) => requireHrRole(c, HR_VIEW_ROLES);
 
 const issues = (e: z.ZodError) => e.issues.map((i) => ({ path: i.path, message: i.message }));
 
@@ -70,7 +80,7 @@ const toConfig = (r: ConfigRow): CommissionConfig => ({
 });
 
 hr.get('/config', async (c) => {
-  const gate = await requireAdmin(c);
+  const gate = await requireHrView(c);
   if (!gate.ok) return gate.res;
   const supabase = c.get('supabase');
   const { data, error } = await supabase.from('hr_commission_config').select(CONFIG_SELECT).eq('id', 1).single();
@@ -132,7 +142,7 @@ const toProfileApi = (r: ProfileRow) => ({
 });
 
 hr.get('/profiles', async (c) => {
-  const gate = await requireAdmin(c);
+  const gate = await requireHrView(c);
   if (!gate.ok) return gate.res;
   const supabase = c.get('supabase');
   const { data, error } = await supabase
@@ -223,7 +233,7 @@ const toItemKpiApi = (r: ItemKpiRow) => ({
 });
 
 hr.get('/item-kpi', async (c) => {
-  const gate = await requireAdmin(c);
+  const gate = await requireHrView(c);
   if (!gate.ok) return gate.res;
   const supabase = c.get('supabase');
   const { data, error } = await supabase.from('hr_item_kpi').select(ITEM_KPI_SELECT).order('created_at', { ascending: true });
@@ -293,7 +303,7 @@ hr.delete('/item-kpi/:id', async (c) => {
 
 // ── pickers: assignable staff + showrooms + products/fabrics/specials to flag ──
 hr.get('/pickers', async (c) => {
-  const gate = await requireAdmin(c);
+  const gate = await requireHrView(c);
   if (!gate.ok) return gate.res;
   const supabase = c.get('supabase');
 
@@ -341,7 +351,7 @@ const chunk = <T>(arr: T[], size: number): T[][] => {
 const TIER_RANK: Record<string, number> = { manager: 0, sales: 1 };
 
 hr.get('/commission', async (c) => {
-  const gate = await requireAdmin(c);
+  const gate = await requireHrView(c);
   if (!gate.ok) return gate.res;
   const from = (c.req.query('from') ?? '').trim();
   const to = (c.req.query('to') ?? '').trim();

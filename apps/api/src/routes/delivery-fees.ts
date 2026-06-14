@@ -9,10 +9,10 @@ export const deliveryFees = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 deliveryFees.use('*', supabaseAuth);
 
-// admin + coordinator (legacy) plus master_account — cost/sell split Phase 2
+// admin + coordinator (legacy) plus sales_director — cost/sell split Phase 2
 // moved the delivery fee onto the POS Master Account surface. Kept in lockstep
 // with the delivery_fee_config UPDATE RLS policy (migration 0112).
-const WRITE_ROLES = new Set(['admin', 'coordinator', 'master_account']);
+const WRITE_ROLES = new Set(['admin', 'coordinator', 'sales_director']);
 
 // Same form holds fees + lead days. Each field is independent so the PATCH
 // can partial-update either group without nuking the other.
@@ -42,7 +42,7 @@ deliveryFees.get('/', async (c) => {
   });
 });
 
-// PATCH — fee editors only (admin / coordinator / master_account). Server-side
+// PATCH — fee editors only (admin / coordinator / sales_director). Server-side
 // role check + RLS as defence-in-depth (migrations 0029 + 0112 grant UPDATE to
 // exactly these roles).
 deliveryFees.patch('/', async (c) => {
