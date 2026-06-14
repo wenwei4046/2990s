@@ -337,6 +337,9 @@ const chunk = <T>(arr: T[], size: number): T[][] => {
   return out;
 };
 
+// display order within a showroom: managers (tier 2) first, then sales (tier 1).
+const TIER_RANK: Record<string, number> = { manager: 0, sales: 1 };
+
 hr.get('/commission', async (c) => {
   const gate = await requireAdmin(c);
   if (!gate.ok) return gate.res;
@@ -456,6 +459,8 @@ hr.get('/commission', async (c) => {
       staffName: staffName.get(r.staffId) ?? '',
       kpiDetail: [...(kpiDetail.get(r.staffId)?.values() ?? [])],
     }));
+    // managers first, then sales; stable within tier (preserves existing order).
+    rows.sort((a, b) => (TIER_RANK[a.tier] ?? 9) - (TIER_RANK[b.tier] ?? 9));
     return {
       showroomId: sid,
       showroomName: showroomName.get(sid) ?? sid,
