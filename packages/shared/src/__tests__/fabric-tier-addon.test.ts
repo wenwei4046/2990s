@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fabricTierAddon, type FabricTierAddonConfig } from '../fabric-tier-addon';
+import { fabricTierAddon, type FabricTierAddonConfig, type FabricTierModelOverride } from '../fabric-tier-addon';
 
 const CFG: FabricTierAddonConfig = {
   sofaTier2Delta: 150,
@@ -26,5 +26,44 @@ describe('fabricTierAddon', () => {
   });
   it('clamps a negative configured delta to 0', () => {
     expect(fabricTierAddon('SOFA', 'PRICE_2', { ...CFG, sofaTier2Delta: -5 })).toBe(0);
+  });
+});
+
+describe('fabricTierAddon — per-Model override', () => {
+  const config: FabricTierAddonConfig = {
+    sofaTier2Delta: 125, sofaTier3Delta: 200,
+    bedframeTier2Delta: 80, bedframeTier3Delta: 150,
+  };
+
+  it('uses the model override for the matching tier (replaces global)', () => {
+    const override: FabricTierModelOverride = { tier2Delta: 500, tier3Delta: null };
+    expect(fabricTierAddon('SOFA', 'PRICE_2', config, override)).toBe(500);
+  });
+
+  it('inherits the global when that tier override is null', () => {
+    const override: FabricTierModelOverride = { tier2Delta: 500, tier3Delta: null };
+    expect(fabricTierAddon('SOFA', 'PRICE_3', config, override)).toBe(200);
+  });
+
+  it('treats an explicit 0 override as a free upgrade (NOT inherit)', () => {
+    const override: FabricTierModelOverride = { tier2Delta: 0, tier3Delta: null };
+    expect(fabricTierAddon('SOFA', 'PRICE_2', config, override)).toBe(0);
+  });
+
+  it('applies to bedframe context with the same override shape', () => {
+    const override: FabricTierModelOverride = { tier2Delta: null, tier3Delta: 999 };
+    expect(fabricTierAddon('BEDFRAME', 'PRICE_3', config, override)).toBe(999);
+    expect(fabricTierAddon('BEDFRAME', 'PRICE_2', config, override)).toBe(80);
+  });
+
+  it('clamps a negative override to 0', () => {
+    const override: FabricTierModelOverride = { tier2Delta: -50, tier3Delta: null };
+    expect(fabricTierAddon('SOFA', 'PRICE_2', config, override)).toBe(0);
+  });
+
+  it('is byte-for-byte unchanged when no override is passed (back-compat)', () => {
+    expect(fabricTierAddon('SOFA', 'PRICE_2', config)).toBe(125);
+    expect(fabricTierAddon('SOFA', 'PRICE_2', config, null)).toBe(125);
+    expect(fabricTierAddon('BEDFRAME', 'PRICE_1', config, { tier2Delta: 500, tier3Delta: 500 })).toBe(0);
   });
 });

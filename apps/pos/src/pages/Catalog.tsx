@@ -31,7 +31,7 @@ import styles from './Catalog.module.css';
    same value the API's wrangler.toml BACKEND_PORTAL_URL carries). */
 const BACKEND_PORTAL_URL =
   (import.meta.env.VITE_BACKEND_PORTAL_URL as string | undefined) ??
-  'https://2990s-backend.pages.dev';
+  'https://erp.2990shome.com';
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
 // PR — Commander 2026-05-27: Catalog now reads `mfg_products` (Backend SKU

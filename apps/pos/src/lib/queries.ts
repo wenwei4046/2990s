@@ -1789,6 +1789,80 @@ export const useUpdateFabricLibraryTier = () => {
   });
 };
 
+/* ─── Per-Model fabric-tier Δ overrides (migration 0172) ─── */
+
+export interface ModelFabricTierOverrideRow {
+  modelId:    string;
+  modelName:  string;
+  modelCode:  string | null;
+  category:   string | null;
+  tier2Delta: number | null;   // whole MYR; null = inherit global
+  tier3Delta: number | null;
+}
+
+/** List Models tagged with a fabric-tier override. Read by the Master editor
+ *  AND every POS Δ surface (so the shown add-on matches what the server
+ *  charges for a special Model). */
+export const useModelFabricTierOverrides = () =>
+  useQuery({
+    queryKey: ['model-fabric-tier-overrides'],
+    queryFn: async (): Promise<ModelFabricTierOverrideRow[]> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/fabric-tier-addon/special`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`GET /fabric-tier-addon/special failed (${res.status})`);
+      return (await res.json()) as ModelFabricTierOverrideRow[];
+    },
+    staleTime: 60_000,
+  });
+
+export const useUpsertModelFabricTierOverride = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (row: { modelId: string; tier2Delta: number | null; tier3Delta: number | null }) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/fabric-tier-addon/special`, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(row),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `PUT /fabric-tier-addon/special failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['model-fabric-tier-overrides'] }); },
+  });
+};
+
+export const useDeleteModelFabricTierOverride = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (modelId: string) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/fabric-tier-addon/special/${encodeURIComponent(modelId)}`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `DELETE /fabric-tier-addon/special failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['model-fabric-tier-overrides'] }); },
+  });
+};
+
 /* ─── Special add-ons (migration 0133) — Product Add-ons CRUD ──────────
  *
  * The grown-up "Specials": per-Model product add-on (selling surcharge +

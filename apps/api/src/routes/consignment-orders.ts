@@ -34,6 +34,7 @@ import {
   loadFabricByCode,
   loadFabricSellingTiers,
   loadFabricTierAddonConfig,
+  loadModelFabricTierOverrides,
   loadModelSofaModulePrices,
   loadModelSofaModuleCostRows,
   type MfgItemForRecompute,
@@ -590,6 +591,7 @@ consignmentOrders.post('/', async (c) => {
   }
   const cachedCombos = await loadActiveSofaCombos(sb);
   const cachedFabricAddonConfig = await loadFabricTierAddonConfig(sb);
+  const cachedModelOverrides = await loadModelFabricTierOverrides(sb);  // migration 0172 — per-Model Δ
 
   const lineProducts = await Promise.all(
     items.map((it) => loadProductByCode(sb, String(it.itemCode ?? ''))),
@@ -637,7 +639,7 @@ consignmentOrders.post('/', async (c) => {
       unitPriceCenti: Number(it.unitPriceCenti ?? 0),
       variants:       (it.variants as MfgItemForRecompute['variants']) ?? null,
     };
-    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, null, null, cachedSpecialAddons, sofaModuleCostRows);
+    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, null, null, cachedSpecialAddons, sofaModuleCostRows, cachedModelOverrides);
   }));
 
   /* Task #114 — snapshot unit cost from mfg_products when client didn't. */
@@ -1261,7 +1263,7 @@ consignmentOrders.post('/:docNo/items', async (c) => {
     );
     if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeStr }, 400);
   }
-  const [cachedConfig, productLite, fabricLite, sofaCombosLite, sellingTiersLite, fabricAddonConfigLite, specialAddonsLite] = await Promise.all([
+  const [cachedConfig, productLite, fabricLite, sofaCombosLite, sellingTiersLite, fabricAddonConfigLite, specialAddonsLite, modelOverridesLite] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadProductByCode(sb, itemCodeStr),
     loadFabricByCode(sb, variantsObj?.fabricCode ?? null),
@@ -1269,6 +1271,7 @@ consignmentOrders.post('/:docNo/items', async (c) => {
     loadFabricSellingTiers(sb, (variantsObj as { fabricId?: string } | null)?.fabricId ?? null),
     loadFabricTierAddonConfig(sb),
     loadSpecialAddons(sb),
+    loadModelFabricTierOverrides(sb),
   ]);
   // Audit 2026-06-11 C2 — module COST rows so a build's cost = Σ module costs.
   const [sofaModulePricesLite, sofaModuleCostRowsLite] = productLite?.category === 'SOFA'
@@ -1300,6 +1303,7 @@ consignmentOrders.post('/:docNo/items', async (c) => {
     null,                // pwpSofaComboIds
     specialAddonsLite,
     sofaModuleCostRowsLite,
+    modelOverridesLite,  // migration 0172 — per-Model Δ
   );
   /* Backend authors the selling price; no drift rejection (no POS path). */
   const unit = recomputed.unit_price_sen;
@@ -1408,7 +1412,7 @@ consignmentOrders.patch('/:docNo/items/:itemId', async (c) => {
     if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeAfter }, 400);
   }
   if (shouldRecompute && itemCodeAfter) {
-    const [cfg, prodLite, fabLite, sofaCombosPatch, sellingTiersPatch, fabricAddonConfigPatch, specialAddonsPatch] = await Promise.all([
+    const [cfg, prodLite, fabLite, sofaCombosPatch, sellingTiersPatch, fabricAddonConfigPatch, specialAddonsPatch, modelOverridesPatch] = await Promise.all([
       loadMaintenanceConfig(sb),
       loadProductByCode(sb, itemCodeAfter),
       loadFabricByCode(sb, variantsAfter?.fabricCode ?? null),
@@ -1416,6 +1420,7 @@ consignmentOrders.patch('/:docNo/items/:itemId', async (c) => {
       loadFabricSellingTiers(sb, (variantsAfter as { fabricId?: string } | null)?.fabricId ?? null),
       loadFabricTierAddonConfig(sb),
       loadSpecialAddons(sb),
+      loadModelFabricTierOverrides(sb),
     ]);
     // Audit 2026-06-11 C2 — module COST rows so a build's cost = Σ module costs.
     const [sofaModulePricesPatch, sofaModuleCostRowsPatch] = prodLite?.category === 'SOFA'
@@ -1447,6 +1452,7 @@ consignmentOrders.patch('/:docNo/items/:itemId', async (c) => {
       null,                // pwpSofaComboIds
       specialAddonsPatch,
       sofaModuleCostRowsPatch,
+      modelOverridesPatch, // migration 0172 — per-Model Δ
     );
   }
   /* Carry the bound price-list figure out when a recompute ran. Backend drift

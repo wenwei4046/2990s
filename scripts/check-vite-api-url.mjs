@@ -62,7 +62,7 @@ export function assertViteApiUrl({ value, command, app }) {
       '    fetch localhost and fail with "Failed to fetch" (incident 2026-06-13).',
       '',
       '    Fix: build with the production API URL, e.g.',
-      `      VITE_API_URL="https://2990s-api.wwch.workers.dev" pnpm --filter @2990s/${app} exec vite build`,
+      `      VITE_API_URL="https://api.2990shome.com" pnpm --filter @2990s/${app} exec vite build`,
       '    or just use scripts/deploy-backend.sh (it injects all VITE_* vars).',
       '    CI already passes VITE_API_URL from the GitHub secret of the same name.',
       '',

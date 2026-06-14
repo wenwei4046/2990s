@@ -19,6 +19,7 @@ import {
   useModelAllowedSpecials,
   useSpecialAddons,
   useFabricTierAddonConfig,
+  useModelFabricTierOverrides,
   useAddons,
   useBedframeColours,
   useBedframeCustomizerData,
@@ -306,6 +307,15 @@ export const Configurator = () => {
   const fabricLib = useFabricLibrary();
   const fabricColours = useFabricColours();
   const addonCfgQ = useFabricTierAddonConfig();  // migration 0124 — fabric-tier Δ amounts
+  // migration 0172 — per-Model fabric-tier Δ override, resolved by this product's
+  // model_id. Fed to every Δ surface so the figure matches the server recompute.
+  const modelOverridesQ = useModelFabricTierOverrides();
+  const modelFabricOverride = useMemo(() => {
+    const id = (product.data as { model_id?: string | null } | null)?.model_id ?? null;
+    if (!id) return null;
+    const row = (modelOverridesQ.data ?? []).find((r) => r.modelId === id);
+    return row ? { tier2Delta: row.tier2Delta, tier3Delta: row.tier3Delta } : null;
+  }, [modelOverridesQ.data, product.data]);
 
   // Fabrics are a SERIES (fabric_library) / COLOUR (fabric_colours) library
   // synced from the Backend Fabric Converter (migration 0127). A Model offers a
@@ -1195,7 +1205,7 @@ export const Configurator = () => {
   // Fabric-tier add-on (migration 0124) — bedframe picks a fabric (fabricSel);
   // its bedframe tier adds a flat Δ (server adds the same). 0 with default data.
   const bedframeFabricDelta = fabricSel && addonCfgQ.data
-    ? fabricTierAddon('BEDFRAME', fabricSel.bedframeTier as FabricTier | null, addonCfgQ.data)
+    ? fabricTierAddon('BEDFRAME', fabricSel.bedframeTier as FabricTier | null, addonCfgQ.data, modelFabricOverride)
     : 0;
   // PWP Code Voucher (0130) — the bedframe's base becomes its per-size PWP price
   // (fabric Δ + option surcharges still stack; server adds the same on the PWP
@@ -1540,7 +1550,7 @@ export const Configurator = () => {
   // fabric's SELLING tier — replaces the old per-fabric surcharge. The server
   // adds the SAME Δ via the shared fabricTierAddon, so the figure can't drift.
   const sofaFabricDelta = fabricSel && addonCfgQ.data
-    ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data)
+    ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data, modelFabricOverride)
     : 0;
   const sofaSpecialDelta = specialSelsSurcharge(sofaSpecialSel);
   // Sofa leg height — reuse the bedframe OptionSelect (same look). Options come
@@ -2015,6 +2025,7 @@ export const Configurator = () => {
                 onChange={setFabricSel}
                 category="SOFA"
                 addonConfig={addonCfgQ.data ?? null}
+                modelOverride={modelFabricOverride}
                 enabledColourIds={productId?.startsWith('mfg-') ? sofaFabricCodes : null}
                 optional
                 onClear={() => setFabricSel(null)}
@@ -2187,6 +2198,7 @@ export const Configurator = () => {
                     onChange={setFabricSel}
                     category="BEDFRAME"
                     addonConfig={addonCfgQ.data ?? null}
+                    modelOverride={modelFabricOverride}
                     enabledColourIds={bedframeFabricCodes}
                     optional
                     onClear={() => setFabricSel(null)}

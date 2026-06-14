@@ -32,7 +32,7 @@ import {
 } from '@2990s/shared';
 import { buildSeamlessRun, renderSeamlessSofa, renderSeamlessGroup, isFunctionalSeat, type SeamlessRun } from '../lib/sofa-seamless';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
-import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useCreateSofaCombo, useCreateSofaQuickPick, useSofaCombos, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
+import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useModelFabricTierOverrides, useCreateSofaCombo, useCreateSofaQuickPick, useSofaCombos, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
 import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
@@ -818,6 +818,13 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   const fabricColours = useFabricColours();
   const productFabrics = useProductFabrics(productId);
   const addonCfgQ = useFabricTierAddonConfig();  // migration 0124 — fabric-tier Δ
+  // migration 0172 — per-Model Δ override for this build's Model (modelId prop).
+  const modelOverridesQ = useModelFabricTierOverrides();
+  const modelFabricOverride = useMemo(() => {
+    if (!modelId) return null;
+    const row = (modelOverridesQ.data ?? []).find((r) => r.modelId === modelId);
+    return row ? { tier2Delta: row.tier2Delta, tier3Delta: row.tier3Delta } : null;
+  }, [modelOverridesQ.data, modelId]);
   const fabricCodes = useMemo<string[]>(
     () => (productId?.startsWith('mfg-') ? (modelCustomizer?.fabricIds ?? []) : []),
     [productId, modelCustomizer],
@@ -856,7 +863,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // fabric's SELLING tier — replaces the old per-fabric surcharge. Server adds
   // the same Δ per line via the shared fabricTierAddon, so it can't drift.
   const sofaFabricDelta = fabricSel && addonCfgQ.data
-    ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data)
+    ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data, modelFabricOverride)
     : 0;
   // Fabric is OPTIONAL at Add-to-Cart (Loo 2026-06-11) — some customers can't
   // confirm it yet. The SO-side rule still demands fabricCode before a
@@ -1143,6 +1150,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           onChange={setFabricSel}
           category="SOFA"
           addonConfig={addonCfgQ.data ?? null}
+          modelOverride={modelFabricOverride}
           enabledColourIds={productId?.startsWith('mfg-') ? fabricCodes : null}
           optional
           onClear={() => setFabricSel(null)}
