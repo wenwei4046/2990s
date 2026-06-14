@@ -3,6 +3,14 @@ main = "src/index.ts"
 compatibility_date = "2026-05-08"
 compatibility_flags = ["nodejs_compat"]
 
+# Custom domain for the Worker. `wrangler deploy` attaches api.2990shome.com to
+# this Worker on each deploy. REQUIRES the 2990shome.com zone to be active on the
+# same Cloudflare account first (DNS managed by Cloudflare) — otherwise the
+# deploy fails provisioning the domain. The old *.workers.dev URL keeps working.
+[[routes]]
+pattern = "api.2990shome.com"
+custom_domain = true
+
 # Public env (non-secrets). Secrets set via `wrangler secret put`:
 #   wrangler secret put SUPABASE_ANON_KEY
 #   wrangler secret put SUPABASE_SERVICE_ROLE_KEY
@@ -21,11 +29,14 @@ SUPABASE_URL = "https://dolvxrchzbnqvahocwsu.supabase.co"
 # sales_executive, outlet_manager) get their magic link anchored to
 # POS_PORTAL_URL instead so they land in the POS app on first sign-in.
 # Both URLs must be on the Supabase Redirect URLs allow-list.
-BACKEND_PORTAL_URL = "https://2990s-backend.pages.dev"
-POS_PORTAL_URL = "https://2990s-pos.pages.dev"
+BACKEND_PORTAL_URL = "https://erp.2990shome.com"
+POS_PORTAL_URL = "https://pos.2990shome.com"
 
-# Allowed CORS origins (dev + prod). Update when domain is set.
-ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:6273,http://localhost:6274,http://localhost:6275,http://localhost:6276,http://127.0.0.1:5174,http://127.0.0.1:6273,http://127.0.0.1:6274,http://127.0.0.1:6275,http://127.0.0.1:6276,https://2990s-pos.pages.dev,https://2990s-backend.pages.dev"
+# Allowed CORS origins (dev + prod). Custom domains erp/pos.2990shome.com are the
+# primary prod origins; the legacy *.pages.dev URLs are kept so anyone hitting
+# the old address mid-cutover still works. Both must also be on the Supabase
+# Redirect URLs allow-list for magic links (Authentication → URL Configuration).
+ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:6273,http://localhost:6274,http://localhost:6275,http://localhost:6276,http://127.0.0.1:5174,http://127.0.0.1:6273,http://127.0.0.1:6274,http://127.0.0.1:6275,http://127.0.0.1:6276,https://pos.2990shome.com,https://erp.2990shome.com,https://2990s-pos.pages.dev,https://2990s-backend.pages.dev"
 
 # R2 bucket settings — fill R2_ENDPOINT after CF account ID is known
 # (CF dashboard → top-right account dropdown → Account ID).

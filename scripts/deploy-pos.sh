@@ -26,7 +26,7 @@ set -euo pipefail
 # JSON parse error, and every data fetch fails).
 export VITE_SUPABASE_URL="${VITE_SUPABASE_URL:-https://dolvxrchzbnqvahocwsu.supabase.co}"
 export VITE_SUPABASE_PUBLISHABLE_KEY="${VITE_SUPABASE_PUBLISHABLE_KEY:-sb_publishable_zhBeXIdf3CBqmTsxsvhUYg_CiP3NU1q}"
-export VITE_API_URL="${VITE_API_URL:-https://2990s-api.wwch.workers.dev}"
+export VITE_API_URL="${VITE_API_URL:-https://api.2990shome.com}"
 
 if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
   echo "❌ CLOUDFLARE_API_TOKEN not set. Aborting."
@@ -48,7 +48,7 @@ if ! grep -rq "$VITE_SUPABASE_PUBLISHABLE_KEY" apps/pos/dist/assets/*.js; then
   echo "❌ Supabase publishable key not found in bundle. Build did not pick up env vars."
   exit 1
 fi
-if ! grep -rq "2990s-api.wwch.workers.dev" apps/pos/dist/assets/*.js; then
+if ! grep -rq "api.2990shome.com" apps/pos/dist/assets/*.js; then
   echo "❌ API URL not found in bundle. Build did not pick up VITE_API_URL."
   exit 1
 fi
@@ -63,4 +63,4 @@ echo "✓ Env vars verified in bundle. Deploying…"
 
 echo "✓ Done. POS is a PWA: the new bundle waits behind the 'A new version is"
 echo "  ready · Refresh' toast. On the iPad, tap Refresh (or hard-reload"
-echo "  https://2990s-pos.pages.dev) to drop the stale service-worker cache."
+echo "  https://pos.2990shome.com) to drop the stale service-worker cache."
