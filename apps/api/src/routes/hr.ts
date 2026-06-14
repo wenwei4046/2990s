@@ -352,22 +352,18 @@ hr.get('/commission', async (c) => {
   if (cfgRes.error) return c.json({ error: 'config_failed', reason: cfgRes.error.message }, 500);
   const config = toConfig(cfgRes.data as ConfigRow);
 
-  // active profiles (tier + HR-assigned showroom)
+  // active profiles (tier + HR-assigned showroom + staff name for labels).
+  // The HR-assigned showroom is the SINGLE source of truth for the showroom
+  // dimension: a salesperson's goods, their grouping, and the whole-showroom
+  // total all key off the profile, so they can never diverge.
   const profRes = await supabase
     .from('hr_salesperson_profiles')
-    .select('staff_id, tier, showroom_id')
+    .select('staff_id, tier, showroom_id, staff:staff(name)')
     .eq('active', true);
   if (profRes.error) return c.json({ error: 'profiles_failed', reason: profRes.error.message }, 500);
-
-  // staff → home showroom + name (attribution for the WHOLE showroom total + labels)
-  const staffRes = await supabase.from('staff').select('id, name, showroom_id');
-  if (staffRes.error) return c.json({ error: 'staff_failed', reason: staffRes.error.message }, 500);
-  const staffShowroom = new Map<string, string | null>();
-  const staffName = new Map<string, string>();
-  for (const s of staffRes.data ?? []) {
-    staffShowroom.set(s.id as string, (s.showroom_id as string | null) ?? null);
-    staffName.set(s.id as string, (s.name as string) ?? '');
-  }
+  type ProfRow = { staff_id: string; tier: string; showroom_id: string; staff?: { name?: string } | null };
+  const profiles = (profRes.data as ProfRow[]) ?? [];
+  const staffName = new Map<string, string>(profiles.map((p) => [p.staff_id, p.staff?.name ?? '']));
 
   const showroomRes = await supabase.from('showrooms').select('id, name');
   if (showroomRes.error) return c.json({ error: 'showrooms_failed', reason: showroomRes.error.message }, 500);
@@ -384,16 +380,11 @@ hr.get('/commission', async (c) => {
   const orders = (ordRes.data as OrderRow[]) ?? [];
 
   const personalGoods = new Map<string, number>(); // salesperson_id → goods centi
-  const showroomGoods = new Map<string, number>(); // showroom_id → goods centi
   const docToSalesperson = new Map<string, string>();
   for (const o of orders) {
-    const g = goodsOf(o);
-    if (o.salesperson_id) {
-      personalGoods.set(o.salesperson_id, (personalGoods.get(o.salesperson_id) ?? 0) + g);
-      docToSalesperson.set(o.doc_no, o.salesperson_id);
-      const home = staffShowroom.get(o.salesperson_id) ?? null;
-      if (home) showroomGoods.set(home, (showroomGoods.get(home) ?? 0) + g);
-    }
+    if (!o.salesperson_id) continue;
+    personalGoods.set(o.salesperson_id, (personalGoods.get(o.salesperson_id) ?? 0) + goodsOf(o));
+    docToSalesperson.set(o.doc_no, o.salesperson_id);
   }
 
   // item-KPI: only fetch lines if there are active flags.
@@ -410,6 +401,7 @@ hr.get('/commission', async (c) => {
       const lineRes = await supabase
         .from('mfg_sales_order_items')
         .select('doc_no, item_code, qty, variants')
+        .eq('cancelled', false)
         .in('doc_no', batch);
       if (lineRes.error) return c.json({ error: 'lines_failed', reason: lineRes.error.message }, 500);
       for (const ln of lineRes.data ?? []) {
@@ -443,19 +435,22 @@ hr.get('/commission', async (c) => {
 
   // group profiles by their HR-assigned showroom, then compute
   const byShowroom = new Map<string, SalespersonInput[]>();
-  for (const p of profRes.data ?? []) {
-    const sid = p.showroom_id as string;
+  for (const p of profiles) {
+    const sid = p.showroom_id;
     if (!byShowroom.has(sid)) byShowroom.set(sid, []);
     byShowroom.get(sid)!.push({
-      staffId: p.staff_id as string,
+      staffId: p.staff_id,
       tier: p.tier as 'sales' | 'manager',
-      personalGoodsCenti: personalGoods.get(p.staff_id as string) ?? 0,
-      itemKpiCenti: itemKpiCenti.get(p.staff_id as string) ?? 0,
+      personalGoodsCenti: personalGoods.get(p.staff_id) ?? 0,
+      itemKpiCenti: itemKpiCenti.get(p.staff_id) ?? 0,
     });
   }
 
   const showrooms = [...byShowroom.entries()].map(([sid, people]) => {
-    const sg = showroomGoods.get(sid) ?? 0;
+    // whole-showroom total = sum of this showroom's profiled members' personal
+    // goods. Single source of truth: the displayed rows always add up to this
+    // figure, and both the 400k gate and the manager override base use it.
+    const sg = people.reduce((acc, m) => acc + m.personalGoodsCenti, 0);
     const rows = computeShowroomCommission(config, sg, people).map((r) => ({
       ...r,
       staffName: staffName.get(r.staffId) ?? '',

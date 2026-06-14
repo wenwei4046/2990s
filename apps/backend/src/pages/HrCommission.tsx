@@ -81,7 +81,14 @@ export const HrCommission = () => {
           <span className={styles.label}>To</span>
           <input className={styles.input} type="date" value={to} onChange={(e) => setTo(e.target.value)} />
         </div>
-        <button className={`${styles.btn} ${styles.btnPrimary}`} onClick={() => setApplied({ from, to })}>
+        <button
+          className={`${styles.btn} ${styles.btnPrimary}`}
+          disabled={!from || !to || from > to}
+          onClick={() => {
+            if (!from || !to || from > to) return;
+            setApplied({ from, to });
+          }}
+        >
           Calculate
         </button>
       </div>

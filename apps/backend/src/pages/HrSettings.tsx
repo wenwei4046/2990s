@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import {
   useHrProfiles, useCreateHrProfile, useUpdateHrProfile, useDeleteHrProfile,
@@ -13,6 +13,8 @@ const ICON = { size: 16, strokeWidth: 1.75 } as const;
 // editable %-rate field (stored as bps). Mounts only once config is loaded.
 const RateField = ({ label, bps, onSave }: { label: string; bps: number; onSave: (bps: number) => void }) => {
   const [v, setV] = useState((bps / 100).toString());
+  // resync when the server value changes (e.g. after save/refetch or a concurrent edit)
+  useEffect(() => setV((bps / 100).toString()), [bps]);
   return (
     <div className={styles.field}>
       <span className={styles.label}>{label}</span>
@@ -32,6 +34,7 @@ const RateField = ({ label, bps, onSave }: { label: string; bps: number; onSave:
 // editable RM-threshold field (stored as centi)
 const CentiField = ({ label, centi, onSave }: { label: string; centi: number; onSave: (centi: number) => void }) => {
   const [v, setV] = useState((centi / 100).toString());
+  useEffect(() => setV((centi / 100).toString()), [centi]);
   return (
     <div className={styles.field}>
       <span className={styles.label}>{label}</span>
@@ -202,10 +205,12 @@ export const HrSettings = () => {
             <span className={styles.label}>Bonus RM / unit</span>
             <input className={styles.input} type="number" min={0} value={flagBonusRM} onChange={(e) => setFlagBonusRM(e.target.value)} />
           </div>
-          <button className={`${styles.btn} ${styles.btnPrimary}`} disabled={!flagRef || !flagBonusRM}
+          <button className={`${styles.btn} ${styles.btnPrimary}`} disabled={!flagRef || !(Number(flagBonusRM) > 0)}
             onClick={() => {
+              const bonus = Number(flagBonusRM);
+              if (!flagRef || !(bonus > 0)) return;
               const label = refList.find((r) => r.ref === flagRef)?.label ?? flagRef;
-              createItemKpi.mutate({ flagType, ref: flagRef, label, bonusCenti: Math.round(Number(flagBonusRM) * 100) });
+              createItemKpi.mutate({ flagType, ref: flagRef, label, bonusCenti: Math.round(bonus * 100) });
               setFlagRef(''); setFlagBonusRM('');
             }}>
             <Plus {...ICON} /> Add

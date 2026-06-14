@@ -31,12 +31,16 @@ excluding `status IN ('CANCELLED', 'ON_HOLD')`:
   (the four product category columns on `mfg_sales_orders`; **excludes** `service_centi`,
   i.e. delivery / disposal / lift fees).
 - **personalGoods(staff)** = Σ goods(order) where `order.salesperson_id = staff.id`.
-- **showroomGoods(showroom)** = Σ goods(order) for orders whose salesperson belongs to
-  that showroom, i.e. `staff.showroom_id` of `order.salesperson_id = showroom`.
-  (There is **no** order→showroom FK: `mfg_sales_orders` has `salesperson_id` + `venue_id`,
-  and `venues` carries no `showroom_id`. The salesperson's home showroom is the only path,
-  and all sales-role staff have a non-null `showroom_id`. Orders with a null salesperson
-  are unattributable and excluded. Still excludes service.)
+- **showroomGoods(showroom)** = Σ `personalGoods` of that showroom's **profiled** salespeople
+  (the team total, including the manager's own sales). The HR profile's `showroom_id` is the
+  **single source of truth** for the showroom dimension — goods attribution, row grouping, and
+  the whole-showroom total all key off the profile, so they can never diverge, and the rows
+  shown under a showroom always sum to its total. (There is no order→showroom FK; attributing
+  the total any other way — e.g. via `staff.showroom_id` — risks divergence from the grouping.
+  Orders by a salesperson with no active HR profile, or with a null salesperson, don't count
+  toward any showroom total. Still excludes service. **Open for Loo:** originally framed as
+  "all orders in the showroom" — confirm whether sales by un-profiled staff should also count;
+  if so we'd attribute via `staff.showroom_id` and validate it equals the profile showroom.)
 
 ### 2.2 Personal commission (both tiers earn this on their own sales)
 
@@ -267,8 +271,9 @@ Salary data is sensitive. **Admin + super_admin only** at every layer:
 
 1. KPI rate bumps apply to the **whole** personal goods, not marginal.
 2. Manager override base = **whole showroom** goods (includes the manager's own sales).
-3. Showroom 400k threshold / override base = whole showroom goods (orders attributed to a
-   showroom via the salesperson's `staff.showroom_id`), **excluding** service SKUs.
+3. Showroom 400k threshold / override base = the showroom's **team total** = Σ of its
+   profiled salespeople's personal goods (incl. the manager's own), **excluding** service SKUs.
+   (Single-source via the HR profile; see §2.1 "Open for Loo" on un-profiled sales.)
 4. Returns do **not** reduce the sales figure.
 5. Excel export is required.
 
