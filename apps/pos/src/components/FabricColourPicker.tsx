@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { fmtRM, fabricTierAddon, type FabricTier, type FabricTierAddonConfig } from '@2990s/shared';
+import { fmtRM, fabricTierAddon, type FabricTier, type FabricTierAddonConfig, type FabricTierModelOverride } from '@2990s/shared';
 import { useFabricLibrary, useFabricColours, type ProductFabricRow } from '../lib/queries';
 import styles from './FabricColourPicker.module.css';
 
@@ -29,6 +29,10 @@ export interface FabricColourPickerProps {
   category?: 'SOFA' | 'BEDFRAME';
   /** The 4 Δ amounts; when present each chip shows its tier add-on. */
   addonConfig?: FabricTierAddonConfig | null;
+  /** Per-Model Δ override (migration 0172) for THIS Model, resolved by the
+   *  parent from useModelFabricTierOverrides() by the configured model_id. When
+   *  set, each chip's "+RM" reflects the Model's special. null = global. */
+  modelOverride?: FabricTierModelOverride | null;
   /** Per-Model enabled colour codes (allowed_options.fabrics). When provided,
    *  only these colours render under each series. null/undefined = no filter. */
   enabledColourIds?: string[] | null;
@@ -45,7 +49,7 @@ export interface FabricColourPickerProps {
 // "+RM" surcharge (or "Included"); colour swatches belong to the chosen
 // fabric (spec 2026-05-24, G3). Controlled — the Configurator owns the state
 // so the topbar LIVE TOTAL + Add-to-Cart gate can read it.
-export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChange, category = 'SOFA', addonConfig = null, enabledColourIds = null, optional = false, onClear }: FabricColourPickerProps) => {
+export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChange, category = 'SOFA', addonConfig = null, modelOverride = null, enabledColourIds = null, optional = false, onClear }: FabricColourPickerProps) => {
   const lib = useFabricLibrary();
   const colours = useFabricColours();
 
@@ -115,7 +119,7 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
           {fabrics.map((f) => {
             const on = f.id === fabricId;
             const tierForCtx = (category === 'BEDFRAME' ? f.bedframeTier : f.sofaTier) as FabricTier | null;
-            const tierDelta = addonConfig ? fabricTierAddon(category, tierForCtx, addonConfig) : 0;
+            const tierDelta = addonConfig ? fabricTierAddon(category, tierForCtx, addonConfig, modelOverride) : 0;
             return (
               <button
                 key={f.id}

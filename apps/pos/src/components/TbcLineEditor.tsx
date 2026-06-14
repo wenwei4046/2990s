@@ -25,6 +25,7 @@ import {
   useSofaLegHeights,
   useSpecialAddons,
   useFabricTierAddonConfig,
+  useModelFabricTierOverrides,
   type ProductFabricRow,
   type BedframeOptionRow,
 } from '../lib/queries';
@@ -211,6 +212,15 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
   const fabricColours = useFabricColours();
   const allowedFabricsQ = useModelAllowedFabricCodes(productId);
   const addonCfgQ = useFabricTierAddonConfig();
+  // migration 0172 — per-Model Δ override for this line's Model (same for the
+  // prev/next fabric in the difference; the Model doesn't change on a fill-in).
+  const modelOverridesQ = useModelFabricTierOverrides();
+  const modelFabricOverride = useMemo(() => {
+    const id = product.data?.model_id ?? null;
+    if (!id) return null;
+    const row = (modelOverridesQ.data ?? []).find((r) => r.modelId === id);
+    return row ? { tier2Delta: row.tier2Delta, tier3Delta: row.tier3Delta } : null;
+  }, [modelOverridesQ.data, product.data]);
   const allowedFabricCodes = allowedFabricsQ.data ?? [];
   // Series rows offered on this Model — same construction the Configurator
   // uses (allowed colour codes → their series, joined to the library).
@@ -237,8 +247,8 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
     return (t as FabricTier | undefined) ?? null;
   };
   const fabricDeltaRM = category && addonCfgQ.data && fabricTouched
-    ? fabricTierAddon(category, tierOf(fabricSel?.fabricId ?? null), addonCfgQ.data)
-      - fabricTierAddon(category, tierOf((v.fabricId as string | undefined) ?? null), addonCfgQ.data)
+    ? fabricTierAddon(category, tierOf(fabricSel?.fabricId ?? null), addonCfgQ.data, modelFabricOverride)
+      - fabricTierAddon(category, tierOf((v.fabricId as string | undefined) ?? null), addonCfgQ.data, modelFabricOverride)
     : 0;
 
   /* ── Sofa leg height ──────────────────────────────────────────────── */
@@ -419,6 +429,7 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
           onChange={(next) => setFabricSel(next)}
           category={category}
           addonConfig={addonCfgQ.data ?? null}
+          modelOverride={modelFabricOverride}
           enabledColourIds={allowedFabricCodes}
           optional
           onClear={() => setFabricSel(null)}

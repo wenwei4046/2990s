@@ -98,7 +98,7 @@ import {
   type ProductSupplierRow,
 } from '../lib/products/mfg-products-queries';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
-import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useAddons, type AddonRow, type FabricLibraryRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, useAllAddons, useUpdateAddon, useCreateAddon, useDeleteAddon, type AdminAddonRow } from '../lib/queries';
+import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useModelFabricTierOverrides, useUpsertModelFabricTierOverride, useDeleteModelFabricTierOverride, useAddons, type AddonRow, type FabricLibraryRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, useAllAddons, useUpdateAddon, useCreateAddon, useDeleteAddon, type AdminAddonRow } from '../lib/queries';
 import {
   useProductModels,
   useProductModel,
@@ -4719,6 +4719,34 @@ const FabricPricingPanel = () => {
   const fabrics   = useFabricLibrary();
   const updateTier = useUpdateFabricLibraryTier();
 
+  // Per-model special prices (migration 0172).
+  const overrides      = useModelFabricTierOverrides();
+  const upsertOverride = useUpsertModelFabricTierOverride();
+  const deleteOverride = useDeleteModelFabricTierOverride();
+  const sofaModels     = useProductModels({ category: 'SOFA' });
+  const bedframeModels = useProductModels({ category: 'BEDFRAME' });
+  const [ovModelId, setOvModelId] = useState('');
+  const [ovP2, setOvP2] = useState<number | ''>('');
+  const [ovP3, setOvP3] = useState<number | ''>('');
+  const [ovError, setOvError] = useState<string | null>(null);
+  const allModels = useMemo(
+    () => [...(sofaModels.data ?? []), ...(bedframeModels.data ?? [])]
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [sofaModels.data, bedframeModels.data],
+  );
+  const saveOverride = async () => {
+    setOvError(null);
+    if (!ovModelId) { setOvError('Pick a model.'); return; }
+    try {
+      await upsertOverride.mutateAsync({
+        modelId:    ovModelId,
+        tier2Delta: ovP2 === '' ? null : (ovP2 as number),
+        tier3Delta: ovP3 === '' ? null : (ovP3 as number),
+      });
+      setOvModelId(''); setOvP2(''); setOvP3('');
+    } catch (err) { setOvError(String((err as Error).message ?? err)); }
+  };
+
   const [sofa2, setSofa2] = useState<number | ''>('');
   const [sofa3, setSofa3] = useState<number | ''>('');
   const [bed2, setBed2]   = useState<number | ''>('');
@@ -4837,6 +4865,89 @@ const FabricPricingPanel = () => {
                 <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>{row.label}</td>
                 <td style={{ padding: '6px 8px' }}>{tierBtn(row, 'sofaTier')}</td>
                 <td style={{ padding: '6px 8px' }}>{tierBtn(row, 'bedframeTier')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <h3 style={{ fontSize: 'var(--fs-15)', fontWeight: 600, margin: 'var(--space-6) 0 var(--space-1)' }}>Per-model special prices</h3>
+      <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
+        给个别 Model 设特别的 fabric-tier 加价（大套）。留空 = 沿用上面的标准；填 0 = 该 Model 该档免费。其他 Model 不建行就走标准。
+      </p>
+
+      {canEdit && (
+        <>
+          <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 'var(--space-1)' }}>
+            <div style={{ minWidth: 220, flex: '1 1 220px' }}>
+              <label htmlFor="ov-model" style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>Model</label>
+              <select
+                id="ov-model" value={ovModelId} onChange={(e) => setOvModelId(e.target.value)}
+                style={{ width: '100%', height: 38, boxSizing: 'border-box', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' }}
+              >
+                <option value="">Select a model…</option>
+                {allModels.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name} · {m.category}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ minWidth: 150, flex: '1 1 150px' }}>
+              <label htmlFor="ov-p2" style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>Price 2 (+RM)</label>
+              <input
+                id="ov-p2" type="number" min={0} step={1} value={ovP2}
+                onChange={(e) => setOvP2(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
+                style={{ width: '100%', height: 38, boxSizing: 'border-box', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' }}
+              />
+            </div>
+            <div style={{ minWidth: 150, flex: '1 1 150px' }}>
+              <label htmlFor="ov-p3" style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>Price 3 (+RM)</label>
+              <input
+                id="ov-p3" type="number" min={0} step={1} value={ovP3}
+                onChange={(e) => setOvP3(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
+                style={{ width: '100%', height: 38, boxSizing: 'border-box', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' }}
+              />
+            </div>
+            <Button variant="primary" onClick={() => void saveOverride()} disabled={upsertOverride.isPending}>
+              {upsertOverride.isPending ? 'Saving…' : 'Add / Save'}
+            </Button>
+          </div>
+          <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>留空 = 沿用上面的标准；填 0 = 该档免费。</p>
+        </>
+      )}
+      {ovError && <div role="alert" style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }}>{ovError}</div>}
+
+      {overrides.isLoading ? (
+        <div style={{ color: 'var(--fg-muted)' }}>Loading…</div>
+      ) : (overrides.data ?? []).length === 0 ? (
+        <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>No per-model specials — every model uses the standard above.</div>
+      ) : (
+        <table style={{ borderCollapse: 'collapse', width: '100%', maxWidth: 640 }}>
+          <thead>
+            <tr style={{ textAlign: 'left', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+              <th style={{ padding: '6px 8px' }}>Model</th>
+              <th style={{ padding: '6px 8px' }}>Category</th>
+              <th style={{ padding: '6px 8px' }}>Price 2</th>
+              <th style={{ padding: '6px 8px' }}>Price 3</th>
+              {canEdit && <th style={{ padding: '6px 8px' }} />}
+            </tr>
+          </thead>
+          <tbody>
+            {(overrides.data ?? []).map((r) => (
+              <tr key={r.modelId} style={{ borderTop: '1px solid var(--line)' }}>
+                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>{r.modelName}</td>
+                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>{r.category ?? '—'}</td>
+                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>{r.tier2Delta === null ? 'standard' : `+RM${r.tier2Delta}`}</td>
+                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>{r.tier3Delta === null ? 'standard' : `+RM${r.tier3Delta}`}</td>
+                {canEdit && (
+                  <td style={{ padding: '6px 8px' }}>
+                    <button
+                      type="button" onClick={() => deleteOverride.mutate(r.modelId)} disabled={deleteOverride.isPending}
+                      style={{ padding: '4px 10px', fontSize: 'var(--fs-13)', borderRadius: 'var(--radius-md)', border: '1px solid var(--line)', background: 'transparent', cursor: 'pointer' }}
+                    >
+                      Clear
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
