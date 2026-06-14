@@ -31,9 +31,12 @@ excluding `status IN ('CANCELLED', 'ON_HOLD')`:
   (the four product category columns on `mfg_sales_orders`; **excludes** `service_centi`,
   i.e. delivery / disposal / lift fees).
 - **personalGoods(staff)** = Σ goods(order) where `order.salesperson_id = staff.id`.
-- **showroomGoods(showroom)** = Σ goods(order) where `order.showroom_id = showroom`
-  (the **whole** showroom — every order in that showroom in the period, regardless of
-  whether the salesperson is configured in HR; still excludes service).
+- **showroomGoods(showroom)** = Σ goods(order) for orders whose salesperson belongs to
+  that showroom, i.e. `staff.showroom_id` of `order.salesperson_id = showroom`.
+  (There is **no** order→showroom FK: `mfg_sales_orders` has `salesperson_id` + `venue_id`,
+  and `venues` carries no `showroom_id`. The salesperson's home showroom is the only path,
+  and all sales-role staff have a non-null `showroom_id`. Orders with a null salesperson
+  are unattributable and excluded. Still excludes service.)
 
 ### 2.2 Personal commission (both tiers earn this on their own sales)
 
@@ -98,7 +101,7 @@ Iterate the salesperson's order **lines** (`mfg_sales_order_items`) for orders i
 
 | `flag_type` | `ref` holds | Match rule | Qty |
 |---|---|---|---|
-| `product` | `mfg_products.sku` (item_code) | `line.item_code === ref` | `line.qty` |
+| `product` | `mfg_products.code` (= line item_code) | `line.item_code === ref` | `line.qty` |
 | `fabric`  | `fabric_library.id` (fabricId) | `line.variants.fabricId === ref` | `line.qty` |
 | `special` | `special_addons.code` | `ref` present in `line.variants.specials[].code` | `line.qty` |
 
@@ -264,7 +267,8 @@ Salary data is sensitive. **Admin + super_admin only** at every layer:
 
 1. KPI rate bumps apply to the **whole** personal goods, not marginal.
 2. Manager override base = **whole showroom** goods (includes the manager's own sales).
-3. Showroom 400k threshold / override base = whole showroom goods, **excluding** service SKUs.
+3. Showroom 400k threshold / override base = whole showroom goods (orders attributed to a
+   showroom via the salesperson's `staff.showroom_id`), **excluding** service SKUs.
 4. Returns do **not** reduce the sales figure.
 5. Excel export is required.
 

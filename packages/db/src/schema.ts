@@ -2728,3 +2728,42 @@ export const warehouseRackMovements = pgTable('warehouse_rack_movements', {
   typeEnum:   check('warehouse_rack_movements_type_chk',
     sql`movement_type IN ('STOCK_IN','STOCK_OUT','TRANSFER')`),
 }));
+
+// ── HR / commission ──────────────────────────────────────────────────────
+export const hrTier = pgEnum('hr_tier', ['sales', 'manager']);
+export const hrItemKpiType = pgEnum('hr_item_kpi_type', ['product', 'fabric', 'special']);
+
+export const hrSalespersonProfiles = pgTable('hr_salesperson_profiles', {
+  id:         uuid('id').primaryKey().defaultRandom(),
+  staffId:    uuid('staff_id').notNull().unique().references(() => staff.id, { onDelete: 'cascade' }),
+  tier:       hrTier('tier').notNull().default('sales'),
+  showroomId: uuid('showroom_id').notNull().references(() => showrooms.id),
+  active:     boolean('active').notNull().default(true),
+  createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// singleton, id = 1 (CHECK (id = 1) at DB). Defaults = Loo's stated rates.
+export const hrCommissionConfig = pgTable('hr_commission_config', {
+  id:                        integer('id').primaryKey().default(1),
+  baseBps:                   integer('base_bps').notNull().default(100),         // 1.0%
+  personalKpiThresholdCenti: integer('personal_kpi_threshold_centi').notNull().default(10_000_000), // RM 100k
+  personalKpiBonusBps:       integer('personal_kpi_bonus_bps').notNull().default(50),  // +0.5%
+  showroomKpiThresholdCenti: integer('showroom_kpi_threshold_centi').notNull().default(40_000_000), // RM 400k
+  showroomKpiBonusBps:       integer('showroom_kpi_bonus_bps').notNull().default(50),  // +0.5%
+  overrideBaseBps:           integer('override_base_bps').notNull().default(50),  // 0.5%
+  overrideKpiBonusBps:       integer('override_kpi_bonus_bps').notNull().default(50), // +0.5%
+  updatedAt:                 timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:                 uuid('updated_by'),
+});
+
+export const hrItemKpi = pgTable('hr_item_kpi', {
+  id:         uuid('id').primaryKey().defaultRandom(),
+  flagType:   hrItemKpiType('flag_type').notNull(),
+  ref:        text('ref').notNull(),       // mfg_products.sku | fabric_library.id | special_addons.code
+  label:      text('label').notNull().default(''),
+  bonusCenti: integer('bonus_centi').notNull().default(0),
+  active:     boolean('active').notNull().default(true),
+  createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
