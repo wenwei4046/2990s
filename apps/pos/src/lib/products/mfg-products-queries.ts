@@ -96,6 +96,7 @@ export type MfgProductRow = {
   status: 'ACTIVE' | 'INACTIVE';   // COST/PO side — NOT showroom visibility (use pos_active)
   pos_active: boolean;             // D5 — selling-only POS catalog visibility (Master Account writes)
   included_addons: { addonId: string; qty: number }[]; // D7 — permanent free gifts (display-only)
+  default_free_gifts: { giftProductId: string; qty: number; campaignName?: string | null }[]; // 0170 — accessory free gifts (auto-added at RM 0)
   sku_code: string | null;
   /** PR — supplier-mapping-by-model: optional FK to product_models.id so the
       supplier mapping picker can group SKUs by Model client-side. NULL for
@@ -165,6 +166,17 @@ export type MaintenanceConfig = {
   bedframeSizes?:    MaintPoolEntry[];   // ['K','Q','S','SS','SK','SP'] — bedframe size codes
   sofaCompartments?: MaintPoolEntry[];   // ['1A(LHF)','1A(RHF)','1NA',...] — sofa compartment codes
   mattressSizes?:    MaintPoolEntry[];   // ['K','Q','S','SS']
+  // BRANDING pool — simple value list (no prices). Mirror of the Backend
+  // MaintenanceConfig field: POS reads the same /maintenance-config blob, so
+  // surfacing it here keeps the POS Maintenance tab's Products Maintenance group
+  // in parity with Backend (and an admin edit on either side stays in sync).
+  // Optional on the wire; absent/empty = empty pool.
+  brandings?:        MaintPoolEntry[];   // ['HILTON','SEALY','2990S',...]
+  // SUPPLY CATEGORY pool (owner spec 2026-06-12) — simple value list. Mirror of
+  // the Backend field; on Backend it feeds the Suppliers list filter chips + the
+  // supplier form's Supply Category toggles. POS has no Suppliers page, but
+  // surfaces the pool for view/edit parity. Optional; absent/empty = empty pool.
+  supplierCategories?: MaintPoolEntry[]; // ['Sofa','Bedframe','Mattress',...]
   // PR #220 (Commander 2026-05-27): per-compartment design metadata — POS
   // module designs (image + description + default price) brought into the
   // Maintenance UI for back-office reference. Keyed by compartment code,
@@ -332,6 +344,27 @@ export function useUpdateMfgProductGifts() {
       return authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
         method: 'PATCH',
         body: JSON.stringify({ includedAddons }),
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mfg-products'] });
+    },
+  });
+}
+
+/** 0170 — Default Free Gift (accessory). Writes mfg_products.default_free_gifts
+ *  ([{giftProductId, qty, campaignName?}]). POS auto-adds the gift at RM 0. */
+export function useUpdateMfgProductDefaultGifts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: {
+      id: string;
+      defaultFreeGifts: { giftProductId: string; qty: number; campaignName?: string | null }[];
+    }) => {
+      const { id, defaultFreeGifts } = args;
+      return authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ defaultFreeGifts }),
       });
     },
     onSuccess: () => {

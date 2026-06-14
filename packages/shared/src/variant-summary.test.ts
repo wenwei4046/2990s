@@ -80,27 +80,34 @@ describe('buildVariantSummary', () => {
     expect(summary).toBe('DIVAN 10" + NO LEG');
   });
 
-  /* Loo 2026-06-11 — the POS product-page remark + extra charge is a free-text
-     Special Add-on (auto-SKU minting retired). With money attached it renders
-     inside the SPECIAL segment, next to the picked add-ons. */
-  it('remark with an extra charge renders in the SPECIAL segment like an add-on', () => {
+  /* Loo 2026-06-13 — the POS product-page "special add-on" (note + extra charge,
+     variants.extraAddonNote + extraAddonAmountRM) is a free-text Special Add-on.
+     With money attached it renders inside the SPECIAL segment, next to the picked
+     add-ons. The item remark (variants.remark) is SEPARATE: it never enters the
+     SPECIAL segment — it prints as its own "Remark:" line off the .remark column. */
+  it('a special add-on note + extra charge renders in the SPECIAL segment like an add-on', () => {
     const summary = buildVariantSummary('bedframe', {
       divanHeight: '10"',
       specials: ['Divan Fully Cover'],
-      remark: 'Custom side pocket',
+      extraAddonNote: 'Custom side pocket',
       extraAddonAmountRM: 200,
     });
     expect(summary).toContain('SPECIAL: Divan Fully Cover + Custom side pocket (+RM200)');
   });
 
-  it('an extra charge without remark text renders a generic SPECIAL entry', () => {
+  it('an extra charge without a note renders a generic SPECIAL entry', () => {
     const summary = buildVariantSummary('bedframe', { divanHeight: '10"', extraAddonAmountRM: 150 });
     expect(summary).toContain('SPECIAL: Extra add-on (+RM150)');
   });
 
-  it('a remark WITHOUT money also renders in the SPECIAL segment, bare (Loo 2026-06-11)', () => {
-    const summary = buildVariantSummary('bedframe', { divanHeight: '10"', remark: 'Deliver before noon' });
+  it('a note WITHOUT money also renders in the SPECIAL segment, bare', () => {
+    const summary = buildVariantSummary('bedframe', { divanHeight: '10"', extraAddonNote: 'Deliver before noon' });
     expect(summary).toBe('DIVAN 10" / SPECIAL: Deliver before noon');
+  });
+
+  it('the item remark (variants.remark) never enters the SPECIAL segment (Loo 2026-06-13)', () => {
+    const summary = buildVariantSummary('bedframe', { divanHeight: '10"', remark: 'Handle this item with care' });
+    expect(summary).toBe('DIVAN 10"');
   });
 
   /* Colour KIV (Loo 2026-06-12) — the customer commits to a fabric SERIES

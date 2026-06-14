@@ -15,7 +15,7 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
-import { Plus, Pencil, Trash2, ArrowRight } from 'lucide-react';
+import { Plus, Pencil, Trash2, ArrowRight, ArrowDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildComboLabel } from '@2990s/shared';
 import { useProductModels, type ProductModelRow } from '../../lib/products/product-models-queries';
@@ -335,16 +335,23 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
                 </h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
                   {group.map((r) => (
-                    <div key={r.id} style={{ border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', padding: 'var(--space-4)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-4)', opacity: r.active ? 1 : 0.55 }}>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap', fontSize: 'var(--fs-14)' }}>
-                          <span style={{ fontWeight: 600 }}>{itemSummary(r.triggerCategory === 'SOFA' ? r.triggerComboIds : r.triggerEligibleModelIds, r.triggerCategory)}</span>
-                          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>({catLabel(r.triggerCategory)})</span>
-                          <ArrowRight {...ICON} />
-                          <span style={{ fontWeight: 600 }}>{itemSummary(r.rewardCategory === 'SOFA' ? r.rewardComboIds : r.eligibleRewardModelIds, r.rewardCategory)}</span>
-                          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>({catLabel(r.rewardCategory)})</span>
+                    <div key={r.id} style={{ background: 'var(--c-paper)', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-2)', padding: 'var(--space-4)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 'var(--space-4)', opacity: r.active ? 1 : 0.55 }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontSize: 'var(--fs-12)', fontWeight: 600, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 'var(--space-2)' }}>
+                          {kind === 'promo' ? 'Promo · redeem free' : 'PWP · redeem at a set price'}
                         </div>
-                        <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-1)' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
+                          <div style={{ fontSize: 'var(--fs-13)' }}>
+                            <span style={{ color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.03em', fontSize: 'var(--fs-12)' }}>Trigger · {catLabel(r.triggerCategory)}</span>
+                            <div style={{ fontWeight: 600, fontSize: 'var(--fs-14)' }}>{itemSummary(r.triggerCategory === 'SOFA' ? r.triggerComboIds : r.triggerEligibleModelIds, r.triggerCategory)}</div>
+                          </div>
+                          <ArrowDown size={14} strokeWidth={1.75} style={{ color: 'var(--fg-muted)' }} />
+                          <div style={{ fontSize: 'var(--fs-13)' }}>
+                            <span style={{ color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.03em', fontSize: 'var(--fs-12)' }}>Reward · {catLabel(r.rewardCategory)}</span>
+                            <div style={{ fontWeight: 600, fontSize: 'var(--fs-14)' }}>{itemSummary(r.rewardCategory === 'SOFA' ? r.rewardComboIds : r.eligibleRewardModelIds, r.rewardCategory)}</div>
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-soft)', marginTop: 'var(--space-3)' }}>
                           Ratio 1 : {r.qtyPerTrigger}{r.active ? '' : ' · inactive'}
                         </div>
                       </div>

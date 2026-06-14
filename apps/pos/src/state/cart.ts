@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { summarizeSofaCells, type Cell, type Depth } from '@2990s/shared';
+import { summarizeSofaCells, type Cell, type Depth, type DesiredFreeGift } from '@2990s/shared';
 import { clearHandoverFormSnapshot } from '../lib/handover-helpers';
 
 /**
@@ -51,9 +51,13 @@ export interface SofaConfigSnapshot {
   // the build against the code's reward combos + marks the code USED at Confirm.
   pwp?: boolean;
   pwpCode?: string;
-  /** Per-line remark keyed on the product page (spec 2026-06-06). Rides the
-   *  SO variants → mfg_sales_order_items.remark. */
+  /** Per-line ITEM remark keyed on the product page (spec 2026-06-06). Rides the
+   *  SO variants → mfg_sales_order_items.remark. Item remark ONLY since 2026-06-13
+   *  — the special add-on note is a separate field (extraAddonNote below). */
   remark?: string;
+  /** Special add-on note keyed on the product page (Loo 2026-06-13) — the free-text
+   *  label for the extra charge. Rides variants.extraAddonNote → custom_specials. */
+  extraAddonNote?: string;
   /** Extra charge keyed on the product page, whole MYR PER UNIT (spec D1).
    *  Already folded into `total`; also declared in variants so the server
    *  drift gate adds the same amount to its authoritative figure.
@@ -80,9 +84,13 @@ export interface SizeConfigSnapshot {
   // Original (non-PWP) total — so the cart can auto-revert the price if the
   // same-cart trigger is removed and this line's reserved code is freed.
   pwpOriginalTotal?: number;
-  /** Per-line remark keyed on the product page (spec 2026-06-06). Rides the
-   *  SO variants → mfg_sales_order_items.remark. */
+  /** Per-line ITEM remark keyed on the product page (spec 2026-06-06). Rides the
+   *  SO variants → mfg_sales_order_items.remark. Item remark ONLY since 2026-06-13
+   *  — the special add-on note is a separate field (extraAddonNote below). */
   remark?: string;
+  /** Special add-on note keyed on the product page (Loo 2026-06-13) — the free-text
+   *  label for the extra charge. Rides variants.extraAddonNote → custom_specials. */
+  extraAddonNote?: string;
   /** Extra charge keyed on the product page, whole MYR PER UNIT (spec D1).
    *  Already folded into `total`; also declared in variants so the server
    *  drift gate adds the same amount to its authoritative figure.
@@ -108,6 +116,16 @@ export interface FlatConfigSnapshot {
   kind: 'flat';
   productId: string;
   productName: string;
+  /** UPPERCASE mfg category ('ACCESSORY' / 'SERVICE'), stamped by the
+   *  configurator so inferItemGroup buckets the SO line into accessories_centi
+   *  instead of falling through to 'others'. */
+  category?: string;
+  // 0170 — Default Free Gift markers. A gift line is a flat line at total 0,
+  // its qty derived by the reconciler (entry.qty × trigger.qty), linked to its
+  // trigger by freeGiftTriggerKey so removing the trigger removes the gift.
+  isFreeGift?: boolean;
+  freeGiftTriggerKey?: string;
+  freeGiftCampaign?: string | null;
   total: number;
   summary: string;       // e.g. "Flat price"
 }
@@ -161,9 +179,13 @@ export interface BedframeConfigSnapshot {
   // Original (non-PWP) total — auto-revert source when the same-cart trigger
   // (and its reserved code) is removed from the cart.
   pwpOriginalTotal?: number;
-  /** Per-line remark keyed on the product page (spec 2026-06-06). Rides the
-   *  SO variants → mfg_sales_order_items.remark. */
+  /** Per-line ITEM remark keyed on the product page (spec 2026-06-06). Rides the
+   *  SO variants → mfg_sales_order_items.remark. Item remark ONLY since 2026-06-13
+   *  — the special add-on note is a separate field (extraAddonNote below). */
   remark?: string;
+  /** Special add-on note keyed on the product page (Loo 2026-06-13) — the free-text
+   *  label for the extra charge. Rides variants.extraAddonNote → custom_specials. */
+  extraAddonNote?: string;
   /** Extra charge keyed on the product page, whole MYR PER UNIT (spec D1).
    *  Already folded into `total`; also declared in variants so the server
    *  drift gate adds the same amount to its authoritative figure.
@@ -205,6 +227,8 @@ interface CartState {
    *  price. Called when the same-cart trigger leaves the cart (its reserved
    *  code is freed) so a reward never lingers at the PWP price with a dead code. */
   revertPwp: (key: string) => void;
+  /** 0170 — make the cart's free-gift lines match `desired` (add/update/remove). */
+  reconcileFreeGifts(desired: DesiredFreeGift[], nameById: Map<string, string>): void;
   /** Swap a reward line's voucher code in place (price unchanged). Used by the
    *  PWP reconciler when the server re-minted a trigger's codes (e.g. after a
    *  failed order burned + replaced them) and the line's snapshot went stale. */
@@ -235,9 +259,20 @@ const sanitizeQty = (config: CartConfig, qty: number | undefined, fallback = 1):
 export const cartHasSofa = (lines: CartLine[]): boolean => lines.some((l) => isSofaConfig(l.config));
 export const cartHasNonSofa = (lines: CartLine[]): boolean => lines.some((l) => !isSofaConfig(l.config));
 
-/** Reason string if adding `config` would mix a sofa with non-sofa products
- *  (either direction), else null. Editing a line in place (editingKey) never
- *  conflicts — the line's category doesn't change. */
+/** A MAIN non-sofa line = mattress (`size`) or bedframe — the only categories a
+ *  sofa cannot share a Sales Order with. Accessories (`flat`, ACCESSORY/SERVICE)
+ *  are universal add-ons that ride on any order. Mirrors the server's MAIN set
+ *  ({SOFA,BEDFRAME,MATTRESS}; accessory excluded — see apps/api/.../
+ *  mfg-sales-orders.ts Rule 2 "so_sofa_no_other_main"). */
+const isMainNonSofaConfig = (c: CartConfig): boolean =>
+  c.kind === 'size' || c.kind === 'bedframe';
+export const cartHasMainNonSofa = (lines: CartLine[]): boolean =>
+  lines.some((l) => isMainNonSofaConfig(l.config));
+
+/** Reason string if adding `config` would put a sofa on the same order as a
+ *  mattress/bedframe (either direction), else null. Accessories never conflict —
+ *  they pair with a sofa OR a mattress/bedframe (Loo 2026-06-13). Editing a line
+ *  in place (editingKey) never conflicts — the line's category doesn't change. */
 export const cartCategoryConflict = (
   lines: CartLine[],
   config: CartConfig,
@@ -245,13 +280,17 @@ export const cartCategoryConflict = (
 ): string | null => {
   if (editingKey) return null;
   if (isSofaConfig(config)) {
-    return cartHasNonSofa(lines)
-      ? 'Sofas are placed on their own order. Finish or clear the current items before adding a sofa.'
+    return cartHasMainNonSofa(lines)
+      ? 'Sofas are placed on their own order. Finish or clear the mattress/bedframe items before adding a sofa.'
       : null;
   }
-  return cartHasSofa(lines)
-    ? 'Your cart has a sofa. Sofas are placed on their own order — finish or clear it before adding other products.'
-    : null;
+  if (isMainNonSofaConfig(config)) {
+    return cartHasSofa(lines)
+      ? 'Your cart has a sofa. Sofas are placed on their own order — finish or clear it before adding a mattress or bedframe.'
+      : null;
+  }
+  // Accessory / universal add-on (flat) — pairs with anything.
+  return null;
 };
 
 // In-memory store. Persistence moved off localStorage to the DB (pos_carts,
@@ -317,6 +356,53 @@ export const useCart = create<CartState>()((set, get) => ({
         return { ...l, config: next as CartConfig };
       }),
     });
+  },
+
+  reconcileFreeGifts(desired, nameById) {
+    const want = new Map(desired.map((d) => [d.key, d]));
+    const current = get().lines;
+    const isGift = (l: CartLine): boolean =>
+      (l.config as { isFreeGift?: boolean }).isFreeGift === true;
+
+    let changed = false;
+
+    // Keep non-gift lines untouched (same reference); update gift lines still
+    // wanted only when their derived values differ; drop gift lines no longer
+    // wanted.
+    const kept = current.flatMap((l) => {
+      if (!isGift(l)) return [l];
+      const d = want.get(l.key);
+      if (!d) { changed = true; return []; }       // trigger gone → remove
+      want.delete(l.key);                          // mark as satisfied
+      const cfg = l.config as FlatConfigSnapshot;
+      const name = nameById.get(d.giftProductId) ?? cfg.productName;
+      if (l.qty === d.qty && cfg.total === 0 && cfg.freeGiftCampaign === d.campaignName && cfg.productName === name) {
+        return [l];                                // unchanged → keep same object
+      }
+      changed = true;
+      return [{ ...l, qty: d.qty, config: { ...cfg, productName: name, freeGiftCampaign: d.campaignName, total: 0 } }];
+    });
+
+    // Add any still-wanted gift lines that weren't already present.
+    const added = [...want.values()].map((d) => ({
+      key: d.key,
+      qty: d.qty,
+      config: {
+        kind: 'flat' as const,
+        productId: d.giftProductId,
+        productName: nameById.get(d.giftProductId) ?? d.giftProductId,
+        category: 'ACCESSORY',
+        isFreeGift: true,
+        freeGiftTriggerKey: d.triggerKey,
+        freeGiftCampaign: d.campaignName,
+        total: 0,
+        summary: 'Free gift',
+      } satisfies FlatConfigSnapshot,
+    }));
+    if (added.length > 0) changed = true;
+
+    if (!changed) return;                          // idempotent — no reference churn, no effect loop
+    set({ lines: [...kept, ...added] });
   },
 
   setPwpCode(key, code) {

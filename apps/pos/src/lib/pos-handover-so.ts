@@ -337,6 +337,7 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     if (config.specialLabels && config.specialLabels.length > 0) v.specialLabels = config.specialLabels;
     if (config.specialChoices && Object.keys(config.specialChoices).length > 0) v.specialChoices = config.specialChoices;
     if (config.remark?.trim())          v.remark = config.remark.trim();
+    if (config.extraAddonNote?.trim())  v.extraAddonNote = config.extraAddonNote.trim();
     if ((config.extraAddonAmountRM ?? 0) > 0) v.extraAddonAmountRM = config.extraAddonAmountRM;
     if (config.summary)         v.summary = config.summary;
     return Object.keys(v).length > 0 ? v : null;
@@ -391,6 +392,7 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     if (config.specialLabels && config.specialLabels.length > 0) v.specialLabels = config.specialLabels;
     if (config.specialChoices && Object.keys(config.specialChoices).length > 0) v.specialChoices = config.specialChoices;
     if (config.remark?.trim())          v.remark = config.remark.trim();
+    if (config.extraAddonNote?.trim())  v.extraAddonNote = config.extraAddonNote.trim();
     if ((config.extraAddonAmountRM ?? 0) > 0) v.extraAddonAmountRM = config.extraAddonAmountRM;
     if (config.summary)               v.summary = config.summary;
     return v;
@@ -414,6 +416,7 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     if (config.specialLabels && config.specialLabels.length > 0) v.specialLabels = config.specialLabels;
     if (config.specialChoices && Object.keys(config.specialChoices).length > 0) v.specialChoices = config.specialChoices;
     if (config.remark?.trim())          v.remark = config.remark.trim();
+    if (config.extraAddonNote?.trim())  v.extraAddonNote = config.extraAddonNote.trim();
     if ((config.extraAddonAmountRM ?? 0) > 0) v.extraAddonAmountRM = config.extraAddonAmountRM;
     if (config.summary)               v.summary = config.summary;
     return v;
@@ -547,6 +550,14 @@ export const cartLineToSoItem = (
   // human ref, so a missing SKU is preferable to a blocking failure at confirm.
   const itemCode = resolvedItemCode ?? product?.sku ?? line.config.productId;
   const itemGroup = inferItemGroup(line.config, product);
+  // 0170 — Default Free Gift marker. The server re-derives eligibility from the
+  // order's real trigger lines; triggerRef/triggerKind here are informational.
+  const cfg = line.config as {
+    isFreeGift?: boolean; freeGiftCampaign?: string | null; freeGiftTriggerKey?: string; productId: string;
+  };
+  const freeGift = cfg.isFreeGift
+    ? { freeGift: { triggerRef: cfg.freeGiftTriggerKey ?? '', triggerKind: 'product' as const, campaignName: cfg.freeGiftCampaign ?? null, giftProductId: cfg.productId } }
+    : null;
   // Whole-MYR → sen. POS uses INTEGER ringgit (db/schema.ts §Money), the
   // Backend SO ledger is sen — multiply at the boundary.
   const unitPriceCenti = Math.round(line.config.total * 100);
@@ -579,7 +590,7 @@ export const cartLineToSoItem = (
     qty: line.qty,
     unitPriceCenti,
     discountCenti: 0,
-    variants: buildVariants(line.config),
+    variants: freeGift ? { ...(buildVariants(line.config) ?? {}), ...freeGift } : buildVariants(line.config),
     cartLineKey: line.key,
   };
 };

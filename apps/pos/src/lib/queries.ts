@@ -178,7 +178,16 @@ export const useProduct = (productId: string | undefined) =>
         img_key: null,
         thumb_key: null,
         pricing_kind: pricingKind,
-        flat_price: (mfg.sell_price_sen ?? mfg.base_price_sen) != null ? Math.round((mfg.sell_price_sen ?? mfg.base_price_sen)! / 100) : null,
+        // ACCESSORY is flat + has no variants; Loo wants even an unpriced (null)
+        // or RM 0 accessory to be sellable in POS. Treat null as 0 so the
+        // Configurator's FlatAddToCart renders (its gate is flat_price != null)
+        // and the line books at RM 0. Server reprice has no authoritative figure
+        // for a 0-base accessory → trusts the submitted 0 (no drift). Other flat
+        // categories (legacy / SERVICE) keep null = "no price yet".
+        flat_price:
+          (mfg.sell_price_sen ?? mfg.base_price_sen) != null
+            ? Math.round((mfg.sell_price_sen ?? mfg.base_price_sen)! / 100)
+            : mfg.category === 'ACCESSORY' ? 0 : null,
         recliner_upgrade_price: 0,
         seat_upgrade_label: null,
         seat_upgrade_footrest: true,

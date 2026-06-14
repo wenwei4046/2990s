@@ -10,6 +10,8 @@ import {
   buildVariantSummary, comboChargedPrices, matchComboSubset, type SofaComboRow, type SofaPriceTier,
   oneShotSofaCode, oneShotSimpleCode, remarkSlug,
   fabricTierAddon,
+  parseDefaultFreeGifts, validateFreeGiftClaims,
+  type FreeGiftLineClaim,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
 /* POS auto-Proceed (Loo 2026-06-09) — when a handover arrives already complete
@@ -19,7 +21,10 @@ import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pr
 import { meetsProceedGate } from '@2990s/shared/order-rules';
 /* SO-SKU spec P2 — every charge is a SKU line. Predicates from P1; the
    fee/addon → SERVICE-line decomposition builders are pure + shared. */
-import { isServiceLine, isDeliveryFeeServiceCode } from '@2990s/shared/service-sku';
+import {
+  isServiceLine, isDeliveryFeeServiceCode,
+  SVC_DELIVERY, SVC_DELIVERY_CROSS, SVC_DELIVERY_ADD,
+} from '@2990s/shared/service-sku';
 import {
   buildDeliveryFeeServiceLines,
   computeAddonServiceLines,
@@ -76,6 +81,11 @@ import {
   loadProductsAndModels,
 } from '../lib/allowed-options-check';
 import { findIncompleteVariantLines } from '../lib/so-variant-check';
+/* Default Free Gift (migration 0170, D9) — ONE trigger builder shared by the
+   SO-create validator below and the placed-SO edit reconciler, so create and
+   reconcile can never compute a different gift set. */
+import { buildFreeGiftTriggers, type TriggerLine } from '../lib/free-gift-triggers';
+import { reconcileFreeGiftLinesForSo } from '../lib/free-gift-reconcile';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { pickCrossCategoryMatch, type AutoMatchCandidate } from '../lib/cross-category-match';
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
@@ -164,6 +174,16 @@ const SO_IDENTITY_LOCK_COLS = new Set<string>([
   'hub_id', 'hub_name', 'ship_to_address', 'bill_to_address', 'install_to_address',
   'email', 'customer_type', 'salesperson_id', 'city', 'postcode', 'building_type',
   'emergency_contact_name', 'emergency_contact_phone', 'emergency_contact_relationship',
+]);
+
+/* Owner 2026-06-12 + Loo 2026-06-13 — after the processing date passes the SO is
+   what we PO to the supplier, so only the PRODUCTION-SCHEDULE columns freeze on
+   the header PATCH. Customer / delivery-address / payment fields don't feed the
+   supplier PO and stay editable in the Proceed lane (POS "edit in Proceed").
+   Items have their own per-route processing lock, so only these two date columns
+   belong here. Keyed by DB column name. */
+const SO_PROCESSING_LOCK_COLS = new Set<string>([
+  'internal_expected_dd', 'customer_delivery_date',
 ]);
 
 /* Loose equality for the lock diff — null / undefined / '' all collapse so a
@@ -266,7 +286,7 @@ async function soMainMixIntroduced(sb: any, docNo: string, excludeItemId: string
 async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
   const { data } = await sb
     .from('sofa_combo_pricing')
-    .select('id, base_model, modules, tier, customer_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, effective_from, deleted_at')
+    .select('id, base_model, modules, tier, customer_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, effective_from, deleted_at, default_free_gifts')
     .is('deleted_at', null)
     .is('customer_id', null)   // 2990 B2C — default-scope rows only
     .is('supplier_id', null);  // sales-side only — never auto-price a SO from a supplier's purchasing combos
@@ -276,6 +296,7 @@ async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
     selling_prices_by_height: Record<string, number | null>;
     pwp_prices_by_height: Record<string, number | null> | null;
     label: string | null; effective_from: string; deleted_at: string | null;
+    default_free_gifts: unknown;
   }>).map((r) => ({
     id: r.id, baseModel: r.base_model, modules: r.modules ?? [],
     tier: r.tier, customerId: r.customer_id,
@@ -285,6 +306,9 @@ async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
     // only when a sofa-reward line redeems a valid PWP code (see recompute).
     pwpPricesByHeight: r.pwp_prices_by_height ?? {},
     label: r.label, effectiveFrom: r.effective_from, deletedAt: r.deleted_at,
+    // Default Free Gift (migration 0170, D9) — passthrough jsonb; the SO-create
+    // handler parses it to build the per-combo free-gift trigger.
+    defaultFreeGifts: r.default_free_gifts ?? [],
   }));
 }
 
@@ -881,12 +905,13 @@ mfgSalesOrders.get('/mine', async (c) => {
     const docNo = r.doc_no ?? '';
     const deposit = typeof r.deposit_centi === 'number' ? r.deposit_centi : 0;
     const ledger = paidLedgerByDoc.get(docNo) ?? 0;
+    const soItems = itemsByDoc.get(docNo) ?? [];
     return {
       ...r,
       // Total received = ledger payments (+ header deposit only when the
       // ledger doesn't already carry it as an is_deposit row).
       paid_centi_total: (depositInLedger.has(docNo) ? 0 : deposit) + ledger,
-      items: itemsByDoc.get(docNo) ?? [],
+      items: soItems,
     };
   });
 
@@ -1698,6 +1723,15 @@ mfgSalesOrders.post('/', async (c) => {
   }
   const pwpBaseByIdx = new Map<number, number>();            // non-sofa idx → pwp_price_sen
   const pwpSofaByIdx = new Map<number, string[]>();          // sofa idx → granted reward combo ids
+  /* Default Free Gift (migration 0170) — a line tagged variants.freeGift is
+     priced to RM 0 ONLY when the order also carries a real qualifying trigger
+     (a non-sofa product's default_free_gifts, or a sofa build matching a combo's
+     default_free_gifts — D9). Validated below, after PWP settles; an ineligible
+     gift is rejected 409 free_gift_not_eligible. The grant rides the SAME 0-base
+     path PWP uses (pwpBaseSen = 0 ⇒ free), so recomputeFromSnapshot needs no new
+     parameter. Honest-pricing (CLAUDE.md): a gift with no trigger reprices to the
+     accessory's real sell_price_sen → a tampered "free" client price drifts. */
+  const freeGiftBaseByIdx = new Map<number, number>();       // gift line idx → granted base (always 0)
   const claimedPwpCodes: Array<{ code: string; prevStatus: string }> = [];
   /* Loo 2026-06-05 (VALOR / PW-Test-voucher incident) — a line that CARRIES a
      pwpCode but fails the grant used to be silently repriced at full price,
@@ -1885,33 +1919,101 @@ mfgSalesOrders.post('/', async (c) => {
     }, 409);
   }
 
+  /* Default Free Gift validation (migration 0170, D9) — runs AFTER PWP settles
+     (so a gift never collides with a voucher) and BEFORE the recompute pass (so
+     a granted gift can ride the pwpBaseSen = 0 path). A line tagged
+     `variants.freeGift` is granted base 0 ONLY when the order ALSO carries a real
+     qualifying trigger: a NON-sofa product whose default_free_gifts grants the
+     claimed gift product, OR a SOFA line whose build matches a combo carrying
+     default_free_gifts (D9). Triggers and claims are pure data fed to the shared
+     validateFreeGiftClaims; ANY ineligible gift → 409 free_gift_not_eligible
+     (after rollbackPwpClaims so nothing burns). Honest-pricing: a rejected /
+     un-granted gift reprices to the accessory's real sell_price_sen below, so a
+     tampered "free" client price drifts → 400. */
+  {
+    // Combos that actually grant gifts — filter once so the sofa matcher only
+    // tries combos with a non-empty default_free_gifts. Shared with reconcile
+    // via buildFreeGiftTriggers (free-gift-triggers.ts) so create + edit can
+    // never compute a different gift set.
+    const giftingCombos = cachedCombos
+      .map((c) => ({ combo: c, gifts: parseDefaultFreeGifts(c.defaultFreeGifts) }))
+      .filter((x) => x.gifts.length > 0)
+      .map((x) => ({
+        id:               x.combo.id,
+        baseModel:        x.combo.baseModel ?? null,
+        modules:          x.combo.modules,
+        defaultFreeGifts: x.combo.defaultFreeGifts,
+      }));
+
+    // Flatten each request line to a TriggerLine for the shared builder. The
+    // per-line index keys the trigger (`idx-${idx}`); a gift line (freeGift)
+    // is flagged so the builder skips it as a trigger (one-way).
+    const triggerLines: TriggerLine[] = items.map((it, idx) => {
+      const variants = (it?.variants as Record<string, unknown> | null) ?? null;
+      const product = lineProducts[idx] ?? null;
+      return {
+        triggerKey:       `idx-${idx}`,
+        itemCode:         product?.code ?? '',
+        category:         String(product?.category ?? ''),
+        qty:              Number(it?.qty ?? 1),
+        baseModel:        product?.base_model ?? null,
+        cells:            variants?.cells ?? null,
+        isFreeGift:       Boolean(variants?.freeGift),
+        defaultFreeGifts: product?.default_free_gifts ?? null,
+      };
+    });
+    const triggers = buildFreeGiftTriggers(triggerLines, giftingCombos);
+
+    const claims: FreeGiftLineClaim[] = [];
+    for (let idx = 0; idx < items.length; idx++) {
+      const it = items[idx];
+      const variants = (it?.variants as Record<string, unknown> | null) ?? null;
+      const fg = variants?.freeGift;
+      if (!fg) continue;
+      const fgObj = (fg && typeof fg === 'object') ? (fg as Record<string, unknown>) : null;
+      // giftProductId is an mfg_products.id (set by the POS marshaller). No
+      // itemCode (SKU) fallback — a SKU would never match the UUID-keyed trigger
+      // config, so an empty id fails honestly as `no_trigger` rather than
+      // masquerading as ineligibility.
+      const giftProductId = String(fgObj?.giftProductId ?? '');
+      claims.push({ idx, giftProductId, qty: Number(it?.qty ?? 1) });
+    }
+
+    if (claims.length > 0) {
+      const { valid, rejected } = validateFreeGiftClaims(claims, triggers);
+      if (rejected.length > 0) {
+        await rollbackPwpClaims();
+        return c.json({
+          error: 'free_gift_not_eligible',
+          reason: rejected
+            .map((r) => `line ${r.idx + 1}: ${r.giftProductId} — ${r.reason}`)
+            .join('; '),
+          offendersFreeGift: rejected,
+        }, 409);
+      }
+      for (const idx of valid) freeGiftBaseByIdx.set(idx, 0);
+    }
+  }
+
   /* P3 — keep each sofa item's module price map so the split below distributes
      the build total with the SAME weights the drift gate priced from. */
   const sofaModulePricesByIdx = new Map<number, Record<string, number> | null>();
-  /* Spec 2026-06-06 (D5) — the POS product-page extra charge is feature-
-     gated in SO Maintenance (so_settings.pos_product_remark). When OFF, a
-     line that still declares an extra is rejected EXPLICITLY (never silently
-     dropped or silently charged — CF-cap lesson: surface, don't swallow).
-     Remarks themselves are always accepted (free text, no money). */
+  /* Loo 2026-06-13 — the POS product-page remark + special add-on (note + extra
+     charge) is always available; the pos_product_remark gate was removed. The
+     only flag still read here is the retired pos_remark_extra_auto_sku (one-shot
+     mint, OFF by default); resolve it just for the lines that declare an extra. */
   const hasDeclaredExtra = items.some((it) =>
     Number((it.variants as { extraAddonAmountRM?: unknown } | null)?.extraAddonAmountRM ?? 0) > 0);
   let autoSkuEnabled = false;
   if (hasDeclaredExtra) {
     const { data: flagRows, error: flagErr } = await sb
       .from('so_settings').select('key, enabled')
-      .in('key', ['pos_product_remark', 'pos_remark_extra_auto_sku']);
+      .in('key', ['pos_remark_extra_auto_sku']);
     if (flagErr) {
       await rollbackPwpClaims();
       return c.json({ error: 'lookup_failed', reason: flagErr.message }, 500);
     }
     const flags = new Map((flagRows ?? []).map((r) => [(r as { key: string }).key, (r as { enabled: boolean }).enabled]));
-    if (flags.get('pos_product_remark') === false) {
-      await rollbackPwpClaims();
-      return c.json({
-        error: 'extra_amount_disabled',
-        reason: 'Product-page extra charge is turned off in SO Maintenance.',
-      }, 400);
-    }
     autoSkuEnabled = flags.get('pos_remark_extra_auto_sku') === true; // missing row → OFF
   }
 
@@ -1967,7 +2069,10 @@ mfgSalesOrders.post('/', async (c) => {
     };
     // PWP grant for this line when its code was claimed: a per-SKU base (non-
     // sofa) or the reward combo ids (sofa). Else null → normal base / price.
-    const pwpBaseSen = pwpBaseByIdx.get(idx) ?? null;
+    // Default Free Gift (migration 0170) — a validated gift line falls back to a
+    // 0 base on the SAME pwpBaseSen path (0 ⇒ free), so no recompute signature
+    // change. PWP always wins if both somehow apply (a gift is non-sofa, no code).
+    const pwpBaseSen = pwpBaseByIdx.get(idx) ?? freeGiftBaseByIdx.get(idx) ?? null;
     const pwpSofaComboIds = pwpSofaByIdx.get(idx) ?? null;
     return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, pwpBaseSen, pwpSofaComboIds, cachedSpecialAddons, sofaModuleCostRows);
   }));
@@ -2236,11 +2341,20 @@ mfgSalesOrders.post('/', async (c) => {
             divan_price_sen:         i === 0 ? (recomputed?.divan_price_sen ?? 0) : 0,
             leg_price_sen:           i === 0 ? (recomputed?.leg_price_sen ?? 0) : 0,
             special_order_price_sen: i === 0 ? (recomputed?.special_order_sen ?? 0) : 0,
-            custom_specials:         i === 0 ? (recomputed?.custom_specials ?? null) : null,
+            /* Loo 2026-06-13 — custom_specials is the DISPLAY composition of the
+               line's specials (incl. the POS special add-on note), NOT a money
+               figure: the money lives in unit_price_centi (split across modules)
+               + the i===0 breakdown columns above. So, like the remark below, it
+               rides EVERY module line of a split sofa — each row of the internal
+               Detail Listing then shows the same specials, matching the per-module
+               SoLineCard editor and the every-line description2. The customer
+               print folds the build into one line and never reads custom_specials,
+               so this can't double on the invoice. */
+            custom_specials:         recomputed?.custom_specials ?? null,
             /* Loo 2026-06-09 — the operator remark rides EVERY compartment line
                of the sofa, not just the first. One sofa = one remark, so each
                piece (and its printed SO line) carries the same note. Unlike the
-               breakdown columns above, the remark is not a build-level money
+               i===0 breakdown columns above, the remark is not a build-level money
                figure, so duplicating it across the set is not double-counting. */
             remark: baseRow.remark,
           };
@@ -3311,6 +3425,172 @@ mfgSalesOrders.post('/:docNo/items/:itemId/override', async (c) => {
 });
 
 // ── PATCH header — edit debtor info, addresses, note, etc. ───────────
+/* ── Customer change on an existing SO (Loo 2026-06-13, bug-fix round 2) ───────
+   When a Save re-points an SO to a different customer:
+     • PWP PRODUCT lines are MAINTAINED — a customer/name edit must not re-price
+       a reward. Only an ITEM change re-prices PWP (tbc-swap). So there is NO
+       strip here.
+     • the SO's MINTED vouchers (source_doc_no = docNo) follow the order — their
+       customer_id is re-pointed to the new customer.
+     • the cross-category DELIVERY fee (a SERVICE line whose rate depends on the
+       customer's other orders) is RE-DETECTED — see redetectCrossCategoryDelivery. */
+async function repointMintedVouchers(sb: any, docNo: string, newCustomerId: string | null): Promise<number> {
+  if (!newCustomerId) return 0;
+  const { data } = await sb.from('pwp_codes')
+    .update({ customer_id: newCustomerId, updated_at: new Date().toISOString() })
+    .eq('source_doc_no', docNo)
+    .select('code');
+  return ((data ?? []) as Array<{ code: string }>).length;
+}
+
+/* Re-detect the cross-category delivery fee against a (re-resolved) customer.
+   Auto-matches the new customer's eligible source SO with the SAME logic as the
+   handover Auto-match button (pickCrossCategoryMatch), self-excluding THIS SO so
+   changing BACK to the original customer restores the discount. Recomputes the
+   fee on the authoritative computeSoDeliveryFee (preserving the operator's
+   free-form additional fee, recovered from the existing SVC-DELIVERY-ADD line)
+   and rebuilds the SVC-DELIVERY* lines. No eligible source → plain delivery fee.
+   Only runs when the SO already carries a delivery fee. Best-effort. */
+async function redetectCrossCategoryDelivery(
+  sb: any, docNo: string, newName: string, newPhone: string | null,
+): Promise<{ isFollowup: boolean; sourceDocNo: string | null; total: number } | null> {
+  const { data: lineRows } = await sb.from('mfg_sales_order_items')
+    .select('item_code, item_group, total_centi, line_no')
+    .eq('doc_no', docNo).eq('cancelled', false);
+  const lines = (lineRows ?? []) as Array<{ item_code: string; item_group: string | null; total_centi: number | null; line_no: number | null }>;
+  const deliveryLines = lines.filter((l) => isDeliveryFeeServiceCode(l.item_code));
+  if (deliveryLines.length === 0) return null; // no delivery fee → nothing to re-detect
+
+  // The rebuilt SVC-DELIVERY* lines append AFTER the kept lines (services sort
+  // last anyway, but a numbered line_no keeps the order stable + matches create).
+  const keptMaxLineNo = Math.max(
+    -1,
+    ...lines.filter((l) => !isDeliveryFeeServiceCode(l.item_code))
+      .map((l) => (typeof l.line_no === 'number' ? l.line_no : -1)),
+  );
+
+  // Operator free-form fee — preserved across the recompute.
+  const additionalSen = deliveryLines
+    .filter((l) => l.item_code === SVC_DELIVERY_ADD)
+    .reduce((s, l) => s + Number(l.total_centi ?? 0), 0);
+
+  // Deliverable categories (sofa / mattress / bedframe) + their special-model fees.
+  const DELIVERABLE = new Set(['sofa', 'mattress', 'bedframe']);
+  const categoryIds = lines
+    .map((l) => String(l.item_group ?? '').toLowerCase())
+    .filter((g) => DELIVERABLE.has(g));
+  const goodsCodes = [...new Set(
+    lines.filter((l) => DELIVERABLE.has(String(l.item_group ?? '').toLowerCase())).map((l) => l.item_code),
+  )];
+  const specialModels: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
+  if (goodsCodes.length > 0) {
+    const { data: prodRows } = await sb.from('mfg_products').select('code, model_id').in('code', goodsCodes);
+    const modelIds = [...new Set(
+      ((prodRows ?? []) as Array<{ model_id: string | null }>).map((p) => p.model_id).filter((m): m is string => Boolean(m)),
+    )];
+    if (modelIds.length > 0) {
+      const { data: specialRows } = await sb.from('model_special_delivery_fees')
+        .select('standalone_fee, cross_cat_followup_fee').in('model_id', modelIds);
+      for (const r of (specialRows ?? []) as Array<{ standalone_fee?: number; cross_cat_followup_fee?: number }>) {
+        specialModels.push({
+          standaloneFee: Number(r.standalone_fee ?? 0) * 100,
+          crossCategoryFollowupFee: Number(r.cross_cat_followup_fee ?? 0) * 100,
+        });
+      }
+    }
+  }
+
+  const { data: dcfg } = await sb.from('delivery_fee_config').select('base_fee, cross_category_fee').eq('id', 1).single();
+  const cfgSen = {
+    baseFee: Number((dcfg as { base_fee?: number } | null)?.base_fee ?? 0) * 100,
+    crossCategoryFee: Number((dcfg as { cross_category_fee?: number } | null)?.cross_category_fee ?? 0) * 100,
+  };
+
+  // Auto-match the new customer for an eligible cross-category source SO.
+  let sourceDocNo: string | null = null;
+  const normPhone = newPhone ? (normalizePhone(newPhone) ?? newPhone) : null;
+  if (newName && normPhone) {
+    const { data: candRows } = await sb.from('mfg_sales_orders')
+      .select('doc_no, debtor_name, created_at')
+      .eq('phone', normPhone).neq('status', 'CANCELLED').neq('doc_no', docNo)
+      .order('created_at', { ascending: false }).limit(50);
+    const candidates: AutoMatchCandidate[] = ((candRows ?? []) as Array<{ doc_no: string; debtor_name: string | null }>)
+      .map((r) => ({ docNo: r.doc_no, debtorName: r.debtor_name }));
+    if (candidates.length > 0) {
+      const { data: usedRows } = await sb.from('mfg_sales_orders')
+        .select('cross_category_source_doc_no')
+        .in('cross_category_source_doc_no', candidates.map((x) => x.docNo))
+        .neq('doc_no', docNo); // self-excluded: this SO's own link must not burn its own source
+      const used = ((usedRows ?? []) as Array<{ cross_category_source_doc_no: string | null }>)
+        .map((r) => r.cross_category_source_doc_no).filter((v): v is string => !!v);
+      const match = pickCrossCategoryMatch(candidates, newName, used);
+      if (match) sourceDocNo = match.docNo;
+    }
+  }
+
+  const isFollowup = !!sourceDocNo;
+  const fee = computeSoDeliveryFee(
+    { categoryIds, specialModels, isCrossCategoryFollowup: isFollowup, additionalFee: additionalSen },
+    cfgSen,
+  );
+  const specs = buildDeliveryFeeServiceLines(fee, sourceDocNo);
+
+  // Header context for the rebuilt service rows.
+  const { data: hdr } = await sb.from('mfg_sales_orders')
+    .select('debtor_name, venue, customer_delivery_date').eq('doc_no', docNo).maybeSingle();
+  const h = (hdr ?? {}) as { debtor_name?: string | null; venue?: string | null; customer_delivery_date?: string | null };
+
+  // Replace the SVC-DELIVERY* lines: delete the old, insert the recomputed.
+  const { error: delErr } = await sb.from('mfg_sales_order_items').delete()
+    .eq('doc_no', docNo).in('item_code', [SVC_DELIVERY, SVC_DELIVERY_CROSS, SVC_DELIVERY_ADD]);
+  if (delErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] delivery line delete failed:', delErr.message); }
+  if (specs.length > 0) {
+    const lineDateToday = new Date().toISOString().slice(0, 10);
+    const rows = specs.map((spec, i) => ({
+      doc_no: docNo,                                    // ⚠️ NOT NULL — omitting it silently dropped the line (the bug)
+      line_no: keptMaxLineNo >= 0 ? keptMaxLineNo + 1 + i : null,
+      line_date: lineDateToday,
+      debtor_name: h.debtor_name ?? newName,
+      item_group: 'service',
+      item_code: spec.itemCode,
+      description: spec.description,
+      description2: null,
+      remark: spec.remark ?? null,
+      uom: 'UNIT',
+      qty: spec.qty,
+      unit_price_centi: spec.unitPriceSen,
+      discount_centi: 0,
+      total_centi: spec.totalSen,
+      total_inc_centi: spec.totalSen,
+      balance_centi: spec.totalSen,
+      variants: null,
+      unit_cost_centi: 0,
+      line_cost_centi: 0,
+      line_margin_centi: spec.totalSen,
+      divan_price_sen: 0,
+      leg_price_sen: 0,
+      special_order_price_sen: 0,
+      custom_specials: null,
+      line_delivery_date: h.customer_delivery_date ?? null,
+      line_delivery_date_overridden: false,
+      warehouse_id: null,
+      branding: null,
+      venue: h.venue ?? null,
+      stock_status: 'READY',
+    }));
+    const { error: insErr } = await sb.from('mfg_sales_order_items').insert(rows);
+    if (insErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] delivery line insert failed:', insErr.message); }
+  }
+
+  await sb.from('mfg_sales_orders').update({
+    cross_category_source_doc_no: sourceDocNo,
+    delivery_fee_centi: fee.total,
+    updated_at: new Date().toISOString(),
+  }).eq('doc_no', docNo);
+  await recomputeTotals(sb, docNo);
+  return { isFollowup, sourceDocNo, total: fee.total };
+}
+
 mfgSalesOrders.patch('/:docNo', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
   let body: Record<string, unknown>;
@@ -3454,14 +3734,30 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
      above but before any write. (`before` carries internal_expected_dd via
      the map + processing_date appended above.) */
   if (soProcessingLocked(before as unknown as { internal_expected_dd?: string | null; processing_date?: string | null } | null)) {
-    return c.json(SO_PROCESSING_LOCKED_RESPONSE, 409);
+    /* Field-scoped (Loo 2026-06-13) — only a genuine change to a production-
+       schedule date column is rejected; customer / address / payment header
+       fields stay editable in the Proceed lane. `before` carries every patched
+       column via the map snapshot above. */
+    const beforeRowProc = before as unknown as Record<string, unknown>;
+    const changedSchedule = [...SO_PROCESSING_LOCK_COLS].filter(
+      (col) => col in updates && norm(updates[col]) !== norm(beforeRowProc[col]),
+    );
+    if (changedSchedule.length > 0) {
+      return c.json(SO_PROCESSING_LOCKED_RESPONSE, 409);
+    }
   }
 
-  /* proceeded_at is stamp-once (the POS "Proceed" marker). If the row already
-     has a value, drop any incoming proceeded_at so a later header edit / repeat
-     proceed never overwrites the original sales-side timestamp. */
-  if (updates['proceeded_at'] !== undefined && before
-      && (before as unknown as Record<string, unknown>)['proceeded_at']) {
+  /* proceeded_at is stamp-once for the FORWARD move (the POS "Proceed" marker):
+     once set, a later header edit / repeat proceed must NOT overwrite the
+     original sales-side timestamp, so a non-null re-stamp on an already-
+     proceeded row is dropped. An explicit `null`, though, is the POS
+     "Move to Order placed" un-proceed (Loo 2026-06-13) — it clears the marker
+     so the SO drops back to the editable Order-placed lane, so null passes
+     through. The processing-date lock above already 409s this once the
+     processing day has passed (a locked SO is what we PO to the supplier and
+     can't be pulled back). */
+  if (updates['proceeded_at'] !== undefined && updates['proceeded_at'] !== null
+      && before && (before as unknown as Record<string, unknown>)['proceeded_at']) {
     delete updates['proceeded_at'];
   }
 
@@ -3495,6 +3791,41 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     }
   }
 
+  /* Loo 2026-06-13 — POS "Save" opt-in (recustomer:true). Re-resolve customer_id
+     from the edited name+phone exactly as create does, and write it into
+     `updates` BEFORE the identity lock below so a DO/SI still freezes a customer
+     reassignment. PWP product lines are NOT touched (only an item swap re-prices
+     those). When the identity changed we re-detect the cross-category delivery
+     fee + re-point this SO's minted vouchers AFTER the write (see below). */
+  const beforeRowAll = before as unknown as Record<string, unknown> | null;
+  const oldCustomerId = (beforeRowAll?.['customer_id'] as string | null) ?? null;
+  let resolvedNewCustomerId: string | null = null;
+  let customerIdentityChanged = false; // name or phone changed → re-detect cross-category
+  let reNewName = '';
+  let reNewPhone: string | null = null;
+  if (body['recustomer'] === true) {
+    const nm = typeof body['debtorName'] === 'string' ? (body['debtorName'] as string).trim()
+             : typeof body['customerName'] === 'string' ? (body['customerName'] as string).trim()
+             : ((beforeRowAll?.['debtor_name'] as string | null) ?? '');
+    const ph = typeof updates['phone'] === 'string' ? (updates['phone'] as string)
+             : ((beforeRowAll?.['phone'] as string | null) ?? null);
+    const nameChanged = nm !== ((beforeRowAll?.['debtor_name'] as string | null) ?? '');
+    const phoneChanged = ph !== null && norm(ph) !== norm(beforeRowAll?.['phone']);
+    if ((nameChanged || phoneChanged) && nm && ph) {
+      customerIdentityChanged = true;
+      reNewName = nm;
+      reNewPhone = ph;
+      const { data: rid } = await sb.rpc('upsert_customer_by_name_phone', {
+        p_name: nm, p_phone: ph,
+        p_email: typeof body['email'] === 'string' && (body['email'] as string).trim() ? (body['email'] as string).trim() : null,
+      });
+      resolvedNewCustomerId = (rid as string | null) ?? null;
+      if (resolvedNewCustomerId) {
+        updates['customer_id'] = resolvedNewCustomerId; // visible to the identity lock below
+      }
+    }
+  }
+
   /* Owner 2026-05-31 — Partial header lock. Once a non-cancelled DO / SI exists,
      the IDENTITY + VALUE fields that downstream documents snapshot (customer,
      branding, addresses, ref, location, customer PO, currency, SO date, etc.)
@@ -3522,6 +3853,23 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   const { data, error } = await sb.from('mfg_sales_orders').update(updates).eq('doc_no', docNo).select('doc_no').maybeSingle();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'not_found' }, 404);
+
+  /* Customer identity changed → the minted vouchers follow the order, and the
+     cross-category delivery fee re-detects against the new customer. PWP PRODUCT
+     prices are deliberately UNTOUCHED. Best-effort: the header is already saved;
+     a failure here is logged, not surfaced. */
+  let crossCategoryRedetect: { isFollowup: boolean; sourceDocNo: string | null; total: number } | null = null;
+  if (customerIdentityChanged) {
+    try {
+      if (resolvedNewCustomerId && resolvedNewCustomerId !== oldCustomerId) {
+        await repointMintedVouchers(sb, docNo, resolvedNewCustomerId);
+      }
+      crossCategoryRedetect = await redetectCrossCategoryDelivery(sb, docNo, reNewName, reNewPhone);
+    } catch (e) {
+      /* eslint-disable-next-line no-console */
+      console.error('[mfg-so] customer-change re-detect failed:', e);
+    }
+  }
 
   /* PR-E — Master-follower cascade. When the header's
      customer_delivery_date changes, every line that hasn't been
@@ -3565,14 +3913,26 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   try { await recomputeSoStockAllocation(sb); }
   catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-header-patch failed:', e); }
 
-  return c.json({ ok: true, docNo });
+  return c.json({
+    ok: true,
+    docNo,
+    ...(crossCategoryRedetect ? {
+      deliveryRedetected: true,
+      crossCategory: crossCategoryRedetect.isFollowup,
+      crossCategorySourceDocNo: crossCategoryRedetect.sourceDocNo,
+      deliveryFeeCenti: crossCategoryRedetect.total,
+    } : {}),
+  });
 });
 
 // ── Item CRUD ─────────────────────────────────────────────────────────
 //
 // Each mutation recomputes the header totals + category breakdown so the
 // list view stays accurate without a separate refresh step.
-async function recomputeTotals(sb: any, docNo: string) {
+// Exported so the free-gift reconciler (lib/free-gift-reconcile.ts) can finish
+// with the SAME authoritative roll-up the edit endpoints used to call directly.
+// route<->lib function cycle is safe (not invoked at module-eval time).
+export async function recomputeTotals(sb: any, docNo: string) {
   const { data: items } = await sb.from('mfg_sales_order_items')
     .select('id, item_code, item_group, variants, qty, total_centi, line_cost_centi')
     .eq('doc_no', docNo).eq('cancelled', false);
@@ -3945,7 +4305,9 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   };
   const { data, error } = await sb.from('mfg_sales_order_items').insert(row).select('*').single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
-  await recomputeTotals(sb, docNo);
+  // Default Free Gift (0170) — adding a trigger line may grant a new accessory
+  // gift; reconcile auto-inserts/deletes gift lines, then recomputes totals.
+  await reconcileFreeGiftLinesForSo(sb, docNo);
 
   // PR-D — emit ADD_LINE audit row. Capture item code + qty + unit price
   // so the timeline shows the meaningful what-was-added without an explosion
@@ -4229,7 +4591,9 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
 
   const { error } = await sb.from('mfg_sales_order_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
-  await recomputeTotals(sb, docNo);
+  // Default Free Gift (0170) — editing a line (code/qty) may add or drop a
+  // trigger; reconcile auto-syncs the gift lines, then recomputes totals.
+  await reconcileFreeGiftLinesForSo(sb, docNo);
 
   // PR-D — diff old vs new and emit one UPDATE_LINE row only if any field
   // moved. Compare across both the derived columns (qty/price/discount)
@@ -4314,7 +4678,9 @@ mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
 
   const { error } = await sb.from('mfg_sales_order_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
-  await recomputeTotals(sb, docNo);
+  // Default Free Gift (0170) — removing a trigger line (e.g. a mattress) must
+  // auto-delete its free gift; reconcile drops orphaned gifts, then recomputes.
+  await reconcileFreeGiftLinesForSo(sb, docNo);
 
   // Task #93 — orphan cleanup. Loop over the photo keys and best-effort
   // delete each from R2. Failures are swallowed (logged) so a flaky R2
@@ -4536,7 +4902,9 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-update', async (c) => {
     }
   }
 
-  await recomputeTotals(sb, docNo);
+  // Default Free Gift (0170) — a sofa/variant build change may newly match (or
+  // stop matching) a gifting combo; reconcile syncs the gift lines, then totals.
+  await reconcileFreeGiftLinesForSo(sb, docNo);
   await recordSoAudit(sb, {
     docNo,
     action: 'UPDATE_LINE',
@@ -4918,7 +5286,10 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
     }
   }
 
-  await recomputeTotals(sb, docNo);
+  // Default Free Gift (0170) — runs AFTER the PWP re-evaluation above, in place
+  // of the final recomputeTotals: a product swap can add/drop a trigger, so
+  // reconcile syncs the accessory gift lines and then recomputes header totals.
+  await reconcileFreeGiftLinesForSo(sb, docNo);
   await recordSoAudit(sb, {
     docNo,
     action: 'UPDATE_LINE',
@@ -5607,7 +5978,11 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
     }
   }
 
-  await recomputeTotals(sb, docNo);
+  // Default Free Gift (0170) — runs AFTER the sofa PWP re-evaluation above, in
+  // place of the final recomputeTotals: a sofa build swap can newly match (or
+  // stop matching) a gifting combo, so reconcile syncs the accessory gift lines
+  // and then recomputes header totals.
+  await reconcileFreeGiftLinesForSo(sb, docNo);
   await recordSoAudit(sb, {
     docNo,
     action: 'UPDATE_LINE',

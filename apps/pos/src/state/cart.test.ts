@@ -3,10 +3,12 @@ import {
   cartCategoryConflict,
   cartHasSofa,
   cartHasNonSofa,
+  cartHasMainNonSofa,
   useCart,
   type CartLine,
   type CartConfig,
 } from './cart';
+import { freeGiftLineKey, type DesiredFreeGift } from '@2990s/shared';
 
 // Minimal config fixture — cartCategoryConflict only reads `config.kind`, so
 // the per-kind detail fields are irrelevant here (cast past the union).
@@ -28,10 +30,18 @@ describe('sofa-exclusivity — cartCategoryConflict', () => {
     expect(cartCategoryConflict([line('sofa', 'a'), line('sofa', 'b')], cfg('sofa'))).toBeNull();
   });
 
-  it('a sofa in the cart blocks every other category', () => {
+  it('a sofa in the cart blocks mattress + bedframe', () => {
     expect(cartCategoryConflict([line('sofa')], cfg('size'))).toBeTruthy();      // mattress
     expect(cartCategoryConflict([line('sofa')], cfg('bedframe'))).toBeTruthy();  // bedframe
-    expect(cartCategoryConflict([line('sofa')], cfg('flat'))).toBeTruthy();      // flat-priced
+  });
+
+  it('accessories (flat) pair with a sofa — and with anything', () => {
+    // Accessory added to a sofa cart is allowed (universal add-on).
+    expect(cartCategoryConflict([line('sofa')], cfg('flat'))).toBeNull();
+    // Sofa added to an accessory-only cart is allowed.
+    expect(cartCategoryConflict([line('flat')], cfg('sofa'))).toBeNull();
+    // Accessory never conflicts, even alongside mattress + bedframe.
+    expect(cartCategoryConflict([line('size'), line('bedframe')], cfg('flat'))).toBeNull();
   });
 
   it('a non-sofa cart blocks adding a sofa', () => {
@@ -145,5 +155,84 @@ describe('cart category helpers', () => {
     expect(cartHasNonSofa([line('sofa')])).toBe(false);
     expect(cartHasNonSofa([line('size')])).toBe(true);
     expect(cartHasNonSofa([line('sofa'), line('size')])).toBe(true);
+  });
+
+  it('cartHasMainNonSofa — only mattress/bedframe count, not accessories', () => {
+    expect(cartHasMainNonSofa([line('size')])).toBe(true);
+    expect(cartHasMainNonSofa([line('bedframe')])).toBe(true);
+    expect(cartHasMainNonSofa([line('flat')])).toBe(false);   // accessory
+    expect(cartHasMainNonSofa([line('sofa')])).toBe(false);
+  });
+});
+
+const reset = () => useCart.setState({ lines: [] });
+
+describe('reconcileFreeGifts', () => {
+  beforeEach(reset);
+
+  const nameById = new Map([['mfg-pillow', 'Memory Pillow']]);
+
+  it('adds a gift line at RM 0 with the campaign + derived qty', () => {
+    const desired: DesiredFreeGift[] = [
+      { key: freeGiftLineKey('t0', 0), triggerKey: 't0', giftProductId: 'mfg-pillow', qty: 4, campaignName: 'Raya Campaign' },
+    ];
+    useCart.getState().reconcileFreeGifts(desired, nameById);
+    const lines = useCart.getState().lines;
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.key).toBe(freeGiftLineKey('t0', 0));
+    expect(lines[0]!.qty).toBe(4);
+    const cfg = lines[0]!.config as { isFreeGift?: boolean; total: number; freeGiftCampaign?: string | null; productId: string };
+    expect(cfg.isFreeGift).toBe(true);
+    expect(cfg.total).toBe(0);
+    expect(cfg.freeGiftCampaign).toBe('Raya Campaign');
+    expect(cfg.productId).toBe('mfg-pillow');
+  });
+
+  it('updates qty when the desired qty changes', () => {
+    const mk = (qty: number): DesiredFreeGift[] => [
+      { key: freeGiftLineKey('t0', 0), triggerKey: 't0', giftProductId: 'mfg-pillow', qty, campaignName: null },
+    ];
+    useCart.getState().reconcileFreeGifts(mk(2), nameById);
+    useCart.getState().reconcileFreeGifts(mk(6), nameById);
+    expect(useCart.getState().lines).toHaveLength(1);
+    expect(useCart.getState().lines[0]!.qty).toBe(6);
+  });
+
+  it('removes a gift line whose trigger no longer desires it', () => {
+    useCart.getState().reconcileFreeGifts(
+      [{ key: freeGiftLineKey('t0', 0), triggerKey: 't0', giftProductId: 'mfg-pillow', qty: 2, campaignName: null }],
+      nameById,
+    );
+    useCart.getState().reconcileFreeGifts([], nameById);
+    expect(useCart.getState().lines).toHaveLength(0);
+  });
+
+  it('never touches non-gift lines', () => {
+    useCart.setState({ lines: [{ key: 'cfg-x', qty: 1, config: { kind: 'flat', productId: 'mfg-mat', productName: 'Mat', total: 1990, summary: 'Flat price' } }] });
+    useCart.getState().reconcileFreeGifts(
+      [{ key: freeGiftLineKey('cfg-x', 0), triggerKey: 'cfg-x', giftProductId: 'mfg-pillow', qty: 1, campaignName: null }],
+      nameById,
+    );
+    const lines = useCart.getState().lines;
+    expect(lines).toHaveLength(2);
+    expect(lines.find((l) => l.key === 'cfg-x')!.config.total).toBe(1990);
+  });
+
+  it('is idempotent — a second identical reconcile does not change the lines reference', () => {
+    const desired: DesiredFreeGift[] = [
+      { key: freeGiftLineKey('t0', 0), triggerKey: 't0', giftProductId: 'mfg-pillow', qty: 2, campaignName: 'Raya Campaign' },
+    ];
+    useCart.getState().reconcileFreeGifts(desired, nameById);
+    const ref1 = useCart.getState().lines;
+    useCart.getState().reconcileFreeGifts(desired, nameById);
+    const ref2 = useCart.getState().lines;
+    expect(ref2).toBe(ref1); // same array reference → no re-render / no effect loop
+  });
+
+  it('preserves non-gift line references on a no-op reconcile', () => {
+    useCart.setState({ lines: [{ key: 'cfg-x', qty: 1, config: { kind: 'flat', productId: 'mfg-mat', productName: 'Mat', total: 1990, summary: 'Flat price' } }] });
+    const before = useCart.getState().lines;
+    useCart.getState().reconcileFreeGifts([], nameById); // nothing to do
+    expect(useCart.getState().lines).toBe(before); // unchanged reference
   });
 });

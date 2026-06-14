@@ -61,6 +61,8 @@ import {
   Layers,
   ImageOff,
   Gift,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -77,7 +79,7 @@ import {
 import {
   useMfgProducts,
   useUpdateMfgProductPrices,
-  useUpdateMfgProductGifts,
+  useUpdateMfgProductDefaultGifts,
   useCreateMfgProduct,
   useDeleteMfgProduct,
   useMaintenanceConfig,
@@ -707,7 +709,14 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const arr = (models ?? []).filter((m) => m.active);
+    // Show INACTIVE flat-category models too (accessory/service) so an admin can
+    // re-enable one from POS — the "Show in POS" on/off lives in the drawer, and
+    // toggling it off must not make the card vanish (you'd never get it back).
+    // Other categories stay active-only here; their inactive models are managed
+    // from the Backend portal.
+    const arr = (models ?? []).filter(
+      (m) => m.active || m.category === 'ACCESSORY' || m.category === 'SERVICE',
+    );
     if (!q) return arr;
     return arr.filter(
       (m) =>
@@ -758,8 +767,8 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
         {isLoading
           ? 'Loading models…'
           : canEditAllowed
-            ? `${rows.length} active model${rows.length === 1 ? '' : 's'} · Click a card to edit Allowed Options`
-            : `${rows.length} active model${rows.length === 1 ? '' : 's'} · Model-level allowed options & specs are managed from the Backend portal`}
+            ? `${rows.length} model${rows.length === 1 ? '' : 's'} · Click a card to edit Allowed Options`
+            : `${rows.length} model${rows.length === 1 ? '' : 's'} · Model-level allowed options & specs are managed from the Backend portal`}
       </p>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
@@ -811,6 +820,7 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
                     borderRadius: 'var(--radius-md)',
                     padding: 'var(--space-3)',
                     background: 'var(--c-cream)',
+                    opacity: m.active ? 1 : 0.6,
                     display: 'flex',
                     gap: 'var(--space-3)',
                     alignItems: 'flex-start',
@@ -865,6 +875,18 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
                     >
                       {m.name}
                     </div>
+                    {!m.active && (
+                      <span style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                        marginTop: 3, padding: '1px 8px',
+                        borderRadius: 'var(--radius-pill, 999px)',
+                        border: '1px solid var(--line-strong)',
+                        fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)',
+                        fontWeight: 600, color: 'var(--fg-muted)',
+                      }}>
+                        <EyeOff size={11} strokeWidth={1.75} /> Hidden from POS
+                      </span>
+                    )}
                     {m.model_code && (
                       <div
                         style={{
@@ -978,9 +1000,15 @@ const ModelAllowedOptionsDrawer = ({
   /* Draft of the allowed_options under edit. Initialised once when the row
      resolves; the chip toggles mutate this draft, Save writes it back. */
   const [draft, setDraft] = useState<AllowedOptions | null>(null);
+  // Model-level POS visibility (product_models.active). For flat categories
+  // (accessory/service) this on/off IS the whole drawer — there are no option
+  // pools to tick. Catalog card visibility is model-level via this flag
+  // (apps/api/.../product-models.ts PATCH). Initialised with the draft below.
+  const [activeDraft, setActiveDraft] = useState<boolean | null>(null);
   useEffect(() => {
     if (model.data?.model && draft == null) {
       setDraft(JSON.parse(JSON.stringify(model.data.model.allowed_options ?? {})) as AllowedOptions);
+      setActiveDraft(model.data.model.active);
     }
   }, [model.data, draft]);
 
@@ -1008,6 +1036,9 @@ const ModelAllowedOptionsDrawer = ({
   const isSofa     = m.category === 'SOFA';
   const isBedframe = m.category === 'BEDFRAME';
   const isMattress = m.category === 'MATTRESS';
+  // Flat categories have no variants — they're sold straight at the SKU Master
+  // price, so the option pickers (sizes/compartments/etc.) don't apply.
+  const isFlatCategory = m.category === 'ACCESSORY' || m.category === 'SERVICE';
 
   /* Master pool sources (drawn from MaintenanceConfig). For lists keyed as
      PricedOption[], we project just the .value field for the chip text. */
@@ -1068,7 +1099,10 @@ const ModelAllowedOptionsDrawer = ({
 
   const onSave = () => {
     if (!draft) return;
-    updateModel.mutate({ id: modelId, allowedOptions: draft }, { onSuccess: () => onClose() });
+    updateModel.mutate(
+      { id: modelId, allowedOptions: draft, ...(activeDraft != null ? { active: activeDraft } : {}) },
+      { onSuccess: () => onClose() },
+    );
   };
 
   return (
@@ -1079,47 +1113,96 @@ const ModelAllowedOptionsDrawer = ({
         first if you don't see what you need.
       </p>
 
-      {sizePool.length > 0 && (
-        <AllowedOptionsSection
-          label={isSofa ? 'Seat sizes (inches)' : 'Sizes'}
-          pool={sizePool}
-          isTicked={(v) => isTicked('sizes', v)}
-          onToggle={(v) => toggle('sizes', v)}
-        />
-      )}
-      {isSofa && compartmentPool.length > 0 && (
-        <AllowedOptionsSection
-          label="Compartments"
-          pool={compartmentPool}
-          isTicked={(v) => isTicked('compartments', v)}
-          onToggle={(v) => toggle('compartments', v)}
-        />
-      )}
-      {legHeightPool.length > 0 && (
-        <AllowedOptionsSection
-          label="Leg heights"
-          pool={legHeightPool}
-          isTicked={(v) => isTicked('leg_heights', v)}
-          onToggle={(v) => toggle('leg_heights', v)}
-        />
-      )}
-      {specialAddonPool.length > 0 && (
-        <AllowedOptionsSection
-          label="Special Add-ons"
-          pool={specialAddonPool}
-          isTicked={(v) => isTicked('specials', v)}
-          onToggle={(v) => toggle('specials', v)}
-        />
-      )}
+      {isFlatCategory ? (
+        <>
+          <p className={styles.eyebrow}>
+            No configurable options for {m.category.toLowerCase()} models — the price
+            is set in SKU Master and there are no variants to tick. Use the switch
+            below to decide whether POS staff can sell it.
+          </p>
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: 'var(--space-3)', marginTop: 'var(--space-4)', padding: 'var(--space-3)',
+            border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md, 10px)',
+            background: 'var(--c-paper)',
+          }}>
+            <div>
+              <div style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', fontWeight: 600, color: 'var(--c-ink)' }}>
+                Show in POS
+              </div>
+              <div className={styles.eyebrow} style={{ marginTop: 2 }}>
+                {activeDraft
+                  ? 'On — sales staff can add this to an order.'
+                  : 'Off — hidden from the POS catalog.'}
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={!!activeDraft}
+              aria-label="Show in POS"
+              onClick={() => setActiveDraft((v) => !v)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '8px 16px', borderRadius: 'var(--radius-pill, 999px)',
+                border: '1px solid var(--line-strong)', cursor: 'pointer',
+                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
+                background: activeDraft ? 'var(--c-ink)' : 'transparent',
+                color: activeDraft ? 'var(--c-paper)' : 'var(--c-ink)',
+              }}
+            >
+              {activeDraft
+                ? <Eye size={14} strokeWidth={1.75} />
+                : <EyeOff size={14} strokeWidth={1.75} />}
+              {activeDraft ? 'On' : 'Off'}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          {sizePool.length > 0 && (
+            <AllowedOptionsSection
+              label={isSofa ? 'Seat sizes (inches)' : 'Sizes'}
+              pool={sizePool}
+              isTicked={(v) => isTicked('sizes', v)}
+              onToggle={(v) => toggle('sizes', v)}
+            />
+          )}
+          {isSofa && compartmentPool.length > 0 && (
+            <AllowedOptionsSection
+              label="Compartments"
+              pool={compartmentPool}
+              isTicked={(v) => isTicked('compartments', v)}
+              onToggle={(v) => toggle('compartments', v)}
+            />
+          )}
+          {legHeightPool.length > 0 && (
+            <AllowedOptionsSection
+              label="Leg heights"
+              pool={legHeightPool}
+              isTicked={(v) => isTicked('leg_heights', v)}
+              onToggle={(v) => toggle('leg_heights', v)}
+            />
+          )}
+          {specialAddonPool.length > 0 && (
+            <AllowedOptionsSection
+              label="Special Add-ons"
+              pool={specialAddonPool}
+              isTicked={(v) => isTicked('specials', v)}
+              onToggle={(v) => toggle('specials', v)}
+            />
+          )}
 
-      {(isSofa || isBedframe) && (
-        <FabricAllowedSection
-          series={(fabricLib.data ?? []).map((f) => ({ id: f.id, label: f.label }))}
-          coloursBySeries={coloursBySeries}
-          isTicked={(code) => isTicked('fabrics', code)}
-          onToggle={(code) => toggle('fabrics', code)}
-          onSetAll={setFabricsBulk}
-        />
+          {(isSofa || isBedframe) && (
+            <FabricAllowedSection
+              series={(fabricLib.data ?? []).map((f) => ({ id: f.id, label: f.label }))}
+              coloursBySeries={coloursBySeries}
+              isTicked={(code) => isTicked('fabrics', code)}
+              onToggle={(code) => toggle('fabrics', code)}
+              onSetAll={setFabricsBulk}
+            />
+          )}
+        </>
       )}
 
       <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 'var(--space-5)' }}>
@@ -1669,8 +1752,8 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
           <strong>Failed to load products.</strong>{' '}
           {error instanceof Error ? error.message : String(error)}
           <div style={{ marginTop: 6, fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            If this is a fresh deploy: run <code>pnpm db:push</code> + import
-            <code> seeds/hookka-products-import.sql</code> against Supabase.
+            If this keeps happening, sign out and back in — your session may
+            have expired — or let IT know.
           </div>
         </div>
       )}
@@ -1921,7 +2004,7 @@ const ProductRow = ({
               padding: 0,
               margin: 0,
               cursor: 'pointer',
-              color: (row.included_addons?.length ?? 0) > 0 ? 'var(--c-orange)' : 'var(--fg-muted)',
+              color: (row.default_free_gifts?.length ?? 0) > 0 ? 'var(--c-orange)' : 'var(--fg-muted)',
               display: 'inline-flex',
               alignItems: 'center',
             }}
@@ -2418,6 +2501,8 @@ type MaintenanceListKey =
   | 'sofaSpecials'
   | 'sofaQuickPresets' // PR (Commander 2026-05-28) — module-composition presets
   | 'mattressSizes'    // PR #50 — Mattress size pool (K/Q/S/SS)
+  | 'brandings'        // Branding pool (HILTON/SEALY/2990S/...) — mirror of Backend pool
+  | 'supplierCategories' // Supply Category pool — mirror of Backend pool (parity)
   | 'fabrics'
   | 'fabricPricing'    // migration 0124 — POS selling fabric-tier add-on editor
   | 'productAddons'    // migration 0134 — Special Add-ons (Product) manager
@@ -2474,6 +2559,11 @@ const MAINTENANCE_TABS: {
   { key: 'bedframeSizes',    label: 'Bedframe Sizes',    description: 'Bedframe sizes — edit code · label · dimensions (e.g. K · 6FT · 183X190CM). Used in generated SKU names.', priced: false, section: 'Products Maintenance' },
   { key: 'mattressSizes',    label: 'Mattress Sizes',    description: 'Mattress sizes — edit code · label · dimensions. Used in generated SKU names + width/length placeholders.', priced: false, section: 'Products Maintenance' },
   { key: 'sofaCompartments', label: 'Sofa Compartments', description: 'Sofa compartment pool (1A(LHF), 1A(RHF), 1NA, 2A(LHF), ...). Models tick which they offer.', priced: false, section: 'Products Maintenance' },
+  // Brandings + Supplier Categories — mirror of the Backend Products Maintenance
+  // group (owner spec 2026-06-12). Same maintenance_config blob, rendered here
+  // as plain string pools so the POS Maintenance tab matches Backend's rail.
+  { key: 'brandings',        label: 'Brandings',         description: 'Branding pool (e.g. HILTON, SEALY, 2990S). Feeds every Branding input — New SKU, bulk New Models rows, SKU Master inline edit, Model detail.', priced: false, section: 'Products Maintenance' },
+  { key: 'supplierCategories', label: 'Supplier Categories', description: 'Supply Category pool (e.g. Sofa, Bedframe, Mattress). Feeds the Suppliers list filter chips + the supplier form’s Supply Category toggles. Empty = default five (Sofa / Bedframe / Mattress / Accessory / Service).', priced: false, section: 'Products Maintenance' },
 ];
 
 /**
@@ -2518,6 +2608,27 @@ export const MaintenanceTab = ({
   const history = useMaintenanceConfigHistory(scope);
   const save = useSaveMaintenanceConfig();
   const renameCompartment = useRenameSofaCompartment();
+
+  // Brandings empty-state suggestions — mirror of the Backend useBrandingPool
+  // `distinct`: DISTINCT non-null branding across mfg_products + product_models
+  // (case-insensitive dedupe, first-seen casing wins, A→Z). Shown read-only when
+  // the Brandings pool is empty (parity with Backend) and one-click seeded into
+  // the Edit draft (startEdit) so a single admin Save adopts them. The pool is
+  // never written without an explicit Save.
+  const brandingProducts = useMfgProducts();
+  const brandingModels = useProductModels();
+  const brandingDistinct = useMemo(() => {
+    const seen = new Map<string, string>(); // UPPER → first-seen original casing
+    const collect = (b: string | null | undefined) => {
+      const t = (b ?? '').trim();
+      if (!t) return;
+      const k = t.toUpperCase();
+      if (!seen.has(k)) seen.set(k, t);
+    };
+    for (const p of brandingProducts.data ?? []) collect(p.branding);
+    for (const m of brandingModels.data ?? []) collect(m.branding);
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+  }, [brandingProducts.data, brandingModels.data]);
 
   // PR #208 — when the supplier scope has no row yet, fall through to the
   // master config so commander can see what's there before deciding to
@@ -2576,7 +2687,19 @@ export const MaintenanceTab = ({
     // edits a copy; save writes back to `scope`.
     const seed = resolved.data?.data ?? masterFallback.data?.data ?? null;
     if (!seed) return;
-    setDraft(JSON.parse(JSON.stringify(seed)) as MaintenanceConfig);
+    const copy = JSON.parse(JSON.stringify(seed)) as MaintenanceConfig;
+    // Brandings one-click seed — mirror of Backend: when the master pool is
+    // empty, pre-fill the EDIT DRAFT from the DISTINCT branding values so a
+    // single Save adopts them. Editor-only; config is never written until the
+    // explicit Save. Master scope only (supplier scopes never author brandings).
+    if (
+      scope === 'master'
+      && maintValues(copy.brandings).filter((b) => b.trim().length > 0).length === 0
+      && brandingDistinct.length > 0
+    ) {
+      copy.brandings = [...brandingDistinct];
+    }
+    setDraft(copy);
     setEditMode(true);
   };
 
@@ -2801,6 +2924,9 @@ export const MaintenanceTab = ({
           onChange={(next) => setDraft(next)}
           onQuickAdd={handleQuickAdd}
           priced={active.priced}
+          /* Brandings empty-state DISTINCT suggestions (parity with Backend);
+             only consumed by the 'brandings' string-pool branch. */
+          brandingSuggestions={brandingDistinct}
         />
       </section>
 
@@ -3823,6 +3949,7 @@ const MaintenanceList = ({
   onChange,
   onQuickAdd,
   priced,
+  brandingSuggestions,
 }: {
   listKey: MaintenanceListKey;
   config: MaintenanceConfig;
@@ -3836,6 +3963,9 @@ const MaintenanceList = ({
   onQuickAdd?: (next: MaintenanceConfig) => void;
   onChange: (next: MaintenanceConfig) => void;
   priced: boolean;
+  /** DISTINCT branding values (products + models) shown read-only when the
+      Brandings pool is empty. Parity with the Backend Maintenance editor. */
+  brandingSuggestions?: string[];
 }) => {
   /* When the bottom add row is visible — either because admin is in
      editMode or because sales_director is in add-only mode. */
@@ -3953,12 +4083,25 @@ const MaintenanceList = ({
     || listKey === 'sofaSizes'
     || listKey === 'bedframeSizes'
     || listKey === 'mattressSizes'
+    || listKey === 'brandings'
+    || listKey === 'supplierCategories'
   ) {
     // ACTIVE toggles (owner spec 2026-06-12) — entries may be plain strings
     // (= active) or { value, active: false } once toggled off on the Backend
     // Maintenance tab. POS renders the VALUE and preserves the flag on edit;
     // the Active checkbox itself lives on the Backend editor.
     const items = (config[listKey] as MaintPoolEntry[] | undefined) ?? [];
+
+    // Brandings seed/fallback (parity with Backend): pool empty + not editing →
+    // surface the DISTINCT branding values across products + models as a
+    // read-only suggestion. Hitting Edit seeds them into the draft (see
+    // MaintenanceTab.startEdit) so one Save adopts them — nothing is silently
+    // written to config.
+    const showBrandingSuggestions =
+      listKey === 'brandings'
+      && !editMode
+      && maintValues(items).filter((b) => b.trim().length > 0).length === 0
+      && (brandingSuggestions?.length ?? 0) > 0;
 
     const removeAt = (idx: number) => {
       const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
@@ -4012,6 +4155,26 @@ const MaintenanceList = ({
     };
     return (
       <div className={styles.maintList}>
+        {showBrandingSuggestions && (
+          <>
+            <p className={styles.stateInfo} style={{ marginBottom: 8 }}>
+              Pool is empty — showing {brandingSuggestions!.length} suggested
+              value{brandingSuggestions!.length === 1 ? '' : 's'} found on existing
+              products + models. Hit <strong>Edit</strong> then <strong>Save</strong> to
+              adopt them into the pool.
+            </p>
+            {brandingSuggestions!.map((v, i) => (
+              <div key={v} className={styles.maintRow} style={{ opacity: 0.7 }}>
+                <span className={styles.maintRowIcon} />
+                <span className={styles.maintRowIdx}>{i + 1}</span>
+                <span className={styles.maintRowValue}>{v}</span>
+                <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', fontWeight: 600 }}>
+                  suggested
+                </span>
+              </div>
+            ))}
+          </>
+        )}
         {items.map((entry, i) => {
           const v = maintEntryValue(entry);
           const labelOv = config.sizeLabels?.[v];
@@ -5370,41 +5533,48 @@ const fmtRmCenti = (centi: number): string =>
   `RM ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /* ────────────────────────────────────────────────────────────────────────
-   D7 (Phase 3) — Free-gifts editor. Master Account sets the permanent free
-   add-ons included with a SKU (e.g. a mattress ships with 2 pillows). Writes
-   mfg_products.included_addons ({addonId, qty}[]); the POS Configurator renders
-   "× N INCLUDED". DISPLAY-ONLY — no inventory or cost deduction (D7).
+   0170 — Default Free Gift editor. Admin sets which ACCESSORY SKUs are
+   auto-added to the POS cart at RM 0 when a product is placed on an SO.
+   Writes mfg_products.default_free_gifts ([{giftProductId, qty, campaignName}]).
    ──────────────────────────────────────────────────────────────────────── */
+type DraftGift = { giftProductId: string; qty: number; campaignName: string };
+
 const ProductGiftsDrawer = ({
   row, onClose,
 }: { row: MfgProductRow; onClose: () => void }) => {
-  const addons = useAddons();
-  const update = useUpdateMfgProductGifts();
-  const [gifts, setGifts] = useState<{ addonId: string; qty: number }[]>(row.included_addons ?? []);
-  const [pickAddon, setPickAddon] = useState('');
-  const [pickQty, setPickQty] = useState(1);
+  const accessories = useMfgProducts({ category: 'ACCESSORY' });
+  const updateDefaultGifts = useUpdateMfgProductDefaultGifts();
 
-  const addonsById = useMemo(() => {
-    const m = new Map<string, AddonRow>();
-    for (const a of addons.data ?? []) m.set(a.id, a);
-    return m;
-  }, [addons.data]);
+  const [draft, setDraft] = useState<DraftGift[]>(() =>
+    (row.default_free_gifts ?? []).map((g) => ({
+      giftProductId: g.giftProductId,
+      qty: g.qty,
+      campaignName: g.campaignName ?? '',
+    })),
+  );
 
-  const persist = (next: { addonId: string; qty: number }[]) => {
-    setGifts(next);
-    update.mutate({ id: row.id, includedAddons: next });
+  const setRow = (i: number, patch: Partial<DraftGift>) =>
+    setDraft((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+
+  const addRow = () =>
+    setDraft((prev) => [...prev, { giftProductId: '', qty: 1, campaignName: '' }]);
+
+  const removeRow = (i: number) =>
+    setDraft((prev) => prev.filter((_, idx) => idx !== i));
+
+  const save = async () => {
+    await updateDefaultGifts.mutateAsync({
+      id: row.id,
+      defaultFreeGifts: draft
+        .filter((g) => g.giftProductId)
+        .map((g) => ({
+          giftProductId: g.giftProductId,
+          qty: Math.max(1, g.qty),
+          campaignName: g.campaignName.trim() || null,
+        })),
+    });
+    onClose();
   };
-  const addGift = () => {
-    if (!pickAddon) return;
-    const existing = gifts.find((g) => g.addonId === pickAddon);
-    const next = existing
-      ? gifts.map((g) => (g.addonId === pickAddon ? { ...g, qty: g.qty + pickQty } : g))
-      : [...gifts, { addonId: pickAddon, qty: pickQty }];
-    persist(next);
-    setPickAddon('');
-    setPickQty(1);
-  };
-  const removeGift = (addonId: string) => persist(gifts.filter((g) => g.addonId !== addonId));
 
   const inputStyle = {
     padding: '8px 10px',
@@ -5413,6 +5583,8 @@ const ProductGiftsDrawer = ({
     borderRadius: 'var(--radius-md)',
     background: 'var(--c-cream)',
   } as const;
+
+  const accessoryList = accessories.data ?? [];
 
   return (
     <div className={styles.drawerBackdrop} onClick={onClose}>
@@ -5423,7 +5595,7 @@ const ProductGiftsDrawer = ({
           border: '1px solid var(--line-strong)',
           borderRadius: 'var(--radius-xl)',
           boxShadow: 'var(--shadow-3)',
-          width: 'min(520px, 95vw)',
+          width: 'min(560px, 95vw)',
           maxHeight: '85vh',
           display: 'flex',
           flexDirection: 'column',
@@ -5433,11 +5605,10 @@ const ProductGiftsDrawer = ({
           <div>
             <h2 className={styles.drawerTitle}>
               <Gift {...ICON_PROPS} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-              Free gifts · <span className={styles.codeChip}>{row.code}</span>
+              Default free gift · <span className={styles.codeChip}>{row.code}</span>
             </h2>
             <p style={{ marginTop: 4, fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
-              Included free with this SKU — shown as “× N INCLUDED” in the configurator.
-              Display-only; no stock is deducted.
+              Accessory SKUs auto-added at RM 0 when this product is placed on a sales order.
             </p>
           </div>
           <button type="button" className={styles.iconBtn} onClick={onClose}>
@@ -5446,47 +5617,89 @@ const ProductGiftsDrawer = ({
         </header>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)' }}>
-          {gifts.length === 0 && (
+          {draft.length === 0 && (
             <div style={{ textAlign: 'center', padding: 'var(--space-5)', color: 'var(--fg-muted)' }}>
               <Gift size={32} strokeWidth={1.5} />
-              <div style={{ marginTop: 8 }}>No free gifts on this SKU yet.</div>
+              <div style={{ marginTop: 8 }}>No default free gifts configured for this SKU.</div>
             </div>
           )}
-          {gifts.map((g) => {
-            const a = addonsById.get(g.addonId);
-            return (
-              <div
-                key={g.addonId}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0', borderBottom: '1px solid var(--line-strong)' }}
-              >
-                <span style={{ flex: 1, fontWeight: 600 }}>{a?.label ?? g.addonId}</span>
-                <span style={{ fontSize: 'var(--fs-12)', fontWeight: 700, color: 'var(--c-orange)', whiteSpace: 'nowrap' }}>× {g.qty} FREE</span>
-                <button type="button" className={styles.iconBtn} onClick={() => removeGift(g.addonId)} aria-label={`Remove ${a?.label ?? 'gift'}`}>
-                  <X size={14} strokeWidth={1.75} />
-                </button>
-              </div>
-            );
-          })}
 
-          <div style={{ display: 'flex', gap: 8, marginTop: 'var(--space-4)', alignItems: 'center' }}>
-            <select value={pickAddon} onChange={(e) => setPickAddon(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
-              <option value="">Pick an add-on…</option>
-              {(addons.data ?? []).filter((a) => a.enabled).map((a) => (
-                <option key={a.id} value={a.id}>{a.label}</option>
-              ))}
-            </select>
-            <input
-              type="number"
-              min={1}
-              max={20}
-              value={pickQty}
-              onChange={(e) => setPickQty(Math.min(20, Math.max(1, Math.floor(Number(e.target.value) || 1))))}
-              style={{ ...inputStyle, width: 64 }}
-              aria-label="Quantity"
-            />
-            <Button variant="primary" onClick={addGift} disabled={!pickAddon || update.isPending}>Add</Button>
+          {draft.map((g, i) => (
+            <div
+              key={i}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 64px 1fr auto',
+                gap: 8,
+                alignItems: 'center',
+                padding: '10px 0',
+                borderBottom: '1px solid var(--line-strong)',
+              }}
+            >
+              {/* Accessory picker */}
+              <select
+                value={g.giftProductId}
+                onChange={(e) => setRow(i, { giftProductId: e.target.value })}
+                style={{ ...inputStyle }}
+                aria-label="Gift accessory"
+              >
+                <option value="">Choose accessory…</option>
+                {accessoryList.map((a) => (
+                  <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
+                ))}
+              </select>
+
+              {/* Qty stepper */}
+              <input
+                type="number"
+                min={1}
+                value={g.qty}
+                onChange={(e) => setRow(i, { qty: Math.max(1, Math.floor(Number(e.target.value) || 1)) })}
+                style={{ ...inputStyle, textAlign: 'center' }}
+                aria-label="Quantity"
+              />
+
+              {/* Campaign name */}
+              <input
+                type="text"
+                value={g.campaignName}
+                onChange={(e) => setRow(i, { campaignName: e.target.value })}
+                placeholder="Campaign name (optional)"
+                style={{ ...inputStyle }}
+                aria-label="Campaign name"
+              />
+
+              {/* Remove */}
+              <button
+                type="button"
+                className={styles.iconBtn}
+                onClick={() => removeRow(i)}
+                aria-label="Remove gift row"
+              >
+                <X size={14} strokeWidth={1.75} />
+              </button>
+            </div>
+          ))}
+
+          <div style={{ marginTop: 'var(--space-4)' }}>
+            <Button variant="ghost" size="md" onClick={addRow}>
+              <Plus size={14} strokeWidth={1.75} style={{ marginRight: 4 }} />
+              Add gift
+            </Button>
           </div>
         </div>
+
+        <footer className={styles.drawerFooter}>
+          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+          <Button
+            variant="primary"
+            size="md"
+            onClick={save}
+            disabled={updateDefaultGifts.isPending}
+          >
+            {updateDefaultGifts.isPending ? 'Saving…' : 'Save'}
+          </Button>
+        </footer>
       </div>
     </div>
   );

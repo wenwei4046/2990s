@@ -14,6 +14,30 @@ import { supabase } from './supabase';
 
 const API_URL = import.meta.env.VITE_API_URL;
 
+/* ── Session-expiry recovery ───────────────────────────────────────────────
+   A 401 from the API means GoTrue rejected our bearer token: the Supabase
+   session behind it is gone (revoked / rotated away / cleared server-side).
+   The access token can still be cryptographically valid AND unexpired — so
+   supabase-js sees no reason to auto-refresh — while the session no longer
+   exists, which is exactly the "session_not_found" GoTrue returns. supabase-js
+   can't self-heal that, so every authed query 401s and the operator is left
+   staring at error banners (incident 2026-06-13: the whole Backend "failed to
+   load products / suppliers / …"). Recover explicitly: drop the dead local
+   session and bounce to /login for a clean re-auth. Guarded so N parallel
+   failing queries trigger exactly ONE redirect. */
+let sessionExpiryHandled = false;
+async function handleSessionExpired(): Promise<void> {
+  if (sessionExpiryHandled) return;
+  sessionExpiryHandled = true;
+  // scope:'local' — the server session is already gone, so skip the GoTrue
+  // revoke round-trip (it would just error / hang) and clear localStorage only.
+  try { await supabase.auth.signOut({ scope: 'local' }); } catch { /* best-effort */ }
+  if (window.location.pathname !== '/login') {
+    // Hard navigation guarantees a clean reload with no stale in-memory state.
+    window.location.assign('/login?expired=1');
+  }
+}
+
 /* Edge #J — render the shortage detail out of a 409 short_stock body and ask
    the operator whether to ship anyway (stock goes negative). Returns true on
    confirm; replays the request with confirmShortStock:true. */
@@ -54,6 +78,29 @@ export async function authedFetch<T>(path: string, init?: RequestInit): Promise<
     ...(typeof init?.body === 'string' ? { 'content-type': 'application/json' } : {}),
   };
   let res = await fetch(`${API_URL}${path}`, { ...init, headers });
+
+  /* Session-expiry recovery — a 401 means GoTrue rejected our token (a token is
+     always present here; authedFetch threw 'not_authenticated' above otherwise).
+     Try ONE refresh+replay in case the access token had simply lapsed; if it
+     still 401s, the server-side session is gone → sign out + redirect to login
+     instead of surfacing a cryptic error on every page. */
+  if (res.status === 401) {
+    let refreshedToken: string | undefined;
+    try {
+      const { data: refreshed } = await supabase.auth.refreshSession();
+      refreshedToken = refreshed.session?.access_token;
+    } catch { /* refresh failed — session is gone */ }
+    if (refreshedToken && refreshedToken !== token) {
+      res = await fetch(`${API_URL}${path}`, {
+        ...init,
+        headers: { ...headers, authorization: `Bearer ${refreshedToken}` },
+      });
+    }
+    if (res.status === 401) {
+      await handleSessionExpired();
+      throw new Error('Your session has expired — signing you back in…');
+    }
+  }
 
   /* Edge #J (systemic) — every ship path returns 409 short_stock unless the body
      carries confirmShortStock:true. Catch it once: prompt, and on confirm replay
@@ -118,7 +165,14 @@ export function humanApiError(status: number, body: string): string {
     }
     // 2. Server reason, but only if it's already a plain sentence (no internals).
     const r = (typeof j.reason === 'string' ? j.reason : typeof j.message === 'string' ? j.message : '') as string;
-    if (r && r.length < 200 && !/violates|constraint|null value|column|relation|syntax|PGRST|\b\d{5}\b/i.test(r)) {
+    // Skip nested JSON blobs (e.g. the raw GoTrue "session_not_found" body the
+    // auth middleware forwards verbatim in `reason`) — those must never reach an
+    // operator. The `{`-prefix + `error_code` guards catch them; 401s then fall
+    // through to the friendly "session has expired" status message below.
+    if (
+      r && r.length < 200 && !r.trim().startsWith('{') &&
+      !/violates|constraint|null value|column|relation|syntax|PGRST|error_code|\b\d{5}\b/i.test(r)
+    ) {
       return r;
     }
   } catch { /* body wasn't JSON — fall through to the status map */ }

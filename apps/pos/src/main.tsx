@@ -1,20 +1,36 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { RouterProvider } from 'react-router';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryCache, MutationCache, QueryClientProvider } from '@tanstack/react-query';
 import '@2990s/design-system/tokens.css';
 import './main.css';
 import { AuthProvider } from './lib/auth';
 import { CartSync } from './lib/cart-sync';
 import { PwpCodeSync } from './lib/pwp-code-sync';
+import { FreeGiftSync } from './lib/free-gift-sync';
 import { UpdatePrompt } from './components/UpdatePrompt';
+import { isSessionExpiredError, handleSessionExpired } from './lib/session-recovery';
 import { router } from './router';
 
+// Global session-expiry recovery: a 401 from any POS query/mutation means our
+// Supabase session is dead server-side → sign out + redirect to /login, instead
+// of leaving the user stranded on error banners. Centralised here (one place)
+// because the POS data layer has authedFetch copy-pasted across ~12 modules.
+// See lib/session-recovery.ts.
+const onApiError = (error: unknown) => {
+  if (isSessionExpiredError(error)) void handleSessionExpired();
+};
+
 const queryClient = new QueryClient({
+  queryCache: new QueryCache({ onError: onApiError }),
+  mutationCache: new MutationCache({ onError: onApiError }),
   defaultOptions: {
     queries: {
       staleTime: 30_000,
       refetchOnWindowFocus: false,
+      // Don't burn retries on a dead session — fail fast so the redirect is
+      // immediate. Other errors keep the default 3-attempt behaviour.
+      retry: (failureCount, error) => !isSessionExpiredError(error) && failureCount < 3,
     },
   },
 });
@@ -32,6 +48,9 @@ createRoot(rootEl).render(
         {/* PWP voucher reconciler: reserve codes for trigger lines, free on
             trigger-remove. Beside CartSync so it survives navigation. */}
         <PwpCodeSync />
+        {/* Default Free Gift reconciler (0170): auto-add RM 0 accessory gifts
+            for trigger lines. Local only — no server codes. */}
+        <FreeGiftSync />
         {/* "A new version is ready · Refresh" toast on deploy (PWA prompt
             mode). Beside the syncs so it survives navigation. */}
         <UpdatePrompt />
