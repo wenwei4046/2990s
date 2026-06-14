@@ -18,7 +18,7 @@ set -euo pipefail
 # JSON parse error).
 export VITE_SUPABASE_URL="${VITE_SUPABASE_URL:-https://dolvxrchzbnqvahocwsu.supabase.co}"
 export VITE_SUPABASE_PUBLISHABLE_KEY="${VITE_SUPABASE_PUBLISHABLE_KEY:-sb_publishable_zhBeXIdf3CBqmTsxsvhUYg_CiP3NU1q}"
-export VITE_API_URL="${VITE_API_URL:-https://2990s-api.wwch.workers.dev}"
+export VITE_API_URL="${VITE_API_URL:-https://api.2990shome.com}"
 
 if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
   echo "❌ CLOUDFLARE_API_TOKEN not set. Aborting."
@@ -38,7 +38,7 @@ if ! grep -q "$VITE_SUPABASE_PUBLISHABLE_KEY" apps/backend/dist/assets/*.js; the
   echo "❌ Supabase publishable key not found in bundle. Build did not pick up env vars."
   exit 1
 fi
-if ! grep -q "2990s-api.wwch.workers.dev" apps/backend/dist/assets/*.js; then
+if ! grep -q "api.2990shome.com" apps/backend/dist/assets/*.js; then
   echo "❌ API URL not found in bundle. Build did not pick up VITE_API_URL."
   exit 1
 fi
@@ -47,4 +47,4 @@ echo "✓ Env vars verified in bundle. Deploying…"
 "$ROOT/apps/api/node_modules/.bin/wrangler" pages deploy apps/backend/dist \
   --project-name=2990s-backend --branch=main
 
-echo "✓ Done. Hard-refresh https://2990s-backend.pages.dev (Ctrl+Shift+R)."
+echo "✓ Done. Hard-refresh https://erp.2990shome.com (Ctrl+Shift+R)."
