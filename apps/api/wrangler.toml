@@ -3,6 +3,12 @@ main = "src/index.ts"
 compatibility_date = "2026-05-08"
 compatibility_flags = ["nodejs_compat"]
 
+# Keep the *.workers.dev URL (2990s-api.wwch.workers.dev) ENABLED. Deployed
+# frontend bundles (and cached PWA clients) still call it; wrangler 4 disables
+# workers.dev by default once a custom domain exists, which would 404 the live
+# API mid-cutover. Both api.2990shome.com and the workers.dev URL must serve.
+workers_dev = true
+
 # Custom domain for the Worker. `wrangler deploy` attaches api.2990shome.com to
 # this Worker on each deploy. REQUIRES the 2990shome.com zone to be active on the
 # same Cloudflare account first (DNS managed by Cloudflare) — otherwise the
