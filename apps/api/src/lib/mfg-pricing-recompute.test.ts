@@ -17,7 +17,7 @@
 //     authoritative price, no drift.
 
 import { describe, it, expect } from 'vitest';
-import type { SofaComboRow } from '@2990s/shared';
+import type { SofaComboRow, FabricTierModelOverride } from '@2990s/shared';
 import { recomputeFromSnapshot, type ProductRowLite, type SofaModuleCostRowLite } from './mfg-pricing-recompute';
 
 const mattress = (sell: number | null): ProductRowLite => ({
@@ -697,5 +697,72 @@ describe('recomputeFromSnapshot — multi-module build COST (audit C2)', () => {
       seatProduct, null, null, [], null,
     );
     expect(r.unit_cost_sen).toBe(123000); // seat row @28 via depth (was 100000 flat)
+  });
+});
+
+/* ── Per-Model fabric-tier override (migration 0172) ──────────────────────────
+   A Model can override the global fabric-tier Δ. The override map (13th arg) is
+   resolved INSIDE recomputeFromSnapshot by product.model_id; its non-null tier
+   value REPLACES the global, null inherits. POS resolves the same map by the
+   same model_id → no drift. Base build = 300000 (SOFA_MODULE_PRICES). */
+describe('recomputeFromSnapshot — per-Model fabric-tier override (migration 0172)', () => {
+  const ADDON_CFG = { sofaTier2Delta: 150, sofaTier3Delta: 250, bedframeTier2Delta: 200, bedframeTier3Delta: 300 };
+  const sofaWithModel: ProductRowLite = { ...sofaProduct, model_id: 'mdl-booqit' };
+
+  it('uses the Model override Δ over the global (RM500 not RM150)', () => {
+    const overrides = new Map<string, FabricTierModelOverride>([['mdl-booqit', { tier2Delta: 500, tier3Delta: null }]]);
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 350000, variants: sofaVariants },
+      sofaWithModel, null, null, [], SOFA_MODULE_PRICES,
+      { sofaTier: 'PRICE_2', bedframeTier: null }, ADDON_CFG,
+      null, null, null, null, overrides,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(350000); // 300000 modules + 50000 (RM500 override)
+  });
+
+  it('falls back to the global Δ when the Model has no override row (RM150)', () => {
+    const overrides = new Map<string, FabricTierModelOverride>();
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 315000, variants: sofaVariants },
+      sofaWithModel, null, null, [], SOFA_MODULE_PRICES,
+      { sofaTier: 'PRICE_2', bedframeTier: null }, ADDON_CFG,
+      null, null, null, null, overrides,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(315000); // 300000 + 15000 global P2
+  });
+
+  it('inherits the global on a tier the override leaves null (P3 → global RM250)', () => {
+    const overrides = new Map<string, FabricTierModelOverride>([['mdl-booqit', { tier2Delta: 500, tier3Delta: null }]]);
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 325000, variants: sofaVariants },
+      sofaWithModel, null, null, [], SOFA_MODULE_PRICES,
+      { sofaTier: 'PRICE_3', bedframeTier: null }, ADDON_CFG,
+      null, null, null, null, overrides,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(325000); // 300000 + 25000 (global P3, model's P3 null)
+  });
+
+  it('anti-tamper: POS sends only the global Δ but the Model override is higher → drift', () => {
+    const overrides = new Map<string, FabricTierModelOverride>([['mdl-booqit', { tier2Delta: 500, tier3Delta: null }]]);
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 315000, variants: sofaVariants },
+      sofaWithModel, null, null, [], SOFA_MODULE_PRICES,
+      { sofaTier: 'PRICE_2', bedframeTier: null }, ADDON_CFG,
+      null, null, null, null, overrides,
+    );
+    expect(r.drift).toBe(true); // server 350000 vs client 315000 → >0.5%
+  });
+
+  it('no override map passed (legacy caller) → global Δ, back-compatible', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 315000, variants: sofaVariants },
+      sofaWithModel, null, null, [], SOFA_MODULE_PRICES,
+      { sofaTier: 'PRICE_2', bedframeTier: null }, ADDON_CFG,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(315000); // 300000 + 15000 global P2
   });
 });

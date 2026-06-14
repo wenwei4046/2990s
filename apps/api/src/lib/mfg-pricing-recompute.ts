@@ -46,6 +46,7 @@ import {
   fabricTierAddon,
   type FabricTier,
   type FabricTierAddonConfig,
+  type FabricTierModelOverride,
 } from '@2990s/shared/fabric-tier-addon';
 import { type PwpRule } from '@2990s/shared/pwp';
 
@@ -250,6 +251,12 @@ export function recomputeFromSnapshot(
    *  instead of the first module SKU's flat cost. null / unresolvable → keep
    *  the legacy single-SKU cost (never a regression). Selling path untouched. */
   sofaModuleCostRows: SofaModuleCostRowLite[] | null = null,
+  /** Per-Model fabric-tier Δ overrides (migration 0172), keyed by model_id.
+   *  When the line's product.model_id has an entry, its non-null tier value
+   *  REPLACES the global Δ for that tier (null = inherit). null map / no entry
+   *  → global (back-compatible). Resolved here so every caller only passes the
+   *  map (loaded once). Selling-only; POS resolves the same map by model_id. */
+  modelFabricOverrides: Map<string, FabricTierModelOverride> | null = null,
 ): RecomputedLine {
   const category = toMfgCategory(item.itemGroup, product?.category ?? '');
   const variants = item.variants ?? {};
@@ -481,8 +488,11 @@ export function recomputeFromSnapshot(
     : category === 'BEDFRAME'
       ? (sellingFabricTiers?.bedframeTier ?? null)
       : null;
+  const modelOverride = (modelFabricOverrides && product?.model_id)
+    ? (modelFabricOverrides.get(product.model_id) ?? null)
+    : null;
   const fabricAddonCenti = (fabricAddonConfig && (category === 'SOFA' || category === 'BEDFRAME'))
-    ? fabricTierAddon(category, sellingTier, fabricAddonConfig) * 100
+    ? fabricTierAddon(category, sellingTier, fabricAddonConfig, modelOverride) * 100
     : 0;
 
   /* `extraSen` (declared extra charge, spec D1) is parsed above with the
@@ -777,6 +787,19 @@ export async function loadFabricTierAddonConfig(sb: any): Promise<FabricTierAddo
   };
 }
 
+/** Load all per-Model fabric-tier Δ overrides (migration 0172) keyed by
+ *  model_id. Small table (one row per special Model) → one query. Missing /
+ *  error → empty map (every Model falls back to the global config). */
+export async function loadModelFabricTierOverrides(
+  sb: any,
+): Promise<Map<string, FabricTierModelOverride>> {
+  const { data } = await sb
+    .from('model_fabric_tier_overrides')
+    .select('model_id, tier2_delta, tier3_delta');
+  const rows = (data as Array<{ model_id: string; tier2_delta: number | null; tier3_delta: number | null }>) ?? [];
+  return new Map(rows.map((r) => [r.model_id, { tier2Delta: r.tier2_delta, tier3Delta: r.tier3_delta }]));
+}
+
 /** Load the active PWP (换购) rules (migration 0128). Missing / none → []. The
  *  route feeds these + the order's lines to the shared `resolvePwp` to decide
  *  which reward lines get the PWP price. */
@@ -805,11 +828,12 @@ export async function recomputeOneLine(
   cachedConfig?: MaintenanceConfig | null,
 ): Promise<RecomputedLine> {
   const config = cachedConfig ?? await loadMaintenanceConfig(sb);
-  const [product, fabric, sellingTiers, fabricAddonConfig] = await Promise.all([
+  const [product, fabric, sellingTiers, fabricAddonConfig, modelOverrides] = await Promise.all([
     loadProductByCode(sb, item.itemCode),
     loadFabricByCode(sb, item.variants?.fabricCode ?? null),
     loadFabricSellingTiers(sb, item.variants?.fabricId ?? null),
     loadFabricTierAddonConfig(sb),
+    loadModelFabricTierOverrides(sb),
   ]);
   const [sofaModulePrices, sofaModuleCostRows] = product?.category === 'SOFA'
     ? await Promise.all([
@@ -821,5 +845,5 @@ export async function recomputeOneLine(
         loadModelSofaModuleCostRows(sb, product.base_model),
       ])
     : [null, null];
-  return recomputeFromSnapshot(item, product, fabric, config, null, sofaModulePrices, sellingTiers, fabricAddonConfig, null, null, null, sofaModuleCostRows);
+  return recomputeFromSnapshot(item, product, fabric, config, null, sofaModulePrices, sellingTiers, fabricAddonConfig, null, null, null, sofaModuleCostRows, modelOverrides);
 }
