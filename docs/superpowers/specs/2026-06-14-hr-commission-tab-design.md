@@ -38,9 +38,10 @@ excluding `status IN ('CANCELLED', 'ON_HOLD')`:
   shown under a showroom always sum to its total. (There is no order→showroom FK; attributing
   the total any other way — e.g. via `staff.showroom_id` — risks divergence from the grouping.
   Orders by a salesperson with no active HR profile, or with a null salesperson, don't count
-  toward any showroom total. Still excludes service. **Open for Loo:** originally framed as
-  "all orders in the showroom" — confirm whether sales by un-profiled staff should also count;
-  if so we'd attribute via `staff.showroom_id` and validate it equals the profile showroom.)
+  toward any showroom total. Still excludes service. **Confirmed by Loo (2026-06-14):** this is
+  the intended behaviour ("algorithm A") — only HR-registered salespeople count toward a
+  showroom total; the rule is simply "register everyone who should earn commission". A and the
+  earlier "all orders" framing are identical whenever every seller is registered.)
 
 ### 2.2 Personal commission (both tiers earn this on their own sales)
 
@@ -273,7 +274,8 @@ Salary data is sensitive. **Admin + super_admin only** at every layer:
 2. Manager override base = **whole showroom** goods (includes the manager's own sales).
 3. Showroom 400k threshold / override base = the showroom's **team total** = Σ of its
    profiled salespeople's personal goods (incl. the manager's own), **excluding** service SKUs.
-   (Single-source via the HR profile; see §2.1 "Open for Loo" on un-profiled sales.)
+   (Single-source via the HR profile. Confirmed by Loo 2026-06-14: count only HR-registered
+   salespeople — "algorithm A".)
 4. Returns do **not** reduce the sales figure.
 5. Excel export is required.
 
