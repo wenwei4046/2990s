@@ -115,7 +115,10 @@ export const Users = () => {
   const { staff } = useAuth();
   const toast = useToast();
   const canWrite = staff?.role === 'admin' || staff?.role === 'super_admin';
-  const canRead  = canWrite || staff?.role === 'coordinator' || staff?.role === 'sales_director';
+  // sales_director has NO staff management (it is a Sales-Order-desk role); the
+  // Layout guard also keeps it off /users. Only admin/super_admin write, with
+  // coordinator read-only (mirrors the API STAFF_WRITE_ROLES / STAFF_LIST_ROLES).
+  const canRead  = canWrite || staff?.role === 'coordinator';
 
   const users  = useUsers();
   const venues = useVenues({ includeInactive: false });
@@ -574,10 +577,10 @@ const EditUserDrawer = ({
             <Field label="Phone" value={form.phone}
               onChange={(v) => set('phone', v)} placeholder="+60 12-345-6789" />
           </div>
-          {row.role === 'sales' && (
+          {PASSCODE_LOGIN_ROLES.has(row.role) && (
             <div style={{ marginTop: 'var(--space-4)' }}>
               <Button variant="ghost" size="sm" onClick={() => setPinOpen(true)}>
-                <RefreshCw {...ICON} /> Reset PIN
+                <RefreshCw {...ICON} /> Reset passcode
               </Button>
             </div>
           )}

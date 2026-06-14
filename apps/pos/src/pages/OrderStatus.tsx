@@ -862,8 +862,8 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
   }, [query]);
   const searching = debouncedQuery.trim().length > 0;
 
-  // Owner-tier (super_admin / master_account) may view every salesperson's
-  // board via a filter; everyone else stays self-scoped (param sent as null).
+  // View-all roles (super_admin / sales_director / outlet_manager) may view
+  // every salesperson's board via a filter; everyone else stays self-scoped.
   const staff = useStaff();
   const canSeeAll = canViewAllSales(staff.data?.role);
   const [salesperson, setSalesperson] = useState<string>('all'); // 'all' | staffId

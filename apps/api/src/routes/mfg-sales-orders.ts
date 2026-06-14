@@ -804,8 +804,8 @@ mfgSalesOrders.get('/mine', async (c) => {
   const toYmd = c.req.query('to') ?? null;
   const LIMIT = 300;
 
-  /* ?salesperson=<id|all> — only owner-tier (super_admin / master_account) may
-     view OTHER salespeople. We verify the caller's role with a service-role
+  /* ?salesperson=<id|all> — only view-all roles (super_admin / sales_director /
+     outlet_manager) may view OTHER salespeople. We verify the caller's role with a service-role
      lookup; if they qualify we run the whole board on the service-role client
      (so RLS can't clip another salesperson's rows/items/payments). Everyone
      else: the param is ignored and they stay self-scoped on their own client. */
