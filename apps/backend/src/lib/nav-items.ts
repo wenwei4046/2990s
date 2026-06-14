@@ -61,6 +61,10 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Customers', path: '/customers', group: 'Reference', keywords: 'debtor directory' },
   { label: 'Settings', path: '/settings', group: 'Reference' },
 
+  // HR
+  { label: 'Commission', path: '/hr/commission', group: 'HR', keywords: 'salary payroll salesperson sales commission kpi' },
+  { label: 'HR Settings', path: '/hr/settings', group: 'HR', keywords: 'commission rates tier showroom item kpi payroll' },
+
   // Administration
   { label: 'Users', path: '/users', group: 'Administration', keywords: 'staff roles invite' },
   { label: 'System Health', path: '/system-health', group: 'Administration', keywords: 'metrics latency observability' },
