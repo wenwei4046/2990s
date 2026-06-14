@@ -4877,25 +4877,42 @@ const FabricPricingPanel = () => {
       </p>
 
       {canEdit && (
-        <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 'var(--space-3)' }}>
-          <div style={{ marginBottom: 'var(--space-4)', minWidth: 220, flex: '1 1 220px' }}>
-            <label htmlFor="ov-model" style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>Model</label>
-            <select
-              id="ov-model" value={ovModelId} onChange={(e) => setOvModelId(e.target.value)}
-              style={{ width: '100%', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' }}
-            >
-              <option value="">Select a model…</option>
-              {allModels.map((m) => (
-                <option key={m.id} value={m.id}>{m.name} · {m.category}</option>
-              ))}
-            </select>
+        <>
+          <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 'var(--space-1)' }}>
+            <div style={{ minWidth: 220, flex: '1 1 220px' }}>
+              <label htmlFor="ov-model" style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>Model</label>
+              <select
+                id="ov-model" value={ovModelId} onChange={(e) => setOvModelId(e.target.value)}
+                style={{ width: '100%', height: 38, boxSizing: 'border-box', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' }}
+              >
+                <option value="">Select a model…</option>
+                {allModels.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name} · {m.category}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ minWidth: 150, flex: '1 1 150px' }}>
+              <label htmlFor="ov-p2" style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>Price 2 (+RM)</label>
+              <input
+                id="ov-p2" type="number" min={0} step={1} value={ovP2}
+                onChange={(e) => setOvP2(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
+                style={{ width: '100%', height: 38, boxSizing: 'border-box', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' }}
+              />
+            </div>
+            <div style={{ minWidth: 150, flex: '1 1 150px' }}>
+              <label htmlFor="ov-p3" style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>Price 3 (+RM)</label>
+              <input
+                id="ov-p3" type="number" min={0} step={1} value={ovP3}
+                onChange={(e) => setOvP3(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
+                style={{ width: '100%', height: 38, boxSizing: 'border-box', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' }}
+              />
+            </div>
+            <Button variant="primary" onClick={() => void saveOverride()} disabled={upsertOverride.isPending}>
+              {upsertOverride.isPending ? 'Saving…' : 'Add / Save'}
+            </Button>
           </div>
-          {numField('ov-p2', 'Price 2 (+RM)', '留空 = 沿用标准', ovP2, setOvP2)}
-          {numField('ov-p3', 'Price 3 (+RM)', '留空 = 沿用标准', ovP3, setOvP3)}
-          <Button variant="primary" onClick={() => void saveOverride()} disabled={upsertOverride.isPending}>
-            {upsertOverride.isPending ? 'Saving…' : 'Add / Save'}
-          </Button>
-        </div>
+          <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>留空 = 沿用上面的标准；填 0 = 该档免费。</p>
+        </>
       )}
       {ovError && <div role="alert" style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }}>{ovError}</div>}
 
