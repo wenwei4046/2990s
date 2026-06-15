@@ -12,7 +12,7 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Plus, X, FileText, Printer, ArrowRightLeft } from 'lucide-react';
+import { Plus, X, FileText, Printer, ArrowRightLeft, ChevronsDownUp } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
@@ -202,6 +202,8 @@ export const PurchaseOrders = () => {
   const navigate = useNavigate();
   // Multi-select state — batch-convert N POs into one GRN.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Bump to collapse every expanded drill-down in the list at once.
+  const [collapseNonce, setCollapseNonce] = useState(0);
   const cancelPo = useCancelPurchaseOrder();
 
   // Always fetch all rows — filtering Outstanding (SUBMITTED ∪
@@ -282,6 +284,10 @@ export const PurchaseOrders = () => {
             Replaced the old side-drawer with a full-page AutoCount-style
             form at /purchase-orders/new. */}
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <Button variant="ghost" size="sm" onClick={() => setCollapseNonce((n) => n + 1)} title="Collapse all expanded rows">
+            <ChevronsDownUp {...ICON} />
+            <span>Collapse all</span>
+          </Button>
           {/* PR — Phase 1: multi-SO → PO picker. Lets commander select
               outstanding SO lines (across customers + suppliers), input
               partial qty per line, and emit one PO per supplier. */}
@@ -361,6 +367,7 @@ export const PurchaseOrders = () => {
         rowKey={(po) => po.id}
         searchPlaceholder="Search POs…"
         groupBanner={false}
+        collapseAllNonce={collapseNonce}
         /* Commander 2026-05-29 — open on DOUBLE-click (single-click was too
            trigger-happy: "本来应该要点两次的嘛"). Right-click → context menu. */
         onRowDoubleClick={(po) => navigate(`/purchase-orders/${po.id}`)}
