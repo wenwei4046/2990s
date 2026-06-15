@@ -22,7 +22,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
-import { ChevronRight, ChevronDown, RefreshCw, AlertTriangle, PackageCheck, Truck, ShoppingCart, CalendarRange, Info } from 'lucide-react';
+import { ChevronRight, ChevronDown, RefreshCw, Truck, ShoppingCart, CalendarRange, Info } from 'lucide-react';
 import { useMrp, type MrpSku, type MrpLine, type MrpResponse, type SofaSet } from '../lib/mrp-queries';
 import { useCreatePosFromSoItems } from '../lib/suppliers-queries';
 import { fmtDateOrDash, fmtDateTime } from '@2990s/shared';
@@ -30,15 +30,22 @@ import styles from './Mrp.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
-const CAT_LABELS: Record<string, string> = {
-  SOFA: 'Sofa', BEDFRAME: 'Bedframe', MATTRESS: 'Mattress',
-  ACCESSORY: 'Accessory', SERVICE: 'Service',
-};
-
 // Canonical date format (Commander 2026-05-29) — shared @2990s/shared helper.
 const fmtDate = (iso: string | null): string => fmtDateOrDash(iso);
 
-type View = 'general' | 'sofa';
+type View = 'sofa' | 'bedframe' | 'mattress' | 'accessory';
+
+/* MRP split into four category tabs (Commander 2026-06-15). Each tab is locked
+   to its own category; Service is excluded (not an orderable stock item). */
+const VIEW_CATEGORY: Record<View, string> = {
+  sofa: 'SOFA', bedframe: 'BEDFRAME', mattress: 'MATTRESS', accessory: 'ACCESSORY',
+};
+const VIEW_TABS: { value: View; label: string }[] = [
+  { value: 'sofa', label: 'Sofa' },
+  { value: 'bedframe', label: 'Bedframe' },
+  { value: 'mattress', label: 'Mattress' },
+  { value: 'accessory', label: 'Accessories' },
+];
 
 /* A "Model" groups every variant that shares the same SKU code (item_code).
    Bedframe/sofa: one model, many fabric/colour variants. Mattress/accessory:
@@ -160,8 +167,7 @@ function sofaSetsToSkus(sets: SofaSet[]): MrpSku[] {
 
 export const Mrp = () => {
   const navigate = useNavigate();
-  const [view, setView] = useState<View>('general');
-  const [category, setCategory] = useState<string>('all');
+  const [view, setView] = useState<View>('sofa');
   const [warehouseId, setWarehouseId] = useState<string>('all');
   /* Two expand levels: models (itemCode) and variants (rowKey). The sofa flat
      view reuses expandedVariants (each sofa row is variant-level). */
@@ -205,18 +211,18 @@ export const Mrp = () => {
      (YYYY-MM-DD). Blank = send no override → server uses each SO's own date. */
   const [proceedExpectedAt, setProceedExpectedAt] = useState<string>('');
 
-  // General tab can sub-filter by category (excl. sofa); sofa tab is locked to SOFA.
-  const apiCategory = view === 'sofa' ? 'SOFA' : (category === 'all' ? 'all' : category);
+  // Each tab is locked to its own category (Commander 2026-06-15 — four tabs).
+  const apiCategory = VIEW_CATEGORY[view];
   const q = useMrp({ category: apiCategory, warehouseId, includeUndated: showUndated });
   const data = q.data;
   const createPos = useCreatePosFromSoItems();
 
-  /* Tab split (Commander 2026-05-29 — "MRP 分两个地方"): General = everything
-     except sofa, Sofa = sofa only. Done client-side so a stray category in the
-     payload can't leak across tabs. */
+  /* Four category tabs (Commander 2026-06-15): Sofa is fed from the per-SO sofa
+     SETS; the other three filter the SKU payload to their own category so a
+     stray category can't leak across tabs. */
   const tabSkus = view === 'sofa'
     ? sofaSetsToSkus(data?.sofaSets ?? [])
-    : (data?.skus ?? []).filter((s) => s.category !== 'SOFA');
+    : (data?.skus ?? []).filter((s) => s.category === VIEW_CATEGORY[view]);
 
   /* Delivery-date window: filter child lines + recompute the parent's Qty
      Needed / Shortage to the window. Stock/PO Outstanding stay SKU-level
@@ -275,7 +281,6 @@ export const Mrp = () => {
 
   const switchView = (v: View) => {
     setView(v);
-    setCategory('all');
     setSelected(new Set());
     setExpandedModels(new Set());
     setExpandedVariants(new Set());
@@ -474,8 +479,6 @@ export const Mrp = () => {
   // line-based (each shortage SO order-line is one unit).
   const shortCount = allShortageLineIds.length;
   const selectedShortCount = allShortageLineIds.filter((id) => selected.has(id)).length;
-  const shortageUnits = shortageSkus.reduce((a, s) => a + s.shortage, 0);
-  const inDemandCount = viewSkus.length;
 
   const allShortSelected = shortCount > 0 && selectedShortCount === shortCount;
   const someShortSelected = selectedShortCount > 0 && !allShortSelected;
@@ -502,7 +505,6 @@ export const Mrp = () => {
 
   const basisLabel = dateBasis === 'processing' ? 'Processing Date' : dateBasis === 'soDate' ? 'SO Date' : dateBasis === 'orderBy' ? 'Order-by' : 'Delivery';
   const windowLabel = hasWindow ? `${basisLabel} ${dateFrom || '…'} → ${dateTo || '…'}` : '';
-  const skuNoun = 'variants';
 
   return (
     <div className={styles.page}>
@@ -557,28 +559,21 @@ export const Mrp = () => {
         </div>
       </div>
 
-      {/* Tabs — Commander 2026-05-29: split MRP into two places (non-sofa / sofa). */}
+      {/* Tabs — Commander 2026-06-15: one tab per category (Service excluded). */}
       <div className={styles.tabBar} role="tablist">
-        <button type="button" role="tab" aria-selected={view === 'general'}
-          className={styles.tab} data-active={view === 'general'} onClick={() => switchView('general')}>
-          General
-        </button>
-        <button type="button" role="tab" aria-selected={view === 'sofa'}
-          className={styles.tab} data-active={view === 'sofa'} onClick={() => switchView('sofa')}>
-          Sofa
-        </button>
+        {VIEW_TABS.map((t) => (
+          <button key={t.value} type="button" role="tab" aria-selected={view === t.value}
+            className={styles.tab} data-active={view === t.value} onClick={() => switchView(t.value)}>
+            {t.label}
+          </button>
+        ))}
       </div>
 
-      {/* Summary badges — reflect the active delivery-date window. */}
-      {data && (
+      {/* Summary pills removed (Commander 2026-06-15 — "那个不需要,删掉"); the
+          active date-window chip stays since it reflects the live filter. */}
+      {data && hasWindow && (
         <div className={styles.summaryRow}>
-          <span className={styles.summaryChip}><PackageCheck {...ICON} /> {inDemandCount} {skuNoun} in demand</span>
-          <span className={`${styles.summaryChip} ${shortCount > 0 ? styles.summaryChipWarn : ''}`}>
-            <AlertTriangle {...ICON} /> {shortCount} short · {shortageUnits} units to order
-          </span>
-          {hasWindow && (
-            <span className={styles.summaryChip}><CalendarRange {...ICON} /> Window {windowLabel}</span>
-          )}
+          <span className={styles.summaryChip}><CalendarRange {...ICON} /> Window {windowLabel}</span>
         </div>
       )}
 
@@ -644,19 +639,7 @@ export const Mrp = () => {
             ))}
           </select>
         </label>
-        {view === 'general' && (
-          <label className={styles.filterField}>
-            <span className={styles.filterLabel}>Category</span>
-            <select className={styles.filterSelect} value={category} onChange={(e) => setCategory(e.target.value)}>
-              <option value="all">All (non-sofa)</option>
-              {(data?.categories ?? ['BEDFRAME', 'MATTRESS'])
-                .filter((cat) => cat !== 'SOFA')
-                .map((cat) => (
-                  <option key={cat} value={cat}>{CAT_LABELS[cat] ?? cat}</option>
-                ))}
-            </select>
-          </label>
-        )}
+        {/* Category sub-filter removed — each tab IS its own category now (M1). */}
       </div>
 
       {/* Table — 3-level Model → Variant → SO orders, identical for both tabs.
