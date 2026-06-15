@@ -578,6 +578,7 @@ mfgSalesOrders.get('/', async (c) => {
     const firstCat = new Map<string, string>();
     const firstBranding = new Map<string, string | null>();
     const firstItemCode = new Map<string, string | null>();
+    const allCodes = new Set<string>();
     const normCategory = (raw: string): string => {
       const g = (raw ?? '').trim().toUpperCase();
       if (g.includes('BEDFRAME')) return 'BEDFRAME';
@@ -599,6 +600,7 @@ mfgSalesOrders.get('/', async (c) => {
       let catSet = cats.get(it.doc_no);
       if (!catSet) { catSet = new Set(); cats.set(it.doc_no, catSet); }
       catSet.add(normCategory(it.item_group));
+      if (it.item_code) allCodes.add(it.item_code);
 
       /* Rows arrive ordered by (doc_no, created_at ASC) so the first time we
          see a doc_no IS its earliest line — record it once. */
@@ -609,26 +611,46 @@ mfgSalesOrders.get('/', async (c) => {
       }
     }
 
-    /* Mattress brand fallback: when the first line is a MATTRESS but carries no
-       own branding text, look it up from mfg_products.branding via item_code.
-       Batch-fetch only the codes we actually need (first-item mattresses with
-       blank line.branding) so this stays a single cheap query. */
-    const mattressCodesToLookup = new Set<string>();
-    for (const [docNo, cat] of firstCat) {
-      if (cat !== 'MATTRESS') continue;
-      const b = firstBranding.get(docNo);
-      if (b && b.trim()) continue;
-      const code = firstItemCode.get(docNo);
-      if (code) mattressCodesToLookup.add(code);
-    }
+    /* Resolve each line's category from the CATALOG (mfg_products.category),
+       not just the line's free-text item_group. A sofa module line saved with
+       item_group 'others' (or a leading SERVICE/delivery line) must not blank
+       the SO's Branding pill — so we (a) trust the catalog category and (b) pick
+       the first MAIN line (sofa/bedframe/mattress) as the SO's representative,
+       falling back to the earliest line when there is none. Batch-fetch the
+       catalog by the codes actually in view (bounded .in, chunked — never the
+       whole table) so this can't hit the PostgREST row cap. The same map also
+       supplies the mattress-brand fallback (mfg_products.branding). */
+    const productCategory = new Map<string, string>();
     const productBranding = new Map<string, string>();
-    if (mattressCodesToLookup.size > 0) {
+    const codeList = [...allCodes];
+    for (let i = 0; i < codeList.length; i += 300) {
+      const chunk = codeList.slice(i, i + 300);
+      if (chunk.length === 0) continue;
       const { data: prodRows } = await sb
         .from('mfg_products')
-        .select('code, branding')
-        .in('code', [...mattressCodesToLookup]);
-      for (const p of (prodRows ?? []) as Array<{ code: string; branding: string | null }>) {
+        .select('code, category, branding')
+        .in('code', chunk);
+      for (const p of (prodRows ?? []) as Array<{ code: string; category: string | null; branding: string | null }>) {
+        if (p.category) productCategory.set(p.code, normCategory(p.category));
         if (p.branding && p.branding.trim()) productBranding.set(p.code, p.branding);
+      }
+    }
+    const resolveLineCat = (code: string | null, group: string): string =>
+      (code ? productCategory.get(code) : undefined) ?? normCategory(group);
+    const MAIN_CATS = new Set(['SOFA', 'BEDFRAME', 'MATTRESS']);
+    /* First MAIN line per doc (catalog-resolved), re-iterating the already
+       (doc_no, line_no, created_at)-ordered itemRows. Falls back to the earliest
+       line captured above when an SO has no sofa/bedframe/mattress line. */
+    const repCat = new Map<string, string>();
+    const repBranding = new Map<string, string | null>();
+    const repCode = new Map<string, string | null>();
+    for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_group: string; branding: string | null; item_code: string | null }>) {
+      if (repCat.has(it.doc_no)) continue;
+      const cat = resolveLineCat(it.item_code, it.item_group);
+      if (MAIN_CATS.has(cat)) {
+        repCat.set(it.doc_no, cat);
+        repBranding.set(it.doc_no, it.branding ?? null);
+        repCode.set(it.doc_no, it.item_code ?? null);
       }
     }
 
@@ -745,12 +767,13 @@ mfgSalesOrders.get('/', async (c) => {
       const readiness = readinessByDoc.get(docNo);
       (r as Record<string, unknown>).stock_remark = readiness?.stockRemark ?? '';
       (r as Record<string, unknown>).is_main_ready = readiness?.isMainReady ?? false;
-      /* First-item branding source (PR #266). */
-      const fCat = firstCat.get(docNo);
+      /* First-item branding source (PR #266; catalog-resolved + mains-first). */
+      const hasRep = repCat.has(docNo);
+      const fCat = (hasRep ? repCat.get(docNo) : firstCat.get(docNo)) ?? null;
       (r as Record<string, unknown>).first_item_category = fCat ?? null;
-      let fBranding = firstBranding.get(docNo) ?? null;
+      let fBranding = (hasRep ? repBranding.get(docNo) : firstBranding.get(docNo)) ?? null;
       if (fCat === 'MATTRESS' && (!fBranding || !fBranding.trim())) {
-        const code = firstItemCode.get(docNo);
+        const code = hasRep ? repCode.get(docNo) : firstItemCode.get(docNo);
         fBranding = (code && productBranding.get(code)) || fBranding;
       }
       (r as Record<string, unknown>).first_item_branding = fBranding;
