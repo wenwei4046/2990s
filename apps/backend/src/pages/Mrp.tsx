@@ -25,7 +25,7 @@ import { useNavigate } from 'react-router';
 import { ChevronRight, ChevronDown, RefreshCw, Truck, ShoppingCart, CalendarRange, Info } from 'lucide-react';
 import { useMrp, type MrpSku, type MrpLine, type MrpResponse, type SofaSet } from '../lib/mrp-queries';
 import { useCreatePosFromSoItems } from '../lib/suppliers-queries';
-import { fmtDateOrDash, fmtDateTime } from '@2990s/shared';
+import { fmtDateOrDash } from '@2990s/shared';
 import styles from './Mrp.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -120,26 +120,28 @@ function groupByModel(skus: MrpSku[]): ModelGroup[] {
   return groups;
 }
 
-/* Adapter (Commander 2026-05-30) — fold the per-SO sofa SETS into the same
-   MrpSku/MrpLine shape the General tab uses, so the Sofa tab can reuse the
-   identical Model → Variant → SO hierarchy (ModelRows). One sofa item_code =
-   one Model; its colour/spec configs = variants; each SO line = one order line.
-   Coverage is the pooled per-(warehouse, code, variant) stock+PO allocation the
-   server already computed (orderedQty), so this reuse does NOT regress to
-   variant-key PO matching. */
+/* Adapter (F5, Wei Siang 2026-06-15) — fold sofa SETS into PER-SO module SKUs so
+   the Sofa tab groups by SO (groupBySo below): one parent row per SO, its sofa
+   modules as the variant sub-rows. NOT pooled across SOs (each module SKU belongs
+   to one SO), and the variantKey is prefixed with the SO doc no so the render's
+   per-variant expand key (rowKey) stays unique across SO rows. Ordering is
+   unchanged — selection + Proceed PO still key off each line's soItemId. */
 function sofaSetsToSkus(sets: SofaSet[]): MrpSku[] {
   const map = new Map<string, MrpSku>();
   for (const s of sets) {
-    const variantKey = s.variantLabel ?? s.colour ?? '';
-    // Per-warehouse (Commander 2026-05-31): the same sofa config in two
-    // warehouses stays two rows, matching the General tab's per-WH buckets.
-    const key = `${s.warehouseId ?? WH_NONE}|${s.itemCode}|${variantKey}`;
+    const realVariant = s.variantLabel ?? s.colour ?? '';
+    // One row per (warehouse, SO, module, variant).
+    const key = `${s.warehouseId ?? WH_NONE}|${s.soDocNo}|${s.itemCode}|${realVariant}`;
     let sku = map.get(key);
     if (!sku) {
       const main = s.suppliers.find((x) => x.isMain) ?? null;
       sku = {
         warehouseId: s.warehouseId, warehouseCode: s.warehouseCode, warehouseName: s.warehouseName,
-        itemCode: s.itemCode, variantKey, variantLabel: s.variantLabel,
+        itemCode: s.itemCode,
+        // soDocNo-prefixed so the same module+variant in two SOs gets distinct
+        // rowKeys; the visible label shows the module (+ its fabric/colour).
+        variantKey: `${s.soDocNo}::${realVariant}`,
+        variantLabel: realVariant ? `${s.itemCode} · ${realVariant}` : s.itemCode,
         description: s.description, category: 'SOFA',
         qtyNeeded: 0, stock: 0, poOutstanding: 0, shortage: 0,
         mainSupplierCode: main?.code ?? null, mainSupplierName: main?.name ?? null,
@@ -163,6 +165,62 @@ function sofaSetsToSkus(sets: SofaSet[]): MrpSku[] {
     });
   }
   return [...map.values()];
+}
+
+/* "BOOQIT-1B(LHF)", "BOOQIT-CNR" → "BOOQIT: 1B(LHF) + CNR" when every module
+   shares one base model; otherwise the full codes joined. */
+function sofaComposition(codes: string[]): string {
+  const parts = codes.map((c) => {
+    const i = c.indexOf('-');
+    return i > 0 ? { base: c.slice(0, i), mod: c.slice(i + 1) } : { base: '', mod: c };
+  });
+  const bases = new Set(parts.map((p) => p.base).filter(Boolean));
+  if (bases.size === 1) return `${[...bases][0]}: ${parts.map((p) => p.mod).join(' + ')}`;
+  return codes.join(' + ');
+}
+
+/* F5 — group the per-SO sofa module SKUs into ONE parent row per SO (the SO doc
+   no is the "serial"); the modules become the variant sub-rows. Mirrors
+   groupByModel's totals + shortage-first sort. */
+function groupBySo(skus: MrpSku[]): ModelGroup[] {
+  const map = new Map<string, ModelGroup>();
+  for (const s of skus) {
+    const soDocNo = s.lines[0]?.soDocNo ?? '—';
+    const debtor = s.lines[0]?.debtorName ?? null;
+    const gk = `${s.warehouseId ?? WH_NONE}|${soDocNo}`;
+    let g = map.get(gk);
+    if (!g) {
+      g = {
+        groupKey: gk,
+        warehouseId: s.warehouseId, warehouseCode: s.warehouseCode, warehouseName: s.warehouseName,
+        itemCode: soDocNo, description: debtor, category: 'SOFA',
+        variants: [], qtyNeeded: 0, stock: 0, poOutstanding: 0, shortage: 0,
+        suppliers: s.suppliers,
+      };
+      map.set(gk, g);
+    }
+    g.variants.push(s);
+    g.qtyNeeded += s.qtyNeeded;
+    g.stock += s.stock;
+    g.poOutstanding += s.poOutstanding;
+    g.shortage += s.shortage;
+  }
+  const groups = [...map.values()];
+  for (const g of groups) {
+    g.variants.sort((a, b) => (a.itemCode < b.itemCode ? -1 : 1));
+    const comp = sofaComposition(g.variants.map((v) => v.itemCode));
+    g.description = [g.description, comp].filter(Boolean).join(' · ');
+  }
+  groups.sort((a, b) => {
+    if ((b.shortage > 0 ? 1 : 0) !== (a.shortage > 0 ? 1 : 0)) {
+      return (b.shortage > 0 ? 1 : 0) - (a.shortage > 0 ? 1 : 0);
+    }
+    const wa = a.warehouseCode ?? a.warehouseName ?? '';
+    const wb = b.warehouseCode ?? b.warehouseName ?? '';
+    if (wa !== wb) return wa < wb ? -1 : 1;
+    return a.itemCode < b.itemCode ? -1 : 1;
+  });
+  return groups;
 }
 
 export const Mrp = () => {
@@ -253,7 +311,9 @@ export const Mrp = () => {
     })
     .filter((s) => !hasWindow || s.lines.length > 0);
 
-  const models = groupByModel(viewSkus);
+  // Sofa tab groups by SO (one parent row per SO, modules as sub-rows, F5);
+  // the other category tabs group by SKU/Model.
+  const models = view === 'sofa' ? groupBySo(viewSkus) : groupByModel(viewSkus);
 
   /* Only-shortages focus filter (Commander 2026-05-29) — affects which ROWS
      render; the summary counts above stay on the full demand set so the
