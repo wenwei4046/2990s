@@ -4221,11 +4221,15 @@ function exportSkusCsv(rows: MfgProductRow[], sofaSizes: string[], tier: SofaPri
   const wantSofa = category === 'all' || category === 'SOFA';
   const wantFlat = category === 'all' || category !== 'SOFA';
   const sizeCols = sofaSizes.map(priceColForSize);
+  // Lean price sheet (Wei Siang 2026-06-15): the match key + the identity
+  // columns the import requires (code/name/category) + size_label for human
+  // readability + the price columns. Descriptive fields (description,
+  // base_model, unit_m3, status, branding) are dropped — a blank/absent cell
+  // never changes them, so a price round-trip doesn't need to carry them.
   const columns = [
-    'code', 'name', 'category', 'description', 'base_model', 'size_label',
+    'code', 'name', 'category', 'size_label',
     ...(wantSofa ? ['price_tier', ...sizeCols] : []),
     ...(wantFlat ? ['base_price', 'price1'] : []),
-    'unit_m3_milli', 'status', 'branding',
   ];
 
   // RFC4180: quote if contains comma, quote, or newline.
@@ -4242,12 +4246,7 @@ function exportSkusCsv(rows: MfgProductRow[], sofaSizes: string[], tier: SofaPri
       code:        r.code,
       name:        r.name,
       category:    r.category,
-      description: r.description,
-      base_model:  r.base_model,
       size_label:  r.size_label,
-      unit_m3_milli: r.unit_m3_milli,
-      status:      r.status,
-      branding:    r.branding,
     };
 
     const emit = (extra: Record<string, unknown>) => {
@@ -4297,6 +4296,21 @@ function exportSkusCsv(rows: MfgProductRow[], sofaSizes: string[], tier: SofaPri
  * leading UTF-8 BOM so a file saved from Excel parses cleanly. (fabric-csv's
  * parseCsv is fabric-specific — it requires a fabric_code column and remaps to
  * fabric apiKeys — so we keep a small local parser here.) */
+/** Read the first sheet of an uploaded Excel workbook (.xlsx/.xls) into rows of
+ *  string cells, so an exported CSV that Excel re-saved as a workbook still
+ *  imports. CSV stays on parseSkuCsv below. */
+async function readXlsxGrid(file: File): Promise<string[][]> {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  const first = wb.SheetNames[0];
+  const sheet = first ? wb.Sheets[first] : undefined;
+  if (!sheet) return [];
+  const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: '' });
+  return aoa
+    .map((r) => (Array.isArray(r) ? r.map((c) => String(c ?? '')) : []))
+    .filter((r) => r.some((c) => c.trim().length > 0));
+}
+
 function parseSkuCsv(text: string): Array<Record<string, string>> {
   if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
   const grid: string[][] = [];
@@ -4321,7 +4335,12 @@ function parseSkuCsv(text: string): Array<Record<string, string>> {
     cellStr += ch;
   }
   if (cellStr !== '' || row.length > 0) { row.push(cellStr); grid.push(row); }
+  return gridToSkuRecords(grid);
+}
 
+/** Header-key a parsed grid (CSV or Excel) into one object per data row, keyed
+ *  by lower-cased trimmed header text. */
+function gridToSkuRecords(grid: string[][]): Array<Record<string, string>> {
   if (grid.length < 1) return [];
   const header = (grid[0] ?? []).map((h) => h.trim().toLowerCase());
   const out: Array<Record<string, string>> = [];
@@ -4350,8 +4369,10 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
     setResult(null);
     setErrorMsg(null);
     try {
-      const text = await file.text();
-      const parsed = parseSkuCsv(text);
+      const fname = file.name.toLowerCase();
+      const parsed = (fname.endsWith('.xlsx') || fname.endsWith('.xls'))
+        ? gridToSkuRecords(await readXlsxGrid(file))
+        : parseSkuCsv(await file.text());
       if (parsed.length === 0) {
         setErrorMsg('That file had no rows. Export a copy first, edit it, then import the same file.');
         setBusy(false);
@@ -4494,13 +4515,13 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
           <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON_PROPS} /></button>
         </header>
         <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
-          Pick a CSV exported from this page. Edit the prices in Excel, save, and
-          import it back. A blank cell is left as it was — it never clears a price.
+          Pick a CSV or Excel file exported from this page. Edit the prices in Excel,
+          save, and import it back. A blank cell is left as it was — it never clears a price.
           Up to 500 SKUs per file.
         </p>
         <input
           type="file"
-          accept=".csv"
+          accept=".csv,.xlsx,.xls"
           disabled={busy}
           style={{ marginTop: 'var(--space-3)' }}
           onChange={(e) => {
@@ -4523,8 +4544,15 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
 
         {result && (
           <div style={{ marginTop: 'var(--space-3)', fontSize: 'var(--fs-13)' }}>
-            <div style={{ fontWeight: 600 }}>
-              Imported {result.upserted}{result.failed > 0 ? `, failed ${result.failed}` : ''}.
+            <div style={{
+              fontWeight: 700,
+              color: result.failed > 0 ? 'var(--c-burnt)' : 'var(--c-secondary-a, #2F5D4F)',
+            }}>
+              {result.upserted > 0
+                ? `Saved — ${result.upserted} SKU${result.upserted === 1 ? '' : 's'} updated${result.failed > 0 ? ` · ${result.failed} failed` : ''}`
+                : result.failed > 0
+                  ? `Nothing saved — ${result.failed} row${result.failed === 1 ? '' : 's'} failed`
+                  : 'Nothing to update — every value already matched what was saved'}
             </div>
             {result.failures.length > 0 && (
               <ul style={{ marginTop: 'var(--space-2)', paddingLeft: '1.2em', color: 'var(--fg-muted)' }}>
