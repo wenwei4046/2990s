@@ -186,14 +186,13 @@ function groupBySo(skus: MrpSku[]): ModelGroup[] {
   const map = new Map<string, ModelGroup>();
   for (const s of skus) {
     const soDocNo = s.lines[0]?.soDocNo ?? '—';
-    const debtor = s.lines[0]?.debtorName ?? null;
     const gk = `${s.warehouseId ?? WH_NONE}|${soDocNo}`;
     let g = map.get(gk);
     if (!g) {
       g = {
         groupKey: gk,
         warehouseId: s.warehouseId, warehouseCode: s.warehouseCode, warehouseName: s.warehouseName,
-        itemCode: soDocNo, description: debtor, category: 'SOFA',
+        itemCode: soDocNo, description: null, category: 'SOFA',
         variants: [], qtyNeeded: 0, stock: 0, poOutstanding: 0, shortage: 0,
         suppliers: s.suppliers,
       };
@@ -208,8 +207,9 @@ function groupBySo(skus: MrpSku[]): ModelGroup[] {
   const groups = [...map.values()];
   for (const g of groups) {
     g.variants.sort((a, b) => (a.itemCode < b.itemCode ? -1 : 1));
-    const comp = sofaComposition(g.variants.map((v) => v.itemCode));
-    g.description = [g.description, comp].filter(Boolean).join(' · ');
+    // Composition only — no customer name on the parent row (Wei Siang
+    // 2026-06-16); the customer still shows in the expanded child order lines.
+    g.description = sofaComposition(g.variants.map((v) => v.itemCode));
   }
   groups.sort((a, b) => {
     if ((b.shortage > 0 ? 1 : 0) !== (a.shortage > 0 ? 1 : 0)) {
