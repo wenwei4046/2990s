@@ -24,6 +24,7 @@ import {
   Download,
   Upload,
   Edit3,
+  Save,
   Search,
   History,
   Package,
@@ -251,10 +252,47 @@ const upsertHeightTier = (
   return next;
 };
 
+/* Staged inline-edit patch for one SKU row (Edit Prices mode). Mirrors the
+   fields useUpdateMfgProductPrices accepts (minus id). Nothing is sent to the
+   server until Save (Commander 2026-06-15 — no 裸奔). */
+type ProductEditPatch = {
+  code?: string;
+  name?: string;
+  branding?: string | null;
+  seatHeightPrices?: SeatHeightPrice[];
+  basePriceSen?: number | null;
+  price1Sen?: number | null;
+};
+
 const SkuMasterTab = () => {
   const [category, setCategory] = useState<MfgCategory | 'all'>('all');
   const [search, setSearch] = useState('');
   const [editMode, setEditMode] = useState(false);
+  /* Edit→Save (Commander 2026-06-15 — no 裸奔): in Edit Prices mode every cell
+     edit stages into pendingEdits keyed by row id; NOTHING hits the server until
+     Save. Cancel discards the staged edits. Replaces the old blur-auto-save. */
+  const [pendingEdits, setPendingEdits] = useState<Record<string, ProductEditPatch>>({});
+  const [savingEdits, setSavingEdits] = useState(false);
+  const updatePrices = useUpdateMfgProductPrices();
+  const stageEdit = useCallback((id: string, patch: ProductEditPatch) => {
+    setPendingEdits((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  }, []);
+  const dirtyCount = Object.keys(pendingEdits).length;
+  const saveEdits = async () => {
+    const entries = Object.entries(pendingEdits);
+    if (entries.length === 0) { setEditMode(false); return; }
+    setSavingEdits(true);
+    try {
+      for (const [id, patch] of entries) {
+        await updatePrices.mutateAsync({ id, ...patch });
+      }
+      setPendingEdits({});
+      setEditMode(false);
+    } finally {
+      setSavingEdits(false);
+    }
+  };
+  const exitEdit = () => { setPendingEdits({}); setEditMode(false); };
   const [tier, setTier] = useState<Tier>('PRICE_2');
   // PR #39 — Model filter chip row (visible only on Sofa view).
   // Distinct base_model values pulled from current rows. 'all' = no filter.
@@ -721,14 +759,23 @@ const SkuMasterTab = () => {
               <span>{deleting ? 'Deleting…' : `Delete ${selectedIds.size}`}</span>
             </Button>
           )}
-          <Button
-            variant={editMode ? 'secondary' : 'primary'}
-            size="md"
-            onClick={() => setEditMode(!editMode)}
-          >
-            <Edit3 {...ICON_PROPS} />
-            <span>{editMode ? 'Cancel' : 'Edit Prices'}</span>
-          </Button>
+          {editMode ? (
+            <>
+              <Button variant="secondary" size="md" onClick={exitEdit} disabled={savingEdits}>
+                <X {...ICON_PROPS} />
+                <span>Cancel</span>
+              </Button>
+              <Button variant="primary" size="md" onClick={saveEdits} disabled={savingEdits || dirtyCount === 0}>
+                <Save {...ICON_PROPS} />
+                <span>{savingEdits ? 'Saving…' : dirtyCount > 0 ? `Save (${dirtyCount})` : 'Save'}</span>
+              </Button>
+            </>
+          ) : (
+            <Button variant="primary" size="md" onClick={() => setEditMode(true)}>
+              <Edit3 {...ICON_PROPS} />
+              <span>Edit Prices</span>
+            </Button>
+          )}
           {isSofaView && (
             <div className={styles.tierGroup}>
               <span className={styles.tierLabel}>TIER</span>
@@ -882,6 +929,8 @@ const SkuMasterTab = () => {
                 onOpenSuppliers={setSuppliersRow}
                 selected={selectedIds.has(row.id)}
                 onToggleSelected={toggleRow}
+                patch={pendingEdits[row.id]}
+                onStage={stageEdit}
               />
             ))}
             {!isLoading && !error && rows.length === 0 && (
@@ -935,7 +984,7 @@ const SkuMasterTab = () => {
 
 const ProductRow = memo(({
   row, editMode, isSofaView, isMattressView, sofaSizes, tier, onOpenSuppliers,
-  selected, onToggleSelected,
+  selected, onToggleSelected, patch, onStage,
 }: {
   row: MfgProductRow;
   editMode: boolean;
@@ -948,26 +997,22 @@ const ProductRow = memo(({
       the checkbox + reports clicks. */
   selected:         boolean;
   onToggleSelected: (id: string) => void;
+  /** Edit→Save (Commander 2026-06-15) — staged edits for THIS row (undefined =
+      none yet) + the parent stager. Cells read the staged value over the stored
+      one; nothing commits until the parent's Save. No more blur-auto-save. */
+  patch?: ProductEditPatch;
+  onStage: (id: string, patch: ProductEditPatch) => void;
 }) => {
-  // Local draft of the seat_height_prices array — buffers user edits before
-  // committing on blur. Reset whenever the row's data changes upstream.
-  const [draftSeat, setDraftSeat] = useState<SeatHeightPrice[] | null>(null);
-  const [draftBase, setDraftBase] = useState<number | null>(null);
-  const [draftP1, setDraftP1] = useState<number | null>(null);
-  const [draftBranding, setDraftBranding] = useState<string | null>(null);
-  const update = useUpdateMfgProductPrices();
-
-  // The effective array we read from — draft if mid-edit, else the server row.
-  const seatArr = draftSeat ?? row.seat_height_prices ?? [];
+  // Effective values — a staged patch wins over the stored row while editing.
+  const seatArr = patch?.seatHeightPrices ?? row.seat_height_prices ?? [];
+  // Prices can be staged as null (a deliberate clear), so test key presence,
+  // not nullishness, before falling back to the stored value.
+  const baseSen = patch && 'basePriceSen' in patch ? patch.basePriceSen ?? null : row.base_price_sen;
+  const p1Sen = patch && 'price1Sen' in patch ? patch.price1Sen ?? null : row.price1_sen;
+  const brandingVal = patch?.branding ?? row.branding ?? '';
 
   const updateSofaCell = (size: string, newPriceSen: number | null) => {
-    const next = upsertHeightTier(seatArr, size, tier, newPriceSen);
-    setDraftSeat(next);
-    update.mutate({ id: row.id, seatHeightPrices: next });
-  };
-
-  const flushBedframePrice = (field: 'basePriceSen' | 'price1Sen', val: number | null) => {
-    update.mutate({ id: row.id, [field]: val });
+    onStage(row.id, { seatHeightPrices: upsertHeightTier(seatArr, size, tier, newPriceSen) });
   };
 
   return (
@@ -1026,7 +1071,7 @@ const ProductRow = memo(({
             chipClassName={styles.codeChip}
             ariaLabel="Edit product code"
             editable={editMode}
-            onSave={(val) => update.mutate({ id: row.id, code: val })}
+            onSave={(val) => onStage(row.id, { code: val })}
           />
         </span>
       </td>
@@ -1041,7 +1086,7 @@ const ProductRow = memo(({
             inline
             ariaLabel="Edit description"
             editable={editMode}
-            onSave={(val) => update.mutate({ id: row.id, name: val })}
+            onSave={(val) => onStage(row.id, { name: val })}
           />
           {row.one_shot && (
             <span
@@ -1088,12 +1133,9 @@ const ProductRow = memo(({
           <td>
             {editMode ? (
               <BrandingInput
-                value={draftBranding ?? row.branding ?? ''}
+                value={brandingVal}
                 listId="branding-pool-sku-master"
-                onCommit={(v) => {
-                  setDraftBranding(v);
-                  update.mutate({ id: row.id, branding: v });
-                }}
+                onCommit={(v) => onStage(row.id, { branding: v })}
               />
             ) : (
               row.branding
@@ -1103,14 +1145,11 @@ const ProductRow = memo(({
           </td>
           <td>{row.size_label ?? '—'}</td>
           {/* Single Price column for mattress — uses base_price_sen. */}
-          <td className={(draftBase ?? row.base_price_sen) ? styles.price : styles.priceEmpty}>
+          <td className={baseSen ? styles.price : styles.priceEmpty}>
             {editMode ? (
               <PriceInput
-                valueSen={draftBase ?? row.base_price_sen}
-                onCommit={(v) => {
-                  setDraftBase(v);
-                  flushBedframePrice('basePriceSen', v);
-                }}
+                valueSen={baseSen}
+                onCommit={(v) => onStage(row.id, { basePriceSen: v })}
               />
             ) : (
               fmtRm(row.base_price_sen)
@@ -1121,27 +1160,21 @@ const ProductRow = memo(({
         <>
           <td><span className={styles.catPill}>{row.category}</span></td>
           <td>{row.size_label ?? '—'}</td>
-          <td className={(draftBase ?? row.base_price_sen) ? styles.price : styles.priceEmpty}>
+          <td className={baseSen ? styles.price : styles.priceEmpty}>
             {editMode ? (
               <PriceInput
-                valueSen={draftBase ?? row.base_price_sen}
-                onCommit={(v) => {
-                  setDraftBase(v);
-                  flushBedframePrice('basePriceSen', v);
-                }}
+                valueSen={baseSen}
+                onCommit={(v) => onStage(row.id, { basePriceSen: v })}
               />
             ) : (
               fmtRm(row.base_price_sen)
             )}
           </td>
-          <td className={(draftP1 ?? row.price1_sen) ? styles.price : styles.priceEmpty}>
+          <td className={p1Sen ? styles.price : styles.priceEmpty}>
             {editMode ? (
               <PriceInput
-                valueSen={draftP1 ?? row.price1_sen}
-                onCommit={(v) => {
-                  setDraftP1(v);
-                  flushBedframePrice('price1Sen', v);
-                }}
+                valueSen={p1Sen}
+                onCommit={(v) => onStage(row.id, { price1Sen: v })}
               />
             ) : (
               fmtRm(row.price1_sen)
