@@ -217,5 +217,6 @@ export function specsLine(it: SupplierDocLine, fabricMap: Map<string, string>): 
       }
     }
   }
-  return buildVariantSummary(it.item_group ?? null, mapped);
+  // labelled: supplier docs (PO / GRN / PI) prefix the fabric segment "Fabric: ".
+  return buildVariantSummary(it.item_group ?? null, mapped, { labelled: true });
 }
