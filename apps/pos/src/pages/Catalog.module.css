@@ -306,6 +306,16 @@
   box-shadow: var(--shadow-2);
   transform: translateY(-2px);
 }
+/* Flat-product cards render as a <button> (tap = add to cart). Reset the UA
+   button styling so it's pixel-identical to the <Link> cards. */
+.cardButton {
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+  width: 100%;
+  appearance: none;
+}
 .cardDisabled {
   opacity: 0.6;
   cursor: not-allowed;

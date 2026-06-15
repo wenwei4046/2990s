@@ -17,10 +17,11 @@ import {
   ExternalLink,
   type LucideIcon,
 } from 'lucide-react';
-import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow } from '../lib/queries';
+import { fmtRM } from '@2990s/shared';
+import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow, type MfgCatalogCategory } from '../lib/queries';
 import { useStaff, isGlobalCurator, isPosSalesRole } from '../lib/staff';
 import { supabase } from '../lib/supabase';
-import { useCart, cartHasSofa, cartHasMainNonSofa } from '../state/cart';
+import { useCart, cartHasSofa, cartHasMainNonSofa, type FlatConfigSnapshot } from '../state/cart';
 import { Topbar } from '../components/Topbar';
 import { CustomerOrderFab } from '../components/CustomerOrderFab';
 import styles from './Catalog.module.css';
@@ -68,6 +69,8 @@ const productInitial = (name: string): string =>
 interface CatalogCard {
   modelKey:    string;       // model_id when present, else SKU id (orphan)
   categoryId:  string;
+  /** Raw mfg category enum — drives flat-product direct-add (ACCESSORY/SERVICE). */
+  category:    MfgCatalogCategory;
   name:        string;
   description: string | null;
   branding:    string | null;
@@ -130,6 +133,7 @@ function buildCards(rows: MfgCatalogRow[]): CatalogCard[] {
     groups.set(key, {
       modelKey:     key,
       categoryId:   r.categoryId,
+      category:     r.category,
       // Prefer the Model's name (clean — "ADDA") over the SKU's name
       // ("SOFA ADDA 1A(LHF)") so cards read like a product, not a line item.
       name:         r.modelName ?? r.name,
@@ -558,6 +562,35 @@ const ProductCard = ({ p, blocked = false }: { p: CatalogCard; blocked?: boolean
   // + not clickable — a sofa can't share a cart with other categories (and vice
   // versa). The cart store (cartCategoryConflict) enforces the same rule as a
   // backstop in case this card is reached by deep link.
+  const addConfigured = useCart((s) => s.addConfigured);
+
+  // Direct-add (Loo 2026-06-15): flat products (ACCESSORY / SERVICE) have no
+  // size/options to choose — their configurator screen is just a price + qty +
+  // Add. When such a product has a single SKU (variantCount === 1, nothing to
+  // pick), skip that screen: tapping the card adds it straight to cart at qty 1
+  // (adjustable in the cart). flatPrice mirrors useProduct() exactly — selling
+  // price (sen→RM), or RM 0 for an unpriced accessory. The always-visible
+  // CustomerOrderFab badge + subtotal is the confirmation. Mattress/sofa/
+  // bedframe (and multi-SKU flats) are untouched — they still open the configurator.
+  const isFlat = p.category === 'ACCESSORY' || p.category === 'SERVICE';
+  const flatPrice =
+    p.minPriceSen != null ? Math.round(p.minPriceSen / 100)
+    : p.category === 'ACCESSORY' ? 0
+    : null;
+  const canDirectAdd = isFlat && p.variantCount === 1 && flatPrice != null;
+
+  const addFlatToCart = () => {
+    const snapshot: FlatConfigSnapshot = {
+      kind: 'flat',
+      productId: p.leadSkuId,
+      productName: p.name,
+      category: p.category, // UPPERCASE mfg enum — buckets the SO line under accessories
+      total: flatPrice ?? 0,
+      summary: 'Flat price',
+    };
+    addConfigured(snapshot, { qty: 1 });
+  };
+
   const inner = (
     <>
       <div
@@ -584,7 +617,11 @@ const ProductCard = ({ p, blocked = false }: { p: CatalogCard; blocked?: boolean
         <div className={styles.priceRow}>
           <code className={styles.sku}>{p.leadSku}</code>
           <span className={styles.fromLabel}>
-            {p.variantCount > 1 ? `${p.variantCount} variants` : 'By size'}
+            {p.variantCount > 1
+              ? `${p.variantCount} variants`
+              : canDirectAdd
+                ? `Add · ${fmtRM(flatPrice!)}`
+                : 'By size'}
           </span>
         </div>
       </div>
@@ -601,6 +638,19 @@ const ProductCard = ({ p, blocked = false }: { p: CatalogCard; blocked?: boolean
       >
         {inner}
       </div>
+    );
+  }
+
+  // Flat single-SKU product → tap adds straight to cart (no configurator step).
+  if (canDirectAdd) {
+    return (
+      <button
+        type="button"
+        className={`${styles.card} ${styles.cardButton}`}
+        onClick={addFlatToCart}
+      >
+        {inner}
+      </button>
     );
   }
 
