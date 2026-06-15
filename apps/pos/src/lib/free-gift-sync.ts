@@ -6,6 +6,7 @@ import { useModelDefaultGifts } from './queries';
 import {
   buildFreeGiftTriggers,
   computeDesiredFreeGifts,
+  mergeDesiredFreeGifts,
   type TriggerLine,
 } from '@2990s/shared';
 
@@ -52,7 +53,12 @@ export function useFreeGiftSync(): void {
         gifts:      modelId ? (giftsByModel.get(modelId) ?? []) : [],
       });
     }
-    const desired = computeDesiredFreeGifts(buildFreeGiftTriggers(triggerLines));
+    // Merge same-gift lines (same product + campaign) into ONE cart row with the
+    // summed qty — mirrors the server's diffFreeGiftLines bucketing so the cart
+    // shows "<gift> ×N" not one row per trigger (Loo 2026-06-15).
+    const desired = mergeDesiredFreeGifts(
+      computeDesiredFreeGifts(buildFreeGiftTriggers(triggerLines)),
+    );
     useCart.getState().reconcileFreeGifts(desired, nameById);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, lines, productsQ.data, modelGiftsQ.data]);
