@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import '@2990s/design-system/tokens.css';
 import './main.css';
 import { AuthProvider } from './lib/auth';
+import { ConfirmProvider } from './components/ConfirmDialog';
 import { router } from './router';
 
 // Library tables (categories, series, compartment_library, bundle_library,
@@ -26,7 +27,9 @@ createRoot(rootEl).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <RouterProvider router={router} />
+        <ConfirmProvider>
+          <RouterProvider router={router} />
+        </ConfirmProvider>
       </AuthProvider>
     </QueryClientProvider>
   </StrictMode>,

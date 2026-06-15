@@ -39,6 +39,7 @@ import {
 import { useWarehouses } from '../lib/inventory-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { MoneyInput } from '../components/MoneyInput';
+import { useConfirm } from '../components/ConfirmDialog';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -118,6 +119,7 @@ export const PurchaseConsignmentReceiveDetail = () => {
   const updateHeader = useUpdatePurchaseConsignmentReceiveHeader();
   const updateItem = useUpdatePurchaseConsignmentReceiveItem();
   const deleteItem = useDeletePurchaseConsignmentReceiveItem();
+  const askConfirm = useConfirm();
   const cancel = useCancelPurchaseConsignmentReceive();
 
   const grn = detail.data?.grn ?? null;
@@ -378,7 +380,19 @@ export const PurchaseConsignmentReceiveDetail = () => {
                       {isEditing && (
                         <button
                           type="button"
-                          onClick={() => { if (!isLocked) deleteItem.mutate({ grnId: grn.id, itemId: it.id }); }}
+                          /* Commander 2026-06-15 — confirm before delete (no more
+                             裸奔). */
+                          onClick={async () => {
+                            if (isLocked) return;
+                            if (await askConfirm({
+                              title: 'Remove this line?',
+                              body: "The line is removed from this consignment receive.",
+                              confirmLabel: 'Remove',
+                              danger: true,
+                            })) {
+                              deleteItem.mutate({ grnId: grn.id, itemId: it.id });
+                            }
+                          }}
                           title="Remove line"
                           disabled={isLocked || deleteItem.isPending}
                           style={{

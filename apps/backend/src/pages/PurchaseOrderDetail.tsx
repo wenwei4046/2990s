@@ -16,7 +16,8 @@
 //   • Save  → commits header changes + every changed line's field edits
 //   • Back  → leaves the page, discarding the field-edit draft (no auto-save —
 //             "为什么只是点 Back 也会自动 Save 呢")
-//   • Delete (trash) removes the line immediately (no confirm popup). A line's
+//   • Delete (trash) asks an in-app confirm first (Commander 2026-06-15 — no
+//     more 裸奔), then removes the line on confirm. A line's
 //     add (Convert from SO) and remove both move SO quota server-side, so they
 //     are immediate — deleting a converted line releases its SO quota straight
 //     away so it reappears in the From-SO picker ("delete 掉…想再加回去却没看到").
@@ -46,6 +47,7 @@ import {
 } from '../lib/suppliers-queries';
 import { useWarehouses } from '../lib/inventory-queries';
 import { MoneyInput } from '../components/MoneyInput';
+import { useConfirm } from '../components/ConfirmDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
@@ -114,6 +116,7 @@ export const PurchaseOrderDetail = () => {
   const deletePo = useDeletePurchaseOrder();
   const updateItem = useUpdatePurchaseOrderItem();
   const deleteItem = useDeletePurchaseOrderItem();
+  const askConfirm = useConfirm();
   // PR #102 — PO PDF (AutoCount layout) needs the Purchase Location's
   // human-readable name; the header only carries the warehouse id. Load
   // warehouses once at the top so the print handler can resolve it.
@@ -529,11 +532,21 @@ export const PurchaseOrderDetail = () => {
                             <button type="button"
                               className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
                               title="Remove line" disabled={isLocked || deleteItem.isPending}
-                              /* Commander 2026-05-29 — delete immediately (no
-                                 confirm). A converted line's SO quota is released
-                                 right away so it reappears in the From-SO picker
-                                 ("delete 掉…想再加回去却没看到"). */
-                              onClick={() => { if (!isLocked) deleteItem.mutate({ poId: po.id, itemId: it.id }); }}>
+                              /* Commander 2026-06-15 — confirm before delete (no
+                                 more 裸奔). On confirm the line is removed and its
+                                 converted SO quota is released back to the From-SO
+                                 picker. */
+                              onClick={async () => {
+                                if (isLocked) return;
+                                if (await askConfirm({
+                                  title: 'Remove this line?',
+                                  body: "The line is deleted and its converted SO quantity is released back to the From-SO picker.",
+                                  confirmLabel: 'Remove',
+                                  danger: true,
+                                })) {
+                                  deleteItem.mutate({ poId: po.id, itemId: it.id });
+                                }
+                              }}>
                               <Trash2 {...SM_ICON} />
                             </button>
                           </span>
