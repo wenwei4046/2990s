@@ -52,9 +52,21 @@ const comboLabel = (c: SofaComboRule): string =>
 
 // ── Free-gift section ─────────────────────────────────────────────────────────
 
+const chipStyle = (on: boolean, disabled: boolean): React.CSSProperties => ({
+  padding: '6px 12px',
+  borderRadius: 999,
+  fontSize: 'var(--fs-13)',
+  fontFamily: 'var(--font-button)',
+  cursor: disabled ? 'default' : 'pointer',
+  border: on ? '1px solid var(--c-orange)' : '1px solid var(--line-strong)',
+  background: on ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-cream)',
+  color: on ? 'var(--c-burnt, #A6471E)' : 'var(--c-ink)',
+  opacity: disabled && !on ? 0.6 : 1,
+});
+
 const GIFT_CATEGORIES = ['MATTRESS', 'BEDFRAME', 'SOFA'] as const;
 
-const FreeGiftSection = ({ canEdit }: { canEdit: boolean }) => {
+const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; gwpOpen: boolean; onCloseGwp: () => void }) => {
   const mattress = useProductModels({ category: 'MATTRESS' });
   const bedframe = useProductModels({ category: 'BEDFRAME' });
   const sofa     = useProductModels({ category: 'SOFA' });
@@ -63,9 +75,16 @@ const FreeGiftSection = ({ canEdit }: { canEdit: boolean }) => {
   const upsert   = useUpsertModelDefaultGifts();
   const remove   = useDeleteModelDefaultGifts();
 
+  // Per-Model edit (tweak / clear one Model's existing gift set).
   const [editModelId, setEditModelId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DefaultFreeGift[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // Bulk add — pick many Models, define gift(s), append to all of them.
+  const [bulkSelected, setBulkSelected] = useState<string[]>([]);
+  const [bulkDraft, setBulkDraft] = useState<DefaultFreeGift[]>([{ giftProductId: '', qty: 1, campaignName: null }]);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   useEffect(() => {
     if (!editModelId) return;
@@ -73,6 +92,16 @@ const FreeGiftSection = ({ canEdit }: { canEdit: boolean }) => {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [editModelId]);
+
+  useEffect(() => {
+    if (!gwpOpen) return;
+    setBulkSelected([]);
+    setBulkDraft([{ giftProductId: '', qty: 1, campaignName: null }]);
+    setBulkError(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCloseGwp(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [gwpOpen, onCloseGwp]);
 
   const models = useMemo(
     () => [...(mattress.data ?? []), ...(bedframe.data ?? []), ...(sofa.data ?? [])],
@@ -90,6 +119,29 @@ const FreeGiftSection = ({ canEdit }: { canEdit: boolean }) => {
   const giftModelLabel = (m: { branding?: string | null; name: string; model_code: string }) =>
     [m.branding, m.name].filter(Boolean).join(' ') || m.model_code;
 
+  // Clean draft rows → storable entries (drop empty, floor qty, trim campaign).
+  const cleanGifts = (rows: DefaultFreeGift[]): DefaultFreeGift[] =>
+    rows
+      .filter((g) => g.giftProductId)
+      .map((g) => ({ giftProductId: g.giftProductId, qty: Math.max(1, Math.floor(g.qty)), campaignName: g.campaignName?.trim() || null }));
+
+  // Append `additions` to `existing`, keyed by (giftProductId, campaignName): a
+  // matching key updates its qty, a new key is appended — so one Model can carry
+  // several distinct gifts (e.g. 2 pillows + 1 protector) built up over time.
+  const mergeGifts = (existing: DefaultFreeGift[], additions: DefaultFreeGift[]): DefaultFreeGift[] => {
+    const keyOf = (g: DefaultFreeGift) => `${g.giftProductId} ${g.campaignName ?? ''}`;
+    const out = existing.map((g) => ({ ...g }));
+    const at = new Map(out.map((g, i) => [keyOf(g), i] as const));
+    for (const a of additions) {
+      const k = keyOf(a);
+      const i = at.get(k);
+      if (i != null) out[i] = { ...a };
+      else { at.set(k, out.length); out.push({ ...a }); }
+    }
+    return out;
+  };
+
+  // ── Per-Model edit modal ──
   const open = (mid: string) => {
     setError(null);
     setEditModelId(mid);
@@ -99,21 +151,56 @@ const FreeGiftSection = ({ canEdit }: { canEdit: boolean }) => {
     setDraft((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
   const addRow = () => setDraft((prev) => [...prev, { giftProductId: '', qty: 1, campaignName: null }]);
   const removeRow = (i: number) => setDraft((prev) => prev.filter((_, idx) => idx !== i));
-
   const save = async () => {
     if (!editModelId) return;
     setError(null);
-    const gifts = draft
-      .filter((g) => g.giftProductId)
-      .map((g) => ({ giftProductId: g.giftProductId, qty: Math.max(1, Math.floor(g.qty)), campaignName: g.campaignName?.trim() || null }));
+    const gifts = cleanGifts(draft);
     try {
       if (gifts.length === 0) await remove.mutateAsync(editModelId);
       else await upsert.mutateAsync({ modelId: editModelId, gifts });
       setEditModelId(null);
     } catch (e) { setError(String((e as Error).message ?? e)); }
   };
+  // Delete a Model's whole free-gift config straight from the list row.
+  const deleteModelGift = async (m: ProductModelRow) => {
+    if (!window.confirm(`Remove the free gift for ${giftModelLabel(m)}?`)) return;
+    try { await remove.mutateAsync(m.id); } catch (e) { window.alert(`Delete failed: ${String((e as Error).message ?? e)}`); }
+  };
+
+  // ── Bulk add ──
+  const toggleBulkModel = (mid: string) =>
+    setBulkSelected((prev) => (prev.includes(mid) ? prev.filter((x) => x !== mid) : [...prev, mid]));
+  const toggleBulkCategory = (cat: string) => {
+    const ids = models.filter((m) => m.category === cat).map((m) => m.id);
+    const allOn = ids.length > 0 && ids.every((id) => bulkSelected.includes(id));
+    setBulkSelected((prev) => (allOn ? prev.filter((id) => !ids.includes(id)) : [...new Set([...prev, ...ids])]));
+  };
+  const bulkSetRow = (i: number, patch: Partial<DefaultFreeGift>) =>
+    setBulkDraft((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  const bulkAddRow = () => setBulkDraft((prev) => [...prev, { giftProductId: '', qty: 1, campaignName: null }]);
+  const bulkRemoveRow = (i: number) => setBulkDraft((prev) => (prev.length <= 1 ? prev : prev.filter((_, idx) => idx !== i)));
+  const applyBulk = async () => {
+    setBulkError(null);
+    const additions = cleanGifts(bulkDraft);
+    if (bulkSelected.length === 0) { setBulkError('Pick at least one Model.'); return; }
+    if (additions.length === 0) { setBulkError('Choose at least one gift accessory.'); return; }
+    setBulkBusy(true);
+    try {
+      for (const mid of bulkSelected) {
+        await upsert.mutateAsync({ modelId: mid, gifts: mergeGifts(giftsByModel.get(mid) ?? [], additions) });
+      }
+      setBulkSelected([]);
+      setBulkDraft([{ giftProductId: '', qty: 1, campaignName: null }]);
+      onCloseGwp();
+    } catch (e) { setBulkError(String((e as Error).message ?? e)); }
+    finally { setBulkBusy(false); }
+  };
 
   const inputStyle = { padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' } as const;
+  const withGifts = models.filter((m) => (giftsByModel.get(m.id)?.length ?? 0) > 0);
+  const groups = GIFT_CATEGORIES
+    .map((cat) => ({ cat, list: models.filter((m) => m.category === cat) }))
+    .filter((g) => g.list.length > 0);
 
   return (
     <div style={{ marginBottom: 'var(--space-6)', borderBottom: '1px solid var(--line)', paddingBottom: 'var(--space-5)' }}>
@@ -129,32 +216,98 @@ const FreeGiftSection = ({ canEdit }: { canEdit: boolean }) => {
       {giftsQ.isLoading ? (
         <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>Loading…</div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-          {models.filter((m) => (giftsByModel.get(m.id)?.length ?? 0) > 0).map((m) => (
-            <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)', padding: '8px 12px', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)', background: 'var(--c-paper)' }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 'var(--fs-14)' }}>{giftModelLabel(m)} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>· {m.category}</span></div>
-                <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-soft)' }}>
-                  {(giftsByModel.get(m.id) ?? []).map((g) => `${g.qty}× ${accName(g.giftProductId)}`).join(', ')}
+        <>
+          {withGifts.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
+              {withGifts.map((m) => (
+                <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)', padding: '8px 12px', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)', background: 'var(--c-paper)' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 'var(--fs-14)' }}>{giftModelLabel(m)} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>· {m.category}</span></div>
+                    <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-soft)' }}>
+                      {(giftsByModel.get(m.id) ?? []).map((g) => `${g.qty}× ${accName(g.giftProductId)}`).join(', ')}
+                    </div>
+                  </div>
+                  {canEdit && (
+                    <div style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
+                      <Button variant="ghost" size="sm" onClick={() => open(m.id)}>Edit</Button>
+                      <button type="button" aria-label="Delete free gift" title="Delete free gift" disabled={remove.isPending} onClick={() => void deleteModelGift(m)} style={{ background: 'transparent', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', cursor: 'pointer', color: 'var(--c-burnt, #A6471E)' }}><Trash2 size={14} strokeWidth={1.75} /></button>
+                    </div>
+                  )}
                 </div>
-              </div>
-              {canEdit && <Button variant="ghost" size="sm" onClick={() => open(m.id)}>Edit</Button>}
-            </div>
-          ))}
-          {canEdit && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
-              <select aria-label="Add free gift to Model" value="" onChange={(e) => { if (e.target.value) open(e.target.value); }} style={{ ...inputStyle, minWidth: 260 }}>
-                <option value="">+ Add free gift to a Model…</option>
-                {GIFT_CATEGORIES.map((cat) => (
-                  <optgroup key={cat} label={cat}>
-                    {models.filter((m) => m.category === cat && (giftsByModel.get(m.id)?.length ?? 0) === 0).map((m) => (
-                      <option key={m.id} value={m.id}>{giftModelLabel(m)}</option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
+              ))}
             </div>
           )}
+
+        </>
+      )}
+
+      {gwpOpen && (
+        <div onClick={onCloseGwp} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--c-cream)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-xl)', boxShadow: 'var(--shadow-3)', width: 'min(820px, 95vw)', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}>
+            <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'var(--space-4)', borderBottom: '1px solid var(--line)' }}>
+              <h2 style={{ fontSize: 'var(--fs-16)', margin: 0 }}>
+                <Gift size={18} strokeWidth={1.75} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+                New GWP — add a free gift to Models
+              </h2>
+              <button type="button" aria-label="Close" onClick={onCloseGwp} style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}><X size={18} strokeWidth={1.75} /></button>
+            </header>
+            <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)' }}>
+              <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
+                Pick the Models, choose the gift, then Add. The gift is appended — a Model can hold several (e.g. 2 pillows + a protector). A <Gift size={11} strokeWidth={1.75} style={{ verticalAlign: 'middle' }} /> marks Models that already have a gift.
+              </p>
+
+              {groups.map(({ cat, list }) => {
+                const ids = list.map((m) => m.id);
+                const allOn = ids.length > 0 && ids.every((id) => bulkSelected.includes(id));
+                return (
+                  <div key={cat} style={{ marginBottom: 'var(--space-3)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 4 }}>
+                      <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{cat}</span>
+                      <button type="button" onClick={() => toggleBulkCategory(cat)} style={{ background: 'transparent', border: 'none', color: 'var(--c-orange)', fontSize: 'var(--fs-11)', cursor: 'pointer', padding: 0 }}>
+                        {allOn ? 'clear' : 'select all'}
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+                      {list.map((m) => {
+                        const has = (giftsByModel.get(m.id)?.length ?? 0) > 0;
+                        return (
+                          <button key={m.id} type="button" onClick={() => toggleBulkModel(m.id)} style={chipStyle(bulkSelected.includes(m.id), false)}>
+                            {giftModelLabel(m)}{has && <Gift size={11} strokeWidth={1.75} style={{ verticalAlign: 'middle', marginLeft: 4 }} />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+
+              <div style={{ marginTop: 'var(--space-2)' }}>
+                {bulkDraft.map((g, i) => (
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 64px 1fr auto', gap: 8, alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
+                    <select value={g.giftProductId} onChange={(e) => bulkSetRow(i, { giftProductId: e.target.value })} style={inputStyle} aria-label="Gift accessory">
+                      <option value="">Choose accessory…</option>
+                      {accessories.map((a) => (<option key={a.id} value={a.id}>{a.code} - {a.name}</option>))}
+                    </select>
+                    <input type="number" min={1} value={g.qty} onChange={(e) => bulkSetRow(i, { qty: Math.max(1, Math.floor(Number(e.target.value) || 1)) })} style={{ ...inputStyle, textAlign: 'center' }} aria-label="Quantity" />
+                    <input type="text" value={g.campaignName ?? ''} onChange={(e) => bulkSetRow(i, { campaignName: e.target.value })} placeholder="Campaign name (optional)" style={inputStyle} aria-label="Campaign name" />
+                    <button type="button" aria-label="Remove gift row" onClick={() => bulkRemoveRow(i)} disabled={bulkDraft.length <= 1} style={{ background: 'transparent', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', cursor: bulkDraft.length <= 1 ? 'default' : 'pointer', opacity: bulkDraft.length <= 1 ? 0.4 : 1 }}><X size={14} strokeWidth={1.75} /></button>
+                  </div>
+                ))}
+                <div style={{ marginTop: 'var(--space-2)' }}>
+                  <Button variant="ghost" size="md" onClick={bulkAddRow}><Plus size={14} strokeWidth={1.75} style={{ marginRight: 4 }} />Add gift</Button>
+                </div>
+              </div>
+
+              {bulkError && <div role="alert" style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginTop: 'var(--space-2)' }}>{bulkError}</div>}
+            </div>
+            <footer style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-3)', padding: 'var(--space-4)', borderTop: '1px solid var(--line)', alignItems: 'center' }}>
+              {bulkSelected.length > 0 && <Button variant="ghost" size="md" onClick={() => setBulkSelected([])}>Clear selection</Button>}
+              <Button variant="ghost" size="md" onClick={onCloseGwp}>Cancel</Button>
+              <Button variant="primary" size="md" disabled={bulkBusy || bulkSelected.length === 0} onClick={() => void applyBulk()}>
+                {bulkBusy ? 'Adding…' : `Add to ${bulkSelected.length} Model${bulkSelected.length === 1 ? '' : 's'}`}
+              </Button>
+            </footer>
+          </div>
         </div>
       )}
 
@@ -224,18 +377,6 @@ const emptyDraft = (type: RuleType = 'pwp'): Draft => ({
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
-const chipStyle = (on: boolean, disabled: boolean): React.CSSProperties => ({
-  padding: '6px 12px',
-  borderRadius: 999,
-  fontSize: 'var(--fs-13)',
-  fontFamily: 'var(--font-button)',
-  cursor: disabled ? 'default' : 'pointer',
-  border: on ? '1px solid var(--c-orange)' : '1px solid var(--line-strong)',
-  background: on ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-cream)',
-  color: on ? 'var(--c-burnt, #A6471E)' : 'var(--c-ink)',
-  opacity: disabled && !on ? 0.6 : 1,
-});
-
 export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
   const canEdit = mode === 'full';
 
@@ -249,6 +390,7 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [gwpOpen, setGwpOpen] = useState(false);
 
   // Selectable items for a category: {id,label}. SOFA → combos; else → models.
   const itemsFor = (cat: Cat): { id: string; label: string }[] => {
@@ -470,11 +612,12 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
           <div style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
             <Button variant="primary" onClick={() => openNew('pwp')}><Plus {...ICON} /> New PWP</Button>
             <Button variant="secondary" onClick={() => openNew('promo')}><Plus {...ICON} /> New Promo</Button>
+            <Button variant="secondary" onClick={() => setGwpOpen(true)}><Plus {...ICON} /> New GWP</Button>
           </div>
         )}
       </div>
 
-      <FreeGiftSection canEdit={canEdit} />
+      <FreeGiftSection canEdit={canEdit} gwpOpen={gwpOpen} onCloseGwp={() => setGwpOpen(false)} />
 
       {rules.length === 0 ? (
         <div style={{ padding: 'var(--space-7)', textAlign: 'center', color: 'var(--fg-muted)', border: '1px dashed var(--line-strong)', borderRadius: 'var(--radius-md)' }}>
