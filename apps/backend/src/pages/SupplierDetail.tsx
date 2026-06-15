@@ -3144,11 +3144,26 @@ const ModelSkuPickerDialog = ({
         ) : (
           <>
             <div className={styles.modalBody} style={{ paddingBottom: 'var(--space-3)' }}>
-              <p className={styles.infoLabel} style={{ marginBottom: 'var(--space-3)' }}>
-                One supplier code per Model. Save will create a binding for every
-                ACTIVE SKU under each Model with the SAME supplier code + price.
-                Already-mapped SKUs are skipped.
+              <p className={styles.infoLabel} style={{ marginBottom: 'var(--space-2)' }}>
+                This links this supplier to the items under each Model you picked, so
+                a Purchase Order to them auto-fills the cost + lead time. Save creates a
+                binding for every ACTIVE SKU under each Model with the same supplier code
+                + price; already-mapped SKUs are skipped.
               </p>
+              <ul style={{
+                margin: '0 0 var(--space-3)',
+                paddingLeft: '1.1em',
+                fontSize: 'var(--fs-12)',
+                color: 'var(--fg-muted)',
+                lineHeight: 1.6,
+              }}>
+                <li><strong>Supplier Code</strong> — the supplier's own code for these items (their part no.). Leave blank if they don't use one.</li>
+                <li><strong>Description</strong> — a free note for your reference (grade, lead, anything). Optional.</li>
+                <li><strong>Unit Price (RM)</strong> — what this supplier charges you per piece (their cost to you, not the selling price).</li>
+                <li><strong>Lead (d)</strong> — days from raising the PO to receiving the goods.</li>
+                <li><strong>MOQ</strong> — minimum order quantity the supplier accepts (0 = no minimum).</li>
+                <li><strong>Main</strong> — tick if this is the primary/default supplier for these items.</li>
+              </ul>
               <div style={{ maxHeight: '50vh', overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)' }}>
                 <table className={styles.table}>
                   <thead>
