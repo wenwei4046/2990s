@@ -352,26 +352,6 @@ export function useUpdateMfgProductGifts() {
   });
 }
 
-/** 0170 — Default Free Gift (accessory). Writes mfg_products.default_free_gifts
- *  ([{giftProductId, qty, campaignName?}]). POS auto-adds the gift at RM 0. */
-export function useUpdateMfgProductDefaultGifts() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (args: {
-      id: string;
-      defaultFreeGifts: { giftProductId: string; qty: number; campaignName?: string | null }[];
-    }) => {
-      const { id, defaultFreeGifts } = args;
-      return authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ defaultFreeGifts }),
-      });
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['mfg-products'] });
-    },
-  });
-}
 
 export type MasterPriceHistoryRow = {
   id: string;

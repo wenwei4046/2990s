@@ -1863,13 +1863,13 @@ export const useDeleteModelFabricTierOverride = () => {
   });
 };
 
-/* ─── Per-Model default free gifts (migration 0172) ────────────────────
+/* ─── Per-Model default free gifts (migration 0174) ────────────────────
  *
  * GET /model-free-gifts   → list of ModelDefaultGiftRow
  * PUT /model-free-gifts   → upsert { modelId, gifts }
  * DELETE /model-free-gifts/:modelId → remove override
  *
- * Read by the FabricPricingPanel editor AND the cart reconciler
+ * Read by the PWP & Promo tab (PwpRulesTab) editor AND the cart reconciler
  * (useFreeGiftSync) so the cart knows which gift lines to maintain. */
 export interface ModelDefaultGiftRow {
   modelId: string;
