@@ -280,15 +280,34 @@ export async function computeMrp(
   const effQtyOf = (r: DemandRow): number => Math.max(0, r.qty - deliveredNetOf(r.id));
   const demand = demandActive.filter((r) => effQtyOf(r) > 0);
 
-  // ── 2. Product master — category + name + warehouses + categories list ─
-  const { data: products } = await sb
-    .from('mfg_products')
-    .select('code, name, category');
+  // ── 2. Product master — category + name (bounded by the codes in demand) ─
+  // The category lookup MUST be complete for every demanded SKU. An unbounded
+  // `select()` is capped at ~1000 rows by PostgREST, so once the catalog grew
+  // past the cap, non-sofa SO lines whose product fell outside the returned
+  // slice resolved to a null category and were silently dropped by the category
+  // filter below — the "No open Sales-Order demand / nothing needs ordering"
+  // bug for Bedframe / Mattress / Accessories (sofa kept working because its
+  // module SKUs are few and stay within the cap). Fetch BY the codes actually
+  // in demand (bounded .in, chunked) so the map can never be clipped.
   const prodByCode = new Map<string, ProductRow>();
+  const demandCodes = [...new Set(demand.map((d) => d.item_code).filter((c): c is string => !!c))];
+  for (let i = 0; i < demandCodes.length; i += 300) {
+    const chunk = demandCodes.slice(i, i + 300);
+    if (chunk.length === 0) continue;
+    const { data: prods } = await sb
+      .from('mfg_products')
+      .select('code, name, category')
+      .in('code', chunk);
+    for (const p of (prods ?? []) as ProductRow[]) prodByCode.set(p.code, p);
+  }
+
+  // The category dropdown lists every catalog category (a handful of enum
+  // values), independent of current demand — derive it from a lightweight
+  // category-only fetch (the few distinct values all surface within the cap).
   const categorySet = new Set<string>();
-  for (const p of (products ?? []) as ProductRow[]) {
-    prodByCode.set(p.code, p);
-    if (p.category) categorySet.add(p.category);
+  const { data: catRows } = await sb.from('mfg_products').select('category');
+  for (const c of (catRows ?? []) as Array<{ category: string | null }>) {
+    if (c.category) categorySet.add(c.category);
   }
 
   const { data: warehouses } = await sb
