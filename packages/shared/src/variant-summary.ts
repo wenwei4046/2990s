@@ -33,6 +33,10 @@ const specialsList = (v: unknown): string[] => {
 export function buildVariantSummary(
   itemGroup: string | null | undefined,
   variants: Record<string, unknown> | null | undefined,
+  /* labelled — prefix the fabric segment with "Fabric: " on supplier-facing
+     docs (PO / GRN / PI). Seat/Leg/Divan/Gap already carry inline labels; the
+     fabric code was the only bare segment. Default off → POS/SO unchanged. */
+  opts?: { labelled?: boolean },
 ): string {
   if (!variants || typeof variants !== 'object') return '';
 
@@ -59,7 +63,7 @@ export function buildVariantSummary(
   const fabric = [...new Set(fabricParts.filter(Boolean))].join(' ')
     || str(variants.fabricColor)
     || (str(variants.fabricLabel) ? `${str(variants.fabricLabel)} COLOUR KIV` : '');
-  if (fabric) segments.push(fabric);
+  if (fabric) segments.push(opts?.labelled ? `Fabric: ${fabric}` : fabric);
 
   // 2026-06-04 — POS handover sofa lines carry the leg pick as sofaLegHeight
   // (PR #473) and the seat pick as depth; Backend-keyed lines use legHeight /
