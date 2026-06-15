@@ -238,7 +238,7 @@ export function buildFreeGiftTriggers(lines: TriggerLine[]): FreeGiftTrigger[] {
         triggerKey:  buildId,
         triggerRef:  line.modelId ?? buildId,
         triggerKind: 'product',
-        triggerQty:  1,
+        triggerQty:  1,                          // one complete sofa = one gift; never scale by module-row qty
         gifts:       line.gifts,
       });
     } else {

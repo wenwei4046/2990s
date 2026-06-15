@@ -237,4 +237,14 @@ describe('buildFreeGiftTriggers (per-Model)', () => {
   it('sofa with no model gifts → no trigger', () => {
     expect(buildFreeGiftTriggers([line({ category: 'SOFA', buildKey: 'b', modelId: 'm', gifts: [] })])).toHaveLength(0);
   });
+
+  it('mixed sofa + non-sofa cart → distinct triggers, input order preserved', () => {
+    const t = buildFreeGiftTriggers([
+      line({ triggerKey: 'idx-0', category: 'MATTRESS', qty: 1, modelId: 'mat', gifts: [G('p1')] }),
+      line({ triggerKey: 'idx-1', category: 'SOFA', buildKey: 'build-1', modelId: 'annsa', gifts: [G('p2')] }),
+    ]);
+    expect(t).toHaveLength(2);
+    expect(t.map((x) => x.triggerKey)).toEqual(['idx-0', 'build-1']);
+    expect(t.map((x) => x.triggerRef)).toEqual(['CODE', 'annsa']);
+  });
 });
