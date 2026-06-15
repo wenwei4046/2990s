@@ -407,10 +407,25 @@ export async function computeMrp(
   // only that warehouse's demand lines are grouped. Sofa is handled separately
   // as colour-matched SETS (section 8) so it isn't double-counted here.
   type Bucket = { whId: string | null; code: string; vkey: string; vlabel: string; rows: DemandRow[] };
+  /* Category from the catalog (authoritative); when the SO line's item_code is
+     NOT in mfg_products yet (an item ordered before it was added to the SKU
+     Master), fall back to the line's own item_group so the demand still SHOWS
+     under its category tab instead of silently vanishing. Wei Siang 2026-06-16:
+     the Bedframe/Mattress tabs were dropping every line whose code wasn't
+     catalogued — only the catalogued ones (e.g. BARON-(K)) survived. */
+  const catFromGroup = (g: string | null | undefined): string | null => {
+    const s = (g ?? '').trim().toUpperCase();
+    if (s.includes('BEDFRAME')) return 'BEDFRAME';
+    if (s.includes('SOFA')) return 'SOFA';
+    if (s.includes('MATTRESS')) return 'MATTRESS';
+    if (s.includes('ACCESSOR')) return 'ACCESSORY';
+    if (s.includes('SERVICE')) return 'SERVICE';
+    return null;
+  };
   const demandByKey = new Map<string, Bucket>();
   for (const d of demand) {
     const prod = prodByCode.get(d.item_code);
-    const cat = prod?.category ?? null;
+    const cat = prod?.category ?? catFromGroup(d.item_group);
     /* P1 SO-SKU spec §4.6 — SERVICE lines (delivery fee / dispose / lift) are
        services, not goods: they never create purchase demand. Skip BEFORE the
        category filter so even ?category=SERVICE can't surface them. (Section 8
