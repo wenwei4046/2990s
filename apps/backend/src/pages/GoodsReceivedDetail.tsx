@@ -46,6 +46,7 @@ import { useWarehouses } from '../lib/inventory-queries';
 import { useRacks } from '../lib/warehouse-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { MoneyInput } from '../components/MoneyInput';
+import { useConfirm } from '../components/ConfirmDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
@@ -140,6 +141,7 @@ export const GoodsReceivedDetail = () => {
   const updateHeader = useUpdateGrnHeader();
   const updateItem = useUpdateGrnItem();
   const deleteItem = useDeleteGrnItem();
+  const askConfirm = useConfirm();
   const cancel = useCancelGrn();
 
   const grn = detail.data?.grn ?? null;
@@ -438,12 +440,23 @@ export const GoodsReceivedDetail = () => {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
                       <span className={styles.previewPrice}>{fmtRm(lineValueCenti, grn.currency)}</span>
-                      {/* Remove — Edit mode only. Deletes immediately (no confirm);
-                          the server releases the PO's received_qty back. */}
+                      {/* Remove — Edit mode only. Commander 2026-06-15 — confirm
+                          before delete (no more 裸奔). On confirm the line is
+                          removed and the server releases the PO's received_qty back. */}
                       {isEditing && (
                         <button
                           type="button"
-                          onClick={() => { if (!isLocked) deleteItem.mutate({ grnId: grn.id, itemId: it.id }); }}
+                          onClick={async () => {
+                            if (isLocked) return;
+                            if (await askConfirm({
+                              title: 'Remove this line?',
+                              body: "The line is removed and the PO's received quantity is released back.",
+                              confirmLabel: 'Remove',
+                              danger: true,
+                            })) {
+                              deleteItem.mutate({ grnId: grn.id, itemId: it.id });
+                            }
+                          }}
                           title="Remove line"
                           disabled={isLocked || deleteItem.isPending}
                           style={{

@@ -30,6 +30,7 @@ import {
 } from '../lib/purchase-consignment-return-queries';
 import { useSuppliers, useSupplierDetail, type SupplierRow } from '../lib/suppliers-queries';
 import { MoneyInput } from '../components/MoneyInput';
+import { useConfirm } from '../components/ConfirmDialog';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -98,6 +99,7 @@ export const PurchaseConsignmentReturnDetail = () => {
   const updateHeader = useUpdatePurchaseConsignmentReturnHeader();
   const updateItem = useUpdatePurchaseConsignmentReturnItem();
   const deleteItem = useDeletePurchaseConsignmentReturnItem();
+  const askConfirm = useConfirm();
   const cancel = useCancelPurchaseConsignmentReturn();
 
   const pr = detail.data?.purchaseReturn ?? null;
@@ -348,7 +350,19 @@ export const PurchaseConsignmentReturnDetail = () => {
                             <button type="button"
                               className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
                               title="Remove line" disabled={isLocked || deleteItem.isPending}
-                              onClick={() => { if (!isLocked) deleteItem.mutate({ id: pr.id, itemId: it.id }); }}>
+                              /* Commander 2026-06-15 — confirm before delete (no
+                                 more 裸奔). */
+                              onClick={async () => {
+                                if (isLocked) return;
+                                if (await askConfirm({
+                                  title: 'Remove this line?',
+                                  body: "The line is removed from this consignment return.",
+                                  confirmLabel: 'Remove',
+                                  danger: true,
+                                })) {
+                                  deleteItem.mutate({ id: pr.id, itemId: it.id });
+                                }
+                              }}>
                               <Trash2 {...SM_ICON} />
                             </button>
                           </span>

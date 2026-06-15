@@ -8,6 +8,7 @@ import {
   useHrPickers, type HrPickerRef,
 } from '../lib/hr-queries';
 import { useAuth, isAdminLevel } from '../lib/auth';
+import { useConfirm } from '../components/ConfirmDialog';
 import styles from './Hr.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -74,6 +75,7 @@ const HrSettingsInner = () => {
   const itemKpi = useHrItemKpi();
   const createItemKpi = useCreateHrItemKpi();
   const deleteItemKpi = useDeleteHrItemKpi();
+  const askConfirm = useConfirm();
 
   const [newStaff, setNewStaff] = useState('');
   const [newTier, setNewTier] = useState<'sales' | 'manager'>('sales');
@@ -121,7 +123,7 @@ const HrSettingsInner = () => {
                     onChange={(e) => updateProfile.mutate({ id: p.id, active: e.target.checked })} />
                 </td>
                 <td>
-                  <button className={styles.iconBtn} onClick={() => deleteProfile.mutate(p.id)} aria-label="Remove salesperson">
+                  <button className={styles.iconBtn} onClick={async () => { if (await askConfirm({ title: 'Remove this salesperson?', body: 'They will be removed from the commission list.', confirmLabel: 'Remove', danger: true })) deleteProfile.mutate(p.id); }} aria-label="Remove salesperson">
                     <Trash2 {...ICON} />
                   </button>
                 </td>
@@ -189,7 +191,7 @@ const HrSettingsInner = () => {
                 <td className={styles.num}>RM {(it.bonusCenti / 100).toFixed(2)}</td>
                 <td>{it.active ? 'Yes' : 'No'}</td>
                 <td>
-                  <button className={styles.iconBtn} onClick={() => deleteItemKpi.mutate(it.id)} aria-label="Remove item KPI">
+                  <button className={styles.iconBtn} onClick={async () => { if (await askConfirm({ title: 'Remove this item KPI?', confirmLabel: 'Remove', danger: true })) deleteItemKpi.mutate(it.id); }} aria-label="Remove item KPI">
                     <Trash2 {...ICON} />
                   </button>
                 </td>

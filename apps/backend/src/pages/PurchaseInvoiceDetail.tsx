@@ -44,6 +44,7 @@ import {
 } from '../lib/flow-queries';
 import { useSuppliers, useSupplierDetail, type SupplierRow } from '../lib/suppliers-queries';
 import { MoneyInput } from '../components/MoneyInput';
+import { useConfirm } from '../components/ConfirmDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
@@ -126,6 +127,7 @@ export const PurchaseInvoiceDetail = () => {
   const updateHeader = useUpdatePurchaseInvoiceHeader();
   const updateItem = useUpdatePurchaseInvoiceItem();
   const deleteItem = useDeletePurchaseInvoiceItem();
+  const askConfirm = useConfirm();
   const cancel = useCancelPurchaseInvoice();
 
   const pi = detail.data?.purchaseInvoice ?? null;
@@ -400,10 +402,20 @@ export const PurchaseInvoiceDetail = () => {
                             <button type="button"
                               className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
                               title="Remove line" disabled={isLocked || deleteItem.isPending}
-                              /* Delete immediately (no confirm). PI is AP-only, so
-                                 removal is a plain line delete (inventory landed at
-                                 GRN time). */
-                              onClick={() => { if (!isLocked) deleteItem.mutate({ id: pi.id, itemId: it.id }); }}>
+                              /* Commander 2026-06-15 — confirm before delete (no
+                                 more 裸奔). PI is AP-only, so removal is a plain line
+                                 delete (inventory landed at GRN time). */
+                              onClick={async () => {
+                                if (isLocked) return;
+                                if (await askConfirm({
+                                  title: 'Remove this line?',
+                                  body: "The line is removed from this invoice.",
+                                  confirmLabel: 'Remove',
+                                  danger: true,
+                                })) {
+                                  deleteItem.mutate({ id: pi.id, itemId: it.id });
+                                }
+                              }}>
                               <Trash2 {...SM_ICON} />
                             </button>
                           </span>

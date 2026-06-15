@@ -43,6 +43,7 @@ import {
 } from '../lib/flow-queries';
 import { useSuppliers, useSupplierDetail, type SupplierRow } from '../lib/suppliers-queries';
 import { MoneyInput } from '../components/MoneyInput';
+import { useConfirm } from '../components/ConfirmDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
@@ -117,6 +118,7 @@ export const PurchaseReturnDetail = () => {
   const updateHeader = useUpdatePurchaseReturnHeader();
   const updateItem = useUpdatePurchaseReturnItem();
   const deleteItem = useDeletePurchaseReturnItem();
+  const askConfirm = useConfirm();
   const cancel = useCancelPurchaseReturn();
 
   const pr = detail.data?.purchaseReturn ?? null;
@@ -380,8 +382,19 @@ export const PurchaseReturnDetail = () => {
                             <button type="button"
                               className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
                               title="Remove line" disabled={isLocked || deleteItem.isPending}
-                              /* Delete immediately (no confirm). */
-                              onClick={() => { if (!isLocked) deleteItem.mutate({ id: pr.id, itemId: it.id }); }}>
+                              /* Commander 2026-06-15 — confirm before delete (no
+                                 more 裸奔). */
+                              onClick={async () => {
+                                if (isLocked) return;
+                                if (await askConfirm({
+                                  title: 'Remove this line?',
+                                  body: "The line is removed from this return.",
+                                  confirmLabel: 'Remove',
+                                  danger: true,
+                                })) {
+                                  deleteItem.mutate({ id: pr.id, itemId: it.id });
+                                }
+                              }}>
                               <Trash2 {...SM_ICON} />
                             </button>
                           </span>
