@@ -3933,8 +3933,8 @@ const ProductSuppliersDrawer = ({
 }: { row: MfgProductRow; onClose: () => void }) => {
   const q = useMfgProductSuppliers(row.id);
   const suppliers = q.data?.suppliers ?? [];
-  // 0166 — editable SKU barcode. Local draft commits on blur / Enter via the
-  // shared PATCH hook (verified-save reads the row back before claiming OK).
+  // 0166 — editable SKU barcode. Local draft commits on Enter (no blur-auto-save,
+  // Commander 2026-06-15) via the shared PATCH hook (verified-save reads back).
   const update = useUpdateMfgProductPrices();
   const [barcodeDraft, setBarcodeDraft] = useState(row.barcode ?? '');
   const commitBarcode = () => {
@@ -3968,7 +3968,7 @@ const ProductSuppliersDrawer = ({
               {row.name}{row.description ? ` — ${row.description}` : ''}
             </p>
             {/* 0166 — barcode lives on the SKU detail drawer (the SKU Master
-                grid column is read-only + default-hidden). Commits on blur. */}
+                grid column is read-only + default-hidden). Saves on Enter. */}
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
               <span style={{
                 fontSize: 'var(--fs-11)', fontWeight: 700, textTransform: 'uppercase',
@@ -3980,9 +3980,9 @@ const ProductSuppliersDrawer = ({
                 type="text"
                 value={barcodeDraft}
                 onChange={(e) => setBarcodeDraft(e.target.value)}
-                onBlur={commitBarcode}
-                onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                placeholder="scan or type…"
+                /* Commander 2026-06-15 — Enter saves; no blur-auto-save (裸奔). */
+                onKeyDown={(e) => { if (e.key === 'Enter') commitBarcode(); }}
+                placeholder="scan or type, then Enter"
                 disabled={update.isPending}
                 style={{
                   width: 220,
@@ -4396,6 +4396,9 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
   const [result, setResult] = useState<BatchImportResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const batchImport = useBatchImportMfgProducts();
+  // Parsed rows held for PREVIEW — committed only on explicit Confirm (Commander
+  // 2026-06-15, no 裸奔: picking a file must NOT write to the server).
+  const [staged, setStaged] = useState<{ rows: BatchImportRow[]; tierErrors: Array<{ code: string; reason: string }> } | null>(null);
 
   const handleFile = async (file: File) => {
     setBusy(true);
@@ -4514,15 +4517,31 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
         return;
       }
 
-      const res = await batchImport.mutateAsync(rows);
-      // Fold the client-side tier rejections into the result the operator sees.
-      setResult(tierErrors.length > 0
+      // Stage for preview — DO NOT commit yet (Commander 2026-06-15, no 裸奔):
+      // show what will change and require an explicit Confirm before writing.
+      setStaged({ rows, tierErrors });
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Commit the staged rows — the ONLY path that writes to the server.
+  const confirmImport = async () => {
+    if (!staged) return;
+    setBusy(true);
+    setErrorMsg(null);
+    try {
+      const res = await batchImport.mutateAsync(staged.rows);
+      setResult(staged.tierErrors.length > 0
         ? {
             upserted: res.upserted,
-            failed: res.failed + tierErrors.length,
-            failures: [...tierErrors, ...(res.failures ?? [])],
+            failed: res.failed + staged.tierErrors.length,
+            failures: [...staged.tierErrors, ...(res.failures ?? [])],
           }
         : res);
+      setStaged(null);
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : String(e));
     } finally {
@@ -4555,7 +4574,7 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
         <input
           type="file"
           accept=".csv,.xlsx,.xls"
-          disabled={busy}
+          disabled={busy || staged !== null}
           style={{ marginTop: 'var(--space-3)' }}
           onChange={(e) => {
             const f = e.target.files?.[0];
@@ -4565,8 +4584,33 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
 
         {busy && (
           <p style={{ marginTop: 'var(--space-3)', fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
-            Importing…
+            Working…
           </p>
+        )}
+
+        {/* Preview + explicit Confirm (Commander 2026-06-15 — no 裸奔). Nothing
+            is written until the operator confirms this staged batch. */}
+        {staged && !result && (
+          <div style={{ marginTop: 'var(--space-4)' }}>
+            <p style={{ fontSize: 'var(--fs-13)' }}>
+              <strong>{staged.rows.length}</strong> SKU{staged.rows.length === 1 ? '' : 's'} ready to import
+              {staged.tierErrors.length > 0 && (
+                <> · <span style={{ color: 'var(--c-burnt)' }}>{staged.tierErrors.length} will be skipped</span></>
+              )}. Blank cells keep the current value. <strong>Nothing is saved until you confirm.</strong>
+            </p>
+            {staged.tierErrors.length > 0 && (
+              <ul style={{ margin: 'var(--space-2) 0 0', paddingLeft: 'var(--space-4)', fontSize: 'var(--fs-12)', color: 'var(--c-burnt)' }}>
+                {staged.tierErrors.slice(0, 8).map((e) => <li key={e.code}>{e.code}: {e.reason}</li>)}
+                {staged.tierErrors.length > 8 && <li>…and {staged.tierErrors.length - 8} more</li>}
+              </ul>
+            )}
+            <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 'var(--space-4)' }}>
+              <Button variant="ghost" size="md" onClick={() => setStaged(null)} disabled={busy}>Cancel</Button>
+              <Button variant="primary" size="md" onClick={() => void confirmImport()} disabled={busy}>
+                {busy ? 'Importing…' : `Confirm import (${staged.rows.length})`}
+              </Button>
+            </div>
+          </div>
         )}
 
         {errorMsg && (
