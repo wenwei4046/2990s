@@ -2802,7 +2802,9 @@ const ModelSkuPickerDialog = ({
   const modelRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = (modelsQ.data ?? []).filter((m) => {
-      if (!m.active) return false;
+      // Show inactive Models too (purchaser 2026-06: "price info did not show
+      // item active or no"). They render dimmed + "Inactive" and are not
+      // pickable (you don't map prices on a deactivated item) — but visible.
       if (!q) return true;
       return (
         m.model_code.toLowerCase().includes(q) ||
@@ -3039,9 +3041,10 @@ const ModelSkuPickerDialog = ({
                     )}
                     {!loading && modelRows.map(({ model, skus, boundCount }) => {
                       const isPicked = pickedIds.has(model.id);
+                      const inactive = !model.active;
                       const noSkus = skus.length === 0;
                       const fullyBound = boundCount >= skus.length && skus.length > 0;
-                      const disabled = noSkus || fullyBound;
+                      const disabled = inactive || noSkus || fullyBound;
                       const status = bindingStatus(skus.length, boundCount);
                       return (
                         <tr
@@ -3053,11 +3056,13 @@ const ModelSkuPickerDialog = ({
                             background: isPicked ? 'rgba(232, 107, 58, 0.06)' : undefined,
                           }}
                           title={
-                            noSkus
-                              ? 'No active SKUs under this Model'
-                              : fullyBound
-                                ? 'All SKUs under this Model already mapped'
-                                : ''
+                            inactive
+                              ? 'Model is inactive — activate it in SKU Master before mapping prices'
+                              : noSkus
+                                ? 'No active SKUs under this Model'
+                                : fullyBound
+                                  ? 'All SKUs under this Model already mapped'
+                                  : ''
                           }
                         >
                           <td>
@@ -3070,7 +3075,14 @@ const ModelSkuPickerDialog = ({
                             />
                           </td>
                           <td className={styles.codeCell}>{model.model_code}</td>
-                          <td>{model.name}</td>
+                          <td>
+                            {model.name}
+                            {inactive && (
+                              <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', fontWeight: 700, color: 'var(--c-burnt)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                · Inactive
+                              </span>
+                            )}
+                          </td>
                           <td className={styles.muted}>{model.category}</td>
                           <td className={`${styles.tableRight} ${styles.muted}`}>{skus.length}</td>
                           <td>

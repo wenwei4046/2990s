@@ -624,13 +624,11 @@ const SkuMasterTab = () => {
     }
     cols.push(
       {
-        // 0166 — SKU barcode. Default-hidden: show it via the grid's column
-        // pill / right-click header menu. Edit from the SKU detail drawer
-        // (double-click a row) or set it when creating a SKU.
+        // 0166 — SKU barcode. Shown by default (purchaser request). Edit from
+        // the SKU detail drawer (double-click a row) or set it when creating a SKU.
         key: 'barcode',
         label: 'Barcode',
         width: 140,
-        defaultHidden: true,
         accessor: (r) => r.barcode
           ? <span className={styles.codeChip}>{r.barcode}</span>
           : <span className={styles.priceEmpty}>—</span>,

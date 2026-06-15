@@ -89,7 +89,7 @@ const buildColumns = (): DataGridColumn<GrnRow>[] => [
     sortFn: (a, b) => String(a.received_at ?? '').localeCompare(String(b.received_at ?? '')),
   },
   {
-    key: 'delivery_note_ref', label: 'DN Ref', width: 130, sortable: true, defaultHidden: true,
+    key: 'delivery_note_ref', label: 'DN Ref', width: 130, sortable: true,
     accessor: (g) => g.delivery_note_ref ?? '—',
     searchValue: (g) => g.delivery_note_ref ?? '',
   },

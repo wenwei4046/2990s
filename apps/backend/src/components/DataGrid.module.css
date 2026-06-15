@@ -374,7 +374,7 @@
   cursor: pointer;
 }
 .tr:hover { background: var(--c-cream); }
-.trSelected { background: rgba(232, 107, 58, 0.10) !important; }
+.trSelected { background: rgba(232, 107, 58, 0.10) !important; font-weight: 600; }
 .tr:last-child { border-bottom: 0; }
 
 .td {
