@@ -375,23 +375,25 @@ function ComboCard({
         </button>
       </div>
 
-      {/* Height tiers */}
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 4 }}>
+      {/* Height tiers — wrap into roomy cells instead of cramming every size
+          into one tight row (Commander 2026-06-15: "字那么小怎么看"). Cells now
+          auto-fill at a comfortable min-width and the size + price font is bumped. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(68px, 1fr))', gap: 6 }}>
         {heights.map((h) => {
           const v = rule.pricesByHeight?.[h];
           return (
             <div key={h} style={{
-              padding: '4px 6px',
+              padding: '6px 8px',
               background: 'var(--c-cream)',
               borderRadius: 'var(--radius-sm)',
               textAlign: 'center',
             }}>
-              <div style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+              <div style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
                 {h}
               </div>
               <div style={{
                 fontFamily: 'var(--font-mono)',
-                fontSize: 'var(--fs-12)',
+                fontSize: 'var(--fs-14)',
                 fontWeight: 600,
                 color: v == null ? 'var(--fg-muted)' : 'var(--c-ink)',
               }}>
