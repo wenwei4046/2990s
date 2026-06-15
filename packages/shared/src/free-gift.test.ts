@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseDefaultFreeGifts,
   computeDesiredFreeGifts,
+  mergeDesiredFreeGifts,
   validateFreeGiftClaims,
   freeGiftLineKey,
   diffFreeGiftLines,
@@ -75,6 +76,39 @@ describe('computeDesiredFreeGifts', () => {
     ];
     const desired = computeDesiredFreeGifts(triggers);
     expect(desired.map((d) => d.key)).toEqual([freeGiftLineKey('t0', 0), freeGiftLineKey('t1', 0)]);
+  });
+});
+
+describe('mergeDesiredFreeGifts', () => {
+  it('collapses same (gift, campaign) lines from different triggers into one summed row', () => {
+    const desired = computeDesiredFreeGifts([
+      { triggerKey: 't0', triggerRef: 'a', triggerKind: 'product', triggerQty: 1, gifts: [{ giftProductId: 'g', qty: 2, campaignName: null }] },
+      { triggerKey: 't1', triggerRef: 'b', triggerKind: 'product', triggerQty: 1, gifts: [{ giftProductId: 'g', qty: 2, campaignName: null }] },
+    ]);
+    expect(mergeDesiredFreeGifts(desired)).toEqual([
+      { key: 'gift-g ', triggerKey: 't0', giftProductId: 'g', qty: 4, campaignName: null },
+    ]);
+  });
+  it('keeps distinct gift products / campaigns on separate rows', () => {
+    const desired = computeDesiredFreeGifts([
+      { triggerKey: 't0', triggerRef: 'a', triggerKind: 'product', triggerQty: 1, gifts: [
+        { giftProductId: 'pillow', qty: 1, campaignName: null },
+        { giftProductId: 'pillow', qty: 1, campaignName: 'Raya' },   // diff campaign → own row
+        { giftProductId: 'bolster', qty: 1, campaignName: null },    // diff product → own row
+      ] },
+    ]);
+    const merged = mergeDesiredFreeGifts(desired);
+    expect(merged.map((d) => [d.giftProductId, d.campaignName, d.qty])).toEqual([
+      ['pillow', null, 1],
+      ['pillow', 'Raya', 1],
+      ['bolster', null, 1],
+    ]);
+  });
+  it('produces a stable key independent of the triggering line (cart reconciler matches it)', () => {
+    const build = (triggerKey: string) => mergeDesiredFreeGifts(computeDesiredFreeGifts([
+      { triggerKey, triggerRef: 'a', triggerKind: 'product', triggerQty: 1, gifts: [{ giftProductId: 'g', qty: 1, campaignName: null }] },
+    ]));
+    expect(build('cfg-aaa')[0]?.key).toEqual(build('cfg-zzz')[0]?.key);
   });
 });
 

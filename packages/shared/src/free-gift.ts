@@ -112,6 +112,26 @@ const giftBucketKey = (giftProductId: string, campaignName: string | null): stri
   `${giftProductId} ${campaignName ?? ''}`;
 
 /**
+ * Collapse desired gift lines that are the SAME (giftProductId, campaignName)
+ * into ONE line with the summed qty, so the POS cart shows a single
+ * "<gift> · Free gift" row instead of one row per trigger (Loo 2026-06-15).
+ * Mirrors diffFreeGiftLines' bucketing, so the cart matches the placed SO.
+ * The bucket key is deterministic so the cart reconciler matches it stably
+ * across recomputes; triggerKey keeps the first contributing trigger as an
+ * informational ref (the server re-derives real eligibility regardless).
+ */
+export function mergeDesiredFreeGifts(desired: DesiredFreeGift[]): DesiredFreeGift[] {
+  const byBucket = new Map<string, DesiredFreeGift>();
+  for (const d of desired) {
+    const bucket = giftBucketKey(d.giftProductId, d.campaignName);
+    const cur = byBucket.get(bucket);
+    if (cur) cur.qty += d.qty;
+    else byBucket.set(bucket, { ...d, key: `gift-${bucket}` });
+  }
+  return [...byBucket.values()];
+}
+
+/**
  * Reconcile a placed SO's existing free-gift lines against the desired set,
  * bucketed by (giftProductId, campaignName). Idempotent: when a bucket's
  * existing total qty already equals the desired total, it is left untouched
