@@ -110,15 +110,19 @@ export function buildVariantSummary(
   // Loo 2026-06-13 — the POS product-page "special add-on" (note + extra charge,
   // variants.extraAddonNote + extraAddonAmountRM) is a FREE-TEXT Special Add-on.
   // Its NOTE renders in the same SPECIAL segment as the picked add-ons so
-  // Description 2 reads them together — with money it carries "(+RM…)", without
-  // money it's the bare note (a free note is still an option). The item remark
-  // (variants.remark) is a SEPARATE field and does NOT belong here — it prints as
-  // its own "Remark:" line off the mfg_sales_order_items.remark column.
+  // Description 2 reads them together. The item remark (variants.remark) is a
+  // SEPARATE field and does NOT belong here — it prints as its own "Remark:"
+  // line off the mfg_sales_order_items.remark column.
+  //
+  // Loo 2026-06-15 — the add-on AMOUNT is no longer surfaced here. It is already
+  // folded into the line's selling price (POS submit + recompute extraSen fold),
+  // so printing "(+RM…)" double-shows money that's already in the product amount.
+  // The SPECIAL segment keeps the note label ("Extra add-on" by default) so the
+  // add-on stays visible — only the RM figure is dropped.
   const extraRM = Math.round(Number(variants.extraAddonAmountRM ?? 0));
   const noteText = str(variants.extraAddonNote);
   if (noteText || extraRM > 0) {
-    const bit = noteText || 'Extra add-on';
-    specialBits.push(extraRM > 0 ? `${bit} (+RM${extraRM})` : bit);
+    specialBits.push(noteText || 'Extra add-on');
   }
   if (specialBits.length) segments.push(`SPECIAL: ${specialBits.join(' + ')}`);
 

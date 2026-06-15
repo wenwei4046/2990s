@@ -85,19 +85,23 @@ describe('buildVariantSummary', () => {
      With money attached it renders inside the SPECIAL segment, next to the picked
      add-ons. The item remark (variants.remark) is SEPARATE: it never enters the
      SPECIAL segment — it prints as its own "Remark:" line off the .remark column. */
-  it('a special add-on note + extra charge renders in the SPECIAL segment like an add-on', () => {
+  // Loo 2026-06-15 — the add-on AMOUNT is no longer shown in the summary (it is
+  // already folded into the line price); the SPECIAL segment keeps only the note.
+  it('a special add-on note + extra charge renders the note (no RM figure) in the SPECIAL segment', () => {
     const summary = buildVariantSummary('bedframe', {
       divanHeight: '10"',
       specials: ['Divan Fully Cover'],
       extraAddonNote: 'Custom side pocket',
       extraAddonAmountRM: 200,
     });
-    expect(summary).toContain('SPECIAL: Divan Fully Cover + Custom side pocket (+RM200)');
+    expect(summary).toContain('SPECIAL: Divan Fully Cover + Custom side pocket');
+    expect(summary).not.toContain('RM');
   });
 
-  it('an extra charge without a note renders a generic SPECIAL entry', () => {
+  it('an extra charge without a note renders a generic SPECIAL entry, no RM figure', () => {
     const summary = buildVariantSummary('bedframe', { divanHeight: '10"', extraAddonAmountRM: 150 });
-    expect(summary).toContain('SPECIAL: Extra add-on (+RM150)');
+    expect(summary).toContain('SPECIAL: Extra add-on');
+    expect(summary).not.toContain('RM');
   });
 
   it('a note WITHOUT money also renders in the SPECIAL segment, bare', () => {
