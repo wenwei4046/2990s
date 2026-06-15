@@ -170,32 +170,18 @@ export async function generatePurchaseOrderPdf(
 
   // Border boxes so it looks like AutoCount
   doc.setDrawColor(120); doc.setLineWidth(0.2);
-  const blockH = 40;
-  doc.rect(leftX,  y, colW, blockH);
-  doc.rect(rightX, y, colW, blockH);
+  const boxTop = y;
+  const leftTextX = leftX + 2;
+  const leftW = colW - 4;
+  const metaValX = rightX + 35;
+  const metaValW = colW - 37;
 
-  // LEFT: supplier name + address + TEL/FAX + Attn
-  doc.setFont('helvetica', 'bold');  doc.setFontSize(10);
-  doc.text(s.name ?? '—', leftX + 2, y + 5);
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-  let ly = y + 9;
-  supplierAddressLines.forEach((line) => {
-    doc.text(String(line), leftX + 2, ly);
-    ly += 4;
-  });
-  doc.text(`TEL : ${s.phone ?? sFull.mobile ?? ''}      FAX : ${sFull.fax ?? ''}`, leftX + 2, ly);
-  ly += 4;
-  doc.text(`Attn: ${sFull.attention ?? s.contact_person ?? ''}`, leftX + 2, ly);
-
-  /* RIGHT: meta block. "Your Ref No." = the source S/O No. (AutoCount keeps
-     the customer's reference here); falls back to per-line so_doc_no roll-up
-     when the header never carried one. Terms = supplier payment terms.
-     Page row is patched after pagination (we don't know N yet). */
+  /* "Your Ref No." = the source S/O No. (AutoCount keeps the customer's
+     reference here); falls back to the per-line so_doc_no roll-up. */
   const lineSoDocs = [...new Set(items.map((it) => (it.so_doc_no ?? '').trim()).filter(Boolean))];
   const yourRef = header.your_ref_no
     ?? header.source_so_doc_no
     ?? (lineSoDocs.length > 0 ? lineSoDocs.join(', ') : '');
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
   const metaLines: Array<[string, string]> = [
     ['PO No.',            header.po_number],
     ['Your Ref No.',      yourRef],
@@ -205,16 +191,52 @@ export async function generatePurchaseOrderPdf(
     ['Purchase Location', header.purchase_location_name ?? ''],
     ['Page',              ''],                          // patched after pagination
   ];
-  let my = y + 5;
+
+  /* Measure the WRAPPED content first, then size the boxes to fit. A long
+     address or Purchase Location used to overrun its box (no width clamp) and
+     collide with the right column — "…47000 SUNGAI BULOH" ran into the
+     "Your Ref No." value. splitTextToSize wraps; blockH grows to the taller
+     column so nothing overlaps the note/table below. */
+  doc.setFont('helvetica', 'bold');  doc.setFontSize(10);
+  const nameLines = doc.splitTextToSize(s.name ?? '—', leftW) as string[];
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+  const leftBody: string[] = [];
+  supplierAddressLines.forEach((line) => leftBody.push(...(doc.splitTextToSize(String(line), leftW) as string[])));
+  leftBody.push(...(doc.splitTextToSize(`TEL : ${s.phone ?? sFull.mobile ?? ''}   FAX : ${sFull.fax ?? ''}`, leftW) as string[]));
+  leftBody.push(...(doc.splitTextToSize(`Attn: ${sFull.attention ?? s.contact_person ?? ''}`, leftW) as string[]));
+  const metaWrapped = metaLines.map(([label, val]) => ({
+    label,
+    lines: (doc.splitTextToSize(String(val ?? ''), metaValW) as string[]),
+  }));
+
+  const leftH = 5 + nameLines.length * 4 + 1 + leftBody.length * 4;
+  const metaH = 5 + metaWrapped.reduce((a, m) => a + Math.max(1, m.lines.length) * 4.5, 0);
+  const blockH = Math.max(40, leftH + 2, metaH + 2);
+  doc.rect(leftX,  boxTop, colW, blockH);
+  doc.rect(rightX, boxTop, colW, blockH);
+
+  // LEFT: supplier name + address + TEL/FAX + Attn (wrapped)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
+  let ly = boxTop + 5;
+  nameLines.forEach((ln) => { doc.text(ln, leftTextX, ly); ly += 4; });
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+  ly += 1;
+  leftBody.forEach((ln) => { doc.text(ln, leftTextX, ly); ly += 4; });
+
+  // RIGHT: meta block — values wrap inside the box rather than overrunning it.
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+  let my = boxTop + 5;
   let pageRowY = 0;
-  metaLines.forEach(([label, val]) => {
-    doc.text(label,             rightX + 2,  my);
-    doc.text(':',               rightX + 32, my);
-    doc.text(String(val ?? ''), rightX + 35, my);
+  metaWrapped.forEach(({ label, lines }) => {
+    doc.text(label, rightX + 2,  my);
+    doc.text(':',   rightX + 32, my);
+    const vlines = lines.length ? lines : [''];
+    vlines.forEach((vl, i) => doc.text(vl, metaValX, my + i * 4.5));
     if (label === 'Page') pageRowY = my;
-    my += 4.5;
+    my += Math.max(1, vlines.length) * 4.5;
   });
-  y += blockH + 2;
+
+  y = boxTop + blockH + 2;
 
   // Owner's rule — supplier acts on THEIR codes; ours stay printed alongside.
   doc.setFont('helvetica', 'italic'); doc.setFontSize(8); doc.setTextColor(80);
@@ -234,10 +256,15 @@ export async function generatePurchaseOrderPdf(
   //   Transf. SO | UOM | Qty | U/Price | Disc | Total
   type Row = [string, string, string, string, string, string, string, string, string];
   const rows: Row[] = items.map((it) => {
+    // ONE variant line only: the recomputed specs (fabric-mapped) when present,
+    // else the stored description2 — never BOTH. They are the same summary with
+    // only the fabric segment differing (e.g. "CG-001 …" vs "KN390-1 (CG-001) …"),
+    // which slipped past the Set-dedup and printed the variant twice. Matches
+    // how the SO / GRN / PI PDFs already compose their description.
+    const specs = specsLine(it, fabricMap) || (it.description2 ?? '').trim();
     const descParts = [
       it.description ?? it.material_name,
-      (it.description2 ?? '').trim() || null,
-      specsLine(it, fabricMap) || null,
+      specs || null,
       (it.notes ?? '').trim() ? `Remark: ${(it.notes ?? '').trim()}` : null,
       it.delivery_date ? `Delivery: ${fmtDocDate(it.delivery_date)}` : null,
     ].filter(Boolean) as string[];
@@ -271,7 +298,7 @@ export async function generatePurchaseOrderPdf(
   autoTable(doc, {
     startY: y,
     head: [[
-      'Item', 'Our Code', 'Description', 'Transf. SO', 'UOM', 'Qty',
+      'Supplier Code', 'Our Code', 'Description', 'Transf. SO', 'UOM', 'Qty',
       `U/Price ${header.currency}`, 'Disc.', `Total ${header.currency}`,
     ]],
     body: rows,
@@ -280,9 +307,9 @@ export async function generatePurchaseOrderPdf(
     headStyles: { fontStyle: 'bold', halign: 'left', valign: 'middle', lineWidth: { top: 0.4, bottom: 0.4 } as never },
     bodyStyles: { valign: 'top' },
     columnStyles: {
-      0: { cellWidth: 24, fontStyle: 'bold' },
+      0: { cellWidth: 26, fontStyle: 'bold' },
       1: { cellWidth: 22 },
-      2: { cellWidth: 56 },
+      2: { cellWidth: 54 },
       3: { cellWidth: 20 },
       4: { cellWidth: 12 },
       5: { cellWidth: 10, halign: 'right' },
