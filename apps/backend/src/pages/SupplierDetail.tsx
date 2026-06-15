@@ -1775,20 +1775,25 @@ function exportBindingsCsv(
      given supplier only has e.g. bedframe bindings — keeps the import path
      position-stable, and commander can re-upload a partial sheet without
      losing other categories. */
+  // Only emit the price-column groups for the categories this supplier actually
+  // binds — a bedframe-only supplier no longer gets a wall of empty sofa_*
+  // columns. internal_description is dropped (read-only echo, never imported).
+  // Wei Siang 2026-06-15: keep the sheet to the match key + prices.
+  const kinds = new Set(bindings.map((b) => bindingKindForCsv(b, productByCode)));
   const sofaCols: string[] = [];
-  for (const h of sofaHeights) {
-    for (const t of SOFA_TIERS_FOR_EXPORT) {
-      sofaCols.push(`sofa_${h}_${t}`);
+  if (kinds.has('sofa')) {
+    for (const h of sofaHeights) {
+      for (const t of SOFA_TIERS_FOR_EXPORT) {
+        sofaCols.push(`sofa_${h}_${t}`);
+      }
     }
   }
   const header: string[] = [
     'internal_code',
-    'internal_description',
     'supplier_sku',
-    'unit_price_rm',
+    ...(kinds.has('other') ? ['unit_price_rm'] : []),
     ...sofaCols,
-    'bedframe_P1',
-    'bedframe_P2',
+    ...(kinds.has('bedframe') ? ['bedframe_P1', 'bedframe_P2'] : []),
     'lead_time_days',
     'moq',
     'is_main_supplier',
@@ -1799,7 +1804,6 @@ function exportBindingsCsv(
     const kind = bindingKindForCsv(b, productByCode);
     const row: Record<string, unknown> = {
       internal_code: b.material_code,
-      internal_description: b.material_name,
       supplier_sku: b.supplier_sku,
       // unit_price_rm only meaningful for non-matrix categories
       unit_price_rm: kind === 'other' ? fmtRmCell(b.unit_price_centi) : '',
@@ -1838,6 +1842,21 @@ function exportBindingsCsv(
  *  try to be clever about UTF-8 BOM or CRLF / mixed line endings; commander's
  *  workflow is "Export → edit in Excel → save → Import" which produces
  *  comma-separated UTF-8 with quoted strings. */
+/** Read the first sheet of an uploaded Excel workbook (.xlsx/.xls) into rows of
+ *  string cells — so an exported CSV that the operator edited and let Excel
+ *  re-save as a workbook still imports. CSV stays on parseCsv below. */
+async function readXlsxGrid(file: File): Promise<string[][]> {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  const first = wb.SheetNames[0];
+  const sheet = first ? wb.Sheets[first] : undefined;
+  if (!sheet) return [];
+  const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: '' });
+  return aoa
+    .map((r) => (Array.isArray(r) ? r.map((c) => String(c ?? '')) : []))
+    .filter((r) => r.some((c) => c.trim().length > 0));
+}
+
 function parseCsv(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -1899,9 +1918,16 @@ const ImportBindingsDialog = ({
     setRunning(true);
     setSummary(null);
     try {
-      const text = await file.text();
-      const rows = parseCsv(text);
-      if (rows.length < 2) { setSummary('CSV has no data rows.'); setRunning(false); return; }
+      const fname = file.name.toLowerCase();
+      let rows: string[][];
+      if (fname.endsWith('.xlsx') || fname.endsWith('.xls')) {
+        rows = await readXlsxGrid(file);
+      } else {
+        let text = await file.text();
+        if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); // strip Excel UTF-8 BOM
+        rows = parseCsv(text);
+      }
+      if (rows.length < 2) { setSummary('File has no data rows.'); setRunning(false); return; }
       const header = rows[0]!.map((h) => h.trim());
       const idx = (col: string) => header.indexOf(col);
       const colCode = idx('internal_code');
@@ -2067,21 +2093,21 @@ const ImportBindingsDialog = ({
         onClick={(e) => e.stopPropagation()}
       >
         <header className={styles.modalHeader}>
-          <h3 className={styles.modalTitle}>Import Bindings (CSV)</h3>
+          <h3 className={styles.modalTitle}>Import Bindings (CSV / Excel)</h3>
           <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close">
             <X {...ICON} />
           </button>
         </header>
         <div className={styles.modalBody}>
           <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
-            Upload a CSV exported via <strong>Export Bindings</strong>. Rows whose
+            Upload a CSV or Excel file exported via <strong>Export Bindings</strong>. Rows whose
             <code> internal_code </code>matches an existing binding are
             <strong> updated</strong>; unknown codes are <strong>skipped</strong>
             (no auto-create — use the SKU Mappings dialog to add new bindings).
           </p>
           <input
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.xlsx,.xls,text/csv"
             disabled={running}
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             style={{ marginBottom: 'var(--space-3)' }}
