@@ -161,6 +161,11 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
       setEditModelId(null);
     } catch (e) { setError(String((e as Error).message ?? e)); }
   };
+  // Delete a Model's whole free-gift config straight from the list row.
+  const deleteModelGift = async (m: ProductModelRow) => {
+    if (!window.confirm(`Remove the free gift for ${giftModelLabel(m)}?`)) return;
+    try { await remove.mutateAsync(m.id); } catch (e) { window.alert(`Delete failed: ${String((e as Error).message ?? e)}`); }
+  };
 
   // ── Bulk add ──
   const toggleBulkModel = (mid: string) =>
@@ -222,7 +227,12 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
                       {(giftsByModel.get(m.id) ?? []).map((g) => `${g.qty}× ${accName(g.giftProductId)}`).join(', ')}
                     </div>
                   </div>
-                  {canEdit && <Button variant="ghost" size="sm" onClick={() => open(m.id)}>Edit</Button>}
+                  {canEdit && (
+                    <div style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
+                      <Button variant="ghost" size="sm" onClick={() => open(m.id)}>Edit</Button>
+                      <button type="button" aria-label="Delete free gift" title="Delete free gift" disabled={remove.isPending} onClick={() => void deleteModelGift(m)} style={{ background: 'transparent', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', cursor: 'pointer', color: 'var(--c-burnt, #A6471E)' }}><Trash2 size={14} strokeWidth={1.75} /></button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
