@@ -14,7 +14,7 @@
 // isn't wired yet. Writes gated to Master Admin (mode === 'full').
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Plus, Pencil, Trash2, ArrowRight, ArrowDown, Gift, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildComboLabel, type DefaultFreeGift } from '@2990s/shared';
@@ -66,6 +66,13 @@ const FreeGiftSection = ({ canEdit }: { canEdit: boolean }) => {
   const [editModelId, setEditModelId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DefaultFreeGift[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!editModelId) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setEditModelId(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [editModelId]);
 
   const models = useMemo(
     () => [...(mattress.data ?? []), ...(bedframe.data ?? []), ...(sofa.data ?? [])],
@@ -159,7 +166,7 @@ const FreeGiftSection = ({ canEdit }: { canEdit: boolean }) => {
                 <Gift size={18} strokeWidth={1.75} style={{ verticalAlign: 'middle', marginRight: 6 }} />
                 Free gift · {giftModelLabel(models.find((m) => m.id === editModelId) ?? { name: '', model_code: editModelId })}
               </h2>
-              <button type="button" aria-label="Close" onClick={() => setEditModelId(null)} style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}><X size={18} /></button>
+              <button type="button" aria-label="Close" onClick={() => setEditModelId(null)} style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}><X size={18} strokeWidth={1.75} /></button>
             </header>
             <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)' }}>
               {draft.length === 0 && <div style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-5)' }}>No gift configured. Add one below — or save empty to clear.</div>}
@@ -171,7 +178,7 @@ const FreeGiftSection = ({ canEdit }: { canEdit: boolean }) => {
                   </select>
                   <input type="number" min={1} value={g.qty} onChange={(e) => setRow(i, { qty: Math.max(1, Math.floor(Number(e.target.value) || 1)) })} style={{ ...inputStyle, textAlign: 'center' }} aria-label="Quantity" />
                   <input type="text" value={g.campaignName ?? ''} onChange={(e) => setRow(i, { campaignName: e.target.value })} placeholder="Campaign name (optional)" style={inputStyle} aria-label="Campaign name" />
-                  <button type="button" aria-label="Remove gift row" onClick={() => removeRow(i)} style={{ background: 'transparent', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', cursor: 'pointer' }}><X size={14} /></button>
+                  <button type="button" aria-label="Remove gift row" onClick={() => removeRow(i)} style={{ background: 'transparent', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', cursor: 'pointer' }}><X size={14} strokeWidth={1.75} /></button>
                 </div>
               ))}
               <div style={{ marginTop: 'var(--space-4)' }}>
