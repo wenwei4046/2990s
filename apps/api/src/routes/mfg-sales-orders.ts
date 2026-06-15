@@ -444,13 +444,30 @@ const deriveWarehouseIdFromState = async (
   state: string | null | undefined,
 ): Promise<string | null> => {
   if (!state) return null;
-  const key = state === 'Wilayah Persekutuan Kuala Lumpur' ? 'Kuala Lumpur' : state;
-  const { data: m } = await sb
+  /* Match the state against state_warehouse_mappings tolerantly: trim +
+     lowercase + collapse spaces + a few known aliases, matched in JS over the
+     (small, operator-maintained) table. The old exact case-sensitive .eq
+     silently missed e.g. "Pulau Pinang" vs "Penang", a stray-case row, or a
+     trailing space → NULL warehouse despite a filled state. */
+  const canon = (s: string): string => {
+    const t = s.trim().toLowerCase().replace(/\s+/g, ' ');
+    const aliases: Record<string, string> = {
+      'wilayah persekutuan kuala lumpur': 'kuala lumpur',
+      'wp kuala lumpur': 'kuala lumpur',
+      'kl': 'kuala lumpur',
+      'penang': 'pulau pinang',
+      'malacca': 'melaka',
+    };
+    return aliases[t] ?? t;
+  };
+  const want = canon(state);
+  const { data: rows } = await sb
     .from('state_warehouse_mappings')
-    .select('warehouse_id')
-    .eq('state', key)
-    .maybeSingle();
-  return (m as { warehouse_id?: string } | null)?.warehouse_id ?? null;
+    .select('state, warehouse_id');
+  for (const m of (rows ?? []) as Array<{ state: string; warehouse_id: string | null }>) {
+    if (m.warehouse_id && canon(m.state) === want) return m.warehouse_id;
+  }
+  return null;
 };
 
 const nextDocNo = async (sb: any): Promise<string> => {
@@ -3706,6 +3723,20 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
         body['customerState'] as string | null,
       );
       if (derived) updates['sales_location'] = derived;
+    }
+    /* Re-bind the per-line warehouse: the create-time derive runs only once, so
+       an SO whose State was filled in / corrected AFTER creation kept its lines'
+       warehouse_id NULL → "—" in MRP. Backfill the warehouse onto lines that
+       don't have one yet (NULL only — explicit per-line overrides untouched).
+       Wei Siang 2026-06-16. */
+    const reboundWh = await deriveWarehouseIdFromState(sb, body['customerState'] as string | null);
+    if (reboundWh) {
+      await sb
+        .from('mfg_sales_order_items')
+        .update({ warehouse_id: reboundWh })
+        .eq('doc_no', docNo)
+        .eq('cancelled', false)
+        .is('warehouse_id', null);
     }
   }
 
