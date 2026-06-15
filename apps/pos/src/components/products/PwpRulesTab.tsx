@@ -14,10 +14,10 @@
 // isn't wired yet. Writes gated to Master Admin (mode === 'full').
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
-import { Plus, Pencil, Trash2, ArrowRight, ArrowDown } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Plus, Pencil, Trash2, ArrowRight, ArrowDown, Gift, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildComboLabel } from '@2990s/shared';
+import { buildComboLabel, type DefaultFreeGift } from '@2990s/shared';
 import { useProductModels, type ProductModelRow } from '../../lib/products/product-models-queries';
 import { useSofaCombos, type SofaComboRule } from '../../lib/products/sofa-combos-queries';
 import {
@@ -27,6 +27,12 @@ import {
   useDeletePwpRule,
   type PwpRuleRow,
 } from '../../lib/products/pwp-queries';
+import { useMfgProducts } from '../../lib/products/mfg-products-queries';
+import {
+  useModelDefaultGifts,
+  useUpsertModelDefaultGifts,
+  useDeleteModelDefaultGifts,
+} from '../../lib/queries';
 
 type Mode = 'view' | 'add-only' | 'full';
 // SOFA is matched by Combo (Phase 2); Mattress/Bedframe by Model.
@@ -43,6 +49,155 @@ const modelLabel = (m: ProductModelRow): string =>
 
 const comboLabel = (c: SofaComboRule): string =>
   [c.baseModel, c.label || buildComboLabel(c.modules)].filter(Boolean).join(' · ');
+
+// ── Free-gift section ─────────────────────────────────────────────────────────
+
+const GIFT_CATEGORIES = ['MATTRESS', 'BEDFRAME', 'SOFA'] as const;
+
+const FreeGiftSection = ({ canEdit }: { canEdit: boolean }) => {
+  const mattress = useProductModels({ category: 'MATTRESS' });
+  const bedframe = useProductModels({ category: 'BEDFRAME' });
+  const sofa     = useProductModels({ category: 'SOFA' });
+  const accessoriesQ = useMfgProducts({ category: 'ACCESSORY' });
+  const giftsQ   = useModelDefaultGifts();
+  const upsert   = useUpsertModelDefaultGifts();
+  const remove   = useDeleteModelDefaultGifts();
+
+  const [editModelId, setEditModelId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<DefaultFreeGift[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!editModelId) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setEditModelId(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [editModelId]);
+
+  const models = useMemo(
+    () => [...(mattress.data ?? []), ...(bedframe.data ?? []), ...(sofa.data ?? [])],
+    [mattress.data, bedframe.data, sofa.data],
+  );
+  const giftsByModel = useMemo(
+    () => new Map((giftsQ.data ?? []).map((r) => [r.modelId, r.gifts])),
+    [giftsQ.data],
+  );
+  const accessories = accessoriesQ.data ?? [];
+  const accName = (id: string) => {
+    const a = accessories.find((x) => x.id === id);
+    return a ? `${a.code} - ${a.name}` : id;
+  };
+  const giftModelLabel = (m: { branding?: string | null; name: string; model_code: string }) =>
+    [m.branding, m.name].filter(Boolean).join(' ') || m.model_code;
+
+  const open = (mid: string) => {
+    setError(null);
+    setEditModelId(mid);
+    setDraft((giftsByModel.get(mid) ?? []).map((g) => ({ ...g })));
+  };
+  const setRow = (i: number, patch: Partial<DefaultFreeGift>) =>
+    setDraft((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  const addRow = () => setDraft((prev) => [...prev, { giftProductId: '', qty: 1, campaignName: null }]);
+  const removeRow = (i: number) => setDraft((prev) => prev.filter((_, idx) => idx !== i));
+
+  const save = async () => {
+    if (!editModelId) return;
+    setError(null);
+    const gifts = draft
+      .filter((g) => g.giftProductId)
+      .map((g) => ({ giftProductId: g.giftProductId, qty: Math.max(1, Math.floor(g.qty)), campaignName: g.campaignName?.trim() || null }));
+    try {
+      if (gifts.length === 0) await remove.mutateAsync(editModelId);
+      else await upsert.mutateAsync({ modelId: editModelId, gifts });
+      setEditModelId(null);
+    } catch (e) { setError(String((e as Error).message ?? e)); }
+  };
+
+  const inputStyle = { padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' } as const;
+
+  return (
+    <div style={{ marginBottom: 'var(--space-6)', borderBottom: '1px solid var(--line)', paddingBottom: 'var(--space-5)' }}>
+      <h3 style={{ fontSize: 'var(--fs-13)', fontWeight: 600, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 'var(--space-2)' }}>
+        <Gift size={14} strokeWidth={1.75} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+        Free gifts — per Model
+      </h3>
+      <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)', maxWidth: 620 }}>
+        An accessory auto-added at RM 0 when this Model is placed on an order. Applies to every SKU of the Model;
+        a complete sofa of the Model grants its gift once. Changes apply to new orders only.
+      </p>
+
+      {giftsQ.isLoading ? (
+        <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>Loading…</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+          {models.filter((m) => (giftsByModel.get(m.id)?.length ?? 0) > 0).map((m) => (
+            <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)', padding: '8px 12px', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)', background: 'var(--c-paper)' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 'var(--fs-14)' }}>{giftModelLabel(m)} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>· {m.category}</span></div>
+                <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-soft)' }}>
+                  {(giftsByModel.get(m.id) ?? []).map((g) => `${g.qty}× ${accName(g.giftProductId)}`).join(', ')}
+                </div>
+              </div>
+              {canEdit && <Button variant="ghost" size="sm" onClick={() => open(m.id)}>Edit</Button>}
+            </div>
+          ))}
+          {canEdit && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
+              <select aria-label="Add free gift to Model" value="" onChange={(e) => { if (e.target.value) open(e.target.value); }} style={{ ...inputStyle, minWidth: 260 }}>
+                <option value="">+ Add free gift to a Model…</option>
+                {GIFT_CATEGORIES.map((cat) => (
+                  <optgroup key={cat} label={cat}>
+                    {models.filter((m) => m.category === cat && (giftsByModel.get(m.id)?.length ?? 0) === 0).map((m) => (
+                      <option key={m.id} value={m.id}>{giftModelLabel(m)}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+      )}
+
+      {editModelId && (
+        <div onClick={() => setEditModelId(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--c-cream)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-xl)', boxShadow: 'var(--shadow-3)', width: 'min(560px, 95vw)', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+            <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'var(--space-4)', borderBottom: '1px solid var(--line)' }}>
+              <h2 style={{ fontSize: 'var(--fs-16)', margin: 0 }}>
+                <Gift size={18} strokeWidth={1.75} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+                Free gift · {giftModelLabel(models.find((m) => m.id === editModelId) ?? { name: '', model_code: editModelId })}
+              </h2>
+              <button type="button" aria-label="Close" onClick={() => setEditModelId(null)} style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}><X size={18} strokeWidth={1.75} /></button>
+            </header>
+            <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)' }}>
+              {draft.length === 0 && <div style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-5)' }}>No gift configured. Add one below — or save empty to clear.</div>}
+              {draft.map((g, i) => (
+                <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 64px 1fr auto', gap: 8, alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--line-strong)' }}>
+                  <select value={g.giftProductId} onChange={(e) => setRow(i, { giftProductId: e.target.value })} style={inputStyle} aria-label="Gift accessory">
+                    <option value="">Choose accessory…</option>
+                    {accessories.map((a) => (<option key={a.id} value={a.id}>{a.code} - {a.name}</option>))}
+                  </select>
+                  <input type="number" min={1} value={g.qty} onChange={(e) => setRow(i, { qty: Math.max(1, Math.floor(Number(e.target.value) || 1)) })} style={{ ...inputStyle, textAlign: 'center' }} aria-label="Quantity" />
+                  <input type="text" value={g.campaignName ?? ''} onChange={(e) => setRow(i, { campaignName: e.target.value })} placeholder="Campaign name (optional)" style={inputStyle} aria-label="Campaign name" />
+                  <button type="button" aria-label="Remove gift row" onClick={() => removeRow(i)} style={{ background: 'transparent', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', cursor: 'pointer' }}><X size={14} strokeWidth={1.75} /></button>
+                </div>
+              ))}
+              <div style={{ marginTop: 'var(--space-4)' }}>
+                <Button variant="ghost" size="md" onClick={addRow}><Plus size={14} strokeWidth={1.75} style={{ marginRight: 4 }} />Add gift</Button>
+              </div>
+              {error && <div role="alert" style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginTop: 'var(--space-3)' }}>{error}</div>}
+            </div>
+            <footer style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-3)', padding: 'var(--space-4)', borderTop: '1px solid var(--line)' }}>
+              <Button variant="ghost" size="md" onClick={() => setEditModelId(null)}>Cancel</Button>
+              <Button variant="primary" size="md" onClick={() => void save()} disabled={upsert.isPending || remove.isPending}>{upsert.isPending || remove.isPending ? 'Saving…' : 'Save'}</Button>
+            </footer>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 type RuleType = 'pwp' | 'promo';
 
@@ -318,6 +473,8 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
           </div>
         )}
       </div>
+
+      <FreeGiftSection canEdit={canEdit} />
 
       {rules.length === 0 ? (
         <div style={{ padding: 'var(--space-7)', textAlign: 'center', color: 'var(--fg-muted)', border: '1px dashed var(--line-strong)', borderRadius: 'var(--radius-md)' }}>

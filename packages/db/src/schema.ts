@@ -157,6 +157,18 @@ export const modelFabricTierOverrides = pgTable('model_fabric_tier_overrides', {
   updatedBy:  uuid('updated_by'),        // references staff(id)
 });
 
+/* ──────────────── Per-Model default free gifts ───────────────────────── */
+// Migration 0174. Re-keys the per-SKU mfg_products.default_free_gifts (0170)
+// to the Model level. Same jsonb entry shape:
+// [{ giftProductId, qty, campaignName? }]. RLS: read for any staff;
+// write for admin/super_admin/coordinator/sales_director.
+export const modelDefaultFreeGifts = pgTable('model_default_free_gifts', {
+  modelId:   uuid('model_id').primaryKey().references(() => productModels.id, { onDelete: 'cascade' }),
+  gifts:     jsonb('gifts').notNull().default([]),   // [{giftProductId, qty, campaignName?}]
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: uuid('updated_by'),                     // references staff(id)
+});
+
 /* ─────────────────────────── Venues ─────────────────────────────────── */
 // Migration 0086 (2026-05-27). Parallel concept to showrooms — venues are
 // where the sales force (sales / sales_executive / outlet_manager) actually

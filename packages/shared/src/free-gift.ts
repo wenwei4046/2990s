@@ -192,3 +192,64 @@ export function validateFreeGiftClaims(
   }
   return { valid, rejected };
 }
+
+/**
+ * One cart/order line flattened to what trigger-building needs. The caller
+ * resolves `gifts` from the line's Model (Map<model_id, DefaultFreeGift[]>) — the
+ * builder is key-agnostic and never queries.
+ */
+export interface TriggerLine {
+  /** stable per-line id: cart line key (POS), `idx-${i}` (create), or row id (reconcile). */
+  triggerKey: string;
+  /** SO line item_code (SKU) — used as a non-sofa trigger ref. */
+  itemCode: string;
+  /** product category (SOFA / MATTRESS / BEDFRAME / ...). */
+  category: string;
+  qty: number;
+  /** product_models.id of the line's Model (null = orphan SKU → no gift). */
+  modelId: string | null;
+  /** sofa build grouping (variants.buildKey on the SO); null for non-sofa / single-line sofa. */
+  buildKey: string | null;
+  /** variants.freeGift present → never a trigger (one-way). */
+  isFreeGift: boolean;
+  /** the line's Model gifts, already resolved by the caller. */
+  gifts: DefaultFreeGift[];
+}
+
+/**
+ * Build the free-gift triggers granted by a set of lines (per-Model, mig 0174).
+ *   - a gift line (isFreeGift) is never a trigger (one-way);
+ *   - a SOFA line triggers ONE gift per complete sofa — dedup by buildKey
+ *     (the split module rows share one buildKey); triggerQty is always 1;
+ *   - any other line triggers from its Model's gifts, scaled by the line qty.
+ * Identical on create (one sofa line) and reconcile (split rows) — no drift.
+ */
+export function buildFreeGiftTriggers(lines: TriggerLine[]): FreeGiftTrigger[] {
+  const triggers: FreeGiftTrigger[] = [];
+  const seenSofaBuilds = new Set<string>();
+  for (const line of lines) {
+    if (line.isFreeGift) continue;
+    if (line.gifts.length === 0) continue;
+    if (String(line.category ?? '').toUpperCase() === 'SOFA') {
+      const buildId = line.buildKey ?? line.triggerKey;
+      if (seenSofaBuilds.has(buildId)) continue;   // one gift per complete sofa
+      seenSofaBuilds.add(buildId);
+      triggers.push({
+        triggerKey:  buildId,
+        triggerRef:  line.modelId ?? buildId,
+        triggerKind: 'product',
+        triggerQty:  1,                          // one complete sofa = one gift; never scale by module-row qty
+        gifts:       line.gifts,
+      });
+    } else {
+      triggers.push({
+        triggerKey:  line.triggerKey,
+        triggerRef:  line.itemCode || line.triggerKey,
+        triggerKind: 'product',
+        triggerQty:  Number(line.qty ?? 1),
+        gifts:       line.gifts,
+      });
+    }
+  }
+  return triggers;
+}

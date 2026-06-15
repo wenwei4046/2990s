@@ -49,6 +49,7 @@ import {
   type FabricTierModelOverride,
 } from '@2990s/shared/fabric-tier-addon';
 import { type PwpRule } from '@2990s/shared/pwp';
+import { parseDefaultFreeGifts, type DefaultFreeGift } from '@2990s/shared';
 
 export type MfgItemVariants = {
   fabricCode?:    string | null;
@@ -798,6 +799,19 @@ export async function loadModelFabricTierOverrides(
     .select('model_id, tier2_delta, tier3_delta');
   const rows = (data as Array<{ model_id: string; tier2_delta: number | null; tier3_delta: number | null }>) ?? [];
   return new Map(rows.map((r) => [r.model_id, { tier2Delta: r.tier2_delta, tier3Delta: r.tier3_delta }]));
+}
+
+/** Load all per-Model default free gifts (migration 0174) keyed by model_id.
+ *  Small table (one row per gifted Model) → one query. Missing/error → empty
+ *  map (Models with no row grant no gift). */
+export async function loadModelDefaultGifts(
+  sb: any,
+): Promise<Map<string, DefaultFreeGift[]>> {
+  const { data } = await sb
+    .from('model_default_free_gifts')
+    .select('model_id, gifts');
+  const rows = (data as Array<{ model_id: string; gifts: unknown }>) ?? [];
+  return new Map(rows.map((r) => [r.model_id, parseDefaultFreeGifts(r.gifts)]));
 }
 
 /** Load the active PWP (换购) rules (migration 0128). Missing / none → []. The

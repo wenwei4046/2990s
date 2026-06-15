@@ -60,7 +60,6 @@ import {
   ChevronDown,
   Layers,
   ImageOff,
-  Gift,
   Eye,
   EyeOff,
 } from 'lucide-react';
@@ -79,7 +78,6 @@ import {
 import {
   useMfgProducts,
   useUpdateMfgProductPrices,
-  useUpdateMfgProductDefaultGifts,
   useCreateMfgProduct,
   useDeleteMfgProduct,
   useMaintenanceConfig,
@@ -1542,7 +1540,6 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   // Drawer + modal state
   const [newSkuOpen, setNewSkuOpen] = useState(false);
   const [suppliersRow, setSuppliersRow] = useState<MfgProductRow | null>(null);
-  const [giftsRow, setGiftsRow] = useState<MfgProductRow | null>(null);
   const [importing, setImporting] = useState(false);
   // PR #73 — "+ New SKU" now opens the Model creation dialog (with the
   // active category filter pre-filled). The legacy single-SKU drawer
@@ -1825,7 +1822,6 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
                    admin-only (canEdit). sales_director / view roles see
                    selling prices but never the supplier purchase-cost data. */
                 onOpenSuppliers={canEdit ? setSuppliersRow : undefined}
-                onOpenGifts={canEdit ? setGiftsRow : undefined}
                 showSelectCol={canEdit}
                 selected={selectedIds.has(row.id)}
                 onToggleSelected={() => toggleRow(row.id)}
@@ -1868,7 +1864,6 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
         />
       )}
       {suppliersRow && <ProductSuppliersDrawer row={suppliersRow} onClose={() => setSuppliersRow(null)} />}
-      {giftsRow && <ProductGiftsDrawer row={giftsRow} onClose={() => setGiftsRow(null)} />}
       {importing && (
         <ScopeDeferredNotice
           title="Import SKUs from POS — open Backend"
@@ -1880,7 +1875,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
 };
 
 const ProductRow = ({
-  row, editMode, isSofaView, isMattressView, sofaSizes, onOpenSuppliers, onOpenGifts,
+  row, editMode, isSofaView, isMattressView, sofaSizes, onOpenSuppliers,
   showSelectCol = true, selected, onToggleSelected,
 }: {
   row: MfgProductRow;
@@ -1889,8 +1884,6 @@ const ProductRow = ({
   isMattressView: boolean;
   sofaSizes: string[];
   onOpenSuppliers?: (row: MfgProductRow) => void;
-  /** D7 (Phase 3) — open the free-gifts editor for this SKU (full mode only). */
-  onOpenGifts?: (row: MfgProductRow) => void;
   /** Render the leading select checkbox column (admin/full mode only).
       add-only + view tiers don't have a bulk-delete affordance so the
       column is suppressed entirely. */
@@ -1991,26 +1984,6 @@ const ProductRow = ({
             }}
           >
             <Truck size={13} strokeWidth={1.75} />
-          </button>
-          )}
-          {onOpenGifts && (
-          <button
-            type="button"
-            aria-label={`Edit free gifts for ${row.code}`}
-            title="Free gifts included with this SKU"
-            onClick={() => onOpenGifts?.(row)}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              padding: 0,
-              margin: 0,
-              cursor: 'pointer',
-              color: (row.default_free_gifts?.length ?? 0) > 0 ? 'var(--c-orange)' : 'var(--fg-muted)',
-              display: 'inline-flex',
-              alignItems: 'center',
-            }}
-          >
-            <Gift size={13} strokeWidth={1.75} />
           </button>
           )}
           <EditableTextCell
@@ -5643,179 +5616,6 @@ const fmtDateTime = (iso: string): string => {
 
 const fmtRmCenti = (centi: number): string =>
   `RM ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-/* ────────────────────────────────────────────────────────────────────────
-   0170 — Default Free Gift editor. Admin sets which ACCESSORY SKUs are
-   auto-added to the POS cart at RM 0 when a product is placed on an SO.
-   Writes mfg_products.default_free_gifts ([{giftProductId, qty, campaignName}]).
-   ──────────────────────────────────────────────────────────────────────── */
-type DraftGift = { giftProductId: string; qty: number; campaignName: string };
-
-const ProductGiftsDrawer = ({
-  row, onClose,
-}: { row: MfgProductRow; onClose: () => void }) => {
-  const accessories = useMfgProducts({ category: 'ACCESSORY' });
-  const updateDefaultGifts = useUpdateMfgProductDefaultGifts();
-
-  const [draft, setDraft] = useState<DraftGift[]>(() =>
-    (row.default_free_gifts ?? []).map((g) => ({
-      giftProductId: g.giftProductId,
-      qty: g.qty,
-      campaignName: g.campaignName ?? '',
-    })),
-  );
-
-  const setRow = (i: number, patch: Partial<DraftGift>) =>
-    setDraft((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
-
-  const addRow = () =>
-    setDraft((prev) => [...prev, { giftProductId: '', qty: 1, campaignName: '' }]);
-
-  const removeRow = (i: number) =>
-    setDraft((prev) => prev.filter((_, idx) => idx !== i));
-
-  const save = async () => {
-    await updateDefaultGifts.mutateAsync({
-      id: row.id,
-      defaultFreeGifts: draft
-        .filter((g) => g.giftProductId)
-        .map((g) => ({
-          giftProductId: g.giftProductId,
-          qty: Math.max(1, g.qty),
-          campaignName: g.campaignName.trim() || null,
-        })),
-    });
-    onClose();
-  };
-
-  const inputStyle = {
-    padding: '8px 10px',
-    fontSize: 'var(--fs-14)',
-    border: '1px solid var(--line-strong)',
-    borderRadius: 'var(--radius-md)',
-    background: 'var(--c-cream)',
-  } as const;
-
-  const accessoryList = accessories.data ?? [];
-
-  return (
-    <div className={styles.drawerBackdrop} onClick={onClose}>
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: 'var(--c-cream)',
-          border: '1px solid var(--line-strong)',
-          borderRadius: 'var(--radius-xl)',
-          boxShadow: 'var(--shadow-3)',
-          width: 'min(560px, 95vw)',
-          maxHeight: '85vh',
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-      >
-        <header className={styles.drawerHeader}>
-          <div>
-            <h2 className={styles.drawerTitle}>
-              <Gift {...ICON_PROPS} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-              Default free gift · <span className={styles.codeChip}>{row.code}</span>
-            </h2>
-            <p style={{ marginTop: 4, fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
-              Accessory SKUs auto-added at RM 0 when this product is placed on a sales order.
-            </p>
-          </div>
-          <button type="button" className={styles.iconBtn} onClick={onClose}>
-            <X {...ICON_PROPS} />
-          </button>
-        </header>
-
-        <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)' }}>
-          {draft.length === 0 && (
-            <div style={{ textAlign: 'center', padding: 'var(--space-5)', color: 'var(--fg-muted)' }}>
-              <Gift size={32} strokeWidth={1.5} />
-              <div style={{ marginTop: 8 }}>No default free gifts configured for this SKU.</div>
-            </div>
-          )}
-
-          {draft.map((g, i) => (
-            <div
-              key={i}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '1fr 64px 1fr auto',
-                gap: 8,
-                alignItems: 'center',
-                padding: '10px 0',
-                borderBottom: '1px solid var(--line-strong)',
-              }}
-            >
-              {/* Accessory picker */}
-              <select
-                value={g.giftProductId}
-                onChange={(e) => setRow(i, { giftProductId: e.target.value })}
-                style={{ ...inputStyle }}
-                aria-label="Gift accessory"
-              >
-                <option value="">Choose accessory…</option>
-                {accessoryList.map((a) => (
-                  <option key={a.id} value={a.id}>{a.code} - {a.name}</option>
-                ))}
-              </select>
-
-              {/* Qty stepper */}
-              <input
-                type="number"
-                min={1}
-                value={g.qty}
-                onChange={(e) => setRow(i, { qty: Math.max(1, Math.floor(Number(e.target.value) || 1)) })}
-                style={{ ...inputStyle, textAlign: 'center' }}
-                aria-label="Quantity"
-              />
-
-              {/* Campaign name */}
-              <input
-                type="text"
-                value={g.campaignName}
-                onChange={(e) => setRow(i, { campaignName: e.target.value })}
-                placeholder="Campaign name (optional)"
-                style={{ ...inputStyle }}
-                aria-label="Campaign name"
-              />
-
-              {/* Remove */}
-              <button
-                type="button"
-                className={styles.iconBtn}
-                onClick={() => removeRow(i)}
-                aria-label="Remove gift row"
-              >
-                <X size={14} strokeWidth={1.75} />
-              </button>
-            </div>
-          ))}
-
-          <div style={{ marginTop: 'var(--space-4)' }}>
-            <Button variant="ghost" size="md" onClick={addRow}>
-              <Plus size={14} strokeWidth={1.75} style={{ marginRight: 4 }} />
-              Add gift
-            </Button>
-          </div>
-        </div>
-
-        <footer className={styles.drawerFooter}>
-          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
-          <Button
-            variant="primary"
-            size="md"
-            onClick={save}
-            disabled={updateDefaultGifts.isPending}
-          >
-            {updateDefaultGifts.isPending ? 'Saving…' : 'Save'}
-          </Button>
-        </footer>
-      </div>
-    </div>
-  );
-};
 
 const ProductSuppliersDrawer = ({
   row, onClose,

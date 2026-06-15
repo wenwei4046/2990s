@@ -22,10 +22,11 @@
 import {
   computeDesiredFreeGifts,
   diffFreeGiftLines,
+  buildFreeGiftTriggers,
   type ExistingGiftLine,
+  type TriggerLine,
 } from '@2990s/shared';
-import { loadProductsByCodes } from './mfg-pricing-recompute';
-import { buildFreeGiftTriggers, type TriggerLine, type GiftingComboLite } from './free-gift-triggers';
+import { loadProductsByCodes, loadModelDefaultGifts } from './mfg-pricing-recompute';
 // recomputeTotals is the route's authoritative header roll-up. The route<->lib
 // reference is a function-level cycle (route imports this file, this file
 // imports recomputeTotals) — safe with esbuild because neither is called at
@@ -44,32 +45,6 @@ interface SoItemRow {
   line_no: number | null;
 }
 
-/** Active sales-side combos that grant gifts. Mirrors loadActiveSofaCombos in
- *  mfg-sales-orders.ts (default-scope rows only), but selects ONLY the columns
- *  the trigger matcher needs and pre-filters to non-empty default_free_gifts so
- *  the reconcile pass stays light on subrequests. */
-async function loadGiftingCombos(sb: any): Promise<GiftingComboLite[]> {
-  const { data } = await sb
-    .from('sofa_combo_pricing')
-    .select('id, base_model, modules, default_free_gifts')
-    .is('deleted_at', null)
-    .is('customer_id', null)
-    .is('supplier_id', null);
-  return ((data ?? []) as Array<{
-    id: string;
-    base_model: string | null;
-    modules: string[][] | null;
-    default_free_gifts: unknown;
-  }>)
-    .map((r) => ({
-      id:               r.id,
-      baseModel:        r.base_model ?? null,
-      modules:          r.modules ?? [],
-      defaultFreeGifts: r.default_free_gifts ?? [],
-    }))
-    .filter((c) => Array.isArray(c.defaultFreeGifts) && c.defaultFreeGifts.length > 0);
-}
-
 /**
  * Reconcile a placed SO's accessory free-gift lines against its current
  * triggers. ALWAYS finishes by recomputing the header totals — even on error.
@@ -84,31 +59,34 @@ export async function reconcileFreeGiftLinesForSo(sb: any, docNo: string): Promi
       .eq('cancelled', false);
     const items = ((itemsRaw ?? []) as SoItemRow[]);
 
-    // 2. Resolve each line's product (category / base_model / default_free_gifts)
-    //    in ONE in() query, and load the gifting combos.
-    const [productByCode, giftingCombos] = await Promise.all([
+    // 2. Resolve each line's product (category / model_id) in ONE in() query,
+    //    and load the per-Model default-gift map (keyed by product_models.id).
+    //    Both batched — never per-line (CF Workers subrequest cap).
+    const [productByCode, modelGiftsById] = await Promise.all([
       loadProductsByCodes(sb, items.map((it) => it.item_code)),
-      loadGiftingCombos(sb),
+      loadModelDefaultGifts(sb),
     ]);
 
     // 3. Build TriggerLine[] from the lines. A gift line (variants.freeGift) is
     //    flagged isFreeGift so the builder skips it as a trigger (one-way). The
-    //    line id is the stable trigger key.
+    //    line id is the stable trigger key. Gifts resolve from the line's Model
+    //    (model_id) — IDENTICAL shape to the create path so the two can't drift.
     const triggerLines: TriggerLine[] = items.map((it) => {
       const variants = it.variants ?? null;
       const product = productByCode.get((it.item_code ?? '').trim()) ?? null;
+      const modelId = product?.model_id ?? null;
       return {
-        triggerKey:       it.id,
-        itemCode:         product?.code ?? (it.item_code ?? ''),
-        category:         String(product?.category ?? ''),
-        qty:              Number(it.qty ?? 1),
-        baseModel:        product?.base_model ?? null,
-        cells:            variants?.cells ?? null,
-        isFreeGift:       Boolean(variants?.freeGift),
-        defaultFreeGifts: product?.default_free_gifts ?? null,
+        triggerKey: it.id,
+        itemCode:   product?.code ?? (it.item_code ?? ''),
+        category:   String(product?.category ?? ''),
+        qty:        Number(it.qty ?? 1),
+        modelId,
+        buildKey:   (variants?.buildKey as string | undefined) ?? null,
+        isFreeGift: Boolean((variants as Record<string, unknown> | null)?.freeGift),
+        gifts:      modelId ? (modelGiftsById.get(modelId) ?? []) : [],
       };
     });
-    const triggers = buildFreeGiftTriggers(triggerLines, giftingCombos);
+    const triggers = buildFreeGiftTriggers(triggerLines);
 
     // 4. The gift lines the SO SHOULD contain.
     const desired = computeDesiredFreeGifts(triggers);

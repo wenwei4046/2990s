@@ -5,8 +5,10 @@ import {
   validateFreeGiftClaims,
   freeGiftLineKey,
   diffFreeGiftLines,
+  buildFreeGiftTriggers,
   type FreeGiftTrigger,
   type ExistingGiftLine,
+  type TriggerLine,
 } from './free-gift';
 
 describe('parseDefaultFreeGifts', () => {
@@ -181,5 +183,68 @@ describe('diffFreeGiftLines', () => {
     );
     expect(diff.toInsert).toEqual([{ giftProductId: 'bolster', campaignName: null, qty: 1 }]);
     expect(diff.toDeleteIds).toEqual(['L9']);
+  });
+});
+
+const G = (id: string, qty = 1): { giftProductId: string; qty: number; campaignName: string | null } =>
+  ({ giftProductId: id, qty, campaignName: null });
+
+const line = (over: Partial<TriggerLine>): TriggerLine => ({
+  triggerKey: 'k', itemCode: 'CODE', category: 'MATTRESS', qty: 1,
+  modelId: null, buildKey: null, isFreeGift: false, gifts: [], ...over,
+});
+
+describe('buildFreeGiftTriggers (per-Model)', () => {
+  it('non-sofa line with model gifts → one trigger, qty scales by line qty', () => {
+    const t = buildFreeGiftTriggers([line({ triggerKey: 'idx-0', category: 'MATTRESS', qty: 3, modelId: 'm1', gifts: [G('acc', 2)] })]);
+    expect(t).toHaveLength(1);
+    expect(t[0]).toMatchObject({ triggerKey: 'idx-0', triggerRef: 'CODE', triggerQty: 3, gifts: [G('acc', 2)] });
+  });
+
+  it('non-sofa line with no gifts → no trigger', () => {
+    expect(buildFreeGiftTriggers([line({ gifts: [] })])).toHaveLength(0);
+  });
+
+  it('gift line never triggers (one-way)', () => {
+    expect(buildFreeGiftTriggers([line({ isFreeGift: true, gifts: [G('acc')] })])).toHaveLength(0);
+  });
+
+  it('sofa: one complete sofa = one gift regardless of module count (dedupe by buildKey)', () => {
+    const rows: TriggerLine[] = [
+      line({ triggerKey: 'r1', category: 'SOFA', buildKey: 'build-1', modelId: 'annsa', qty: 1, gifts: [G('acc')] }),
+      line({ triggerKey: 'r2', category: 'SOFA', buildKey: 'build-1', modelId: 'annsa', qty: 1, gifts: [G('acc')] }),
+      line({ triggerKey: 'r3', category: 'SOFA', buildKey: 'build-1', modelId: 'annsa', qty: 2, gifts: [G('acc')] }),
+    ];
+    const t = buildFreeGiftTriggers(rows);
+    expect(t).toHaveLength(1);
+    expect(t[0]).toMatchObject({ triggerKey: 'build-1', triggerRef: 'annsa', triggerQty: 1, gifts: [G('acc')] });
+  });
+
+  it('sofa: two separate builds of the same Model → two gifts', () => {
+    const t = buildFreeGiftTriggers([
+      line({ triggerKey: 'r1', category: 'SOFA', buildKey: 'build-1', modelId: 'annsa', gifts: [G('acc')] }),
+      line({ triggerKey: 'r2', category: 'SOFA', buildKey: 'build-2', modelId: 'annsa', gifts: [G('acc')] }),
+    ]);
+    expect(t).toHaveLength(2);
+  });
+
+  it('sofa with no buildKey (single cart line) falls back to triggerKey as the build id', () => {
+    const t = buildFreeGiftTriggers([line({ triggerKey: 'cartline-9', category: 'SOFA', buildKey: null, modelId: 'annsa', gifts: [G('acc')] })]);
+    expect(t).toHaveLength(1);
+    expect(t[0]).toMatchObject({ triggerKey: 'cartline-9', triggerRef: 'annsa', triggerQty: 1 });
+  });
+
+  it('sofa with no model gifts → no trigger', () => {
+    expect(buildFreeGiftTriggers([line({ category: 'SOFA', buildKey: 'b', modelId: 'm', gifts: [] })])).toHaveLength(0);
+  });
+
+  it('mixed sofa + non-sofa cart → distinct triggers, input order preserved', () => {
+    const t = buildFreeGiftTriggers([
+      line({ triggerKey: 'idx-0', category: 'MATTRESS', qty: 1, modelId: 'mat', gifts: [G('p1')] }),
+      line({ triggerKey: 'idx-1', category: 'SOFA', buildKey: 'build-1', modelId: 'annsa', gifts: [G('p2')] }),
+    ]);
+    expect(t).toHaveLength(2);
+    expect(t.map((x) => x.triggerKey)).toEqual(['idx-0', 'build-1']);
+    expect(t.map((x) => x.triggerRef)).toEqual(['CODE', 'annsa']);
   });
 });

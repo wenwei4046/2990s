@@ -10,8 +10,8 @@ import {
   buildVariantSummary, comboChargedPrices, matchComboSubset, type SofaComboRow, type SofaPriceTier,
   oneShotSofaCode, oneShotSimpleCode, remarkSlug,
   fabricTierAddon,
-  parseDefaultFreeGifts, validateFreeGiftClaims,
-  type FreeGiftLineClaim,
+  validateFreeGiftClaims, buildFreeGiftTriggers,
+  type FreeGiftLineClaim, type TriggerLine,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
 /* POS auto-Proceed (Loo 2026-06-09) — when a handover arrives already complete
@@ -66,6 +66,7 @@ import {
   loadFabricSellingTiersByIds,
   loadFabricTierAddonConfig,
   loadModelFabricTierOverrides,
+  loadModelDefaultGifts,
   loadModelSofaModulePrices,
   loadModelSofaModuleCostRows,
   type MfgItemForRecompute,
@@ -82,10 +83,10 @@ import {
   loadProductsAndModels,
 } from '../lib/allowed-options-check';
 import { findIncompleteVariantLines } from '../lib/so-variant-check';
-/* Default Free Gift (migration 0170, D9) — ONE trigger builder shared by the
-   SO-create validator below and the placed-SO edit reconciler, so create and
-   reconcile can never compute a different gift set. */
-import { buildFreeGiftTriggers, type TriggerLine } from '../lib/free-gift-triggers';
+/* Default Free Gift (migration 0170/0174, D9) — ONE per-Model trigger builder
+   (in @2990s/shared) is shared by the SO-create validator below and the
+   placed-SO edit reconciler, so create and reconcile can never compute a
+   different gift set. */
 import { reconcileFreeGiftLinesForSo } from '../lib/free-gift-reconcile';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { pickCrossCategoryMatch, type AutoMatchCandidate } from '../lib/cross-category-match';
@@ -1956,38 +1957,32 @@ mfgSalesOrders.post('/', async (c) => {
      un-granted gift reprices to the accessory's real sell_price_sen below, so a
      tampered "free" client price drifts → 400. */
   {
-    // Combos that actually grant gifts — filter once so the sofa matcher only
-    // tries combos with a non-empty default_free_gifts. Shared with reconcile
-    // via buildFreeGiftTriggers (free-gift-triggers.ts) so create + edit can
-    // never compute a different gift set.
-    const giftingCombos = cachedCombos
-      .map((c) => ({ combo: c, gifts: parseDefaultFreeGifts(c.defaultFreeGifts) }))
-      .filter((x) => x.gifts.length > 0)
-      .map((x) => ({
-        id:               x.combo.id,
-        baseModel:        x.combo.baseModel ?? null,
-        modules:          x.combo.modules,
-        defaultFreeGifts: x.combo.defaultFreeGifts,
-      }));
+    // Per-Model default-gift map (migration 0174), keyed by product_models.id,
+    // loaded ONCE for the whole request (never per-line — CF Workers subrequest
+    // cap). Shared with reconcile via the per-Model buildFreeGiftTriggers so
+    // create + edit can never compute a different gift set.
+    const modelGiftsById = await loadModelDefaultGifts(sb);
 
     // Flatten each request line to a TriggerLine for the shared builder. The
     // per-line index keys the trigger (`idx-${idx}`); a gift line (freeGift)
-    // is flagged so the builder skips it as a trigger (one-way).
+    // is flagged so the builder skips it as a trigger (one-way). Gifts resolve
+    // from the line's Model (model_id), not the combo — combo gifting is retired.
     const triggerLines: TriggerLine[] = items.map((it, idx) => {
       const variants = (it?.variants as Record<string, unknown> | null) ?? null;
       const product = lineProducts[idx] ?? null;
+      const modelId = product?.model_id ?? null;
       return {
-        triggerKey:       `idx-${idx}`,
-        itemCode:         product?.code ?? '',
-        category:         String(product?.category ?? ''),
-        qty:              Number(it?.qty ?? 1),
-        baseModel:        product?.base_model ?? null,
-        cells:            variants?.cells ?? null,
-        isFreeGift:       Boolean(variants?.freeGift),
-        defaultFreeGifts: product?.default_free_gifts ?? null,
+        triggerKey: `idx-${idx}`,
+        itemCode:   product?.code ?? '',
+        category:   String(product?.category ?? ''),
+        qty:        Number(it?.qty ?? 1),
+        modelId,
+        buildKey:   (variants?.buildKey as string | undefined) ?? null,
+        isFreeGift: Boolean(variants?.freeGift),
+        gifts:      modelId ? (modelGiftsById.get(modelId) ?? []) : [],
       };
     });
-    const triggers = buildFreeGiftTriggers(triggerLines, giftingCombos);
+    const triggers = buildFreeGiftTriggers(triggerLines);
 
     const claims: FreeGiftLineClaim[] = [];
     for (let idx = 0; idx < items.length; idx++) {
