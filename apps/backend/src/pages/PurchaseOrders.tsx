@@ -12,18 +12,21 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { Plus, X, FileText, Printer, ArrowRightLeft, ChevronsDownUp } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
   usePurchaseOrders,
   usePurchaseOrderDetail,
+  fetchPurchaseOrderDetail,
   useCancelPurchaseOrder,
   type PoStatus,
   type PoHeaderRow,
   type PoItemRow,
   type Currency,
 } from '../lib/suppliers-queries';
+import { useWarehouses } from '../lib/inventory-queries';
 import { poStatusLabel } from '../lib/po-status';
 import { ItemGroupPill } from '../lib/category-badges';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
@@ -205,6 +208,9 @@ export const PurchaseOrders = () => {
   // Bump to collapse every expanded drill-down in the list at once.
   const [collapseNonce, setCollapseNonce] = useState(0);
   const cancelPo = useCancelPurchaseOrder();
+  const qc = useQueryClient();
+  const warehousesQ = useWarehouses();
+  const [printingDocs, setPrintingDocs] = useState(false);
 
   // Always fetch all rows — filtering Outstanding (SUBMITTED ∪
   // PARTIALLY_RECEIVED) client-side is one trip vs. two and the dataset is
@@ -228,6 +234,44 @@ export const PurchaseOrders = () => {
     () => rows.filter((r) => selectedIds.has(r.id)),
     [rows, selectedIds],
   );
+
+  /* Batch "Print documentation" — fetch each selected PO's full detail (cache
+     reused from any expanded row) and render them into ONE PDF, each PO on its
+     own page. The operator filters by supplier/date, selects, then sends the
+     supplier a single file. */
+  const printSelectedDocs = async () => {
+    if (selectedRows.length === 0 || printingDocs) return;
+    setPrintingDocs(true);
+    try {
+      const warehouses = warehousesQ.data ?? [];
+      const details: Array<{ purchaseOrder: PoHeaderRow; items: PoItemRow[] }> = [];
+      for (const row of selectedRows) {
+        details.push(await qc.fetchQuery({
+          queryKey: ['mfg-purchase-order-detail', row.id],
+          queryFn: () => fetchPurchaseOrderDetail(row.id),
+          staleTime: 30_000,
+        }));
+      }
+      const pos = details.map((d) => {
+        const wh = warehouses.find((w) => w.id === d.purchaseOrder.purchase_location_id);
+        return {
+          header: {
+            ...d.purchaseOrder,
+            purchase_location_name: wh ? `${wh.code} · ${wh.name}` : null,
+            your_ref_no:      (d.purchaseOrder as { your_ref_no?: string | null }).your_ref_no ?? null,
+            source_so_doc_no: (d.purchaseOrder as { source_so_doc_no?: string | null }).source_so_doc_no ?? null,
+          },
+          items: d.items,
+        };
+      });
+      const { generateCombinedPurchaseOrderPdf } = await import('../lib/purchase-order-pdf');
+      await generateCombinedPurchaseOrderPdf(pos, { fileName: `purchase-orders-${new Date().toISOString().slice(0, 10)}.pdf` });
+    } catch (e) {
+      alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setPrintingDocs(false);
+    }
+  };
   const selectedSuppliers = useMemo(
     () => new Set(selectedRows.map((r) => r.supplier_id)),
     [selectedRows],
@@ -351,6 +395,10 @@ export const PurchaseOrders = () => {
           </span>
           <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
             <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>Clear</Button>
+            <Button variant="ghost" size="sm" onClick={printSelectedDocs} disabled={printingDocs}>
+              <Printer {...ICON} />
+              <span>{printingDocs ? 'Preparing…' : `Print documentation (${selectedIds.size})`}</span>
+            </Button>
             <Button variant="primary" size="sm"
               onClick={convertToGrn}
               disabled={selectedSuppliers.size !== 1}>
