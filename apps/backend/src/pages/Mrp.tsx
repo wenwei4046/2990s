@@ -764,6 +764,7 @@ export const Mrp = () => {
                 onSetLinesSelected={setLinesSelected}
                 lineSupplier={lineSupplier}
                 onLineSupplierChange={setLineSupplierId}
+                flatModules={view === 'sofa'}
               />
             ))}
           </tbody>
@@ -872,6 +873,7 @@ const shortageLineIdsOf = (s: MrpSku): string[] =>
 const ModelRows = ({
   group, modelOpen, onToggleModel, expandedVariants, onToggleVariant,
   selected, onToggleLine, onSetLinesSelected, lineSupplier, onLineSupplierChange,
+  flatModules,
 }: {
   group: ModelGroup;
   modelOpen: boolean;
@@ -883,6 +885,7 @@ const ModelRows = ({
   onSetLinesSelected: (ids: string[], on: boolean) => void;
   lineSupplier: Record<string, string>;
   onLineSupplierChange: (soItemId: string, supplierId: string) => void;
+  flatModules?: boolean;
 }) => {
   const short = group.shortage > 0;
   // Parent (Model) checkbox state — over every shortage line beneath the model.
@@ -938,9 +941,22 @@ const ModelRows = ({
             single value here was misleading. Supplier lives per SO line below. */}
       </tr>
 
+      {/* Sofa flat view (M-S1): one table per SO, one row per module — module +
+          its order-line detail (coverage / supplier / delivery) on the same row,
+          no second drill. */}
+      {modelOpen && flatModules && (
+        <tr className={styles.detailRow}>
+          <td /><td />
+          <td colSpan={7}>
+            <SofaSoTable group={group} selected={selected} onToggleLine={onToggleLine}
+              lineSupplier={lineSupplier} onLineSupplierChange={onLineSupplierChange} />
+          </td>
+        </tr>
+      )}
+
       {/* Single-variant model → orders directly (2-level). Show the variant
           spec as a label above the orders when there is one (bedframe/sofa). */}
-      {modelOpen && single && (
+      {modelOpen && !flatModules && single && (
         <tr className={styles.detailRow}>
           <td /><td />
           <td colSpan={7}>
@@ -957,7 +973,7 @@ const ModelRows = ({
       )}
 
       {/* Multi-variant model → variant sub-rows (each expandable to orders). */}
-      {modelOpen && !single && group.variants.map((v) => {
+      {modelOpen && !flatModules && !single && group.variants.map((v) => {
         const k = rowKey(v);
         const vShort = v.shortage > 0;
         const vOpen = expandedVariants.has(k);
@@ -1118,3 +1134,71 @@ const ChildLine = ({ ln, suppliers, whCode, whName, selected, onToggleLine, chos
     </tr>
   );
 };
+
+/* Sofa-only flat view (M-S1, Wei Siang 2026-06-16): ONE table per SO, one row
+   per module, with the order-line detail (coverage / supplier / delivery) on the
+   SAME row — instead of the module → order-line two-level drill. Each sofa module
+   has exactly one SO line; selection + supplier reuse the per-line handlers, so
+   ordering (Proceed PO) is unchanged. */
+const SofaSoTable = ({ group, selected, onToggleLine, lineSupplier, onLineSupplierChange }: {
+  group: ModelGroup;
+  selected: Set<string>;
+  onToggleLine: (soItemId: string) => void;
+  lineSupplier: Record<string, string>;
+  onLineSupplierChange: (soItemId: string, supplierId: string) => void;
+}) => (
+  <table className={styles.childTable}>
+    <thead>
+      <tr>
+        <th className={styles.colSelect} />
+        <th>Module</th>
+        <th className={styles.num}>Qty</th>
+        <th>Coverage</th>
+        <th>Supplier</th>
+        <th>Delivery</th>
+      </tr>
+    </thead>
+    <tbody>
+      {group.variants.flatMap((v) => v.lines.map((ln, i) => {
+        const short = ln.source === 'shortage' && ln.shortageQty > 0 && Boolean(ln.soItemId);
+        return (
+          <tr key={`${v.itemCode}-${ln.soDocNo}-${i}`} className={short ? styles.childShort : undefined}>
+            <td className={styles.colSelect}>
+              {short && (
+                <input
+                  type="checkbox"
+                  checked={selected.has(ln.soItemId)}
+                  onChange={() => onToggleLine(ln.soItemId)}
+                  aria-label={`Select ${v.variantLabel ?? v.itemCode} to order`}
+                />
+              )}
+            </td>
+            <td className={styles.codeCell}><span className={styles.variantTag}>{v.variantLabel ?? v.itemCode}</span></td>
+            <td className={styles.num}>{ln.qty}</td>
+            <td>
+              {ln.source === 'stock' && <span className={`${styles.tag} ${styles.tagStock}`}>stock</span>}
+              {ln.source === 'po' && (
+                <span className={`${styles.tag} ${styles.tagPo}`}>
+                  {ln.poNumber ? `${ln.poNumber}${ln.poEta ? ` · ETA ${fmtDate(ln.poEta)}` : ''}` : 'ordered'}
+                </span>
+              )}
+              {short && (
+                <span className={`${styles.tag} ${styles.tagShort}`}>
+                  SHORT{ln.shortageQty > 1 ? ` ×${ln.shortageQty}` : ''}
+                </span>
+              )}
+            </td>
+            <td className={styles.supplierCell}>
+              {short
+                ? <LineSupplierCell suppliers={v.suppliers} chosenSupplierId={lineSupplier[ln.soItemId] ?? null} onSupplierChange={(sid) => onLineSupplierChange(ln.soItemId, sid)} />
+                : ln.source === 'po'
+                  ? <span className={styles.poSupplierRO} title="Supplier locked — this line is already on a PO"><Truck {...ICON} /> {ln.poSupplierName ?? '—'}</span>
+                  : <span className={styles.whNone}>—</span>}
+            </td>
+            <td>{fmtDate(ln.deliveryDate)}</td>
+          </tr>
+        );
+      }))}
+    </tbody>
+  </table>
+);
