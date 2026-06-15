@@ -406,6 +406,11 @@ export function usePurchaseOrderDetail(id: string | null) {
   });
 }
 
+/* Plain (non-hook) fetch of a PO's full detail, for loops like batch print —
+   same shape + cache key as usePurchaseOrderDetail. */
+export const fetchPurchaseOrderDetail = (id: string) =>
+  authedFetch<{ purchaseOrder: PoHeaderRow; items: PoItemRow[] }>(`/mfg-purchase-orders/${id}`);
+
 export type NewPoItem = {
   materialKind: MaterialKind;
   materialCode: string;

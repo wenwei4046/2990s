@@ -111,14 +111,20 @@ const fmtMoney = (centi: number, currency: string): string =>
 const fmtAmount = (centi: number): string =>
   (centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export async function generatePurchaseOrderPdf(
+type JsPdf = import('jspdf').jsPDF;
+type AutoTableFn = (typeof import('jspdf-autotable'))['default'];
+
+/* Draw ONE purchase order's content into `doc` (letterhead → meta → items →
+   totals → notes → signature). Does NOT number pages / resolve total-pages /
+   save — the caller finalizes ONCE, so several POs can share one doc (batch
+   "Print documentation"). Returns what the finalizer needs. */
+async function renderPurchaseOrderInto(
+  doc: JsPdf,
+  autoTable: AutoTableFn,
   header: PoHeader,
   items: PoItem[],
   opts?: { docTitle?: string },
-): Promise<void> {
-  const { jsPDF } = await import('jspdf');
-  const autoTable = (await import('jspdf-autotable')).default;
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+): Promise<{ pageRowY: number; rightX: number; supplierName: string }> {
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 14;
   const docTitle = opts?.docTitle ?? 'PURCHASE ORDER';
@@ -377,7 +383,16 @@ export async function generatePurchaseOrderPdf(
   doc.text('Supplier Acknowledgement',               margin + sigW + 8 + 2, lastY + 21);
   lastY += 28;
 
-  // ── Footer page numbers + meta-block "Page : 1 of N" patch ───────
+  return { pageRowY, rightX, supplierName: s.name ?? 'supplier' };
+}
+
+const PO_TOTAL_PAGES_EXP = '{total_pages}';
+
+/* Footer page numbers on every page + resolve the {total_pages} placeholder.
+   Runs ONCE after all POs are rendered. `pageOnePatch` (single-PO only) writes
+   "1 of N" into the meta block's reserved Page row. */
+function finalizePoPdf(doc: JsPdf, pageOnePatch?: { pageRowY: number; rightX: number }): void {
+  const pageW = doc.internal.pageSize.getWidth();
   const pageCount = doc.getNumberOfPages();
   for (let p = 1; p <= pageCount; p += 1) {
     doc.setPage(p);
@@ -388,19 +403,48 @@ export async function generatePurchaseOrderPdf(
     );
     doc.setTextColor(0);
   }
-  // Patch the meta block's reserved Page row on page 1 (exact AutoCount slot).
-  if (pageRowY > 0) {
+  if (pageOnePatch && pageOnePatch.pageRowY > 0) {
     doc.setPage(1);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-    doc.text(`1 of ${pageCount}`, rightX + 35, pageRowY);
+    doc.text(`1 of ${pageCount}`, pageOnePatch.rightX + 35, pageOnePatch.pageRowY);
   }
-  /* Resolve the didDrawPage "{total_pages}" placeholder on every header. */
   const docWithTotals = doc as unknown as { putTotalPages?: (exp: string) => unknown };
   if (typeof docWithTotals.putTotalPages === 'function') {
-    docWithTotals.putTotalPages(totalPagesExp);
+    docWithTotals.putTotalPages(PO_TOTAL_PAGES_EXP);
   }
+}
 
-  // ── Save ──────────────────────────────────────────────────────────
-  const safeName = (s.name || 'supplier').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 32);
+/* Single PO → its own file (unchanged behaviour). */
+export async function generatePurchaseOrderPdf(
+  header: PoHeader,
+  items: PoItem[],
+  opts?: { docTitle?: string },
+): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const { pageRowY, rightX, supplierName } = await renderPurchaseOrderInto(doc, autoTable, header, items, opts);
+  finalizePoPdf(doc, { pageRowY, rightX });
+  const safeName = supplierName.replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 32);
   doc.save(`${header.po_number}-${safeName}.pdf`);
+}
+
+/* Several POs → ONE combined file, each PO starting on a new page. For the
+   batch "Print documentation" action (send a supplier all their POs in one
+   attachment). The per-PO "1 of N" meta patch is skipped (cosmetic in a
+   multi-PO doc); each page still carries its own PO number header + a global
+   "Page p of N" footer. */
+export async function generateCombinedPurchaseOrderPdf(
+  pos: Array<{ header: PoHeader; items: PoItem[] }>,
+  opts?: { docTitle?: string; fileName?: string },
+): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  for (let i = 0; i < pos.length; i += 1) {
+    if (i > 0) doc.addPage();
+    await renderPurchaseOrderInto(doc, autoTable, pos[i]!.header, pos[i]!.items, opts);
+  }
+  finalizePoPdf(doc);
+  doc.save(opts?.fileName ?? 'purchase-orders.pdf');
 }
