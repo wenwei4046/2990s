@@ -29,6 +29,7 @@ import {
   type FabricTrackingRow,
 } from '../lib/fabric-queries';
 import { DataGrid, type DataGridColumn } from './DataGrid';
+import { useConfirm } from './ConfirmDialog';
 import styles from '../pages/FabricTracking.module.css';
 
 /* Commander 2026-05-27 (Fix 6): only Price 1 and Price 2 in use today.
@@ -51,12 +52,25 @@ const TierCell = ({ row, field, tier }: {
   row: FabricTrackingRow; field: FabricTierField; tier: FabricTier | null;
 }) => {
   const updateTier = useUpdateFabricTier();
+  const askConfirm = useConfirm();
+  const next = TIER_NEXT[tier ?? 'PRICE_2'];
+  const label = field === 'sofaPriceTier' ? 'Sofa' : 'Bedframe';
   return (
     <button
       type="button"
       className={styles.tierPicker}
-      onClick={() => updateTier.mutate({ id: row.id, field, tier: TIER_NEXT[tier ?? 'PRICE_2'] })}
-      title="Click to cycle PRICE_1 → 2 → 3"
+      /* Commander 2026-06-15 — confirm before changing the tier (no 裸奔); the
+         tier drives the fabric's price, so a stray click must not commit. */
+      onClick={async () => {
+        if (await askConfirm({
+          title: 'Change tier?',
+          body: `Set this fabric's ${label} tier to ${tierShort(next)}? This changes its price.`,
+          confirmLabel: 'Change',
+        })) {
+          updateTier.mutate({ id: row.id, field, tier: next });
+        }
+      }}
+      title="Change the price tier (asks to confirm)"
     >
       {tierShort(tier)}
     </button>
@@ -68,14 +82,27 @@ const TierCell = ({ row, field, tier }: {
    selects, scan-SO catalog); existing documents keep displaying the code. */
 const ActiveCell = ({ row }: { row: FabricTrackingRow }) => {
   const update = useUpdateFabricActive();
+  const askConfirm = useConfirm();
   const isActive = row.is_active !== false;
   return (
     <button
       type="button"
       className={styles.tierPicker}
-      onClick={() => update.mutate({ id: row.id, isActive: !isActive })}
+      /* Commander 2026-06-15 — confirm before toggling active (no 裸奔). */
+      onClick={async () => {
+        if (await askConfirm({
+          title: isActive ? 'Deactivate fabric?' : 'Reactivate fabric?',
+          body: isActive
+            ? 'It will be hidden from fabric pickers for new entries. Existing documents keep showing it.'
+            : 'It will appear in fabric pickers again.',
+          confirmLabel: isActive ? 'Deactivate' : 'Reactivate',
+          danger: isActive,
+        })) {
+          update.mutate({ id: row.id, isActive: !isActive });
+        }
+      }}
       disabled={update.isPending}
-      title="Inactive fabrics are hidden from pickers for new entries; existing documents keep showing them"
+      title="Active fabrics show in pickers for new entries (asks to confirm)"
       style={isActive ? undefined : { color: 'var(--fg-muted)', opacity: 0.7 }}
     >
       {isActive ? 'Yes' : 'No'}
@@ -264,7 +291,7 @@ const SupplierCodeCell = ({ id, value }: { id: string; value: string }) => {
           if (e.key === 'Enter') commit();
           else if (e.key === 'Escape') cancel();
         }}
-        onBlur={commit}
+        onBlur={cancel}
       />
       <button type="button" className={styles.iconBtn} onMouseDown={(e) => e.preventDefault()} onClick={commit} title="Save">
         <Check size={14} strokeWidth={1.75} />
@@ -321,7 +348,7 @@ const DescriptionCell = ({ id, value }: { id: string; value: string }) => {
           if (e.key === 'Enter') commit();
           else if (e.key === 'Escape') cancel();
         }}
-        onBlur={commit}
+        onBlur={cancel}
         style={{ minWidth: 220 }}
       />
       <button type="button" className={styles.iconBtn} onMouseDown={(e) => e.preventDefault()} onClick={commit} title="Save">
@@ -377,7 +404,7 @@ const SeriesCell = ({ id, value }: { id: string; value: string }) => {
           if (e.key === 'Enter') commit();
           else if (e.key === 'Escape') cancel();
         }}
-        onBlur={commit}
+        onBlur={cancel}
         style={{ minWidth: 180 }}
       />
       <button type="button" className={styles.iconBtn} onMouseDown={(e) => e.preventDefault()} onClick={commit} title="Save">
