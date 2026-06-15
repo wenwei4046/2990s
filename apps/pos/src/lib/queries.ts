@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sofaModulePricesFromSkus, normalizeCompartmentCode, representativeArtCode } from '@2990s/shared/sofa-build';
-import { comboChargedPrices, type MfgSeatHeightPrice } from '@2990s/shared';
+import { comboChargedPrices, type MfgSeatHeightPrice, type DefaultFreeGift } from '@2990s/shared';
 import { supabase } from './supabase';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -1860,6 +1860,80 @@ export const useDeleteModelFabricTierOverride = () => {
       }
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['model-fabric-tier-overrides'] }); },
+  });
+};
+
+/* ─── Per-Model default free gifts (migration 0172) ────────────────────
+ *
+ * GET /model-free-gifts   → list of ModelDefaultGiftRow
+ * PUT /model-free-gifts   → upsert { modelId, gifts }
+ * DELETE /model-free-gifts/:modelId → remove override
+ *
+ * Read by the FabricPricingPanel editor AND the cart reconciler
+ * (useFreeGiftSync) so the cart knows which gift lines to maintain. */
+export interface ModelDefaultGiftRow {
+  modelId: string;
+  modelName: string;
+  modelCode: string | null;
+  category: string | null;
+  gifts: DefaultFreeGift[];
+  updatedAt: string;
+}
+
+export const useModelDefaultGifts = () =>
+  useQuery({
+    queryKey: ['model-default-gifts'],
+    queryFn: async (): Promise<ModelDefaultGiftRow[]> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/model-free-gifts`, { headers: { authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error(`GET /model-free-gifts failed (${res.status})`);
+      return (await res.json()) as ModelDefaultGiftRow[];
+    },
+    staleTime: 60_000,
+  });
+
+export const useUpsertModelDefaultGifts = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (row: { modelId: string; gifts: DefaultFreeGift[] }) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/model-free-gifts`, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(row),
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(b.reason ?? b.error ?? `PUT /model-free-gifts failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['model-default-gifts'] }); },
+  });
+};
+
+export const useDeleteModelDefaultGifts = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (modelId: string) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/model-free-gifts/${encodeURIComponent(modelId)}`, {
+        method: 'DELETE', headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(b.reason ?? b.error ?? `DELETE /model-free-gifts failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['model-default-gifts'] }); },
   });
 };
 
