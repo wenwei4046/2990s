@@ -104,6 +104,8 @@ export type DataGridProps<T> = {
   toolbar?: ReactNode;
   /** controlled focus for the "Find" button — bump to focus the search box */
   focusSearchNonce?: number;
+  /** bump to collapse every expanded drill-down row ("Collapse all") */
+  collapseAllNonce?: number;
   /** show "Drag a column header here to group by that column" banner */
   groupBanner?: boolean;
   emptyMessage?: string;
@@ -196,6 +198,7 @@ function DataGridInner<T>({
   onSelectionChange,
   toolbar,
   focusSearchNonce,
+  collapseAllNonce,
   groupBanner = true,
   emptyMessage = 'No data.',
   isLoading = false,
@@ -261,6 +264,11 @@ function DataGridInner<T>({
   useEffect(() => {
     if (focusSearchNonce != null) searchRef.current?.focus();
   }, [focusSearchNonce]);
+
+  // Collapse every expanded drill-down when the parent bumps collapseAllNonce.
+  useEffect(() => {
+    if (collapseAllNonce != null) setExpandedRows(new Set());
+  }, [collapseAllNonce]);
 
   // Close context menu on outside click.
   useEffect(() => {
