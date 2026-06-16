@@ -35,7 +35,7 @@ export interface FilterColumn<T> {
   accessor: (row: T) => string | null | undefined;
 }
 
-type DatePreset = 'today' | 'tomorrow' | 'thisWeek' | 'thisMonth' | 'lastMonth' | 'overdue' | 'custom';
+type DatePreset = 'today' | 'tomorrow' | 'thisWeek' | 'thisMonth' | 'lastMonth' | 'custom';
 
 interface ActiveFilter {
   key: string;
@@ -79,11 +79,6 @@ function presetRange(preset: DatePreset, from?: string, to?: string): { from: st
       const e = new Date(now.getFullYear(), now.getMonth(), 0);
       return { from: iso(s), to: iso(e) };
     }
-    case 'overdue': {
-      // Everything strictly before today (mirrors DataGrid's 'overdue').
-      const y = new Date(now.getTime() - day);
-      return { from: '', to: iso(y) };
-    }
     default: return { from: '', to: '' };
   }
 }
@@ -94,7 +89,6 @@ const PRESET_LABELS: Record<DatePreset, string> = {
   thisWeek: 'This week',
   thisMonth: 'This month',
   lastMonth: 'Last month',
-  overdue: 'Overdue',
   custom: 'Custom range…',
 };
 
@@ -283,7 +277,7 @@ export function useColumnFilter<T>({
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 <select value={f.preset ?? 'custom'} onChange={(e) => patchFilter(idx, { preset: e.target.value as DatePreset })}
                   style={{ ...SELECT_STYLE, height: 26, border: 'none', minWidth: 104, padding: '0 22px 0 4px' }}>
-                  {(['today', 'tomorrow', 'thisWeek', 'thisMonth', 'lastMonth', 'overdue', 'custom'] as DatePreset[])
+                  {(['today', 'tomorrow', 'thisWeek', 'thisMonth', 'lastMonth', 'custom'] as DatePreset[])
                     .map((p) => <option key={p} value={p}>{PRESET_LABELS[p]}</option>)}
                 </select>
                 {f.preset === 'custom' && (
