@@ -179,13 +179,21 @@ const SO_IDENTITY_LOCK_COLS = new Set<string>([
 ]);
 
 /* Owner 2026-06-12 + Loo 2026-06-13 — after the processing date passes the SO is
-   what we PO to the supplier, so only the PRODUCTION-SCHEDULE columns freeze on
-   the header PATCH. Customer / delivery-address / payment fields don't feed the
-   supplier PO and stay editable in the Proceed lane (POS "edit in Proceed").
-   Items have their own per-route processing lock, so only these two date columns
-   belong here. Keyed by DB column name. */
+   what we PO to the supplier, so the columns that feed the supplier PO freeze on
+   the header PATCH. The rest of the customer / delivery-address / payment fields
+   stay editable in the Proceed lane (POS "edit in Proceed"); items have their
+   own per-route processing lock. Keyed by DB column name.
+
+   Owner 2026-06-16 — customer_state + sales_location ALSO freeze here. State
+   drives each SO line's warehouse_id (deriveWarehouseIdFromState), and that
+   warehouse is what the PO ships from. Once the SO is locked the line warehouse
+   is frozen + PO'd, so letting State change afterwards would silently desync the
+   warehouse / PO from the customer's address. The REST of the address (address
+   lines / city / postcode) + payment stay editable — only the State (and the
+   Location it derives) lock. */
 const SO_PROCESSING_LOCK_COLS = new Set<string>([
   'internal_expected_dd', 'customer_delivery_date',
+  'customer_state', 'sales_location',
 ]);
 
 /* Loose equality for the lock diff — null / undefined / '' all collapse so a
