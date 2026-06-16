@@ -20,11 +20,11 @@
 //   │                                 Purchase Loc.: WH-KL · Main WH   │
 //   │                                 Page         : 1 of N            │
 //   ├──────────────────────────────────────────────────────────────────┤
-//   │ Item | Our Code | Description | Transf. SO | UOM | Qty | U/Price │
-//   │      |          |             |            |     |     | | Disc | Total
-//   │  (Item = SUPPLIER code, bold. Description = model + composition +
-//   │   supplier colour (our code) + variant attrs + remark + per-line
-//   │   delivery date.)
+//   │ Transf. SO | Supplier Code | Description | UOM | Qty | U/Price │
+//   │            |               |             |     |     | Disc | Total
+//   │  (Supplier Code = SUPPLIER code, bold. Description = model +
+//   │   composition + supplier colour (our code) + variant attrs +
+//   │   remark + per-line delivery date.)
 //   ├──────────────────────────────────────────────────────────────────┤
 //   │ RINGGIT MALAYSIA … ONLY                          TOTAL  9,999.00 │
 //   │ E. & O.E.                                                        │
@@ -246,21 +246,23 @@ async function renderPurchaseOrderInto(
 
   // Owner's rule — supplier acts on THEIR codes; ours stay printed alongside.
   doc.setFont('helvetica', 'italic'); doc.setFontSize(8); doc.setTextColor(80);
-  doc.text('Codes shown are SUPPLIER codes; our reference in second column.', leftX, y + 2);
+  doc.text('Item codes shown are SUPPLIER codes; our model & reference appear in the Description.', leftX, y + 2);
   doc.setFont('helvetica', 'normal'); doc.setTextColor(0);
   y += 6;
 
   // ── Items table ──────────────────────────────────────────────────
-  // Dual-code DSL layout (Commander — supplier-facing purchasing docs):
-  //   Item        = SUPPLIER's code, bold, FIRST (the code they act on)
-  //   Our Code    = internal reference
-  //   Description = name/model + composition (description2) + Specs
-  //                 (supplier colour (our fabric code) via Fabric Converter +
-  //                 divan/leg/seat heights + D1 specials via
-  //                 buildVariantSummary inside specsLine) + line remark +
-  //                 per-line delivery date
-  //   Transf. SO | UOM | Qty | U/Price | Disc | Total
-  type Row = [string, string, string, string, string, string, string, string, string];
+  // Supplier-facing layout (Commander 2026-06-16 — dropped the standalone "Our
+  // Code" column: our model already reads inside the Description, and the SO
+  // this PO serves now leads the row):
+  //   Transf. SO    = the source S/O this line fulfils, FIRST column
+  //   Supplier Code = SUPPLIER's code, bold (the code they act on)
+  //   Description   = name/model + composition (description2) + Specs
+  //                   (supplier colour (our fabric code) via Fabric Converter +
+  //                   divan/leg/seat heights + D1 specials via
+  //                   buildVariantSummary inside specsLine) + line remark +
+  //                   per-line delivery date
+  //   UOM | Qty | U/Price | Disc | Total
+  type Row = [string, string, string, string, string, string, string, string];
   const rows: Row[] = items.map((it) => {
     // ONE variant line only: the recomputed specs (fabric-mapped) when present,
     // else the stored description2 — never BOTH. They are the same summary with
@@ -275,12 +277,11 @@ async function renderPurchaseOrderInto(
       it.delivery_date ? `Delivery: ${fmtDocDate(it.delivery_date)}` : null,
     ].filter(Boolean) as string[];
     return [
+      it.so_doc_no ?? '—',
       supplierCodeFor(it, skuMap),
-      it.material_code,
       // Dedupe consecutive identical segments (description2 often equals the
       // live specs line) so the cell doesn't read the same string twice.
       [...new Set(descParts)].join('\n'),
-      it.so_doc_no ?? '—',
       (it.uom ?? 'UNIT').toUpperCase(),
       String(it.qty),
       fmtAmount(it.unit_price_centi),
@@ -304,7 +305,7 @@ async function renderPurchaseOrderInto(
   autoTable(doc, {
     startY: y,
     head: [[
-      'Supplier Code', 'Our Code', 'Description', 'Transf. SO', 'UOM', 'Qty',
+      'Transf. SO', 'Supplier Code', 'Description', 'UOM', 'Qty',
       `U/Price ${header.currency}`, 'Disc.', `Total ${header.currency}`,
     ]],
     body: rows,
@@ -312,16 +313,16 @@ async function renderPurchaseOrderInto(
     styles: { fontSize: 8.5, cellPadding: { top: 1.5, right: 1.5, bottom: 1.5, left: 1.5 }, lineColor: [120, 120, 120], lineWidth: 0.1 },
     headStyles: { fontStyle: 'bold', halign: 'left', valign: 'middle', lineWidth: { top: 0.4, bottom: 0.4 } as never },
     bodyStyles: { valign: 'top' },
+    // Widths sum to 180mm — fits the A4 printable width (210 − 14×2 = 182).
     columnStyles: {
-      0: { cellWidth: 26, fontStyle: 'bold' },
-      1: { cellWidth: 22 },
-      2: { cellWidth: 54 },
-      3: { cellWidth: 20 },
-      4: { cellWidth: 12 },
-      5: { cellWidth: 10, halign: 'right' },
-      6: { cellWidth: 16, halign: 'right' },
-      7: { cellWidth: 12, halign: 'right' },
-      8: { cellWidth: 16, halign: 'right' },
+      0: { cellWidth: 24 },                    // Transf. SO (the SO this PO serves — first)
+      1: { cellWidth: 26, fontStyle: 'bold' }, // Supplier Code (the code they act on)
+      2: { cellWidth: 56 },                    // Description (model + specs + our code)
+      3: { cellWidth: 13 },                    // UOM
+      4: { cellWidth: 12, halign: 'right' },   // Qty
+      5: { cellWidth: 18, halign: 'right' },   // U/Price
+      6: { cellWidth: 13, halign: 'right' },   // Disc.
+      7: { cellWidth: 18, halign: 'right' },   // Total
     },
     margin: { left: margin, right: margin, top: 16 },
     didDrawPage: (data) => drawPageHeader(data.pageNumber),
