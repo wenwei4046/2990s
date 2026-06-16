@@ -24,6 +24,7 @@
 // ----------------------------------------------------------------------------
 
 import { Hono, type Context } from 'hono';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { canonicalizeComboModulesForStorage, comboSlotsKey, sofaComboCostSen, parseDefaultFreeGifts, type ComboSlots } from '@2990s/shared';
@@ -102,6 +103,79 @@ function rowToWire(r: Row) {
     updatedAt: r.updated_at,
     createdBy: r.created_by,
   };
+}
+
+// ── R8 anchor mirror (Commander 2026-06-16) ──────────────────────────────
+// A base_model can be ANCHORED to one supplier (sofa_combo_anchor, PK
+// base_model). While anchored, every combo CREATE and price EDIT is mirrored
+// bidirectionally between the master (sales-side, supplier_id NULL) combo and
+// that supplier's scope (supplier_id = the anchored supplier), so the
+// Product-Maintenance cost reference and the anchored supplier's cost stay in
+// lock-step. Mirroring is append-only (it INSERTs a copy on the other side)
+// and best-effort (the primary write already succeeded — a mirror failure must
+// never 500 the caller; we just report mirrored:false).
+
+// `Sb` = the Supabase client this route's middleware stashes on the context
+// (`c.get('supabase')`, see env.ts Variables). The mirror helpers take it
+// explicitly so they can run the secondary INSERT on the same client.
+type Sb = SupabaseClient;
+
+// The anchored supplier for a base model, or null when not anchored.
+async function loadComboAnchor(
+  sb: Sb,
+  baseModel: string,
+): Promise<string | null> {
+  const { data } = await sb
+    .from('sofa_combo_anchor')
+    .select('supplier_id')
+    .eq('base_model', baseModel)
+    .maybeSingle();
+  return (data as { supplier_id?: string } | null)?.supplier_id ?? null;
+}
+
+// Mirror a just-saved combo row to the OTHER side of the anchor.
+//   · savedRow on the master (supplier_id NULL)         → copy into the supplier scope.
+//   · savedRow on the anchored supplier's scope          → copy into the master (NULL).
+//   · savedRow on some OTHER supplier (not the anchor)   → no mirror (returns false).
+// The copy keeps the same scope tuple (base_model / modules / tier / customer)
+// and every price map, only swapping supplier_id to the mirror target, so the
+// lookup picker treats it as a fresh effective-dated row on that side.
+async function mirrorAnchoredCombo(
+  sb: Sb,
+  savedRow: Row,
+  anchorSupplierId: string,
+  userId: string,
+): Promise<boolean> {
+  let target: string | null;
+  if (savedRow.supplier_id == null) {
+    target = anchorSupplierId;            // master → supplier scope
+  } else if (savedRow.supplier_id === anchorSupplierId) {
+    target = null;                        // anchored supplier → master
+  } else {
+    return false;                         // a different supplier — not part of this anchor
+  }
+
+  try {
+    const { error } = await sb.from('sofa_combo_pricing').insert({
+      base_model: savedRow.base_model,
+      modules: savedRow.modules,
+      tier: savedRow.tier,
+      customer_id: savedRow.customer_id,
+      supplier_id: target,
+      prices_by_height: savedRow.prices_by_height,
+      selling_prices_by_height: savedRow.selling_prices_by_height,
+      pwp_prices_by_height: savedRow.pwp_prices_by_height ?? {},
+      default_free_gifts: savedRow.default_free_gifts ?? [],
+      label: savedRow.label,
+      effective_from: savedRow.effective_from,
+      notes: savedRow.notes,
+      created_by: userId,
+    });
+    return !error;
+  } catch {
+    // Best-effort — the primary write already succeeded; never throw here.
+    return false;
+  }
 }
 
 /**
@@ -296,6 +370,75 @@ sofaCombos.get('/history', async (c) => {
   return c.json({ rules: matching.map(rowToWire) });
 });
 
+// ── GET /anchors ─────────────────────────────────────────────────────────
+// R8 — every base_model → anchored supplier mapping. SELECT is open (the combo
+// UI reads this to drive the per-model anchor control + the write paths read it
+// to decide whether to mirror). Declared BEFORE the `/:id` routes so the literal
+// `/anchors` path always wins over the `:id` param matcher.
+sofaCombos.get('/anchors', async (c) => {
+  const supabase = c.get('supabase');
+  const { data, error } = await supabase
+    .from('sofa_combo_anchor')
+    .select('base_model, supplier_id')
+    .order('base_model', { ascending: true });
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  return c.json({ anchors: (data ?? []) as Array<{ base_model: string; supplier_id: string }> });
+});
+
+// ── PUT /anchors/:baseModel ───────────────────────────────────────────────
+// R8 — set or clear the anchor for one base model. body { supplierId: string |
+// null }. A non-empty supplierId UPSERTs the anchor (one row per base_model);
+// null / empty deletes it (un-anchor). Write-gated like every combo mutation.
+sofaCombos.put('/anchors/:baseModel', async (c) => {
+  const gate = await requireWriteRole(c);
+  if (!gate.ok) return gate.res;
+
+  const baseModel = c.req.param('baseModel');
+  if (!baseModel) return c.json({ error: 'base_model_required' }, 400);
+
+  let body: { supplierId?: string | null };
+  try {
+    body = (await c.req.json()) as typeof body;
+  } catch {
+    return c.json({ error: 'invalid_json' }, 400);
+  }
+
+  const supabase = c.get('supabase');
+  const user = c.get('user');
+  const supplierId =
+    typeof body.supplierId === 'string' && body.supplierId.trim() ? body.supplierId.trim() : null;
+
+  if (supplierId) {
+    const { error } = await supabase
+      .from('sofa_combo_anchor')
+      .upsert(
+        {
+          base_model: baseModel,
+          supplier_id: supplierId,
+          created_by: user.id,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'base_model' },
+      );
+    if (error) {
+      if (error.code === '42501' || /permission denied/i.test(error.message)) {
+        return c.json({ error: 'forbidden', reason: error.message }, 403);
+      }
+      return c.json({ error: 'anchor_upsert_failed', reason: error.message }, 500);
+    }
+  } else {
+    const { error } = await supabase.from('sofa_combo_anchor').delete().eq('base_model', baseModel);
+    if (error) {
+      if (error.code === '42501' || /permission denied/i.test(error.message)) {
+        return c.json({ error: 'forbidden', reason: error.message }, 403);
+      }
+      return c.json({ error: 'anchor_delete_failed', reason: error.message }, 500);
+    }
+  }
+
+  return c.json({ ok: true });
+});
+
 // ── POST / ─────────────────────────────────────────────────────────────
 // Create a new combo row. body: {
 //   baseModel, modules: string[][], tier?: SofaPriceTier | null,
@@ -439,7 +582,14 @@ sofaCombos.post('/', async (c) => {
     }
     return c.json({ error: 'insert_failed', reason: error.message }, 500);
   }
-  return c.json(rowToWire(data as unknown as Row), 201);
+
+  // R8 — if this base model is anchored to a supplier, mirror the just-saved
+  // combo to the other side (master ⇄ that supplier). Best-effort: a mirror
+  // failure leaves the primary row intact and just reports mirrored:false.
+  const savedRow = data as unknown as Row;
+  const anchor = await loadComboAnchor(supabase, baseModel);
+  const mirrored = anchor ? await mirrorAnchoredCombo(supabase, savedRow, anchor, user.id) : false;
+  return c.json({ ...rowToWire(savedRow), mirrored }, 201);
 });
 
 // ── PUT /:id ───────────────────────────────────────────────────────────
@@ -539,7 +689,13 @@ sofaCombos.put('/:id', async (c) => {
     .single();
 
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
-  return c.json(rowToWire(data as unknown as Row), 201);
+
+  // R8 — mirror the new effective row to the other side of the anchor when the
+  // base model is anchored (master ⇄ supplier). Same best-effort contract as POST.
+  const savedRow = data as unknown as Row;
+  const anchor = await loadComboAnchor(supabase, (orig as { base_model: string }).base_model);
+  const mirrored = anchor ? await mirrorAnchoredCombo(supabase, savedRow, anchor, user.id) : false;
+  return c.json({ ...rowToWire(savedRow), mirrored }, 201);
 });
 
 // ── DELETE /:id ────────────────────────────────────────────────────────

@@ -38,10 +38,12 @@ import {
   useUpdateSofaCombo,
   useDeleteSofaCombo,
   useSofaComboHistory,
+  useSofaComboAnchors,
+  useSetSofaComboAnchor,
   type SofaComboRule,
 } from '../lib/sofa-combos-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
-import { useSupplierDetail } from '../lib/suppliers-queries';
+import { useSupplierDetail, useSuppliers, type SupplierRow } from '../lib/suppliers-queries';
 import { todayMyt } from '../lib/dates';
 
 // Seat-height columns mirror the live Maintenance pool (Products → Maintenance
@@ -200,6 +202,20 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
 
   const deleteM = useDeleteSofaCombo();
 
+  // R8 — anchor a base_model to ONE supplier (sales-side view only). When
+  // anchored, combo create + price edits mirror between this master combo and
+  // the anchored supplier's scope (handled server-side). The control reads the
+  // current anchor + the supplier master; changing it sets/clears the anchor.
+  const isSalesSide = !supplierId;
+  const anchorsQ = useSofaComboAnchors();
+  const suppliersQ = useSuppliers({ status: 'ACTIVE' });
+  const setAnchorM = useSetSofaComboAnchor();
+  const anchorByModel = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const a of anchorsQ.data ?? []) m[a.base_model] = a.supplier_id;
+    return m;
+  }, [anchorsQ.data]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '8px 0' }}>
       {/* Header */}
@@ -269,16 +285,25 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
       ) : (
         grouped.map(([model, rules]) => (
           <section key={model} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <h3 style={{
-              fontFamily: 'var(--font-sans)',
-              fontSize: 'var(--fs-15)',
-              fontWeight: 600,
-              color: 'var(--c-ink)',
-              margin: 0,
-              padding: '4px 0',
-            }}>
-              {model} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>({rules.length} combo{rules.length !== 1 ? 's' : ''})</span>
-            </h3>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0', flexWrap: 'wrap' }}>
+              <h3 style={{
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--fs-15)',
+                fontWeight: 600,
+                color: 'var(--c-ink)',
+                margin: 0,
+              }}>
+                {model} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>({rules.length} combo{rules.length !== 1 ? 's' : ''})</span>
+              </h3>
+              {isSalesSide && (
+                <AnchorControl
+                  anchoredSupplierId={anchorByModel[model] ?? null}
+                  suppliers={suppliersQ.data ?? []}
+                  busy={setAnchorM.isPending}
+                  onChange={(supplierId) => setAnchorM.mutate({ baseModel: model, supplierId })}
+                />
+              )}
+            </div>
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))',
@@ -321,6 +346,71 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
     </div>
   );
 };
+
+// ─── Anchor control (R8) ──────────────────────────────────────────────
+// Per-base_model「⇄ Anchor」picker shown on the SALES-side combo view only.
+// Anchoring a model to a supplier makes the server mirror every combo
+// create + price edit between this master combo and that supplier's scope, so
+// the Product-Maintenance cost stays in lock-step with the supplier's cost.
+// Picking a supplier sets the anchor; the ✕ clears it (un-anchor).
+
+function AnchorControl({
+  anchoredSupplierId, suppliers, busy, onChange,
+}: {
+  anchoredSupplierId: string | null;
+  suppliers: SupplierRow[];
+  busy: boolean;
+  onChange: (supplierId: string | null) => void;
+}) {
+  const anchored = anchoredSupplierId
+    ? suppliers.find((s) => s.id === anchoredSupplierId)
+    : null;
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <span style={{
+        fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)',
+        fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5,
+        color: 'var(--fg-muted)',
+      }}>
+        ⇄ Anchor
+      </span>
+      <select
+        value={anchoredSupplierId ?? ''}
+        disabled={busy}
+        onChange={(e) => onChange(e.target.value || null)}
+        title="Anchor this model's combos to one supplier — combo create + price edits mirror both ways."
+        style={{ ...selectStyle, fontSize: 'var(--fs-12)', padding: '4px 8px' }}
+      >
+        <option value="">— none —</option>
+        {/* Keep a stale/non-ACTIVE anchored supplier selectable so the value
+            never renders blank if it dropped out of the ACTIVE list. */}
+        {anchored == null && anchoredSupplierId && (
+          <option value={anchoredSupplierId}>{anchoredSupplierId}</option>
+        )}
+        {suppliers.map((s) => (
+          <option key={s.id} value={s.id}>{s.name}</option>
+        ))}
+      </select>
+      {anchoredSupplierId && (
+        <span style={anchorChipStyle} title="Anchored supplier">
+          {anchored?.name ?? anchoredSupplierId}
+          <button
+            type="button"
+            onClick={() => onChange(null)}
+            disabled={busy}
+            title="Un-anchor"
+            style={{
+              ...iconBtnStyle, padding: 0, marginLeft: 4,
+              color: 'var(--c-orange, #c47b2f)',
+            }}
+          >
+            <X size={12} strokeWidth={2} />
+          </button>
+        </span>
+      )}
+    </div>
+  );
+}
 
 // ─── Combo card ────────────────────────────────────────────────────────
 
@@ -918,6 +1008,21 @@ const chipStyleSoft: CSSProperties = {
   padding: '2px 6px',
   borderRadius: 'var(--radius-sm)',
   border: '1px solid var(--line)',
+};
+
+// Anchored-supplier chip (R8) — reuses the orange supplier-identity tint so it
+// reads as "this model is bound to a supplier", with an inline ✕ to clear.
+const anchorChipStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  fontFamily: 'var(--font-sans)',
+  fontSize: 'var(--fs-11)',
+  fontWeight: 600,
+  background: 'var(--c-paper)',
+  color: 'var(--c-orange, #c47b2f)',
+  padding: '2px 6px',
+  borderRadius: 'var(--radius-sm)',
+  border: '1px solid var(--c-orange, #c47b2f)',
 };
 
 const statusPillActive: CSSProperties = {
