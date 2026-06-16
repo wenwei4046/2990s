@@ -101,6 +101,10 @@ export type DataGridProps<T> = {
       undefined for the default look. */
   rowStyle?: (row: T) => CSSProperties | undefined;
   onSelectionChange?: (rows: T[]) => void;
+  /** Fires with the rows currently visible after search + column filters
+      (post-sort) — lets a parent print/export exactly what's filtered, no
+      row-ticking. Pass a STABLE setter (e.g. a useState dispatch). (2026-06-16) */
+  onFilteredRowsChange?: (rows: T[]) => void;
   toolbar?: ReactNode;
   /** controlled focus for the "Find" button — bump to focus the search box */
   focusSearchNonce?: number;
@@ -196,6 +200,7 @@ function DataGridInner<T>({
   onRowClick,
   rowStyle,
   onSelectionChange,
+  onFilteredRowsChange,
   toolbar,
   focusSearchNonce,
   collapseAllNonce,
@@ -526,6 +531,13 @@ function DataGridInner<T>({
     const found = rows.find((r) => rowKey(r) === selectedKey);
     onSelectionChange(found ? [found] : []);
   }, [selectedKey, rows, rowKey, onSelectionChange]);
+
+  /* Filtered-rows callback (Commander 2026-06-16) — hand the parent exactly the
+     rows visible after search + column filters (post-sort), so a "Print all
+     (filtered)" button prints what the operator sees with no row-ticking. */
+  useEffect(() => {
+    onFilteredRowsChange?.(sortedRows);
+  }, [sortedRows, onFilteredRowsChange]);
 
   // ── Group rendering ───────────────────────────────────────────────
   // Multi-level groups produced as a flat list of render instructions.
