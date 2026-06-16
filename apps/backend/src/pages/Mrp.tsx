@@ -805,7 +805,9 @@ export const Mrp = () => {
               {/* Commander 2026-05-31 — per-warehouse MRP: each Model row is
                   scoped to one warehouse (no cross-WH pooling). */}
               <th>Warehouse</th>
-              <th>Item Code</th>
+              {/* Sofa tab is one row per SALES ORDER (F5), so the lead column is
+                  the SO No there, not an item code — label it honestly per tab. */}
+              <th>{view === 'sofa' ? 'Sales Order' : 'Item Code'}</th>
               <th>Description</th>
               <th className={styles.num}>Qty Needed</th>
               <th className={styles.num}>Stock</th>
