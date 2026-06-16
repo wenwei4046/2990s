@@ -81,6 +81,7 @@ import { todayMyt } from '../lib/dates';
 import { FabricsTable } from '../components/FabricsTable';
 import { SofaComboTab } from '../components/SofaComboTab';
 import { SpecialAddonsTab, SpecialAddonsManager } from '../components/SpecialAddonsTab';
+import { useToast } from '../components/Toast';
 import { FabricTracking } from './FabricTracking';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/size-info';
 import { ProductModels, NewModelDialog } from './ProductModels';
@@ -274,6 +275,7 @@ const SkuMasterTab = () => {
   const [pendingEdits, setPendingEdits] = useState<Record<string, ProductEditPatch>>({});
   const [savingEdits, setSavingEdits] = useState(false);
   const updatePrices = useUpdateMfgProductPrices();
+  const toast = useToast();
   const stageEdit = useCallback((id: string, patch: ProductEditPatch) => {
     setPendingEdits((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
   }, []);
@@ -435,8 +437,7 @@ const SkuMasterTab = () => {
       + `Force delete will wipe those side-table rows first then drop the SKU. Continue?`,
     );
     if (!wantForce) {
-      // eslint-disable-next-line no-alert
-      alert(`Deleted ${results.length - failed.length} / ${results.length}. ${failed.length} failed.\n${sample}${overflow}`);
+      toast.warning(`Deleted ${results.length - failed.length} / ${results.length}. ${failed.length} failed.\n${sample}${overflow}`);
       return;
     }
     setDeleting(true);
@@ -446,12 +447,10 @@ const SkuMasterTab = () => {
     setDeleting(false);
     const stillFailed = retry.filter((r) => !r.ok);
     if (stillFailed.length === 0) {
-      // eslint-disable-next-line no-alert
-      alert(`Force delete cleaned up the remaining ${retry.length} SKU${retry.length === 1 ? '' : 's'}.`);
+      toast.success(`Force delete cleaned up the remaining ${retry.length} SKU${retry.length === 1 ? '' : 's'}.`);
     } else {
       const stillSample = stillFailed.slice(0, 3).map((r) => `· ${r.ok ? '' : r.err.slice(0, 160)}`).join('\n');
-      // eslint-disable-next-line no-alert
-      alert(`Force delete: ${retry.length - stillFailed.length} / ${retry.length} succeeded. ${stillFailed.length} still failed:\n${stillSample}`);
+      toast.error(`Force delete: ${retry.length - stillFailed.length} / ${retry.length} succeeded. ${stillFailed.length} still failed:\n${stillSample}`);
     }
   };
 
@@ -1629,6 +1628,7 @@ export const MaintenanceTab = ({
   const history = useMaintenanceConfigHistory(scope);
   const save = useSaveMaintenanceConfig();
   const renameCompartment = useRenameSofaCompartment();
+  const toast = useToast();
   // BRANDING pool — `distinct` (DISTINCT branding across mfg_products +
   // product_models) is the read-only suggestion shown when the pool is empty
   // AND the one-click seed for the Edit draft (see startEdit). The pool
@@ -1762,8 +1762,7 @@ export const MaintenanceTab = ({
           try {
             await renameCompartment.mutateAsync(r);
           } catch (e) {
-            // eslint-disable-next-line no-alert
-            alert(`Rename ${r.from} → ${r.to} failed: ${e instanceof Error ? e.message : String(e)}\nNothing was partially renamed for this pair; fix and retry.`);
+            toast.error(`Rename ${r.from} → ${r.to} failed: ${e instanceof Error ? e.message : String(e)}\nNothing was partially renamed for this pair; fix and retry.`);
             return;
           }
         }
@@ -2164,6 +2163,7 @@ const SofaCompartmentsList = ({
    * show a "saving…" hint on the right thumbnail. */
   const uploadPhoto = useUploadSofaCompartmentPhoto();
   const deletePhoto = useDeleteSofaCompartmentPhoto();
+  const toast = useToast();
   const [uploadingCode, setUploadingCode] = useState<string | null>(null);
 
   const writeMeta = (code: string, patch: Partial<CompartmentMeta>) => {
@@ -2328,8 +2328,7 @@ const SofaCompartmentsList = ({
                         uploadPhoto.mutate({ code, file }, {
                           onSettled: () => setUploadingCode(null),
                           onError: (err) => {
-                            // eslint-disable-next-line no-alert
-                            alert(`Upload failed: ${err instanceof Error ? err.message : String(err)}`);
+                            toast.error(`Upload failed: ${err instanceof Error ? err.message : String(err)}`);
                           },
                         });
                       }}
@@ -3793,6 +3792,7 @@ const FabricsMaintenancePanel = () => {
 
 const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
   const create = useCreateMfgProduct();
+  const toast = useToast();
   // Branding datalist — maintenance pool first, DISTINCT fallback. Free text
   // stays possible (datalist, not a hard select) so legacy values aren't blocked.
   const brandingPool = useBrandingPool();
@@ -3821,8 +3821,8 @@ const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
   const isService = form.category === 'SERVICE';
 
   const submit = () => {
-    if (!form.code.trim()) { alert('Code is required.'); return; }
-    if (!form.name.trim()) { alert('Name is required.'); return; }
+    if (!form.code.trim()) { toast.error('Code is required.'); return; }
+    if (!form.name.trim()) { toast.error('Name is required.'); return; }
     const toSen = (s: string): number | null => {
       const t = s.trim();
       if (!t) return null;

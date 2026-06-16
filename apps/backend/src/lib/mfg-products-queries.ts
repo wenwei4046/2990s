@@ -13,6 +13,7 @@ import type { MaintPoolEntry } from '@2990s/shared';
 import { supabase } from './supabase';
 import { authedFetch, humanApiError } from './authed-fetch';
 import { verifiedSave, readbackGet, friendlySaveMessage } from './verified-save';
+import { useToast } from '../components/Toast';
 
 const API_URL = import.meta.env.VITE_API_URL;
 if (!API_URL) {
@@ -276,6 +277,7 @@ export function useMfgProducts(opts?: {
 
 export function useUpdateMfgProductPrices() {
   const qc = useQueryClient();
+  const toast = useToast();
   return useMutation({
     mutationFn: async (args: {
       id: string;
@@ -331,8 +333,7 @@ export function useUpdateMfgProductPrices() {
     onError: (err) => {
       // Surface a money-save failure LOUDLY — a silent miss would let the
       // operator believe a price stuck when it didn't (verified-save).
-      // eslint-disable-next-line no-alert
-      window.alert(err instanceof Error ? err.message : String(err));
+      toast.error(err instanceof Error ? err.message : String(err));
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mfg-products'] });
