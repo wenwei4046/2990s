@@ -154,7 +154,6 @@ export const ProductModelDetail = ({
     };
     // Pull global pools the same way the panels do below so the auto-fill
     // matches what commander sees.
-    const sofaComps = maintActiveValues(cfg?.sofaCompartments ?? FALLBACK_SOFA_COMPARTMENTS);
     const sofaSizes = maintActiveValues(cfg?.sofaSizes ?? ['24', '26', '28', '30', '32', '35']);
     const sofaLegs  = (cfg?.sofaLegHeights ?? []).map((o) => o.value);
     const sofaSpec  = specialsByCategory.sofa;
@@ -167,7 +166,13 @@ export const ProductModelDetail = ({
     const matSizes  = maintActiveValues(cfg?.mattressSizes ?? FALLBACK_MATTRESS_SIZES);
 
     if (data.model.category === 'SOFA') {
-      fillIfEmpty('compartments', sofaComps);
+      // Compartments are intentionally NOT auto-seeded (Loo 2026-06-16).
+      // Force-filling an empty allowed_options.compartments with the entire
+      // master pool is exactly how RETIRED codes (the legacy 1A(L) Power-Leg
+      // family) got baked into Models and then surfaced as phantom RM 0 modules
+      // in the POS configurator after being removed from the pool. Compartments
+      // are now opt-in per Model: a new sofa Model starts with an empty list
+      // (mirrors the POS Allowed Options drawer's leg_heights-only seed, #636).
       fillIfEmpty('sizes',        sofaSizes);
       fillIfEmpty('leg_heights',  sofaLegs);
       fillIfEmpty('specials',     sofaSpec);
