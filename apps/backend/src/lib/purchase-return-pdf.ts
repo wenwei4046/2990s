@@ -2,7 +2,7 @@
 // Dual-code layout (Commander): supplier code first, our code alongside.
 // purchase_return_items has NO supplier_sku column — resolved at print time
 // from supplier_material_bindings via the doc's supplier_id.
-import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate } from './pdf-common';
+import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate, fmtDocStamp } from './pdf-common';
 import { loadSupplierDocData, supplierCodeFor, specsLine } from './supplier-doc-data';
 
 type PrHeader = {
@@ -104,7 +104,11 @@ export async function generatePurchaseReturnPdf(
   doc.text(opts?.totalLabel ?? 'TOTAL REFUND', totalsX, lastY + 2);
   doc.text(fmtRm(header.refund_centi), pageW - margin, lastY + 2, { align: 'right' });
 
-  drawSignatureBoxes(doc, lastY + 12, "2990's Home Issued By", 'Supplier Acknowledgement');
+  const ty = drawSignatureBoxes(doc, lastY + 12, "2990's Home Issued By", 'Supplier Acknowledgement');
+
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(110);
+  doc.text(`Generated ${fmtDocStamp()}`, pageW - margin, ty, { align: 'right' });
+  doc.setTextColor(0);
 
   doc.save(`${header.return_number}-${safeName(header.supplier?.name ?? 'supplier')}.pdf`);
 }
