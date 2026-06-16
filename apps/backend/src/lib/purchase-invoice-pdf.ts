@@ -2,7 +2,7 @@
 // Dual-code layout (Commander): supplier code first, our code alongside.
 // purchase_invoice_items has NO supplier_sku column — resolved at print time
 // from supplier_material_bindings via the doc's supplier_id.
-import { drawHeader, drawTwoColInfo, fmtRm, safeName, fmtDocDate } from './pdf-common';
+import { drawHeader, drawTwoColInfo, fmtRm, safeName, fmtDocDate, fmtDocStamp } from './pdf-common';
 import { loadSupplierDocData, supplierCodeFor, specsLine } from './supplier-doc-data';
 
 type PiHeader = {
@@ -106,6 +106,10 @@ export async function generatePurchaseInvoicePdf(header: PiHeader, items: PiItem
   doc.setFontSize(9);
   drawRow('Paid',        fmtRm(header.paid_centi, header.currency), ty + 4); ty += 4;
   drawRow('Outstanding', fmtRm(header.total_centi - header.paid_centi, header.currency), ty + 4, true);
+
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(110);
+  doc.text(`Generated ${fmtDocStamp()}`, pageW - margin, ty + 14, { align: 'right' });
+  doc.setTextColor(0);
 
   doc.save(`${header.invoice_number}-${safeName(header.supplier?.name ?? 'supplier')}.pdf`);
 }

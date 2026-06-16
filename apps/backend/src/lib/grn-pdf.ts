@@ -1,7 +1,7 @@
 // Goods Receipt Note PDF — printable for warehouse / supplier reconciliation.
 // Dual-code layout (Commander): supplier sees THEIR code first, ours alongside;
 // fabric specs show the supplier's colour code with our internal code in ().
-import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate } from './pdf-common';
+import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate, fmtDocStamp } from './pdf-common';
 import { loadSupplierDocData, supplierCodeFor, specsLine } from './supplier-doc-data';
 
 type GrnHeader = {
@@ -98,7 +98,11 @@ export async function generateGrnPdf(
   });
   const lastY = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y) + 6;
 
-  drawSignatureBoxes(doc, lastY, 'Warehouse Received By', 'Supplier Driver Signature');
+  const ty = drawSignatureBoxes(doc, lastY, 'Warehouse Received By', 'Supplier Driver Signature');
+
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(110);
+  doc.text(`Generated ${fmtDocStamp()}`, doc.internal.pageSize.getWidth() - margin, ty, { align: 'right' });
+  doc.setTextColor(0);
 
   doc.save(`${header.grn_number}-${safeName(header.supplier?.name ?? 'supplier')}.pdf`);
 }
