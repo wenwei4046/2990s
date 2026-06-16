@@ -25,6 +25,7 @@ import {
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import { SkeletonDetailPage } from '../components/Skeleton';
+import { useConfirm } from '../components/ConfirmDialog';
 import {
   useDeliveryReturnDetail,
   useUpdateDeliveryReturnHeader,
@@ -160,6 +161,7 @@ const draftFromItem = (it: DrItem): SoLineDraft => ({
 export const DeliveryReturnDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const askConfirm = useConfirm();
   const [searchParams] = useSearchParams();
   const detail = useDeliveryReturnDetail(id ?? null);
   const updateHeader = useUpdateDeliveryReturnHeader();
@@ -329,12 +331,12 @@ export const DeliveryReturnDetail = () => {
   const isLocked = lockedStatuses.includes(header.status);
   const isCancelled = header.status === 'CANCELLED';
 
-  const handleCancel = () => {
-    if (!window.confirm(`Cancel ${header.return_number}? This sets status = CANCELLED.`)) return;
+  const handleCancel = async () => {
+    if (!(await askConfirm({ title: `Cancel ${header.return_number}?`, body: 'This sets status = CANCELLED.', confirmLabel: 'Cancel', danger: true }))) return;
     updateStatus.mutate({ id: header.id, status: 'CANCELLED' });
   };
-  const handleReopen = () => {
-    if (!window.confirm(`Reopen ${header.return_number} back to RECEIVED?`)) return;
+  const handleReopen = async () => {
+    if (!(await askConfirm({ title: `Reopen ${header.return_number} back to RECEIVED?`, confirmLabel: 'Reopen' }))) return;
     updateStatus.mutate({ id: header.id, status: 'RECEIVED' });
   };
   const handlePrint = () => {

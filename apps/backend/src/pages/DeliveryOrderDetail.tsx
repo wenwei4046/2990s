@@ -25,6 +25,7 @@ import {
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import { SkeletonDetailPage } from '../components/Skeleton';
+import { useConfirm } from '../components/ConfirmDialog';
 import {
   useMfgDeliveryOrderDetail,
   useUpdateMfgDeliveryOrderHeader,
@@ -212,6 +213,7 @@ const draftFromItem = (it: DoItem): SoLineDraft => ({
 
 export const DeliveryOrderDetail = () => {
   const { id } = useParams<{ id: string }>();
+  const askConfirm = useConfirm();
   const [searchParams] = useSearchParams();
   const detail = useMfgDeliveryOrderDetail(id ?? null);
   const updateHeader = useUpdateMfgDeliveryOrderHeader();
@@ -498,12 +500,12 @@ export const DeliveryOrderDetail = () => {
       .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
-  const handleCancel = () => {
-    if (!window.confirm(`Cancel ${header.do_number}? This sets status = CANCELLED.`)) return;
+  const handleCancel = async () => {
+    if (!(await askConfirm({ title: `Cancel ${header.do_number}?`, body: 'This sets status = CANCELLED.', confirmLabel: 'Cancel', danger: true }))) return;
     updateStatus.mutate({ id: header.id, status: 'CANCELLED' });
   };
-  const handleReopen = () => {
-    if (!window.confirm(`Reopen ${header.do_number} back to LOADED?`)) return;
+  const handleReopen = async () => {
+    if (!(await askConfirm({ title: `Reopen ${header.do_number} back to LOADED?`, confirmLabel: 'Reopen' }))) return;
     updateStatus.mutate({ id: header.id, status: 'LOADED' });
   };
 

@@ -31,6 +31,7 @@ import { useWarehouses } from '../lib/inventory-queries';
 import { poStatusLabel } from '../lib/po-status';
 import { ItemGroupPill } from '../lib/category-badges';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useConfirm } from '../components/ConfirmDialog';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -206,6 +207,7 @@ export const PurchaseOrders = () => {
   const [status, setStatus] = useState<StatusFilter>('outstanding');
   const [drawer, setDrawer] = useState<Drawer>({ kind: 'closed' });
   const navigate = useNavigate();
+  const askConfirm = useConfirm();
   // Multi-select state — batch-convert N POs into one GRN.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // Bump to collapse every expanded drill-down in the list at once.
@@ -326,16 +328,16 @@ export const PurchaseOrders = () => {
     }
     navigate(`/grns/from-po?poId=${po.id}`);
   };
-  const doCancelPo = (po: PoHeaderRow) => {
-    if (!window.confirm(`Cancel ${po.po_number}? It will stop proceeding and any converted SO lines are released back.`)) return;
+  const doCancelPo = async (po: PoHeaderRow) => {
+    if (!(await askConfirm({ title: `Cancel ${po.po_number}?`, body: 'It will stop proceeding and any converted SO lines are released back.', confirmLabel: 'Cancel', danger: true }))) return;
     cancelPo.mutate(po.id, {
       onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
     });
   };
   // Reopen — inverse of Cancel (Commander 2026-06-16). CANCELLED → SUBMITTED;
   // the converted SO lines re-claim their quota (leave the From-SO picker again).
-  const doReopenPo = (po: PoHeaderRow) => {
-    if (!window.confirm(`Reopen ${po.po_number}? Status returns to SUBMITTED and its converted SO lines re-claim their quota.`)) return;
+  const doReopenPo = async (po: PoHeaderRow) => {
+    if (!(await askConfirm({ title: `Reopen ${po.po_number}?`, body: 'Status returns to SUBMITTED and its converted SO lines re-claim their quota.', confirmLabel: 'Reopen' }))) return;
     reopenPo.mutate(po.id, {
       onError: (e) => alert(`Reopen failed: ${e instanceof Error ? e.message : String(e)}`),
     });
