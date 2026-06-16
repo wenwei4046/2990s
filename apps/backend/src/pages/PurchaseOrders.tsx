@@ -495,6 +495,10 @@ export const PurchaseOrders = () => {
 const buildPoDrilldownColumns = (
   currency: Currency,
   headerExpectedAt: string | null,
+  /* Resolve a line's warehouse_id → warehouse code. The per-line warehouse
+     flows SO line → PO line at proceed time; surfacing it here answers "did the
+     SO's warehouse come over?" (Commander 2026-06-16). */
+  whName: (id: string | null | undefined) => string,
 ): DataGridColumn<PoItemRow>[] => [
   {
     key: 'group', label: 'Group', width: 90, groupable: true,
@@ -508,6 +512,20 @@ const buildPoDrilldownColumns = (
     accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{it.material_code}</span>,
     searchValue: (it) => it.material_code,
     sortFn: (a, b) => a.material_code.localeCompare(b.material_code),
+  },
+  {
+    /* Warehouse — the per-line ship-to that flowed from the SO line. "—" means
+       this PO line never got a warehouse (e.g. raised before the SO had one).
+       Commander 2026-06-16. */
+    key: 'warehouse', label: 'Warehouse', width: 110, groupable: true,
+    accessor: (it) => {
+      const name = whName(it.warehouse_id);
+      return name
+        ? <span style={{ whiteSpace: 'nowrap' }}>{name}</span>
+        : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+    },
+    searchValue: (it) => whName(it.warehouse_id),
+    groupValue: (it) => whName(it.warehouse_id) || '(no warehouse)',
   },
   {
     key: 'description', label: 'Description', width: 240, minWidth: 180,
@@ -594,6 +612,14 @@ const buildPoDrilldownColumns = (
 
 const ExpandedPoLines = ({ po }: { po: PoHeaderRow }) => {
   const detail = usePurchaseOrderDetail(po.id);
+  /* Warehouse-id → code map for the per-line Warehouse column (Commander
+     2026-06-16). Hooks must run before the early returns below. */
+  const warehousesQ = useWarehouses();
+  const whById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const w of warehousesQ.data ?? []) m.set(w.id, w.code);
+    return m;
+  }, [warehousesQ.data]);
 
   if (detail.isLoading) {
     return (
@@ -624,7 +650,8 @@ const ExpandedPoLines = ({ po }: { po: PoHeaderRow }) => {
   let subtotal = 0;
   for (const it of items) subtotal += Number(it.line_total_centi ?? 0);
 
-  const columns = buildPoDrilldownColumns(po.currency, po.expected_at ?? null);
+  const whName = (id: string | null | undefined) => (id ? whById.get(id) ?? '' : '');
+  const columns = buildPoDrilldownColumns(po.currency, po.expected_at ?? null, whName);
 
   return (
     <div style={{ padding: 'var(--space-2) var(--space-3) var(--space-3) 40px', background: 'var(--c-cream)' }}>
