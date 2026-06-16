@@ -62,6 +62,11 @@ export type DataGridColumn<T> = {
       value the operator sees in the cell. Falls back to groupValue, then the
       cell text — never to searchValue. */
   filterValue?: (row: T) => string;
+  /** Date column → its filter popover gains quick presets (Today / Tomorrow /
+      This Week / This Month / Overdue). `dateValue` returns the row's RAW ISO
+      date (YYYY-MM-DD…) used for the range match. (Commander 2026-06-16) */
+  filterType?: 'date';
+  dateValue?: (row: T) => string | null | undefined;
   /**
    * HOUZS port (so-list-houzs-port) — when true and the user hasn't manually
    * hidden/shown anything yet (no persisted `layout.hidden` for this key),
@@ -185,6 +190,42 @@ const coerceSearchString = (v: ReactNode): string => {
   return '';
 };
 
+/* Date-filter quick presets for `filterType: 'date'` columns (Commander
+   2026-06-16). Evaluated in MYT (UTC+8) to match the rest of the app — a Date
+   shifted by +8h has its UTC fields equal to the MYT wall clock, so date-only
+   math via the getUTCDate / setUTCDate family is correct. */
+export type DatePreset = 'today' | 'tomorrow' | 'thisWeek' | 'thisMonth' | 'overdue';
+const DATE_PRESETS: { key: DatePreset; label: string }[] = [
+  { key: 'today',     label: 'Today' },
+  { key: 'tomorrow',  label: 'Tomorrow' },
+  { key: 'thisWeek',  label: 'This Week' },
+  { key: 'thisMonth', label: 'This Month' },
+  { key: 'overdue',   label: 'Overdue' },
+];
+const dateMatchesPreset = (iso: string | null | undefined, preset: DatePreset): boolean => {
+  if (!iso) return false;
+  const d = String(iso).slice(0, 10);
+  if (d.length < 10) return false;
+  const nowMyt = new Date(Date.now() + 8 * 3600 * 1000);
+  const today = nowMyt.toISOString().slice(0, 10);
+  switch (preset) {
+    case 'today':    return d === today;
+    case 'overdue':  return d < today;
+    case 'tomorrow': {
+      const t = new Date(nowMyt); t.setUTCDate(t.getUTCDate() + 1);
+      return d === t.toISOString().slice(0, 10);
+    }
+    case 'thisWeek': {
+      const dow = (nowMyt.getUTCDay() + 6) % 7; // 0 = Monday
+      const mon = new Date(nowMyt); mon.setUTCDate(mon.getUTCDate() - dow);
+      const sun = new Date(mon);   sun.setUTCDate(sun.getUTCDate() + 6);
+      return d >= mon.toISOString().slice(0, 10) && d <= sun.toISOString().slice(0, 10);
+    }
+    case 'thisMonth': return d.slice(0, 7) === today.slice(0, 7);
+    default:          return false;
+  }
+};
+
 /* Task #99 (UI perf) — Inner implementation, kept generic. Exported
    `DataGrid` below is the same function wrapped in React.memo so a parent
    re-render with unchanged props (rows, columns, etc.) skips the whole
@@ -259,6 +300,8 @@ function DataGridInner<T>({
      去做选择"). filters[colKey] = the set of allowed values; absent / empty =
      no filter on that column. filterMenu anchors the open dropdown. */
   const [filters, setFilters] = useState<Record<string, string[]>>({});
+  // Date-preset filters for `filterType: 'date'` columns (colKey → preset).
+  const [dateFilters, setDateFilters] = useState<Record<string, DatePreset>>({});
   const [filterMenu, setFilterMenu] = useState<{ colKey: string; x: number; y: number } | null>(null);
   /* Same inside-vs-outside scroll guard as the Columns popover — the filter
      dropdown has its own scrollable value list (maxHeight 320 / overflow auto). */
@@ -379,8 +422,18 @@ function DataGridInner<T>({
       return out;
     });
   }, []);
-  const clearFilter = useCallback((colKey: string) =>
-    setFilters((prev) => { const o = { ...prev }; delete o[colKey]; return o; }), []);
+  const clearFilter = useCallback((colKey: string) => {
+    setFilters((prev) => { const o = { ...prev }; delete o[colKey]; return o; });
+    setDateFilters((prev) => { const o = { ...prev }; delete o[colKey]; return o; });
+  }, []);
+  // Date-preset toggle: clicking the active preset again clears it.
+  const toggleDatePreset = useCallback((colKey: string, preset: DatePreset) => {
+    setDateFilters((prev) => {
+      const out = { ...prev };
+      if (out[colKey] === preset) delete out[colKey]; else out[colKey] = preset;
+      return out;
+    });
+  }, []);
 
   /* HOUZS-parity column show/hide actions for the Columns popover. Reset
      clears hidden + order + widths (preserving groupBy + sort so search
@@ -483,7 +536,8 @@ function DataGridInner<T>({
   const filteredRows = useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
     const active = Object.entries(filters).filter(([, vals]) => vals.length > 0);
-    if (!q && active.length === 0) return rows;
+    const activeDates = Object.entries(dateFilters);
+    if (!q && active.length === 0 && activeDates.length === 0) return rows;
     return rows.filter((row) => {
       if (q && !(searchBlobs.get(row) ?? '').includes(q)) return false;
       for (const [colKey, vals] of active) {
@@ -491,9 +545,17 @@ function DataGridInner<T>({
         if (!c) continue;
         if (!vals.includes(filterColValue(c, row))) return false;
       }
+      // Date-preset filters — match on the column's raw ISO dateValue (falls
+      // back to the displayed value if a date column didn't supply one).
+      for (const [colKey, preset] of activeDates) {
+        const c = columns.find((cc) => cc.key === colKey);
+        if (!c) continue;
+        const iso = c.dateValue ? c.dateValue(row) : filterColValue(c, row);
+        if (!dateMatchesPreset(iso, preset)) return false;
+      }
       return true;
     });
-  }, [rows, columns, debouncedSearch, filters, filterColValue, searchBlobs]);
+  }, [rows, columns, debouncedSearch, filters, dateFilters, filterColValue, searchBlobs]);
 
   // Distinct values for the currently-open filter dropdown.
   const filterValues = useMemo(() => {
@@ -845,7 +907,7 @@ function DataGridInner<T>({
           <button
             type="button"
             className={styles.toolbarPill}
-            onClick={() => setFilters({})}
+            onClick={() => { setFilters({}); setDateFilters({}); }}
             title="Clear all column filters"
           >
             <Filter size={14} strokeWidth={1.75} aria-hidden style={{ color: 'var(--c-orange)' }} />
@@ -989,7 +1051,7 @@ function DataGridInner<T>({
                           style={{
                             background: 'transparent', border: 0, padding: '0 2px', marginLeft: 2,
                             cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
-                            color: (filters[col.key]?.length ?? 0) > 0 ? 'var(--c-orange)' : 'var(--fg-soft, #9a9a9a)',
+                            color: ((filters[col.key]?.length ?? 0) > 0 || dateFilters[col.key]) ? 'var(--c-orange)' : 'var(--fg-soft, #9a9a9a)',
                           }}
                         >
                           <Filter size={11} strokeWidth={2} aria-hidden />
@@ -1104,13 +1166,34 @@ function DataGridInner<T>({
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 10px', borderBottom: '1px solid var(--line)' }}>
               <strong style={{ fontSize: 'var(--fs-11)' }}>Filter: {col?.label}</strong>
-              {sel.length > 0 && (
+              {(sel.length > 0 || dateFilters[filterMenu.colKey]) && (
                 <button type="button" onClick={() => clearFilter(filterMenu.colKey)}
                   style={{ background: 'transparent', border: 0, color: 'var(--c-orange)', cursor: 'pointer', fontSize: 'var(--fs-11)', fontWeight: 600 }}>
                   Clear
                 </button>
               )}
             </div>
+            {/* Date columns: quick presets above the value list (Commander 2026-06-16). */}
+            {col?.filterType === 'date' && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '8px 10px', borderBottom: '1px solid var(--line)' }}>
+                {DATE_PRESETS.map((p) => {
+                  const on = dateFilters[filterMenu.colKey] === p.key;
+                  return (
+                    <button key={p.key} type="button"
+                      onClick={() => toggleDatePreset(filterMenu.colKey, p.key)}
+                      style={{
+                        fontSize: 'var(--fs-11)', fontWeight: 600, padding: '3px 9px',
+                        borderRadius: '999px', cursor: 'pointer',
+                        border: `1px solid ${on ? 'var(--c-orange)' : 'var(--line)'}`,
+                        background: on ? 'var(--c-orange)' : 'var(--c-paper)',
+                        color: on ? '#fff' : 'var(--c-ink)',
+                      }}>
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             {filterValues.length === 0 && (
               <div style={{ padding: '6px 10px', color: 'var(--fg-muted)', fontSize: 'var(--fs-11)' }}>No values.</div>
             )}
