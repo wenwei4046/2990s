@@ -1,5 +1,6 @@
 // Delivery Return PDF — printable for the customer to sign on collection.
 import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate, fmtDocStamp } from './pdf-common';
+import { docVariantLine, loadCustomerFabricMaps } from './supplier-doc-data';
 
 type DrHeader = {
   return_number: string; status: string; return_date: string;
@@ -11,6 +12,8 @@ type DrItem = {
   item_code: string; description: string | null;
   qty_returned: number; condition: string | null;
   unit_price_centi: number; refund_centi: number;
+  item_group?: string | null;
+  variants?: Record<string, unknown> | null;
 };
 
 export async function generateDeliveryReturnPdf(
@@ -41,10 +44,11 @@ export async function generateDeliveryReturnPdf(
     [header.reason ?? '—', header.notes ?? null],
   );
 
+  const fabric = await loadCustomerFabricMaps(items);
   const rows = items.map((it, idx) => [
     String(idx + 1),
     it.item_code,
-    it.description ?? '—',
+    [it.description, docVariantLine(it, fabric.ext, fabric.desc)].filter(Boolean).join('\n') || '—',
     String(it.qty_returned),
     it.condition ?? '—',
     fmtRm(it.unit_price_centi),
