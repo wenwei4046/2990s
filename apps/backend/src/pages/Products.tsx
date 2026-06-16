@@ -80,7 +80,7 @@ import { MoneyInput } from '../components/MoneyInput';
 import { todayMyt } from '../lib/dates';
 import { FabricsTable } from '../components/FabricsTable';
 import { SofaComboTab } from '../components/SofaComboTab';
-import { SpecialAddonsTab, SpecialAddonsManager } from '../components/SpecialAddonsTab';
+import { SpecialAddonsTab, SpecialAddonsManager, type SpecialAddonsManagerHandle } from '../components/SpecialAddonsTab';
 import { FabricTracking } from './FabricTracking';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/size-info';
 import { ProductModels, NewModelDialog } from './ProductModels';
@@ -1694,6 +1694,10 @@ export const MaintenanceTab = ({
   // Edit/Save/History chrome is hidden (special_addons has its own inline CRUD).
   const isSpecials = active?.key === 'specials' || active?.key === 'sofaSpecials';
   const specialsCat = active?.key === 'sofaSpecials' ? 'SOFA' : 'BEDFRAME';
+  // Lets the Specials panel header surface the manager's "+ New" primary action,
+  // so this header has the same right-aligned action area as every other
+  // Maintenance panel (Commander 2026-06-16, R6).
+  const specialsManagerRef = useRef<SpecialAddonsManagerHandle>(null);
 
   const startEdit = () => {
     // Seed the draft from whichever config we're currently showing — could
@@ -1882,7 +1886,19 @@ export const MaintenanceTab = ({
               </p>
             )}
           </div>
-          {!isSpecials && (
+          {isSpecials ? (
+            /* Specials panel keeps the SAME right-aligned actions-row as every
+               other Maintenance panel (Commander 2026-06-16, R6), but with only
+               the manager's primary "+ New" action surfaced into the header —
+               no Edit/Save toggle (special_addons is always inline-edit, not a
+               config draft) and no History (special_addons has no history). */
+            <div className={styles.actionsRow}>
+              <Button variant="ghost" size="sm" onClick={() => specialsManagerRef.current?.requestNew()}>
+                <Plus {...ICON_PROPS} />
+                <span>New</span>
+              </Button>
+            </div>
+          ) : (
           <div className={styles.actionsRow}>
             {!editMode ? (
               <Button variant="ghost" size="sm" onClick={startEdit}>
@@ -1909,8 +1925,10 @@ export const MaintenanceTab = ({
 
         {isSpecials ? (
           /* Specials live in the shared special_addons table; the editor has its
-             own New/Edit/Delete — no config draft/Save here. (Commander 2026-06-16) */
-          <SpecialAddonsManager categoryFilter={specialsCat} />
+             own New/Edit/Delete — no config draft/Save here. The header "+ New"
+             button drives startNew() through specialsManagerRef. (Commander
+             2026-06-16) */
+          <SpecialAddonsManager ref={specialsManagerRef} categoryFilter={specialsCat} />
         ) : (
           <MaintenanceList
             listKey={active.key}

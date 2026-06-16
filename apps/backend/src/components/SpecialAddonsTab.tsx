@@ -16,7 +16,7 @@
 // write permission, same as SkuMasterTab.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { forwardRef, useImperativeHandle, useMemo, useState } from 'react';
 import { Button } from '@2990s/design-system';
 import {
   useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon,
@@ -97,12 +97,20 @@ export const SpecialAddonsTab = ({ orderOnly = false }: { orderOnly?: boolean } 
 // Product Add-ons (special_addons) — per-Model surcharge options
 // ════════════════════════════════════════════════════════════════════════
 
+/* Imperative handle so an embedding panel (Maintenance > Specials) can drive
+   the manager's primary "add a new add-on" action from its own header button —
+   keeps every Maintenance panel header's right-aligned primary action
+   consistent (Commander 2026-06-16, R6). */
+export type SpecialAddonsManagerHandle = { requestNew: () => void };
+
 /* categoryFilter (Commander 2026-06-16) — when set (e.g. 'BEDFRAME' / 'SOFA'),
    the manager is embedded inside Maintenance under that category: it lists only
    that category's add-ons, defaults a new add-on to it, hides the Categories
-   column + the global intro. Omit → the original all-categories manager. Same
-   `special_addons` data either way (shared with POS), so nothing forks. */
-export const SpecialAddonsManager = ({ categoryFilter }: { categoryFilter?: string } = {}) => {
+   column + the global intro + the in-body "+ New" button (surfaced into the
+   panel header instead). Omit → the original all-categories manager with its
+   own in-body "+ New" button. Same `special_addons` data either way (shared
+   with POS), so nothing forks. */
+export const SpecialAddonsManager = forwardRef<SpecialAddonsManagerHandle, { categoryFilter?: string }>(({ categoryFilter }, ref) => {
   const list    = useSpecialAddons();
   const create  = useCreateSpecialAddon();
   const update  = useUpdateSpecialAddon();
@@ -124,6 +132,10 @@ export const SpecialAddonsManager = ({ categoryFilter }: { categoryFilter?: stri
       active: row.active, sortOrder: row.sortOrder,
     } });
   };
+
+  // Let an embedding panel header (Maintenance > Specials) trigger the same
+  // "new add-on" form its in-body button would (Commander 2026-06-16, R6).
+  useImperativeHandle(ref, () => ({ requestNew: startNew }), [categoryFilter]);
 
   const patch = (p: Partial<SpecialAddonInput>) =>
     setEditing((e) => (e ? { ...e, draft: { ...e.draft, ...p } } : e));
@@ -257,7 +269,12 @@ export const SpecialAddonsManager = ({ categoryFilter }: { categoryFilter?: stri
         </p>
       )}
 
-      {canEdit && !editing && (
+      {/* In-body "+ New" only for the standalone manager. When embedded under a
+          categoryFilter (Maintenance > Specials), this action is surfaced into
+          the panel header instead (via the requestNew imperative handle), so it
+          isn't duplicated — matching the other Maintenance panels' header layout
+          (Commander 2026-06-16, R6). */}
+      {canEdit && !editing && !categoryFilter && (
         <Button variant="primary" size="sm" onClick={startNew}>+ New add-on</Button>
       )}
       {error && <div style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', margin: 'var(--space-3) 0' }} role="alert">{error}</div>}
@@ -403,7 +420,8 @@ export const SpecialAddonsManager = ({ categoryFilter }: { categoryFilter?: stri
       )}
     </div>
   );
-};
+});
+SpecialAddonsManager.displayName = 'SpecialAddonsManager';
 
 // ════════════════════════════════════════════════════════════════════════
 // Order Add-ons (addons table) — whole-order one-time fees
