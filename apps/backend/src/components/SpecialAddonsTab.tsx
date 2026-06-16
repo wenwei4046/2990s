@@ -87,7 +87,12 @@ export const SpecialAddonsTab = () => {
 // Product Add-ons (special_addons) — per-Model surcharge options
 // ════════════════════════════════════════════════════════════════════════
 
-const SpecialAddonsManager = () => {
+/* categoryFilter (Commander 2026-06-16) — when set (e.g. 'BEDFRAME' / 'SOFA'),
+   the manager is embedded inside Maintenance under that category: it lists only
+   that category's add-ons, defaults a new add-on to it, hides the Categories
+   column + the global intro. Omit → the original all-categories manager. Same
+   `special_addons` data either way (shared with POS), so nothing forks. */
+export const SpecialAddonsManager = ({ categoryFilter }: { categoryFilter?: string } = {}) => {
   const list    = useSpecialAddons();
   const create  = useCreateSpecialAddon();
   const update  = useUpdateSpecialAddon();
@@ -96,7 +101,10 @@ const SpecialAddonsManager = () => {
   const [editing, setEditing] = useState<{ id: string | null; draft: SpecialAddonInput } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const startNew = () => { setError(null); setEditing({ id: null, draft: emptySpecialAddon() }); };
+  const startNew = () => {
+    setError(null);
+    setEditing({ id: null, draft: { ...emptySpecialAddon(), categories: categoryFilter ? [categoryFilter] : [] } });
+  };
   const startEdit = (row: SpecialAddonRow) => {
     setError(null);
     setEditing({ id: row.id, draft: {
@@ -229,10 +237,12 @@ const SpecialAddonsManager = () => {
 
   return (
     <div style={{ padding: 'var(--space-5)', maxWidth: 860 }}>
-      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-4)' }}>
-        每个 add-on = 名字 + SO 描述 + 适用 Category + 加价（可为负 = 减价）+ 0~多个追问（如 Right Drawer → 10″/8″，每个选项可各带价）。
-        勾哪个 Model 用，在 <strong>Modular</strong> tab 决定。只动卖价，不开新 SKU、不动成本。
-      </p>
+      {!categoryFilter && (
+        <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-4)' }}>
+          每个 add-on = 名字 + SO 描述 + 适用 Category + 加价（可为负 = 减价）+ 0~多个追问（如 Right Drawer → 10″/8″，每个选项可各带价）。
+          勾哪个 Model 用，在 <strong>Modular</strong> tab 决定。只动卖价，不开新 SKU、不动成本。
+        </p>
+      )}
 
       {canEdit && !editing && (
         <Button variant="primary" size="sm" onClick={startNew}>+ New add-on</Button>
@@ -328,9 +338,9 @@ const SpecialAddonsManager = () => {
       ) : (
         <div style={{ marginTop: 'var(--space-3)' }}>
           <DataGrid
-            rows={list.data ?? []}
-            columns={saColumns}
-            storageKey="dg-special-addons-product"
+            rows={(list.data ?? []).filter((r) => !categoryFilter || r.categories.includes(categoryFilter))}
+            columns={categoryFilter ? saColumns.filter((c) => c.key !== 'categories') : saColumns}
+            storageKey={categoryFilter ? `dg-special-addons-${categoryFilter}` : 'dg-special-addons-product'}
             rowKey={(r) => r.id}
             searchPlaceholder="Filter add-ons…"
             groupBanner={false}
