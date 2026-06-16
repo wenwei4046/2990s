@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { fmtDate, fmtRM, daysAgo, formatPhone } from '@2990s/shared';
 import { useMfgSalesOrders } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import styles from './Customers.module.css';
 
 /* ─── Aggregation ────────────────────────────────────────────────────────
@@ -166,13 +167,38 @@ const CUSTOMER_COLUMNS: DataGridColumn<CustomerEntry>[] = [
   },
 ];
 
+/* Column-aware filter config for the customers directory (shared
+   ColumnFilterBar). The directory aggregates SOs into CustomerEntry, so the
+   filterable fields are only those that exist on the aggregated row:
+   name + phone (text) and last-order (date). quickSearchKeys mirror the
+   DataGrid's "search by phone or name" entry point. */
+const CUST_FILTER_COLUMNS: FilterColumn<CustomerEntry>[] = [
+  { key: 'name',  label: 'Customer',   type: 'text', accessor: (c) => c.name },
+  { key: 'phone', label: 'Phone',      type: 'text', accessor: (c) => (c.phone ? `${c.phone} ${formatPhone(c.phone)}` : '') },
+  { key: 'last',  label: 'Last order', type: 'date', accessor: (c) => c.lastOrderAt },
+];
+const CUST_QUICK_SEARCH_KEYS = ['name', 'phone'];
+
 export const Customers = () => {
   const salesOrders = useMfgSalesOrders(undefined);
 
-  const customers = useMemo(
+  const baseRows = useMemo(
     () => aggregate((salesOrders.data?.salesOrders ?? []) as SoRow[]),
     [salesOrders.data],
   );
+
+  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
+     add-a-column filters (text / date presets + range), layered on top of the
+     DataGrid's own search + column filters (kept). */
+  const { rows: customers, bar: filterBar } = useColumnFilter<CustomerEntry>({
+    allRows: baseRows,
+    columns: CUST_FILTER_COLUMNS,
+    quickSearchKeys: CUST_QUICK_SEARCH_KEYS,
+    quickSearchPlaceholder: 'Phone or name…',
+    storageKey: 'pr-g.customers.filters.v1',
+    totalCount: baseRows.length,
+    loading: salesOrders.isLoading,
+  });
 
   return (
     <div className={styles.page}>
@@ -193,22 +219,28 @@ export const Customers = () => {
           <div className={styles.empty}>Failed to load: {String(salesOrders.error)}</div>
         </div>
       ) : (
-        <DataGrid
-          rows={customers}
-          columns={CUSTOMER_COLUMNS}
-          storageKey="dg-customers"
-          rowKey={(c) => c.key}
-          searchPlaceholder="Search by phone or name…"
-          groupBanner={false}
-          isLoading={salesOrders.isLoading}
-          emptyMessage="No customers yet. Each Sales Order adds an entry here."
-          expandable={{ renderExpansion: (c) => <CustomerHistory customer={c} /> }}
-          toolbar={
-            <span className={styles.totalsCount}>
-              {customers.length} {customers.length === 1 ? 'customer' : 'customers'}
-            </span>
-          }
-        />
+        <>
+          {/* Column-aware filter row — shared ColumnFilterBar (quick search +
+              add-a-column filters), additive on top of the DataGrid's own
+              search + column filters. */}
+          {filterBar}
+          <DataGrid
+            rows={customers}
+            columns={CUSTOMER_COLUMNS}
+            storageKey="dg-customers"
+            rowKey={(c) => c.key}
+            searchPlaceholder="Search by phone or name…"
+            groupBanner={false}
+            isLoading={salesOrders.isLoading}
+            emptyMessage="No customers yet. Each Sales Order adds an entry here."
+            expandable={{ renderExpansion: (c) => <CustomerHistory customer={c} /> }}
+            toolbar={
+              <span className={styles.totalsCount}>
+                {customers.length} {customers.length === 1 ? 'customer' : 'customers'}
+              </span>
+            }
+          />
+        </>
       )}
     </div>
   );
