@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sofaModulePricesFromSkus, normalizeCompartmentCode, representativeArtCode } from '@2990s/shared/sofa-build';
-import { comboChargedPrices, type MfgSeatHeightPrice, type DefaultFreeGift } from '@2990s/shared';
+import { comboChargedPrices, maintActiveValues, type MaintPoolEntry, type MfgSeatHeightPrice, type DefaultFreeGift } from '@2990s/shared';
 import { supabase } from './supabase';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -1318,11 +1318,25 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
       if (cfgErr) throw cfgErr;
       const cfg = (cfgRow?.config ?? {}) as {
         sofaCompartmentMeta?: Record<string, MaintenanceCompartmentMeta>;
-        sofaCompartments?:    string[];
+        sofaCompartments?:    MaintPoolEntry[];
       };
       const metaMap = cfg.sofaCompartmentMeta ?? {};
 
-      const tickedCompartments = allowed.compartments ?? [];
+      // Palette membership = the Model's ticked compartments INTERSECT the live
+      // master pool (cfg.sofaCompartments). A code a Model still carries in its
+      // allowed_options but that has since been RETIRED from the pool (e.g. the
+      // legacy 1A(L) Power-Leg family) must NOT render — otherwise it surfaces a
+      // phantom RM 0 module nobody enabled and nobody can sell. This brings the
+      // compartment axis in line with how the leg / size / fabric axes already
+      // gate against their pools. Empty / absent pool ⇒ treat as "no restriction"
+      // so a transient config fetch-miss can never blank every Model's palette.
+      const poolSet = new Set(
+        maintActiveValues(cfg.sofaCompartments).map(normalizeCompartmentCode),
+      );
+      const tickedCompartments =
+        poolSet.size === 0
+          ? (allowed.compartments ?? [])
+          : (allowed.compartments ?? []).filter((c) => poolSet.has(normalizeCompartmentCode(c)));
       const compartments: ResolvedSofaCompartment[] = tickedCompartments.map((rawCode) => {
         const meta = metaMap[rawCode] ?? {};
         // Legacy bundled SVG fallback — when commander hasn't uploaded a

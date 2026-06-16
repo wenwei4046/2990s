@@ -2178,8 +2178,21 @@ const SofaCompartmentsList = ({
   const removeAt = (idx: number) => {
     const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
     const arr  = next.sofaCompartments ?? [];
+    // Drop the code's meta override alongside the pool entry, mirroring the
+    // rename meta-migration in updateCode. An orphan sofaCompartmentMeta key
+    // still resolves a label + art and would re-decorate a phantom module on
+    // any Model that still carries the retired code in allowed_options — the
+    // exact defect that left the legacy 1A(L) family drawable after removal.
+    const removed = arr[idx] != null ? maintEntryValue(arr[idx]!) : undefined;
     arr.splice(idx, 1);
     next.sofaCompartments = arr;
+    if (removed) {
+      const m = next.sofaCompartmentMeta ?? {};
+      if (m[removed]) {
+        delete m[removed];
+        next.sofaCompartmentMeta = m;
+      }
+    }
     onChange(next);
   };
 
