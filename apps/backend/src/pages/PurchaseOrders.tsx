@@ -31,6 +31,7 @@ import { useWarehouses } from '../lib/inventory-queries';
 import { poStatusLabel } from '../lib/po-status';
 import { ItemGroupPill } from '../lib/category-badges';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { useConfirm } from '../components/ConfirmDialog';
 import styles from './Suppliers.module.css';
 
@@ -73,6 +74,25 @@ const summarizeItems = (items: PoHeaderRow['items']): string | null => {
   const extra = items.length - HEAD;
   return extra > 0 ? `${shown} · +${extra} more` : shown;
 };
+
+/* Column-aware filter config for the PO list (shared ColumnFilterBar). Mirrors
+   the SI list's additive pattern: a free-text quick search sits on top, plus
+   add-a-column filters whose value control adapts to the column TYPE (text /
+   enum / date). Built only from fields that actually exist on PoHeaderRow —
+   text for PO No + Supplier; enum for Supplier / Currency / Status (status
+   options read through poStatusLabel so they match the grid pill); date for
+   the order date + expected-delivery columns. Coexists with the DataGrid's own
+   column filters. */
+const PO_FILTER_COLUMNS: FilterColumn<PoHeaderRow>[] = [
+  { key: 'po_number',  label: 'PO No',     type: 'text', accessor: (po) => po.po_number },
+  { key: 'supplier',   label: 'Supplier',  type: 'text', accessor: (po) => po.supplier?.name ?? po.supplier?.code },
+  { key: 'supplier_e', label: 'Supplier',  type: 'enum', accessor: (po) => po.supplier?.name ?? po.supplier?.code },
+  { key: 'currency',   label: 'Currency',  type: 'enum', accessor: (po) => po.currency },
+  { key: 'status',     label: 'Status',    type: 'enum', accessor: (po) => poStatusLabel(po.status) },
+  { key: 'po_date',    label: 'Date',      type: 'date', accessor: (po) => po.po_date },
+  { key: 'expected_at', label: 'Expected', type: 'date', accessor: (po) => po.expected_at },
+];
+const PO_QUICK_SEARCH_KEYS = ['po_number', 'supplier'];
 
 /* localStorage key for the PO list's DataGrid column layout (order / hidden /
    widths / sort / grouping). Stable id so commander's column prefs survive
@@ -226,11 +246,25 @@ export const PurchaseOrders = () => {
   // PARTIALLY_RECEIVED) client-side is one trip vs. two and the dataset is
   // small (4-staff org).
   const { data, isLoading, error } = usePurchaseOrders();
-  const rows = useMemo(() => {
+  const baseRows = useMemo(() => {
     const all = data ?? [];
     if (status === 'all') return all;
     return all.filter((r) => r.status === 'SUBMITTED' || r.status === 'PARTIALLY_RECEIVED');
   }, [data, status]);
+
+  /* Shared ColumnFilterBar (quick search + add-a-column filters), inserted on
+     top of the status-chip-filtered list (additive — the DataGrid keeps its own
+     column filters too). The status chip flows via `status` state and applies
+     first; these filters narrow further. */
+  const { rows, bar: filterBar } = useColumnFilter<PoHeaderRow>({
+    allRows: baseRows,
+    columns: PO_FILTER_COLUMNS,
+    quickSearchKeys: PO_QUICK_SEARCH_KEYS,
+    quickSearchPlaceholder: 'PO No, supplier…',
+    storageKey: 'pr-g.po-list.filters.v1',
+    totalCount: baseRows.length,
+    loading: isLoading,
+  });
 
   const toggleSelect = (id: string) => {
     setSelectedIds((s) => {
@@ -454,6 +488,11 @@ export const PurchaseOrders = () => {
           </span>
         </div>
       )}
+
+      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
+          add-a-column filters). Sits directly above the grid; the grid keeps
+          its own per-column filters too. */}
+      {filterBar}
 
       <DataGrid<PoHeaderRow>
         rows={rows}

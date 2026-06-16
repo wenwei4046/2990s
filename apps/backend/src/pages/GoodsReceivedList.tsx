@@ -19,6 +19,7 @@ import {
   useGrnDetail,
 } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { useConfirm } from '../components/ConfirmDialog';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
@@ -120,6 +121,21 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
     sortFn: (a, b) => a.status.localeCompare(b.status),
   },
 ];
+
+/* Column-aware filter config for the GRN list. Each entry tells the shared
+   ColumnFilterBar how to read + present a column. enum options are derived from
+   the data; date columns get presets + a custom range. Mirrors the SI list's
+   SI_FILTER_COLUMNS. Status enum uses the displayed label so the dropdown
+   matches the Status column on screen. */
+const GRN_FILTER_COLUMNS: FilterColumn<GrnRow>[] = [
+  { key: 'grn_number',        label: 'GRN No',        type: 'text', accessor: (g) => g.grn_number },
+  { key: 'supplier',          label: 'Supplier',      type: 'enum', accessor: (g) => g.supplier?.name ?? g.supplier?.code ?? '' },
+  { key: 'po_number',         label: 'PO Ref',        type: 'text', accessor: (g) => g.purchase_order?.po_number ?? '' },
+  { key: 'delivery_note_ref', label: 'DN Ref',        type: 'text', accessor: (g) => g.delivery_note_ref },
+  { key: 'status',            label: 'Status',        type: 'enum', accessor: (g) => STATUS_LABEL[g.status] ?? g.status },
+  { key: 'received_at',       label: 'Received Date', type: 'date', accessor: (g) => (g.received_at ? String(g.received_at).slice(0, 10) : null) },
+];
+const GRN_QUICK_SEARCH_KEYS = ['grn_number', 'supplier', 'po_number', 'delivery_note_ref'];
 
 /* ── Drill-down — per-line breakdown for one GRN, mirrors ExpandedPoLines ── */
 type GrnItem = Record<string, unknown> & {
@@ -275,10 +291,22 @@ export const GoodsReceived = () => {
   const cancelGrn = useCancelGrn();
 
   const allRows = useMemo<GrnRow[]>(() => (data?.grns ?? []) as GrnRow[], [data]);
-  const rows = useMemo<GrnRow[]>(
+  const baseRows = useMemo<GrnRow[]>(
     () => (statusChip === 'all' ? allRows : allRows.filter((g) => g.status === statusChip)),
     [allRows, statusChip],
   );
+  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
+     add-a-column filters (enum / date presets + range / text). The status chip
+     still flows via ?status=… and applies on top of the column filters. */
+  const { rows, bar: filterBar } = useColumnFilter<GrnRow>({
+    allRows: baseRows,
+    columns: GRN_FILTER_COLUMNS,
+    quickSearchKeys: GRN_QUICK_SEARCH_KEYS,
+    quickSearchPlaceholder: 'GRN No, supplier, PO…',
+    storageKey: 'pr-g.grn-list.filters.v1',
+    totalCount: baseRows.length,
+    loading: isLoading,
+  });
   const columns = useMemo(() => buildGrnColumns(), []);
 
   // Single-GRN convert (right-click) → open the New PI review screen pre-loaded
@@ -345,6 +373,10 @@ export const GoodsReceived = () => {
           </button>
         ))}
       </div>
+
+      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
+          add-a-column filters). Sits above the grid, feeding it filtered rows. */}
+      {filterBar}
 
       <DataGrid<GrnRow>
         rows={rows}
