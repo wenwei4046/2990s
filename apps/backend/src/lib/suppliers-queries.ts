@@ -91,6 +91,13 @@ export type BindingRow = {
    *  Products Maintenance page shape. NULL on existing rows + on categories
    *  that use the single unit_price_centi (mattress / accessory / service). */
   price_matrix: PriceMatrix | null;
+  /** Migration 0177 — cost anchor. When true, this binding is THE cost anchor
+   *  for its material_code: editing either side's cost (this binding's
+   *  unit_price_centi / price_matrix, or the linked mfg_products
+   *  base_price_sen / price1_sen) mirrors onto the other. At most one anchor
+   *  per material_code (enforced server-side). SOFA bindings can be anchored
+   *  but cost sync is skipped (per-height matrix vs single SKU cost). */
+  is_cost_anchor: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -368,6 +375,28 @@ export function useDeleteBinding() {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['supplier-detail', vars.supplierId] });
       qc.invalidateQueries({ queryKey: ['suppliers-for-material'] });
+    },
+  });
+}
+
+/** Migration 0177 — set/clear this binding as the cost anchor for its
+ *  material_code. Setting clears the flag on any other binding for the same
+ *  product (one anchor per code) and pushes the binding's current cost onto the
+ *  product (initial sync). We invalidate the supplier detail (flag changed) AND
+ *  the mfg-products cache (the product's cost may have just been mirrored). */
+export function useSetCostAnchor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ supplierId, bindingId, anchor }: { supplierId: string; bindingId: string; anchor: boolean }) =>
+      authedFetch<{ binding: BindingRow }>(`/suppliers/${supplierId}/bindings/${bindingId}/cost-anchor`, {
+        method: 'PATCH',
+        body: JSON.stringify({ anchor }),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['supplier-detail', vars.supplierId] });
+      qc.invalidateQueries({ queryKey: ['suppliers-for-material'] });
+      // The initial sync may have rewritten the product's cost.
+      qc.invalidateQueries({ queryKey: ['mfg-products'] });
     },
   });
 }

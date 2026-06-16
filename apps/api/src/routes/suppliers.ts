@@ -25,6 +25,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizePhone } from '@2990s/shared/phone';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
+import { bindingToProductPatch } from '../lib/cost-anchor-sync';
 import type { Env, Variables } from '../env';
 
 /* Task #91 — small helper: normalize a body field to E.164 phone storage,
@@ -65,7 +66,7 @@ const BINDING_COLS =
   'id, supplier_id, material_kind, material_code, material_name, supplier_sku, ' +
   'unit_price_centi, currency, lead_time_days, payment_terms_override, moq, ' +
   'price_valid_from, price_valid_to, is_main_supplier, notes, price_matrix, ' +
-  'created_at, updated_at';
+  'is_cost_anchor, created_at, updated_at';
 
 /* PR — Commander 2026-05-27 ("跟着 Product Maintenance 的排版"): per-category
    supplier cost matrix. Validates the JSONB shape against the SKU's
@@ -164,6 +165,54 @@ async function categoryForMaterial(
     .eq('code', code)
     .maybeSingle();
   return (data?.category as string | undefined) ?? null;
+}
+
+/* ── Cost anchor (migration 0177) ─────────────────────────────────────────
+   R8 at the SKU level. When a binding flagged is_cost_anchor has its cost
+   written, mirror that cost onto the matching mfg_products row so
+   Product-Maintenance cost == this supplier's cost. BEST-EFFORT: any failure
+   here is swallowed (the primary binding write already committed). SOFA is
+   skipped by the pure helper (ambiguous per-height grid). The mirror write
+   targets mfg_products directly — it does NOT re-enter the binding PATCH route,
+   so there is no sync loop. */
+async function syncAnchoredProductFromBinding(
+  supabase: SupabaseClient,
+  binding: {
+    is_cost_anchor?: boolean | null;
+    material_kind?: string | null;
+    material_code?: string | null;
+    unit_price_centi?: number | null;
+    price_matrix?: unknown;
+  },
+): Promise<void> {
+  try {
+    if (!binding.is_cost_anchor) return;
+    if (binding.material_kind !== 'mfg_product') return;
+    const code = binding.material_code;
+    if (!code) return;
+
+    const { data: product } = await supabase
+      .from('mfg_products')
+      .select('id, category')
+      .eq('code', code)
+      .maybeSingle();
+    if (!product) return;
+
+    const result = bindingToProductPatch({
+      category: (product as { category: string | null }).category,
+      unit_price_centi: binding.unit_price_centi ?? null,
+      price_matrix: binding.price_matrix ?? null,
+    });
+    if (result.skipped) return;
+    if (Object.keys(result.patch).length === 0) return;
+
+    await supabase
+      .from('mfg_products')
+      .update({ ...result.patch, updated_at: new Date().toISOString() })
+      .eq('id', (product as { id: string }).id);
+  } catch {
+    // Best-effort mirror — never surface to the primary write.
+  }
 }
 
 // ── List suppliers ────────────────────────────────────────────────────
@@ -538,7 +587,76 @@ suppliers.patch('/:id/bindings/:bindingId', async (c) => {
     if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message }, 403);
     return c.json({ error: 'update_failed', reason: error.message }, 500);
   }
+
+  /* Cost anchor (0177) — if this binding is the cost anchor for its
+     material_code, mirror its (just-written) cost onto the linked
+     mfg_products row. Best-effort: the binding write above already
+     committed, so a sync failure must not 500 this response. */
+  await syncAnchoredProductFromBinding(supabase, data as unknown as Record<string, unknown>);
+
   return c.json({ binding: data });
+});
+
+// ── Set / clear the cost anchor for a binding ────────────────────────────
+// PATCH /suppliers/:id/bindings/:bindingId/cost-anchor   body { anchor: boolean }
+//
+// Migration 0177. Flags (or clears) this binding as THE cost anchor for its
+// material_code. At most one anchor per material_code is enforced here (app
+// layer, like is_main_supplier): setting the anchor first clears the flag on
+// every OTHER binding with the same material_code. On SET we also push the
+// binding's current cost → the product immediately, so the two sides start
+// aligned. Gated by RLS on supplier_material_bindings (write denial → 403),
+// the same gate the cost-field PATCH above relies on.
+suppliers.patch('/:id/bindings/:bindingId/cost-anchor', async (c) => {
+  const bindingId = c.req.param('bindingId');
+  let body: { anchor?: unknown };
+  try { body = (await c.req.json()) as typeof body; } catch {
+    return c.json({ error: 'invalid_json' }, 400);
+  }
+  if (typeof body.anchor !== 'boolean') return c.json({ error: 'anchor_required' }, 400);
+  const anchor = body.anchor;
+
+  const supabase = c.get('supabase');
+
+  // Fetch the binding's material identity (needed to clear sibling anchors and
+  // to drive the initial sync).
+  const { data: existing, error: loadErr } = await supabase
+    .from('supplier_material_bindings')
+    .select('id, material_kind, material_code')
+    .eq('id', bindingId)
+    .maybeSingle();
+  if (loadErr) return c.json({ error: 'load_failed', reason: loadErr.message }, 500);
+  if (!existing) return c.json({ error: 'not_found' }, 404);
+
+  // Set this binding's flag first (this is the write RLS gates → 403 on denial).
+  const { data: updated, error: setErr } = await supabase
+    .from('supplier_material_bindings')
+    .update({ is_cost_anchor: anchor, updated_at: new Date().toISOString() })
+    .eq('id', bindingId)
+    .select(BINDING_COLS)
+    .single();
+  if (setErr) {
+    if (setErr.code === '42501') return c.json({ error: 'forbidden', reason: setErr.message }, 403);
+    return c.json({ error: 'update_failed', reason: setErr.message }, 500);
+  }
+
+  // Enforce one-anchor-per-material: clear the flag on every OTHER binding for
+  // the same material_code (only when turning this one ON).
+  if (anchor) {
+    await supabase
+      .from('supplier_material_bindings')
+      .update({ is_cost_anchor: false })
+      .eq('material_kind', existing.material_kind)
+      .eq('material_code', existing.material_code)
+      .eq('is_cost_anchor', true)
+      .neq('id', bindingId);
+
+    // Initial sync — push the binding's current cost onto the product so they
+    // start aligned. Best-effort (never fails the anchor toggle).
+    await syncAnchoredProductFromBinding(supabase, updated as unknown as Record<string, unknown>);
+  }
+
+  return c.json({ binding: updated });
 });
 
 suppliers.delete('/:id/bindings/:bindingId', async (c) => {
