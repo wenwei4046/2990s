@@ -31,6 +31,7 @@ import { SkuPreviewStrip } from './SupplierDetail';
 import { composeSupplierSku } from '../lib/supplier-sku-helpers';
 import { MultiSupplierPicker } from '../components/MultiSupplierPicker';
 import { MoneyInput } from '../components/MoneyInput';
+import { useConfirm } from '../components/ConfirmDialog';
 import styles from './ProductModels.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -77,6 +78,7 @@ export const ProductModels = () => {
   // under each Model in a single /bindings/batch POST.
   const [assigningSupplier, setAssigningSupplier] = useState(false);
   const deleteMut = useDeleteProductModel();
+  const askConfirm = useConfirm();
 
   const { data: models = [], isLoading, error } = useProductModels(
     filter === 'all' ? undefined : { category: filter },
@@ -318,11 +320,12 @@ export const ProductModels = () => {
               size="sm"
               disabled={deleting}
               onClick={async () => {
-                // eslint-disable-next-line no-alert
-                if (!confirm(
-                  `Delete ${selectedIds.size} Model${selectedIds.size === 1 ? '' : 's'}? ` +
-                  `Any SKUs underneath stay in mfg_products but lose their model_id link.`,
-                )) return;
+                if (!(await askConfirm({
+                  title: `Delete ${selectedIds.size} Model${selectedIds.size === 1 ? '' : 's'}?`,
+                  body: 'Any SKUs underneath stay in mfg_products but lose their model_id link.',
+                  confirmLabel: 'Delete',
+                  danger: true,
+                }))) return;
                 setDeleting(true);
                 const ids = Array.from(selectedIds);
                 const results = await Promise.all(ids.map((id) =>
@@ -514,6 +517,7 @@ function ModelPhotoCell({ model }: { model: ProductModelRow }) {
   const [err, setErr] = useState<string | null>(null);
   const upload = useUploadProductModelPhoto();
   const remove = useDeleteProductModelPhoto();
+  const askConfirm = useConfirm();
 
   const busy = upload.isPending || remove.isPending;
   const src = resolveBackendPhotoUrl(model.photo_url);
@@ -556,8 +560,11 @@ function ModelPhotoCell({ model }: { model: ProductModelRow }) {
     e.stopPropagation();
     e.preventDefault();
     if (busy) return;
-    // eslint-disable-next-line no-alert
-    if (!confirm(`Remove photo for ${model.model_code}?`)) return;
+    if (!(await askConfirm({
+      title: `Remove photo for ${model.model_code}?`,
+      confirmLabel: 'Remove',
+      danger: true,
+    }))) return;
     setErr(null);
     try {
       await remove.mutateAsync(model.id);
@@ -715,6 +722,7 @@ export function NewModelDialog({
   // (B) Wei Siang 2026-06-08 — used to ROLL BACK a just-created model when its
   // SKU generation produced zero rows, so we never leave an empty phantom model.
   const deleteMut   = useDeleteProductModel();
+  const askConfirm  = useConfirm();
 
   // (A) Wei Siang 2026-06-09 — optional one-step supplier assignment is now
   // PER MODEL: each row carries its own supplier + code, and every SKU that
@@ -799,6 +807,22 @@ export function NewModelDialog({
       setBatchError(`Model code "${dup}" appears more than once in this batch.`);
       return;
     }
+
+    /* In-app confirm before creating codes (Commander 2026-06-16 — "开 code
+       需要提示词", creation can't be 裸奔). Count the SKUs the same way the
+       footer button does: one per size/compartment per row, else one per row. */
+    const sizeCount = category === 'SOFA' ? pickedComps.size
+      : (category === 'MATTRESS' || category === 'BEDFRAME') ? pickedSizes.size
+      : 0;
+    const skuTotal = sizeCount > 0 ? rows.length * sizeCount : rows.length;
+    const codeList = rows.map((r) => r.modelCode.trim()).filter(Boolean).join(', ');
+    if (!(await askConfirm({
+      title: `Create ${skuTotal} SKU${skuTotal === 1 ? '' : 's'}?`,
+      body: `New ${category} model${rows.length === 1 ? '' : 's'}: ${codeList}`
+        + (sizeCount > 0 ? ` × ${sizeCount} size${sizeCount === 1 ? '' : 's'}` : '')
+        + `. This creates ${skuTotal} SKU${skuTotal === 1 ? '' : 's'}.`,
+      confirmLabel: `Create ${skuTotal} SKU${skuTotal === 1 ? '' : 's'}`,
+    }))) return;
 
     setSubmitting(true);
     try {
