@@ -1,6 +1,6 @@
 // Consignment Notes list — DataGrid clone of the Delivery Orders list
 // (MfgDeliveryOrdersList.tsx), which is itself an SO-clone. Same chrome:
-// 4 KPI tiles, draggable filter bar (search · brand · venue · date range),
+// 4 KPI tiles, shared ColumnFilterBar (quick search + add-a-column filters),
 // status chips, ~visible/hidden column set, right-click context menu,
 // click-to-expand line drill-down, and double-click-to-open. Wired to the
 // consignment-note list hook + the parallel /consignment-notes API.
@@ -9,14 +9,15 @@
 // menu entries are intentionally DROPPED — a consignment note is free-entry.
 //
 // UNIQUE localStorage keys ('pr-g.cn-list.layout.v1' /
-// 'pr-g.cn-list.filter-order.v1') — never reuse the DO/SO/DR keys.
+// 'pr-g.cn-list.filters.v1') — never reuse the DO/SO/DR keys.
 
-import { useMemo, useState } from 'react';
-import type { CSSProperties, DragEvent, JSX, ReactNode } from 'react';
+import { useMemo } from 'react';
+import type { JSX } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Plus, Filter, Search } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
@@ -279,68 +280,26 @@ const ExpandedCnLines = ({ id }: { id: string }) => {
   );
 };
 
-/* ── Filter chrome (matches DO list) ───────────────────────────────────── */
-const HOUZS_CARET = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6' fill='none'><path d='M1 1l4 4 4-4' stroke='%23878D8D' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>")`;
-const HOUZS_SELECT: CSSProperties = {
-  height: 32, padding: '0 28px 0 10px',
-  background: `#FFFFFF ${HOUZS_CARET} no-repeat right 10px center / 10px 6px`,
-  border: '1px solid #DDE5E5', borderRadius: 6, fontFamily: 'var(--font-sans)', fontSize: 11,
-  fontWeight: 600, color: '#4B5563', outline: 'none', appearance: 'none', WebkitAppearance: 'none',
-  MozAppearance: 'none', cursor: 'pointer', lineHeight: '30px', minWidth: 130,
-};
-const HOUZS_INPUT_DATE: CSSProperties = {
-  height: 32, padding: '0 10px', background: '#FFFFFF', border: '1px solid #DDE5E5', borderRadius: 6,
-  fontFamily: 'var(--font-sans)', fontSize: 11, fontWeight: 600, color: '#4B5563', outline: 'none',
-  cursor: 'pointer', lineHeight: '30px',
-};
-
-type FilterId = 'search' | 'brand' | 'venue' | 'dateRange';
-const DEFAULT_FILTER_ORDER: FilterId[] = ['search', 'brand', 'venue', 'dateRange'];
-const FILTER_ORDER_KEY = 'pr-g.cn-list.filter-order.v1';
-
-const readFilterOrder = (): FilterId[] => {
-  if (typeof window === 'undefined') return DEFAULT_FILTER_ORDER;
-  try {
-    const raw = window.localStorage.getItem(FILTER_ORDER_KEY);
-    if (!raw) return DEFAULT_FILTER_ORDER;
-    const parsed = JSON.parse(raw) as FilterId[];
-    const known = new Set<FilterId>(DEFAULT_FILTER_ORDER);
-    const valid = parsed.filter((f): f is FilterId => known.has(f));
-    for (const f of DEFAULT_FILTER_ORDER) if (!valid.includes(f)) valid.push(f);
-    return valid;
-  } catch { return DEFAULT_FILTER_ORDER; }
-};
-
-const DraggableFilter = ({
-  id, order, setOrder, children,
-}: { id: FilterId; order: FilterId[]; setOrder: (next: FilterId[]) => void; children: ReactNode }) => {
-  const [over, setOver] = useState(false);
-  const onDragStart = (e: DragEvent<HTMLDivElement>) => {
-    e.dataTransfer.setData('text/x-cn-filter', id);
-    e.dataTransfer.effectAllowed = 'move';
-  };
-  const onDragOver = (e: DragEvent<HTMLDivElement>) => { e.preventDefault(); setOver(true); };
-  const onDrop = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault(); setOver(false);
-    const src = e.dataTransfer.getData('text/x-cn-filter') as FilterId;
-    if (!src || src === id) return;
-    const next = order.filter((f) => f !== src);
-    const idx = next.indexOf(id);
-    next.splice(idx, 0, src);
-    setOrder(next);
-  };
-  return (
-    <div draggable onDragStart={onDragStart} onDragOver={onDragOver} onDragLeave={() => setOver(false)} onDrop={onDrop}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 4px 2px 2px',
-        background: over ? 'rgba(232, 107, 58, 0.10)' : 'transparent', borderRadius: 6, cursor: 'grab',
-      }}
-      title="Drag to reorder">
-      <span aria-hidden style={{ color: '#B0B7B7', fontSize: 11, fontWeight: 700, userSelect: 'none', lineHeight: 1, cursor: 'grab', letterSpacing: -2 }}>::</span>
-      {children}
-    </div>
-  );
-};
+/* Column-aware filter config for the CN list. Each entry tells the shared
+   ColumnFilterBar how to read + present a column. enum options are derived
+   from the data; date columns get presets + a custom range. */
+const CN_FILTER_COLUMNS: FilterColumn<CnRow>[] = [
+  { key: 'do_number',     label: 'Note No',         type: 'text', accessor: (r) => r.do_number },
+  { key: 'debtor',        label: 'Customer',        type: 'text', accessor: (r) => r.debtor_name },
+  { key: 'ref',           label: 'Reference',       type: 'text', accessor: (r) => r.customer_so_no ?? r.ref },
+  { key: 'brand',         label: 'Branding',        type: 'enum', accessor: (r) => deriveBranding(r) },
+  { key: 'venue',         label: 'Venue',           type: 'enum', accessor: (r) => r.venue },
+  { key: 'location',      label: 'Location',        type: 'enum', accessor: (r) => r.sales_location },
+  { key: 'customer_type', label: 'Customer Type',   type: 'enum', accessor: (r) => r.customer_type },
+  { key: 'building_type', label: 'Building Type',   type: 'enum', accessor: (r) => r.building_type },
+  { key: 'state',         label: 'State',           type: 'enum', accessor: (r) => r.customer_state },
+  { key: 'country',       label: 'Country',         type: 'enum', accessor: (r) => r.customer_country },
+  { key: 'status',        label: 'Status',          type: 'enum', accessor: (r) => STATUS_LABEL[r.status] ?? r.status },
+  { key: 'do_date',       label: 'Document Date',   type: 'date', accessor: (r) => r.do_date },
+  { key: 'expected_delivery_at', label: 'Expected Date', type: 'date', accessor: (r) => r.expected_delivery_at },
+  { key: 'delivery_date', label: 'Delivery Date',   type: 'date', accessor: (r) => r.customer_delivery_date },
+];
+const CN_QUICK_SEARCH_KEYS = ['do_number', 'debtor', 'ref', 'venue', 'brand'];
 
 const STORAGE_KEY = 'pr-g.cn-list.layout.v1';
 
@@ -352,53 +311,28 @@ export const ConsignmentNotes = () => {
   const { data, isLoading, error } = useConsignmentNotes(undefined);
   const allRows = useMemo<CnRow[]>(() => (data?.deliveryOrders ?? []) as CnRow[], [data]);
 
-  const [search, setSearch] = useState('');
-  const [brand, setBrand] = useState('');
-  const [venue, setVenue] = useState('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-
-  const [filterOrder, setFilterOrderRaw] = useState<FilterId[]>(() => readFilterOrder());
-  const setFilterOrder = (next: FilterId[]) => {
-    setFilterOrderRaw(next);
-    try { window.localStorage.setItem(FILTER_ORDER_KEY, JSON.stringify(next)); } catch { /* quota */ }
-  };
-
   const setStatusChip = (s: string) => {
     const next = new URLSearchParams(searchParams);
     if (s === 'all') next.delete('status'); else next.set('status', s);
     setSearchParams(next, { replace: true });
   };
 
-  const filterOptions = useMemo(() => {
-    const brands = new Set<string>();
-    const venues = new Set<string>();
-    for (const r of allRows) {
-      const b = deriveBranding(r);
-      if (b) brands.add(b);
-      if (r.venue) venues.add(r.venue);
-    }
-    return { brands: [...brands].sort(), venues: [...venues].sort() };
-  }, [allRows]);
-
-  const rows = useMemo<CnRow[]>(() => {
-    const q = search.trim().toLowerCase();
-    return allRows.filter((r) => {
-      if (statusChip !== 'all' && r.status !== statusChip) return false;
-      if (brand && deriveBranding(r) !== brand) return false;
-      if (venue && r.venue !== venue) return false;
-      if (dateFrom && (r.do_date ?? '') < dateFrom) return false;
-      if (dateTo && (r.do_date ?? '') > dateTo) return false;
-      if (q) {
-        const blob = [
-          r.do_number, r.debtor_name, r.debtor_code, r.venue,
-          deriveBranding(r), r.customer_so_no, r.ref, r.phone, r.driver_name,
-        ].filter(Boolean).join(' ').toLowerCase();
-        if (!blob.includes(q)) return false;
-      }
-      return true;
-    });
-  }, [allRows, statusChip, search, brand, venue, dateFrom, dateTo]);
+  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
+     add-a-column filters (enum / date presets + range / text). The status
+     chip still flows via ?status=… and applies on top of the column filters. */
+  const baseRows = useMemo<CnRow[]>(
+    () => (statusChip === 'all' ? allRows : allRows.filter((r) => r.status === statusChip)),
+    [allRows, statusChip],
+  );
+  const { rows, bar: filterBar } = useColumnFilter<CnRow>({
+    allRows: baseRows,
+    columns: CN_FILTER_COLUMNS,
+    quickSearchKeys: CN_QUICK_SEARCH_KEYS,
+    quickSearchPlaceholder: 'Note No, debtor, driver…',
+    storageKey: 'pr-g.cn-list.filters.v1',
+    totalCount: allRows.length,
+    loading: isLoading,
+  });
 
   const kpis = useMemo(() => {
     let revenue = 0, cost = 0, margin = 0;
@@ -409,10 +343,6 @@ export const ConsignmentNotes = () => {
     }
     return { totalNotes: rows.length, revenue, cost, margin };
   }, [rows]);
-
-  const resetFilters = () => {
-    setSearch(''); setBrand(''); setVenue(''); setDateFrom(''); setDateTo('');
-  };
 
   const staffQ = useStaff();
   const staffById = useMemo(() => {
@@ -491,68 +421,10 @@ export const ConsignmentNotes = () => {
         ))}
       </div>
 
-      {/* Draggable filter row (matches DO list). */}
-      <div style={{
-        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-2)',
-        padding: 'var(--space-2) var(--space-3)', background: 'var(--c-paper)', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)',
-      }}>
-        <Filter size={16} strokeWidth={1.75} style={{ color: 'var(--fg-muted)' }} aria-label="Filters" />
-        {filterOrder.map((fid) => {
-          switch (fid) {
-            case 'search':
-              return (
-                <DraggableFilter key={fid} id={fid} order={filterOrder} setOrder={setFilterOrder}>
-                  <div style={{ position: 'relative', flex: '1 1 240px', minWidth: 200, display: 'inline-block' }}>
-                    <Search size={14} strokeWidth={1.75}
-                      style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-muted)', pointerEvents: 'none' }} />
-                    <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Note No, debtor, driver…"
-                      style={{ ...HOUZS_INPUT_DATE, paddingLeft: 30, paddingRight: 12, width: 240, cursor: 'text' }} />
-                  </div>
-                </DraggableFilter>
-              );
-            case 'brand':
-              return (
-                <DraggableFilter key={fid} id={fid} order={filterOrder} setOrder={setFilterOrder}>
-                  <select value={brand} onChange={(e) => setBrand(e.target.value)} style={HOUZS_SELECT}>
-                    <option value="">All Brands</option>
-                    {filterOptions.brands.map((b) => <option key={b} value={b}>{b}</option>)}
-                  </select>
-                </DraggableFilter>
-              );
-            case 'venue':
-              return (
-                <DraggableFilter key={fid} id={fid} order={filterOrder} setOrder={setFilterOrder}>
-                  <select value={venue} onChange={(e) => setVenue(e.target.value)} style={HOUZS_SELECT}>
-                    <option value="">All Venues</option>
-                    {filterOptions.venues.map((v) => <option key={v} value={v}>{v}</option>)}
-                  </select>
-                </DraggableFilter>
-              );
-            case 'dateRange':
-              return (
-                <DraggableFilter key={fid} id={fid} order={filterOrder} setOrder={setFilterOrder}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={HOUZS_INPUT_DATE} />
-                    <span style={{ color: 'var(--fg-muted)', fontSize: 11 }}>→</span>
-                    <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={HOUZS_INPUT_DATE} />
-                  </span>
-                </DraggableFilter>
-              );
-            default:
-              return null;
-          }
-        })}
-        {(search || brand || venue || dateFrom || dateTo) && (
-          <button type="button" onClick={resetFilters}
-            style={{ background: 'transparent', border: '1px solid #DDE5E5', borderRadius: 6, padding: '0 12px', height: 32, fontSize: 11, fontWeight: 600, color: 'var(--fg-muted)', cursor: 'pointer' }}>
-            Reset
-          </button>
-        )}
-        <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-          {isLoading ? 'Loading…' : `${rows.length} of ${allRows.length} rows`}
-        </span>
-      </div>
+      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
+          add-a-column filters). Replaces the old fixed search/brand/venue/
+          date-range row. */}
+      {filterBar}
 
       <DataGrid<CnRow>
         rows={rows}

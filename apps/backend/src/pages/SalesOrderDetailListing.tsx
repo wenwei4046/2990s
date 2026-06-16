@@ -34,15 +34,15 @@
 // are also default-hidden.
 // ----------------------------------------------------------------------------
 
-import { todayMyt } from '../lib/dates';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, ClipboardList, Printer, Eye, Filter, X, Search, Plus,
+  ArrowLeft, ClipboardList, Printer, X, Plus,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { ItemGroupPill, BrandingPill, badgeFor } from '../lib/category-badges';
 import {
   useSalesOrderDetailListing,
@@ -142,6 +142,39 @@ const fmtHeight = (v: number | string | null): string => {
 /* Numeric rows sort by value; string picks sink to the end (stable). */
 const heightSortValue = (v: number | string | null): number =>
   typeof v === 'number' ? v : v == null ? -Infinity : Infinity;
+
+/* Read a possibly-untyped field off the flattened row (the API folds the
+   SO header onto every line, so anything in mfg_sales_orders is reachable
+   via (r as Record<string, unknown>)[k]). Module-level helper so the
+   ColumnFilterBar config + the column factory share one implementation. */
+const optStr = (r: SoDetailListingRow, k: string): string => {
+  const v = (r as Record<string, unknown>)[k];
+  if (v == null || v === '') return '';
+  return String(v);
+};
+
+/* Column-aware filter config for the SO Detail Listing. Mirrors the SO list
+   pattern (ConsignmentOrders.tsx) so the operator sees a consistent
+   add-a-column filter across every L2 listing. enum options derive from the
+   data; date columns get presets + a custom range. */
+const SO_DETAIL_FILTER_COLUMNS: FilterColumn<SoDetailListingRow>[] = [
+  { key: 'doc_no',          label: 'Doc No',          type: 'text', accessor: (r) => r.doc_no },
+  { key: 'debtor',          label: 'Customer',        type: 'text', accessor: (r) => r.debtor_name },
+  { key: 'item_code',       label: 'Item Code',       type: 'text', accessor: (r) => r.item_code },
+  { key: 'brand',           label: 'Branding',        type: 'enum', accessor: (r) => r.branding },
+  { key: 'item_group',      label: 'Item Group',      type: 'enum', accessor: (r) => r.item_group },
+  { key: 'agent',           label: 'Agent',           type: 'enum', accessor: (r) => r.agent },
+  { key: 'venue',           label: 'Venue',           type: 'enum', accessor: (r) => optStr(r, 'venue') },
+  { key: 'location',        label: 'Location',        type: 'enum', accessor: (r) => r.location },
+  { key: 'payment',         label: 'Payment',         type: 'enum', accessor: (r) => payStateFor(optStr(r, 'payment_status')) },
+  { key: 'state',           label: 'State',           type: 'enum', accessor: (r) => r.customer_state },
+  { key: 'country',         label: 'Country',         type: 'enum', accessor: (r) => r.customer_country },
+  { key: 'status',          label: 'Status',          type: 'enum', accessor: (r) => r.status },
+  { key: 'so_date',         label: 'Document Date',   type: 'date', accessor: (r) => (r.so_date ?? r.line_date) as string | null },
+  { key: 'processing_date', label: 'Processing Date', type: 'date', accessor: (r) => optStr(r, 'internal_expected_dd') || null },
+  { key: 'delivery_date',   label: 'Delivery Date',   type: 'date', accessor: (r) => r.customer_delivery_date },
+];
+const SO_DETAIL_QUICK_SEARCH_KEYS = ['doc_no', 'debtor', 'item_code', 'agent', 'venue', 'brand'];
 
 /* ─────────────────────────────────────────────────────────────────────────
    Column factory — 47 columns total (33 visible by default + 14 hidden).
@@ -572,87 +605,37 @@ export const SalesOrderDetailListing = () => {
     setSearchParams(next, { replace: true });
   };
 
-  /* ── Filter state ─────────────────────────────────────────────────
-     Houzs filter row (left-to-right): funnel · search · brand · group ·
-     agent · venue · payment · date from – to. Each one narrows the
-     visible row-set client-side off the same one-shot query. Date range
-     is the only filter sent to the server (so the page can scale beyond
-     ~2k lines once the SO table grows). */
-  const today = todayMyt();
-  const yearAgo = todayMyt(-365);
-  const [dateFrom, setDateFrom] = useState(yearAgo);
-  const [dateTo,   setDateTo]   = useState(today);
-  const [search,   setSearch]   = useState('');
-  const [brand,    setBrand]    = useState<string>('');
-  const [group,    setGroup]    = useState<string>('');
-  const [agent,    setAgent]    = useState<string>('');
-  const [venue,    setVenue]    = useState<string>('');
-  const [payment,  setPayment]  = useState<string>('');
-
   /* ── Server-side query — auto-runs (Houzs shows data immediately).
-        Date range is the only filter passed server-side. */
-  const committed: SoDetailListingFilters = useMemo(() => ({
-    dateFrom, dateTo, sortBy: 'date',
-  }), [dateFrom, dateTo]);
+        Date range filtering is now client-side via the column-aware filter
+        bar, so we fetch the full result set with just a stable sort. If the
+        line count ever balloons past ~2k we can re-introduce a server-side
+        date window. */
+  const committed: SoDetailListingFilters = useMemo(() => ({ sortBy: 'date' }), []);
   const query = useSalesOrderDetailListing(committed);
   const rawRows = useMemo<SoDetailListingRow[]>(() => query.data?.rows ?? [], [query.data]);
 
-  /* Build distinct-value lists for the dropdown options off the raw row
-     set. Cheap O(n) pass — runs once per query refetch. */
-  const opt = useCallback((r: SoDetailListingRow, k: string): string => {
-    const v = (r as Record<string, unknown>)[k];
-    if (v == null || v === '') return '';
-    return String(v);
-  }, []);
+  /* Apply the outstanding-only overlay before handing rows to the shared
+     ColumnFilterBar. The line-flat row format repeats outstanding per line;
+     we drop lines from docs whose (local_total − paid) <= 0. */
+  const baseRows = useMemo<SoDetailListingRow[]>(() => {
+    if (!outstandingOnly) return rawRows;
+    return rawRows.filter((r) => (r.local_total_centi ?? 0) - (r.paid_total_centi ?? 0) > 0);
+  }, [rawRows, outstandingOnly]);
 
-  const filterOptions = useMemo(() => {
-    const brands = new Set<string>();
-    const groups = new Set<string>();
-    const agents = new Set<string>();
-    const venues = new Set<string>();
-    for (const r of rawRows) {
-      if (r.branding) brands.add(r.branding);
-      if (r.item_group) groups.add(r.item_group);
-      if (r.agent) agents.add(r.agent);
-      const v = opt(r, 'venue');
-      if (v) venues.add(v);
-    }
-    return {
-      brands: [...brands].sort(),
-      groups: [...groups].sort(),
-      agents: [...agents].sort(),
-      venues: [...venues].sort(),
-    };
-  }, [rawRows, opt]);
-
-  /* Apply client-side filters (brand/group/agent/venue/payment + global
-     search + outstanding-only). The DataGrid still owns its own global
-     search box internally, but the Houzs reference puts the search input
-     in the top filter row — we pass the value down via searchValue
-     column matches in the row filter below. */
-  const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return rawRows.filter((r) => {
-      if (brand && r.branding !== brand) return false;
-      if (group && r.item_group !== group) return false;
-      if (agent && r.agent !== agent) return false;
-      if (venue && opt(r, 'venue') !== venue) return false;
-      if (payment && payStateFor(opt(r, 'payment_status')) !== (payment as PayState)) return false;
-      if (outstandingOnly) {
-        const lt = r.local_total_centi ?? 0;
-        const pt = r.paid_total_centi ?? 0;
-        if (lt - pt <= 0) return false;
-      }
-      if (q) {
-        const blob = [
-          r.doc_no, r.debtor_name, r.item_code, r.description,
-          r.agent, opt(r, 'venue'), r.item_group, r.branding,
-        ].filter(Boolean).join(' ').toLowerCase();
-        if (!blob.includes(q)) return false;
-      }
-      return true;
-    });
-  }, [rawRows, brand, group, agent, venue, payment, search, outstandingOnly, opt]);
+  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
+     add-a-column filters (enum / date presets + range / text). Replaces the
+     old fixed search · brand · group · agent · venue · payment · date-range
+     row. The outstanding-only toggle still flows via ?outstanding=1 and
+     applies on top of the column filters. */
+  const { rows: filteredRows, bar: filterBar } = useColumnFilter<SoDetailListingRow>({
+    allRows: baseRows,
+    columns: SO_DETAIL_FILTER_COLUMNS,
+    quickSearchKeys: SO_DETAIL_QUICK_SEARCH_KEYS,
+    quickSearchPlaceholder: 'Doc No, debtor, SKU, agent, venue…',
+    storageKey: 'pr-g.so-detail-listing.filters.v1',
+    totalCount: rawRows.length,
+    loading: query.isFetching,
+  });
 
   /* ── 6 KPI tiles — computed off the filtered row set, NOT rawRows, so
         narrowing the filters re-scopes the headline numbers (matches
@@ -771,59 +754,10 @@ export const SalesOrderDetailListing = () => {
         ))}
       </div>
 
-      {/* ── Compact horizontal filter row (Houzs layout) ─────────────── */}
-      <div style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        alignItems: 'center',
-        gap: 'var(--space-2)',
-        padding: 'var(--space-2) var(--space-3)',
-        background: 'var(--c-paper)',
-        border: '1px solid var(--line)',
-        borderRadius: 'var(--radius-md)',
-      }}>
-        <Filter size={16} strokeWidth={1.75} style={{ color: 'var(--fg-muted)' }} aria-label="Filters" />
-        <div style={{ position: 'relative', flex: '1 1 240px', minWidth: 200 }}>
-          <Search size={14} strokeWidth={1.75}
-            style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-muted)', pointerEvents: 'none' }} />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Doc No, debtor, SKU, agent, venue…"
-            className={styles.fieldInput}
-            style={{ paddingLeft: 28 }}
-          />
-        </div>
-        <select className={styles.fieldSelect} value={brand} onChange={(e) => setBrand(e.target.value)} style={{ width: 'auto', minWidth: 130 }}>
-          <option value="">All Brands</option>
-          {filterOptions.brands.map((b) => <option key={b} value={b}>{b}</option>)}
-        </select>
-        <select className={styles.fieldSelect} value={group} onChange={(e) => setGroup(e.target.value)} style={{ width: 'auto', minWidth: 130 }}>
-          <option value="">All Groups</option>
-          {filterOptions.groups.map((g) => <option key={g} value={g}>{g}</option>)}
-        </select>
-        <select className={styles.fieldSelect} value={agent} onChange={(e) => setAgent(e.target.value)} style={{ width: 'auto', minWidth: 130 }}>
-          <option value="">All Agents</option>
-          {filterOptions.agents.map((a) => <option key={a} value={a}>{a}</option>)}
-        </select>
-        <select className={styles.fieldSelect} value={venue} onChange={(e) => setVenue(e.target.value)} style={{ width: 'auto', minWidth: 130 }}>
-          <option value="">All Venues</option>
-          {filterOptions.venues.map((v) => <option key={v} value={v}>{v}</option>)}
-        </select>
-        <select className={styles.fieldSelect} value={payment} onChange={(e) => setPayment(e.target.value)} style={{ width: 'auto', minWidth: 130 }}>
-          <option value="">All Payment</option>
-          <option value="Checked">Checked</option>
-          <option value="Unchecked">Unchecked</option>
-          <option value="Pending">Pending</option>
-        </select>
-        <input type="date" className={styles.fieldInput} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ width: 'auto' }} />
-        <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>→</span>
-        <input type="date" className={styles.fieldInput} value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: 'auto' }} />
-        <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-          {query.isFetching ? 'Loading…' : `${filteredRows.length} of ${rawRows.length} lines`}
-        </span>
-      </div>
+      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
+          add-a-column filters). Replaces the old fixed search · brand ·
+          group · agent · venue · payment · date-range row. */}
+      {filterBar}
 
       {/* ── DataGrid — 34 visible columns + 10 hidden by default ─── */}
       <section className={styles.resultCard}>
