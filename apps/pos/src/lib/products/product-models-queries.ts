@@ -166,6 +166,19 @@ export function useUpdateProductModel() {
       // Activating a sofa compartment may auto-create its SKU server-side
       // (Chairman 2026-06-02) — refresh SKU Master so the new SKU shows up.
       qc.invalidateQueries({ queryKey: ['mfg-products'] });
+      // allowed_options drives the POS configurator's per-SKU option pools
+      // (legs / sizes / compartments / fabrics / specials). Those queries are
+      // keyed by SKU id, NOT model id, so the model invalidations above don't
+      // touch them — without this, deactivating e.g. a leg height in the
+      // Allowed Options drawer never reaches the configurator until the 30s
+      // staleTime lapses or the app reloads ("save did nothing", 2026-06-16).
+      // Invalidate by key PREFIX so every affected SKU of this Model refetches.
+      qc.invalidateQueries({ queryKey: ['sofa-leg-heights'] });
+      qc.invalidateQueries({ queryKey: ['bedframe-customizer-data'] });
+      qc.invalidateQueries({ queryKey: ['sofa-customizer-data'] });
+      qc.invalidateQueries({ queryKey: ['model-allowed-fabrics'] });
+      qc.invalidateQueries({ queryKey: ['model-allowed-specials'] });
+      qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === 'product' && q.queryKey[2] === 'sizes' });
     },
   });
 }
