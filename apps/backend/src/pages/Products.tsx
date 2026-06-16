@@ -127,10 +127,9 @@ export const Products = () => {
             >
               Modular
             </button>
-            {/* Special Add-ons — Backend parity with the POS tab (Loo
-                2026-06-08). Product Add-ons (special_addons) replaces the
-                legacy Maintenance > Specials editor; Order Add-ons mirrors
-                the POS order-fee manager. Same shared API as POS. */}
+            {/* Order Add-ons — whole-order fees (Dispose / Lift). Specials
+                (Product Add-ons) moved into Maintenance > BEDFRAME / SOFA
+                (Commander 2026-06-16), so this tab keeps ONLY Order Add-ons. */}
             <button
               type="button"
               role="tab"
@@ -138,7 +137,7 @@ export const Products = () => {
               className={styles.tabSwitchBtn}
               onClick={() => setTopTab('special-addons')}
             >
-              Special Add-ons
+              Order Add-ons
             </button>
             <button
               type="button"
@@ -180,7 +179,7 @@ export const Products = () => {
 
       {topTab === 'sku' && <SkuMasterTab />}
       {topTab === 'modular' && <ProductModels />}
-      {topTab === 'special-addons' && <SpecialAddonsTab />}
+      {topTab === 'special-addons' && <SpecialAddonsTab orderOnly />}
       {topTab === 'maintenance' && <MaintenanceTab />}
       {topTab === 'combos' && <SofaComboTab />}
       {topTab === 'fabric' && <FabricTracking />}
