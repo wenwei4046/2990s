@@ -34,6 +34,7 @@ import { resolveSizeInfo } from '../lib/size-info';
 import { supabase } from '../lib/supabase';
 import styles from './ProductModelDetail.module.css';
 import { SkeletonDetailPage } from '../components/Skeleton';
+import { useToast } from '../components/Toast';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
@@ -85,6 +86,7 @@ export const ProductModelDetail = ({
   const id = modelId ?? paramId;
   const embedded = Boolean(modelId);
   const navigate = useNavigate();
+  const toast = useToast();
   const { data, isLoading, error } = useProductModel(id);
   const updateMut = useUpdateProductModel();
   const deleteMut = useDeleteProductModel();
@@ -201,7 +203,7 @@ export const ProductModelDetail = ({
     if (!id) return;
     const code = modelCode.trim();
     if (!code) {
-      window.alert('Model code is required.');
+      toast.error('Model code is required.');
       return;
     }
     updateMut.mutate({
@@ -872,6 +874,7 @@ function AddCodesModal({
   existingCodes: string[];
   onClose: () => void;
 }) {
+  const toast = useToast();
   const generateMut = useGenerateModelSkus();
   const existingSet = useMemo(() => new Set(existingCodes), [existingCodes]);
   const candidates = useMemo(
@@ -897,7 +900,7 @@ function AddCodesModal({
 
   const submit = () => {
     if (picked.size === 0) {
-      window.alert('Pick at least one code to add.');
+      toast.error('Pick at least one code to add.');
       return;
     }
     // PR #69 — send the FULL rows the modal computed locally so the API
@@ -916,14 +919,14 @@ function AddCodesModal({
       { id: modelId, rows },
       {
         onSuccess: (res) => {
-          window.alert(
+          toast.success(
             `Added ${res.generated} code${res.generated === 1 ? '' : 's'}.`
             + (res.skipped > 0 ? ` Skipped ${res.skipped} (already existed).` : ''),
           );
           onClose();
         },
         onError: (err) => {
-          window.alert(`Add failed: ${err instanceof Error ? err.message : err}`);
+          toast.error(`Add failed: ${err instanceof Error ? err.message : err}`);
         },
       },
     );

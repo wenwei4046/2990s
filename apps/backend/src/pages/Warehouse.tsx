@@ -34,6 +34,7 @@ import {
   type RackMovement,
   type RackStatus,
 } from '../lib/warehouse-queries';
+import { useToast } from '../components/Toast';
 import styles from './Warehouse.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -189,6 +190,7 @@ const KpiTile = ({ label, value, icon }: { label: string; value: number | string
    place.
    ════════════════════════════════════════════════════════════════════════ */
 const useRackRename = (rack: Rack) => {
+  const toast = useToast();
   const updateRack = useUpdateRack();
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(rack.rack);
@@ -206,7 +208,7 @@ const useRackRename = (rack: Rack) => {
         onSuccess: () => setEditing(false),
         onError: (err) => {
           const msg = err instanceof Error ? err.message : String(err);
-          window.alert(
+          toast.error(
             msg.includes('duplicate_rack')
               ? `A rack named "${trimmed}" already exists in this warehouse.`
               : msg,
