@@ -220,3 +220,52 @@ export function specsLine(it: SupplierDocLine, fabricMap: Map<string, string>): 
   // labelled: supplier docs (PO / GRN / PI) prefix the fabric segment "Fabric: ".
   return buildVariantSummary(it.item_group ?? null, mapped, { labelled: true });
 }
+
+/* ── Customer-facing document variant line (Commander 2026-06-16) ───────────
+   ONE shared composer so EVERY customer document — SO, DO, DR, SI, Consignment
+   Note/Return — renders the line description identically: buildVariantSummary
+   with each fabric code shown as "internal (external) — description". This is
+   what unifies the supply-chain docs (the supplier docs keep specsLine, which
+   leads with the SUPPLIER's code per the owner's "supplier acts on their own
+   code" rule). */
+export function docVariantLine(
+  item: { item_group?: string | null; variants?: Record<string, unknown> | null },
+  fabricExtMap: Map<string, string>,
+  fabricDescMap: Map<string, string>,
+): string {
+  const v = item.variants;
+  if (!v || typeof v !== 'object') return '';
+  let mapped: Record<string, unknown> = v;
+  for (const key of FABRIC_VARIANT_KEYS) {
+    const raw = v[key];
+    if (typeof raw === 'string' && raw.trim()) {
+      const code = raw.trim();
+      const ext = fabricExtMap.get(code);   // supplier external colour code
+      const desc = fabricDescMap.get(code);  // our fabric description
+      if (ext || desc) {
+        if (mapped === v) mapped = { ...v };
+        mapped[key] = `${code}${ext ? ` (${ext})` : ''}${desc ? ` — ${desc}` : ''}`;
+      }
+    }
+  }
+  return buildVariantSummary(item.item_group ?? null, mapped);
+}
+
+/** Load BOTH fabric maps (supplier external colour + our description) for a set
+ *  of doc lines in one parallel round — feeds docVariantLine on customer docs. */
+export async function loadCustomerFabricMaps(
+  items: Array<{ variants?: Record<string, unknown> | null }>,
+): Promise<{ ext: Map<string, string>; desc: Map<string, string> }> {
+  const set = new Set<string>();
+  for (const it of items) {
+    const v = it.variants;
+    if (!v || typeof v !== 'object') continue;
+    for (const k of FABRIC_VARIANT_KEYS) {
+      const r = v[k];
+      if (typeof r === 'string' && r.trim()) set.add(r.trim());
+    }
+  }
+  const codes = [...set];
+  const [ext, desc] = await Promise.all([loadFabricSupplierMap(codes), loadFabricDescriptionMap(codes)]);
+  return { ext, desc };
+}

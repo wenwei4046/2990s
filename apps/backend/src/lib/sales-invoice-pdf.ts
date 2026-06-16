@@ -1,5 +1,6 @@
 // Sales Invoice PDF — issued to the customer.
 import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate, fmtDocStamp } from './pdf-common';
+import { docVariantLine, loadCustomerFabricMaps } from './supplier-doc-data';
 
 type SiHeader = {
   invoice_number: string; status: string;
@@ -16,6 +17,8 @@ type SiItem = {
   // type widening.
   discount_centi?: number; tax_centi?: number;
   line_total_centi: number;
+  item_group?: string | null;
+  variants?: Record<string, unknown> | null;
 };
 
 export async function generateSalesInvoicePdf(header: SiHeader, items: SiItem[]): Promise<void> {
@@ -44,10 +47,11 @@ export async function generateSalesInvoicePdf(header: SiHeader, items: SiItem[])
     [header.notes ?? null],
   );
 
+  const fabric = await loadCustomerFabricMaps(items);
   const rows = items.map((it, idx) => [
     String(idx + 1),
     it.item_code,
-    it.description ?? '—',
+    [it.description, docVariantLine(it, fabric.ext, fabric.desc)].filter(Boolean).join('\n') || '—',
     String(it.qty),
     fmtRm(it.unit_price_centi, header.currency),
     (it.discount_centi ?? 0) > 0 ? fmtRm(it.discount_centi ?? 0, header.currency) : '—',

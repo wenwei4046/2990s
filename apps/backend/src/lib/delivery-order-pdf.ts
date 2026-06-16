@@ -13,6 +13,7 @@ import {
   fmtRm,
   safeName,
 } from './pdf-common';
+import { docVariantLine, loadCustomerFabricMaps } from './supplier-doc-data';
 
 type DoHeader = {
   do_number: string;
@@ -43,6 +44,10 @@ type DoItem = {
   qty: number;
   m3_milli: number | null;
   unit_price_centi: number;
+  /* Variant info snapshotted from the SO (migration 0058) — drives the unified
+     variant line so DO/Consignment Note read like SO/PO/etc. */
+  item_group?: string | null;
+  variants?: Record<string, unknown> | null;
 };
 
 export async function generateDeliveryOrderPdf(
@@ -86,11 +91,14 @@ export async function generateDeliveryOrderPdf(
     ],
   );
 
-  // Line items
+  // Line items — description cell = SKU description + the UNIFIED variant line
+  // (same composer as SO/DR/SI/consignment), so the line reads identically on
+  // every customer document (Commander 2026-06-16).
+  const fabric = await loadCustomerFabricMaps(items);
   const rows = items.map((it, idx) => [
     String(idx + 1),
     it.item_code,
-    it.description ?? '—',
+    [it.description, docVariantLine(it, fabric.ext, fabric.desc)].filter(Boolean).join('\n') || '—',
     String(it.qty),
     it.m3_milli != null ? (it.m3_milli / 1000).toFixed(3) : '—',
     fmtRm(it.unit_price_centi),
