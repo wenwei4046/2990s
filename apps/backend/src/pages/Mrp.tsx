@@ -225,6 +225,36 @@ function groupBySo(skus: MrpSku[]): ModelGroup[] {
   return groups;
 }
 
+/* BF-FLAT (Commander 2026-06-16) — bedframe is flattened like the Sofa tab:
+   each colour VARIANT becomes its own top row (its Description 2 read straight
+   at L1), and expanding jumps straight to the SO orders. No model → variant →
+   orders middle level. We emit ONE single-variant ModelGroup per variant SKU so
+   ModelRows' existing 2-level "single" path renders L1 → orders with no extra
+   click. Mattress / Accessory keep groupByModel (one model, one variant). */
+function groupByVariant(skus: MrpSku[]): ModelGroup[] {
+  const groups: ModelGroup[] = skus.map((s) => ({
+    groupKey: rowKey(s),               // warehouse|itemCode|variantKey — unique per variant
+    warehouseId: s.warehouseId, warehouseCode: s.warehouseCode, warehouseName: s.warehouseName,
+    itemCode: s.itemCode, description: s.description, category: s.category,
+    variants: [s],                     // single → ModelRows jumps straight to orders
+    qtyNeeded: s.qtyNeeded, stock: s.stock, poOutstanding: s.poOutstanding, shortage: s.shortage,
+    suppliers: s.suppliers,
+  }));
+  // Same ordering as the other groupers: shortage (orange) first, then warehouse,
+  // then code, then the variant label so a model's colours cluster together.
+  groups.sort((a, b) => {
+    if ((b.shortage > 0 ? 1 : 0) !== (a.shortage > 0 ? 1 : 0)) {
+      return (b.shortage > 0 ? 1 : 0) - (a.shortage > 0 ? 1 : 0);
+    }
+    const wa = a.warehouseCode ?? a.warehouseName ?? '';
+    const wb = b.warehouseCode ?? b.warehouseName ?? '';
+    if (wa !== wb) return wa < wb ? -1 : 1;
+    if (a.itemCode !== b.itemCode) return a.itemCode < b.itemCode ? -1 : 1;
+    return (a.variants[0]!.variantLabel ?? '') < (b.variants[0]!.variantLabel ?? '') ? -1 : 1;
+  });
+  return groups;
+}
+
 export const Mrp = () => {
   const navigate = useNavigate();
   const { staff } = useAuth();
@@ -317,8 +347,13 @@ export const Mrp = () => {
     .filter((s) => !hasWindow || s.lines.length > 0);
 
   // Sofa tab groups by SO (one parent row per SO, modules as sub-rows, F5);
-  // the other category tabs group by SKU/Model.
-  const models = view === 'sofa' ? groupBySo(viewSkus) : groupByModel(viewSkus);
+  // Bedframe flattens to one row per colour variant (BF-FLAT); Mattress /
+  // Accessory group by SKU/Model.
+  const models = view === 'sofa'
+    ? groupBySo(viewSkus)
+    : view === 'bedframe'
+      ? groupByVariant(viewSkus)
+      : groupByModel(viewSkus);
 
   /* Only-shortages focus filter (Commander 2026-05-29) — affects which ROWS
      render; the summary counts above stay on the full demand set so the
@@ -684,6 +719,18 @@ export const Mrp = () => {
         </div>
       )}
 
+      {/* Bedframe flattened (BF-FLAT): one row per colour variant. */}
+      {view === 'bedframe' && (
+        <div className={styles.note}>
+          <Info {...ICON} />
+          <span>
+            Each row is one bedframe <strong>colour / variant</strong> (its
+            Description 2). Expand a row to see which Sales Orders need it. Orange
+            rows still need ordering.
+          </span>
+        </div>
+      )}
+
       {/* Filters — switchable date basis drives the window; Warehouse over
           Category on the right. Category sub-filter only on the General tab. */}
       <div className={styles.filterRow}>
@@ -799,6 +846,7 @@ export const Mrp = () => {
                 lineSupplier={lineSupplier}
                 onLineSupplierChange={setLineSupplierId}
                 flatModules={view === 'sofa'}
+                variantAtL1={view === 'bedframe'}
               />
             ))}
           </tbody>
@@ -907,7 +955,7 @@ const shortageLineIdsOf = (s: MrpSku): string[] =>
 const ModelRows = ({
   group, modelOpen, onToggleModel, expandedVariants, onToggleVariant,
   selected, onToggleLine, onSetLinesSelected, lineSupplier, onLineSupplierChange,
-  flatModules,
+  flatModules, variantAtL1,
 }: {
   group: ModelGroup;
   modelOpen: boolean;
@@ -920,6 +968,10 @@ const ModelRows = ({
   lineSupplier: Record<string, string>;
   onLineSupplierChange: (soItemId: string, supplierId: string) => void;
   flatModules?: boolean;
+  /* BF-FLAT — bedframe groups are single-variant (one colour each). Show the
+     variant (Description 2) right on the L1 row so colours of the same model are
+     distinguishable, and skip the redundant spec label inside the expand. */
+  variantAtL1?: boolean;
 }) => {
   const short = group.shortage > 0;
   // Parent (Model) checkbox state — over every shortage line beneath the model.
@@ -962,9 +1014,13 @@ const ModelRows = ({
         <td className={styles.codeCell}>{group.itemCode}</td>
         <td className={styles.descCell}>
           {group.description ?? '—'}
-          {hasNamedVariant && (
-            <span className={styles.countTag}>{variantCount} variant{variantCount === 1 ? '' : 's'}</span>
-          )}
+          {variantAtL1
+            ? (onlyVariant.variantLabel
+                ? <span className={styles.variantTag}>{onlyVariant.variantLabel}</span>
+                : null)
+            : (hasNamedVariant
+                ? <span className={styles.countTag}>{variantCount} variant{variantCount === 1 ? '' : 's'}</span>
+                : null)}
         </td>
         <td className={styles.num}>{group.qtyNeeded}</td>
         <td className={styles.num}>{group.stock}</td>
@@ -994,7 +1050,9 @@ const ModelRows = ({
         <tr className={styles.detailRow}>
           <td /><td />
           <td colSpan={7}>
-            {onlyVariant.variantLabel && (
+            {/* variantAtL1 (bedframe): the variant already shows on the L1 row,
+                so don't repeat it as a spec label above the orders. */}
+            {!variantAtL1 && onlyVariant.variantLabel && (
               <div className={styles.singleSpec}>
                 <span className={styles.variantBranch}>↳</span>
                 <span className={styles.variantTag}>{onlyVariant.variantLabel}</span>
