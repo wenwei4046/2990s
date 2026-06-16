@@ -70,6 +70,7 @@ import {
   maintEntryValue,
   maintEntryActive,
   maintEntryWithValue,
+  fillEmptyAllowedOptions,
   type MaintPoolEntry,
   SOFA_MODULES,
   resolveSofaQuickPresets,
@@ -1005,11 +1006,31 @@ const ModelAllowedOptionsDrawer = ({
   // (apps/api/.../product-models.ts PATCH). Initialised with the draft below.
   const [activeDraft, setActiveDraft] = useState<boolean | null>(null);
   useEffect(() => {
-    if (model.data?.model && draft == null) {
-      setDraft(JSON.parse(JSON.stringify(model.data.model.allowed_options ?? {})) as AllowedOptions);
-      setActiveDraft(model.data.model.active);
-    }
-  }, [model.data, draft]);
+    const mdl = model.data?.model;
+    const mcfg = masterCfg.data?.data;
+    if (!mdl || !mcfg || draft != null) return;
+    const saved = JSON.parse(JSON.stringify(mdl.allowed_options ?? {})) as AllowedOptions;
+    // PR #87 parity with the Backend Model editor (ProductModelDetail.fillIfEmpty):
+    // allowed_options default to all-on, untick-to-exclude. An empty/absent
+    // leg_heights reads as "no restriction = offer EVERY leg" downstream
+    // (useSofaLegHeights + the server gate), so seed the leg chips all-on when
+    // empty — otherwise the drawer renders every leg OFF while the configurator
+    // still shows all of them, making it impossible to deactivate one leg
+    // (report 2026-06-16). leg_heights is the ONLY pool seeded here: it is the
+    // only editor pool that is both "empty = show all" in the POS configurator
+    // AND side-effect-free on the PATCH. (sizes mirror SKU pos_active;
+    // compartments auto-create SKUs; specials + fabrics are opt-in — empty =
+    // none — so seeding them would wrongly switch every option ON.)
+    const legPool =
+      mdl.category === 'SOFA' ? mcfg.sofaLegHeights
+      : mdl.category === 'BEDFRAME' ? mcfg.legHeights
+      : undefined;
+    const seeded = legPool
+      ? fillEmptyAllowedOptions(saved, { leg_heights: legPool.map((o) => o.value) })
+      : saved;
+    setDraft(seeded);
+    setActiveDraft(mdl.active);
+  }, [model.data, masterCfg.data, draft]);
 
   const m = model.data?.model;
   const cfg = masterCfg.data?.data;
