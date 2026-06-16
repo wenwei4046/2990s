@@ -58,6 +58,7 @@ import {
   useMaintenanceConfig,
   useMaintenanceConfigHistory,
   useSaveMaintenanceConfig,
+  useSpecialAddons,
   useRenameSofaCompartment,
   useMfgProductSuppliers,
   useUploadSofaCompartmentPhoto,
@@ -79,7 +80,7 @@ import { MoneyInput } from '../components/MoneyInput';
 import { todayMyt } from '../lib/dates';
 import { FabricsTable } from '../components/FabricsTable';
 import { SofaComboTab } from '../components/SofaComboTab';
-import { SpecialAddonsTab } from '../components/SpecialAddonsTab';
+import { SpecialAddonsTab, SpecialAddonsManager } from '../components/SpecialAddonsTab';
 import { FabricTracking } from './FabricTracking';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/size-info';
 import { ProductModels, NewModelDialog } from './ProductModels';
@@ -1562,14 +1563,15 @@ const MAINTENANCE_TABS: {
   { key: 'totalHeights', label: 'Total Heights', description: 'Total height (Divan + Gap + Leg) surcharge pricing', priced: true, section: 'Bedframe' },
   { key: 'gaps', label: 'Gaps', description: 'Bedframe gap height options (inches)', priced: false, section: 'Bedframe' },
   { key: 'legHeights', label: 'Leg Heights', description: 'Bedframe leg height options with surcharge pricing', priced: true, section: 'Bedframe' },
-  // 'specials' retired 2026-06-08 (Loo) — bedframe special orders moved to the
-  // Special Add-ons tab (special_addons / Product Add-ons), shared with POS.
+  // Specials re-surfaced here (Commander 2026-06-16) — edits the SAME special_addons
+  // data as the Special Add-ons tab, filtered to BEDFRAME (selling-price options).
+  { key: 'specials', label: 'Specials', description: 'Bedframe special add-ons — selling-price options (shared with POS).', priced: true, section: 'Bedframe' },
 
   // ── Sofa (commander-edited variant pools) ───────────────────────────────
   { key: 'sofaSizes', label: 'Sizes', description: 'Available sofa seat height sizes (inches)', priced: false, section: 'Sofa' },
   { key: 'sofaLegHeights', label: 'Leg Heights', description: 'Sofa leg height options with surcharge pricing', priced: true, section: 'Sofa' },
-  // 'sofaSpecials' retired 2026-06-08 (Loo) — sofa special orders moved to the
-  // Special Add-ons tab (special_addons / Product Add-ons), shared with POS.
+  // Sofa Specials — same special_addons data, filtered to SOFA (Commander 2026-06-16).
+  { key: 'sofaSpecials', label: 'Specials', description: 'Sofa special add-ons — selling-price options (shared with POS).', priced: true, section: 'Sofa' },
   // Quick Presets editor entry retired (Chairman 2026-06-02) — removed from the
   // Maintenance rail in both apps. The sofaQuickPresets DATA + the shared
   // DEFAULT_SOFA_QUICK_PRESETS fallback are kept (Sofa Combos reference preset
@@ -1633,6 +1635,9 @@ export const MaintenanceTab = ({
   // AND the one-click seed for the Edit draft (see startEdit). The pool
   // itself never gets written without an explicit Save.
   const brandingPool = useBrandingPool();
+  // Specials (Commander 2026-06-16) — re-surfaced in Maintenance editing the
+  // shared special_addons; used for the rail count + the embedded editor.
+  const specialAddonsList = useSpecialAddons();
 
   // PR #208 — when the supplier scope has no row yet, fall through to the
   // master config so commander can see what's there before deciding to
@@ -1648,8 +1653,12 @@ export const MaintenanceTab = ({
   const allSections: MaintenanceSection[] = ['Bedframe', 'Sofa', 'Common', 'Products Maintenance'];
   const sections: MaintenanceSection[] = sectionFilter ?? allSections;
   const visibleTabs = useMemo(
-    () => MAINTENANCE_TABS.filter((t) => sections.includes(t.section)),
-    [sections],
+    () => MAINTENANCE_TABS.filter((t) =>
+      sections.includes(t.section)
+      // Specials edit GLOBAL special_addons (selling price) — show only on the
+      // master Products page, never the per-supplier (cost-overlay) Maintenance.
+      && !((t.key === 'specials' || t.key === 'sofaSpecials') && scope !== 'master')),
+    [sections, scope],
   );
 
   // First visible tab — the section filter may have hidden 'divanHeights'.
@@ -1681,6 +1690,11 @@ export const MaintenanceTab = ({
   const config =
     draft ?? resolved.data?.data ?? masterFallback.data?.data ?? null;
   const active = MAINTENANCE_TABS.find((t) => t.key === activeKey) ?? visibleTabs[0];
+  // Specials panel (Commander 2026-06-16) — renders the special_addons editor
+  // filtered to this category instead of the config-pool editor; the config
+  // Edit/Save/History chrome is hidden (special_addons has its own inline CRUD).
+  const isSpecials = active?.key === 'specials' || active?.key === 'sofaSpecials';
+  const specialsCat = active?.key === 'sofaSpecials' ? 'SOFA' : 'BEDFRAME';
 
   const startEdit = () => {
     // Seed the draft from whichever config we're currently showing — could
@@ -1825,7 +1839,11 @@ export const MaintenanceTab = ({
           <div key={section}>
             <div className={styles.maintSection}>{section}</div>
             {MAINTENANCE_TABS.filter((t) => t.section === section).map((t) => {
-              const count = t.key === 'fabrics' ? fabricsCount : countItems(config, t.key);
+              const count = t.key === 'fabrics'
+                ? fabricsCount
+                : (t.key === 'specials' || t.key === 'sofaSpecials')
+                  ? (specialAddonsList.data ?? []).filter((r) => r.categories.includes(t.key === 'sofaSpecials' ? 'SOFA' : 'BEDFRAME')).length
+                  : countItems(config, t.key);
               return (
                 <button
                   key={t.key}
@@ -1848,7 +1866,7 @@ export const MaintenanceTab = ({
           <div>
             <h2 className={styles.maintTitle}>{active.label}</h2>
             <p className={styles.maintSubtitle}>{active.description}</p>
-            {resolved.data?.effectiveFrom && (
+            {!isSpecials && resolved.data?.effectiveFrom && (
               <p className={styles.stateInfo} style={{ marginTop: 8 }}>
                 Effective from {resolved.data.effectiveFrom}
                 {resolved.data.hasPendingPriceChange && (
@@ -1858,13 +1876,14 @@ export const MaintenanceTab = ({
                 )}
               </p>
             )}
-            {showingMasterFallback && (
+            {!isSpecials && showingMasterFallback && (
               <p className={styles.stateInfo} style={{ marginTop: 8, color: 'var(--c-burnt)' }}>
                 No supplier-specific pricing yet — showing the master baseline.
                 Hit Edit + Save to override.
               </p>
             )}
           </div>
+          {!isSpecials && (
           <div className={styles.actionsRow}>
             {!editMode ? (
               <Button variant="ghost" size="sm" onClick={startEdit}>
@@ -1886,17 +1905,24 @@ export const MaintenanceTab = ({
               <span>History</span>
             </Button>
           </div>
+          )}
         </header>
 
-        <MaintenanceList
-          listKey={active.key}
-          config={config}
-          editMode={editMode}
-          onChange={(next) => setDraft(next)}
-          priced={active.priced}
-          singleCostColumn={singleCostColumn}
-          brandingSuggestions={brandingPool.distinct}
-        />
+        {isSpecials ? (
+          /* Specials live in the shared special_addons table; the editor has its
+             own New/Edit/Delete — no config draft/Save here. (Commander 2026-06-16) */
+          <SpecialAddonsManager categoryFilter={specialsCat} />
+        ) : (
+          <MaintenanceList
+            listKey={active.key}
+            config={config}
+            editMode={editMode}
+            onChange={(next) => setDraft(next)}
+            priced={active.priced}
+            singleCostColumn={singleCostColumn}
+            brandingSuggestions={brandingPool.distinct}
+          />
+        )}
       </section>
 
       {showMaintHistory && (
