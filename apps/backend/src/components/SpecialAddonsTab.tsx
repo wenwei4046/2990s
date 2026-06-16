@@ -171,7 +171,10 @@ export const SpecialAddonsManager = ({ categoryFilter }: { categoryFilter?: stri
     catch (err) { setError(String((err as Error).message ?? err)); }
   };
 
-  const rm = (sen: number) => `${sen < 0 ? '−' : '+'}RM ${Math.abs(senToRm(sen)).toLocaleString('en-MY')}`;
+  // Plain RM amount matching the other Maintenance panels: positive shows NO
+  // sign ("RM 200.00"), only negatives get a minus; always 2 decimals. The old
+  // "+RM" surcharge style was inconsistent with the rest (Commander 2026-06-16).
+  const rm = (sen: number) => `${sen < 0 ? '−' : ''}RM ${Math.abs(senToRm(sen)).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const inputStyle: React.CSSProperties = { width: '100%', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' };
 
   /* DataGrid columns (owner request 2026-06-12). `startEdit` / `remove` are
@@ -366,14 +369,10 @@ export const SpecialAddonsManager = ({ categoryFilter }: { categoryFilter?: stri
               }}
             >
               <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-soft)' }}>{i + 1}</span>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 'var(--fs-16)', fontWeight: 600, color: 'var(--c-ink)' }}>{r.label}</div>
-                {(r.soDescription || r.optionGroups.length > 0) && (
-                  <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-                    {r.soDescription || r.code}
-                    {r.optionGroups.length > 0 && ` · ${r.optionGroups.map((g) => `${g.label} (${g.choices.length})`).join(' · ')}`}
-                  </div>
-                )}
+              {/* Name only — match the other Maintenance panels (no description
+                  subtitle). Commander 2026-06-16. */}
+              <div style={{ minWidth: 0, fontSize: 'var(--fs-16)', fontWeight: 600, color: 'var(--c-ink)' }}>
+                {r.label}
               </div>
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-15)', color: 'var(--c-ink)', textAlign: 'right', whiteSpace: 'nowrap' }}>{rm(r.sellingPriceSen)}</span>
               <span style={{ fontSize: 'var(--fs-12)', fontWeight: 600, textAlign: 'right', color: r.active ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)' }}>{r.active ? 'Active' : 'Off'}</span>
