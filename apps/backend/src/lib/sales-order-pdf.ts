@@ -15,7 +15,7 @@ import {
   fmtRm,
   safeName,
 } from './pdf-common';
-import { loadFabricDescriptionMap } from './supplier-doc-data';
+import { loadFabricDescriptionMap, loadFabricSupplierMap } from './supplier-doc-data';
 import { composeSoLineDescription } from './so-line-description';
 
 // ----------------------------------------------------------------------------
@@ -172,17 +172,25 @@ const collectFabricCodes = (items: SoItem[]): string[] => {
    code enriched to "EZ-001 — <fabric_description>" when the Fabric Tracking
    master knows it. Returns '' when the line has no variants object —
    description2 prints on its own line, so no fallback to it here. */
-const variantLine = (it: SoItem, fabricDescMap: Map<string, string>): string => {
+const variantLine = (
+  it: SoItem,
+  fabricDescMap: Map<string, string>,
+  fabricExtMap: Map<string, string>,
+): string => {
   const v = it.variants;
   if (!v || typeof v !== 'object') return '';
   let mapped: Record<string, unknown> = v;
   for (const key of FABRIC_VARIANT_KEYS) {
     const raw = v[key];
-    if (typeof raw === 'string') {
-      const desc = fabricDescMap.get(raw.trim());
-      if (desc) {
+    if (typeof raw === 'string' && raw.trim()) {
+      const code = raw.trim();
+      const ext = fabricExtMap.get(code);   // supplier's EXTERNAL colour code
+      const desc = fabricDescMap.get(code);  // our fabric_description
+      if (ext || desc) {
         if (mapped === v) mapped = { ...v }; // clone once, on demand
-        mapped[key] = `${raw.trim()} — ${desc}`;
+        // internal (external) — description: same internal+external pairing the
+        // supplier docs (specsLine) show, plus our description. (Commander 2026-06-16)
+        mapped[key] = `${code}${ext ? ` (${ext})` : ''}${desc ? ` — ${desc}` : ''}`;
       }
     }
   }
@@ -275,6 +283,10 @@ export async function generateSalesOrderPdf(
      code → fabric_description so the customer reads "EZ-001 — <description>"
      instead of a bare internal code. */
   const fabricDescMap = await loadFabricDescriptionMap(collectFabricCodes(items));
+  /* Internal fabric code → supplier EXTERNAL colour code (Fabric Tracking), so
+     the SO shows both like the supplier docs: "EZ-001 (KN390-1) — <desc>"
+     (Commander 2026-06-16 — Fabric internal + external on the SO too). */
+  const fabricExtMap = await loadFabricSupplierMap(collectFabricCodes(items));
 
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
@@ -421,7 +433,7 @@ export async function generateSalesOrderPdf(
     const lines = composeSoLineDescription({
       description: it.description ?? it.item_code,
       description2: (it.description2 ?? '').trim(),
-      specs: variantLine(it, fabricDescMap) ?? '',
+      specs: variantLine(it, fabricDescMap, fabricExtMap) ?? '',
       remark: typeof it.remark === 'string' ? it.remark : null,
       notes,
     });
