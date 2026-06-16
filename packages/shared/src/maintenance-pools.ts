@@ -76,3 +76,34 @@ export const maintEntryWithActive = (e: MaintPoolEntry, active: boolean): MaintP
   const value = maintEntryValue(e);
   return active ? value : { value, active: false };
 };
+
+/** "Default all-on, untick-to-exclude" seed for a per-Model allowed_options
+ *  editor (PR #87 mental model, mirrors the Backend ProductModelDetail
+ *  `fillIfEmpty`). For each (key → master pool) in `fills`, if the saved
+ *  allowed_options[key] is EMPTY or ABSENT and the pool is non-empty, seed it
+ *  with the full pool so the chip editor renders every option ON.
+ *
+ *  Why this is needed: an empty allowed_options[key] reads as "no restriction =
+ *  offer EVERY option" downstream (e.g. `useSofaLegHeights`, the server gate).
+ *  A chip editor that renders that empty list as "nothing ticked" is then a
+ *  trap — unticking an already-empty list is a no-op, so a user can never
+ *  deactivate a single option (the leg-height report, 2026-06-16).
+ *
+ *  Only pass pools whose empty-means-ALL semantics hold AND that are
+ *  side-effect-free on save. leg_heights qualifies. Opt-in pools (specials,
+ *  fabrics — empty = NONE in the POS configurator) and pools with PATCH side
+ *  effects (sizes mirror pos_active; compartments auto-create SKUs) must NOT be
+ *  passed in. Pure: never mutates `saved`; returns a shallow copy. */
+export function fillEmptyAllowedOptions<T extends Record<string, unknown>>(
+  saved: T,
+  fills: Record<string, readonly string[]>,
+): T {
+  const next: Record<string, unknown> = { ...saved };
+  for (const [key, pool] of Object.entries(fills)) {
+    const cur = next[key];
+    if (pool.length > 0 && (!Array.isArray(cur) || cur.length === 0)) {
+      next[key] = [...pool];
+    }
+  }
+  return next as T;
+}
