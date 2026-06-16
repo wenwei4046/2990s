@@ -43,6 +43,7 @@ import {
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { useSupplierDetail } from '../lib/suppliers-queries';
 import { todayMyt } from '../lib/dates';
+import { useConfirm } from './ConfirmDialog';
 
 // Seat-height columns mirror the live Maintenance pool (Products → Maintenance
 // → Sofa → Sizes; config key `sofaSizes`). This fallback only shows if that
@@ -84,6 +85,12 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
   const [baseModelFilter, setBaseModelFilter] = useState<string>('');
   const [composer, setComposer] = useState<{ open: boolean; editing?: SofaComboRule }>({ open: false });
   const [historyFor, setHistoryFor] = useState<SofaComboRule | null>(null);
+  const askConfirm = useConfirm();
+  // Multi-select for batch operations (Commander R7). Holds combo ids.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const toggleSelect = (id: string) => setSelected((s) => {
+    const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n;
+  });
 
   // Default scope: customer_id = null (applies to all). 2990 is B2C, so we
   // never let the UI write a customer_id. When a supplierId is supplied the
@@ -199,6 +206,17 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
   const total = combosQ.data?.length ?? 0;
 
   const deleteM = useDeleteSofaCombo();
+  // Batch soft-delete every selected combo (one in-app confirm, then fire each).
+  const doBatchDelete = async () => {
+    if (selected.size === 0) return;
+    if (!(await askConfirm({
+      title: `Soft-delete ${selected.size} combo${selected.size === 1 ? '' : 's'}?`,
+      body: 'They stop applying to pricing; History still shows them.',
+      confirmLabel: 'Delete', danger: true,
+    }))) return;
+    for (const id of selected) deleteM.mutate(id);
+    setSelected(new Set());
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '8px 0' }}>
@@ -254,6 +272,24 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
         </span>
       </div>
 
+      {/* Batch-action bar — shows when ≥1 combo is ticked (Commander R7). */}
+      {selected.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px',
+          background: 'var(--c-cream)', border: '1px solid var(--c-orange)',
+          borderRadius: 'var(--radius-md)',
+        }}>
+          <span style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', fontWeight: 600, color: 'var(--c-ink)' }}>
+            {selected.size} selected
+          </span>
+          <div style={{ flex: 1 }} />
+          <Button variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
+          <Button variant="ghost" onClick={doBatchDelete}>
+            <Trash2 {...ICON_PROPS} style={{ marginRight: 6 }} /> Delete selected
+          </Button>
+        </div>
+      )}
+
       {/* List */}
       {combosQ.isLoading ? (
         <p style={{ color: 'var(--fg-muted)' }}>Loading…</p>
@@ -290,10 +326,12 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
                   rule={r}
                   heights={heights}
                   supplierCode={supplierCodeByBaseModel[r.baseModel]}
+                  selected={selected.has(r.id)}
+                  onToggleSelect={() => toggleSelect(r.id)}
                   onEdit={() => setComposer({ open: true, editing: r })}
                   onHistory={() => setHistoryFor(r)}
-                  onDelete={() => {
-                    if (confirm('Soft-delete this combo? (History will still show it.)')) {
+                  onDelete={async () => {
+                    if (await askConfirm({ title: 'Soft-delete this combo?', body: 'History will still show it.', confirmLabel: 'Delete', danger: true })) {
                       deleteM.mutate(r.id);
                     }
                   }}
@@ -325,13 +363,15 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
 // ─── Combo card ────────────────────────────────────────────────────────
 
 function ComboCard({
-  rule, heights, supplierCode, onEdit, onHistory, onDelete,
+  rule, heights, supplierCode, selected, onToggleSelect, onEdit, onHistory, onDelete,
 }: {
   rule: SofaComboRule;
   heights: string[];
   /** Supplier's own model code for this base model (e.g. "5539"), shown next
       to our internal name on the supplier-scoped page. Undefined elsewhere. */
   supplierCode?: string;
+  selected: boolean;
+  onToggleSelect: () => void;
   onEdit: () => void;
   onHistory: () => void;
   onDelete: () => void;
@@ -341,7 +381,7 @@ function ComboCard({
   return (
     <div style={{
       background: 'var(--c-paper)',
-      border: '1px solid var(--line)',
+      border: selected ? '1px solid var(--c-orange)' : '1px solid var(--line)',
       borderRadius: 'var(--radius-md)',
       padding: 12,
       display: 'flex',
@@ -349,6 +389,13 @@ function ComboCard({
       gap: 8,
     }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelect}
+          aria-label="Select combo for batch action"
+          style={{ marginTop: 2, width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--c-orange)' }}
+        />
         <span style={chipStyleStrong}>{rule.baseModel}</span>
         {supplierCode && (
           <span style={chipStyleSupplierCode} title="Supplier's own model code">
