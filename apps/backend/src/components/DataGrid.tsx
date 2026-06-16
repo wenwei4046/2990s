@@ -63,8 +63,9 @@ export type DataGridColumn<T> = {
       cell text — never to searchValue. */
   filterValue?: (row: T) => string;
   /** Date column → its filter popover gains quick presets (Today / Tomorrow /
-      This Week / This Month / Overdue). `dateValue` returns the row's RAW ISO
-      date (YYYY-MM-DD…) used for the range match. (Commander 2026-06-16) */
+      This week / This month / Last month / Overdue) — same set + wording as the
+      shared ColumnFilterBar. `dateValue` returns the row's RAW ISO date
+      (YYYY-MM-DD…) used for the range match. (Commander 2026-06-16) */
   filterType?: 'date';
   dateValue?: (row: T) => string | null | undefined;
   /**
@@ -194,12 +195,13 @@ const coerceSearchString = (v: ReactNode): string => {
    2026-06-16). Evaluated in MYT (UTC+8) to match the rest of the app — a Date
    shifted by +8h has its UTC fields equal to the MYT wall clock, so date-only
    math via the getUTCDate / setUTCDate family is correct. */
-export type DatePreset = 'today' | 'tomorrow' | 'thisWeek' | 'thisMonth' | 'overdue';
+export type DatePreset = 'today' | 'tomorrow' | 'thisWeek' | 'thisMonth' | 'lastMonth' | 'overdue';
 const DATE_PRESETS: { key: DatePreset; label: string }[] = [
   { key: 'today',     label: 'Today' },
   { key: 'tomorrow',  label: 'Tomorrow' },
-  { key: 'thisWeek',  label: 'This Week' },
-  { key: 'thisMonth', label: 'This Month' },
+  { key: 'thisWeek',  label: 'This week' },
+  { key: 'thisMonth', label: 'This month' },
+  { key: 'lastMonth', label: 'Last month' },
   { key: 'overdue',   label: 'Overdue' },
 ];
 const dateMatchesPreset = (iso: string | null | undefined, preset: DatePreset): boolean => {
@@ -222,6 +224,10 @@ const dateMatchesPreset = (iso: string | null | undefined, preset: DatePreset): 
       return d >= mon.toISOString().slice(0, 10) && d <= sun.toISOString().slice(0, 10);
     }
     case 'thisMonth': return d.slice(0, 7) === today.slice(0, 7);
+    case 'lastMonth': {
+      const lm = new Date(nowMyt); lm.setUTCDate(1); lm.setUTCMonth(lm.getUTCMonth() - 1);
+      return d.slice(0, 7) === lm.toISOString().slice(0, 7);
+    }
     default:          return false;
   }
 };
