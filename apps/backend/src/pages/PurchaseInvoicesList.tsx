@@ -15,6 +15,7 @@ import { Plus, FileText, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { usePurchaseInvoices, useCancelPurchaseInvoice, usePurchaseInvoiceDetail } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { useConfirm } from '../components/ConfirmDialog';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
@@ -119,6 +120,22 @@ const buildPiColumns = (): DataGridColumn<PiRow>[] => [
     sortFn: (a, b) => a.status.localeCompare(b.status),
   },
 ];
+
+/* Column-aware filter config for the PI list (supplier-side). Mirrors the
+   SI-list additive pattern but reads THIS page's real PiRow fields: supplier
+   name/code, the GRN/PO source ref, invoice/due dates, status + currency.
+   enum options are derived from the data; date columns get presets + range. */
+const PI_FILTER_COLUMNS: FilterColumn<PiRow>[] = [
+  { key: 'invoice_number', label: 'Invoice No',     type: 'text', accessor: (r) => r.invoice_number },
+  { key: 'supplier',       label: 'Supplier',        type: 'text', accessor: (r) => r.supplier?.name ?? r.supplier?.code ?? '' },
+  { key: 'source_ref',     label: 'GRN / PO Ref',    type: 'text', accessor: (r) => r.grn?.grn_number ?? r.purchase_order?.po_number ?? '' },
+  { key: 'supplier_enum',  label: 'Supplier (pick)', type: 'enum', accessor: (r) => r.supplier?.name ?? r.supplier?.code ?? '' },
+  { key: 'currency',       label: 'Currency',        type: 'enum', accessor: (r) => r.currency ?? '' },
+  { key: 'status',         label: 'Status',          type: 'enum', accessor: (r) => r.status },
+  { key: 'invoice_date',   label: 'Invoice Date',    type: 'date', accessor: (r) => r.invoice_date },
+  { key: 'due_date',       label: 'Due Date',        type: 'date', accessor: (r) => r.due_date },
+];
+const PI_QUICK_SEARCH_KEYS = ['invoice_number', 'supplier', 'source_ref'];
 
 /* ── Drill-down — per-line breakdown for one PI, mirrors ExpandedPoLines ─── */
 type PiItem = Record<string, unknown> & {
@@ -236,10 +253,22 @@ export const PurchaseInvoices = () => {
   const cancelPi = useCancelPurchaseInvoice();
 
   const allRows = useMemo<PiRow[]>(() => (data?.purchaseInvoices ?? []) as PiRow[], [data]);
-  const rows = useMemo<PiRow[]>(
+  const baseRows = useMemo<PiRow[]>(
     () => (statusChip === 'all' ? allRows : allRows.filter((r) => r.status === statusChip)),
     [allRows, statusChip],
   );
+  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
+     add-a-column filters (enum / date presets + range / text). The status
+     chip still flows via ?status=… and applies on top, feeding baseRows. */
+  const { rows, bar: filterBar } = useColumnFilter<PiRow>({
+    allRows: baseRows,
+    columns: PI_FILTER_COLUMNS,
+    quickSearchKeys: PI_QUICK_SEARCH_KEYS,
+    quickSearchPlaceholder: 'PI No, supplier…',
+    storageKey: 'pr-g.pi-list.filters.v1',
+    totalCount: baseRows.length,
+    loading: isLoading,
+  });
   const columns = useMemo(() => buildPiColumns(), []);
 
   // Cancel a PI (right-click) — flips status → CANCELLED (PI is AP-only, no
@@ -297,6 +326,10 @@ export const PurchaseInvoices = () => {
           </button>
         ))}
       </div>
+
+      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
+          add-a-column filters), inserted above the grid. */}
+      {filterBar}
 
       <DataGrid<PiRow>
         rows={rows}
