@@ -640,6 +640,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DrRow>[] =
     accessor: (r) => compactDate(r.return_date),
     searchValue: (r) => `${r.return_date ?? ''} ${compactDate(r.return_date)}`,
     sortFn: (a, b) => (a.return_date ?? '').localeCompare(b.return_date ?? ''),
+    filterType: 'date', dateValue: (r) => r.return_date,
   },
   {
     key: 'debtor_name', label: 'Debtor Name', width: 220, sortable: true, groupable: true,

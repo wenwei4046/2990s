@@ -84,6 +84,7 @@ const buildColumns = (): DataGridColumn<PrRow>[] => [
     accessor: (r) => fmtDateOrDash(r.return_date),
     searchValue: (r) => r.return_date ?? '',
     sortFn: (a, b) => String(a.return_date ?? '').localeCompare(String(b.return_date ?? '')),
+    filterType: 'date', dateValue: (r) => r.return_date,
   },
   {
     key: 'refund_centi', label: 'Refund', width: 130, sortable: true, align: 'right', groupable: false,

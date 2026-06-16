@@ -87,12 +87,14 @@ const buildPiColumns = (): DataGridColumn<PiRow>[] => [
     accessor: (r) => fmtDateOrDash(r.invoice_date),
     searchValue: (r) => r.invoice_date ?? '',
     sortFn: (a, b) => String(a.invoice_date ?? '').localeCompare(String(b.invoice_date ?? '')),
+    filterType: 'date', dateValue: (r) => r.invoice_date,
   },
   {
     key: 'due_date', label: 'Due Date', width: 120, sortable: true,
     accessor: (r) => fmtDateOrDash(r.due_date),
     searchValue: (r) => r.due_date ?? '',
     sortFn: (a, b) => String(a.due_date ?? '').localeCompare(String(b.due_date ?? '')),
+    filterType: 'date', dateValue: (r) => r.due_date,
   },
   {
     key: 'total_centi', label: 'Total', width: 130, sortable: true, align: 'right', groupable: false,

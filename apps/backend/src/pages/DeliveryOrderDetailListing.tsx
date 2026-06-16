@@ -59,6 +59,7 @@ export const DeliveryOrderDetailListing = () => {
       key: 'do_date', label: 'Date', width: 100, sortable: true,
       accessor: (r) => fmtDateOrDash((r.do_date ?? r.line_date) as string | null),
       searchValue: (r) => String(r.do_date ?? r.line_date ?? ''),
+      filterType: 'date', dateValue: (r) => (r.do_date ?? r.line_date) as string | null,
     },
     {
       key: 'so_doc_no', label: 'Transfer From (SO)', width: 110, sortable: true, groupable: true,
@@ -99,6 +100,7 @@ export const DeliveryOrderDetailListing = () => {
       key: 'expected_delivery_at', label: 'Expected', width: 110, sortable: true,
       accessor: (r) => fmtDateOrDash(r.expected_delivery_at ?? null),
       searchValue: (r) => r.expected_delivery_at ?? '',
+      filterType: 'date', dateValue: (r) => r.expected_delivery_at,
     },
     {
       key: 'item_code', label: 'Item Code', width: 120, sortable: true,

@@ -109,6 +109,7 @@ const JE_COLUMNS: DataGridColumn<JournalEntry>[] = [
     accessor: (r) => fmtDateOrDash(r.entry_date),
     filterValue: (r) => fmtDateOrDash(r.entry_date),
     sortFn: (a, b) => (a.entry_date ?? '').localeCompare(b.entry_date ?? ''),
+    filterType: 'date', dateValue: (r) => r.entry_date,
   },
   {
     key: 'source',

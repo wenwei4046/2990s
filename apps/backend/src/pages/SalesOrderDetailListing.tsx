@@ -181,6 +181,7 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       accessor: (r) => compactDate((r.so_date ?? r.line_date) as string | null),
       searchValue: (r) => String(r.so_date ?? r.line_date ?? ''),
       sortFn: (a, b) => String(a.so_date ?? a.line_date ?? '').localeCompare(String(b.so_date ?? b.line_date ?? '')),
+      filterType: 'date', dateValue: (r) => (r.so_date ?? r.line_date) as string | null,
     },
     /* 3 */ {
       key: 'debtor_name', label: 'Debtor Name', width: 200, sortable: true, groupable: true,
@@ -407,11 +408,13 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       key: 'processing_date', label: 'Processing Date', width: 130, sortable: true,
       accessor: (r) => { const v = opt(r, 'internal_expected_dd'); return v ? compactDate(v) : '—'; },
       searchValue: (r) => opt(r, 'internal_expected_dd'),
+      filterType: 'date', dateValue: (r) => opt(r, 'internal_expected_dd'),
     },
     /* 28 */ {
       key: 'tax_expiry', label: 'Tax Exemption Expiry', width: 150, sortable: true,
       accessor: (r) => r.sales_exemption_expiry ? compactDate(r.sales_exemption_expiry) : '—',
       searchValue: (r) => r.sales_exemption_expiry ?? '',
+      filterType: 'date', dateValue: (r) => r.sales_exemption_expiry,
     },
     /* 29 */ {
       key: 'note', label: 'Note', width: 160, sortable: true,
@@ -431,6 +434,7 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       accessor: (r) => r.last_payment_at ? compactDate(r.last_payment_at) : '—',
       searchValue: (r) => r.last_payment_at ?? '',
       sortFn: (a, b) => String(a.last_payment_at ?? '').localeCompare(String(b.last_payment_at ?? '')),
+      filterType: 'date', dateValue: (r) => r.last_payment_at,
     },
     /* 32 — Task #63: most-recent payment's account_sheet (bank account /
        cashbook) from mfg_sales_order_payments. */
@@ -532,6 +536,7 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       defaultHidden: true,
       accessor: (r) => r.customer_delivery_date ? compactDate(r.customer_delivery_date) : '—',
       searchValue: (r) => r.customer_delivery_date ?? '',
+      filterType: 'date', dateValue: (r) => r.customer_delivery_date,
     },
     {
       /* Customer state — populated whenever the customer record has an

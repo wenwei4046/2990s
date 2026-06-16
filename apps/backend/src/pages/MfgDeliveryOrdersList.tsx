@@ -717,6 +717,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     accessor: (r) => compactDate(r.do_date),
     searchValue: (r) => `${r.do_date ?? ''} ${compactDate(r.do_date)}`,
     sortFn: (a, b) => (a.do_date ?? '').localeCompare(b.do_date ?? ''),
+    filterType: 'date', dateValue: (r) => r.do_date,
   },
   {
     key: 'debtor_name', label: 'Debtor Name', width: 220, sortable: true, groupable: true,
@@ -740,6 +741,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     accessor: (r) => compactDate(r.expected_delivery_at),
     searchValue: (r) => r.expected_delivery_at ?? '',
     sortFn: (a, b) => (a.expected_delivery_at ?? '').localeCompare(b.expected_delivery_at ?? ''),
+    filterType: 'date', dateValue: (r) => r.expected_delivery_at,
   },
   {
     key: 'customer_so_no', label: 'Reference', width: 130, sortable: true,
@@ -870,6 +872,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     key: 'customer_delivery_date', label: 'Delivery Date', width: 130, sortable: true, defaultHidden: true,
     accessor: (r) => compactDate(r.customer_delivery_date),
     searchValue: (r) => `${r.customer_delivery_date ?? ''} ${compactDate(r.customer_delivery_date)}`,
+    filterType: 'date', dateValue: (r) => r.customer_delivery_date,
   },
   {
     key: 'vehicle', label: 'Vehicle', width: 120, sortable: true, defaultHidden: true,
