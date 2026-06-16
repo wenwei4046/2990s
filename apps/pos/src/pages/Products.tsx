@@ -1005,31 +1005,22 @@ const ModelAllowedOptionsDrawer = ({
   // pools to tick. Catalog card visibility is model-level via this flag
   // (apps/api/.../product-models.ts PATCH). Initialised with the draft below.
   const [activeDraft, setActiveDraft] = useState<boolean | null>(null);
-  // Inline guard message — currently used to stop the "turn every leg off"
-  // footgun (an empty leg_heights reads as "no restriction = show ALL legs"
-  // downstream, the opposite of what unticking-all looks like; report 2026-06-16).
-  const [saveError, setSaveError] = useState<string | null>(null);
   useEffect(() => {
     const mdl = model.data?.model;
     const mcfg = masterCfg.data?.data;
     if (!mdl || !mcfg || draft != null) return;
     const saved = JSON.parse(JSON.stringify(mdl.allowed_options ?? {})) as AllowedOptions;
-    // PR #87 parity with the Backend Model editor (ProductModelDetail.fillIfEmpty):
-    // allowed_options default to all-on, untick-to-exclude. An empty/absent
-    // leg_heights reads as "no restriction = offer EVERY leg" downstream
-    // (useSofaLegHeights + the server gate), so seed the leg chips all-on when
-    // empty — otherwise the drawer renders every leg OFF while the configurator
-    // still shows all of them, making it impossible to deactivate one leg
-    // (report 2026-06-16). leg_heights is the ONLY pool seeded here: it is the
-    // only editor pool that is both "empty = show all" in the POS configurator
-    // AND side-effect-free on the PATCH. (sizes mirror SKU pos_active;
-    // compartments auto-create SKUs; specials + fabrics are opt-in — empty =
-    // none — so seeding them would wrongly switch every option ON.)
+    // Seed the leg chips all-on ONLY for an UNCONFIGURED Model (leg_heights key
+    // absent) — a sensible "offer every leg" default so staff untick-to-exclude.
+    // If the key is PRESENT (even []), the Model was explicitly configured, so we
+    // render its saved set as-is: a saved [] means "offer no legs" and must show
+    // every chip OFF (owner 2026-06-16 — staff want to be able to turn all legs
+    // off). Mirrors useSofaLegHeights' absent=all / present=exact semantics.
     const legPool =
       mdl.category === 'SOFA' ? mcfg.sofaLegHeights
       : mdl.category === 'BEDFRAME' ? mcfg.legHeights
       : undefined;
-    const seeded = legPool
+    const seeded = (legPool && !('leg_heights' in saved))
       ? fillEmptyAllowedOptions(saved, { leg_heights: legPool.map((o) => o.value) })
       : saved;
     setDraft(seeded);
@@ -1099,7 +1090,6 @@ const ModelAllowedOptionsDrawer = ({
     return Array.isArray(arr) && arr.includes(v);
   };
   const toggle = (pool: keyof AllowedOptions, v: string) => {
-    if (saveError) setSaveError(null);
     setDraft((prev) => {
       const next: AllowedOptions = JSON.parse(JSON.stringify(prev ?? {}));
       const arr = (next[pool] as string[] | undefined) ?? [];
@@ -1124,21 +1114,10 @@ const ModelAllowedOptionsDrawer = ({
 
   const onSave = () => {
     if (!draft) return;
-    // Footgun guard (2026-06-16): an empty leg_heights means "no restriction =
-    // offer EVERY leg" downstream, so turning ALL leg chips off (which looks like
-    // "hide every leg") actually shows them all. Block that save and explain —
-    // to hide a leg, untick only that one and leave the rest on.
-    if (
-      (isSofa || isBedframe) &&
-      legHeightPool.length > 0 &&
-      ((draft.leg_heights as string[] | undefined)?.length ?? 0) === 0
-    ) {
-      setSaveError(
-        'All leg heights are turned off — that would actually show every leg (an empty list means “no restriction”). Turn on the leg heights you want to offer; to hide one, untick only that leg.',
-      );
-      return;
-    }
-    setSaveError(null);
+    // Turning every leg off is now a valid config — an explicitly-saved empty
+    // leg_heights means "offer no legs" (useSofaLegHeights treats a present-but-
+    // empty list as "none", a key-absent list as "all"). Owner asked to allow
+    // this and drop the earlier "all off" guard (2026-06-16).
     updateModel.mutate(
       { id: modelId, allowedOptions: draft, ...(activeDraft != null ? { active: activeDraft } : {}) },
       { onSuccess: () => onClose() },
@@ -1245,19 +1224,6 @@ const ModelAllowedOptionsDrawer = ({
         </>
       )}
 
-      {saveError && (
-        <p
-          role="alert"
-          style={{
-            marginTop: 'var(--space-4)', marginBottom: 0,
-            padding: 'var(--space-3)', borderRadius: 'var(--radius-md, 10px)',
-            border: '1px solid var(--c-orange)', background: 'var(--c-cream)',
-            color: 'var(--c-ink)', fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)',
-          }}
-        >
-          {saveError}
-        </p>
-      )}
       <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 'var(--space-5)' }}>
         <Button variant="ghost" size="md" onClick={onClose}>
           <span>Cancel</span>

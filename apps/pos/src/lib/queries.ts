@@ -745,6 +745,9 @@ export const useSofaLegHeights = (productId: string | undefined) =>
     queryFn: async (): Promise<SofaLegOption[]> => {
       if (!productId) return [];
 
+      // allowedLegs === null  → no restriction (offer every leg)
+      // allowedLegs === []     → offer NO legs (explicitly turned all off)
+      // allowedLegs === [...]   → offer exactly those legs
       let allowedLegs: string[] | null = null;
       if (productId.startsWith('mfg-')) {
         const { data, error } = await supabase
@@ -753,9 +756,17 @@ export const useSofaLegHeights = (productId: string | undefined) =>
           .eq('id', productId)
           .maybeSingle();
         if (error) throw error;
-        const pool = (data as { product_models?: { allowed_options?: { leg_heights?: string[] } } | null } | null)
-          ?.product_models?.allowed_options?.leg_heights;
-        allowedLegs = (pool?.length ?? 0) > 0 ? pool! : null;
+        const ao = (data as { product_models?: { allowed_options?: Record<string, unknown> } | null } | null)
+          ?.product_models?.allowed_options ?? null;
+        // Empty-semantics (owner 2026-06-16): the leg_heights KEY being ABSENT
+        // means "unconfigured → offer ALL legs" (sensible default for a brand-new
+        // Model). The key being PRESENT — even as [] — means it was explicitly
+        // configured, so it offers EXACTLY that set; an empty [] = offer NO legs.
+        // This lets staff turn every leg off in the Allowed Options drawer and
+        // actually hide them all (previously [] wrongly meant "show all").
+        if (ao && 'leg_heights' in ao && Array.isArray((ao as { leg_heights?: unknown }).leg_heights)) {
+          allowedLegs = (ao as { leg_heights: string[] }).leg_heights;
+        }
       }
 
       const { data: cfgRow, error: cfgErr } = await supabase
@@ -769,7 +780,8 @@ export const useSofaLegHeights = (productId: string | undefined) =>
         .maybeSingle();
       if (cfgErr) throw cfgErr;
       const list = ((cfgRow?.config ?? {}) as { sofaLegHeights?: CfgPricedOption[] }).sofaLegHeights ?? [];
-      const gate = allowedLegs ? new Set(allowedLegs) : null;
+      // null → no gate (all); [] → empty gate (none); [...] → that subset.
+      const gate = allowedLegs === null ? null : new Set(allowedLegs);
       return list
         // ACTIVE toggles (owner spec 2026-06-12) — deactivated leg heights
         // never surface on NEW POS orders.
