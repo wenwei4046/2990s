@@ -157,6 +157,7 @@ export const AuditLog = () => {
       searchValue: (r) => `${fmtDay(r.placedAt)} ${fmtClock(r.placedAt)}`,
       filterValue: (r) => fmtDay(r.placedAt),
       sortFn: (a, b) => a.placedAt.localeCompare(b.placedAt),
+      filterType: 'date', dateValue: (r) => r.placedAt,
     },
     {
       key: 'so',

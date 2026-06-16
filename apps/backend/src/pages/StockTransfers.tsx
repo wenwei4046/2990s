@@ -82,6 +82,7 @@ export const StockTransfers = () => {
       searchValue: (t) => fmtDate(t.transfer_date),
       filterValue: (t) => fmtDate(t.transfer_date),
       sortFn: (a, b) => a.transfer_date.localeCompare(b.transfer_date),
+      filterType: 'date', dateValue: (t) => t.transfer_date,
     },
     {
       key: 'fromTo',

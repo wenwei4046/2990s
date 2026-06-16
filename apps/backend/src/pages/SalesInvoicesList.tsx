@@ -652,6 +652,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<SiRow>[] =
     accessor: (r) => compactDate(r.invoice_date),
     searchValue: (r) => `${r.invoice_date ?? ''} ${compactDate(r.invoice_date)}`,
     sortFn: (a, b) => (a.invoice_date ?? '').localeCompare(b.invoice_date ?? ''),
+    filterType: 'date', dateValue: (r) => r.invoice_date,
   },
   {
     key: 'debtor_name', label: 'Debtor Name', width: 220, sortable: true, groupable: true,
@@ -675,6 +676,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<SiRow>[] =
     accessor: (r) => compactDate(r.due_date),
     searchValue: (r) => r.due_date ?? '',
     sortFn: (a, b) => (a.due_date ?? '').localeCompare(b.due_date ?? ''),
+    filterType: 'date', dateValue: (r) => r.due_date,
   },
   {
     key: 'customer_so_no', label: 'Reference', width: 130, sortable: true,

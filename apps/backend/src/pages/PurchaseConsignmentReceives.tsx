@@ -87,6 +87,7 @@ const buildColumns = (): DataGridColumn<GrnRow>[] => [
     accessor: (g) => fmtDateOrDash(g.received_at),
     searchValue: (g) => g.received_at ?? '',
     sortFn: (a, b) => String(a.received_at ?? '').localeCompare(String(b.received_at ?? '')),
+    filterType: 'date', dateValue: (g) => g.received_at,
   },
   {
     key: 'delivery_note_ref', label: 'DN Ref', width: 130, sortable: true,
@@ -181,6 +182,7 @@ const buildDrilldownColumns = (currency: string): DataGridColumn<GrnItem>[] => [
     accessor: (it) => fmtDateOrDash((it.received_at ?? '').slice(0, 10) || null),
     searchValue: (it) => it.received_at ?? '',
     sortFn: (a, b) => String(a.received_at ?? '').localeCompare(String(b.received_at ?? '')),
+    filterType: 'date', dateValue: (it) => it.received_at,
   },
 ];
 

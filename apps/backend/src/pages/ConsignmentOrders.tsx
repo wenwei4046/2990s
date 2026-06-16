@@ -1326,6 +1326,7 @@ const buildColumns = (
     searchValue: (r) => `${r.so_date ?? ''} ${compactDate(r.so_date)}`,
     filterValue: (r) => compactDate(r.so_date),
     sortFn: (a, b) => (a.so_date ?? '').localeCompare(b.so_date ?? ''),
+    filterType: 'date', dateValue: (r) => r.so_date,
   },
   {
     key: 'debtor_name', label: 'Debtor Name', width: 220, sortable: true, groupable: true,
@@ -1599,12 +1600,14 @@ const buildColumns = (
     defaultHidden: true,
     accessor: (r) => compactDate(r.internal_expected_dd),
     searchValue: (r) => `${r.internal_expected_dd ?? ''} ${compactDate(r.internal_expected_dd)}`,
+    filterType: 'date', dateValue: (r) => r.internal_expected_dd,
   },
   {
     key: 'customer_delivery_date', label: 'Delivery Date', width: 130, sortable: true,
     defaultHidden: true,
     accessor: (r) => compactDate(r.customer_delivery_date),
     searchValue: (r) => `${r.customer_delivery_date ?? ''} ${compactDate(r.customer_delivery_date)}`,
+    filterType: 'date', dateValue: (r) => r.customer_delivery_date,
   },
   {
     /* #19 (Commander 2026-05-29) — Payment Method summarises the per-receipt

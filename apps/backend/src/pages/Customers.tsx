@@ -162,6 +162,7 @@ const CUSTOMER_COLUMNS: DataGridColumn<CustomerEntry>[] = [
     searchValue: (c) => fmtDate(c.lastOrderAt),
     filterValue: (c) => fmtDate(c.lastOrderAt),
     sortFn: (a, b) => a.lastOrderAt.localeCompare(b.lastOrderAt),
+    filterType: 'date', dateValue: (c) => c.lastOrderAt,
   },
 ];
 

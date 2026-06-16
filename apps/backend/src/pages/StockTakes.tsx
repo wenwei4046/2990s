@@ -88,6 +88,7 @@ export const StockTakes = () => {
       searchValue: (t) => fmtDate(t.take_date),
       filterValue: (t) => fmtDate(t.take_date),
       sortFn: (a, b) => a.take_date.localeCompare(b.take_date),
+      filterType: 'date', dateValue: (t) => t.take_date,
     },
     {
       key: 'warehouse',

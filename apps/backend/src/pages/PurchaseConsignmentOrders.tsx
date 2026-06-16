@@ -109,12 +109,14 @@ const buildColumns = (): DataGridColumn<PoHeaderRow>[] => [
     accessor: (po) => fmtDateOrDash(po.po_date),
     searchValue: (po) => po.po_date,
     sortFn: (a, b) => (a.po_date ?? '').localeCompare(b.po_date ?? ''),
+    filterType: 'date', dateValue: (po) => po.po_date,
   },
   {
     key: 'expected_at', label: 'Expected', width: 120, sortable: true,
     accessor: (po) => fmtDateOrDash(po.expected_at),
     searchValue: (po) => po.expected_at ?? '',
     sortFn: (a, b) => (a.expected_at ?? '').localeCompare(b.expected_at ?? ''),
+    filterType: 'date', dateValue: (po) => po.expected_at,
   },
   {
     key: 'currency', label: 'Currency', width: 90, sortable: true, groupable: true,
@@ -307,6 +309,7 @@ const buildDrilldownColumns = (
     },
     searchValue: (it) => it.delivery_date ?? headerExpectedAt ?? '',
     sortFn: (a, b) => (a.delivery_date ?? headerExpectedAt ?? '').localeCompare(b.delivery_date ?? headerExpectedAt ?? ''),
+    filterType: 'date', dateValue: (it) => it.delivery_date ?? headerExpectedAt,
   },
   {
     key: 'unit_price', label: 'Unit Price', width: 100, align: 'right',

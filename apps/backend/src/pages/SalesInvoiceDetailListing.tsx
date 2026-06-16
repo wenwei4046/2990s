@@ -52,11 +52,13 @@ export const SalesInvoiceDetailListing = () => {
       key: 'invoice_date', label: 'Date', width: 100, sortable: true,
       accessor: (r) => fmtDateOrDash((r.invoice_date ?? r.line_date) as string | null),
       searchValue: (r) => String(r.invoice_date ?? r.line_date ?? ''),
+      filterType: 'date', dateValue: (r) => (r.invoice_date ?? r.line_date) as string | null,
     },
     {
       key: 'due_date', label: 'Due', width: 100, sortable: true,
       accessor: (r) => fmtDateOrDash(r.due_date ?? null),
       searchValue: (r) => r.due_date ?? '',
+      filterType: 'date', dateValue: (r) => r.due_date,
     },
     {
       key: 'so_doc_no', label: 'Transfer From (SO)', width: 110, sortable: true, groupable: true,

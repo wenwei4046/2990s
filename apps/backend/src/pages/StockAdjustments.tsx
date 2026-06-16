@@ -78,6 +78,7 @@ export const StockAdjustments = () => {
       searchValue: (m) => fmtDateTime(m.created_at),
       filterValue: (m) => fmtDateTime(m.created_at),
       sortFn: (a, b) => a.created_at.localeCompare(b.created_at),
+      filterType: 'date', dateValue: (m) => m.created_at,
     },
     {
       key: 'warehouse',
