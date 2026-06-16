@@ -330,17 +330,59 @@ export const SpecialAddonsManager = ({ categoryFilter }: { categoryFilter?: stri
         </div>
       )}
 
-      {/* ── List — shared DataGrid (owner request 2026-06-12): sort /
-          per-column filter / column show-hide / reorder / persisted layout.
-          Edit + Delete keep working via stop-propagation cells. ── */}
+      {/* ── List ──
+          categoryFilter (embedded in Maintenance > BEDFRAME/SOFA): render CALM
+          CARD ROWS matching the other Maintenance panels (Divan Heights etc.) —
+          number · name/desc · +RM · Active · ✕ — click a row to edit. No
+          DataGrid chrome (Commander 2026-06-16, "这整个要做的跟它一样的 UI").
+          The follow-up-question editing still uses the form above (a price row
+          can't hold them). Standalone tab keeps the full DataGrid. */}
       {list.error ? (
         <div style={{ color: 'var(--c-burnt, #A6471E)', marginTop: 'var(--space-3)' }}>Failed to load: {String(list.error)}</div>
+      ) : categoryFilter ? (
+        <div style={{ marginTop: 'var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+          {(list.data ?? []).filter((r) => r.categories.includes(categoryFilter)).map((r, i) => (
+            <div
+              key={r.id}
+              onClick={() => startEdit(r)}
+              title="Click to edit"
+              style={{
+                display: 'grid', gridTemplateColumns: '28px 1fr auto 64px 24px',
+                alignItems: 'center', gap: 'var(--space-3)',
+                padding: 'var(--space-3) var(--space-4)',
+                background: 'var(--c-cream)', border: '1px solid var(--line)',
+                borderRadius: 'var(--radius-md)', cursor: 'pointer',
+                opacity: r.active ? 1 : 0.55,
+              }}
+            >
+              <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-soft)' }}>{i + 1}</span>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 'var(--fs-16)', fontWeight: 600, color: 'var(--c-ink)' }}>{r.label}</div>
+                {(r.soDescription || r.optionGroups.length > 0) && (
+                  <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                    {r.soDescription || r.code}
+                    {r.optionGroups.length > 0 && ` · ${r.optionGroups.map((g) => `${g.label} (${g.choices.length})`).join(' · ')}`}
+                  </div>
+                )}
+              </div>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-15)', color: 'var(--c-ink)', textAlign: 'right', whiteSpace: 'nowrap' }}>{rm(r.sellingPriceSen)}</span>
+              <span style={{ fontSize: 'var(--fs-12)', fontWeight: 600, textAlign: 'right', color: r.active ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)' }}>{r.active ? 'Active' : 'Off'}</span>
+              <button type="button" title="Delete" onClick={(e) => { e.stopPropagation(); void remove(r); }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)', fontSize: 'var(--fs-14)', lineHeight: 1 }}>✕</button>
+            </div>
+          ))}
+          {!list.isLoading && (list.data ?? []).filter((r) => r.categories.includes(categoryFilter)).length === 0 && (
+            <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)', padding: 'var(--space-3)' }}>
+              No special add-ons in this category yet — click “+ New add-on”.
+            </div>
+          )}
+        </div>
       ) : (
         <div style={{ marginTop: 'var(--space-3)' }}>
           <DataGrid
-            rows={(list.data ?? []).filter((r) => !categoryFilter || r.categories.includes(categoryFilter))}
-            columns={categoryFilter ? saColumns.filter((c) => c.key !== 'categories') : saColumns}
-            storageKey={categoryFilter ? `dg-special-addons-${categoryFilter}` : 'dg-special-addons-product'}
+            rows={list.data ?? []}
+            columns={saColumns}
+            storageKey="dg-special-addons-product"
             rowKey={(r) => r.id}
             searchPlaceholder="Filter add-ons…"
             groupBanner={false}
