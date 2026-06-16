@@ -1005,6 +1005,10 @@ const ModelAllowedOptionsDrawer = ({
   // pools to tick. Catalog card visibility is model-level via this flag
   // (apps/api/.../product-models.ts PATCH). Initialised with the draft below.
   const [activeDraft, setActiveDraft] = useState<boolean | null>(null);
+  // Inline guard message — currently used to stop the "turn every leg off"
+  // footgun (an empty leg_heights reads as "no restriction = show ALL legs"
+  // downstream, the opposite of what unticking-all looks like; report 2026-06-16).
+  const [saveError, setSaveError] = useState<string | null>(null);
   useEffect(() => {
     const mdl = model.data?.model;
     const mcfg = masterCfg.data?.data;
@@ -1095,6 +1099,7 @@ const ModelAllowedOptionsDrawer = ({
     return Array.isArray(arr) && arr.includes(v);
   };
   const toggle = (pool: keyof AllowedOptions, v: string) => {
+    if (saveError) setSaveError(null);
     setDraft((prev) => {
       const next: AllowedOptions = JSON.parse(JSON.stringify(prev ?? {}));
       const arr = (next[pool] as string[] | undefined) ?? [];
@@ -1119,6 +1124,21 @@ const ModelAllowedOptionsDrawer = ({
 
   const onSave = () => {
     if (!draft) return;
+    // Footgun guard (2026-06-16): an empty leg_heights means "no restriction =
+    // offer EVERY leg" downstream, so turning ALL leg chips off (which looks like
+    // "hide every leg") actually shows them all. Block that save and explain —
+    // to hide a leg, untick only that one and leave the rest on.
+    if (
+      (isSofa || isBedframe) &&
+      legHeightPool.length > 0 &&
+      ((draft.leg_heights as string[] | undefined)?.length ?? 0) === 0
+    ) {
+      setSaveError(
+        'All leg heights are turned off — that would actually show every leg (an empty list means “no restriction”). Turn on the leg heights you want to offer; to hide one, untick only that leg.',
+      );
+      return;
+    }
+    setSaveError(null);
     updateModel.mutate(
       { id: modelId, allowedOptions: draft, ...(activeDraft != null ? { active: activeDraft } : {}) },
       { onSuccess: () => onClose() },
@@ -1225,6 +1245,19 @@ const ModelAllowedOptionsDrawer = ({
         </>
       )}
 
+      {saveError && (
+        <p
+          role="alert"
+          style={{
+            marginTop: 'var(--space-4)', marginBottom: 0,
+            padding: 'var(--space-3)', borderRadius: 'var(--radius-md, 10px)',
+            border: '1px solid var(--c-orange)', background: 'var(--c-cream)',
+            color: 'var(--c-ink)', fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)',
+          }}
+        >
+          {saveError}
+        </p>
+      )}
       <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 'var(--space-5)' }}>
         <Button variant="ghost" size="md" onClick={onClose}>
           <span>Cancel</span>
