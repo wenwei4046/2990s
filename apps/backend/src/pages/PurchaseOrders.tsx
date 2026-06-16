@@ -247,7 +247,9 @@ export const PurchaseOrders = () => {
      reused from any expanded row) and render them into ONE PDF, each PO on its
      own page. The operator filters by supplier/date, selects, then sends the
      supplier a single file. */
-  const printDocs = async (rowsToPrint: PoHeaderRow[]) => {
+  /* separate=false → ONE combined PDF (each PO a page). separate=true → N
+     individual PDF files, one per PO (Commander 2026-06-16 — "5 个 PDF 分开存"). */
+  const printDocs = async (rowsToPrint: PoHeaderRow[], separate = false) => {
     if (rowsToPrint.length === 0 || printingDocs) return;
     setPrintingDocs(true);
     try {
@@ -272,8 +274,13 @@ export const PurchaseOrders = () => {
           items: d.items,
         };
       });
-      const { generateCombinedPurchaseOrderPdf } = await import('../lib/purchase-order-pdf');
-      await generateCombinedPurchaseOrderPdf(pos, { fileName: `purchase-orders-${new Date().toISOString().slice(0, 10)}.pdf` });
+      const pdf = await import('../lib/purchase-order-pdf');
+      if (separate) {
+        // One file per PO — each generatePurchaseOrderPdf saves its own file.
+        for (const po of pos) await pdf.generatePurchaseOrderPdf(po.header, po.items);
+      } else {
+        await pdf.generateCombinedPurchaseOrderPdf(pos, { fileName: `purchase-orders-${new Date().toISOString().slice(0, 10)}.pdf` });
+      }
     } catch (e) {
       alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -353,9 +360,17 @@ export const PurchaseOrders = () => {
               filter to a supplier/date → the count + the PDF follow. (2026-06-16) */}
           <Button variant="ghost" size="sm" onClick={() => printDocs(visibleRows)}
             disabled={printingDocs || visibleRows.length === 0}
-            title="Print every PO currently shown (follows the filters below) into one PDF">
+            title="Print every PO currently shown (follows the filters below) into ONE combined PDF">
             <Printer {...ICON} />
-            <span>{printingDocs ? 'Preparing…' : `Print all docs (${visibleRows.length})`}</span>
+            <span>{printingDocs ? 'Preparing…' : `Print all · 1 PDF (${visibleRows.length})`}</span>
+          </Button>
+          {/* Separate mode (Commander 2026-06-16) — each shown PO as its OWN PDF
+              file, so you don't save them one by one. */}
+          <Button variant="ghost" size="sm" onClick={() => printDocs(visibleRows, true)}
+            disabled={printingDocs || visibleRows.length === 0}
+            title="Save each shown PO as its own separate PDF file">
+            <Printer {...ICON} />
+            <span>{`Print all · ${visibleRows.length} files`}</span>
           </Button>
           {/* PR — Phase 1: multi-SO → PO picker. Lets commander select
               outstanding SO lines (across customers + suppliers), input
@@ -422,7 +437,12 @@ export const PurchaseOrders = () => {
             <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>Clear</Button>
             <Button variant="ghost" size="sm" onClick={() => printDocs(selectedRows)} disabled={printingDocs}>
               <Printer {...ICON} />
-              <span>{printingDocs ? 'Preparing…' : `Print documentation (${selectedIds.size})`}</span>
+              <span>{printingDocs ? 'Preparing…' : `1 PDF (${selectedIds.size})`}</span>
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => printDocs(selectedRows, true)} disabled={printingDocs}
+              title="Save each selected PO as its own separate PDF file">
+              <Printer {...ICON} />
+              <span>{`${selectedIds.size} files`}</span>
             </Button>
             <Button variant="primary" size="sm"
               onClick={convertToGrn}
