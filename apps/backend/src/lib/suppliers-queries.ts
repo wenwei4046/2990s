@@ -187,6 +187,16 @@ export type PoItemRow = {
   /** 2026-06-12 — stamped by GET /:id (so_item_id → SO doc_no) for the PO
       PDF's "Transferred SO" column. Null for manual / MRP lines. */
   so_doc_no?: string | null;
+  /** SO→PO drift (Commander 2026-06-16) — set by GET /:id when this line's
+      source SO line was edited AFTER the PO was raised, so the PO snapshot no
+      longer matches the live SO (e.g. customer changed the fabric). The
+      purchaser must re-send the corrected PO to the supplier. Null = in sync /
+      not from an SO. itemChanged = the SO swapped to a different SKU. */
+  so_drift?: {
+    specPo: string; specSo: string;
+    itemPo: string; itemSo: string;
+    itemChanged: boolean;
+  } | null;
 };
 
 export type PoLineReceipt = { grnNumber: string; qty: number; status: string };

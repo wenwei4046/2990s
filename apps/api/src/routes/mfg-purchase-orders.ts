@@ -370,6 +370,16 @@ mfgPurchaseOrders.get('/:id', async (c) => {
      Best-effort: a lookup failure leaves so_doc_no null, never blocks the
      detail response. */
   const soDocByItem = new Map<string, string>();
+  /* SO→PO drift (Commander 2026-06-16) — a PO line snapshots its source SO
+     line's spec at proceed time. Their workflow allows raising a PO BEFORE the
+     SO is locked (pre-ordering long-lead material), so the SO can still be
+     edited afterwards and the PO silently goes stale → the factory builds the
+     wrong thing. We deliberately do NOT auto-sync (the PO may already be
+     printed / sent to the supplier); instead we SURFACE the drift so the
+     purchaser re-sends. The variant summary is recomputed apples-to-apples
+     (same helper both sides) so a formatter change can't false-trip it. */
+  type SoSnap = { item_code: string; item_group: string | null; description: string | null; variants: Record<string, unknown> | null };
+  const soLineById = new Map<string, SoSnap>();
   try {
     const soItemIds = [...new Set(
       itemRows.map((it) => it.so_item_id as string | null | undefined).filter(Boolean),
@@ -377,19 +387,40 @@ mfgPurchaseOrders.get('/:id', async (c) => {
     if (soItemIds.length > 0) {
       const { data: soLines } = await supabase
         .from('mfg_sales_order_items')
-        .select('id, doc_no')
+        .select('id, doc_no, item_code, item_group, description, variants')
         .in('id', soItemIds);
-      for (const r of (soLines ?? []) as Array<{ id: string; doc_no: string }>) {
+      for (const r of (soLines ?? []) as Array<{ id: string; doc_no: string } & SoSnap>) {
         soDocByItem.set(r.id, r.doc_no);
+        soLineById.set(r.id, { item_code: r.item_code, item_group: r.item_group, description: r.description, variants: r.variants });
       }
     }
-  } catch { /* leave so_doc_no null */ }
+  } catch { /* leave so_doc_no / drift null */ }
 
-  const items = itemRows.map((it) => ({
-    ...it,
-    receipts: receiptsMap.get(it.id) ?? [],
-    so_doc_no: it.so_item_id ? soDocByItem.get(it.so_item_id as string) ?? null : null,
-  }));
+  const items = itemRows.map((it) => {
+    const soId = it.so_item_id as string | null;
+    const so = soId ? soLineById.get(soId) ?? null : null;
+    /* Drift = the live SO spec no longer matches this PO line's snapshot. Item
+       code change = a product swap on the SO (a different SKU → maybe a
+       different supplier), flagged separately so the purchaser redoes the PO
+       rather than just re-printing it. */
+    let so_drift: null | { specPo: string; specSo: string; itemPo: string; itemSo: string; itemChanged: boolean } = null;
+    if (so) {
+      const specPo = buildVariantSummary(String(it.item_group ?? ''), (it.variants as Record<string, unknown> | null) ?? null);
+      const specSo = buildVariantSummary(String(so.item_group ?? ''), so.variants ?? null);
+      const itemPo = String(it.material_code ?? '');
+      const itemSo = String(so.item_code ?? '');
+      const itemChanged = itemPo !== itemSo;
+      if (specPo !== specSo || itemChanged) {
+        so_drift = { specPo, specSo, itemPo, itemSo, itemChanged };
+      }
+    }
+    return {
+      ...it,
+      receipts: receiptsMap.get(it.id) ?? [],
+      so_doc_no: soId ? soDocByItem.get(soId) ?? null : null,
+      so_drift,
+    };
+  });
 
   return c.json({ purchaseOrder, items });
 });
