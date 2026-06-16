@@ -218,6 +218,31 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
     setSelected(new Set());
   };
 
+  const updateM = useUpdateSofaCombo();
+  const [batchPriceOpen, setBatchPriceOpen] = useState(false);
+  // Batch price edit (Commander R7): set / +RM / +% across the selected combos'
+  // priced heights. Each touched combo gets a NEW effective row (today-dated);
+  // History keeps the old one. (Same append-only path as a single edit.)
+  const applyBatchPrice = (op: 'set' | 'addRm' | 'addPct', value: number, heightScope: string) => {
+    const cents = Math.round(value * 100);
+    for (const id of selected) {
+      const combo = combosQ.data?.find((c) => c.id === id);
+      if (!combo) continue;
+      const cur = combo.pricesByHeight ?? {};
+      const next: Record<string, number | null> = { ...cur };
+      const touch = heightScope === '__all__' ? Object.keys(cur) : [heightScope];
+      for (const h of touch) {
+        const existing = cur[h];
+        if (op === 'set') next[h] = cents;
+        else if (op === 'addRm') next[h] = existing == null ? null : existing + cents;
+        else next[h] = existing == null ? null : Math.round(existing * (1 + value / 100));
+      }
+      updateM.mutate({ id, pricesByHeight: next, effectiveFrom: todayIso() });
+    }
+    setBatchPriceOpen(false);
+    setSelected(new Set());
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '8px 0' }}>
       {/* Header */}
@@ -284,6 +309,9 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
           </span>
           <div style={{ flex: 1 }} />
           <Button variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
+          <Button variant="ghost" onClick={() => setBatchPriceOpen(true)}>
+            <Pencil {...ICON_PROPS} style={{ marginRight: 6 }} /> Edit prices
+          </Button>
           <Button variant="ghost" onClick={doBatchDelete}>
             <Trash2 {...ICON_PROPS} style={{ marginRight: 6 }} /> Delete selected
           </Button>
@@ -356,9 +384,88 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
       {historyFor && (
         <HistoryModal rule={historyFor} supplierId={supplierId} heights={heights} onClose={() => setHistoryFor(null)} />
       )}
+
+      {batchPriceOpen && (
+        <BatchEditPricesModal
+          count={selected.size}
+          heights={heights}
+          busy={updateM.isPending}
+          onApply={applyBatchPrice}
+          onClose={() => setBatchPriceOpen(false)}
+        />
+      )}
     </div>
   );
 };
+
+// ─── Batch edit prices modal (Commander R7) ───────────────────────────
+// Set / +RM / +% across the selected combos' priced heights. Each apply
+// inserts a new effective-dated row per combo (append-only, like a single edit).
+function BatchEditPricesModal({
+  count, heights, busy, onApply, onClose,
+}: {
+  count: number;
+  heights: string[];
+  busy: boolean;
+  onApply: (op: 'set' | 'addRm' | 'addPct', value: number, heightScope: string) => void;
+  onClose: () => void;
+}) {
+  const [op, setOp] = useState<'set' | 'addRm' | 'addPct'>('addPct');
+  const [value, setValue] = useState('');
+  const [height, setHeight] = useState('__all__');
+  const num = Number(value);
+  const valid = value.trim() !== '' && Number.isFinite(num);
+  const backdrop: CSSProperties = {
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.28)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 90, padding: 'var(--space-4)',
+  };
+  const card: CSSProperties = {
+    background: 'var(--c-paper)', border: '1px solid var(--line-strong)',
+    borderRadius: 'var(--radius-xl)', boxShadow: 'var(--shadow-3)', width: 'min(440px, 95vw)', padding: 'var(--space-5)',
+  };
+  const fieldLabel: CSSProperties = {
+    display: 'flex', flexDirection: 'column', gap: 4,
+    fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600, color: 'var(--fg-muted)',
+  };
+  return (
+    <div style={backdrop} onClick={onClose} role="presentation">
+      <div style={card} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <h2 style={{ fontFamily: 'var(--font-title)', fontWeight: 700, fontSize: 'var(--fs-18)', color: 'var(--c-ink)', margin: '0 0 4px' }}>
+          Batch edit prices
+        </h2>
+        <p style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', margin: '0 0 16px', lineHeight: 1.5 }}>
+          Applies to {count} selected combo{count === 1 ? '' : 's'}. Each gets a new effective-dated row (today); History keeps the old one. For +RM / +%, heights a combo doesn't price stay untouched.
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <label style={fieldLabel}>Operation
+            <select value={op} onChange={(e) => setOp(e.target.value as 'set' | 'addRm' | 'addPct')} style={selectStyle}>
+              <option value="addPct">Increase by %</option>
+              <option value="addRm">Increase by RM</option>
+              <option value="set">Set to RM</option>
+            </select>
+          </label>
+          <label style={fieldLabel}>
+            {op === 'addPct' ? 'Percent (negative reduces)' : 'Amount RM (negative reduces)'}
+            <input type="number" value={value} onChange={(e) => setValue(e.target.value)}
+              placeholder={op === 'addPct' ? 'e.g. 5 or -5' : 'e.g. 100 or -50'} style={inputStyle} />
+          </label>
+          <label style={fieldLabel}>Heights
+            <select value={height} onChange={(e) => setHeight(e.target.value)} style={selectStyle}>
+              <option value="__all__">All priced heights</option>
+              {heights.map((h) => <option key={h} value={h}>{h}&quot;</option>)}
+            </select>
+          </label>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="primary" onClick={() => { if (valid) onApply(op, num, height); }} disabled={!valid || busy}>
+            {busy ? 'Applying…' : `Apply to ${count}`}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── Combo card ────────────────────────────────────────────────────────
 
