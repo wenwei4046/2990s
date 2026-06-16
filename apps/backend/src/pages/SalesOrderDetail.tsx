@@ -1121,14 +1121,20 @@ export const SalesOrderDetail = () => {
                     )}
                   </td>
                   {/* Commander 2026-05-28 — "Description 2": the HOOKKA-style
-                      one-line variant/spec summary in its own column. Prefers the
-                      stored description2, falling back to the computed variant
-                      summary, then a muted em-dash when both are empty. */}
+                      one-line variant/spec summary in its own column.
+                      Commander 2026-06-16 — recompute the summary LIVE from
+                      `variants` (the source of truth) and fall back to the stored
+                      description2 only when there's nothing to recompute. This
+                      mirrors composeSoLineDescription (so-line-description.ts:34)
+                      and the Convert-From pickers (VariantDescription.tsx:30) so
+                      the VIEW table, the SO PDF, and the PO all show the SAME
+                      line. Older rows carried a STALE stored description2 (written
+                      before the remark/RM display fixes) that made this VIEW
+                      disagree with what the PO printed. */}
                   <td>
                     {(() => {
-                      const desc2 = (it.description2 && it.description2.trim())
-                        ? it.description2
-                        : buildVariantSummary(it.item_group, it.variants);
+                      const live = buildVariantSummary(it.item_group, it.variants);
+                      const desc2 = live || (it.description2 ?? '').trim();
                       return desc2
                         ? <span>{desc2}</span>
                         : <span className={styles.muted}>—</span>;
