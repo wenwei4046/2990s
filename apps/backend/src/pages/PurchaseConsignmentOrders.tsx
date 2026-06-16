@@ -34,6 +34,7 @@ import {
 import { poStatusLabel } from '../lib/po-status';
 import { ItemGroupPill } from '../lib/category-badges';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -65,6 +66,21 @@ const summarizeItems = (items: PoHeaderRow['items']): string | null => {
 };
 
 const PC_ORDER_LIST_STORAGE_KEY = 'pc-order-list.layout.v1';
+
+/* Column-aware filter config for the Purchase Consignment Order list. Tells the
+   shared ColumnFilterBar how to read + present each column. enum options are
+   derived from the data; date columns get presets + a custom range. Supplier +
+   status + currency mirror the column accessors (status uses the display label
+   from poStatusLabel so the filter dropdown reads like the Status pill). */
+const PCO_FILTER_COLUMNS: FilterColumn<PoHeaderRow>[] = [
+  { key: 'po_number',   label: 'P/CO No.',  type: 'text', accessor: (po) => po.po_number },
+  { key: 'supplier',    label: 'Supplier',  type: 'enum', accessor: (po) => po.supplier?.name ?? po.supplier?.code ?? '' },
+  { key: 'status',      label: 'Status',    type: 'enum', accessor: (po) => poStatusLabel(po.status) },
+  { key: 'currency',    label: 'Currency',  type: 'enum', accessor: (po) => po.currency },
+  { key: 'po_date',     label: 'Date',      type: 'date', accessor: (po) => po.po_date },
+  { key: 'expected_at', label: 'Expected',  type: 'date', accessor: (po) => po.expected_at },
+];
+const PCO_QUICK_SEARCH_KEYS = ['po_number', 'supplier'];
 
 const buildColumns = (): DataGridColumn<PoHeaderRow>[] => [
   {
@@ -153,11 +169,24 @@ export const PurchaseConsignmentOrders = () => {
   const cancelPo = useCancelPurchaseConsignmentOrder();
 
   const { data, isLoading, error } = usePurchaseConsignmentOrders();
-  const rows = useMemo(() => {
+  const baseRows = useMemo(() => {
     const all = data ?? [];
     if (status === 'all') return all;
     return all.filter((r) => r.status === 'SUBMITTED' || r.status === 'PARTIALLY_RECEIVED');
   }, [data, status]);
+
+  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
+     add-a-column filters (enum / date presets + range / text). The status chip
+     (Outstanding / All) still flows via local state and applies on top. */
+  const { rows, bar: filterBar } = useColumnFilter<PoHeaderRow>({
+    allRows: baseRows,
+    columns: PCO_FILTER_COLUMNS,
+    quickSearchKeys: PCO_QUICK_SEARCH_KEYS,
+    quickSearchPlaceholder: 'P/CO No., supplier…',
+    storageKey: 'pr-g.pco-list.filters.v1',
+    totalCount: baseRows.length,
+    loading: isLoading,
+  });
 
   const columns = useMemo(() => buildColumns(), []);
 
@@ -215,6 +244,10 @@ export const PurchaseConsignmentOrders = () => {
           {error instanceof Error ? error.message : String(error)}
         </div>
       )}
+
+      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
+          add-a-column filters), feeding the grid's filtered rows. */}
+      {filterBar}
 
       <DataGrid<PoHeaderRow>
         rows={rows}

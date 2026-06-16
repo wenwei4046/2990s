@@ -26,6 +26,7 @@ import {
   usePurchaseConsignmentReceiveDetail,
 } from '../lib/purchase-consignment-receive-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
@@ -60,6 +61,19 @@ type GrnRow = Record<string, unknown> & {
   purchase_order?: { id: string; po_number: string } | null;
   has_children?: boolean;
 };
+
+/* Column-aware filter config for the PCR list (shared ColumnFilterBar): free-
+   text quick search + add-a-column filters. enum options derive from the data;
+   date columns get presets + a custom range. Mirrors the SI list pattern. */
+const PCR_FILTER_COLUMNS: FilterColumn<GrnRow>[] = [
+  { key: 'grn_number',        label: 'Receive No',   type: 'text', accessor: (g) => g.grn_number },
+  { key: 'supplier',          label: 'Supplier',     type: 'enum', accessor: (g) => g.supplier?.name ?? g.supplier?.code ?? '' },
+  { key: 'po_number',         label: 'Source Order', type: 'text', accessor: (g) => g.purchase_order?.po_number ?? '' },
+  { key: 'delivery_note_ref', label: 'DN Ref',       type: 'text', accessor: (g) => g.delivery_note_ref },
+  { key: 'status',            label: 'Status',       type: 'enum', accessor: (g) => STATUS_LABEL[g.status] ?? g.status },
+  { key: 'received_at',       label: 'Received Date', type: 'date', accessor: (g) => g.received_at },
+];
+const PCR_QUICK_SEARCH_KEYS = ['grn_number', 'supplier', 'po_number', 'delivery_note_ref'];
 
 const buildColumns = (): DataGridColumn<GrnRow>[] => [
   {
@@ -248,10 +262,22 @@ export const PurchaseConsignmentReceives = () => {
   const cancelReceive = useCancelPurchaseConsignmentReceive();
 
   const allRows = useMemo<GrnRow[]>(() => (data?.grns ?? []) as GrnRow[], [data]);
-  const rows = useMemo<GrnRow[]>(
+  const baseRows = useMemo<GrnRow[]>(
     () => (statusChip === 'all' ? allRows : allRows.filter((g) => g.status === statusChip)),
     [allRows, statusChip],
   );
+  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
+     add-a-column filters. The status chip still flows via ?status=… and
+     applies on top (it feeds baseRows). */
+  const { rows, bar: filterBar } = useColumnFilter<GrnRow>({
+    allRows: baseRows,
+    columns: PCR_FILTER_COLUMNS,
+    quickSearchKeys: PCR_QUICK_SEARCH_KEYS,
+    quickSearchPlaceholder: 'Receive No, supplier, order…',
+    storageKey: 'pr-g.pcr-list.filters.v1',
+    totalCount: baseRows.length,
+    loading: isLoading,
+  });
   const columns = useMemo(() => buildColumns(), []);
 
   const doCancel = (g: GrnRow) => {
@@ -300,6 +326,10 @@ export const PurchaseConsignmentReceives = () => {
           </button>
         ))}
       </div>
+
+      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
+          add-a-column filters), feeding rows into the DataGrid below. */}
+      {filterBar}
 
       <DataGrid<GrnRow>
         rows={rows}

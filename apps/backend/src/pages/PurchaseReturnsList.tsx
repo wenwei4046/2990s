@@ -15,6 +15,7 @@ import { Plus, Undo2, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { usePurchaseReturns, useCancelPurchaseReturn, usePurchaseReturnDetail } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { useConfirm } from '../components/ConfirmDialog';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
@@ -104,6 +105,20 @@ const buildPrColumns = (): DataGridColumn<PrRow>[] => [
     sortFn: (a, b) => a.status.localeCompare(b.status),
   },
 ];
+
+/* Column-aware filter config for the PR list (shared ColumnFilterBar). text =
+   contains-search · enum = dropdown of distinct values present · date = presets
+   + custom range. Supplier name doubles as a text filter AND an enum facet. */
+const PR_FILTER_COLUMNS: FilterColumn<PrRow>[] = [
+  { key: 'return_number', label: 'Return No',  type: 'text', accessor: (r) => r.return_number },
+  { key: 'supplier_text', label: 'Supplier',   type: 'text', accessor: (r) => r.supplier?.name ?? r.supplier?.code ?? '' },
+  { key: 'grn_ref',       label: 'GRN Ref',     type: 'text', accessor: (r) => r.grn?.grn_number ?? '' },
+  { key: 'po_ref',        label: 'PO Ref',      type: 'text', accessor: (r) => r.purchase_order?.po_number ?? '' },
+  { key: 'supplier',      label: 'Supplier',    type: 'enum', accessor: (r) => r.supplier?.name ?? r.supplier?.code ?? '' },
+  { key: 'status',        label: 'Status',      type: 'enum', accessor: (r) => STATUS_LABEL[r.status] ?? r.status },
+  { key: 'return_date',   label: 'Return Date', type: 'date', accessor: (r) => r.return_date },
+];
+const PR_QUICK_SEARCH_KEYS = ['return_number', 'supplier_text', 'grn_ref', 'po_ref'];
 
 /* ── Drill-down — per-line breakdown for one PR, mirrors ExpandedPoLines ─── */
 type PrItem = Record<string, unknown> & {
@@ -220,10 +235,21 @@ export const PurchaseReturns = () => {
   const cancelPr = useCancelPurchaseReturn();
 
   const allRows = useMemo<PrRow[]>(() => (data?.purchaseReturns ?? []) as PrRow[], [data]);
-  const rows = useMemo<PrRow[]>(
+  /* Status chip applies first (flows via ?status=…); the shared ColumnFilterBar
+     then filters on top of it (quick search + add-a-column filters). */
+  const baseRows = useMemo<PrRow[]>(
     () => (statusChip === 'all' ? allRows : allRows.filter((r) => r.status === statusChip)),
     [allRows, statusChip],
   );
+  const { rows, bar: filterBar } = useColumnFilter<PrRow>({
+    allRows: baseRows,
+    columns: PR_FILTER_COLUMNS,
+    quickSearchKeys: PR_QUICK_SEARCH_KEYS,
+    quickSearchPlaceholder: 'Return No, supplier…',
+    storageKey: 'pr-g.pr-list.filters.v1',
+    totalCount: baseRows.length,
+    loading: isLoading,
+  });
   const columns = useMemo(() => buildPrColumns(), []);
 
   // Cancel a PR (right-click) — reverses the return server-side (stock goes back
@@ -281,6 +307,10 @@ export const PurchaseReturns = () => {
           </button>
         ))}
       </div>
+
+      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
+          add-a-column filters), applied on top of the status chip. */}
+      {filterBar}
 
       <DataGrid<PrRow>
         rows={rows}

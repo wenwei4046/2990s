@@ -25,6 +25,7 @@ import {
   usePurchaseConsignmentReturnDetail,
 } from '../lib/purchase-consignment-return-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
@@ -108,6 +109,19 @@ const buildColumns = (): DataGridColumn<PrRow>[] => [
     sortFn: (a, b) => a.status.localeCompare(b.status),
   },
 ];
+
+/* Column-aware filter config for the consignment-return list (shared
+   ColumnFilterBar). text for the return number / supplier / source receive ref;
+   enum for status + supplier; date for the return date. */
+const PCRET_FILTER_COLUMNS: FilterColumn<PrRow>[] = [
+  { key: 'return_number', label: 'Return No.',  type: 'text', accessor: (r) => r.return_number },
+  { key: 'supplier',      label: 'Supplier',     type: 'text', accessor: (r) => r.supplier?.name ?? r.supplier?.code ?? '' },
+  { key: 'receive',       label: 'Source Receive', type: 'text', accessor: (r) => r.grn?.grn_number ?? '' },
+  { key: 'supplier_enum', label: 'Supplier (pick)', type: 'enum', accessor: (r) => r.supplier?.name ?? r.supplier?.code ?? '' },
+  { key: 'status',        label: 'Status',       type: 'enum', accessor: (r) => STATUS_LABEL[r.status] ?? r.status },
+  { key: 'return_date',   label: 'Return Date',  type: 'date', accessor: (r) => r.return_date },
+];
+const PCRET_QUICK_SEARCH_KEYS = ['return_number', 'supplier', 'receive'];
 
 /* ── Drill-down — per-line breakdown for one return ── */
 type PrItem = Record<string, unknown> & {
@@ -223,10 +237,22 @@ export const PurchaseConsignmentReturns = () => {
   const cancelPr = useCancelPurchaseConsignmentReturn();
 
   const allRows = useMemo<PrRow[]>(() => (data?.purchaseReturns ?? []) as PrRow[], [data]);
-  const rows = useMemo<PrRow[]>(
+  const baseRows = useMemo<PrRow[]>(
     () => (statusChip === 'all' ? allRows : allRows.filter((r) => r.status === statusChip)),
     [allRows, statusChip],
   );
+  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
+     add-a-column filters (enum / date presets + range / text). The status chip
+     still flows via ?status=… and applies on top via baseRows. */
+  const { rows, bar: filterBar } = useColumnFilter<PrRow>({
+    allRows: baseRows,
+    columns: PCRET_FILTER_COLUMNS,
+    quickSearchKeys: PCRET_QUICK_SEARCH_KEYS,
+    quickSearchPlaceholder: 'Return No., supplier, receive…',
+    storageKey: 'pr-g.pcret-list.filters.v1',
+    totalCount: baseRows.length,
+    loading: isLoading,
+  });
   const columns = useMemo(() => buildColumns(), []);
 
   const doCancelPr = (r: PrRow) => {
@@ -275,6 +301,10 @@ export const PurchaseConsignmentReturns = () => {
           </button>
         ))}
       </div>
+
+      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
+          add-a-column filters), sitting on top of the status chips. */}
+      {filterBar}
 
       <DataGrid<PrRow>
         rows={rows}
