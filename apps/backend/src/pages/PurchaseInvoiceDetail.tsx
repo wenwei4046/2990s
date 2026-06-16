@@ -45,6 +45,7 @@ import {
 import { useSuppliers, useSupplierDetail, type SupplierRow } from '../lib/suppliers-queries';
 import { MoneyInput } from '../components/MoneyInput';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useToast } from '../components/Toast';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
@@ -128,6 +129,7 @@ export const PurchaseInvoiceDetail = () => {
   const updateItem = useUpdatePurchaseInvoiceItem();
   const deleteItem = useDeletePurchaseInvoiceItem();
   const askConfirm = useConfirm();
+  const toast = useToast();
   const cancel = useCancelPurchaseInvoice();
 
   const pi = detail.data?.purchaseInvoice ?? null;
@@ -238,7 +240,7 @@ export const PurchaseInvoiceDetail = () => {
       setHeaderDraft(null);
       setLineDrafts({});
     } catch (e) {
-      window.alert(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setSavingDraft(false);
     }
@@ -249,7 +251,7 @@ export const PurchaseInvoiceDetail = () => {
     // purchase-invoice-pdf helper.
     import('../lib/purchase-invoice-pdf').then(({ generatePurchaseInvoicePdf }) =>
       generatePurchaseInvoicePdf(pi, items as any),
-    ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+    ).catch((e) => toast.error(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
   return (
@@ -292,7 +294,7 @@ export const PurchaseInvoiceDetail = () => {
               onClick={() => {
                 if (!confirm(`Cancel invoice ${pi.invoice_number}? This sets status to CANCELLED — line items stay for audit.`)) return;
                 cancel.mutate(pi.id, {
-                  onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
+                  onError: (err) => toast.error(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
                 });
               }}
               disabled={cancel.isPending}>

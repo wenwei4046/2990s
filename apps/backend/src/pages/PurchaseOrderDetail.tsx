@@ -49,6 +49,7 @@ import {
 import { useWarehouses } from '../lib/inventory-queries';
 import { MoneyInput } from '../components/MoneyInput';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useToast } from '../components/Toast';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
@@ -119,6 +120,7 @@ export const PurchaseOrderDetail = () => {
   const updateItem = useUpdatePurchaseOrderItem();
   const deleteItem = useDeletePurchaseOrderItem();
   const askConfirm = useConfirm();
+  const toast = useToast();
   // PR #102 — PO PDF (AutoCount layout) needs the Purchase Location's
   // human-readable name; the header only carries the warehouse id. Load
   // warehouses once at the top so the print handler can resolve it.
@@ -280,7 +282,7 @@ export const PurchaseOrderDetail = () => {
       setHeaderDraft(null);
       setLineDrafts({});
     } catch (e) {
-      window.alert(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setSavingDraft(false);
     }
@@ -299,7 +301,7 @@ export const PurchaseOrderDetail = () => {
     };
     import('../lib/purchase-order-pdf').then(({ generatePurchaseOrderPdf }) =>
       generatePurchaseOrderPdf(headerForPdf, items),
-    ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+    ).catch((e) => toast.error(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
   return (
@@ -361,7 +363,7 @@ export const PurchaseOrderDetail = () => {
               onClick={async () => {
                 if (!(await askConfirm({ title: `Cancel PO ${po.po_number}?`, body: 'This sets status to CANCELLED — line items + linked docs stay for audit.', confirmLabel: 'Cancel PO', danger: true }))) return;
                 cancel.mutate(po.id, {
-                  onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
+                  onError: (err) => toast.error(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
                 });
               }}
               disabled={cancel.isPending}>
@@ -381,7 +383,7 @@ export const PurchaseOrderDetail = () => {
                   confirmLabel: 'Reopen',
                 })) {
                   reopen.mutate(po.id, {
-                    onError: (err) => window.alert(`Reopen failed: ${err instanceof Error ? err.message : String(err)}`),
+                    onError: (err) => toast.error(`Reopen failed: ${err instanceof Error ? err.message : String(err)}`),
                   });
                 }
               }}
@@ -396,7 +398,7 @@ export const PurchaseOrderDetail = () => {
                 if (!(await askConfirm({ title: `Permanently delete PO ${po.po_number}?`, body: 'This removes the header + all line items and cannot be undone.', confirmLabel: 'Delete', danger: true }))) return;
                 deletePo.mutate(po.id, {
                   onSuccess: () => navigate('/purchase-orders'),
-                  onError:   (err) => window.alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),
+                  onError:   (err) => toast.error(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),
                 });
               }}
               disabled={deletePo.isPending}>

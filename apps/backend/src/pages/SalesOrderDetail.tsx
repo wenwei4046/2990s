@@ -51,6 +51,7 @@ import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } fr
 import { PaymentsTable } from '../components/PaymentsTable';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useToast } from '../components/Toast';
 import { fetchSoSlipUrl } from '../lib/slip';
 import {
   useLocalities,
@@ -325,6 +326,7 @@ export const SalesOrderDetail = () => {
   const updateHeader = useUpdateMfgSalesOrderHeader();
   const updateStatus = useUpdateMfgSalesOrderStatus();
   const askConfirm = useConfirm();
+  const toast = useToast();
   const addItem = useAddMfgSalesOrderItem();
   const updateItem = useUpdateMfgSalesOrderItem();
   const deleteItem = useDeleteMfgSalesOrderItem();
@@ -407,7 +409,7 @@ export const SalesOrderDetail = () => {
        guard so Edit can't blank it out (the backend PATCH now rejects an
        empty phone too; this keeps the operator from a confusing 400). */
     if (!handle.getPhone().trim()) {
-      window.alert('Phone number is required — every sales order must have a contact number.');
+      toast.error('Phone number is required — every sales order must have a contact number.');
       return;
     }
 
@@ -709,7 +711,7 @@ export const SalesOrderDetail = () => {
         }
       }
       if (failed > 0) {
-        window.alert(
+        toast.error(
           `Line added, but ${failed} staged photo${failed === 1 ? '' : 's'} ` +
           `failed to upload. Please re-attach on the row.`,
         );
@@ -775,7 +777,7 @@ export const SalesOrderDetail = () => {
        the query is still loading we surface a brief notice and bail out
        rather than printing a PDF with an empty Payments table. */
     if (printPaymentsQ.isLoading) {
-      alert('Loading payments… please try again in a moment.');
+      toast('Loading payments… please try again in a moment.');
       return;
     }
     const payments = printPaymentsQ.data ?? [];
@@ -785,7 +787,7 @@ export const SalesOrderDetail = () => {
     generateSalesOrderPdf(header, items, payments, 'save', pwpCodes).catch((e) => {
       // eslint-disable-next-line no-console
       console.error('PDF generation failed:', e);
-      alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`);
     });
   };
 
@@ -958,7 +960,7 @@ export const SalesOrderDetail = () => {
               if (!unlockOverride) {
                 const reason = window.prompt('Reason for override?', '');
                 if (!reason || reason.trim().length < 10) {
-                  alert('Override needs a reason ≥ 10 chars.');
+                  toast.error('Override needs a reason ≥ 10 chars.');
                   return;
                 }
                 // Audit the override via a status change row (we re-affirm the
@@ -1395,6 +1397,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   //   • venue              → reused for Building Type (POS dropdown)
   // Agent + Branding kept (B2B-specific, commander 2026-05-26).
   // POS field "Salesperson" → Agent column on the SO.
+  const toast = useToast();
   const localities = useLocalities();
   const localityRows = useMemo(() => localities.data ?? [], [localities.data]);
   const staffQ = useStaff();
@@ -1675,7 +1678,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     const err = validateDates();
     if (err) {
       if (cb?.onError) cb.onError(err);
-      else window.alert(err);
+      else toast.error(err);
       return;
     }
     onSave(buildPayload(), cb);
@@ -2291,6 +2294,7 @@ const OverridePriceModal = ({
   onClose: () => void;
 }) => {
   const override = useOverrideMfgSoLinePrice();
+  const toast = useToast();
   const [overrideRm, setOverrideRm] = useState(
     (item.unit_price_centi / 100).toFixed(2),
   );
@@ -2299,11 +2303,11 @@ const OverridePriceModal = ({
   const submit = () => {
     const newSen = Math.round(Number(overrideRm) * 100);
     if (!Number.isFinite(newSen) || newSen <= 0) {
-      alert('Override price must be a positive number.');
+      toast.error('Override price must be a positive number.');
       return;
     }
     if (reason.trim().length < 10) {
-      alert('Reason must be at least 10 characters.');
+      toast.error('Reason must be at least 10 characters.');
       return;
     }
     override.mutate(
