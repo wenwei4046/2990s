@@ -358,8 +358,8 @@ export const PurchaseOrderDetail = () => {
               Delete: only CANCELLED (after migration 0078; DRAFT no longer exists). */}
           {(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
             <Button variant="ghost" size="md"
-              onClick={() => {
-                if (!confirm(`Cancel PO ${po.po_number}? This sets status to CANCELLED — line items + linked docs stay for audit.`)) return;
+              onClick={async () => {
+                if (!(await askConfirm({ title: `Cancel PO ${po.po_number}?`, body: 'This sets status to CANCELLED — line items + linked docs stay for audit.', confirmLabel: 'Cancel PO', danger: true }))) return;
                 cancel.mutate(po.id, {
                   onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
                 });
@@ -392,8 +392,8 @@ export const PurchaseOrderDetail = () => {
           )}
           {po.status === 'CANCELLED' && (
             <Button variant="ghost" size="md"
-              onClick={() => {
-                if (!confirm(`Permanently delete PO ${po.po_number}? This removes the header + all line items and cannot be undone.`)) return;
+              onClick={async () => {
+                if (!(await askConfirm({ title: `Permanently delete PO ${po.po_number}?`, body: 'This removes the header + all line items and cannot be undone.', confirmLabel: 'Delete', danger: true }))) return;
                 deletePo.mutate(po.id, {
                   onSuccess: () => navigate('/purchase-orders'),
                   onError:   (err) => window.alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),

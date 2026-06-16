@@ -15,6 +15,7 @@ import { Plus, Undo2, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { usePurchaseReturns, useCancelPurchaseReturn, usePurchaseReturnDetail } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useConfirm } from '../components/ConfirmDialog';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
@@ -206,6 +207,7 @@ const ExpandedPrLines = ({ pr }: { pr: PrRow }) => {
 
 export const PurchaseReturns = () => {
   const navigate = useNavigate();
+  const askConfirm = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
   const setStatusChip = (s: string) => {
@@ -226,8 +228,8 @@ export const PurchaseReturns = () => {
 
   // Cancel a PR (right-click) — reverses the return server-side (stock goes back
   // in). Confirm first. Mirrors the GRN list's doCancelGrn.
-  const doCancelPr = (r: PrRow) => {
-    if (!window.confirm(`Cancel return ${r.return_number}? This reverses the return — the goods are put back into stock. Line items stay for audit.`)) return;
+  const doCancelPr = async (r: PrRow) => {
+    if (!(await askConfirm({ title: `Cancel return ${r.return_number}?`, body: 'This reverses the return — the goods are put back into stock. Line items stay for audit.', confirmLabel: 'Cancel', danger: true }))) return;
     cancelPr.mutate(r.id, {
       onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
     });

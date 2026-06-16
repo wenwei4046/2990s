@@ -50,6 +50,7 @@ import {
 import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
 import { PaymentsTable } from '../components/PaymentsTable';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { useConfirm } from '../components/ConfirmDialog';
 import { fetchSoSlipUrl } from '../lib/slip';
 import {
   useLocalities,
@@ -323,6 +324,7 @@ export const SalesOrderDetail = () => {
   const detail = useMfgSalesOrderDetail(docNo ?? null);
   const updateHeader = useUpdateMfgSalesOrderHeader();
   const updateStatus = useUpdateMfgSalesOrderStatus();
+  const askConfirm = useConfirm();
   const addItem = useAddMfgSalesOrderItem();
   const updateItem = useUpdateMfgSalesOrderItem();
   const deleteItem = useDeleteMfgSalesOrderItem();
@@ -755,14 +757,16 @@ export const SalesOrderDetail = () => {
   const cancellableStatuses: SoStatus[] = ['CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP'];
   const canCancel = cancellableStatuses.includes(header.status);
 
-  const handleCancelSo = () => {
-    if (!window.confirm(
-      `Cancel ${header.doc_no}?\n\nThe SO will stop proceeding — it won't appear in MRP / PO / DO conversion, and line edits lock. You can Reopen it later.`,
-    )) return;
+  const handleCancelSo = async () => {
+    if (!(await askConfirm({
+      title: `Cancel ${header.doc_no}?`,
+      body: "The SO will stop proceeding — it won't appear in MRP / PO / DO conversion, and line edits lock. You can Reopen it later.",
+      confirmLabel: 'Cancel SO', danger: true,
+    }))) return;
     updateStatus.mutate({ docNo: header.doc_no, status: 'CANCELLED' });
   };
-  const handleReopenSo = () => {
-    if (!window.confirm(`Reopen ${header.doc_no} back to CONFIRMED so it can proceed again?`)) return;
+  const handleReopenSo = async () => {
+    if (!(await askConfirm({ title: `Reopen ${header.doc_no}?`, body: 'Back to CONFIRMED so it can proceed again.', confirmLabel: 'Reopen' }))) return;
     updateStatus.mutate({ docNo: header.doc_no, status: 'CONFIRMED' });
   };
   const handlePrint = () => {

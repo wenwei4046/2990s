@@ -19,6 +19,7 @@ import {
   useGrnDetail,
 } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useConfirm } from '../components/ConfirmDialog';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
@@ -260,6 +261,7 @@ const ExpandedGrnLines = ({ grn }: { grn: GrnRow }) => {
 
 export const GoodsReceived = () => {
   const navigate = useNavigate();
+  const askConfirm = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
   const setStatusChip = (s: string) => {
@@ -292,8 +294,8 @@ export const GoodsReceived = () => {
     });
   };
   // Cancel a GRN (right-click) — reverses the receipt server-side. Confirm first.
-  const doCancelGrn = (g: GrnRow) => {
-    if (!window.confirm(`Cancel GRN ${g.grn_number}? This reverses the receipt — stock is taken back out and the source PO's received qty is rolled back. Line items stay for audit.`)) return;
+  const doCancelGrn = async (g: GrnRow) => {
+    if (!(await askConfirm({ title: `Cancel GRN ${g.grn_number}?`, body: "This reverses the receipt — stock is taken back out and the source PO's received qty is rolled back. Line items stay for audit.", confirmLabel: 'Cancel', danger: true }))) return;
     cancelGrn.mutate(g.id, {
       onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
     });

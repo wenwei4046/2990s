@@ -15,6 +15,7 @@ import { Plus, FileText, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { usePurchaseInvoices, useCancelPurchaseInvoice, usePurchaseInvoiceDetail } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useConfirm } from '../components/ConfirmDialog';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
@@ -222,6 +223,7 @@ const ExpandedPiLines = ({ pi }: { pi: PiRow }) => {
 
 export const PurchaseInvoices = () => {
   const navigate = useNavigate();
+  const askConfirm = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
   const setStatusChip = (s: string) => {
@@ -242,8 +244,8 @@ export const PurchaseInvoices = () => {
 
   // Cancel a PI (right-click) — flips status → CANCELLED (PI is AP-only, no
   // inventory). Confirm first; the endpoint blocks a PAID invoice.
-  const doCancelPi = (r: PiRow) => {
-    if (!window.confirm(`Cancel invoice ${r.invoice_number}? This sets status to CANCELLED — line items stay for audit.`)) return;
+  const doCancelPi = async (r: PiRow) => {
+    if (!(await askConfirm({ title: `Cancel invoice ${r.invoice_number}?`, body: 'This sets status to CANCELLED — line items stay for audit.', confirmLabel: 'Cancel', danger: true }))) return;
     cancelPi.mutate(r.id, {
       onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
     });
