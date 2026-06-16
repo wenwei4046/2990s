@@ -38,6 +38,7 @@ import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineC
 import {
   PaymentsTable, labelToApi, draftMethodFields, type PaymentDraft,
 } from '../components/PaymentsTable';
+import { useToast } from '../components/Toast';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -54,6 +55,7 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 
 export const DeliveryOrderNew = () => {
   const navigate = useNavigate();
+  const toast = useToast();
   const [searchParams] = useSearchParams();
   const fromSo = searchParams.get('fromSo');
   const fromPicks = searchParams.get('fromPicks') === '1';
@@ -274,11 +276,11 @@ export const DeliveryOrderNew = () => {
   };
 
   const onSave = () => {
-    if (loadingPrefill) { window.alert('Still loading the Sales Order — please wait a moment.'); return; }
-    if (!canSave) { window.alert('Customer name is required.'); return; }
+    if (loadingPrefill) { toast.error('Still loading the Sales Order — please wait a moment.'); return; }
+    if (!canSave) { toast.error('Customer name is required.'); return; }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
-      window.alert('Add at least one item via "+ Add Line Item".');
+      toast.error('Add at least one item via "+ Add Line Item".');
       return;
     }
 
@@ -330,7 +332,7 @@ export const DeliveryOrderNew = () => {
         onSuccess: async (res: { id: string; doNumber: string }) => {
           const { failed } = await flushPaymentDrafts(res.id);
           if (failed > 0) {
-            window.alert(
+            toast.warning(
               `Delivery order ${res.doNumber} was created, but ${failed} payment ` +
               `row${failed === 1 ? '' : 's'} failed to save. Please re-enter ` +
               `${failed === 1 ? 'it' : 'them'} on the Detail page.`,
@@ -344,7 +346,7 @@ export const DeliveryOrderNew = () => {
              re-throws the original 409) — they chose not to ship, so swallow
              the raw payload instead of dumping it. */
           if (raw.includes('"short_stock"')) return;
-          window.alert(`Save failed: ${raw}`);
+          toast.error(`Save failed: ${raw}`);
         },
       },
     );

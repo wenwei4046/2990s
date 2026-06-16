@@ -38,6 +38,7 @@ import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineC
 import {
   PaymentsTable, labelToApi, draftMethodFields, type PaymentDraft,
 } from '../components/PaymentsTable';
+import { useToast } from '../components/Toast';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -53,6 +54,7 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export const SalesInvoiceNew = () => {
+  const toast = useToast();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const fromDo = searchParams.get('fromDo');
@@ -278,10 +280,10 @@ export const SalesInvoiceNew = () => {
   };
 
   const onSave = () => {
-    if (!canSave) { window.alert('Customer name is required.'); return; }
+    if (!canSave) { toast.error('Customer name is required.'); return; }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
-      window.alert('Add at least one item via "+ Add Line Item".');
+      toast.error('Add at least one item via "+ Add Line Item".');
       return;
     }
 
@@ -333,7 +335,7 @@ export const SalesInvoiceNew = () => {
         onSuccess: async (res: { id: string; invoiceNumber: string }) => {
           const { failed } = await flushPaymentDrafts(res.id);
           if (failed > 0) {
-            window.alert(
+            toast.warning(
               `Invoice ${res.invoiceNumber} was created, but ${failed} payment ` +
               `row${failed === 1 ? '' : 's'} failed to save. Please re-enter ` +
               `${failed === 1 ? 'it' : 'them'} on the Detail page.`,
@@ -341,7 +343,7 @@ export const SalesInvoiceNew = () => {
           }
           navigate(`/sales-invoices/${res.id}`);
         },
-        onError: (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError: (err) => toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
       },
     );
   };
