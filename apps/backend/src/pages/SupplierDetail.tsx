@@ -2520,6 +2520,9 @@ const SupplierInfoCard = ({
   const save = () => {
     update.mutate({ id: supplier.id, ...form } as Partial<SupplierRow> & { id: string }, {
       onSuccess: onClose,
+      // Never fail silently (Commander 2026-06-16 — "Save 没有反应"): surface the
+      // real error so a server reject (e.g. a stale DB constraint) is visible.
+      onError: (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
     });
   };
 
