@@ -27,6 +27,7 @@ import {
   type StockTakeStatus,
   type StockTakeLine,
 } from '../lib/stock-takes-queries';
+import { useToast } from '../components/Toast';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -92,6 +93,7 @@ const varianceOf = (d: LineDraft): number | null => {
 export const StockTakeDetail = () => {
   const { id }   = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const toast    = useToast();
 
   const detail = useStockTakeDetail(id ?? null);
   const update = useUpdateStockTakeLines();
@@ -187,14 +189,14 @@ export const StockTakeDetail = () => {
       },
       {
         onSuccess: () => { setDirty(false); detail.refetch(); },
-        onError:   (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError:   (err) => toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
       },
     );
   };
 
   const onPost = () => {
     if (!id) return;
-    if (dirty) { window.alert('Save your counts before posting.'); return; }
+    if (dirty) { toast.error('Save your counts before posting.'); return; }
     const summary =
       `Lines: ${totals.totalLines} (${totals.counted} counted, ${totals.uncounted} untouched)\n` +
       `Variance lines: ${totals.nonZeroVarianceLines}\n` +
@@ -207,14 +209,14 @@ export const StockTakeDetail = () => {
       onSuccess: (res) => {
         detail.refetch();
         if (res.movementErrors && res.movementErrors.length > 0) {
-          window.alert(
+          toast.error(
             `Stock take posted, but adjustment write failed:\n\n${res.movementErrors.join('\n')}\n\nFix manually via Stock Adjustments.`,
           );
         } else {
-          window.alert(`Posted. ${res.movementsWritten} adjustment movement${res.movementsWritten === 1 ? '' : 's'} written.`);
+          toast.success(`Posted. ${res.movementsWritten} adjustment movement${res.movementsWritten === 1 ? '' : 's'} written.`);
         }
       },
-      onError: (err) => window.alert(`Post failed: ${err instanceof Error ? err.message : String(err)}`),
+      onError: (err) => toast.error(`Post failed: ${err instanceof Error ? err.message : String(err)}`),
     });
   };
 
@@ -223,7 +225,7 @@ export const StockTakeDetail = () => {
     if (!window.confirm('Cancel this OPEN stock take? It will be marked cancelled and locked.')) return;
     cancel.mutate(id, {
       onSuccess: () => detail.refetch(),
-      onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
+      onError: (err) => toast.error(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
     });
   };
 
@@ -240,16 +242,16 @@ export const StockTakeDetail = () => {
       onSuccess: (res) => {
         detail.refetch();
         if (res.movementErrors && res.movementErrors.length > 0) {
-          window.alert(
+          toast.error(
             `Undone, but reversing the stock changes failed:\n\n${res.movementErrors.join('\n')}\n\nFix manually via Stock Adjustments.`,
           );
         } else {
-          window.alert(
+          toast.success(
             `Undone. ${res.movementsReversed} stock change${res.movementsReversed === 1 ? '' : 's'} reversed.`,
           );
         }
       },
-      onError: (err) => window.alert(`Undo failed: ${err instanceof Error ? err.message : String(err)}`),
+      onError: (err) => toast.error(`Undo failed: ${err instanceof Error ? err.message : String(err)}`),
     });
   };
 
@@ -258,7 +260,7 @@ export const StockTakeDetail = () => {
     if (!window.confirm('Delete this OPEN stock take permanently? The count sheet will be lost.')) return;
     del.mutate(id, {
       onSuccess: () => navigate('/inventory/stock-takes'),
-      onError: (err) => window.alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),
+      onError: (err) => toast.error(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),
     });
   };
 

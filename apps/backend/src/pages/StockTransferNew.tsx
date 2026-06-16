@@ -21,6 +21,7 @@ import {
   useCreateStockTransfer,
   type StockTransferItemInput,
 } from '../lib/stock-transfers-queries';
+import { useToast } from '../components/Toast';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -46,6 +47,7 @@ const todayISO = () => {
 export const StockTransferNew = () => {
   const navigate = useNavigate();
   const create   = useCreateStockTransfer();
+  const toast    = useToast();
 
   // ── Header state ─────────────────────────────────────────────────────
   const [fromWarehouseId, setFromWarehouseId] = useState<string>('');
@@ -115,7 +117,7 @@ export const StockTransferNew = () => {
 
   const onSave = () => {
     if (!canSave) {
-      window.alert('Pick From + To warehouses (must differ), date, and at least one valid line.');
+      toast.error('Pick From + To warehouses (must differ), date, and at least one valid line.');
       return;
     }
     if (overdrawn.length > 0) {
@@ -141,7 +143,7 @@ export const StockTransferNew = () => {
       },
       {
         onSuccess: (res) => navigate(`/inventory/transfers/${res.id}`),
-        onError:   (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError:   (err) => toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
       },
     );
   };

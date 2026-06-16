@@ -17,6 +17,7 @@ import {
   useCreateStockTake,
   type StockTakeScopeType,
 } from '../lib/stock-takes-queries';
+import { useToast } from '../components/Toast';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -37,6 +38,7 @@ const CATEGORIES: Array<{ value: string; label: string }> = [
 
 export const StockTakeNew = () => {
   const navigate = useNavigate();
+  const toast    = useToast();
   const create   = useCreateStockTake();
 
   const [warehouseId, setWarehouseId] = useState<string>('');
@@ -93,7 +95,7 @@ export const StockTakeNew = () => {
 
   const onCreate = () => {
     if (!canCreate) {
-      window.alert('Pick a warehouse, date, and (for Category/Prefix scopes) a scope value.');
+      toast.error('Pick a warehouse, date, and (for Category/Prefix scopes) a scope value.');
       return;
     }
     if (previewCount === 0) {
@@ -112,7 +114,7 @@ export const StockTakeNew = () => {
       },
       {
         onSuccess: (res) => navigate(`/inventory/stock-takes/${res.id}`),
-        onError:   (err) => window.alert(`Create failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError:   (err) => toast.error(`Create failed: ${err instanceof Error ? err.message : String(err)}`),
       },
     );
   };

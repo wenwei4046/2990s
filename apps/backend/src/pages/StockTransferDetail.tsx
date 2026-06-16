@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { SkeletonDetailPage } from '../components/Skeleton';
+import { useToast } from '../components/Toast';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   useWarehouses,
@@ -52,6 +53,7 @@ export const StockTransferDetail = () => {
 
   const detail = useStockTransferDetail(id ?? null);
   const cancel = useCancelStockTransfer();
+  const toast  = useToast();
 
   const warehouses = useWarehouses();
 
@@ -92,7 +94,7 @@ export const StockTransferDetail = () => {
     if (!proceed) return;
     cancel.mutate(id, {
       onSuccess: () => detail.refetch(),
-      onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
+      onError: (err) => toast.error(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
     });
   };
 
