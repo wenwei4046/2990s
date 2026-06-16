@@ -13,6 +13,7 @@
 //   PATCH /mfg-purchase-orders/:id            — update header (status/notes/etc)
 //   PATCH /mfg-purchase-orders/:id/submit     — flip DRAFT → SUBMITTED
 //   PATCH /mfg-purchase-orders/:id/cancel     — flip → CANCELLED
+//   PATCH /mfg-purchase-orders/:id/reopen     — flip CANCELLED → SUBMITTED
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
@@ -1868,6 +1869,59 @@ mfgPurchaseOrders.patch('/:id/cancel', async (c) => {
     .eq('id', id)
     .maybeSingle();
   return c.json({ purchaseOrder: after ?? { id, status: 'CANCELLED' } });
+});
+
+/* Reopen — the inverse of cancel (Commander 2026-06-16: "PO cancel 了,不可以
+   uncancel 回来吗?"). Only a CANCELLED PO can be reopened; it returns to
+   SUBMITTED and its converted SO lines RE-CLAIM their quota. Same
+   read → guard → update → re-read split as cancel so the RETURNING-coercion
+   PGRST116 can't 500 it. A cancellable PO never has a GRN (poHasDownstream
+   blocks cancel once one exists), so a CANCELLED PO was always SUBMITTED —
+   reopening to SUBMITTED is correct. */
+mfgPurchaseOrders.patch('/:id/reopen', async (c) => {
+  const id = c.req.param('id');
+  const supabase = c.get('supabase');
+
+  const { data: cur, error: readErr } = await supabase
+    .from('purchase_orders')
+    .select('id, status')
+    .eq('id', id)
+    .maybeSingle();
+  if (readErr) return c.json({ error: 'load_failed', reason: readErr.message }, 500);
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  const curStatus = (cur as { status: string }).status;
+  // Idempotent — a live PO is already open, echo back.
+  if (curStatus === 'SUBMITTED' || curStatus === 'PARTIALLY_RECEIVED') {
+    return c.json({ purchaseOrder: { id, status: curStatus } });
+  }
+  if (curStatus !== 'CANCELLED') {
+    return c.json({ error: 'cannot_reopen', message: `Only a cancelled PO can be reopened (this is ${curStatus})` }, 409);
+  }
+
+  const { error: updErr } = await supabase
+    .from('purchase_orders')
+    .update({ status: 'SUBMITTED', cancelled_at: null, updated_at: new Date().toISOString() })
+    .eq('id', id);
+  if (updErr) return c.json({ error: 'reopen_failed', reason: updErr.message }, 500);
+
+  /* Re-claim every converted SO line's quota: the PO is SUBMITTED again, so
+     recomputeSoPicked now counts this PO's lines (it excludes only CANCELLED
+     POs) — the exact inverse of the release cancel did. Best-effort: never fail
+     the reopen on a counter recount. */
+  try {
+    const { data: lines } = await supabase
+      .from('purchase_order_items')
+      .select('so_item_id')
+      .eq('purchase_order_id', id);
+    await recomputeSoPicked(supabase, ((lines ?? []) as Array<{ so_item_id: string | null }>).map((l) => l.so_item_id));
+  } catch { /* best-effort — PO already reopened, don't fail on counter recount */ }
+
+  const { data: after } = await supabase
+    .from('purchase_orders')
+    .select('id, status, cancelled_at')
+    .eq('id', id)
+    .maybeSingle();
+  return c.json({ purchaseOrder: after ?? { id, status: 'SUBMITTED' } });
 });
 
 // ── Delete ────────────────────────────────────────────────────────────

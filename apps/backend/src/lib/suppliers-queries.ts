@@ -798,6 +798,25 @@ export function useCancelPurchaseOrder() {
   });
 }
 
+/** Reopen a cancelled PO → SUBMITTED (inverse of cancel; re-claims SO quota). */
+export function useReopenPurchaseOrder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch<{ purchaseOrder: { id: string; status: PoStatus; cancelled_at: string | null } }>(
+        `/mfg-purchase-orders/${id}/reopen`,
+        { method: 'PATCH' },
+      ),
+    onSuccess: (_, id) => {
+      // Re-claims SO quota, so the From-SO picker (prefix
+      // ['mfg-purchase-orders','outstanding-so-items']) must refetch — those
+      // lines leave the picker again — plus this PO's detail.
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', id] });
+    },
+  });
+}
+
 /** Hard-delete PO. Only allowed when status is CANCELLED (post-0078). */
 export function useDeletePurchaseOrder() {
   const qc = useQueryClient();
