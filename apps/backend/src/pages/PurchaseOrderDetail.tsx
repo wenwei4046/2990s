@@ -184,6 +184,12 @@ export const PurchaseOrderDetail = () => {
      move SO quota), so the table shows the live items straight from the server;
      only the per-line field edits are buffered in lineDrafts. */
   const visibleItems = items;
+  /* SO→PO drift (Commander 2026-06-16) — lines whose source SO was edited AFTER
+     this PO was raised, so the PO no longer matches the live SO. Only actionable
+     while the PO is still open (pre-receipt): a received / cancelled PO can't be
+     re-sent anyway, so we hide the warning there. */
+  const driftCount = visibleItems.filter((it) => it.so_drift).length;
+  const showDrift = po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED';
   const lineOf = (it: PoItemRow): LineDraft => lineDrafts[it.id] ?? lineSnapshot(it);
   const lineTotalOf = (it: PoItemRow): number => {
     if (!isEditing) return it.line_total_centi ?? 0;
@@ -460,6 +466,15 @@ export const PurchaseOrderDetail = () => {
           <h2 className={styles.cardTitle}>Line Items ({visibleItems.length})</h2>
         </header>
 
+        {/* SO→PO drift banner — the source SO changed after this PO was raised.
+            We never auto-edit a PO that may already be with the supplier; the
+            purchaser syncs + re-sends. (Commander 2026-06-16.) */}
+        {showDrift && driftCount > 0 && (
+          <div className={styles.bannerWarn} style={{ margin: 'var(--space-2) var(--space-3)' }}>
+            ⚠ 有 <strong>{driftCount}</strong> 行的来源 SO 在本 PO 开单后被改过。请核对下方红字、同步规格后<strong>重新发给供应商</strong>,以免工厂照旧规格生产。
+          </div>
+        )}
+
         {visibleItems.length === 0 ? (
           <p className={styles.emptyRow}>
             {isEditing
@@ -505,6 +520,13 @@ export const PurchaseOrderDetail = () => {
                           || it.material_name;
                         return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
                       })()}
+                      {showDrift && it.so_drift && (
+                        <div style={{ marginTop: 3, fontSize: 'var(--fs-11)', fontWeight: 700, color: 'var(--c-danger, #b8331f)' }}>
+                          {it.so_drift.itemChanged
+                            ? <>⚠ SO 已换产品 → {it.so_drift.itemSo}(本单仍是 {it.so_drift.itemPo}),建议取消重开</>
+                            : <>⚠ SO 现规格:{it.so_drift.specSo || '—'}(本单仍是 {it.so_drift.specPo || '—'})</>}
+                        </div>
+                      )}
                     </td>
                     <td style={{ fontFamily: 'var(--font-mono)' }}>{it.supplier_sku?.trim() || '—'}</td>
                     <td className={styles.muted}>{it.item_group ?? it.material_kind}</td>
