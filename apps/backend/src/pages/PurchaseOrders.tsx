@@ -21,6 +21,7 @@ import {
   usePurchaseOrderDetail,
   fetchPurchaseOrderDetail,
   useCancelPurchaseOrder,
+  useReopenPurchaseOrder,
   type PoStatus,
   type PoHeaderRow,
   type PoItemRow,
@@ -208,6 +209,7 @@ export const PurchaseOrders = () => {
   // Bump to collapse every expanded drill-down in the list at once.
   const [collapseNonce, setCollapseNonce] = useState(0);
   const cancelPo = useCancelPurchaseOrder();
+  const reopenPo = useReopenPurchaseOrder();
   const qc = useQueryClient();
   const warehousesQ = useWarehouses();
   const [printingDocs, setPrintingDocs] = useState(false);
@@ -315,6 +317,14 @@ export const PurchaseOrders = () => {
     if (!window.confirm(`Cancel ${po.po_number}? It will stop proceeding and any converted SO lines are released back.`)) return;
     cancelPo.mutate(po.id, {
       onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
+    });
+  };
+  // Reopen — inverse of Cancel (Commander 2026-06-16). CANCELLED → SUBMITTED;
+  // the converted SO lines re-claim their quota (leave the From-SO picker again).
+  const doReopenPo = (po: PoHeaderRow) => {
+    if (!window.confirm(`Reopen ${po.po_number}? Status returns to SUBMITTED and its converted SO lines re-claim their quota.`)) return;
+    reopenPo.mutate(po.id, {
+      onError: (e) => alert(`Reopen failed: ${e instanceof Error ? e.message : String(e)}`),
     });
   };
 
@@ -451,6 +461,11 @@ export const PurchaseOrders = () => {
           if (po.status !== 'CANCELLED' && po.status !== 'RECEIVED' && !hasChildren) {
             menu.push({ divider: true as const });
             menu.push({ label: 'Cancel PO', danger: true, onClick: () => doCancelPo(po) });
+          }
+          // Reopen — only a cancelled PO; inverse of Cancel (Commander 2026-06-16).
+          if (po.status === 'CANCELLED') {
+            menu.push({ divider: true as const });
+            menu.push({ label: 'Reopen PO', onClick: () => doReopenPo(po) });
           }
           return menu;
         }}

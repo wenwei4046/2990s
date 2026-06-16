@@ -29,7 +29,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ArrowRightLeft,
-  ChevronDown,
+  ChevronDown, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
@@ -39,6 +39,7 @@ import {
   useUpdatePurchaseOrderItem,
   useDeletePurchaseOrderItem,
   useCancelPurchaseOrder,
+  useReopenPurchaseOrder,
   useDeletePurchaseOrder,
   useSuppliers,
   useSupplierDetail,
@@ -113,6 +114,7 @@ export const PurchaseOrderDetail = () => {
   const updateHeader = useUpdatePurchaseOrderHeader();
   // PR-DRAFT-removal — Submit button removed (POs are SUBMITTED on create).
   const cancel = useCancelPurchaseOrder();
+  const reopen = useReopenPurchaseOrder();
   const deletePo = useDeletePurchaseOrder();
   const updateItem = useUpdatePurchaseOrderItem();
   const deleteItem = useDeletePurchaseOrderItem();
@@ -359,6 +361,27 @@ export const PurchaseOrderDetail = () => {
               disabled={cancel.isPending}>
               <Ban {...ICON} />
               <span>{cancel.isPending ? 'Cancelling…' : 'Cancel'}</span>
+            </Button>
+          )}
+          {/* Reopen a cancelled PO (Commander 2026-06-16 — "PO cancel 了 不可以
+              uncancel 回来吗?"). Inverse of Cancel: back to SUBMITTED and the
+              converted SO lines re-claim their quota. In-app confirm (no 裸奔). */}
+          {po.status === 'CANCELLED' && (
+            <Button variant="ghost" size="md"
+              onClick={async () => {
+                if (await askConfirm({
+                  title: `Reopen PO ${po.po_number}?`,
+                  body: 'Status returns to SUBMITTED and this PO re-claims its Sales-Order quota (those lines leave the From-SO picker again).',
+                  confirmLabel: 'Reopen',
+                })) {
+                  reopen.mutate(po.id, {
+                    onError: (err) => window.alert(`Reopen failed: ${err instanceof Error ? err.message : String(err)}`),
+                  });
+                }
+              }}
+              disabled={reopen.isPending}>
+              <RotateCcw {...ICON} />
+              <span>{reopen.isPending ? 'Reopening…' : 'Reopen'}</span>
             </Button>
           )}
           {po.status === 'CANCELLED' && (
