@@ -1465,6 +1465,53 @@ async function validateSoDropdownFields(
   };
 }
 
+/* One-time backfill — bind a warehouse to every SO line that still has none, by
+   re-deriving from its SO's State. The create-time derive only ran once, so SOs
+   placed before per-line warehouse routing existed (or via paths that sent no
+   address) kept NULL warehouses and show "—" in MRP. Admin-only. SOs with no /
+   unmapped State are skipped (they need a location set). Only NULL lines are
+   touched — explicit per-line warehouses are never overwritten. */
+mfgSalesOrders.post('/backfill-warehouses', async (c) => {
+  const sb = c.get('supabase'); const user = c.get('user');
+  if (!(await isPriceOverrideCaller(sb, user?.id))) return c.json({ error: 'forbidden' }, 403);
+
+  const { data: nullLines } = await sb
+    .from('mfg_sales_order_items')
+    .select('doc_no')
+    .is('warehouse_id', null)
+    .eq('cancelled', false);
+  const docNos = [...new Set(
+    ((nullLines ?? []) as Array<{ doc_no: string | null }>).map((r) => r.doc_no).filter((x): x is string => !!x),
+  )];
+  if (docNos.length === 0) return c.json({ filled: 0, skipped: 0, orders: 0 });
+
+  // States for those SOs (chunk the .in to dodge the PostgREST row cap).
+  const stateByDoc = new Map<string, string | null>();
+  for (let i = 0; i < docNos.length; i += 200) {
+    const { data: sos } = await sb
+      .from('mfg_sales_orders')
+      .select('doc_no, customer_state')
+      .in('doc_no', docNos.slice(i, i + 200));
+    for (const s of (sos ?? []) as Array<{ doc_no: string; customer_state: string | null }>) {
+      stateByDoc.set(s.doc_no, s.customer_state);
+    }
+  }
+
+  let filled = 0; let skipped = 0;
+  for (const docNo of docNos) {
+    const wh = await deriveWarehouseIdFromState(sb, stateByDoc.get(docNo) ?? null);
+    if (!wh) { skipped += 1; continue; }
+    await sb
+      .from('mfg_sales_order_items')
+      .update({ warehouse_id: wh })
+      .eq('doc_no', docNo)
+      .is('warehouse_id', null)
+      .eq('cancelled', false);
+    filled += 1;
+  }
+  return c.json({ filled, skipped, orders: docNos.length });
+});
+
 mfgSalesOrders.post('/', async (c) => {
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }

@@ -24,6 +24,8 @@ import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { ChevronRight, ChevronDown, RefreshCw, Truck, ShoppingCart, CalendarRange, Info } from 'lucide-react';
 import { useMrp, type MrpSku, type MrpLine, type MrpResponse, type SofaSet } from '../lib/mrp-queries';
+import { authedFetch } from '../lib/authed-fetch';
+import { useAuth, isAdminLevel } from '../lib/auth';
 import { useCreatePosFromSoItems } from '../lib/suppliers-queries';
 import { fmtDateOrDash } from '@2990s/shared';
 import styles from './Mrp.module.css';
@@ -225,6 +227,9 @@ function groupBySo(skus: MrpSku[]): ModelGroup[] {
 
 export const Mrp = () => {
   const navigate = useNavigate();
+  const { staff } = useAuth();
+  const isAdmin = isAdminLevel(staff?.role);
+  const [backfilling, setBackfilling] = useState(false);
   const [view, setView] = useState<View>('sofa');
   const [warehouseId, setWarehouseId] = useState<string>('all');
   /* Two expand levels: models (itemCode) and variants (rowKey). The sofa flat
@@ -547,6 +552,29 @@ export const Mrp = () => {
     setSelected(new Set(allShortageLineIds));
   };
 
+  /* One-click backfill of warehouses onto older SOs that have none (derived
+     from each SO's State). Fixes the "—" warehouse on SOs placed before per-line
+     warehouse routing / via paths that sent no address. Admin-only. */
+  const onBackfillWarehouses = async () => {
+    if (backfilling) return;
+    setBackfilling(true);
+    try {
+      const res = await authedFetch<{ filled: number; skipped: number; orders: number }>(
+        '/mfg-sales-orders/backfill-warehouses', { method: 'POST' },
+      );
+      setDialog({
+        kind: 'info',
+        title: 'Warehouses re-bound',
+        body: `Filled ${res.filled} order${res.filled === 1 ? '' : 's'} from their State.${res.skipped > 0 ? ` ${res.skipped} skipped — no / unmapped State (set a location on those SOs, or add the State to State→Warehouse mappings).` : ''}`,
+      });
+      void q.refetch();
+    } catch (e) {
+      setDialog({ kind: 'info', title: 'Backfill failed', body: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBackfilling(false);
+    }
+  };
+
   /* Proceed PO — gather the selected shortage lines (or all visible shortage
      lines if none selected) and open the confirm dialog so the operator can
      OPTIONALLY pick one Expected Delivery date for the whole batch. */
@@ -591,6 +619,12 @@ export const Mrp = () => {
             <button type="button" className={styles.ghostBtn} onClick={() => void q.refetch()} disabled={q.isFetching}>
               <RefreshCw {...ICON} className={q.isFetching ? styles.spin : undefined} /> Refresh
             </button>
+            {isAdmin && (
+              <button type="button" className={styles.ghostBtn} onClick={onBackfillWarehouses} disabled={backfilling}
+                title="Bind a warehouse to older SOs that have none, derived from each SO's State">
+                {backfilling ? 'Re-binding…' : 'Re-bind WH'}
+              </button>
+            )}
           </div>
 
           <span className={styles.toolbarDivider} aria-hidden="true" />
