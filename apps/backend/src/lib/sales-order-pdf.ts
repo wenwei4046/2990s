@@ -452,21 +452,22 @@ export async function generateSalesOrderPdf(
     head: [['SKU', 'Description', 'Qty', 'Unit Price', 'Disc', 'Line Total']],
     body: tableRows,
     theme: 'striped',
-    styles: { fontSize: 8.5, cellPadding: 2, valign: 'top' },
+    styles: { fontSize: 8, cellPadding: 2, valign: 'top' },
     headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
-    /* Owner 2026-06-12 — money cells must stay on ONE line ("MYR 2,990.00",
-       never "MYR\n2,990.00"). The old fixed widths summed to 190 mm against
-       182 mm usable (A4 − 2×14 margins), so autotable shrank every column and
-       the money cells wrapped. Numeric columns: 8 pt + right-aligned + wide
-       enough for "MYR 123,456.78"; Description takes the leftover (~67 mm)
-       via 'auto' — it's the only column allowed to wrap. */
+    /* Owner 2026-06-16 (R10) — wider SKU + longer Description + smaller font.
+       Money cells must STILL stay on ONE line ("MYR 2,990.00", never wrapped):
+       numeric columns are 7.5 pt, right-aligned, wide enough for a 5-digit
+       "MYR 99,999.00". Fixed widths sum to 110 mm of 182 usable (A4 − 2×14
+       margins), leaving ~72 mm for Description ('auto', the only column allowed
+       to wrap — up from ~67). SKU widened 22→30 mm so long module SKUs
+       (e.g. "1A(LHF)-5530-32") no longer wrap. */
     columnStyles: {
-      0: { cellWidth: 22 },
+      0: { cellWidth: 30 },
       1: { cellWidth: 'auto' },
-      2: { cellWidth: 17, halign: 'right', fontSize: 8 },
-      3: { cellWidth: 27, halign: 'right', fontSize: 8 },
-      4: { cellWidth: 22, halign: 'right', fontSize: 8 },
-      5: { cellWidth: 27, halign: 'right', fontSize: 8 },
+      2: { cellWidth: 14, halign: 'right', fontSize: 7.5 },
+      3: { cellWidth: 25, halign: 'right', fontSize: 7.5 },
+      4: { cellWidth: 16, halign: 'right', fontSize: 7.5 },
+      5: { cellWidth: 25, halign: 'right', fontSize: 7.5 },
     },
     margin: { left: margin, right: margin },
   });
