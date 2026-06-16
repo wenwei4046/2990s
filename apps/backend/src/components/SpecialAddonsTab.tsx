@@ -50,8 +50,8 @@ const emptySpecialAddon = (): SpecialAddonInput => ({
 
 type SaSection = 'product' | 'order';
 
-export const SpecialAddonsTab = () => {
-  const [section, setSection] = useState<SaSection>('product');
+export const SpecialAddonsTab = ({ orderOnly = false }: { orderOnly?: boolean } = {}) => {
+  const [section, setSection] = useState<SaSection>(orderOnly ? 'order' : 'product');
   const tab = (key: SaSection, label: string) => (
     <button
       type="button"
@@ -68,6 +68,16 @@ export const SpecialAddonsTab = () => {
       {label}
     </button>
   );
+  // Specials (Product Add-ons) now live in Maintenance > BEDFRAME/SOFA
+  // (Commander 2026-06-16). When embedded order-only, this renders just the
+  // whole-order fee manager (Dispose / Lift) — no Product Add-ons sub-nav.
+  if (orderOnly) {
+    return (
+      <div style={{ padding: 'var(--space-4)' }}>
+        <OrderAddonsManager />
+      </div>
+    );
+  }
   return (
     <div style={{ display: 'flex', gap: 'var(--space-4)', padding: 'var(--space-4)' }}>
       <nav style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 180 }} role="tablist" aria-label="Special add-ons">
