@@ -208,6 +208,10 @@ export const PurchaseOrders = () => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // Bump to collapse every expanded drill-down in the list at once.
   const [collapseNonce, setCollapseNonce] = useState(0);
+  /* Rows currently visible after the grid's search + column filters — fed by
+     DataGrid.onFilteredRowsChange so "Print all docs" prints exactly what's
+     filtered, no row-ticking (Commander 2026-06-16). */
+  const [visibleRows, setVisibleRows] = useState<PoHeaderRow[]>([]);
   const cancelPo = useCancelPurchaseOrder();
   const reopenPo = useReopenPurchaseOrder();
   const qc = useQueryClient();
@@ -241,13 +245,13 @@ export const PurchaseOrders = () => {
      reused from any expanded row) and render them into ONE PDF, each PO on its
      own page. The operator filters by supplier/date, selects, then sends the
      supplier a single file. */
-  const printSelectedDocs = async () => {
-    if (selectedRows.length === 0 || printingDocs) return;
+  const printDocs = async (rowsToPrint: PoHeaderRow[]) => {
+    if (rowsToPrint.length === 0 || printingDocs) return;
     setPrintingDocs(true);
     try {
       const warehouses = warehousesQ.data ?? [];
       const details: Array<{ purchaseOrder: PoHeaderRow; items: PoItemRow[] }> = [];
-      for (const row of selectedRows) {
+      for (const row of rowsToPrint) {
         details.push(await qc.fetchQuery({
           queryKey: ['mfg-purchase-order-detail', row.id],
           queryFn: () => fetchPurchaseOrderDetail(row.id),
@@ -342,6 +346,15 @@ export const PurchaseOrders = () => {
             <ChevronsDownUp {...ICON} />
             <span>Collapse all</span>
           </Button>
+          {/* Print all (filtered) — one combined PDF of EVERY PO currently shown.
+              Respects the search + column filters below (no row-ticking needed):
+              filter to a supplier/date → the count + the PDF follow. (2026-06-16) */}
+          <Button variant="ghost" size="sm" onClick={() => printDocs(visibleRows)}
+            disabled={printingDocs || visibleRows.length === 0}
+            title="Print every PO currently shown (follows the filters below) into one PDF">
+            <Printer {...ICON} />
+            <span>{printingDocs ? 'Preparing…' : `Print all docs (${visibleRows.length})`}</span>
+          </Button>
           {/* PR — Phase 1: multi-SO → PO picker. Lets commander select
               outstanding SO lines (across customers + suppliers), input
               partial qty per line, and emit one PO per supplier. */}
@@ -405,7 +418,7 @@ export const PurchaseOrders = () => {
           </span>
           <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
             <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>Clear</Button>
-            <Button variant="ghost" size="sm" onClick={printSelectedDocs} disabled={printingDocs}>
+            <Button variant="ghost" size="sm" onClick={() => printDocs(selectedRows)} disabled={printingDocs}>
               <Printer {...ICON} />
               <span>{printingDocs ? 'Preparing…' : `Print documentation (${selectedIds.size})`}</span>
             </Button>
@@ -421,6 +434,7 @@ export const PurchaseOrders = () => {
       <DataGrid<PoHeaderRow>
         rows={rows}
         columns={columns}
+        onFilteredRowsChange={setVisibleRows}
         storageKey={PO_LIST_STORAGE_KEY}
         rowKey={(po) => po.id}
         searchPlaceholder="Search POs…"
