@@ -33,6 +33,7 @@ import { useFabricTrackings } from '../lib/fabric-queries';
 import { PcVariantEditor } from '../components/PcVariantEditor';
 import { ItemGroupPill } from '../lib/category-badges';
 import { MoneyInput } from '../components/MoneyInput';
+import { useToast } from '../components/Toast';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -102,6 +103,7 @@ const newLine = (): DraftLine => ({
 
 export const PurchaseConsignmentReturnNew = () => {
   const navigate = useNavigate();
+  const toast = useToast();
   const [params] = useSearchParams();
   const receiveId = params.get('fromPcReceive');
   const orderId   = params.get('fromPcOrder');
@@ -261,7 +263,7 @@ export const PurchaseConsignmentReturnNew = () => {
   const canSave = !!supplierId && validLines.length > 0;
 
   const onSave = async () => {
-    if (!canSave) { window.alert('Need supplier + at least one line with an item code and qty > 0.'); return; }
+    if (!canSave) { toast.error('Need supplier + at least one line with an item code and qty > 0.'); return; }
     try {
       const createRes = await create.mutateAsync({
         supplierId,
@@ -286,10 +288,10 @@ export const PurchaseConsignmentReturnNew = () => {
         })),
       });
       await post.mutateAsync(createRes.id);
-      window.alert(`Purchase Consignment Return ${createRes.returnNumber} created + posted.`);
+      toast.success(`Purchase Consignment Return ${createRes.returnNumber} created + posted.`);
       navigate(`/purchase-consignment-return/${createRes.id}`);
     } catch (err) {
-      window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 

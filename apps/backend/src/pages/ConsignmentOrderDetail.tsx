@@ -34,6 +34,7 @@ import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import { PhoneInput } from '../components/PhoneInput';
+import { useToast } from '../components/Toast';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import {
   useConsignmentOrderDetail,
@@ -160,6 +161,7 @@ const draftFromItem = (it: ConsignmentItem): SoLineDraft => ({
 });
 
 export const ConsignmentOrderDetail = () => {
+  const toast = useToast();
   const { docNo } = useParams<{ docNo: string }>();
   const navigate = useNavigate();
   const detail = useConsignmentOrderDetail(docNo ?? null);
@@ -220,7 +222,7 @@ export const ConsignmentOrderDetail = () => {
     setSaveError(null);
 
     if (!handle.getPhone().trim()) {
-      window.alert('Phone number is required — every consignment order must have a contact number.');
+      toast.error('Phone number is required — every consignment order must have a contact number.');
       return;
     }
     if (addingDraft && !addingDraft.itemCode.trim()) {
@@ -429,7 +431,7 @@ export const ConsignmentOrderDetail = () => {
         }
       }
       if (failed > 0) {
-        window.alert(
+        toast.error(
           `Line added, but ${failed} staged photo${failed === 1 ? '' : 's'} ` +
           `failed to upload. Please re-attach on the row.`,
         );
@@ -463,7 +465,7 @@ export const ConsignmentOrderDetail = () => {
         generateSalesOrderPdf(header as never, items as never, [], 'save', [], {
           docTitle: 'CONSIGNMENT ORDER', docNoLabel: 'CO No',
         }))
-      .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e) => toast.error(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
   return (
@@ -689,6 +691,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   isEditing = false,
   onDeliveryDateChange,
 }, ref) => {
+  const toast = useToast();
   const localities = useLocalities();
   const localityRows = useMemo(() => localities.data ?? [], [localities.data]);
   const staffQ = useStaff();
@@ -853,7 +856,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     const err = validateDates();
     if (err) {
       if (cb?.onError) cb.onError(err);
-      else window.alert(err);
+      else toast.error(err);
       return;
     }
     onSave(buildPayload(), cb);

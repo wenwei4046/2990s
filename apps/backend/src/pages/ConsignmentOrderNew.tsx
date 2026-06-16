@@ -23,6 +23,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { useToast } from '../components/Toast';
 import {
   useCreateConsignmentOrder, useConsignmentDebtorSearch, useAddConsignmentOrderPayment,
   useUploadConsignmentItemPhoto, useConsignmentOrderDetail,
@@ -65,6 +66,7 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
   })}`;
 
 export const ConsignmentOrderNew = () => {
+  const toast = useToast();
   const navigate = useNavigate();
   /* Copy-to-new: ?copyFrom=<docNo> seeds this form from an existing consignment
      order (customer + line items only — dates, payments, customer ref, doc no
@@ -424,15 +426,15 @@ export const ConsignmentOrderNew = () => {
 
   const onSave = () => {
     if (!debtorName.trim()) {
-      window.alert('Customer name is required.');
+      toast.error('Customer name is required.');
       return;
     }
     if (!phone.trim()) {
-      window.alert('Phone number is required — every consignment order must have a contact number.');
+      toast.error('Phone number is required — every consignment order must have a contact number.');
       return;
     }
     if (datesXor) {
-      window.alert(
+      toast.error(
         'Processing Date and Delivery Date must be set together.\n\n' +
         'Either fill in BOTH dates, or leave BOTH empty — partial dates ' +
         'cause scheduling issues.',
@@ -440,20 +442,20 @@ export const ConsignmentOrderNew = () => {
       return;
     }
     if (processingDate && processingDate < today) {
-      window.alert('Processing Date cannot be in the past — pick today or a future date.');
+      toast.error('Processing Date cannot be in the past — pick today or a future date.');
       return;
     }
     if (deliveryDate && deliveryDate < today) {
-      window.alert('Delivery Date cannot be in the past — pick today or a future date.');
+      toast.error('Delivery Date cannot be in the past — pick today or a future date.');
       return;
     }
     if (processingDate && deliveryDate && processingDate > deliveryDate) {
-      window.alert('Processing Date cannot be later than the Delivery Date.');
+      toast.error('Processing Date cannot be later than the Delivery Date.');
       return;
     }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
-      window.alert('Add at least one item via "+ Add Line Item".');
+      toast.error('Add at least one item via "+ Add Line Item".');
       return;
     }
     if (processingDate) {
@@ -461,7 +463,7 @@ export const ConsignmentOrderNew = () => {
         .map((l) => ({ code: l.itemCode, miss: missingRequiredVariants(l.itemGroup, l.variants) }))
         .filter((x) => x.miss.length > 0);
       if (variantGaps.length > 0) {
-        window.alert(
+        toast.error(
           'Complete all variant selections before saving:\n\n'
           + variantGaps.map((x) => `• ${x.code}: ${x.miss.join(', ')}`).join('\n'),
         );
@@ -514,14 +516,14 @@ export const ConsignmentOrderNew = () => {
           const { failed: photoFailed, skipped: photoSkipped } =
             await flushPendingPhotos(res.docNo, validLines);
           if (failed > 0) {
-            window.alert(
+            toast.error(
               `Consignment order ${res.docNo} was created, but ${failed} ` +
               `payment row${failed === 1 ? '' : 's'} failed to save. ` +
               `Please re-enter ${failed === 1 ? 'it' : 'them'} on the Detail page.`,
             );
           }
           if (photoFailed > 0 || photoSkipped > 0) {
-            window.alert(
+            toast.error(
               `Consignment order ${res.docNo} was created, but ${photoFailed + photoSkipped} ` +
               `staged photo${(photoFailed + photoSkipped) === 1 ? '' : 's'} could not be ` +
               `uploaded. Please re-attach on the Detail page.`,
@@ -529,7 +531,7 @@ export const ConsignmentOrderNew = () => {
           }
           navigate(`/consignment/${res.docNo}`);
         },
-        onError:   (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError:   (err) => toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
       },
     );
   };
