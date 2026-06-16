@@ -6,6 +6,8 @@ import {
   groupSofas,
   cellEffectiveBbox,
   cellBbox,
+  cellsBbox,
+  centerCellsWithin,
   moduleFootprint,
   findModule,
   classifySofaCompartment,
@@ -34,6 +36,7 @@ import {
   EDGE_S,
   orderSofaCellsLeftToRight,
   type Cell,
+  type Depth,
   type SofaProductPricing,
 } from '../sofa-build';
 
@@ -1317,5 +1320,43 @@ describe('orderSofaCellsLeftToRight', () => {
     const input = [...CORNER_LHF_28];
     orderSofaCellsLeftToRight(input, '28');
     expect(input.map((c) => c.moduleId)).toEqual(['CNR', '2A(RHF)', '1B(LHF)']);
+  });
+});
+
+describe('centerCellsWithin', () => {
+  const depth: Depth = '24';
+  // Two 1-seaters in a straight row, anchored at the top-left (as
+  // cellsFromComboModules emits before a layout is loaded into the room).
+  const row: Cell[] = [
+    { id: 'a', moduleId: '1A(LHF)', x: 0, y: 0, rot: 0 },
+    { id: 'b', moduleId: '1A(RHF)', x: 95, y: 0, rot: 0 },
+  ];
+
+  it('centers the layout bounding box within the given area', () => {
+    const centered = centerCellsWithin(row, depth, 600, 480);
+    const bb = cellsBbox(centered, depth)!;
+    expect(bb.x + bb.w / 2).toBeCloseTo(300, 6); // room mid-X
+    expect(bb.y + bb.h / 2).toBeCloseTo(240, 6); // room mid-Y
+  });
+
+  it('is a pure translation — relative geometry is preserved', () => {
+    const before = cellsBbox(row, depth)!;
+    const centered = centerCellsWithin(row, depth, 600, 480);
+    const after = cellsBbox(centered, depth)!;
+    // Same size, same inter-cell offsets, just shifted.
+    expect(after.w).toBeCloseTo(before.w, 6);
+    expect(after.h).toBeCloseTo(before.h, 6);
+    expect(centered[1]!.x - centered[0]!.x).toBe(95);
+    expect(centered[1]!.y - centered[0]!.y).toBe(0);
+  });
+
+  it('does not mutate the input array', () => {
+    const snapshot = row.map((c) => ({ ...c }));
+    centerCellsWithin(row, depth, 600, 480);
+    expect(row).toEqual(snapshot);
+  });
+
+  it('returns the cells unchanged when there is no measurable footprint', () => {
+    expect(centerCellsWithin([], depth, 600, 480)).toEqual([]);
   });
 });

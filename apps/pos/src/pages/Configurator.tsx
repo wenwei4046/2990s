@@ -48,7 +48,7 @@ import {
    exactly like the handover does and replaces the SO build server-side. */
 import { fetchItemCodeMap, cartLinesToSoItems } from '../lib/pos-handover-so';
 import { supabase } from '../lib/supabase';
-import { CustomBuilder } from './CustomBuilder';
+import { CustomBuilder, centerCellsInRoom } from './CustomBuilder';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import {
   BedframeOptions,
@@ -2009,8 +2009,9 @@ export const Configurator = () => {
               setQpMirror(false);
             }}
             onQuickPickEdit={(item) => {
-              // Load into Customize for further adjustment.
-              setSofaCells(cellsFromComboModules(item.modules, activeDepth));
+              // Load into Customize for further adjustment, centered in the room
+              // (like tap-to-add) rather than pinned to the top-left corner.
+              setSofaCells(centerCellsInRoom(cellsFromComboModules(item.modules, activeDepth), activeDepth));
               setMode('custom');
             }}
             onQuickPickDelete={(item) => {

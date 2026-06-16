@@ -953,6 +953,21 @@ export const cellsBbox = (cells: Cell[], depth: Depth): Bbox | null => {
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 };
 
+/* Translate a layout so its bounding box is centered within a `w`×`h` area
+   (e.g. the CustomBuilder room). Pure translation — every cell shifts by the
+   same delta, so relative geometry, grouping, pricing, and left-to-right order
+   are all unchanged. A freshly-generated layout (cellsFromComboModules) is
+   anchored at (0,0); without this it renders jammed into the top-left corner
+   when handed to a room. Returns the cells unchanged when there's no
+   measurable footprint. */
+export const centerCellsWithin = (cells: Cell[], depth: Depth, w: number, h: number): Cell[] => {
+  const bb = cellsBbox(cells, depth);
+  if (!bb) return cells;
+  const dx = w / 2 - bb.w / 2 - bb.x;
+  const dy = h / 2 - bb.h / 2 - bb.y;
+  return cells.map((c) => ({ ...c, x: c.x + dx, y: c.y + dy }));
+};
+
 /* ─── Adjacency + grouping ─────────────────────────────────────────── */
 
 const CONTACT_TOL = 2; // cm — anything closer than this counts as touching.

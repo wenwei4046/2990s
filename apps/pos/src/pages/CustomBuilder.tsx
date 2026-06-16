@@ -9,6 +9,7 @@ import {
   moduleFootprint,
   cellBbox,
   cellsBbox,
+  centerCellsWithin,
   groupSofas,
   analyzeSofa,
   computeSofaPrice,
@@ -43,6 +44,15 @@ import styles from './CustomBuilder.module.css';
 const ROOM_W_CM = 600;   // 6 m wide
 const ROOM_H_CM = 480;   // 4.8 m deep
 const SCALE = 1;         // 1 px = 1 cm. Stage is 600×480 px, fits a tablet column.
+
+/* Center a freshly-generated layout in the room — matches where tap-to-add
+   drops modules (spawnPos centers on roomW/2 × roomH/2). Quick-Pick "Edit in
+   Customize" hands the builder a layout pinned at (0,0) by cellsFromComboModules;
+   without this it lands in the top-left corner instead of mid-canvas. Centers
+   against the 1× room: the builder mounts fresh with roomScale = 1 whenever a
+   pick is loaded. */
+export const centerCellsInRoom = (cells: Cell[], depth: Depth): Cell[] =>
+  centerCellsWithin(cells, depth, ROOM_W_CM, ROOM_H_CM);
 
 // TV anchors the room's "front" — sofas face the TV. Fixed 140×30 block,
 // 30cm from the bottom wall, horizontally centered. TV_GAP (40cm) is the
