@@ -24,7 +24,7 @@ import {
   todayLocalIso,
   type HandoverForm, type AddonInfo,
 } from '../lib/handover-helpers';
-import { missingVariantAxes } from '@2990s/shared';
+import { missingVariantAxes, payableDeliveryCategories } from '@2990s/shared';
 import { Topbar } from '../components/Topbar';
 import { PhaseNav } from '../components/handover/PhaseNav';
 import { StepFooter } from '../components/handover/StepFooter';
@@ -221,10 +221,17 @@ export const Handover = () => {
       .map((it) => it.description || it.itemCode),
   ));
   const hasTbcLines = tbcItemNames.length > 0;
-  const DELIVERABLE_GROUPS = new Set(['sofa', 'mattress', 'bedframe']);
-  const cartCategoryIds = lines
-    .map((l) => inferItemGroup(l.config, productById.get(l.config.productId)))
-    .filter((g) => DELIVERABLE_GROUPS.has(g));
+  // Free-item-campaign lines are treated like accessories for delivery — excluded
+  // from the fee so the preview matches the server (Loo 2026-06-17). The cart marks
+  // a made-free line with config.freeItemCampaignId.
+  const cartLineIsFree = (l: (typeof lines)[number]): boolean =>
+    Boolean((l.config as { freeItemCampaignId?: string | null }).freeItemCampaignId);
+  const cartCategoryIds = payableDeliveryCategories(
+    lines.map((l) => ({
+      group: inferItemGroup(l.config, productById.get(l.config.productId)),
+      isFree: cartLineIsFree(l),
+    })),
+  );
   const deliveryCfg = deliveryCfgQuery.data ?? { baseFee: 0, crossCategoryFee: 0 };
   // Special-model fees (migration 0140) — map model_id → fee, then collect the
   // specials present in this cart so the shown fee matches the server charge.
@@ -233,6 +240,8 @@ export const Handover = () => {
   );
   const cartSpecialModels: SpecialModelDeliveryFee[] = lines
     .map((l) => {
+      // A free-item line adds no special transport fee (treated like accessory).
+      if (cartLineIsFree(l)) return null;
       // The cart line carries its own product_models.id (configurator-set on
       // size + bedframe lines); fall back to the catalog only for older lines.
       // The catalog lookup misses size-variant SKUs, so config.modelId is what
