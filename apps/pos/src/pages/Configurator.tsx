@@ -50,8 +50,10 @@ import { fetchItemCodeMap, cartLinesToSoItems } from '../lib/pos-handover-so';
 import {
   useSoHeaderForAdd,
   useAddProductToPlacedSo,
+  useRedeemablePwpCodesForOrder,
   AddSoItemApiError,
   type AddSoItemBody,
+  type RedeemablePwpCode,
 } from '../lib/queries';
 import { supabase } from '../lib/supabase';
 import { CustomBuilder, centerCellsInRoom } from './CustomBuilder';
@@ -517,6 +519,20 @@ export const Configurator = () => {
   const addToOrderMutation = useAddProductToPlacedSo();
   const [addToOrderPending, setAddToOrderPending] = useState(false);
   const [addToOrderError, setAddToOrderError] = useState<string | null>(null);
+
+  /* ── PWP auto-fill for addToOrder mode (Task 7) ────────────────────────
+     When adding a product to a placed SO, query the order's redeemable codes
+     (minted by the SO's own trigger lines, e.g. its mattress minted a code
+     that this bed-frame reward should redeem). If the currently-configured
+     product matches one of those codes, auto-apply it — same state paths the
+     manual "Insert PWP Code" flow uses, so the display + submit are identical.
+     Disabled outside addToOrder mode (hook is conditional on docNo). */
+  const orderRedeemableCodesQ = useRedeemablePwpCodesForOrder(
+    isAddToOrderMode ? (addToOrderDoc ?? undefined) : undefined,
+  );
+  /* Flag: a PWP code has been auto-applied from the order's redeemable codes.
+     Task 8 reads this to hide the free-item affordance (mutual exclusion). */
+  const [orderPwpAutoApplied, setOrderPwpAutoApplied] = useState(false);
 
   /** Marshal and POST a configured snapshot to POST /:docNo/items. Works
    *  for any product kind — the same CartLine + fetchItemCodeMap path the
@@ -1136,6 +1152,81 @@ export const Configurator = () => {
     const comboId = (top.rewardComboIds ?? []).find((id) => matchedSet.has(id));
     return comboId ? { code: top.code, comboId } : null;
   }, [reservedCodesQ.data, cartLines, editKey, sofaMatchedComboIds]);
+
+  /* ── PWP auto-pick from order's redeemable codes (addToOrder, Task 7) ──
+     Find the first redeemable code from the SO that matches the currently-
+     configured product. FIFO — the codes come back in DB insert order, so
+     the earliest-minted code is picked first (mirrors same-cart FIFO logic).
+
+     Non-sofa (BEDFRAME / MATTRESS): category + model match.
+     Sofa: category SOFA + rewardComboIds ∩ sofaMatchedComboIds. */
+  // Derived early (before the early-return guard) so the auto-pick memos below
+  // can reference it without breaking Rules of Hooks.
+  const isSofaProduct = product.data?.pricing_kind === 'sofa_build';
+
+  const orderAutoCodeNonSofa = useMemo((): RedeemablePwpCode | null => {
+    if (!isAddToOrderMode || !pwpRewardCategory || isSofaProduct) return null;
+    const codes = orderRedeemableCodesQ.data ?? [];
+    return codes.find((rc) =>
+      String(rc.rewardCategory).toUpperCase() === pwpRewardCategory &&
+      (rc.eligibleRewardModelIds.length === 0 ||
+        (pwpRewardModelId != null && rc.eligibleRewardModelIds.includes(pwpRewardModelId))),
+    ) ?? null;
+  }, [isAddToOrderMode, orderRedeemableCodesQ.data, pwpRewardCategory, pwpRewardModelId, isSofaProduct]);
+
+  const orderAutoSofaPick = useMemo((): { code: string; comboId: string } | null => {
+    if (!isAddToOrderMode || !isSofaProduct || sofaMatchedComboIds.length === 0) return null;
+    const codes = orderRedeemableCodesQ.data ?? [];
+    const matchedSet = new Set(sofaMatchedComboIds);
+    const match = codes.find((rc) =>
+      String(rc.rewardCategory).toUpperCase() === 'SOFA' &&
+      (rc.rewardComboIds ?? []).some((id) => matchedSet.has(id)),
+    );
+    if (!match) return null;
+    const comboId = (match.rewardComboIds ?? []).find((id) => matchedSet.has(id));
+    return comboId ? { code: match.code, comboId } : null;
+  }, [isAddToOrderMode, orderRedeemableCodesQ.data, isSofaProduct, sofaMatchedComboIds]);
+
+  /* Auto-apply non-sofa order code — mirrors edit-hydration pattern:
+     set state directly without re-validating (server re-validates on submit).
+     Guard: only auto-apply once; if the salesperson manually removes the code,
+     don't re-apply it (the ref resets on productId change via the effect above). */
+  const orderNonSofaAutoAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!orderAutoCodeNonSofa || orderNonSofaAutoAppliedRef.current) return;
+    if (insertedCode) return; // already applied (manual or edit-hydration)
+    orderNonSofaAutoAppliedRef.current = true;
+    const code = orderAutoCodeNonSofa.code;
+    const isPromo = orderAutoCodeNonSofa.type === 'promo';
+    setInsertedCode(code);
+    setInsertCodeInput(code);
+    setInsertedCodeType(isPromo ? 'promo' : 'pwp');
+    setInsertErr(null);
+    setUsePwp(false); // cross-order path, not same-cart toggle
+    setOrderPwpAutoApplied(true);
+  }, [orderAutoCodeNonSofa, insertedCode]);
+
+  /* Auto-apply sofa order code — mirrors the sofa edit-hydration: set
+     sofaPwpCode + sofaPwpComboIds directly (server re-validates on submit). */
+  const orderSofaAutoAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!orderAutoSofaPick || orderSofaAutoAppliedRef.current) return;
+    if (sofaPwpCode) return; // already applied
+    orderSofaAutoAppliedRef.current = true;
+    setSofaPwpCode(orderAutoSofaPick.code);
+    setSofaPwpInput(orderAutoSofaPick.code);
+    setSofaPwpComboIds([orderAutoSofaPick.comboId]);
+    setSofaPwpErr(null);
+    setOrderPwpAutoApplied(true);
+  }, [orderAutoSofaPick, sofaPwpCode]);
+
+  /* Reset auto-applied refs when productId changes (the productId reset effect
+     above already clears all PWP state; this keeps the refs in sync). */
+  useEffect(() => {
+    orderNonSofaAutoAppliedRef.current = false;
+    orderSofaAutoAppliedRef.current = false;
+    setOrderPwpAutoApplied(false);
+  }, [productId]);
 
   // Validate + apply a sofa PWP code against the build's matched combos (plain
   // fn, not a hook). Mirrors CustomBuilder's old applyPwpCode; codeArg lets Auto
