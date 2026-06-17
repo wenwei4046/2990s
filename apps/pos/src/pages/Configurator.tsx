@@ -1,8 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, Hourglass, X, Plus, Minus, Package, Trash2, FlipHorizontal2 } from 'lucide-react';
+import { ArrowLeft, Hourglass, X, Plus, Minus, Package, Trash2, FlipHorizontal2, Gift } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, matchComboSubset, comboChargedPrices, orderSofaCellsLeftToRight, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, matchComboSubset, comboChargedPrices, orderSofaCellsLeftToRight, campaignsCoveringLine, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
 import { resolvePwp, type PwpLineInput } from '@2990s/shared/pwp';
 import { usePwpRules, useMyReservedPwpCodes, validatePwpCode } from '../lib/products/pwp-queries';
 import {
@@ -30,9 +30,11 @@ import {
   useSofaQuickPicks,
   useSofaQuickPicksRealtime,
   useDeleteSofaQuickPick,
+  useActiveFreeItemCampaigns,
   type AddonRow,
   type ProductFabricRow,
   type BedframeOptionRow,
+  type FreeItemCampaignRow,
 } from '../lib/queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useMyQuickPicks, useDeletePersonalQuickPick } from '../lib/personal-quick-picks';
@@ -557,7 +559,13 @@ export const Configurator = () => {
       if (!soItem) throw new Error('Failed to marshal item.');
       // PosHandoffItem is a superset of AddSoItemBody (extra fields: description,
       // cartLineKey) — the API ignores the extras. Cast to satisfy TS.
-      await addToOrderMutation.mutateAsync({ docNo: addToOrderDoc, item: soItem as unknown as AddSoItemBody });
+      // freeItemCampaignId is a TOP-LEVEL body field (not inside variants) — the
+      // server validates eligibility and forces the line to RM 0 (Task 4).
+      const itemBody: AddSoItemBody = {
+        ...(soItem as unknown as AddSoItemBody),
+        ...(freeItemCampaignId ? { freeItemCampaignId } : {}),
+      };
+      await addToOrderMutation.mutateAsync({ docNo: addToOrderDoc, item: itemBody });
       navigate(`/my-orders`);
     } catch (err) {
       if (err instanceof AddSoItemApiError) {
@@ -705,11 +713,29 @@ export const Configurator = () => {
   const [sofaPwpComboIds, setSofaPwpComboIds] = useState<string[]>([]);
   const [sofaPwpErr, setSofaPwpErr] = useState<string | null>(null);
   const [sofaPwpChecking, setSofaPwpChecking] = useState(false);
+
+  /* ── Free Item Campaign (Task 8) — addToOrder mode only ─────────────────
+     Active campaigns + combo-modules map (reuses sofaCombosQ already loaded
+     for this Model). Campaign state resets on product change (see effect below). */
+  const { data: activeCampaigns = [] } = useActiveFreeItemCampaigns();
+  // comboModulesById feeds campaignsCoveringLine's sofa combo-scope check.
+  // sofaCombosQ is already scoped to this Model's base_model, which is the
+  // right scope: a campaign's combo eligibility pins a comboId belonging to
+  // this model's combos. Mirrors CartContents but model-scoped (correct here).
+  const comboModulesByIdForFic = useMemo(
+    () => new Map((sofaCombosQ.data ?? []).map((cb) => [cb.id, cb.modules])),
+    [sofaCombosQ.data],
+  );
+  // Selected free-item campaign state — reset on product change (see effect below).
+  const [freeItemCampaignId, setFreeItemCampaignId] = useState<string | null>(null);
+  const [freeItemCampaignName, setFreeItemCampaignName] = useState<string | null>(null);
+
   useEffect(() => { // never leak the toggle / code across products
     setUsePwp(false);
     setInsertCodeInput(''); setInsertedCode(null); setInsertedCodeType('pwp'); setInsertErr(null);
     setSofaPwpInput(''); setSofaPwpCode(null); setSofaPwpComboIds([]); setSofaPwpErr(null);
     setSofaLegValue(null);
+    setFreeItemCampaignId(null); setFreeItemCampaignName(null);
   }, [productId]);
   const pwpEval = useMemo(() => {
     const rules = pwpRulesQ.data ?? [];
@@ -1266,6 +1292,43 @@ export const Configurator = () => {
   // switch (the productId reset above).
   const sofaPwpApplied = sofaPwpCode != null && sofaPwpComboIds.some((id) => sofaMatchedComboIds.includes(id));
 
+  /* ── Free Item Campaign coverage (Task 8) — addToOrder mode only ────────
+     Mirrors CartContents: compute which active campaigns cover the currently-
+     configured product. Only active in addToOrder mode (this affordance is
+     NOT available in cart mode — the cart's own CartContents "Make free" handles
+     that). Mutual exclusion: blocked when any PWP path is active. */
+  // Product-level inputs for campaignsCoveringLine (category + modelId).
+  // These are derived BEFORE the early-return guard (both are safe ''/null
+  // before product.data lands), so the memo below is always a valid hook call.
+  const ficProductCategory = (product.data as { category_id?: string | null } | null)?.category_id ?? '';
+  const ficProductModelId = (product.data as { model_id?: string | null } | null)?.model_id ?? null;
+  // Sofa built module ids — the same `sofaBuiltModules` already derived above.
+  // Non-sofa lines pass [] (campaignsCoveringLine ignores it for non-SOFA lines).
+  const ficCovering = useMemo<FreeItemCampaignRow[]>(() => {
+    if (!isAddToOrderMode) return [];
+    // PWP mutual exclusion — never show the free-item control when a PWP code
+    // is applied via any path (same-cart, cross-order, or auto-applied from the
+    // order's redeemable codes). The server also rejects both (free_and_pwp_exclusive).
+    const anyPwpActive = Boolean(usePwp) || (insertedCode != null) || sofaPwpApplied || orderPwpAutoApplied;
+    if (anyPwpActive) return [];
+    if (!ficProductModelId) return [];
+    return campaignsCoveringLine(
+      {
+        category: ficProductCategory,
+        modelId: ficProductModelId,
+        builtModuleIds: sofaBuiltModules,
+      },
+      activeCampaigns,
+      comboModulesByIdForFic,
+    );
+  }, [
+    isAddToOrderMode,
+    usePwp, insertedCode, sofaPwpApplied, orderPwpAutoApplied,
+    ficProductCategory, ficProductModelId, sofaBuiltModules,
+    activeCampaigns, comboModulesByIdForFic,
+  ]);
+  const ficSingleCampaign = ficCovering.length === 1 ? ficCovering[0]! : null;
+
   // F5: per-Model seat depths ('24,30' → ['24','30']). Fallback ['24'] so the
   // toggle always has a value (only rendered for sofas, which always seed it).
   //
@@ -1467,6 +1530,64 @@ export const Configurator = () => {
       )}
     </RailSection>
   );
+
+  /* Make free — addToOrder mode only (Task 8). Shown when ≥1 active campaign
+     covers the currently-configured product AND no PWP path is active.
+     1 campaign → a toggle button ("Make free · <name>").
+     2+ campaigns → a small picker ("Make free…" select).
+     Mutual exclusion with PWP is enforced above in ficCovering (returns [] when
+     any PWP is active) AND the server rejects both (free_and_pwp_exclusive).
+     Applying free also prevents PWP: once freeItemCampaignId is set, the user
+     can still interact with PWP controls but ficCovering will stay [] because
+     anyPwpActive would be true — however freeItemCampaignId and PWP can't
+     coexist in the same submit (the server rejects it). To be safe, clearing
+     the free selection should NOT auto-apply PWP (no side effect — the user
+     must explicitly apply PWP if they want it).
+     This section is only rendered in isAddToOrderMode. */
+  const makeFreeRailSection = isAddToOrderMode && ficCovering.length > 0 ? (
+    <RailSection title="Free item">
+      {freeItemCampaignId ? (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)', padding: 'var(--space-2) 0' }}>
+          <span style={{ fontSize: 'var(--fs-12)' }}>
+            <Gift size={14} strokeWidth={1.75} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} />
+            <span style={{ fontWeight: 600 }}>FREE · {freeItemCampaignName}</span>
+            <span style={{ display: 'block', color: 'var(--fg-muted)' }}>
+              Server sets price to RM 0
+            </span>
+          </span>
+          <Button variant="ghost" onClick={() => { setFreeItemCampaignId(null); setFreeItemCampaignName(null); }}>
+            Remove
+          </Button>
+        </div>
+      ) : ficSingleCampaign ? (
+        <div style={{ paddingTop: 'var(--space-2)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <Gift size={14} strokeWidth={1.75} />
+          <Button
+            variant="secondary"
+            onClick={() => { setFreeItemCampaignId(ficSingleCampaign.id); setFreeItemCampaignName(ficSingleCampaign.name); }}
+          >
+            Make free · {ficSingleCampaign.name}
+          </Button>
+        </div>
+      ) : (
+        <div style={{ paddingTop: 'var(--space-2)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <Gift size={14} strokeWidth={1.75} />
+          <select
+            aria-label="Make free under campaign"
+            defaultValue=""
+            onChange={(e) => {
+              const c = ficCovering.find((x) => x.id === e.target.value);
+              if (c) { setFreeItemCampaignId(c.id); setFreeItemCampaignName(c.name); }
+            }}
+            style={{ flex: 1 }}
+          >
+            <option value="" disabled>Make free…</option>
+            {ficCovering.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+      )}
+    </RailSection>
+  ) : null;
 
   // Special add-on (note + extra charge) — Loo 2026-06-13. The description + amount
   // feed variants.extraAddonNote + extraAddonAmountRM → custom_specials (a charged
@@ -2264,7 +2385,13 @@ export const Configurator = () => {
               <SpecialAddonsPicker addons={sofaSpecialAddons} value={sofaSpecialSel} onChange={setSofaSpecialSel} />
             }
             legBlock={sofaLegBlock}
-            remarkBlock={remarkExtraRailSection}
+            remarkBlock={
+              <>
+                {/* Make free — addToOrder only (Task 8). Shown before remark/extra. */}
+                {makeFreeRailSection}
+                {remarkExtraRailSection}
+              </>
+            }
           />
         ) : (
           <CustomBuilder
@@ -2284,7 +2411,13 @@ export const Configurator = () => {
             legBlock={sofaLegBlock}
             legHeight={sofaLegValue}
             legSurchargeRm={sofaLegSurcharge}
-            remarkBlock={remarkExtraRailSection}
+            remarkBlock={
+              <>
+                {/* Make free — addToOrder only (Task 8). Shown before remark/extra. */}
+                {makeFreeRailSection}
+                {remarkExtraRailSection}
+              </>
+            }
             remark={lineRemark}
             extraAddonNote={lineExtraNote}
             extraAmountRm={effectiveExtraRm}
@@ -2328,6 +2461,10 @@ export const Configurator = () => {
             {/* Special add-on (note + extra charge) + item remark — directly below
                 the Add-ons chips (Loo 2026-06-13). */}
             {pickedSize && remarkExtraRailSection}
+
+            {/* Free item campaign — addToOrder only (Task 8). Shown when a campaign
+                covers this product and no PWP path is active. */}
+            {pickedSize && makeFreeRailSection}
 
             {/* PWP redeem — shared bed frame + mattress section. Shown once a size
                 is picked (it prices off the size's PWP price). */}
@@ -2411,6 +2548,10 @@ export const Configurator = () => {
             {/* Line quantity (Loo 2026-06-12) — shown once a size is picked. */}
             {pickedSize && quantityRailSection}
 
+            {/* Free item campaign — addToOrder only (Task 8). Shown when a campaign
+                covers this product and no PWP path is active. */}
+            {makeFreeRailSection}
+
             {/* PWP redeem — shared bed frame + mattress section (see pwpRailSection). */}
             {isBedframe && pwpRailSection}
 
@@ -2446,20 +2587,25 @@ export const Configurator = () => {
       )}
 
       {p.pricing_kind === 'flat' && p.flat_price != null && (
-        <FlatAddToCart
-          productId={p.id}
-          productName={p.name}
-          flatPrice={p.flat_price}
-          category={p.category_id ? p.category_id.toUpperCase() : undefined}
-          onAdded={backToCatalog}
-          {...(isAddToOrderMode ? {
-            onAddToOrder: (snapshot: FlatConfigSnapshot, qty: number) => {
-              void confirmAddToOrder(snapshot, qty);
-            },
-            addToOrderPending,
-            addEligible: soHeader?.addEligible ?? true,
-          } : {})}
-        />
+        <>
+          {/* Make free — addToOrder only (Task 8). Shown when a campaign covers
+              this flat product and no PWP path is active. */}
+          {makeFreeRailSection}
+          <FlatAddToCart
+            productId={p.id}
+            productName={p.name}
+            flatPrice={p.flat_price}
+            category={p.category_id ? p.category_id.toUpperCase() : undefined}
+            onAdded={backToCatalog}
+            {...(isAddToOrderMode ? {
+              onAddToOrder: (snapshot: FlatConfigSnapshot, qty: number) => {
+                void confirmAddToOrder(snapshot, qty);
+              },
+              addToOrderPending,
+              addEligible: soHeader?.addEligible ?? true,
+            } : {})}
+          />
+        </>
       )}
 
       {p.pricing_kind === 'tbc' && (
