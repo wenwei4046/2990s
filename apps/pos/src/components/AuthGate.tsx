@@ -13,9 +13,14 @@ import { LockScreen } from '../pages/LockScreen';
 // them. Send them to /set-password first; the form flips the flag, and the
 // next render falls through to LockScreen / app as normal.
 export const AuthGate = ({ children }: { children: ReactNode }) => {
-  const { user, loading } = useAuth();
+  const { user, loading, recovery } = useAuth();
 
   if (loading) return <div style={{ padding: 32 }}>Loading…</div>;
+  // A password-recovery session must reach the reset form even when Supabase
+  // dropped the user at the Site-URL root (→ /catalog) instead of /set-password.
+  // Require `user` so a recovery flag with no live session falls through to the
+  // LockScreen below instead of looping with /login → /set-password.
+  if (recovery && user) return <Navigate to="/set-password" replace />;
   if (user && user.user_metadata?.password_set === false) {
     return <Navigate to="/set-password" replace />;
   }

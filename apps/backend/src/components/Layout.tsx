@@ -32,7 +32,7 @@ const ROUTE_META: Record<string, RouteMeta> = {
 };
 
 export const Layout = () => {
-  const { user, staff, loading } = useAuth();
+  const { user, staff, loading, recovery } = useAuth();
   const location = useLocation();
 
   // Global Ctrl/Cmd+K command palette. Hook runs unconditionally (before any
@@ -51,6 +51,12 @@ export const Layout = () => {
 
   if (loading) return <div className={styles.loading}>Loading…</div>;
   if (!user) return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+
+  // A password-recovery session must land on the reset form even when Supabase
+  // dropped the user at the Site-URL root (→ /dashboard) instead of /set-password.
+  if (recovery && location.pathname !== '/set-password') {
+    return <Navigate to="/set-password" replace />;
+  }
 
   // PR #48 — first-login onboarding. Invited staff land here via the magic
   // link with `user_metadata.password_set === false` (set by inviteUserByEmail
