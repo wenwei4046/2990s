@@ -63,6 +63,13 @@ export interface SofaConfigSnapshot {
    *  drift gate adds the same amount to its authoritative figure.
    *  Never pre-multiplied by qty — the server scales unit × qty. */
   extraAddonAmountRM?: number;
+  /** Free Item Campaign (mig 0176) — set when the salesperson made this line
+   *  free under an ACTIVE campaign (no purchase). `total` is forced to 0;
+   *  freeItemOriginalTotal restores it on revert. Rides variants.freeItem to
+   *  the SO; the server re-validates + forces RM0. */
+  freeItemCampaignId?: string | null;
+  freeItemCampaign?: string | null;
+  freeItemOriginalTotal?: number;
   total: number;
   summary: string;       // e.g. "3+L · Bundle · Velvet/Sand"
 }
@@ -96,6 +103,13 @@ export interface SizeConfigSnapshot {
    *  drift gate adds the same amount to its authoritative figure.
    *  Never pre-multiplied by qty — the server scales unit × qty. */
   extraAddonAmountRM?: number;
+  /** Free Item Campaign (mig 0176) — set when the salesperson made this line
+   *  free under an ACTIVE campaign (no purchase). `total` is forced to 0;
+   *  freeItemOriginalTotal restores it on revert. Rides variants.freeItem to
+   *  the SO; the server re-validates + forces RM0. */
+  freeItemCampaignId?: string | null;
+  freeItemCampaign?: string | null;
+  freeItemOriginalTotal?: number;
   total: number;
   summary: string;       // e.g. "Queen"
   /** Paid-extra add-ons attached to this configured line (e.g. extra pillows
@@ -126,6 +140,13 @@ export interface FlatConfigSnapshot {
   isFreeGift?: boolean;
   freeGiftTriggerKey?: string;
   freeGiftCampaign?: string | null;
+  /** Free Item Campaign (mig 0176) — set when the salesperson made this line
+   *  free under an ACTIVE campaign (no purchase). `total` is forced to 0;
+   *  freeItemOriginalTotal restores it on revert. Rides variants.freeItem to
+   *  the SO; the server re-validates + forces RM0. */
+  freeItemCampaignId?: string | null;
+  freeItemCampaign?: string | null;
+  freeItemOriginalTotal?: number;
   total: number;
   summary: string;       // e.g. "Flat price"
 }
@@ -198,6 +219,13 @@ export interface BedframeConfigSnapshot {
   divanHeightLabel?: string | null;
   totalHeightLabel?: string | null;
   specialLabels?: string[];
+  /** Free Item Campaign (mig 0176) — set when the salesperson made this line
+   *  free under an ACTIVE campaign (no purchase). `total` is forced to 0;
+   *  freeItemOriginalTotal restores it on revert. Rides variants.freeItem to
+   *  the SO; the server re-validates + forces RM0. */
+  freeItemCampaignId?: string | null;
+  freeItemCampaign?: string | null;
+  freeItemOriginalTotal?: number;
   total: number;
   summary: string;       // e.g. "Queen · Sand · Gap 6\" · Leg 4\""
 }
@@ -229,6 +257,11 @@ interface CartState {
   revertPwp: (key: string) => void;
   /** 0170 — make the cart's free-gift lines match `desired` (add/update/remove). */
   reconcileFreeGifts(desired: DesiredFreeGift[], nameById: Map<string, string>): void;
+  /** Make a line free under an active campaign (mig 0176). Frees up to
+   *  cap units; if qty > cap, splits a free line (qty=cap) off the paid one. */
+  makeFree(key: string, campaign: { id: string; name: string; maxFreeQty: number }): void;
+  /** Revert a made-free line to its original price + clear the marker. */
+  revertFreeItem(key: string): void;
   /** Swap a reward line's voucher code in place (price unchanged). Used by the
    *  PWP reconciler when the server re-minted a trigger's codes (e.g. after a
    *  failed order burned + replaced them) and the line's snapshot went stale. */
@@ -252,6 +285,9 @@ const isSofaConfig = (c: CartConfig): boolean => c.kind === 'sofa';
    everywhere the store can change it. The server claim loop is the authority
    (409); this clamp keeps the cart honest before checkout. */
 const isPwpReward = (c: CartConfig): boolean => (c as { pwp?: boolean }).pwp === true;
+
+const isFreeItemLine = (c: CartConfig): boolean =>
+  Boolean((c as { freeItemCampaignId?: string | null }).freeItemCampaignId);
 
 const sanitizeQty = (config: CartConfig, qty: number | undefined, fallback = 1): number =>
   isPwpReward(config) ? 1 : Math.max(1, Math.floor(qty ?? fallback));
@@ -324,10 +360,9 @@ export const useCart = create<CartState>()((set, get) => ({
   },
 
   setQty(key, qty) {
-    if (qty < 1) {
-      get().remove(key);
-      return;
-    }
+    const line = get().lines.find((l) => l.key === key);
+    if (line && isFreeItemLine(line.config)) return;   // free-item qty is fixed (the freed quantity)
+    if (qty < 1) { get().remove(key); return; }
     set({
       lines: get().lines.map((l) =>
         l.key === key ? { ...l, qty: sanitizeQty(l.config, qty) } : l,
@@ -353,6 +388,54 @@ export const useCart = create<CartState>()((set, get) => ({
         delete next.pwpCode;
         delete next.pwpTriggerLabel;
         delete next.pwpOriginalTotal;
+        return { ...l, config: next as CartConfig };
+      }),
+    });
+  },
+
+  makeFree(key, campaign) {
+    const lines = get().lines;
+    const idx = lines.findIndex((l) => l.key === key);
+    if (idx === -1) return;
+    const line = lines[idx]!;
+    const cap = Math.max(1, Math.floor(campaign.maxFreeQty));
+    const freeQty = Math.min(line.qty, cap);
+    const original = line.config.total;
+    const freeConfig = {
+      ...line.config,
+      freeItemCampaignId: campaign.id,
+      freeItemCampaign: campaign.name,
+      freeItemOriginalTotal: original,
+      total: 0,
+    } as CartConfig;
+    if (freeQty >= line.qty) {
+      // whole line free
+      set({ lines: lines.map((l) => (l.key === key ? { ...l, config: freeConfig } : l)) });
+      return;
+    }
+    // split: paid remainder keeps the original line; a new free line carries the cap
+    const freeLine: CartLine = {
+      key: `cfg-${Math.random().toString(36).slice(2, 9)}`,
+      qty: freeQty,
+      config: freeConfig,
+    };
+    const paidLine: CartLine = { key: line.key, config: line.config, qty: line.qty - freeQty };
+    const next = [...lines];
+    next.splice(idx, 1, paidLine, freeLine);
+    set({ lines: next });
+  },
+
+  revertFreeItem(key) {
+    set({
+      lines: get().lines.map((l) => {
+        if (l.key !== key) return l;
+        const c = l.config as CartConfig & { freeItemCampaignId?: string | null; freeItemCampaign?: string | null; freeItemOriginalTotal?: number };
+        if (!c.freeItemCampaignId) return l;
+        const next = { ...c };
+        if (typeof c.freeItemOriginalTotal === 'number') next.total = c.freeItemOriginalTotal;
+        delete next.freeItemCampaignId;
+        delete next.freeItemCampaign;
+        delete next.freeItemOriginalTotal;
         return { ...l, config: next as CartConfig };
       }),
     });
