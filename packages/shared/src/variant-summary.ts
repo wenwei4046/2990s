@@ -138,8 +138,8 @@ export function buildVariantSummary(
   // simply "FREE" when the campaign name is blank. This segment prints LAST so
   // existing SEAT/LEG/SPECIAL segments remain unchanged.
   if (isFreeItemLine(variants)) {
-    const fi = variants as { freeItem?: { campaignName?: unknown } };
-    const name = str(fi.freeItem?.campaignName);
+    const freeItem = variants.freeItem as { campaignName?: unknown } | undefined;
+    const name = str(freeItem?.campaignName);
     segments.push(name ? `FREE · ${name}` : 'FREE');
   }
 
