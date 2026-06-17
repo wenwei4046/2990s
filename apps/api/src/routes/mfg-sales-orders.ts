@@ -14,6 +14,7 @@ import {
   type FreeGiftLineClaim, type TriggerLine,
   campaignsCoveringLine,
   isFreeItemLine,
+  payableDeliveryCategories,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
 /* POS auto-Proceed (Loo 2026-06-09) — when a handover arrives already complete
@@ -2614,10 +2615,16 @@ mfgSalesOrders.post('/', async (c) => {
       .select('base_fee, cross_category_fee')
       .eq('id', 1)
       .single();
-    const DELIVERABLE = new Set(['sofa', 'mattress', 'bedframe']);
-    const categoryIds = items
-      .map((it) => String((it as { itemGroup?: string }).itemGroup ?? '').toLowerCase())
-      .filter((g) => DELIVERABLE.has(g));
+    // Free-item-campaign lines are treated like accessories for delivery — they
+    // never add a delivery charge (Loo 2026-06-17). freeItemByIdx (populated by
+    // the free-item validation block above) marks them; payableDeliveryCategories
+    // drops them so an all-free SO has no deliverable category → RM0 base.
+    const categoryIds = payableDeliveryCategories(
+      items.map((it, idx) => ({
+        group: (it as { itemGroup?: string }).itemGroup,
+        isFree: freeItemByIdx.has(idx),
+      })),
+    );
     const additionalSen = Math.max(0, Math.round(Number(body.additionalDeliveryFee ?? 0) * 100));
     // delivery_fee_config + special fees are whole-MYR; the SO ledger is sen → ×100.
     const cfgSen = {
@@ -2633,7 +2640,8 @@ mfgSalesOrders.post('/', async (c) => {
     const specialModels: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
     const lineModelIds = [...new Set(
       lineProducts
-        .map((p) => (p as { model_id?: string | null } | null)?.model_id)
+        // Skip free-item lines — a free giveaway carries no special transport fee.
+        .map((p, idx) => (freeItemByIdx.has(idx) ? null : (p as { model_id?: string | null } | null)?.model_id))
         .filter((m): m is string => Boolean(m)),
     )];
     if (lineModelIds.length > 0) {
