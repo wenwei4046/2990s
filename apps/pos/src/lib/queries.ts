@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sofaModulePricesFromSkus, normalizeCompartmentCode, representativeArtCode } from '@2990s/shared/sofa-build';
-import { comboChargedPrices, type MfgSeatHeightPrice, type DefaultFreeGift } from '@2990s/shared';
+import { comboChargedPrices, type MfgSeatHeightPrice, type DefaultFreeGift, type FreeItemEligibility, type FreeItemCampaign } from '@2990s/shared';
 import { supabase } from './supabase';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -1946,6 +1946,70 @@ export const useDeleteModelDefaultGifts = () => {
       }
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['model-default-gifts'] }); },
+  });
+};
+
+/* ─── Free Item Campaigns (migration 0176) ───────────────────────────────
+ * GET /free-item-campaigns        → all (admin editor)
+ * GET /free-item-campaigns?active=1 → active (cart "Make free")
+ * POST / PATCH /:id / DELETE /:id  → editor mutations */
+export type FreeItemCampaignRow = FreeItemCampaign;
+
+const fic = async (path: string, init?: RequestInit) => {
+  if (!API_URL) throw new Error('VITE_API_URL is not set');
+  const session = await supabase.auth.getSession();
+  const token = session.data.session?.access_token;
+  if (!token) throw new Error('not_authenticated');
+  const res = await fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: { authorization: `Bearer ${token}`, ...(init?.body ? { 'content-type': 'application/json' } : {}) },
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+    throw new Error(b.reason ?? b.error ?? `${init?.method ?? 'GET'} ${path} failed (${res.status})`);
+  }
+  return res;
+};
+
+export const useFreeItemCampaigns = () =>
+  useQuery({
+    queryKey: ['free-item-campaigns'],
+    queryFn: async (): Promise<FreeItemCampaignRow[]> => (await (await fic('/free-item-campaigns')).json()) as FreeItemCampaignRow[],
+    staleTime: 60_000,
+  });
+
+export const useActiveFreeItemCampaigns = () =>
+  useQuery({
+    queryKey: ['free-item-campaigns', 'active'],
+    queryFn: async (): Promise<FreeItemCampaignRow[]> => (await (await fic('/free-item-campaigns?active=1')).json()) as FreeItemCampaignRow[],
+    staleTime: 60_000,
+  });
+
+type FreeItemCampaignInput = { name: string; active: boolean; maxFreeQty: number; eligible: FreeItemEligibility[] };
+
+export const useCreateFreeItemCampaign = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: FreeItemCampaignInput) => { await fic('/free-item-campaigns', { method: 'POST', body: JSON.stringify(input) }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['free-item-campaigns'] }); },
+  });
+};
+
+export const useUpdateFreeItemCampaign = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...input }: FreeItemCampaignInput & { id: string }) => {
+      await fic(`/free-item-campaigns/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) });
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['free-item-campaigns'] }); },
+  });
+};
+
+export const useDeleteFreeItemCampaign = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => { await fic(`/free-item-campaigns/${encodeURIComponent(id)}`, { method: 'DELETE' }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['free-item-campaigns'] }); },
   });
 };
 
