@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from './supabase';
+import { detectRecoveryInUrl } from './recovery';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
@@ -14,6 +15,8 @@ interface AuthState {
   loading: boolean;
   user: User | null;
   session: Session | null;
+  recovery: boolean;
+  clearRecovery: () => void;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   pinLogin: (staffId: string, pin: string) => Promise<PinLoginResult>;
   signOut: () => Promise<void>;
@@ -24,6 +27,11 @@ const AuthContext = createContext<AuthState | null>(null);
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
+  // Password-recovery session: snapshot the URL hash synchronously before
+  // supabase-js (detectSessionInUrl) strips it; the PASSWORD_RECOVERY event
+  // below is the backup signal. Guards route any recovery session to
+  // /set-password regardless of where Supabase drops the redirect.
+  const [recovery, setRecovery] = useState(() => detectRecoveryInUrl());
 
   useEffect(() => {
     let cancelled = false;
@@ -34,7 +42,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setLoading(false);
     });
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, newSession) => {
+      if (event === 'PASSWORD_RECOVERY') setRecovery(true);
       setSession(newSession);
     });
 
@@ -85,9 +94,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     await supabase.auth.signOut();
   };
 
+  const clearRecovery = () => setRecovery(false);
+
   return (
     <AuthContext.Provider
-      value={{ loading, user: session?.user ?? null, session, signIn, pinLogin, signOut }}
+      value={{ loading, user: session?.user ?? null, session, recovery, clearRecovery, signIn, pinLogin, signOut }}
     >
       {children}
     </AuthContext.Provider>
