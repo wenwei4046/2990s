@@ -87,7 +87,11 @@ const SHOWROOM_SCOPED_ROLES = new Set<string>(
    required for the POS-side roles only; admin / coordinator / finance /
    sales_director are cross-venue. WS2 (2026-05-31): `pin` is required when
    role === 'sales' (admin sets the initial 6-digit PIN); `password` is required
-   for every other role (admin sets the initial password). */
+   for every other role (admin sets the initial password).
+   2026-06-18: `pin` is now ALSO required for PASSWORD_LOGIN_ROLES — there it is
+   the 6-digit "My orders" passcode that opens the POS My-orders gate on a
+   shared tablet (separate from the email password). Net: `pin` required for
+   every login-group role; `password` still required for password roles only. */
 const CreateStaffBodySchema = z.object({
   /* staffCode + initials are auto-generated server-side when omitted (the new
      registration form no longer collects them). Still accepted if a caller
@@ -105,6 +109,10 @@ const CreateStaffBodySchema = z.object({
   password:   z.string().min(8).max(72).optional(),
 })
   .refine((d) => !PASSCODE_LOGIN_ROLES.has(d.role) || !!d.pin, { message: 'pin_required_for_passcode_role', path: ['pin'] })
+  /* Password (email-login) roles must set a 6-digit "My orders" passcode too —
+     it becomes their pin_hash so the role-agnostic /pos/verify-pin gate accepts
+     them on a shared tablet. Independent of the email password below. */
+  .refine((d) => !PASSWORD_LOGIN_ROLES.has(d.role) || !!d.pin, { message: 'pin_required_for_password_role', path: ['pin'] })
   .refine((d) => !PASSWORD_LOGIN_ROLES.has(d.role) || !!d.password, { message: 'password_required_for_password_role', path: ['password'] })
   /* A POS-selling role (SHOWROOM_SCOPED_ROLES) cannot be onboarded without a
      showroom — see the set comment above. This is the upstream guard that stops
@@ -189,9 +197,12 @@ admin.post('/staff', async (c) => {
   }
   const userId = created.user.id;
 
-  // Passcode roles log in by PIN — hash the admin-set 6-digit PIN (required-by-
-  // refine). Password roles have no PIN.
-  const pinHash = isPinUser ? await hashPin(input.pin as string) : null;
+  // Every login-group role carries a 6-digit PIN hash: for passcode roles it is
+  // their POS login passcode; for password (email-login) roles it is the
+  // "My orders" passcode that opens the My-orders gate on a shared tablet. Both
+  // are required-by-refine, so input.pin is present for every real role; the
+  // null fallback only covers a legacy role outside both login groups.
+  const pinHash = input.pin ? await hashPin(input.pin) : null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let newStaff: any = null;
@@ -500,9 +511,11 @@ admin.patch('/staff/:id/pin', async (c) => {
     .eq('id', id)
     .maybeSingle();
   if (!target) return c.json({ error: 'staff_not_found' }, 404);
-  if (!POS_PIN_ROLES.has(target.role)) {
-    return c.json({ error: 'not_a_pos_staff', role: target.role }, 422);
-  }
+  /* 2026-06-18: the 6-digit PIN is now ALSO the "My orders" passcode for
+     email-login roles, so this endpoint sets/resets it for ANY role. (It was
+     passcode-roles-only, which blocked admins/directors from getting a
+     My-orders passcode without a raw SQL UPDATE.) For passcode roles the PIN is
+     their login credential; for password roles it only opens the My-orders gate. */
 
   const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },

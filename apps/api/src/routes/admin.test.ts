@@ -106,7 +106,7 @@ describe('POST /admin/staff — role-based admin-set credential (WS2 2026-05-31)
     expect(insertedRow.email).toBe('aisha@2990s.my');
   });
 
-  it('non-sales role (coordinator) → createUser with the admin-set password, pin_hash NULL', async () => {
+  it('password role (coordinator) → createUser with password + bcrypt My-orders pin_hash (2026-06-18)', async () => {
     createUserMock.mockResolvedValue({ data: { user: { id: 'u-1' } }, error: null });
     let insertedRow: any = null;
     adminFromMock.mockImplementation((table: string) => ({
@@ -121,14 +121,17 @@ describe('POST /admin/staff — role-based admin-set credential (WS2 2026-05-31)
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         staffCode: 'ML', name: 'Mei Lin', role: 'coordinator',
-        email: 'ml@2990s.my', initials: 'ML', color: '#2F5D4F', password: 'sup3rsecret',
+        email: 'ml@2990s.my', initials: 'ML', color: '#2F5D4F',
+        password: 'sup3rsecret', pin: '654321',
       }),
     }, baseEnv);
     expect(res.status).toBe(201);
     expect(createUserMock).toHaveBeenCalledTimes(1);
     expect(inviteByEmailMock).not.toHaveBeenCalled();
     expect(createUserMock.mock.calls[0]![0].password).toBe('sup3rsecret');
-    expect(insertedRow.pin_hash).toBeNull();
+    // Password roles now carry a "My orders" passcode → bcrypt pin_hash on the row.
+    expect(typeof insertedRow.pin_hash).toBe('string');
+    expect(insertedRow.pin_hash.length).toBeGreaterThan(20);
   });
 
   it('sales_executive (passcode role) with a PIN, no staffCode/initials → 201, auto-coded', async () => {
@@ -179,11 +182,26 @@ describe('POST /admin/staff — role-based admin-set credential (WS2 2026-05-31)
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         staffCode: 'ML', name: 'Mei Lin', role: 'coordinator',
-        email: 'ml@b.co', initials: 'ML', color: '#2F5D4F',
+        email: 'ml@b.co', initials: 'ML', color: '#2F5D4F', pin: '654321',
       }),
     }, baseEnv);
     expect(res.status).toBe(400);
     expect(JSON.stringify(await res.json())).toContain('password_required_for_password_role');
+    expect(createUserMock).not.toHaveBeenCalled();
+  });
+
+  it('password role without a My-orders passcode → 400 (pin_required_for_password_role)', async () => {
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffCode: 'ML', name: 'Mei Lin', role: 'coordinator',
+        email: 'ml@b.co', initials: 'ML', color: '#2F5D4F', password: 'sup3rsecret',
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain('pin_required_for_password_role');
     expect(createUserMock).not.toHaveBeenCalled();
   });
 
@@ -284,14 +302,28 @@ describe('PATCH /admin/staff/:id/pin', () => {
     expect(res.status).toBe(403);
   });
 
-  it('non-POS target → 422 not_a_pos_staff', async () => {
+  it('password-login target (coordinator) → 200, sets My-orders pin_hash (block lifted 2026-06-18)', async () => {
+    let updatedPatch: any = null;
+    adminFromMock.mockImplementation((table: string) => ({
+      update: (patch: any) => {
+        if (table === 'staff') updatedPatch = patch;
+        return {
+          eq: () => ({
+            select: () => ({
+              maybeSingle: async () => ({ data: { id: TARGET_ID, role: 'coordinator' }, error: null }),
+            }),
+          }),
+        };
+      },
+    }));
     const app = buildAppForPin('admin', { role: 'coordinator' });
     const res = await app.request(`/admin/staff/${TARGET_ID}/pin`, {
       method: 'PATCH', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ pin: '123456' }),
+      body: JSON.stringify({ pin: '654321' }),
     }, baseEnv);
-    expect(res.status).toBe(422);
-    expect(((await res.json()) as { error?: string }).error).toBe('not_a_pos_staff');
+    expect(res.status).toBe(200);
+    expect(typeof updatedPatch.pin_hash).toBe('string');
+    expect(updatedPatch.pin_hash.length).toBeGreaterThan(20);
   });
 
   it('target not found → 404', async () => {
@@ -429,7 +461,8 @@ describe('staff showroom guard (create + patch)', () => {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         staffCode: 'CO', name: 'Coord', role: 'coordinator',
-        email: 'co@2990s.my', initials: 'CO', color: '#2F5D4F', password: 'sup3rsecret',
+        email: 'co@2990s.my', initials: 'CO', color: '#2F5D4F',
+        password: 'sup3rsecret', pin: '654321',
       }),
     }, baseEnv);
     expect(res.status).toBe(201);

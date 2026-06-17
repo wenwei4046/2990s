@@ -8,24 +8,33 @@ interface Props {
   // Minimal shape so both the Users page (UserRow) and the legacy Settings
   // staff list (StaffRow) can pass a record — only these fields are used.
   staff: { id: string; name: string; staffCode: string };
+  /* What this 6-digit code is FOR. 'passcode' (default) = a passcode-login
+     role's POS sign-in PIN. 'password' = an email-login role's "My orders"
+     passcode (opens the My-orders gate; does NOT change their email+password
+     sign-in). Only the wording differs — both PATCH staff.pin_hash. */
+  loginMethod?: 'passcode' | 'password';
   onClose: () => void;
 }
 
-export const PinDrawer = ({ staff, onClose }: Props) => {
+export const PinDrawer = ({ staff, loginMethod = 'passcode', onClose }: Props) => {
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mutation = useSetStaffPin();
 
+  /* Email-login roles: the PIN is the "My orders" passcode, not a POS sign-in. */
+  const myOrdersOnly = loginMethod === 'password';
+  const codeWord = myOrdersOnly ? 'passcode' : 'PIN';
+
   const onSave = async () => {
     setError(null);
     if (!/^\d{6}$/.test(pin)) {
-      setError('PIN must be 6 digits.');
+      setError(`${myOrdersOnly ? 'Passcode' : 'PIN'} must be 6 digits.`);
       return;
     }
     if (pin !== confirmPin) {
-      setError("PINs don't match.");
+      setError(`${myOrdersOnly ? 'Passcodes' : 'PINs'} don't match.`);
       return;
     }
     try {
@@ -51,10 +60,12 @@ export const PinDrawer = ({ staff, onClose }: Props) => {
       <div className={styles.drawer} onClick={(e) => e.stopPropagation()}>
         <header className={styles.head}>
           <div>
-            <div className="t-eyebrow">Reset PIN</div>
+            <div className="t-eyebrow">{myOrdersOnly ? 'Reset My orders passcode' : 'Reset PIN'}</div>
             <h3 className={styles.title}>{staff.name}</h3>
             <div className={styles.sub}>
-              They'll use this new 6-digit PIN to sign in to POS. Their current session (if any) keeps working until they sign out.
+              {myOrdersOnly
+                ? "They'll use this 6-digit passcode to open My orders on a shared tablet. It does not change their email + password sign-in."
+                : "They'll use this new 6-digit PIN to sign in to POS. Their current session (if any) keeps working until they sign out."}
             </div>
           </div>
           <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close">
@@ -66,7 +77,7 @@ export const PinDrawer = ({ staff, onClose }: Props) => {
           {error && <div className={styles.errorBanner}>{error}</div>}
 
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>New PIN</span>
+            <span className={styles.fieldLabel}>New {codeWord}</span>
             <input
               className={styles.input}
               type="password"
@@ -81,7 +92,7 @@ export const PinDrawer = ({ staff, onClose }: Props) => {
           </label>
 
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>Confirm PIN</span>
+            <span className={styles.fieldLabel}>Confirm {codeWord}</span>
             <input
               className={styles.input}
               type="password"
@@ -99,13 +110,15 @@ export const PinDrawer = ({ staff, onClose }: Props) => {
             {confirmingClear ? (
               <div className={styles.clearConfirm}>
                 <span>
-                  Clear {staff.staffCode}'s PIN? They won't be able to sign in to POS until you set a new one.
+                  {myOrdersOnly
+                    ? `Clear ${staff.staffCode}'s My orders passcode? They won't be able to open My orders until you set a new one (their email + password sign-in is unaffected).`
+                    : `Clear ${staff.staffCode}'s PIN? They won't be able to sign in to POS until you set a new one.`}
                 </span>
                 <Button variant="ghost" onClick={() => setConfirmingClear(false)} disabled={mutation.isPending}>
                   Cancel
                 </Button>
                 <Button variant="primary" onClick={() => void onClear()} disabled={mutation.isPending}>
-                  Yes, clear PIN
+                  Yes, clear {codeWord}
                 </Button>
               </div>
             ) : (
@@ -116,7 +129,7 @@ export const PinDrawer = ({ staff, onClose }: Props) => {
                 disabled={mutation.isPending}
               >
                 <Trash2 size={14} strokeWidth={1.75} />
-                Clear PIN (revoke POS access)
+                {myOrdersOnly ? 'Clear passcode (revoke My orders access)' : 'Clear PIN (revoke POS access)'}
               </button>
             )}
           </div>
@@ -127,7 +140,7 @@ export const PinDrawer = ({ staff, onClose }: Props) => {
           <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
           <Button variant="primary" onClick={() => void onSave()} disabled={mutation.isPending}>
             <Save size={16} strokeWidth={1.75} />
-            {mutation.isPending ? 'Saving…' : 'Save PIN'}
+            {mutation.isPending ? 'Saving…' : `Save ${codeWord}`}
           </Button>
         </footer>
       </div>

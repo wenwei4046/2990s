@@ -379,12 +379,17 @@ const InviteUserDrawer = ({
       toast.error('Pick a venue for this role.');
       return;
     }
-    if (usesPasscode) {
-      if (!/^\d{6}$/.test(form.passcode))     { toast.error('Set a 6-digit passcode.'); return; }
-      if (form.passcode !== form.confirmPasscode) { toast.error('Passcodes do not match.'); return; }
-    } else if (usesPassword && form.password.length < 8) {
+    // Email-login roles need a password (sign-in); passcode-login roles don't.
+    if (usesPassword && form.password.length < 8) {
       toast.error('Set a password (at least 8 characters).');
       return;
+    }
+    // Both groups need a 6-digit code: passcode roles → POS sign-in passcode;
+    // password roles → "My orders" passcode (opens the My-orders gate).
+    if (usesPasscode || usesPassword) {
+      const what = usesPasscode ? 'passcode' : 'My orders passcode';
+      if (!/^\d{6}$/.test(form.passcode))         { toast.error(`Set a 6-digit ${what}.`); return; }
+      if (form.passcode !== form.confirmPasscode) { toast.error(`${usesPasscode ? 'Passcodes' : 'My orders passcodes'} do not match.`); return; }
     }
 
     const body: InviteUserBody = {
@@ -394,14 +399,17 @@ const InviteUserDrawer = ({
       color:  form.color,
       ...(needsVenue ? { venueId: form.venueId } : {}),
       ...(SHOWROOM_SCOPED_ROLES.has(form.role) ? { showroomId: primaryShowroomId } : {}),
-      ...(usesPasscode ? { pin: form.passcode } : { password: form.password }),
+      // Password roles send BOTH: an email password (sign-in) and a 6-digit
+      // "My orders" passcode (pin). Passcode roles send only the passcode (pin).
+      ...(usesPassword ? { password: form.password } : {}),
+      ...(usesPasscode || usesPassword ? { pin: form.passcode } : {}),
     };
 
     invite.mutate(body, {
       onSuccess: (r) => {
         toast.success(usesPasscode
           ? `${r.staff.name} created — they log in with their passcode.`
-          : `${r.staff.name} created — they log in with email + password.`);
+          : `${r.staff.name} created — email + password login, with a My orders passcode set.`);
         onClose();
       },
       onError: (e) => toast.error(`Create failed: ${(e as Error).message}`),
@@ -448,31 +456,38 @@ const InviteUserDrawer = ({
             <div className={styles.formGridFull}>
               <ColourSwatchField value={form.color} onChange={(c) => set('color', c)} />
             </div>
-            {/* Credential: passcode for POS counter roles, password for Backend roles. */}
-            {usesPasscode ? (
-              <>
-                <label className={styles.field}>
-                  <span className={styles.fieldLabel}>Passcode * (6 digits)</span>
-                  <input className={styles.fieldInput} inputMode="numeric" maxLength={6}
-                    value={form.passcode}
-                    onChange={(e) => set('passcode', e.target.value.replace(/\D/g, ''))}
-                    placeholder="6-digit passcode" />
-                </label>
-                <label className={styles.field}>
-                  <span className={styles.fieldLabel}>Confirm passcode *</span>
-                  <input className={styles.fieldInput} inputMode="numeric" maxLength={6}
-                    value={form.confirmPasscode}
-                    onChange={(e) => set('confirmPasscode', e.target.value.replace(/\D/g, ''))}
-                    placeholder="Re-enter passcode" />
-                </label>
-              </>
-            ) : (
+            {/* Credential fields. Passcode roles: a POS sign-in passcode only.
+                Password (email-login) roles: an email password for sign-in PLUS
+                a 6-digit "My orders" passcode that opens the My-orders gate. */}
+            {usesPassword && (
               <label className={styles.field}>
                 <span className={styles.fieldLabel}>Password *</span>
                 <input className={styles.fieldInput} type="password" value={form.password}
                   onChange={(e) => set('password', e.target.value)}
                   placeholder="At least 8 characters" />
               </label>
+            )}
+            {(usesPasscode || usesPassword) && (
+              <>
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>
+                    {usesPasscode ? 'Passcode * (6 digits)' : 'My orders passcode * (6 digits)'}
+                  </span>
+                  <input className={styles.fieldInput} inputMode="numeric" maxLength={6}
+                    value={form.passcode}
+                    onChange={(e) => set('passcode', e.target.value.replace(/\D/g, ''))}
+                    placeholder="6-digit passcode" />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>
+                    {usesPasscode ? 'Confirm passcode *' : 'Confirm My orders passcode *'}
+                  </span>
+                  <input className={styles.fieldInput} inputMode="numeric" maxLength={6}
+                    value={form.confirmPasscode}
+                    onChange={(e) => set('confirmPasscode', e.target.value.replace(/\D/g, ''))}
+                    placeholder="Re-enter passcode" />
+                </label>
+              </>
             )}
           </div>
           <p style={{
@@ -483,7 +498,7 @@ const InviteUserDrawer = ({
           }}>
             {usesPasscode
               ? 'This person logs in with their 6-digit passcode on the POS. Set their starting passcode above — they can change it themselves later. Staff code and initials are generated automatically.'
-              : 'This person logs in with their email + the password above on the Backend. They can change it after signing in. Staff code and initials are generated automatically.'}
+              : 'This person logs in with their email + the password above on the Backend. The 6-digit My orders passcode lets them open My orders on a shared tablet (it does not change their sign-in). Staff code and initials are generated automatically.'}
           </p>
         </div>
         <footer className={styles.drawerFooter}>
@@ -577,10 +592,13 @@ const EditUserDrawer = ({
             <Field label="Phone" value={form.phone}
               onChange={(v) => set('phone', v)} placeholder="+60 12-345-6789" />
           </div>
-          {PASSCODE_LOGIN_ROLES.has(row.role) && (
+          {(PASSCODE_LOGIN_ROLES.has(row.role) || PASSWORD_LOGIN_ROLES.has(row.role)) && (
             <div style={{ marginTop: 'var(--space-4)' }}>
               <Button variant="ghost" size="sm" onClick={() => setPinOpen(true)}>
-                <RefreshCw {...ICON} /> Reset passcode
+                <RefreshCw {...ICON} />
+                {PASSCODE_LOGIN_ROLES.has(row.role)
+                  ? ' Reset passcode'
+                  : ' Set / reset My orders passcode'}
               </Button>
             </div>
           )}
@@ -595,6 +613,7 @@ const EditUserDrawer = ({
       {pinOpen && (
         <PinDrawer
           staff={{ id: row.id, name: row.name, staffCode: row.staff_code }}
+          loginMethod={PASSCODE_LOGIN_ROLES.has(row.role) ? 'passcode' : 'password'}
           onClose={() => setPinOpen(false)}
         />
       )}
