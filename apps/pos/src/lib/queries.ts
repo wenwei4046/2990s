@@ -2606,12 +2606,12 @@ export const useSoHeaderForAdd = (docNo: string | undefined) =>
       const so = body.salesOrder;
 
       /* Mirror soProcessingLocked from the server: the lock triggers once
-         internal_expected_dd OR processing_date is in the past (UTC date). */
-      const todayIso = new Date().toISOString().slice(0, 10);
-      const procDate = so.processing_date ?? so.internal_expected_dd ?? null;
+         internal_expected_dd OR processing_date is in the past (Malaysia UTC+8 date). */
+      const todayIso = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+      const procDate = so.internal_expected_dd ?? so.processing_date ?? null;
       const processingLocked = procDate != null && procDate < todayIso;
 
-      const hasDownstream = body.hasDownstream ?? false;
+      const hasDownstream = (so as { has_children?: boolean }).has_children ?? false;
 
       let addEligible = true;
       let addBlockedReason: string | null = null;
