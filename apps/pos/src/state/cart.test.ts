@@ -7,6 +7,7 @@ import {
   useCart,
   type CartLine,
   type CartConfig,
+  type SizeConfigSnapshot,
 } from './cart';
 import { freeGiftLineKey, type DesiredFreeGift } from '@2990s/shared';
 
@@ -234,5 +235,65 @@ describe('reconcileFreeGifts', () => {
     const before = useCart.getState().lines;
     useCart.getState().reconcileFreeGifts([], nameById); // nothing to do
     expect(useCart.getState().lines).toBe(before); // unchanged reference
+  });
+});
+
+const size = (total: number): SizeConfigSnapshot => ({
+  kind: 'size', productId: 'p1', productName: 'Mattress', sizeId: 'queen', total, summary: 'Queen',
+});
+
+describe('makeFree / revertFreeItem', () => {
+  beforeEach(() => { useCart.getState().clear(); });
+
+  it('zeroes a whole line within cap and restores on revert', () => {
+    const key = useCart.getState().addConfigured(size(1000), { qty: 1 });
+    useCart.getState().makeFree(key, { id: 'c1', name: 'June', maxFreeQty: 1 });
+    const l = useCart.getState().lines.find((x) => x.key === key)!;
+    expect(l.config.total).toBe(0);
+    expect((l.config as { freeItemCampaignId?: string }).freeItemCampaignId).toBe('c1');
+    expect((l.config as { freeItemCampaign?: string }).freeItemCampaign).toBe('June');
+    useCart.getState().revertFreeItem(key);
+    const r = useCart.getState().lines.find((x) => x.key === key)!;
+    expect(r.config.total).toBe(1000);
+    expect((r.config as { freeItemCampaignId?: string }).freeItemCampaignId).toBeUndefined();
+  });
+
+  it('splits when qty exceeds cap: free line at cap + paid remainder', () => {
+    const key = useCart.getState().addConfigured(size(1000), { qty: 3 });
+    useCart.getState().makeFree(key, { id: 'c1', name: 'June', maxFreeQty: 1 });
+    const lines = useCart.getState().lines;
+    expect(lines.length).toBe(2);
+    const free = lines.find((l) => (l.config as { freeItemCampaignId?: string }).freeItemCampaignId === 'c1')!;
+    const paid = lines.find((l) => (l.config as { freeItemCampaignId?: string }).freeItemCampaignId !== 'c1')!;
+    expect(free.qty).toBe(1);
+    expect(free.config.total).toBe(0);
+    // freeItemOriginalTotal must capture the price so the split free line can revert.
+    expect((free.config as { freeItemOriginalTotal?: number }).freeItemOriginalTotal).toBe(1000);
+    expect(paid.qty).toBe(2);
+    expect(paid.config.total).toBe(1000);
+    // The split free line reverts to its original price.
+    useCart.getState().revertFreeItem(free.key);
+    const reverted = useCart.getState().lines.find((l) => l.key === free.key)!;
+    expect(reverted.config.total).toBe(1000);
+    expect((reverted.config as { freeItemCampaignId?: string }).freeItemCampaignId).toBeUndefined();
+  });
+
+  it('makeFree is a no-op on an already-free line (does not zero the original)', () => {
+    const key = useCart.getState().addConfigured(size(1000), { qty: 1 });
+    useCart.getState().makeFree(key, { id: 'c1', name: 'June', maxFreeQty: 1 });
+    // Second call must NOT recapture freeItemOriginalTotal from the now-zero total.
+    useCart.getState().makeFree(key, { id: 'c2', name: 'July', maxFreeQty: 1 });
+    const l = useCart.getState().lines.find((x) => x.key === key)!;
+    expect((l.config as { freeItemCampaignId?: string }).freeItemCampaignId).toBe('c1'); // unchanged
+    expect((l.config as { freeItemOriginalTotal?: number }).freeItemOriginalTotal).toBe(1000);
+    useCart.getState().revertFreeItem(key);
+    expect(useCart.getState().lines.find((x) => x.key === key)!.config.total).toBe(1000); // not 0
+  });
+
+  it('setQty cannot step a made-free line (qty is fixed)', () => {
+    const key = useCart.getState().addConfigured(size(1000), { qty: 1 });
+    useCart.getState().makeFree(key, { id: 'c1', name: 'June', maxFreeQty: 1 });
+    useCart.getState().setQty(key, 5);
+    expect(useCart.getState().lines.find((x) => x.key === key)!.qty).toBe(1);
   });
 });

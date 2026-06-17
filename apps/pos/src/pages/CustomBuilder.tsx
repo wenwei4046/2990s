@@ -290,6 +290,14 @@ interface CustomBuilderProps {
    *  exchange. */
   onSwapConfirm?: (snapshot: SofaConfigSnapshot) => void;
   swapPending?: boolean;
+  /** Add-to-placed-SO mode (Task 6, free-item-campaign) — when set, the
+   *  footer button reads "Add to this order" and hands the single-group
+   *  build to this callback instead of the cart. Single-group only (same
+   *  constraint as swap). */
+  onAddToOrderConfirm?: (snapshot: SofaConfigSnapshot) => void;
+  addToOrderPending?: boolean;
+  /** When in add-to-order mode, true if the target SO is eligible for adds. */
+  addEligible?: boolean;
 }
 
 // Cell ids must survive HMR (which resets module locals) and a future cells-
@@ -313,7 +321,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -881,10 +889,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // can't reach production without it. Leg height stays compulsory.
   // Leg height is OPTIONAL at Add-to-Cart too (Loo 2026-06-11) — the SO-side
   // so-variant-rule legHeight axis still blocks a Processing date / Proceed.
-  // TBC sofa exchange: a swap replaces exactly ONE sofa, so a multi-group
-  // canvas can't confirm.
+  // TBC sofa exchange + add-to-order: single sofa only (one line per call).
   const canAdd = cells.length > 0 && allClosed
-    && (!onSwapConfirm || priceResult.groups.length === 1);
+    && (!onSwapConfirm || priceResult.groups.length === 1)
+    && (!onAddToOrderConfirm || priceResult.groups.length === 1);
 
   // Per-seat upgrade (F3) — this Model offers one named upgrade or none.
   // offersUpgrade gates the per-seat add button; footrest distinguishes
@@ -958,6 +966,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       /* TBC sofa exchange — hand the (single) build to the Configurator's
          confirm instead of the cart. canAdd already pinned groups to 1. */
       if (onSwapConfirm) { onSwapConfirm(snapshot); return; }
+      /* Add-to-placed-SO — hand the single build to the Configurator's
+         confirmAddToOrder. canAdd already pinned groups to 1. */
+      if (onAddToOrderConfirm) { onAddToOrderConfirm(snapshot); return; }
       addConfigured(snapshot, !usedEditKey && editingKey ? { editingKey } : undefined);
       usedEditKey = true;
     }
@@ -1751,18 +1762,20 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 Create Combo
               </Button>
             )}
-            <Button variant="primary" disabled={!canAdd || swapPending} onClick={handleAdd}>
+            <Button variant="primary" disabled={!canAdd || swapPending || addToOrderPending || (onAddToOrderConfirm && !addEligible)} onClick={handleAdd}>
               {!cells.length
                 ? 'Add modules to start'
                 : !allClosed
                   ? `Resolve · ${analyses.find((a) => !a.closed)?.reason ?? 'sofa not closed'}`
-                  : onSwapConfirm && priceResult.groups.length !== 1
-                    ? 'One sofa per exchange'
+                  : (onSwapConfirm || onAddToOrderConfirm) && priceResult.groups.length !== 1
+                    ? (onSwapConfirm ? 'One sofa per exchange' : 'One sofa at a time')
                     : onSwapConfirm
                       ? (swapPending ? 'Saving…' : 'Confirm Change')
-                      : editingKey
-                        ? 'Save changes'
-                        : 'Add to cart'}
+                      : onAddToOrderConfirm
+                        ? (addToOrderPending ? 'Adding…' : 'Add to this order')
+                        : editingKey
+                          ? 'Save changes'
+                          : 'Add to cart'}
             </Button>
           </div>
         </footer>

@@ -49,7 +49,7 @@ import {
   type FabricTierModelOverride,
 } from '@2990s/shared/fabric-tier-addon';
 import { type PwpRule } from '@2990s/shared/pwp';
-import { parseDefaultFreeGifts, type DefaultFreeGift } from '@2990s/shared';
+import { parseDefaultFreeGifts, type DefaultFreeGift, type FreeItemCampaign, parseFreeItemEligible } from '@2990s/shared';
 
 export type MfgItemVariants = {
   fabricCode?:    string | null;
@@ -812,6 +812,24 @@ export async function loadModelDefaultGifts(
     .select('model_id, gifts');
   const rows = (data as Array<{ model_id: string; gifts: unknown }>) ?? [];
   return new Map(rows.map((r) => [r.model_id, parseDefaultFreeGifts(r.gifts)]));
+}
+
+/** Load ACTIVE free-item campaigns (migration 0176). Small table → one query.
+ *  Missing / error → []. The route feeds these (+ active sofa combos) to the
+ *  shared campaignsCoveringLine to validate a made-free line. */
+export async function loadActiveFreeItemCampaigns(sb: any): Promise<FreeItemCampaign[]> {
+  const { data } = await sb
+    .from('free_item_campaigns')
+    .select('id, name, active, max_free_qty, eligible')
+    .eq('active', true);
+  const rows = (data as Array<Record<string, unknown>>) ?? [];
+  return rows.map((r) => ({
+    id: String(r.id),
+    name: String(r.name ?? ''),
+    active: Boolean(r.active),
+    maxFreeQty: Number(r.max_free_qty ?? 1),
+    eligible: parseFreeItemEligible(r.eligible),
+  }));
 }
 
 /** Load the active PWP (换购) rules (migration 0128). Missing / none → []. The

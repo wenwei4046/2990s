@@ -558,6 +558,12 @@ export const cartLineToSoItem = (
   const freeGift = cfg.isFreeGift
     ? { freeGift: { triggerRef: cfg.freeGiftTriggerKey ?? '', triggerKind: 'product' as const, campaignName: cfg.freeGiftCampaign ?? null, giftProductId: cfg.productId } }
     : null;
+  // 0176 — Free Item Campaign marker. campaignName is resolved server-side; we
+  // send only the campaignId (the server re-validates eligibility + cap).
+  const fic = (line.config as { freeItemCampaignId?: string | null });
+  const freeItem = fic.freeItemCampaignId
+    ? { freeItem: { campaignId: fic.freeItemCampaignId } }
+    : null;
   // Whole-MYR → sen. POS uses INTEGER ringgit (db/schema.ts §Money), the
   // Backend SO ledger is sen — multiply at the boundary.
   const unitPriceCenti = Math.round(line.config.total * 100);
@@ -590,7 +596,9 @@ export const cartLineToSoItem = (
     qty: line.qty,
     unitPriceCenti,
     discountCenti: 0,
-    variants: freeGift ? { ...(buildVariants(line.config) ?? {}), ...freeGift } : buildVariants(line.config),
+    variants: (freeGift || freeItem)
+      ? { ...(buildVariants(line.config) ?? {}), ...freeGift, ...freeItem }
+      : buildVariants(line.config),
     cartLineKey: line.key,
   };
 };
