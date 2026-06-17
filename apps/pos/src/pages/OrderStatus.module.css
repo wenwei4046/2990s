@@ -1003,6 +1003,23 @@
 .detailFieldDisabled {
   opacity: 0.7;
 }
+/* Manual key-in toggle (2026-06-17) — light full-width row that flips City +
+   Postcode between the cascading dropdowns and free-text inputs. */
+.detailManualToggle {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -2px 0 0;
+  font-size: var(--fs-11);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.detailManualToggle input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--c-orange);
+}
 .detailFieldLabel {
   font-family: var(--font-button);
   font-size: var(--fs-11);
