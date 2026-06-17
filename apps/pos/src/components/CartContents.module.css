@@ -145,6 +145,20 @@
   gap: 4px;
 }
 
+/* Campaign picker shown when 2+ campaigns cover this line. Sized to match
+   the icon-button row height so it doesn't push the grid out. */
+.makeFreeSelect {
+  height: 32px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: var(--fs-12);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  cursor: pointer;
+  max-width: 120px;
+}
+
 .quotePanel {
   background: var(--c-cream);
   border: 1px solid var(--c-burnt);
