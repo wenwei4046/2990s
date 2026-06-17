@@ -25,6 +25,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   campaignsCoveringLine,
+  isFreeItemLine,
   type FreeItemCampaign,
 } from '@2990s/shared';
 
@@ -248,5 +249,64 @@ describe('Task 5 — anti-tamper: fabricated campaignId → 409', () => {
     );
     expect(result).toHaveLength(0);
     // Handler: 409 free_item_not_eligible
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 6 — Edit-endpoint grandfathering
+//
+// A line persisted with variants.freeItem (made free at create time) must STAY
+// at unit_price_centi = 0 when the SO is later edited, WITHOUT re-validating
+// against active campaigns ("changes apply to new orders only" — the campaign
+// may have since been toggled off). The two in-place edit endpoints that
+// recompute an existing line's unit price guard on isFreeItemLine(prev.variants):
+//
+//   • PATCH /:docNo/items/:itemId   — skips the POS drift gate + forces unit = 0
+//   • POST  /:docNo/items/:itemId/tbc-update — skips the POS floor gate + newUnit = 0
+//
+// Same harness limitation as Task 5 (the full Hono handler reads ~20 Supabase
+// queries): we cover the pure predicate that GATES both guards. If the predicate
+// reads the persisted marker correctly, the forced-zero + gate-skip outcomes are
+// determinate (they are trivial `isFreeItemLine(...) ? 0 : recomputed` branches
+// reading the SAME value the DB returns for prev.variants).
+//
+// The campaign-toggled-off scenario from the brief is exactly what the predicate
+// makes irrelevant: the guard reads the persisted marker, never the campaign
+// table, so an inactive (or deleted) campaign cannot reprice a grandfathered line.
+// ---------------------------------------------------------------------------
+describe('Task 6 — grandfather: persisted free-item line stays free on edit', () => {
+  it('a persisted freeItem marker is recognised regardless of campaign state', () => {
+    // The line was made free at create under campaign 'june-2026'. That campaign
+    // is later toggled inactive — but the EDIT path never consults it; it reads
+    // the marker the DB stored on prev.variants.
+    const prevVariants = { fabricCode: 'COTTON-BEIGE', freeItem: { campaignId: 'june-2026' } };
+    expect(isFreeItemLine(prevVariants)).toBe(true);
+    // Handler (PATCH + tbc-update): isFreeItemLine(prev.variants) === true
+    //   → drift/floor gate SKIPPED, unit/newUnit forced to 0.
+  });
+
+  it('an unrelated-field edit does not strip the marker (predicate still true)', () => {
+    // Simulate a PATCH that touches only an unrelated field; the merged variants
+    // still carry the create-time freeItem marker, so the line stays free.
+    const prevVariants = { freeItem: { campaignId: 'c1' }, remark: 'old' };
+    const afterUnrelatedEdit = { ...prevVariants, remark: 'updated note' };
+    // The guard reads PREV (persisted) variants — the marker is intact either way.
+    expect(isFreeItemLine(prevVariants)).toBe(true);
+    expect(isFreeItemLine(afterUnrelatedEdit)).toBe(true);
+  });
+
+  it('a normal (non-free) line is NOT grandfathered → recompute drives the price', () => {
+    const prevVariants = { fabricCode: 'LINEN-GREY' };
+    expect(isFreeItemLine(prevVariants)).toBe(false);
+    // Handler: isFreeItemLine === false → unit = recomputed.unit_price_sen (normal path).
+  });
+
+  it('a malformed marker (no campaignId) is NOT grandfathered', () => {
+    // A line whose freeItem object lost / never had a campaignId must reprice
+    // normally — only a fully-formed marker is honoured.
+    expect(isFreeItemLine({ freeItem: {} })).toBe(false);
+    expect(isFreeItemLine({ freeItem: { campaignId: '' } })).toBe(false);
+    expect(isFreeItemLine(null)).toBe(false);
+    expect(isFreeItemLine({})).toBe(false);
   });
 });
