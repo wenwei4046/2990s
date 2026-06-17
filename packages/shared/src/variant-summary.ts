@@ -4,6 +4,8 @@
 //   `PC151-01 / DIVAN 10" + NO LEG / GAP 14" / T.Heights 24"`
 // Same code runs on POS, Backend, and Workers (no DOM, no module state).
 
+import { isFreeItemLine } from './free-item-campaign';
+
 /** Coerce a single variant value to a trimmed display string ('' when empty). */
 const str = (v: unknown): string => {
   if (v == null) return '';
@@ -129,6 +131,17 @@ export function buildVariantSummary(
     specialBits.push(noteText || 'Extra add-on');
   }
   if (specialBits.length) segments.push(`SPECIAL: ${specialBits.join(' + ')}`);
+
+  // Free Item Campaign (migration 0176, 2026-06-17) — a line made free by a
+  // campaign carries variants.freeItem.campaignId (stamped server-side). Surface
+  // the campaign name so every customer doc reads "FREE · <campaign name>" or
+  // simply "FREE" when the campaign name is blank. This segment prints LAST so
+  // existing SEAT/LEG/SPECIAL segments remain unchanged.
+  if (isFreeItemLine(variants)) {
+    const fi = variants as { freeItem?: { campaignName?: unknown } };
+    const name = str(fi.freeItem?.campaignName);
+    segments.push(name ? `FREE · ${name}` : 'FREE');
+  }
 
   return segments.filter(Boolean).join(' / ');
 }

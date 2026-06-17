@@ -139,4 +139,43 @@ describe('buildVariantSummary', () => {
     expect(summary).toBe('EZ-003 / SEAT 28');
     expect(summary).not.toContain('KIV');
   });
+
+  /* Free Item Campaign (migration 0176, 2026-06-17) — a line whose
+     variants.freeItem.campaignId is set (stamped server-side by Task 5) must
+     show "FREE · <campaign name>" as the last segment on every customer doc.
+     When the campaign name is blank, it degrades to just "FREE". A normal line
+     (no freeItem key) must not show either token. */
+  it('a free-item line appends "FREE · <name>" when a campaign name is present', () => {
+    const summary = buildVariantSummary('accessory', {
+      freeItem: { campaignId: 'june-2026', campaignName: 'Raya Promo' },
+    });
+    expect(summary).toBe('FREE · Raya Promo');
+  });
+
+  it('a free-item line without a campaign name degrades to "FREE"', () => {
+    const summary = buildVariantSummary('accessory', {
+      freeItem: { campaignId: 'june-2026', campaignName: null },
+    });
+    expect(summary).toBe('FREE');
+  });
+
+  it('a free-item line with other segments puts FREE last', () => {
+    const summary = buildVariantSummary('accessory', {
+      freeItem: { campaignId: 'june-2026', campaignName: 'Mid-Year Sale' },
+      specials: ['Extra Padding'],
+    });
+    expect(summary).toBe('SPECIAL: Extra Padding / FREE · Mid-Year Sale');
+  });
+
+  it('a normal accessory line (no freeItem) does not show FREE', () => {
+    const summary = buildVariantSummary('accessory', { specials: ['Plush Cover'] });
+    expect(summary).not.toContain('FREE');
+  });
+
+  it('a line with freeItem but no campaignId is not a free-item line (isFreeItemLine guard)', () => {
+    const summary = buildVariantSummary('accessory', {
+      freeItem: { campaignName: 'Orphan' },
+    });
+    expect(summary).not.toContain('FREE');
+  });
 });
