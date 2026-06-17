@@ -394,8 +394,7 @@ export const Handover = () => {
                 {
                   method: paymentMethod,
                   amountCenti: Math.round(form.amountPaid * 100),
-                  // Spec D4 — each row's own slip; cash legs may have none (optional now).
-                  // Cash legs may carry no slip (Loo 2026-06-18) — include only when present.
+                  // Spec D4 — each row's own slip; cash legs may have none (Loo 2026-06-18).
                   ...(form.slipUploadSessionId ? { uploadSessionId: form.slipUploadSessionId } : {}),
                   ...(form.approvalCode.trim() ? { approvalCode: form.approvalCode.trim() } : {}),
                   ...(form.merchantProvider ? { merchantProvider: form.merchantProvider } : {}),
