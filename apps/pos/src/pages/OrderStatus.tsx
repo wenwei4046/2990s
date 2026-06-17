@@ -25,6 +25,7 @@ import {
   ChevronRight,
   Users,
   Pencil,
+  Plus,
 } from 'lucide-react';
 import { IconButton } from '@2990s/design-system';
 import { groupSoLinesForDisplay, sortSoLinesByGroupRank } from '@2990s/shared/so-line-display';
@@ -1560,6 +1561,23 @@ const OrderDetail = ({ order, onClose }: {
                 </div>
               ))}
             </div>
+            {/* Add product (Task 9, 2026-06-17) — shown only while the SO is in the
+                Order placed lane (CONFIRMED + not yet proceeded). editablePlaced
+                matches the server's add-item gate: CONFIRMED, no proceeded_at stamp,
+                no downstream DO/SI (those flip the status), processing date not
+                passed. Navigates to the catalog in addToOrder mode so the
+                configurator threads the SO number straight through. */}
+            {editablePlaced && (
+              <div className={styles.detailFootActions} style={{ marginTop: 8 }}>
+                <Link
+                  to={`/catalog?addToOrder=${encodeURIComponent(order.id)}`}
+                  className={styles.detailPrintBtn}
+                >
+                  <Plus size={14} strokeWidth={1.75} />
+                  Add product
+                </Link>
+              </div>
+            )}
             <div className={styles.detailTotalsRow}>
               <span>Subtotal</span>
               <span><span className={styles.detailItemPriceUnit}>RM</span>{fmtMoney(order.subtotal)}</span>
