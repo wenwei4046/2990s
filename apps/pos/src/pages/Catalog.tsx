@@ -169,6 +169,9 @@ export const Catalog = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeCat = searchParams.get('cat') ?? 'all';
   const activeBranding = searchParams.get('brand') ?? 'all';
+  // Add-to-placed-SO mode: ?addToOrder=SO-XXXX is carried from My orders
+  // through Catalog so clicking a product threads the param to the Configurator.
+  const addToOrderParam = searchParams.get('addToOrder') ?? undefined;
   const [query, setQuery] = useState('');
 
   const setParam = (key: 'cat' | 'brand', value: string) =>
@@ -529,6 +532,7 @@ export const Catalog = () => {
                           (p.categoryId === 'sofa' && hasMainNonSofa) ||
                           ((p.categoryId === 'mattress' || p.categoryId === 'bedframe') && hasSofa)
                         }
+                        addToOrder={addToOrderParam}
                       />
                     ))}
                   </div>
@@ -552,7 +556,7 @@ export const Catalog = () => {
   );
 };
 
-const ProductCard = ({ p, blocked = false }: { p: CatalogCard; blocked?: boolean }) => {
+const ProductCard = ({ p, blocked = false, addToOrder }: { p: CatalogCard; blocked?: boolean; addToOrder?: string }) => {
   // PR — Commander wanted a "Configure" affordance even when SKUs are not
   // wired into the production configurator yet. For now the card links to
   // the Configurator route using the lead SKU's id; the Configurator will
@@ -641,8 +645,14 @@ const ProductCard = ({ p, blocked = false }: { p: CatalogCard; blocked?: boolean
     );
   }
 
+  // Compute the configurator URL — always carry the ?addToOrder param if set.
+  const configuratorUrl = addToOrder
+    ? `/configure/${p.leadSkuId}?addToOrder=${encodeURIComponent(addToOrder)}`
+    : `/configure/${p.leadSkuId}`;
+
   // Flat single-SKU product → tap adds straight to cart (no configurator step).
-  if (canDirectAdd) {
+  // In addToOrder mode always route through the configurator (it owns the POST).
+  if (canDirectAdd && !addToOrder) {
     return (
       <button
         type="button"
@@ -655,7 +665,7 @@ const ProductCard = ({ p, blocked = false }: { p: CatalogCard; blocked?: boolean
   }
 
   return (
-    <Link to={`/configure/${p.leadSkuId}`} className={styles.card}>
+    <Link to={configuratorUrl} className={styles.card}>
       {inner}
     </Link>
   );

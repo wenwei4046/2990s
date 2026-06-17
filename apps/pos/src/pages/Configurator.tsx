@@ -47,6 +47,12 @@ import {
 /* TBC sofa exchange (Loo 2026-06-12) — "Confirm Change" marshals the build
    exactly like the handover does and replaces the SO build server-side. */
 import { fetchItemCodeMap, cartLinesToSoItems } from '../lib/pos-handover-so';
+import {
+  useSoHeaderForAdd,
+  useAddProductToPlacedSo,
+  AddSoItemApiError,
+  type AddSoItemBody,
+} from '../lib/queries';
 import { supabase } from '../lib/supabase';
 import { CustomBuilder, centerCellsInRoom } from './CustomBuilder';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
@@ -292,9 +298,10 @@ export const Configurator = () => {
   const backToCatalog = () => {
     const idx = (window.history.state?.idx ?? 0) as number;
     if (idx > 0) navigate(-1);
-    // Sofa exchange enters from My orders — a cold load (refresh) should
-    // fall back THERE, not to the catalogue.
+    // Sofa exchange or add-to-order enters from My orders — a cold load
+    // (refresh) should fall back THERE, not to the catalogue.
     else if (new URLSearchParams(window.location.search).get('swapDoc')) navigate('/my-orders');
+    else if (new URLSearchParams(window.location.search).get('addToOrder')) navigate('/my-orders');
     else navigate('/catalog');
   };
   const product = useProduct(productId);
@@ -496,6 +503,79 @@ export const Configurator = () => {
     swapSeededRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSwapMode]);
+  /* ── Add-product-to-placed-SO mode (Task 6, free-item-campaign) ────────
+     Entered from My orders "Add product" — ?addToOrder=SO-XXXX carries the
+     target SO. The primary button becomes "Add to this order"; the build is
+     marshalled exactly like the handover path (fetchItemCodeMap + cartLinesToSoItems)
+     and POSTed to POST /:docNo/items. Honest pricing: the server recompute
+     is authoritative — a drift 400 surfaces the server's figure so the
+     salesperson can re-submit at the correct price. */
+  const addToOrderDoc = searchParams.get('addToOrder');
+  const isAddToOrderMode = !!addToOrderDoc;
+  const soHeaderQ = useSoHeaderForAdd(addToOrderDoc ?? undefined);
+  const soHeader = soHeaderQ.data;
+  const addToOrderMutation = useAddProductToPlacedSo();
+  const [addToOrderPending, setAddToOrderPending] = useState(false);
+  const [addToOrderError, setAddToOrderError] = useState<string | null>(null);
+
+  /** Marshal and POST a configured snapshot to POST /:docNo/items. Works
+   *  for any product kind — the same CartLine + fetchItemCodeMap path the
+   *  handover uses, scoped to a single item. */
+  const confirmAddToOrder = async (
+    snapshot: SofaConfigSnapshot | SizeConfigSnapshot | BedframeConfigSnapshot | FlatConfigSnapshot,
+    qty = 1,
+  ) => {
+    if (!addToOrderDoc || addToOrderPending) return;
+    setAddToOrderError(null);
+    setAddToOrderPending(true);
+    try {
+      // Wrap the snapshot as a temporary CartLine so fetchItemCodeMap can
+      // resolve the real mfg_products.code the same way the handover does.
+      const tempLine: CartLine = {
+        key: `ato-${Date.now()}`,
+        qty,
+        config: snapshot,
+      };
+      const resolution = await fetchItemCodeMap([tempLine]);
+      const [soItem] = cartLinesToSoItems([tempLine], undefined, resolution);
+      if (!soItem) throw new Error('Failed to marshal item.');
+      // PosHandoffItem is a superset of AddSoItemBody (extra fields: description,
+      // cartLineKey) — the API ignores the extras. Cast to satisfy TS.
+      await addToOrderMutation.mutateAsync({ docNo: addToOrderDoc, item: soItem as unknown as AddSoItemBody });
+      navigate(`/my-orders`);
+    } catch (err) {
+      if (err instanceof AddSoItemApiError) {
+        const { payload } = err;
+        // pricing_drift: surface both figures + let user re-submit.
+        if (payload.error === 'pricing_drift' && payload.itemCode) {
+          const clientRm = Math.round((payload.client ?? 0) / 100).toLocaleString('en-MY');
+          const serverRm = Math.round((payload.server ?? 0) / 100).toLocaleString('en-MY');
+          setAddToOrderError(
+            `The server priced this item differently — tablet: RM ${clientRm}, server: RM ${serverRm}. `
+            + `The server price is authoritative. Hard-refresh the app (or go back and re-enter) to pick up the current pricing.`,
+          );
+        } else if (payload.error === 'so_has_downstream') {
+          setAddToOrderError('This order already has a Delivery Order or Invoice — no more items can be added.');
+        } else if (payload.error === 'SO_PROCESSING_LOCKED') {
+          setAddToOrderError('This order is processing-locked — the processing date has passed.');
+        } else if (payload.error === 'free_item_not_eligible') {
+          setAddToOrderError('This free item campaign is not eligible for this order.');
+        } else if (payload.error === 'pwp_code_rejected') {
+          setAddToOrderError('The PWP code was rejected — it may already be used or not applicable here.');
+        } else if (payload.error === 'free_and_pwp_exclusive') {
+          setAddToOrderError('A free-item line and a PWP redemption cannot be on the same order.');
+        } else {
+          const detail = payload.reason ?? payload.message;
+          setAddToOrderError(`Add failed: ${payload.error}${detail ? ` — ${detail}` : ''}`);
+        }
+      } else {
+        setAddToOrderError(err instanceof Error ? err.message : 'Add failed.');
+      }
+    } finally {
+      setAddToOrderPending(false);
+    }
+  };
+
   const confirmSwap = async (snapshot: SofaConfigSnapshot) => {
     if (!swapDoc || !swapItemId || swapPending) return;
     setSwapError(null);
@@ -1462,6 +1542,7 @@ export const Configurator = () => {
       total: bedframeTotal,
       summary: parts.join(' · '),
     };
+    if (isAddToOrderMode) { void confirmAddToOrder(snapshot, qtyEffective); return; }
     addConfigured(snapshot, { ...(isEditing && editKey ? { editingKey: editKey } : {}), qty: qtyEffective });
     navigate(isEditing ? '/cart' : '/catalog');
   };
@@ -1504,6 +1585,7 @@ export const Configurator = () => {
         specialChoices: Object.fromEntries(mattressSpecialSel.map((s) => [s.id, s.choices ?? []])),
       } : {}),
     };
+    if (isAddToOrderMode) { void confirmAddToOrder(snapshot, qtyEffective); return; }
     addConfigured(snapshot, { ...(isEditing && editKey ? { editingKey: editKey } : {}), qty: qtyEffective });
     navigate(isEditing ? '/cart' : '/catalog');
   };
@@ -1627,6 +1709,7 @@ export const Configurator = () => {
         : `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${activeDepth}"${fabricSuffix}`,
     };
     if (isSwapMode) { void confirmSwap(snapshot); return; }
+    if (isAddToOrderMode) { void confirmAddToOrder(snapshot); return; }
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
     navigate(isEditing ? '/cart' : '/catalog');
   };
@@ -1676,6 +1759,7 @@ export const Configurator = () => {
       summary: `${label} · ${activeDepth}"${fabricSuffix}`,
     };
     if (isSwapMode) { void confirmSwap(snapshot); return; }
+    if (isAddToOrderMode) { void confirmAddToOrder(snapshot); return; }
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
     navigate(isEditing ? '/cart' : '/catalog');
   };
@@ -1719,10 +1803,12 @@ export const Configurator = () => {
       <button
         type="button"
         className={styles.topbarBtnPrimary}
-        disabled={!canAddSize}
+        disabled={!canAddSize || addToOrderPending}
         onClick={handleAddSize}
       >
-        {isEditing ? 'Save changes' : '+ Add to Cart'}
+        {isAddToOrderMode
+          ? (addToOrderPending ? 'Adding…' : 'Add to this order')
+          : isEditing ? 'Save changes' : '+ Add to Cart'}
       </button>
     </span>
   ) : undefined;
@@ -1765,10 +1851,12 @@ export const Configurator = () => {
       <button
         type="button"
         className={styles.topbarBtnPrimary}
-        disabled={!canAddBedframe}
+        disabled={!canAddBedframe || addToOrderPending}
         onClick={handleAddBedframe}
       >
-        {isEditing ? 'Save changes' : '+ Add to Cart'}
+        {isAddToOrderMode
+          ? (addToOrderPending ? 'Adding…' : 'Add to this order')
+          : isEditing ? 'Save changes' : '+ Add to Cart'}
       </button>
     </span>
   ) : undefined;
@@ -1815,12 +1903,14 @@ export const Configurator = () => {
       <button
         type="button"
         className={styles.topbarBtnPrimary}
-        disabled={!canAddSofa || swapPending}
+        disabled={!canAddSofa || swapPending || addToOrderPending}
         onClick={pickedQP ? handleAddQuickPick : handleAddSofa}
       >
         {isSwapMode
           ? (swapPending ? 'Saving…' : 'Confirm Change')
-          : isEditing ? 'Save changes' : '+ Add to Cart'}
+          : isAddToOrderMode
+            ? (addToOrderPending ? 'Adding…' : 'Add to this order')
+            : isEditing ? 'Save changes' : '+ Add to Cart'}
       </button>
     </span>
   ) : undefined;
@@ -1932,6 +2022,53 @@ export const Configurator = () => {
         }}
       >
         {swapError}
+      </div>
+    )}
+    {/* Add-to-placed-SO — eligibility notice (not eligible) + error surface. */}
+    {isAddToOrderMode && soHeaderQ.isLoading && (
+      <div
+        style={{
+          position: 'fixed', top: 72, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 60, maxWidth: 620, padding: '10px 16px', borderRadius: 12,
+          background: '#fff', border: '1px solid var(--line-strong)',
+          fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--c-ink)',
+          boxShadow: '0 4px 14px rgba(34,31,32,0.12)',
+        }}
+      >
+        Loading order…
+      </div>
+    )}
+    {isAddToOrderMode && soHeader && !soHeader.addEligible && (
+      <div
+        role="alert"
+        style={{
+          position: 'fixed', top: 72, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 60, maxWidth: 620, padding: '10px 16px', borderRadius: 12,
+          background: '#fff', border: '1px solid #b3261e', color: '#b3261e',
+          fontFamily: 'var(--font-sans)', fontSize: 13, boxShadow: '0 4px 14px rgba(34,31,32,0.12)',
+        }}
+      >
+        {soHeader.addBlockedReason
+          ? `Cannot add to ${addToOrderDoc}: ${soHeader.addBlockedReason}`
+          : `Cannot add to ${addToOrderDoc} — this order is locked or has downstream documents.`}
+        {' '}<button
+          type="button"
+          onClick={() => navigate('/my-orders')}
+          style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', textDecoration: 'underline', fontFamily: 'inherit', fontSize: 'inherit', padding: 0 }}
+        >Back to My orders</button>
+      </div>
+    )}
+    {isAddToOrderMode && addToOrderError && (
+      <div
+        role="alert"
+        style={{
+          position: 'fixed', top: 72, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 60, maxWidth: 620, padding: '10px 16px', borderRadius: 12,
+          background: '#fff', border: '1px solid #b3261e', color: '#b3261e',
+          fontFamily: 'var(--font-sans)', fontSize: 13, boxShadow: '0 4px 14px rgba(34,31,32,0.12)',
+        }}
+      >
+        {addToOrderError}
       </div>
     )}
     <main
@@ -2062,6 +2199,7 @@ export const Configurator = () => {
             extraAmountRm={effectiveExtraRm}
             onAdded={() => navigate(isEditing ? '/cart' : '/catalog')}
             {...(isSwapMode ? { onSwapConfirm: (snap) => { void confirmSwap(snap); }, swapPending } : {})}
+            {...(isAddToOrderMode ? { onAddToOrderConfirm: (snap) => { void confirmAddToOrder(snap); }, addToOrderPending } : {})}
           />
         )
       )}
@@ -2223,6 +2361,12 @@ export const Configurator = () => {
           flatPrice={p.flat_price}
           category={p.category_id ? p.category_id.toUpperCase() : undefined}
           onAdded={backToCatalog}
+          {...(isAddToOrderMode ? {
+            onAddToOrder: (snapshot: FlatConfigSnapshot, qty: number) => {
+              void confirmAddToOrder(snapshot, qty);
+            },
+            addToOrderPending,
+          } : {})}
         />
       )}
 
@@ -2483,9 +2627,13 @@ interface FlatAddToCartProps {
   /** UPPERCASE mfg category, stamped onto the cart snapshot for SO bucketing. */
   category?: string;
   onAdded: () => void;
+  /** Add-to-placed-SO mode: when set, the button submits to the placed SO
+   *  instead of the cart. */
+  onAddToOrder?: (snapshot: FlatConfigSnapshot, qty: number) => void;
+  addToOrderPending?: boolean;
 }
 
-const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded }: FlatAddToCartProps) => {
+const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded, onAddToOrder, addToOrderPending = false }: FlatAddToCartProps) => {
   const addConfigured = useCart((s) => s.addConfigured);
   const [qty, setQty] = useState(1);
   const handleAdd = () => {
@@ -2497,6 +2645,7 @@ const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded }:
       total: flatPrice,       // PER-UNIT — the server scales unit × qty.
       summary: 'Flat price',
     };
+    if (onAddToOrder) { onAddToOrder(snapshot, qty); return; }
     addConfigured(snapshot, { qty });
     onAdded();
   };
@@ -2531,7 +2680,9 @@ const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded }:
           </span>
         )}
       </div>
-      <Button variant="primary" onClick={handleAdd}>Add to cart</Button>
+      <Button variant="primary" disabled={addToOrderPending} onClick={handleAdd}>
+        {onAddToOrder ? (addToOrderPending ? 'Adding…' : 'Add to this order') : 'Add to cart'}
+      </Button>
     </div>
   );
 };
