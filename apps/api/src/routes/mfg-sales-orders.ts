@@ -4367,6 +4367,18 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
         loadModelSofaModuleCostRows(sb, productLite.base_model),
       ])
     : [null, null];
+  /* Free Item Campaign (add-line path, Task 4) — body field `freeItemCampaignId`
+     opts a single added line into server-validated forced-RM0. Mutually exclusive
+     with PWP (both cannot apply to the same line). Check mutual exclusion BEFORE
+     the PWP claim so we never burn a code and then reject. */
+  const addLineFreeItemCampaignId = String((it.freeItemCampaignId as string | null | undefined) ?? '').trim();
+  const addLinePwpCodeEarly = String((variantsObj as { pwpCode?: string | null } | null)?.pwpCode ?? '').trim();
+  if (addLineFreeItemCampaignId && addLinePwpCodeEarly) {
+    return c.json({ error: 'free_and_pwp_exclusive', reason: 'A line cannot be both a free-item and a PWP reward.' }, 400);
+  }
+  // Resolved after validation below — { campaignId, campaignName } or null.
+  let addLineFreeItem: { campaignId: string; campaignName: string } | null = null;
+
   /* PWP claim (add-line path) — mirrors the create-path loop for ONE code.
      If the client sends variants.pwpCode we attempt to claim the voucher now,
      BEFORE recompute so the PWP base feeds the drift gate correctly.
@@ -4415,6 +4427,40 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     addLinePwpClaimed      = pwpClaimResult.claimed;
   }
 
+  /* Free Item Campaign validation (Task 4) — if freeItemCampaignId was supplied,
+     verify it against active campaigns + the line's model/category/build before
+     persisting anything. Mirrors the create-path block (~2111-2159). */
+  if (addLineFreeItemCampaignId) {
+    const addLineActiveCampaigns = await loadActiveFreeItemCampaigns(sb);
+    const addLineComboModulesById = new Map<string, string[][]>(
+      sofaCombosLite.map((cb) => [cb.id, cb.modules]),
+    );
+    const addLineCells = (variantsObj as { cells?: Array<{ moduleId?: unknown }> } | null)?.cells ?? [];
+    const addLineBuiltModuleIds = Array.isArray(addLineCells)
+      ? addLineCells.map((cl) => String(cl?.moduleId ?? '')).filter(Boolean)
+      : [];
+    const addLineCovering = campaignsCoveringLine(
+      {
+        category:       String(productLite?.category ?? ''),
+        modelId:        productLite?.model_id ?? null,
+        builtModuleIds: addLineBuiltModuleIds,
+      },
+      addLineActiveCampaigns,
+      addLineComboModulesById,
+    );
+    const addLineChosen = addLineCovering.find((camp) => camp.id === addLineFreeItemCampaignId);
+    if (!addLineChosen) {
+      if (addLinePwpClaimed) await rollbackSinglePwpClaim(sb, addLinePwpClaimed);
+      return c.json({ error: 'free_item_not_eligible', reason: 'not_eligible' }, 409);
+    }
+    if (qty > addLineChosen.maxFreeQty) {
+      if (addLinePwpClaimed) await rollbackSinglePwpClaim(sb, addLinePwpClaimed);
+      return c.json({ error: 'free_item_not_eligible', reason: 'over_cap' }, 409);
+    }
+    // Resolved: stamp the server-resolved name so the UI never depends on a client string.
+    addLineFreeItem = { campaignId: addLineChosen.id, campaignName: addLineChosen.name };
+  }
+
   const recomputed = recomputeFromSnapshot(
     {
       itemCode:       itemCodeStr,
@@ -4438,9 +4484,12 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   );
   /* Pricing trust boundary (Owner 2026-05-31, see isPosTabletCaller). POS tablet
      roles are drift-rejected + take the server price; Backend / office authors
-     set the selling price freely. */
+     set the selling price freely.
+     Free Item Campaign (Task 4) — drift check is SKIPPED for a validated free
+     line (unit will be forced to 0 below; client always submits 0, so there is
+     no meaningful drift to gate on — and the cap check already enforced qty). */
   const posTablet = await isPosTabletCaller(sb, user.id);
-  if (posTablet && recomputed.drift) {
+  if (posTablet && recomputed.drift && !addLineFreeItem) {
     /* Rollback any PWP claim before rejecting — must not burn a code on drift. */
     if (addLinePwpClaimed) await rollbackSinglePwpClaim(sb, addLinePwpClaimed);
     return c.json({
@@ -4453,8 +4502,9 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     }, 400);
   }
   /* Carry the bound price-list figure out (costing-only Backend sends no real
-     selling price). POS drift rejects above; Backend drift saves silently. */
-  const unit = recomputed.unit_price_sen;
+     selling price). POS drift rejects above; Backend drift saves silently.
+     Free Item Campaign (Task 4) — forced to 0 when validated above. */
+  const unit = addLineFreeItem ? 0 : recomputed.unit_price_sen;
   /* Audit 2026-06-11 C-2 — same discount gate as POST /: client-authored
      discount must sit in [0, qty × unit] (422, reject-don't-normalize). */
   if (!Number.isFinite(discount) || discount < 0 || discount > qty * unit) {
@@ -4521,9 +4571,13 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     branding: header.branding,
     /* Anti-tamper (Task 6) — strip any client-supplied freeItem marker from a
        line added via the SO-edit path. The freeItem marker is ONLY stamped by
-       the validated POST /mfg-sales-orders create path (which checks an active
-       campaign + cap). An edit-added line is never free via this path. */
-    variants: stripFreeItem(it.variants) ?? null,
+       the server after campaign validation — never trusted from the client.
+       Task 4: if freeItemCampaignId was validated above, re-stamp the server-
+       resolved marker (campaignId + campaignName) after stripping. This is the
+       same pattern as the create path (strip then re-add validated marker). */
+    variants: addLineFreeItem
+      ? { ...(stripFreeItem(it.variants) as Record<string, unknown> | null ?? {}), freeItem: addLineFreeItem }
+      : (stripFreeItem(it.variants) ?? null),
     unit_cost_centi: unitCost,
     line_cost_centi: lineCost,
     line_margin_centi: lineTotal - lineCost,
@@ -4573,7 +4627,7 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     });
     if (split && split.length > 0) {
       const buildKey = `build-add-${nextLineNo ?? crypto.randomUUID().slice(0, 8)}`;
-      const { cells: _cells, ...sharedVariants } =
+      const { cells: _cells, freeItem: _clientFreeItem, ...sharedVariants } =
         ((it.variants as Record<string, unknown> | null) ?? {});
       const moduleRows = split.map((s, i) => {
         const moduleVariants: Record<string, unknown> = {
@@ -4583,6 +4637,10 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
           x: s.x,
           y: s.y,
           rot: s.rot,
+          /* Task 4 — stamp server-validated freeItem on every module row so the
+             grandfather guard (isFreeItemLine) sees the marker on each piece of
+             the split build, exactly mirroring the create-path behaviour. */
+          ...(addLineFreeItem ? { freeItem: addLineFreeItem } : {}),
         };
         const moduleLineTotal = (qty * s.unitPriceSen) - (i === 0 ? discount : 0);
         const moduleLineCost = qty * s.unitCostSen;
