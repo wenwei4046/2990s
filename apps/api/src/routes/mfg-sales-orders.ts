@@ -245,6 +245,21 @@ async function selfScopedSalesBlocked(sb: any, userId: string, docNo: string): P
   return !so || (so as { salesperson_id?: string | null }).salesperson_id !== userId;
 }
 
+/* Anti-tamper (Task 6) — Strip variants.freeItem from a client-supplied
+   variants blob. The freeItem marker is ONLY ever stamped by the validated
+   POST /mfg-sales-orders create path (campaign check + cap). Any SO-EDIT
+   endpoint that writes client variants must call this before persisting so
+   a crafted request cannot inject an unvalidated marker that the grandfather
+   guard (isFreeItemLine) would later honour to force a line to RM 0. */
+function stripFreeItem(v: unknown): unknown {
+  if (v && typeof v === 'object' && !Array.isArray(v) && 'freeItem' in v) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { freeItem: _fi, ..._rest } = v as Record<string, unknown>;
+    return _rest;
+  }
+  return v;
+}
+
 /* POS line quantity (Loo 2026-06-12) — line qty is a money input the
    unit-price drift gate does NOT cover: qty 0 zeroes a line for free, a
    fraction / NaN corrupts total_centi math, and the discount ceiling is
@@ -4452,7 +4467,11 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     balance_centi: lineTotal,
     venue: header.venue,
     branding: header.branding,
-    variants: (it.variants as unknown) ?? null,
+    /* Anti-tamper (Task 6) — strip any client-supplied freeItem marker from a
+       line added via the SO-edit path. The freeItem marker is ONLY stamped by
+       the validated POST /mfg-sales-orders create path (which checks an active
+       campaign + cap). An edit-added line is never free via this path. */
+    variants: stripFreeItem(it.variants) ?? null,
     unit_cost_centi: unitCost,
     line_cost_centi: lineCost,
     line_margin_centi: lineTotal - lineCost,
@@ -4736,6 +4755,17 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     ['remark', 'remark'], ['cancelled', 'cancelled'],
   ] as const) {
     if (it[from] !== undefined) updates[to] = it[from];
+  }
+  /* Anti-tamper (Task 6) — when the client sends variants, strip any client-supplied
+     freeItem marker, then re-graft the persisted marker (if any) so an already-free
+     line stays free and a normal line cannot be made free via a crafted PATCH.
+     Must run AFTER the loop above so variants is already in updates. */
+  if (it.variants !== undefined) {
+    const clientVariants = stripFreeItem(updates['variants']);
+    const prevFreeItem = (prev.variants as Record<string, unknown> | null | undefined)?.freeItem;
+    updates['variants'] = prevFreeItem !== undefined
+      ? { ...(clientVariants as Record<string, unknown> ?? {}), freeItem: prevFreeItem }
+      : clientVariants ?? null;
   }
   /* Commander 2026-05-28 — "Description 2" is ALWAYS the server-generated
      variant summary; never trust a client-sent value. Recompute from the
@@ -5723,8 +5753,10 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
   }
   const newVariants: Record<string, unknown> = { ...((item.variants ?? {}) as Record<string, unknown>) };
   /* A swap build is a normal sale — strip any PWP markers the configurator
-     PWP machinery could have left on the snapshot. */
+     PWP machinery could have left on the snapshot. Also strip freeItem: a
+     sofa swap cannot inject a free-item marker (anti-tamper, Task 6). */
   delete newVariants.pwp; delete newVariants.pwpCode; delete newVariants.pwpTriggerLabel;
+  delete newVariants.freeItem;
   const newCells = newVariants.cells;
   if (!Array.isArray(newCells) || newCells.length === 0) {
     return c.json({ error: 'sofa_swap_requires_build', reason: 'Configure the sofa (its modules) before confirming the exchange.' }, 400);

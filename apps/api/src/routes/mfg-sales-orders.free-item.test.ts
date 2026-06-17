@@ -310,3 +310,80 @@ describe('Task 6 — grandfather: persisted free-item line stays free on edit', 
     expect(isFreeItemLine({})).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// stripFreeItem helper — inline reference implementation matching the one
+// added to mfg-sales-orders.ts (private, not exported, so tested here by
+// duplicating the logic verbatim so the spec is independently verifiable).
+// ---------------------------------------------------------------------------
+
+function stripFreeItem(v: unknown): unknown {
+  if (v && typeof v === 'object' && !Array.isArray(v) && 'freeItem' in v) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { freeItem: _fi, ...rest } = v as Record<string, unknown>;
+    return rest;
+  }
+  return v;
+}
+
+describe('stripFreeItem — anti-tamper helper (Task 6)', () => {
+  it('strips freeItem when present, preserves other keys', () => {
+    const stripped = stripFreeItem({ freeItem: { campaignId: 'c1' }, fabricCode: 'COTTON' });
+    expect(stripped).toEqual({ fabricCode: 'COTTON' });
+    expect((stripped as Record<string, unknown>)['freeItem']).toBeUndefined();
+  });
+
+  it('is a no-op when freeItem is absent', () => {
+    const v = { fabricCode: 'LINEN', sofaLegHeight: '150' };
+    expect(stripFreeItem(v)).toEqual(v);
+  });
+
+  it('is a no-op on null', () => {
+    expect(stripFreeItem(null)).toBeNull();
+  });
+
+  it('is a no-op on undefined', () => {
+    expect(stripFreeItem(undefined)).toBeUndefined();
+  });
+
+  it('is a no-op on an empty object', () => {
+    expect(stripFreeItem({})).toEqual({});
+  });
+
+  it('result passes isFreeItemLine === false (stripped marker no longer detectable)', () => {
+    const stripped = stripFreeItem({ freeItem: { campaignId: 'june-2026' }, remark: 'test' });
+    expect(isFreeItemLine(stripped)).toBe(false);
+  });
+
+  it('POST /:docNo/items scenario: crafted client variants lose freeItem before insert', () => {
+    // Simulates: variants = (it.variants as unknown) replaced with stripFreeItem(it.variants)
+    const clientVariants = { freeItem: { campaignId: 'fake' }, sofaLegHeight: '140' };
+    const toInsert = stripFreeItem(clientVariants);
+    expect(isFreeItemLine(toInsert)).toBe(false);
+    expect((toInsert as Record<string, unknown>)['sofaLegHeight']).toBe('140');
+  });
+
+  it('PATCH /:docNo/items scenario: prev freeItem preserved, client freeItem stripped', () => {
+    // Simulates the merged variants logic in the PATCH endpoint:
+    // strip client freeItem, then re-graft prev.variants.freeItem
+    const prevVariants = { freeItem: { campaignId: 'june-2026' }, fabricCode: 'COTTON' };
+    const clientPatch = { freeItem: { campaignId: 'injected' }, sofaLegHeight: '150' };
+    const stripped = stripFreeItem(clientPatch) as Record<string, unknown>;
+    const prevFreeItem = (prevVariants as Record<string, unknown>)['freeItem'];
+    const merged = prevFreeItem !== undefined ? { ...stripped, freeItem: prevFreeItem } : stripped;
+    // freeItem from prev is preserved; client injection is blocked
+    expect((merged as Record<string, unknown>)['freeItem']).toEqual({ campaignId: 'june-2026' });
+    expect((merged as Record<string, unknown>)['sofaLegHeight']).toBe('150');
+    expect(isFreeItemLine(merged)).toBe(true);
+  });
+
+  it('PATCH /:docNo/items scenario: normal line — client freeItem stripped, no prev marker', () => {
+    const prevVariants = { fabricCode: 'LINEN' }; // no freeItem
+    const clientPatch = { freeItem: { campaignId: 'injected' }, sofaLegHeight: '150' };
+    const stripped = stripFreeItem(clientPatch) as Record<string, unknown>;
+    const prevFreeItem = (prevVariants as Record<string, unknown>)['freeItem'];
+    const merged = prevFreeItem !== undefined ? { ...stripped, freeItem: prevFreeItem } : stripped;
+    // No freeItem from prev and client injection stripped → normal line
+    expect(isFreeItemLine(merged)).toBe(false);
+  });
+});
