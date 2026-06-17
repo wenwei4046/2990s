@@ -4769,10 +4769,13 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   }
   /* Commander 2026-05-28 — "Description 2" is ALWAYS the server-generated
      variant summary; never trust a client-sent value. Recompute from the
-     effective itemGroup + variants (incoming patch, else the stored row). */
+     effective itemGroup + variants (incoming patch, else the stored row).
+     Use the FINAL persisted variants (updates['variants']) if variants were patched,
+     to ensure description2 matches the stripped-and-re-grafted variants that will
+     actually be persisted, not the raw client input. */
   {
     const effGroup = (it.itemGroup ?? prev.item_group) as string | null | undefined;
-    const effVariants = (it.variants ?? prev.variants) as Record<string, unknown> | null | undefined;
+    const effVariants = (it.variants !== undefined ? updates['variants'] : prev.variants) as Record<string, unknown> | null | undefined;
     updates['description2'] = buildVariantSummary(String(effGroup ?? ''), effVariants ?? null) || null;
   }
 
