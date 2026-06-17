@@ -13,6 +13,7 @@ import {
   validateFreeGiftClaims, buildFreeGiftTriggers,
   type FreeGiftLineClaim, type TriggerLine,
   campaignsCoveringLine,
+  isFreeItemLine,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
 /* POS auto-Proceed (Loo 2026-06-09) — when a handover arrives already complete
@@ -4639,7 +4640,12 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       sofaModuleCostRowsPatch,
       modelOverridesPatch, // migration 0172 — per-Model Δ
     );
-    if (posTablet && recomputedPatch.drift) {
+    /* Task 6 — grandfathering: a line already carrying variants.freeItem was
+       made free at create time and must STAY at RM 0 on edit recompute, even
+       if the campaign has since been toggled off. Skip the drift check too —
+       the client always sends 0 for a free-item line so there is no drift to
+       gate against. */
+    if (!isFreeItemLine(prev.variants) && posTablet && recomputedPatch.drift) {
       return c.json({
         error:    'pricing_drift',
         reason:   'Client unitPriceCenti differs >0.5% from server compute.',
@@ -4652,8 +4658,11 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   }
   /* Carry the bound price-list figure out when a recompute ran (costing-only
      Backend sends no real selling price). POS drift rejects above; Backend
-     drift saves silently. */
-  const unit = recomputedPatch ? recomputedPatch.unit_price_sen : clientUnit;
+     drift saves silently. Task 6 — a persisted free-item line is grandfathered
+     at RM 0 regardless of what the current recompute produced. */
+  const unit = isFreeItemLine(prev.variants)
+    ? 0
+    : (recomputedPatch ? recomputedPatch.unit_price_sen : clientUnit);
   /* Audit 2026-06-11 C-2 — same discount gate as POST /: the effective
      (patch-else-stored) discount must sit in [0, qty × unit] against the
      effective unit price (422, reject-don't-normalize). */
@@ -5021,8 +5030,14 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-update', async (c) => {
   const sellingDeltaCenti = (after.breakdown.unitPriceSen - before.breakdown.unitPriceSen) + tierDeltaCenti;
   const costDeltaCenti = after.unit_cost_sen - before.unit_cost_sen;
 
+  /* Task 6 — grandfathering: a line carrying variants.freeItem was made free
+     at create time and must STAY at RM 0 regardless of any fabric/option delta.
+     Treat it as a no-price-change TBC edit (the variant picks still land).
+     Also skip the POS floor check — a zero-priced line can never lower the
+     bill further; the check is meaningless and would compare 0 vs 0. */
+  const isFreeItemGrandfathered = isFreeItemLine(prevVariants);
   const posTablet = await isPosTabletCaller(sb, user.id);
-  if (posTablet && sellingDeltaCenti < 0) {
+  if (!isFreeItemGrandfathered && posTablet && sellingDeltaCenti < 0) {
     return c.json({
       error:    'so_total_below_original',
       reason:   'Changes cannot reduce the bill below the original sales order total.',
@@ -5032,7 +5047,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-update', async (c) => {
   }
 
   const qty = Number(prev.qty);
-  const newUnit = Math.max(0, Number(prev.unit_price_centi) + sellingDeltaCenti);
+  const newUnit = isFreeItemGrandfathered ? 0 : Math.max(0, Number(prev.unit_price_centi) + sellingDeltaCenti);
   const newTotal = (qty * newUnit) - Number(prev.discount_centi ?? 0);
   const newUnitCost = Math.max(0, Number(prev.unit_cost_centi ?? 0) + costDeltaCenti);
   const { error: upErr } = await sb.from('mfg_sales_order_items').update({

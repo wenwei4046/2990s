@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFreeItemEligible, campaignsCoveringLine, type FreeItemCampaign } from './free-item-campaign';
+import { parseFreeItemEligible, campaignsCoveringLine, isFreeItemLine, type FreeItemCampaign } from './free-item-campaign';
 
 const camp = (over: Partial<FreeItemCampaign>): FreeItemCampaign => ({
   id: 'c1', name: 'June', active: true, maxFreeQty: 1, eligible: [], ...over,
@@ -7,6 +7,12 @@ const camp = (over: Partial<FreeItemCampaign>): FreeItemCampaign => ({
 const combos = new Map<string, string[][]>([
   ['combo-X', [['2A(LHF)', '2A(RHF)'], ['L(LHF)', 'L(RHF)']]],
 ]);
+
+it('isFreeItemLine detects a persisted marker', () => {
+  expect(isFreeItemLine({ freeItem: { campaignId: 'c1' } })).toBe(true);
+  expect(isFreeItemLine({ freeItem: {} })).toBe(false);
+  expect(isFreeItemLine(null)).toBe(false);
+});
 
 describe('parseFreeItemEligible', () => {
   it('keeps model entries and drops malformed', () => {

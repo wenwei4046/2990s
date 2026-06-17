@@ -52,6 +52,12 @@ export function parseFreeItemEligible(raw: unknown): FreeItemEligibility[] {
   return out;
 }
 
+/** A persisted line carries a free-item marker iff variants.freeItem.campaignId is set. */
+export function isFreeItemLine(variants: unknown): boolean {
+  const v = variants as { freeItem?: { campaignId?: unknown } } | null;
+  return Boolean(v?.freeItem && typeof v.freeItem === 'object' && v.freeItem.campaignId);
+}
+
 /** Every ACTIVE campaign that covers this line. Non-sofa / sofa 'model' match by
  *  modelId; sofa 'combo' matches only when the built modules cover the combo's
  *  slots (matchComboSubset). Returns all covering campaigns so the cart can let
