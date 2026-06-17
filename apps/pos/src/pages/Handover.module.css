@@ -185,6 +185,24 @@
   margin: var(--space-3) 0;
 }
 
+/* Manual key-in toggle (2026-06-17) — light inline row that flips City +
+   Postcode between the cascading dropdowns and free-text inputs for the
+   postcodes the seed can't search. Deliberately lighter than .highlightCard. */
+.manualToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -2px 0 2px;
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.manualToggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--c-orange);
+}
+
 .addonList {
   display: flex;
   flex-direction: column;
