@@ -93,6 +93,11 @@ export function FreeItemCampaignSection({ canEdit }: { canEdit: boolean }) {
     setDraft(null);
   };
 
+  const onDelete = async (id: string, name: string) => {
+    if (!window.confirm(`Delete campaign "${name}"?`)) return;
+    await remove.mutateAsync(id);
+  };
+
   // Group models by category for the eligible picker.
   const modelsByCategory = models.reduce<Record<string, ProductModelRow[]>>(
     (acc, m) => {
@@ -182,7 +187,7 @@ export function FreeItemCampaignSection({ canEdit }: { canEdit: boolean }) {
                 {c.active ? '' : ' · inactive'}
               </div>
               <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-                {c.eligible.length} model(s) · free up to {c.maxFreeQty}/line
+                {new Set(c.eligible.map((e) => e.modelId)).size} model(s) · free up to {c.maxFreeQty}/line
               </div>
             </div>
             {canEdit && (
@@ -212,7 +217,7 @@ export function FreeItemCampaignSection({ canEdit }: { canEdit: boolean }) {
                 <button
                   type="button"
                   aria-label="Delete"
-                  onClick={() => void remove.mutateAsync(c.id)}
+                  onClick={() => void onDelete(c.id, c.name)}
                   style={{
                     background: 'transparent',
                     border: '1px solid var(--line-strong)',
