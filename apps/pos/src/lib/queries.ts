@@ -2657,8 +2657,6 @@ export interface RedeemablePwpCode {
   status: 'AVAILABLE' | 'RESERVED';
   sourceDocNo: string | null;
   customerId: string | null;
-  /** Whole MYR reward price, or null if unset. */
-  pwpPriceSen: number | null;
 }
 
 /** List AVAILABLE / RESERVED PWP codes that are redeemable for an order.
@@ -2682,10 +2680,15 @@ export const useRedeemablePwpCodesForOrder = (docNo: string | undefined) =>
     staleTime: 15_000,
     queryFn: async (): Promise<RedeemablePwpCode[]> => {
       if (!docNo) return [];
+      // NOTE: do NOT select pwp_price_sen here — that column lives on
+      // mfg_products (the reward SKU's per-size PWP price), NOT on pwp_codes.
+      // Selecting it made PostgREST 400 ("column does not exist"), so the query
+      // threw and no order code was ever auto-filled in addToOrder mode. The
+      // reward price is derived from the configured product's size, not the code.
       const { data, error } = await supabase
         .from('pwp_codes')
         .select(
-          'code, rule_id, reward_category, eligible_reward_model_ids, reward_combo_ids, type, status, source_doc_no, customer_id, pwp_price_sen',
+          'code, rule_id, reward_category, eligible_reward_model_ids, reward_combo_ids, type, status, source_doc_no, customer_id',
         )
         .eq('source_doc_no', docNo)
         .in('status', ['AVAILABLE', 'RESERVED']);
@@ -2700,7 +2703,6 @@ export const useRedeemablePwpCodesForOrder = (docNo: string | undefined) =>
         status: r.status as 'AVAILABLE' | 'RESERVED',
         sourceDocNo: (r.source_doc_no as string | null) ?? null,
         customerId: (r.customer_id as string | null) ?? null,
-        pwpPriceSen: (r.pwp_price_sen as number | null) ?? null,
       }));
     },
   });
