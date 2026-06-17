@@ -96,7 +96,8 @@ freeItemCampaigns.patch('/:id', async (c) => {
 freeItemCampaigns.delete('/:id', async (c) => {
   const gate = await requireCampaignEditor(c);
   if ('error' in gate) return gate.error;
-  const { error } = await gate.supabase.from('free_item_campaigns').delete().eq('id', c.req.param('id'));
+  const { data, error } = await gate.supabase.from('free_item_campaigns').delete().eq('id', c.req.param('id')).select('id');
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  if (!data || data.length === 0) return c.json({ error: 'delete_failed', reason: 'not_found_or_rls' }, 404);
   return c.json({ ok: true });
 });

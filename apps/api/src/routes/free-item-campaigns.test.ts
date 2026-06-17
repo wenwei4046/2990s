@@ -320,7 +320,9 @@ describe('DELETE /free-item-campaigns/:id', () => {
       }
       return {
         delete: () => ({
-          eq: (_col: string, _val: string) => Promise.resolve({ error: null }),
+          eq: (_col: string, _val: string) => ({
+            select: (_cols: string) => Promise.resolve({ data: [{ id: CAMPAIGN_ID }], error: null }),
+          }),
         }),
       };
     };
@@ -346,5 +348,28 @@ describe('DELETE /free-item-campaigns/:id', () => {
     expect(res.status).toBe(403);
     const body = await res.json() as { reason: string };
     expect(body.reason).toBe('no_active_staff');
+  });
+
+  it('returns 404 not_found_or_rls when delete returns empty data', async () => {
+    const fromImpl = (table: string) => {
+      if (table === 'staff') {
+        return {
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { role: 'admin', active: true }, error: null }) }) }),
+        };
+      }
+      return {
+        delete: () => ({
+          eq: (_col: string, _val: string) => ({
+            select: (_cols: string) => Promise.resolve({ data: [], error: null }),
+          }),
+        }),
+      };
+    };
+
+    const app = buildAppWithFrom(fromImpl);
+    const res = await app.request(`/free-item-campaigns/${CAMPAIGN_ID}`, { method: 'DELETE' }, baseEnv);
+    expect(res.status).toBe(404);
+    const body = await res.json() as { reason: string };
+    expect(body.reason).toBe('not_found_or_rls');
   });
 });
