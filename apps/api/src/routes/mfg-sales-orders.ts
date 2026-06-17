@@ -91,6 +91,7 @@ import { findIncompleteVariantLines } from '../lib/so-variant-check';
    placed-SO edit reconciler, so create and reconcile can never compute a
    different gift set. */
 import { reconcileFreeGiftLinesForSo } from '../lib/free-gift-reconcile';
+import { claimPwpForSingleLine, rollbackSinglePwpClaim } from '../lib/pwp-claim-single';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { pickCrossCategoryMatch, type AutoMatchCandidate } from '../lib/cross-category-match';
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
@@ -4311,7 +4312,7 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   /* PR-E — pull customer_delivery_date alongside debtor/agent/venue so a
      line added later still inherits the SO header's delivery date by
      default. Client can override by sending lineDeliveryDate explicitly. */
-  const { data: header } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name, agent, branding, venue, customer_delivery_date, customer_state, internal_expected_dd, processing_date').eq('doc_no', docNo).maybeSingle();
+  const { data: header } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name, agent, branding, venue, customer_delivery_date, customer_state, internal_expected_dd, processing_date, customer_id').eq('doc_no', docNo).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
   /* Owner 2026-06-12 — processing-date lock: no line ADD once the processing
      day has passed (the locked order is already PO'd to the supplier). */
@@ -4366,6 +4367,54 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
         loadModelSofaModuleCostRows(sb, productLite.base_model),
       ])
     : [null, null];
+  /* PWP claim (add-line path) — mirrors the create-path loop for ONE code.
+     If the client sends variants.pwpCode we attempt to claim the voucher now,
+     BEFORE recompute so the PWP base feeds the drift gate correctly.
+     On rejection we return 409 (same shape as create). On success we carry
+     `addLinePwpClaimed` for rollback on a subsequent insert failure. */
+  let addLinePwpBaseSen: number | null = null;
+  let addLinePwpSofaComboIds: string[] | null = null;
+  let addLinePwpClaimed: { code: string; prevStatus: string } | null = null;
+  const addLinePwpCode = String((variantsObj as { pwpCode?: string | null } | null)?.pwpCode ?? '').trim();
+  if (addLinePwpCode) {
+    /* PWP reward qty lock (Loo 2026-06-12) — a reward line must be exactly 1
+       unit; the claim helper enforces this too, but a fast 422 mirrors the
+       create-path pattern so the error shape is consistent. */
+    if (qty !== 1) {
+      return c.json({
+        error: 'invalid_qty',
+        reason: 'A PWP reward line must have quantity 1.',
+        itemCode: itemCodeStr,
+        qty,
+      }, 422);
+    }
+    const pwpClaimResult = await claimPwpForSingleLine(sb, {
+      code: addLinePwpCode,
+      docNo,
+      itemCode: productLite?.code ?? itemCodeStr,  // resolved catalog SKU — matches create audit
+      product: {
+        category:      productLite?.category ?? '',
+        model_id:      productLite?.model_id ?? null,
+        base_model:    productLite?.base_model ?? null,
+        pwp_price_sen: productLite?.pwp_price_sen ?? null,
+      },
+      customerId:    (header.customer_id as string | null) ?? null,
+      ownerStaffId:  user.id,
+      qty,
+      variants:      variantsObj as Record<string, unknown> | null,
+    });
+    if (pwpClaimResult.rejection) {
+      return c.json({
+        error:  'pwp_code_rejected',
+        code:   pwpClaimResult.rejection.code,
+        reason: pwpClaimResult.rejection.reason,
+      }, 409);
+    }
+    addLinePwpBaseSen      = pwpClaimResult.pwpBaseSen;
+    addLinePwpSofaComboIds = pwpClaimResult.pwpSofaComboIds;
+    addLinePwpClaimed      = pwpClaimResult.claimed;
+  }
+
   const recomputed = recomputeFromSnapshot(
     {
       itemCode:       itemCodeStr,
@@ -4381,17 +4430,19 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     sofaModulePricesLite,
     sellingTiersLite,
     fabricAddonConfigLite,
-    null,                // pwpBaseSen (resolved elsewhere for this single-item path)
-    null,                // pwpSofaComboIds
+    addLinePwpBaseSen,       // pwpBaseSen — claimed above, or null for non-PWP lines
+    addLinePwpSofaComboIds,  // pwpSofaComboIds — claimed above, or null
     specialAddonsLite,
     sofaModuleCostRowsLite,
-    modelOverridesLite,  // migration 0172 — per-Model Δ
+    modelOverridesLite,      // migration 0172 — per-Model Δ
   );
   /* Pricing trust boundary (Owner 2026-05-31, see isPosTabletCaller). POS tablet
      roles are drift-rejected + take the server price; Backend / office authors
      set the selling price freely. */
   const posTablet = await isPosTabletCaller(sb, user.id);
   if (posTablet && recomputed.drift) {
+    /* Rollback any PWP claim before rejecting — must not burn a code on drift. */
+    if (addLinePwpClaimed) await rollbackSinglePwpClaim(sb, addLinePwpClaimed);
     return c.json({
       error:    'pricing_drift',
       reason:   'Client unitPriceCenti differs >0.5% from server compute.',
@@ -4407,6 +4458,8 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   /* Audit 2026-06-11 C-2 — same discount gate as POST /: client-authored
      discount must sit in [0, qty × unit] (422, reject-don't-normalize). */
   if (!Number.isFinite(discount) || discount < 0 || discount > qty * unit) {
+    /* Rollback any PWP claim before rejecting — must not burn a code on invalid discount. */
+    if (addLinePwpClaimed) await rollbackSinglePwpClaim(sb, addLinePwpClaimed);
     return c.json({
       error:    'invalid_discount',
       reason:   'discountCenti must be between 0 and qty × unit price.',
@@ -4565,7 +4618,11 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
         .from('mfg_sales_order_items')
         .insert(moduleRows)
         .select('*');
-      if (moduleError) return c.json({ error: 'insert_failed', reason: moduleError.message }, 500);
+      if (moduleError) {
+        /* Don't burn a PWP code on a failed insert — mirror create's rollbackPwpClaims. */
+        if (addLinePwpClaimed) await rollbackSinglePwpClaim(sb, addLinePwpClaimed);
+        return c.json({ error: 'insert_failed', reason: moduleError.message }, 500);
+      }
       const firstRow = (moduleData ?? [])[0] ?? moduleRows[0];
 
       // Default Free Gift — adding a sofa trigger may grant a gift.
@@ -4599,7 +4656,11 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
   };
   const { data, error } = await sb.from('mfg_sales_order_items').insert(row).select('*').single();
-  if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  if (error) {
+    /* Don't burn a PWP code on a failed insert — mirror create's rollbackPwpClaims. */
+    if (addLinePwpClaimed) await rollbackSinglePwpClaim(sb, addLinePwpClaimed);
+    return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  }
   // Default Free Gift (0170) — adding a trigger line may grant a new accessory
   // gift; reconcile auto-inserts/deletes gift lines, then recomputes totals.
   await reconcileFreeGiftLinesForSo(sb, docNo);
