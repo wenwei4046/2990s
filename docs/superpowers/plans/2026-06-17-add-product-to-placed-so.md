@@ -37,7 +37,7 @@
 
 ---
 
-## Task A1: Server — `claimPwpForSingleLine` helper
+## Task 1: Server — `claimPwpForSingleLine` helper
 
 **Files:**
 - Create: `apps/api/src/lib/pwp-claim-single.ts`
@@ -69,7 +69,7 @@ export async function rollbackSinglePwpClaim(sb: any, claimed: { code: string; p
 
 ---
 
-## Task A2: Server — sofa split on `POST /:docNo/items`
+## Task 2: Server — sofa split on `POST /:docNo/items`
 
 **Files:** Modify `apps/api/src/routes/mfg-sales-orders.ts` (the add-line handler ~4449-4493).
 
@@ -84,11 +84,11 @@ export async function rollbackSinglePwpClaim(sb: any, claimed: { code: string; p
 
 ---
 
-## Task A3: Server — PWP claim on `POST /:docNo/items`
+## Task 3: Server — PWP claim on `POST /:docNo/items`
 
 **Files:** Modify `apps/api/src/routes/mfg-sales-orders.ts` add-line handler.
 
-**Interfaces:** Consumes `claimPwpForSingleLine` / `rollbackSinglePwpClaim` (Task A1).
+**Interfaces:** Consumes `claimPwpForSingleLine` / `rollbackSinglePwpClaim` (Task 1).
 
 - [ ] **Step 1:** Load the SO header's `customer_id` (add to the existing header select). If `variants.pwpCode` present: enforce `qty === 1` (else 422), call `claimPwpForSingleLine(...)`. On `rejection` → 409 `pwp_code_rejected` with the reason. On success → pass `pwpBaseSen` / `pwpSofaComboIds` into `recomputeFromSnapshot` (replace the hardcoded `null` at ~4384-4385).
 - [ ] **Step 2:** Wrap the `insert` (and sofa multi-row insert) in try/catch (or check `error`): on failure, call `rollbackSinglePwpClaim(claimed)` BEFORE returning 500 — never burn a code on a failed insert (mirrors create's `rollbackPwpClaims` on insert failure).
@@ -96,7 +96,7 @@ export async function rollbackSinglePwpClaim(sb: any, claimed: { code: string; p
 
 ---
 
-## Task A4: Server — free-item apply on `POST /:docNo/items`
+## Task 4: Server — free-item apply on `POST /:docNo/items`
 
 **Files:** Modify `apps/api/src/routes/mfg-sales-orders.ts` add-line handler.
 
@@ -108,7 +108,7 @@ export async function rollbackSinglePwpClaim(sb: any, claimed: { code: string; p
 
 ---
 
-## Task P1: POS — load context for addToOrder mode (hooks)
+## Task 5: POS — load context for addToOrder mode (hooks)
 
 **Files:** Modify `apps/pos/src/lib/queries.ts` (or flow-queries).
 
@@ -121,7 +121,7 @@ export async function rollbackSinglePwpClaim(sb: any, claimed: { code: string; p
 
 ---
 
-## Task P2: POS — Configurator `addToOrder` mode + submit
+## Task 6: POS — Configurator `addToOrder` mode + submit
 
 **Files:** Modify `apps/pos/src/pages/Configurator.tsx`, `apps/pos/src/pages/Catalog.tsx` (param passthrough).
 
@@ -132,27 +132,27 @@ export async function rollbackSinglePwpClaim(sb: any, claimed: { code: string; p
 
 ---
 
-## Task P3: POS — PWP auto-fill in addToOrder mode
+## Task 7: POS — PWP auto-fill in addToOrder mode
 
 **Files:** Modify `apps/pos/src/pages/Configurator.tsx`.
 
-- [ ] **Step 1:** In addToOrder mode, when the configured product is a PWP **reward** (its category/model matches a redeemable code from `useRedeemablePwpCodesForOrder`), auto-apply the code: set the line `pwp=true`, `pwpCode`, show "PWP price · 换购自 <trigger>", and reflect the PWP price (the configurator's existing PWP apply logic — reuse `validatePwpCode` + the same display the cart uses). Send `variants.pwpCode` in the submit; the SERVER re-validates + claims (Task A3) and forces the PWP price.
+- [ ] **Step 1:** In addToOrder mode, when the configured product is a PWP **reward** (its category/model matches a redeemable code from `useRedeemablePwpCodesForOrder`), auto-apply the code: set the line `pwp=true`, `pwpCode`, show "PWP price · 换购自 <trigger>", and reflect the PWP price (the configurator's existing PWP apply logic — reuse `validatePwpCode` + the same display the cart uses). Send `variants.pwpCode` in the submit; the SERVER re-validates + claims (Task 3) and forces the PWP price.
 - [ ] **Step 2:** If multiple codes are redeemable, pick the appropriate one (FIFO / matching reward category), mirroring the cart's same-cart auto-pick.
 - [ ] Typecheck + build. Commit.
 
 ---
 
-## Task P4: POS — free-item make-free affordance in addToOrder mode
+## Task 8: POS — free-item make-free affordance in addToOrder mode
 
 **Files:** Modify `apps/pos/src/pages/Configurator.tsx`.
 
 - [ ] **Step 1:** In addToOrder mode, compute `campaignsCoveringLine` for the configured product (reuse `useActiveFreeItemCampaigns` + `useSofaCombos`, exactly like `CartContents`). If covered AND not a PWP line, show a **"Make free · campaign"** control (1 campaign → button; 2+ → pick). Mutually exclusive with PWP (hide if PWP applied).
-- [ ] **Step 2:** When made free, the submit sends `freeItemCampaignId` (NOT a client `variants.freeItem`); the SERVER validates + forces RM 0 (Task A4). Display the line as `FREE · campaign`.
+- [ ] **Step 2:** When made free, the submit sends `freeItemCampaignId` (NOT a client `variants.freeItem`); the SERVER validates + forces RM 0 (Task 4). Display the line as `FREE · campaign`.
 - [ ] Typecheck + build. Commit.
 
 ---
 
-## Task P5: POS — "Add product" button on the Order Placed drawer
+## Task 9: POS — "Add product" button on the Order Placed drawer
 
 **Files:** Modify `apps/pos/src/pages/OrderStatus.tsx`.
 
