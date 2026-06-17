@@ -232,6 +232,9 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit, activeCampaigns, comb
     activeCampaigns,
     comboModulesById,
   );
+  // Single covering campaign → one button. (TS doesn't narrow covering[0] from a
+  // length check, so bind it here instead of asserting inside the JSX.)
+  const singleCampaign = covering.length === 1 ? covering[0]! : null;
 
   return (
   <li className={`${styles.line} ${variant === 'rail' ? styles.lineRail : ''}`}>
@@ -294,16 +297,13 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit, activeCampaigns, comb
           title="Revert to normal price"
           onClick={() => onRevertFree(line.key)}
         />
-      ) : covering.length === 1 ? (
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        (() => { const c = covering[0]!; return (
+      ) : singleCampaign ? (
         <IconButton
           icon={<Gift size={16} strokeWidth={1.75} />}
           aria-label="Make free gift"
-          title={`Make free · ${c.name}`}
-          onClick={() => onMakeFree(line.key, { id: c.id, name: c.name, maxFreeQty: c.maxFreeQty })}
+          title={`Make free · ${singleCampaign.name}`}
+          onClick={() => onMakeFree(line.key, { id: singleCampaign.id, name: singleCampaign.name, maxFreeQty: singleCampaign.maxFreeQty })}
         />
-        ); })()
       ) : covering.length > 1 ? (
         <select
           aria-label="Make free under campaign"
