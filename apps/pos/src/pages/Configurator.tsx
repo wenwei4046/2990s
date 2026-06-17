@@ -525,7 +525,7 @@ export const Configurator = () => {
     snapshot: SofaConfigSnapshot | SizeConfigSnapshot | BedframeConfigSnapshot | FlatConfigSnapshot,
     qty = 1,
   ) => {
-    if (!addToOrderDoc || addToOrderPending) return;
+    if (!addToOrderDoc || addToOrderPending || !soHeader?.addEligible) return;
     setAddToOrderError(null);
     setAddToOrderPending(true);
     try {
@@ -1803,7 +1803,7 @@ export const Configurator = () => {
       <button
         type="button"
         className={styles.topbarBtnPrimary}
-        disabled={!canAddSize || addToOrderPending}
+        disabled={!canAddSize || addToOrderPending || (isAddToOrderMode && !soHeader?.addEligible)}
         onClick={handleAddSize}
       >
         {isAddToOrderMode
@@ -1851,7 +1851,7 @@ export const Configurator = () => {
       <button
         type="button"
         className={styles.topbarBtnPrimary}
-        disabled={!canAddBedframe || addToOrderPending}
+        disabled={!canAddBedframe || addToOrderPending || (isAddToOrderMode && !soHeader?.addEligible)}
         onClick={handleAddBedframe}
       >
         {isAddToOrderMode
@@ -1903,7 +1903,7 @@ export const Configurator = () => {
       <button
         type="button"
         className={styles.topbarBtnPrimary}
-        disabled={!canAddSofa || swapPending || addToOrderPending}
+        disabled={!canAddSofa || swapPending || addToOrderPending || (isAddToOrderMode && !soHeader?.addEligible)}
         onClick={pickedQP ? handleAddQuickPick : handleAddSofa}
       >
         {isSwapMode
@@ -2366,6 +2366,7 @@ export const Configurator = () => {
               void confirmAddToOrder(snapshot, qty);
             },
             addToOrderPending,
+            addEligible: soHeader?.addEligible ?? true,
           } : {})}
         />
       )}
@@ -2631,9 +2632,11 @@ interface FlatAddToCartProps {
    *  instead of the cart. */
   onAddToOrder?: (snapshot: FlatConfigSnapshot, qty: number) => void;
   addToOrderPending?: boolean;
+  /** When in add-to-order mode, true if the target SO is eligible for adds. */
+  addEligible?: boolean;
 }
 
-const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded, onAddToOrder, addToOrderPending = false }: FlatAddToCartProps) => {
+const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded, onAddToOrder, addToOrderPending = false, addEligible = true }: FlatAddToCartProps) => {
   const addConfigured = useCart((s) => s.addConfigured);
   const [qty, setQty] = useState(1);
   const handleAdd = () => {
@@ -2680,7 +2683,7 @@ const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded, o
           </span>
         )}
       </div>
-      <Button variant="primary" disabled={addToOrderPending} onClick={handleAdd}>
+      <Button variant="primary" disabled={addToOrderPending || (onAddToOrder && !addEligible)} onClick={handleAdd}>
         {onAddToOrder ? (addToOrderPending ? 'Adding…' : 'Add to this order') : 'Add to cart'}
       </Button>
     </div>

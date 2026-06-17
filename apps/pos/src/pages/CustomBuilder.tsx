@@ -1766,7 +1766,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 : !allClosed
                   ? `Resolve · ${analyses.find((a) => !a.closed)?.reason ?? 'sofa not closed'}`
                   : (onSwapConfirm || onAddToOrderConfirm) && priceResult.groups.length !== 1
-                    ? 'One sofa per exchange'
+                    ? (onSwapConfirm ? 'One sofa per exchange' : 'One sofa at a time')
                     : onSwapConfirm
                       ? (swapPending ? 'Saving…' : 'Confirm Change')
                       : onAddToOrderConfirm
