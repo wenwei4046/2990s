@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFreeItemEligible, campaignsCoveringLine, isFreeItemLine, type FreeItemCampaign } from './free-item-campaign';
+import { parseFreeItemEligible, campaignsCoveringLine, isFreeItemLine, payableDeliveryCategories, type FreeItemCampaign } from './free-item-campaign';
 
 const camp = (over: Partial<FreeItemCampaign>): FreeItemCampaign => ({
   id: 'c1', name: 'June', active: true, maxFreeQty: 1, eligible: [], ...over,
@@ -66,5 +66,54 @@ describe('campaignsCoveringLine', () => {
     const b = camp({ id: 'b', eligible: [{ modelId: 'm1', scope: 'model', comboId: null }] });
     const got = campaignsCoveringLine({ category: 'MATTRESS', modelId: 'm1', builtModuleIds: [] }, [a, b], combos);
     expect(got.map((x) => x.id).sort()).toEqual(['a', 'b']);
+  });
+});
+
+describe('payableDeliveryCategories — free items excluded from delivery', () => {
+  it('free sofa only → no deliverable categories (auto-waive)', () => {
+    expect(payableDeliveryCategories([{ group: 'sofa', isFree: true }])).toEqual([]);
+  });
+
+  it('free sofa + paid mattress → only the paid mattress counts', () => {
+    expect(payableDeliveryCategories([
+      { group: 'sofa', isFree: true },
+      { group: 'mattress', isFree: false },
+    ])).toEqual(['mattress']);
+  });
+
+  it('free mattress + paid mattress → one mattress (free dropped)', () => {
+    expect(payableDeliveryCategories([
+      { group: 'mattress', isFree: true },
+      { group: 'mattress', isFree: false },
+    ])).toEqual(['mattress']);
+  });
+
+  it('keeps all paid deliverables, preserving order and duplicates', () => {
+    expect(payableDeliveryCategories([
+      { group: 'sofa', isFree: false },
+      { group: 'mattress', isFree: false },
+    ])).toEqual(['sofa', 'mattress']);
+  });
+
+  it('drops non-deliverable groups (accessory) and is case-insensitive', () => {
+    expect(payableDeliveryCategories([
+      { group: 'ACCESSORY', isFree: false },
+      { group: 'Mattress', isFree: false },
+    ])).toEqual(['mattress']);
+  });
+
+  it('drops null / empty groups', () => {
+    expect(payableDeliveryCategories([
+      { group: null, isFree: false },
+      { group: '', isFree: false },
+      { group: 'bedframe', isFree: false },
+    ])).toEqual(['bedframe']);
+  });
+
+  it('all free → empty', () => {
+    expect(payableDeliveryCategories([
+      { group: 'sofa', isFree: true },
+      { group: 'mattress', isFree: true },
+    ])).toEqual([]);
   });
 });

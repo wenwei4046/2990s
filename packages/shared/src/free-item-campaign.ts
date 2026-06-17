@@ -85,3 +85,21 @@ export function campaignsCoveringLine(
   }
   return out;
 }
+
+const DELIVERABLE_GROUPS = new Set(['sofa', 'mattress', 'bedframe']);
+
+/** Delivery-fee rule (Loo 2026-06-17): a free-item-campaign giveaway is treated
+ *  like an accessory for delivery — it never adds a delivery charge. Given each
+ *  cart/order line's item group and whether it is a free-item line, return the
+ *  deliverable category ids that feed computeSoDeliveryFee: free lines dropped,
+ *  non-deliverable / empty groups dropped, lowercased. (Special-model fees apply
+ *  the same isFree drop at the call sites.) An SO whose goods are all free yields
+ *  [] → no base / cross-category fee. */
+export function payableDeliveryCategories(
+  lines: ReadonlyArray<{ group: string | null | undefined; isFree: boolean }>,
+): string[] {
+  return lines
+    .filter((l) => !l.isFree)
+    .map((l) => String(l.group ?? '').toLowerCase())
+    .filter((g) => DELIVERABLE_GROUPS.has(g));
+}
