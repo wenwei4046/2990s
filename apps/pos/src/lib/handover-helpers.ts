@@ -47,15 +47,23 @@ export interface ExtraPayment {
 export const collectedTotal = (f: Pick<HandoverForm, 'amountPaid' | 'extraPayments'>): number =>
   f.amountPaid + (f.extraPayments ?? []).reduce((acc, p) => acc + (p.amount || 0), 0);
 
-/** Per-row completeness — method picked, positive amount, approval code,
- *  and the method-scoped sub-field (bank / term) present. */
+/** Approval code + payment slip are required only for a payment that is BOTH
+ *  non-zero AND non-cash (Loo 2026-06-18). Cash never needs proof; a zero payment
+ *  (free RM0 order / nothing collected now) needs none either. Shared by the
+ *  primary payment, each split row, and the ConfirmPaymentStep required-markers
+ *  so the three can't drift. */
+export const paymentProofRequired = (method: string, amount: number): boolean =>
+  amount > 0 && method !== 'cash';
+
+/** Per-row completeness — method picked, positive amount, the method-scoped
+ *  sub-field (bank / term), and (only for a non-cash row) approval code + slip. */
 export const extraPaymentComplete = (p: ExtraPayment): boolean =>
   Boolean(p.method)
   && p.amount > 0
-  && p.approvalCode.trim().length > 0
   && (p.method !== 'merchant' || p.merchantProvider != null)
   && (p.method !== 'installment' || p.installmentMonths != null)
-  && p.slipUploadSessionId !== null;
+  && (!paymentProofRequired(p.method, p.amount)
+      || (p.approvalCode.trim().length > 0 && p.slipUploadSessionId !== null));
 
 export interface HandoverForm {
   name: string; phone: string; email: string;
@@ -203,12 +211,16 @@ export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonT
   const total = subtotal + addonTotal + deliveryFeeTotal;
   const halfTotal = Math.round(total / 2);
   const collected = collectedTotal(f);
-  if (f.amountPaid <= 0) return false;
-  if (collected < halfTotal || collected > total) return false;
+  if (f.amountPaid < 0) return false;                                        // allow exactly 0 (free order / nothing now)
+  if ((f.extraPayments?.length ?? 0) > 0 && f.amountPaid <= 0) return false; // a split's primary leg must be a real payment
+  if (collected < halfTotal || collected > total) return false;             // ≥50% floor unchanged → still gates paid orders
   if (!(f.extraPayments ?? []).every(extraPaymentComplete)) return false;
-  if (f.approvalCode.trim().length === 0) return false;
   if (!f.paymentRecorded) return false;
-  if (f.slipUploadSessionId === null) return false;  // slip / proof compulsory for ALL payment methods
+  // Approval code + slip only for a non-zero, non-cash payment (Loo 2026-06-18).
+  if (paymentProofRequired(f.paymentMethod, f.amountPaid)) {
+    if (f.approvalCode.trim().length === 0) return false;
+    if (f.slipUploadSessionId === null) return false;
+  }
   return true;
 };
 
@@ -302,10 +314,20 @@ const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: n
   if (collected < halfTotal) b.push(`Total collected must be at least RM ${halfTotal.toLocaleString('en-MY')} (50% deposit)`);
   else if (collected > total) b.push('Total collected exceeds the order total');
   extras.forEach((p, i) => {
-    if (!extraPaymentComplete(p)) b.push(`Payment ${i + 2}: pick method, amount and approval code${p.method === 'merchant' ? ' (and merchant)' : p.method === 'installment' ? ' (and term)' : ''}${p.slipUploadSessionId === null ? ' (and slip)' : ''}`);
+    if (extraPaymentComplete(p)) return;
+    const needsProof = paymentProofRequired(p.method, p.amount);
+    const bits = ['pick method', 'amount'];
+    if (needsProof) bits.push('approval code');
+    let msg = `Payment ${i + 2}: ${bits.join(', ')}`;
+    if (p.method === 'merchant') msg += ' (and merchant)';
+    else if (p.method === 'installment') msg += ' (and term)';
+    if (needsProof && p.slipUploadSessionId === null) msg += ' (and slip)';
+    b.push(msg);
   });
-  if (!f.approvalCode.trim()) b.push('Approval code required');
-  if (f.slipUploadSessionId === null) b.push('Payment slip / proof required');
+  if (paymentProofRequired(f.paymentMethod, f.amountPaid)) {
+    if (!f.approvalCode.trim()) b.push('Approval code required');
+    if (f.slipUploadSessionId === null) b.push('Payment slip / proof required');
+  }
   if (!f.paymentRecorded) b.push('Click "Confirm payment received" first to record');
   return b;
 };

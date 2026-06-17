@@ -8,6 +8,7 @@ import {
   validateConfirmPayment,
   validateSign,
   extraPaymentComplete,
+  paymentProofRequired,
   computeMinCalendarDate,
   computeAddonTotal,
   firstName,
@@ -188,7 +189,7 @@ describe('validateConfirmPayment', () => {
   /* Split payment (Loo 2026-06-06) — extras count toward the floor/ceiling
      and every extra row must be complete. */
   describe('split payment', () => {
-    const okExtra = { uid: 'test-uid-1', method: 'cash' as const, amount: 1000, approvalCode: 'CR-1', merchantProvider: null, installmentMonths: null, slipUploadSessionId: 'ex-sess' };
+    const okExtra = { uid: 'test-uid-1', method: 'transfer' as const, amount: 1000, approvalCode: 'CR-1', merchantProvider: null, installmentMonths: null, slipUploadSessionId: 'ex-sess' };
     const base = {
       ...baseForm, paymentMethod: 'transfer' as const, approvalCode: '123',
       paymentRecorded: true, slipUploadSessionId: 'sess',
@@ -226,7 +227,7 @@ describe('validateConfirmPayment', () => {
       )).toBe(false);
     });
     it('extra payment is incomplete without its own slip (spec D4)', () => {
-      const p = { uid: 'test-uid-2', method: 'cash' as const, amount: 100, approvalCode: 'R-1',
+      const p = { uid: 'test-uid-2', method: 'transfer' as const, amount: 100, approvalCode: 'R-1',
         merchantProvider: null, installmentMonths: null, slipUploadSessionId: null };
       expect(extraPaymentComplete(p)).toBe(false);
       expect(extraPaymentComplete({ ...p, slipUploadSessionId: 'sess-1' })).toBe(true);
@@ -288,5 +289,47 @@ describe('firstName', () => {
     expect(firstName('  Aisyah   Wong  ')).toBe('Aisyah');
     expect(firstName('Loo')).toBe('Loo');
     expect(firstName('')).toBe('');
+  });
+});
+
+describe('paymentProofRequired', () => {
+  it('false for a zero payment (any method)', () => {
+    expect(paymentProofRequired('cash', 0)).toBe(false);
+    expect(paymentProofRequired('transfer', 0)).toBe(false);
+  });
+  it('false for cash at any positive amount', () => {
+    expect(paymentProofRequired('cash', 1000)).toBe(false);
+  });
+  it('true for a non-zero non-cash payment', () => {
+    expect(paymentProofRequired('transfer', 1000)).toBe(true);
+    expect(paymentProofRequired('merchant', 1)).toBe(true);
+    expect(paymentProofRequired('installment', 500)).toBe(true);
+  });
+});
+
+describe('validateConfirmPayment — RM0 + cash proof relaxation', () => {
+  const recorded = { ...baseForm, paymentRecorded: true };
+  const leg = (over: Partial<import('./handover-helpers').ExtraPayment>) => ({
+    uid: 'x', method: 'cash' as const, amount: 500, approvalCode: '',
+    merchantProvider: null, installmentMonths: null, slipUploadSessionId: null, ...over,
+  });
+  it('free RM0 order proceeds with no approval/slip', () => {
+    expect(validateConfirmPayment({ ...recorded, paymentMethod: 'cash', amountPaid: 0 }, 0, 0, 0)).toBe(true);
+    expect(validateConfirmPayment({ ...recorded, paymentMethod: 'transfer', amountPaid: 0 }, 0, 0, 0)).toBe(true);
+  });
+  it('cash payment proceeds with no approval/slip', () => {
+    expect(validateConfirmPayment({ ...recorded, paymentMethod: 'cash', amountPaid: 1000 }, 1000, 0, 0)).toBe(true);
+  });
+  it('non-cash still requires approval + slip', () => {
+    expect(validateConfirmPayment({ ...recorded, paymentMethod: 'transfer', amountPaid: 1000 }, 1000, 0, 0)).toBe(false);
+    expect(validateConfirmPayment({ ...recorded, paymentMethod: 'transfer', amountPaid: 1000, approvalCode: 'A1' }, 1000, 0, 0)).toBe(false);
+    expect(validateConfirmPayment({ ...recorded, paymentMethod: 'transfer', amountPaid: 1000, approvalCode: 'A1', slipUploadSessionId: 's1' }, 1000, 0, 0)).toBe(true);
+  });
+  it('split: a cash leg lacking proof passes; a non-cash leg lacking proof fails', () => {
+    expect(validateConfirmPayment({ ...recorded, paymentMethod: 'cash', amountPaid: 500, extraPayments: [leg({})] }, 1000, 0, 0)).toBe(true);
+    expect(validateConfirmPayment({ ...recorded, paymentMethod: 'cash', amountPaid: 500, extraPayments: [leg({ method: 'transfer' })] }, 1000, 0, 0)).toBe(false);
+  });
+  it('split primary leg must be > 0', () => {
+    expect(validateConfirmPayment({ ...recorded, paymentMethod: 'cash', amountPaid: 0, extraPayments: [leg({ amount: 1000 })] }, 1000, 0, 0)).toBe(false);
   });
 });
