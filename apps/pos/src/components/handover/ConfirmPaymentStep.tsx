@@ -5,7 +5,7 @@ import { PAYMENT_METHOD_CODES, type PaymentMethodCode } from '@2990s/shared/paym
 import { Field } from './Field';
 import { SlipUploadStep } from '../SlipUploadStep';
 import { MERCHANT_FALLBACK, INSTALLMENT_FALLBACK, parseTermMonths } from './AddonsPaymentStep';
-import { collectedTotal, type HandoverForm, type ExtraPayment } from '../../lib/handover-helpers';
+import { collectedTotal, paymentProofRequired, type HandoverForm, type ExtraPayment } from '../../lib/handover-helpers';
 import { usePaymentMethodLabels, useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
 import styles from '../../pages/Handover.module.css';
 
@@ -131,7 +131,7 @@ export const ConfirmPaymentStep = ({
         </PresetPill>
       </div>
 
-      <Field label="Approval code *">
+      <Field label={`Approval code${paymentProofRequired(form.paymentMethod, form.amountPaid) ? ' *' : ''}`}>
         <input
           type="text"
           value={form.approvalCode}
@@ -187,7 +187,7 @@ export const ConfirmPaymentStep = ({
               placeholder="0"
             />
           </Field>
-          <Field label="Approval code *">
+          <Field label={`Approval code${paymentProofRequired(p.method, p.amount) ? ' *' : ''}`}>
             <input
               type="text"
               value={p.approvalCode}
@@ -239,7 +239,7 @@ export const ConfirmPaymentStep = ({
             </div>
           )}
           <div style={{ gridColumn: '1 / -1' }}>
-            <Field label={`Payment ${i + 2} slip / proof *`}>
+            <Field label={`Payment ${i + 2} slip / proof${paymentProofRequired(p.method, p.amount) ? ' *' : ''}`}>
               <SlipUploadStep
                 onConfirmed={(id) => patchExtra(i, { slipUploadSessionId: id })}
                 onCleared={() => patchExtra(i, { slipUploadSessionId: null })}
@@ -274,7 +274,8 @@ export const ConfirmPaymentStep = ({
       )}
 
       <h3 className="subTitle">
-        Payment 1 slip / proof <span className={styles.required}>*</span>
+        Payment 1 slip / proof{paymentProofRequired(form.paymentMethod, form.amountPaid)
+          ? <span className={styles.required}> *</span> : null}
       </h3>
       <SlipUploadStep
         onConfirmed={(id) => update('slipUploadSessionId', id)}
