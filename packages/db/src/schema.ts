@@ -169,6 +169,22 @@ export const modelDefaultFreeGifts = pgTable('model_default_free_gifts', {
   updatedBy: uuid('updated_by'),                     // references staff(id)
 });
 
+/* ──────────────── Free Item Campaigns (standalone giveaway) ───────────── */
+// Migration 0176. While active, eligible cart lines can be made RM0 by the
+// salesperson (no qualifying purchase). eligible jsonb = per-Model; sofa scope
+// 'model' (any build) | 'combo' (specific combo id). RLS: read any staff; write
+// admin/super_admin/coordinator/sales_director.
+export const freeItemCampaigns = pgTable('free_item_campaigns', {
+  id:         uuid('id').primaryKey().defaultRandom(),
+  name:       text('name').notNull(),
+  active:     boolean('active').notNull().default(false),
+  maxFreeQty: integer('max_free_qty').notNull().default(1),
+  eligible:   jsonb('eligible').notNull().default([]),  // [{modelId, scope, comboId?}]
+  createdBy:  uuid('created_by'),                        // references staff(id)
+  createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 /* ─────────────────────────── Venues ─────────────────────────────────── */
 // Migration 0086 (2026-05-27). Parallel concept to showrooms — venues are
 // where the sales force (sales / sales_executive / outlet_manager) actually
