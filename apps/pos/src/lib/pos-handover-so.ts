@@ -113,9 +113,9 @@ export interface PosHandoffPayload {
     method: 'merchant' | 'transfer' | 'installment' | 'cash';
     /** Centi-MYR. */
     amountCenti: number;
-    /** Spec D4 — every split payment carries its own slip upload session.
-     *  Required server-side (the API books one slip per payment row). */
-    uploadSessionId: string;
+    /** Spec D4 — each split payment's own slip upload session.
+     *  Omitted for cash legs which carry no slip (Loo 2026-06-18). */
+    uploadSessionId?: string;
     approvalCode?: string;
     merchantProvider?: string;
     installmentMonths?: number;
