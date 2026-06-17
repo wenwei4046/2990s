@@ -2513,3 +2513,287 @@ export const useShowroomSalesStaff = () =>
       return undefined;
     },
   });
+
+/* ─── Add-product-to-placed-SO hooks (Task 5, free-item-campaign) ──────────
+ *
+ * Three hooks that together enable the "add product to placed SO" flow:
+ *
+ *   1. useSoHeaderForAdd(docNo) — fetch the SO header + customer so the
+ *      configurator can show the order context and gate itself on eligibility.
+ *
+ *   2. useRedeemablePwpCodesForOrder(docNo) — list AVAILABLE/RESERVED PWP
+ *      codes for this order's customer + source SO so the configurator can
+ *      pre-fill a PWP reward code.
+ *
+ *   3. useAddProductToPlacedSo() — mutation → POST /:docNo/items. Surfaces
+ *      the server error body (pricing_drift, pwp_code_rejected, etc.) so the
+ *      calling UI can render it.
+ *
+ * All three mirror the existing POS patterns: authedFetch via raw fetch +
+ * supabase.auth.getSession() for API routes; supabase JS client for direct
+ * table reads (pwp_codes). */
+
+/* ── 1. SO header for add-product context ──────────────────────────────── */
+
+export interface SoHeaderForAdd {
+  docNo: string;
+  status: string;
+  proceededAt: string | null;
+  processingDate: string | null;       // internal_expected_dd
+  deliveryDate: string | null;         // customer_delivery_date
+  customerId: string | null;
+  customerName: string;
+  customerPhone: string | null;
+  /** True when the server's POST /:docNo/items will not reject with a scope /
+   *  downstream lock. The rules mirror the server:
+   *    - status === CONFIRMED (the only status that allows item edits)
+   *    - not processing-locked (processing date not passed)
+   *    - no downstream DO / SI (checked lazily — if the SO has been proceeded
+   *      with no DO yet this stays true; the server will block a real DO lock)
+   *
+   *  Note: we do NOT check proceeded_at here because the server's add-item
+   *  endpoint allows adding to a proceeded-but-not-DO'd SO (the downstream
+   *  lock is what truly gates it, not the proceed marker). */
+  addEligible: boolean;
+  /** Human reason when addEligible is false (for UI display). */
+  addBlockedReason: string | null;
+}
+
+/** Fetch the SO header fields needed for the add-product context.
+ *
+ *  Reuses the existing GET /mfg-sales-orders/:docNo API endpoint (the same
+ *  one useSalesOrderDoc calls) rather than duplicating a new fetch. Returns
+ *  the minimal subset the add-product flow needs: status, dates, customer.
+ *
+ *  addEligible mirrors the server-side gates in POST /:docNo/items:
+ *    1. status CONFIRMED  (only status that accepts line edits)
+ *    2. processing date not passed  (soProcessingLocked)
+ *    3. no DO / SI downstream  (soHasDownstream — this hook uses the
+ *       API response flag "hasDownstream" if present; falls back to safe
+ *       assumption of false when the flag is absent so we don't over-block)
+ */
+export const useSoHeaderForAdd = (docNo: string | undefined) =>
+  useQuery({
+    enabled: !!docNo,
+    queryKey: ['so-header-for-add', docNo],
+    staleTime: 10_000,
+    queryFn: async (): Promise<SoHeaderForAdd> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      if (!docNo) throw new Error('no docNo');
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/mfg-sales-orders/${encodeURIComponent(docNo)}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`GET /mfg-sales-orders/${docNo} failed (${res.status})`);
+      const body = (await res.json()) as {
+        salesOrder: {
+          doc_no: string;
+          status: string;
+          proceeded_at: string | null;
+          internal_expected_dd: string | null;
+          processing_date: string | null;
+          customer_delivery_date: string | null;
+          customer_id: string | null;
+          debtor_name: string | null;
+          phone: string | null;
+        };
+        /** Present when the API has computed downstream relationships.
+         *  If absent (older build) we conservatively treat as no downstream. */
+        hasDownstream?: boolean;
+      };
+      const so = body.salesOrder;
+
+      /* Mirror soProcessingLocked from the server: the lock triggers once
+         internal_expected_dd OR processing_date is in the past (UTC date). */
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const procDate = so.processing_date ?? so.internal_expected_dd ?? null;
+      const processingLocked = procDate != null && procDate < todayIso;
+
+      const hasDownstream = body.hasDownstream ?? false;
+
+      let addEligible = true;
+      let addBlockedReason: string | null = null;
+
+      if (so.status !== 'CONFIRMED') {
+        addEligible = false;
+        addBlockedReason = `Order is ${so.status} — items can only be added to CONFIRMED orders.`;
+      } else if (processingLocked) {
+        addEligible = false;
+        addBlockedReason = `Processing date (${procDate!}) has passed — contact a coordinator to add items.`;
+      } else if (hasDownstream) {
+        addEligible = false;
+        addBlockedReason = 'This order already has a delivery or invoice — items cannot be added.';
+      }
+
+      return {
+        docNo: so.doc_no,
+        status: so.status,
+        proceededAt: so.proceeded_at ?? null,
+        processingDate: procDate,
+        deliveryDate: so.customer_delivery_date ?? null,
+        customerId: so.customer_id ?? null,
+        customerName: so.debtor_name ?? '',
+        customerPhone: so.phone ?? null,
+        addEligible,
+        addBlockedReason,
+      };
+    },
+  });
+
+/* ── 2. Redeemable PWP codes for an order ──────────────────────────────── */
+
+export interface RedeemablePwpCode {
+  code: string;
+  ruleId: string | null;
+  /** Reward category (e.g. 'MATTRESS'). */
+  rewardCategory: string;
+  /** Model ids the reward must match (empty = any model). */
+  eligibleRewardModelIds: string[];
+  /** Combo ids for a SOFA reward (Phase 2). */
+  rewardComboIds: string[];
+  type: 'pwp' | 'promo';
+  status: 'AVAILABLE' | 'RESERVED';
+  sourceDocNo: string | null;
+  customerId: string | null;
+  /** Whole MYR reward price, or null if unset. */
+  pwpPriceSen: number | null;
+}
+
+/** List AVAILABLE / RESERVED PWP codes that are redeemable for an order.
+ *
+ *  Queries pwp_codes directly via the Supabase JS client (same pattern as
+ *  TbcLineEditor.tsx useSwapContext — the pwp_codes table is readable by any
+ *  authed staff via RLS). Filters:
+ *    - status IN ('AVAILABLE', 'RESERVED')
+ *    - source_doc_no = docNo  (codes this SO earned, not yet spent)
+ *
+ *  The configurator also accepts manually-entered codes — this query is for
+ *  auto-prefill only (saves the salesperson from typing). The server re-
+ *  validates at POST /:docNo/items (pwpCode in variants), so no extra client-
+ *  side category/model filter is needed here.
+ *
+ *  disabled when docNo is undefined (used as a conditional hook). */
+export const useRedeemablePwpCodesForOrder = (docNo: string | undefined) =>
+  useQuery({
+    enabled: !!docNo,
+    queryKey: ['pwp-codes-for-add', docNo],
+    staleTime: 15_000,
+    queryFn: async (): Promise<RedeemablePwpCode[]> => {
+      if (!docNo) return [];
+      const { data, error } = await supabase
+        .from('pwp_codes')
+        .select(
+          'code, rule_id, reward_category, eligible_reward_model_ids, reward_combo_ids, type, status, source_doc_no, customer_id, pwp_price_sen',
+        )
+        .eq('source_doc_no', docNo)
+        .in('status', ['AVAILABLE', 'RESERVED']);
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        code: r.code as string,
+        ruleId: (r.rule_id as string | null) ?? null,
+        rewardCategory: r.reward_category as string,
+        eligibleRewardModelIds: (r.eligible_reward_model_ids as string[] | null) ?? [],
+        rewardComboIds: (r.reward_combo_ids as string[] | null) ?? [],
+        type: r.type as 'pwp' | 'promo',
+        status: r.status as 'AVAILABLE' | 'RESERVED',
+        sourceDocNo: (r.source_doc_no as string | null) ?? null,
+        customerId: (r.customer_id as string | null) ?? null,
+        pwpPriceSen: (r.pwp_price_sen as number | null) ?? null,
+      }));
+    },
+  });
+
+/* ── 3. Add product to a placed SO mutation ─────────────────────────────── */
+
+/** Body shape for POST /mfg-sales-orders/:docNo/items.
+ *  `variants` may carry `pwpCode` for PWP redemption; `freeItemCampaignId`
+ *  opts the line into server-validated forced-RM0 (Task 4 / migration 0176).
+ *  Mirrors PosHandoffItem but scoped to a single line (no per-SO fields). */
+export interface AddSoItemBody {
+  itemCode: string;
+  itemGroup: 'sofa' | 'bedframe' | 'mattress' | 'accessory' | 'others';
+  qty: number;
+  variants: Record<string, unknown> | null;
+  unitPriceCenti: number;
+  discountCenti?: number;
+  lineDeliveryDate?: string;
+  /** free-item-campaign (migration 0176) — server validates eligibility + cap.
+   *  Mutually exclusive with a pwpCode in variants. */
+  freeItemCampaignId?: string | null;
+}
+
+/** Server error body from POST /:docNo/items.
+ *  Mirrors PosHandoffError from pos-handover-so.ts — same API error shapes. */
+export interface AddSoItemError {
+  error: string;
+  reason?: string;
+  message?: string;
+  itemCode?: string;
+  client?: number;
+  server?: number;
+  field?: string;
+  value?: string;
+  allowed?: string[];
+  offenders?: Array<{ id?: string; itemCode: string; group: string; missing: string[] }>;
+}
+
+export class AddSoItemApiError extends Error {
+  payload: AddSoItemError;
+  status: number;
+  constructor(status: number, payload: AddSoItemError) {
+    super(payload.reason ?? payload.message ?? payload.error ?? `POST /:docNo/items failed (${status})`);
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+/** POST /mfg-sales-orders/:docNo/items — add a single configured line to a
+ *  placed SO. On success invalidates both the 'my-orders' board and the
+ *  'so-header-for-add' context so the drawer refreshes. Throws
+ *  AddSoItemApiError on non-2xx so the caller can inspect the error body
+ *  (pricing_drift, pwp_code_rejected, free_item_not_eligible, etc.). */
+export const useAddProductToPlacedSo = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      docNo,
+      item,
+    }: {
+      docNo: string;
+      item: AddSoItemBody;
+    }): Promise<{ ok: boolean }> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(
+        `${API_URL}/mfg-sales-orders/${encodeURIComponent(docNo)}/items`,
+        {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${token}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(item),
+        },
+      );
+      if (!res.ok) {
+        let payload: AddSoItemError = { error: `http_${res.status}` };
+        try {
+          payload = (await res.json()) as AddSoItemError;
+        } catch { /* body wasn't JSON — keep the http_NNN code */ }
+        throw new AddSoItemApiError(res.status, payload);
+      }
+      return { ok: true };
+    },
+    onSuccess: (_data, { docNo }) => {
+      // Refresh the My-orders board (lane + drawer) and the add-header context.
+      void qc.invalidateQueries({ queryKey: ['my-orders'] });
+      void qc.invalidateQueries({ queryKey: ['so-header-for-add', docNo] });
+      // Also invalidate the printable doc so SalesOrderPrint refreshes.
+      void qc.invalidateQueries({ queryKey: ['so-doc-print', docNo] });
+    },
+  });
+};
