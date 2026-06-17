@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import { IconButton } from '@2990s/design-system';
 import { groupSoLinesForDisplay, sortSoLinesByGroupRank } from '@2990s/shared/so-line-display';
-import { splitSofaCode, localityNeedsManualEntry } from '@2990s/shared';
+import { splitSofaCode } from '@2990s/shared';
 import { REQUIRED_VARIANT_AXES_BY_CATEGORY } from '@2990s/shared/so-variant-rule';
 import { PAYMENT_METHOD_CODES } from '@2990s/shared/payment-methods';
 import { meetsProceedGate } from '@2990s/shared/order-rules';
@@ -1173,19 +1173,12 @@ const OrderDetail = ({ order, onClose }: {
   // Local edit state. Resync ONLY when switching orders, not on background
   // refetches of the same order — otherwise typing would get blown away.
   const [edited, setEdited] = useState<MyOrderRow>(() => ({ ...order, approvalCode: null }));
-  /* Manual address key-in (2026-06-17) — null = follow auto-detect (off-list
-     city/postcode → manual on); true/false = operator's explicit choice. Reset
-     on order switch so the next order re-derives from its own address. */
-  const [addressManualOverride, setAddressManualOverride] = useState<boolean | null>(null);
   /* Resync on order switch. approvalCode is blanked every time: it is NOT a
      header field (absent from `dirty` + buildPatch) — it only feeds the NEXT
      payment's approval code. Seeding it from order.approval_code made a new
      payment silently inherit the PREVIOUS payment's terminal ref (Loo
      2026-06-09); the post-record onSuccess clears it for the same reason. */
-  useEffect(() => {
-    setEdited({ ...order, approvalCode: null });
-    setAddressManualOverride(null);
-  }, [order.id]);
+  useEffect(() => { setEdited({ ...order, approvalCode: null }); }, [order.id]);
 
   // Payment recorded this session (added on top of order.paid).
   const [paymentAdd, setPaymentAdd] = useState<string>('');
@@ -1264,19 +1257,6 @@ const OrderDetail = ({ order, onClose }: {
     }
     return Array.from(set).sort();
   }, [localities.data, edited.customerState, edited.customerCity]);
-
-  /* Manual key-in: default ON when this order's city/postcode aren't in the
-     seed (e.g. a previously hand-keyed address), else follow the operator's
-     explicit toggle. State stays a dropdown. */
-  const addressManualAuto = useMemo(
-    () => localityNeedsManualEntry(localities.data ?? [], {
-      state: edited.customerState,
-      city: edited.customerCity,
-      postcode: edited.customerPostcode,
-    }),
-    [localities.data, edited.customerState, edited.customerCity, edited.customerPostcode],
-  );
-  const addressManual = addressManualOverride ?? addressManualAuto;
 
   const set = <K extends keyof MyOrderRow>(k: K, v: MyOrderRow[K]) =>
     setEdited((prev) => ({ ...prev, [k]: v }));
@@ -1694,68 +1674,34 @@ const OrderDetail = ({ order, onClose }: {
                 </select>
               </DetailField>
               <DetailField label="City *" disabled={!canEditDetails || !edited.customerState}>
-                {addressManual ? (
-                  <input
-                    type="text"
-                    value={edited.customerCity ?? ''}
-                    onChange={(e) => set('customerCity', e.target.value || null)}
-                    disabled={!canEditDetails || !edited.customerState}
-                    placeholder="Type city name"
-                  />
-                ) : (
-                  <select
-                    value={edited.customerCity ?? ''}
-                    onChange={(e) => {
-                      setEdited((p) => ({
-                        ...p,
-                        customerCity: e.target.value || null,
-                        customerPostcode: null,
-                      }));
-                    }}
-                    disabled={!canEditDetails || !edited.customerState}
-                  >
-                    <option value="">{edited.customerState ? 'Select city…' : 'Pick state first'}</option>
-                    {cities.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                )}
+                <select
+                  value={edited.customerCity ?? ''}
+                  onChange={(e) => {
+                    setEdited((p) => ({
+                      ...p,
+                      customerCity: e.target.value || null,
+                      customerPostcode: null,
+                    }));
+                  }}
+                  disabled={!canEditDetails || !edited.customerState}
+                >
+                  <option value="">{edited.customerState ? 'Select city…' : 'Pick state first'}</option>
+                  {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
               </DetailField>
-              {canEditDetails && (
-                <label className={styles.detailManualToggle}>
-                  <input
-                    type="checkbox"
-                    checked={addressManual}
-                    onChange={() => setAddressManualOverride(!addressManual)}
-                  />
-                  Can&apos;t find the city or postcode? Enter them manually
-                </label>
-              )}
-              <DetailField
-                label="Postcode *"
-                disabled={!canEditDetails || (addressManual ? !edited.customerState : !edited.customerCity)}
-              >
-                {addressManual ? (
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={edited.customerPostcode ?? ''}
-                    onChange={(e) => set('customerPostcode', e.target.value || null)}
-                    disabled={!canEditDetails || !edited.customerState}
-                    placeholder="e.g. 47301"
-                  />
-                ) : (
-                  <select
-                    value={edited.customerPostcode ?? ''}
-                    onChange={(e) => set('customerPostcode', e.target.value || null)}
-                    disabled={!canEditDetails || !edited.customerCity}
-                  >
-                    <option value="">
-                      {!edited.customerState ? 'Pick state first'
-                        : !edited.customerCity ? 'Pick city first'
-                        : 'Select postcode…'}
-                    </option>
-                    {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
-                  </select>
-                )}
+              <DetailField label="Postcode *" disabled={!canEditDetails || !edited.customerCity}>
+                <select
+                  value={edited.customerPostcode ?? ''}
+                  onChange={(e) => set('customerPostcode', e.target.value || null)}
+                  disabled={!canEditDetails || !edited.customerCity}
+                >
+                  <option value="">
+                    {!edited.customerState ? 'Pick state first'
+                      : !edited.customerCity ? 'Pick city first'
+                      : 'Select postcode…'}
+                  </option>
+                  {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
               </DetailField>
               {/* Dates feed production scheduling — locked in Proceed (D4); edit
                   them by un-proceeding back to Order placed first. */}
