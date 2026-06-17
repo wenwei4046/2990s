@@ -2269,7 +2269,7 @@ mfgSalesOrders.post('/', async (c) => {
     if (!it) continue;
     const r = recomputes[i];
     const qtyI = Number(it.qty ?? 1);
-    const unitI = r ? r.unit_price_sen : Number(it.unitPriceCenti ?? 0);
+    const unitI = freeItemByIdx.has(i) ? 0 : (r ? r.unit_price_sen : Number(it.unitPriceCenti ?? 0));
     const discI = Number(it.discountCenti ?? 0);
     if (!Number.isFinite(discI) || discI < 0 || discI > qtyI * unitI) {
       await rollbackPwpClaims();  // don't burn a voucher on a rejected order
