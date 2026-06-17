@@ -102,9 +102,11 @@ describe('payableDeliveryCategories — free items excluded from delivery', () =
     ])).toEqual(['mattress']);
   });
 
-  it('drops null / empty groups', () => {
+  it('drops null / undefined / empty groups', () => {
+    // undefined is the real create-path input type (item.itemGroup: string | undefined).
     expect(payableDeliveryCategories([
       { group: null, isFree: false },
+      { group: undefined, isFree: false },
       { group: '', isFree: false },
       { group: 'bedframe', isFree: false },
     ])).toEqual(['bedframe']);
