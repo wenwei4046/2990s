@@ -296,6 +296,8 @@ interface CustomBuilderProps {
    *  constraint as swap). */
   onAddToOrderConfirm?: (snapshot: SofaConfigSnapshot) => void;
   addToOrderPending?: boolean;
+  /** When in add-to-order mode, true if the target SO is eligible for adds. */
+  addEligible?: boolean;
 }
 
 // Cell ids must survive HMR (which resets module locals) and a future cells-
@@ -319,7 +321,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -1760,7 +1762,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 Create Combo
               </Button>
             )}
-            <Button variant="primary" disabled={!canAdd || swapPending || addToOrderPending} onClick={handleAdd}>
+            <Button variant="primary" disabled={!canAdd || swapPending || addToOrderPending || (onAddToOrderConfirm && !addEligible)} onClick={handleAdd}>
               {!cells.length
                 ? 'Add modules to start'
                 : !allClosed

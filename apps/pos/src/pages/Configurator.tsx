@@ -2436,7 +2436,7 @@ export const Configurator = () => {
             extraAmountRm={effectiveExtraRm}
             onAdded={() => navigate(isEditing ? '/cart' : '/catalog')}
             {...(isSwapMode ? { onSwapConfirm: (snap) => { void confirmSwap(snap); }, swapPending } : {})}
-            {...(isAddToOrderMode ? { onAddToOrderConfirm: (snap) => { void confirmAddToOrder(snap); }, addToOrderPending } : {})}
+            {...(isAddToOrderMode ? { onAddToOrderConfirm: (snap) => { void confirmAddToOrder(snap); }, addToOrderPending, addEligible: soHeader?.addEligible ?? true } : {})}
           />
         )
       )}
