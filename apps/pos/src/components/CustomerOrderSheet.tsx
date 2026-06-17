@@ -11,9 +11,12 @@ import {
   ShoppingBag,
   Check,
   Pencil,
+  Gift,
+  Undo2,
 } from 'lucide-react';
+import { campaignsCoveringLine } from '@2990s/shared';
 import { useCart, cartItemCount, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
-import { useCatalog, type CatalogProduct, type MfgCatalogRow } from '../lib/queries';
+import { useCatalog, useActiveFreeItemCampaigns, useSofaCombos, type CatalogProduct, type MfgCatalogRow, type FreeItemCampaignRow } from '../lib/queries';
 import { cartLineTitle, useMfgCatalogIndex } from '../lib/cart-display';
 import { useSaveQuote, useUpdateQuote } from '../lib/quotes';
 import { useFreePwpCodes } from '../lib/products/pwp-queries';
@@ -48,6 +51,16 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
     return m;
   }, [catalog.data]);
   const mfgById = useMfgCatalogIndex();
+
+  const makeFree = useCart((s) => s.makeFree);
+  const revertFreeItem = useCart((s) => s.revertFreeItem);
+
+  const { data: activeCampaigns = [] } = useActiveFreeItemCampaigns();
+  const { data: sofaCombos = [] } = useSofaCombos();
+  const comboModulesById = useMemo(
+    () => new Map(sofaCombos.map((cb) => [cb.id, cb.modules])),
+    [sofaCombos],
+  );
 
   const saveQuote = useSaveQuote();
   const updateQuote = useUpdateQuote();
@@ -186,6 +199,10 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
                 line={line}
                 product={productsById.get(line.config.productId)}
                 mfgRow={mfgById.get(line.config.productId)}
+                activeCampaigns={activeCampaigns}
+                comboModulesById={comboModulesById}
+                onMakeFree={makeFree}
+                onRevertFree={revertFreeItem}
                 onRemove={() => remove(line.key)}
                 onDec={() => setQty(line.key, line.qty - 1)}
                 onInc={() => setQty(line.key, line.qty + 1)}
@@ -310,6 +327,10 @@ interface CartItemProps {
   product: CatalogProduct | undefined;
   /** mfg catalog row for mfg- product ids — Model photo + clean title source. */
   mfgRow: MfgCatalogRow | undefined;
+  activeCampaigns: FreeItemCampaignRow[];
+  comboModulesById: Map<string, string[][]>;
+  onMakeFree: (key: string, campaign: { id: string; name: string; maxFreeQty: number }) => void;
+  onRevertFree: (key: string) => void;
   onRemove: () => void;
   onDec: () => void;
   onInc: () => void;
@@ -318,10 +339,39 @@ interface CartItemProps {
   onEdit?: () => void;
 }
 
-const CartItem = ({ line, product, mfgRow, onRemove, onDec, onInc, onEdit }: CartItemProps) => {
+const CartItem = ({ line, product, mfgRow, activeCampaigns, comboModulesById, onMakeFree, onRevertFree, onRemove, onDec, onInc, onEdit }: CartItemProps) => {
   const photo = mfgRow?.photoUrl ?? product?.thumb_key ?? product?.img_key ?? null;
   const title = cartLineTitle(line.config, mfgRow);
   const lineTotal = line.qty * line.config.total;
+
+  // Resolve free-item eligibility — mirrors CartContents.tsx Line exactly.
+  const cfgAny = line.config as {
+    freeItemCampaignId?: string | null;
+    freeItemCampaign?: string | null;
+    pwp?: boolean;
+    isFreeGift?: boolean;
+    cells?: Array<{ moduleId?: string }>;
+  };
+  const alreadyFree = Boolean(cfgAny.freeItemCampaignId);
+  const blocked = Boolean(cfgAny.pwp) || Boolean(cfgAny.isFreeGift);
+  // mfgRow carries camelCase: modelId + category (uppercase enum e.g. 'SOFA').
+  const covering = (blocked || alreadyFree) ? [] : campaignsCoveringLine(
+    {
+      category: String(mfgRow?.category ?? ''),
+      modelId: mfgRow?.modelId ?? null,
+      builtModuleIds: (cfgAny.cells ?? []).map((c) => String(c?.moduleId ?? '')).filter(Boolean),
+    },
+    activeCampaigns,
+    comboModulesById,
+  );
+  const singleCampaign = covering.length === 1 ? covering[0]! : null;
+
+  // Qty + is locked when the line is PWP, an auto free-gift, OR made free via a campaign.
+  const qtyLocked =
+    ('pwp' in line.config && line.config.pwp === true) ||
+    ('isFreeGift' in line.config && line.config.isFreeGift === true) ||
+    alreadyFree;
+
   return (
     <div className={styles.item}>
       <div
@@ -336,6 +386,21 @@ const CartItem = ({ line, product, mfgRow, onRemove, onDec, onInc, onEdit }: Car
           <span className={styles.itemName}>{title}</span>
         </div>
         <div className={styles.itemDetail}>{cartSummary(line.config)}</div>
+        {'pwp' in line.config && line.config.pwp && (
+          <div className={styles.itemDetail}>
+            PWP price{'pwpTriggerLabel' in line.config && line.config.pwpTriggerLabel ? ` · from ${line.config.pwpTriggerLabel}` : ''}
+          </div>
+        )}
+        {'isFreeGift' in line.config && line.config.isFreeGift && (
+          <div className={styles.itemDetail}>
+            {('freeGiftCampaign' in line.config && line.config.freeGiftCampaign) ? String(line.config.freeGiftCampaign) : 'Free gift'}
+          </div>
+        )}
+        {alreadyFree && (
+          <div className={styles.itemFreeLabel}>
+            FREE{cfgAny.freeItemCampaign ? ` · ${cfgAny.freeItemCampaign}` : ''}
+          </div>
+        )}
         <div className={styles.itemQty}>
           <button type="button" onClick={onDec} aria-label="Decrease">
             <Minus size={12} strokeWidth={2} />
@@ -344,9 +409,16 @@ const CartItem = ({ line, product, mfgRow, onRemove, onDec, onInc, onEdit }: Car
           <button
             type="button"
             onClick={onInc}
-            // One code = one redemption = one unit — the store clamps too (Loo 2026-06-12).
-            disabled={'pwp' in line.config && line.config.pwp === true}
-            title={'pwp' in line.config && line.config.pwp === true ? 'PWP — one unit per code' : undefined}
+            disabled={qtyLocked}
+            title={
+              'pwp' in line.config && line.config.pwp === true
+                ? 'PWP — one unit per code'
+                : 'isFreeGift' in line.config && line.config.isFreeGift === true
+                  ? 'Free gift — quantity follows the qualifying item'
+                  : alreadyFree
+                    ? 'Free item — quantity locked'
+                    : undefined
+            }
             aria-label="Increase"
           >
             <Plus size={12} strokeWidth={2} />
@@ -365,6 +437,40 @@ const CartItem = ({ line, product, mfgRow, onRemove, onDec, onInc, onEdit }: Car
               <Pencil size={14} strokeWidth={1.75} />
             </button>
           )}
+          {alreadyFree ? (
+            <button
+              type="button"
+              className={styles.itemMakeFree}
+              aria-label="Remove free gift"
+              title="Revert to normal price"
+              onClick={() => onRevertFree(line.key)}
+            >
+              <Undo2 size={14} strokeWidth={1.75} />
+            </button>
+          ) : singleCampaign ? (
+            <button
+              type="button"
+              className={styles.itemMakeFree}
+              aria-label="Make free gift"
+              title={`Make free · ${singleCampaign.name}`}
+              onClick={() => onMakeFree(line.key, { id: singleCampaign.id, name: singleCampaign.name, maxFreeQty: singleCampaign.maxFreeQty })}
+            >
+              <Gift size={14} strokeWidth={1.75} />
+            </button>
+          ) : covering.length > 1 ? (
+            <select
+              aria-label="Make free under campaign"
+              defaultValue=""
+              onChange={(e) => {
+                const c = covering.find((x) => x.id === e.target.value);
+                if (c) onMakeFree(line.key, { id: c.id, name: c.name, maxFreeQty: c.maxFreeQty });
+              }}
+              className={styles.makeFreeSelect}
+            >
+              <option value="" disabled>Make free…</option>
+              {covering.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          ) : null}
           <button
             type="button"
             className={styles.itemRemove}
