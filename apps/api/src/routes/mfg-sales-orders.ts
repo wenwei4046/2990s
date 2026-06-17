@@ -4446,18 +4446,17 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   const nextLineNo = typeof (maxNoRow as { line_no?: number | null } | null)?.line_no === 'number'
     ? (maxNoRow as { line_no: number }).line_no + 1
     : null;
-  const row = {
+  /* Shared base fields — used for both the single-row non-sofa path and as the
+     template for each sofa module row (create-path convention: baseRow). */
+  const baseRow = {
     doc_no: docNo,
     line_date: (it.lineDate as string) ?? new Date().toISOString().slice(0, 10),
-    ...(nextLineNo !== null ? { line_no: nextLineNo } : {}),
     debtor_code: header.debtor_code,
     debtor_name: header.debtor_name,
     agent: header.agent,
     item_group: it.itemGroup ?? 'others',
     item_code: it.itemCode,
     description: (it.description as string) ?? null,
-    /* Commander 2026-05-28 — "Description 2" auto-generated from variants. */
-    description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
     uom: (it.uom as string) ?? 'UNIT',
     qty,
     unit_price_centi: unit,
@@ -4489,6 +4488,117 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     ...(isServiceLine({ itemGroup: String(it.itemGroup ?? ''), itemCode: itemCodeStr })
       ? { stock_status: 'READY' }
       : {}),
+  };
+
+  /* SO-SKU spec P3 (add-line mirror) — a sofa BUILD added to a placed SO is
+     split into per-compartment module rows, exactly like the create path
+     (~2456-2559). The money is already settled above: `unit` is the
+     authoritative per-build selling price and the drift gate already passed.
+     Splitting only decomposes it — each module gets its price share, residue
+     on the last, Σ totals === build total. Non-splittable lines (no cells /
+     unknown base model) keep the single-row insert below. */
+  const addLineCells = (it.variants as { cells?: unknown } | null)?.cells;
+  if (
+    productLite?.category === 'SOFA' &&
+    Array.isArray(addLineCells) && addLineCells.length > 0 &&
+    productLite.base_model
+  ) {
+    if (!sofaModulePricesLite && productLite.base_model) {
+      // Catalog gap — split degrades to equal-price weights. Surface so ops
+      // can fix the Model's module SKU prices.
+      // eslint-disable-next-line no-console
+      console.warn(`[so-add-line] no module prices for ${productLite.base_model} — sofa split uses equal weights`);
+    }
+    const split = splitSofaBuildIntoModuleLines({
+      baseModel: productLite.base_model,
+      cells: addLineCells,
+      buildUnitPriceSen: unit,
+      buildUnitCostSen: unitCost,
+      modulePrices: sofaModulePricesLite,
+      depth: String((it.variants as { depth?: unknown } | null)?.depth ?? '24'),
+    });
+    if (split && split.length > 0) {
+      const buildKey = `build-add-${nextLineNo ?? Date.now()}`;
+      const { cells: _cells, ...sharedVariants } =
+        ((it.variants as Record<string, unknown> | null) ?? {});
+      const moduleRows = split.map((s, i) => {
+        const moduleVariants: Record<string, unknown> = {
+          ...sharedVariants,
+          buildKey,
+          cellIndex: s.cellIndex,
+          x: s.x,
+          y: s.y,
+          rot: s.rot,
+        };
+        const moduleLineTotal = (qty * s.unitPriceSen) - (i === 0 ? discount : 0);
+        const moduleLineCost = qty * s.unitCostSen;
+        return {
+          ...baseRow,
+          /* line_no: first module gets nextLineNo (same as single-row), each
+             subsequent module increments. Pre-0165 docs (nextLineNo === null)
+             stay un-numbered consistent with the rest of the SO. */
+          ...(nextLineNo !== null ? { line_no: nextLineNo + i } : {}),
+          item_code: s.itemCode,
+          description: s.description,
+          description2: buildVariantSummary('sofa', moduleVariants) || null,
+          unit_price_centi: s.unitPriceSen,
+          discount_centi: i === 0 ? discount : 0,
+          total_centi: moduleLineTotal,
+          total_inc_centi: moduleLineTotal,
+          balance_centi: moduleLineTotal,
+          variants: moduleVariants,
+          unit_cost_centi: s.unitCostSen,
+          line_cost_centi: moduleLineCost,
+          line_margin_centi: moduleLineTotal - moduleLineCost,
+          /* Breakdown + custom_specials on first module row only (build-level
+             figures — duplicating across N rows would double-display in SO
+             Details). custom_specials rides every row (display composition,
+             not a money figure — same rule as create path). */
+          divan_price_sen:         i === 0 ? (recomputed.divan_price_sen ?? 0) : 0,
+          leg_price_sen:           i === 0 ? (recomputed.leg_price_sen ?? 0) : 0,
+          special_order_price_sen: i === 0 ? (recomputed.special_order_sen ?? 0) : 0,
+          custom_specials:         recomputed.custom_specials ?? null,
+          remark: baseRow.variants && typeof baseRow.variants === 'object'
+            ? ((baseRow.variants as Record<string, unknown>).remark as string | null | undefined) ?? null
+            : null,
+        };
+      });
+      const { data: moduleData, error: moduleError } = await sb
+        .from('mfg_sales_order_items')
+        .insert(moduleRows)
+        .select('*');
+      if (moduleError) return c.json({ error: 'insert_failed', reason: moduleError.message }, 500);
+      const firstRow = (moduleData ?? [])[0] ?? moduleRows[0];
+
+      // Default Free Gift — adding a sofa trigger may grant a gift.
+      await reconcileFreeGiftLinesForSo(sb, docNo);
+
+      await recordSoAudit(sb, {
+        docNo,
+        action: 'ADD_LINE',
+        actorId: user.id,
+        actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+        fieldChanges: [
+          { field: 'itemCode', to: String(firstRow.item_code ?? itemCodeStr) },
+          { field: 'qty', to: qty },
+          { field: 'unitPriceCenti', to: unit },
+          { field: 'totalCenti', to: lineTotal },
+        ],
+      });
+
+      try { await recomputeSoStockAllocation(sb); }
+      catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-line-add failed:', e); }
+
+      return c.json({ item: firstRow }, 201);
+    }
+  }
+
+  /* Non-sofa (or non-splittable sofa) — single-row insert, original path. */
+  const row = {
+    ...baseRow,
+    ...(nextLineNo !== null ? { line_no: nextLineNo } : {}),
+    /* Commander 2026-05-28 — "Description 2" auto-generated from variants. */
+    description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
   };
   const { data, error } = await sb.from('mfg_sales_order_items').insert(row).select('*').single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
