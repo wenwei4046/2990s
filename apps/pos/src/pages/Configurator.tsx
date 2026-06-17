@@ -1306,9 +1306,11 @@ export const Configurator = () => {
   // Non-sofa lines pass [] (campaignsCoveringLine ignores it for non-SOFA lines).
   const ficCovering = useMemo<FreeItemCampaignRow[]>(() => {
     if (!isAddToOrderMode) return [];
-    // PWP mutual exclusion — never show the free-item control when a PWP code
-    // is applied via any path (same-cart, cross-order, or auto-applied from the
-    // order's redeemable codes). The server also rejects both (free_and_pwp_exclusive).
+    // PWP mutual exclusion — never return campaigns when a PWP code is applied
+    // via any path (same-cart, cross-order, or auto-applied from the order's
+    // redeemable codes). This hides the make-free control, and a useEffect below
+    // auto-clears any existing free-item selection to prevent submit errors
+    // (the server also rejects free_and_pwp_exclusive).
     const anyPwpActive = Boolean(usePwp) || (insertedCode != null) || sofaPwpApplied || orderPwpAutoApplied;
     if (anyPwpActive) return [];
     if (!ficProductModelId) return [];
@@ -1328,6 +1330,17 @@ export const Configurator = () => {
     activeCampaigns, comboModulesByIdForFic,
   ]);
   const ficSingleCampaign = ficCovering.length === 1 ? ficCovering[0]! : null;
+
+  /* Clear free-item selection when PWP becomes active. Mutual exclusion:
+     the server rejects free_and_pwp_exclusive, so if the user selects
+     free and then activates PWP, we auto-clear the free-item state to
+     prevent a 400 on submit. */
+  useEffect(() => {
+    if (usePwp || insertedCode != null || sofaPwpApplied || orderPwpAutoApplied) {
+      setFreeItemCampaignId(null);
+      setFreeItemCampaignName(null);
+    }
+  }, [usePwp, insertedCode, sofaPwpApplied, orderPwpAutoApplied]);
 
   // F5: per-Model seat depths ('24,30' → ['24','30']). Fallback ['24'] so the
   // toggle always has a value (only rendered for sofas, which always seed it).
