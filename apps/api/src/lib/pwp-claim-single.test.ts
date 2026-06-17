@@ -29,6 +29,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   checkPwpEligibility,
+  codeAlreadyOnOrder,
   type PwpCodeRow,
   type PureEligibilityArgs,
 } from './pwp-claim-single';
@@ -479,6 +480,108 @@ describe('checkPwpEligibility — sofa reward', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toContain("sofa build doesn't match");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// codeAlreadyOnOrder — pure helper for the already-on-order guard
+// ---------------------------------------------------------------------------
+
+describe('codeAlreadyOnOrder', () => {
+  it('returns false for null rows', () => {
+    expect(codeAlreadyOnOrder(null, 'ABC-123')).toBe(false);
+  });
+
+  it('returns false for empty rows array', () => {
+    expect(codeAlreadyOnOrder([], 'ABC-123')).toBe(false);
+  });
+
+  it('returns false when no row has variants.pwpCode', () => {
+    const rows = [
+      { variants: { otherKey: 'ABC-123' } },
+      { variants: null },
+      { variants: 42 },
+    ];
+    expect(codeAlreadyOnOrder(rows, 'ABC-123')).toBe(false);
+  });
+
+  it('returns true when a row variants.pwpCode matches exactly', () => {
+    const rows = [
+      { variants: { pwpCode: 'OTHER-CODE' } },
+      { variants: { pwpCode: 'ABC-123' } },
+    ];
+    expect(codeAlreadyOnOrder(rows, 'ABC-123')).toBe(true);
+  });
+
+  it('returns false when no row matches the code', () => {
+    const rows = [
+      { variants: { pwpCode: 'OTHER-CODE' } },
+      { variants: { pwpCode: 'YET-ANOTHER' } },
+    ];
+    expect(codeAlreadyOnOrder(rows, 'ABC-123')).toBe(false);
+  });
+
+  it('trims whitespace on both sides before comparing', () => {
+    const rows = [{ variants: { pwpCode: '  ABC-123  ' } }];
+    expect(codeAlreadyOnOrder(rows, 'ABC-123')).toBe(true);
+    expect(codeAlreadyOnOrder(rows, '  ABC-123  ')).toBe(true);
+  });
+
+  it('returns false when variants.pwpCode is not a string', () => {
+    const rows = [
+      { variants: { pwpCode: 123 } },
+      { variants: { pwpCode: null } },
+      { variants: { pwpCode: undefined } },
+    ];
+    expect(codeAlreadyOnOrder(rows, '123')).toBe(false);
+  });
+
+  it('non-pwp rows (no pwpCode key) are ignored', () => {
+    const rows = [
+      { variants: { itemGroup: 'mattress', size: 'Queen' } },
+    ];
+    expect(codeAlreadyOnOrder(rows, 'ABC-123')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Customer binding — orphaned-USED must NOT apply customer check (mirrors create)
+// ---------------------------------------------------------------------------
+
+describe('checkPwpEligibility — customer binding: orphaned-USED skips customer check', () => {
+  it('does NOT reject an orphaned-USED code belonging to a different customer', () => {
+    // Create path gates customer check on `cRow.status === 'AVAILABLE'` only.
+    // An orphaned-USED self-heal must bypass the customer check — otherwise
+    // a stuck code with customer_id would never recover for a different customer order.
+    const result = checkPwpEligibility(baseArgs({
+      codeRow: makeCodeRow({
+        status: 'USED',
+        redeemed_doc_no: 'SO-DEAD',
+        customer_id: 'cust-ORIGINAL',
+      }),
+      customerId: 'cust-DIFFERENT',
+      isOrphanedUsed: true,
+    }));
+    // Should not be rejected on customer grounds — may succeed or fail for
+    // other reasons, but the reason must NOT mention customer binding.
+    if (!result.ok) {
+      expect(result.reason).not.toBe('code belongs to a different customer');
+    }
+    // In the MATTRESS happy path (baseArgs defaults) this should succeed.
+    expect(result.ok).toBe(true);
+  });
+
+  it('still rejects an AVAILABLE code belonging to a different customer', () => {
+    // Ensure the fix didn't regress the AVAILABLE customer check.
+    const result = checkPwpEligibility(baseArgs({
+      codeRow: makeCodeRow({ status: 'AVAILABLE', customer_id: 'cust-ORIGINAL' }),
+      customerId: 'cust-DIFFERENT',
+      isOrphanedUsed: false,
+    }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('code belongs to a different customer');
     }
   });
 });

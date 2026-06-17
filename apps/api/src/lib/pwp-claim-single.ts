@@ -49,6 +49,12 @@ export interface SinglePwpClaimResult {
 export interface PwpClaimSingleArgs {
   code: string;
   docNo: string;
+  /**
+   * The resolved product catalog SKU (product.code from the catalog row).
+   * Caller MUST pass product.code here — this value is written to
+   * redeemed_item_code on the pwp_codes row (matching create's audit at
+   * mfg-sales-orders.ts ~1988: `redeemed_item_code: product.code`).
+   */
   itemCode: string;
   /** Resolved from the product catalog row (same shape passed to recomputeFromSnapshot). */
   product: {
@@ -143,11 +149,11 @@ export function checkPwpEligibility(args: PureEligibilityArgs): PureEligibilityR
   }
 
   // Rule 4: customer_id binding for AVAILABLE codes (mirrors create ~line 1943-1946).
-  // For an orphaned-USED code the effective status is AVAILABLE or RESERVED (uncertain),
-  // so apply the AVAILABLE customer check when the code carried a customer_id and we
-  // know our order's customer — safe to be conservative here.
-  const effectivelyAvailable = cRow.status === 'AVAILABLE' || isOrphanedUsed;
-  if (effectivelyAvailable && cRow.customer_id && customerId && cRow.customer_id !== customerId) {
+  // Create gates this check on `cRow.status === 'AVAILABLE'` ONLY — an orphaned-USED
+  // self-heal skips the customer check entirely (the original redemption was already
+  // accepted; we're just recovering a stuck code). Applying the check to orphaned-USED
+  // codes would be STRICTER than create and would block legitimate recovery.
+  if (cRow.status === 'AVAILABLE' && cRow.customer_id && customerId && cRow.customer_id !== customerId) {
     return { ok: false, reason: 'code belongs to a different customer' };
   }
 
@@ -172,6 +178,32 @@ export function checkPwpEligibility(args: PureEligibilityArgs): PureEligibilityR
     if (!modelOk) return { ok: false, reason: 'code is not valid for this model' };
     return { ok: true, grantPwpPrice: isPromo ? 0 : pwpPrice, grantSofaComboIds: null };
   }
+}
+
+/**
+ * Pure helper — tests whether a given PWP code is already applied to any item
+ * row on the order.  Expects the raw `variants` column values from
+ * `mfg_sales_order_items.select('variants')`.
+ *
+ * The match reads `variants.pwpCode` (trimmed string), mirroring the create-path
+ * per-item code extraction at mfg-sales-orders.ts ~1893:
+ *   `String((it?.variants as { pwpCode?: string | null } | null)?.pwpCode ?? '').trim()`
+ *
+ * Exported for unit tests.
+ */
+export function codeAlreadyOnOrder(
+  rows: Array<{ variants: unknown }> | null | undefined,
+  code: string,
+): boolean {
+  if (!rows || rows.length === 0) return false;
+  const trimmed = code.trim();
+  return rows.some((row) => {
+    const v = row.variants;
+    if (!v || typeof v !== 'object') return false;
+    const pwpCode = (v as Record<string, unknown>).pwpCode;
+    if (typeof pwpCode !== 'string') return false;
+    return pwpCode.trim() === trimmed;
+  });
 }
 
 /** Extract sofa module ids from a variants blob (same logic as extractSofaComboLookupArgs in mfg-sales-orders.ts). */
@@ -220,12 +252,27 @@ export async function claimPwpForSingleLine(
   if (!cRow) return reject('code not found — it may have been replaced; re-apply PWP on this line');
 
   // ── Rule 8 (add-line only): already on this order? ────────────────────────
-  const { data: existingItems } = await sb
+  // NOTE: mfg_sales_order_items has NO `redeemed_item_code` column — that field
+  // lives on pwp_codes and records the reward SKU, not the voucher code.
+  // The per-item voucher code is stored in variants.pwpCode (JSON).
+  // We select `variants` and delegate matching to codeAlreadyOnOrder(), mirroring
+  // the create-path extraction at mfg-sales-orders.ts ~1893.
+  // We MUST destructure `error` — dropping it would silently pass on DB failure
+  // (the previous bug), turning a lookup error into a double-spend opportunity.
+  const { data: existingItems, error: itemsErr } = await sb
     .from('mfg_sales_order_items')
-    .select('redeemed_item_code')
+    .select('variants')
     .eq('doc_no', args.docNo);
-  const alreadyOnOrder = (existingItems as Array<{ redeemed_item_code: string | null }> | null)
-    ?.some((row) => row.redeemed_item_code === args.code) ?? false;
+  if (itemsErr) {
+    // Mirror create's pwpPrefetchFailed honesty (~1883-1888): a failed read is NOT
+    // "code not found" — reject as retryable rather than silently passing.
+    console.error('[pwp-claim-single] item variants lookup failed:', itemsErr.message ?? itemsErr);
+    return reject('could not verify the code — please try again (code_lookup_failed)');
+  }
+  const alreadyOnOrder = codeAlreadyOnOrder(
+    existingItems as Array<{ variants: unknown }> | null,
+    args.code,
+  );
 
   // ── Rule 3a: orphaned-USED check (mirrors create ~line 1921-1928) ─────────
   const redeemable =
