@@ -51,6 +51,7 @@ import {
   PaymentsTable, labelToApi, draftMethodFields, newPaymentDraft, type PaymentDraft,
 } from '../components/PaymentsTable';
 import { formatPhone } from '@2990s/shared/phone';
+import { localityNeedsManualEntry } from '@2990s/shared';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -181,6 +182,11 @@ export const SalesOrderNew = () => {
   const [state,       setState]       = useState('');
   const [city,        setCity]        = useState('');
   const [postcode,    setPostcode]    = useState('');
+  /* Manual key-in (2026-06-17) — null = follow auto-detect (off-list
+     city/postcode → manual on, e.g. a prefilled address the seed can't
+     search); true/false = the editor's explicit choice. State stays a
+     dropdown. */
+  const [addressManualOverride, setAddressManualOverride] = useState<boolean | null>(null);
   /* Commander 2026-05-27 (Fix 5) — Sales Location auto-derives from the
      state_warehouse_mappings entry for the picked state. Held in local
      state so the cascade effect can overwrite it whenever State changes
@@ -443,6 +449,11 @@ export const SalesOrderNew = () => {
     () => (state && city) ? postcodesInCity(locRows, state, city) : [],
     [locRows, state, city],
   );
+  const addressManualAuto = useMemo(
+    () => localityNeedsManualEntry(locRows, { state, city, postcode }),
+    [locRows, state, city, postcode],
+  );
+  const addressManual = addressManualOverride ?? addressManualAuto;
 
   /* Commander 2026-05-27 (Fix 5) — State → Sales Location cascade. Same
      rule as Edit SO: pick a state, the Sales Location auto-fills with the
@@ -1157,33 +1168,72 @@ export const SalesOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>City</span>
-              <span className={styles.selectWrap}>
-                <select
-                  className={styles.fieldSelect}
+              {addressManual ? (
+                <input
+                  className={styles.fieldInput}
                   value={city}
-                  onChange={(e) => { setCity(e.target.value); setPostcode(''); }}
+                  onChange={(e) => setCity(e.target.value)}
+                  placeholder="Type city name"
                   disabled={!state}
-                >
-                  <option value="">{state ? 'Pick city' : '— pick state first'}</option>
-                  {cities.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
-              </span>
+                />
+              ) : (
+                <span className={styles.selectWrap}>
+                  <select
+                    className={styles.fieldSelect}
+                    value={city}
+                    onChange={(e) => { setCity(e.target.value); setPostcode(''); }}
+                    disabled={!state}
+                  >
+                    <option value="">{state ? 'Pick city' : '— pick state first'}</option>
+                    {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+                </span>
+              )}
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Postcode</span>
-              <span className={styles.selectWrap}>
-                <select
-                  className={styles.fieldSelect}
+              {addressManual ? (
+                <input
+                  className={styles.fieldInput}
                   value={postcode}
                   onChange={(e) => setPostcode(e.target.value)}
-                  disabled={!state || !city}
-                >
-                  <option value="">{(state && city) ? 'Pick postcode' : '— pick city first'}</option>
-                  {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
-                </select>
-                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
-              </span>
+                  placeholder="e.g. 47301"
+                  inputMode="numeric"
+                  disabled={!state}
+                />
+              ) : (
+                <span className={styles.selectWrap}>
+                  <select
+                    className={styles.fieldSelect}
+                    value={postcode}
+                    onChange={(e) => setPostcode(e.target.value)}
+                    disabled={!state || !city}
+                  >
+                    <option value="">{(state && city) ? 'Pick postcode' : '— pick city first'}</option>
+                    {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                  <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+                </span>
+              )}
+            </label>
+            <label
+              style={{
+                gridColumn: 'span 4',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontSize: 12,
+                color: 'var(--fg-muted)',
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={addressManual}
+                onChange={() => setAddressManualOverride(!addressManual)}
+              />
+              Can&apos;t find the city or postcode? Enter them manually
             </label>
             {/* Task #121 — Country is auto-derived from the picked state via
                 my_localities. Read-only display; the API re-derives + snaps
