@@ -296,6 +296,49 @@
   gap: 2px;
 }
 
+/* FREE · <campaign> label shown when a line has been made free via a campaign. */
+.itemFreeLabel {
+  font-size: var(--fs-11);
+  font-family: var(--font-button);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-burnt);
+}
+
+/* Make-free / revert icon button — same size as .itemEdit / .itemRemove. */
+.itemMakeFree {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: 120ms;
+}
+
+.itemMakeFree:hover {
+  color: var(--c-burnt);
+  background: rgba(166, 71, 30, 0.08);
+}
+
+/* Campaign picker shown when 2+ campaigns cover this line. */
+.makeFreeSelect {
+  height: 28px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: var(--fs-11);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  cursor: pointer;
+  max-width: 110px;
+}
+
 .itemEdit {
   width: 24px;
   height: 24px;
