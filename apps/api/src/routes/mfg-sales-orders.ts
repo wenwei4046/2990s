@@ -12,6 +12,7 @@ import {
   fabricTierAddon,
   validateFreeGiftClaims, buildFreeGiftTriggers,
   type FreeGiftLineClaim, type TriggerLine,
+  campaignsCoveringLine,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
 /* POS auto-Proceed (Loo 2026-06-09) — when a handover arrives already complete
@@ -69,6 +70,7 @@ import {
   loadModelDefaultGifts,
   loadModelSofaModulePrices,
   loadModelSofaModuleCostRows,
+  loadActiveFreeItemCampaigns,
   type MfgItemForRecompute,
   type RecomputedLine,
   type SofaModuleCostRowLite,
@@ -1830,6 +1832,8 @@ mfgSalesOrders.post('/', async (c) => {
      parameter. Honest-pricing (CLAUDE.md): a gift with no trigger reprices to the
      accessory's real sell_price_sen → a tampered "free" client price drifts. */
   const freeGiftBaseByIdx = new Map<number, number>();       // gift line idx → granted base (always 0)
+  // Free Item Campaign (migration 0176) — idx → resolved {campaignId, campaignName}.
+  const freeItemByIdx = new Map<number, { campaignId: string; campaignName: string }>();
   const claimedPwpCodes: Array<{ code: string; prevStatus: string }> = [];
   /* Loo 2026-06-05 (VALOR / PW-Test-voucher incident) — a line that CARRIES a
      pwpCode but fails the grant used to be silently repriced at full price,
@@ -2087,6 +2091,56 @@ mfgSalesOrders.post('/', async (c) => {
     }
   }
 
+  /* Free Item Campaign (migration 0176) — a line tagged variants.freeItem
+     { campaignId } is forced to RM0 ONLY when an ACTIVE campaign covers the
+     line's Model (sofa 'combo' scope: the build must match the pinned combo) AND
+     the line qty <= the campaign's per-line cap. Eligibility uses the SAME shared
+     campaignsCoveringLine the POS button uses (no drift). Ineligible → 409
+     free_item_not_eligible (after rollbackPwpClaims). The forced-zero + drift skip
+     live in the persist pass below; here we only validate + resolve the name. */
+  {
+    const activeCampaigns = await loadActiveFreeItemCampaigns(sb);
+    const comboModulesById = new Map<string, string[][]>(
+      cachedCombos.map((cb) => [cb.id, cb.modules]),
+    );
+    const rejections: Array<{ idx: number; reason: string }> = [];
+    for (let idx = 0; idx < items.length; idx++) {
+      const it = items[idx];
+      const variants = (it?.variants as Record<string, unknown> | null) ?? null;
+      const fi = variants?.freeItem;
+      if (!fi || typeof fi !== 'object') continue;
+      const campaignId = String((fi as Record<string, unknown>).campaignId ?? '');
+      if (!campaignId) { rejections.push({ idx, reason: 'no_campaign' }); continue; }
+      const product = lineProducts[idx] ?? null;
+      const cells = (variants?.cells as Array<{ moduleId?: unknown }> | undefined) ?? [];
+      const built = Array.isArray(cells)
+        ? cells.map((cl) => String(cl?.moduleId ?? '')).filter(Boolean)
+        : [];
+      const covering = campaignsCoveringLine(
+        { category: String(product?.category ?? ''), modelId: product?.model_id ?? null, builtModuleIds: built },
+        activeCampaigns,
+        comboModulesById,
+      );
+      const chosen = covering.find((c) => c.id === campaignId);
+      if (!chosen) { rejections.push({ idx, reason: 'not_eligible' }); continue; }
+      if (Number(it?.qty ?? 1) > chosen.maxFreeQty) { rejections.push({ idx, reason: 'over_cap' }); continue; }
+      // Stamp the resolved name onto the persisted variants (D8) + mark forced-zero.
+      if (!it) continue; // narrowing guard — items[idx] is always set at this point
+      const v = (it.variants as Record<string, unknown> | null) ?? {};
+      v.freeItem = { campaignId: chosen.id, campaignName: chosen.name };
+      (it as { variants?: unknown }).variants = v;
+      freeItemByIdx.set(idx, { campaignId: chosen.id, campaignName: chosen.name });
+    }
+    if (rejections.length > 0) {
+      await rollbackPwpClaims();
+      return c.json({
+        error: 'free_item_not_eligible',
+        reason: rejections.map((r) => `line ${r.idx + 1}: ${r.reason}`).join('; '),
+        offendersFreeItem: rejections,
+      }, 409);
+    }
+  }
+
   /* P3 — keep each sofa item's module price map so the split below distributes
      the build total with the SAME weights the drift gate priced from. */
   const sofaModulePricesByIdx = new Map<number, Record<string, number> | null>();
@@ -2191,7 +2245,7 @@ mfgSalesOrders.post('/', async (c) => {
   if (posTablet) {
     for (let i = 0; i < recomputes.length; i++) {
       const r = recomputes[i];
-      if (r && r.drift) {
+      if (r && r.drift && !freeItemByIdx.has(i)) {
         await rollbackPwpClaims();  // don't burn a voucher on a rejected order
         return c.json({
           error:    'pricing_drift',
@@ -2270,7 +2324,12 @@ mfgSalesOrders.post('/', async (c) => {
        persisted — the Backend is costing-only and sends no real selling price,
        so we carry the catalog price out instead of the client's junk value.
        POS-tablet drift is rejected above; Backend drift is accepted silently. */
-    const unit = recomputed ? recomputed.unit_price_sen : Number(it.unitPriceCenti ?? 0);
+    // Free Item Campaign (mig 0176): a validated free-item line is forced to 0
+    // (server-validated above), which zeroes the non-sofa row AND, via
+    // buildUnitPriceSen below, every sofa module row of the build.
+    const unit = freeItemByIdx.has(idx)
+      ? 0
+      : (recomputed ? recomputed.unit_price_sen : Number(it.unitPriceCenti ?? 0));
     const discount = Number(it.discountCenti ?? 0);
     const lineTotal = (qty * unit) - discount;
     // Commander 2026-05-28 — the server-computed cost (base + Σ backend
