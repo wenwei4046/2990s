@@ -7,6 +7,7 @@ import {
 } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from './supabase';
+import { detectRecoveryInUrl } from './recovery';
 
 // Migration 0086 (2026-05-27) — 3 new sales-side roles.
 export type StaffRole =
@@ -92,6 +93,8 @@ interface AuthState {
   user: User | null;
   session: Session | null;
   staff: StaffProfile | null;
+  recovery: boolean;
+  clearRecovery: () => void;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
 }
@@ -131,6 +134,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [staffLoading, setStaffLoading] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
   const [staff, setStaff] = useState<StaffProfile | null>(null);
+  // Password-recovery session: snapshot the URL hash synchronously before
+  // supabase-js (detectSessionInUrl) strips it; the PASSWORD_RECOVERY event in
+  // Effect 1 is the backup signal. Guards route any recovery session to
+  // /set-password regardless of where Supabase drops the redirect.
+  const [recovery, setRecovery] = useState(() => detectRecoveryInUrl());
   const userId = session?.user?.id ?? null;
 
   // Effect 1: own session — initial fetch + auth-change subscription.
@@ -169,8 +177,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setSessionLoading(false);
       });
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, newSession) => {
       if (!mounted) return;
+      if (event === 'PASSWORD_RECOVERY') setRecovery(true);
       setSession(newSession);
       setSessionLoading(false);
     });
@@ -255,9 +264,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     await supabase.auth.signOut();
   };
 
+  const clearRecovery = () => setRecovery(false);
+
   return (
     <AuthContext.Provider
-      value={{ loading, user: session?.user ?? null, session, staff, signIn, signOut }}
+      value={{ loading, user: session?.user ?? null, session, staff, recovery, clearRecovery, signIn, signOut }}
     >
       {children}
     </AuthContext.Provider>

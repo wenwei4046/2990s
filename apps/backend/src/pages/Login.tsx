@@ -6,7 +6,7 @@ import { supabase } from '../lib/supabase';
 import styles from './Login.module.css';
 
 export const Login = () => {
-  const { user, signIn, loading } = useAuth();
+  const { user, signIn, loading, recovery } = useAuth();
   const location = useLocation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -17,6 +17,10 @@ export const Login = () => {
   const [resetState, setResetState] = useState<'idle' | 'sending' | 'sent'>('idle');
 
   if (loading) return <div className={styles.shell}>Loading…</div>;
+
+  // A password-recovery session (Forgot password link) must land on the reset
+  // form, not be treated as a normal sign-in that bounces to the dashboard.
+  if (recovery) return <Navigate to="/set-password" replace />;
 
   if (user) {
     const from = (location.state as { from?: string } | null)?.from ?? '/dashboard';

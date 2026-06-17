@@ -21,7 +21,7 @@ import styles from './SetPassword.module.css';
 const MIN_LEN = 8;
 
 export const SetPassword = () => {
-  const { user, loading } = useAuth();
+  const { user, loading, recovery, clearRecovery } = useAuth();
   const navigate = useNavigate();
   const [pw, setPw] = useState('');
   const [pw2, setPw2] = useState('');
@@ -70,6 +70,9 @@ export const SetPassword = () => {
       setError(updateErr.message);
       return;
     }
+    // Clear before the done-state flip so the post-success redirect to the
+    // dashboard isn't bounced back to /set-password by the recovery guard.
+    clearRecovery();
     setDone(true);
   };
 
@@ -94,10 +97,16 @@ export const SetPassword = () => {
       <form className={styles.card} onSubmit={onSubmit}>
         <div className={styles.brand}>
           <span className="t-eyebrow">2990's · Backend</span>
-          <h1 className="t-h2">Set your password</h1>
+          <h1 className="t-h2">{recovery ? 'Reset your password' : 'Set your password'}</h1>
           <p className="t-body fg-muted">
-            Signed in as <strong>{user.email}</strong>. Pick a password you'll use to sign in
-            from now on.
+            {recovery ? (
+              <>Choose a new password for <strong>{user.email}</strong>.</>
+            ) : (
+              <>
+                Signed in as <strong>{user.email}</strong>. Pick a password you'll use to sign in
+                from now on.
+              </>
+            )}
           </p>
         </div>
 
@@ -131,7 +140,11 @@ export const SetPassword = () => {
         {error && <p className={styles.error}>{error}</p>}
 
         <Button type="submit" disabled={submitting} fullWidth size="lg">
-          {submitting ? 'Saving…' : 'Set password & continue'}
+          {submitting
+            ? 'Saving…'
+            : recovery
+              ? 'Update password & continue'
+              : 'Set password & continue'}
         </Button>
 
         <p className={styles.helper}>
