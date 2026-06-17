@@ -3631,9 +3631,9 @@ async function redetectCrossCategoryDelivery(
   sb: any, docNo: string, newName: string, newPhone: string | null,
 ): Promise<{ isFollowup: boolean; sourceDocNo: string | null; total: number } | null> {
   const { data: lineRows } = await sb.from('mfg_sales_order_items')
-    .select('item_code, item_group, total_centi, line_no')
+    .select('item_code, item_group, total_centi, line_no, variants')
     .eq('doc_no', docNo).eq('cancelled', false);
-  const lines = (lineRows ?? []) as Array<{ item_code: string; item_group: string | null; total_centi: number | null; line_no: number | null }>;
+  const lines = (lineRows ?? []) as Array<{ item_code: string; item_group: string | null; total_centi: number | null; line_no: number | null; variants: unknown }>;
   const deliveryLines = lines.filter((l) => isDeliveryFeeServiceCode(l.item_code));
   if (deliveryLines.length === 0) return null; // no delivery fee → nothing to re-detect
 
@@ -3651,12 +3651,16 @@ async function redetectCrossCategoryDelivery(
     .reduce((s, l) => s + Number(l.total_centi ?? 0), 0);
 
   // Deliverable categories (sofa / mattress / bedframe) + their special-model fees.
+  // Free-item-campaign lines are excluded like accessories — no delivery charge
+  // from a giveaway (Loo 2026-06-17); a re-detect on an all-free SO yields RM0.
   const DELIVERABLE = new Set(['sofa', 'mattress', 'bedframe']);
-  const categoryIds = lines
-    .map((l) => String(l.item_group ?? '').toLowerCase())
-    .filter((g) => DELIVERABLE.has(g));
+  const categoryIds = payableDeliveryCategories(
+    lines.map((l) => ({ group: l.item_group, isFree: isFreeItemLine(l.variants) })),
+  );
   const goodsCodes = [...new Set(
-    lines.filter((l) => DELIVERABLE.has(String(l.item_group ?? '').toLowerCase())).map((l) => l.item_code),
+    lines
+      .filter((l) => !isFreeItemLine(l.variants) && DELIVERABLE.has(String(l.item_group ?? '').toLowerCase()))
+      .map((l) => l.item_code),
   )];
   const specialModels: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
   if (goodsCodes.length > 0) {
