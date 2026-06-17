@@ -4509,6 +4509,7 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
       // eslint-disable-next-line no-console
       console.warn(`[so-add-line] no module prices for ${productLite.base_model} — sofa split uses equal weights`);
     }
+    // add-line has no extra-charge path, so always proportional split (no evenSplitPrice).
     const split = splitSofaBuildIntoModuleLines({
       baseModel: productLite.base_model,
       cells: addLineCells,
@@ -4518,7 +4519,7 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
       depth: String((it.variants as { depth?: unknown } | null)?.depth ?? '24'),
     });
     if (split && split.length > 0) {
-      const buildKey = `build-add-${nextLineNo ?? Date.now()}`;
+      const buildKey = `build-add-${nextLineNo ?? crypto.randomUUID().slice(0, 8)}`;
       const { cells: _cells, ...sharedVariants } =
         ((it.variants as Record<string, unknown> | null) ?? {});
       const moduleRows = split.map((s, i) => {
@@ -4550,16 +4551,13 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
           unit_cost_centi: s.unitCostSen,
           line_cost_centi: moduleLineCost,
           line_margin_centi: moduleLineTotal - moduleLineCost,
-          /* Breakdown + custom_specials on first module row only (build-level
-             figures — duplicating across N rows would double-display in SO
-             Details). custom_specials rides every row (display composition,
-             not a money figure — same rule as create path). */
+          /* Breakdown columns (divan/leg/special) on first row only; custom_specials + remark on every row (display, same as create). */
           divan_price_sen:         i === 0 ? (recomputed.divan_price_sen ?? 0) : 0,
           leg_price_sen:           i === 0 ? (recomputed.leg_price_sen ?? 0) : 0,
           special_order_price_sen: i === 0 ? (recomputed.special_order_sen ?? 0) : 0,
           custom_specials:         recomputed.custom_specials ?? null,
-          remark: baseRow.variants && typeof baseRow.variants === 'object'
-            ? ((baseRow.variants as Record<string, unknown>).remark as string | null | undefined) ?? null
+          remark: typeof sharedVariants.remark === 'string' && (sharedVariants.remark as string).trim() !== ''
+            ? (sharedVariants.remark as string).trim()
             : null,
         };
       });
