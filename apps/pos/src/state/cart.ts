@@ -398,6 +398,10 @@ export const useCart = create<CartState>()((set, get) => ({
     const idx = lines.findIndex((l) => l.key === key);
     if (idx === -1) return;
     const line = lines[idx]!;
+    // Already free — no-op. Guards against a double-call capturing
+    // freeItemOriginalTotal: 0 (total is already 0), which would make a
+    // later revert restore the price to RM0 instead of the real original.
+    if (isFreeItemLine(line.config)) return;
     const cap = Math.max(1, Math.floor(campaign.maxFreeQty));
     const freeQty = Math.min(line.qty, cap);
     const original = line.config.total;
