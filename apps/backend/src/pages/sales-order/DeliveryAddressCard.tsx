@@ -6,7 +6,6 @@
 import {
   forwardRef, memo, useEffect, useImperativeHandle, useMemo, useRef, useState,
 } from 'react';
-import { localityNeedsManualEntry } from '@2990s/shared';
 import {
   useLocalities,
   distinctStates,
@@ -38,14 +37,7 @@ const DeliveryAddressCardInner = forwardRef<CardHandle, Props>(({ header, isEdit
   const headerRef = useRef(header);
   headerRef.current = header;
 
-  /* Manual key-in (2026-06-17) — null = follow auto-detect (off-list
-     city/postcode → manual on); true/false = the editor's explicit choice.
-     Reset on header switch so each SO re-derives from its own address. */
-  const [manualOverride, setManualOverride] = useState<boolean | null>(null);
-  useEffect(() => {
-    setForm(initialFormFor(header));
-    setManualOverride(null);
-  }, [header]);
+  useEffect(() => { setForm(initialFormFor(header)); }, [header]);
 
   const localities = useLocalities();
   const localityRows = useMemo(() => localities.data ?? [], [localities.data]);
@@ -59,11 +51,6 @@ const DeliveryAddressCardInner = forwardRef<CardHandle, Props>(({ header, isEdit
     () => (form.state && form.city ? postcodesInCity(localityRows, form.state, form.city) : []),
     [localityRows, form.state, form.city],
   );
-  const addressManualAuto = useMemo(
-    () => localityNeedsManualEntry(localityRows, { state: form.state, city: form.city, postcode: form.postcode }),
-    [localityRows, form.state, form.city, form.postcode],
-  );
-  const manual = manualOverride ?? addressManualAuto;
 
   /* Task #121 — Country auto-derives from picked state. Prefer the header
      snapshot so historic SOs whose locality country later changed still
@@ -135,67 +122,27 @@ const DeliveryAddressCardInner = forwardRef<CardHandle, Props>(({ header, isEdit
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>City</span>
-            {manual ? (
-              <input
-                className={styles.fieldInput}
-                value={form.city}
-                placeholder="Type city name"
-                disabled={inputsDisabled || !form.state}
-                onChange={(e) => set('city', e.target.value)}
-              />
-            ) : (
-              <select
-                className={styles.fieldSelect}
-                value={form.city}
-                onChange={(e) => setForm((s) => ({ ...s, city: e.target.value, postcode: '' }))}
-                disabled={inputsDisabled || !form.state}
-              >
-                <option value="">{form.state ? 'Pick city' : '— pick state first'}</option>
-                {cities.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            )}
+            <select
+              className={styles.fieldSelect}
+              value={form.city}
+              onChange={(e) => setForm((s) => ({ ...s, city: e.target.value, postcode: '' }))}
+              disabled={inputsDisabled || !form.state}
+            >
+              <option value="">{form.state ? 'Pick city' : '— pick state first'}</option>
+              {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Postcode</span>
-            {manual ? (
-              <input
-                className={styles.fieldInput}
-                value={form.postcode}
-                placeholder="e.g. 47301"
-                inputMode="numeric"
-                disabled={inputsDisabled || !form.state}
-                onChange={(e) => set('postcode', e.target.value)}
-              />
-            ) : (
-              <select
-                className={styles.fieldSelect}
-                value={form.postcode}
-                onChange={(e) => set('postcode', e.target.value)}
-                disabled={inputsDisabled || !form.city}
-              >
-                <option value="">{form.city ? 'Pick postcode' : '— pick city first'}</option>
-                {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
-            )}
-          </label>
-          <label
-            style={{
-              gridColumn: 'span 4',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              fontSize: 12,
-              color: 'var(--fg-muted)',
-              cursor: inputsDisabled ? 'default' : 'pointer',
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={manual}
-              disabled={inputsDisabled}
-              onChange={() => setManualOverride(!manual)}
-            />
-            Can&apos;t find the city or postcode? Enter them manually
+            <select
+              className={styles.fieldSelect}
+              value={form.postcode}
+              onChange={(e) => set('postcode', e.target.value)}
+              disabled={inputsDisabled || !form.city}
+            >
+              <option value="">{form.city ? 'Pick postcode' : '— pick city first'}</option>
+              {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
           </label>
           <div className={styles.field}>
             <span className={styles.fieldLabel}>Country</span>
