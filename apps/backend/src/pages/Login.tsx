@@ -20,7 +20,9 @@ export const Login = () => {
 
   // A password-recovery session (Forgot password link) must land on the reset
   // form, not be treated as a normal sign-in that bounces to the dashboard.
-  if (recovery) return <Navigate to="/set-password" replace />;
+  // Require `user`: a recovery flag with no live session (e.g. a token that
+  // failed validation) would otherwise ping-pong /login ⇄ /set-password forever.
+  if (recovery && user) return <Navigate to="/set-password" replace />;
 
   if (user) {
     const from = (location.state as { from?: string } | null)?.from ?? '/dashboard';

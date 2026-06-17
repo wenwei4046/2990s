@@ -114,8 +114,11 @@ the Site-URL root. We detect a recovery session and force-navigate to `/set-pass
 A recovery session is signalled two ways; we use both for resilience:
 - **URL hash at load:** the implicit-flow recovery link returns
   `…/set-password#access_token=…&type=recovery`. supabase-js (`detectSessionInUrl: true`) strips
-  the hash asynchronously, so we snapshot it **synchronously** via a `useState` initializer:
-  `() => /(?:^|[#&])type=recovery(?:[&]|$)/.test(window.location.hash)`.
+  the hash asynchronously, so we snapshot it **synchronously** via a `useState` initializer.
+  The detector requires **both** `access_token` *and* `type=recovery` in the hash —
+  `/(?:^|[#&])type=recovery(?:&|$)/.test(h) && /(?:^|[#&])access_token=/.test(h)` — so a bare,
+  tokenless `#type=recovery` (which supabase-js ignores) can't trip it (anti-spoof; see review
+  outcome).
 - **`PASSWORD_RECOVERY` event:** `supabase.auth.onAuthStateChange` fires `PASSWORD_RECOVERY` when
   it processes the recovery token. The listener can mount after the event fires, which is exactly
   why the URL snapshot above is the primary signal and this is the backup.
@@ -132,16 +135,19 @@ browser. ~15 lines each; identical logic, deliberately not shared (file-scoping 
 
 ### B2. Guards → force the form
 Add a recovery redirect to the existing guards (placed **before** the normal authed-home
-redirects):
+redirects). Each recovery redirect is gated on **`user` present** (a genuine recovery always has a
+session) — see "Adversarial review outcome" for why:
 
 - **Backend `Login.tsx`** — before the `if (user)` redirect:
-  `if (recovery) return <Navigate to="/set-password" replace />`
-- **Backend `Layout.tsx`** — after the `loading` check, before the `password_set === false` block:
+  `if (recovery && user) return <Navigate to="/set-password" replace />`
+- **Backend `Layout.tsx`** — after the `loading` + `if (!user)` checks (so `user` is already
+  guaranteed), before the `password_set === false` block:
   `if (recovery && location.pathname !== '/set-password') return <Navigate to="/set-password" replace />`
   (catches landing on `/dashboard` via the `*`→`/dashboard`→`Layout` path)
-- **POS `Login.tsx`** — before the `if (user)` redirect: same recovery `<Navigate>`
-- **POS `AuthGate.tsx`** — after `loading`, before the `password_set === false` block: same recovery
-  `<Navigate>` (catches landing on `/catalog`)
+- **POS `Login.tsx`** — before the `if (user)` redirect: `if (recovery && user)` `<Navigate>`
+- **POS `AuthGate.tsx`** — after `loading`, before the `password_set === false` block:
+  `if (recovery && user)` `<Navigate>` (catches landing on `/catalog`; userless recovery falls
+  through to `LockScreen`)
 
 ### B3. `SetPassword.tsx` (both apps) — recovery-aware copy + clear on success
 - When `recovery` is true, render reset-context copy: eyebrow unchanged, heading
@@ -151,8 +157,9 @@ redirects):
 - On successful `updateUser`, call `clearRecovery()` **before** flipping `done`, so the
   post-success navigate to `/dashboard` (Backend) / `/` (POS) is not bounced back to
   `/set-password` by the B2 guard.
-- The existing `if (!user) return <Navigate to="/login" />` stays — a recovery session sets
-  `user`, so the form renders.
+- The existing `if (!user) return <Navigate to="/login" />` stays. A genuine recovery session
+  has `user`, so the form renders; a *failed* recovery (token didn't validate) has no `user`, and
+  the `user`-gated B2 guards above keep that from looping (see review outcome).
 
 ### Flow after the change
 1. User clicks *Forgot password?* → enters email → `resetPasswordForEmail` (unchanged).
@@ -185,10 +192,28 @@ redirects):
 - No new route; `/set-password` is reused (copy adapts to recovery context).
 - No migration, no new code-side secret (Resend key lives only in Supabase SMTP settings).
 
-## Deploy notes
+## Adversarial review outcome (2026-06-18)
 
-- **Part A** is Loo-side dashboard/DNS work; nothing to deploy.
-- **Part B** ships with the normal app deploy (POS → CF Pages, Backend → CF Pages). Per
-  memory: hard-refresh / "Refresh" banner the PWA after a POS deploy. Part B is safe to deploy
-  before Part A is finished — it only adds resilience; the existing Supabase email keeps working
-  until SMTP is switched.
+A multi-agent adversarial review of the Part-B diff (3 review lenses → per-finding refutation,
+verified against the installed `@supabase/auth-js@2.105.4` source) confirmed **two real bugs**,
+both now fixed in this branch:
+
+1. **Redirect loop (medium).** `recovery` is seeded synchronously from the URL hash, but the
+   session is established asynchronously. If a `type=recovery` hash carries a token that fails
+   `/user` validation (transient network blip, or a token revoked/consumed between mint and
+   click), supabase-js saves **no** session, fires **no** `PASSWORD_RECOVERY`, and **retains** the
+   hash. End state: `recovery=true`, `user=null`, `loading=false` → `/set-password` (`!user` →
+   `/login`) ⇄ `/login` (`recovery` → `/set-password`) loops forever, reload-proof. **Fix:** gate
+   every recovery redirect on `user` present (B2). A genuine recovery always has a session, so the
+   happy path is unchanged; a userless recovery now falls through to the sign-in form / LockScreen.
+   (The common *expired-link* case was already safe — Supabase returns `#error=…&error_code=
+   otp_expired` with no `type=recovery`, so the detector returns false.)
+
+2. **Tokenless `#type=recovery` spoof (low).** The original detector matched a bare
+   `#type=recovery` with no token. supabase-js ignores a tokenless hash (keeps the existing
+   session), so a crafted link like `…/dashboard#type=recovery` would force an already-signed-in
+   user onto a self-reset form for their own email — a phishing assist the prior flow lacked.
+   **Fix:** the detector now requires `access_token` *and* `type=recovery` (B1); the unit test that
+   encoded the unsafe "bare hash → true" behavior was flipped to assert `false`.
+
+Two further raised findings were **refuted** on verification (not real in this diff).
