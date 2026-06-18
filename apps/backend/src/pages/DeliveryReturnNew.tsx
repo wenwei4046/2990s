@@ -35,6 +35,7 @@ import {
   useSoDropdownOptions, optionsOrFallback,
 } from '../lib/so-dropdown-options-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
+import { useToast } from '../components/Toast';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -51,6 +52,7 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 
 export const DeliveryReturnNew = () => {
   const navigate = useNavigate();
+  const toast = useToast();
   const [searchParams] = useSearchParams();
   const fromDo = searchParams.get('fromDo');
   const fromPicks = searchParams.get('fromPicks') === '1';
@@ -215,11 +217,11 @@ export const DeliveryReturnNew = () => {
   const canSave = debtorName.trim().length > 0;
 
   const onSave = () => {
-    if (loadingPrefill) { window.alert('Still loading the Delivery Order — please wait a moment.'); return; }
-    if (!canSave) { window.alert('Customer name is required.'); return; }
+    if (loadingPrefill) { toast.error('Still loading the Delivery Order — please wait a moment.'); return; }
+    if (!canSave) { toast.error('Customer name is required.'); return; }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
-      window.alert('Add at least one item via "+ Add Line Item".');
+      toast.error('Add at least one item via "+ Add Line Item".');
       return;
     }
 
@@ -269,7 +271,7 @@ export const DeliveryReturnNew = () => {
         onSuccess: (res: { id: string; returnNumber: string }) => {
           navigate(`/delivery-returns/${res.id}`);
         },
-        onError: (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError: (err) => toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
       },
     );
   };
