@@ -621,6 +621,19 @@ mfgPurchaseOrders.post('/', async (c) => {
   return c.json({ id: header.id, poNumber: header.po_number }, 201);
 });
 
+/* Commander 2026-06-18 — subtract N calendar days from a 'YYYY-MM-DD' date,
+   returning 'YYYY-MM-DD'. Pulls a PO line's delivery date EARLIER than the
+   customer date by the category's MRP lead days so the supplier delivers with a
+   buffer. Null/empty in → null out; days<=0 → unchanged (preserves the raw
+   date). UTC math so it never drifts a day across a timezone. */
+function subtractCalendarDays(dateStr: string | null | undefined, days: number): string | null {
+  if (!dateStr) return null;
+  if (!Number.isFinite(days) || days <= 0) return dateStr;
+  const ms = Date.parse(`${String(dateStr).slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(ms)) return dateStr;
+  return new Date(ms - days * 86400000).toISOString().slice(0, 10);
+}
+
 // ── POST /from-sos ────────────────────────────────────────────────────
 // Create POs from selected Sales Order items. For each SO item, looks up
 // the MAIN supplier binding via supplier_material_bindings. Groups items
@@ -714,6 +727,20 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     .select('id, code, name');
   type Wh = { id: string; code: string | null; name: string | null };
   const warehouses = (whRows ?? []) as Wh[];
+
+  // Commander 2026-06-18 — per-category MRP lead days. A PO line's delivery date
+  // is pulled this many days EARLIER than the customer/SO delivery date so the
+  // supplier delivers ahead of the customer date (mrp_category_lead_times — the
+  // same table the MRP order-by-date hint reads). Keyed lowercase by category,
+  // which on a SO/PO line is the item_group.
+  const { data: leadRows } = await supabase
+    .from('mrp_category_lead_times')
+    .select('category, lead_days');
+  const leadDaysByCat = new Map<string, number>();
+  for (const lr of (leadRows ?? []) as Array<{ category: string; lead_days: number }>) {
+    leadDaysByCat.set((lr.category ?? '').toLowerCase(), lr.lead_days ?? 0);
+  }
+
   const resolveWarehouseId = (salesLocation: string | null | undefined): string | null => {
     const needle = (salesLocation ?? '').trim().toLowerCase();
     if (!needle) return null;
@@ -836,12 +863,18 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       ?? row.warehouse_id
       ?? resolveWarehouseId(row.so?.sales_location);
     // Per-line delivery date = SO LINE's own date, falling back to the SO
-    // header customer_delivery_date; an explicit override wins if present.
-    const lineDeliveryDate =
-      (expectedAtOverride as string | undefined)
-      ?? row.line_delivery_date
+    // header customer_delivery_date; an explicit caller override wins as-is.
+    // Commander 2026-06-18 — when NOT overridden, pull the date EARLIER by the
+    // category's MRP lead days so the supplier delivers ahead of the customer
+    // date. lead 0 / null date → unchanged. category = the SO line's item_group.
+    const rawDeliveryDate =
+      row.line_delivery_date
       ?? row.so?.customer_delivery_date
       ?? null;
+    const lineLeadDays = leadDaysByCat.get((row.item_group ?? '').toLowerCase()) ?? 0;
+    const lineDeliveryDate =
+      (expectedAtOverride as string | undefined)
+      ?? subtractCalendarDays(rawDeliveryDate, lineLeadDays);
     return {
       soDocNo:  row.doc_no,
       itemCode: row.item_code,

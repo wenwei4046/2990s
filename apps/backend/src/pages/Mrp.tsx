@@ -22,8 +22,11 @@
 
 import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
-import { ChevronRight, ChevronDown, RefreshCw, Truck, ShoppingCart, CalendarRange, Info } from 'lucide-react';
-import { useMrp, type MrpSku, type MrpLine, type MrpResponse, type SofaSet } from '../lib/mrp-queries';
+import { ChevronRight, ChevronDown, RefreshCw, Truck, ShoppingCart, CalendarRange, Info, Clock } from 'lucide-react';
+import {
+  useMrp, useCategoryLeadTimes, useUpdateCategoryLeadTime,
+  type MrpSku, type MrpLine, type MrpResponse, type SofaSet, type LeadCategory,
+} from '../lib/mrp-queries';
 import { authedFetch } from '../lib/authed-fetch';
 import { useAuth, isAdminLevel } from '../lib/auth';
 import { useCreatePosFromSoItems } from '../lib/suppliers-queries';
@@ -36,6 +39,66 @@ const ICON = { size: 14, strokeWidth: 1.75 } as const;
 const fmtDate = (iso: string | null): string => fmtDateOrDash(iso);
 
 type View = 'sofa' | 'bedframe' | 'mattress' | 'accessory';
+
+// Lead-time maintenance shows the four orderable categories (Service excluded,
+// mirroring the MRP tabs). Commander 2026-06-18 — moved here from SO Maintenance.
+const MRP_LEAD_CATEGORIES: LeadCategory[] = ['sofa', 'bedframe', 'mattress', 'accessory'];
+
+/* LeadTimesDialog (Commander 2026-06-18, moved from SO Maintenance) — per-
+   category "order N days early". When you Proceed PO, the PO delivery date is
+   set this many days BEFORE the customer delivery date (see mfg-purchase-orders
+   /from-sos). Self-contained: owns its query + per-category draft + save. */
+function LeadTimesDialog({ onClose }: { onClose: () => void }) {
+  const q = useCategoryLeadTimes();
+  const update = useUpdateCategoryLeadTime();
+  const leadTimes = q.data?.leadTimes;
+  const [draft, setDraft] = useState<Partial<Record<LeadCategory, string>>>({});
+  const valueFor = (cat: LeadCategory) => draft[cat] ?? String(leadTimes?.[cat] ?? 0);
+  const dirty = (cat: LeadCategory) =>
+    draft[cat] !== undefined && draft[cat] !== String(leadTimes?.[cat] ?? 0);
+  const save = (cat: LeadCategory) => {
+    const n = Math.max(0, Math.floor(Number(valueFor(cat)) || 0));
+    update.mutate(
+      { category: cat, leadDays: n },
+      { onSuccess: () => setDraft((s) => { const x = { ...s }; delete x[cat]; return x; }) },
+    );
+  };
+  return (
+    <div className={styles.dialogBackdrop} onClick={onClose}>
+      <div className={styles.dialog} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <h2 className={styles.dialogTitle}>Lead Times</h2>
+        <p className={styles.dialogBody}>
+          How many days <strong>before</strong> the customer delivery date each category&rsquo;s PO is
+          ordered. When you Proceed PO, the PO delivery date is set this many days earlier so the
+          supplier delivers ahead of the customer date.
+        </p>
+        {q.isLoading && <p className={styles.dialogBody}>Loading…</p>}
+        {!q.isLoading && MRP_LEAD_CATEGORIES.map((cat) => (
+          <label key={cat} className={styles.dialogField}>
+            <span className={styles.filterLabel} style={{ textTransform: 'capitalize' }}>{cat}</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="number" min={0} className={styles.filterSelect}
+                style={{ width: 110, textAlign: 'right' }}
+                value={valueFor(cat)}
+                onChange={(e) => setDraft((s) => ({ ...s, [cat]: e.target.value }))}
+              />
+              <span style={{ color: 'var(--fg-muted)', whiteSpace: 'nowrap' }}>days early</span>
+              <button
+                type="button" className={styles.primaryBtn}
+                disabled={update.isPending || !dirty(cat)}
+                onClick={() => save(cat)}
+              >Save</button>
+            </span>
+          </label>
+        ))}
+        <div className={styles.dialogActions}>
+          <button type="button" className={styles.ghostBtn} onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* MRP split into four category tabs (Commander 2026-06-15). Each tab is locked
    to its own category; Service is excluded (not an orderable stock item). */
@@ -260,6 +323,7 @@ export const Mrp = () => {
   const { staff } = useAuth();
   const isAdmin = isAdminLevel(staff?.role);
   const [backfilling, setBackfilling] = useState(false);
+  const [showLeadTimes, setShowLeadTimes] = useState(false);
   const [view, setView] = useState<View>('sofa');
   const [warehouseId, setWarehouseId] = useState<string>('all');
   /* Two expand levels: models (itemCode) and variants (rowKey). The sofa flat
@@ -660,6 +724,12 @@ export const Mrp = () => {
                 {backfilling ? 'Re-binding…' : 'Re-bind WH'}
               </button>
             )}
+            {isAdmin && (
+              <button type="button" className={styles.ghostBtn} onClick={() => setShowLeadTimes(true)}
+                title="Set how many days early each category's PO is ordered (applied when you Proceed PO)">
+                <Clock {...ICON} /> Lead Times
+              </button>
+            )}
           </div>
 
           <span className={styles.toolbarDivider} aria-hidden="true" />
@@ -915,6 +985,8 @@ export const Mrp = () => {
           </div>
         </div>
       )}
+
+      {showLeadTimes && <LeadTimesDialog onClose={() => setShowLeadTimes(false)} />}
     </div>
   );
 };

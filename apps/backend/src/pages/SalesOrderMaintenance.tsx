@@ -18,7 +18,7 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router';
-import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronRight, MapPin, Clock, Lock } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronRight, MapPin, Lock } from 'lucide-react';
 import { isCorePaymentMethodRow } from '@2990s/shared/payment-methods';
 import { Button } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
@@ -50,11 +50,6 @@ import {
   type SoDropdownCategory,
   type SoDropdownOption,
 } from '../lib/so-dropdown-options-queries';
-/* Commander 2026-05-29 — per-category MRP lead times (order N days early). */
-import {
-  useCategoryLeadTimes, useUpdateCategoryLeadTime,
-  LEAD_CATEGORIES, type LeadCategory,
-} from '../lib/mrp-queries';
 import styles from './SalesOrderMaintenance.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -325,9 +320,6 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
           venue_id; every POS-created SO is stamped with the salesperson's
           venue for venue-level reporting. */}
       <VenuesSection canEdit={canEdit} />
-
-      {/* ── MRP lead times (Commander 2026-05-29) ─────────────────────── */}
-      <LeadTimesSection canEdit={canEdit} />
 
       {/* ── Unified Geo + Warehouse drill-down (Commander 2026-05-27) ──
           Commander folded the separate State→Warehouse table and the Geo
@@ -1436,94 +1428,3 @@ const inputStyle: CSSProperties = {
   color: 'var(--c-ink)', outline: 'none',
 };
 
-/* ════════════════════════════════════════════════════════════════════════
-   LeadTimesSection (Commander 2026-05-29) — per-category MRP lead time. Sets
-   "order N days early" per category; the MRP computes order-by date =
-   delivery − lead days, shows it on each line + sorts the most-urgent first.
-   Five fixed categories (migration 0099), one integer each.
-   ════════════════════════════════════════════════════════════════════════ */
-const LeadTimesSection = ({ canEdit }: { canEdit: boolean }) => {
-  const q = useCategoryLeadTimes();
-  const update = useUpdateCategoryLeadTime();
-  const toast = useToast();
-  const [draft, setDraft] = useState<Partial<Record<LeadCategory, string>>>({});
-  const lt = q.data?.leadTimes;
-  const valueFor = (cat: LeadCategory): string => draft[cat] ?? String(lt?.[cat] ?? 0);
-  const dirty = (cat: LeadCategory): boolean =>
-    draft[cat] !== undefined && draft[cat] !== String(lt?.[cat] ?? 0);
-  const save = (cat: LeadCategory) => {
-    const n = Math.max(0, Math.floor(Number(valueFor(cat)) || 0));
-    update.mutate({ category: cat, leadDays: n }, {
-      onSuccess: () => {
-        toast.success(`${cat} lead time saved — order ${n} day${n === 1 ? '' : 's'} early`);
-        setDraft((s) => { const x = { ...s }; delete x[cat]; return x; });
-      },
-      onError: (e) => toast.error(e instanceof Error ? e.message : 'Save failed'),
-    });
-  };
-
-  return (
-    <section style={{ marginBottom: 'var(--space-6)' }}>
-      <header style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
-        <Clock size={20} strokeWidth={1.75} />
-        <h2 style={{ margin: 0, fontFamily: 'var(--font-title)', fontSize: 'var(--fs-20)', fontWeight: 700 }}>
-          Lead Times
-        </h2>
-      </header>
-      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
-        How many days BEFORE a Sales Order&rsquo;s delivery date a PO must be placed,
-        per category. The MRP Stock Status report shows an <strong>Order-By date</strong> =
-        delivery date &minus; these days, and floats the most-urgent-to-order rows to the top.
-      </p>
-
-      <div style={{
-        background: 'var(--c-paper)', border: '1px solid var(--line)',
-        borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-2)', overflow: 'hidden',
-      }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr>
-              <th style={thStyle}>Category</th>
-              <th style={thStyle}>Order how many days early</th>
-              {canEdit && <th style={thStyle} />}
-            </tr>
-          </thead>
-          <tbody>
-            {q.isLoading && <tr><td colSpan={3} style={emptyStyle}>Loading…</td></tr>}
-            {!q.isLoading && LEAD_CATEGORIES.map((cat) => (
-              <tr key={cat} style={{ borderTop: '1px solid var(--line)' }}>
-                <td style={tdStyle}>
-                  <strong style={{ color: 'var(--c-ink)', textTransform: 'capitalize' }}>{cat}</strong>
-                </td>
-                <td style={tdStyle}>
-                  {canEdit ? (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                      <input
-                        type="number" min={0}
-                        value={valueFor(cat)}
-                        onChange={(e) => setDraft((s) => ({ ...s, [cat]: e.target.value }))}
-                        style={{ ...inputStyle, width: 90, textAlign: 'right' }}
-                      />
-                      <span style={{ color: 'var(--fg-muted)' }}>days</span>
-                    </span>
-                  ) : (
-                    <span>{valueFor(cat)} days</span>
-                  )}
-                </td>
-                {canEdit && (
-                  <td style={tdStyle}>
-                    <Button variant="primary" size="sm"
-                      onClick={() => save(cat)}
-                      disabled={update.isPending || !dirty(cat)}>
-                      Save
-                    </Button>
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-};
