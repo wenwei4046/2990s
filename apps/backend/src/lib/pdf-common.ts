@@ -161,6 +161,58 @@ export function drawTwoColInfo(
   return top + Math.max(lefts.length, rights.length, 1) * 4 + 4;
 }
 
+/* Unified document info block (Commander 2026-06-19 — Hookka-tidy layout):
+   LEFT = "BILL TO" with a label gutter (Company / Address / Tel …); the value
+   wraps. RIGHT = a colon-aligned key:value list ("SO No : … / Date : …").
+   Blank values are skipped. Returns the Y to continue below the taller column.
+   Black-and-white only (no fills) so it prints clean. */
+export function drawInfoColumns(
+  doc: import('jspdf').jsPDF,
+  startY: number,
+  left: { title: string; rows: Array<[string, string | null | undefined]> },
+  right: { title: string; rows: Array<[string, string | null | undefined]> },
+): number {
+  const pageW = doc.internal.pageSize.getWidth();
+  const margin = 14;
+  const midX = pageW / 2 + 2;
+  const leftW = midX - margin - 6;
+  const gutter = 20;
+  const rValX = midX + 33;
+  const lh = 4;
+
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
+  doc.text(left.title, margin, startY);
+  doc.text(right.title, midX, startY);
+  let ly = startY + 4.6;
+  let ry = startY + 4.6;
+
+  doc.setFontSize(8.5);
+  for (const [label, value] of left.rows) {
+    const v = (value ?? '').toString().trim();
+    if (!v) continue;
+    doc.setFont('helvetica', 'normal');
+    if (label) {
+      doc.setTextColor(110); doc.text(label, margin, ly); doc.setTextColor(0);
+      const wrapped = doc.splitTextToSize(v, leftW - gutter) as string[];
+      doc.text(wrapped, margin + gutter, ly);
+      ly += Math.max(1, wrapped.length) * lh;
+    } else {
+      const wrapped = doc.splitTextToSize(v, leftW) as string[];
+      doc.text(wrapped, margin, ly);
+      ly += Math.max(1, wrapped.length) * lh;
+    }
+  }
+  for (const [label, value] of right.rows) {
+    const v = (value ?? '').toString().trim();
+    if (!v) continue;
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(110); doc.text(label, midX, ry); doc.setTextColor(0);
+    doc.text(`: ${v}`, rValX, ry);
+    ry += lh;
+  }
+  return Math.max(ly, ry) + 4;
+}
+
 // Two dashed signature boxes side by side
 export function drawSignatureBoxes(
   doc: import('jspdf').jsPDF,

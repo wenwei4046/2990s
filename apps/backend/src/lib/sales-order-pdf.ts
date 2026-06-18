@@ -1,5 +1,6 @@
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
+import type { RowInput } from 'jspdf-autotable';
 import {
   allocatePwpTriggerNotes,
   orderSofaModuleRowsWithinBuilds,
@@ -10,7 +11,8 @@ import {
 import {
   COMPANY,
   drawHeader,
-  drawTwoColInfo,
+  drawInfoColumns,
+  amountInWordsMyr,
   fmtDocDate,
   fmtRm,
   safeName,
@@ -297,38 +299,18 @@ export async function generateSalesOrderPdf(
     docTitle: opts?.docTitle ?? 'SALES ORDER',
     rightMeta: [
       { label: opts?.docNoLabel ?? 'Doc No', value: header.doc_no },
-      { label: 'Date',   value: fmtDocDate(header.so_date) },
-      { label: 'Status', value: header.status.replace(/_/g, ' ') },
+      { label: 'Date', value: fmtDocDate(header.so_date) },
     ],
   });
 
-  // ── ORDER REFERENCE / DELIVERY ESTIMATE meta blocks ──────────────
-  /* Mirrors the POS printout's MetaRow: order ref + placed date on the left;
-     processing date + delivery estimate on the right. "To be confirmed"
-     when no delivery date is set yet — same wording as POS.
-
-     Owner 2026-06-12 — the Detail page's "Processing Date" lives in the
-     internal_expected_dd column (PR #140 renamed only the LABEL, not the
-     column); the legacy processing_date column stays null on UI-edited SOs,
-     which is why this printed "—" on an SO that clearly had one. Read the
-     UI's column first, legacy second. Delivery no longer falls back to
-     internal_expected_dd — that value IS the processing date. */
+  // ── Resolve processing + delivery dates (folded into ORDER DETAILS below).
+  /* Owner 2026-06-12 — Processing Date lives in internal_expected_dd (PR #140
+     renamed only the LABEL, not the column); legacy processing_date is null on
+     UI-edited SOs. Read the UI column first, legacy second. */
   const processingDate = header.internal_expected_dd ?? header.processing_date ?? null;
   const deliveryDate = header.customer_delivery_date ?? null;
-  y = drawTwoColInfo(doc, y, 'ORDER REFERENCE', 'DELIVERY ESTIMATE',
-    [
-      header.doc_no,
-      `Placed: ${fmtDocDate(header.so_date)}`,
-      header.ref ? `Reference: ${header.ref}` : null,
-      header.po_doc_no ? `Customer PO: ${header.po_doc_no}` : null,
-    ],
-    [
-      `Processing date: ${processingDate ? fmtDocDate(processingDate) : '—'}`,
-      `Delivery date: ${deliveryDate ? fmtDocDate(deliveryDate) : 'To be confirmed'}`,
-    ],
-  );
 
-  // ── BILL TO / SOLD BY ─────────────────────────────────────────────
+  // ── BILL TO + ORDER DETAILS (unified Hookka-tidy info block) ──────
   /* DELIVERY address rule (owner): ship_to_address wins; otherwise mirror
      the Detail page's Customer card EXACTLY — Address line 1, Address line 2,
      then ONE locality line "postcode city state" where city = city ?? address3
@@ -370,29 +352,41 @@ export async function generateSalesOrderPdf(
      this is the only second-contact field family, so it prints here. */
   const familyContact = (header.emergency_contact_name ?? '').trim() || (header.emergency_contact_phone ?? '').trim()
     ? [
-        'Family contact: ',
         (header.emergency_contact_name ?? '').trim(),
-        (header.emergency_contact_phone ?? '').trim() ? ` · ${formatPhone((header.emergency_contact_phone ?? '').trim())}` : '',
-        (header.emergency_contact_relationship ?? '').trim() ? ` (${(header.emergency_contact_relationship ?? '').trim()})` : '',
-      ].join('')
+        (header.emergency_contact_phone ?? '').trim() ? formatPhone((header.emergency_contact_phone ?? '').trim()) : '',
+        (header.emergency_contact_relationship ?? '').trim() ? `(${(header.emergency_contact_relationship ?? '').trim()})` : '',
+      ].filter(Boolean).join(' · ')
     : null;
-  y = drawTwoColInfo(doc, y, 'BILL TO', 'SOLD BY',
-    [
-      header.debtor_name,
-      header.debtor_code ? `Code: ${header.debtor_code}` : null,
-      ...addressLines,
-      /* Task #91 — pretty Malaysian format on customer-facing PDF. */
-      header.phone ? `Tel: ${formatPhone(header.phone)}` : null,
-      header.email ? `Email: ${header.email}` : null,
-      familyContact,
-    ],
-    [
-      header.agent ? `Agent: ${header.agent}` : null,
-      header.sales_location ? `Sales location: ${header.sales_location}` : null,
-      header.venue ? `Venue: ${header.venue}` : null,
-      header.branding ? `Branding: ${header.branding}` : null,
-      header.note ? `Note: ${header.note}` : null,
-    ],
+  const statusText = header.status.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+  y = drawInfoColumns(doc, y,
+    {
+      title: 'BILL TO',
+      rows: [
+        ['Company', header.debtor_name],
+        ['Code', header.debtor_code],
+        ['Address', addressLines.join(', ')],
+        ['Tel', header.phone ? formatPhone(header.phone) : null],
+        ['Email', header.email],
+        ['Family', familyContact],
+        ['Note', header.note],
+      ],
+    },
+    {
+      title: 'ORDER DETAILS',
+      rows: [
+        [opts?.docNoLabel ?? 'Doc No', header.doc_no],
+        ['Customer PO', header.customer_po ?? header.po_doc_no],
+        ['Reference', header.ref],
+        ['Agent', header.agent],
+        ['Sales Location', header.sales_location],
+        ['Venue', header.venue],
+        ['Branding', header.branding],
+        ['Date', fmtDocDate(header.so_date)],
+        ['Delivery Date', deliveryDate ? fmtDocDate(deliveryDate) : 'To be confirmed'],
+        ['Processing Date', processingDate ? fmtDocDate(processingDate) : '—'],
+        ['Status', statusText],
+      ],
+    },
   );
 
   // ── Line items table ─────────────────────────────────────────────
@@ -438,6 +432,7 @@ export async function generateSalesOrderPdf(
       notes,
     });
     return [
+      String(itIdx + 1),
       it.item_code,
       lines.join('\n'),
       `${it.qty} ${it.uom}`,
@@ -447,27 +442,41 @@ export async function generateSalesOrderPdf(
     ];
   });
 
+  /* Interleave category section header rows (SOFA / BEDFRAME / …) above each
+     group, matching the on-screen grouping. Greyscale fill so it prints B&W. */
+  const bodyRows: RowInput[] = [];
+  let lastGroup: string | null = null;
+  orderedItems.forEach((it, itIdx) => {
+    const grp = (it.item_group || 'OTHER').toUpperCase();
+    if (grp !== lastGroup) {
+      bodyRows.push([{
+        content: grp, colSpan: 7,
+        styles: { fontStyle: 'bold', fillColor: [238, 238, 238] as [number, number, number], textColor: 40 },
+      }]);
+      lastGroup = grp;
+    }
+    bodyRows.push(tableRows[itIdx]!);
+  });
+
   autoTable(doc, {
     startY: y,
-    head: [['SKU', 'Description', 'Qty', 'Unit Price', 'Disc', 'Line Total']],
-    body: tableRows,
+    head: [['#', 'Item Code', 'Description', 'Qty', 'Unit Price', 'Discount', 'Amount (RM)']],
+    body: bodyRows,
     theme: 'striped',
     styles: { fontSize: 8, cellPadding: 2, valign: 'top' },
     headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
-    /* Owner 2026-06-16 (R10) — wider SKU + longer Description + smaller font.
-       Money cells must STILL stay on ONE line ("MYR 2,990.00", never wrapped):
-       numeric columns are 7.5 pt, right-aligned, wide enough for a 5-digit
-       "MYR 99,999.00". Fixed widths sum to 110 mm of 182 usable (A4 − 2×14
-       margins), leaving ~72 mm for Description ('auto', the only column allowed
-       to wrap — up from ~67). SKU widened 22→30 mm so long module SKUs
-       (e.g. "1A(LHF)-5530-32") no longer wrap. */
+    /* Money cells must stay on ONE line ("MYR 2,990.00", never wrapped):
+       numeric columns are 7.5 pt, right-aligned. Fixed widths sum to ~114 mm of
+       182 usable (A4 − 2×14 margins), leaving ~68 mm for Description ('auto',
+       the only column allowed to wrap). */
     columnStyles: {
-      0: { cellWidth: 30 },
-      1: { cellWidth: 'auto' },
-      2: { cellWidth: 14, halign: 'right', fontSize: 7.5 },
-      3: { cellWidth: 25, halign: 'right', fontSize: 7.5 },
-      4: { cellWidth: 16, halign: 'right', fontSize: 7.5 },
-      5: { cellWidth: 25, halign: 'right', fontSize: 7.5 },
+      0: { cellWidth: 8, halign: 'right', fontSize: 7.5 },
+      1: { cellWidth: 28 },
+      2: { cellWidth: 'auto' },
+      3: { cellWidth: 14, halign: 'right', fontSize: 7.5 },
+      4: { cellWidth: 24, halign: 'right', fontSize: 7.5 },
+      5: { cellWidth: 16, halign: 'right', fontSize: 7.5 },
+      6: { cellWidth: 24, halign: 'right', fontSize: 7.5 },
     },
     margin: { left: margin, right: margin },
   });
@@ -529,6 +538,7 @@ export async function generateSalesOrderPdf(
     : payments.reduce((sum, p) => sum + (p.amount_centi || 0), 0);
   const balanceCenti = Math.max(0, subtotalCenti - paidCenti);
   if (ty > 240) { doc.addPage(); ty = margin; }
+  const awTopY = ty;
   const totalsX = pageW - margin - 70;
   doc.setFontSize(9);
   const drawRow = (label: string, val: string, ry: number, bold = false) => {
@@ -561,6 +571,14 @@ export async function generateSalesOrderPdf(
     doc.setTextColor(0);
     ty += 5;
   }
+
+  // Amount in words (left, aligned with the totals block).
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(80);
+  doc.text(
+    doc.splitTextToSize(`Amount in words: ${amountInWordsMyr(subtotalCenti)}`, totalsX - margin - 8) as string[],
+    margin, awTopY + 1,
+  );
+  doc.setTextColor(0);
 
   // ── Signature boxes — customer (with stored POS signature) + company ──
   if (ty > 225) { doc.addPage(); ty = margin; }
