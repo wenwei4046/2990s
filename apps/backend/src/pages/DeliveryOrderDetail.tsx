@@ -712,9 +712,10 @@ export const DeliveryOrderDetail = () => {
                       variant summary, then a muted em-dash when both are empty. */}
                   <td>
                     {(() => {
-                      const desc2 = (it.description2 && it.description2.trim())
-                        ? it.description2
-                        : buildVariantSummary(it.item_group, it.variants);
+                      // Description 2 — live recompute first so detail matches list/PDF
+                      // (Commander 2026-06-18). Stored is only a fallback.
+                      const desc2 = buildVariantSummary(it.item_group, it.variants)
+                        || (it.description2 && it.description2.trim()) || '';
                       return desc2
                         ? <span>{desc2}</span>
                         : <span className={styles.muted}>—</span>;

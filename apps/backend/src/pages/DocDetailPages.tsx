@@ -244,10 +244,13 @@ export const GrnDetail = () => {
             <tbody>
               {items.map((it) => {
                 const description = ((it.description as string | null) || it.material_name) ?? '';
-                const description2 = ((it.description2 as string | null)?.trim()) || buildVariantSummary(
+                // Description 2 — recompute LIVE from this line's own variants so the
+                // detail matches the list + PDF (Commander 2026-06-18: a stored snapshot
+                // could show a stale/different string than the live value shown elsewhere).
+                const description2 = buildVariantSummary(
                   (it.item_group as string | null) ?? null,
                   (it.variants as Record<string, unknown> | null) ?? null,
-                );
+                ) || ((it.description2 as string | null)?.trim()) || '';
                 return (
                   <tr key={it.id as string}>
                     <td>
@@ -418,10 +421,13 @@ export const PurchaseInvoiceDetail = () => {
             </tr></thead>
             <tbody>
               {items.map((it) => {
-                const description2 = ((it.description2 as string | null)?.trim()) || buildVariantSummary(
+                // Description 2 — recompute LIVE from this line's own variants so the
+                // detail matches the list + PDF (Commander 2026-06-18: a stored snapshot
+                // could show a stale/different string than the live value shown elsewhere).
+                const description2 = buildVariantSummary(
                   (it.item_group as string | null) ?? null,
                   (it.variants as Record<string, unknown> | null) ?? null,
-                );
+                ) || ((it.description2 as string | null)?.trim()) || '';
                 return (
                   <tr key={it.id as string}>
                     <td><div className={styles.codeCell}>{it.material_code}</div><div className={styles.muted}>{(it.description as string | null) || it.material_name}</div></td>
@@ -601,10 +607,13 @@ export const SalesInvoiceDetail = () => {
             </tr></thead>
             <tbody>
               {items.map((it) => {
-                const description2 = ((it.description2 as string | null)?.trim()) || buildVariantSummary(
+                // Description 2 — recompute LIVE from this line's own variants so the
+                // detail matches the list + PDF (Commander 2026-06-18: a stored snapshot
+                // could show a stale/different string than the live value shown elsewhere).
+                const description2 = buildVariantSummary(
                   (it.item_group as string | null) ?? null,
                   (it.variants as Record<string, unknown> | null) ?? null,
-                );
+                ) || ((it.description2 as string | null)?.trim()) || '';
                 return (
                   <tr key={it.id as string}>
                     <td><div className={styles.codeCell}>{it.item_code}</div><div className={styles.muted}>{it.description ?? '—'}</div></td>
@@ -855,10 +864,13 @@ export const PurchaseReturnDetail = () => {
             </tr></thead>
             <tbody>
               {items.map((it) => {
-                const description2 = ((it.description2 as string | null)?.trim()) || buildVariantSummary(
+                // Description 2 — recompute LIVE from this line's own variants so the
+                // detail matches the list + PDF (Commander 2026-06-18: a stored snapshot
+                // could show a stale/different string than the live value shown elsewhere).
+                const description2 = buildVariantSummary(
                   (it.item_group as string | null) ?? null,
                   (it.variants as Record<string, unknown> | null) ?? null,
-                );
+                ) || ((it.description2 as string | null)?.trim()) || '';
                 return (
                   <tr key={it.id as string}>
                     <td><div className={styles.codeCell}>{it.material_code}</div><div className={styles.muted}>{(it.description as string | null) || it.material_name}</div></td>
