@@ -47,6 +47,7 @@ import { useRacks } from '../lib/warehouse-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { MoneyInput } from '../components/MoneyInput';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useToast } from '../components/Toast';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
@@ -142,6 +143,7 @@ export const GoodsReceivedDetail = () => {
   const updateItem = useUpdateGrnItem();
   const deleteItem = useDeleteGrnItem();
   const askConfirm = useConfirm();
+  const toast = useToast();
   const cancel = useCancelGrn();
 
   const grn = detail.data?.grn ?? null;
@@ -273,7 +275,7 @@ export const GoodsReceivedDetail = () => {
       setHeaderDraft(null);
       setLineDrafts({});
     } catch (e) {
-      window.alert(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setSavingDraft(false);
     }
@@ -284,7 +286,7 @@ export const GoodsReceivedDetail = () => {
     // purchase-order-pdf helper, here the GRN-specific grn-pdf helper.
     import('../lib/grn-pdf').then(({ generateGrnPdf }) =>
       generateGrnPdf(grn, items as any),
-    ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+    ).catch((e) => toast.error(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
   return (
@@ -342,7 +344,7 @@ export const GoodsReceivedDetail = () => {
               onClick={() => {
                 if (!confirm(`Cancel GRN ${grn.grn_number}? This reverses the receipt — stock is taken back out and the source PO's received qty is rolled back. Line items stay for audit.`)) return;
                 cancel.mutate(grn.id, {
-                  onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
+                  onError: (err) => toast.error(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
                 });
               }}
               disabled={cancel.isPending}>
