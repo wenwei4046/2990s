@@ -19,15 +19,16 @@
 4. **`<StatusPill>` + `lib/status-pill.ts`** — one canonical status badge
    (tone palette + per-doc-type {label,tone}); adopted on GRN/PR/PI/PCO/PCR
    lists. SO/DO/SI lifecycle + class-based detail pages = follow-up.
-
-## ⏳ Needs a 5-second owner steer (1 decision, reversible)
-- **Numeric/figures font** — money/qty cells diverge across 3 fonts:
-  `.priceCell`=`--font-mark`, `.numCell`=`--font-mono`, lists=sans (this is the
-  "crooked numbers" look). DataGrid lists are already uniform (tabular-nums +
-  sans). To unify the detail tables we need ONE figures font: **mono**
-  (accounting-grade, aligns best) / **sans** (matches lists) / **mark** (brand).
-  1-line token, reversible. Until steered, the detail-table font unification +
-  the shared line-items CSS (#36) are parked.
+5. **Figures font → Mono** (owner chose Mono) — DataGrid right-aligned cells +
+   the 4 brand-mark `.priceCell` now use `--font-mono`; `.numCell` already was.
+   Detail `.tableRight` (inherits page-sans) + tabular-nums on bespoke detail
+   tables → rolls into the shared line-items CSS (#36).
+6. **Unified filter engine — Phase A** (owner approved "按我提的设计") —
+   DataGrid `filterType` widened to date|number|numbering|enum|text:
+   number=min/max, date=presets+from→to range (day-first DateField),
+   numbering=type-to-find over doc codes. Additive/backwards-compatible; tested.
+   **Phase B = tag the 14 list pages with `filterType` + retire & delete
+   `ColumnFilterBar.tsx`** (owner OK'd the replacement).
 
 ## 🔴 Bugs — root cause: the deploy auto-migration runner is DEAD
 The GH Actions `Apply DB migrations` step fails every deploy (`password
