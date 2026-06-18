@@ -1156,6 +1156,15 @@ salesInvoices.patch('/:id/status', async (c) => {
       // eslint-disable-next-line no-console
       console.error(`[customer-credit] reopen credit-reversal failed for ${d.invoice_number}:`, e);
     }
+    /* Commander 2026-06-18 — re-derive PAID / PARTIALLY_PAID / SENT from the live
+       payments ledger. Cancel never zeroed paid_centi, so a reopened already-paid
+       invoice would otherwise latch at SENT (the reopen comment above already
+       promised this re-derive, but the call was missing). Best-effort. */
+    try { await recomputePaid(sb, id); }
+    catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(`[si-paid] reopen status recompute failed for ${d.invoice_number}:`, e);
+    }
   }
 
   return c.json({ salesInvoice: data });
