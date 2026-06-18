@@ -36,7 +36,7 @@
 // autotable didDrawPage hook + jsPDF putTotalPages.
 // ----------------------------------------------------------------------------
 
-import { COMPANY, amountInWordsMyr, fmtDocDate, fmtDocStamp } from './pdf-common';
+import { COMPANY, amountInWordsMyr, drawInfoColumns, fmtDocDate, fmtDocStamp } from './pdf-common';
 import {
   loadSupplierDocData,
   supplierCodeFor,
@@ -127,7 +127,7 @@ async function renderPurchaseOrderInto(
   header: PoHeader,
   items: PoItem[],
   opts?: { docTitle?: string },
-): Promise<{ pageRowY: number; rightX: number; supplierName: string }> {
+): Promise<{ supplierName: string }> {
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 14;
   const docTitle = opts?.docTitle ?? 'PURCHASE ORDER';
@@ -160,14 +160,10 @@ async function renderPurchaseOrderInto(
   doc.text(docTitle, pageW / 2, y, { align: 'center' });
   y += 8;
 
-  // ── Two-column block: supplier (left) + meta (right) ──────────────
-  const leftX  = margin;
-  const rightX = pageW / 2 + 4;
-  const colW   = pageW / 2 - margin - 4;
-
+  // ── Supplier (left) + PO details (right) — borderless, like the SO ──
   /* Embedded 7-field supplier first, full master record as the top-up for
      anything the embed omits (fax / attention / payment_terms / area /
-     postcode / state / country). Both optional → '—' fallbacks. */
+     postcode / state / country). */
   const s: Partial<SupplierRecord> = { ...(fullSupplier ?? {}), ...(header.supplier ?? {}) };
   const sFull = fullSupplier ?? {};
   const supplierAddressLines = [
@@ -177,80 +173,56 @@ async function renderPurchaseOrderInto(
     sFull.country,
   ].filter(Boolean) as string[];
 
-  // Border boxes so it looks like AutoCount
-  doc.setDrawColor(120); doc.setLineWidth(0.2);
-  const boxTop = y;
-  const leftTextX = leftX + 2;
-  const leftW = colW - 4;
-  const metaValX = rightX + 35;
-  const metaValW = colW - 37;
-
-  /* "Your Ref No." = the source S/O No. (AutoCount keeps the customer's
-     reference here); falls back to the per-line so_doc_no roll-up. */
+  /* "Your Ref No." = the source S/O No.; falls back to the per-line so_doc_no roll-up. */
   const lineSoDocs = [...new Set(items.map((it) => (it.so_doc_no ?? '').trim()).filter(Boolean))];
   const yourRef = header.your_ref_no
     ?? header.source_so_doc_no
     ?? (lineSoDocs.length > 0 ? lineSoDocs.join(', ') : '');
-  const metaLines: Array<[string, string]> = [
-    ['PO No.',            header.po_number],
-    ['Your Ref No.',      yourRef],
-    ['Terms',             sFull.payment_terms ?? header.supplier?.payment_terms ?? ''],
-    ['Date',              fmtDocDate(header.po_date)],
-    ['Delivery Date',     header.expected_at ? fmtDocDate(header.expected_at) : ''],
-    ['Purchase Location', header.purchase_location_name ?? ''],
-    ['Deliver To',        header.delivery_address ?? ''],
-    ['Page',              ''],                          // patched after pagination
-  ];
 
-  /* Measure the WRAPPED content first, then size the boxes to fit. A long
-     address or Purchase Location used to overrun its box (no width clamp) and
-     collide with the right column — "…47000 SUNGAI BULOH" ran into the
-     "Your Ref No." value. splitTextToSize wraps; blockH grows to the taller
-     column so nothing overlaps the note/table below. */
-  doc.setFont('helvetica', 'bold');  doc.setFontSize(10);
-  const nameLines = doc.splitTextToSize(s.name ?? '—', leftW) as string[];
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-  const leftBody: string[] = [];
-  supplierAddressLines.forEach((line) => leftBody.push(...(doc.splitTextToSize(String(line), leftW) as string[])));
-  leftBody.push(...(doc.splitTextToSize(`TEL : ${s.phone ?? sFull.mobile ?? ''}   FAX : ${sFull.fax ?? ''}`, leftW) as string[]));
-  leftBody.push(...(doc.splitTextToSize(`Attn: ${sFull.attention ?? s.contact_person ?? ''}`, leftW) as string[]));
-  const metaWrapped = metaLines.map(([label, val]) => ({
-    label,
-    lines: (doc.splitTextToSize(String(val ?? ''), metaValW) as string[]),
-  }));
+  y = drawInfoColumns(doc, y,
+    {
+      title: 'SUPPLIER',
+      rows: [
+        ['Company', s.name],
+        ['Address', supplierAddressLines.join(', ')],
+        ['Tel', s.phone ?? sFull.mobile],
+        ['Fax', sFull.fax],
+        ['Attn', sFull.attention ?? s.contact_person],
+      ],
+    },
+    {
+      title: 'PO DETAILS',
+      rows: [
+        ['PO No', header.po_number],
+        ['Your Ref No', yourRef],
+        ['Terms', sFull.payment_terms ?? header.supplier?.payment_terms ?? ''],
+        ['Date', fmtDocDate(header.po_date)],
+        ['Delivery Date', header.expected_at ? fmtDocDate(header.expected_at) : ''],
+      ],
+    },
+  );
 
-  const leftH = 5 + nameLines.length * 4 + 1 + leftBody.length * 4;
-  const metaH = 5 + metaWrapped.reduce((a, m) => a + Math.max(1, m.lines.length) * 4.5, 0);
-  const blockH = Math.max(40, leftH + 2, metaH + 2);
-  doc.rect(leftX,  boxTop, colW, blockH);
-  doc.rect(rightX, boxTop, colW, blockH);
-
-  // LEFT: supplier name + address + TEL/FAX + Attn (wrapped)
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
-  let ly = boxTop + 5;
-  nameLines.forEach((ln) => { doc.text(ln, leftTextX, ly); ly += 4; });
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-  ly += 1;
-  leftBody.forEach((ln) => { doc.text(ln, leftTextX, ly); ly += 4; });
-
-  // RIGHT: meta block — values wrap inside the box rather than overrunning it.
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-  let my = boxTop + 5;
-  let pageRowY = 0;
-  metaWrapped.forEach(({ label, lines }) => {
-    doc.text(label, rightX + 2,  my);
-    doc.text(':',   rightX + 32, my);
-    const vlines = lines.length ? lines : [''];
-    vlines.forEach((vl, i) => doc.text(vl, metaValX, my + i * 4.5));
-    if (label === 'Page') pageRowY = my;
-    my += Math.max(1, vlines.length) * 4.5;
-  });
-
-  y = boxTop + blockH + 2;
+  /* Deliver To — the purchase-location warehouse + its FULL address, wrapped
+     full-width so the supplier sees exactly where to ship (owner 2026-06-19;
+     the address is the warehouse `location` field). */
+  const deliverToName = (header.purchase_location_name ?? '').trim();
+  const deliverToAddr = (header.delivery_address ?? '').trim();
+  if (deliverToName || deliverToAddr) {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(110);
+    doc.text('DELIVER TO', margin, y); doc.setTextColor(0);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+    const dtW = pageW - margin * 2 - 26;
+    const dtLines: string[] = [];
+    if (deliverToName) dtLines.push(...(doc.splitTextToSize(deliverToName, dtW) as string[]));
+    if (deliverToAddr) dtLines.push(...(doc.splitTextToSize(deliverToAddr, dtW) as string[]));
+    doc.text(dtLines, margin + 26, y);
+    y += Math.max(1, dtLines.length) * 4 + 2;
+  }
+  y += 2;
 
   // Owner's rule — supplier acts on THEIR codes; ours stay printed alongside.
   doc.setFont('helvetica', 'italic'); doc.setFontSize(8); doc.setTextColor(80);
-  doc.text('Item codes shown are SUPPLIER codes; our model & reference appear in the Description.', leftX, y + 2);
+  doc.text('Item codes shown are SUPPLIER codes; our model & reference appear in the Description.', margin, y + 2);
   doc.setFont('helvetica', 'normal'); doc.setTextColor(0);
   y += 6;
 
@@ -319,13 +291,13 @@ async function renderPurchaseOrderInto(
     bodyStyles: { valign: 'top' },
     // Widths sum to 180mm — fits the A4 printable width (210 − 14×2 = 182).
     columnStyles: {
-      0: { cellWidth: 24 },                    // Transf. SO (the SO this PO serves — first)
+      0: { cellWidth: 20 },                    // Transf. SO (the SO this PO serves — first)
       1: { cellWidth: 26, fontStyle: 'bold' }, // Supplier Code (the code they act on)
-      2: { cellWidth: 56 },                    // Description (model + specs + our code)
-      3: { cellWidth: 13 },                    // UOM
+      2: { cellWidth: 64 },                    // Description — wider (owner 2026-06-19)
+      3: { cellWidth: 11 },                    // UOM
       4: { cellWidth: 12, halign: 'right' },   // Qty
       5: { cellWidth: 18, halign: 'right' },   // U/Price
-      6: { cellWidth: 13, halign: 'right' },   // Disc.
+      6: { cellWidth: 11, halign: 'right' },   // Disc.
       7: { cellWidth: 18, halign: 'right' },   // Total
     },
     margin: { left: margin, right: margin, top: 16 },
@@ -358,7 +330,7 @@ async function renderPurchaseOrderInto(
   const words = doc.splitTextToSize(amountInWordsMyr(header.total_centi), totalsX - margin - 6) as string[];
   doc.text(words, margin, lastY);
   doc.setFont('helvetica', 'normal');
-  let wordsY = lastY + words.length * 3.6 + 2;
+  const wordsY = lastY + words.length * 3.6 + 2;
   doc.setFontSize(8); doc.setTextColor(110);
   doc.text('E. & O.E.', margin, wordsY);
   doc.setTextColor(0);
@@ -388,7 +360,7 @@ async function renderPurchaseOrderInto(
   doc.text('Supplier Acknowledgement',               margin + sigW + 8 + 2, lastY + 21);
   lastY += 28;
 
-  return { pageRowY, rightX, supplierName: s.name ?? 'supplier' };
+  return { supplierName: s.name ?? 'supplier' };
 }
 
 const PO_TOTAL_PAGES_EXP = '{total_pages}';
@@ -396,7 +368,7 @@ const PO_TOTAL_PAGES_EXP = '{total_pages}';
 /* Footer page numbers on every page + resolve the {total_pages} placeholder.
    Runs ONCE after all POs are rendered. `pageOnePatch` (single-PO only) writes
    "1 of N" into the meta block's reserved Page row. */
-function finalizePoPdf(doc: JsPdf, pageOnePatch?: { pageRowY: number; rightX: number }): void {
+function finalizePoPdf(doc: JsPdf): void {
   const pageW = doc.internal.pageSize.getWidth();
   const pageCount = doc.getNumberOfPages();
   for (let p = 1; p <= pageCount; p += 1) {
@@ -407,11 +379,6 @@ function finalizePoPdf(doc: JsPdf, pageOnePatch?: { pageRowY: number; rightX: nu
       pageW / 2, 287, { align: 'center' },
     );
     doc.setTextColor(0);
-  }
-  if (pageOnePatch && pageOnePatch.pageRowY > 0) {
-    doc.setPage(1);
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-    doc.text(`1 of ${pageCount}`, pageOnePatch.rightX + 35, pageOnePatch.pageRowY);
   }
   const docWithTotals = doc as unknown as { putTotalPages?: (exp: string) => unknown };
   if (typeof docWithTotals.putTotalPages === 'function') {
@@ -428,8 +395,8 @@ export async function generatePurchaseOrderPdf(
   const { jsPDF } = await import('jspdf');
   const autoTable = (await import('jspdf-autotable')).default;
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-  const { pageRowY, rightX, supplierName } = await renderPurchaseOrderInto(doc, autoTable, header, items, opts);
-  finalizePoPdf(doc, { pageRowY, rightX });
+  const { supplierName } = await renderPurchaseOrderInto(doc, autoTable, header, items, opts);
+  finalizePoPdf(doc);
   const safeName = supplierName.replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 32);
   doc.save(`${header.po_number}-${safeName}.pdf`);
 }
