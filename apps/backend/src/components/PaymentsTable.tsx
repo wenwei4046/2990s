@@ -31,6 +31,7 @@ import type { SlipUrlResponse } from '@2990s/shared/schemas';
 import { fetchPaymentSlipUrl } from '../lib/slip';
 import { SlipUploadField } from './SlipUploadField';
 import { MoneyInput } from './MoneyInput';
+import { useToast } from './Toast';
 import { todayMyt } from '../lib/dates';
 import {
   PAYMENT_METHOD_CODE_TO_VALUE,
@@ -287,6 +288,7 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
   const staffQ = useStaff();
   const staff  = staffQ.data ?? [];
   const auth   = useAuth();
+  const toast  = useToast();
 
   /* Task #118 — methods are DB-backed (so_dropdown_options 'payment_method',
      locked to the four core rows since the 2026-06-06 unify). Falls back to
@@ -407,7 +409,7 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
       onError: (e) => {
         // eslint-disable-next-line no-console
         console.error('[payment] add failed:', e);
-        window.alert(`Failed to save payment: ${e instanceof Error ? e.message : String(e)}`);
+        toast.error(`Failed to save payment: ${e instanceof Error ? e.message : String(e)}`);
       },
     });
   };
