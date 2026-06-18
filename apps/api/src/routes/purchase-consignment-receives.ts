@@ -26,7 +26,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
-import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
+import { writeMovements, defaultWarehouseId, resolveWarehouseLotCosts } from '../lib/inventory-movements';
 
 export const purchaseConsignmentReceives = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseConsignmentReceives.use('*', supabaseAuth);
@@ -103,14 +103,22 @@ async function resyncReceiveInventory(sb: any, receiveId: string, performedBy: s
     const { data: lines } = await sb.from('purchase_consignment_receive_items')
       .select('material_code, material_name, qty_accepted, unit_price_centi, item_group, variants')
       .eq('pc_receive_id', receiveId);
+    // Commander 2026-06-18 — a consignment receive often carries a 0 price (the
+    // supplier still owns the goods until settlement), so fall back to the SKU's
+    // current on-hand weighted-avg cost instead of opening a 0-cost FIFO lot a
+    // later sale would consume and under-state COGS on. Same fix the sales-side
+    // consignment-returns.ts got for BUG-2026-06-07-001; this in-path was missed.
+    const costByBucket = await resolveWarehouseLotCosts(sb, warehouseId);
     for (const it of ((lines ?? []) as Array<{ material_code: string; material_name: string | null; qty_accepted: number | null; unit_price_centi: number | null; item_group: string | null; variants: unknown }>)) {
       const qty = Number(it.qty_accepted ?? 0);
       if (qty <= 0) continue;
       const vk = computeVariantKey(it.item_group, (it.variants as VariantAttrs | null) ?? null);
+      const lineCost = Number(it.unit_price_centi ?? 0);
+      const unitCost = lineCost > 0 ? lineCost : (costByBucket.get(`${it.material_code}::${vk}`) ?? 0);
       const k = `${it.material_code}::${vk}`;
       const cur = targetByBucket.get(k);
       if (cur) cur.qty += qty;
-      else targetByBucket.set(k, { product_code: it.material_code, variant_key: vk, product_name: it.material_name, qty, unit_cost_sen: Number(it.unit_price_centi ?? 0) });
+      else targetByBucket.set(k, { product_code: it.material_code, variant_key: vk, product_name: it.material_name, qty, unit_cost_sen: unitCost });
     }
   }
 
