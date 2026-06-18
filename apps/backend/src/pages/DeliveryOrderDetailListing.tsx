@@ -1,15 +1,36 @@
 // ----------------------------------------------------------------------------
 // DeliveryOrderDetailListing — Task #120 L2 page for Delivery Orders.
 // One row per delivery_order_items line, with the DO header denormalised.
-// Mirrors the SalesOrderDetailListing structure via DetailListingShell.
+//
+// 2026-06-16 — migrated off the legacy DetailListingShell (AutoCount-style
+// two-card "Basic Filter" + Inquiry/Preview/Print bar) to the same shared
+// ColumnFilterBar layout as SalesOrderDetailListing: a single horizontal
+// filter row (funnel · quick search · add-a-column enum/date/text chips) with
+// the query auto-running on mount and KPI tiles scoped to the filtered rows.
+// The page is now standalone (no shell), mirroring the SO L2 page; SI / DR
+// still use DetailListingShell.
 // ----------------------------------------------------------------------------
 
-import { useCallback } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router';
+import { ArrowLeft, ClipboardList, Printer } from 'lucide-react';
+import { Button } from '@2990s/design-system';
 import { fmtDateOrDash } from '@2990s/shared';
-import { DetailListingShell } from '../components/DetailListingShell';
-import { useDeliveryOrderDetailListing, type DetailListingRow } from '../lib/flow-queries';
-import type { DataGridColumn } from '../components/DataGrid';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
+import { useDeliveryOrderDetailListing, type DetailListingRow, type DetailListingFilters } from '../lib/flow-queries';
 import styles from './SalesOrderDetailListing.module.css';
+
+const ICON = { size: 16, strokeWidth: 1.75 } as const;
+const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
+
+/* DataGrid column-layout persistence key — unchanged from the shell era so
+   operators keep their saved DO column order/visibility. */
+const STORAGE_KEY = 'do-detail-listing-grid';
+
+/* DO doc statuses that count as "settled" — used both by the Not-Delivered
+   KPI and the ?outstanding=1 overlay so the two stay in lockstep. */
+const SETTLED_DO_STATUS = new Set(['DELIVERED', 'INVOICED', 'CANCELLED']);
 
 type DoRow = DetailListingRow & {
   do_number?: string;
@@ -35,16 +56,88 @@ const fmtRm = (centi: number | null | undefined): string => {
 const fmtM3 = (milli: number | null | undefined): string =>
   ((Number(milli ?? 0)) / 1000).toFixed(3);
 
+/* Column-aware filter config for the DO Detail Listing. Mirrors the SO Detail
+   Listing pattern (SalesOrderDetailListing.tsx) so the operator sees a
+   consistent add-a-column filter across every L2 listing. enum options derive
+   from the data; date columns get presets + a custom range. Accessors use the
+   page's real DoRow field names. */
+const DO_DETAIL_FILTER_COLUMNS: FilterColumn<DoRow>[] = [
+  { key: 'doc_no',      label: 'DO No',        type: 'text', accessor: (r) => r.doc_no },
+  { key: 'so_doc_no',   label: 'Transfer From (SO)', type: 'text', accessor: (r) => r.so_doc_no },
+  { key: 'debtor_code', label: 'Debtor Code',  type: 'text', accessor: (r) => r.debtor_code },
+  { key: 'debtor_name', label: 'Customer',     type: 'text', accessor: (r) => r.debtor_name },
+  { key: 'item_code',   label: 'Item Code',    type: 'text', accessor: (r) => r.item_code },
+  { key: 'driver_name', label: 'Driver',       type: 'enum', accessor: (r) => r.driver_name },
+  { key: 'vehicle',     label: 'Vehicle',      type: 'enum', accessor: (r) => r.vehicle },
+  { key: 'city',        label: 'City',         type: 'enum', accessor: (r) => r.city },
+  { key: 'state',       label: 'State',        type: 'enum', accessor: (r) => r.state },
+  { key: 'item_group',  label: 'Item Group',   type: 'enum', accessor: (r) => r.item_group },
+  { key: 'uom',         label: 'UOM',          type: 'enum', accessor: (r) => r.uom },
+  { key: 'status',      label: 'Status',       type: 'enum', accessor: (r) => r.status },
+  { key: 'do_date',     label: 'Document Date', type: 'date', accessor: (r) => (r.do_date ?? r.line_date) as string | null },
+  { key: 'expected_delivery_at', label: 'Expected Date', type: 'date', accessor: (r) => r.expected_delivery_at },
+];
+const DO_DETAIL_QUICK_SEARCH_KEYS = ['doc_no', 'so_doc_no', 'debtor_name', 'item_code', 'driver_name', 'city'];
+
 export const DeliveryOrderDetailListing = () => {
-  const buildColumns = useCallback((opts: { checked: Record<string, boolean>; onToggle: (id: string) => void }): DataGridColumn<DoRow>[] => [
+  const navigate = useNavigate();
+
+  /* Task #120 — `?outstanding=1` URL param applied to the row set. For DOs
+     "outstanding" is doc-level (no payment ledger): a DO whose status hasn't
+     reached DELIVERED / INVOICED (and isn't CANCELLED). Same param used on the
+     L1 list and across all SO-family modules. */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const outstandingOnly = searchParams.get('outstanding') === '1';
+  const clearOutstanding = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('outstanding');
+    setSearchParams(next, { replace: true });
+  };
+
+  /* ── Server-side query — auto-runs (matches the SO L2 page; data shows
+        immediately). Date-range filtering is now client-side via the
+        column-aware filter bar, so we fetch the full result set with no
+        server filters. */
+  const committed: DetailListingFilters = useMemo(() => ({}), []);
+  const query = useDeliveryOrderDetailListing(committed);
+  const rawRows = useMemo<DoRow[]>(() => (query.data?.rows ?? []) as DoRow[], [query.data]);
+
+  /* Apply the outstanding-only overlay before handing rows to the shared
+     ColumnFilterBar. Drop lines whose document status is already settled. */
+  const baseRows = useMemo<DoRow[]>(() => {
+    if (!outstandingOnly) return rawRows;
+    return rawRows.filter((r) => !SETTLED_DO_STATUS.has(String(r.status ?? '')));
+  }, [rawRows, outstandingOnly]);
+
+  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
+     add-a-column filters (enum / date presets + range / text). Replaces the
+     old AutoCount-style Basic Filter card (Document Date range · Document No ·
+     Debtor Code · Item Code) gated behind the Inquiry button. The
+     outstanding-only toggle still flows via ?outstanding=1 and applies on top
+     of the column filters. */
+  const { rows: filteredRows, bar: filterBar } = useColumnFilter<DoRow>({
+    allRows: baseRows,
+    columns: DO_DETAIL_FILTER_COLUMNS,
+    quickSearchKeys: DO_DETAIL_QUICK_SEARCH_KEYS,
+    quickSearchPlaceholder: 'DO No, SO ref, customer, SKU, driver, city…',
+    storageKey: 'pr-g.do-detail-listing.filters.v1',
+    totalCount: rawRows.length,
+    loading: query.isFetching,
+  });
+
+  /* Selection state for the leading "Check" column (mirrors the shell). */
+  const [checked, setChecked] = useState<Record<string, boolean>>({});
+  const onToggle = (id: string) => setChecked((p) => ({ ...p, [id]: !p[id] }));
+
+  const columns = useMemo<DataGridColumn<DoRow>[]>(() => [
     {
       key: 'check', label: 'Check', width: 50, align: 'left', sortable: false, groupable: false,
       accessor: (r) => (
         <input
           type="checkbox"
           aria-label={`Toggle ${r.doc_no} / ${r.item_code}`}
-          checked={!!opts.checked[r.id]}
-          onChange={() => opts.onToggle(r.id)}
+          checked={!!checked[r.id]}
+          onChange={() => onToggle(r.id)}
           onClick={(e) => e.stopPropagation()}
         />
       ),
@@ -157,44 +250,134 @@ export const DeliveryOrderDetailListing = () => {
       accessor: (r) => (r.status ? String(r.status).replace(/_/g, ' ') : '—'),
       searchValue: (r) => r.status ?? '',
     },
-  ], []);
+  ], [checked]);
+
+  /* ── KPI tiles — computed off the filtered row set, NOT rawRows, so
+        narrowing the filters re-scopes the headline numbers (matches the SO
+        L2 page). Delivery Orders have no payment ledger — "Not Delivered" is
+        doc-level: the sum of LINE totals per doc whose status is still
+        in-flight (not DELIVERED / INVOICED / CANCELLED). */
+  const kpis = useMemo(() => {
+    const totalLines = filteredRows.length;
+    const uniqueDocs = new Set<string>();
+    let revenue = 0;
+    const docStatuses = new Map<string, string>();
+    for (const r of filteredRows) {
+      uniqueDocs.add(r.doc_no);
+      revenue += Number(r.total_centi ?? 0);
+      docStatuses.set(r.doc_no, String(r.status ?? ''));
+    }
+    const outstandingByDoc = new Map<string, number>();
+    for (const r of filteredRows) {
+      const status = docStatuses.get(r.doc_no) ?? '';
+      if (SETTLED_DO_STATUS.has(status)) continue;
+      const cur = outstandingByDoc.get(r.doc_no) ?? 0;
+      outstandingByDoc.set(r.doc_no, cur + Number(r.total_centi ?? 0));
+    }
+    const outstanding = [...outstandingByDoc.values()].reduce((s, v) => s + v, 0);
+    return { totalLines, uniqueDocs: uniqueDocs.size, revenue, outstanding };
+  }, [filteredRows]);
+
+  const [findNonce, setFindNonce] = useState(0);
+  const runPrint = () => window.print();
+
+  useEffect(() => {
+    document.title = `Delivery Order Details · ${kpis.totalLines} items`;
+    return () => { document.title = '2990s'; };
+  }, [kpis.totalLines]);
 
   return (
-    <DetailListingShell<DoRow>
-      title="Delivery Order Detail Listing"
-      storageKey="do-detail-listing-grid"
-      docNoPlaceholder="DO-2605-001"
-      useDetailQuery={useDeliveryOrderDetailListing}
-      buildColumns={buildColumns}
-      // Delivery Orders have no payment ledger — "Outstanding" here is
-      // doc-level: a DO whose status hasn't reached DELIVERED / INVOICED.
-      // We compute it as undelivered lines × line_total.
-      computeKpis={(rows) => {
-        const totalLines = rows.length;
-        const uniqueDocs = new Set<string>();
-        let revenue = 0;
-        const outstandingByDoc = new Map<string, number>();
-        const docStatuses = new Map<string, string>();
-        for (const r of rows) {
-          uniqueDocs.add(r.doc_no);
-          revenue += Number(r.total_centi ?? 0);
-          docStatuses.set(r.doc_no, String(r.status ?? ''));
-        }
-        // Sum the LINE totals per doc whose status is still in-flight.
-        for (const r of rows) {
-          const status = docStatuses.get(r.doc_no) ?? '';
-          if (status === 'DELIVERED' || status === 'INVOICED' || status === 'CANCELLED') continue;
-          const cur = outstandingByDoc.get(r.doc_no) ?? 0;
-          outstandingByDoc.set(r.doc_no, cur + Number(r.total_centi ?? 0));
-        }
-        const outstanding = [...outstandingByDoc.values()].reduce((s, v) => s + v, 0);
-        return {
-          totalLines, uniqueDocs: uniqueDocs.size,
-          revenue, cost: 0, margin: 0, marginPct: 0, outstanding,
-        };
-      }}
-      hideKpis={{ cost: true, margin: true }}
-      kpiLabels={{ uniqueDocs: 'Unique DOs', outstanding: 'Not Delivered' }}
-    />
+    <div className={styles.page}>
+      {/* ── Header ───────────────────────────────────────────────── */}
+      <div className={styles.headerRow}>
+        <div className={styles.titleBlock}>
+          <button type="button" className={styles.backBtn} onClick={() => navigate(-1)}>
+            <ArrowLeft {...ICON} />
+            <span>Back</span>
+          </button>
+          <div>
+            <h1 className={styles.title}>
+              <ClipboardList size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
+              Delivery Order Detail Listing
+              {outstandingOnly && <span style={{ color: 'var(--c-burnt)', marginLeft: 8 }}>· Not delivered only</span>}
+            </h1>
+            {outstandingOnly && (
+              <p className={styles.subtitle}>
+                <button type="button" onClick={clearOutstanding}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--c-burnt)',
+                    cursor: 'pointer', textDecoration: 'underline', font: 'inherit', padding: 0 }}>
+                  Clear outstanding filter
+                </button>
+              </p>
+            )}
+          </div>
+        </div>
+        <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+          <Button variant="ghost" size="sm" onClick={runPrint}>
+            <Printer {...SM_ICON} />
+            <span>Print</span>
+          </Button>
+        </div>
+      </div>
+
+      {/* ── 4 KPI tiles (always rendered, scoped to current filters) ─
+          DOs have no cost/margin, so we show Total Lines · Unique DOs ·
+          Revenue · Not Delivered (matches the prior shell config:
+          hideKpis cost+margin, uniqueDocs→"Unique DOs",
+          outstanding→"Not Delivered"). */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(4, 1fr)',
+        gap: 'var(--space-2)',
+      }}>
+        {([
+          { label: 'Total Lines',   value: kpis.totalLines.toString() },
+          { label: 'Unique DOs',    value: kpis.uniqueDocs.toString() },
+          { label: 'Revenue (RM)',  value: fmtRm(kpis.revenue) },
+          { label: 'Not Delivered (RM)', value: fmtRm(kpis.outstanding),
+            accent: kpis.outstanding > 0 ? 'bad' as const : null },
+        ]).map(({ label, value, accent }) => (
+          <div key={label} className={styles.card} style={{
+            padding: 'var(--space-2) var(--space-3)',
+          }}>
+            <div className={styles.cardTitle} style={{ borderBottom: 'none', padding: 0, fontSize: 'var(--fs-10)' }}>
+              {label}
+            </div>
+            <div style={{
+              fontFamily: 'var(--font-sans)',
+              fontWeight: 700,
+              fontSize: 'var(--fs-14)',
+              fontVariantNumeric: 'tabular-nums',
+              color: accent === 'bad' ? 'var(--c-festive-b, #B8331F)' : 'var(--c-ink)',
+            }}>
+              {value}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
+          add-a-column filters). Replaces the old AutoCount-style Basic Filter
+          card + Inquiry/Preview/Print action bar. */}
+      {filterBar}
+
+      {/* ── DataGrid ─────────────────────────────────────────────── */}
+      <section className={styles.resultCard}>
+        <DataGrid<DoRow>
+          rows={filteredRows}
+          columns={columns}
+          storageKey={STORAGE_KEY}
+          rowKey={(r) => r.id}
+          searchPlaceholder="Search rows…"
+          focusSearchNonce={findNonce}
+          groupBanner={false}
+          isLoading={query.isFetching && rawRows.length === 0}
+          emptyMessage={query.isFetching ? 'Loading…' : 'No rows match the current filters.'}
+          contextMenu={() => [
+            { label: 'Focus search box', onClick: () => setFindNonce((n) => n + 1) },
+          ]}
+        />
+      </section>
+    </div>
   );
 };
