@@ -809,6 +809,7 @@ export const ConsignmentOrders = () => {
     await generateSalesOrderPdf(
       json.salesOrder as never, json.items as never, payments as never, action,
       (json.pwpCodes ?? []) as never,
+      { docTitle: 'CONSIGNMENT ORDER', docNoLabel: 'CO No', docNoun: 'consignment order' },
     );
   };
 

@@ -461,7 +461,7 @@ export const ConsignmentOrderDetail = () => {
     import('../lib/sales-order-pdf')
       .then(({ generateSalesOrderPdf }) =>
         generateSalesOrderPdf(header as never, items as never, [], 'save', [], {
-          docTitle: 'CONSIGNMENT ORDER', docNoLabel: 'CO No',
+          docTitle: 'CONSIGNMENT ORDER', docNoLabel: 'CO No', docNoun: 'consignment order',
         }))
       .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };

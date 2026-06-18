@@ -142,11 +142,13 @@ type SoPayment = {
 
 /* Numbered T&C — copied verbatim from apps/pos/src/lib/legal.ts
    RECEIPT_TERMS (the POS printout is the legal record; keep in sync). */
-const RECEIPT_TERMS: readonly string[] = [
-  'This sales order becomes a binding tax invoice once goods are delivered and full payment is reconciled.',
+/* `noun` lets the Consignment Order reuse this template without printing
+   "sales order" wording (Commander 2026-06-19 — same fix Hookka shipped). */
+const receiptTerms = (noun: string): readonly string[] => [
+  `This ${noun} becomes a binding tax invoice once goods are delivered and full payment is reconciled.`,
   'Balance due is payable in full before delivery. Bank transfer, DuitNow QR, and cheque accepted.',
   'Delivery date is best-effort and may shift ±3 working days subject to operation confirmation.',
-  'Stair-carry surcharges (if any) are billed on this sales order and are not invoiced separately on the DO.',
+  `Stair-carry surcharges (if any) are billed on this ${noun} and are not invoiced separately on the DO.`,
   'Once the delivery date has been confirmed, any subsequent request to change or extend the date will incur a rescheduling surcharge.',
 ];
 
@@ -279,7 +281,7 @@ export async function generateSalesOrderPdf(
   /* PWP vouchers this SO's trigger items issued (GET /:docNo `pwpCodes`) —
      used to mark trigger lines. Optional so older callers stay valid. */
   pwpCodes: SoPwpCodeRow[] = [],
-  opts?: { docTitle?: string; docNoLabel?: string },
+  opts?: { docTitle?: string; docNoLabel?: string; docNoun?: string },
 ): Promise<void> {
   // Dynamic import — code-split into a vendor chunk.
   const { jsPDF } = await import('jspdf');
@@ -624,7 +626,7 @@ export async function generateSalesOrderPdf(
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
   doc.setTextColor(110);
-  RECEIPT_TERMS.forEach((t, i) => {
+  receiptTerms(opts?.docNoun ?? 'sales order').forEach((t, i) => {
     const wrapped = doc.splitTextToSize(`${i + 1}. ${t}`, pageW - margin * 2) as string[];
     doc.text(wrapped, margin, ty);
     ty += wrapped.length * 3.2 + 0.8;
