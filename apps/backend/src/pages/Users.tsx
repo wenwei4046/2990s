@@ -108,7 +108,7 @@ const INVITE_ROLES: StaffRole[] = [
 const formatLastSignIn = (iso: string | null): string => {
   if (!iso) return 'Never';
   const d = new Date(iso);
-  return d.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/-/g, '/');
+  return d.toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' });
 };
 
 export const Users = () => {

@@ -45,7 +45,7 @@ const greetingForHour = (h: number): string => {
 
 const fmtDateLong = (d: Date): string => {
   const weekday = d.toLocaleDateString('en-MY', { weekday: 'long' });
-  const ymd = d.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/-/g, '/');
+  const ymd = d.toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' });
   return `${weekday}, ${ymd}`;
 };
 

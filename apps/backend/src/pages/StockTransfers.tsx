@@ -33,7 +33,7 @@ const STATUS_TONE: Record<StockTransferStatus, { bg: string; fg: string; label: 
 const fmtDate = (iso: string): string => {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return iso;
-  return d.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/-/g, '/');
+  return d.toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' });
 };
 
 export const StockTransfers = () => {

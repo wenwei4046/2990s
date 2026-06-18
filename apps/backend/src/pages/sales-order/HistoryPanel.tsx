@@ -125,7 +125,7 @@ const relTime = (iso: string): string => {
   if (h < 24) return `${h}h ago`;
   const d = Math.round(h / 24);
   if (d < 14) return `${d}d ago`;
-  return new Date(iso).toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/-/g, '/');
+  return new Date(iso).toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' });
 };
 
 const HistoryPanelInner = ({
