@@ -171,9 +171,10 @@ export function drawInfoColumns(
   startY: number,
   left: { title: string; rows: Array<[string, string | null | undefined]> },
   right: { title: string; rows: Array<[string, string | null | undefined]> },
+  marginX = 14,
 ): number {
   const pageW = doc.internal.pageSize.getWidth();
-  const margin = 14;
+  const margin = marginX;
   const midX = pageW / 2 + 2;
   const leftW = midX - margin - 6;
   const gutter = 20;

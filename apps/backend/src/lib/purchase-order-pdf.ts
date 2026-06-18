@@ -129,7 +129,7 @@ async function renderPurchaseOrderInto(
   opts?: { docTitle?: string },
 ): Promise<{ supplierName: string }> {
   const pageW = doc.internal.pageSize.getWidth();
-  const margin = 14;
+  const margin = 10; // tighter left/right than the SO's 14 (owner 2026-06-19)
   const docTitle = opts?.docTitle ?? 'PURCHASE ORDER';
 
   /* Print-time lookups (all fail-soft): supplier SKU bindings + Fabric
@@ -200,6 +200,7 @@ async function renderPurchaseOrderInto(
         ['Delivery Date', header.expected_at ? fmtDocDate(header.expected_at) : ''],
       ],
     },
+    margin,
   );
 
   /* Deliver To — the purchase-location warehouse + its FULL address, wrapped
@@ -291,14 +292,14 @@ async function renderPurchaseOrderInto(
     bodyStyles: { valign: 'top' },
     // Widths sum to 180mm — fits the A4 printable width (210 − 14×2 = 182).
     columnStyles: {
-      0: { cellWidth: 20 },                    // Transf. SO (the SO this PO serves — first)
-      1: { cellWidth: 26, fontStyle: 'bold' }, // Supplier Code (the code they act on)
-      2: { cellWidth: 64 },                    // Description — wider (owner 2026-06-19)
+      0: { cellWidth: 25 },                    // Transf. SO — fits "SO-2606-001" on one line
+      1: { cellWidth: 27, fontStyle: 'bold' }, // Supplier Code (the code they act on)
+      2: { cellWidth: 'auto' },                // Description — auto-fills (≈68mm with margin 10)
       3: { cellWidth: 11 },                    // UOM
-      4: { cellWidth: 12, halign: 'right' },   // Qty
-      5: { cellWidth: 18, halign: 'right' },   // U/Price
+      4: { cellWidth: 10, halign: 'right' },   // Qty
+      5: { cellWidth: 19, halign: 'right' },   // U/Price
       6: { cellWidth: 11, halign: 'right' },   // Disc.
-      7: { cellWidth: 18, halign: 'right' },   // Total
+      7: { cellWidth: 19, halign: 'right' },   // Total
     },
     margin: { left: margin, right: margin, top: 16 },
     didDrawPage: (data) => drawPageHeader(data.pageNumber),
