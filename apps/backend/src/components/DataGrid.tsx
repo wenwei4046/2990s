@@ -37,6 +37,7 @@ import { Search, Columns3, RotateCcw, Filter } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useDebouncedValue } from '../lib/hooks';
 import { SkeletonRows } from './Skeleton';
+import { DateField } from './DateField';
 import styles from './DataGrid.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -62,12 +63,17 @@ export type DataGridColumn<T> = {
       value the operator sees in the cell. Falls back to groupValue, then the
       cell text — never to searchValue. */
   filterValue?: (row: T) => string;
-  /** Date column → its filter popover gains quick presets (Today / Tomorrow /
-      This week / This month / Last month / Overdue) — same set + wording as the
-      shared ColumnFilterBar. `dateValue` returns the row's RAW ISO date
-      (YYYY-MM-DD…) used for the range match. (Commander 2026-06-16) */
-  filterType?: 'date';
+  /** Per-column filter UX (Commander 2026-06-18 — one unified filter spec):
+      - 'date'      → quick presets (Today/This week/This month/…) + a custom
+                      from→to range. `dateValue` returns the row's RAW ISO date.
+      - 'number'    → min/max range inputs. `numberValue` returns the raw number.
+      - 'numbering' → searchable distinct-value list (type-to-find over doc
+                      codes like PO-2606-001), backed by `filterValue`.
+      - 'enum' | 'text' | undefined → the classic checkbox value list. */
+  filterType?: 'date' | 'number' | 'numbering' | 'enum' | 'text';
   dateValue?: (row: T) => string | null | undefined;
+  /** Raw numeric value for `filterType: 'number'` min/max matching. */
+  numberValue?: (row: T) => number | null | undefined;
   /**
    * HOUZS port (so-list-houzs-port) — when true and the user hasn't manually
    * hidden/shown anything yet (no persisted `layout.hidden` for this key),
@@ -308,7 +314,14 @@ function DataGridInner<T>({
   const [filters, setFilters] = useState<Record<string, string[]>>({});
   // Date-preset filters for `filterType: 'date'` columns (colKey → preset).
   const [dateFilters, setDateFilters] = useState<Record<string, DatePreset>>({});
+  // Number range filters (`filterType: 'number'`): colKey → {min?, max?}.
+  const [numberFilters, setNumberFilters] = useState<Record<string, { min?: number; max?: number }>>({});
+  // Custom date range (`filterType: 'date'`): colKey → {from?, to?} ISO. Sits
+  // alongside the preset (if both set, they AND together).
+  const [dateRangeFilters, setDateRangeFilters] = useState<Record<string, { from?: string; to?: string }>>({});
   const [filterMenu, setFilterMenu] = useState<{ colKey: string; x: number; y: number } | null>(null);
+  // Type-to-find text for `filterType: 'numbering'` (filters the value list).
+  const [filterSearch, setFilterSearch] = useState('');
   /* Same inside-vs-outside scroll guard as the Columns popover — the filter
      dropdown has its own scrollable value list (maxHeight 320 / overflow auto). */
   const filterMenuRef = useRef<HTMLDivElement>(null);
@@ -398,6 +411,9 @@ function DataGridInner<T>({
     };
   }, [filterMenu]);
 
+  // Reset the numbering type-to-find when the open column changes / closes.
+  useEffect(() => { setFilterSearch(''); }, [filterMenu?.colKey]);
+
   // Value a column reports for grouping/sorting (groupValue → searchValue → text).
   const colValue = useCallback((c: DataGridColumn<T>, row: T): string => {
     if (c.groupValue) return c.groupValue(row);
@@ -445,6 +461,30 @@ function DataGridInner<T>({
   const clearFilter = useCallback((colKey: string) => {
     setFilters((prev) => { const o = { ...prev }; delete o[colKey]; return o; });
     setDateFilters((prev) => { const o = { ...prev }; delete o[colKey]; return o; });
+    setNumberFilters((prev) => { const o = { ...prev }; delete o[colKey]; return o; });
+    setDateRangeFilters((prev) => { const o = { ...prev }; delete o[colKey]; return o; });
+  }, []);
+  // Number-range bound setter — '' / NaN clears that bound; both empty drops the filter.
+  const setNumberBound = useCallback((colKey: string, bound: 'min' | 'max', value: string) => {
+    setNumberFilters((prev) => {
+      const cur = { ...(prev[colKey] ?? {}) };
+      if (value.trim() === '' || Number.isNaN(Number(value))) delete cur[bound];
+      else cur[bound] = Number(value);
+      const out = { ...prev };
+      if (cur.min == null && cur.max == null) delete out[colKey]; else out[colKey] = cur;
+      return out;
+    });
+  }, []);
+  // Custom date-range bound setter — '' clears that bound; both empty drops the filter.
+  const setDateBound = useCallback((colKey: string, bound: 'from' | 'to', value: string) => {
+    setDateRangeFilters((prev) => {
+      const cur = { ...(prev[colKey] ?? {}) };
+      if (value === '') delete cur[bound];
+      else cur[bound] = value;
+      const out = { ...prev };
+      if (!cur.from && !cur.to) delete out[colKey]; else out[colKey] = cur;
+      return out;
+    });
   }, []);
   // Date-preset toggle: clicking the active preset again clears it.
   const toggleDatePreset = useCallback((colKey: string, preset: DatePreset) => {
@@ -557,7 +597,10 @@ function DataGridInner<T>({
     const q = debouncedSearch.trim().toLowerCase();
     const active = Object.entries(filters).filter(([, vals]) => vals.length > 0);
     const activeDates = Object.entries(dateFilters);
-    if (!q && active.length === 0 && activeDates.length === 0) return rows;
+    const activeNumbers = Object.entries(numberFilters);
+    const activeDateRanges = Object.entries(dateRangeFilters);
+    if (!q && active.length === 0 && activeDates.length === 0
+      && activeNumbers.length === 0 && activeDateRanges.length === 0) return rows;
     return rows.filter((row) => {
       if (q && !(searchBlobs.get(row) ?? '').includes(q)) return false;
       for (const [colKey, vals] of active) {
@@ -573,9 +616,28 @@ function DataGridInner<T>({
         const iso = c.dateValue ? c.dateValue(row) : filterColValue(c, row);
         if (!dateMatchesPreset(iso, preset)) return false;
       }
+      // Custom date range (from/to inclusive, ISO YYYY-MM-DD string compare).
+      for (const [colKey, range] of activeDateRanges) {
+        const c = columns.find((cc) => cc.key === colKey);
+        if (!c) continue;
+        const raw = c.dateValue ? c.dateValue(row) : filterColValue(c, row);
+        const d = String(raw ?? '').slice(0, 10);
+        if (!d) return false;
+        if (range.from && d < range.from) return false;
+        if (range.to && d > range.to) return false;
+      }
+      // Number range (min/max inclusive).
+      for (const [colKey, range] of activeNumbers) {
+        const c = columns.find((cc) => cc.key === colKey);
+        if (!c) continue;
+        const n = c.numberValue ? c.numberValue(row) : Number(filterColValue(c, row));
+        if (n == null || Number.isNaN(n)) return false;
+        if (range.min != null && n < range.min) return false;
+        if (range.max != null && n > range.max) return false;
+      }
       return true;
     });
-  }, [rows, columns, debouncedSearch, filters, dateFilters, filterColValue, searchBlobs]);
+  }, [rows, columns, debouncedSearch, filters, dateFilters, numberFilters, dateRangeFilters, filterColValue, searchBlobs]);
 
   // Distinct values for the currently-open filter dropdown.
   const filterValues = useMemo(() => {
@@ -930,11 +992,14 @@ function DataGridInner<T>({
         {/* Clear-all-filters — appears only when ≥1 column filter is active.
             Per-column funnels already highlight orange; this is the one-click
             reset for the whole grid. Wei Siang 2026-06-04. */}
-        {Object.values(filters).some((v) => v.length > 0) && (
+        {(Object.values(filters).some((v) => v.length > 0)
+          || Object.keys(dateFilters).length > 0
+          || Object.keys(numberFilters).length > 0
+          || Object.keys(dateRangeFilters).length > 0) && (
           <button
             type="button"
             className={styles.toolbarPill}
-            onClick={() => { setFilters({}); setDateFilters({}); }}
+            onClick={() => { setFilters({}); setDateFilters({}); setNumberFilters({}); setDateRangeFilters({}); }}
             title="Clear all column filters"
           >
             <Filter size={14} strokeWidth={1.75} aria-hidden style={{ color: 'var(--c-orange)' }} />
@@ -1078,7 +1143,7 @@ function DataGridInner<T>({
                           style={{
                             background: 'transparent', border: 0, padding: '0 2px', marginLeft: 2,
                             cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
-                            color: ((filters[col.key]?.length ?? 0) > 0 || dateFilters[col.key]) ? 'var(--c-orange)' : 'var(--fg-soft, #9a9a9a)',
+                            color: ((filters[col.key]?.length ?? 0) > 0 || dateFilters[col.key] || numberFilters[col.key] || dateRangeFilters[col.key]) ? 'var(--c-orange)' : 'var(--fg-soft, #9a9a9a)',
                           }}
                         >
                           <Filter size={11} strokeWidth={2} aria-hidden />
@@ -1184,6 +1249,8 @@ function DataGridInner<T>({
       {filterMenu && (() => {
         const col = columns.find((c) => c.key === filterMenu.colKey);
         const sel = filters[filterMenu.colKey] ?? [];
+        const q = filterSearch.trim().toLowerCase();
+        const visibleFilterValues = q ? filterValues.filter((v) => v.toLowerCase().includes(q)) : filterValues;
         return (
           <div
             ref={filterMenuRef}
@@ -1193,55 +1260,99 @@ function DataGridInner<T>({
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 10px', borderBottom: '1px solid var(--line)' }}>
               <strong style={{ fontSize: 'var(--fs-11)' }}>Filter: {col?.label}</strong>
-              {(sel.length > 0 || dateFilters[filterMenu.colKey]) && (
+              {(sel.length > 0 || dateFilters[filterMenu.colKey] || numberFilters[filterMenu.colKey] || dateRangeFilters[filterMenu.colKey]) && (
                 <button type="button" onClick={() => clearFilter(filterMenu.colKey)}
                   style={{ background: 'transparent', border: 0, color: 'var(--c-orange)', cursor: 'pointer', fontSize: 'var(--fs-11)', fontWeight: 600 }}>
                   Clear
                 </button>
               )}
             </div>
-            {/* Date columns: quick presets above the value list (Commander 2026-06-16). */}
-            {col?.filterType === 'date' && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '8px 10px', borderBottom: '1px solid var(--line)' }}>
-                {DATE_PRESETS.map((p) => {
-                  const on = dateFilters[filterMenu.colKey] === p.key;
-                  return (
-                    <button key={p.key} type="button"
-                      onClick={() => toggleDatePreset(filterMenu.colKey, p.key)}
-                      style={{
-                        fontSize: 'var(--fs-11)', fontWeight: 600, padding: '3px 9px',
-                        borderRadius: '999px', cursor: 'pointer',
-                        border: `1px solid ${on ? 'var(--c-orange)' : 'var(--line)'}`,
-                        background: on ? 'var(--c-orange)' : 'var(--c-paper)',
-                        color: on ? '#fff' : 'var(--c-ink)',
-                      }}>
-                      {p.label}
+            {col?.filterType === 'number' ? (
+              /* ── Number: min / max range ── */
+              <div style={{ display: 'grid', gap: 8, padding: '10px' }}>
+                <label style={{ display: 'grid', gap: 3, fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                  Min
+                  <input type="number" inputMode="decimal" placeholder="–"
+                    value={numberFilters[filterMenu.colKey]?.min ?? ''}
+                    onChange={(e) => setNumberBound(filterMenu.colKey, 'min', e.target.value)}
+                    style={{ fontSize: 'var(--fs-12)', padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm, 6px)' }} />
+                </label>
+                <label style={{ display: 'grid', gap: 3, fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                  Max
+                  <input type="number" inputMode="decimal" placeholder="–"
+                    value={numberFilters[filterMenu.colKey]?.max ?? ''}
+                    onChange={(e) => setNumberBound(filterMenu.colKey, 'max', e.target.value)}
+                    style={{ fontSize: 'var(--fs-12)', padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm, 6px)' }} />
+                </label>
+              </div>
+            ) : col?.filterType === 'date' ? (
+              /* ── Date: quick presets + custom from→to range ── */
+              <div style={{ display: 'grid', gap: 8, padding: '8px 10px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {DATE_PRESETS.map((p) => {
+                    const on = dateFilters[filterMenu.colKey] === p.key;
+                    return (
+                      <button key={p.key} type="button"
+                        onClick={() => toggleDatePreset(filterMenu.colKey, p.key)}
+                        style={{
+                          fontSize: 'var(--fs-11)', fontWeight: 600, padding: '3px 9px',
+                          borderRadius: '999px', cursor: 'pointer',
+                          border: `1px solid ${on ? 'var(--c-orange)' : 'var(--line)'}`,
+                          background: on ? 'var(--c-orange)' : 'var(--c-paper)',
+                          color: on ? '#fff' : 'var(--c-ink)',
+                        }}>
+                        {p.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <label style={{ display: 'grid', gap: 3, fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                  From
+                  <DateField fullWidth aria-label="From date"
+                    value={dateRangeFilters[filterMenu.colKey]?.from ?? ''}
+                    onChange={(iso) => setDateBound(filterMenu.colKey, 'from', iso)} />
+                </label>
+                <label style={{ display: 'grid', gap: 3, fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                  To
+                  <DateField fullWidth aria-label="To date"
+                    value={dateRangeFilters[filterMenu.colKey]?.to ?? ''}
+                    onChange={(iso) => setDateBound(filterMenu.colKey, 'to', iso)} />
+                </label>
+              </div>
+            ) : (
+              /* ── Numbering / enum / text: searchable value checkbox list. The
+                 type-to-find box shows for 'numbering' and any long value list. */
+              <>
+                {(col?.filterType === 'numbering' || filterValues.length > 8) && (
+                  <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--line)' }}>
+                    <input type="search" value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)}
+                      placeholder="Find…"
+                      style={{ width: '100%', boxSizing: 'border-box', fontSize: 'var(--fs-12)', padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm, 6px)' }} />
+                  </div>
+                )}
+                {visibleFilterValues.length > 0 && (
+                  <div style={{ display: 'flex', gap: 4, padding: '6px 10px', borderBottom: '1px solid var(--line)' }}>
+                    <button type="button" onClick={() => selectAllFilterValues(filterMenu.colKey, visibleFilterValues)}
+                      style={{ fontSize: 'var(--fs-11)', fontWeight: 600, padding: '3px 9px', borderRadius: '999px', cursor: 'pointer', border: '1px solid var(--line)', background: 'var(--c-paper)', color: 'var(--c-ink)' }}>
+                      Select all
                     </button>
-                  );
-                })}
-              </div>
+                    <button type="button" onClick={() => invertFilterValues(filterMenu.colKey, visibleFilterValues)}
+                      style={{ fontSize: 'var(--fs-11)', fontWeight: 600, padding: '3px 9px', borderRadius: '999px', cursor: 'pointer', border: '1px solid var(--line)', background: 'var(--c-paper)', color: 'var(--c-ink)' }}>
+                      Select invert
+                    </button>
+                  </div>
+                )}
+                {visibleFilterValues.length === 0 && (
+                  <div style={{ padding: '6px 10px', color: 'var(--fg-muted)', fontSize: 'var(--fs-11)' }}>No values.</div>
+                )}
+                {visibleFilterValues.map((v) => (
+                  <label key={v} className={styles.ctxItem} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={sel.includes(v)} onChange={() => toggleFilterValue(filterMenu.colKey, v)} />
+                    <span>{v || '(blank)'}</span>
+                  </label>
+                ))}
+              </>
             )}
-            {filterValues.length > 0 && (
-              <div style={{ display: 'flex', gap: 4, padding: '6px 10px', borderBottom: '1px solid var(--line)' }}>
-                <button type="button" onClick={() => selectAllFilterValues(filterMenu.colKey, filterValues)}
-                  style={{ fontSize: 'var(--fs-11)', fontWeight: 600, padding: '3px 9px', borderRadius: '999px', cursor: 'pointer', border: '1px solid var(--line)', background: 'var(--c-paper)', color: 'var(--c-ink)' }}>
-                  Select all
-                </button>
-                <button type="button" onClick={() => invertFilterValues(filterMenu.colKey, filterValues)}
-                  style={{ fontSize: 'var(--fs-11)', fontWeight: 600, padding: '3px 9px', borderRadius: '999px', cursor: 'pointer', border: '1px solid var(--line)', background: 'var(--c-paper)', color: 'var(--c-ink)' }}>
-                  Select invert
-                </button>
-              </div>
-            )}
-            {filterValues.length === 0 && (
-              <div style={{ padding: '6px 10px', color: 'var(--fg-muted)', fontSize: 'var(--fs-11)' }}>No values.</div>
-            )}
-            {filterValues.map((v) => (
-              <label key={v} className={styles.ctxItem} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                <input type="checkbox" checked={sel.includes(v)} onChange={() => toggleFilterValue(filterMenu.colKey, v)} />
-                <span>{v || '(blank)'}</span>
-              </label>
-            ))}
           </div>
         );
       })()}

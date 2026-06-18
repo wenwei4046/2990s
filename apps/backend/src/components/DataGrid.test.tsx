@@ -56,3 +56,61 @@ describe('DataGrid global search', () => {
     });
   });
 });
+
+// ── Unified per-column filters: number range / date range / numbering ──
+type DocRow = { id: string; doc: string; amount: number; date: string };
+const docRows: DocRow[] = [
+  { id: '1', doc: 'PO-2606-001', amount: 100, date: '2026-06-10' },
+  { id: '2', doc: 'PO-2606-002', amount: 250, date: '2026-06-20' },
+  { id: '3', doc: 'PO-2605-010', amount: 400, date: '2026-05-15' },
+];
+const docColumns: DataGridColumn<DocRow>[] = [
+  { key: 'doc', label: 'Doc No', accessor: (r) => r.doc, filterType: 'numbering', filterValue: (r) => r.doc },
+  { key: 'amount', label: 'Amount', align: 'right', accessor: (r) => r.amount, filterType: 'number', numberValue: (r) => r.amount },
+  { key: 'date', label: 'Date', accessor: (r) => r.date, filterType: 'date', dateValue: (r) => r.date },
+];
+const renderDocGrid = () =>
+  render(<DataGrid<DocRow> rows={docRows} columns={docColumns} rowKey={(r) => r.id} storageKey="test-grid-filters" />);
+
+describe('DataGrid per-column filters', () => {
+  it('number range (min) drops rows below the bound', async () => {
+    const user = userEvent.setup();
+    renderDocGrid();
+    await user.click(screen.getByLabelText('Filter Amount'));
+    await user.type(screen.getAllByRole('spinbutton')[0]!, '200'); // Min
+    await waitFor(() => {
+      expect(screen.queryByText('PO-2606-001')).not.toBeInTheDocument(); // 100 < 200
+      expect(screen.getByText('PO-2606-002')).toBeInTheDocument(); // 250
+      expect(screen.getByText('PO-2605-010')).toBeInTheDocument(); // 400
+    });
+  });
+
+  it('date range (from) drops earlier rows', async () => {
+    const user = userEvent.setup();
+    renderDocGrid();
+    await user.click(screen.getByLabelText('Filter Date'));
+    await user.type(screen.getByLabelText('From date'), '01/06/2026');
+    await waitFor(() => {
+      expect(screen.queryByText('PO-2605-010')).not.toBeInTheDocument(); // 2026-05-15 < from
+      expect(screen.getByText('PO-2606-001')).toBeInTheDocument();
+      expect(screen.getByText('PO-2606-002')).toBeInTheDocument();
+    });
+  });
+
+  it('numbering type-to-find narrows the value list', async () => {
+    const user = userEvent.setup();
+    renderDocGrid();
+    await user.click(screen.getByLabelText('Filter Doc No'));
+    const find = screen.getByPlaceholderText('Find…');
+    await user.type(find, '2605');
+    await waitFor(() => {
+      // Only the matching code remains as a checkbox option in the popover.
+      const labels = screen.getAllByText(/PO-260/).map((n) => n.textContent);
+      expect(labels).toContain('PO-2605-010');
+      // The option for the non-matching code is gone from the list (the grid
+      // cells still show all rows — no row filter applied until a value is ticked).
+      const options = screen.getAllByRole('checkbox');
+      expect(options.length).toBe(1);
+    });
+  });
+});
