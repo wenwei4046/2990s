@@ -5,6 +5,30 @@
 > Track everything here so nothing is forgotten. "能统一就统一" — unify wherever
 > possible; a non-standard system "looks low-grade".
 
+## ✅ Shipped — session 2026-06-18 (all on `main`, deployed)
+1. **Date display → DD/MM/YYYY system-wide** — flipped shared `fmtDate`
+   (en-CA→en-GB) + PDF `fmtDocDate`/`fmtDocStamp` delegate to it + 15 inline
+   clones flipped. All 63 importers + every PDF now day-first. Added `todayMY()`,
+   `fmtCenti()`, `fmtQty()`.
+2. **DataGrid empty cell → `'—'`** — primitive-empty cells render an em-dash
+   system-wide (0/false/JSX preserved; synthetic cols blank).
+3. **`<DateField>`** — always-DD/MM/YYYY date input (fixes the MRP/Proceed-PO
+   MM↔DD bug); OS calendar via hidden native + showPicker; adopted on MRP
+   from/to + Proceed-PO. (Broad adoption of the other ~87 `<input type=date>`
+   = incremental follow-up.)
+4. **`<StatusPill>` + `lib/status-pill.ts`** — one canonical status badge
+   (tone palette + per-doc-type {label,tone}); adopted on GRN/PR/PI/PCO/PCR
+   lists. SO/DO/SI lifecycle + class-based detail pages = follow-up.
+
+## ⏳ Needs a 5-second owner steer (1 decision, reversible)
+- **Numeric/figures font** — money/qty cells diverge across 3 fonts:
+  `.priceCell`=`--font-mark`, `.numCell`=`--font-mono`, lists=sans (this is the
+  "crooked numbers" look). DataGrid lists are already uniform (tabular-nums +
+  sans). To unify the detail tables we need ONE figures font: **mono**
+  (accounting-grade, aligns best) / **sans** (matches lists) / **mark** (brand).
+  1-line token, reversible. Until steered, the detail-table font unification +
+  the shared line-items CSS (#36) are parked.
+
 ## 🔴 Bugs — root cause: the deploy auto-migration runner is DEAD
 The GH Actions `Apply DB migrations` step fails every deploy (`password
 authentication failed for user "postgres"` — stale `SUPABASE_DB_URL` secret), so
