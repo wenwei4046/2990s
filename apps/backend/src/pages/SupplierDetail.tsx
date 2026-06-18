@@ -24,7 +24,7 @@ import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, Building2, Clock, AlertTriangle, CheckCircle2,
   TrendingUp, Package, Plus, Pencil, Trash2, Star, X, Save, Search,
-  Tag, ChevronDown, ChevronRight, Download, Upload,
+  Tag, ChevronDown, ChevronRight, Download, Upload, Anchor,
 } from 'lucide-react';
 import { MaintenanceTab, type MaintenanceSection } from './Products';
 import { SofaComboTab } from '../components/SofaComboTab';
@@ -38,6 +38,7 @@ import {
   useCreateBindingsBatch,
   useUpdateBinding,
   useDeleteBinding,
+  useSetCostAnchor,
   type BindingRow,
   type MaterialKind,
   type Currency,
@@ -1014,12 +1015,13 @@ function bindingHeadColumns(
 }
 
 /** Trailing columns shared by all three binding grids — lead / MOQ / price-
- *  matrix indicator / main-supplier star / row actions. */
+ *  matrix indicator / cost-anchor toggle / main-supplier star / row actions. */
 function bindingTailColumns(
   supplierId: string,
   update: ReturnType<typeof useUpdateBinding>,
   remove: ReturnType<typeof useDeleteBinding>,
   onEdit: (b: BindingRow) => void,
+  setAnchor: ReturnType<typeof useSetCostAnchor>,
 ): DataGridColumn<BindingRow>[] {
   return [
     {
@@ -1046,6 +1048,19 @@ function bindingTailColumns(
       accessor: (b) => (b.price_matrix ? 'Yes' : '—'),
       filterValue: (b) => (b.price_matrix ? 'Yes' : '—'),
       sortFn: (a, b) => Number(Boolean(a.price_matrix)) - Number(Boolean(b.price_matrix)),
+    },
+    {
+      key: 'anchor',
+      label: 'Cost anchor',
+      width: 100,
+      accessor: (b) => (
+        <CellStop>
+          <AnchorCell binding={b} supplierId={supplierId} setAnchor={setAnchor} />
+        </CellStop>
+      ),
+      searchValue: (b) => (b.is_cost_anchor ? 'anchor' : ''),
+      filterValue: (b) => (b.is_cost_anchor ? 'Anchored' : '—'),
+      sortFn: (a, b) => Number(a.is_cost_anchor) - Number(b.is_cost_anchor),
     },
     {
       key: 'main',
@@ -1095,6 +1110,7 @@ const DefaultSkuMappingsTable = ({
 }) => {
   const update = useUpdateBinding();
   const remove = useDeleteBinding();
+  const setAnchor = useSetCostAnchor();
 
   const columns = useMemo<DataGridColumn<BindingRow>[]>(() => [
     ...bindingHeadColumns(supplierId, update),
@@ -1112,8 +1128,8 @@ const DefaultSkuMappingsTable = ({
       filterValue: (b) => fmtCurrency(b.unit_price_centi, b.currency),
       sortFn: (a, b) => a.unit_price_centi - b.unit_price_centi,
     },
-    ...bindingTailColumns(supplierId, update, remove, onEdit),
-  ], [supplierId, update, remove, onEdit]);
+    ...bindingTailColumns(supplierId, update, remove, onEdit, setAnchor),
+  ], [supplierId, update, remove, onEdit, setAnchor]);
 
   return (
     <DataGrid
@@ -1163,6 +1179,7 @@ const SofaSkuMappingsTable = ({
 }) => {
   const update = useUpdateBinding();
   const remove = useDeleteBinding();
+  const setAnchor = useSetCostAnchor();
   const [selectedTier, setSelectedTier] = useState<'P1' | 'P2' | 'P3'>('P2');
 
   // Read seat-heights from the master maintenance config (Products Maintenance
@@ -1203,8 +1220,8 @@ const SofaSkuMappingsTable = ({
         (readSofaCell(a.price_matrix, h, selectedTier) ?? -1)
         - (readSofaCell(b.price_matrix, h, selectedTier) ?? -1),
     })),
-    ...bindingTailColumns(supplierId, update, remove, onEdit),
-  ], [supplierId, update, remove, onEdit, heights, selectedTier]);
+    ...bindingTailColumns(supplierId, update, remove, onEdit, setAnchor),
+  ], [supplierId, update, remove, onEdit, setAnchor, heights, selectedTier]);
 
   return (
     <div>
@@ -1284,6 +1301,7 @@ const BedframeSkuMappingsTable = ({
 }) => {
   const update = useUpdateBinding();
   const remove = useDeleteBinding();
+  const setAnchor = useSetCostAnchor();
 
   const columns = useMemo<DataGridColumn<BindingRow>[]>(() => [
     ...bindingHeadColumns(supplierId, update),
@@ -1311,8 +1329,8 @@ const BedframeSkuMappingsTable = ({
         (readBedframeCell(a.price_matrix, tier) ?? -1)
         - (readBedframeCell(b.price_matrix, tier) ?? -1),
     })),
-    ...bindingTailColumns(supplierId, update, remove, onEdit),
-  ], [supplierId, update, remove, onEdit]);
+    ...bindingTailColumns(supplierId, update, remove, onEdit, setAnchor),
+  ], [supplierId, update, remove, onEdit, setAnchor]);
 
   return (
     <DataGrid
@@ -1367,6 +1385,85 @@ const MainStarCell = ({
     {binding.is_main_supplier && <span className={styles.mainPill}>Main</span>}
   </>
 );
+
+/* ────────────────────────────────────────────────────────────────────────
+   AnchorCell — the ⚓ "Cost anchor" toggle (migration 0177).
+
+   Marks THIS binding as the cost anchor for its material_code: while anchored,
+   editing either side's cost (this binding's unit_price_centi / price_matrix,
+   or the linked mfg_products base_price_sen / price1_sen) mirrors onto the
+   other, so Product-Maintenance cost == this supplier's cost. Setting the
+   anchor clears it on any other binding for the same product (one per code,
+   server-enforced) and pushes the binding's current cost onto the product
+   (initial sync) — so we confirm before turning it ON (it writes product cost).
+   Clearing just drops the flag (no sync), so no confirm.
+
+   SOFA bindings can be anchored but cost sync is SKIPPED server-side (a single
+   SKU cost vs a per-height grid is ambiguous). We surface that in the tooltip
+   so the toggle isn't silently a no-op for sofa cost. */
+const looksLikeSofaMatrix = (m: PriceMatrix | null): boolean => {
+  if (!m || typeof m !== 'object') return false;
+  // Sofa matrix nests tier objects under height keys ({ "24": { P1,.. } });
+  // bedframe is flat ({ P1, P2 }). Any object-valued cell ⇒ sofa-shaped.
+  return Object.values(m as Record<string, unknown>).some(
+    (v) => v !== null && typeof v === 'object',
+  );
+};
+
+const AnchorCell = ({
+  binding,
+  supplierId,
+  setAnchor,
+}: {
+  binding: BindingRow;
+  supplierId: string;
+  setAnchor: ReturnType<typeof useSetCostAnchor>;
+}) => {
+  const anchored = binding.is_cost_anchor;
+  // Anchor is meaningful only for our own SKUs (mfg_product). Fabric / raw
+  // bindings have no mfg_products cost row to mirror — hide the toggle.
+  if (binding.material_kind !== 'mfg_product') {
+    return <span className={styles.muted}>—</span>;
+  }
+  const sofaSkipped = looksLikeSofaMatrix(binding.price_matrix);
+  const title = anchored
+    ? 'Cost anchor ON — this supplier’s cost ⇄ product cost stay in sync. Click to unlink.'
+    : sofaSkipped
+      ? 'Set as cost anchor. Note: sofa per-height cost is NOT auto-synced (phase-2).'
+      : 'Set as cost anchor — links this supplier’s cost to the product’s cost (both update together).';
+  return (
+    <>
+      <button
+        type="button"
+        className={styles.iconBtn}
+        title={title}
+        disabled={setAnchor.isPending}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!anchored) {
+            // Turning ON pushes this binding's cost onto the product — confirm.
+            const ok = confirm(
+              `Anchor ${binding.material_code} to this supplier’s cost?\n\n` +
+              `Product-Maintenance cost will be kept equal to this supplier’s cost ` +
+              `(editing either side updates the other).` +
+              (sofaSkipped ? `\n\nNote: sofa per-height cost is not auto-synced.` : ''),
+            );
+            if (!ok) return;
+          }
+          setAnchor.mutate({ supplierId, bindingId: binding.id, anchor: !anchored });
+        }}
+      >
+        <Anchor
+          size={16}
+          strokeWidth={1.75}
+          fill={anchored ? 'currentColor' : 'none'}
+          style={{ color: anchored ? 'var(--c-burnt)' : 'var(--fg-muted)' }}
+        />
+      </button>
+      {anchored && <span className={styles.mainPill}>Anchor</span>}
+    </>
+  );
+};
 
 const RowActionsCell = ({
   binding,

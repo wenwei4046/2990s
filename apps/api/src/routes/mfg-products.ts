@@ -16,10 +16,11 @@
 // ----------------------------------------------------------------------------
 
 import { Hono, type Context } from 'hono';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
 import { findSkuUsage } from '../lib/sku-usage';
+import { productToBindingPatch } from '../lib/cost-anchor-sync';
 import { moduleCodeFromSku, normalizeSofaTier, parseDefaultFreeGifts } from '@2990s/shared';
 import type { Env, Variables } from '../env';
 
@@ -53,6 +54,57 @@ async function requireRole(c: AppContext, allowed: Set<string>): Promise<{ ok: t
 
 // Allowed values for the `field` column on master_price_history.
 const PRICE_FIELDS = new Set(['base_price_sen', 'price1_sen', 'cost_price_sen', 'sell_price_sen', 'pwp_price_sen']);
+
+/* ── Cost anchor (migration 0177) ─────────────────────────────────────────
+   The product→binding leg of R8-at-SKU-level. After a product's COST
+   (base_price_sen / price1_sen) is written, if any supplier_material_bindings
+   row for this code is the cost anchor (is_cost_anchor=true), mirror the
+   product cost back onto that binding so the two sides stay equal. BEST-EFFORT:
+   the product write already committed, so any failure here is swallowed. SOFA
+   is skipped by the pure helper. The mirror targets the binding row directly —
+   it does NOT re-enter mfg-products PATCH, so there's no sync loop. */
+async function syncAnchorBindingFromProduct(
+  supabase: SupabaseClient,
+  productCode: string,
+  product: { base_price_sen: number | null; price1_sen: number | null },
+): Promise<void> {
+  try {
+    // The anchor binding for this code (at most one — enforced app-side).
+    const { data: binding } = await supabase
+      .from('supplier_material_bindings')
+      .select('id, price_matrix')
+      .eq('material_kind', 'mfg_product')
+      .eq('material_code', productCode)
+      .eq('is_cost_anchor', true)
+      .maybeSingle();
+    if (!binding) return;
+
+    // Category drives the mapping lane — read it off the product row we just
+    // updated (passed in so we don't re-query mfg_products).
+    const { data: prod } = await supabase
+      .from('mfg_products')
+      .select('category')
+      .eq('code', productCode)
+      .maybeSingle();
+
+    const result = productToBindingPatch(
+      { base_price_sen: product.base_price_sen, price1_sen: product.price1_sen },
+      {
+        category: (prod as { category: string | null } | null)?.category ?? null,
+        price_matrix: (binding as { price_matrix: unknown }).price_matrix,
+      },
+    );
+    if (result.skipped) return;
+    if (Object.keys(result.patch).length === 0) return;
+
+    await supabase
+      .from('supplier_material_bindings')
+      .update({ ...result.patch, updated_at: new Date().toISOString() })
+      .eq('id', (binding as { id: string }).id);
+  } catch {
+    // Best-effort mirror — never surface to the primary product write.
+  }
+}
 
 // ── GET / ──────────────────────────────────────────────────────────────
 mfgProducts.get('/', async (c) => {
@@ -549,6 +601,27 @@ mfgProducts.patch('/:id', async (c) => {
       return c.json({ error: 'duplicate_code', reason: 'Another SKU already uses that code.' }, 409);
     }
     return c.json({ error: 'update_failed', reason: updErr.message }, 500);
+  }
+
+  /* Cost anchor (0177) — mirror the new COST onto this SKU's anchor binding
+     (if any). Only fires when base_price_sen / price1_sen actually changed
+     (the two cost fields the mapping reads). Uses the FINAL values: the
+     written value if it changed, else the unchanged current value. Best-effort
+     — runs after the product write committed. */
+  const costFieldChanged = priceChanges.some(
+    (ch) => ch.field === 'base_price_sen' || ch.field === 'price1_sen',
+  );
+  if (costFieldChanged) {
+    // Use the FINAL values. `'key' in updates` (not ??) so an explicit clear to
+    // null is honoured rather than falling back to the old value.
+    await syncAnchorBindingFromProduct(supabase, current.code, {
+      base_price_sen: 'base_price_sen' in updates
+        ? (updates.base_price_sen as number | null)
+        : current.base_price_sen,
+      price1_sen: 'price1_sen' in updates
+        ? (updates.price1_sen as number | null)
+        : current.price1_sen,
+    });
   }
 
   // Audit trail. Best-effort — if these fail the price update has already
