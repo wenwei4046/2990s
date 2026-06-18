@@ -41,6 +41,7 @@ import {
 } from '@2990s/shared/mfg-pricing';
 import { MoneyInput } from '../components/MoneyInput';
 import { ActionResultDialog } from '../components/ActionResultDialog';
+import { useToast } from '../components/Toast';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -143,6 +144,7 @@ const SpecialsCheckboxes = ({
 export const PurchaseOrderNew = () => {
   const navigate = useNavigate();
   const create   = useCreatePurchaseOrder();
+  const toast    = useToast();
 
   // ── Header state ────────────────────────────────────────────────────
   const [supplierId, setSupplierId]   = useState<string>('');
@@ -599,7 +601,7 @@ export const PurchaseOrderNew = () => {
 
   const onSave = () => {
     if (!supplierId) {
-      window.alert('Pick a Creditor (supplier) first.');
+      toast.error('Pick a Creditor (supplier) first.');
       return;
     }
     // PR #157 — Commander 2026-05-26: "这些没有 expected delivery date 和
@@ -607,11 +609,11 @@ export const PurchaseOrderNew = () => {
     // submit — they fan out to per-line warehouse + delivery date and are
     // needed downstream for GRN. Defense-in-depth: API also rejects missing.
     if (!expectedAt) {
-      window.alert('Expected Delivery date is required.');
+      toast.error('Expected Delivery date is required.');
       return;
     }
     if (!purchaseLocationId) {
-      window.alert('Purchase Location is required.');
+      toast.error('Purchase Location is required.');
       return;
     }
     const validLines = lines.filter((l) => l.materialCode.trim() && l.qty > 0);
@@ -649,7 +651,7 @@ export const PurchaseOrderNew = () => {
       },
       {
         onSuccess: (res) => navigate(`/purchase-orders/${res.id}`),
-        onError:   (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError:   (err) => toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
       },
     );
   };
