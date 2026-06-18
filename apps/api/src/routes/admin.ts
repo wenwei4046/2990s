@@ -132,6 +132,28 @@ async function loadStaffRole(c: any): Promise<string | null> {
   return data.role;
 }
 
+/* Lockout guards (Commander 2026-06-19, learned from Hookka BUG-2026-06-12-010):
+   a caller may NOT deactivate their own account, nor the LAST active
+   admin/super_admin — both would lock the org out of staff management. Returns
+   an error code to reject with, or null when the deactivation is safe. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function deactivationBlocked(c: any, id: string): Promise<string | null> {
+  if (id === c.get('user').id) return 'cannot_deactivate_self';
+  const admin = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: target } = await admin.from('staff').select('role, active').eq('id', id).maybeSingle();
+  if (target?.active && (target.role === 'admin' || target.role === 'super_admin')) {
+    const { count } = await admin
+      .from('staff')
+      .select('id', { count: 'exact', head: true })
+      .eq('active', true)
+      .in('role', ['admin', 'super_admin']);
+    if ((count ?? 0) <= 1) return 'cannot_deactivate_last_admin';
+  }
+  return null;
+}
+
 admin.post('/staff', async (c) => {
   const callerRole = await loadStaffRole(c);
   if (!callerRole || !STAFF_WRITE_ROLES.has(callerRole)) {
@@ -343,6 +365,12 @@ admin.patch('/staff/:id', async (c) => {
   if (input.color      !== undefined) updates.color    = input.color;
   if (input.active     !== undefined) updates.active   = input.active;
 
+  // Deactivating via edit gets the same self/last-admin lockout guard as DELETE.
+  if (input.active === false) {
+    const blocked = await deactivationBlocked(c, id);
+    if (blocked) return c.json({ error: blocked }, 400);
+  }
+
   if (Object.keys(updates).length === 0) return c.json({ error: 'no_changes' }, 400);
 
   /* Guard: a POS-selling role (SHOWROOM_SCOPED_ROLES) must keep a non-null
@@ -392,6 +420,9 @@ admin.delete('/staff/:id', async (c) => {
   const idParse = z.string().uuid().safeParse(c.req.param('id'));
   if (!idParse.success) return c.json({ error: 'invalid_request' }, 400);
   const id = idParse.data;
+
+  const blocked = await deactivationBlocked(c, id);
+  if (blocked) return c.json({ error: blocked }, 400);
 
   const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
