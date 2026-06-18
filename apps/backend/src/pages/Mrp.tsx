@@ -31,6 +31,7 @@ import { authedFetch } from '../lib/authed-fetch';
 import { useAuth, isAdminLevel } from '../lib/auth';
 import { useCreatePosFromSoItems } from '../lib/suppliers-queries';
 import { fmtDateOrDash } from '@2990s/shared';
+import { DateField } from '../components/DateField';
 import styles from './Mrp.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -817,13 +818,11 @@ export const Mrp = () => {
         </label>
         <label className={styles.filterField}>
           <span className={styles.filterLabel}>from</span>
-          <input type="date" className={styles.filterSelect} value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)} />
+          <DateField value={dateFrom} onChange={setDateFrom} aria-label="From date" />
         </label>
         <label className={styles.filterField}>
           <span className={styles.filterLabel}>to</span>
-          <input type="date" className={styles.filterSelect} value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)} />
+          <DateField value={dateTo} onChange={setDateTo} aria-label="To date" />
         </label>
         {hasWindow && (
           <button type="button" className={styles.ghostBtn}
@@ -939,11 +938,11 @@ export const Mrp = () => {
             </p>
             <label className={styles.dialogField}>
               <span className={styles.filterLabel}>Expected Delivery (optional — leave blank to use each SO's own date)</span>
-              <input
-                type="date"
-                className={styles.filterSelect}
+              <DateField
+                fullWidth
                 value={proceedExpectedAt}
-                onChange={(e) => setProceedExpectedAt(e.target.value)}
+                onChange={setProceedExpectedAt}
+                aria-label="Expected delivery date"
                 title="Apply one delivery date to the whole batch (PO header + every line). Leave blank to keep each SO's own date."
               />
             </label>
