@@ -168,6 +168,9 @@ export const useCancelGrn = () => {
       qc.invalidateQueries({ queryKey: ['grns'] });
       qc.invalidateQueries({ queryKey: ['inventory'] });
     },
+    onError: (err) => {
+      window.alert(`Cancel GRN failed: ${err instanceof Error ? err.message : String(err)}`);
+    },
   });
 };
 
@@ -243,6 +246,9 @@ export const useCancelPurchaseInvoice = () => {
     onSuccess: (_, id) => {
       qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
       qc.invalidateQueries({ queryKey: ['purchase-invoice-detail', id] });
+    },
+    onError: (err) => {
+      window.alert(`Cancel invoice failed: ${err instanceof Error ? err.message : String(err)}`);
     },
   });
 };
@@ -546,6 +552,9 @@ export const useUpdateSoItemStockStatus = () => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
+    },
+    onError: (err) => {
+      window.alert(`Stock status update failed: ${err instanceof Error ? err.message : String(err)}`);
     },
   });
 };
@@ -891,6 +900,9 @@ export const useUpdateMfgDeliveryOrderStatus = () => {
       /* CANCEL releases the delivered qty back to the SO. */
       releaseSoSideQueries(qc);
     },
+    onError: (err) => {
+      window.alert(`Status update failed: ${err instanceof Error ? err.message : String(err)}`);
+    },
   });
 };
 
@@ -1052,6 +1064,9 @@ export const useUpdateSalesInvoiceStatus = () => {
       qc.invalidateQueries({ queryKey: ['journal-entries'] });
       qc.invalidateQueries({ queryKey: ['account-balances'] });
       qc.invalidateQueries({ queryKey: ['ar-aging'] });
+    },
+    onError: (err) => {
+      window.alert(`Status update failed: ${err instanceof Error ? err.message : String(err)}`);
     },
   });
 };
@@ -1320,6 +1335,9 @@ export const useCancelPurchaseReturn = () => {
       qc.invalidateQueries({ queryKey: ['purchase-returns'] });
       qc.invalidateQueries({ queryKey: ['purchase-return-detail', id] });
     },
+    onError: (err) => {
+      window.alert(`Cancel return failed: ${err instanceof Error ? err.message : String(err)}`);
+    },
   });
 };
 
@@ -1457,6 +1475,9 @@ export const useUpdateDeliveryReturnStatus = () => {
       /* Cancel reverses the inventory increase (negative ADJUSTMENT) — refresh
          inventory so on-hand reflects the removed stock. */
       qc.invalidateQueries({ queryKey: ['inventory'] });
+    },
+    onError: (err) => {
+      window.alert(`Status update failed: ${err instanceof Error ? err.message : String(err)}`);
     },
   });
 };

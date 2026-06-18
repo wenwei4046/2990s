@@ -75,6 +75,9 @@ export const useUpdateConsignmentOrderStatus = () => {
       qc.invalidateQueries({ queryKey: ['consignment-order'] });
       qc.invalidateQueries({ queryKey: ['consignment-order-detail', vars.docNo] });
     },
+    onError: (err) => {
+      window.alert(`Status update failed: ${err instanceof Error ? err.message : String(err)}`);
+    },
   });
 };
 

@@ -153,5 +153,8 @@ export const useCancelPurchaseConsignmentReceive = () => {
       qc.invalidateQueries({ queryKey: ['pc-receive-detail', id] });
       qc.invalidateQueries({ queryKey: ['pc-receive'] });
     },
+    onError: (err) => {
+      window.alert(`Cancel receive failed: ${err instanceof Error ? err.message : String(err)}`);
+    },
   });
 };

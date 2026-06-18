@@ -95,6 +95,9 @@ export const useCancelPurchaseConsignmentReturn = () => {
       qc.invalidateQueries({ queryKey: ['pc-return'] });
       qc.invalidateQueries({ queryKey: ['pc-return-detail', id] });
     },
+    onError: (err) => {
+      window.alert(`Cancel return failed: ${err instanceof Error ? err.message : String(err)}`);
+    },
   });
 };
 

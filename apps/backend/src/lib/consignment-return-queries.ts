@@ -115,6 +115,9 @@ export const useUpdateConsignmentReturnStatus = () => {
       qc.invalidateQueries({ queryKey: ['consignment-return'] });
       qc.invalidateQueries({ queryKey: ['consignment-return-detail', vars.id] });
     },
+    onError: (err) => {
+      window.alert(`Status update failed: ${err instanceof Error ? err.message : String(err)}`);
+    },
   });
 };
 

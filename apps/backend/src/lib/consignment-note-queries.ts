@@ -90,6 +90,9 @@ export const useUpdateConsignmentNoteStatus = () => {
       qc.invalidateQueries({ queryKey: ['consignment-note'] });
       qc.invalidateQueries({ queryKey: ['consignment-note-detail', vars.id] });
     },
+    onError: (err) => {
+      window.alert(`Status update failed: ${err instanceof Error ? err.message : String(err)}`);
+    },
   });
 };
 
