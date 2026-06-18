@@ -244,7 +244,13 @@ export function docVariantLine(
       const desc = fabricDescMap.get(code);  // our fabric description
       if (ext || desc) {
         if (mapped === v) mapped = { ...v };
-        mapped[key] = `${code}${ext ? ` (${ext})` : ''}${desc ? ` — ${desc}` : ''}`;
+        // Strip a redundant leading code from the description (the fabric_trackings
+        // description often starts with the code, e.g. "EZ-008 Forest") so the line
+        // doesn't read "EZ-008 (M2402-13) — EZ-008 Forest" (Commander 2026-06-19).
+        const cleanDesc = desc && desc.toLowerCase().startsWith(code.toLowerCase())
+          ? desc.slice(code.length).trim()
+          : desc;
+        mapped[key] = `${code}${ext ? ` (${ext})` : ''}${cleanDesc ? ` — ${cleanDesc}` : ''}`;
       }
     }
   }

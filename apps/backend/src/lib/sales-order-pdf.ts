@@ -190,9 +190,13 @@ const variantLine = (
       const desc = fabricDescMap.get(code);  // our fabric_description
       if (ext || desc) {
         if (mapped === v) mapped = { ...v }; // clone once, on demand
-        // internal (external) — description: same internal+external pairing the
-        // supplier docs (specsLine) show, plus our description. (Commander 2026-06-16)
-        mapped[key] = `${code}${ext ? ` (${ext})` : ''}${desc ? ` — ${desc}` : ''}`;
+        // internal (external) — description. Strip a redundant leading code from
+        // the description ("EZ-008 Forest") so it doesn't read "EZ-008 (…) — EZ-008
+        // Forest" (Commander 2026-06-19, 2026-06-16).
+        const cleanDesc = desc && desc.toLowerCase().startsWith(code.toLowerCase())
+          ? desc.slice(code.length).trim()
+          : desc;
+        mapped[key] = `${code}${ext ? ` (${ext})` : ''}${cleanDesc ? ` — ${cleanDesc}` : ''}`;
       }
     }
   }
@@ -451,7 +455,7 @@ export async function generateSalesOrderPdf(
     if (grp !== lastGroup) {
       bodyRows.push([{
         content: grp, colSpan: 7,
-        styles: { fontStyle: 'bold', fillColor: [238, 238, 238] as [number, number, number], textColor: 40 },
+        styles: { fontStyle: 'bold', fillColor: [238, 238, 238] as [number, number, number], textColor: 40, halign: 'left' },
       }]);
       lastGroup = grp;
     }
