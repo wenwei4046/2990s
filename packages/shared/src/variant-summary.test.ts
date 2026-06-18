@@ -63,6 +63,19 @@ describe('buildVariantSummary', () => {
     expect(summary).toBe('BF-07 / DIVAN 10" + LEG 2" / GAP 9"');
   });
 
+  it('bedframe does not repeat the bare colour label after an ENRICHED fabric code', () => {
+    // The doc layer enriches fabricCode to "BF-12 (PC151-12)"; the bare colour
+    // label "BF-12" must not tack on again → "BF-12 (PC151-12) BF-12".
+    const summary = buildVariantSummary('bedframe', {
+      fabricCode: 'BF-12 (PC151-12)',
+      colourLabel: 'BF-12',
+      divanHeight: '8"',
+      legHeight: '2"',
+      gap: '11"',
+    });
+    expect(summary).toBe('BF-12 (PC151-12) / DIVAN 8" + LEG 2" / GAP 11"');
+  });
+
   it('bedframe leg height carries the LEG label even without a colour', () => {
     const summary = buildVariantSummary('bedframe', {
       divanHeight: '10"',
