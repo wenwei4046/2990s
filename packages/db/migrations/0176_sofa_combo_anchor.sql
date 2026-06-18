@@ -9,9 +9,11 @@
 -- The Product-Maintenance cost (SO cost reference) and the anchored supplier's
 -- cost stay in lock-step. One anchor per Model (PK = base_model).
 --
--- ⚠️ Apply to prod via Supabase MCP (the GitHub "Apply DB migration" workflow
--- is unset, as for every other migration). Additive (new table); changes no
--- existing object.
+-- ⚠️ Applied to prod 2026-06-18 directly in the Supabase SQL Editor. Additive
+-- (new table); changes no existing object. The CREATE POLICY statements below
+-- are guarded with DROP POLICY IF EXISTS so the deploy auto-runner (applies
+-- migrations >= 0168) can safely re-run this file without erroring on an
+-- already-existing policy.
 
 CREATE TABLE IF NOT EXISTS sofa_combo_anchor (
   base_model  TEXT PRIMARY KEY,
@@ -32,9 +34,11 @@ COMMENT ON TABLE sofa_combo_anchor IS
 -- gating. No existing policy altered.
 ALTER TABLE sofa_combo_anchor ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS sofa_combo_anchor_select_all ON sofa_combo_anchor;
 CREATE POLICY sofa_combo_anchor_select_all
   ON sofa_combo_anchor FOR SELECT TO authenticated USING (true);
 
+DROP POLICY IF EXISTS sofa_combo_anchor_write_editors ON sofa_combo_anchor;
 CREATE POLICY sofa_combo_anchor_write_editors
   ON sofa_combo_anchor FOR ALL TO authenticated
   USING      (EXISTS (SELECT 1 FROM staff WHERE id = auth.uid() AND active = TRUE AND role IN ('admin','super_admin','coordinator','sales_director')))
