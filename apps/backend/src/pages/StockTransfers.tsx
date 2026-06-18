@@ -15,8 +15,10 @@ import {
   useStockTransfers,
   type StockTransferRow,
   type StockTransferStatus,
+  type StockTransferWarehouse,
 } from '../lib/stock-transfers-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import styles from './Inventory.module.css';
 
 const ICON    = { size: 14, strokeWidth: 1.75 } as const;
@@ -35,6 +37,39 @@ const fmtDate = (iso: string): string => {
   if (!Number.isFinite(d.getTime())) return iso;
   return d.toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' });
 };
+
+/* Column-aware filter config for the stock-transfer list (shared
+   ColumnFilterBar): free-text quick search + add-a-column filters (text /
+   enum / date presets+range), layered client-side ON TOP of the existing
+   server-side status/warehouse/date query. Warehouse-code resolution needs
+   the warehouse map, so this is a factory the page memoizes over `wmap`. */
+type StxWarehouseMap = Map<string, StockTransferWarehouse>;
+const warehouseCode = (
+  wmap: StxWarehouseMap,
+  embedded: StockTransferWarehouse | null | undefined,
+  id: string,
+): string => (embedded ?? wmap.get(id))?.code ?? '';
+
+const buildStxFilterColumns = (wmap: StxWarehouseMap): FilterColumn<StockTransferRow>[] => [
+  { key: 'transferNo', label: 'ST #',    type: 'text', accessor: (t) => t.transfer_no },
+  { key: 'notes',      label: 'Notes',   type: 'text', accessor: (t) => t.notes },
+  {
+    key: 'fromTo', label: 'From → To', type: 'text',
+    accessor: (t) =>
+      `${warehouseCode(wmap, t.from_warehouse, t.from_warehouse_id)} → ${warehouseCode(wmap, t.to_warehouse, t.to_warehouse_id)}`,
+  },
+  {
+    key: 'fromWarehouse', label: 'From Warehouse', type: 'enum',
+    accessor: (t) => warehouseCode(wmap, t.from_warehouse, t.from_warehouse_id),
+  },
+  {
+    key: 'toWarehouse', label: 'To Warehouse', type: 'enum',
+    accessor: (t) => warehouseCode(wmap, t.to_warehouse, t.to_warehouse_id),
+  },
+  { key: 'status', label: 'Status', type: 'enum', accessor: (t) => STATUS_TONE[t.status]?.label ?? t.status },
+  { key: 'date',    label: 'Date',  type: 'date', accessor: (t) => (t.transfer_date ?? '').slice(0, 10) },
+];
+const STX_QUICK_SEARCH_KEYS = ['transferNo', 'fromTo', 'status'];
 
 export const StockTransfers = () => {
   const navigate = useNavigate();
@@ -58,7 +93,21 @@ export const StockTransfers = () => {
     dateTo:           dateTo   || undefined,
   });
 
-  const rows = useMemo<StockTransferRow[]>(() => transfers ?? [], [transfers]);
+  const baseRows = useMemo<StockTransferRow[]>(() => transfers ?? [], [transfers]);
+
+  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
+     add-a-column filters, layered client-side on top of the server-side
+     status/warehouse/date query above. `rows` (post-filter) feeds the grid. */
+  const stxFilterColumns = useMemo(() => buildStxFilterColumns(wmap), [wmap]);
+  const { rows, bar: filterBar } = useColumnFilter<StockTransferRow>({
+    allRows: baseRows,
+    columns: stxFilterColumns,
+    quickSearchKeys: STX_QUICK_SEARCH_KEYS,
+    quickSearchPlaceholder: 'ST #, warehouse…',
+    storageKey: 'pr-g.stock-transfers.filters.v1',
+    totalCount: baseRows.length,
+    loading: isLoading,
+  });
 
   /* DataGrid conversion (dg-inventory rollout) — columns mirror the legacy
      <table> 1:1. Single click still opens the detail page (onRowClick). */
@@ -273,6 +322,10 @@ export const StockTransfers = () => {
           {error instanceof Error ? error.message : String(error)}
         </div>
       )}
+
+      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
+          add-a-column filters), additive on top of the server-side filters. */}
+      {filterBar}
 
       <DataGrid<StockTransferRow>
         rows={rows}

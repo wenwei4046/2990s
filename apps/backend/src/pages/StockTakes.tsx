@@ -16,6 +16,7 @@ import {
   type StockTakeStatus,
 } from '../lib/stock-takes-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import styles from './Inventory.module.css';
 
 const ICON    = { size: 14, strokeWidth: 1.75 } as const;
@@ -44,6 +45,26 @@ const scopeLabel = (scopeType: string, scopeValue: string | null): string => {
   return scopeType;
 };
 
+/* Column-aware filter config for the shared ColumnFilterBar (additive layer on
+   top of the existing server-side warehouse/date/status filters + the DataGrid
+   column filters). Each entry tells the bar how to read + present a column:
+   text = contains-search, enum = dropdown of distinct values, date = presets +
+   range. Warehouse reads the embedded row.warehouse (self-contained — no wmap),
+   matching the grid's "code · name" display. Status/scope-type use the same
+   human labels the grid shows. */
+const ST_FILTER_COLUMNS: FilterColumn<StockTakeRow>[] = [
+  { key: 'takeNo',     label: 'STK #',      type: 'text', accessor: (t) => t.take_no },
+  {
+    key: 'warehouse', label: 'Warehouse', type: 'enum',
+    accessor: (t) => (t.warehouse ? `${t.warehouse.code} · ${t.warehouse.name}` : (t.warehouse_id || null)),
+  },
+  { key: 'scope',      label: 'Scope',      type: 'text', accessor: (t) => scopeLabel(t.scope_type, t.scope_value) },
+  { key: 'scopeType',  label: 'Scope Type', type: 'enum', accessor: (t) => t.scope_type },
+  { key: 'status',     label: 'Status',     type: 'enum', accessor: (t) => STATUS_TONE[t.status]?.label ?? t.status },
+  { key: 'date',       label: 'Date',       type: 'date', accessor: (t) => (t.take_date ? t.take_date.slice(0, 10) : null) },
+];
+const ST_QUICK_SEARCH_KEYS = ['takeNo', 'warehouse', 'scope', 'status'];
+
 export const StockTakes = () => {
   const navigate = useNavigate();
   const [status, setStatus]           = useState<StockTakeStatus | 'ALL'>('ALL');
@@ -64,7 +85,20 @@ export const StockTakes = () => {
     dateTo:      dateTo   || undefined,
   });
 
-  const rows = useMemo<StockTakeRow[]>(() => takes ?? [], [takes]);
+  const baseRows = useMemo<StockTakeRow[]>(() => takes ?? [], [takes]);
+
+  /* Shared ColumnFilterBar — additive client-side layer on top of the
+     server-filtered result (warehouse/date/status query params still apply
+     first via useStockTakes). Free-text quick search + add-a-column filters. */
+  const { rows, bar: filterBar } = useColumnFilter<StockTakeRow>({
+    allRows: baseRows,
+    columns: ST_FILTER_COLUMNS,
+    quickSearchKeys: ST_QUICK_SEARCH_KEYS,
+    quickSearchPlaceholder: 'STK #, warehouse, scope…',
+    storageKey: 'pr-g.stock-takes.filters.v1',
+    totalCount: baseRows.length,
+    loading: isLoading,
+  });
 
   /* DataGrid conversion (dg-inventory rollout) — columns mirror the legacy
      <table> 1:1. Single click still opens the detail page (onRowClick). */
@@ -281,6 +315,10 @@ export const StockTakes = () => {
           {error instanceof Error ? error.message : String(error)}
         </div>
       )}
+
+      {/* Shared ColumnFilterBar (quick search + add-a-column filters) — additive
+          on top of the server-side warehouse/date/status filters above. */}
+      {filterBar}
 
       <DataGrid<StockTakeRow>
         rows={rows}
