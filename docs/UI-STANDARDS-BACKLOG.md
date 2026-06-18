@@ -27,8 +27,15 @@
    DataGrid `filterType` widened to date|number|numbering|enum|text:
    number=min/max, date=presets+from→to range (day-first DateField),
    numbering=type-to-find over doc codes. Additive/backwards-compatible; tested.
-   **Phase B = tag the 14 list pages with `filterType` + retire & delete
-   `ColumnFilterBar.tsx`** (owner OK'd the replacement).
+7. **Filter Phase B — pilot DONE** (MfgDeliveryOrdersList) — removed the
+   redundant ColumnFilterBar top bar; DataGrid funnels own all filtering; KPIs
+   rewired via `onFilteredRowsChange`; status-chip prefilter kept; tagged
+   DO/SO→numbering, total→number, status→clean filterValue. **REMAINING 7 pages**
+   (same validated pattern): MfgSalesOrdersList, SalesInvoicesList,
+   DeliveryReturnsList, ConsignmentNotes, ConsignmentOrders, ConsignmentReturns
+   (+ "reason" lost-cap → add a hidden Reason column), SalesOrderDetailListing.
+   **DELETE `ColumnFilterBar.tsx`** after the last one. (Owner: eyeball the DO
+   list's new single-funnel filter before the ×7 rollout in case of UX tweaks.)
 
 ## 🔴 Bugs — root cause: the deploy auto-migration runner is DEAD
 The GH Actions `Apply DB migrations` step fails every deploy (`password
