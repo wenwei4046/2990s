@@ -388,7 +388,10 @@
   vertical-align: middle;
 }
 .td:last-child { border-right: 0; }
-.tdAlignRight { text-align: right; }
+/* Figures = one font system-wide (owner 2026-06-18: Mono). --font-mono is the
+   readable system stack + the table already sets tabular-nums, so numeric
+   columns line up regardless of which page renders them. */
+.tdAlignRight { text-align: right; font-family: var(--font-mono); }
 .tdMuted { color: var(--fg-muted); }
 .tdNumeric { font-variant-numeric: tabular-nums; }
 

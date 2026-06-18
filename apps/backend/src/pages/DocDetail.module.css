@@ -221,7 +221,7 @@
 .muted { color: var(--fg-muted); }
 
 .priceCell {
-  font-family: var(--font-mark);
+  font-family: var(--font-mono);
   font-size: var(--fs-14);
   font-weight: 800;
   font-stretch: 80%;

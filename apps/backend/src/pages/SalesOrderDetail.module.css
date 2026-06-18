@@ -436,7 +436,7 @@
      Step down to fs-12 + weight 700 (was fs-14 / 800) so the price fits the
      ~96px column without wrapping. Still bolded + burnt so the value is
      visually distinct from the cost/margin cells next to it. */
-  font-family: var(--font-mark);
+  font-family: var(--font-mono);
   font-size: var(--fs-12);
   font-weight: 700;
   font-stretch: 80%;

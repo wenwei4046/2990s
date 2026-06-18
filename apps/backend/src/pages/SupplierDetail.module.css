@@ -341,7 +341,7 @@
 .priceCell {
   /* PR — Commander 2026-05-27: drop to fs-12/700 so RM values fit the
      ~96px seat-height columns without wrapping. */
-  font-family: var(--font-mark);
+  font-family: var(--font-mono);
   font-size: var(--fs-12);
   font-weight: 700;
   font-stretch: 80%;
