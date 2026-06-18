@@ -292,6 +292,9 @@ export const PurchaseOrderDetail = () => {
     const headerForPdf = {
       ...po,
       purchase_location_name: wh ? `${wh.code} · ${wh.name}` : null,
+      // #1 (Commander 2026-06-18) — deliver-to address = the bound warehouse's
+      // location text, so the supplier knows where to ship.
+      delivery_address: wh?.location ?? null,
       // your_ref_no / source_so_doc_no don't have columns yet; pass through
       // when present on po (forward-compat). Schema follow-up adds them.
       your_ref_no:      (po as unknown as { your_ref_no?: string | null }).your_ref_no      ?? null,
@@ -703,6 +706,13 @@ const SupplierCard = ({
                 const wh = warehouses.find((w) => w.id === po.purchase_location_id);
                 return wh ? `${wh.code} · ${wh.name}` : null;
               })()} />
+            <div style={{ gridColumn: 'span 2' }}>
+              <InfoCell label="Deliver To"
+                value={(() => {
+                  const wh = warehouses.find((w) => w.id === po.purchase_location_id);
+                  return wh?.location || null;
+                })()} />
+            </div>
             <div style={{ gridColumn: 'span 2' }}>
               <InfoCell label="Notes" value={po.notes || null} />
             </div>

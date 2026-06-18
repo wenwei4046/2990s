@@ -63,6 +63,9 @@ type PoHeader = {
   your_ref_no?:           string | null;
   source_so_doc_no?:      string | null;
   purchase_location_name?: string | null;
+  /** #1 (Commander 2026-06-18) — deliver-to address (the bound warehouse's
+      location). Printed in the meta block so the supplier knows where to ship. */
+  delivery_address?: string | null;
   supplier?: {
     code:           string;
     name:           string;
@@ -195,6 +198,7 @@ async function renderPurchaseOrderInto(
     ['Date',              fmtDocDate(header.po_date)],
     ['Delivery Date',     header.expected_at ? fmtDocDate(header.expected_at) : ''],
     ['Purchase Location', header.purchase_location_name ?? ''],
+    ['Deliver To',        header.delivery_address ?? ''],
     ['Page',              ''],                          // patched after pagination
   ];
 

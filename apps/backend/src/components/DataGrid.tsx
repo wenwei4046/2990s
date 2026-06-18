@@ -428,6 +428,20 @@ function DataGridInner<T>({
       return out;
     });
   }, []);
+  // Bulk select / invert for the per-column value checkbox list (Commander
+  // 2026-06-18). `vals` is the column's full distinct-value list (filterValues).
+  const selectAllFilterValues = useCallback((colKey: string, vals: string[]) => {
+    setFilters((prev) => (vals.length === 0 ? prev : { ...prev, [colKey]: [...vals] }));
+  }, []);
+  const invertFilterValues = useCallback((colKey: string, vals: string[]) => {
+    setFilters((prev) => {
+      const cur = prev[colKey] ?? [];
+      const next = vals.filter((v) => !cur.includes(v));
+      const out = { ...prev };
+      if (next.length === 0) delete out[colKey]; else out[colKey] = next;
+      return out;
+    });
+  }, []);
   const clearFilter = useCallback((colKey: string) => {
     setFilters((prev) => { const o = { ...prev }; delete o[colKey]; return o; });
     setDateFilters((prev) => { const o = { ...prev }; delete o[colKey]; return o; });
@@ -1198,6 +1212,18 @@ function DataGridInner<T>({
                     </button>
                   );
                 })}
+              </div>
+            )}
+            {filterValues.length > 0 && (
+              <div style={{ display: 'flex', gap: 4, padding: '6px 10px', borderBottom: '1px solid var(--line)' }}>
+                <button type="button" onClick={() => selectAllFilterValues(filterMenu.colKey, filterValues)}
+                  style={{ fontSize: 'var(--fs-11)', fontWeight: 600, padding: '3px 9px', borderRadius: '999px', cursor: 'pointer', border: '1px solid var(--line)', background: 'var(--c-paper)', color: 'var(--c-ink)' }}>
+                  Select all
+                </button>
+                <button type="button" onClick={() => invertFilterValues(filterMenu.colKey, filterValues)}
+                  style={{ fontSize: 'var(--fs-11)', fontWeight: 600, padding: '3px 9px', borderRadius: '999px', cursor: 'pointer', border: '1px solid var(--line)', background: 'var(--c-paper)', color: 'var(--c-ink)' }}>
+                  Select invert
+                </button>
               </div>
             )}
             {filterValues.length === 0 && (

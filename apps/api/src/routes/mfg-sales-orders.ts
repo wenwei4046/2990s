@@ -4053,20 +4053,20 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     }
   }
 
-  /* PR-E — Master-follower cascade. When the header's
-     customer_delivery_date changes, every line that hasn't been
-     manually overridden picks up the new date. Mirrors the SoLineCard
-     variants cascade pattern (PR #141 / #147). Lines with
-     line_delivery_date_overridden=true are left untouched.
-     Best-effort: if the cascade UPDATE fails we still report success
-     for the header — the audit trail (next header refresh) will show
-     the divergence. */
+  /* PR-E — Master-follower cascade. When the header's customer_delivery_date
+     changes, EVERY line picks up the new date and its per-line override flag is
+     cleared (Commander 2026-06-18 #4: the header delivery date is the source of
+     truth for ordering, so MRP — which derives each line's suggested PO/order-by
+     date from line_delivery_date — stays accurate after a header date edit,
+     including lines that were previously edited individually). Previously lines
+     with line_delivery_date_overridden=true were skipped, which left MRP showing
+     a stale order-by date. Best-effort: if the cascade UPDATE fails we still
+     report success for the header; the next refresh shows the divergence. */
   if (body['customerDeliveryDate'] !== undefined) {
     const newDate = body['customerDeliveryDate'] as string | null;
     await sb.from('mfg_sales_order_items')
-      .update({ line_delivery_date: newDate })
-      .eq('doc_no', docNo)
-      .eq('line_delivery_date_overridden', false);
+      .update({ line_delivery_date: newDate, line_delivery_date_overridden: false })
+      .eq('doc_no', docNo);
   }
 
   /* PR-D — Audit log row capturing field-level from→to diff. */

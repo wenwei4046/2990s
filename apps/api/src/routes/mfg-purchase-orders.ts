@@ -1416,6 +1416,27 @@ async function recomputePoTotals(sb: any, poId: string) {
   }).eq('id', poId);
 }
 
+/* Keep header expected_at in sync with the lines: earliest non-null line
+   delivery_date, else null. Mirrors the PO-create rule so a per-line Delivery
+   Date edit shows on the PO list + PDF (both read the header expected_at).
+   Best-effort: never fail the line write on this. (Commander 2026-06-18 #2/#3) */
+async function recomputePoExpectedAt(sb: any, poId: string) {
+  try {
+    const { data: lines } = await sb.from('purchase_order_items')
+      .select('delivery_date')
+      .eq('purchase_order_id', poId);
+    const dates = ((lines ?? []) as Array<{ delivery_date: string | null }>)
+      .map((r) => r.delivery_date)
+      .filter((d): d is string => Boolean(d))
+      .sort();
+    await sb.from('purchase_orders')
+      .update({ expected_at: dates[0] ?? null, updated_at: new Date().toISOString() })
+      .eq('id', poId);
+  } catch (e) {
+    console.error('[recomputePoExpectedAt] best-effort failed', { poId, error: e });
+  }
+}
+
 /* ── Commander 2026-05-30 — self-healing SO "picked" counter ──────────────
    Replaces the old scattered "+qty on create / -qty on delete" arithmetic on
    mfg_sales_order_items.po_qty_picked. For each given SO line, recount how many
@@ -1523,6 +1544,7 @@ mfgPurchaseOrders.post('/:id/items', async (c) => {
   const { data, error } = await sb.from('purchase_order_items').insert(row).select('*').single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputePoTotals(sb, poId);
+  await recomputePoExpectedAt(sb, poId);
   return c.json({ item: data }, 201);
 });
 
@@ -1575,6 +1597,7 @@ mfgPurchaseOrders.patch('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('purchase_order_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   await recomputePoTotals(sb, poId);
+  await recomputePoExpectedAt(sb, poId);
   /* Recount po_qty_picked on the source SO line. If this edit reduced qty, the
      SO line releases that quota back to the From-SO picker (qty - picked > 0
      again); if it raised qty, picked rises. Self-healing — see recomputeSoPicked.
@@ -1605,6 +1628,7 @@ mfgPurchaseOrders.delete('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('purchase_order_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputePoTotals(sb, poId);
+  await recomputePoExpectedAt(sb, poId);
 
   /* Recount po_qty_picked from the live PO lines so this SO line reappears in
      the From-SO picker (qty - picked > 0 again). The deleted line is already

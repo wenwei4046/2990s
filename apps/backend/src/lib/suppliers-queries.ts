@@ -774,6 +774,8 @@ export function useAddPurchaseOrderItem() {
       }),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.poId] });
+      /* #2/#3 — adding a line can change the header expected_at; refresh list. */
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
     },
   });
 }
@@ -787,6 +789,9 @@ export function useUpdatePurchaseOrderItem() {
       }),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.poId] });
+      /* #2/#3 — a per-line delivery-date edit now recomputes the header
+         expected_at server-side, so refresh the list (it reads expected_at). */
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
     },
   });
 }
