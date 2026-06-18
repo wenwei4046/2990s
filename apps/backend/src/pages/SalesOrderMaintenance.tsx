@@ -251,7 +251,7 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
       country:   (lockedCountry || newCountry).trim() || 'Malaysia',
     };
     if (!payload.state || !payload.stateCode || !payload.city || !payload.postcode) {
-      window.alert('State, State Code, City and Postcode are all required.');
+      toast.error('State, State Code, City and Postcode are all required.');
       return;
     }
     createLoc.mutate(payload, {
@@ -259,7 +259,7 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
         setNewState(''); setNewStateCode(''); setNewCity(''); setNewPostcode('');
         if (!lockedCountry) setNewCountry('Malaysia');
       },
-      onError: (err) => window.alert(String((err as Error).message ?? err)),
+      onError: (err) => toast.error(String((err as Error).message ?? err)),
     });
   };
 
@@ -277,7 +277,7 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
         }),
       ));
     } catch (err) {
-      window.alert(`Save failed partway: ${String((err as Error).message ?? err)}`);
+      toast.error(`Save failed partway: ${String((err as Error).message ?? err)}`);
     }
   };
 
@@ -301,7 +301,7 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
         updateLoc.mutateAsync({ id: r.id!, country: trimmed }),
       ));
     } catch (err) {
-      window.alert(`Move failed partway: ${String((err as Error).message ?? err)}`);
+      toast.error(`Move failed partway: ${String((err as Error).message ?? err)}`);
     }
   };
 
@@ -431,7 +431,7 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
               disabled={createLoc.isPending}
               onClick={async () => {
                 const country = newCountry.trim();
-                if (!country) { window.alert('Country name is required.'); return; }
+                if (!country) { toast.error('Country name is required.'); return; }
                 try {
                   await createLoc.mutateAsync({
                     state: '—', stateCode: '—', city: '—', postcode: '—',
@@ -632,7 +632,7 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
                 const stateCode = newStateCode.trim().toUpperCase();
                 const whId = newCountry.trim();  // repurposed; '' = no default
                 if (!state || !stateCode) {
-                  window.alert('State name and code are required.');
+                  toast.error('State name and code are required.');
                   return;
                 }
                 try {
@@ -940,6 +940,7 @@ const DropdownCategoryCard = ({
   canEdit:  boolean;
 }) => {
   const [expanded, setExpanded] = useState(true);
+  const toast = useToast();
 
   const createOpt = useCreateSoDropdownOption();
   const updateOpt = useUpdateSoDropdownOption();
@@ -968,21 +969,21 @@ const DropdownCategoryCard = ({
       onSuccess: () => {
         setEdits((e) => { const next = { ...e }; delete next[row.id]; return next; });
       },
-      onError: (err) => window.alert(`Update failed: ${(err as Error).message ?? err}`),
+      onError: (err) => toast.error(`Update failed: ${(err as Error).message ?? err}`),
     });
   };
 
   const toggleActive = (row: SoDropdownOption) => {
     updateOpt.mutate(
       { id: row.id, active: !row.active },
-      { onError: (err) => window.alert(`Update failed: ${(err as Error).message ?? err}`) },
+      { onError: (err) => toast.error(`Update failed: ${(err as Error).message ?? err}`) },
     );
   };
 
   const removeRow = (row: SoDropdownOption) => {
     if (!confirm(`Delete "${row.label}" from ${title}? Historical SOs that reference "${row.value}" stay valid; this just removes the option from new dropdowns.`)) return;
     deleteOpt.mutate(row.id, {
-      onError: (err) => window.alert(`Delete failed: ${(err as Error).message ?? err}`),
+      onError: (err) => toast.error(`Delete failed: ${(err as Error).message ?? err}`),
     });
   };
 
@@ -990,7 +991,7 @@ const DropdownCategoryCard = ({
     const value = newValue.trim();
     const label = newLabel.trim();
     if (!value || !label) {
-      window.alert('Both Value and Label are required.');
+      toast.error('Both Value and Label are required.');
       return;
     }
     /* Auto-append: new row gets sort_order = max(existing) + 1 so it
@@ -1002,7 +1003,7 @@ const DropdownCategoryCard = ({
       { category, value, label, sortOrder },
       {
         onSuccess: () => { setNewValue(''); setNewLabel(''); },
-        onError:   (err) => window.alert(`Add failed: ${(err as Error).message ?? err}`),
+        onError:   (err) => toast.error(`Add failed: ${(err as Error).message ?? err}`),
       },
     );
   };

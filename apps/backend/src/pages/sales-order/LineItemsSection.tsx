@@ -26,6 +26,7 @@ import {
   useUpdateSoItemStockStatus,
 } from '../../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../../components/SoLineCard';
+import { useToast } from '../../components/Toast';
 import { VariantsPills } from './VariantsPills';
 import type { SoHeader, SoItem } from './types';
 import { fmtRm, ICON, SM_ICON } from './types';
@@ -45,6 +46,7 @@ type Props = {
 };
 
 const LineItemsSectionInner = ({ header, items, isEditing, isLocked }: Props) => {
+  const toast = useToast();
   const addItem = useAddMfgSalesOrderItem();
   const updateItem = useUpdateMfgSalesOrderItem();
   const deleteItem = useDeleteMfgSalesOrderItem();
@@ -121,7 +123,7 @@ const LineItemsSectionInner = ({ header, items, isEditing, isLocked }: Props) =>
   const submitEditingDraft = (id: string) => {
     const d = editingDrafts[id];
     if (!d) return;
-    if (!d.itemCode.trim()) { window.alert('Pick a product first.'); return; }
+    if (!d.itemCode.trim()) { toast.error('Pick a product first.'); return; }
     updateItem.mutate(
       {
         docNo: header.doc_no,
@@ -161,7 +163,7 @@ const LineItemsSectionInner = ({ header, items, isEditing, isLocked }: Props) =>
 
   const submitAddLine = () => {
     if (!addingDraft) return;
-    if (!addingDraft.itemCode.trim()) { window.alert('Pick a product first.'); return; }
+    if (!addingDraft.itemCode.trim()) { toast.error('Pick a product first.'); return; }
     addItem.mutate(
       {
         docNo: header.doc_no,

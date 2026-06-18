@@ -27,6 +27,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { useToast } from '../components/Toast';
 import {
   useCreateMfgSalesOrder, useDebtorSearch, useAddSalesOrderPayment,
   useUploadSoItemPhoto, useMfgSalesOrderDetail,
@@ -77,6 +78,7 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 
 export const SalesOrderNew = () => {
   const navigate = useNavigate();
+  const toast = useToast();
   /* Copy-to-new-SO: ?copyFrom=<docNo> seeds this form from an existing SO
      (customer + line items only — dates, payments, customer SO ref, doc no
      and status are intentionally left blank so the operator starts fresh). */
@@ -629,15 +631,15 @@ export const SalesOrderNew = () => {
 
   const onSave = () => {
     if (!debtorName.trim()) {
-      window.alert('Customer name is required.');
+      toast.error('Customer name is required.');
       return;
     }
     if (!phone.trim()) {
-      window.alert('Phone number is required — every sales order must have a contact number.');
+      toast.error('Phone number is required — every sales order must have a contact number.');
       return;
     }
     if (datesXor) {
-      window.alert(
+      toast.error(
         'Processing Date and Delivery Date must be set together.\n\n' +
         'Either fill in BOTH dates, or leave BOTH empty — partial dates ' +
         'cause scheduling issues.',
@@ -646,22 +648,22 @@ export const SalesOrderNew = () => {
     }
     // Commander 2026-05-28 — Processing/Delivery date must be today or future.
     if (processingDate && processingDate < today) {
-      window.alert('Processing Date cannot be in the past — pick today or a future date.');
+      toast.error('Processing Date cannot be in the past — pick today or a future date.');
       return;
     }
     if (deliveryDate && deliveryDate < today) {
-      window.alert('Delivery Date cannot be in the past — pick today or a future date.');
+      toast.error('Delivery Date cannot be in the past — pick today or a future date.');
       return;
     }
     // Owner 2026-06-03 — Process Date is the factory start; it cannot fall after
     // the Delivery Date.
     if (processingDate && deliveryDate && processingDate > deliveryDate) {
-      window.alert('Processing Date cannot be later than the Delivery Date.');
+      toast.error('Processing Date cannot be later than the Delivery Date.');
       return;
     }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
-      window.alert('Add at least one item via "+ Add Line Item".');
+      toast.error('Add at least one item via "+ Add Line Item".');
       return;
     }
     // Variants are only mandatory once a processing date is set: with a date,
@@ -672,7 +674,7 @@ export const SalesOrderNew = () => {
         .map((l) => ({ code: l.itemCode, miss: missingRequiredVariants(l.itemGroup, l.variants) }))
         .filter((x) => x.miss.length > 0);
       if (variantGaps.length > 0) {
-        window.alert(
+        toast.error(
           'Complete all variant selections before saving:\n\n'
           + variantGaps.map((x) => `• ${x.code}: ${x.miss.join(', ')}`).join('\n'),
         );
@@ -686,7 +688,7 @@ export const SalesOrderNew = () => {
        the save and tells commander which rows to fix. */
     const slipless = paymentDrafts.filter((d) => d.amountCenti > 0 && !d.slipUploadSessionId);
     if (slipless.length > 0) {
-      window.alert(
+      toast.error(
         `Each payment needs a slip uploaded before saving.\n\n` +
         `${slipless.length} payment row${slipless.length === 1 ? '' : 's'} ` +
         `${slipless.length === 1 ? 'is' : 'are'} missing a slip — upload ` +
@@ -761,14 +763,14 @@ export const SalesOrderNew = () => {
           const { failed: photoFailed, skipped: photoSkipped } =
             await flushPendingPhotos(res.docNo, validLines);
           if (failed > 0) {
-            window.alert(
+            toast.error(
               `Sales order ${res.docNo} was created, but ${failed} ` +
               `payment row${failed === 1 ? '' : 's'} failed to save. ` +
               `Please re-enter ${failed === 1 ? 'it' : 'them'} on the Detail page.`,
             );
           }
           if (photoFailed > 0 || photoSkipped > 0) {
-            window.alert(
+            toast.error(
               `Sales order ${res.docNo} was created, but ${photoFailed + photoSkipped} ` +
               `staged photo${(photoFailed + photoSkipped) === 1 ? '' : 's'} could not be ` +
               `uploaded. Please re-attach on the Detail page.`,
@@ -776,7 +778,7 @@ export const SalesOrderNew = () => {
           }
           navigate(`/mfg-sales-orders/${res.docNo}`);
         },
-        onError:   (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError:   (err) => toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
       },
     );
   };

@@ -29,6 +29,7 @@ import { fmtDateOrDash } from '@2990s/shared';
 import { useMfgProducts, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useCreateMfgSalesOrder } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useToast } from '../components/Toast';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -178,6 +179,7 @@ const specToBody = (s: SoSpec) => ({
 /* ── page ───────────────────────────────────────────────────────────────── */
 export const SoFromProducts = () => {
   const navigate = useNavigate();
+  const toast = useToast();
   const prodQ = useMfgProducts({});
   const createSo = useCreateMfgSalesOrder();
 
@@ -230,15 +232,15 @@ export const SoFromProducts = () => {
   // Manual: each ticked product → its own one-line SO (always composition-valid).
   const pickedManual = Object.entries(picks).filter(([, v]) => v.picked && v.qty > 0);
   const runManual = () => {
-    if (!manualCustomer.trim()) { window.alert('Enter a customer name first.'); return; }
-    if (Boolean(manualProc) !== Boolean(manualDeliv)) { window.alert('Processing Date and Delivery Date must be set together (or both empty).'); return; }
+    if (!manualCustomer.trim()) { toast.error('Enter a customer name first.'); return; }
+    if (Boolean(manualProc) !== Boolean(manualDeliv)) { toast.error('Processing Date and Delivery Date must be set together (or both empty).'); return; }
     // Loo 2026-06-11 — mirror the SO API's date gates (no past dates; factory
     // start never after delivery) so a bad manual pick fails HERE, not as a
     // per-SO 400 row in the batch result. The input `min` attr alone is
     // bypassable (typed dates / a page left open across midnight).
-    if (manualProc && manualProc < todayMY()) { window.alert('Processing Date cannot be in the past — pick today or a future date.'); return; }
-    if (manualDeliv && manualDeliv < todayMY()) { window.alert('Delivery Date cannot be in the past — pick today or a future date.'); return; }
-    if (manualProc && manualDeliv && manualProc > manualDeliv) { window.alert('Processing Date cannot be later than the Delivery Date.'); return; }
+    if (manualProc && manualProc < todayMY()) { toast.error('Processing Date cannot be in the past — pick today or a future date.'); return; }
+    if (manualDeliv && manualDeliv < todayMY()) { toast.error('Delivery Date cannot be in the past — pick today or a future date.'); return; }
+    if (manualProc && manualDeliv && manualProc > manualDeliv) { toast.error('Processing Date cannot be later than the Delivery Date.'); return; }
     const specs: SoSpec[] = pickedManual.map(([code, v]) => {
       const p = products.find((x) => x.code === code)!;
       const group = (p.category.toLowerCase() as GenLine['itemGroup']);
