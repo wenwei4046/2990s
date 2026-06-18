@@ -12,6 +12,8 @@ import {
   fabricTierAddon,
   validateFreeGiftClaims, buildFreeGiftTriggers,
   type FreeGiftLineClaim, type TriggerLine,
+  campaignsCoveringLine,
+  isFreeItemLine,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
 /* POS auto-Proceed (Loo 2026-06-09) — when a handover arrives already complete
@@ -69,6 +71,7 @@ import {
   loadModelDefaultGifts,
   loadModelSofaModulePrices,
   loadModelSofaModuleCostRows,
+  loadActiveFreeItemCampaigns,
   type MfgItemForRecompute,
   type RecomputedLine,
   type SofaModuleCostRowLite,
@@ -88,6 +91,7 @@ import { findIncompleteVariantLines } from '../lib/so-variant-check';
    placed-SO edit reconciler, so create and reconcile can never compute a
    different gift set. */
 import { reconcileFreeGiftLinesForSo } from '../lib/free-gift-reconcile';
+import { claimPwpForSingleLine, rollbackSinglePwpClaim } from '../lib/pwp-claim-single';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { pickCrossCategoryMatch, type AutoMatchCandidate } from '../lib/cross-category-match';
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
@@ -240,6 +244,21 @@ async function selfScopedSalesBlocked(sb: any, userId: string, docNo: string): P
   if (!isSelfScopedSales((caller as { role?: string } | null)?.role)) return false;
   const { data: so } = await sb.from('mfg_sales_orders').select('salesperson_id').eq('doc_no', docNo).maybeSingle();
   return !so || (so as { salesperson_id?: string | null }).salesperson_id !== userId;
+}
+
+/* Anti-tamper (Task 6) — Strip variants.freeItem from a client-supplied
+   variants blob. The freeItem marker is ONLY ever stamped by the validated
+   POST /mfg-sales-orders create path (campaign check + cap). Any SO-EDIT
+   endpoint that writes client variants must call this before persisting so
+   a crafted request cannot inject an unvalidated marker that the grandfather
+   guard (isFreeItemLine) would later honour to force a line to RM 0. */
+function stripFreeItem(v: unknown): unknown {
+  if (v && typeof v === 'object' && !Array.isArray(v) && 'freeItem' in v) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { freeItem: _fi, ..._rest } = v as Record<string, unknown>;
+    return _rest;
+  }
+  return v;
 }
 
 /* POS line quantity (Loo 2026-06-12) — line qty is a money input the
@@ -1830,6 +1849,8 @@ mfgSalesOrders.post('/', async (c) => {
      parameter. Honest-pricing (CLAUDE.md): a gift with no trigger reprices to the
      accessory's real sell_price_sen → a tampered "free" client price drifts. */
   const freeGiftBaseByIdx = new Map<number, number>();       // gift line idx → granted base (always 0)
+  // Free Item Campaign (migration 0176) — idx → resolved {campaignId, campaignName}.
+  const freeItemByIdx = new Map<number, { campaignId: string; campaignName: string }>();
   const claimedPwpCodes: Array<{ code: string; prevStatus: string }> = [];
   /* Loo 2026-06-05 (VALOR / PW-Test-voucher incident) — a line that CARRIES a
      pwpCode but fails the grant used to be silently repriced at full price,
@@ -2087,6 +2108,56 @@ mfgSalesOrders.post('/', async (c) => {
     }
   }
 
+  /* Free Item Campaign (migration 0176) — a line tagged variants.freeItem
+     { campaignId } is forced to RM0 ONLY when an ACTIVE campaign covers the
+     line's Model (sofa 'combo' scope: the build must match the pinned combo) AND
+     the line qty <= the campaign's per-line cap. Eligibility uses the SAME shared
+     campaignsCoveringLine the POS button uses (no drift). Ineligible → 409
+     free_item_not_eligible (after rollbackPwpClaims). The forced-zero + drift skip
+     live in the persist pass below; here we only validate + resolve the name. */
+  {
+    const activeCampaigns = await loadActiveFreeItemCampaigns(sb);
+    const comboModulesById = new Map<string, string[][]>(
+      cachedCombos.map((cb) => [cb.id, cb.modules]),
+    );
+    const rejections: Array<{ idx: number; reason: string }> = [];
+    for (let idx = 0; idx < items.length; idx++) {
+      const it = items[idx];
+      const variants = (it?.variants as Record<string, unknown> | null) ?? null;
+      const fi = variants?.freeItem;
+      if (!fi || typeof fi !== 'object') continue;
+      const campaignId = String((fi as Record<string, unknown>).campaignId ?? '');
+      if (!campaignId) { rejections.push({ idx, reason: 'no_campaign' }); continue; }
+      const product = lineProducts[idx] ?? null;
+      const cells = (variants?.cells as Array<{ moduleId?: unknown }> | undefined) ?? [];
+      const built = Array.isArray(cells)
+        ? cells.map((cl) => String(cl?.moduleId ?? '')).filter(Boolean)
+        : [];
+      const covering = campaignsCoveringLine(
+        { category: String(product?.category ?? ''), modelId: product?.model_id ?? null, builtModuleIds: built },
+        activeCampaigns,
+        comboModulesById,
+      );
+      const chosen = covering.find((c) => c.id === campaignId);
+      if (!chosen) { rejections.push({ idx, reason: 'not_eligible' }); continue; }
+      if (Number(it?.qty ?? 1) > chosen.maxFreeQty) { rejections.push({ idx, reason: 'over_cap' }); continue; }
+      // Stamp the resolved name onto the persisted variants (D8) + mark forced-zero.
+      if (!it) continue; // narrowing guard — items[idx] is always set at this point
+      const v = (it.variants as Record<string, unknown> | null) ?? {};
+      v.freeItem = { campaignId: chosen.id, campaignName: chosen.name };
+      (it as { variants?: unknown }).variants = v;
+      freeItemByIdx.set(idx, { campaignId: chosen.id, campaignName: chosen.name });
+    }
+    if (rejections.length > 0) {
+      await rollbackPwpClaims();
+      return c.json({
+        error: 'free_item_not_eligible',
+        reason: rejections.map((r) => `line ${r.idx + 1}: ${r.reason}`).join('; '),
+        offendersFreeItem: rejections,
+      }, 409);
+    }
+  }
+
   /* P3 — keep each sofa item's module price map so the split below distributes
      the build total with the SAME weights the drift gate priced from. */
   const sofaModulePricesByIdx = new Map<number, Record<string, number> | null>();
@@ -2191,7 +2262,7 @@ mfgSalesOrders.post('/', async (c) => {
   if (posTablet) {
     for (let i = 0; i < recomputes.length; i++) {
       const r = recomputes[i];
-      if (r && r.drift) {
+      if (r && r.drift && !freeItemByIdx.has(i)) {
         await rollbackPwpClaims();  // don't burn a voucher on a rejected order
         return c.json({
           error:    'pricing_drift',
@@ -2215,7 +2286,7 @@ mfgSalesOrders.post('/', async (c) => {
     if (!it) continue;
     const r = recomputes[i];
     const qtyI = Number(it.qty ?? 1);
-    const unitI = r ? r.unit_price_sen : Number(it.unitPriceCenti ?? 0);
+    const unitI = freeItemByIdx.has(i) ? 0 : (r ? r.unit_price_sen : Number(it.unitPriceCenti ?? 0));
     const discI = Number(it.discountCenti ?? 0);
     if (!Number.isFinite(discI) || discI < 0 || discI > qtyI * unitI) {
       await rollbackPwpClaims();  // don't burn a voucher on a rejected order
@@ -2270,7 +2341,12 @@ mfgSalesOrders.post('/', async (c) => {
        persisted — the Backend is costing-only and sends no real selling price,
        so we carry the catalog price out instead of the client's junk value.
        POS-tablet drift is rejected above; Backend drift is accepted silently. */
-    const unit = recomputed ? recomputed.unit_price_sen : Number(it.unitPriceCenti ?? 0);
+    // Free Item Campaign (mig 0176): a validated free-item line is forced to 0
+    // (server-validated above), which zeroes the non-sofa row AND, via
+    // buildUnitPriceSen below, every sofa module row of the build.
+    const unit = freeItemByIdx.has(idx)
+      ? 0
+      : (recomputed ? recomputed.unit_price_sen : Number(it.unitPriceCenti ?? 0));
     const discount = Number(it.discountCenti ?? 0);
     const lineTotal = (qty * unit) - discount;
     // Commander 2026-05-28 — the server-computed cost (base + Σ backend
@@ -4236,7 +4312,7 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   /* PR-E — pull customer_delivery_date alongside debtor/agent/venue so a
      line added later still inherits the SO header's delivery date by
      default. Client can override by sending lineDeliveryDate explicitly. */
-  const { data: header } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name, agent, branding, venue, customer_delivery_date, customer_state, internal_expected_dd, processing_date').eq('doc_no', docNo).maybeSingle();
+  const { data: header } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name, agent, branding, venue, customer_delivery_date, customer_state, internal_expected_dd, processing_date, customer_id').eq('doc_no', docNo).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
   /* Owner 2026-06-12 — processing-date lock: no line ADD once the processing
      day has passed (the locked order is already PO'd to the supplier). */
@@ -4291,6 +4367,100 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
         loadModelSofaModuleCostRows(sb, productLite.base_model),
       ])
     : [null, null];
+  /* Free Item Campaign (add-line path, Task 4) — body field `freeItemCampaignId`
+     opts a single added line into server-validated forced-RM0. Mutually exclusive
+     with PWP (both cannot apply to the same line). Check mutual exclusion BEFORE
+     the PWP claim so we never burn a code and then reject. */
+  const addLineFreeItemCampaignId = String((it.freeItemCampaignId as string | null | undefined) ?? '').trim();
+  const addLinePwpCodeEarly = String((variantsObj as { pwpCode?: string | null } | null)?.pwpCode ?? '').trim();
+  if (addLineFreeItemCampaignId && addLinePwpCodeEarly) {
+    return c.json({ error: 'free_and_pwp_exclusive', reason: 'A line cannot be both a free-item and a PWP reward.' }, 400);
+  }
+  // Resolved after validation below — { campaignId, campaignName } or null.
+  let addLineFreeItem: { campaignId: string; campaignName: string } | null = null;
+
+  /* PWP claim (add-line path) — mirrors the create-path loop for ONE code.
+     If the client sends variants.pwpCode we attempt to claim the voucher now,
+     BEFORE recompute so the PWP base feeds the drift gate correctly.
+     On rejection we return 409 (same shape as create). On success we carry
+     `addLinePwpClaimed` for rollback on a subsequent insert failure. */
+  let addLinePwpBaseSen: number | null = null;
+  let addLinePwpSofaComboIds: string[] | null = null;
+  let addLinePwpClaimed: { code: string; prevStatus: string } | null = null;
+  const addLinePwpCode = String((variantsObj as { pwpCode?: string | null } | null)?.pwpCode ?? '').trim();
+  if (addLinePwpCode) {
+    /* PWP reward qty lock (Loo 2026-06-12) — a reward line must be exactly 1
+       unit; the claim helper enforces this too, but a fast 422 mirrors the
+       create-path pattern so the error shape is consistent. */
+    if (qty !== 1) {
+      return c.json({
+        error: 'invalid_qty',
+        reason: 'A PWP reward line must have quantity 1.',
+        itemCode: itemCodeStr,
+        qty,
+      }, 422);
+    }
+    const pwpClaimResult = await claimPwpForSingleLine(sb, {
+      code: addLinePwpCode,
+      docNo,
+      itemCode: productLite?.code ?? itemCodeStr,  // resolved catalog SKU — matches create audit
+      product: {
+        category:      productLite?.category ?? '',
+        model_id:      productLite?.model_id ?? null,
+        base_model:    productLite?.base_model ?? null,
+        pwp_price_sen: productLite?.pwp_price_sen ?? null,
+      },
+      customerId:    (header.customer_id as string | null) ?? null,
+      ownerStaffId:  user.id,
+      qty,
+      variants:      variantsObj as Record<string, unknown> | null,
+    });
+    if (pwpClaimResult.rejection) {
+      return c.json({
+        error:  'pwp_code_rejected',
+        code:   pwpClaimResult.rejection.code,
+        reason: pwpClaimResult.rejection.reason,
+      }, 409);
+    }
+    addLinePwpBaseSen      = pwpClaimResult.pwpBaseSen;
+    addLinePwpSofaComboIds = pwpClaimResult.pwpSofaComboIds;
+    addLinePwpClaimed      = pwpClaimResult.claimed;
+  }
+
+  /* Free Item Campaign validation (Task 4) — if freeItemCampaignId was supplied,
+     verify it against active campaigns + the line's model/category/build before
+     persisting anything. Mirrors the create-path block (~2111-2159). */
+  if (addLineFreeItemCampaignId) {
+    const addLineActiveCampaigns = await loadActiveFreeItemCampaigns(sb);
+    const addLineComboModulesById = new Map<string, string[][]>(
+      sofaCombosLite.map((cb) => [cb.id, cb.modules]),
+    );
+    const addLineCells = (variantsObj as { cells?: Array<{ moduleId?: unknown }> } | null)?.cells ?? [];
+    const addLineBuiltModuleIds = Array.isArray(addLineCells)
+      ? addLineCells.map((cl) => String(cl?.moduleId ?? '')).filter(Boolean)
+      : [];
+    const addLineCovering = campaignsCoveringLine(
+      {
+        category:       String(productLite?.category ?? ''),
+        modelId:        productLite?.model_id ?? null,
+        builtModuleIds: addLineBuiltModuleIds,
+      },
+      addLineActiveCampaigns,
+      addLineComboModulesById,
+    );
+    const addLineChosen = addLineCovering.find((camp) => camp.id === addLineFreeItemCampaignId);
+    if (!addLineChosen) {
+      if (addLinePwpClaimed) await rollbackSinglePwpClaim(sb, addLinePwpClaimed);
+      return c.json({ error: 'free_item_not_eligible', reason: 'not_eligible' }, 409);
+    }
+    if (qty > addLineChosen.maxFreeQty) {
+      if (addLinePwpClaimed) await rollbackSinglePwpClaim(sb, addLinePwpClaimed);
+      return c.json({ error: 'free_item_not_eligible', reason: 'over_cap' }, 409);
+    }
+    // Resolved: stamp the server-resolved name so the UI never depends on a client string.
+    addLineFreeItem = { campaignId: addLineChosen.id, campaignName: addLineChosen.name };
+  }
+
   const recomputed = recomputeFromSnapshot(
     {
       itemCode:       itemCodeStr,
@@ -4306,17 +4476,22 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     sofaModulePricesLite,
     sellingTiersLite,
     fabricAddonConfigLite,
-    null,                // pwpBaseSen (resolved elsewhere for this single-item path)
-    null,                // pwpSofaComboIds
+    addLinePwpBaseSen,       // pwpBaseSen — claimed above, or null for non-PWP lines
+    addLinePwpSofaComboIds,  // pwpSofaComboIds — claimed above, or null
     specialAddonsLite,
     sofaModuleCostRowsLite,
-    modelOverridesLite,  // migration 0172 — per-Model Δ
+    modelOverridesLite,      // migration 0172 — per-Model Δ
   );
   /* Pricing trust boundary (Owner 2026-05-31, see isPosTabletCaller). POS tablet
      roles are drift-rejected + take the server price; Backend / office authors
-     set the selling price freely. */
+     set the selling price freely.
+     Free Item Campaign (Task 4) — drift check is SKIPPED for a validated free
+     line (unit will be forced to 0 below; client always submits 0, so there is
+     no meaningful drift to gate on — and the cap check already enforced qty). */
   const posTablet = await isPosTabletCaller(sb, user.id);
-  if (posTablet && recomputed.drift) {
+  if (posTablet && recomputed.drift && !addLineFreeItem) {
+    /* Rollback any PWP claim before rejecting — must not burn a code on drift. */
+    if (addLinePwpClaimed) await rollbackSinglePwpClaim(sb, addLinePwpClaimed);
     return c.json({
       error:    'pricing_drift',
       reason:   'Client unitPriceCenti differs >0.5% from server compute.',
@@ -4327,11 +4502,14 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     }, 400);
   }
   /* Carry the bound price-list figure out (costing-only Backend sends no real
-     selling price). POS drift rejects above; Backend drift saves silently. */
-  const unit = recomputed.unit_price_sen;
+     selling price). POS drift rejects above; Backend drift saves silently.
+     Free Item Campaign (Task 4) — forced to 0 when validated above. */
+  const unit = addLineFreeItem ? 0 : recomputed.unit_price_sen;
   /* Audit 2026-06-11 C-2 — same discount gate as POST /: client-authored
      discount must sit in [0, qty × unit] (422, reject-don't-normalize). */
   if (!Number.isFinite(discount) || discount < 0 || discount > qty * unit) {
+    /* Rollback any PWP claim before rejecting — must not burn a code on invalid discount. */
+    if (addLinePwpClaimed) await rollbackSinglePwpClaim(sb, addLinePwpClaimed);
     return c.json({
       error:    'invalid_discount',
       reason:   'discountCenti must be between 0 and qty × unit price.',
@@ -4371,18 +4549,17 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   const nextLineNo = typeof (maxNoRow as { line_no?: number | null } | null)?.line_no === 'number'
     ? (maxNoRow as { line_no: number }).line_no + 1
     : null;
-  const row = {
+  /* Shared base fields — used for both the single-row non-sofa path and as the
+     template for each sofa module row (create-path convention: baseRow). */
+  const baseRow = {
     doc_no: docNo,
     line_date: (it.lineDate as string) ?? new Date().toISOString().slice(0, 10),
-    ...(nextLineNo !== null ? { line_no: nextLineNo } : {}),
     debtor_code: header.debtor_code,
     debtor_name: header.debtor_name,
     agent: header.agent,
     item_group: it.itemGroup ?? 'others',
     item_code: it.itemCode,
     description: (it.description as string) ?? null,
-    /* Commander 2026-05-28 — "Description 2" auto-generated from variants. */
-    description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
     uom: (it.uom as string) ?? 'UNIT',
     qty,
     unit_price_centi: unit,
@@ -4392,7 +4569,15 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     balance_centi: lineTotal,
     venue: header.venue,
     branding: header.branding,
-    variants: (it.variants as unknown) ?? null,
+    /* Anti-tamper (Task 6) — strip any client-supplied freeItem marker from a
+       line added via the SO-edit path. The freeItem marker is ONLY stamped by
+       the server after campaign validation — never trusted from the client.
+       Task 4: if freeItemCampaignId was validated above, re-stamp the server-
+       resolved marker (campaignId + campaignName) after stripping. This is the
+       same pattern as the create path (strip then re-add validated marker). */
+    variants: addLineFreeItem
+      ? { ...(stripFreeItem(it.variants) as Record<string, unknown> | null ?? {}), freeItem: addLineFreeItem }
+      : (stripFreeItem(it.variants) ?? null),
     unit_cost_centi: unitCost,
     line_cost_centi: lineCost,
     line_margin_centi: lineTotal - lineCost,
@@ -4411,8 +4596,129 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
       ? { stock_status: 'READY' }
       : {}),
   };
+
+  /* SO-SKU spec P3 (add-line mirror) — a sofa BUILD added to a placed SO is
+     split into per-compartment module rows, exactly like the create path
+     (~2456-2559). The money is already settled above: `unit` is the
+     authoritative per-build selling price and the drift gate already passed.
+     Splitting only decomposes it — each module gets its price share, residue
+     on the last, Σ totals === build total. Non-splittable lines (no cells /
+     unknown base model) keep the single-row insert below. */
+  const addLineCells = (it.variants as { cells?: unknown } | null)?.cells;
+  if (
+    productLite?.category === 'SOFA' &&
+    Array.isArray(addLineCells) && addLineCells.length > 0 &&
+    productLite.base_model
+  ) {
+    if (!sofaModulePricesLite && productLite.base_model) {
+      // Catalog gap — split degrades to equal-price weights. Surface so ops
+      // can fix the Model's module SKU prices.
+      // eslint-disable-next-line no-console
+      console.warn(`[so-add-line] no module prices for ${productLite.base_model} — sofa split uses equal weights`);
+    }
+    // add-line has no extra-charge path, so always proportional split (no evenSplitPrice).
+    const split = splitSofaBuildIntoModuleLines({
+      baseModel: productLite.base_model,
+      cells: addLineCells,
+      buildUnitPriceSen: unit,
+      buildUnitCostSen: unitCost,
+      modulePrices: sofaModulePricesLite,
+      depth: String((it.variants as { depth?: unknown } | null)?.depth ?? '24'),
+    });
+    if (split && split.length > 0) {
+      const buildKey = `build-add-${nextLineNo ?? crypto.randomUUID().slice(0, 8)}`;
+      const { cells: _cells, freeItem: _clientFreeItem, ...sharedVariants } =
+        ((it.variants as Record<string, unknown> | null) ?? {});
+      const moduleRows = split.map((s, i) => {
+        const moduleVariants: Record<string, unknown> = {
+          ...sharedVariants,
+          buildKey,
+          cellIndex: s.cellIndex,
+          x: s.x,
+          y: s.y,
+          rot: s.rot,
+          /* Task 4 — stamp server-validated freeItem on every module row so the
+             grandfather guard (isFreeItemLine) sees the marker on each piece of
+             the split build, exactly mirroring the create-path behaviour. */
+          ...(addLineFreeItem ? { freeItem: addLineFreeItem } : {}),
+        };
+        const moduleLineTotal = (qty * s.unitPriceSen) - (i === 0 ? discount : 0);
+        const moduleLineCost = qty * s.unitCostSen;
+        return {
+          ...baseRow,
+          /* line_no: first module gets nextLineNo (same as single-row), each
+             subsequent module increments. Pre-0165 docs (nextLineNo === null)
+             stay un-numbered consistent with the rest of the SO. */
+          ...(nextLineNo !== null ? { line_no: nextLineNo + i } : {}),
+          item_code: s.itemCode,
+          description: s.description,
+          description2: buildVariantSummary('sofa', moduleVariants) || null,
+          unit_price_centi: s.unitPriceSen,
+          discount_centi: i === 0 ? discount : 0,
+          total_centi: moduleLineTotal,
+          total_inc_centi: moduleLineTotal,
+          balance_centi: moduleLineTotal,
+          variants: moduleVariants,
+          unit_cost_centi: s.unitCostSen,
+          line_cost_centi: moduleLineCost,
+          line_margin_centi: moduleLineTotal - moduleLineCost,
+          /* Breakdown columns (divan/leg/special) on first row only; custom_specials + remark on every row (display, same as create). */
+          divan_price_sen:         i === 0 ? (recomputed.divan_price_sen ?? 0) : 0,
+          leg_price_sen:           i === 0 ? (recomputed.leg_price_sen ?? 0) : 0,
+          special_order_price_sen: i === 0 ? (recomputed.special_order_sen ?? 0) : 0,
+          custom_specials:         recomputed.custom_specials ?? null,
+          remark: typeof sharedVariants.remark === 'string' && (sharedVariants.remark as string).trim() !== ''
+            ? (sharedVariants.remark as string).trim()
+            : null,
+        };
+      });
+      const { data: moduleData, error: moduleError } = await sb
+        .from('mfg_sales_order_items')
+        .insert(moduleRows)
+        .select('*');
+      if (moduleError) {
+        /* Don't burn a PWP code on a failed insert — mirror create's rollbackPwpClaims. */
+        if (addLinePwpClaimed) await rollbackSinglePwpClaim(sb, addLinePwpClaimed);
+        return c.json({ error: 'insert_failed', reason: moduleError.message }, 500);
+      }
+      const firstRow = (moduleData ?? [])[0] ?? moduleRows[0];
+
+      // Default Free Gift — adding a sofa trigger may grant a gift.
+      await reconcileFreeGiftLinesForSo(sb, docNo);
+
+      await recordSoAudit(sb, {
+        docNo,
+        action: 'ADD_LINE',
+        actorId: user.id,
+        actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+        fieldChanges: [
+          { field: 'itemCode', to: String(firstRow.item_code ?? itemCodeStr) },
+          { field: 'qty', to: qty },
+          { field: 'unitPriceCenti', to: unit },
+          { field: 'totalCenti', to: lineTotal },
+        ],
+      });
+
+      try { await recomputeSoStockAllocation(sb); }
+      catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-line-add failed:', e); }
+
+      return c.json({ item: firstRow }, 201);
+    }
+  }
+
+  /* Non-sofa (or non-splittable sofa) — single-row insert, original path. */
+  const row = {
+    ...baseRow,
+    ...(nextLineNo !== null ? { line_no: nextLineNo } : {}),
+    /* Commander 2026-05-28 — "Description 2" auto-generated from variants. */
+    description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
+  };
   const { data, error } = await sb.from('mfg_sales_order_items').insert(row).select('*').single();
-  if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  if (error) {
+    /* Don't burn a PWP code on a failed insert — mirror create's rollbackPwpClaims. */
+    if (addLinePwpClaimed) await rollbackSinglePwpClaim(sb, addLinePwpClaimed);
+    return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  }
   // Default Free Gift (0170) — adding a trigger line may grant a new accessory
   // gift; reconcile auto-inserts/deletes gift lines, then recomputes totals.
   await reconcileFreeGiftLinesForSo(sb, docNo);
@@ -4580,7 +4886,12 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       sofaModuleCostRowsPatch,
       modelOverridesPatch, // migration 0172 — per-Model Δ
     );
-    if (posTablet && recomputedPatch.drift) {
+    /* Task 6 — grandfathering: a line already carrying variants.freeItem was
+       made free at create time and must STAY at RM 0 on edit recompute, even
+       if the campaign has since been toggled off. Skip the drift check too —
+       the client always sends 0 for a free-item line so there is no drift to
+       gate against. */
+    if (!isFreeItemLine(prev.variants) && posTablet && recomputedPatch.drift) {
       return c.json({
         error:    'pricing_drift',
         reason:   'Client unitPriceCenti differs >0.5% from server compute.',
@@ -4593,8 +4904,11 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   }
   /* Carry the bound price-list figure out when a recompute ran (costing-only
      Backend sends no real selling price). POS drift rejects above; Backend
-     drift saves silently. */
-  const unit = recomputedPatch ? recomputedPatch.unit_price_sen : clientUnit;
+     drift saves silently. Task 6 — a persisted free-item line is grandfathered
+     at RM 0 regardless of what the current recompute produced. */
+  const unit = isFreeItemLine(prev.variants)
+    ? 0
+    : (recomputedPatch ? recomputedPatch.unit_price_sen : clientUnit);
   /* Audit 2026-06-11 C-2 — same discount gate as POST /: the effective
      (patch-else-stored) discount must sit in [0, qty × unit] against the
      effective unit price (422, reject-don't-normalize). */
@@ -4669,12 +4983,26 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   ] as const) {
     if (it[from] !== undefined) updates[to] = it[from];
   }
+  /* Anti-tamper (Task 6) — when the client sends variants, strip any client-supplied
+     freeItem marker, then re-graft the persisted marker (if any) so an already-free
+     line stays free and a normal line cannot be made free via a crafted PATCH.
+     Must run AFTER the loop above so variants is already in updates. */
+  if (it.variants !== undefined) {
+    const clientVariants = stripFreeItem(updates['variants']);
+    const prevFreeItem = (prev.variants as Record<string, unknown> | null | undefined)?.freeItem;
+    updates['variants'] = prevFreeItem !== undefined
+      ? { ...(clientVariants as Record<string, unknown> ?? {}), freeItem: prevFreeItem }
+      : clientVariants ?? null;
+  }
   /* Commander 2026-05-28 — "Description 2" is ALWAYS the server-generated
      variant summary; never trust a client-sent value. Recompute from the
-     effective itemGroup + variants (incoming patch, else the stored row). */
+     effective itemGroup + variants (incoming patch, else the stored row).
+     Use the FINAL persisted variants (updates['variants']) if variants were patched,
+     to ensure description2 matches the stripped-and-re-grafted variants that will
+     actually be persisted, not the raw client input. */
   {
     const effGroup = (it.itemGroup ?? prev.item_group) as string | null | undefined;
-    const effVariants = (it.variants ?? prev.variants) as Record<string, unknown> | null | undefined;
+    const effVariants = (it.variants !== undefined ? updates['variants'] : prev.variants) as Record<string, unknown> | null | undefined;
     updates['description2'] = buildVariantSummary(String(effGroup ?? ''), effVariants ?? null) || null;
   }
 
@@ -4962,8 +5290,14 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-update', async (c) => {
   const sellingDeltaCenti = (after.breakdown.unitPriceSen - before.breakdown.unitPriceSen) + tierDeltaCenti;
   const costDeltaCenti = after.unit_cost_sen - before.unit_cost_sen;
 
+  /* Task 6 — grandfathering: a line carrying variants.freeItem was made free
+     at create time and must STAY at RM 0 regardless of any fabric/option delta.
+     Treat it as a no-price-change TBC edit (the variant picks still land).
+     Also skip the POS floor check — a zero-priced line can never lower the
+     bill further; the check is meaningless and would compare 0 vs 0. */
+  const isFreeItemGrandfathered = isFreeItemLine(prevVariants);
   const posTablet = await isPosTabletCaller(sb, user.id);
-  if (posTablet && sellingDeltaCenti < 0) {
+  if (!isFreeItemGrandfathered && posTablet && sellingDeltaCenti < 0) {
     return c.json({
       error:    'so_total_below_original',
       reason:   'Changes cannot reduce the bill below the original sales order total.',
@@ -4973,7 +5307,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-update', async (c) => {
   }
 
   const qty = Number(prev.qty);
-  const newUnit = Math.max(0, Number(prev.unit_price_centi) + sellingDeltaCenti);
+  const newUnit = isFreeItemGrandfathered ? 0 : Math.max(0, Number(prev.unit_price_centi) + sellingDeltaCenti);
   const newTotal = (qty * newUnit) - Number(prev.discount_centi ?? 0);
   const newUnitCost = Math.max(0, Number(prev.unit_cost_centi ?? 0) + costDeltaCenti);
   const { error: upErr } = await sb.from('mfg_sales_order_items').update({
@@ -5649,8 +5983,10 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
   }
   const newVariants: Record<string, unknown> = { ...((item.variants ?? {}) as Record<string, unknown>) };
   /* A swap build is a normal sale — strip any PWP markers the configurator
-     PWP machinery could have left on the snapshot. */
+     PWP machinery could have left on the snapshot. Also strip freeItem: a
+     sofa swap cannot inject a free-item marker (anti-tamper, Task 6). */
   delete newVariants.pwp; delete newVariants.pwpCode; delete newVariants.pwpTriggerLabel;
+  delete newVariants.freeItem;
   const newCells = newVariants.cells;
   if (!Array.isArray(newCells) || newCells.length === 0) {
     return c.json({ error: 'sofa_swap_requires_build', reason: 'Configure the sofa (its modules) before confirming the exchange.' }, 400);

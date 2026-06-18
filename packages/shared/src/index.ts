@@ -20,4 +20,5 @@ export * from './so-sofa-split'; // 2026-06-05 — sofa build → per-module lin
 export * from './one-shot-sku'; // 2026-06-08 — one-shot SKU code/name helpers (remark → auto-SKU)
 export * from './maintenance-pools'; // 2026-06-12 — maintenance option ACTIVE toggles (picker-level filter)
 export * from './free-gift'; // 2026-06-14 — default free gift pure module (parse/desired/validate)
+export * from './free-item-campaign'; // 2026-06-17 — free item campaign matcher (campaignsCoveringLine)
 export * from './hr-commission'; // 2026-06-14 — HR commission math + KPI line matcher

@@ -33,6 +33,7 @@ import {
   useUpsertModelDefaultGifts,
   useDeleteModelDefaultGifts,
 } from '../../lib/queries';
+import { FreeItemCampaignSection } from './FreeItemCampaignSection';
 
 type Mode = 'view' | 'add-only' | 'full';
 // SOFA is matched by Combo (Phase 2); Mattress/Bedframe by Model.
@@ -618,6 +619,7 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
       </div>
 
       <FreeGiftSection canEdit={canEdit} gwpOpen={gwpOpen} onCloseGwp={() => setGwpOpen(false)} />
+      <FreeItemCampaignSection canEdit={canEdit} />
 
       {rules.length === 0 ? (
         <div style={{ padding: 'var(--space-7)', textAlign: 'center', color: 'var(--fg-muted)', border: '1px dashed var(--line-strong)', borderRadius: 'var(--radius-md)' }}>

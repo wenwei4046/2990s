@@ -1,8 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, Hourglass, X, Plus, Minus, Package, Trash2, FlipHorizontal2 } from 'lucide-react';
+import { ArrowLeft, Hourglass, X, Plus, Minus, Package, Trash2, FlipHorizontal2, Gift } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, matchComboSubset, comboChargedPrices, orderSofaCellsLeftToRight, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, matchComboSubset, comboChargedPrices, orderSofaCellsLeftToRight, campaignsCoveringLine, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
 import { resolvePwp, type PwpLineInput } from '@2990s/shared/pwp';
 import { usePwpRules, useMyReservedPwpCodes, validatePwpCode } from '../lib/products/pwp-queries';
 import {
@@ -30,9 +30,11 @@ import {
   useSofaQuickPicks,
   useSofaQuickPicksRealtime,
   useDeleteSofaQuickPick,
+  useActiveFreeItemCampaigns,
   type AddonRow,
   type ProductFabricRow,
   type BedframeOptionRow,
+  type FreeItemCampaignRow,
 } from '../lib/queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useMyQuickPicks, useDeletePersonalQuickPick } from '../lib/personal-quick-picks';
@@ -47,6 +49,14 @@ import {
 /* TBC sofa exchange (Loo 2026-06-12) — "Confirm Change" marshals the build
    exactly like the handover does and replaces the SO build server-side. */
 import { fetchItemCodeMap, cartLinesToSoItems } from '../lib/pos-handover-so';
+import {
+  useSoHeaderForAdd,
+  useAddProductToPlacedSo,
+  useRedeemablePwpCodesForOrder,
+  AddSoItemApiError,
+  type AddSoItemBody,
+  type RedeemablePwpCode,
+} from '../lib/queries';
 import { supabase } from '../lib/supabase';
 import { CustomBuilder, centerCellsInRoom } from './CustomBuilder';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
@@ -292,9 +302,10 @@ export const Configurator = () => {
   const backToCatalog = () => {
     const idx = (window.history.state?.idx ?? 0) as number;
     if (idx > 0) navigate(-1);
-    // Sofa exchange enters from My orders — a cold load (refresh) should
-    // fall back THERE, not to the catalogue.
+    // Sofa exchange or add-to-order enters from My orders — a cold load
+    // (refresh) should fall back THERE, not to the catalogue.
     else if (new URLSearchParams(window.location.search).get('swapDoc')) navigate('/my-orders');
+    else if (new URLSearchParams(window.location.search).get('addToOrder')) navigate('/my-orders');
     else navigate('/catalog');
   };
   const product = useProduct(productId);
@@ -496,6 +507,99 @@ export const Configurator = () => {
     swapSeededRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSwapMode]);
+  /* ── Add-product-to-placed-SO mode (Task 6, free-item-campaign) ────────
+     Entered from My orders "Add product" — ?addToOrder=SO-XXXX carries the
+     target SO. The primary button becomes "Add to this order"; the build is
+     marshalled exactly like the handover path (fetchItemCodeMap + cartLinesToSoItems)
+     and POSTed to POST /:docNo/items. Honest pricing: the server recompute
+     is authoritative — a drift 400 surfaces the server's figure so the
+     salesperson can re-submit at the correct price. */
+  const addToOrderDoc = searchParams.get('addToOrder');
+  const isAddToOrderMode = !!addToOrderDoc;
+  const soHeaderQ = useSoHeaderForAdd(addToOrderDoc ?? undefined);
+  const soHeader = soHeaderQ.data;
+  const addToOrderMutation = useAddProductToPlacedSo();
+  const [addToOrderPending, setAddToOrderPending] = useState(false);
+  const [addToOrderError, setAddToOrderError] = useState<string | null>(null);
+
+  /* ── PWP auto-fill for addToOrder mode (Task 7) ────────────────────────
+     When adding a product to a placed SO, query the order's redeemable codes
+     (minted by the SO's own trigger lines, e.g. its mattress minted a code
+     that this bed-frame reward should redeem). If the currently-configured
+     product matches one of those codes, auto-apply it — same state paths the
+     manual "Insert PWP Code" flow uses, so the display + submit are identical.
+     Disabled outside addToOrder mode (hook is conditional on docNo). */
+  const orderRedeemableCodesQ = useRedeemablePwpCodesForOrder(
+    isAddToOrderMode ? (addToOrderDoc ?? undefined) : undefined,
+  );
+  /* Flag: a PWP code has been auto-applied from the order's redeemable codes.
+     Task 8 reads this to hide the free-item affordance (mutual exclusion). */
+  const [orderPwpAutoApplied, setOrderPwpAutoApplied] = useState(false);
+
+  /** Marshal and POST a configured snapshot to POST /:docNo/items. Works
+   *  for any product kind — the same CartLine + fetchItemCodeMap path the
+   *  handover uses, scoped to a single item. */
+  const confirmAddToOrder = async (
+    snapshot: SofaConfigSnapshot | SizeConfigSnapshot | BedframeConfigSnapshot | FlatConfigSnapshot,
+    qty = 1,
+  ) => {
+    if (!addToOrderDoc || addToOrderPending || !soHeader?.addEligible) return;
+    setAddToOrderError(null);
+    setAddToOrderPending(true);
+    try {
+      // Wrap the snapshot as a temporary CartLine so fetchItemCodeMap can
+      // resolve the real mfg_products.code the same way the handover does.
+      const tempLine: CartLine = {
+        key: `ato-${Date.now()}`,
+        qty,
+        config: snapshot,
+      };
+      const resolution = await fetchItemCodeMap([tempLine]);
+      const [soItem] = cartLinesToSoItems([tempLine], undefined, resolution);
+      if (!soItem) throw new Error('Failed to marshal item.');
+      // PosHandoffItem is a superset of AddSoItemBody (extra fields: description,
+      // cartLineKey) — the API ignores the extras. Cast to satisfy TS.
+      // freeItemCampaignId is a TOP-LEVEL body field (not inside variants) — the
+      // server validates eligibility and forces the line to RM 0 (Task 4).
+      const itemBody: AddSoItemBody = {
+        ...(soItem as unknown as AddSoItemBody),
+        ...(freeItemCampaignId ? { freeItemCampaignId } : {}),
+      };
+      await addToOrderMutation.mutateAsync({ docNo: addToOrderDoc, item: itemBody });
+      navigate(`/my-orders`);
+    } catch (err) {
+      if (err instanceof AddSoItemApiError) {
+        const { payload } = err;
+        // pricing_drift: surface both figures + let user re-submit.
+        if (payload.error === 'pricing_drift' && payload.itemCode) {
+          const clientRm = Math.round((payload.client ?? 0) / 100).toLocaleString('en-MY');
+          const serverRm = Math.round((payload.server ?? 0) / 100).toLocaleString('en-MY');
+          setAddToOrderError(
+            `The server priced this item differently — tablet: RM ${clientRm}, server: RM ${serverRm}. `
+            + `The server price is authoritative. Hard-refresh the app (or go back and re-enter) to pick up the current pricing.`,
+          );
+        } else if (payload.error === 'so_has_downstream') {
+          setAddToOrderError('This order already has a Delivery Order or Invoice — no more items can be added.');
+        } else if (payload.error === 'SO_PROCESSING_LOCKED') {
+          setAddToOrderError('This order is processing-locked — the processing date has passed.');
+        } else if (payload.error === 'free_item_not_eligible') {
+          setAddToOrderError('This free item campaign is not eligible for this order.');
+        } else if (payload.error === 'pwp_code_rejected') {
+          setAddToOrderError('The PWP code was rejected — it may already be used or not applicable here.');
+        } else if (payload.error === 'free_and_pwp_exclusive') {
+          setAddToOrderError('A free-item line and a PWP redemption cannot be on the same order.');
+        } else {
+          const detail = payload.reason ?? payload.message;
+          setAddToOrderError(`Add failed: ${payload.error}${detail ? ` — ${detail}` : ''}`);
+        }
+      } else {
+        setAddToOrderError(err instanceof Error ? err.message : 'Add failed.');
+      }
+    } finally {
+      setAddToOrderPending(false);
+    }
+  };
+
   const confirmSwap = async (snapshot: SofaConfigSnapshot) => {
     if (!swapDoc || !swapItemId || swapPending) return;
     setSwapError(null);
@@ -609,11 +713,29 @@ export const Configurator = () => {
   const [sofaPwpComboIds, setSofaPwpComboIds] = useState<string[]>([]);
   const [sofaPwpErr, setSofaPwpErr] = useState<string | null>(null);
   const [sofaPwpChecking, setSofaPwpChecking] = useState(false);
+
+  /* ── Free Item Campaign (Task 8) — addToOrder mode only ─────────────────
+     Active campaigns + combo-modules map (reuses sofaCombosQ already loaded
+     for this Model). Campaign state resets on product change (see effect below). */
+  const { data: activeCampaigns = [] } = useActiveFreeItemCampaigns();
+  // comboModulesById feeds campaignsCoveringLine's sofa combo-scope check.
+  // sofaCombosQ is already scoped to this Model's base_model, which is the
+  // right scope: a campaign's combo eligibility pins a comboId belonging to
+  // this model's combos. Mirrors CartContents but model-scoped (correct here).
+  const comboModulesByIdForFic = useMemo(
+    () => new Map((sofaCombosQ.data ?? []).map((cb) => [cb.id, cb.modules])),
+    [sofaCombosQ.data],
+  );
+  // Selected free-item campaign state — reset on product change (see effect below).
+  const [freeItemCampaignId, setFreeItemCampaignId] = useState<string | null>(null);
+  const [freeItemCampaignName, setFreeItemCampaignName] = useState<string | null>(null);
+
   useEffect(() => { // never leak the toggle / code across products
     setUsePwp(false);
     setInsertCodeInput(''); setInsertedCode(null); setInsertedCodeType('pwp'); setInsertErr(null);
     setSofaPwpInput(''); setSofaPwpCode(null); setSofaPwpComboIds([]); setSofaPwpErr(null);
     setSofaLegValue(null);
+    setFreeItemCampaignId(null); setFreeItemCampaignName(null);
   }, [productId]);
   const pwpEval = useMemo(() => {
     const rules = pwpRulesQ.data ?? [];
@@ -1057,6 +1179,81 @@ export const Configurator = () => {
     return comboId ? { code: top.code, comboId } : null;
   }, [reservedCodesQ.data, cartLines, editKey, sofaMatchedComboIds]);
 
+  /* ── PWP auto-pick from order's redeemable codes (addToOrder, Task 7) ──
+     Find the first redeemable code from the SO that matches the currently-
+     configured product. FIFO — the codes come back in DB insert order, so
+     the earliest-minted code is picked first (mirrors same-cart FIFO logic).
+
+     Non-sofa (BEDFRAME / MATTRESS): category + model match.
+     Sofa: category SOFA + rewardComboIds ∩ sofaMatchedComboIds. */
+  // Derived early (before the early-return guard) so the auto-pick memos below
+  // can reference it without breaking Rules of Hooks.
+  const isSofaProduct = product.data?.pricing_kind === 'sofa_build';
+
+  const orderAutoCodeNonSofa = useMemo((): RedeemablePwpCode | null => {
+    if (!isAddToOrderMode || !pwpRewardCategory || isSofaProduct) return null;
+    const codes = orderRedeemableCodesQ.data ?? [];
+    return codes.find((rc) =>
+      String(rc.rewardCategory).toUpperCase() === pwpRewardCategory &&
+      (rc.eligibleRewardModelIds.length === 0 ||
+        (pwpRewardModelId != null && rc.eligibleRewardModelIds.includes(pwpRewardModelId))),
+    ) ?? null;
+  }, [isAddToOrderMode, orderRedeemableCodesQ.data, pwpRewardCategory, pwpRewardModelId, isSofaProduct]);
+
+  const orderAutoSofaPick = useMemo((): { code: string; comboId: string } | null => {
+    if (!isAddToOrderMode || !isSofaProduct || sofaMatchedComboIds.length === 0) return null;
+    const codes = orderRedeemableCodesQ.data ?? [];
+    const matchedSet = new Set(sofaMatchedComboIds);
+    const match = codes.find((rc) =>
+      String(rc.rewardCategory).toUpperCase() === 'SOFA' &&
+      (rc.rewardComboIds ?? []).some((id) => matchedSet.has(id)),
+    );
+    if (!match) return null;
+    const comboId = (match.rewardComboIds ?? []).find((id) => matchedSet.has(id));
+    return comboId ? { code: match.code, comboId } : null;
+  }, [isAddToOrderMode, orderRedeemableCodesQ.data, isSofaProduct, sofaMatchedComboIds]);
+
+  /* Auto-apply non-sofa order code — mirrors edit-hydration pattern:
+     set state directly without re-validating (server re-validates on submit).
+     Guard: only auto-apply once; if the salesperson manually removes the code,
+     don't re-apply it (the ref resets on productId change via the effect above). */
+  const orderNonSofaAutoAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!orderAutoCodeNonSofa || orderNonSofaAutoAppliedRef.current) return;
+    if (insertedCode) return; // already applied (manual or edit-hydration)
+    orderNonSofaAutoAppliedRef.current = true;
+    const code = orderAutoCodeNonSofa.code;
+    const isPromo = orderAutoCodeNonSofa.type === 'promo';
+    setInsertedCode(code);
+    setInsertCodeInput(code);
+    setInsertedCodeType(isPromo ? 'promo' : 'pwp');
+    setInsertErr(null);
+    setUsePwp(false); // cross-order path, not same-cart toggle
+    setOrderPwpAutoApplied(true);
+  }, [orderAutoCodeNonSofa, insertedCode]);
+
+  /* Auto-apply sofa order code — mirrors the sofa edit-hydration: set
+     sofaPwpCode + sofaPwpComboIds directly (server re-validates on submit). */
+  const orderSofaAutoAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!orderAutoSofaPick || orderSofaAutoAppliedRef.current) return;
+    if (sofaPwpCode) return; // already applied
+    orderSofaAutoAppliedRef.current = true;
+    setSofaPwpCode(orderAutoSofaPick.code);
+    setSofaPwpInput(orderAutoSofaPick.code);
+    setSofaPwpComboIds([orderAutoSofaPick.comboId]);
+    setSofaPwpErr(null);
+    setOrderPwpAutoApplied(true);
+  }, [orderAutoSofaPick, sofaPwpCode]);
+
+  /* Reset auto-applied refs when productId changes (the productId reset effect
+     above already clears all PWP state; this keeps the refs in sync). */
+  useEffect(() => {
+    orderNonSofaAutoAppliedRef.current = false;
+    orderSofaAutoAppliedRef.current = false;
+    setOrderPwpAutoApplied(false);
+  }, [productId]);
+
   // Validate + apply a sofa PWP code against the build's matched combos (plain
   // fn, not a hook). Mirrors CustomBuilder's old applyPwpCode; codeArg lets Auto
   // Fill apply a same-cart code.
@@ -1094,6 +1291,56 @@ export const Configurator = () => {
   // the price stays correct); the code is cleared outright only on a product
   // switch (the productId reset above).
   const sofaPwpApplied = sofaPwpCode != null && sofaPwpComboIds.some((id) => sofaMatchedComboIds.includes(id));
+
+  /* ── Free Item Campaign coverage (Task 8) — addToOrder mode only ────────
+     Mirrors CartContents: compute which active campaigns cover the currently-
+     configured product. Only active in addToOrder mode (this affordance is
+     NOT available in cart mode — the cart's own CartContents "Make free" handles
+     that). Mutual exclusion: blocked when any PWP path is active. */
+  // Product-level inputs for campaignsCoveringLine (category + modelId).
+  // These are derived BEFORE the early-return guard (both are safe ''/null
+  // before product.data lands), so the memo below is always a valid hook call.
+  const ficProductCategory = (product.data as { category_id?: string | null } | null)?.category_id ?? '';
+  const ficProductModelId = (product.data as { model_id?: string | null } | null)?.model_id ?? null;
+  // Sofa built module ids — the same `sofaBuiltModules` already derived above.
+  // Non-sofa lines pass [] (campaignsCoveringLine ignores it for non-SOFA lines).
+  const ficCovering = useMemo<FreeItemCampaignRow[]>(() => {
+    if (!isAddToOrderMode) return [];
+    // PWP mutual exclusion — never return campaigns when a PWP code is applied
+    // via any path (same-cart, cross-order, or auto-applied from the order's
+    // redeemable codes). This hides the make-free control, and a useEffect below
+    // auto-clears any existing free-item selection to prevent submit errors
+    // (the server also rejects free_and_pwp_exclusive).
+    const anyPwpActive = Boolean(usePwp) || (insertedCode != null) || sofaPwpApplied || orderPwpAutoApplied;
+    if (anyPwpActive) return [];
+    if (!ficProductModelId) return [];
+    return campaignsCoveringLine(
+      {
+        category: ficProductCategory,
+        modelId: ficProductModelId,
+        builtModuleIds: sofaBuiltModules,
+      },
+      activeCampaigns,
+      comboModulesByIdForFic,
+    );
+  }, [
+    isAddToOrderMode,
+    usePwp, insertedCode, sofaPwpApplied, orderPwpAutoApplied,
+    ficProductCategory, ficProductModelId, sofaBuiltModules,
+    activeCampaigns, comboModulesByIdForFic,
+  ]);
+  const ficSingleCampaign = ficCovering.length === 1 ? ficCovering[0]! : null;
+
+  /* Clear free-item selection when PWP becomes active. Mutual exclusion:
+     the server rejects free_and_pwp_exclusive, so if the user selects
+     free and then activates PWP, we auto-clear the free-item state to
+     prevent a 400 on submit. */
+  useEffect(() => {
+    if (usePwp || insertedCode != null || sofaPwpApplied || orderPwpAutoApplied) {
+      setFreeItemCampaignId(null);
+      setFreeItemCampaignName(null);
+    }
+  }, [usePwp, insertedCode, sofaPwpApplied, orderPwpAutoApplied]);
 
   // F5: per-Model seat depths ('24,30' → ['24','30']). Fallback ['24'] so the
   // toggle always has a value (only rendered for sofas, which always seed it).
@@ -1297,6 +1544,64 @@ export const Configurator = () => {
     </RailSection>
   );
 
+  /* Make free — addToOrder mode only (Task 8). Shown when ≥1 active campaign
+     covers the currently-configured product AND no PWP path is active.
+     1 campaign → a toggle button ("Make free · <name>").
+     2+ campaigns → a small picker ("Make free…" select).
+     Mutual exclusion with PWP is enforced above in ficCovering (returns [] when
+     any PWP is active) AND the server rejects both (free_and_pwp_exclusive).
+     Applying free also prevents PWP: once freeItemCampaignId is set, the user
+     can still interact with PWP controls but ficCovering will stay [] because
+     anyPwpActive would be true — however freeItemCampaignId and PWP can't
+     coexist in the same submit (the server rejects it). To be safe, clearing
+     the free selection should NOT auto-apply PWP (no side effect — the user
+     must explicitly apply PWP if they want it).
+     This section is only rendered in isAddToOrderMode. */
+  const makeFreeRailSection = isAddToOrderMode && ficCovering.length > 0 ? (
+    <RailSection title="Free item">
+      {freeItemCampaignId ? (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)', padding: 'var(--space-2) 0' }}>
+          <span style={{ fontSize: 'var(--fs-12)' }}>
+            <Gift size={14} strokeWidth={1.75} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} />
+            <span style={{ fontWeight: 600 }}>FREE · {freeItemCampaignName}</span>
+            <span style={{ display: 'block', color: 'var(--fg-muted)' }}>
+              Server sets price to RM 0
+            </span>
+          </span>
+          <Button variant="ghost" onClick={() => { setFreeItemCampaignId(null); setFreeItemCampaignName(null); }}>
+            Remove
+          </Button>
+        </div>
+      ) : ficSingleCampaign ? (
+        <div style={{ paddingTop: 'var(--space-2)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <Gift size={14} strokeWidth={1.75} />
+          <Button
+            variant="secondary"
+            onClick={() => { setFreeItemCampaignId(ficSingleCampaign.id); setFreeItemCampaignName(ficSingleCampaign.name); }}
+          >
+            Make free · {ficSingleCampaign.name}
+          </Button>
+        </div>
+      ) : (
+        <div style={{ paddingTop: 'var(--space-2)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <Gift size={14} strokeWidth={1.75} />
+          <select
+            aria-label="Make free under campaign"
+            defaultValue=""
+            onChange={(e) => {
+              const c = ficCovering.find((x) => x.id === e.target.value);
+              if (c) { setFreeItemCampaignId(c.id); setFreeItemCampaignName(c.name); }
+            }}
+            style={{ flex: 1 }}
+          >
+            <option value="" disabled>Make free…</option>
+            {ficCovering.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+      )}
+    </RailSection>
+  ) : null;
+
   // Special add-on (note + extra charge) — Loo 2026-06-13. The description + amount
   // feed variants.extraAddonNote + extraAddonAmountRM → custom_specials (a charged
   // special add-on on the SO). Rendered directly below the SPECIAL ADD-ON chips.
@@ -1462,6 +1767,7 @@ export const Configurator = () => {
       total: bedframeTotal,
       summary: parts.join(' · '),
     };
+    if (isAddToOrderMode) { void confirmAddToOrder(snapshot, qtyEffective); return; }
     addConfigured(snapshot, { ...(isEditing && editKey ? { editingKey: editKey } : {}), qty: qtyEffective });
     navigate(isEditing ? '/cart' : '/catalog');
   };
@@ -1504,6 +1810,7 @@ export const Configurator = () => {
         specialChoices: Object.fromEntries(mattressSpecialSel.map((s) => [s.id, s.choices ?? []])),
       } : {}),
     };
+    if (isAddToOrderMode) { void confirmAddToOrder(snapshot, qtyEffective); return; }
     addConfigured(snapshot, { ...(isEditing && editKey ? { editingKey: editKey } : {}), qty: qtyEffective });
     navigate(isEditing ? '/cart' : '/catalog');
   };
@@ -1627,6 +1934,7 @@ export const Configurator = () => {
         : `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${activeDepth}"${fabricSuffix}`,
     };
     if (isSwapMode) { void confirmSwap(snapshot); return; }
+    if (isAddToOrderMode) { void confirmAddToOrder(snapshot); return; }
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
     navigate(isEditing ? '/cart' : '/catalog');
   };
@@ -1676,6 +1984,7 @@ export const Configurator = () => {
       summary: `${label} · ${activeDepth}"${fabricSuffix}`,
     };
     if (isSwapMode) { void confirmSwap(snapshot); return; }
+    if (isAddToOrderMode) { void confirmAddToOrder(snapshot); return; }
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
     navigate(isEditing ? '/cart' : '/catalog');
   };
@@ -1719,10 +2028,12 @@ export const Configurator = () => {
       <button
         type="button"
         className={styles.topbarBtnPrimary}
-        disabled={!canAddSize}
+        disabled={!canAddSize || addToOrderPending || (isAddToOrderMode && !soHeader?.addEligible)}
         onClick={handleAddSize}
       >
-        {isEditing ? 'Save changes' : '+ Add to Cart'}
+        {isAddToOrderMode
+          ? (addToOrderPending ? 'Adding…' : 'Add to this order')
+          : isEditing ? 'Save changes' : '+ Add to Cart'}
       </button>
     </span>
   ) : undefined;
@@ -1765,10 +2076,12 @@ export const Configurator = () => {
       <button
         type="button"
         className={styles.topbarBtnPrimary}
-        disabled={!canAddBedframe}
+        disabled={!canAddBedframe || addToOrderPending || (isAddToOrderMode && !soHeader?.addEligible)}
         onClick={handleAddBedframe}
       >
-        {isEditing ? 'Save changes' : '+ Add to Cart'}
+        {isAddToOrderMode
+          ? (addToOrderPending ? 'Adding…' : 'Add to this order')
+          : isEditing ? 'Save changes' : '+ Add to Cart'}
       </button>
     </span>
   ) : undefined;
@@ -1815,12 +2128,14 @@ export const Configurator = () => {
       <button
         type="button"
         className={styles.topbarBtnPrimary}
-        disabled={!canAddSofa || swapPending}
+        disabled={!canAddSofa || swapPending || addToOrderPending || (isAddToOrderMode && !soHeader?.addEligible)}
         onClick={pickedQP ? handleAddQuickPick : handleAddSofa}
       >
         {isSwapMode
           ? (swapPending ? 'Saving…' : 'Confirm Change')
-          : isEditing ? 'Save changes' : '+ Add to Cart'}
+          : isAddToOrderMode
+            ? (addToOrderPending ? 'Adding…' : 'Add to this order')
+            : isEditing ? 'Save changes' : '+ Add to Cart'}
       </button>
     </span>
   ) : undefined;
@@ -1934,6 +2249,53 @@ export const Configurator = () => {
         {swapError}
       </div>
     )}
+    {/* Add-to-placed-SO — eligibility notice (not eligible) + error surface. */}
+    {isAddToOrderMode && soHeaderQ.isLoading && (
+      <div
+        style={{
+          position: 'fixed', top: 72, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 60, maxWidth: 620, padding: '10px 16px', borderRadius: 12,
+          background: '#fff', border: '1px solid var(--line-strong)',
+          fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--c-ink)',
+          boxShadow: '0 4px 14px rgba(34,31,32,0.12)',
+        }}
+      >
+        Loading order…
+      </div>
+    )}
+    {isAddToOrderMode && soHeader && !soHeader.addEligible && (
+      <div
+        role="alert"
+        style={{
+          position: 'fixed', top: 72, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 60, maxWidth: 620, padding: '10px 16px', borderRadius: 12,
+          background: '#fff', border: '1px solid #b3261e', color: '#b3261e',
+          fontFamily: 'var(--font-sans)', fontSize: 13, boxShadow: '0 4px 14px rgba(34,31,32,0.12)',
+        }}
+      >
+        {soHeader.addBlockedReason
+          ? `Cannot add to ${addToOrderDoc}: ${soHeader.addBlockedReason}`
+          : `Cannot add to ${addToOrderDoc} — this order is locked or has downstream documents.`}
+        {' '}<button
+          type="button"
+          onClick={() => navigate('/my-orders')}
+          style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', textDecoration: 'underline', fontFamily: 'inherit', fontSize: 'inherit', padding: 0 }}
+        >Back to My orders</button>
+      </div>
+    )}
+    {isAddToOrderMode && addToOrderError && (
+      <div
+        role="alert"
+        style={{
+          position: 'fixed', top: 72, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 60, maxWidth: 620, padding: '10px 16px', borderRadius: 12,
+          background: '#fff', border: '1px solid #b3261e', color: '#b3261e',
+          fontFamily: 'var(--font-sans)', fontSize: 13, boxShadow: '0 4px 14px rgba(34,31,32,0.12)',
+        }}
+      >
+        {addToOrderError}
+      </div>
+    )}
     <main
       className={isSofa && mode === 'quick' ? styles.sofaShell : (isSize || isBedframe) ? styles.shellWide : styles.shell}
       // Custom-build mode runs on a slightly warmer cream (#FAF6EC vs the app
@@ -2036,7 +2398,13 @@ export const Configurator = () => {
               <SpecialAddonsPicker addons={sofaSpecialAddons} value={sofaSpecialSel} onChange={setSofaSpecialSel} />
             }
             legBlock={sofaLegBlock}
-            remarkBlock={remarkExtraRailSection}
+            remarkBlock={
+              <>
+                {/* Make free — addToOrder only (Task 8). Shown before remark/extra. */}
+                {makeFreeRailSection}
+                {remarkExtraRailSection}
+              </>
+            }
           />
         ) : (
           <CustomBuilder
@@ -2056,12 +2424,19 @@ export const Configurator = () => {
             legBlock={sofaLegBlock}
             legHeight={sofaLegValue}
             legSurchargeRm={sofaLegSurcharge}
-            remarkBlock={remarkExtraRailSection}
+            remarkBlock={
+              <>
+                {/* Make free — addToOrder only (Task 8). Shown before remark/extra. */}
+                {makeFreeRailSection}
+                {remarkExtraRailSection}
+              </>
+            }
             remark={lineRemark}
             extraAddonNote={lineExtraNote}
             extraAmountRm={effectiveExtraRm}
             onAdded={() => navigate(isEditing ? '/cart' : '/catalog')}
             {...(isSwapMode ? { onSwapConfirm: (snap) => { void confirmSwap(snap); }, swapPending } : {})}
+            {...(isAddToOrderMode ? { onAddToOrderConfirm: (snap) => { void confirmAddToOrder(snap); }, addToOrderPending, addEligible: soHeader?.addEligible ?? true } : {})}
           />
         )
       )}
@@ -2099,6 +2474,10 @@ export const Configurator = () => {
             {/* Special add-on (note + extra charge) + item remark — directly below
                 the Add-ons chips (Loo 2026-06-13). */}
             {pickedSize && remarkExtraRailSection}
+
+            {/* Free item campaign — addToOrder only (Task 8). Shown when a campaign
+                covers this product and no PWP path is active. */}
+            {pickedSize && makeFreeRailSection}
 
             {/* PWP redeem — shared bed frame + mattress section. Shown once a size
                 is picked (it prices off the size's PWP price). */}
@@ -2182,6 +2561,10 @@ export const Configurator = () => {
             {/* Line quantity (Loo 2026-06-12) — shown once a size is picked. */}
             {pickedSize && quantityRailSection}
 
+            {/* Free item campaign — addToOrder only (Task 8). Shown when a campaign
+                covers this product and no PWP path is active. */}
+            {makeFreeRailSection}
+
             {/* PWP redeem — shared bed frame + mattress section (see pwpRailSection). */}
             {isBedframe && pwpRailSection}
 
@@ -2217,13 +2600,25 @@ export const Configurator = () => {
       )}
 
       {p.pricing_kind === 'flat' && p.flat_price != null && (
-        <FlatAddToCart
-          productId={p.id}
-          productName={p.name}
-          flatPrice={p.flat_price}
-          category={p.category_id ? p.category_id.toUpperCase() : undefined}
-          onAdded={backToCatalog}
-        />
+        <>
+          {/* Make free — addToOrder only (Task 8). Shown when a campaign covers
+              this flat product and no PWP path is active. */}
+          {makeFreeRailSection}
+          <FlatAddToCart
+            productId={p.id}
+            productName={p.name}
+            flatPrice={p.flat_price}
+            category={p.category_id ? p.category_id.toUpperCase() : undefined}
+            onAdded={backToCatalog}
+            {...(isAddToOrderMode ? {
+              onAddToOrder: (snapshot: FlatConfigSnapshot, qty: number) => {
+                void confirmAddToOrder(snapshot, qty);
+              },
+              addToOrderPending,
+              addEligible: soHeader?.addEligible ?? true,
+            } : {})}
+          />
+        </>
       )}
 
       {p.pricing_kind === 'tbc' && (
@@ -2483,9 +2878,15 @@ interface FlatAddToCartProps {
   /** UPPERCASE mfg category, stamped onto the cart snapshot for SO bucketing. */
   category?: string;
   onAdded: () => void;
+  /** Add-to-placed-SO mode: when set, the button submits to the placed SO
+   *  instead of the cart. */
+  onAddToOrder?: (snapshot: FlatConfigSnapshot, qty: number) => void;
+  addToOrderPending?: boolean;
+  /** When in add-to-order mode, true if the target SO is eligible for adds. */
+  addEligible?: boolean;
 }
 
-const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded }: FlatAddToCartProps) => {
+const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded, onAddToOrder, addToOrderPending = false, addEligible = true }: FlatAddToCartProps) => {
   const addConfigured = useCart((s) => s.addConfigured);
   const [qty, setQty] = useState(1);
   const handleAdd = () => {
@@ -2497,6 +2898,7 @@ const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded }:
       total: flatPrice,       // PER-UNIT — the server scales unit × qty.
       summary: 'Flat price',
     };
+    if (onAddToOrder) { onAddToOrder(snapshot, qty); return; }
     addConfigured(snapshot, { qty });
     onAdded();
   };
@@ -2531,7 +2933,9 @@ const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded }:
           </span>
         )}
       </div>
-      <Button variant="primary" onClick={handleAdd}>Add to cart</Button>
+      <Button variant="primary" disabled={addToOrderPending || (onAddToOrder && !addEligible)} onClick={handleAdd}>
+        {onAddToOrder ? (addToOrderPending ? 'Adding…' : 'Add to this order') : 'Add to cart'}
+      </Button>
     </div>
   );
 };

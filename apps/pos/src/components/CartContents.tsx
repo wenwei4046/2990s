@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Trash2, BookmarkPlus, Check, Pencil, Plus } from 'lucide-react';
+import { Trash2, BookmarkPlus, Check, Pencil, Plus, Gift, Undo2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM } from '@2990s/shared';
+import { fmtRM, campaignsCoveringLine } from '@2990s/shared';
 import { useCart, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
 import { cartLineTitle, useMfgCatalogIndex } from '../lib/cart-display';
 import { useSaveQuote } from '../lib/quotes';
 import { useFreePwpCodes } from '../lib/products/pwp-queries';
+import { useActiveFreeItemCampaigns, useSofaCombos, type FreeItemCampaignRow } from '../lib/queries';
 import { ProductThumb } from './ProductThumb';
 import { CountryPhoneInput } from './CountryPhoneInput';
 import styles from './CartContents.module.css';
@@ -25,9 +26,17 @@ export const CartContents = ({ variant, onContinue }: Props) => {
   const setQty = useCart((s) => s.setQty);
   const clear = useCart((s) => s.clear);
   const sourceQuoteId = useCart((s) => s.sourceQuoteId);
+  const makeFree = useCart((s) => s.makeFree);
+  const revertFreeItem = useCart((s) => s.revertFreeItem);
   const subtotal = cartSubtotal(lines);
   const saveQuote = useSaveQuote();
   const freePwp = useFreePwpCodes();
+  const { data: activeCampaigns = [] } = useActiveFreeItemCampaigns();
+  const { data: sofaCombos = [] } = useSofaCombos();
+  const comboModulesById = useMemo(
+    () => new Map(sofaCombos.map((cb) => [cb.id, cb.modules])),
+    [sofaCombos],
+  );
 
   // Abandon — free any RESERVED PWP codes the cart's trigger lines hold, then
   // clear. (A quote-save / order-place KEEPS / consumes them, so those paths
@@ -101,6 +110,10 @@ export const CartContents = ({ variant, onContinue }: Props) => {
                 ? () => navigate(`/configure/${l.config.productId}?edit=${l.key}`)
                 : undefined
             }
+            activeCampaigns={activeCampaigns}
+            comboModulesById={comboModulesById}
+            onMakeFree={makeFree}
+            onRevertFree={revertFreeItem}
           />
         ))}
       </ul>
@@ -184,15 +197,45 @@ export const CartContents = ({ variant, onContinue }: Props) => {
   );
 };
 
-const Line = ({ line, variant, onRemove, onSetQty, onEdit }: {
+const Line = ({ line, variant, onRemove, onSetQty, onEdit, activeCampaigns, comboModulesById, onMakeFree, onRevertFree }: {
   line: CartLine;
   variant: CartContentsVariant;
   onRemove: (k: string) => void;
   onSetQty: (k: string, q: number) => void;
   onEdit?: () => void;
+  activeCampaigns: FreeItemCampaignRow[];
+  comboModulesById: Map<string, string[][]>;
+  onMakeFree: (key: string, campaign: { id: string; name: string; maxFreeQty: number }) => void;
+  onRevertFree: (key: string) => void;
 }) => {
   const mfgById = useMfgCatalogIndex();
   const title = cartLineTitle(line.config, mfgById.get(line.config.productId));
+
+  // Resolve free-item eligibility for this line.
+  const mfgRow = mfgById.get(line.config.productId);
+  const cfgAny = line.config as {
+    freeItemCampaignId?: string | null;
+    freeItemCampaign?: string | null;
+    pwp?: boolean;
+    isFreeGift?: boolean;
+    cells?: Array<{ moduleId?: string }>;
+  };
+  const alreadyFree = Boolean(cfgAny.freeItemCampaignId);
+  const blocked = Boolean(cfgAny.pwp) || Boolean(cfgAny.isFreeGift);
+  // MfgCatalogRow uses camelCase: modelId + category (uppercase enum e.g. 'SOFA').
+  const covering = (blocked || alreadyFree) ? [] : campaignsCoveringLine(
+    {
+      category: String(mfgRow?.category ?? ''),
+      modelId: mfgRow?.modelId ?? null,
+      builtModuleIds: (cfgAny.cells ?? []).map((c) => String(c?.moduleId ?? '')).filter(Boolean),
+    },
+    activeCampaigns,
+    comboModulesById,
+  );
+  // Single covering campaign → one button. (TS doesn't narrow covering[0] from a
+  // length check, so bind it here instead of asserting inside the JSX.)
+  const singleCampaign = covering.length === 1 ? covering[0]! : null;
+
   return (
   <li className={`${styles.line} ${variant === 'rail' ? styles.lineRail : ''}`}>
     <ProductThumb
@@ -211,6 +254,11 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit }: {
       {'isFreeGift' in line.config && line.config.isFreeGift && (
         <div className={styles.lineSummary}>
           {('freeGiftCampaign' in line.config && line.config.freeGiftCampaign) ? line.config.freeGiftCampaign : 'Free gift'}
+        </div>
+      )}
+      {alreadyFree && (
+        <div className={styles.lineSummary}>
+          FREE{cfgAny.freeItemCampaign ? ` · ${cfgAny.freeItemCampaign}` : ''}
         </div>
       )}
     </div>
@@ -242,6 +290,34 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit }: {
           onClick={onEdit}
         />
       )}
+      {alreadyFree ? (
+        <IconButton
+          icon={<Undo2 size={16} strokeWidth={1.75} />}
+          aria-label="Remove free gift"
+          title="Revert to normal price"
+          onClick={() => onRevertFree(line.key)}
+        />
+      ) : singleCampaign ? (
+        <IconButton
+          icon={<Gift size={16} strokeWidth={1.75} />}
+          aria-label="Make free gift"
+          title={`Make free · ${singleCampaign.name}`}
+          onClick={() => onMakeFree(line.key, { id: singleCampaign.id, name: singleCampaign.name, maxFreeQty: singleCampaign.maxFreeQty })}
+        />
+      ) : covering.length > 1 ? (
+        <select
+          aria-label="Make free under campaign"
+          defaultValue=""
+          onChange={(e) => {
+            const c = covering.find((x) => x.id === e.target.value);
+            if (c) onMakeFree(line.key, { id: c.id, name: c.name, maxFreeQty: c.maxFreeQty });
+          }}
+          className={styles.makeFreeSelect}
+        >
+          <option value="" disabled>Make free…</option>
+          {covering.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      ) : null}
       <IconButton
         icon={<Trash2 size={18} strokeWidth={1.75} />}
         aria-label="Remove line"
