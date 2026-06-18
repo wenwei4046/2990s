@@ -40,6 +40,7 @@ import {
 import { useWarehouses } from '../lib/inventory-queries';
 import { MoneyInput } from '../components/MoneyInput';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useToast } from '../components/Toast';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
@@ -106,6 +107,7 @@ export const PurchaseConsignmentOrderDetail = () => {
   const updateItem = useUpdatePurchaseConsignmentOrderItem();
   const deleteItem = useDeletePurchaseConsignmentOrderItem();
   const askConfirm = useConfirm();
+  const toast = useToast();
 
   const po = detail.data?.purchaseOrder ?? null;
   const items = detail.data?.items ?? [];
@@ -195,7 +197,7 @@ export const PurchaseConsignmentOrderDetail = () => {
     import('../lib/purchase-order-pdf')
       .then(({ generatePurchaseOrderPdf }) =>
         generatePurchaseOrderPdf(po as never, items as never, { docTitle: 'PURCHASE CONSIGNMENT ORDER' }))
-      .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e) => toast.error(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
   const setHeaderField = (k: keyof HeaderDraft, v: string) => {
@@ -247,7 +249,7 @@ export const PurchaseConsignmentOrderDetail = () => {
       setHeaderDraft(null);
       setLineDrafts({});
     } catch (e) {
-      window.alert(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setSavingDraft(false);
     }
@@ -286,7 +288,7 @@ export const PurchaseConsignmentOrderDetail = () => {
               onClick={() => {
                 if (!confirm(`Cancel ${po.po_number}? This sets status to CANCELLED — line items + linked docs stay for audit.`)) return;
                 cancel.mutate(po.id, {
-                  onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
+                  onError: (err) => toast.error(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
                 });
               }}
               disabled={cancel.isPending}>
@@ -300,7 +302,7 @@ export const PurchaseConsignmentOrderDetail = () => {
                 if (!confirm(`Permanently delete ${po.po_number}? This removes the header + all line items and cannot be undone.`)) return;
                 deletePo.mutate(po.id, {
                   onSuccess: () => navigate('/purchase-consignment'),
-                  onError:   (err) => window.alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),
+                  onError:   (err) => toast.error(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),
                 });
               }}
               disabled={deletePo.isPending}>
