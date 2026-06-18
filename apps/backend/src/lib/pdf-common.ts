@@ -6,6 +6,8 @@
 /* Real letterhead — mirrors apps/pos/src/lib/legal.ts COMPANY_LEGAL
    byte-for-byte (the POS SO printout is the legal record; if 2990's
    incorporates a new entity or moves, edit legal.ts AND here together). */
+import { fmtDate } from '@2990s/shared';
+
 export const COMPANY = {
   name: '2990 HOME SDN. BHD.',
   reg: 'SSM 202501060667',
@@ -82,23 +84,19 @@ export const fmtRm = (centi: number | null, currency = 'MYR'): string => {
   })}`;
 };
 
-/** Document date → "2026/05/31". Null-safe ("—"). System-wide date format. */
+/** Document date → "31/05/2026". Null-safe ("—"). Delegates to the shared
+ *  {@link fmtDate} so PDFs and the SPA share ONE date format (no 2nd source). */
 export const fmtDocDate = (d: string | null | undefined): string => {
   if (d == null || d === '') return '—';
   const date = new Date(d);
   if (!Number.isFinite(date.getTime())) return String(d);
-  return date
-    .toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' })
-    .replace(/-/g, '/');
+  return fmtDate(date);
 };
 
-/** Generated-stamp timestamp → "2026/05/31, 11:20 AM". */
+/** Generated-stamp timestamp → "31/05/2026, 11:20 AM". */
 export const fmtDocStamp = (d: Date = new Date()): string => {
-  const date = d
-    .toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' })
-    .replace(/-/g, '/');
   const time = d.toLocaleTimeString('en-MY', { hour: 'numeric', minute: '2-digit', hour12: true });
-  return `${date}, ${time}`;
+  return `${fmtDate(d)}, ${time}`;
 };
 
 // Draw the 2990s header (top-left brand) + doc title + meta block on the right.

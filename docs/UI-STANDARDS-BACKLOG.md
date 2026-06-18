@@ -16,10 +16,14 @@ applying by hand via the Supabase SQL Editor.)
 - [x] **Supplier multi-category save 500** — migration `0175` (drop
       `suppliers_category_check`, the legacy single-value CHECK) was never
       applied → saving "Sofa, Bedframe" 500'd. **Applied to prod 2026-06-18.**
-- [ ] **AUDIT other unapplied migrations** — diff every migration file ≥ 0168
-      (+ the backfill list 0126/0162/0166/0167) against prod, apply the missing
-      ones (SKIP `0164_so_scan_samples` — owner on-hold). Likely more hidden
-      "save failed" bugs lurk here. **← recommend next.**
+- [x] **AUDIT other unapplied migrations** — DONE 2026-06-18. Spot-checked the
+      schema objects of 0165–0178 against prod + cross-referenced the earlier
+      full phantom-column audit (97 tables, 0 missing). RESULT: **all code-
+      referenced tables/columns/constraints are present in prod**; the dropped
+      `suppliers_category_check` was the ONLY casualty (now fixed). No other
+      unapplied-migration "save failed" bug. (Non-schema migrations 0163/0168/
+      0169/0173 are data/RLS — not checked here; 0173 RLS rewrite worth a later
+      look but doesn't cause save crashes.)
 
 ## 🎨 UI standards (system-wide, one-by-one)
 - [ ] **Filter standard** — one unified, good-looking filter UX for 3 types,
@@ -42,10 +46,22 @@ applying by hand via the Supabase SQL Editor.)
       (`sofa_24_P1, sofa_24_P2 …`) is messy / hard to read + fill.
 
 ## 📐 Data & format standards (unify system-wide)
-- [ ] **Date format** — ONE format everywhere (DD/MM/YYYY, Malaysian). MRP /
-      Proceed-PO date inputs are inconsistent (DDMMYYYY vs MMDDYYYY).
-- [ ] **Other format inconsistencies** — audit currency, number formatting,
-      casing, terminology and unify.
+- [~] **Date format** — canonical **DD/MM/YYYY** (Malaysian). **FOUNDATION DONE
+      2026-06-18:** flipped shared `fmtDate` (`packages/shared/src/format.ts`,
+      en-CA→en-GB) + made PDF `fmtDocDate`/`fmtDocStamp` delegate to it (killed
+      the 2nd source of truth in `pdf-common.ts`) → all 63 `fmtDate` importers +
+      every PDF now show day-first. Added `todayMY()` (canonical ISO producer
+      for inputs/API, UTC+8, TZ-stable). **STILL TODO:** (a) the ~15 inline
+      display clones (`...en-CA...replace(/-/g,'/')` → DD/MM/YYYY) — each must be
+      checked it's *display*, not a sort/group **key** (e.g. Dashboard:48 `ymd`);
+      (b) the literal MM↔DD **input** bug = native `<input type=date>` is OS-
+      locale-driven → needs the `<DateField>` component (plan item #8).
+- [~] **Number/currency formatters** — added shared `fmtCenti()` ("RM 2,990.00",
+      2dp) + `fmtQty()` ("1,250") to `format.ts` (additive). NOTE: did **not**
+      force RM onto the currency-aware `fmtRm(centi, header.currency)` — docs
+      carry a stored `currency` field; relabeling MYR→RM there would contradict
+      data. Adoption of `fmtCenti`/`fmtQty` across private inline copies = TODO.
+- [ ] **Other format inconsistencies** — audit casing, terminology and unify.
 - [ ] **MD/doc writing** — keep our own docs/specs uniform too.
 
 ## ✨ Features
