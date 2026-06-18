@@ -1317,11 +1317,15 @@ const SofaSoTable = ({ group, selected, onToggleLine, lineSupplier, onLineSuppli
     <thead>
       <tr>
         <th className={styles.colSelect} />
+        <th>SO No</th>
+        <th>Warehouse</th>
         <th>Module</th>
+        <th>Customer</th>
+        <th>Processing Date</th>
+        <th>Delivery Date</th>
         <th className={styles.num}>Qty</th>
         <th>Coverage</th>
         <th>Supplier</th>
-        <th>Delivery</th>
       </tr>
     </thead>
     <tbody>
@@ -1339,7 +1343,16 @@ const SofaSoTable = ({ group, selected, onToggleLine, lineSupplier, onLineSuppli
                 />
               )}
             </td>
-            <td className={styles.codeCell}><span className={styles.variantTag}>{v.variantLabel ?? v.itemCode}</span></td>
+            <td className={styles.codeCell}>{ln.soDocNo}</td>
+            <td className={styles.whCell}>
+              {v.warehouseCode
+                ? <span className={styles.whTag} title={v.warehouseName ?? undefined}>{v.warehouseCode}</span>
+                : <span className={styles.whNone}>—</span>}
+            </td>
+            <td><span className={styles.variantTag}>{v.variantLabel ?? v.itemCode}</span></td>
+            <td>{ln.debtorName ?? '—'}</td>
+            <td>{fmtDate(ln.processingDate)}</td>
+            <td>{fmtDate(ln.deliveryDate)}</td>
             <td className={styles.num}>{ln.qty}</td>
             <td>
               {ln.source === 'stock' && <span className={`${styles.tag} ${styles.tagStock}`}>stock</span>}
@@ -1361,7 +1374,6 @@ const SofaSoTable = ({ group, selected, onToggleLine, lineSupplier, onLineSuppli
                   ? <span className={styles.poSupplierRO} title="Supplier locked — this line is already on a PO"><Truck {...ICON} /> {ln.poSupplierName ?? '—'}</span>
                   : <span className={styles.whNone}>—</span>}
             </td>
-            <td>{fmtDate(ln.deliveryDate)}</td>
           </tr>
         );
       }))}
