@@ -26,7 +26,6 @@ import {
   useCancelPurchaseConsignmentOrder,
 } from '../lib/purchase-consignment-order-queries';
 import {
-  type PoStatus,
   type PoHeaderRow,
   type PoItemRow,
   type Currency,
@@ -34,6 +33,7 @@ import {
 import { poStatusLabel } from '../lib/po-status';
 import { ItemGroupPill } from '../lib/category-badges';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { StatusPill } from '../components/StatusPill';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -43,13 +43,6 @@ const STATUS_CHIPS: { value: StatusFilter; label: string }[] = [
   { value: 'outstanding', label: 'Outstanding' },
   { value: 'all', label: 'All' },
 ];
-
-const STATUS_COLOR: Record<PoStatus, string> = {
-  SUBMITTED: 'rgba(166, 71, 30, 0.12)',
-  PARTIALLY_RECEIVED: 'rgba(166, 71, 30, 0.18)',
-  RECEIVED: 'rgba(47, 93, 79, 0.28)',
-  CANCELLED: 'rgba(184, 51, 31, 0.10)',
-};
 
 const fmtMoney = (centi: number, currency: Currency): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -136,11 +129,7 @@ const buildColumns = (): DataGridColumn<PoHeaderRow>[] => [
   },
   {
     key: 'status', label: 'Status', width: 160, sortable: true, groupable: true,
-    accessor: (po) => (
-      <span className={styles.statusPill} style={{ background: STATUS_COLOR[po.status] }}>
-        {poStatusLabel(po.status)}
-      </span>
-    ),
+    accessor: (po) => <StatusPill docType="po" status={po.status} />,
     searchValue: (po) => poStatusLabel(po.status),
     groupValue: (po) => poStatusLabel(po.status),
     sortFn: (a, b) => poStatusLabel(a.status).localeCompare(poStatusLabel(b.status)),

@@ -26,21 +26,14 @@ import {
   usePurchaseConsignmentReceiveDetail,
 } from '../lib/purchase-consignment-receive-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { StatusPill } from '../components/StatusPill';
+import { statusLabel } from '../lib/status-pill';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-const STATUS_COLOR: Record<string, string> = {
-  POSTED:    'rgba(166, 71, 30, 0.12)',
-  CLOSED:    'rgba(47, 93, 79, 0.28)',
-  CANCELLED: 'rgba(184, 51, 31, 0.10)',
-};
-const STATUS_LABEL: Record<string, string> = {
-  POSTED:    'Confirmed',
-  CLOSED:    'Closed',
-  CANCELLED: 'Cancelled',
-};
+// Colours + labels come from the canonical lib/status-pill map via <StatusPill>.
 const STATUS_CHIPS = ['all', 'POSTED', 'CLOSED', 'CANCELLED'] as const;
 
 const fmtMoney = (centi: number, currency = 'MYR'): string =>
@@ -106,13 +99,9 @@ const buildColumns = (): DataGridColumn<GrnRow>[] => [
   },
   {
     key: 'status', label: 'Status', width: 130, sortable: true, groupable: true,
-    accessor: (g) => (
-      <span className={styles.statusPill} style={{ background: STATUS_COLOR[g.status] }}>
-        {STATUS_LABEL[g.status] ?? g.status.replace('_', ' ')}
-      </span>
-    ),
-    searchValue: (g) => STATUS_LABEL[g.status] ?? g.status.replace('_', ' '),
-    groupValue: (g) => STATUS_LABEL[g.status] ?? g.status,
+    accessor: (g) => <StatusPill docType="grn" status={g.status} />,
+    searchValue: (g) => statusLabel('grn', g.status),
+    groupValue: (g) => statusLabel('grn', g.status),
     sortFn: (a, b) => a.status.localeCompare(b.status),
   },
 ];
@@ -296,7 +285,7 @@ export const PurchaseConsignmentReceives = () => {
               background: statusChip === s ? 'rgba(232, 107, 58, 0.10)' : '#FFFFFF',
               color: statusChip === s ? 'var(--c-burnt)' : 'var(--fg-muted)',
             }}>
-            {s === 'all' ? 'All' : STATUS_LABEL[s] ?? s}
+            {s === 'all' ? 'All' : statusLabel('grn', s)}
           </button>
         ))}
       </div>

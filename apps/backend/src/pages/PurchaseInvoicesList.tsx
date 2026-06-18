@@ -15,6 +15,8 @@ import { Plus, FileText, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { usePurchaseInvoices, useCancelPurchaseInvoice, usePurchaseInvoiceDetail } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { StatusPill } from '../components/StatusPill';
+import { statusLabel } from '../lib/status-pill';
 import { useConfirm } from '../components/ConfirmDialog';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
@@ -22,20 +24,7 @@ import styles from './Suppliers.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
 // purchase_invoice_status enum: POSTED / PARTIALLY_PAID / PAID / CANCELLED.
-// Tints use the shared lifecycle palette (PO/SO): confirmed=burnt,
-// in-progress=darker burnt, complete=green, void=red.
-const STATUS_COLOR: Record<string, string> = {
-  POSTED: 'rgba(166, 71, 30, 0.12)',
-  PARTIALLY_PAID: 'rgba(166, 71, 30, 0.18)',
-  PAID: 'rgba(47, 93, 79, 0.28)',
-  CANCELLED: 'rgba(184, 51, 31, 0.10)',
-};
-const STATUS_LABEL: Record<string, string> = {
-  POSTED: 'Confirmed',
-  PARTIALLY_PAID: 'Partially Paid',
-  PAID: 'Paid',
-  CANCELLED: 'Cancelled',
-};
+// Colours + labels come from the canonical lib/status-pill map via <StatusPill>.
 const STATUS_CHIPS = ['all', 'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED'] as const;
 
 const fmtMoney = (centi: number, currency = 'MYR'): string =>
@@ -109,13 +98,9 @@ const buildPiColumns = (): DataGridColumn<PiRow>[] => [
   },
   {
     key: 'status', label: 'Status', width: 130, sortable: true, groupable: true,
-    accessor: (r) => (
-      <span className={styles.statusPill} style={{ background: STATUS_COLOR[r.status] }}>
-        {STATUS_LABEL[r.status] ?? r.status.replace('_', ' ')}
-      </span>
-    ),
-    searchValue: (r) => STATUS_LABEL[r.status] ?? r.status.replace('_', ' '),
-    groupValue: (r) => STATUS_LABEL[r.status] ?? r.status,
+    accessor: (r) => <StatusPill docType="pi" status={r.status} />,
+    searchValue: (r) => statusLabel('pi', r.status),
+    groupValue: (r) => statusLabel('pi', r.status),
     sortFn: (a, b) => a.status.localeCompare(b.status),
   },
 ];
@@ -293,7 +278,7 @@ export const PurchaseInvoices = () => {
               background: statusChip === s ? 'rgba(232, 107, 58, 0.10)' : '#FFFFFF',
               color: statusChip === s ? 'var(--c-burnt)' : 'var(--fg-muted)',
             }}>
-            {s === 'all' ? 'All' : STATUS_LABEL[s] ?? s}
+            {s === 'all' ? 'All' : statusLabel('pi', s)}
           </button>
         ))}
       </div>
