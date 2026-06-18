@@ -8,14 +8,13 @@
 // UNIQUE localStorage keys ('pr-g.do-list.layout.v1' /
 // 'pr-g.do-list.filters.v1') — never reuse the SO keys.
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { JSX } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
-import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { useConfirm } from '../components/ConfirmDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
@@ -336,27 +335,6 @@ const ExpandedDoLines = ({ id }: { id: string }) => {
   );
 };
 
-/* Column-aware filter config for the DO list. Each entry tells the shared
-   ColumnFilterBar how to read + present a column. enum options are derived
-   from the data; date columns get presets + a custom range. */
-const DO_FILTER_COLUMNS: FilterColumn<DoRow>[] = [
-  { key: 'do_number',     label: 'DO No.',         type: 'text', accessor: (r) => r.do_number },
-  { key: 'so_doc_no',     label: 'SO No.',         type: 'text', accessor: (r) => r.so_doc_no },
-  { key: 'debtor',        label: 'Customer',       type: 'text', accessor: (r) => r.debtor_name },
-  { key: 'ref',           label: 'Reference',      type: 'text', accessor: (r) => r.customer_so_no ?? r.po_doc_no ?? r.ref },
-  { key: 'driver',        label: 'Driver',         type: 'text', accessor: (r) => r.driver_name },
-  { key: 'brand',         label: 'Branding',       type: 'enum', accessor: (r) => deriveBranding(r) },
-  { key: 'venue',         label: 'Venue',          type: 'enum', accessor: (r) => r.venue },
-  { key: 'location',      label: 'Location',       type: 'enum', accessor: (r) => r.sales_location },
-  { key: 'customer_type', label: 'Customer Type',  type: 'enum', accessor: (r) => r.customer_type },
-  { key: 'building_type', label: 'Building Type',  type: 'enum', accessor: (r) => r.building_type },
-  { key: 'state',         label: 'State',          type: 'enum', accessor: (r) => r.customer_state },
-  { key: 'country',       label: 'Country',        type: 'enum', accessor: (r) => r.customer_country },
-  { key: 'do_date',       label: 'Document Date',  type: 'date', accessor: (r) => r.do_date },
-  { key: 'expected_delivery_at', label: 'Expected Delivery', type: 'date', accessor: (r) => r.expected_delivery_at },
-  { key: 'delivery_date', label: 'Delivery Date',  type: 'date', accessor: (r) => r.customer_delivery_date },
-];
-const DO_QUICK_SEARCH_KEYS = ['do_number', 'so_doc_no', 'debtor', 'ref', 'driver', 'venue', 'brand'];
 
 const STORAGE_KEY = 'pr-g.do-list.layout.v1';
 
@@ -375,34 +353,27 @@ export const MfgDeliveryOrdersList = () => {
     setSearchParams(next, { replace: true });
   };
 
-  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
-     add-a-column filters (enum / date presets + range / text). The status-chip
-     pre-filter (?status=...) still applies on top of the column filters. */
+  /* The status-chip pre-filter (?status=...) narrows the rows; the DataGrid's
+     own per-column funnel filters do the rest on top. */
   const baseRows = useMemo<DoRow[]>(
     () => (statusChip !== 'all'
       ? allRows.filter((r) => doEffectiveKey(r.status, r.lifecycle_state) === statusChip)
       : allRows),
     [allRows, statusChip],
   );
-  const { rows, bar: filterBar } = useColumnFilter<DoRow>({
-    allRows: baseRows,
-    columns: DO_FILTER_COLUMNS,
-    quickSearchKeys: DO_QUICK_SEARCH_KEYS,
-    quickSearchPlaceholder: 'DO No, SO, debtor, driver…',
-    storageKey: 'pr-g.do-list.filters.v1',
-    totalCount: allRows.length,
-    loading: isLoading,
-  });
+  // DataGrid filters internally now; capture its on-screen rows so the KPI
+  // strip reflects the active funnel filters (was the ColumnFilterBar output).
+  const [visibleRows, setVisibleRows] = useState<DoRow[]>(baseRows);
 
   const kpis = useMemo(() => {
     let revenue = 0, cost = 0, margin = 0;
-    for (const r of rows) {
+    for (const r of visibleRows) {
       revenue += r.local_total_centi ?? 0;
       cost += r.total_cost_centi ?? 0;
       margin += r.total_margin_centi ?? 0;
     }
-    return { totalOrders: rows.length, revenue, cost, margin };
-  }, [rows]);
+    return { totalOrders: visibleRows.length, revenue, cost, margin };
+  }, [visibleRows]);
 
   const staffQ = useStaff();
   const staffById = useMemo(() => {
@@ -499,13 +470,9 @@ export const MfgDeliveryOrdersList = () => {
         ))}
       </div>
 
-      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
-          add-a-column filters). Replaces the old fixed search/brand/venue/
-          date-range row. */}
-      {filterBar}
-
       <DataGrid<DoRow>
-        rows={rows}
+        rows={baseRows}
+        onFilteredRowsChange={setVisibleRows}
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
         rowKey={(r) => r.id}
@@ -584,11 +551,13 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     ),
     searchValue: (r) => `${r.do_number} ${r.status ?? ''}`,
     filterValue: (r) => r.do_number,
+    filterType: 'numbering',
   },
   {
     key: 'so_doc_no', label: 'Transfer From (SO)', width: 130, sortable: true,
     accessor: (r) => r.so_doc_no ?? '—',
     searchValue: (r) => r.so_doc_no ?? '',
+    filterType: 'numbering', filterValue: (r) => r.so_doc_no ?? '',
   },
   {
     key: 'do_date', label: 'Date', width: 110, sortable: true,
@@ -657,6 +626,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     ),
     searchValue: (r) => fmtRm(r.local_total_centi),
     sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
+    filterType: 'number', numberValue: (r) => r.local_total_centi,
   },
   {
     key: 'mattress_sofa_centi', label: 'Mattress/Sofa', width: 130, sortable: true, align: 'right',
@@ -702,6 +672,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     key: 'status', label: 'Status', width: 130, sortable: true, groupable: true,
     accessor: (r) => <StatusPill status={r.status} lifecycle={r.lifecycle_state} />,
     searchValue: (r) => STATUS_LABEL[doEffectiveKey(r.status, r.lifecycle_state)] ?? r.status,
+    filterValue: (r) => STATUS_LABEL[doEffectiveKey(r.status, r.lifecycle_state)] ?? r.status,
     groupValue: (r) => doEffectiveKey(r.status, r.lifecycle_state),
     sortFn: (a, b) => doEffectiveKey(a.status, a.lifecycle_state).localeCompare(doEffectiveKey(b.status, b.lifecycle_state)),
   },
