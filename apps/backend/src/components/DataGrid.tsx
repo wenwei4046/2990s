@@ -876,13 +876,20 @@ function DataGridInner<T>({
                 </td>
               );
             }
+            /* Empty-cell standard (Commander 2026-06-18) — render an em-dash
+               for a primitive-empty cell (null / undefined / '') so the whole
+               system stops mixing blanks and dashes. 0 / false / JSX elements
+               are preserved (a real 0 must show as 0); synthetic columns
+               (__expand__ / __select__) render nothing, not a dash. */
+            const content = col.accessor(row);
+            const isEmpty = content == null || content === '';
             return (
               <td
                 key={col.key}
                 className={`${styles.td} ${col.align === 'right' ? styles.tdAlignRight : ''}`}
                 style={{ width: w, maxWidth: w }}
               >
-                {col.accessor(row)}
+                {isEmpty ? (col.key.startsWith('__') ? null : '—') : content}
               </td>
             );
           })}
