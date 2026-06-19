@@ -23,6 +23,9 @@ export const ConfirmPaymentStep = ({
   const total = subtotal + addonTotal + deliveryFeeTotal;
   const halfTotal = Math.round(total / 2);
   const seventyTotal = Math.round(total * 0.7);
+  // Fully-free order (Free Item Campaign giveaway): nothing to collect, so the
+  // approval code + payment slip are not required (Loo 2026-06-19).
+  const isFree = total <= 0;
 
   // Sync the initial preset='full' default with the actual cart total on
   // first mount. The form is initialized in Handover.tsx with amountPaid=0
@@ -86,8 +89,12 @@ export const ConfirmPaymentStep = ({
     <section className={styles.stepBody}>
       <h2 className={styles.stepTitle}>Confirm payment</h2>
       <p className={styles.stepLead}>
-        Record the payment received via <strong>{methodLabel}</strong>. Customer can pay any amount between{' '}
-        <strong>50% deposit</strong> ({fmtRM(halfTotal)}) and the full total ({fmtRM(total)}).
+        {isFree ? (
+          <>This is a <strong>free order</strong> — nothing to collect. No payment amount, slip, or approval code is needed; just record and continue.</>
+        ) : (
+          <>Record the payment received via <strong>{methodLabel}</strong>. Customer can pay any amount between{' '}
+          <strong>50% deposit</strong> ({fmtRM(halfTotal)}) and the full total ({fmtRM(total)}).</>
+        )}
       </p>
 
       <div className={styles.amountCard}>
@@ -131,7 +138,7 @@ export const ConfirmPaymentStep = ({
         </PresetPill>
       </div>
 
-      <Field label="Approval code *">
+      <Field label={isFree ? 'Approval code' : 'Approval code *'}>
         <input
           type="text"
           value={form.approvalCode}
@@ -274,7 +281,7 @@ export const ConfirmPaymentStep = ({
       )}
 
       <h3 className="subTitle">
-        Payment 1 slip / proof <span className={styles.required}>*</span>
+        Payment 1 slip / proof {isFree ? <span className={styles.stepLead}>(optional)</span> : <span className={styles.required}>*</span>}
       </h3>
       <SlipUploadStep
         onConfirmed={(id) => update('slipUploadSessionId', id)}

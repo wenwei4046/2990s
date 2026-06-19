@@ -175,15 +175,19 @@ describe('validateConfirmPayment', () => {
   });
 
   /* Free Item Campaign giveaway (Loo 2026-06-19) — a fully-free order (total
-     RM 0) has nothing to collect, so the amount-paid / 50%-deposit floor must
-     not block "Continue to signature". Approval code + slip + recorded stay
-     required (they're filled in the POS confirm UI). */
-  it('a fully-free order (total RM 0) proceeds with RM 0 paid', () => {
-    const free = { ...baseForm, paymentMethod: 'cash' as const, amountPaid: 0, approvalCode: '1212', paymentRecorded: true, slipUploadSessionId: 'sess' };
+     RM 0) collects nothing, so NEITHER the amount-paid / 50%-deposit floor NOR
+     the approval-code / payment-slip requirement may block "Continue to
+     signature". Only "Confirm payment received" (paymentRecorded) stays. */
+  it('a fully-free order (total RM 0) proceeds with no payment, slip or approval code', () => {
+    const free = { ...baseForm, paymentMethod: 'cash' as const, amountPaid: 0, approvalCode: '', paymentRecorded: true, slipUploadSessionId: null };
     expect(validateConfirmPayment(free, 0, 0, 0)).toBe(true);
   });
+  it('a free order still requires "Confirm payment received" (paymentRecorded)', () => {
+    const f = { ...baseForm, paymentMethod: 'cash' as const, amountPaid: 0, approvalCode: '', paymentRecorded: false, slipUploadSessionId: null };
+    expect(validateConfirmPayment(f, 0, 0, 0)).toBe(false);
+  });
   it('a free order still rejects over-collection (paid > 0 against an RM 0 total)', () => {
-    const f = { ...baseForm, paymentMethod: 'cash' as const, amountPaid: 50, approvalCode: '1212', paymentRecorded: true, slipUploadSessionId: 'sess' };
+    const f = { ...baseForm, paymentMethod: 'cash' as const, amountPaid: 50, approvalCode: '', paymentRecorded: true, slipUploadSessionId: null };
     expect(validateConfirmPayment(f, 0, 0, 0)).toBe(false);
   });
 

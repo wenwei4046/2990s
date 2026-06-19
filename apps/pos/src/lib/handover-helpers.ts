@@ -214,9 +214,13 @@ export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonT
     return false;
   }
   if (!(f.extraPayments ?? []).every(extraPaymentComplete)) return false;
-  if (f.approvalCode.trim().length === 0) return false;
+  // A fully-free order (total RM 0) collects nothing, so no approval code or
+  // payment slip is required (Loo 2026-06-19). Paid orders still require both.
+  if (total > 0) {
+    if (f.approvalCode.trim().length === 0) return false;
+    if (f.slipUploadSessionId === null) return false;  // slip / proof compulsory for every PAID order
+  }
   if (!f.paymentRecorded) return false;
-  if (f.slipUploadSessionId === null) return false;  // slip / proof compulsory for ALL payment methods
   return true;
 };
 
@@ -315,8 +319,9 @@ const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: n
   extras.forEach((p, i) => {
     if (!extraPaymentComplete(p)) b.push(`Payment ${i + 2}: pick method, amount and approval code${p.method === 'merchant' ? ' (and merchant)' : p.method === 'installment' ? ' (and term)' : ''}${p.slipUploadSessionId === null ? ' (and slip)' : ''}`);
   });
-  if (!f.approvalCode.trim()) b.push('Approval code required');
-  if (f.slipUploadSessionId === null) b.push('Payment slip / proof required');
+  // Free order (total 0): no approval code / slip required (matches validateConfirmPayment).
+  if (total > 0 && !f.approvalCode.trim()) b.push('Approval code required');
+  if (total > 0 && f.slipUploadSessionId === null) b.push('Payment slip / proof required');
   if (!f.paymentRecorded) b.push('Click "Confirm payment received" first to record');
   return b;
 };
