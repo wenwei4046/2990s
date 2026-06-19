@@ -1,6 +1,7 @@
 // Regression tests for the DataGrid global search — guards the
 // precomputed-search-blob + debounce change (the '\n' column separator must not
 // produce false cross-column matches).
+import { useState } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect } from 'vitest';
@@ -111,6 +112,44 @@ describe('DataGrid per-column filters', () => {
       // cells still show all rows — no row filter applied until a value is ticked).
       const options = screen.getAllByRole('checkbox');
       expect(options.length).toBe(1);
+    });
+  });
+});
+
+// ── First-class multi-select column (selectable prop) ──
+describe('DataGrid multi-select column', () => {
+  function SelectableGrid() {
+    const [sel, setSel] = useState<Set<string>>(new Set());
+    return (
+      <DataGrid<Row>
+        rows={rows}
+        columns={columns}
+        rowKey={(r) => r.id}
+        storageKey="test-grid-select"
+        selectable={{
+          selectedKeys: sel,
+          onToggle: (k) => setSel((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; }),
+          onToggleAll: (keys, all) => setSel(all ? new Set() : new Set(keys)),
+        }}
+      />
+    );
+  }
+
+  it('row checkbox toggles selection; header select-all picks every visible row', async () => {
+    const user = userEvent.setup();
+    render(<SelectableGrid />);
+    // header select-all + one per row (3 rows) = 4 checkboxes
+    const boxes = () => screen.getAllByRole('checkbox');
+    expect(boxes()).toHaveLength(4);
+    // tick a single row
+    await user.click(screen.getByLabelText('Select all rows'));
+    await waitFor(() => {
+      expect(boxes().filter((b) => (b as HTMLInputElement).checked)).toHaveLength(4);
+    });
+    // clicking select-all again clears
+    await user.click(screen.getByLabelText('Select all rows'));
+    await waitFor(() => {
+      expect(boxes().filter((b) => (b as HTMLInputElement).checked)).toHaveLength(0);
     });
   });
 });
