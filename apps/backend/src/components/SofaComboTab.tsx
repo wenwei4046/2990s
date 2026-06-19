@@ -22,9 +22,10 @@
 //              + Edit/History/Delete actions.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState, type CSSProperties } from 'react';
-import { Plus, Pencil, Trash2, History, X } from 'lucide-react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { Plus, Pencil, Trash2, History, X, CheckSquare, Square } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { DateField } from './DateField';
 import {
   maintValues,
   SOFA_MODULES,
@@ -41,6 +42,7 @@ import {
   useSofaComboAnchors,
   useSetSofaComboAnchor,
   type SofaComboRule,
+  type NewSofaCombo,
 } from '../lib/sofa-combos-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { useSupplierDetail, useSuppliers, type SupplierRow } from '../lib/suppliers-queries';
@@ -86,6 +88,25 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
   const [baseModelFilter, setBaseModelFilter] = useState<string>('');
   const [composer, setComposer] = useState<{ open: boolean; editing?: SofaComboRule }>({ open: false });
   const [historyFor, setHistoryFor] = useState<SofaComboRule | null>(null);
+
+  // Batch price edit (#39) — multi-select combos then POST one fresher-effective
+  // row per selected combo with adjusted prices. Append-only: never PUT/overwrite.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchOpen, setBatchOpen] = useState(false);
+  const toggleSelected = (id: string) => {
+    setSelectedIds((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  // Reset selection whenever the scope changes (base-model filter or supplier),
+  // so a checkbox can't carry over to a different set of combos.
+  useEffect(() => {
+    setSelectedIds(new Set());
+    setBatchOpen(false);
+  }, [baseModelFilter, supplierId]);
 
   // Default scope: customer_id = null (applies to all). 2990 is B2C, so we
   // never let the UI write a customer_id. When a supplierId is supplied the
@@ -243,9 +264,16 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
               : ' All combos apply to every customer (2990 B2C model).'}
           </p>
         </div>
-        <Button variant="primary" onClick={() => setComposer({ open: true })}>
-          <Plus {...ICON_PROPS} style={{ marginRight: 6 }} /> New Combo
-        </Button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          {selectedIds.size > 0 && (
+            <Button variant="ghost" onClick={() => setBatchOpen(true)}>
+              <Pencil {...ICON_PROPS} style={{ marginRight: 6 }} /> Batch price edit ({selectedIds.size})
+            </Button>
+          )}
+          <Button variant="primary" onClick={() => setComposer({ open: true })}>
+            <Plus {...ICON_PROPS} style={{ marginRight: 6 }} /> New Combo
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -315,6 +343,8 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
                   rule={r}
                   heights={heights}
                   supplierCode={supplierCodeByBaseModel[r.baseModel]}
+                  selected={selectedIds.has(r.id)}
+                  onToggleSelect={() => toggleSelected(r.id)}
                   onEdit={() => setComposer({ open: true, editing: r })}
                   onHistory={() => setHistoryFor(r)}
                   onDelete={() => {
@@ -342,6 +372,19 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
 
       {historyFor && (
         <HistoryModal rule={historyFor} supplierId={supplierId} heights={heights} onClose={() => setHistoryFor(null)} />
+      )}
+
+      {batchOpen && (
+        <BatchEditModal
+          rules={(combosQ.data ?? []).filter((r) => selectedIds.has(r.id))}
+          supplierId={supplierId}
+          heights={heights}
+          onClose={() => setBatchOpen(false)}
+          onDone={() => {
+            setSelectedIds(new Set());
+            setBatchOpen(false);
+          }}
+        />
       )}
     </div>
   );
@@ -415,13 +458,16 @@ function AnchorControl({
 // ─── Combo card ────────────────────────────────────────────────────────
 
 function ComboCard({
-  rule, heights, supplierCode, onEdit, onHistory, onDelete,
+  rule, heights, supplierCode, selected, onToggleSelect, onEdit, onHistory, onDelete,
 }: {
   rule: SofaComboRule;
   heights: string[];
   /** Supplier's own model code for this base model (e.g. "5539"), shown next
       to our internal name on the supplier-scoped page. Undefined elsewhere. */
   supplierCode?: string;
+  /** Batch-edit selection state for this card. */
+  selected: boolean;
+  onToggleSelect: () => void;
   onEdit: () => void;
   onHistory: () => void;
   onDelete: () => void;
@@ -439,6 +485,17 @@ function ComboCard({
       gap: 8,
     }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}
+          title={selected ? 'Deselect for batch edit' : 'Select for batch edit'}
+          style={{
+            ...iconBtnStyle,
+            color: selected ? 'var(--c-orange, #c47b2f)' : 'var(--fg-muted)',
+          }}
+        >
+          {selected ? <CheckSquare size={16} strokeWidth={1.75} /> : <Square size={16} strokeWidth={1.75} />}
+        </button>
         <span style={chipStyleStrong}>{rule.baseModel}</span>
         {supplierCode && (
           <span style={chipStyleSupplierCode} title="Supplier's own model code">
@@ -847,6 +904,208 @@ function ComposerModal({
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button variant="primary" onClick={submit} disabled={create.isPending || update.isPending}>
             {(create.isPending || update.isPending) ? 'Saving…' : (editing ? 'Save new effective row' : 'Create combo')}
+          </Button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+// ─── Batch price edit modal (#39) ─────────────────────────────────────
+// Multi-select combos → POST one fresher-effective row per selected combo with
+// adjusted prices. APPEND-ONLY: each combo's scope (baseModel/modules/tier/
+// customerId/supplierId) + label + notes are preserved; only non-null height
+// prices are adjusted. Never PUT/overwrite an existing row.
+//   · percent: round(old * (1 + pct/100)) for each non-null height
+//   · set:     setCenti for each EXISTING (key present) height; null stays null
+// Mirrors HOOKKA's batch price tool.
+
+type BatchMode = 'percent' | 'set';
+
+/** Compute the adjusted pricesByHeight for one combo. Keys are unchanged; only
+ *  non-null values are touched. Returns integer-centi values. */
+function adjustPrices(
+  pricesByHeight: Record<string, number | null>,
+  mode: BatchMode,
+  pct: number,
+  setCenti: number,
+): Record<string, number | null> {
+  const out: Record<string, number | null> = {};
+  for (const [h, v] of Object.entries(pricesByHeight)) {
+    if (v == null) { out[h] = null; continue; }
+    out[h] = mode === 'percent'
+      ? Math.round(v * (1 + pct / 100))
+      : setCenti;
+  }
+  return out;
+}
+
+function BatchEditModal({
+  rules, supplierId, heights, onClose, onDone,
+}: {
+  rules: SofaComboRule[];
+  supplierId?: string;
+  heights: string[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const create = useCreateSofaCombo();
+
+  const [effectiveFrom, setEffectiveFrom] = useState(todayIso());
+  const [mode, setMode] = useState<BatchMode>('percent');
+  const [pctStr, setPctStr] = useState('0');
+  const [setRmStr, setSetRmStr] = useState('');
+  const [applying, setApplying] = useState(false);
+
+  const pct = Number(pctStr);
+  const setRm = Number(setRmStr);
+  const setCenti = Math.round((Number.isFinite(setRm) ? setRm : 0) * 100);
+  const inputsValid =
+    mode === 'percent'
+      ? Number.isFinite(pct)
+      : Number.isFinite(setRm) && setRm >= 0 && setRmStr.trim() !== '';
+
+  // The first representative non-null height for a combo (preview anchor).
+  const firstPricedHeight = (r: SofaComboRule): string | null => {
+    for (const h of heights) {
+      if (r.pricesByHeight?.[h] != null) return h;
+    }
+    // Fall back to any key (heights list may not cover legacy keys).
+    for (const [h, v] of Object.entries(r.pricesByHeight ?? {})) {
+      if (v != null) return h;
+    }
+    return null;
+  };
+
+  const apply = async () => {
+    if (!inputsValid || applying) return;
+    setApplying(true);
+    let ok = 0;
+    let fail = 0;
+    for (const r of rules) {
+      const newCombo: NewSofaCombo = {
+        baseModel: r.baseModel,
+        modules: r.modules,
+        tier: r.tier,
+        customerId: r.customerId,
+        supplierId: supplierId ?? r.supplierId ?? null,
+        label: r.label,
+        notes: r.notes,
+        effectiveFrom,
+        pricesByHeight: adjustPrices(r.pricesByHeight ?? {}, mode, pct, setCenti),
+      };
+      try {
+        await create.mutateAsync(newCombo);
+        ok += 1;
+      } catch {
+        fail += 1;
+      }
+    }
+    setApplying(false);
+    window.alert(`Updated ${ok} combo${ok === 1 ? '' : 's'} (${fail} failed)`);
+    onDone();
+  };
+
+  return (
+    <ModalShell title={`Batch price edit (${rules.length})`} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <p style={{
+          fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)',
+          color: 'var(--fg-soft)', margin: 0,
+        }}>
+          Appends a new effective-dated row for each selected combo with the
+          adjusted prices. Existing rows stay in history; scope, label, and notes
+          are preserved. Only priced (non-empty) heights are changed.
+        </p>
+
+        <Field label="Effective from">
+          <DateField value={effectiveFrom} onChange={setEffectiveFrom} fullWidth />
+        </Field>
+
+        <Field label="Adjustment">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="radio"
+                name="batch-mode"
+                checked={mode === 'percent'}
+                onChange={() => setMode('percent')}
+              />
+              <span style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', color: 'var(--c-ink)' }}>
+                Adjust by %
+              </span>
+              <input
+                type="number"
+                step="0.1"
+                value={pctStr}
+                onChange={(e) => setPctStr(e.target.value)}
+                disabled={mode !== 'percent'}
+                style={{ ...inputStyle, width: 100, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+              />
+              <span style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', color: 'var(--fg-soft)' }}>%</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="radio"
+                name="batch-mode"
+                checked={mode === 'set'}
+                onChange={() => setMode('set')}
+              />
+              <span style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', color: 'var(--c-ink)' }}>
+                Set all heights to RM
+              </span>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={setRmStr}
+                onChange={(e) => setSetRmStr(e.target.value)}
+                disabled={mode !== 'set'}
+                placeholder="0.00"
+                style={{ ...inputStyle, width: 120, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+              />
+            </label>
+          </div>
+        </Field>
+
+        <Field label="Preview">
+          <div style={{
+            display: 'flex', flexDirection: 'column', gap: 6,
+            padding: 8, background: 'var(--c-cream)',
+            borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)',
+          }}>
+            {rules.slice(0, 3).map((r) => {
+              const h = firstPricedHeight(r);
+              const oldV = h ? (r.pricesByHeight?.[h] ?? null) : null;
+              const newV = h
+                ? adjustPrices(r.pricesByHeight ?? {}, mode, pct, setCenti)[h] ?? null
+                : null;
+              return (
+                <div key={r.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', color: 'var(--c-ink)',
+                }}>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {r.label || r.baseModel}{h ? ` · ${h}` : ''}
+                  </span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-soft)' }}>{fmtRm(oldV)}</span>
+                  <span style={{ color: 'var(--fg-muted)' }}>→</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{fmtRm(newV)}</span>
+                </div>
+              );
+            })}
+            {rules.length > 3 && (
+              <div style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                …and {rules.length - 3} more
+              </div>
+            )}
+          </div>
+        </Field>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={apply} disabled={!inputsValid || applying}>
+            {applying ? 'Applying…' : `Apply (${rules.length})`}
           </Button>
         </div>
       </div>
