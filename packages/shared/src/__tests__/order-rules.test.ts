@@ -47,7 +47,16 @@ describe('meetsProceedGate', () => {
     expect(meetsProceedGate({ ...complete, hasEmail: false })).toBe(false);
   });
 
-  it('fails when total is zero (no division blow-up)', () => {
-    expect(meetsProceedGate({ ...complete, paid: 0, total: 0 })).toBe(false);
+  // A fully-free order (Free Item Campaign giveaway) has nothing to collect, so a
+  // COMPLETE-info RM0 order clears the paid check and may Proceed (mirrors how
+  // validateConfirmPayment relaxes the deposit floor at total===0). No division
+  // blow-up at total=0 either.
+  it('passes for a complete RM0 (fully-free) order — nothing to collect', () => {
+    expect(meetsProceedGate({ ...complete, paid: 0, total: 0 })).toBe(true);
+  });
+
+  it('still fails an incomplete RM0 order (missing info keeps it in Order Placed)', () => {
+    expect(meetsProceedGate({ ...complete, paid: 0, total: 0, hasAddress: false })).toBe(false);
+    expect(meetsProceedGate({ ...complete, paid: 0, total: 0, hasDeliveryDate: false })).toBe(false);
   });
 });

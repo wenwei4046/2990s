@@ -1276,8 +1276,10 @@ const OrderDetail = ({ order, onClose }: {
   const customerInfoOk = !!(edited.customerName.trim() && edited.customerEmail?.trim());
   const addressOk = !!(edited.customerAddress?.trim() && edited.customerPostcode?.trim());
   const dateOk = !!edited.deliveryDate;
-  // Gate on the live ledger (paidSoFar), the recorded source of truth.
-  const paidOk = order.total > 0 && paidSoFar / order.total >= 0.5;
+  // Gate on the live ledger (paidSoFar), the recorded source of truth. A
+  // fully-free order (total 0 — Free Item Campaign giveaway) has nothing to
+  // collect, so the paid tick is satisfied — matches meetsProceedGate below.
+  const paidOk = order.total <= 0 || paidSoFar / order.total >= 0.5;
   // Outstanding balance — once it hits zero the order is fully collected, so the
   // "top up / record payment" form below is hidden (nothing left to collect).
   const outstanding = Math.max(0, order.total - paidSoFar);

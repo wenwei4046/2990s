@@ -203,8 +203,16 @@ export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonT
   const total = subtotal + addonTotal + deliveryFeeTotal;
   const halfTotal = Math.round(total / 2);
   const collected = collectedTotal(f);
-  if (f.amountPaid <= 0) return false;
-  if (collected < halfTotal || collected > total) return false;
+  // Fully-free order (total RM 0 — e.g. a Free Item Campaign giveaway): there is
+  // nothing to collect, so the amount-paid / 50%-deposit floor must NOT block
+  // "Continue to signature". Non-zero orders keep the deposit rule intact; either
+  // way, never accept an over-collection against a free order.
+  if (total > 0) {
+    if (f.amountPaid <= 0) return false;
+    if (collected < halfTotal || collected > total) return false;
+  } else if (collected > 0) {
+    return false;
+  }
   if (!(f.extraPayments ?? []).every(extraPaymentComplete)) return false;
   if (f.approvalCode.trim().length === 0) return false;
   if (!f.paymentRecorded) return false;
@@ -294,6 +302,9 @@ const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: n
   if (!f.paymentMethod) b.push('Payment method missing');
   // Whole-order basis — goods + add-ons + delivery (matches the Order summary).
   // Split payment: the 50% floor / full ceiling apply to the COLLECTED total.
+  // Free Item Campaign giveaway (total 0): halfTotal is 0 so the deposit floor
+  // below never fires, and any collected > 0 trips the "exceeds the order total"
+  // message — kept in lockstep with validateConfirmPayment's total===0 carve-out.
   const total = subtotal + addonTotal + deliveryFeeTotal;
   const halfTotal = Math.round(total / 2);
   const extras = f.extraPayments ?? [];
