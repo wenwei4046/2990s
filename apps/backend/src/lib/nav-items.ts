@@ -20,7 +20,6 @@ export const NAV_ITEMS: NavItem[] = [
   // Sales Order
   { label: 'Sales Orders', path: '/mfg-sales-orders', group: 'Sales Order', keywords: 'so' },
   { label: 'New Sales Order', path: '/mfg-sales-orders/new', group: 'Sales Order', keywords: 'create so add' },
-  { label: 'SO Detail View', path: '/reports/sales-order-detail-listing', group: 'Sales Order', keywords: 'listing report' },
   { label: 'SO Maintenance', path: '/mfg-sales-orders/maintenance', group: 'Sales Order', keywords: 'localities warehouse dropdown' },
   // Commander 2026-05-29 — Delivery flows grouped with Sales Order (outbound side).
   // Ordered to follow the real flow: SO → Delivery Order → Invoice → Return.

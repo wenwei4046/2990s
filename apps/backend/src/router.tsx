@@ -121,7 +121,6 @@ const Outstanding = lazyRetry(() => import('./pages/Outstanding').then(m => ({ d
 const Mrp = lazyRetry(() => import('./pages/Mrp').then(m => ({ default: m.Mrp })));
 const SystemHealth = lazyRetry(() => import('./pages/SystemHealth').then(m => ({ default: m.SystemHealth })));
 const Placeholder = lazyRetry(() => import('./pages/Placeholder').then(m => ({ default: m.Placeholder })));
-const SalesOrderDetailListing = lazyRetry(() => import('./pages/SalesOrderDetailListing').then(m => ({ default: m.SalesOrderDetailListing })));
 const DeliveryOrderDetailListing = lazyRetry(() => import('./pages/DeliveryOrderDetailListing').then(m => ({ default: m.DeliveryOrderDetailListing })));
 const SalesInvoiceDetailListing = lazyRetry(() => import('./pages/SalesInvoiceDetailListing').then(m => ({ default: m.SalesInvoiceDetailListing })));
 const DeliveryReturnDetailListing = lazyRetry(() => import('./pages/DeliveryReturnDetailListing').then(m => ({ default: m.DeliveryReturnDetailListing })));
@@ -278,7 +277,6 @@ export const router = createBrowserRouter([
       { path: 'accounting', element: <Accounting /> },
       { path: 'outstanding', element: <Outstanding /> },
       { path: 'reports/sales-order-listing', element: <Placeholder title="Sales Order Listing" phase="a follow-up PR" hint="One row per SO header. Use Sales Order Detail Listing for line-item view." /> },
-      { path: 'reports/sales-order-detail-listing', element: <SalesOrderDetailListing /> },
       /* Task #120 — L2 Detail Listing routes for the other SO-family modules.
          Reached from the L1 toolbar's "Listing" picker; no sidebar entry. */
       { path: 'reports/delivery-order-detail-listing', element: <DeliveryOrderDetailListing /> },
