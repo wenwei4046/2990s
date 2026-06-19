@@ -20,7 +20,7 @@
 import { todayMyt } from '../lib/dates';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Plus, Save, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useCreatePurchaseConsignmentOrder } from '../lib/purchase-consignment-order-queries';
 import {
@@ -29,18 +29,16 @@ import {
   useSuppliersForMaterial,
   type BindingRow,
   type NewPoItem,
-  type MaterialKind,
 } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
-import { PcVariantEditor } from '../components/PcVariantEditor';
+import { PcLineCard, type PcLineDraft } from '../components/PcLineCard';
 import { useWarehouses } from '../lib/inventory-queries';
 import {
   computeMfgPoUnitCost,
   type MfgFabricTier,
   type PoPriceMatrix,
 } from '@2990s/shared/mfg-pricing';
-import { MoneyInput } from '../components/MoneyInput';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import styles from './SalesOrderDetail.module.css';
 
@@ -53,22 +51,9 @@ const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   })}`;
 };
 
-type DraftLine = {
-  rid: string;
-  bindingId?: string;
-  materialKind: MaterialKind;
-  materialCode: string;
-  materialName: string;
-  supplierSku?: string;
-  qty: number;
-  unitPriceCenti: number;
-  discountCenti?: number;
-  deliveryDate?: string;
-  warehouseId?: string;
-  category?: string;
-  variants: Record<string, unknown>;
-  priceTouched?: boolean;
-};
+/* The per-line draft + its blank factory now live on the shared PcLineCard
+   (T12). Aliased here so the rest of this page reads unchanged. */
+type DraftLine = PcLineDraft;
 
 const newLine = (): DraftLine => ({
   rid: `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -79,43 +64,6 @@ const newLine = (): DraftLine => ({
   unitPriceCenti: 0,
   variants: {},
 });
-
-/* Special Orders multi-select, mirroring New PO. Writes variants.specials as a
-   string[] so it flows into Description 2 like SO does. */
-const SpecialsCheckboxes = ({
-  pool, picked, onChange,
-}: {
-  pool: Array<{ value: string }> | undefined;
-  picked: string[];
-  onChange: (arr: string[]) => void;
-}) => {
-  if (!pool || pool.length === 0) return null;
-  return (
-    <div style={{ marginTop: 'var(--space-2)' }}>
-      <div style={{
-        fontSize: 'var(--fs-11)', fontWeight: 700, letterSpacing: '0.08em',
-        textTransform: 'uppercase', color: 'var(--fg-muted)', marginBottom: 4,
-      }}>
-        Special Orders
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px' }}>
-        {pool.map((o) => {
-          const on = picked.includes(o.value);
-          return (
-            <label key={o.value} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--fs-12)', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={on}
-                onChange={() => onChange(on ? picked.filter((x) => x !== o.value) : [...picked, o.value])}
-              />
-              {o.value}
-            </label>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
 
 export const PurchaseConsignmentOrderNew = () => {
   const navigate = useNavigate();
@@ -591,247 +539,25 @@ export const PurchaseConsignmentOrderNew = () => {
           </span>
         </div>
         <div className={styles.cardBody} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-          {lines.map((l, idx) => {
-            const lineTotalCenti = Math.max(0, l.qty * l.unitPriceCenti - (l.discountCenti ?? 0));
-            const categoryLabel = l.category?.toUpperCase() ?? 'UNSET';
-            const showVariants  = l.category && ['sofa', 'bedframe'].includes(l.category) && maint;
-
-            return (
-              <div
-                key={l.rid}
-                style={{
-                  background: 'var(--c-paper)',
-                  border: '1px solid var(--line)',
-                  borderRadius: 'var(--radius-lg)',
-                  padding: 'var(--space-4)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 'var(--space-3)',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-                    <span style={{
-                      fontFamily: 'var(--font-button)',
-                      fontSize: 'var(--fs-12)',
-                      fontWeight: 700,
-                      letterSpacing: '0.10em',
-                      color: 'var(--fg-muted)',
-                    }}>
-                      LINE {idx + 1}
-                    </span>
-                    {l.category && (
-                      <span style={{
-                        fontFamily: 'var(--font-button)',
-                        fontSize: 'var(--fs-11)',
-                        fontWeight: 700,
-                        letterSpacing: '0.10em',
-                        padding: '2px 8px',
-                        borderRadius: 'var(--radius-pill)',
-                        background: 'rgba(166, 71, 30, 0.12)',
-                        color: 'var(--c-burnt)',
-                      }}>
-                        {categoryLabel}
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                    <span className={styles.previewPrice}>{fmtRm(lineTotalCenti, currency)}</span>
-                    <button
-                      type="button"
-                      onClick={() => dropLine(l.rid)}
-                      title="Remove line"
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        cursor: 'pointer',
-                        color: 'var(--c-festive-b, #B8331F)',
-                        padding: 4,
-                        display: 'inline-flex',
-                      }}
-                    >
-                      <Trash2 {...ICON} />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Identity row — Internal code + Supplier SKU side by side */}
-                <div className={styles.formGrid2}>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Item Code (Internal)</span>
-                    <input
-                      type="text"
-                      list={`bindings-${l.rid}`}
-                      value={l.materialCode}
-                      onChange={(e) => {
-                        const code = e.target.value;
-                        const match = supplierId
-                          ? bindings.find((b) => b.material_code === code)
-                          : undefined;
-                        if (match) { pickBinding(l.rid, match); return; }
-                        const sku = (allSkus.data ?? []).find((p) => p.code === code);
-                        setLine(l.rid, {
-                          materialCode: code,
-                          materialName: sku?.name ?? l.materialName,
-                          bindingId: undefined,
-                          category: sku?.category.toLowerCase() ?? categoryForCode(code),
-                        });
-                        if (!supplierId) setPendingItemPick(code ? { rid: l.rid, code } : null);
-                      }}
-                      placeholder="Type or pick our internal SKU…"
-                      className={styles.fieldInput}
-                      style={{ fontFamily: 'var(--font-mono)' }}
-                    />
-                    <datalist id={`bindings-${l.rid}`}>
-                      {supplierId && bindings.length > 0
-                        ? bindings.map((b) => (
-                            <option key={b.id} value={b.material_code}>
-                              {b.material_name} · {b.supplier_sku} · {fmtRm(b.unit_price_centi, b.currency)}
-                            </option>
-                          ))
-                        : (allSkus.data ?? []).map((p) => (
-                            <option key={p.id} value={p.code}>
-                              {p.name} · {p.category}
-                            </option>
-                          ))
-                      }
-                    </datalist>
-                  </label>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Supplier SKU</span>
-                    <input
-                      type="text"
-                      list={`supplier-skus-${l.rid}`}
-                      value={l.supplierSku ?? ''}
-                      onChange={(e) => {
-                        const sku = e.target.value;
-                        if (supplierId) {
-                          const match = bindings.find((b) => b.supplier_sku === sku);
-                          if (match) {
-                            pickBinding(l.rid, match);
-                          } else {
-                            setLine(l.rid, { supplierSku: sku });
-                          }
-                        } else {
-                          setLine(l.rid, { supplierSku: sku });
-                        }
-                      }}
-                      placeholder={supplierId
-                        ? 'Type or pick supplier’s code…'
-                        : 'Pick a supplier first to enable picker'}
-                      className={styles.fieldInput}
-                      style={{ fontFamily: 'var(--font-mono)' }}
-                    />
-                    <datalist id={`supplier-skus-${l.rid}`}>
-                      {supplierId && bindings.map((b) => (
-                        <option key={b.id} value={b.supplier_sku || ''}>
-                          {b.material_code} · {b.material_name} · {fmtRm(b.unit_price_centi, b.currency)}
-                        </option>
-                      ))}
-                    </datalist>
-                  </label>
-                </div>
-
-                {/* Description — full width */}
-                <label className={styles.field}>
-                  <span className={styles.fieldLabel}>Description</span>
-                  <input
-                    type="text"
-                    value={l.materialName}
-                    onChange={(e) => setLine(l.rid, { materialName: e.target.value })}
-                    placeholder="(auto-filled if bound — editable for one-off purchases)"
-                    className={styles.fieldInput}
-                  />
-                </label>
-
-                {/* Per-category variant editor */}
-                {showVariants && (
-                  <div style={{
-                    background: 'var(--c-cream)',
-                    border: '1px solid var(--line)',
-                    borderRadius: 'var(--radius-md)',
-                    padding: 'var(--space-3)',
-                  }}>
-                    <div style={{
-                      fontFamily: 'var(--font-button)',
-                      fontSize: 'var(--fs-11)',
-                      fontWeight: 700,
-                      letterSpacing: '0.16em',
-                      textTransform: 'uppercase',
-                      color: 'var(--fg-muted)',
-                      marginBottom: 'var(--space-2)',
-                    }}>
-                      {l.category} Variants
-                    </div>
-
-                    <PcVariantEditor
-                      category={l.category ?? ''}
-                      variants={l.variants as Record<string, unknown>}
-                      onChange={(k, v) => setVariant(l.rid, k, v)}
-                      fabrics={fabrics}
-                      maint={maint!}
-                    />
-                  </div>
-                )}
-
-                {/* Pricing row — Qty · Unit Price · Discount · Delivery · Ship-to */}
-                <div className={styles.formGrid4} style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Qty</span>
-                    <input
-                      type="number" min={0} step={1}
-                      value={l.qty}
-                      onChange={(e) => setLine(l.rid, { qty: Number(e.target.value) })}
-                      className={styles.fieldInput}
-                      style={{ textAlign: 'right' }}
-                    />
-                  </label>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Unit Price ({currency})</span>
-                    <MoneyInput
-                      bare
-                      valueSen={l.unitPriceCenti}
-                      onCommit={(sen) => setLine(l.rid, { unitPriceCenti: sen ?? 0, priceTouched: true })}
-                      inputClassName={styles.fieldInput}
-                      selectOnFocus
-                    />
-                  </label>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Discount ({currency})</span>
-                    <MoneyInput
-                      bare
-                      valueSen={l.discountCenti ?? 0}
-                      onCommit={(sen) => setLine(l.rid, { discountCenti: sen ?? 0 })}
-                      inputClassName={styles.fieldInput}
-                      selectOnFocus
-                    />
-                  </label>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Delivery Date</span>
-                    <input
-                      type="date"
-                      value={l.deliveryDate ?? ''}
-                      onChange={(e) => setLine(l.rid, { deliveryDate: e.target.value })}
-                      className={styles.fieldInput}
-                    />
-                  </label>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Ship-to Location</span>
-                    <select
-                      value={l.warehouseId ?? ''}
-                      onChange={(e) => setLine(l.rid, { warehouseId: e.target.value })}
-                      className={styles.fieldInput}
-                    >
-                      <option value="">— Inherit Purchase Location —</option>
-                      {(warehouses.data ?? []).map((w) => (
-                        <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-              </div>
-            );
-          })}
+          {lines.map((l, idx) => (
+            <PcLineCard
+              key={l.rid}
+              index={idx}
+              line={l}
+              currency={currency}
+              supplierId={supplierId}
+              bindings={bindings}
+              allSkus={allSkus.data ?? []}
+              warehouses={warehouses.data ?? []}
+              maint={maint}
+              fabrics={fabrics}
+              onChange={(patch) => setLine(l.rid, patch)}
+              onPickBinding={(b) => pickBinding(l.rid, b)}
+              onSetVariant={(k, v) => setVariant(l.rid, k, v)}
+              onPendingItemPick={(code) => setPendingItemPick(code ? { rid: l.rid, code } : null)}
+              onRemove={() => dropLine(l.rid)}
+            />
+          ))}
 
           <button
             type="button"

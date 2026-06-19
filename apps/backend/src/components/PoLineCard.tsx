@@ -148,6 +148,8 @@ export const PoLineCard = ({
   onPendingItemPick,
   onRemove,
   disabled = false,
+  hidePoFields = false,
+  identityReadOnly = false,
 }: {
   index: number;
   line: PoLineDraft;
@@ -182,6 +184,14 @@ export const PoLineCard = ({
   onRemove: () => void;
   /** Read-only when true (locked PO). */
   disabled?: boolean;
+  /** T12 — PI reuse: hide the PO-only fields that don't apply to a Purchase
+      Invoice (per-line delivery date, supplier-revised dates, ship-to warehouse,
+      supplier SKU). Defaults off (PO renders them). */
+  hidePoFields?: boolean;
+  /** T12 — PI reuse: a line that descends from a GRN keeps its identity
+      (item code + supplier SKU) and variants READ-ONLY; only qty/price/discount
+      stay editable. Defaults off (full Create-style editing). */
+  identityReadOnly?: boolean;
 }) => {
   const l = line;
   const lineTotalCenti = Math.max(0, l.qty * l.unitPriceCenti - (l.discountCenti ?? 0));
@@ -190,6 +200,9 @@ export const PoLineCard = ({
   // branding are encoded in the SKU code itself).
   const showVariants = Boolean(l.category) && ['sofa', 'bedframe'].includes(l.category ?? '') && Boolean(maint);
   const specials = Array.isArray(l.variants.specials) ? (l.variants.specials as string[]) : [];
+  // T12 — identity (code/SKU/description) + variants lock for GRN-sourced PI
+  // lines; the whole card's `disabled` (locked doc) still wins over everything.
+  const identityLocked = disabled || identityReadOnly;
 
   return (
     <div
@@ -252,15 +265,17 @@ export const PoLineCard = ({
         </div>
       </div>
 
-      {/* Identity row — Internal code + Supplier SKU side by side */}
-      <div className={styles.formGrid2}>
+      {/* Identity row — Internal code + Supplier SKU side by side. T12: when
+          hidePoFields (PI) the Supplier SKU column is dropped, so the code spans
+          the row alone. */}
+      <div className={hidePoFields ? undefined : styles.formGrid2}>
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Item Code (Internal)</span>
           <input
             type="text"
             list={`bindings-${l.rid}`}
             value={l.materialCode}
-            disabled={disabled}
+            disabled={identityLocked}
             onChange={(e) => {
               const code = e.target.value;
               // Bound match wins (autofills supplier SKU + price).
@@ -303,6 +318,8 @@ export const PoLineCard = ({
             }
           </datalist>
         </label>
+        {/* T12 — Supplier SKU is a PO-only field; hidden on the PI card. */}
+        {!hidePoFields && (
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Supplier SKU</span>
           {/* Bi-directional picker: typing/picking a supplier_sku reverse-fills
@@ -313,7 +330,7 @@ export const PoLineCard = ({
             type="text"
             list={`supplier-skus-${l.rid}`}
             value={l.supplierSku ?? ''}
-            disabled={disabled}
+            disabled={identityLocked}
             onChange={(e) => {
               const sku = e.target.value;
               if (supplierId) {
@@ -341,6 +358,7 @@ export const PoLineCard = ({
             ))}
           </datalist>
         </label>
+        )}
       </div>
 
       {/* Description — full width */}
@@ -349,7 +367,7 @@ export const PoLineCard = ({
         <input
           type="text"
           value={l.materialName}
-          disabled={disabled}
+          disabled={identityLocked}
           onChange={(e) => onChange({ materialName: e.target.value })}
           placeholder="(auto-filled if bound — editable for one-off purchases)"
           className={styles.fieldInput}
@@ -387,7 +405,7 @@ export const PoLineCard = ({
                   <select
                     className={styles.fieldSelect}
                     value={String(l.variants.fabricCode ?? '')}
-                    disabled={disabled}
+                    disabled={identityLocked}
                     onChange={(e) => onSetVariant('fabricCode', e.target.value)}
                   >
                     <option value="" disabled>Select…</option>
@@ -403,7 +421,7 @@ export const PoLineCard = ({
                   <select
                     className={styles.fieldSelect}
                     value={String(l.variants.gap ?? '')}
-                    disabled={disabled}
+                    disabled={identityLocked}
                     onChange={(e) => onSetVariant('gap', e.target.value)}
                   >
                     <option value="" disabled>Select…</option>
@@ -415,7 +433,7 @@ export const PoLineCard = ({
                   <select
                     className={styles.fieldSelect}
                     value={String(l.variants.divanHeight ?? '')}
-                    disabled={disabled}
+                    disabled={identityLocked}
                     onChange={(e) => onSetVariant('divanHeight', e.target.value)}
                   >
                     <option value="" disabled>Select…</option>
@@ -427,7 +445,7 @@ export const PoLineCard = ({
                   <select
                     className={styles.fieldSelect}
                     value={String(l.variants.legHeight ?? '')}
-                    disabled={disabled}
+                    disabled={identityLocked}
                     onChange={(e) => onSetVariant('legHeight', e.target.value)}
                   >
                     <option value="" disabled>Select…</option>
@@ -438,7 +456,7 @@ export const PoLineCard = ({
               <SpecialsCheckboxes
                 pool={specialsPools.bedframe}
                 picked={specials}
-                disabled={disabled}
+                disabled={identityLocked}
                 onChange={(arr) => onSetVariant('specials', arr)}
               />
             </>
@@ -469,7 +487,7 @@ export const PoLineCard = ({
                   <select
                     className={styles.fieldSelect}
                     value={String(l.variants.seatHeight ?? '')}
-                    disabled={disabled}
+                    disabled={identityLocked}
                     onChange={(e) => onSetVariant('seatHeight', e.target.value)}
                   >
                     <option value="" disabled>Select…</option>
@@ -481,7 +499,7 @@ export const PoLineCard = ({
                   <select
                     className={styles.fieldSelect}
                     value={String(l.variants.legHeight ?? '')}
-                    disabled={disabled}
+                    disabled={identityLocked}
                     onChange={(e) => onSetVariant('legHeight', e.target.value)}
                   >
                     <option value="" disabled>Select…</option>
@@ -493,7 +511,7 @@ export const PoLineCard = ({
               <SpecialsCheckboxes
                 pool={specialsPools.sofa}
                 picked={specials}
-                disabled={disabled}
+                disabled={identityLocked}
                 onChange={(arr) => onSetVariant('specials', arr)}
               />
             </>
@@ -501,8 +519,10 @@ export const PoLineCard = ({
         </div>
       )}
 
-      {/* Pricing row — Qty · Unit Price · Discount · Delivery · Ship-to */}
-      <div className={styles.formGrid4} style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
+      {/* Pricing row — Qty · Unit Price · Discount · Delivery · Ship-to. T12: on
+          the PI card (hidePoFields) Delivery + Ship-to are dropped, so the row
+          collapses to 3 columns. */}
+      <div className={styles.formGrid4} style={{ gridTemplateColumns: hidePoFields ? 'repeat(3, 1fr)' : 'repeat(5, 1fr)' }}>
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Qty</span>
           <input
@@ -539,6 +559,8 @@ export const PoLineCard = ({
             selectOnFocus
           />
         </label>
+        {/* T12 — Delivery + Ship-to are PO-only; hidden on the PI card. */}
+        {!hidePoFields && (
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Delivery Date</span>
           <input
@@ -549,6 +571,8 @@ export const PoLineCard = ({
             className={styles.fieldInput}
           />
         </label>
+        )}
+        {!hidePoFields && (
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Ship-to Location</span>
           <select
@@ -563,11 +587,14 @@ export const PoLineCard = ({
             ))}
           </select>
         </label>
+        )}
       </div>
 
       {/* Supplier-revised delivery dates (migration 0180). The supplier pushes
           the delivery back; the latest non-empty date is the effective one used
-          downstream (MRP / GRN / on-time). All optional. */}
+          downstream (MRP / GRN / on-time). All optional. T12: PO-only — hidden
+          on the PI card. */}
+      {!hidePoFields && (
       <div className={styles.formGrid4} style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Supplier Date 2</span>
@@ -600,6 +627,7 @@ export const PoLineCard = ({
           />
         </label>
       </div>
+      )}
     </div>
   );
 };
