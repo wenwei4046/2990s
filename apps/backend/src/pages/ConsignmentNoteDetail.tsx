@@ -32,6 +32,7 @@ import {
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import { PhoneInput } from '../components/PhoneInput';
+import { StatusPill } from '../components/StatusPill';
 import {
   useConsignmentNoteDetail,
   useUpdateConsignmentNoteHeader,
@@ -56,16 +57,6 @@ const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
 const STATUS_FLOW = ['LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED', 'DELIVERED', 'INVOICED', 'CANCELLED'] as const;
 type CnStatus = typeof STATUS_FLOW[number];
-
-const STATUS_CLASS: Record<string, string> = {
-  LOADED:      styles.statusConfirmed ?? '',
-  DISPATCHED:  styles.statusShipped ?? '',
-  IN_TRANSIT:  styles.statusInProd ?? '',
-  SIGNED:      styles.statusReady ?? '',
-  DELIVERED:   styles.statusDelivered ?? '',
-  INVOICED:    styles.statusInvoiced ?? '',
-  CANCELLED:   styles.statusCancelled ?? '',
-};
 
 const fmtRm = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -365,9 +356,7 @@ export const ConsignmentNoteDetail = () => {
             <span className={styles.totalRailLabel}>Total</span>
             <span className={styles.totalRailValue}>{fmtRm(header.local_total_centi, header.currency)}</span>
           </div>
-          <span className={`${styles.statusPill} ${STATUS_CLASS[header.status] ?? ''}`}>
-            {header.status.replace(/_/g, ' ')}
-          </span>
+          <StatusPill docType="do" status={header.status} />
           <RelationshipMapButton type="cdo" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer size={15} strokeWidth={1.75} /><span>Print PDF</span>

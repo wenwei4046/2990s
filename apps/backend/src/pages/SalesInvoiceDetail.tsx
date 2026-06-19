@@ -39,6 +39,7 @@ import {
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { StatusPill } from '../components/StatusPill';
 import {
   PaymentsTable, labelToApi, draftMethodFields, type PaymentDraft,
 } from '../components/PaymentsTable';
@@ -55,21 +56,6 @@ import styles from './SalesOrderDetail.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
 type SiStatus = 'SENT' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' | 'CANCELLED';
-
-const STATUS_CLASS: Record<string, string> = {
-  SENT:           styles.statusShipped ?? '',
-  PARTIALLY_PAID: styles.statusInProd ?? '',
-  PAID:           styles.statusDelivered ?? '',
-  OVERDUE:        styles.statusCancelled ?? '',
-  CANCELLED:      styles.statusCancelled ?? '',
-};
-const STATUS_LABEL: Record<string, string> = {
-  SENT:           'Issued',
-  PARTIALLY_PAID: 'Partially Paid',
-  PAID:           'Paid',
-  OVERDUE:        'Overdue',
-  CANCELLED:      'Cancelled',
-};
 
 const fmtRm = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -447,9 +433,7 @@ export const SalesInvoiceDetail = () => {
             <span className={styles.totalRailLabel}>Total</span>
             <span className={styles.totalRailValue}>{fmtRm(grandTotal, header.currency)}</span>
           </div>
-          <span className={`${styles.statusPill} ${STATUS_CLASS[header.status] ?? ''}`}>
-            {STATUS_LABEL[header.status] ?? header.status.replace(/_/g, ' ')}
-          </span>
+          <StatusPill docType="si" status={header.status} />
           <RelationshipMapButton type="si" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} /><span>Print PDF</span>

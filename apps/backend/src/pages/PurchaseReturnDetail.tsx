@@ -47,23 +47,11 @@ import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { StatusPill } from '../components/StatusPill';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
-
-// purchase_return_status — POSTED ("Confirmed", editable) / COMPLETED /
-// CANCELLED (both locked).
-const STATUS_CLASS: Record<string, string> = {
-  POSTED:    styles.statusDelivered ?? '',
-  COMPLETED: styles.statusDelivered ?? '',
-  CANCELLED: styles.statusCancelled ?? '',
-};
-const STATUS_LABEL: Record<string, string> = {
-  POSTED:    'Confirmed',
-  COMPLETED: 'Completed',
-  CANCELLED: 'Cancelled',
-};
 
 const fmtRm = (centi: number | null | undefined): string => {
   const v = centi ?? 0;
@@ -262,9 +250,7 @@ export const PurchaseReturnDetail = () => {
             <span className={styles.totalRailValue}>{fmtRm(refundTotal)}</span>
           </div>
           {/* A return is Confirmed the moment it exists (no Draft/lifecycle). */}
-          <span className={`${styles.statusPill} ${STATUS_CLASS[pr.status as string] ?? ''}`}>
-            {STATUS_LABEL[pr.status as string] ?? String(pr.status)}
-          </span>
+          <StatusPill docType="pr" status={pr.status} />
           <RelationshipMapButton type="pr" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} />

@@ -41,20 +41,10 @@ import { ItemGroupPill } from '../lib/category-badges';
 import { MoneyInput } from '../components/MoneyInput';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
+import { StatusPill } from '../components/StatusPill';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
-
-const STATUS_CLASS: Record<string, string> = {
-  POSTED:    styles.statusDelivered ?? '',
-  CANCELLED: styles.statusCancelled ?? '',
-  CLOSED:    styles.statusCancelled ?? '',
-};
-const STATUS_LABEL: Record<string, string> = {
-  POSTED:    'Confirmed',
-  CANCELLED: 'Cancelled',
-  CLOSED:    'Closed',
-};
 
 const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   const v = centi ?? 0;
@@ -279,9 +269,7 @@ export const PurchaseConsignmentReceiveDetail = () => {
             <span className={styles.totalRailLabel}>Total</span>
             <span className={styles.totalRailValue}>{fmtRm(grandTotal, grn.currency)}</span>
           </div>
-          <span className={`${styles.statusPill} ${STATUS_CLASS[grn.status as string] ?? ''}`}>
-            {STATUS_LABEL[grn.status as string] ?? String(grn.status)}
-          </span>
+          <StatusPill docType="grn" status={grn.status} />
           <RelationshipMapButton type="pcr" id={grn.id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} /><span>Print PDF</span>

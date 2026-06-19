@@ -50,21 +50,10 @@ import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { StatusPill } from '../components/StatusPill';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
-
-// grn_status enum — POSTED reads as "Confirmed"; CANCELLED / CLOSED lock the page.
-const STATUS_CLASS: Record<string, string> = {
-  POSTED:    styles.statusDelivered ?? '',
-  CANCELLED: styles.statusCancelled ?? '',
-  CLOSED:    styles.statusCancelled ?? '',
-};
-const STATUS_LABEL: Record<string, string> = {
-  POSTED:    'Confirmed',
-  CANCELLED: 'Cancelled',
-  CLOSED:    'Closed',
-};
 
 const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   const v = centi ?? 0;
@@ -312,9 +301,7 @@ export const GoodsReceivedDetail = () => {
             <span className={styles.totalRailValue}>{fmtRm(grandTotal, grn.currency)}</span>
           </div>
           {/* A GRN is Confirmed the moment it exists (no Draft/lifecycle). */}
-          <span className={`${styles.statusPill} ${STATUS_CLASS[grn.status as string] ?? ''}`}>
-            {STATUS_LABEL[grn.status as string] ?? String(grn.status)}
-          </span>
+          <StatusPill docType="grn" status={grn.status} />
           <RelationshipMapButton type="grn" id={id} />
           {/* From Purchase Order — Commander 2026-05-31: the EDIT flow uses the
               SAME top-level convert-from-PO picker as Create GR (a GRN is built by

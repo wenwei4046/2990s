@@ -18,6 +18,7 @@ import { Button } from '@2990s/design-system';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
+import { StatusPill } from '../components/StatusPill';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   useStockTakeDetail,
@@ -32,12 +33,6 @@ import {
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
-
-const STATUS_TONE: Record<StockTakeStatus, { bg: string; fg: string; label: string }> = {
-  OPEN:      { bg: 'rgba(34, 31, 32, 0.08)',  fg: 'var(--fg-muted)',                label: 'Open' },
-  POSTED:    { bg: 'rgba(47, 93, 79, 0.16)',  fg: 'var(--c-secondary-a, #2F5D4F)',  label: 'Posted' },
-  CANCELLED: { bg: 'rgba(184, 51, 31, 0.10)', fg: 'var(--c-festive-b, #B8331F)',    label: 'Cancelled' },
-};
 
 const fmtDateTime = (iso: string | null): string => {
   if (!iso) return '—';
@@ -118,7 +113,6 @@ export const StockTakeDetail = () => {
   const status: StockTakeStatus | undefined = detail.data?.take.status;
   const isDraft  = status === 'OPEN';      // local var name kept for diff minimization; refers to OPEN state
   const isPosted = status === 'POSTED';
-  const tone     = status ? STATUS_TONE[status] : null;
 
   const filteredLines = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -317,16 +311,9 @@ export const StockTakeDetail = () => {
           </Link>
           <h1 className={styles.title}>
             {t.take_no}
-            {tone && (
-              <span style={{
-                marginLeft: 'var(--space-3)',
-                display: 'inline-flex', alignItems: 'center',
-                padding: '4px 10px', borderRadius: 'var(--radius-pill)',
-                fontFamily: 'var(--font-button)', fontSize: 'var(--fs-12)', fontWeight: 600,
-                background: tone.bg, color: tone.fg, letterSpacing: '0.04em',
-                verticalAlign: 'middle',
-              }}>
-                {tone.label}
+            {status && (
+              <span style={{ marginLeft: 'var(--space-3)', verticalAlign: 'middle' }}>
+                <StatusPill docType="stockTake" status={status} />
               </span>
             )}
           </h1>

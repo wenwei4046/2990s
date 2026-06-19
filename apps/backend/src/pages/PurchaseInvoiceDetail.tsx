@@ -48,25 +48,11 @@ import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { StatusPill } from '../components/StatusPill';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
-
-// purchase_invoice_status — POSTED ("Confirmed", editable) / PARTIALLY_PAID /
-// PAID (editable) / CANCELLED (locked).
-const STATUS_CLASS: Record<string, string> = {
-  POSTED:         styles.statusDelivered ?? '',
-  PARTIALLY_PAID: styles.statusDelivered ?? '',
-  PAID:           styles.statusDelivered ?? '',
-  CANCELLED:      styles.statusCancelled ?? '',
-};
-const STATUS_LABEL: Record<string, string> = {
-  POSTED:         'Confirmed',
-  PARTIALLY_PAID: 'Partially paid',
-  PAID:           'Paid',
-  CANCELLED:      'Cancelled',
-};
 
 const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   const v = centi ?? 0;
@@ -278,9 +264,7 @@ export const PurchaseInvoiceDetail = () => {
             <span className={styles.totalRailValue}>{fmtRm(grandTotal, pi.currency)}</span>
           </div>
           {/* A PI is Confirmed the moment it exists (no Draft/lifecycle). */}
-          <span className={`${styles.statusPill} ${STATUS_CLASS[pi.status as string] ?? ''}`}>
-            {STATUS_LABEL[pi.status as string] ?? String(pi.status)}
-          </span>
+          <StatusPill docType="pi" status={pi.status} />
           <RelationshipMapButton type="pi" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} />

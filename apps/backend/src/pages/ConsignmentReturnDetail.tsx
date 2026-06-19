@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { StatusPill } from '../components/StatusPill';
 import {
   useConsignmentReturnDetail,
   useUpdateConsignmentReturnHeader,
@@ -50,16 +51,6 @@ const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
 const STATUS_FLOW = ['PENDING', 'RECEIVED', 'INSPECTED', 'REFUNDED', 'CREDIT_NOTED', 'REJECTED', 'CANCELLED'] as const;
 type CrnStatus = typeof STATUS_FLOW[number];
-
-const STATUS_CLASS: Record<string, string> = {
-  PENDING:      styles.statusConfirmed ?? '',
-  RECEIVED:     styles.statusReady ?? '',
-  INSPECTED:    styles.statusInProd ?? '',
-  REFUNDED:     styles.statusDelivered ?? '',
-  CREDIT_NOTED: styles.statusInvoiced ?? '',
-  REJECTED:     styles.statusCancelled ?? '',
-  CANCELLED:    styles.statusCancelled ?? '',
-};
 
 const fmtRm = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -378,9 +369,7 @@ export const ConsignmentReturnDetail = () => {
             <span className={styles.totalRailLabel}>Returned</span>
             <span className={styles.totalRailValue}>{fmtRm(header.local_total_centi, header.currency)}</span>
           </div>
-          <span className={`${styles.statusPill} ${STATUS_CLASS[header.status] ?? ''}`}>
-            {header.status.replace(/_/g, ' ')}
-          </span>
+          <StatusPill docType="dr" status={header.status} />
           <RelationshipMapButton type="cdr" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer size={15} strokeWidth={1.75} /><span>Print PDF</span>

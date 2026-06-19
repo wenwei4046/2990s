@@ -16,6 +16,7 @@ import { Button } from '@2990s/design-system';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
+import { StatusPill } from '../components/StatusPill';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   useWarehouses,
@@ -33,11 +34,6 @@ const ICON = { size: 16, strokeWidth: 1.75 } as const;
 type LineDraft = StockTransferItemInput & { _key: string };
 
 const newKey = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-const STATUS_TONE: Record<StockTransferStatus, { bg: string; fg: string; label: string }> = {
-  POSTED:    { bg: 'rgba(47, 93, 79, 0.16)',  fg: 'var(--c-secondary-a, #2F5D4F)',  label: 'Posted' },
-  CANCELLED: { bg: 'rgba(184, 51, 31, 0.10)', fg: 'var(--c-festive-b, #B8331F)',    label: 'Cancelled' },
-};
 
 const fmtDateTime = (iso: string | null): string => {
   if (!iso) return '—';
@@ -85,7 +81,6 @@ export const StockTransferDetail = () => {
   }, [detail.data]);
 
   const status: StockTransferStatus | undefined = detail.data?.transfer.status;
-  const tone    = status ? STATUS_TONE[status] : null;
   const isPosted = status === 'POSTED';
 
   // ── Cancel ───────────────────────────────────────────────────────────
@@ -130,16 +125,9 @@ export const StockTransferDetail = () => {
           </Link>
           <h1 className={styles.title}>
             {t.transfer_no}
-            {tone && (
-              <span style={{
-                marginLeft: 'var(--space-3)',
-                display: 'inline-flex', alignItems: 'center',
-                padding: '4px 10px', borderRadius: 'var(--radius-pill)',
-                fontFamily: 'var(--font-button)', fontSize: 'var(--fs-12)', fontWeight: 600,
-                background: tone.bg, color: tone.fg, letterSpacing: '0.04em',
-                verticalAlign: 'middle',
-              }}>
-                {tone.label}
+            {status && (
+              <span style={{ marginLeft: 'var(--space-3)', verticalAlign: 'middle' }}>
+                <StatusPill docType="stockTransfer" status={status} />
               </span>
             )}
           </h1>

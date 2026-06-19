@@ -46,6 +46,7 @@ import {
   usePurchaseReturnLinked,
 } from '../lib/suppliers-queries';
 import { SmartButtons } from '../components/SmartButtons';
+import { StatusPill } from '../components/StatusPill';
 import styles from './DocDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -74,12 +75,6 @@ const daysSince = (iso: string | null | undefined): number => {
 /* ════════════════════════════════════════════════════════════════════════
    1. GRN Detail — Post action rolls qty_accepted back to PO.received_qty
    ════════════════════════════════════════════════════════════════════════ */
-
-const GRN_STATUS_CLASS: Record<string, string> = {
-  // DRAFT removed in migration 0078 — GRNs post on create.
-  POSTED: styles.statusOk ?? '',
-  CLOSED: styles.statusClosed ?? '',
-};
 
 export const GrnDetail = () => {
   const notify = useNotify();
@@ -172,7 +167,7 @@ export const GrnDetail = () => {
           </div>
         </div>
         <div className={styles.actions}>
-          <span className={`${styles.statusPill} ${GRN_STATUS_CLASS[grn.status] ?? ''}`}>{grn.status}</span>
+          <StatusPill docType="grn" status={grn.status} />
           <Button variant="ghost" size="md" onClick={() => {
             import('../lib/grn-pdf').then(({ generateGrnPdf }) => generateGrnPdf(grn, items))
               .catch((e) => notify({ title: `PDF failed: ${e instanceof Error ? e.message : String(e)}`, tone: 'error' }));
@@ -301,14 +296,6 @@ export const GrnDetail = () => {
    2. Purchase Invoice Detail — Post + Record Payment
    ════════════════════════════════════════════════════════════════════════ */
 
-const PI_STATUS_CLASS: Record<string, string> = {
-  // DRAFT removed in migration 0078 — PIs post on create.
-  POSTED:          styles.statusPosted ?? '',
-  PARTIALLY_PAID:  styles.statusInProgress ?? '',
-  PAID:            styles.statusOk ?? '',
-  CANCELLED:       styles.statusBad ?? '',
-};
-
 export const PurchaseInvoiceDetail = () => {
   const notify = useNotify();
   const askConfirm = useConfirm();
@@ -367,9 +354,7 @@ export const PurchaseInvoiceDetail = () => {
           </div>
         </div>
         <div className={styles.actions}>
-          <span className={`${styles.statusPill} ${PI_STATUS_CLASS[pi.status] ?? ''}`}>
-            {pi.status.replace('_', ' ')}
-          </span>
+          <StatusPill docType="pi" status={pi.status} />
           <Button variant="ghost" size="md" onClick={() => {
             import('../lib/purchase-invoice-pdf').then(({ generatePurchaseInvoicePdf }) => generatePurchaseInvoicePdf(pi, items))
               .catch((e) => notify({ title: `PDF failed: ${e instanceof Error ? e.message : String(e)}`, tone: 'error' }));
@@ -502,15 +487,6 @@ export const PurchaseInvoiceDetail = () => {
    4. Sales Invoice Detail — issue + record payment + AR aging
    ════════════════════════════════════════════════════════════════════════ */
 
-const SI_STATUS_CLASS: Record<string, string> = {
-  // DRAFT removed in migration 0078.
-  ISSUED:         styles.statusPosted ?? '',
-  SENT:           styles.statusPosted ?? '',
-  PARTIALLY_PAID: styles.statusInProgress ?? '',
-  PAID:           styles.statusOk ?? '',
-  CANCELLED:      styles.statusBad ?? '',
-};
-
 export const SalesInvoiceDetail = () => {
   const notify = useNotify();
   const { id } = useParams<{ id: string }>();
@@ -558,9 +534,7 @@ export const SalesInvoiceDetail = () => {
           </div>
         </div>
         <div className={styles.actions}>
-          <span className={`${styles.statusPill} ${SI_STATUS_CLASS[si.status] ?? ''}`}>
-            {si.status.replace('_', ' ')}
-          </span>
+          <StatusPill docType="si" status={si.status} />
           <Button variant="ghost" size="md" onClick={() => {
             import('../lib/sales-invoice-pdf').then(({ generateSalesInvoicePdf }) => generateSalesInvoicePdf(si, items))
               .catch((e) => notify({ title: `PDF failed: ${e instanceof Error ? e.message : String(e)}`, tone: 'error' }));
@@ -757,13 +731,6 @@ const PaymentModal = ({
    6. Purchase Return Detail — Post → Complete (with credit note ref)
    ════════════════════════════════════════════════════════════════════════ */
 
-const PR_STATUS_CLASS: Record<string, string> = {
-  // DRAFT removed in migration 0078 — PRs post on create.
-  POSTED:    styles.statusInProgress ?? '',
-  COMPLETED: styles.statusOk ?? '',
-  CANCELLED: styles.statusBad ?? '',
-};
-
 export const PurchaseReturnDetail = () => {
   const notify = useNotify();
   const askConfirm = useConfirm();
@@ -820,7 +787,7 @@ export const PurchaseReturnDetail = () => {
           </div>
         </div>
         <div className={styles.actions}>
-          <span className={`${styles.statusPill} ${PR_STATUS_CLASS[pr.status] ?? ''}`}>{pr.status}</span>
+          <StatusPill docType="pr" status={pr.status} />
           <Button variant="ghost" size="md" onClick={() => {
             import('../lib/purchase-return-pdf').then(({ generatePurchaseReturnPdf }) => generatePurchaseReturnPdf(pr, items))
               .catch((e) => notify({ title: `PDF failed: ${e instanceof Error ? e.message : String(e)}`, tone: 'error' }));

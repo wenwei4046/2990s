@@ -52,21 +52,11 @@ import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { StatusPill } from '../components/StatusPill';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
-
-// PR-DRAFT-removal — DRAFT dropped from po_status (migration 0078).
-const STATUS_LIST = ['SUBMITTED', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED'] as const;
-type PoStatus = typeof STATUS_LIST[number];
-
-const STATUS_CLASS: Record<PoStatus, string> = {
-  SUBMITTED:          styles.statusConfirmed ?? '',
-  PARTIALLY_RECEIVED: styles.statusInProd ?? '',
-  RECEIVED:           styles.statusDelivered ?? '',
-  CANCELLED:          styles.statusCancelled ?? '',
-};
 
 const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   const v = centi ?? 0;
@@ -337,9 +327,7 @@ export const PurchaseOrderDetail = () => {
             <span className={styles.totalRailLabel}>Total</span>
             <span className={styles.totalRailValue}>{fmtRm(grandTotal, po.currency)}</span>
           </div>
-          <span className={`${styles.statusPill} ${STATUS_CLASS[po.status as PoStatus]}`}>
-            {po.status.replace(/_/g, ' ')}
-          </span>
+          <StatusPill docType="po" status={po.status} />
           <RelationshipMapButton type="po" id={po.id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} />

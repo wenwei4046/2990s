@@ -37,6 +37,7 @@ import {
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { StatusPill } from '../components/StatusPill';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
@@ -51,16 +52,6 @@ const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
 const STATUS_FLOW = ['PENDING', 'RECEIVED', 'INSPECTED', 'REFUNDED', 'CREDIT_NOTED', 'REJECTED', 'CANCELLED'] as const;
 type DrStatus = typeof STATUS_FLOW[number];
-
-const STATUS_CLASS: Record<string, string> = {
-  PENDING:      styles.statusConfirmed ?? '',
-  RECEIVED:     styles.statusReady ?? '',
-  INSPECTED:    styles.statusInProd ?? '',
-  REFUNDED:     styles.statusDelivered ?? '',
-  CREDIT_NOTED: styles.statusInvoiced ?? '',
-  REJECTED:     styles.statusCancelled ?? '',
-  CANCELLED:    styles.statusCancelled ?? '',
-};
 
 const fmtRm = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -392,9 +383,7 @@ export const DeliveryReturnDetail = () => {
             <span className={styles.totalRailLabel}>Returned</span>
             <span className={styles.totalRailValue}>{fmtRm(header.local_total_centi, header.currency)}</span>
           </div>
-          <span className={`${styles.statusPill} ${STATUS_CLASS[header.status] ?? ''}`}>
-            {header.status.replace(/_/g, ' ')}
-          </span>
+          <StatusPill docType="dr" status={header.status} />
           <RelationshipMapButton type="dr" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} /><span>Print PDF</span>
