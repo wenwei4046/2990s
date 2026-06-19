@@ -871,9 +871,9 @@ export function NewModelDialog({
         const results = await Promise.all(createdModels.map(async (m) => {
           try {
             const r = await generateMut.mutateAsync({ id: m.id });
-            return { model: m, generated: r.generated ?? 0, codes: r.codes ?? [], error: null as string | null };
+            return { model: m, generated: r.generated ?? 0, skipped: r.skipped ?? 0, codes: r.codes ?? [], error: null as string | null, reason: r.reason ?? null };
           } catch (err) {
-            return { model: m, generated: 0, codes: [] as string[], error: err instanceof Error ? err.message : String(err) };
+            return { model: m, generated: 0, skipped: 0, codes: [] as string[], error: err instanceof Error ? err.message : String(err), reason: null as string | null };
           }
         }));
         totalGenerated = results.reduce((sum, r) => sum + r.generated, 0);
@@ -882,14 +882,21 @@ export function NewModelDialog({
         // SKUs (generation errored, or produced nothing) is deleted so it can't
         // linger as an empty shell that blocks the next attempt with a
         // duplicate-code 409. The failure is surfaced, never swallowed.
-        const failed = results.filter((r) => r.generated === 0);
+        // A model is a REAL failure only if generation errored, or it produced
+        // no SKU at all (none generated AND none pre-existing). "Skipped because
+        // the SKU code already exists" (skipped > 0) is NOT a failure — the SKU
+        // is already in the catalog, so keep the model and still bind its
+        // suppliers to it (Commander 2026-06-19: an ACCESSORY whose code already
+        // existed was stuck in an un-saveable loop because generated:0 was
+        // treated as fatal, and the real reason was hidden).
+        const failed = results.filter((r) => r.error != null || (r.generated === 0 && r.skipped === 0));
         if (failed.length > 0) {
           await Promise.all(failed.map((r) => deleteMut.mutateAsync(r.model.id).catch(() => {})));
           const codesFailed = failed.map((r) => r.model.model_code).join(', ');
+          const why = failed.map((r) => r.reason || r.error).filter(Boolean).join(' ');
           throw new Error(
-            `Could not create the SKUs for ${codesFailed}. ` +
-            `The empty model${failed.length === 1 ? ' was' : 's were'} removed so nothing was left behind. ` +
-            `Please check the sizes and press Create again.`,
+            `Could not create the SKUs for ${codesFailed}. ${why ? `${why} ` : ''}` +
+            `The empty model${failed.length === 1 ? ' was' : 's were'} removed so nothing was left behind.`,
           );
         }
 

@@ -213,7 +213,7 @@ export function useGenerateModelSkus() {
       const body: Record<string, unknown> = {};
       if (args.rows && args.rows.length > 0) body.rows = args.rows;
       else if (args.codes && args.codes.length > 0) body.codes = args.codes;
-      return authedFetch<{ generated: number; skipped: number; codes: string[] }>(
+      return authedFetch<{ generated: number; skipped: number; codes: string[]; reason?: string }>(
         `/product-models/${args.id}/generate-skus`,
         { method: 'POST', body: JSON.stringify(body) },
       );

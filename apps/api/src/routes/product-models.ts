@@ -632,8 +632,11 @@ productModels.post('/:id/generate-skus', async (c) => {
   if (toInsert.length === 0) {
     return c.json({
       generated: 0,
-      skipped: wanted.length,
-      reason: 'All variant codes already exist — nothing to insert.',
+      skipped: wantedFiltered.length,
+      // Return the (already-existing) codes so the caller can still bind
+      // suppliers to them — an existing SKU is NOT a failure to create the model.
+      codes: wantedFiltered.map((w) => w.code),
+      reason: 'All variant codes already exist — nothing new to insert.',
     });
   }
 
@@ -672,7 +675,9 @@ productModels.post('/:id/generate-skus', async (c) => {
   return c.json({
     generated: rows.length,
     skipped: existingSet.size,
-    codes: rows.map((r) => r.code),
+    // ALL wanted codes (newly-inserted + already-existing) so a partial batch
+    // still lets the caller bind suppliers to every SKU, not only the new ones.
+    codes: wantedFiltered.map((w) => w.code),
   });
 });
 
