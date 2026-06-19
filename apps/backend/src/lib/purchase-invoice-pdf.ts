@@ -2,7 +2,12 @@
 // Dual-code layout (Commander): supplier code first, our code alongside.
 // purchase_invoice_items has NO supplier_sku column — resolved at print time
 // from supplier_material_bindings via the doc's supplier_id.
-import { drawHeader, drawTwoColInfo, fmtRm, safeName, fmtDocDate, fmtDocStamp } from './pdf-common';
+//
+// 2026-06-19 — unified "Hookka-tidy" layout shared with SO/PO/DO/SI: real
+// letterhead header, the drawInfoColumns info block (SUPPLIER label-gutter +
+// INVOICE DETAILS colon-aligned), and the consistent footer (doc no · portal ·
+// page n of m). A4 portrait, pure B&W. Dual-code table + totals unchanged.
+import { COMPANY, drawHeader, drawInfoColumns, fmtRm, safeName, fmtDocDate } from './pdf-common';
 import { loadSupplierDocData, supplierCodeFor, specsLine } from './supplier-doc-data';
 
 type PiHeader = {
@@ -33,20 +38,31 @@ export async function generatePurchaseInvoicePdf(header: PiHeader, items: PiItem
   let y = drawHeader(doc, {
     docTitle: 'PURCHASE INVOICE',
     rightMeta: [
-      { label: 'Our PI No',    value: header.invoice_number },
-      { label: 'Supplier Ref', value: header.supplier_invoice_ref ?? '—' },
-      { label: 'Date',         value: fmtDocDate(header.invoice_date) },
-      { label: 'Due',          value: fmtDocDate(header.due_date) },
-      { label: 'Status',       value: header.status.replace(/_/g, ' ') },
+      { label: 'Our PI No', value: header.invoice_number },
+      { label: 'Date',      value: fmtDocDate(header.invoice_date) },
     ],
   });
 
-  y = drawTwoColInfo(doc, y, 'SUPPLIER', 'NOTES',
-    [
-      header.supplier?.name ?? '—',
-      header.supplier?.code ? `Code: ${header.supplier.code}` : null,
-    ],
-    [header.notes ?? null],
+  const statusText = header.status.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+  y = drawInfoColumns(doc, y,
+    {
+      title: 'SUPPLIER',
+      rows: [
+        ['Company', header.supplier?.name],
+        ['Code', header.supplier?.code],
+        ['Note', header.notes],
+      ],
+    },
+    {
+      title: 'INVOICE DETAILS',
+      rows: [
+        ['Our PI No', header.invoice_number],
+        ['Supplier Ref', header.supplier_invoice_ref],
+        ['Date', fmtDocDate(header.invoice_date)],
+        ['Due', header.due_date ? fmtDocDate(header.due_date) : null],
+        ['Status', statusText],
+      ],
+    },
   );
 
   // Codes note + dual-code lookups (no supplier_sku column on PI items —
@@ -75,7 +91,7 @@ export async function generatePurchaseInvoicePdf(header: PiHeader, items: PiItem
     head: [['#', 'Supplier Code', 'Our Code', 'Description', 'Qty', 'Unit Price', 'Total']],
     body: rows,
     theme: 'striped',
-    styles: { fontSize: 8.5, cellPadding: 2 },
+    styles: { fontSize: 8.5, cellPadding: 2, valign: 'top' },
     headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
     columnStyles: {
       0: { cellWidth: 8, halign: 'right' },
@@ -107,9 +123,16 @@ export async function generatePurchaseInvoicePdf(header: PiHeader, items: PiItem
   drawRow('Paid',        fmtRm(header.paid_centi, header.currency), ty + 4); ty += 4;
   drawRow('Outstanding', fmtRm(header.total_centi - header.paid_centi, header.currency), ty + 4, true);
 
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(110);
-  doc.text(`Generated ${fmtDocStamp()}`, pageW - margin, ty + 14, { align: 'right' });
-  doc.setTextColor(0);
+  // Footer: doc no · portal · page n of m on every page
+  const pageCount = doc.getNumberOfPages();
+  for (let p = 1; p <= pageCount; p += 1) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
+    doc.text(header.invoice_number, margin, 290);
+    doc.text(`${COMPANY.portalLabel} · ${fmtDocDate(header.invoice_date)}`, pageW / 2, 290, { align: 'center' });
+    doc.text(`Page ${p} of ${pageCount}`, pageW - margin, 290, { align: 'right' });
+    doc.setTextColor(0);
+  }
 
   doc.save(`${header.invoice_number}-${safeName(header.supplier?.name ?? 'supplier')}.pdf`);
 }

@@ -2,7 +2,12 @@
 // Dual-code layout (Commander): supplier code first, our code alongside.
 // purchase_return_items has NO supplier_sku column — resolved at print time
 // from supplier_material_bindings via the doc's supplier_id.
-import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate, fmtDocStamp } from './pdf-common';
+//
+// 2026-06-19 — adopts the unified "Hookka-tidy" layout shared with SO/PO/DO/SI:
+// real letterhead header, the drawInfoColumns info block (SUPPLIER label-gutter +
+// RETURN DETAILS colon-aligned), and the consistent footer (doc no · portal ·
+// page n of m) on every page. A4 portrait, pure B&W. No field dropped.
+import { COMPANY, drawHeader, drawInfoColumns, drawSignatureBoxes, fmtRm, safeName, fmtDocDate } from './pdf-common';
 import { loadSupplierDocData, supplierCodeFor, specsLine } from './supplier-doc-data';
 
 type PrHeader = {
@@ -39,20 +44,33 @@ export async function generatePurchaseReturnPdf(
   let y = drawHeader(doc, {
     docTitle: opts?.docTitle ?? 'PURCHASE RETURN',
     rightMeta: [
-      { label: opts?.docNoLabel ?? 'PR No',   value: header.return_number },
-      { label: 'Date',    value: fmtDocDate(header.return_date) },
-      { label: 'PO Ref',  value: header.purchase_order?.po_number ?? '—' },
-      { label: 'GRN Ref', value: header.grn?.grn_number ?? '—' },
-      { label: 'Status',  value: header.status },
+      { label: opts?.docNoLabel ?? 'PR No', value: header.return_number },
+      { label: 'Date', value: fmtDocDate(header.return_date) },
     ],
   });
 
-  y = drawTwoColInfo(doc, y, 'SUPPLIER', 'REASON',
-    [
-      header.supplier?.name ?? '—',
-      header.supplier?.code ? `Code: ${header.supplier.code}` : null,
-    ],
-    [header.reason ?? '—', header.notes ?? null, header.credit_note_ref ? `Supplier CN: ${header.credit_note_ref}` : null],
+  const statusText = header.status.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+  y = drawInfoColumns(doc, y,
+    {
+      title: 'SUPPLIER',
+      rows: [
+        ['Company', header.supplier?.name ?? null],
+        ['Code', header.supplier?.code ?? null],
+        ['Reason', header.reason],
+        ['Note', header.notes],
+      ],
+    },
+    {
+      title: 'RETURN DETAILS',
+      rows: [
+        [opts?.docNoLabel ?? 'PR No', header.return_number],
+        ['Date', fmtDocDate(header.return_date)],
+        ['PO Ref', header.purchase_order?.po_number],
+        ['GRN Ref', header.grn?.grn_number],
+        ['Supplier CN', header.credit_note_ref],
+        ['Status', statusText],
+      ],
+    },
   );
 
   // Codes note + dual-code lookups (no supplier_sku column on PR items —
@@ -82,7 +100,7 @@ export async function generatePurchaseReturnPdf(
     head: [['#', 'Supplier Code', 'Our Code', 'Description', 'Qty', 'Unit Price', opts?.amountLabel ?? 'Refund', 'Reason']],
     body: rows,
     theme: 'striped',
-    styles: { fontSize: 8.5, cellPadding: 2 },
+    styles: { fontSize: 8.5, cellPadding: 2, valign: 'top' },
     headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
     columnStyles: {
       0: { cellWidth: 8, halign: 'right' },
@@ -104,11 +122,18 @@ export async function generatePurchaseReturnPdf(
   doc.text(opts?.totalLabel ?? 'TOTAL REFUND', totalsX, lastY + 2);
   doc.text(fmtRm(header.refund_centi), pageW - margin, lastY + 2, { align: 'right' });
 
-  const ty = drawSignatureBoxes(doc, lastY + 12, "2990's Home Issued By", 'Supplier Acknowledgement');
+  drawSignatureBoxes(doc, lastY + 12, `${COMPANY.name} Issued By`, 'Supplier Acknowledgement');
 
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(110);
-  doc.text(`Generated ${fmtDocStamp()}`, pageW - margin, ty, { align: 'right' });
-  doc.setTextColor(0);
+  // Footer: doc no · portal · page n of m on every page
+  const pageCount = doc.getNumberOfPages();
+  for (let p = 1; p <= pageCount; p += 1) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
+    doc.text(header.return_number, margin, 290);
+    doc.text(`${COMPANY.portalLabel} · ${fmtDocDate(header.return_date)}`, pageW / 2, 290, { align: 'center' });
+    doc.text(`Page ${p} of ${pageCount}`, pageW - margin, 290, { align: 'right' });
+    doc.setTextColor(0);
+  }
 
   doc.save(`${header.return_number}-${safeName(header.supplier?.name ?? 'supplier')}.pdf`);
 }

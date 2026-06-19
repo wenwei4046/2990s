@@ -1,5 +1,10 @@
 // Sales Invoice PDF — issued to the customer.
-import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate, fmtDocStamp } from './pdf-common';
+//
+// 2026-06-19 — unified "Hookka-tidy" layout shared with SO/PO/DO: real
+// letterhead header, the drawInfoColumns info block (BILL TO label-gutter +
+// INVOICE DETAILS colon-aligned), and the consistent footer (doc no · portal ·
+// page n of m). A4 portrait, pure B&W. Totals + signatures unchanged.
+import { COMPANY, drawHeader, drawInfoColumns, drawSignatureBoxes, fmtRm, safeName, fmtDocDate } from './pdf-common';
 import { docVariantLine, loadCustomerFabricMaps } from './supplier-doc-data';
 
 type SiHeader = {
@@ -33,18 +38,29 @@ export async function generateSalesInvoicePdf(header: SiHeader, items: SiItem[])
     rightMeta: [
       { label: 'Invoice No', value: header.invoice_number },
       { label: 'Date',       value: fmtDocDate(header.invoice_date) },
-      { label: 'Due',        value: fmtDocDate(header.due_date) },
-      { label: 'SO Ref',     value: header.so_doc_no ?? '—' },
-      { label: 'Status',     value: header.status.replace(/_/g, ' ') },
     ],
   });
 
-  y = drawTwoColInfo(doc, y, 'BILL TO', 'NOTES',
-    [
-      header.debtor_name,
-      header.debtor_code ? `Code: ${header.debtor_code}` : null,
-    ],
-    [header.notes ?? null],
+  const statusText = header.status.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+  y = drawInfoColumns(doc, y,
+    {
+      title: 'BILL TO',
+      rows: [
+        ['Company', header.debtor_name],
+        ['Code', header.debtor_code],
+        ['Note', header.notes],
+      ],
+    },
+    {
+      title: 'INVOICE DETAILS',
+      rows: [
+        ['Invoice No', header.invoice_number],
+        ['SO Ref', header.so_doc_no],
+        ['Date', fmtDocDate(header.invoice_date)],
+        ['Due', header.due_date ? fmtDocDate(header.due_date) : null],
+        ['Status', statusText],
+      ],
+    },
   );
 
   const fabric = await loadCustomerFabricMaps(items);
@@ -62,7 +78,7 @@ export async function generateSalesInvoicePdf(header: SiHeader, items: SiItem[])
     head: [['#', 'Item', 'Description', 'Qty', 'Unit Price', 'Disc', 'Total']],
     body: rows,
     theme: 'striped',
-    styles: { fontSize: 8.5, cellPadding: 2 },
+    styles: { fontSize: 8.5, cellPadding: 2, valign: 'top' },
     headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
     columnStyles: {
       0: { cellWidth: 8, halign: 'right' },
@@ -98,11 +114,22 @@ export async function generateSalesInvoicePdf(header: SiHeader, items: SiItem[])
   drawRow('Outstanding', fmtRm(header.total_centi - header.paid_centi, header.currency), ty + 4, true);
   ty += 12;
 
-  ty = drawSignatureBoxes(doc, ty, 'Customer Acknowledgement', "2990's Home Authorised Signature");
+  ty = drawSignatureBoxes(doc, ty, 'Customer Acknowledgement', `${COMPANY.name} Authorised Signature`);
 
   doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(110);
   doc.text('Terms: Payment due as per invoice. Late payments may incur a service charge.', margin, ty);
-  doc.text(`Generated ${fmtDocStamp()}`, pageW - margin, ty, { align: 'right' });
+  doc.setTextColor(0);
+
+  // Footer: doc no · portal · page n of m on every page
+  const pageCount = doc.getNumberOfPages();
+  for (let p = 1; p <= pageCount; p += 1) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
+    doc.text(header.invoice_number, margin, 290);
+    doc.text(`${COMPANY.portalLabel} · ${fmtDocDate(header.invoice_date)}`, pageW / 2, 290, { align: 'center' });
+    doc.text(`Page ${p} of ${pageCount}`, pageW - margin, 290, { align: 'right' });
+    doc.setTextColor(0);
+  }
 
   doc.save(`${header.invoice_number}-${safeName(header.debtor_name)}.pdf`);
 }

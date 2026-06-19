@@ -1,7 +1,12 @@
 // Goods Receipt Note PDF — printable for warehouse / supplier reconciliation.
 // Dual-code layout (Commander): supplier sees THEIR code first, ours alongside;
 // fabric specs show the supplier's colour code with our internal code in ().
-import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate, fmtDocStamp } from './pdf-common';
+//
+// 2026-06-19 — adopts the unified "Hookka-tidy" layout shared with SO/PO/DO/SI:
+// real letterhead header, the drawInfoColumns info block (SUPPLIER label-gutter +
+// GRN DETAILS colon-aligned), and the consistent footer (doc no · portal · page
+// n of m) on every page. A4 portrait, pure B&W. No field dropped.
+import { COMPANY, drawHeader, drawInfoColumns, drawSignatureBoxes, fmtRm, safeName, fmtDocDate } from './pdf-common';
 import { loadSupplierDocData, supplierCodeFor, specsLine } from './supplier-doc-data';
 
 type GrnHeader = {
@@ -37,20 +42,32 @@ export async function generateGrnPdf(
   let y = drawHeader(doc, {
     docTitle: opts?.docTitle ?? 'GOODS RECEIPT NOTE',
     rightMeta: [
-      { label: opts?.docNoLabel ?? 'GRN No',   value: header.grn_number },
-      { label: 'Received', value: fmtDocDate(header.received_at) },
-      { label: 'DN Ref',   value: header.delivery_note_ref ?? '—' },
-      { label: 'PO Ref',   value: header.purchase_order?.po_number ?? '—' },
-      { label: 'Status',   value: header.status },
+      { label: opts?.docNoLabel ?? 'GRN No', value: header.grn_number },
+      { label: 'Date', value: fmtDocDate(header.received_at) },
     ],
   });
 
-  y = drawTwoColInfo(doc, y, 'SUPPLIER', 'NOTES',
-    [
-      header.supplier?.name ?? '—',
-      header.supplier?.code ? `Code: ${header.supplier.code}` : null,
-    ],
-    [header.notes ?? null, header.posted_at ? `Posted: ${header.posted_at.slice(0, 10)}` : null],
+  const statusText = header.status.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+  y = drawInfoColumns(doc, y,
+    {
+      title: 'SUPPLIER',
+      rows: [
+        ['Company', header.supplier?.name ?? null],
+        ['Code', header.supplier?.code ?? null],
+        ['Note', header.notes],
+      ],
+    },
+    {
+      title: 'GRN DETAILS',
+      rows: [
+        [opts?.docNoLabel ?? 'GRN No', header.grn_number],
+        ['Received', fmtDocDate(header.received_at)],
+        ['DN Ref', header.delivery_note_ref],
+        ['PO Ref', header.purchase_order?.po_number],
+        ['Posted', header.posted_at ? fmtDocDate(header.posted_at) : null],
+        ['Status', statusText],
+      ],
+    },
   );
 
   // Codes note + dual-code lookups (snapshotted grn_items.supplier_sku first,
@@ -81,7 +98,7 @@ export async function generateGrnPdf(
     head: [['#', 'Supplier Code', 'Our Code', 'Description', 'Recv', 'Acc', 'Rej', 'Reason', 'Unit Price']],
     body: rows,
     theme: 'striped',
-    styles: { fontSize: 8.5, cellPadding: 2 },
+    styles: { fontSize: 8.5, cellPadding: 2, valign: 'top' },
     headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
     columnStyles: {
       0: { cellWidth: 8, halign: 'right' },
@@ -98,11 +115,18 @@ export async function generateGrnPdf(
   });
   const lastY = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y) + 6;
 
-  const ty = drawSignatureBoxes(doc, lastY, 'Warehouse Received By', 'Supplier Driver Signature');
+  drawSignatureBoxes(doc, lastY, 'Warehouse Received By', 'Supplier Driver Signature');
 
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(110);
-  doc.text(`Generated ${fmtDocStamp()}`, doc.internal.pageSize.getWidth() - margin, ty, { align: 'right' });
-  doc.setTextColor(0);
+  // Footer: doc no · portal · page n of m on every page
+  const pageCount = doc.getNumberOfPages();
+  for (let p = 1; p <= pageCount; p += 1) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
+    doc.text(header.grn_number, margin, 290);
+    doc.text(`${COMPANY.portalLabel} · ${fmtDocDate(header.received_at)}`, pageW / 2, 290, { align: 'center' });
+    doc.text(`Page ${p} of ${pageCount}`, pageW - margin, 290, { align: 'right' });
+    doc.setTextColor(0);
+  }
 
   doc.save(`${header.grn_number}-${safeName(header.supplier?.name ?? 'supplier')}.pdf`);
 }
