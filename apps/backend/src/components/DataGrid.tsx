@@ -148,6 +148,19 @@ export type DataGridProps<T> = {
     rowExpansionKey?: (row: T) => string;
   };
   /**
+   * First-class multi-select (Commander 2026-06-19). Prepends a synthetic
+   * `__select__` checkbox column (mirrors `__expand__`); the header checkbox
+   * selects/clears all currently-visible rows. Selection state lives in the
+   * parent so it survives re-render + drives batch actions.
+   */
+  selectable?: {
+    selectedKeys: Set<string>;
+    onToggle: (key: string) => void;
+    /** Toggle all visible rows. `keys` = the keys currently shown; `allSelected`
+        = whether they are all already selected (so the parent clears vs selects). */
+    onToggleAll: (keys: string[], allSelected: boolean) => void;
+  };
+  /**
    * Compact mode for grids embedded inside another grid's expansion row
    * (the SO drill-down). Suppresses the search box and the bottom
    * "N of M rows / Reset layout" status line — both read as heavy chrome
@@ -262,6 +275,7 @@ function DataGridInner<T>({
   isLoading = false,
   contextMenu,
   expandable,
+  selectable,
   embedded = false,
 }: DataGridProps<T>) {
   /* HOUZS-style inline expansion (PR so-list-houzs-port). Tracks the set of
@@ -547,23 +561,25 @@ function DataGridInner<T>({
       .filter((k) => !effectiveHidden.has(k))
       .map((k) => byKey.get(k)!)
       .filter(Boolean);
-    if (!expandable) return base;
-    /* Synthetic chevron column — accessor is a placeholder; the actual
-       chevron is rendered in a dedicated <td> in the tbody so it can wire
-       click handlers without leaking `toggleExpand` into the column spec
-       (which would force memoization headaches on the caller). */
-    const chevronCol: DataGridColumn<T> = {
-      key: '__expand__',
-      label: '',
-      width: 32,
-      minWidth: 32,
-      sortable: false,
-      groupable: false,
-      accessor: () => null,
-      searchValue: () => '',
-    };
-    return [chevronCol, ...base];
-  }, [columns, layout.order, effectiveHidden, expandable]);
+    const synthetic: DataGridColumn<T>[] = [];
+    /* Synthetic select column — checkbox rendered in a dedicated <td>/<th>. */
+    if (selectable) {
+      synthetic.push({
+        key: '__select__', label: '', width: 30, minWidth: 30,
+        sortable: false, groupable: false, accessor: () => null, searchValue: () => '',
+      });
+    }
+    /* Synthetic chevron column — accessor is a placeholder; the actual chevron
+       is rendered in a dedicated <td> in the tbody so it can wire click handlers
+       without leaking `toggleExpand` into the column spec. */
+    if (expandable) {
+      synthetic.push({
+        key: '__expand__', label: '', width: 32, minWidth: 32,
+        sortable: false, groupable: false, accessor: () => null, searchValue: () => '',
+      });
+    }
+    return synthetic.length ? [...synthetic, ...base] : base;
+  }, [columns, layout.order, effectiveHidden, expandable, selectable]);
 
   // ── Filtered + sorted + grouped rows ──────────────────────────────
   /* Precompute one lowercased search blob per row (once per rows/columns
@@ -916,6 +932,23 @@ function DataGridInner<T>({
         >
           {visibleColumns.map((col) => {
             const w = layout.widths[col.key] ?? col.width ?? 140;
+            if (col.key === '__select__' && selectable) {
+              return (
+                <td
+                  key={col.key}
+                  className={styles.td}
+                  style={{ width: w, maxWidth: w, padding: '4px 6px', textAlign: 'center' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="checkbox"
+                    aria-label="Select row"
+                    checked={selectable.selectedKeys.has(key)}
+                    onChange={() => selectable.onToggle(key)}
+                  />
+                </td>
+              );
+            }
             if (col.key === '__expand__' && expandable && expandKey) {
               return (
                 <td
@@ -1114,6 +1147,24 @@ function DataGridInner<T>({
                 const style: CSSProperties = { width: w, minWidth: col.minWidth ?? 40 };
                 const isSorted = layout.sort?.key === col.key;
                 const arrow = isSorted ? (layout.sort!.dir === 'asc' ? 'A' : 'V') : '';
+                if (col.key === '__select__' && selectable) {
+                  const keys = sortedRows.map(rowKey);
+                  const allSel = keys.length > 0 && keys.every((k) => selectable.selectedKeys.has(k));
+                  const someSel = !allSel && keys.some((k) => selectable.selectedKeys.has(k));
+                  return (
+                    <th key={col.key} className={styles.th} style={style}>
+                      <span className={styles.thInner}>
+                        <input
+                          type="checkbox"
+                          aria-label="Select all rows"
+                          checked={allSel}
+                          ref={(el) => { if (el) el.indeterminate = someSel; }}
+                          onChange={() => selectable.onToggleAll(keys, allSel)}
+                        />
+                      </span>
+                    </th>
+                  );
+                }
                 return (
                   <th
                     key={col.key}
