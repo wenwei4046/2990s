@@ -11,13 +11,12 @@
 // UNIQUE localStorage keys ('pr-g.cn-list.layout.v1' /
 // 'pr-g.cn-list.filters.v1') — never reuse the DO/SO/DR keys.
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { JSX } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Plus } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
-import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { formatPhone } from '@2990s/shared/phone';
@@ -282,27 +281,6 @@ const ExpandedCnLines = ({ id }: { id: string }) => {
   );
 };
 
-/* Column-aware filter config for the CN list. Each entry tells the shared
-   ColumnFilterBar how to read + present a column. enum options are derived
-   from the data; date columns get presets + a custom range. */
-const CN_FILTER_COLUMNS: FilterColumn<CnRow>[] = [
-  { key: 'do_number',     label: 'Note No',         type: 'text', accessor: (r) => r.do_number },
-  { key: 'debtor',        label: 'Customer',        type: 'text', accessor: (r) => r.debtor_name },
-  { key: 'ref',           label: 'Reference',       type: 'text', accessor: (r) => r.customer_so_no ?? r.ref },
-  { key: 'brand',         label: 'Branding',        type: 'enum', accessor: (r) => deriveBranding(r) },
-  { key: 'venue',         label: 'Venue',           type: 'enum', accessor: (r) => r.venue },
-  { key: 'location',      label: 'Location',        type: 'enum', accessor: (r) => r.sales_location },
-  { key: 'customer_type', label: 'Customer Type',   type: 'enum', accessor: (r) => r.customer_type },
-  { key: 'building_type', label: 'Building Type',   type: 'enum', accessor: (r) => r.building_type },
-  { key: 'state',         label: 'State',           type: 'enum', accessor: (r) => r.customer_state },
-  { key: 'country',       label: 'Country',         type: 'enum', accessor: (r) => r.customer_country },
-  { key: 'status',        label: 'Status',          type: 'enum', accessor: (r) => STATUS_LABEL[r.status] ?? r.status },
-  { key: 'do_date',       label: 'Document Date',   type: 'date', accessor: (r) => r.do_date },
-  { key: 'expected_delivery_at', label: 'Expected Date', type: 'date', accessor: (r) => r.expected_delivery_at },
-  { key: 'delivery_date', label: 'Delivery Date',   type: 'date', accessor: (r) => r.customer_delivery_date },
-];
-const CN_QUICK_SEARCH_KEYS = ['do_number', 'debtor', 'ref', 'venue', 'brand'];
-
 const STORAGE_KEY = 'pr-g.cn-list.layout.v1';
 
 export const ConsignmentNotes = () => {
@@ -321,32 +299,25 @@ export const ConsignmentNotes = () => {
     setSearchParams(next, { replace: true });
   };
 
-  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
-     add-a-column filters (enum / date presets + range / text). The status
-     chip still flows via ?status=… and applies on top of the column filters. */
+  /* The status-chip pre-filter (?status=…) narrows the rows; the DataGrid's
+     own per-column funnel filters do the rest on top. */
   const baseRows = useMemo<CnRow[]>(
     () => (statusChip === 'all' ? allRows : allRows.filter((r) => r.status === statusChip)),
     [allRows, statusChip],
   );
-  const { rows, bar: filterBar } = useColumnFilter<CnRow>({
-    allRows: baseRows,
-    columns: CN_FILTER_COLUMNS,
-    quickSearchKeys: CN_QUICK_SEARCH_KEYS,
-    quickSearchPlaceholder: 'Note No, debtor, driver…',
-    storageKey: 'pr-g.cn-list.filters.v1',
-    totalCount: allRows.length,
-    loading: isLoading,
-  });
+  // DataGrid filters internally now; capture its on-screen rows so the KPI
+  // strip reflects the active funnel filters (was the ColumnFilterBar output).
+  const [visibleRows, setVisibleRows] = useState<CnRow[]>(baseRows);
 
   const kpis = useMemo(() => {
     let revenue = 0, cost = 0, margin = 0;
-    for (const r of rows) {
+    for (const r of visibleRows) {
       revenue += r.local_total_centi ?? 0;
       cost += r.total_cost_centi ?? 0;
       margin += r.total_margin_centi ?? 0;
     }
-    return { totalNotes: rows.length, revenue, cost, margin };
-  }, [rows]);
+    return { totalNotes: visibleRows.length, revenue, cost, margin };
+  }, [visibleRows]);
 
   const staffQ = useStaff();
   const staffById = useMemo(() => {
@@ -430,13 +401,9 @@ export const ConsignmentNotes = () => {
         ))}
       </div>
 
-      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
-          add-a-column filters). Replaces the old fixed search/brand/venue/
-          date-range row. */}
-      {filterBar}
-
       <DataGrid<CnRow>
-        rows={rows}
+        rows={baseRows}
+        onFilteredRowsChange={setVisibleRows}
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
         rowKey={(r) => r.id}
@@ -488,6 +455,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<CnRow>[] =
     ),
     searchValue: (r) => `${r.do_number} ${r.status ?? ''}`,
     filterValue: (r) => r.do_number,
+    filterType: 'numbering',
   },
   {
     key: 'do_date', label: 'Date', width: 110, sortable: true,

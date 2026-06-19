@@ -42,7 +42,6 @@ import {
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
-import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { ItemGroupPill, BrandingPill, badgeFor } from '../lib/category-badges';
 import {
   useSalesOrderDetailListing,
@@ -143,39 +142,6 @@ const fmtHeight = (v: number | string | null): string => {
 const heightSortValue = (v: number | string | null): number =>
   typeof v === 'number' ? v : v == null ? -Infinity : Infinity;
 
-/* Read a possibly-untyped field off the flattened row (the API folds the
-   SO header onto every line, so anything in mfg_sales_orders is reachable
-   via (r as Record<string, unknown>)[k]). Module-level helper so the
-   ColumnFilterBar config + the column factory share one implementation. */
-const optStr = (r: SoDetailListingRow, k: string): string => {
-  const v = (r as Record<string, unknown>)[k];
-  if (v == null || v === '') return '';
-  return String(v);
-};
-
-/* Column-aware filter config for the SO Detail Listing. Mirrors the SO list
-   pattern (ConsignmentOrders.tsx) so the operator sees a consistent
-   add-a-column filter across every L2 listing. enum options derive from the
-   data; date columns get presets + a custom range. */
-const SO_DETAIL_FILTER_COLUMNS: FilterColumn<SoDetailListingRow>[] = [
-  { key: 'doc_no',          label: 'Doc No',          type: 'text', accessor: (r) => r.doc_no },
-  { key: 'debtor',          label: 'Customer',        type: 'text', accessor: (r) => r.debtor_name },
-  { key: 'item_code',       label: 'Item Code',       type: 'text', accessor: (r) => r.item_code },
-  { key: 'brand',           label: 'Branding',        type: 'enum', accessor: (r) => r.branding },
-  { key: 'item_group',      label: 'Item Group',      type: 'enum', accessor: (r) => r.item_group },
-  { key: 'agent',           label: 'Agent',           type: 'enum', accessor: (r) => r.agent },
-  { key: 'venue',           label: 'Venue',           type: 'enum', accessor: (r) => optStr(r, 'venue') },
-  { key: 'location',        label: 'Location',        type: 'enum', accessor: (r) => r.location },
-  { key: 'payment',         label: 'Payment',         type: 'enum', accessor: (r) => payStateFor(optStr(r, 'payment_status')) },
-  { key: 'state',           label: 'State',           type: 'enum', accessor: (r) => r.customer_state },
-  { key: 'country',         label: 'Country',         type: 'enum', accessor: (r) => r.customer_country },
-  { key: 'status',          label: 'Status',          type: 'enum', accessor: (r) => r.status },
-  { key: 'so_date',         label: 'Document Date',   type: 'date', accessor: (r) => (r.so_date ?? r.line_date) as string | null },
-  { key: 'processing_date', label: 'Processing Date', type: 'date', accessor: (r) => optStr(r, 'internal_expected_dd') || null },
-  { key: 'delivery_date',   label: 'Delivery Date',   type: 'date', accessor: (r) => r.customer_delivery_date },
-];
-const SO_DETAIL_QUICK_SEARCH_KEYS = ['doc_no', 'debtor', 'item_code', 'agent', 'venue', 'brand'];
-
 /* ─────────────────────────────────────────────────────────────────────────
    Column factory — 47 columns total (33 visible by default + 14 hidden).
    Order mirrors the Houzs reference shot column-for-column. Houzs col 23
@@ -208,6 +174,7 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       key: 'doc_no', label: 'Doc. No.', width: 120, sortable: true, groupable: false,
       accessor: (r) => <span className={styles.codeCell}>{r.doc_no}</span>,
       searchValue: (r) => r.doc_no,
+      filterType: 'numbering', filterValue: (r) => r.doc_no,
     },
     /* 2 */ {
       key: 'so_date', label: 'Date', width: 110, sortable: true,
@@ -293,6 +260,7 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       accessor: (r) => <span style={{ fontWeight: 600 }}>{fmtRm(r.total_centi)}</span>,
       searchValue: (r) => fmtRm(r.total_centi),
       sortFn: (a, b) => (a.total_centi ?? 0) - (b.total_centi ?? 0),
+      filterType: 'number', numberValue: (r) => r.total_centi ?? 0,
     },
     /* 12 */ {
       key: 'line_cost', label: 'Line Cost', width: 110, align: 'right', sortable: true,
@@ -614,40 +582,31 @@ export const SalesOrderDetailListing = () => {
   const query = useSalesOrderDetailListing(committed);
   const rawRows = useMemo<SoDetailListingRow[]>(() => query.data?.rows ?? [], [query.data]);
 
-  /* Apply the outstanding-only overlay before handing rows to the shared
-     ColumnFilterBar. The line-flat row format repeats outstanding per line;
-     we drop lines from docs whose (local_total − paid) <= 0. */
+  /* Apply the outstanding-only overlay before handing rows to the DataGrid.
+     The line-flat row format repeats outstanding per line; we drop lines from
+     docs whose (local_total − paid) <= 0. */
   const baseRows = useMemo<SoDetailListingRow[]>(() => {
     if (!outstandingOnly) return rawRows;
     return rawRows.filter((r) => (r.local_total_centi ?? 0) - (r.paid_total_centi ?? 0) > 0);
   }, [rawRows, outstandingOnly]);
 
-  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
-     add-a-column filters (enum / date presets + range / text). Replaces the
-     old fixed search · brand · group · agent · venue · payment · date-range
-     row. The outstanding-only toggle still flows via ?outstanding=1 and
-     applies on top of the column filters. */
-  const { rows: filteredRows, bar: filterBar } = useColumnFilter<SoDetailListingRow>({
-    allRows: baseRows,
-    columns: SO_DETAIL_FILTER_COLUMNS,
-    quickSearchKeys: SO_DETAIL_QUICK_SEARCH_KEYS,
-    quickSearchPlaceholder: 'Doc No, debtor, SKU, agent, venue…',
-    storageKey: 'pr-g.so-detail-listing.filters.v1',
-    totalCount: rawRows.length,
-    loading: query.isFetching,
-  });
+  /* The outstanding-only overlay (?outstanding=1) narrows the rows; the
+     DataGrid's own per-column funnel filters do the rest on top. */
+  // DataGrid filters internally now; capture its on-screen rows so the KPI
+  // strip reflects the active funnel filters (was the ColumnFilterBar output).
+  const [visibleRows, setVisibleRows] = useState<SoDetailListingRow[]>(baseRows);
 
   /* ── 6 KPI tiles — computed off the filtered row set, NOT rawRows, so
         narrowing the filters re-scopes the headline numbers (matches
         Houzs's interactive feel). Outstanding is deduped per docNo since
         the line-flat row format repeats it per line. */
   const kpis = useMemo(() => {
-    const totalLines = filteredRows.length;
+    const totalLines = visibleRows.length;
     const uniqueDocs = new Set<string>();
     let revenue = 0;
     let cost = 0;
     const outstandingByDoc = new Map<string, number>();
-    for (const r of filteredRows) {
+    for (const r of visibleRows) {
       uniqueDocs.add(r.doc_no);
       revenue += r.total_centi ?? 0;
       cost    += r.line_cost_centi ?? 0;
@@ -661,7 +620,7 @@ export const SalesOrderDetailListing = () => {
     const margin = revenue - cost;
     const marginPct = revenue > 0 ? (margin / revenue) * 100 : 0;
     return { totalLines, uniqueOrders: uniqueDocs.size, revenue, cost, margin, marginPct, outstanding };
-  }, [filteredRows]);
+  }, [visibleRows]);
 
   /* ── PDF preview (retained from the AutoCount layout) ──────────────── */
   const [findNonce, setFindNonce] = useState(0);
@@ -754,15 +713,11 @@ export const SalesOrderDetailListing = () => {
         ))}
       </div>
 
-      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
-          add-a-column filters). Replaces the old fixed search · brand ·
-          group · agent · venue · payment · date-range row. */}
-      {filterBar}
-
       {/* ── DataGrid — 34 visible columns + 10 hidden by default ─── */}
       <section className={styles.resultCard}>
         <DataGrid<SoDetailListingRow>
-          rows={filteredRows}
+          rows={baseRows}
+          onFilteredRowsChange={setVisibleRows}
           columns={COLUMNS}
           storageKey={STORAGE_KEY}
           rowKey={(r) => r.id}

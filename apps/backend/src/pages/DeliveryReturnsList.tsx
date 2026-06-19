@@ -12,13 +12,12 @@
 // UNIQUE localStorage keys ('pr-g.dr-list.layout.v1' /
 // 'pr-g.dr-list.filters.v1') — never reuse the DO/SO keys.
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { JSX } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
-import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { formatPhone } from '@2990s/shared/phone';
@@ -302,27 +301,6 @@ const ExpandedDrLines = ({ id }: { id: string }) => {
   );
 };
 
-/* Column-aware filter config for the DR list. Mirrors the SO/DO/CN pattern —
-   shared ColumnFilterBar reads each column via its accessor; enum options are
-   derived live from the data; date columns get presets + a custom range. */
-const DR_FILTER_COLUMNS: FilterColumn<DrRow>[] = [
-  { key: 'return_number', label: 'Return No',     type: 'text', accessor: (r) => r.return_number },
-  { key: 'do_doc_no',     label: 'DO No',         type: 'text', accessor: (r) => r.do_doc_no },
-  { key: 'debtor',        label: 'Customer',      type: 'text', accessor: (r) => r.debtor_name },
-  { key: 'ref',           label: 'Reference',     type: 'text', accessor: (r) => r.customer_so_no ?? r.ref },
-  { key: 'reason',        label: 'Reason',        type: 'text', accessor: (r) => r.reason },
-  { key: 'brand',         label: 'Branding',      type: 'enum', accessor: (r) => deriveBranding(r) },
-  { key: 'venue',         label: 'Venue',         type: 'enum', accessor: (r) => r.venue },
-  { key: 'location',      label: 'Location',      type: 'enum', accessor: (r) => r.sales_location },
-  { key: 'customer_type', label: 'Customer Type', type: 'enum', accessor: (r) => r.customer_type },
-  { key: 'building_type', label: 'Building Type', type: 'enum', accessor: (r) => r.building_type },
-  { key: 'state',         label: 'State',         type: 'enum', accessor: (r) => r.customer_state },
-  { key: 'country',       label: 'Country',       type: 'enum', accessor: (r) => r.customer_country },
-  { key: 'status',        label: 'Status',        type: 'enum', accessor: (r) => r.status },
-  { key: 'return_date',   label: 'Return Date',   type: 'date', accessor: (r) => r.return_date },
-];
-const DR_QUICK_SEARCH_KEYS = ['return_number', 'do_doc_no', 'debtor', 'ref', 'venue', 'brand', 'reason'];
-
 const STORAGE_KEY = 'pr-g.dr-list.layout.v1';
 
 export const DeliveryReturnsList = () => {
@@ -349,28 +327,19 @@ export const DeliveryReturnsList = () => {
     [allRows, statusChip],
   );
 
-  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
-     add-a-column filters (enum / date presets + range / text). Replaces the
-     old fixed search / brand / venue / date-range row. */
-  const { rows, bar: filterBar } = useColumnFilter<DrRow>({
-    allRows: baseRows,
-    columns: DR_FILTER_COLUMNS,
-    quickSearchKeys: DR_QUICK_SEARCH_KEYS,
-    quickSearchPlaceholder: 'Return No, DO, debtor, reason…',
-    storageKey: 'pr-g.dr-list.filters.v1',
-    totalCount: allRows.length,
-    loading: isLoading,
-  });
+  // DataGrid filters internally now; capture its on-screen rows so the KPI
+  // strip reflects the active funnel filters (was the ColumnFilterBar output).
+  const [visibleRows, setVisibleRows] = useState<DrRow[]>(baseRows);
 
   const kpis = useMemo(() => {
     let revenue = 0, cost = 0, margin = 0;
-    for (const r of rows) {
+    for (const r of visibleRows) {
       revenue += r.local_total_centi ?? 0;
       cost += r.total_cost_centi ?? 0;
       margin += r.total_margin_centi ?? 0;
     }
-    return { totalReturns: rows.length, revenue, cost, margin };
-  }, [rows]);
+    return { totalReturns: visibleRows.length, revenue, cost, margin };
+  }, [visibleRows]);
 
   const staffQ = useStaff();
   const staffById = useMemo(() => {
@@ -454,13 +423,9 @@ export const DeliveryReturnsList = () => {
         ))}
       </div>
 
-      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
-          add-a-column filters). Replaces the old fixed search/brand/venue/
-          date-range row. */}
-      {filterBar}
-
       <DataGrid<DrRow>
-        rows={rows}
+        rows={baseRows}
+        onFilteredRowsChange={setVisibleRows}
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
         rowKey={(r) => r.id}
@@ -509,6 +474,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DrRow>[] =
     ),
     searchValue: (r) => `${r.return_number} ${r.status ?? ''}`,
     filterValue: (r) => r.return_number,
+    filterType: 'numbering',
   },
   {
     key: 'do_doc_no', label: 'Transfer From (DO)', width: 130, sortable: true,
@@ -573,6 +539,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DrRow>[] =
     ),
     searchValue: (r) => fmtRm(r.local_total_centi),
     sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
+    filterType: 'number', numberValue: (r) => r.local_total_centi,
   },
   {
     key: 'mattress_sofa_centi', label: 'Mattress/Sofa', width: 130, sortable: true, align: 'right',

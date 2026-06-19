@@ -32,7 +32,6 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, X, Wrench, Camera } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
-import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { ListingPickerDialog, type ListingChoice } from '../components/ListingPickerDialog';
 import { ScanOrderModal } from '../components/ScanOrderModal';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -568,29 +567,6 @@ const buildDrilldownColumns = (paymentRefs: string): DataGridColumn<SoItem>[] =>
   },
 ];
 
-/* Column-aware filter config for the SO list. Each entry tells the shared
-   ColumnFilterBar how to read + present a column. enum options are derived
-   from the data; date columns get presets + a custom range. Branding reuses
-   `deriveBranding` so the filter values match what the Branding column
-   actually renders. */
-const SO_FILTER_COLUMNS: FilterColumn<SoRow>[] = [
-  { key: 'doc_no',        label: 'Doc No',         type: 'text', accessor: (r) => r.doc_no },
-  { key: 'debtor',        label: 'Customer',       type: 'text', accessor: (r) => r.debtor_name },
-  { key: 'ref',           label: 'Reference',      type: 'text', accessor: (r) => r.customer_so_no ?? r.po_doc_no ?? r.ref },
-  { key: 'brand',         label: 'Branding',       type: 'enum', accessor: (r) => deriveBranding(r) },
-  { key: 'venue',         label: 'Venue',          type: 'enum', accessor: (r) => r.venue },
-  { key: 'location',      label: 'Location',       type: 'enum', accessor: (r) => r.sales_location },
-  { key: 'customer_type', label: 'Customer Type',  type: 'enum', accessor: (r) => r.customer_type },
-  { key: 'building_type', label: 'Building Type',  type: 'enum', accessor: (r) => r.building_type },
-  { key: 'state',         label: 'State',          type: 'enum', accessor: (r) => r.customer_state },
-  { key: 'country',       label: 'Country',        type: 'enum', accessor: (r) => r.customer_country },
-  { key: 'status',        label: 'Status',         type: 'enum', accessor: (r) => r.status },
-  { key: 'so_date',         label: 'Document Date',   type: 'date', accessor: (r) => r.so_date },
-  { key: 'processing_date', label: 'Processing Date', type: 'date', accessor: (r) => r.internal_expected_dd },
-  { key: 'delivery_date',   label: 'Delivery Date',   type: 'date', accessor: (r) => r.customer_delivery_date },
-];
-const SO_QUICK_SEARCH_KEYS = ['doc_no', 'debtor', 'ref', 'venue', 'brand'];
-
 const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
   const q = useMfgSalesOrderDetail(docNo);
   /* Parallel payments fetch — Houzs PAYMENT column shows
@@ -708,23 +684,15 @@ export const MfgSalesOrdersList = () => {
   const { data, isLoading, error } = useMfgSalesOrders(undefined);
   const allRows = useMemo<SoRow[]>(() => (data?.salesOrders ?? []) as SoRow[], [data]);
 
-  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
-     add-a-column filters (enum / date presets + range / text). The
-     outstanding-only toggle still flows via ?outstanding=1 and applies on
-     top of the column filters. */
+  /* The outstanding-only overlay (?outstanding=1) narrows the rows; the
+     DataGrid's own per-column funnel filters do the rest on top. */
   const baseRows = useMemo<SoRow[]>(
     () => (outstandingOnly ? allRows.filter((r) => liveBalance(r) > 0) : allRows),
     [allRows, outstandingOnly],
   );
-  const { rows, bar: filterBar } = useColumnFilter<SoRow>({
-    allRows: baseRows,
-    columns: SO_FILTER_COLUMNS,
-    quickSearchKeys: SO_QUICK_SEARCH_KEYS,
-    quickSearchPlaceholder: 'Doc No, debtor, reference, venue…',
-    storageKey: 'pr-g.so-list.filters.v1',
-    totalCount: allRows.length,
-    loading: isLoading,
-  });
+  // DataGrid filters internally now; capture its on-screen rows so the KPI
+  // strip reflects the active funnel filters (was the ColumnFilterBar output).
+  const [visibleRows, setVisibleRows] = useState<SoRow[]>(baseRows);
 
   const clearOutstanding = () => {
     const next = new URLSearchParams(searchParams);
@@ -736,14 +704,14 @@ export const MfgSalesOrdersList = () => {
      filter re-scopes the headline numbers (matches Houzs interactive feel). */
   const kpis = useMemo(() => {
     let revenue = 0, outstanding = 0, paid = 0;
-    for (const r of rows) {
+    for (const r of visibleRows) {
       revenue += r.local_total_centi ?? 0;
       paid    += r.paid_total_centi ?? r.paid_centi ?? 0;
       const bal = liveBalance(r);
       if (bal > 0) outstanding += bal;
     }
-    return { totalOrders: rows.length, revenue, outstanding, paid };
-  }, [rows]);
+    return { totalOrders: visibleRows.length, revenue, outstanding, paid };
+  }, [visibleRows]);
 
   /* The Listing picker dialog (Listing / Outstanding-only / Detail Listing /
      Outstanding Detail Listing) is no longer surfaced in the chrome — the
@@ -969,11 +937,6 @@ export const MfgSalesOrdersList = () => {
         {kpiTile('Paid (RM)', fmtRm(kpis.paid), kpis.paid > 0 ? 'good' : undefined)}
       </div>
 
-      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
-          add-a-column filters). Replaces the old fixed search/brand/venue/
-          date-range row. */}
-      {filterBar}
-
       <ListingPickerDialog
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
@@ -985,7 +948,8 @@ export const MfgSalesOrdersList = () => {
       {showScan && <ScanOrderModal onClose={() => setShowScan(false)} />}
 
       <DataGrid<SoRow>
-        rows={rows}
+        rows={baseRows}
+        onFilteredRowsChange={setVisibleRows}
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
         rowKey={(r) => r.doc_no}
@@ -1120,6 +1084,7 @@ const buildColumns = (
     ),
     searchValue: (r) => `${r.doc_no} ${r.status ?? ''}`,
     filterValue: (r) => r.doc_no,
+    filterType: 'numbering',
   },
   {
     /* Current — which document the flow has reached now (DO / SI / DR), or this
@@ -1211,6 +1176,7 @@ const buildColumns = (
     ),
     searchValue: (r) => fmtRm(r.local_total_centi),
     sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
+    filterType: 'number', numberValue: (r) => r.local_total_centi,
   },
   {
     /* Commander 2026-05-30 — Stock Status column rebuilt around the operator's

@@ -16,7 +16,6 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
-import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { formatPhone } from '@2990s/shared/phone';
@@ -114,28 +113,6 @@ const StatusPill = ({ status }: { status: string }) => (
 
 /* Branding follows the SI header (carried from the DO). */
 const deriveBranding = (r: SiRow): string => r.branding ?? '';
-
-/* Column-aware filter config for the SI list. Each entry tells the shared
-   ColumnFilterBar how to read + present a column. enum options are derived
-   from the data; date columns get presets + a custom range. */
-const SI_FILTER_COLUMNS: FilterColumn<SiRow>[] = [
-  { key: 'invoice_number',  label: 'Invoice No',     type: 'text', accessor: (r) => r.invoice_number },
-  { key: 'so_doc_no',       label: 'SO Doc No',      type: 'text', accessor: (r) => r.so_doc_no },
-  { key: 'debtor',          label: 'Customer',       type: 'text', accessor: (r) => r.debtor_name },
-  { key: 'ref',             label: 'Reference',      type: 'text', accessor: (r) => r.customer_so_no ?? r.po_doc_no ?? r.ref },
-  { key: 'brand',           label: 'Branding',       type: 'enum', accessor: (r) => deriveBranding(r) },
-  { key: 'venue',           label: 'Venue',          type: 'enum', accessor: (r) => r.venue },
-  { key: 'location',        label: 'Location',       type: 'enum', accessor: (r) => r.sales_location },
-  { key: 'customer_type',   label: 'Customer Type',  type: 'enum', accessor: (r) => r.customer_type },
-  { key: 'building_type',   label: 'Building Type',  type: 'enum', accessor: (r) => r.building_type },
-  { key: 'state',           label: 'State',          type: 'enum', accessor: (r) => r.customer_state },
-  { key: 'country',         label: 'Country',        type: 'enum', accessor: (r) => r.customer_country },
-  { key: 'status',          label: 'Status',         type: 'enum', accessor: (r) => r.status },
-  { key: 'invoice_date',    label: 'Invoice Date',   type: 'date', accessor: (r) => r.invoice_date },
-  { key: 'due_date',        label: 'Due Date',       type: 'date', accessor: (r) => r.due_date },
-  { key: 'delivery_date',   label: 'Delivery Date',  type: 'date', accessor: (r) => r.customer_delivery_date },
-];
-const SI_QUICK_SEARCH_KEYS = ['invoice_number', 'so_doc_no', 'debtor', 'ref', 'venue', 'brand'];
 
 /* ── Drilldown — per-line breakdown for one SI, mirrors ExpandedDoLines ─── */
 type SiItem = {
@@ -334,35 +311,28 @@ export const SalesInvoicesList = () => {
     setSearchParams(next, { replace: true });
   };
 
-  /* Column-aware filter (shared ColumnFilterBar): free-text quick search +
-     add-a-column filters (enum / date presets + range / text). The status
-     chip still flows via ?status=… and applies on top of the column filters. */
+  /* The status-chip pre-filter (?status=…) narrows the rows; the DataGrid's
+     own per-column funnel filters do the rest on top. */
   const baseRows = useMemo<SiRow[]>(
     () => (statusChip !== 'all' ? allRows.filter((r) => r.status === statusChip) : allRows),
     [allRows, statusChip],
   );
-  const { rows, bar: filterBar } = useColumnFilter<SiRow>({
-    allRows: baseRows,
-    columns: SI_FILTER_COLUMNS,
-    quickSearchKeys: SI_QUICK_SEARCH_KEYS,
-    quickSearchPlaceholder: 'Invoice No, SO, debtor…',
-    storageKey: 'pr-g.si-list.filters.v1',
-    totalCount: allRows.length,
-    loading: isLoading,
-  });
+  // DataGrid filters internally now; capture its on-screen rows so the KPI
+  // strip reflects the active funnel filters (was the ColumnFilterBar output).
+  const [visibleRows, setVisibleRows] = useState<SiRow[]>(baseRows);
 
   const localTotal = (r: SiRow) => r.local_total_centi || r.total_centi || 0;
 
   const kpis = useMemo(() => {
     let revenue = 0, cost = 0, margin = 0, outstanding = 0;
-    for (const r of rows) {
+    for (const r of visibleRows) {
       revenue += localTotal(r);
       cost += r.total_cost_centi ?? 0;
       margin += r.total_margin_centi ?? 0;
       if (r.status !== 'CANCELLED') outstanding += Math.max(0, (r.total_centi ?? localTotal(r)) - (r.paid_centi ?? 0));
     }
-    return { totalInvoices: rows.length, revenue, cost, margin, outstanding };
-  }, [rows]);
+    return { totalInvoices: visibleRows.length, revenue, cost, margin, outstanding };
+  }, [visibleRows]);
 
   const staffQ = useStaff();
   const staffById = useMemo(() => {
@@ -460,13 +430,9 @@ export const SalesInvoicesList = () => {
         ))}
       </div>
 
-      {/* Column-aware filter row — shared ColumnFilterBar (quick search +
-          add-a-column filters). Replaces the old fixed search/brand/venue/
-          date-range row. */}
-      {filterBar}
-
       <DataGrid<SiRow>
-        rows={rows}
+        rows={baseRows}
+        onFilteredRowsChange={setVisibleRows}
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
         rowKey={(r) => r.id}
@@ -519,6 +485,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<SiRow>[] =
     ),
     searchValue: (r) => `${r.invoice_number} ${r.status ?? ''}`,
     filterValue: (r) => r.invoice_number,
+    filterType: 'numbering',
   },
   {
     key: 'so_doc_no', label: 'Transfer From (SO)', width: 130, sortable: true,
@@ -586,6 +553,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<SiRow>[] =
     ),
     searchValue: (r) => fmtRm(r.local_total_centi || r.total_centi || 0),
     sortFn: (a, b) => (a.local_total_centi || a.total_centi || 0) - (b.local_total_centi || b.total_centi || 0),
+    filterType: 'number', numberValue: (r) => r.local_total_centi || r.total_centi || 0,
   },
   {
     key: 'paid_centi', label: 'Paid', width: 110, sortable: true, align: 'right',
