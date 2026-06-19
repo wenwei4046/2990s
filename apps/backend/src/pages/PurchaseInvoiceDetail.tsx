@@ -291,8 +291,13 @@ export const PurchaseInvoiceDetail = () => {
               so this just flips status + releases GRN consumption). */}
           {!isLocked && (
             <Button variant="ghost" size="md"
-              onClick={() => {
-                if (!confirm(`Cancel invoice ${pi.invoice_number}? This sets status to CANCELLED — line items stay for audit.`)) return;
+              onClick={async () => {
+                if (!(await askConfirm({
+                  title: `Cancel invoice ${pi.invoice_number}?`,
+                  body: `This sets status to CANCELLED — line items stay for audit.`,
+                  confirmLabel: 'Cancel invoice',
+                  danger: true,
+                }))) return;
                 cancel.mutate(pi.id, {
                   onError: (err) => notify({ title: 'Cancel failed', body: `${err instanceof Error ? err.message : String(err)}`, tone: 'error' }),
                 });

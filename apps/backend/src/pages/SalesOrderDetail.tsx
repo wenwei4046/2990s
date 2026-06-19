@@ -622,8 +622,12 @@ export const SalesOrderDetail = () => {
     for (const it of items) {
       map.set(it.id, {
         onChange: (patch) => patchEditingDraft(it.id, patch),
-        onRemove: () => {
-          if (confirm(`Remove ${it.item_code} from this SO?`)) {
+        onRemove: async () => {
+          if (await askConfirm({
+            title: `Remove ${it.item_code} from this SO?`,
+            confirmLabel: 'Remove',
+            danger: true,
+          })) {
             deleteItem.mutate(
               { docNo: it.doc_no, itemId: it.id },
               { onSuccess: () => removeEditingLine(it.id) },
@@ -633,7 +637,7 @@ export const SalesOrderDetail = () => {
       });
     }
     return map;
-  }, [items, patchEditingDraft, removeEditingLine, deleteItem]);
+  }, [items, patchEditingDraft, removeEditingLine, deleteItem, askConfirm]);
 
   /* Add path — single inline SoLineCard appended below the table when
      "+ Add Line Item" is clicked. The draft is committed together with the

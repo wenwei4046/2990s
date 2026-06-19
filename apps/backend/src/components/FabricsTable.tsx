@@ -112,12 +112,18 @@ const ActiveCell = ({ row }: { row: FabricTrackingRow }) => {
 
 const DeleteCell = ({ row }: { row: FabricTrackingRow }) => {
   const deleteFabric = useDeleteFabric();
+  const askConfirm = useConfirm();
   return (
     <button
       type="button"
       className={styles.iconBtn}
-      onClick={() => {
-        if (confirm(`Delete fabric ${row.fabric_code}? This cannot be undone.`)) {
+      onClick={async () => {
+        if (await askConfirm({
+          title: `Delete fabric ${row.fabric_code}?`,
+          body: 'This cannot be undone.',
+          confirmLabel: 'Delete',
+          danger: true,
+        })) {
           deleteFabric.mutate(row.id);
         }
       }}

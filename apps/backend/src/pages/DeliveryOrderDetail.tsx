@@ -339,8 +339,8 @@ export const DeliveryOrderDetail = () => {
     for (const it of items) {
       map.set(it.id, {
         onChange: (patch) => patchEditingDraft(it.id, patch),
-        onRemove: () => {
-          if (confirm(`Remove ${it.item_code} from this DO?`)) {
+        onRemove: async () => {
+          if (await askConfirm({ title: `Remove ${it.item_code} from this DO?`, confirmLabel: 'Remove', danger: true })) {
             deleteItem.mutate(
               { id: it.delivery_order_id, itemId: it.id },
               { onSuccess: () => removeEditingLine(it.id) },
@@ -350,7 +350,7 @@ export const DeliveryOrderDetail = () => {
       });
     }
     return map;
-  }, [items, patchEditingDraft, removeEditingLine, deleteItem]);
+  }, [items, patchEditingDraft, removeEditingLine, deleteItem, askConfirm]);
 
   const startAddLine = () =>
     setAddingDrafts((prev) => [...prev, { uid: newUid(), soItemId: null, maxQty: 0, draft: { ...emptySoLine() } }]);

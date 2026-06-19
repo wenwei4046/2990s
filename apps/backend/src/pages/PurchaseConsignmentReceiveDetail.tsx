@@ -295,8 +295,13 @@ export const PurchaseConsignmentReceiveDetail = () => {
           )}
           {grn.status === 'POSTED' && !hasChildren && (
             <Button variant="ghost" size="md"
-              onClick={() => {
-                if (!confirm(`Cancel ${grn.grn_number}? This reverses the receipt. Line items stay for audit.`)) return;
+              onClick={async () => {
+                if (!(await askConfirm({
+                  title: `Cancel ${grn.grn_number}?`,
+                  body: 'This reverses the receipt. Line items stay for audit.',
+                  confirmLabel: 'Cancel Receive',
+                  danger: true,
+                }))) return;
                 cancel.mutate(grn.id, {
                   onError: (err) => notify({ title: 'Cancel failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
                 });

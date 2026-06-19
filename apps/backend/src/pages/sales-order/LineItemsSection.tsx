@@ -27,6 +27,7 @@ import {
 } from '../../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../../components/SoLineCard';
 import { useNotify } from '../../components/NotifyDialog';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { VariantsPills } from './VariantsPills';
 import type { SoHeader, SoItem } from './types';
 import { fmtRm, ICON, SM_ICON } from './types';
@@ -51,6 +52,7 @@ const LineItemsSectionInner = ({ header, items, isEditing, isLocked }: Props) =>
   const deleteItem = useDeleteMfgSalesOrderItem();
   const updateStock = useUpdateSoItemStockStatus();
   const notify = useNotify();
+  const askConfirm = useConfirm();
 
   const [editingLineIds, setEditingLineIds] = useState<Set<string>>(new Set());
   const [editingDrafts, setEditingDrafts] = useState<Record<string, SoLineDraft>>({});
@@ -391,9 +393,13 @@ const LineItemsSectionInner = ({ header, items, isEditing, isLocked }: Props) =>
                             className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
                             title="Delete"
                             disabled={isLocked}
-                            onClick={() => {
+                            onClick={async () => {
                               if (isLocked) return;
-                              if (confirm(`Remove ${it.item_code} from this SO?`)) {
+                              if (await askConfirm({
+                                title: `Remove ${it.item_code} from this SO?`,
+                                confirmLabel: 'Remove',
+                                danger: true,
+                              })) {
                                 deleteItem.mutate({ docNo: header.doc_no, itemId: it.id });
                               }
                             }}

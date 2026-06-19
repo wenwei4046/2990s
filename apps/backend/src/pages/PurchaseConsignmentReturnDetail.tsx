@@ -254,8 +254,13 @@ export const PurchaseConsignmentReturnDetail = () => {
           </Button>
           {pr.status !== 'CANCELLED' && pr.status !== 'COMPLETED' && (
             <Button variant="ghost" size="md"
-              onClick={() => {
-                if (!confirm(`Cancel return ${pr.return_number}? This reverses the return — the goods are put back into stock. Line items stay for audit.`)) return;
+              onClick={async () => {
+                if (!(await askConfirm({
+                  title: `Cancel return ${pr.return_number}?`,
+                  body: 'This reverses the return — the goods are put back into stock. Line items stay for audit.',
+                  confirmLabel: 'Cancel Return',
+                  danger: true,
+                }))) return;
                 cancel.mutate(pr.id, {
                   onError: (err) => notify({ title: 'Cancel failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
                 });

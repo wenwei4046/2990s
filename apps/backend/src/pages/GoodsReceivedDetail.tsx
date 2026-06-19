@@ -341,8 +341,13 @@ export const GoodsReceivedDetail = () => {
               (reverses the receipt server-side). */}
           {grn.status === 'POSTED' && !hasChildren && (
             <Button variant="ghost" size="md"
-              onClick={() => {
-                if (!confirm(`Cancel GRN ${grn.grn_number}? This reverses the receipt — stock is taken back out and the source PO's received qty is rolled back. Line items stay for audit.`)) return;
+              onClick={async () => {
+                if (!(await askConfirm({
+                  title: `Cancel GRN ${grn.grn_number}?`,
+                  body: `This reverses the receipt — stock is taken back out and the source PO's received qty is rolled back. Line items stay for audit.`,
+                  confirmLabel: 'Cancel GRN',
+                  danger: true,
+                }))) return;
                 cancel.mutate(grn.id, {
                   onError: (err) => notify({ title: 'Cancel failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
                 });

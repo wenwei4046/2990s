@@ -24,6 +24,7 @@ import { Button } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
 import { useToast } from '../components/Toast';
 import { useNotify } from '../components/NotifyDialog';
+import { useConfirm } from '../components/ConfirmDialog';
 /* Migration 0086 — Venues CRUD section folded into SO Maintenance. */
 import {
   useVenues, useCreateVenue, useUpdateVenue, useDeactivateVenue,
@@ -100,6 +101,7 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
   const deleteLoc = useDeleteLocality();
   const toast = useToast();
   const notify = useNotify();
+  const askConfirm = useConfirm();
 
   const states = useMemo(() => distinctStates(localities.data ?? []), [localities.data]);
   const mappedByState = useMemo(() => {
@@ -295,9 +297,10 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
       (r) => (r.country || 'Malaysia') === fromCountry && r.state === state && r.id,
     );
     if (rows.length === 0) return;
-    if (!confirm(
-      `Move all ${rows.length} localities under ${state} from "${fromCountry}" to "${trimmed}"?`,
-    )) return;
+    if (!(await askConfirm({
+      title: `Move all ${rows.length} localities under ${state} from "${fromCountry}" to "${trimmed}"?`,
+      confirmLabel: 'Move',
+    }))) return;
     try {
       await Promise.all(rows.map((r) =>
         updateLoc.mutateAsync({ id: r.id!, country: trimmed }),
@@ -782,8 +785,12 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
                             type="button"
                             className={styles.editBtn}
                             disabled={deleteLoc.isPending}
-                            onClick={() => {
-                              if (confirm(`Delete ${selectedCity} / ${r.postcode}?`)) {
+                            onClick={async () => {
+                              if (await askConfirm({
+                                title: `Delete ${selectedCity} / ${r.postcode}?`,
+                                confirmLabel: 'Delete',
+                                danger: true,
+                              })) {
                                 deleteLoc.mutate(r.id!);
                               }
                             }}
@@ -943,6 +950,7 @@ const DropdownCategoryCard = ({
 }) => {
   const [expanded, setExpanded] = useState(true);
   const notify = useNotify();
+  const askConfirm = useConfirm();
 
   const createOpt = useCreateSoDropdownOption();
   const updateOpt = useUpdateSoDropdownOption();
@@ -982,8 +990,13 @@ const DropdownCategoryCard = ({
     );
   };
 
-  const removeRow = (row: SoDropdownOption) => {
-    if (!confirm(`Delete "${row.label}" from ${title}? Historical SOs that reference "${row.value}" stay valid; this just removes the option from new dropdowns.`)) return;
+  const removeRow = async (row: SoDropdownOption) => {
+    if (!(await askConfirm({
+      title: `Delete "${row.label}" from ${title}?`,
+      body: `Historical SOs that reference "${row.value}" stay valid; this just removes the option from new dropdowns.`,
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return;
     deleteOpt.mutate(row.id, {
       onError: (err) => notify({ title: 'Delete failed', body: `${(err as Error).message ?? err}`, tone: 'error' }),
     });
@@ -1243,6 +1256,7 @@ const VenuesSection = ({ canEdit }: { canEdit: boolean }) => {
   const update = useUpdateVenue();
   const deactivate = useDeactivateVenue();
   const toast = useToast();
+  const askConfirm = useConfirm();
 
   const [newName, setNewName] = useState('');
   const [newAddress, setNewAddress] = useState('');
@@ -1277,8 +1291,13 @@ const VenuesSection = ({ canEdit }: { canEdit: boolean }) => {
     );
   };
 
-  const removeVenue = (v: VenueRow) => {
-    if (!confirm(`Deactivate venue "${v.name}"? Existing SOs that reference it are kept; the venue just hides from pickers.`)) return;
+  const removeVenue = async (v: VenueRow) => {
+    if (!(await askConfirm({
+      title: `Deactivate venue "${v.name}"?`,
+      body: 'Existing SOs that reference it are kept; the venue just hides from pickers.',
+      confirmLabel: 'Deactivate',
+      danger: true,
+    }))) return;
     deactivate.mutate(v.id, {
       onSuccess: () => toast.success(`${v.name} deactivated`),
       onError: (e) => toast.error(`Deactivate failed: ${(e as Error).message}`),

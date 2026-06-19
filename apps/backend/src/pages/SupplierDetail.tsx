@@ -1421,6 +1421,7 @@ const AnchorCell = ({
   supplierId: string;
   setAnchor: ReturnType<typeof useSetCostAnchor>;
 }) => {
+  const askConfirm = useConfirm();
   const anchored = binding.is_cost_anchor;
   // Anchor is meaningful only for our own SKUs (mfg_product). Fabric / raw
   // bindings have no mfg_products cost row to mirror — hide the toggle.
@@ -1440,16 +1441,18 @@ const AnchorCell = ({
         className={styles.iconBtn}
         title={title}
         disabled={setAnchor.isPending}
-        onClick={(e) => {
+        onClick={async (e) => {
           e.stopPropagation();
           if (!anchored) {
             // Turning ON pushes this binding's cost onto the product — confirm.
-            const ok = confirm(
-              `Anchor ${binding.material_code} to this supplier’s cost?\n\n` +
-              `Product-Maintenance cost will be kept equal to this supplier’s cost ` +
-              `(editing either side updates the other).` +
-              (sofaSkipped ? `\n\nNote: sofa per-height cost is not auto-synced.` : ''),
-            );
+            const ok = await askConfirm({
+              title: `Anchor ${binding.material_code} to this supplier’s cost?`,
+              body:
+                `Product-Maintenance cost will be kept equal to this supplier’s cost ` +
+                `(editing either side updates the other).` +
+                (sofaSkipped ? `\n\nNote: sofa per-height cost is not auto-synced.` : ''),
+              confirmLabel: 'Anchor',
+            });
             if (!ok) return;
           }
           setAnchor.mutate({ supplierId, bindingId: binding.id, anchor: !anchored });
@@ -1477,7 +1480,9 @@ const RowActionsCell = ({
   supplierId: string;
   remove: ReturnType<typeof useDeleteBinding>;
   onEdit: (b: BindingRow) => void;
-}) => (
+}) => {
+  const askConfirm = useConfirm();
+  return (
   <span className={styles.actionsCell}>
     <button
       type="button"
@@ -1494,9 +1499,13 @@ const RowActionsCell = ({
       type="button"
       className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
       title="Delete"
-      onClick={(e) => {
+      onClick={async (e) => {
         e.stopPropagation();
-        if (confirm(`Remove mapping ${binding.material_code} → ${binding.supplier_sku}?`)) {
+        if (await askConfirm({
+          title: `Remove mapping ${binding.material_code} → ${binding.supplier_sku}?`,
+          confirmLabel: 'Remove',
+          danger: true,
+        })) {
           remove.mutate({ supplierId, bindingId: binding.id });
         }
       }}
@@ -1504,7 +1513,8 @@ const RowActionsCell = ({
       <Trash2 {...SM_ICON} />
     </button>
   </span>
-);
+  );
+};
 
 /* ════════════════════════════════════════════════════════════════════════
    Inline editors — supplier_sku + unit_price cells on SkuMappingsTable

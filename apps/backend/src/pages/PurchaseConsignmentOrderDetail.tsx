@@ -285,8 +285,13 @@ export const PurchaseConsignmentOrderDetail = () => {
           </Button>
           {(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
             <Button variant="ghost" size="md"
-              onClick={() => {
-                if (!confirm(`Cancel ${po.po_number}? This sets status to CANCELLED — line items + linked docs stay for audit.`)) return;
+              onClick={async () => {
+                if (!(await askConfirm({
+                  title: `Cancel ${po.po_number}?`,
+                  body: 'This sets status to CANCELLED — line items + linked docs stay for audit.',
+                  confirmLabel: 'Cancel PO',
+                  danger: true,
+                }))) return;
                 cancel.mutate(po.id, {
                   onError: (err) => notify({ title: 'Cancel failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
                 });
@@ -298,8 +303,13 @@ export const PurchaseConsignmentOrderDetail = () => {
           )}
           {po.status === 'CANCELLED' && (
             <Button variant="ghost" size="md"
-              onClick={() => {
-                if (!confirm(`Permanently delete ${po.po_number}? This removes the header + all line items and cannot be undone.`)) return;
+              onClick={async () => {
+                if (!(await askConfirm({
+                  title: `Permanently delete ${po.po_number}?`,
+                  body: 'This removes the header + all line items and cannot be undone.',
+                  confirmLabel: 'Delete',
+                  danger: true,
+                }))) return;
                 deletePo.mutate(po.id, {
                   onSuccess: () => navigate('/purchase-consignment'),
                   onError:   (err) => notify({ title: 'Delete failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),

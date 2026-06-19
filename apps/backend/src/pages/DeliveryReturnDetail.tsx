@@ -244,8 +244,8 @@ export const DeliveryReturnDetail = () => {
     for (const it of items) {
       map.set(it.id, {
         onChange: (patch) => patchEditingDraft(it.id, patch),
-        onRemove: () => {
-          if (confirm(`Remove ${it.item_code} from this return?`)) {
+        onRemove: async () => {
+          if (await askConfirm({ title: `Remove ${it.item_code} from this return?`, confirmLabel: 'Remove', danger: true })) {
             deleteItem.mutate(
               { id: it.delivery_return_id, itemId: it.id },
               { onSuccess: () => removeEditingLine(it.id) },
@@ -255,7 +255,7 @@ export const DeliveryReturnDetail = () => {
       });
     }
     return map;
-  }, [items, patchEditingDraft, removeEditingLine, deleteItem]);
+  }, [items, patchEditingDraft, removeEditingLine, deleteItem, askConfirm]);
 
   const startAddLine = () => setAddingDraft({ ...emptySoLine() });
   const cancelAddLine = useCallback(() => setAddingDraft(null), []);

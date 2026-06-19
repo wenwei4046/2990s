@@ -32,6 +32,7 @@ import { fetchPaymentSlipUrl } from '../lib/slip';
 import { SlipUploadField } from './SlipUploadField';
 import { MoneyInput } from './MoneyInput';
 import { useNotify } from './NotifyDialog';
+import { useConfirm } from './ConfirmDialog';
 import { todayMyt } from '../lib/dates';
 import {
   PAYMENT_METHOD_CODE_TO_VALUE,
@@ -282,6 +283,7 @@ const PaymentSlipThumb = ({ docNo, payment, orderSlipUrl, orderSlipType }: {
 
 const PaymentsTableInner = (props: PaymentsTableProps) => {
   const notify = useNotify();
+  const askConfirm = useConfirm();
   const currency = props.currency ?? 'MYR';
   const grandTotal = props.grandTotalCenti ?? 0;
   const locked = props.locked ?? false;
@@ -602,8 +604,12 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                       type="button"
                       className={paymentsStyles.trashBtn}
                       disabled={deletePayment.isPending}
-                      onClick={() => {
-                        if (confirm(`Delete this ${methodDisplay(p)} payment of ${fmtRm(p.amount_centi, currency)}?`)) {
+                      onClick={async () => {
+                        if (await askConfirm({
+                          title: `Delete this ${methodDisplay(p)} payment of ${fmtRm(p.amount_centi, currency)}?`,
+                          confirmLabel: 'Delete',
+                          danger: true,
+                        })) {
                           deletePayment.mutate({ docNo: (props as SavedModeProps).docNo, id: p.id });
                         }
                       }}

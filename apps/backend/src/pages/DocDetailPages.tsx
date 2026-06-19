@@ -23,6 +23,7 @@ import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-29 —
 import { LoadingButton } from '../components/LoadingButton';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { useNotify } from '../components/NotifyDialog';
+import { useConfirm } from '../components/ConfirmDialog';
 import {
   useGrnDetail,
   usePostGrn,
@@ -310,6 +311,7 @@ const PI_STATUS_CLASS: Record<string, string> = {
 
 export const PurchaseInvoiceDetail = () => {
   const notify = useNotify();
+  const askConfirm = useConfirm();
   const { id } = useParams<{ id: string }>();
   const detail = usePurchaseInvoiceDetail(id ?? null);
   const linked = usePurchaseInvoiceLinked(id ?? null);
@@ -381,8 +383,13 @@ export const PurchaseInvoiceDetail = () => {
             </Button>
           )}
           {pi.status !== 'PAID' && pi.status !== 'CANCELLED' && (
-            <Button variant="ghost" size="sm" onClick={() => {
-              if (confirm(`Cancel PI ${pi.invoice_number}? This cannot be undone.`)) cancel.mutate(id!);
+            <Button variant="ghost" size="sm" onClick={async () => {
+              if (await askConfirm({
+                title: `Cancel PI ${pi.invoice_number}?`,
+                body: 'This cannot be undone.',
+                confirmLabel: 'Cancel PI',
+                danger: true,
+              })) cancel.mutate(id!);
             }}>
               <span>Cancel</span>
             </Button>
@@ -759,6 +766,7 @@ const PR_STATUS_CLASS: Record<string, string> = {
 
 export const PurchaseReturnDetail = () => {
   const notify = useNotify();
+  const askConfirm = useConfirm();
   const { id } = useParams<{ id: string }>();
   const detail = usePurchaseReturnDetail(id ?? null);
   const linked = usePurchaseReturnLinked(id ?? null);
@@ -826,8 +834,13 @@ export const PurchaseReturnDetail = () => {
             </Button>
           )}
           {pr.status !== 'COMPLETED' && pr.status !== 'CANCELLED' && (
-            <Button variant="ghost" size="sm" onClick={() => {
-              if (confirm(`Cancel ${pr.return_number}? Cannot be undone.`)) cancel.mutate(id!);
+            <Button variant="ghost" size="sm" onClick={async () => {
+              if (await askConfirm({
+                title: `Cancel ${pr.return_number}?`,
+                body: 'Cannot be undone.',
+                confirmLabel: 'Cancel return',
+                danger: true,
+              })) cancel.mutate(id!);
             }}>
               <span>Cancel</span>
             </Button>

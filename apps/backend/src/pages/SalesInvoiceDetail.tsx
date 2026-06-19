@@ -285,8 +285,12 @@ export const SalesInvoiceDetail = () => {
     for (const it of items) {
       map.set(it.id, {
         onChange: (patch) => patchEditingDraft(it.id, patch),
-        onRemove: () => {
-          if (confirm(`Remove ${it.item_code} from this invoice?`)) {
+        onRemove: async () => {
+          if (await askConfirm({
+            title: `Remove ${it.item_code} from this invoice?`,
+            confirmLabel: 'Remove',
+            danger: true,
+          })) {
             deleteItem.mutate(
               { id: it.sales_invoice_id, itemId: it.id },
               { onSuccess: () => removeEditingLine(it.id) },
@@ -296,7 +300,7 @@ export const SalesInvoiceDetail = () => {
       });
     }
     return map;
-  }, [items, patchEditingDraft, removeEditingLine, deleteItem]);
+  }, [items, patchEditingDraft, removeEditingLine, deleteItem, askConfirm]);
 
   const startAddLine = () => setAddingDraft({ ...emptySoLine() });
   const cancelAddLine = useCallback(() => setAddingDraft(null), []);

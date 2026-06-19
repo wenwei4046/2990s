@@ -32,6 +32,7 @@ import { useVenues, type VenueRow } from '../lib/venues-queries';
 import { useShowrooms } from '../lib/admin-queries';
 import { PinDrawer } from '../components/PinDrawer';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useConfirm } from '../components/ConfirmDialog';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -135,6 +136,7 @@ export const Users = () => {
 
   const deactivate = useDeactivateUser();
   const update     = useUpdateUser();
+  const askConfirm = useConfirm();
 
   const rows = useMemo(() => {
     const all = users.data ?? [];
@@ -146,9 +148,14 @@ export const Users = () => {
     });
   }, [users.data, filterRole, filterVenue, showInactive]);
 
-  const onToggleActive = useCallback((row: UserRow) => {
+  const onToggleActive = useCallback(async (row: UserRow) => {
     if (row.active) {
-      if (!confirm(`Deactivate ${row.name}? They will lose Backend access immediately.`)) return;
+      if (!(await askConfirm({
+        title: `Deactivate ${row.name}?`,
+        body: 'They will lose Backend access immediately.',
+        confirmLabel: 'Deactivate',
+        danger: true,
+      }))) return;
       deactivate.mutate(row.id, {
         onSuccess: () => toast.success(`${row.name} deactivated`),
         onError: (e) => toast.error(`Deactivate failed: ${(e as Error).message}`),
@@ -161,7 +168,7 @@ export const Users = () => {
     }
     // mutate fns are stable; toast comes from context and is stable too.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deactivate.mutate, update.mutate, toast]);
+  }, [deactivate.mutate, update.mutate, toast, askConfirm]);
 
   /* Shared DataGrid conversion (2026-06-12). Role / venue / show-inactive
      filters above keep driving `rows`; the grid adds sort, per-column

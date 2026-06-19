@@ -49,6 +49,7 @@ import {
 } from '../lib/consignment-order-queries';
 import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import {
   useLocalities,
@@ -163,6 +164,7 @@ const draftFromItem = (it: ConsignmentItem): SoLineDraft => ({
 export const ConsignmentOrderDetail = () => {
   const { docNo } = useParams<{ docNo: string }>();
   const navigate = useNavigate();
+  const askConfirm = useConfirm();
   const notify = useNotify();
   const detail = useConsignmentOrderDetail(docNo ?? null);
   const updateHeader = useUpdateConsignmentOrderHeader();
@@ -353,8 +355,8 @@ export const ConsignmentOrderDetail = () => {
     for (const it of items) {
       map.set(it.id, {
         onChange: (patch) => patchEditingDraft(it.id, patch),
-        onRemove: () => {
-          if (confirm(`Remove ${it.item_code} from this consignment order?`)) {
+        onRemove: async () => {
+          if (await askConfirm({ title: `Remove ${it.item_code} from this consignment order?`, confirmLabel: 'Remove', danger: true })) {
             deleteItem.mutate(
               { docNo: it.doc_no, itemId: it.id },
               { onSuccess: () => removeEditingLine(it.id) },
@@ -364,7 +366,7 @@ export const ConsignmentOrderDetail = () => {
       });
     }
     return map;
-  }, [items, patchEditingDraft, removeEditingLine, deleteItem]);
+  }, [items, patchEditingDraft, removeEditingLine, deleteItem, askConfirm]);
 
   const startAddLine = () => {
     if (!header) return;

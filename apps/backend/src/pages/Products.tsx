@@ -79,6 +79,7 @@ import { SkeletonRows } from '../components/Skeleton';
 import { MoneyInput } from '../components/MoneyInput';
 import { usePrompt } from '../components/PromptDialog';
 import { useNotify } from '../components/NotifyDialog';
+import { useConfirm } from '../components/ConfirmDialog';
 import { todayMyt } from '../lib/dates';
 import { FabricsTable } from '../components/FabricsTable';
 import { SofaComboTab } from '../components/SofaComboTab';
@@ -277,6 +278,7 @@ const SkuMasterTab = () => {
   const [savingEdits, setSavingEdits] = useState(false);
   const updatePrices = useUpdateMfgProductPrices();
   const notify = useNotify();
+  const askConfirm = useConfirm();
   const stageEdit = useCallback((id: string, patch: ProductEditPatch) => {
     setPendingEdits((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
   }, []);
@@ -412,8 +414,12 @@ const SkuMasterTab = () => {
   }, [visibleIds]);
   const bulkDelete = async () => {
     if (selectedIds.size === 0) return;
-    // eslint-disable-next-line no-alert
-    if (!confirm(`Delete ${selectedIds.size} SKU${selectedIds.size === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    if (!(await askConfirm({
+      title: `Delete ${selectedIds.size} SKU${selectedIds.size === 1 ? '' : 's'}?`,
+      body: 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return;
     setDeleting(true);
     const ids = Array.from(selectedIds);
     const results = await Promise.all(ids.map((id) =>
@@ -431,12 +437,14 @@ const SkuMasterTab = () => {
     const blockedByRef = failed.filter((f) => /product_in_use|23503|references/i.test(f.err));
     const sample = failed.slice(0, 3).map((f) => `· ${f.err.slice(0, 160)}`).join('\n');
     const overflow = failed.length > 3 ? `\n…and ${failed.length - 3} more.` : '';
-    // eslint-disable-next-line no-alert
-    const wantForce = blockedByRef.length > 0 && confirm(
-      `Deleted ${results.length - failed.length} / ${results.length}. ${failed.length} failed:\n${sample}${overflow}\n\n`
-      + `${blockedByRef.length} of the failures look like inventory / supplier bindings.\n`
-      + `Force delete will wipe those side-table rows first then drop the SKU. Continue?`,
-    );
+    const wantForce = blockedByRef.length > 0 && (await askConfirm({
+      title: `Deleted ${results.length - failed.length} / ${results.length}. ${failed.length} failed:`,
+      body: `${sample}${overflow}\n\n`
+        + `${blockedByRef.length} of the failures look like inventory / supplier bindings.\n`
+        + `Force delete will wipe those side-table rows first then drop the SKU. Continue?`,
+      confirmLabel: 'Force delete',
+      danger: true,
+    }));
     if (!wantForce) {
       notify({
         title: `Deleted ${results.length - failed.length} / ${results.length}. ${failed.length} failed.`,
@@ -1688,6 +1696,7 @@ export const MaintenanceTab = ({
   const [showMaintHistory, setShowMaintHistory] = useState(false);
   const askPrompt = usePrompt();
   const notify = useNotify();
+  const askConfirm = useConfirm();
 
   // Count fabric_trackings rows for the left-rail "Fabrics (N)" badge.
   // Lightweight query (cached 30s) — uses the same hook as the panel itself.
@@ -1768,12 +1777,14 @@ export const MaintenanceTab = ({
       }
       if (renames.length > 0) {
         const summary = renames.map((r) => `${r.from} → ${r.to}`).join('\n');
-        // eslint-disable-next-line no-alert
-        const ok = confirm(
-          `Rename compartment code${renames.length > 1 ? 's' : ''}?\n\n${summary}\n\n` +
-          `This cascades EVERYWHERE: SKU codes + names, sales orders (incl. history), ` +
-          `delivery orders, invoices, GRN/PO lines, Modular ticks, Combos and Quick Picks.`,
-        );
+        const ok = await askConfirm({
+          title: `Rename compartment code${renames.length > 1 ? 's' : ''}?`,
+          body: `${summary}\n\n` +
+            `This cascades EVERYWHERE: SKU codes + names, sales orders (incl. history), ` +
+            `delivery orders, invoices, GRN/PO lines, Modular ticks, Combos and Quick Picks.`,
+          confirmLabel: 'Rename',
+          danger: true,
+        });
         if (!ok) return;
         for (const r of renames) {
           try {
@@ -2185,6 +2196,7 @@ const SofaCompartmentsList = ({
   const uploadPhoto = useUploadSofaCompartmentPhoto();
   const deletePhoto = useDeleteSofaCompartmentPhoto();
   const notify = useNotify();
+  const askConfirm = useConfirm();
   const [uploadingCode, setUploadingCode] = useState<string | null>(null);
 
   const writeMeta = (code: string, patch: Partial<CompartmentMeta>) => {
@@ -2305,13 +2317,16 @@ const SofaCompartmentsList = ({
                         ? `${resolved.imageKey} — click to replace${isUploaded ? ' · right-click / × to remove' : ''}`
                         : 'Click to upload a photo'
                   }
-                  onContextMenu={(e) => {
+                  onContextMenu={async (e) => {
                     // Right-click on an uploaded photo = delete (matches
                     // commander's "Right-click or × → delete" spec).
                     if (!isUploaded || isUploading) return;
                     e.preventDefault();
-                    // eslint-disable-next-line no-alert
-                    if (!confirm(`Remove uploaded photo for ${code}?`)) return;
+                    if (!(await askConfirm({
+                      title: `Remove uploaded photo for ${code}?`,
+                      confirmLabel: 'Remove',
+                      danger: true,
+                    }))) return;
                     deletePhoto.mutate(code);
                   }}
                 >
@@ -2358,10 +2373,13 @@ const SofaCompartmentsList = ({
                   {isUploaded && !isUploading && (
                     <button
                       type="button"
-                      onClick={(e) => {
+                      onClick={async (e) => {
                         e.stopPropagation();
-                        // eslint-disable-next-line no-alert
-                        if (!confirm(`Remove uploaded photo for ${code}?`)) return;
+                        if (!(await askConfirm({
+                          title: `Remove uploaded photo for ${code}?`,
+                          confirmLabel: 'Remove',
+                          danger: true,
+                        }))) return;
                         deletePhoto.mutate(code);
                       }}
                       title="Remove uploaded photo"
@@ -2598,6 +2616,7 @@ const SofaQuickPresetsList = ({
   onChange: (next: MaintenanceConfig) => void;
   dragRowProps: (i: number) => HTMLAttributes<HTMLDivElement>;
 }) => {
+  const askConfirm = useConfirm();
   /* When the override is absent, surface the defaults as the working list so
      commander can edit them inline. Save persists whatever's in the array. */
   const stored = config.sofaQuickPresets;
@@ -2627,8 +2646,13 @@ const SofaQuickPresetsList = ({
     writeAll(next);
   };
 
-  const removeAt = (idx: number) => {
-    if (!confirm(`Remove preset "${items[idx]?.label ?? '?'}"? (Existing combos with this preset_id keep working.)`)) return;
+  const removeAt = async (idx: number) => {
+    if (!(await askConfirm({
+      title: `Remove preset "${items[idx]?.label ?? '?'}"?`,
+      body: '(Existing combos with this preset_id keep working.)',
+      confirmLabel: 'Remove',
+      danger: true,
+    }))) return;
     writeAll(items.filter((_, i) => i !== idx));
   };
 

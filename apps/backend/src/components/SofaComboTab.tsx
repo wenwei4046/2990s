@@ -47,6 +47,7 @@ import {
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { useSupplierDetail, useSuppliers, type SupplierRow } from '../lib/suppliers-queries';
 import { useNotify } from './NotifyDialog';
+import { useConfirm } from './ConfirmDialog';
 import { todayMyt } from '../lib/dates';
 
 // Seat-height columns mirror the live Maintenance pool (Products → Maintenance
@@ -223,6 +224,7 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
   const total = combosQ.data?.length ?? 0;
 
   const deleteM = useDeleteSofaCombo();
+  const askConfirm = useConfirm();
 
   // R8 — anchor a base_model to ONE supplier (sales-side view only). When
   // anchored, combo create + price edits mirror between this master combo and
@@ -348,8 +350,13 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
                   onToggleSelect={() => toggleSelected(r.id)}
                   onEdit={() => setComposer({ open: true, editing: r })}
                   onHistory={() => setHistoryFor(r)}
-                  onDelete={() => {
-                    if (confirm('Soft-delete this combo? (History will still show it.)')) {
+                  onDelete={async () => {
+                    if (await askConfirm({
+                      title: 'Soft-delete this combo?',
+                      body: '(History will still show it.)',
+                      confirmLabel: 'Soft-delete',
+                      danger: true,
+                    })) {
                       deleteM.mutate(r.id);
                     }
                   }}
