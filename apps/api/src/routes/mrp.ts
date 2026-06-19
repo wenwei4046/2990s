@@ -64,6 +64,13 @@ type DemandRow = {
   qty: number;
   warehouse_id: string | null; // SO line's ship-from warehouse (migration 0118)
   line_delivery_date: string | null;
+  /* Persisted per-document listing sequence (migration 0165) — the CANONICAL
+     stored order (mains → accessories → services, sofa modules left-to-right)
+     the SO detail + SO PDF render in. NULL on legacy pre-0165 lines; the sofa
+     SET render falls back to created_at then item_code so the order stays
+     stable. Carried so the MRP sofa modules render in the SAME stored order. */
+  line_no: number | null;
+  created_at: string | null;
   cancelled: boolean;
   so: {
     debtor_name: string | null;
@@ -166,6 +173,13 @@ type SofaSet = {
   warehouseName: string | null;
   soItemId: string;
   soDocNo: string;
+  /* CANONICAL stored listing order within the SO (migration 0165). The MRP
+     Sofa tab groups sets back into per-SO rows (groupBySo) and orders the
+     module sub-rows by this so they read LHF → NA → RHF exactly as the SO
+     detail + SO PDF do, instead of an alphabetical item_code sort. NULL on
+     legacy lines → the frontend falls back to created_at, then item_code. */
+  lineNo: number | null;
+  createdAt: string | null;
   debtorName: string | null;
   soDate: string | null;
   deliveryDate: string | null;
@@ -250,7 +264,7 @@ export async function computeMrp(
   const { data: demandRaw, error: demandErr } = await sb
     .from('mfg_sales_order_items')
     .select(`
-      id, doc_no, item_code, description, item_group, variants, qty, warehouse_id, line_delivery_date, cancelled,
+      id, doc_no, item_code, description, item_group, variants, qty, warehouse_id, line_delivery_date, line_no, created_at, cancelled,
       so:mfg_sales_orders!inner ( debtor_name, status, so_date, customer_delivery_date, internal_expected_dd )
     `)
     .eq('cancelled', false)
@@ -640,6 +654,8 @@ export async function computeMrp(
         warehouseName: wh?.name ?? null,
         soItemId: d.id,
         soDocNo: d.doc_no,
+        lineNo: d.line_no ?? null,
+        createdAt: d.created_at ?? null,
         debtorName: d.so?.debtor_name ?? null,
         soDate: d.so?.so_date ?? null,
         deliveryDate: setDelivery,
