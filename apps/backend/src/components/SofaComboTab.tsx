@@ -392,6 +392,15 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
             setSelectedIds(new Set());
             setBatchOpen(false);
           }}
+          // Per-row "Edit composition…" jump from inside the batch grid
+          // (commander 2026-06-20: "Compartment edit 不到的"). Closes the batch
+          // modal and opens the single-combo Composer for that row — the ONLY
+          // place modules/compartments may change (append-only identity stays
+          // intact; selection is preserved so batch can be re-opened after).
+          onEditComposition={(r) => {
+            setBatchOpen(false);
+            setComposer({ open: true, editing: r });
+          }}
         />
       )}
     </div>
@@ -978,13 +987,16 @@ function adjustPrices(
 }
 
 function BatchEditModal({
-  rules, supplierId, heights, onClose, onDone,
+  rules, supplierId, heights, onClose, onDone, onEditComposition,
 }: {
   rules: SofaComboRule[];
   supplierId?: string;
   heights: string[];
   onClose: () => void;
   onDone: () => void;
+  /** Jump to the single-combo Composer for one row (composition editing is
+      never done in batch — append-only identity). Closes batch + opens it. */
+  onEditComposition: (rule: SofaComboRule) => void;
 }) {
   const notify = useNotify();
   const create = useCreateSofaCombo();
@@ -1191,15 +1203,28 @@ function BatchEditModal({
                 <tbody>
                   {rules.map((r) => (
                     <tr key={r.id}>
-                      <td style={gridLabelCellStyle} title={r.label || buildComboLabel(r.modules)}>
+                      <td style={gridLabelCellStyle}>
                         <div style={{ fontWeight: 600, color: 'var(--c-ink)' }}>{r.baseModel}</div>
-                        <div style={{
-                          fontSize: 'var(--fs-11)', color: 'var(--fg-soft)',
-                          maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                        }}>
+                        {/* Full composition — wraps instead of truncating so the
+                            compartment makeup is always readable (commander
+                            2026-06-20: "被遮着了"). */}
+                        <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-soft)', lineHeight: 1.35 }}>
                           {r.label || buildComboLabel(r.modules)}
                           {r.tier ? ` · ${r.tier}` : ''}
                         </div>
+                        {/* Compartment editing lives in the Composer (append-only
+                            identity). This jumps straight there for THIS combo. */}
+                        <button
+                          type="button"
+                          onClick={() => onEditComposition(r)}
+                          title="Change this combo's compartments (opens the Composer)"
+                          style={{
+                            ...ghostBtnStyle, marginTop: 4, padding: '2px 6px',
+                            fontSize: 'var(--fs-11)',
+                          }}
+                        >
+                          <Pencil size={11} strokeWidth={1.75} /> Edit composition…
+                        </button>
                       </td>
                       {heights.map((h) => (
                         <td key={h} style={gridInputCellStyle}>
@@ -1531,9 +1556,13 @@ const gridHeadCellStickyStyle: CSSProperties = {
 const gridLabelCellStyle: CSSProperties = {
   fontFamily: 'var(--font-sans)',
   fontSize: 'var(--fs-12)',
-  padding: '4px 8px 4px 0',
-  verticalAlign: 'middle',
-  whiteSpace: 'nowrap',
+  padding: '6px 10px 6px 0',
+  verticalAlign: 'top',
+  // Wrap the composition instead of clipping it (commander 2026-06-20). Cap the
+  // width so the height columns still get room; the text flows onto 2–3 lines.
+  whiteSpace: 'normal',
+  maxWidth: 200,
+  minWidth: 140,
 };
 
 const gridInputCellStyle: CSSProperties = {
