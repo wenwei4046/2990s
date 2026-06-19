@@ -128,7 +128,7 @@ describe('DataGrid multi-select column', () => {
         storageKey="test-grid-select"
         selectable={{
           selectedKeys: sel,
-          onToggle: (k) => setSel((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; }),
+          onToggle: (k) => setSel((p) => { const n = new Set(p); if (n.has(k)) n.delete(k); else n.add(k); return n; }),
           onToggleAll: (keys, all) => setSel(all ? new Set() : new Set(keys)),
         }}
       />

@@ -88,7 +88,7 @@ describe('POST /mfg-products/:id/activate-one-shot', () => {
     // Track calls by table + operation.
     const mfgProductsUpdateCalls: any[] = [];
     const productModelsUpdateCalls: any[] = [];
-    let callCount = 0; // mfg_products.select is called once, product_models.select is called once
+    const callCount = 0; // mfg_products.select is called once, product_models.select is called once
 
     adminFromMock.mockImplementation((table: string) => {
       if (table === 'mfg_products') {

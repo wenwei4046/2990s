@@ -5470,7 +5470,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
     unit_price_centi: number; discount_centi: number | null;
     unit_cost_centi: number | null; variants: Record<string, unknown> | null;
   };
-  let triggerCodesToRestamp: string[] = [];
+  const triggerCodesToRestamp: string[] = [];
   const pwpDeleteCodes: string[] = [];
   const pwpRevertCodes: string[] = [];
   let rewardLinesToRevert: SwapRewardRevertLine[] = [];
