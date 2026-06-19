@@ -1803,6 +1803,7 @@ mfgSalesOrders.post('/', async (c) => {
   // product row instead of one query per line.
   const productRowByCode = await loadProductsByCodes(sb, items.map((it) => String(it.itemCode ?? '')));
   const lineProducts = items.map((it) => productRowByCode.get(String(it.itemCode ?? '').trim()) ?? null);
+
   /* PWP Code Voucher (migration 0130) — code-driven grant + atomic claim. A
      reward line earns its per-SKU pwp_price_sen ONLY if it carries a valid
      `variants.pwpCode`: the code exists, is redeemable (AVAILABLE, or RESERVED
@@ -1849,7 +1850,11 @@ mfgSalesOrders.post('/', async (c) => {
      parameter. Honest-pricing (CLAUDE.md): a gift with no trigger reprices to the
      accessory's real sell_price_sen → a tampered "free" client price drifts. */
   const freeGiftBaseByIdx = new Map<number, number>();       // gift line idx → granted base (always 0)
-  // Free Item Campaign (migration 0176) — idx → resolved {campaignId, campaignName}.
+  /* Free Item Campaign (migration 0176) — idx → resolved {campaignId, campaignName}.
+     Populated below by the server-side campaign re-validation (NOT the client's
+     variants.freeItem marker), so the delivery + special-model fee blocks that
+     read freeItemByIdx.has(idx) only exclude lines a real active campaign covers
+     — a tampered "free" marker still pays delivery (honest pricing, CLAUDE.md). */
   const freeItemByIdx = new Map<number, { campaignId: string; campaignName: string }>();
   const claimedPwpCodes: Array<{ code: string; prevStatus: string }> = [];
   /* Loo 2026-06-05 (VALOR / PW-Test-voucher incident) — a line that CARRIES a
@@ -2614,10 +2619,18 @@ mfgSalesOrders.post('/', async (c) => {
       .select('base_fee, cross_category_fee')
       .eq('id', 1)
       .single();
+    // Free-item-campaign lines are treated like accessories for delivery — they
+    // never add a delivery charge (Loo 2026-06-17). freeItemByIdx (populated by
+    // the server-side campaign re-validation above) marks them, so an all-free SO
+    // has no deliverable category → RM0 base.
     const DELIVERABLE = new Set(['sofa', 'mattress', 'bedframe']);
     const categoryIds = items
-      .map((it) => String((it as { itemGroup?: string }).itemGroup ?? '').toLowerCase())
-      .filter((g) => DELIVERABLE.has(g));
+      .map((it, idx) => ({
+        group: String((it as { itemGroup?: string }).itemGroup ?? '').toLowerCase(),
+        isFree: freeItemByIdx.has(idx),
+      }))
+      .filter((x) => !x.isFree && DELIVERABLE.has(x.group))
+      .map((x) => x.group);
     const additionalSen = Math.max(0, Math.round(Number(body.additionalDeliveryFee ?? 0) * 100));
     // delivery_fee_config + special fees are whole-MYR; the SO ledger is sen → ×100.
     const cfgSen = {
@@ -2633,7 +2646,8 @@ mfgSalesOrders.post('/', async (c) => {
     const specialModels: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
     const lineModelIds = [...new Set(
       lineProducts
-        .map((p) => (p as { model_id?: string | null } | null)?.model_id)
+        // Skip free-item lines — a free giveaway carries no special transport fee.
+        .map((p, idx) => (freeItemByIdx.has(idx) ? null : (p as { model_id?: string | null } | null)?.model_id))
         .filter((m): m is string => Boolean(m)),
     )];
     if (lineModelIds.length > 0) {
