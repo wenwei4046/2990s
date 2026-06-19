@@ -6,9 +6,9 @@
 // pricing flow through arguments. Same code runs on POS, Backend preview,
 // and Cloudflare Workers when /orders does the server-side recompute.
 
-import { pickComboMatch, comboTierPriceActive, type SofaComboRow, type SofaPriceTier } from './sofa-combo-pricing';
+import { pickComboMatch, type SofaComboRow, type SofaPriceTier } from './sofa-combo-pricing';
 export type { SofaComboRow } from './sofa-combo-pricing';
-export { comboChargedPrices, comboChargedPricesForTier, comboTierPriceActive } from './sofa-combo-pricing';
+export { comboChargedPrices } from './sofa-combo-pricing';
 // One-way edge: mfg-pricing.ts imports nothing (fully self-contained), so this
 // does NOT create a cycle. resolveSeatHeightSelling powers the SELLING assembly
 // helper below; MfgSeatHeightPrice is the per-(height,tier) entry shape.
@@ -531,52 +531,6 @@ export const computeSofaSellingSen = (
     baseModel: '',
   };
   return Math.round(computeSofaPrice(cells, depth, pricing).total * 100);
-};
-
-/**
- * Combo Price 1/2/3 (Option B, migration 0179): does this build's pricing get
- * dominated by a combo that carries an EXPLICIT per-tier selling price for the
- * given fabric tier? When true, the line must SUPPRESS the flat fabric-tier
- * add-on for the matched groups (the tier premium is already baked into the
- * combo's price2/price3 map). When false — no combo, the combo has no explicit
- * tier map, or the tier is PRICE_1 — this returns false and the caller keeps the
- * flat add-on, BYTE-IDENTICAL to today.
- *
- * Re-uses the SAME matcher (`pickComboMatch`) + the SAME PRICE_1 combo-match
- * scoping + the SAME group split as the price engine, so a group reads as
- * "tier-priced combo" here iff `computeSofaPrice` actually charged it that way.
- * Pure — POS live total + server recompute both call it so the suppression
- * decision can't drift. `combos` is the SAME pre-built list fed to
- * `computeSofaSellingSen` (already tier-resolved via comboChargedPricesForTier),
- * but the per-tier detection reads the combos' own price2/price3 maps, so feed
- * combos that still carry those maps (the loaders preserve them).
- */
-export const sofaTierComboApplies = (
-  cells: Cell[],
-  depth: Depth,
-  combos: SofaComboRow[] | null | undefined,
-  fabricTier: SofaPriceTier | null | undefined,
-): boolean => {
-  // PRICE_1 (or no tier) can never have an Option-B override → always false →
-  // the flat add-on path is untouched (it is already 0 for PRICE_1 anyway).
-  if (!combos || combos.length === 0) return false;
-  if (fabricTier !== 'PRICE_2' && fabricTier !== 'PRICE_3') return false;
-  const heightStr = String(depth);
-  for (const group of groupSofas(cells, depth)) {
-    const modIds = group.map((c) => c.moduleId);
-    const match = pickComboMatch(
-      {
-        baseModel: '',
-        modules: modIds,
-        customerId: null,
-        tier: 'PRICE_1',          // combo-match scope — same as computeSofaSellingSen
-        height: heightStr,
-      },
-      combos,
-    );
-    if (match && comboTierPriceActive(match.row, fabricTier)) return true;
-  }
-  return false;
 };
 
 /** Auto-detect a Combo's COST (sen) = Σ COST of each slot's representative

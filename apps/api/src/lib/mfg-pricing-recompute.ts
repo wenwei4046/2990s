@@ -34,8 +34,6 @@ import {
 import {
   computeSofaSellingSen,
   comboChargedPrices,
-  comboChargedPricesForTier,
-  sofaTierComboApplies,
   sofaModulePricesFromSkus,
   sofaModuleSellingPricesFromSkus,
   sofaModuleCostPricesFromSkus,
@@ -519,43 +517,17 @@ export function recomputeFromSnapshot(
        PWP price that beats à-la-carte applies; default {} → no override. Combos
        NOT in the grant list keep their normal selling price. */
     const pwpComboSet = pwpSofaComboIds && pwpSofaComboIds.length > 0 ? new Set(pwpSofaComboIds) : null;
-    /* Combo Price 1/2/3 (Option B, migration 0179). Re-merge each combo's charged
-       price for the line's resolved SELLING fabric tier: a combo with a non-empty
-       price2/price3 map for this tier charges that EXPLICIT price; everything else
-       falls back to price1 selling (byte-identical to today). PWP wins over Option
-       B (a PWP voucher is a deeper, code-gated override). The combos keep their
-       price2/price3 maps so sofaTierComboApplies can detect the suppression. */
-    const effectiveCombos = lineCombos.map((c) => {
-      if (pwpComboSet && pwpComboSet.has(c.id)) {
-        // PWP override — charge the code's PWP price merged over the normal price.
-        return { ...c, pricesByHeight: comboChargedPrices(c.pwpPricesByHeight, c.pricesByHeight) };
-      }
-      // Option-B tier resolution. Tier-1 / no explicit tier map → unchanged map.
-      return {
-        ...c,
-        pricesByHeight: comboChargedPricesForTier(
-          c.sellingPricesByHeight ?? c.pricesByHeight,
-          c.price2ByHeight,
-          c.price3ByHeight,
-          c.costPricesByHeight ?? c.pricesByHeight,
-          sellingTier,
-        ),
-      };
-    });
-    // Option B: when the build's dominant combo carries an explicit tier price for
-    // this fabric tier, the flat fabric-tier add-on must be SUPPRESSED (the tier
-    // premium is already in the combo's price2/price3 map). No such combo → keep
-    // the flat add-on, byte-identical to today.
-    const suppressSofaAddon =
-      (category === 'SOFA') &&
-      sofaTierComboApplies(sofaCells as Cell[], sofaDepth, lineCombos, sellingTier);
-    const effectiveSofaAddonCenti = suppressSofaAddon ? 0 : fabricAddonCenti;
+    const effectiveCombos = pwpComboSet
+      ? lineCombos.map((c) => (pwpComboSet.has(c.id)
+          ? { ...c, pricesByHeight: comboChargedPrices(c.pwpPricesByHeight, c.pricesByHeight) }
+          : c))
+      : lineCombos;
     const sofaSellingSen = computeSofaSellingSen(sofaCells as Cell[], sofaDepth, sofaModulePrices, effectiveCombos);
     if (sofaSellingSen > 0) {
       // Server has authoritative per-Model module SELLING prices for this build,
       // + the SELLING fabric-tier Δ (migration 0124); the POS adds the same Δ so
       // the gate matches. Δ = 0 with default data (no tier / no config set).
-      const authoritativeSofaSen = sofaSellingSen + effectiveSofaAddonCenti + extraSen;
+      const authoritativeSofaSen = sofaSellingSen + fabricAddonCenti + extraSen;
       drift = driftThresholdExceeded(manualUnitSelling, authoritativeSofaSen);
       unitToPersistSen = authoritativeSofaSen;
     } else {

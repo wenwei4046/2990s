@@ -337,27 +337,6 @@ function ComboCard({
         <span style={isActive ? statusPillActive : statusPillPending}>
           {isActive ? 'Active' : 'Pending'}
         </span>
-        {/* Option B (migration 0179) — flag a combo carrying explicit per-tier
-            selling prices so the curator can spot the override at a glance. */}
-        {(() => {
-          const hasTier = (m: Record<string, number | null> | undefined): boolean =>
-            !!m && Object.values(m).some((x) => x != null);
-          const set: string[] = [];
-          if (hasTier(rule.price2ByHeight)) set.push('P2');
-          if (hasTier(rule.price3ByHeight)) set.push('P3');
-          return set.length > 0 ? (
-            <span
-              title={`Explicit tier selling price set: ${set.join(', ')} (overrides the flat fabric-tier add-on)`}
-              style={{
-                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)', fontWeight: 600,
-                padding: '2px 6px', borderRadius: 999,
-                background: 'var(--accent-soft, #eff6ff)', color: 'var(--accent, #2563eb)',
-              }}
-            >
-              {set.join(' · ')}
-            </span>
-          ) : null;
-        })()}
         <div style={{ flex: 1 }} />
         {canEdit && (
           <button type="button" onClick={onEdit} style={ghostBtnStyle}>
@@ -407,26 +386,15 @@ function ComposerModal({
   const [label, setLabel] = useState(editing?.label ?? '');
   const [effectiveFrom, setEffectiveFrom] = useState(editing?.effectiveFrom ?? todayIso());
   // The base grid on this page is the SELLING price (Chairman 2026-06-02 — show
-  // 卖家 base, not cost). Seeded from the combo's sellingPricesByHeight. This is
-  // PRICE 1 — the base tier. Price 2 / Price 3 (Option B, migration 0179) are
-  // EXPLICIT per-fabric-tier selling prices, edited via the tier toggle below.
-  const seedGrid = (src: Record<string, number | null> | undefined): Record<string, string> => {
+  // 卖家 base, not cost). Seeded from the combo's sellingPricesByHeight.
+  const [prices, setPrices] = useState<Record<string, string>>(() => {
     const seed: Record<string, string> = {};
     for (const h of heights) {
-      const v = src?.[h];
+      const v = editing?.sellingPricesByHeight?.[h];
       seed[h] = v == null ? '' : (v / 100).toFixed(2);
     }
     return seed;
-  };
-  const [prices, setPrices] = useState<Record<string, string>>(() => seedGrid(editing?.sellingPricesByHeight));
-  // Combo Price 2/3 by fabric tier (Option B, migration 0179). Blank for EVERY
-  // height = "not set" → that tier inherits Price 1 + the flat fabric-tier add-on
-  // (byte-identical to pre-Option-B). A filled grid is the EXPLICIT tier price
-  // (charged directly, the flat add-on suppressed for that combo).
-  const [price2, setPrice2] = useState<Record<string, string>>(() => seedGrid(editing?.price2ByHeight));
-  const [price3, setPrice3] = useState<Record<string, string>>(() => seedGrid(editing?.price3ByHeight));
-  // Which tier grid is showing (one at a time, per the editor toggle).
-  const [tierTab, setTierTab] = useState<'PRICE_1' | 'PRICE_2' | 'PRICE_3'>('PRICE_1');
+  });
   // PWP (换购) selling price per height (Phase 2). Blank = no PWP price → the
   // engine never overrides the normal price for that height.
   const [pwpPrices, setPwpPrices] = useState<Record<string, string>>(() => {
@@ -487,26 +455,6 @@ function ComposerModal({
       }
     }
 
-    // Combo Price 2/3 by fabric tier (Option B, migration 0179). Parse each grid;
-    // an all-blank grid persists as {} → "not set" → that tier inherits Price 1 +
-    // the flat add-on (byte-identical to today). A filled height is the explicit
-    // tier selling price (centi).
-    const parseTierGrid = (grid: Record<string, string>, tierLabel: string): Record<string, number | null> | null => {
-      const out: Record<string, number | null> = {};
-      for (const h of heights) {
-        const raw = (grid[h] ?? '').trim();
-        if (!raw) { out[h] = null; continue; }
-        const n = Number(raw);
-        if (!Number.isFinite(n) || n < 0) { alert(`Bad ${tierLabel} price at ${h}".`); return null; }
-        out[h] = Math.round(n * 100);
-      }
-      return out;
-    };
-    const price2ByHeight = parseTierGrid(price2, 'Price 2');
-    if (!price2ByHeight) return;
-    const price3ByHeight = parseTierGrid(price3, 'Price 3');
-    if (!price3ByHeight) return;
-
     try {
       if (editing) {
         await update.mutateAsync({
@@ -516,8 +464,6 @@ function ComposerModal({
           pricesByHeight: editing.pricesByHeight ?? {},
           sellingPricesByHeight,
           pwpPricesByHeight,
-          price2ByHeight,
-          price3ByHeight,
           label: label || null,
           effectiveFrom,
           notes: notes || null,
@@ -539,8 +485,6 @@ function ComposerModal({
           // auto-detect COST from module SKUs, so selling and cost stay decoupled.
           sellingPricesByHeight,
           pwpPricesByHeight,
-          price2ByHeight,
-          price3ByHeight,
           label: label || null,
           effectiveFrom,
           notes: notes || null,
@@ -646,71 +590,23 @@ function ComposerModal({
           )}
         </Field>
 
-        {/* Combo Price 1/2/3 by fabric tier (Option B, migration 0179). One grid
-            at a time via the tier toggle. Price 1 = the base selling price (the
-            sofa's PRICE_1 fabric). Price 2 / Price 3 are EXPLICIT selling prices
-            for PRICE_2 / PRICE_3 fabrics — leaving a tier's grid entirely blank
-            keeps the legacy behaviour (Price 1 + the flat fabric-tier add-on). */}
-        <Field label="Selling price by seat height (RM) — per fabric tier">
-          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-            {([
-              ['PRICE_1', 'Price 1 (base)'],
-              ['PRICE_2', 'Price 2'],
-              ['PRICE_3', 'Price 3'],
-            ] as const).map(([t, lbl]) => {
-              const grid = t === 'PRICE_1' ? prices : t === 'PRICE_2' ? price2 : price3;
-              const filled = heights.some((h) => (grid[h] ?? '').trim() !== '');
-              const active = tierTab === t;
-              return (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => setTierTab(t)}
-                  style={{
-                    flex: 1,
-                    padding: '6px 8px',
-                    fontSize: 'var(--fs-12)',
-                    cursor: 'pointer',
-                    borderRadius: 6,
-                    border: `1px solid ${active ? 'var(--accent, #2563eb)' : 'var(--border, #d4d4d8)'}`,
-                    background: active ? 'var(--accent-soft, #eff6ff)' : 'transparent',
-                    color: active ? 'var(--accent, #2563eb)' : 'var(--fg, inherit)',
-                    fontWeight: active ? 600 : 400,
-                  }}
-                >
-                  {lbl}{t !== 'PRICE_1' && filled ? ' ●' : ''}
-                </button>
-              );
-            })}
-          </div>
-          {(() => {
-            const grid = tierTab === 'PRICE_1' ? prices : tierTab === 'PRICE_2' ? price2 : price3;
-            const setGrid = tierTab === 'PRICE_1' ? setPrices : tierTab === 'PRICE_2' ? setPrice2 : setPrice3;
-            return (
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
-                {heights.map((h) => (
-                  <div key={h}>
-                    <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textAlign: 'center' }}>{h}{/^\d/.test(h) ? '"' : ''}</div>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={grid[h] ?? ''}
-                      onChange={(e) => setGrid((cur) => ({ ...cur, [h]: e.target.value }))}
-                      placeholder="—"
-                      style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
-                    />
-                  </div>
-                ))}
+        <Field label="Selling price by seat height (RM)">
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
+            {heights.map((h) => (
+              <div key={h}>
+                <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textAlign: 'center' }}>{h}{/^\d/.test(h) ? '"' : ''}</div>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={prices[h] ?? ''}
+                  onChange={(e) => setPrices((cur) => ({ ...cur, [h]: e.target.value }))}
+                  placeholder="—"
+                  style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+                />
               </div>
-            );
-          })()}
-          {tierTab !== 'PRICE_1' && (
-            <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginTop: 6 }}>
-              Leave entirely blank → this tier inherits Price 1 plus the standard fabric-tier add-on.
-              Any value here becomes the explicit combo price for {tierTab === 'PRICE_2' ? 'Price 2' : 'Price 3'} fabrics (no extra add-on).
-            </div>
-          )}
+            ))}
+          </div>
         </Field>
 
         {/* PWP (换购) price per height — Phase 2. Blank = no PWP price for that

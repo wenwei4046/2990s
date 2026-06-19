@@ -53,27 +53,6 @@ export interface SofaComboRow {
    *  combo AND the line redeems a valid PWP code, the engine charges this
    *  instead of `pricesByHeight`. Optional: only the selling path carries it. */
   pwpPricesByHeight?: Record<string, number | null>;
-  /** Combo Price 2/3 by fabric tier (migration 0179, Option B). EXPLICIT per-tier
-   *  SELLING price per height. price1 = the combo's normal `sellingPricesByHeight`
-   *  (folded into `pricesByHeight` via comboChargedPrices). When a build's fabric
-   *  resolves to PRICE_2 / PRICE_3 AND the matching map here is NON-EMPTY, the
-   *  engine charges that explicit tier price (via comboChargedPricesForTier) AND
-   *  the caller suppresses the flat fabric-tier add-on for that combo (the tier
-   *  premium is already in the map). EMPTY {} / undefined (every existing combo)
-   *  → fall back to price1 + the flat add-on, BYTE-IDENTICAL to today. Optional:
-   *  only the selling path carries them. */
-  price2ByHeight?: Record<string, number | null>;
-  price3ByHeight?: Record<string, number | null>;
-  /** Raw SELLING (price1) + COST maps (Option B, migration 0179). The loaders
-   *  pre-merge `pricesByHeight = comboChargedPrices(selling, cost)`, which loses
-   *  the originals — but the per-line tier re-merge (comboChargedPricesForTier,
-   *  in the recompute) needs the RAW price1 selling + the cost map so a height
-   *  missing an explicit tier price still falls back to selling-over-cost. The
-   *  loaders carry these alongside the merged `pricesByHeight`. Optional: when
-   *  absent the tier re-merge falls back to `pricesByHeight` (the merged map),
-   *  which for PRICE_1 / no-tier-map combos is identical anyway. */
-  sellingPricesByHeight?: Record<string, number | null>;
-  costPricesByHeight?: Record<string, number | null>;
   label?: string | null;
   effectiveFrom: string;        // ISO date 'YYYY-MM-DD'
   deletedAt?: string | null;
@@ -111,53 +90,6 @@ export const comboChargedPrices = (
     if (v !== null && v !== undefined) out[height] = v;
   }
   return out;
-};
-
-/** True iff `m` carries at least one non-null per-height entry. An all-null /
- *  empty / absent map means "not set" — the Option-B tier maps default to {},
- *  which reads as "inherit price1 + flat add-on". Pure. */
-const hasAnyPrice = (m: Record<string, number | null> | null | undefined): boolean => {
-  if (!m) return false;
-  for (const v of Object.values(m)) if (v !== null && v !== undefined) return true;
-  return false;
-};
-
-/** True iff this combo has an EXPLICIT Option-B selling price for fabric tier N
- *  (price2 for PRICE_2, price3 for PRICE_3). PRICE_1 / null / undefined → false
- *  (price1 is the base map, never an Option-B override). When true, the engine
- *  charges the tier map AND the caller must SUPPRESS the flat fabric-tier add-on
- *  for that combo (the tier premium is baked into the map). Pure — POS + server
- *  both call it so the add-on-suppression decision can't drift. */
-export const comboTierPriceActive = (
-  combo: { price2ByHeight?: Record<string, number | null> | null; price3ByHeight?: Record<string, number | null> | null } | null | undefined,
-  tier: SofaPriceTier | null | undefined,
-): boolean => {
-  if (!combo) return false;
-  if (tier === 'PRICE_2') return hasAnyPrice(combo.price2ByHeight);
-  if (tier === 'PRICE_3') return hasAnyPrice(combo.price3ByHeight);
-  return false;
-};
-
-/** Resolve the combo's SELLING-charged price map for a given fabric tier
- *  (Option B, migration 0179). When the line's fabric resolves to PRICE_2 /
- *  PRICE_3 AND the matching explicit map is NON-EMPTY, charge that map merged
- *  over cost (so a height missing an explicit tier price still falls back to
- *  cost, exactly like the base selling map does). OTHERWISE — PRICE_1, or an
- *  empty/absent tier map (every existing combo) — this is BYTE-IDENTICAL to
- *  `comboChargedPrices(selling, cost)`: price1 selling merged over cost, and the
- *  flat fabric-tier add-on still applies on top at the line level. This dual
- *  path is the backward-compat guarantee. Pure. */
-export const comboChargedPricesForTier = (
-  selling: Record<string, number | null> | null | undefined,
-  price2: Record<string, number | null> | null | undefined,
-  price3: Record<string, number | null> | null | undefined,
-  cost: Record<string, number | null> | null | undefined,
-  tier: SofaPriceTier | null | undefined,
-): Record<string, number | null> => {
-  if (tier === 'PRICE_2' && hasAnyPrice(price2)) return comboChargedPrices(price2, cost);
-  if (tier === 'PRICE_3' && hasAnyPrice(price3)) return comboChargedPrices(price3, cost);
-  // PRICE_1, or no explicit tier map → today's behaviour exactly.
-  return comboChargedPrices(selling, cost);
 };
 
 /**

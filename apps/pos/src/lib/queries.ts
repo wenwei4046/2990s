@@ -2216,15 +2216,6 @@ export interface SofaComboRow {
   /** PWP (换购) selling price per height (Phase 2). Charged instead of selling
    *  when a sofa-reward line redeems a valid PWP code. {} = unset. POS-only. */
   pwpPricesByHeight?: Record<string, number | null>;
-  /** Combo Price 2/3 by fabric tier (Option B, migration 0179). EXPLICIT per-tier
-   *  selling price per height. {} = inherit price1 + the flat fabric-tier add-on
-   *  (byte-identical to pre-Option-B). The Configurator resolves the line's
-   *  fabric tier and (when set) charges the tier map + suppresses the flat Δ. */
-  price2ByHeight?: Record<string, number | null>;
-  price3ByHeight?: Record<string, number | null>;
-  /** Raw COST map (Option B). `pricesByHeight` is overwritten with the merged
-   *  charged map below; the tier re-merge needs the original cost side. */
-  costPricesByHeight?: Record<string, number | null>;
   label: string | null;
   effectiveFrom: string;
   deletedAt: string | null;
@@ -2267,9 +2258,6 @@ export const useSofaCombos = (baseModel?: string | null) =>
       // POS live total and server recompute price from one source.
       return (body.rules ?? []).map((r) => ({
         ...r,
-        // Keep the raw cost side for the Option-B per-tier re-merge (the merge
-        // below overwrites pricesByHeight with the charged price1 map).
-        costPricesByHeight: r.pricesByHeight,
         pricesByHeight: comboChargedPrices(r.sellingPricesByHeight, r.pricesByHeight),
       }));
     },

@@ -14,8 +14,6 @@ import {
   sofaModulePricesFromSkus,
   sofaCompartmentsFromModulePrices,
   computeSofaSellingSen,
-  comboChargedPricesForTier,
-  sofaTierComboApplies,
   sofaComboCostSen,
   parseCompartmentStructure,
   findModule,
@@ -253,81 +251,6 @@ describe('computeSofaSellingSen', () => {
     // two separate 1-module groups, the combo can't cover either, and 1A has no
     // SKU price → 0. (Even adjacent, 28 is unpriced on this combo → still 0.)
     expect(computeSofaSellingSen(cells, '28', annsaModules, [twoOneA])).toBe(0);      // data gap, not a code bug
-  });
-});
-
-/* ─── Combo Price 1/2/3 by fabric tier (Option B, migration 0179) ───────────
- * End-to-end: the consumer (POS / server recompute) builds each combo's
- * pricesByHeight via comboChargedPricesForTier(tier), then runs the SAME
- * computeSofaSellingSen engine. sofaTierComboApplies tells the line whether to
- * suppress the flat fabric-tier add-on. These tests pin BOTH halves + the
- * backward-compat guarantee that a combo with no price2/price3 prices exactly as
- * before. */
-describe('Combo Price 1/2/3 end-to-end (Option B)', () => {
-  const map = { '2A(LHF)': 240000, 'L(RHF)': 190000 };
-  const cells: Cell[] = [
-    { id: 'a', moduleId: '2A(LHF)', x: 0, y: 0, rot: 0 },
-    { id: 'b', moduleId: 'L(RHF)', x: 158, y: 0, rot: 0 },
-  ];
-  const baseCombo = (over: Partial<SofaComboRow> = {}): SofaComboRow => ({
-    id: 'cmb', baseModel: '',
-    modules: [['2A(LHF)', '2A(RHF)'], ['L(LHF)', 'L(RHF)']],
-    tier: 'PRICE_1', customerId: null,
-    pricesByHeight: { '24': 380000 },        // price1 charged map (merged)
-    sellingPricesByHeight: { '24': 380000 }, // raw price1 selling
-    costPricesByHeight: { '24': 300000 },    // raw cost
-    label: null, effectiveFrom: '2026-01-01', deletedAt: null,
-    ...over,
-  });
-
-  // Simulate the consumer's per-line tier re-merge, then price through the engine.
-  const priceForTier = (combo: SofaComboRow, tier: 'PRICE_1' | 'PRICE_2' | 'PRICE_3') => {
-    const merged: SofaComboRow = {
-      ...combo,
-      pricesByHeight: comboChargedPricesForTier(
-        combo.sellingPricesByHeight, combo.price2ByHeight, combo.price3ByHeight,
-        combo.costPricesByHeight, tier,
-      ),
-    };
-    return computeSofaSellingSen(cells, '24', map, [merged]);
-  };
-
-  it('BACKWARD-COMPAT: a combo with no price2/price3 prices the SAME at every tier', () => {
-    const combo = baseCombo();
-    expect(priceForTier(combo, 'PRICE_1')).toBe(380000);
-    expect(priceForTier(combo, 'PRICE_2')).toBe(380000); // identical — flat add-on lives outside
-    expect(priceForTier(combo, 'PRICE_3')).toBe(380000);
-    // …and the add-on is NOT suppressed for any tier (no explicit tier map).
-    expect(sofaTierComboApplies(cells, '24', [combo], 'PRICE_2')).toBe(false);
-    expect(sofaTierComboApplies(cells, '24', [combo], 'PRICE_3')).toBe(false);
-  });
-
-  it('price2 set → PRICE_2 line charges the explicit price2; add-on suppressed', () => {
-    const combo = baseCombo({ price2ByHeight: { '24': 430000 } });
-    expect(priceForTier(combo, 'PRICE_1')).toBe(380000); // price1 unchanged
-    expect(priceForTier(combo, 'PRICE_2')).toBe(430000); // explicit tier price wins
-    expect(sofaTierComboApplies(cells, '24', [combo], 'PRICE_2')).toBe(true);  // → suppress flat add-on
-    // PRICE_3 has no explicit map → falls back to price1 + (would keep) add-on.
-    expect(priceForTier(combo, 'PRICE_3')).toBe(380000);
-    expect(sofaTierComboApplies(cells, '24', [combo], 'PRICE_3')).toBe(false);
-  });
-
-  it('price3 set → PRICE_3 line charges the explicit price3; add-on suppressed', () => {
-    const combo = baseCombo({ price3ByHeight: { '24': 480000 } });
-    expect(priceForTier(combo, 'PRICE_3')).toBe(480000);
-    expect(sofaTierComboApplies(cells, '24', [combo], 'PRICE_3')).toBe(true);
-    expect(priceForTier(combo, 'PRICE_2')).toBe(380000);
-    expect(sofaTierComboApplies(cells, '24', [combo], 'PRICE_2')).toBe(false);
-  });
-
-  it('PRICE_1 never suppresses the add-on even if price2/price3 are set', () => {
-    const combo = baseCombo({ price2ByHeight: { '24': 430000 }, price3ByHeight: { '24': 480000 } });
-    expect(sofaTierComboApplies(cells, '24', [combo], 'PRICE_1' as 'PRICE_2')).toBe(false);
-  });
-
-  it('no combo matches the build → never suppresses', () => {
-    const combo = baseCombo({ modules: [['CNR'], ['CNR']], price2ByHeight: { '24': 430000 } });
-    expect(sofaTierComboApplies(cells, '24', [combo], 'PRICE_2')).toBe(false);
   });
 });
 

@@ -968,13 +968,9 @@ export const purchaseOrders = pgTable('purchase_orders', {
   // Extended fields (migration 0041)
   status:      poStatus('status').notNull().default('SUBMITTED'),
   poDate:      date('po_date').notNull().defaultNow(),
-  expectedAt:  date('expected_at'),                        // delivery ETA (ORIGINAL earliest line date — see recomputePoExpectedAt)
-  /* Supplier-revised delivery dates (header level). The supplier pushes the
-     delivery back: date2 is the 1st revision, date3 the 2nd, date4 the 3rd.
-     All nullable; default NULL. The EFFECTIVE delivery date used by every
-     reader = MAX over non-null of [expected_at, date2, date3, date4]
-     (effectiveDelivery helper). expected_at itself stays meaning the ORIGINAL
-     earliest line date — it is NOT flipped to MAX. */
+  expectedAt:  date('expected_at'),                        // delivery ETA (original earliest)
+  // Supplier-revised delivery dates (migration 0180). expected_at keeps its
+  // original meaning; the EFFECTIVE date = GREATEST(expected_at, _2, _3, _4).
   supplierDeliveryDate2: date('supplier_delivery_date_2'),
   supplierDeliveryDate3: date('supplier_delivery_date_3'),
   supplierDeliveryDate4: date('supplier_delivery_date_4'),
@@ -1036,11 +1032,7 @@ export const purchaseOrderItems = pgTable('purchase_order_items', {
   // PR #77 — per-line delivery date + ship-to warehouse. Both nullable;
   // empty = inherit from PO header (expected_at + purchase_location_id).
   deliveryDate:            date('delivery_date'),
-  /* Supplier-revised delivery dates (line level). Mirror the header columns:
-     date2/3/4 are successive revisions, all nullable, default NULL. The
-     effective per-line delivery date = MAX over non-null of [delivery_date,
-     date2, date3, date4] (effectiveDelivery). A line's own dates override the
-     header's the same way delivery_date overrides expected_at. */
+  // Supplier-revised line delivery dates (migration 0180).
   supplierDeliveryDate2:   date('supplier_delivery_date_2'),
   supplierDeliveryDate3:   date('supplier_delivery_date_3'),
   supplierDeliveryDate4:   date('supplier_delivery_date_4'),
@@ -1993,17 +1985,6 @@ export const sofaComboPricing = pgTable('sofa_combo_pricing', {
   // the Backend cost side gets no such column (cost is identical regardless of
   // selling price). {} = no PWP price set → never overrides → zero price change.
   pwpPricesByHeight: jsonb('pwp_prices_by_height').notNull().default({}),  // { "<inch>": centi|null } — PWP SELLING (POS)
-  // Combo Price 1/2/3 by fabric tier (migration 0179, Option B). The combo
-  // GENUINELY stores three per-height SELLING price maps, picked by the line's
-  // fabric tier. price1 = the EXISTING `selling_prices_by_height` (PRICE_1 base,
-  // NOT renamed). When a build's fabric resolves to PRICE_2 / PRICE_3 AND the
-  // matching map below is NON-EMPTY, the engine charges that explicit tier price
-  // (and the flat fabric-tier add-on is suppressed for that combo — the tier
-  // premium is already baked into the map). EMPTY {} (the legacy default for
-  // every existing combo) → fall back to PRICE_1 selling + the flat add-on, i.e.
-  // BYTE-IDENTICAL to today. This dual-path is the backward-compat guarantee.
-  price2ByHeight: jsonb('price2_by_height').notNull().default({}),  // { "<inch>": centi|null } — SELLING for fabric tier PRICE_2 ({} = inherit price1 + flat add-on)
-  price3ByHeight: jsonb('price3_by_height').notNull().default({}),  // { "<inch>": centi|null } — SELLING for fabric tier PRICE_3 ({} = inherit price1 + flat add-on)
   defaultFreeGifts: jsonb('default_free_gifts').notNull().default([]),  // 0170 — accessory free gifts granted when this combo is the cart's sofa build (trigger by combo, D9).
   label:           text('label'),                                         // null = auto-build from modules
   effectiveFrom:   date('effective_from').notNull(),

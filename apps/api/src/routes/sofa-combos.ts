@@ -73,9 +73,6 @@ type Row = {
   prices_by_height: Record<string, number | null>;
   selling_prices_by_height: Record<string, number | null>;
   pwp_prices_by_height: Record<string, number | null> | null;
-  // Combo Price 1/2/3 (migration 0179). price1 = selling_prices_by_height above.
-  price2_by_height: Record<string, number | null> | null;
-  price3_by_height: Record<string, number | null> | null;
   default_free_gifts: Array<{ giftProductId: string; qty: number; campaignName?: string | null }> | null;
   label: string | null;
   effective_from: string;
@@ -97,9 +94,6 @@ function rowToWire(r: Row) {
     pricesByHeight: r.prices_by_height ?? {},
     sellingPricesByHeight: r.selling_prices_by_height ?? {},
     pwpPricesByHeight: r.pwp_prices_by_height ?? {},
-    // Combo Price 1/2/3 (migration 0179) — {} = inherit price1 + flat add-on.
-    price2ByHeight: r.price2_by_height ?? {},
-    price3ByHeight: r.price3_by_height ?? {},
     defaultFreeGifts: r.default_free_gifts ?? [],
     label: r.label,
     effectiveFrom: r.effective_from,
@@ -171,10 +165,6 @@ async function mirrorAnchoredCombo(
       prices_by_height: savedRow.prices_by_height,
       selling_prices_by_height: savedRow.selling_prices_by_height,
       pwp_prices_by_height: savedRow.pwp_prices_by_height ?? {},
-      // Combo Price 1/2/3 (migration 0179) — mirror the per-tier maps too so the
-      // anchored supplier scope and master stay in lock-step.
-      price2_by_height: savedRow.price2_by_height ?? {},
-      price3_by_height: savedRow.price3_by_height ?? {},
       default_free_gifts: savedRow.default_free_gifts ?? [],
       label: savedRow.label,
       effective_from: savedRow.effective_from,
@@ -256,7 +246,7 @@ sofaCombos.get('/', async (c) => {
   let q = supabase
     .from('sofa_combo_pricing')
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, price2_by_height, price3_by_height, default_free_gifts, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, default_free_gifts, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .order('base_model', { ascending: true })
@@ -346,7 +336,7 @@ sofaCombos.get('/history', async (c) => {
   let q = supabase
     .from('sofa_combo_pricing')
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, price2_by_height, price3_by_height, default_free_gifts, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, default_free_gifts, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .eq('base_model', baseModel)
@@ -472,8 +462,6 @@ sofaCombos.post('/', async (c) => {
     pricesByHeight?: unknown;
     sellingPricesByHeight?: unknown;
     pwpPricesByHeight?: unknown;
-    price2ByHeight?: unknown;
-    price3ByHeight?: unknown;
     defaultFreeGifts?: Array<{ giftProductId: string; qty: number; campaignName?: string | null }>;
     label?: string | null;
     effectiveFrom?: string;
@@ -525,17 +513,6 @@ sofaCombos.post('/', async (c) => {
   const pwpPrices = pwpProvided ? validatePricesByHeight(body.pwpPricesByHeight) : null;
   if (pwpProvided && !pwpPrices) return c.json({ error: 'pwp_prices_by_height_invalid' }, 400);
 
-  // Combo Price 2/3 by fabric tier (migration 0179, Option B). {} when unset →
-  // the combo inherits price1 (selling) + the flat fabric-tier add-on, byte-
-  // identical to today. A non-empty map is the EXPLICIT per-tier selling price
-  // (engine charges it AND suppresses the flat add-on). Validated like selling.
-  const price2Provided = body.price2ByHeight !== undefined;
-  const price2 = price2Provided ? validatePricesByHeight(body.price2ByHeight) : null;
-  if (price2Provided && !price2) return c.json({ error: 'price2_by_height_invalid' }, 400);
-  const price3Provided = body.price3ByHeight !== undefined;
-  const price3 = price3Provided ? validatePricesByHeight(body.price3ByHeight) : null;
-  if (price3Provided && !price3) return c.json({ error: 'price3_by_height_invalid' }, 400);
-
   // COST prices (Backend / PO benchmark). Three cases (Chairman 2026-05-31):
   //   1. client sends pricesByHeight        → use it (Backend keys / overrides).
   //   2. client omits it but sends selling  → AUTO-DETECT = Σ module SKU costs
@@ -585,9 +562,6 @@ sofaCombos.post('/', async (c) => {
       prices_by_height: prices,
       selling_prices_by_height: sellingPrices,
       pwp_prices_by_height: pwpPrices ?? {},
-      // Combo Price 2/3 (migration 0179) — {} = inherit price1 + flat add-on.
-      price2_by_height: price2 ?? {},
-      price3_by_height: price3 ?? {},
       default_free_gifts: Array.isArray(body.defaultFreeGifts)
         ? parseDefaultFreeGifts(body.defaultFreeGifts)
         : [],
@@ -597,7 +571,7 @@ sofaCombos.post('/', async (c) => {
       created_by: user.id,
     })
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, price2_by_height, price3_by_height, default_free_gifts, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, default_free_gifts, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .single();
@@ -632,7 +606,7 @@ sofaCombos.put('/:id', async (c) => {
 
   const { data: orig, error: findErr } = await supabase
     .from('sofa_combo_pricing')
-    .select('base_model, modules, tier, customer_id, supplier_id, pwp_prices_by_height, price2_by_height, price3_by_height, default_free_gifts')
+    .select('base_model, modules, tier, customer_id, supplier_id, pwp_prices_by_height, default_free_gifts')
     .eq('id', id)
     .maybeSingle();
   if (findErr) return c.json({ error: 'load_failed', reason: findErr.message }, 500);
@@ -642,8 +616,6 @@ sofaCombos.put('/:id', async (c) => {
     pricesByHeight?: unknown;
     sellingPricesByHeight?: unknown;
     pwpPricesByHeight?: unknown;
-    price2ByHeight?: unknown;
-    price3ByHeight?: unknown;
     defaultFreeGifts?: Array<{ giftProductId: string; qty: number; campaignName?: string | null }>;
     label?: string | null;
     effectiveFrom?: string;
@@ -675,18 +647,6 @@ sofaCombos.put('/:id', async (c) => {
     : validatePricesByHeight(body.pwpPricesByHeight);
   if (!pwpPrices) return c.json({ error: 'pwp_prices_by_height_invalid' }, 400);
 
-  // Combo Price 2/3 by fabric tier (migration 0179). Append-only edit: carry the
-  // existing per-tier maps forward unless the body sets new ones, so editing the
-  // base selling/cost never wipes the combo's explicit tier prices.
-  const price2 = body.price2ByHeight === undefined
-    ? ((orig as { price2_by_height: Record<string, number | null> | null }).price2_by_height ?? {})
-    : validatePricesByHeight(body.price2ByHeight);
-  if (!price2) return c.json({ error: 'price2_by_height_invalid' }, 400);
-  const price3 = body.price3ByHeight === undefined
-    ? ((orig as { price3_by_height: Record<string, number | null> | null }).price3_by_height ?? {})
-    : validatePricesByHeight(body.price3ByHeight);
-  if (!price3) return c.json({ error: 'price3_by_height_invalid' }, 400);
-
   const effectiveFrom = (body.effectiveFrom ?? '').trim();
   if (!ISO_DATE.test(effectiveFrom)) {
     return c.json({ error: 'effective_from_required', message: 'YYYY-MM-DD' }, 400);
@@ -714,9 +674,6 @@ sofaCombos.put('/:id', async (c) => {
       prices_by_height: prices,
       selling_prices_by_height: sellingPrices,
       pwp_prices_by_height: pwpPrices,
-      // Combo Price 2/3 (migration 0179) — carried forward (above) or freshly set.
-      price2_by_height: price2,
-      price3_by_height: price3,
       default_free_gifts: Array.isArray(body.defaultFreeGifts)
         ? parseDefaultFreeGifts(body.defaultFreeGifts)
         : ((orig as { default_free_gifts: Array<{ giftProductId: string; qty: number; campaignName?: string | null }> | null }).default_free_gifts ?? []),
@@ -726,7 +683,7 @@ sofaCombos.put('/:id', async (c) => {
       created_by: user.id,
     })
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, price2_by_height, price3_by_height, default_free_gifts, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, default_free_gifts, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .single();

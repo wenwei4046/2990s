@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Package, Trash2, FlipHorizontal2, Gift } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, matchComboSubset, comboChargedPrices, comboChargedPricesForTier, sofaTierComboApplies, orderSofaCellsLeftToRight, campaignsCoveringLine, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, matchComboSubset, comboChargedPrices, orderSofaCellsLeftToRight, campaignsCoveringLine, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
 import { resolvePwp, type PwpLineInput } from '@2990s/shared/pwp';
 import { usePwpRules, useMyReservedPwpCodes, validatePwpCode } from '../lib/products/pwp-queries';
 import {
@@ -1078,24 +1078,7 @@ export const Configurator = () => {
     reclinerUpgradePrice: product.data?.recliner_upgrade_price ?? 0,
     seatUpgradeLabel: product.data?.seat_upgrade_label ?? null,
     seatUpgradeFootrest: product.data?.seat_upgrade_footrest ?? true,
-    /* Combo Price 1/2/3 (Option B, migration 0179). Re-merge each combo's charged
-       price for the line's resolved SELLING fabric tier: a combo with a non-empty
-       price2/price3 map for this tier charges that EXPLICIT price (and the flat
-       fabric-tier add-on is suppressed below in sofaFabricDelta); a combo with no
-       tier map keeps its price1 charged map — byte-identical to today. Keep the
-       price2/price3 maps on the row so sofaTierComboApplies can detect the
-       suppression. The combo-MATCH tier stays PRICE_1 (below) — only the per-tier
-       PRICE picked changes. */
-    combos: (sofaCombosQ.data ?? []).map((c) => ({
-      ...c,
-      pricesByHeight: comboChargedPricesForTier(
-        c.sellingPricesByHeight,
-        c.price2ByHeight,
-        c.price3ByHeight,
-        c.costPricesByHeight ?? c.pricesByHeight,
-        (fabricSel?.sofaTier as FabricTier | null) ?? null,
-      ),
-    })),
+    combos: sofaCombosQ.data ?? [],
     /* Combo + seat-base lookup tier. Chairman 2026-06-01: the whole sofa runs
        at P1 — the module seat-height SELLING map is built at PRICE_1 (see
        depthSellingMap above) and EVERY sofa_combo_pricing row is authored at
@@ -1118,9 +1101,6 @@ export const Configurator = () => {
     product.data?.seat_upgrade_footrest,
     sofaCombosQ.data,
     activeDepth,
-    // Option B (migration 0179) — re-merge the per-tier combo price when the
-    // chosen fabric's SOFA tier changes.
-    fabricSel?.sofaTier,
   ]);
 
   // PWP-effective sofa pricing — when a sofa PWP voucher is applied, the matched
@@ -1873,27 +1853,10 @@ export const Configurator = () => {
   })();
   const qpPickPrice = effectiveQPModules ? (priceForLayout(effectiveQPModules) ?? 0) : 0;
 
-  // Combo Price 1/2/3 (Option B, migration 0179): when the live build's dominant
-  // combo carries an EXPLICIT price2/price3 for the chosen fabric tier, the flat
-  // fabric-tier add-on is SUPPRESSED (the tier premium is already in the combo's
-  // tier map, charged via sofaPricing.combos above). No such combo → keep the
-  // flat add-on, byte-identical to today. The server recompute makes the SAME
-  // decision (sofaTierComboApplies), so POS live total and the drift gate agree.
-  const sofaTierComboSuppressAddon = (() => {
-    const tier = (fabricSel?.sofaTier as FabricTier | null) ?? null;
-    if (tier !== 'PRICE_2' && tier !== 'PRICE_3') return false;
-    const cells = mode === 'custom'
-      ? sofaCells
-      : (effectiveQPModules ? cellsFromComboModules(effectiveQPModules, activeDepth) : []);
-    if (cells.length === 0) return false;
-    return sofaTierComboApplies(cells, activeDepth, sofaCombosQ.data ?? [], tier);
-  })();
-
   // Fabric-tier add-on (migration 0124): per-item flat Δ from the chosen
   // fabric's SELLING tier — replaces the old per-fabric surcharge. The server
   // adds the SAME Δ via the shared fabricTierAddon, so the figure can't drift.
-  // Suppressed (0) when an Option-B tier-priced combo dominates the build.
-  const sofaFabricDelta = (fabricSel && addonCfgQ.data && !sofaTierComboSuppressAddon)
+  const sofaFabricDelta = fabricSel && addonCfgQ.data
     ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data, modelFabricOverride)
     : 0;
   const sofaSpecialDelta = specialSelsSurcharge(sofaSpecialSel);
