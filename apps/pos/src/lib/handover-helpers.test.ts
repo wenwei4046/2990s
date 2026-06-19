@@ -8,6 +8,7 @@ import {
   validateConfirmPayment,
   validateSign,
   extraPaymentComplete,
+  paymentProofRequired,
   computeMinCalendarDate,
   computeAddonTotal,
   firstName,
@@ -205,13 +206,15 @@ describe('validateConfirmPayment', () => {
   /* Split payment (Loo 2026-06-06) — extras count toward the floor/ceiling
      and every extra row must be complete. */
   describe('split payment', () => {
-    const okExtra = { uid: 'test-uid-1', method: 'cash' as const, amount: 1000, approvalCode: 'CR-1', merchantProvider: null, installmentMonths: null, slipUploadSessionId: 'ex-sess' };
+    // transfer (not cash) so the "incomplete without proof" cases below still
+    // bite — cash legs no longer require approval/slip (Loo 2026-06-18).
+    const okExtra = { uid: 'test-uid-1', method: 'transfer' as const, amount: 1000, approvalCode: 'CR-1', merchantProvider: null, installmentMonths: null, slipUploadSessionId: 'ex-sess' };
     const base = {
       ...baseForm, paymentMethod: 'transfer' as const, approvalCode: '123',
       paymentRecorded: true, slipUploadSessionId: 'sess',
     };
     it('primary below 50% passes once extras lift the COLLECTED total over the floor', () => {
-      // total 2990 → floor 1495. Primary 800 alone fails; +1000 cash extra = 1800 passes.
+      // total 2990 → floor 1495. Primary 800 alone fails; +1000 transfer extra = 1800 passes.
       expect(validateConfirmPayment({ ...base, amountPaid: 800 }, 2990, 0)).toBe(false);
       expect(validateConfirmPayment({ ...base, amountPaid: 800, extraPayments: [okExtra] }, 2990, 0)).toBe(true);
     });
@@ -242,12 +245,44 @@ describe('validateConfirmPayment', () => {
         { ...base, amountPaid: 0, extraPayments: [{ ...okExtra, amount: 2990 }] }, 2990, 0,
       )).toBe(false);
     });
-    it('extra payment is incomplete without its own slip (spec D4)', () => {
-      const p = { uid: 'test-uid-2', method: 'cash' as const, amount: 100, approvalCode: 'R-1',
+    it('a non-cash extra payment is incomplete without its own slip (spec D4)', () => {
+      const p = { uid: 'test-uid-2', method: 'transfer' as const, amount: 100, approvalCode: 'R-1',
         merchantProvider: null, installmentMonths: null, slipUploadSessionId: null };
       expect(extraPaymentComplete(p)).toBe(false);
       expect(extraPaymentComplete({ ...p, slipUploadSessionId: 'sess-1' })).toBe(true);
     });
+    it('a cash extra payment is complete with no approval code or slip', () => {
+      const cash = { uid: 'test-uid-3', method: 'cash' as const, amount: 100, approvalCode: '',
+        merchantProvider: null, installmentMonths: null, slipUploadSessionId: null };
+      expect(extraPaymentComplete(cash)).toBe(true);
+    });
+  });
+});
+
+describe('paymentProofRequired', () => {
+  it('is false for a zero payment (any method)', () => {
+    expect(paymentProofRequired('cash', 0)).toBe(false);
+    expect(paymentProofRequired('transfer', 0)).toBe(false);
+  });
+  it('is false for cash at any positive amount', () => {
+    expect(paymentProofRequired('cash', 1000)).toBe(false);
+  });
+  it('is true for a non-zero non-cash payment', () => {
+    expect(paymentProofRequired('transfer', 1000)).toBe(true);
+    expect(paymentProofRequired('merchant', 1)).toBe(true);
+    expect(paymentProofRequired('installment', 500)).toBe(true);
+  });
+});
+
+describe('validateConfirmPayment — cash needs no approval/slip', () => {
+  const recorded = { ...baseForm, paymentRecorded: true };
+  it('a cash payment proceeds with no approval code or slip', () => {
+    expect(validateConfirmPayment({ ...recorded, paymentMethod: 'cash', amountPaid: 1000 }, 1000, 0, 0)).toBe(true);
+  });
+  it('a non-cash payment still requires both approval code and slip', () => {
+    expect(validateConfirmPayment({ ...recorded, paymentMethod: 'transfer', amountPaid: 1000 }, 1000, 0, 0)).toBe(false);
+    expect(validateConfirmPayment({ ...recorded, paymentMethod: 'transfer', amountPaid: 1000, approvalCode: 'A1' }, 1000, 0, 0)).toBe(false);
+    expect(validateConfirmPayment({ ...recorded, paymentMethod: 'transfer', amountPaid: 1000, approvalCode: 'A1', slipUploadSessionId: 's1' }, 1000, 0, 0)).toBe(true);
   });
 });
 

@@ -34,6 +34,7 @@ import { REQUIRED_VARIANT_AXES_BY_CATEGORY } from '@2990s/shared/so-variant-rule
 import { PAYMENT_METHOD_CODES } from '@2990s/shared/payment-methods';
 import { meetsProceedGate } from '@2990s/shared/order-rules';
 import { getSoEditScope } from '../lib/so-edit-scope';
+import { paymentProofRequired } from '../lib/handover-helpers';
 import { useAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import { Topbar } from '../components/Topbar';
@@ -1368,6 +1369,9 @@ const OrderDetail = ({ order, onClose }: {
   const [payOnlineType, setPayOnlineType] = useState('');
   const [payInstallmentMonths, setPayInstallmentMonths] = useState<number | null>(null);
   const [paySlipSession, setPaySlipSession] = useState<string | null>(null);
+  // Approval code + slip are required only for a non-zero, non-cash top-up
+  // (Loo 2026-06-18) — a cash payment needs neither.
+  const payProofNeeded = paymentProofRequired(payMethod, additionalPaid);
   /* Slip uploader remount key — a recorded payment must reset the uploader
      to idle (its internal state is otherwise sticky). */
   const [slipResetKey, setSlipResetKey] = useState(0);
@@ -1410,7 +1414,7 @@ const OrderDetail = ({ order, onClose }: {
   const paymentMutation = useMutation({
     mutationFn: async () => {
       const amount = additionalPaid;
-      if (amount <= 0 || !paySlipSession) return;
+      if (amount <= 0 || (payProofNeeded && !paySlipSession)) return;
       const today = new Date().toISOString().slice(0, 10);
       await authedFetch(`/mfg-sales-orders/${order.id}/payments`, {
         method: 'POST',
@@ -1424,7 +1428,7 @@ const OrderDetail = ({ order, onClose }: {
           ...(payMethod === 'transfer' ? { onlineType: payOnlineType || null } : {}),
           ...(edited.approvalCode?.trim() ? { approvalCode: edited.approvalCode.trim() } : {}),
           ...(user?.id ? { collectedBy: user.id } : {}),
-          uploadSessionId: paySlipSession,
+          ...(paySlipSession ? { uploadSessionId: paySlipSession } : {}),
         }),
       });
     },
@@ -1483,7 +1487,7 @@ const OrderDetail = ({ order, onClose }: {
   });
 
   const onSave = () => saveMutation.mutate();
-  const onRecordPayment = () => { if (additionalPaid > 0 && paySlipSession !== null) paymentMutation.mutate(); };
+  const onRecordPayment = () => { if (additionalPaid > 0 && (!payProofNeeded || paySlipSession !== null)) paymentMutation.mutate(); };
   const onProceed = () => {
     if (!allOk) return;
     proceedMutation.mutate();
@@ -1839,7 +1843,7 @@ const OrderDetail = ({ order, onClose }: {
                   </DetailField>
                 </div>
                 <div style={{ marginTop: 8 }}>
-                  <DetailField label="Payment slip / proof *" disabled={false}>
+                  <DetailField label={`Payment slip / proof${payProofNeeded ? ' *' : ''}`} disabled={false}>
                     <SlipUploadStep
                       key={slipResetKey}
                       onConfirmed={(id) => setPaySlipSession(id)}
@@ -1861,8 +1865,7 @@ const OrderDetail = ({ order, onClose }: {
                     disabled={
                       additionalPaid <= 0
                       || paymentMutation.isPending
-                      || paySlipSession === null
-                      || !(edited.approvalCode ?? '').trim()
+                      || (payProofNeeded && (paySlipSession === null || !(edited.approvalCode ?? '').trim()))
                       || (payMethod === 'merchant' && !payMerchant)
                       || (payMethod === 'installment' && payInstallmentMonths === null)
                     }
