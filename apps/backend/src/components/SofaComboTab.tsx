@@ -226,6 +226,23 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
   const deleteM = useDeleteSofaCombo();
   const askConfirm = useConfirm();
 
+  // Bulk soft-delete the selected combos (commander 2026-06-20: "不能
+  // multiselect 删掉的吗?"). Same selection that feeds Batch price edit; each id
+  // is soft-deleted (History still shows it) so it's reversible.
+  const bulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    const n = selectedIds.size;
+    if (!(await askConfirm({
+      title: `Soft-delete ${n} combo${n === 1 ? '' : 's'}?`,
+      body: '(History will still show them — this is reversible.)',
+      confirmLabel: `Soft-delete ${n}`,
+      danger: true,
+    }))) return;
+    const ids = [...selectedIds];
+    await Promise.all(ids.map((id) => deleteM.mutateAsync(id).catch(() => null)));
+    setSelectedIds(new Set());
+  };
+
   // R8 — anchor a base_model to ONE supplier (sales-side view only). When
   // anchored, combo create + price edits mirror between this master combo and
   // the anchored supplier's scope (handled server-side). The control reads the
@@ -271,6 +288,16 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
           {selectedIds.size > 0 && (
             <Button variant="ghost" onClick={() => setBatchOpen(true)}>
               <Pencil {...ICON_PROPS} style={{ marginRight: 6 }} /> Batch price edit ({selectedIds.size})
+            </Button>
+          )}
+          {selectedIds.size > 0 && (
+            <Button
+              variant="ghost"
+              onClick={() => { void bulkDelete(); }}
+              disabled={deleteM.isPending}
+              style={{ color: 'var(--c-festive-b, #B8331F)' }}
+            >
+              <Trash2 {...ICON_PROPS} style={{ marginRight: 6 }} /> Delete ({selectedIds.size})
             </Button>
           )}
           <Button variant="primary" onClick={() => setComposer({ open: true })}>
