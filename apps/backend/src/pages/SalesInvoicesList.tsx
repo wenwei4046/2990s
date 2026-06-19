@@ -509,6 +509,7 @@ export const SalesInvoicesList = () => {
         onFilteredRowsChange={setVisibleRows}
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
+        exportName="Sales Invoices"
         rowKey={(r) => r.id}
         selectable={{
           selectedKeys: sel,

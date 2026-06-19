@@ -375,6 +375,7 @@ export const PurchaseInvoices = () => {
         rows={rows}
         columns={columns}
         storageKey={PI_LIST_STORAGE_KEY}
+        exportName="Purchase Invoices"
         rowKey={(r) => r.id}
         selectable={{
           selectedKeys: sel,

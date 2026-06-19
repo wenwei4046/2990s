@@ -341,6 +341,7 @@ export const AuditLog = () => {
           rows={rows}
           columns={columns}
           storageKey="dg-audit-log"
+          exportName="Audit Log"
           rowKey={(r) => r.id}
           searchPlaceholder="Filter visible payments…"
           groupBanner={false}

@@ -325,6 +325,7 @@ export const Users = () => {
         rows={rows}
         columns={columns}
         storageKey="dg-users"
+        exportName="Users"
         rowKey={(u) => u.id}
         searchPlaceholder="Search users…"
         groupBanner={false}

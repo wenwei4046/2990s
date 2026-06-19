@@ -197,6 +197,7 @@ export const Customers = () => {
           rows={customers}
           columns={CUSTOMER_COLUMNS}
           storageKey="dg-customers"
+          exportName="Customers"
           rowKey={(c) => c.key}
           searchPlaceholder="Search by phone or name…"
           groupBanner={false}

@@ -303,6 +303,7 @@ export const PurchaseConsignmentReceives = () => {
         rows={rows}
         columns={columns}
         storageKey={PCR_LIST_STORAGE_KEY}
+        exportName="Purchase Consignment Receives"
         rowKey={(g) => g.id}
         searchPlaceholder="Search receives…"
         groupBanner={false}

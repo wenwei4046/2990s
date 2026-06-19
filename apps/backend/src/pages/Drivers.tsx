@@ -113,6 +113,7 @@ export const Drivers = () => {
         rows={drivers.data ?? []}
         columns={columns}
         storageKey="dg-drivers"
+        exportName="Drivers"
         rowKey={(d) => d.id}
         searchPlaceholder="Search drivers…"
         groupBanner={false}

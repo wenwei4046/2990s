@@ -169,6 +169,7 @@ const JeTab = () => {
       rows={rows}
       columns={JE_COLUMNS}
       storageKey="dg-accounting-je"
+      exportName="Journal Entries"
       rowKey={(r) => r.id}
       searchPlaceholder="Filter visible entries…"
       groupBanner={false}

@@ -114,6 +114,7 @@ export const Warehouses = () => {
         rows={warehouses.data ?? []}
         columns={columns}
         storageKey="dg-warehouses"
+        exportName="Warehouses"
         rowKey={(w) => w.id}
         searchPlaceholder="Search warehouses…"
         groupBanner={false}

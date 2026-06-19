@@ -413,6 +413,7 @@ export const StockCard = () => {
             rows={movementsWithBalance}
             columns={movementColumns}
             storageKey="dg-stockcard-movements"
+            exportName="Stock Card"
             rowKey={(m) => m.id}
             searchPlaceholder="Search movements…"
             groupBanner={false}

@@ -492,6 +492,7 @@ export const PurchaseOrders = () => {
         columns={columns}
         onFilteredRowsChange={setVisibleRows}
         storageKey={PO_LIST_STORAGE_KEY}
+        exportName="Purchase Orders"
         rowKey={(po) => po.id}
         searchPlaceholder="Search POs…"
         groupBanner={false}

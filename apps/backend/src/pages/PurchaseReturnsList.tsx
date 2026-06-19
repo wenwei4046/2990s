@@ -363,6 +363,7 @@ export const PurchaseReturns = () => {
         rows={rows}
         columns={columns}
         storageKey={PR_LIST_STORAGE_KEY}
+        exportName="Purchase Returns"
         rowKey={(r) => r.id}
         searchPlaceholder="Search returns…"
         groupBanner={false}

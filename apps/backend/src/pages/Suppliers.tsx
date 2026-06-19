@@ -278,6 +278,7 @@ export const Suppliers = () => {
         rows={rows}
         columns={columns}
         storageKey="dg-suppliers"
+        exportName="Suppliers"
         rowKey={(r) => r.id}
         searchPlaceholder="Filter visible suppliers…"
         groupBanner={false}

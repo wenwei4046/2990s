@@ -394,6 +394,7 @@ export const ProductModels = () => {
         rows={filtered}
         columns={gridColumns}
         storageKey={PM_GRID_KEY}
+        exportName="Product Models"
         rowKey={(m) => m.id}
         searchPlaceholder="Filter visible models…"
         onRowDoubleClick={(m) => setOpenModelId(m.id)}

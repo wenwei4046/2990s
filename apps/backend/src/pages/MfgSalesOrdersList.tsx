@@ -1054,6 +1054,7 @@ export const MfgSalesOrdersList = () => {
         onFilteredRowsChange={setVisibleRows}
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
+        exportName="Sales Orders"
         rowKey={(r) => r.doc_no}
         searchPlaceholder="Search SOs…"
         /* Multi-select (doc_no keys) — drives the batch Export PDF toolbar. */

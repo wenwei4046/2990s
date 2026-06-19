@@ -529,6 +529,7 @@ export const DeliveryReturnsList = () => {
         onFilteredRowsChange={setVisibleRows}
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
+        exportName="Delivery Returns"
         rowKey={(r) => r.id}
         searchPlaceholder="Search returns…"
         groupBanner={false}

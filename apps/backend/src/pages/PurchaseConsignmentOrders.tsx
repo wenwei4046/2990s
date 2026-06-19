@@ -248,6 +248,7 @@ export const PurchaseConsignmentOrders = () => {
         rows={rows}
         columns={columns}
         storageKey={PC_ORDER_LIST_STORAGE_KEY}
+        exportName="Purchase Consignment Orders"
         rowKey={(po) => po.id}
         searchPlaceholder="Search orders…"
         groupBanner={false}

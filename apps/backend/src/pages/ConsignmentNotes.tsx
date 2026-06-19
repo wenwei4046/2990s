@@ -406,6 +406,7 @@ export const ConsignmentNotes = () => {
         onFilteredRowsChange={setVisibleRows}
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
+        exportName="Consignment Notes"
         rowKey={(r) => r.id}
         searchPlaceholder="Search notes…"
         groupBanner={false}

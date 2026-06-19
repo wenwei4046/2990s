@@ -289,6 +289,7 @@ export const PurchaseConsignmentReturns = () => {
         rows={rows}
         columns={columns}
         storageKey={PCT_LIST_STORAGE_KEY}
+        exportName="Purchase Consignment Returns"
         rowKey={(r) => r.id}
         searchPlaceholder="Search returns…"
         groupBanner={false}

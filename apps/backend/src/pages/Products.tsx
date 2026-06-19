@@ -884,6 +884,7 @@ const SkuMasterTab = () => {
           rows={rows}
           columns={gridColumns}
           storageKey={gridStorageKey}
+          exportName="SKU Master"
           rowKey={(r) => r.id}
           searchPlaceholder="Filter visible products…"
           onRowDoubleClick={(r) => setSuppliersRow(r)}

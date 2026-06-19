@@ -404,6 +404,7 @@ export const ConsignmentReturns = () => {
         onFilteredRowsChange={setVisibleRows}
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
+        exportName="Consignment Returns"
         rowKey={(r) => r.id}
         searchPlaceholder="Search returns…"
         groupBanner={false}

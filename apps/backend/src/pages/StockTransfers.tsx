@@ -278,6 +278,7 @@ export const StockTransfers = () => {
         rows={rows}
         columns={columns}
         storageKey="dg-stock-transfers"
+        exportName="Stock Transfers"
         rowKey={(t) => t.id}
         searchPlaceholder="Search transfers…"
         groupBanner={false}

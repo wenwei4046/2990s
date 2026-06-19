@@ -267,6 +267,7 @@ const ModuleTable = ({
       rows={keyedRows}
       columns={columns}
       storageKey={`dg-outstanding-${module}`}
+      exportName={`Outstanding ${config.label}`}
       rowKey={(r) => r.__rk}
       searchPlaceholder={`Search ${module.toUpperCase()} rows…`}
       groupBanner={false}

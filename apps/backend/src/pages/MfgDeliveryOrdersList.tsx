@@ -549,6 +549,7 @@ export const MfgDeliveryOrdersList = () => {
         onFilteredRowsChange={setVisibleRows}
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
+        exportName="Delivery Orders"
         rowKey={(r) => r.id}
         searchPlaceholder="Search DOs…"
         groupBanner={false}

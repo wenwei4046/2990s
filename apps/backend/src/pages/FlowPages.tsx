@@ -359,6 +359,7 @@ export const Grns = () => {
         rows={rows}
         columns={grnColumns}
         storageKey="grn-list.layout.v1"
+        exportName="Goods Received"
         rowKey={(r: any) => r.id}
         searchPlaceholder="Search GRN, PO, supplier…"
         groupBanner={false}

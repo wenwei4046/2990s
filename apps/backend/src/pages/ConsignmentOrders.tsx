@@ -940,6 +940,7 @@ export const ConsignmentOrders = () => {
         onFilteredRowsChange={setVisibleRows}
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
+        exportName="Consignment Orders"
         rowKey={(r) => r.doc_no}
         searchPlaceholder="Search SOs…"
         /* Houzs chrome — kill the "drag column header here to group by

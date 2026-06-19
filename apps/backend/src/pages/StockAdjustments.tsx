@@ -236,6 +236,7 @@ export const StockAdjustments = () => {
         rows={rows}
         columns={columns}
         storageKey="dg-stock-adjustments"
+        exportName="Stock Adjustments"
         rowKey={(m) => m.id}
         searchPlaceholder="Search adjustments…"
         groupBanner={false}
