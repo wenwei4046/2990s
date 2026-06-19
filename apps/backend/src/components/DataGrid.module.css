@@ -95,7 +95,8 @@
   white-space: nowrap;
   height: 28px;
 }
-.toolbarPill:hover { background: var(--c-cream); }
+.toolbarPill:hover:not(:disabled) { background: var(--c-cream); }
+.toolbarPill:disabled { opacity: 0.45; cursor: not-allowed; }
 .toolbarPillOn {
   background: var(--c-ink);
   color: var(--c-paper);

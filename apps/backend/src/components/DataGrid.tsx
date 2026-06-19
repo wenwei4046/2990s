@@ -33,7 +33,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Search, Columns3, RotateCcw, Filter } from 'lucide-react';
+import { Search, Columns3, RotateCcw, Filter, Download } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useDebouncedValue } from '../lib/hooks';
 import { SkeletonRows } from './Skeleton';
@@ -57,6 +57,12 @@ export type DataGridColumn<T> = {
   groupValue?: (row: T) => string;
   /** value used by global search (defaults to String(accessor(row))) */
   searchValue?: (row: T) => string;
+  /** Text value written to Excel by the toolbar "Export Excel" button. Lets a
+      caller override the exported cell when the cell renders JSX or when the
+      search/filter value bundles extra tokens. Falls back, in order, to
+      searchValue → filterValue → groupValue → '' (cells are ReactNode, so we
+      never read the rendered node). */
+  exportValue?: (row: T) => string | number;
   /** Clean single value shown in (and matched by) the per-column filter
       dropdown. Use this when `searchValue` deliberately bundles several
       tokens (e.g. "SO-2605-001 CONFIRMED") so the funnel still lists the one
@@ -856,6 +862,43 @@ function DataGridInner<T>({
   };
   const resetLayout = () => setLayout(() => DEFAULT_LAYOUT);
 
+  /* ── Export to Excel (system-wide via DataGrid) ───────────────────────
+     Exports exactly what the operator sees: the post-filter + post-search +
+     post-sort `sortedRows`, across the visible DATA columns in their on-screen
+     order (the synthetic __select__ / __expand__ columns are skipped). Cells
+     render ReactNode, so we derive a text value per cell. xlsx is dynamic-
+     imported (mirrors the jspdf generators) to keep it out of the main bundle. */
+  const exportRows = useCallback(async () => {
+    if (sortedRows.length === 0) return;
+    const cols = visibleColumns.filter((c) => !c.key.startsWith('__'));
+    if (cols.length === 0) return;
+    const cellText = (c: DataGridColumn<T>, row: T): string | number => {
+      if (c.exportValue) return c.exportValue(row);
+      if (c.searchValue) return c.searchValue(row);
+      if (c.filterValue) return c.filterValue(row);
+      if (c.groupValue) return c.groupValue(row);
+      return '';
+    };
+    const data = sortedRows.map((row) => {
+      const o: Record<string, string | number> = {};
+      for (const c of cols) o[c.label] = cellText(c, row);
+      return o;
+    });
+    const XLSX = await import('xlsx');
+    const ws = XLSX.utils.json_to_sheet(data, { header: cols.map((c) => c.label) });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+    // Filename from the grid's storageKey (strip common layout suffixes); the
+    // key is a stable per-list id (e.g. "sales-orders-grid"), so it reads well.
+    const base = (storageKey || 'export')
+      .replace(/[:.]/g, '-')
+      .replace(/-?(grid|layout|columns|list|table|datagrid)$/i, '')
+      .replace(/[^a-z0-9_-]+/gi, '-')
+      .replace(/^-+|-+$/g, '');
+    const filename = `${base || `export-${sortedRows.length}`}.xlsx`;
+    XLSX.writeFile(wb, filename);
+  }, [sortedRows, visibleColumns, storageKey]);
+
   // ── Sort handlers ─────────────────────────────────────────────────
   const toggleSort = (key: string) => {
     setLayout((l) => {
@@ -1042,6 +1085,19 @@ function DataGridInner<T>({
             </span>
           </button>
         )}
+        {/* Export Excel — exports the currently visible rows (post search +
+            filter + sort) across the visible data columns. System-wide: every
+            list rendered through DataGrid gets it for free. Wei Siang 2026-06-19. */}
+        <button
+          type="button"
+          className={styles.toolbarPill}
+          onClick={() => { void exportRows(); }}
+          disabled={sortedRows.length === 0}
+          title={sortedRows.length === 0 ? 'No rows to export' : 'Export the visible rows to Excel'}
+        >
+          <Download size={14} strokeWidth={1.75} aria-hidden />
+          <span>Export Excel</span>
+        </button>
         <div className={styles.columnsAnchor}>
           <button
             ref={columnsBtnRef}
