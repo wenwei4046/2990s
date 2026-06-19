@@ -109,6 +109,11 @@ export type DataGridProps<T> = {
   /** row id accessor — required for selection + key */
   rowKey: (row: T) => string;
   searchPlaceholder?: string;
+  /** Human filename stem for the "Export Excel" button, e.g. "Purchase Orders".
+      Falls back to a cleaned storageKey when omitted. A YYYY-MM-DD date is
+      appended automatically. (Wei Siang 2026-06-20 — storageKey filenames like
+      "pr-g-so-list-layout-v1" read like junk.) */
+  exportName?: string;
   onRowDoubleClick?: (row: T) => void;
   /** Commander 2026-05-28 — single-click anywhere on a row fires this (in
       addition to the highlight). Cells that stopPropagation (checkboxes,
@@ -268,6 +273,7 @@ function DataGridInner<T>({
   storageKey,
   rowKey,
   searchPlaceholder = 'Search…',
+  exportName,
   onRowDoubleClick,
   onRowClick,
   rowStyle,
@@ -873,9 +879,18 @@ function DataGridInner<T>({
     const cols = visibleColumns.filter((c) => !c.key.startsWith('__'));
     if (cols.length === 0) return;
     const cellText = (c: DataGridColumn<T>, row: T): string | number => {
+      // Export the CLEAN display value — NOT the global-search blob. searchValue
+      // is built for the search box and often concatenates several
+      // representations of one cell (doc-no + status, raw + formatted phone,
+      // label + value); dumping it made every cell look duplicated/merged
+      // ("SO-2606-031 CONFIRMED", "Installment installment", doubled phone —
+      // Wei Siang 2026-06-20). Prefer an explicit exportValue, then the single
+      // filterValue, then the text the cell actually renders. searchValue is
+      // NEVER exported.
       if (c.exportValue) return c.exportValue(row);
-      if (c.searchValue) return c.searchValue(row);
       if (c.filterValue) return c.filterValue(row);
+      const rendered = coerceSearchString(c.accessor(row)).trim();
+      if (rendered) return rendered;
       if (c.groupValue) return c.groupValue(row);
       return '';
     };
@@ -886,18 +901,33 @@ function DataGridInner<T>({
     });
     const XLSX = await import('xlsx');
     const ws = XLSX.utils.json_to_sheet(data, { header: cols.map((c) => c.label) });
+    // Auto-size each column to its widest cell (header included) so the sheet is
+    // legible instead of squished into one default width (Wei Siang 2026-06-20
+    // "很乱很难看"). Capped so a stray long value can't blow a column out.
+    ws['!cols'] = cols.map((c) => {
+      let w = c.label.length;
+      for (const o of data) w = Math.max(w, String(o[c.label] ?? '').length);
+      return { wch: Math.min(60, Math.max(8, w + 2)) };
+    });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
-    // Filename from the grid's storageKey (strip common layout suffixes); the
-    // key is a stable per-list id (e.g. "sales-orders-grid"), so it reads well.
-    const base = (storageKey || 'export')
-      .replace(/[:.]/g, '-')
-      .replace(/-?(grid|layout|columns|list|table|datagrid)$/i, '')
-      .replace(/[^a-z0-9_-]+/gi, '-')
-      .replace(/^-+|-+$/g, '');
-    const filename = `${base || `export-${sortedRows.length}`}.xlsx`;
-    XLSX.writeFile(wb, filename);
-  }, [sortedRows, visibleColumns, storageKey]);
+    // Filename: prefer the caller's human exportName ("Purchase Orders"); else
+    // clean the storageKey down to something legible (strip dg-/pr-g- prefixes,
+    // -v1 / layout suffixes, dashes→spaces). A YYYY-MM-DD date is appended so
+    // repeated exports are self-dating and don't silently overwrite.
+    const stem = (exportName && exportName.trim())
+      || (storageKey || 'export')
+        .replace(/[:.]/g, '-')
+        .replace(/-?v\d+$/i, '')
+        .replace(/-?(grid|layout|columns|list|table|datagrid)$/i, '')
+        .replace(/^(dg|pr-g)-/i, '')
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+      || `export-${sortedRows.length}`;
+    const stamp = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `${stem} ${stamp}.xlsx`);
+  }, [sortedRows, visibleColumns, storageKey, exportName]);
 
   // ── Sort handlers ─────────────────────────────────────────────────
   const toggleSort = (key: string) => {
