@@ -2855,7 +2855,7 @@ mfgSalesOrders.post('/', async (c) => {
     approvalCode?: string | null;
     merchantProvider?: string | null;
     installmentMonths?: number | null;
-    uploadSessionId: string;
+    uploadSessionId?: string | null;
   }> | null = null;
   if (body.payments !== undefined) {
     const parsed = z.array(z.object({
@@ -2864,8 +2864,12 @@ mfgSalesOrders.post('/', async (c) => {
       approvalCode:      z.string().optional().nullable(),
       merchantProvider:  z.string().trim().min(1).optional().nullable(),
       installmentMonths: z.number().int().min(0).max(60).optional().nullable(),
-      uploadSessionId:   z.string().min(1),        // spec D4 — one slip per payment
-    })).min(1).max(10).safeParse(body.payments);
+      // Cash needs no slip (Loo 2026-06-18); every other method still must carry one.
+      uploadSessionId:   z.string().min(1).optional().nullable(),
+    }).refine(
+      (p) => p.method === 'cash' || (typeof p.uploadSessionId === 'string' && p.uploadSessionId.length > 0),
+      { path: ['uploadSessionId'], message: 'Slip required for a non-cash payment.' },
+    )).min(1).max(10).safeParse(body.payments);
     if (!parsed.success) {
       await rollbackPwpClaims();
       return c.json({ error: 'invalid_payments', issues: parsed.error.issues }, 400);
@@ -2881,36 +2885,42 @@ mfgSalesOrders.post('/', async (c) => {
      insert (and rolls back PWP claims), so no SO is created with half its
      payment proofs missing. Accepts 'uploaded' only — a promoted session
      belongs to an earlier payment (replay guard). */
-  let posPaymentSlipKeys: string[] | null = null;
+  let posPaymentSlipKeys: (string | null)[] | null = null;
   if (posPayments) {
-    const sessionIds = posPayments.map((p) => p.uploadSessionId);
+    // Cash rows carry no slip (Loo 2026-06-18); resolve only the rows that do.
+    const sessioned = posPayments
+      .map((p, i) => ({ i, sid: p.uploadSessionId }))
+      .filter((x): x is { i: number; sid: string } => typeof x.sid === 'string' && x.sid.length > 0);
+    const sessionIds = sessioned.map((x) => x.sid);
     if (new Set(sessionIds).size !== sessionIds.length) {
       await rollbackPwpClaims();
       return c.json({ error: 'slip_required', reason: 'Each payment needs its own slip.' }, 400);
     }
-    const { data: slipRows, error: slipRowsErr } = await sb
-      .from('pending_slip_uploads')
-      .select('upload_session_id, r2_key, status')
-      .in('upload_session_id', sessionIds);
-    if (slipRowsErr) {
-      await rollbackPwpClaims();
-      return c.json({ error: 'lookup_failed', reason: slipRowsErr.message }, 500);
-    }
-    const slipById = new Map((slipRows ?? []).map((r) => {
-      const t = r as { upload_session_id: string; r2_key: string | null; status: string };
-      return [t.upload_session_id, t] as const;
-    }));
-    posPaymentSlipKeys = [];
-    for (let i = 0; i < sessionIds.length; i++) {
-      const row = slipById.get(sessionIds[i]!);
-      if (!row || row.status !== 'uploaded' || !row.r2_key) {
+    posPaymentSlipKeys = posPayments.map(() => null);
+    if (sessionIds.length > 0) {
+      const { data: slipRows, error: slipRowsErr } = await sb
+        .from('pending_slip_uploads')
+        .select('upload_session_id, r2_key, status')
+        .in('upload_session_id', sessionIds);
+      if (slipRowsErr) {
         await rollbackPwpClaims();
-        return c.json({
-          error: 'slip_required',
-          reason: `Payment ${i + 1} slip missing or not uploaded.`,
-        }, 400);
+        return c.json({ error: 'lookup_failed', reason: slipRowsErr.message }, 500);
       }
-      posPaymentSlipKeys.push(row.r2_key);
+      const slipById = new Map((slipRows ?? []).map((r) => {
+        const t = r as { upload_session_id: string; r2_key: string | null; status: string };
+        return [t.upload_session_id, t] as const;
+      }));
+      for (const { i, sid } of sessioned) {
+        const row = slipById.get(sid);
+        if (!row || row.status !== 'uploaded' || !row.r2_key) {
+          await rollbackPwpClaims();
+          return c.json({
+            error: 'slip_required',
+            reason: `Payment ${i + 1} slip missing or not uploaded.`,
+          }, 400);
+        }
+        posPaymentSlipKeys[i] = row.r2_key;
+      }
     }
   }
 
@@ -3108,25 +3118,28 @@ mfgSalesOrders.post('/', async (c) => {
         continue;
       }
       /* Promote — 'promoted' rows are excluded from the slip reaper (same dance
-         as the SO-create order slip). The UPDATE runs under the caller's RLS
+         as the SO-create order slip). Cash rows carry no slip session → nothing
+         to promote (Loo 2026-06-18). The UPDATE runs under the caller's RLS
          (pending_slip_uploads allows the UPLOADER to promote); in this flow the
          uploader IS the order creator, so it matches. If it ever doesn't (or
          errors), the row stays 'uploaded' → the reaper would delete the R2
          object after TTL and the same session would be replayable — so a no-op
          promote is logged LOUDLY instead of swallowed. Best-effort: the payment
          row stands either way (slip_key already persisted on it). */
-      const { data: promoted, error: promoteErr } = await sb
-        .from('pending_slip_uploads')
-        .update({ status: 'promoted', promoted_at: new Date().toISOString() })
-        .eq('upload_session_id', p.uploadSessionId)
-        .select('upload_session_id');
-      if (promoteErr || !promoted || promoted.length === 0) {
-        // eslint-disable-next-line no-console
-        console.error(
-          `[so-create] slip promote FAILED for session ${p.uploadSessionId} on ${docNo}: `
-          + (promoteErr?.message ?? 'no row matched (RLS uploader mismatch?)')
-          + ' — slip will be reaped after TTL; replay window open until then.',
-        );
+      if (p.uploadSessionId) {
+        const { data: promoted, error: promoteErr } = await sb
+          .from('pending_slip_uploads')
+          .update({ status: 'promoted', promoted_at: new Date().toISOString() })
+          .eq('upload_session_id', p.uploadSessionId)
+          .select('upload_session_id');
+        if (promoteErr || !promoted || promoted.length === 0) {
+          // eslint-disable-next-line no-console
+          console.error(
+            `[so-create] slip promote FAILED for session ${p.uploadSessionId} on ${docNo}: `
+            + (promoteErr?.message ?? 'no row matched (RLS uploader mismatch?)')
+            + ' — slip will be reaped after TTL; replay window open until then.',
+          );
+        }
       }
       await recordSoAudit(sb, {
         docNo,
@@ -6842,10 +6855,16 @@ const paymentCreateSchema = z.object({
   accountSheet:       z.string().optional().nullable(),
   collectedBy:        z.string().uuid().optional().nullable(),
   note:               z.string().optional().nullable(),
-  /* Spec D4 (2026-06-06) — every payment carries its own slip. The client
-     uploads via /slips/init + confirm and sends the session id here. */
-  uploadSessionId:    z.string().min(1),
-});
+  /* Spec D4 — every NON-CASH payment carries its own slip (Loo 2026-06-18: cash
+     needs none). The client uploads via /slips/init + confirm and sends the
+     session id here. */
+  uploadSessionId:    z.string().min(1).optional().nullable(),
+}).refine(
+  // Proof needed iff amount > 0 AND non-cash (mirrors the client's
+  // paymentProofRequired); a cash or zero-amount row carries no slip.
+  (p) => p.method === 'cash' || p.amountCenti === 0 || (typeof p.uploadSessionId === 'string' && p.uploadSessionId.length > 0),
+  { path: ['uploadSessionId'], message: 'Slip required for a non-cash payment.' },
+);
 
 mfgSalesOrders.post('/:docNo/payments', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
@@ -6880,20 +6899,24 @@ mfgSalesOrders.post('/:docNo/payments', async (c) => {
     }, 400);
   }
 
-  /* Spec D4 — resolve the slip upload session → committed R2 key. Required:
-     a payment without a slip is rejected (same vocabulary as the order-level
-     slip_required guard). Mirrors the SO-create resolve. */
-  const { data: slipRow, error: slipErr } = await sb
-    .from('pending_slip_uploads')
-    .select('r2_key, status')
-    .eq('upload_session_id', p.uploadSessionId)
-    .maybeSingle();
-  if (slipErr) return c.json({ error: 'lookup_failed', reason: slipErr.message }, 500);
-  const slipRowT = slipRow as { r2_key: string | null; status: string } | null;
-  if (!slipRowT || slipRowT.status !== 'uploaded' || !slipRowT.r2_key) {
-    return c.json({ error: 'slip_required', reason: 'Upload the payment slip first.' }, 400);
+  /* Spec D4 — resolve the slip upload session → committed R2 key. Cash carries
+     no slip (Loo 2026-06-18; the schema .refine already enforces a slip for every
+     non-cash method), so resolve only when a session was sent. Mirrors the
+     SO-create resolve. */
+  let paymentSlipKey: string | null = null;
+  if (p.uploadSessionId) {
+    const { data: slipRow, error: slipErr } = await sb
+      .from('pending_slip_uploads')
+      .select('r2_key, status')
+      .eq('upload_session_id', p.uploadSessionId)
+      .maybeSingle();
+    if (slipErr) return c.json({ error: 'lookup_failed', reason: slipErr.message }, 500);
+    const slipRowT = slipRow as { r2_key: string | null; status: string } | null;
+    if (!slipRowT || slipRowT.status !== 'uploaded' || !slipRowT.r2_key) {
+      return c.json({ error: 'slip_required', reason: 'Upload the payment slip first.' }, 400);
+    }
+    paymentSlipKey = slipRowT.r2_key;
   }
-  const paymentSlipKey = slipRowT.r2_key;
 
   // Method-scoped fields per the cascade:
   //   merchant    → merchant_provider + installment_months (0 / null = One-off)
@@ -6930,25 +6953,28 @@ mfgSalesOrders.post('/:docNo/payments', async (c) => {
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
 
   /* Promote — 'promoted' rows are excluded from the slip reaper (same dance
-     as the SO-create slip). The UPDATE runs under the caller's RLS
+     as the SO-create slip). Cash carries no slip session → nothing to promote
+     (Loo 2026-06-18). The UPDATE runs under the caller's RLS
      (pending_slip_uploads allows the UPLOADER to promote); in this flow the
      uploader IS the payment recorder, so it matches. If it ever doesn't
      (or errors), the row stays 'uploaded' → the reaper would delete the R2
      object after TTL and the same session would be replayable — so a
      no-op promote is logged LOUDLY instead of swallowed. Best-effort: the
      payment itself stands either way (slip_key already persisted). */
-  const { data: promoted, error: promoteErr } = await sb
-    .from('pending_slip_uploads')
-    .update({ status: 'promoted', promoted_at: new Date().toISOString() })
-    .eq('upload_session_id', p.uploadSessionId)
-    .select('upload_session_id');
-  if (promoteErr || !promoted || promoted.length === 0) {
-    // eslint-disable-next-line no-console
-    console.error(
-      `[payments] slip promote FAILED for session ${p.uploadSessionId} on ${docNo}: `
-      + (promoteErr?.message ?? 'no row matched (RLS uploader mismatch?)')
-      + ' — slip will be reaped after TTL; replay window open until then.',
-    );
+  if (p.uploadSessionId) {
+    const { data: promoted, error: promoteErr } = await sb
+      .from('pending_slip_uploads')
+      .update({ status: 'promoted', promoted_at: new Date().toISOString() })
+      .eq('upload_session_id', p.uploadSessionId)
+      .select('upload_session_id');
+    if (promoteErr || !promoted || promoted.length === 0) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[payments] slip promote FAILED for session ${p.uploadSessionId} on ${docNo}: `
+        + (promoteErr?.message ?? 'no row matched (RLS uploader mismatch?)')
+        + ' — slip will be reaped after TTL; replay window open until then.',
+      );
+    }
   }
 
   /* Post-merge stitch — wire ADD_PAYMENT into the PR-D audit ledger.
