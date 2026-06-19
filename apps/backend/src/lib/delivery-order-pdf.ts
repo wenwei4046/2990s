@@ -57,14 +57,20 @@ type DoItem = {
   variants?: Record<string, unknown> | null;
 };
 
-export async function generateDeliveryOrderPdf(
+/* Draw ONE delivery order's content into `doc` (letterhead → info block →
+   items → signature → footer). Does NOT create the doc or save — the caller
+   finalizes, so several DOs can share one doc (batch "Export PDF"). The footer
+   loop starts at the page this DO began on (startPage) so combined docs keep
+   each DO's own "page n of m" footer scoped to the run's pages. */
+export async function renderDeliveryOrderInto(
+  doc: import('jspdf').jsPDF,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  autoTable: any,
   header: DoHeader,
   items: DoItem[],
   opts?: { docTitle?: string; docNoLabel?: string },
 ): Promise<void> {
-  const { jsPDF } = await import('jspdf');
-  const autoTable = (await import('jspdf-autotable')).default;
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const startPage = doc.getNumberOfPages();
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 14;
 
@@ -158,7 +164,7 @@ export async function generateDeliveryOrderPdf(
 
   // ── Footer: doc no · portal · page n of m on every page ───────────
   const pageCount = doc.getNumberOfPages();
-  for (let p = 1; p <= pageCount; p += 1) {
+  for (let p = startPage; p <= pageCount; p += 1) {
     doc.setPage(p);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
     doc.text(header.do_number, margin, 290);
@@ -166,6 +172,33 @@ export async function generateDeliveryOrderPdf(
     doc.text(`Page ${p} of ${pageCount}`, pageW - margin, 290, { align: 'right' });
     doc.setTextColor(0);
   }
+}
 
+/* Single DO → its own file (unchanged behaviour). */
+export async function generateDeliveryOrderPdf(
+  header: DoHeader,
+  items: DoItem[],
+  opts?: { docTitle?: string; docNoLabel?: string },
+): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  await renderDeliveryOrderInto(doc, autoTable, header, items, opts);
   doc.save(`${header.do_number}-${safeName(header.debtor_name || 'customer')}.pdf`);
+}
+
+/* Several DOs → ONE combined file, each DO starting on a new page. For the
+   batch "Export PDF" action (download a customer's DOs in one attachment). */
+export async function generateCombinedDeliveryOrderPdf(
+  docs: Array<{ header: DoHeader; items: DoItem[] }>,
+  opts?: { fileName?: string; docTitle?: string; docNoLabel?: string },
+): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  for (let i = 0; i < docs.length; i += 1) {
+    if (i > 0) doc.addPage();
+    await renderDeliveryOrderInto(doc, autoTable, docs[i]!.header, docs[i]!.items, opts);
+  }
+  doc.save(opts?.fileName ?? 'delivery-orders.pdf');
 }

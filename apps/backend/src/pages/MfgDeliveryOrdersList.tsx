@@ -12,10 +12,11 @@ import { useMemo, useState } from 'react';
 import type { JSX } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Plus, ArrowRightLeft } from 'lucide-react';
+import { Plus, ArrowRightLeft, Printer } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useChoice } from '../components/ChoiceDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
@@ -342,9 +343,14 @@ const STORAGE_KEY = 'pr-g.do-list.layout.v1';
 export const MfgDeliveryOrdersList = () => {
   const navigate = useNavigate();
   const askConfirm = useConfirm();
+  const askChoice = useChoice();
   const notify = useNotify();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
+
+  /* Multi-select state — batch "Export PDF" of N DOs into one (or many) files. */
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [exporting, setExporting] = useState(false);
 
   const { data, isLoading, error } = useMfgDeliveryOrders(undefined);
   const allRows = useMemo<DoRow[]>(() => (data?.deliveryOrders ?? []) as DoRow[], [data]);
@@ -391,18 +397,65 @@ export const MfgDeliveryOrdersList = () => {
   const openDetail = (row: DoRow, edit = false) =>
     navigate(`/mfg-delivery-orders/${row.id}${edit ? '?edit=1' : ''}`);
 
+  /* One DO's full detail for the PDF generator — shared by single-row Preview/
+     Print and the batch export. The deliveryOrder/items shapes are passed
+     verbatim to the generator (as never, like before). */
+  const fetchDoBundle = async (row: DoRow): Promise<{ header: unknown; items: unknown[] }> => {
+    const { data: session } = await supabase.auth.getSession();
+    const token = session.session?.access_token ?? '';
+    const res = await fetch(`${import.meta.env.VITE_API_URL}/delivery-orders-mfg/${row.id}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Failed to load DO ${row.do_number}`);
+    const json = (await res.json()) as { deliveryOrder: unknown; items: unknown[] };
+    return { header: json.deliveryOrder, items: json.items };
+  };
+
   const renderPdf = (row: DoRow) => {
     void (async () => {
-      const { data: session } = await supabase.auth.getSession();
-      const token = session.session?.access_token ?? '';
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/delivery-orders-mfg/${row.id}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) { notify({ title: `Failed to load DO ${row.do_number}`, tone: 'error' }); return; }
-      const json = (await res.json()) as { deliveryOrder: unknown; items: unknown[] };
+      const bundle = await fetchDoBundle(row);
       const { generateDeliveryOrderPdf } = await import('../lib/delivery-order-pdf');
-      await generateDeliveryOrderPdf(json.deliveryOrder as never, json.items as never);
+      await generateDeliveryOrderPdf(bundle.header as never, bundle.items as never);
     })().catch((e) => notify({ title: 'PDF failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }));
+  };
+
+  /* Batch "Export PDF" — one selected DO downloads straight; several prompt
+     "One combined PDF" vs "Separate files", then fetch each bundle and render
+     into one combined file or one file per DO. */
+  const exportSelected = async () => {
+    const rows = baseRows.filter((r) => sel.has(r.id));
+    if (rows.length === 0 || exporting) return;
+    try {
+      const { generateDeliveryOrderPdf, generateCombinedDeliveryOrderPdf } = await import('../lib/delivery-order-pdf');
+      if (rows.length === 1) {
+        const bundle = await fetchDoBundle(rows[0]!);
+        await generateDeliveryOrderPdf(bundle.header as never, bundle.items as never);
+        return;
+      }
+      const how = await askChoice({
+        title: `Download ${rows.length} documents`,
+        options: [
+          { value: 'one', label: 'One combined PDF' },
+          { value: 'many', label: 'Separate files', detail: 'One PDF per document' },
+        ],
+      });
+      if (how == null) return;
+      setExporting(true);
+      const bundles: Array<{ header: unknown; items: unknown[] }> = [];
+      for (const r of rows) bundles.push(await fetchDoBundle(r));
+      if (how === 'one') {
+        await generateCombinedDeliveryOrderPdf(
+          bundles as never,
+          { fileName: `delivery-orders-${new Date().toISOString().slice(0, 10)}.pdf` },
+        );
+      } else {
+        for (const b of bundles) await generateDeliveryOrderPdf(b.header as never, b.items as never);
+      }
+    } catch (e) {
+      notify({ title: 'PDF generation failed', body: e instanceof Error ? e.message : String(e), tone: 'error' });
+    } finally {
+      setExporting(false);
+    }
   };
 
   const doCancel = async (row: DoRow) => {
@@ -472,6 +525,25 @@ export const MfgDeliveryOrdersList = () => {
         ))}
       </div>
 
+      {/* Batch action bar — appears once one or more rows are selected. */}
+      {sel.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          background: 'rgba(232, 107, 58, 0.08)', border: '1px solid var(--c-orange)',
+          borderRadius: 'var(--radius-md)', padding: 'var(--space-3) var(--space-4)',
+          gap: 'var(--space-3)',
+        }}>
+          <span style={{ fontWeight: 600, color: 'var(--c-burnt)' }}>{sel.size} selected</span>
+          <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+            <Button variant="ghost" size="sm" onClick={() => setSel(new Set())}>Clear</Button>
+            <Button variant="ghost" size="sm" disabled={exporting} onClick={() => void exportSelected()}>
+              <Printer size={14} strokeWidth={1.75} />
+              <span>{exporting ? 'Preparing…' : `Export PDF (${sel.size})`}</span>
+            </Button>
+          </span>
+        </div>
+      )}
+
       <DataGrid<DoRow>
         rows={baseRows}
         onFilteredRowsChange={setVisibleRows}
@@ -480,6 +552,15 @@ export const MfgDeliveryOrdersList = () => {
         rowKey={(r) => r.id}
         searchPlaceholder="Search DOs…"
         groupBanner={false}
+        selectable={{
+          selectedKeys: sel,
+          onToggle: (k) => setSel((p) => { const n = new Set(p); if (n.has(k)) n.delete(k); else n.add(k); return n; }),
+          onToggleAll: (keys, allSel) => setSel((p) => {
+            const n = new Set(p);
+            if (allSel) { for (const k of keys) n.delete(k); } else { for (const k of keys) n.add(k); }
+            return n;
+          }),
+        }}
         onRowDoubleClick={(r) => openDetail(r)}
         rowStyle={(r) => r.status === 'CANCELLED' ? { opacity: 0.55, filter: 'grayscale(0.6)' } : undefined}
         isLoading={isLoading}

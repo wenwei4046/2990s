@@ -28,10 +28,19 @@ type PiItem = {
   variants?: Record<string, unknown> | null;
 };
 
-export async function generatePurchaseInvoicePdf(header: PiHeader, items: PiItem[]): Promise<void> {
-  const { jsPDF } = await import('jspdf');
-  const autoTable = (await import('jspdf-autotable')).default;
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+/* Draw ONE purchase invoice's content into `doc` (letterhead → info → codes
+   note → table → totals → footer). Does NOT make the doc or save it — the
+   caller finalizes ONCE, so several PIs can share one combined doc. The footer
+   page loop runs from `startPage` so a combined doc only re-numbers THIS PI's
+   pages on each invocation (jsPDF has no per-section page reset). */
+export async function renderPurchaseInvoiceInto(
+  doc: import('jspdf').jsPDF,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- autotable fn loosely typed (matches the PO generator)
+  autoTable: any,
+  header: PiHeader,
+  items: PiItem[],
+): Promise<void> {
+  const startPage = doc.getNumberOfPages();
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 14;
 
@@ -123,9 +132,9 @@ export async function generatePurchaseInvoicePdf(header: PiHeader, items: PiItem
   drawRow('Paid',        fmtRm(header.paid_centi, header.currency), ty + 4); ty += 4;
   drawRow('Outstanding', fmtRm(header.total_centi - header.paid_centi, header.currency), ty + 4, true);
 
-  // Footer: doc no · portal · page n of m on every page
+  // Footer: doc no · portal · page n of m on every page (of THIS PI's run)
   const pageCount = doc.getNumberOfPages();
-  for (let p = 1; p <= pageCount; p += 1) {
+  for (let p = startPage; p <= pageCount; p += 1) {
     doc.setPage(p);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
     doc.text(header.invoice_number, margin, 290);
@@ -133,6 +142,29 @@ export async function generatePurchaseInvoicePdf(header: PiHeader, items: PiItem
     doc.text(`Page ${p} of ${pageCount}`, pageW - margin, 290, { align: 'right' });
     doc.setTextColor(0);
   }
+}
 
+/* Single PI → its own file (unchanged behaviour). */
+export async function generatePurchaseInvoicePdf(header: PiHeader, items: PiItem[]): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  await renderPurchaseInvoiceInto(doc, autoTable, header, items);
   doc.save(`${header.invoice_number}-${safeName(header.supplier?.name ?? 'supplier')}.pdf`);
+}
+
+/* Several PIs → ONE combined file, each PI starting on a new page. For the
+   batch "Export PDF" action on the Purchase Invoices list. */
+export async function generateCombinedPurchaseInvoicePdf(
+  docs: Array<{ header: PiHeader; items: PiItem[] }>,
+  opts?: { fileName?: string },
+): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  for (let i = 0; i < docs.length; i += 1) {
+    if (i > 0) doc.addPage();
+    await renderPurchaseInvoiceInto(doc, autoTable, docs[i]!.header, docs[i]!.items);
+  }
+  doc.save(opts?.fileName ?? 'purchase-invoices.pdf');
 }

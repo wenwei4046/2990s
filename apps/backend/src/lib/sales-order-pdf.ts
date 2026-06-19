@@ -273,19 +273,32 @@ const renderViaIframe = (blobUrl: string, andPrint: boolean): void => {
   }, 60_000);
 };
 
-export async function generateSalesOrderPdf(
+type JsPdf = import('jspdf').jsPDF;
+type AutoTableFn = (typeof import('jspdf-autotable'))['default'];
+
+/* Draw ONE sales order's content into `doc` (letterhead → meta → items →
+   payments → totals → signatures → terms → footer). Does NOT create the doc,
+   save / output / preview — the caller finalizes ONCE, so several SOs can share
+   one doc (batch "Export PDF" → one combined file). Mirrors the
+   renderPurchaseOrderInto precedent in purchase-order-pdf.ts.
+
+   The footer loop iterates ONLY this doc's pages (`startPage`…end), so the
+   per-SO doc no / portal label / "Page p of N" line stays correct when several
+   SOs are appended to one document. */
+export async function renderSalesOrderInto(
+  doc: JsPdf,
+  autoTable: AutoTableFn,
   header: SoHeader,
   items: SoItem[],
   payments: SoPayment[] = [],
-  action: PdfAction = 'save',
   /* PWP vouchers this SO's trigger items issued (GET /:docNo `pwpCodes`) —
      used to mark trigger lines. Optional so older callers stay valid. */
   pwpCodes: SoPwpCodeRow[] = [],
   opts?: { docTitle?: string; docNoLabel?: string; docNoun?: string },
 ): Promise<void> {
-  // Dynamic import — code-split into a vendor chunk.
-  const { jsPDF } = await import('jspdf');
-  const autoTable = (await import('jspdf-autotable')).default;
+  // First page this SO occupies — the footer loop numbers from here so a
+  // combined doc doesn't re-stamp earlier SOs' pages.
+  const startPage = doc.getNumberOfPages();
 
   /* Fabric Tracking lookup (fail-soft, before any drawing): internal fabric
      code → fabric_description so the customer reads "EZ-001 — <description>"
@@ -296,7 +309,6 @@ export async function generateSalesOrderPdf(
      (Commander 2026-06-16 — Fabric internal + external on the SO too). */
   const fabricExtMap = await loadFabricSupplierMap(collectFabricCodes(items));
 
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 14;
 
@@ -634,8 +646,11 @@ export async function generateSalesOrderPdf(
   doc.setTextColor(0);
 
   // ── Footer: doc no · portal label · page n of m on every page ────
+  /* Number ONLY this SO's pages (startPage…end). For a combined doc this reads
+     per absolute page, which is acceptable (matches the PO precedent — we don't
+     over-engineer per-doc relative numbering). */
   const pageCount = doc.getNumberOfPages();
-  for (let p = 1; p <= pageCount; p += 1) {
+  for (let p = startPage; p <= pageCount; p += 1) {
     doc.setPage(p);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
     doc.text(header.doc_no, margin, 290);
@@ -643,6 +658,26 @@ export async function generateSalesOrderPdf(
     doc.text(`Page ${p} of ${pageCount}`, pageW - margin, 290, { align: 'right' });
     doc.setTextColor(0);
   }
+}
+
+/* Single SO → its own file (or print / preview). EXACT same signature and
+   behaviour as before the renderSalesOrderInto extraction — single-doc output
+   is byte-identical to the pre-refactor generator. */
+export async function generateSalesOrderPdf(
+  header: SoHeader,
+  items: SoItem[],
+  payments: SoPayment[] = [],
+  action: PdfAction = 'save',
+  /* PWP vouchers this SO's trigger items issued (GET /:docNo `pwpCodes`) —
+     used to mark trigger lines. Optional so older callers stay valid. */
+  pwpCodes: SoPwpCodeRow[] = [],
+  opts?: { docTitle?: string; docNoLabel?: string; docNoun?: string },
+): Promise<void> {
+  // Dynamic import — code-split into a vendor chunk.
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  await renderSalesOrderInto(doc, autoTable, header, items, payments, pwpCodes, opts);
 
   // Filename: SO-009001-DebtorName.pdf
   const filename = `${header.doc_no}-${safeName(header.debtor_name || 'customer')}.pdf`;
@@ -666,4 +701,26 @@ export async function generateSalesOrderPdf(
   }
   // action === 'print'
   renderViaIframe(blobUrl, true);
+}
+
+/* Several SOs → ONE combined file, each SO starting on a new page. For the
+   batch "Export PDF" action on the SO list (one combined attachment). Each SO's
+   footer numbers its own pages; the whole file saves once. */
+export async function generateCombinedSalesOrderPdf(
+  docs: Array<{ header: SoHeader; items: SoItem[]; payments?: SoPayment[]; pwpCodes?: SoPwpCodeRow[] }>,
+  opts?: { fileName?: string; docTitle?: string; docNoLabel?: string; docNoun?: string },
+): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  for (let i = 0; i < docs.length; i += 1) {
+    if (i > 0) doc.addPage();
+    await renderSalesOrderInto(
+      doc, autoTable,
+      docs[i]!.header, docs[i]!.items,
+      docs[i]!.payments ?? [], docs[i]!.pwpCodes ?? [],
+      opts,
+    );
+  }
+  doc.save(opts?.fileName ?? 'sales-orders.pdf');
 }

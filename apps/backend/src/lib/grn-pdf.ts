@@ -28,16 +28,23 @@ type GrnItem = {
   variants?: Record<string, unknown> | null;
 };
 
-export async function generateGrnPdf(
+/* Draw ONE GRN's content into `doc` (letterhead → info → codes note → table →
+   signature → footer). Mirrors renderPurchaseOrderInto: the per-doc supplier
+   lookup stays inside, but `new jsPDF` / `doc.save` belong to the caller, so
+   several GRNs can share one doc (batch "Export PDF"). The footer loop runs over
+   THIS doc's own pages (startPage…current) so a combined doc footers each GRN's
+   page span without re-footering earlier GRNs. */
+export async function renderGrnInto(
+  doc: import('jspdf').jsPDF,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  autoTable: any,
   header: GrnHeader,
   items: GrnItem[],
   opts?: { docTitle?: string; docNoLabel?: string },
 ): Promise<void> {
-  const { jsPDF } = await import('jspdf');
-  const autoTable = (await import('jspdf-autotable')).default;
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 14;
+  const startPage = doc.getNumberOfPages();
 
   let y = drawHeader(doc, {
     docTitle: opts?.docTitle ?? 'GOODS RECEIPT NOTE',
@@ -117,9 +124,9 @@ export async function generateGrnPdf(
 
   drawSignatureBoxes(doc, lastY, 'Warehouse Received By', 'Supplier Driver Signature');
 
-  // Footer: doc no · portal · page n of m on every page
+  // Footer: doc no · portal · page n of m on every page of THIS GRN's span.
   const pageCount = doc.getNumberOfPages();
-  for (let p = 1; p <= pageCount; p += 1) {
+  for (let p = startPage; p <= pageCount; p += 1) {
     doc.setPage(p);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
     doc.text(header.grn_number, margin, 290);
@@ -127,6 +134,34 @@ export async function generateGrnPdf(
     doc.text(`Page ${p} of ${pageCount}`, pageW - margin, 290, { align: 'right' });
     doc.setTextColor(0);
   }
+}
 
+/* Single GRN → its own file (unchanged behaviour — reused by the GRN detail
+   page and PurchaseConsignmentReceiveDetail with its CONSIGNMENT RECEIVE opts). */
+export async function generateGrnPdf(
+  header: GrnHeader,
+  items: GrnItem[],
+  opts?: { docTitle?: string; docNoLabel?: string },
+): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  await renderGrnInto(doc, autoTable, header, items, opts);
   doc.save(`${header.grn_number}-${safeName(header.supplier?.name ?? 'supplier')}.pdf`);
+}
+
+/* Several GRNs → ONE combined file, each GRN starting on a new page. For the
+   batch "Export PDF" action on the Goods Received list. */
+export async function generateCombinedGrnPdf(
+  docs: Array<{ header: GrnHeader; items: GrnItem[] }>,
+  opts?: { fileName?: string; docTitle?: string; docNoLabel?: string },
+): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  for (let i = 0; i < docs.length; i += 1) {
+    if (i > 0) doc.addPage();
+    await renderGrnInto(doc, autoTable, docs[i]!.header, docs[i]!.items, opts);
+  }
+  doc.save(opts?.fileName ?? 'goods-received.pdf');
 }

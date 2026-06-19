@@ -15,11 +15,13 @@
 import { useMemo, useState } from 'react';
 import type { JSX } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Plus, ArrowRightLeft } from 'lucide-react';
+import { Plus, ArrowRightLeft, Printer } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useChoice } from '../components/ChoiceDialog';
 import { useNotify } from '../components/NotifyDialog';
+import { authedFetch } from '../lib/authed-fetch';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
@@ -306,9 +308,16 @@ const STORAGE_KEY = 'pr-g.dr-list.layout.v1';
 export const DeliveryReturnsList = () => {
   const navigate = useNavigate();
   const askConfirm = useConfirm();
+  const askChoice = useChoice();
   const notify = useNotify();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
+
+  /* Multi-select + batch "Export PDF" (reuses the DELIVERY RETURN pdf
+     generator). `sel` = checked row ids; `exporting` guards the async fetch +
+     render so the button can't double-fire. */
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [exporting, setExporting] = useState(false);
 
   const { data, isLoading, error } = useDeliveryReturns(undefined);
   const allRows = useMemo<DrRow[]>(() => (data?.deliveryReturns ?? []) as DrRow[], [data]);
@@ -360,6 +369,77 @@ export const DeliveryReturnsList = () => {
     if (!(await askConfirm({ title: `Cancel return ${row.return_number}?`, body: 'This sets status = CANCELLED.', confirmLabel: 'Cancel', danger: true }))) return;
     updateStatus.mutate({ id: row.id, status: 'CANCELLED' },
       { onError: (e) => notify({ title: 'Failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }) });
+  };
+
+  /* Fetch one DR's full detail and shape it into the { header, items } bundle
+     the delivery-return PDF generator expects — the SAME mapping the DR Detail
+     page uses for its Print PDF button. Endpoint: GET /delivery-returns/:id
+     → { deliveryReturn, items } (mirrors useDeliveryReturnDetail). */
+  const fetchDrBundle = async (id: string) => {
+    const data = await authedFetch<{ deliveryReturn: Record<string, unknown>; items: Array<Record<string, unknown>> }>(
+      `/delivery-returns/${id}`,
+    );
+    const h = data.deliveryReturn ?? {};
+    const items = (data.items ?? []).map((it) => ({
+      item_code: it.item_code as string,
+      description: (it.description as string | null) ?? null,
+      qty_returned: it.qty_returned as number,
+      condition: (it.condition as string | null) ?? null,
+      unit_price_centi: it.unit_price_centi as number,
+      refund_centi: it.line_total_centi as number,
+    }));
+    return {
+      header: {
+        return_number: h.return_number as string,
+        status: h.status as string,
+        return_date: h.return_date as string,
+        debtor_code: (h.debtor_code as string | null) ?? null,
+        debtor_name: h.debtor_name as string,
+        reason: (h.reason as string | null) ?? null,
+        refund_centi: h.local_total_centi as number,
+        notes: (h.notes as string | null) ?? null,
+        delivery_order_id: (h.delivery_order_id as string | null) ?? null,
+        sales_invoice_id: null,
+      },
+      items,
+    };
+  };
+
+  const exportSelected = async () => {
+    const rows = baseRows.filter((r) => sel.has(r.id));
+    if (rows.length === 0 || exporting) return;
+    setExporting(true);
+    try {
+      if (rows.length === 1) {
+        const bundle = await fetchDrBundle(rows[0]!.id);
+        const { generateDeliveryReturnPdf } = await import('../lib/delivery-return-pdf');
+        await generateDeliveryReturnPdf(bundle.header as never, bundle.items as never);
+      } else {
+        const how = await askChoice({
+          title: `Export ${rows.length} delivery returns`,
+          options: [
+            { value: 'one', label: 'One combined PDF', detail: 'Each return on its own page' },
+            { value: 'many', label: 'Separate files', detail: 'One PDF per return' },
+          ],
+        });
+        if (how == null) { setExporting(false); return; }
+        const bundles = [];
+        for (const r of rows) bundles.push(await fetchDrBundle(r.id));
+        if (how === 'one') {
+          const { generateCombinedDeliveryReturnPdf } = await import('../lib/delivery-return-pdf');
+          await generateCombinedDeliveryReturnPdf(bundles as never, {
+            fileName: `delivery-returns-${new Date().toISOString().slice(0, 10)}.pdf`,
+          });
+        } else {
+          const { generateDeliveryReturnPdf } = await import('../lib/delivery-return-pdf');
+          for (const b of bundles) await generateDeliveryReturnPdf(b.header as never, b.items as never);
+        }
+      }
+    } catch (e) {
+      notify({ title: 'PDF generation failed', body: e instanceof Error ? e.message : String(e), tone: 'error' });
+    } finally {
+      setExporting(false);
+    }
   };
 
   const kpiTile = (label: string, value: string, accent?: 'good' | 'bad' | 'burnt'): JSX.Element => (
@@ -423,6 +503,27 @@ export const DeliveryReturnsList = () => {
         ))}
       </div>
 
+      {/* Batch action bar — appears only with a selection (mirrors the PO list
+          selected-row banner). Right side carries Clear + Export PDF. */}
+      {sel.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)',
+          padding: 'var(--space-3) var(--space-4)', borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--c-orange)', background: 'rgba(232, 107, 58, 0.08)',
+        }}>
+          <span style={{ fontWeight: 600, color: 'var(--c-burnt)' }}>{sel.size} selected</span>
+          <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+            <Button variant="ghost" size="sm" onClick={() => setSel(new Set())}>
+              <span>Clear</span>
+            </Button>
+            <Button variant="ghost" size="sm" disabled={exporting} onClick={() => void exportSelected()}>
+              <Printer size={14} strokeWidth={1.75} />
+              <span>{exporting ? 'Preparing…' : `Export PDF (${sel.size})`}</span>
+            </Button>
+          </div>
+        </div>
+      )}
+
       <DataGrid<DrRow>
         rows={baseRows}
         onFilteredRowsChange={setVisibleRows}
@@ -431,6 +532,15 @@ export const DeliveryReturnsList = () => {
         rowKey={(r) => r.id}
         searchPlaceholder="Search returns…"
         groupBanner={false}
+        selectable={{
+          selectedKeys: sel,
+          onToggle: (k) => setSel((p) => { const n = new Set(p); if (n.has(k)) n.delete(k); else n.add(k); return n; }),
+          onToggleAll: (keys, allSel) => setSel((p) => {
+            const n = new Set(p);
+            if (allSel) { for (const k of keys) n.delete(k); } else { for (const k of keys) n.add(k); }
+            return n;
+          }),
+        }}
         onRowDoubleClick={(r) => openDetail(r)}
         rowStyle={(r) => ['CANCELLED', 'REJECTED'].includes(r.status) ? { opacity: 0.55, filter: 'grayscale(0.6)' } : undefined}
         isLoading={isLoading}

@@ -29,12 +29,13 @@ import { useMemo, useState } from 'react';
 import type { JSX } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Plus, X, Wrench, Camera } from 'lucide-react';
+import { Plus, X, Wrench, Camera, Printer } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ListingPickerDialog, type ListingChoice } from '../components/ListingPickerDialog';
 import { ScanOrderModal } from '../components/ScanOrderModal';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useChoice } from '../components/ChoiceDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
@@ -675,7 +676,13 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
 export const MfgSalesOrdersList = () => {
   const navigate = useNavigate();
   const askConfirm = useConfirm();
+  const askChoice = useChoice();
   const notify = useNotify();
+  /* Multi-select + batch Export PDF. Selection keys are doc_no strings
+     (DataGrid rowKey). `exporting` guards the toolbar button while bundles
+     fetch + the (combined) PDF renders. */
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [exporting, setExporting] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   /* Task #120 — Outstanding filter overlay. `?outstanding=1` narrows the
      list to rows with live balance > 0; clear-chip restores. Same param
@@ -757,23 +764,25 @@ export const MfgSalesOrdersList = () => {
   const openDetail = (row: SoRow, edit = false) =>
     navigate(`/mfg-sales-orders/${row.doc_no}${edit ? '?edit=1' : ''}`);
 
-  const renderPdf = async (row: SoRow, action: 'save' | 'print' | 'preview') => {
-    // One-shot fetch when the toolbar button fires — avoids holding a
-    // TanStack query open for every list selection.
-    // Followup #81: parallel-fetch payments from the ledger alongside the
-    // SO detail. Both endpoints are auth'd off the same Supabase session.
+  /* Fetch the full PDF bundle for one SO — detail (header + items + pwpCodes)
+     and the payments ledger. One-shot fetch when a PDF action fires; avoids
+     holding a TanStack query open for every list selection. Payments are
+     best-effort: a failed payments fetch yields [] so the PDF still renders
+     with an empty Payments table rather than blocking. Reused by the single-doc
+     renderPdf AND the batch exportSelected. Throws on a failed detail fetch. */
+  const fetchSoBundle = async (
+    docNo: string,
+  ): Promise<{ header: unknown; items: unknown[]; payments: unknown[]; pwpCodes: unknown[] }> => {
     const { data: session } = await supabase.auth.getSession();
     const token = session.session?.access_token ?? '';
     const headers = { authorization: `Bearer ${token}` };
     /* Follow-up #81 — parallel-fetch detail + payments (ledger). */
     const [detailRes, paymentsRes] = await Promise.all([
-      fetch(`${import.meta.env.VITE_API_URL}/mfg-sales-orders/${row.doc_no}`, { headers }),
-      fetch(`${import.meta.env.VITE_API_URL}/mfg-sales-orders/${row.doc_no}/payments`, { headers }),
+      fetch(`${import.meta.env.VITE_API_URL}/mfg-sales-orders/${docNo}`, { headers }),
+      fetch(`${import.meta.env.VITE_API_URL}/mfg-sales-orders/${docNo}/payments`, { headers }),
     ]);
-    if (!detailRes.ok) { notify({ title: `Failed to load SO ${row.doc_no}`, tone: 'error' }); return; }
+    if (!detailRes.ok) throw new Error(`Failed to load SO ${docNo}`);
     const json = (await detailRes.json()) as { salesOrder: unknown; items: unknown[]; pwpCodes?: unknown[] };
-    /* Payments endpoint is best-effort: if it fails the PDF still renders
-       with an empty Payments table rather than blocking Preview/Print. */
     let payments: unknown[] = [];
     if (paymentsRes.ok) {
       try {
@@ -781,13 +790,83 @@ export const MfgSalesOrdersList = () => {
         payments = pj.payments ?? [];
       } catch { /* leave empty — PDF will show the no-payments state */ }
     }
+    return { header: json.salesOrder, items: json.items, payments, pwpCodes: json.pwpCodes ?? [] };
+  };
+
+  const renderPdf = async (row: SoRow, action: 'save' | 'print' | 'preview') => {
+    let bundle: Awaited<ReturnType<typeof fetchSoBundle>>;
+    try {
+      bundle = await fetchSoBundle(row.doc_no);
+    } catch {
+      notify({ title: `Failed to load SO ${row.doc_no}`, tone: 'error' });
+      return;
+    }
     /* Follow-up #83 — action routes the PDF to doc.save() / hidden iframe
        print / blob preview, instead of always downloading and asking the
        user to find the file. Payments arg from #81 is threaded through. */
     await generateSalesOrderPdf(
-      json.salesOrder as never, json.items as never, payments as never, action,
-      (json.pwpCodes ?? []) as never,
+      bundle.header as never, bundle.items as never, bundle.payments as never, action,
+      bundle.pwpCodes as never,
     );
+  };
+
+  /* Batch "Export PDF" for the multi-selected rows. One row → a single saved
+     PDF. Many → the operator picks one combined PDF (each SO on a new page) or
+     separate files (one save per SO). baseRows keeps the outstanding overlay. */
+  const exportSelected = async () => {
+    const docNos = baseRows.filter((r) => sel.has(r.doc_no)).map((r) => r.doc_no);
+    if (docNos.length === 0 || exporting) return;
+
+    if (docNos.length === 1) {
+      const row = baseRows.find((r) => r.doc_no === docNos[0]);
+      if (row) await renderPdf(row, 'save');
+      return;
+    }
+
+    const how = await askChoice({
+      title: `Download ${docNos.length} documents`,
+      options: [
+        { value: 'one', label: 'One combined PDF' },
+        { value: 'many', label: 'Separate files', detail: 'One PDF per document' },
+      ],
+    });
+    if (how == null) return;
+
+    setExporting(true);
+    try {
+      const bundles: Array<Awaited<ReturnType<typeof fetchSoBundle>>> = [];
+      for (const docNo of docNos) {
+        bundles.push(await fetchSoBundle(docNo));
+      }
+      if (how === 'one') {
+        const { generateCombinedSalesOrderPdf } = await import('../lib/sales-order-pdf');
+        await generateCombinedSalesOrderPdf(
+          bundles.map((b) => ({
+            header: b.header as never,
+            items: b.items as never,
+            payments: b.payments as never,
+            pwpCodes: b.pwpCodes as never,
+          })),
+          { fileName: `sales-orders-${new Date().toISOString().slice(0, 10)}.pdf` },
+        );
+      } else {
+        for (const b of bundles) {
+          await generateSalesOrderPdf(
+            b.header as never, b.items as never, b.payments as never, 'save',
+            b.pwpCodes as never,
+          );
+        }
+      }
+      setSel(new Set());
+    } catch (e) {
+      notify({
+        title: 'PDF generation failed',
+        body: e instanceof Error ? e.message : String(e),
+        tone: 'error',
+      });
+    } finally {
+      setExporting(false);
+    }
   };
 
   /* Soft-delete a SO row (sets status=CANCELLED). Fired from the row
@@ -947,6 +1026,29 @@ export const MfgSalesOrdersList = () => {
 
       {showScan && <ScanOrderModal onClose={() => setShowScan(false)} />}
 
+      {/* Batch toolbar — appears once any row is selected. Mirrors the PO
+          list's selected-row banner. Export PDF → single save, or (many) the
+          useChoice combined-vs-separate dialog. */}
+      {sel.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: 'var(--space-3) var(--space-4)',
+          background: 'rgba(232, 107, 58, 0.08)',
+          border: '1px solid var(--c-orange)',
+          borderRadius: 'var(--radius-md)',
+          gap: 'var(--space-3)',
+        }}>
+          <span style={{ fontWeight: 600, color: 'var(--c-burnt)' }}>{sel.size} selected</span>
+          <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+            <Button variant="ghost" size="sm" onClick={() => setSel(new Set())}>Clear</Button>
+            <Button variant="ghost" size="sm" disabled={exporting} onClick={() => void exportSelected()}>
+              <Printer size={14} strokeWidth={1.75} />
+              <span>{exporting ? 'Preparing…' : `Export PDF (${sel.size})`}</span>
+            </Button>
+          </span>
+        </div>
+      )}
+
       <DataGrid<SoRow>
         rows={baseRows}
         onFilteredRowsChange={setVisibleRows}
@@ -954,6 +1056,21 @@ export const MfgSalesOrdersList = () => {
         storageKey={STORAGE_KEY}
         rowKey={(r) => r.doc_no}
         searchPlaceholder="Search SOs…"
+        /* Multi-select (doc_no keys) — drives the batch Export PDF toolbar. */
+        selectable={{
+          selectedKeys: sel,
+          onToggle: (k) => setSel((p) => {
+            const n = new Set(p);
+            if (n.has(k)) n.delete(k); else n.add(k);
+            return n;
+          }),
+          onToggleAll: (keys, allSel) => setSel((p) => {
+            const n = new Set(p);
+            if (allSel) { for (const k of keys) n.delete(k); }
+            else { for (const k of keys) n.add(k); }
+            return n;
+          }),
+        }}
         /* Houzs chrome — kill the "drag column header here to group by
            that column" banner; the page-level filter row replaces it. */
         groupBanner={false}

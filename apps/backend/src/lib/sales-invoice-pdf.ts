@@ -26,10 +26,19 @@ type SiItem = {
   variants?: Record<string, unknown> | null;
 };
 
-export async function generateSalesInvoicePdf(header: SiHeader, items: SiItem[]): Promise<void> {
-  const { jsPDF } = await import('jspdf');
-  const autoTable = (await import('jspdf-autotable')).default;
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+/* Draw ONE sales invoice's content into `doc` (letterhead → info block → items →
+   totals → signature → footer). Does NOT create the jsPDF or save — the caller
+   finalizes ONCE, so several SIs can share one doc (batch "Export PDF"). The
+   footer loop starts at this SI's first page so a combined doc numbers each
+   invoice's own pages without re-stamping earlier ones. */
+export async function renderSalesInvoiceInto(
+  doc: import('jspdf').jsPDF,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  autoTable: any,
+  header: SiHeader,
+  items: SiItem[],
+): Promise<void> {
+  const startPage = doc.getNumberOfPages();
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 14;
 
@@ -120,9 +129,9 @@ export async function generateSalesInvoicePdf(header: SiHeader, items: SiItem[])
   doc.text('Terms: Payment due as per invoice. Late payments may incur a service charge.', margin, ty);
   doc.setTextColor(0);
 
-  // Footer: doc no · portal · page n of m on every page
+  // Footer: doc no · portal · page n of m on every page of THIS invoice
   const pageCount = doc.getNumberOfPages();
-  for (let p = 1; p <= pageCount; p += 1) {
+  for (let p = startPage; p <= pageCount; p += 1) {
     doc.setPage(p);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
     doc.text(header.invoice_number, margin, 290);
@@ -130,6 +139,31 @@ export async function generateSalesInvoicePdf(header: SiHeader, items: SiItem[])
     doc.text(`Page ${p} of ${pageCount}`, pageW - margin, 290, { align: 'right' });
     doc.setTextColor(0);
   }
+}
 
+/* Single SI → its own file (unchanged behaviour). */
+export async function generateSalesInvoicePdf(header: SiHeader, items: SiItem[]): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  await renderSalesInvoiceInto(doc, autoTable, header, items);
   doc.save(`${header.invoice_number}-${safeName(header.debtor_name)}.pdf`);
+}
+
+/* Several SIs → ONE combined file, each invoice starting on a new page. For the
+   batch "Export PDF" action (download a customer all their invoices in one
+   attachment). Each invoice numbers its own pages via renderSalesInvoiceInto's
+   startPage-based footer loop. */
+export async function generateCombinedSalesInvoicePdf(
+  docs: Array<{ header: SiHeader; items: SiItem[] }>,
+  opts?: { fileName?: string },
+): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  for (let i = 0; i < docs.length; i += 1) {
+    if (i > 0) doc.addPage();
+    await renderSalesInvoiceInto(doc, autoTable, docs[i]!.header, docs[i]!.items);
+  }
+  doc.save(opts?.fileName ?? 'sales-invoices.pdf');
 }

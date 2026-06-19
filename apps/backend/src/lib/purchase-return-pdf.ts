@@ -30,14 +30,20 @@ type PrItem = {
   variants?: Record<string, unknown> | null;
 };
 
-export async function generatePurchaseReturnPdf(
+/* Draw ONE purchase return's content into `doc` (letterhead → meta → codes-note
+   → items → total refund → signature → footer). Does NOT create the jsPDF or
+   save — the caller finalizes ONCE, so several PRs can share one doc (batch
+   "Export PDF"). The footer loop runs from `startPage` so each PR's own pages
+   carry its return number; earlier PRs' pages keep theirs. */
+export async function renderPurchaseReturnInto(
+  doc: import('jspdf').jsPDF,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  autoTable: any,
   header: PrHeader,
   items: PrItem[],
   opts?: { docTitle?: string; docNoLabel?: string; amountLabel?: string; totalLabel?: string },
 ): Promise<void> {
-  const { jsPDF } = await import('jspdf');
-  const autoTable = (await import('jspdf-autotable')).default;
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const startPage = doc.getNumberOfPages();
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 14;
 
@@ -124,9 +130,10 @@ export async function generatePurchaseReturnPdf(
 
   drawSignatureBoxes(doc, lastY + 12, `${COMPANY.name} Issued By`, 'Supplier Acknowledgement');
 
-  // Footer: doc no · portal · page n of m on every page
+  // Footer: doc no · portal · page n of m on every page (only this PR's pages,
+  // so a combined doc keeps each PR's own footer).
   const pageCount = doc.getNumberOfPages();
-  for (let p = 1; p <= pageCount; p += 1) {
+  for (let p = startPage; p <= pageCount; p += 1) {
     doc.setPage(p);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
     doc.text(header.return_number, margin, 290);
@@ -134,6 +141,36 @@ export async function generatePurchaseReturnPdf(
     doc.text(`Page ${p} of ${pageCount}`, pageW - margin, 290, { align: 'right' });
     doc.setTextColor(0);
   }
+}
 
+/* Single PR → its own file (unchanged behaviour). Reused by
+   PurchaseConsignmentReturnDetail with opts (docTitle / docNoLabel /
+   amountLabel / totalLabel) — kept plumbed through. */
+export async function generatePurchaseReturnPdf(
+  header: PrHeader,
+  items: PrItem[],
+  opts?: { docTitle?: string; docNoLabel?: string; amountLabel?: string; totalLabel?: string },
+): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  await renderPurchaseReturnInto(doc, autoTable, header, items, opts);
   doc.save(`${header.return_number}-${safeName(header.supplier?.name ?? 'supplier')}.pdf`);
+}
+
+/* Several PRs → ONE combined file, each PR starting on a new page. For the batch
+   "Export PDF" action on the Purchase Returns list (send a supplier all their
+   credit-note returns in one attachment). */
+export async function generateCombinedPurchaseReturnPdf(
+  docs: Array<{ header: PrHeader; items: PrItem[] }>,
+  opts?: { fileName?: string; docTitle?: string; docNoLabel?: string; amountLabel?: string; totalLabel?: string },
+): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  for (let i = 0; i < docs.length; i += 1) {
+    if (i > 0) doc.addPage();
+    await renderPurchaseReturnInto(doc, autoTable, docs[i]!.header, docs[i]!.items, opts);
+  }
+  doc.save(opts?.fileName ?? 'purchase-returns.pdf');
 }

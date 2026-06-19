@@ -13,10 +13,11 @@
 import { useMemo, useState } from 'react';
 import type { JSX } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Plus, ArrowRightLeft } from 'lucide-react';
+import { Plus, ArrowRightLeft, Printer } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useChoice } from '../components/ChoiceDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
@@ -298,9 +299,15 @@ const STORAGE_KEY = 'pr-g.si-list.layout.v1';
 export const SalesInvoicesList = () => {
   const navigate = useNavigate();
   const askConfirm = useConfirm();
+  const askChoice = useChoice();
   const notify = useNotify();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
+
+  /* Multi-select + batch "Export PDF" — the operator filters/searches, ticks
+     rows, then downloads them as one combined file or separate per-invoice files. */
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [exporting, setExporting] = useState(false);
 
   const { data, isLoading, error } = useSalesInvoices(undefined);
   const allRows = useMemo<SiRow[]>(() => (data?.salesInvoices ?? []) as SiRow[], [data]);
@@ -349,18 +356,65 @@ export const SalesInvoicesList = () => {
   const openDetail = (row: SiRow, edit = false) =>
     navigate(`/sales-invoices/${row.id}${edit ? '?edit=1' : ''}`);
 
+  /* Fetch ONE invoice's full detail (header + lines) for the PDF generator.
+     Shared by the single-row Preview/Print and the batch Export PDF. */
+  const fetchSiBundle = async (row: SiRow): Promise<{ header: unknown; items: unknown[] }> => {
+    const { data: session } = await supabase.auth.getSession();
+    const token = session.session?.access_token ?? '';
+    const res = await fetch(`${import.meta.env.VITE_API_URL}/sales-invoices/${row.id}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Failed to load invoice ${row.invoice_number}`);
+    const json = (await res.json()) as { salesInvoice: unknown; items: unknown[] };
+    return { header: json.salesInvoice, items: json.items };
+  };
+
   const renderPdf = (row: SiRow) => {
     void (async () => {
-      const { data: session } = await supabase.auth.getSession();
-      const token = session.session?.access_token ?? '';
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/sales-invoices/${row.id}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) { notify({ title: `Failed to load invoice ${row.invoice_number}`, tone: 'error' }); return; }
-      const json = (await res.json()) as { salesInvoice: unknown; items: unknown[] };
+      const bundle = await fetchSiBundle(row);
       const { generateSalesInvoicePdf } = await import('../lib/sales-invoice-pdf');
-      await generateSalesInvoicePdf(json.salesInvoice as never, json.items as never);
+      await generateSalesInvoicePdf(bundle.header as never, bundle.items as never);
     })().catch((e) => notify({ title: 'PDF failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }));
+  };
+
+  /* Batch "Export PDF" — one combined file (each invoice a page) or N separate
+     files. >1 row asks how; a single row goes straight to its own file. */
+  const exportSelected = async () => {
+    const rows = baseRows.filter((r) => sel.has(r.id));
+    if (rows.length === 0 || exporting) return;
+    try {
+      if (rows.length === 1) {
+        const bundle = await fetchSiBundle(rows[0]!);
+        const { generateSalesInvoicePdf } = await import('../lib/sales-invoice-pdf');
+        await generateSalesInvoicePdf(bundle.header as never, bundle.items as never);
+        return;
+      }
+      const how = await askChoice({
+        title: `Download ${rows.length} documents`,
+        options: [
+          { value: 'one', label: 'One combined PDF' },
+          { value: 'many', label: 'Separate files', detail: 'One PDF per document' },
+        ],
+      });
+      if (how == null) return;
+      setExporting(true);
+      const bundles: Array<{ header: unknown; items: unknown[] }> = [];
+      for (const row of rows) bundles.push(await fetchSiBundle(row));
+      if (how === 'one') {
+        const { generateCombinedSalesInvoicePdf } = await import('../lib/sales-invoice-pdf');
+        await generateCombinedSalesInvoicePdf(
+          bundles as never,
+          { fileName: `sales-invoices-${new Date().toISOString().slice(0, 10)}.pdf` },
+        );
+      } else {
+        const { generateSalesInvoicePdf } = await import('../lib/sales-invoice-pdf');
+        for (const b of bundles) await generateSalesInvoicePdf(b.header as never, b.items as never);
+      }
+    } catch (e) {
+      notify({ title: 'PDF generation failed', body: e instanceof Error ? e.message : String(e), tone: 'error' });
+    } finally {
+      setExporting(false);
+    }
   };
 
   const doCancel = async (row: SiRow) => {
@@ -430,12 +484,46 @@ export const SalesInvoicesList = () => {
         ))}
       </div>
 
+      {/* Batch action bar — shown only when rows are ticked. */}
+      {sel.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          background: 'rgba(232,107,58,0.08)', border: '1px solid var(--c-orange)',
+          borderRadius: 'var(--radius-md)', padding: 'var(--space-3) var(--space-4)', gap: 'var(--space-3)',
+        }}>
+          <span style={{ fontWeight: 600, color: 'var(--c-burnt)' }}>{sel.size} selected</span>
+          <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+            <Button variant="ghost" size="sm" onClick={() => setSel(new Set())}>
+              <span>Clear</span>
+            </Button>
+            <Button variant="ghost" size="sm" disabled={exporting} onClick={() => void exportSelected()}>
+              <Printer size={14} strokeWidth={1.75} />
+              <span>{exporting ? 'Preparing…' : `Export PDF (${sel.size})`}</span>
+            </Button>
+          </div>
+        </div>
+      )}
+
       <DataGrid<SiRow>
         rows={baseRows}
         onFilteredRowsChange={setVisibleRows}
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
         rowKey={(r) => r.id}
+        selectable={{
+          selectedKeys: sel,
+          onToggle: (k) => setSel((p) => {
+            const n = new Set(p);
+            if (n.has(k)) n.delete(k); else n.add(k);
+            return n;
+          }),
+          onToggleAll: (keys, allSel) => setSel((p) => {
+            const n = new Set(p);
+            if (allSel) { for (const k of keys) n.delete(k); }
+            else { for (const k of keys) n.add(k); }
+            return n;
+          }),
+        }}
         searchPlaceholder="Search invoices…"
         groupBanner={false}
         onRowDoubleClick={(r) => openDetail(r)}

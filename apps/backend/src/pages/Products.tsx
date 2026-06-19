@@ -532,31 +532,7 @@ const SkuMasterTab = () => {
      Category chips / search / Export / Import / bulk actions above are
      untouched and drive both views. */
   const gridColumns = useMemo<DataGridColumn<MfgProductRow>[]>(() => {
-    const stop = {
-      onClick: (e: React.MouseEvent) => e.stopPropagation(),
-      onDoubleClick: (e: React.MouseEvent) => e.stopPropagation(),
-    };
     const cols: DataGridColumn<MfgProductRow>[] = [
-      {
-        key: 'sel',
-        label: '',
-        width: 36,
-        minWidth: 36,
-        sortable: false,
-        groupable: false,
-        accessor: (r) => (
-          <span {...stop} style={{ display: 'inline-flex' }}>
-            <input
-              type="checkbox"
-              aria-label={`Select ${r.code}`}
-              checked={selectedIds.has(r.id)}
-              onChange={() => toggleRow(r.id)}
-              style={{ cursor: 'pointer' }}
-            />
-          </span>
-        ),
-        searchValue: () => '',
-      },
       {
         key: 'code',
         label: 'Product Code',
@@ -747,7 +723,7 @@ const SkuMasterTab = () => {
       },
     );
     return cols;
-  }, [isSofaView, isMattressView, sofaSizes, tier, selectedIds, toggleRow]);
+  }, [isSofaView, isMattressView, sofaSizes, tier]);
 
   const gridStorageKey = `dg-products-sku-${isSofaView ? 'sofa' : isMattressView ? 'mattress' : 'default'}`;
 
@@ -914,24 +890,15 @@ const SkuMasterTab = () => {
           groupBanner={false}
           isLoading={isLoading}
           emptyMessage="No products yet. Run the seed import if you just migrated the schema."
-          toolbar={
-            <label
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', cursor: 'pointer',
-              }}
-            >
-              <input
-                type="checkbox"
-                aria-label="Select all visible SKUs"
-                checked={allSelected}
-                ref={(el) => { if (el) el.indeterminate = someSelected; }}
-                onChange={toggleAllVisible}
-                style={{ cursor: 'pointer' }}
-              />
-              <span>Select all</span>
-            </label>
-          }
+          selectable={{
+            selectedKeys: selectedIds,
+            onToggle: toggleRow,
+            onToggleAll: (keys, allSel) => setSelectedIds((prev) => {
+              const n = new Set(prev);
+              if (allSel) { for (const k of keys) n.delete(k); } else { for (const k of keys) n.add(k); }
+              return n;
+            }),
+          }}
         />
       )}
 

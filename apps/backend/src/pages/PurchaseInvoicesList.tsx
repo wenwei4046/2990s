@@ -9,16 +9,18 @@
 // routes to /grns). A manual New Invoice page exists at /purchase-invoices/new.
 // ----------------------------------------------------------------------------
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Plus, FileText, ArrowRightLeft } from 'lucide-react';
+import { Plus, FileText, ArrowRightLeft, Printer } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { usePurchaseInvoices, useCancelPurchaseInvoice, usePurchaseInvoiceDetail } from '../lib/flow-queries';
+import { authedFetch } from '../lib/authed-fetch';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { StatusPill } from '../components/StatusPill';
 import { statusLabel } from '../lib/status-pill';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
+import { useChoice } from '../components/ChoiceDialog';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
@@ -207,10 +209,22 @@ const ExpandedPiLines = ({ pi }: { pi: PiRow }) => {
   );
 };
 
+/* Imperative fetch of one PI's full detail (header + items) for PDF export —
+   mirrors usePurchaseInvoiceDetail's queryFn (GET /purchase-invoices/:id →
+   { purchaseInvoice, items }). The generator needs header.supplier (nested) +
+   header.supplier_id, both present on the full PI header the endpoint returns. */
+async function fetchPiBundle(id: string): Promise<{ header: Record<string, unknown>; items: unknown[] }> {
+  const res = await authedFetch<{ purchaseInvoice: Record<string, unknown>; items: unknown[] }>(`/purchase-invoices/${id}`);
+  return { header: res.purchaseInvoice, items: res.items ?? [] };
+}
+
 export const PurchaseInvoices = () => {
   const navigate = useNavigate();
   const askConfirm = useConfirm();
   const notify = useNotify();
+  const askChoice = useChoice();
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [exporting, setExporting] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
   const setStatusChip = (s: string) => {
@@ -228,6 +242,56 @@ export const PurchaseInvoices = () => {
     [allRows, statusChip],
   );
   const columns = useMemo(() => buildPiColumns(), []);
+
+  // Batch "Export PDF" — fetch each selected PI's full detail and hand the
+  // (header, items) bundle to the shared PURCHASE INVOICE generator. One
+  // selected row downloads its own file; many rows ask combined vs separate.
+  const exportSelected = async () => {
+    const selectedRows = rows.filter((r) => sel.has(r.id));
+    if (selectedRows.length === 0 || exporting) return;
+
+    if (selectedRows.length === 1) {
+      setExporting(true);
+      try {
+        const bundle = await fetchPiBundle(selectedRows[0]!.id);
+        const { generatePurchaseInvoicePdf } = await import('../lib/purchase-invoice-pdf');
+        await generatePurchaseInvoicePdf(bundle.header as never, bundle.items as never);
+      } catch (e) {
+        notify({ title: 'Export failed', body: `${e instanceof Error ? e.message : String(e)}`, tone: 'error' });
+      } finally {
+        setExporting(false);
+      }
+      return;
+    }
+
+    const how = await askChoice({
+      title: `Download ${selectedRows.length} documents`,
+      options: [
+        { value: 'one',  label: 'One combined PDF' },
+        { value: 'many', label: 'Separate files', detail: 'One PDF per document' },
+      ],
+    });
+    if (how == null) return;
+
+    setExporting(true);
+    try {
+      const bundles = [];
+      for (const r of selectedRows) bundles.push(await fetchPiBundle(r.id));
+      if (how === 'one') {
+        const { generateCombinedPurchaseInvoicePdf } = await import('../lib/purchase-invoice-pdf');
+        await generateCombinedPurchaseInvoicePdf(bundles as never, {
+          fileName: `purchase-invoices-${new Date().toISOString().slice(0, 10)}.pdf`,
+        });
+      } else {
+        const { generatePurchaseInvoicePdf } = await import('../lib/purchase-invoice-pdf');
+        for (const b of bundles) await generatePurchaseInvoicePdf(b.header as never, b.items as never);
+      }
+    } catch (e) {
+      notify({ title: 'Export failed', body: `${e instanceof Error ? e.message : String(e)}`, tone: 'error' });
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // Cancel a PI (right-click) — flips status → CANCELLED (PI is AP-only, no
   // inventory). Confirm first; the endpoint blocks a PAID invoice.
@@ -285,11 +349,42 @@ export const PurchaseInvoices = () => {
         ))}
       </div>
 
+      {/* Batch-export banner — shown only with a selection. Mirrors the PO
+          list's selected-row banner (orange-tint, burnt label + ghost actions). */}
+      {sel.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 'var(--space-3)', padding: 'var(--space-3) var(--space-4)',
+          border: '1px solid var(--c-orange)', borderRadius: 'var(--radius-md)',
+          background: 'rgba(232, 107, 58, 0.08)',
+        }}>
+          <span style={{ fontWeight: 600, color: 'var(--c-burnt)' }}>{sel.size} selected</span>
+          <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+            <Button variant="ghost" size="sm" onClick={() => setSel(new Set())}>
+              <span>Clear</span>
+            </Button>
+            <Button variant="ghost" size="sm" disabled={exporting} onClick={() => void exportSelected()}>
+              <Printer size={14} strokeWidth={1.75} />
+              <span>{exporting ? 'Preparing…' : `Export PDF (${sel.size})`}</span>
+            </Button>
+          </div>
+        </div>
+      )}
+
       <DataGrid<PiRow>
         rows={rows}
         columns={columns}
         storageKey={PI_LIST_STORAGE_KEY}
         rowKey={(r) => r.id}
+        selectable={{
+          selectedKeys: sel,
+          onToggle: (k) => setSel((p) => { const n = new Set(p); if (n.has(k)) n.delete(k); else n.add(k); return n; }),
+          onToggleAll: (keys, allSel) => setSel((p) => {
+            const n = new Set(p);
+            if (allSel) { for (const k of keys) n.delete(k); } else { for (const k of keys) n.add(k); }
+            return n;
+          }),
+        }}
         searchPlaceholder="Search invoices…"
         groupBanner={false}
         /* Open on DOUBLE-click; right-click → context menu (mirrors the GRN/PR list). */

@@ -5,6 +5,11 @@
 // label-gutter + RETURN DETAILS colon-aligned), and the consistent footer (doc
 // no · portal · page n of m) on every page. A4 portrait, pure B&W. No field
 // dropped.
+//
+// 2026-06-19 — split into renderDeliveryReturnInto (draws ONE return into a
+// shared doc) + generateDeliveryReturnPdf (single file, unchanged output) +
+// generateCombinedDeliveryReturnPdf (several returns → ONE file, each on its
+// own page) for the batch "Export PDF" action on the Delivery Returns list.
 import { COMPANY, drawHeader, drawInfoColumns, drawSignatureBoxes, fmtRm, safeName, fmtDocDate } from './pdf-common';
 import { docVariantLine, loadCustomerFabricMaps } from './supplier-doc-data';
 
@@ -22,14 +27,22 @@ type DrItem = {
   variants?: Record<string, unknown> | null;
 };
 
-export async function generateDeliveryReturnPdf(
+type DrOpts = { docTitle?: string; docNoLabel?: string; amountLabel?: string; totalLabel?: string };
+
+/* Draw ONE delivery return's content into `doc` (letterhead → info → table →
+   total → signature → footer). Reused by ConsignmentReturnDetail via opts
+   (docTitle / docNoLabel / amountLabel / totalLabel). The footer numbers only
+   the pages THIS return added (startPage…pageCount) so several returns can
+   share one doc without renumbering earlier ones. */
+export async function renderDeliveryReturnInto(
+  doc: import('jspdf').jsPDF,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  autoTable: any,
   header: DrHeader,
   items: DrItem[],
-  opts?: { docTitle?: string; docNoLabel?: string; amountLabel?: string; totalLabel?: string },
+  opts?: DrOpts,
 ): Promise<void> {
-  const { jsPDF } = await import('jspdf');
-  const autoTable = (await import('jspdf-autotable')).default;
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const startPage = doc.getNumberOfPages();
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 14;
 
@@ -103,9 +116,9 @@ export async function generateDeliveryReturnPdf(
   doc.text('Note: By signing above, both parties confirm the return of the items listed above.', margin, ty);
   doc.setTextColor(0);
 
-  // Footer: doc no · portal · page n of m on every page
+  // Footer: doc no · portal · page n of m — only on the pages THIS return added.
   const pageCount = doc.getNumberOfPages();
-  for (let p = 1; p <= pageCount; p += 1) {
+  for (let p = startPage; p <= pageCount; p += 1) {
     doc.setPage(p);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
     doc.text(header.return_number, margin, 290);
@@ -113,6 +126,33 @@ export async function generateDeliveryReturnPdf(
     doc.text(`Page ${p} of ${pageCount}`, pageW - margin, 290, { align: 'right' });
     doc.setTextColor(0);
   }
+}
 
+/* Single delivery return → its own file (unchanged behaviour). */
+export async function generateDeliveryReturnPdf(
+  header: DrHeader,
+  items: DrItem[],
+  opts?: DrOpts,
+): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  await renderDeliveryReturnInto(doc, autoTable, header, items, opts);
   doc.save(`${header.return_number}-${safeName(header.debtor_name)}.pdf`);
+}
+
+/* Several delivery returns → ONE combined file, each return starting on a new
+   page. For the batch "Export PDF" action on the Delivery Returns list. */
+export async function generateCombinedDeliveryReturnPdf(
+  docs: Array<{ header: DrHeader; items: DrItem[] }>,
+  opts?: { fileName?: string; docTitle?: string; docNoLabel?: string; amountLabel?: string; totalLabel?: string },
+): Promise<void> {
+  const { jsPDF } = await import('jspdf');
+  const autoTable = (await import('jspdf-autotable')).default;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  for (let i = 0; i < docs.length; i += 1) {
+    if (i > 0) doc.addPage();
+    await renderDeliveryReturnInto(doc, autoTable, docs[i]!.header, docs[i]!.items, opts);
+  }
+  doc.save(opts?.fileName ?? 'delivery-returns.pdf');
 }
