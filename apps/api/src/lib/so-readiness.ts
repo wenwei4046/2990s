@@ -110,8 +110,15 @@ export function summariseReadiness(lines: ReadinessLine[]): ReadinessSummary {
     stockRemark = '';
   } else if (isFullyReady) {
     stockRemark = 'READY';
-  } else if (isMainReady) {
-    /* All MAIN done, only ACC still outstanding — operator can still ship. */
+  } else if (isMainReady && mainCount > 0) {
+    /* All MAIN done, only ACC still outstanding — operator can still ship.
+       Gated on mainCount > 0: "PARTIAL" only makes sense when a MAIN product
+       is the ready half waiting on accessories. An accessory-ONLY scope
+       (mainCount === 0) has no main to be the "ready part" — readiness there
+       is binary (READY when every ACC is in stock — caught by isFullyReady
+       above — otherwise NOT ready), so it must never read "READY (PARTIAL)"
+       (Commander 2026-06-19). Such a scope falls through to the else branch,
+       which emits "ACC" only once every accessory is READY, else "". */
     stockRemark = 'READY (PARTIAL)';
   } else {
     /* Mix of ready / not-ready. List the cats that ARE fully ready — that's

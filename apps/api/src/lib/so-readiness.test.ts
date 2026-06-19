@@ -46,3 +46,41 @@ describe('summariseReadiness — SERVICE excluded from stock status', () => {
     expect(r.accCount).toBe(0);
   });
 });
+
+// Commander 2026-06-19: an ACCESSORY-ONLY scope is binary — READY (every acc
+// in stock) or NOT ready. It must never read "READY (PARTIAL)", because there
+// is no MAIN product to be the "ready half" waiting on accessories. The partial
+// branch is gated on mainCount > 0; an accessory-only scope (mainCount === 0)
+// falls through to the else branch instead.
+describe('summariseReadiness — accessory-only is binary, never "READY (PARTIAL)"', () => {
+  it('all accessories READY → plain READY', () => {
+    const r = summariseReadiness([
+      { item_group: 'accessory', item_code: 'PILLOW-01', stock_status: 'READY' },
+      { item_group: 'accessory', item_code: 'TOPPER-01', stock_status: 'READY' },
+    ]);
+    expect(r.stockRemark).toBe('READY');
+    expect(r.isFullyReady).toBe(true);
+    expect(r.mainCount).toBe(0);
+    expect(r.accCount).toBe(2);
+  });
+
+  it('some accessories PENDING → NOT ready ("" ), NEVER "READY (PARTIAL)"', () => {
+    const r = summariseReadiness([
+      { item_group: 'accessory', item_code: 'PILLOW-01', stock_status: 'READY' },
+      { item_group: 'accessory', item_code: 'TOPPER-01', stock_status: 'PENDING' },
+    ]);
+    expect(r.stockRemark).not.toBe('READY (PARTIAL)');
+    expect(r.stockRemark).toBe('');            // not deliverable yet, nothing partial
+    expect(r.isMainReady).toBe(true);          // no-main convention — but mainCount===0 gates partial
+    expect(r.isFullyReady).toBe(false);
+    expect(r.mainCount).toBe(0);
+  });
+
+  it('a single accessory PENDING → NOT ready, NEVER "READY (PARTIAL)"', () => {
+    const r = summariseReadiness([
+      { item_group: 'accessory', item_code: 'PILLOW-01', stock_status: 'PENDING' },
+    ]);
+    expect(r.stockRemark).not.toBe('READY (PARTIAL)');
+    expect(r.stockRemark).toBe('');
+  });
+});
