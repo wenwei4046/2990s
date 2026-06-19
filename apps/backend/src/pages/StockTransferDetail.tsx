@@ -15,6 +15,7 @@ import {
 import { Button } from '@2990s/design-system';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   useWarehouses,
@@ -55,6 +56,7 @@ export const StockTransferDetail = () => {
   const cancel = useCancelStockTransfer();
 
   const askConfirm = useConfirm();
+  const notify = useNotify();
 
   const warehouses = useWarehouses();
 
@@ -98,7 +100,7 @@ export const StockTransferDetail = () => {
     if (!proceed) return;
     cancel.mutate(id, {
       onSuccess: () => detail.refetch(),
-      onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
+      onError: (err) => notify({ title: 'Cancel failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
     });
   };
 

@@ -27,12 +27,14 @@ import {
   type FabricTier,
 } from '../lib/fabric-queries';
 import { FabricsTable } from '../components/FabricsTable';
+import { useNotify } from '../components/NotifyDialog';
 import { toCsv, parseCsv, triggerDownload, type ParsedImport } from '../lib/fabric-csv';
 import styles from './FabricTracking.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
 export const FabricTracking = () => {
+  const notify = useNotify();
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);
   const [importPreview, setImportPreview] = useState<ParsedImport | null>(null);
@@ -50,7 +52,7 @@ export const FabricTracking = () => {
   const exportFetch = useFabricTrackings({}).data;
   const onExport = () => {
     const all = (search.trim() ? exportFetch : rows) ?? rows;
-    if (all.length === 0) { alert('No fabrics to export.'); return; }
+    if (all.length === 0) { notify({ title: 'No fabrics to export.', tone: 'error' }); return; }
     const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     triggerDownload(`fabric-converter-${stamp}.csv`, toCsv(all));
   };
@@ -112,6 +114,7 @@ export const FabricTracking = () => {
 
 const NewFabricDialog = ({ onClose }: { onClose: () => void }) => {
   const create = useCreateFabric();
+  const notify = useNotify();
   const [form, setForm] = useState({
     fabricCode: '',
     fabricDescription: '',
@@ -127,7 +130,7 @@ const NewFabricDialog = ({ onClose }: { onClose: () => void }) => {
 
   const submit = () => {
     if (!form.fabricCode.trim()) {
-      alert('Fabric Code is required.');
+      notify({ title: 'Fabric Code is required.', tone: 'error' });
       return;
     }
     const colourList = form.colours.split(',').map((s) => s.trim()).filter(Boolean).map((label) => ({ label }));
@@ -142,13 +145,13 @@ const NewFabricDialog = ({ onClose }: { onClose: () => void }) => {
       label: form.fabricDescription.trim() || form.fabricCode.trim(),
       colours: colourList,
     }, {
-      onSuccess: (res) => {
+      onSuccess: async (res) => {
         if (res.libraryWarning) {
-          alert(`Fabric saved, but the customer-pickable entry had an issue:\n${res.libraryWarning}`);
+          await notify({ title: 'Fabric saved, but the customer-pickable entry had an issue:', body: `${res.libraryWarning}` });
         }
         onClose();
       },
-      onError: (e) => alert(`Create failed: ${e instanceof Error ? e.message : String(e)}`),
+      onError: (e) => notify({ title: 'Create failed', body: `${e instanceof Error ? e.message : String(e)}`, tone: 'error' }),
     });
   };
 
@@ -256,17 +259,18 @@ const ImportPreviewDialog = ({
   onClose: () => void;
 }) => {
   const upsert = useBulkUpsertFabrics();
+  const notify = useNotify();
   const { rows, errors, warnings } = preview;
   const canCommit = rows.length > 0;
 
   const commit = () => {
     upsert.mutate(rows, {
-      onSuccess: (res) => {
+      onSuccess: async (res) => {
         const trailing = res.errors.length ? ` (${res.errors.length} row${res.errors.length === 1 ? '' : 's'} rejected server-side)` : '';
-        alert(`Imported ${res.upserted} fabric${res.upserted === 1 ? '' : 's'}.${trailing}`);
+        await notify({ title: `Imported ${res.upserted} fabric${res.upserted === 1 ? '' : 's'}.${trailing}` });
         onClose();
       },
-      onError: (e) => alert(`Import failed: ${e instanceof Error ? e.message : String(e)}`),
+      onError: (e) => notify({ title: 'Import failed', body: `${e instanceof Error ? e.message : String(e)}`, tone: 'error' }),
     });
   };
 

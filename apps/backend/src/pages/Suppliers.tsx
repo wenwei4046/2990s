@@ -32,6 +32,7 @@ import {
   useSupplierCategoryPool,
 } from '../components/SupplyCategoryPicker';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useNotify } from '../components/NotifyDialog';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -357,6 +358,7 @@ const BatchEditModal = ({
   onDone: () => void;
 }) => {
   const update = useUpdateSupplier();
+  const notify = useNotify();
   const [field, setField] = useState<BatchField>('payment_terms');
   const [paymentTerms, setPaymentTerms] = useState('');
   const [statusValue, setStatusValue] = useState<SupplierStatus>('ACTIVE');
@@ -379,7 +381,7 @@ const BatchEditModal = ({
       }
     }
     setApplying(false);
-    window.alert(`Updated ${ok} suppliers (${fail} failed)`);
+    await notify({ title: `Updated ${ok} suppliers (${fail} failed)` });
     onDone();
   };
 
@@ -491,6 +493,7 @@ const SupplierCreateDrawer = ({ onClose }: { onClose: () => void }) => (
 
 const CreateForm = ({ onClose }: { onClose: () => void }) => {
   const create = useCreateSupplier();
+  const notify = useNotify();
   const [form, setForm] = useState<Record<string, string | number>>({
     code: '',
     name: '',
@@ -522,7 +525,7 @@ const CreateForm = ({ onClose }: { onClose: () => void }) => {
     const code = String(form.code ?? '').trim();
     const name = String(form.name ?? '').trim();
     if (!code || !name) {
-      alert('Code and Name are required.');
+      notify({ title: 'Code and Name are required.', tone: 'error' });
       return;
     }
     create.mutate({

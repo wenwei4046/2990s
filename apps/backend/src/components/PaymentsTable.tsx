@@ -31,6 +31,7 @@ import type { SlipUrlResponse } from '@2990s/shared/schemas';
 import { fetchPaymentSlipUrl } from '../lib/slip';
 import { SlipUploadField } from './SlipUploadField';
 import { MoneyInput } from './MoneyInput';
+import { useNotify } from './NotifyDialog';
 import { todayMyt } from '../lib/dates';
 import {
   PAYMENT_METHOD_CODE_TO_VALUE,
@@ -280,6 +281,7 @@ const PaymentSlipThumb = ({ docNo, payment, orderSlipUrl, orderSlipType }: {
    ════════════════════════════════════════════════════════════════════════ */
 
 const PaymentsTableInner = (props: PaymentsTableProps) => {
+  const notify = useNotify();
   const currency = props.currency ?? 'MYR';
   const grandTotal = props.grandTotalCenti ?? 0;
   const locked = props.locked ?? false;
@@ -407,7 +409,7 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
       onError: (e) => {
         // eslint-disable-next-line no-console
         console.error('[payment] add failed:', e);
-        window.alert(`Failed to save payment: ${e instanceof Error ? e.message : String(e)}`);
+        notify({ title: 'Failed to save payment', body: e instanceof Error ? e.message : String(e), tone: 'error' });
       },
     });
   };

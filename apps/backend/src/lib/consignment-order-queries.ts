@@ -15,6 +15,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
+import { serviceNotify } from './dialog-service';
 import { authedFetch, humanApiError } from './authed-fetch';
 
 const API_URL = import.meta.env.VITE_API_URL;
@@ -76,7 +77,7 @@ export const useUpdateConsignmentOrderStatus = () => {
       qc.invalidateQueries({ queryKey: ['consignment-order-detail', vars.docNo] });
     },
     onError: (err) => {
-      window.alert(`Status update failed: ${err instanceof Error ? err.message : String(err)}`);
+      serviceNotify({ title: 'Status update failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
     },
   });
 };

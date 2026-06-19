@@ -25,6 +25,7 @@ import {
 } from '../lib/suppliers-queries';
 import { useMfgDeliveryOrders } from '../lib/flow-queries';
 import { MoneyInput } from '../components/MoneyInput';
+import { useNotify } from '../components/NotifyDialog';
 import sup from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -90,6 +91,7 @@ const DrawerShell = ({
    ══════════════════════════════════════════════════════════════════════ */
 
 export const CreateGrnDrawer = ({ onClose }: { onClose: () => void }) => {
+  const notify = useNotify();
   const pos = usePurchaseOrders({ status: 'SUBMITTED' });
   const [poId, setPoId] = useState<string | null>(null);
   const poDetail = usePurchaseOrderDetail(poId);
@@ -105,7 +107,7 @@ export const CreateGrnDrawer = ({ onClose }: { onClose: () => void }) => {
   );
 
   const submit = () => {
-    if (!poId) return alert('Pick a PO');
+    if (!poId) { notify({ title: 'Pick a PO', tone: 'error' }); return; }
     const itemsBody = lineItems
       .filter((r) => r.qty > 0)
       .map((r) => ({
@@ -117,7 +119,7 @@ export const CreateGrnDrawer = ({ onClose }: { onClose: () => void }) => {
         qtyAccepted: r.qty,
         unitPriceCenti: r.poi.unit_price_centi,
       }));
-    if (!itemsBody.length) return alert('Enter qty for at least one item.');
+    if (!itemsBody.length) { notify({ title: 'Enter qty for at least one item.', tone: 'error' }); return; }
     const po = poDetail.data?.purchaseOrder;
     if (!po) return;
     create.mutate(
@@ -128,7 +130,7 @@ export const CreateGrnDrawer = ({ onClose }: { onClose: () => void }) => {
         notes: notes || undefined,
         items: itemsBody,
       },
-      { onSuccess: (res: any) => { alert(`GRN created: ${res.grnNumber}`); onClose(); } },
+      { onSuccess: async (res: any) => { await notify({ title: `GRN created: ${res.grnNumber}` }); onClose(); } },
     );
   };
 
@@ -210,6 +212,7 @@ export const CreateGrnDrawer = ({ onClose }: { onClose: () => void }) => {
    ══════════════════════════════════════════════════════════════════════ */
 
 export const CreatePurchaseInvoiceDrawer = ({ onClose }: { onClose: () => void }) => {
+  const notify = useNotify();
   const suppliers = useSuppliers({ status: 'ACTIVE' });
   const [supplierId, setSupplierId] = useState<string | null>(null);
   const [supplierInvoiceRef, setSupplierInvoiceRef] = useState('');
@@ -227,9 +230,9 @@ export const CreatePurchaseInvoiceDrawer = ({ onClose }: { onClose: () => void }
     setItems(items.map((it, j) => (j === i ? { ...it, [k]: v } : it)));
 
   const submit = () => {
-    if (!supplierId) return alert('Pick supplier.');
+    if (!supplierId) { notify({ title: 'Pick supplier.', tone: 'error' }); return; }
     const valid = items.filter((it) => it.materialCode && it.materialName && it.qty > 0);
-    if (!valid.length) return alert('Add at least one item with code + name + qty.');
+    if (!valid.length) { notify({ title: 'Add at least one item with code + name + qty.', tone: 'error' }); return; }
     create.mutate(
       {
         supplierId,
@@ -239,7 +242,7 @@ export const CreatePurchaseInvoiceDrawer = ({ onClose }: { onClose: () => void }
         notes: notes || undefined,
         items: valid.map((it) => ({ ...it, materialKind: 'mfg_product' })),
       },
-      { onSuccess: (res: any) => { alert(`Invoice created: ${res.invoiceNumber}`); onClose(); } },
+      { onSuccess: async (res: any) => { await notify({ title: `Invoice created: ${res.invoiceNumber}` }); onClose(); } },
     );
   };
 
@@ -303,6 +306,7 @@ const SO_GROUPS = ['bedframe', 'sofa', 'mattress', 'accessory', 'others'] as con
 const SO_BRANDINGS = ['AKEMI', 'ZANOTTI', 'ERGOTEX', 'DUNLOPILLO', 'OTHER'] as const;
 
 export const CreateSalesOrderDrawer = ({ onClose }: { onClose: () => void }) => {
+  const notify = useNotify();
   const [form, setForm] = useState({
     debtorCode: '', debtorName: '', agent: '', branding: '',
     venue: '', poDocNo: '', ref: '',
@@ -326,12 +330,12 @@ export const CreateSalesOrderDrawer = ({ onClose }: { onClose: () => void }) => 
   const subtotal = items.reduce((s, i) => s + (i.qty * i.unitPriceCenti - i.discountCenti), 0);
 
   const submit = () => {
-    if (!form.debtorName.trim()) return alert('Debtor name required.');
+    if (!form.debtorName.trim()) { notify({ title: 'Debtor name required.', tone: 'error' }); return; }
     const valid = items.filter((it) => it.itemCode && it.qty > 0);
-    if (!valid.length) return alert('Add at least one item with code + qty.');
+    if (!valid.length) { notify({ title: 'Add at least one item with code + qty.', tone: 'error' }); return; }
     create.mutate(
       { ...form, items: valid },
-      { onSuccess: (res: any) => { alert(`SO created: ${res.docNo}`); onClose(); } },
+      { onSuccess: async (res: any) => { await notify({ title: `SO created: ${res.docNo}` }); onClose(); } },
     );
   };
 
@@ -435,6 +439,7 @@ export const CreateSalesOrderDrawer = ({ onClose }: { onClose: () => void }) => 
    ══════════════════════════════════════════════════════════════════════ */
 
 export const CreateSalesInvoiceDrawer = ({ onClose }: { onClose: () => void }) => {
+  const notify = useNotify();
   const dos = useMfgDeliveryOrders('DELIVERED');
   const dos2 = useMfgDeliveryOrders('SIGNED');
   const allDos = [...(dos.data?.deliveryOrders ?? []), ...(dos2.data?.deliveryOrders ?? [])];
@@ -468,9 +473,9 @@ export const CreateSalesInvoiceDrawer = ({ onClose }: { onClose: () => void }) =
   const subtotal = items.reduce((s, i) => s + (i.qty * i.unitPriceCenti - i.discountCenti + i.taxCenti), 0);
 
   const submit = () => {
-    if (!form.debtorName.trim()) return alert('Debtor name required.');
+    if (!form.debtorName.trim()) { notify({ title: 'Debtor name required.', tone: 'error' }); return; }
     const valid = items.filter((it) => it.itemCode && it.qty > 0);
-    if (!valid.length) return alert('Add at least one item.');
+    if (!valid.length) { notify({ title: 'Add at least one item.', tone: 'error' }); return; }
     create.mutate(
       {
         ...form,
@@ -479,7 +484,7 @@ export const CreateSalesInvoiceDrawer = ({ onClose }: { onClose: () => void }) =
         dueDate: form.dueDate || undefined,
         items: valid,
       },
-      { onSuccess: (res: any) => { alert(`Invoice: ${res.invoiceNumber}`); onClose(); } },
+      { onSuccess: async (res: any) => { await notify({ title: `Invoice: ${res.invoiceNumber}` }); onClose(); } },
     );
   };
 

@@ -14,6 +14,7 @@ import {
   type DriverRow,
 } from '../lib/drivers-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useNotify } from '../components/NotifyDialog';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -126,15 +127,16 @@ export const Drivers = () => {
 
 const CreateDriverDrawer = ({ onClose }: { onClose: () => void }) => {
   const create = useCreateDriver();
+  const notify = useNotify();
   const [form, setForm] = useState({
     driverCode: '', name: '', phone: '', icNumber: '', vehicle: '',
   });
   const set = <K extends keyof typeof form>(k: K, v: string) => setForm((s) => ({ ...s, [k]: v }));
 
   const submit = () => {
-    if (!form.driverCode.trim()) { alert('Code required.'); return; }
-    if (!form.name.trim()) { alert('Name required.'); return; }
-    if (!form.phone.trim()) { alert('Phone required.'); return; }
+    if (!form.driverCode.trim()) { notify({ title: 'Code required.', tone: 'error' }); return; }
+    if (!form.name.trim()) { notify({ title: 'Name required.', tone: 'error' }); return; }
+    if (!form.phone.trim()) { notify({ title: 'Phone required.', tone: 'error' }); return; }
     create.mutate({
       driverCode: form.driverCode.trim(),
       name: form.name.trim(),

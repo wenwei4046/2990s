@@ -34,6 +34,7 @@ import { poStatusLabel } from '../lib/po-status';
 import { ItemGroupPill } from '../lib/category-badges';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { StatusPill } from '../components/StatusPill';
 import styles from './Suppliers.module.css';
 
@@ -142,6 +143,7 @@ export const PurchaseConsignmentOrders = () => {
   const navigate = useNavigate();
   const cancelPo = useCancelPurchaseConsignmentOrder();
   const askConfirm = useConfirm();
+  const notify = useNotify();
 
   const { data, isLoading, error } = usePurchaseConsignmentOrders();
   const rows = useMemo(() => {
@@ -160,7 +162,7 @@ export const PurchaseConsignmentOrders = () => {
       danger: true,
     }))) return;
     cancelPo.mutate(po.id, {
-      onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
+      onError: (e) => notify({ title: 'Cancel failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }),
     });
   };
 

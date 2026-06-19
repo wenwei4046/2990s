@@ -26,6 +26,7 @@ import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import {
   useMfgDeliveryOrderDetail,
   useUpdateMfgDeliveryOrderHeader,
@@ -214,6 +215,7 @@ const draftFromItem = (it: DoItem): SoLineDraft => ({
 export const DeliveryOrderDetail = () => {
   const { id } = useParams<{ id: string }>();
   const askConfirm = useConfirm();
+  const notify = useNotify();
   const [searchParams] = useSearchParams();
   const detail = useMfgDeliveryOrderDetail(id ?? null);
   const updateHeader = useUpdateMfgDeliveryOrderHeader();
@@ -497,7 +499,7 @@ export const DeliveryOrderDetail = () => {
   const handlePrint = () => {
     import('../lib/delivery-order-pdf')
       .then(({ generateDeliveryOrderPdf }) => generateDeliveryOrderPdf(header as never, items as never))
-      .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e) => notify({ title: 'PDF generation failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }));
   };
 
   const handleCancel = async () => {

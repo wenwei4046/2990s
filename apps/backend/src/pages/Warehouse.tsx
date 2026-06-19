@@ -22,6 +22,7 @@ import {
   Pencil, Check,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { useNotify } from '../components/NotifyDialog';
 import {
   useRacks,
   useRackMovements,
@@ -190,6 +191,7 @@ const KpiTile = ({ label, value, icon }: { label: string; value: number | string
    ════════════════════════════════════════════════════════════════════════ */
 const useRackRename = (rack: Rack) => {
   const updateRack = useUpdateRack();
+  const notify = useNotify();
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(rack.rack);
 
@@ -206,11 +208,12 @@ const useRackRename = (rack: Rack) => {
         onSuccess: () => setEditing(false),
         onError: (err) => {
           const msg = err instanceof Error ? err.message : String(err);
-          window.alert(
-            msg.includes('duplicate_rack')
+          notify({
+            title: msg.includes('duplicate_rack')
               ? `A rack named "${trimmed}" already exists in this warehouse.`
               : msg,
-          );
+            tone: 'error',
+          });
         },
       },
     );

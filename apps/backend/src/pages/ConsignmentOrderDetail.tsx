@@ -49,6 +49,7 @@ import {
 } from '../lib/consignment-order-queries';
 import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { useNotify } from '../components/NotifyDialog';
 import {
   useLocalities,
   distinctStates,
@@ -162,6 +163,7 @@ const draftFromItem = (it: ConsignmentItem): SoLineDraft => ({
 export const ConsignmentOrderDetail = () => {
   const { docNo } = useParams<{ docNo: string }>();
   const navigate = useNavigate();
+  const notify = useNotify();
   const detail = useConsignmentOrderDetail(docNo ?? null);
   const updateHeader = useUpdateConsignmentOrderHeader();
   const addItem = useAddConsignmentOrderItem();
@@ -220,7 +222,7 @@ export const ConsignmentOrderDetail = () => {
     setSaveError(null);
 
     if (!handle.getPhone().trim()) {
-      window.alert('Phone number is required — every consignment order must have a contact number.');
+      notify({ title: 'Phone number is required', body: 'Every consignment order must have a contact number.', tone: 'error' });
       return;
     }
     if (addingDraft && !addingDraft.itemCode.trim()) {
@@ -429,10 +431,12 @@ export const ConsignmentOrderDetail = () => {
         }
       }
       if (failed > 0) {
-        window.alert(
-          `Line added, but ${failed} staged photo${failed === 1 ? '' : 's'} ` +
-          `failed to upload. Please re-attach on the row.`,
-        );
+        notify({
+          title: 'Photo upload failed',
+          body: `Line added, but ${failed} staged photo${failed === 1 ? '' : 's'} ` +
+            `failed to upload. Please re-attach on the row.`,
+          tone: 'error',
+        });
       }
     }
   };
@@ -463,7 +467,7 @@ export const ConsignmentOrderDetail = () => {
         generateSalesOrderPdf(header as never, items as never, [], 'save', [], {
           docTitle: 'CONSIGNMENT ORDER', docNoLabel: 'CO No', docNoun: 'consignment order',
         }))
-      .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e) => notify({ title: 'PDF generation failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }));
   };
 
   return (
@@ -690,6 +694,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   isEditing = false,
   onDeliveryDateChange,
 }, ref) => {
+  const notify = useNotify();
   const localities = useLocalities();
   const localityRows = useMemo(() => localities.data ?? [], [localities.data]);
   const staffQ = useStaff();
@@ -854,7 +859,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     const err = validateDates();
     if (err) {
       if (cb?.onError) cb.onError(err);
-      else window.alert(err);
+      else notify({ title: 'Cannot save', body: err, tone: 'error' });
       return;
     }
     onSave(buildPayload(), cb);

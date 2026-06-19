@@ -24,6 +24,7 @@ import {
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import {
   ArrowLeft, FileText, Pencil, Plus, Printer, Save, Ban, RotateCcw, ChevronDown,
@@ -145,6 +146,7 @@ export const ConsignmentNoteDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const askConfirm = useConfirm();
+  const notify = useNotify();
   const [searchParams] = useSearchParams();
   const detail = useConsignmentNoteDetail(id ?? null);
   const updateHeader = useUpdateConsignmentNoteHeader();
@@ -319,7 +321,7 @@ export const ConsignmentNoteDetail = () => {
     import('../lib/delivery-order-pdf')
       .then(({ generateDeliveryOrderPdf }) =>
         generateDeliveryOrderPdf(header as never, items as never, { docTitle: 'CONSIGNMENT NOTE', docNoLabel: 'CN No' }))
-      .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e) => notify({ title: 'PDF generation failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }));
   };
 
   const handleCancel = async () => {

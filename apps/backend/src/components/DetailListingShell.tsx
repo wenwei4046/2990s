@@ -23,6 +23,7 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ClipboardList, Printer, Eye, Filter, X, SlidersHorizontal, FileSearch } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from './DataGrid';
+import { useNotify } from './NotifyDialog';
 import type { UseQueryResult } from '@tanstack/react-query';
 import type { DetailListingFilters, DetailListingRow } from '../lib/flow-queries';
 import styles from '../pages/SalesOrderDetailListing.module.css';
@@ -104,6 +105,7 @@ export function DetailListingShell<R extends DetailListingRow>({
   kpiLabels, hideKpis,
   useDetailQuery, buildColumns, computeKpis,
 }: DetailListingShellProps<R>) {
+  const notify = useNotify();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const outstandingOnly = searchParams.get('outstanding') === '1';
@@ -194,7 +196,7 @@ export function DetailListingShell<R extends DetailListingRow>({
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('PDF preview failed', e);
-      alert(`PDF preview failed: ${e instanceof Error ? e.message : String(e)}`);
+      notify({ title: `PDF preview failed: ${e instanceof Error ? e.message : String(e)}`, tone: 'error' });
     }
   };
 
@@ -341,11 +343,11 @@ export function DetailListingShell<R extends DetailListingRow>({
                 <span>Show Criteria In Report</span>
               </label>
               <div className={styles.optionsButtonRow}>
-                <Button variant="ghost" size="sm" onClick={() => alert('More Options — coming soon')}>
+                <Button variant="ghost" size="sm" onClick={() => notify({ title: 'More Options — coming soon' })}>
                   <SlidersHorizontal {...SM_ICON} />
                   <span>More Options</span>
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => alert('Advanced Filter — coming soon')}>
+                <Button variant="ghost" size="sm" onClick={() => notify({ title: 'Advanced Filter — coming soon' })}>
                   <Filter {...SM_ICON} />
                   <span>Advanced Filter</span>
                 </Button>

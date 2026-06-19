@@ -11,6 +11,7 @@
 // ---------------------------------------------------------------------------
 
 import { supabase } from './supabase';
+import { serviceConfirm } from './dialog-service';
 
 const API_URL = import.meta.env.VITE_API_URL;
 
@@ -41,7 +42,7 @@ async function handleSessionExpired(): Promise<void> {
 /* Edge #J — render the shortage detail out of a 409 short_stock body and ask
    the operator whether to ship anyway (stock goes negative). Returns true on
    confirm; replays the request with confirmShortStock:true. */
-function confirmShortStock(raw: string): boolean {
+async function confirmShortStock(raw: string): Promise<boolean> {
   try {
     const jsonStart = raw.indexOf('{');
     const body = JSON.parse(raw.slice(jsonStart)) as {
@@ -58,7 +59,12 @@ function confirmShortStock(raw: string): boolean {
       const altHint = alts ? `\n   Other warehouses: ${alts}` : '';
       return `• ${s.itemCode}\n   At ${s.warehouseName ?? 'this warehouse'}: need ${s.needed}, available ${s.available} (short ${s.short})${altHint}`;
     }).join('\n\n');
-    return window.confirm(`Stock not enough at the selected warehouse:\n\n${lines}\n\nShip anyway? (Stock will go negative.)`);
+    return await serviceConfirm({
+      title: 'Stock not enough at the selected warehouse',
+      body: `${lines}\n\nShip anyway? (Stock will go negative.)`,
+      confirmLabel: 'Ship anyway',
+      danger: true,
+    });
   } catch {
     return false;
   }
@@ -107,7 +113,7 @@ export async function authedFetch<T>(path: string, init?: RequestInit): Promise<
      with the flag merged in. */
   if (res.status === 409 && typeof init?.body === 'string') {
     const text = await res.clone().text();
-    if (text.includes('"short_stock"') && confirmShortStock(text)) {
+    if (text.includes('"short_stock"') && await confirmShortStock(text)) {
       const retryBody = JSON.stringify({ ...JSON.parse(init.body), confirmShortStock: true });
       res = await fetch(`${API_URL}${path}`, { ...init, headers, body: retryBody });
     }

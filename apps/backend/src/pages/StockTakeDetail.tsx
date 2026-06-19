@@ -17,6 +17,7 @@ import {
 import { Button } from '@2990s/design-system';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   useStockTakeDetail,
@@ -102,6 +103,7 @@ export const StockTakeDetail = () => {
   const del     = useDeleteStockTake();
 
   const askConfirm = useConfirm();
+  const notify = useNotify();
 
   const [lines,  setLines]  = useState<LineDraft[]>([]);
   const [search, setSearch] = useState<string>('');
@@ -194,14 +196,14 @@ export const StockTakeDetail = () => {
       },
       {
         onSuccess: () => { setDirty(false); detail.refetch(); },
-        onError:   (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError:   (err) => notify({ title: 'Save failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
       },
     );
   };
 
   const onPost = async () => {
     if (!id) return;
-    if (dirty) { window.alert('Save your counts before posting.'); return; }
+    if (dirty) { notify({ title: 'Save your counts before posting.', tone: 'error' }); return; }
     const summary =
       `Lines: ${totals.totalLines} (${totals.counted} counted, ${totals.uncounted} untouched)\n` +
       `Variance lines: ${totals.nonZeroVarianceLines}\n` +
@@ -216,14 +218,16 @@ export const StockTakeDetail = () => {
       onSuccess: (res) => {
         detail.refetch();
         if (res.movementErrors && res.movementErrors.length > 0) {
-          window.alert(
-            `Stock take posted, but adjustment write failed:\n\n${res.movementErrors.join('\n')}\n\nFix manually via Stock Adjustments.`,
-          );
+          notify({
+            title: 'Stock take posted, but adjustment write failed',
+            body: `${res.movementErrors.join('\n')}\n\nFix manually via Stock Adjustments.`,
+            tone: 'error',
+          });
         } else {
-          window.alert(`Posted. ${res.movementsWritten} adjustment movement${res.movementsWritten === 1 ? '' : 's'} written.`);
+          notify({ title: 'Posted', body: `${res.movementsWritten} adjustment movement${res.movementsWritten === 1 ? '' : 's'} written.` });
         }
       },
-      onError: (err) => window.alert(`Post failed: ${err instanceof Error ? err.message : String(err)}`),
+      onError: (err) => notify({ title: 'Post failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
     });
   };
 
@@ -237,7 +241,7 @@ export const StockTakeDetail = () => {
     }))) return;
     cancel.mutate(id, {
       onSuccess: () => detail.refetch(),
-      onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
+      onError: (err) => notify({ title: 'Cancel failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
     });
   };
 
@@ -257,16 +261,19 @@ export const StockTakeDetail = () => {
       onSuccess: (res) => {
         detail.refetch();
         if (res.movementErrors && res.movementErrors.length > 0) {
-          window.alert(
-            `Undone, but reversing the stock changes failed:\n\n${res.movementErrors.join('\n')}\n\nFix manually via Stock Adjustments.`,
-          );
+          notify({
+            title: 'Undone, but reversing the stock changes failed',
+            body: `${res.movementErrors.join('\n')}\n\nFix manually via Stock Adjustments.`,
+            tone: 'error',
+          });
         } else {
-          window.alert(
-            `Undone. ${res.movementsReversed} stock change${res.movementsReversed === 1 ? '' : 's'} reversed.`,
-          );
+          notify({
+            title: 'Undone',
+            body: `${res.movementsReversed} stock change${res.movementsReversed === 1 ? '' : 's'} reversed.`,
+          });
         }
       },
-      onError: (err) => window.alert(`Undo failed: ${err instanceof Error ? err.message : String(err)}`),
+      onError: (err) => notify({ title: 'Undo failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
     });
   };
 
@@ -280,7 +287,7 @@ export const StockTakeDetail = () => {
     }))) return;
     del.mutate(id, {
       onSuccess: () => navigate('/inventory/stock-takes'),
-      onError: (err) => window.alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),
+      onError: (err) => notify({ title: 'Delete failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
     });
   };
 

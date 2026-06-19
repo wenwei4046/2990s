@@ -36,6 +36,7 @@ import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBa
 import { ListingPickerDialog, type ListingChoice } from '../components/ListingPickerDialog';
 import { ScanOrderModal } from '../components/ScanOrderModal';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
@@ -698,6 +699,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
 export const MfgSalesOrdersList = () => {
   const navigate = useNavigate();
   const askConfirm = useConfirm();
+  const notify = useNotify();
   const [searchParams, setSearchParams] = useSearchParams();
   /* Task #120 — Outstanding filter overlay. `?outstanding=1` narrows the
      list to rows with live balance > 0; clear-chip restores. Same param
@@ -800,7 +802,7 @@ export const MfgSalesOrdersList = () => {
       fetch(`${import.meta.env.VITE_API_URL}/mfg-sales-orders/${row.doc_no}`, { headers }),
       fetch(`${import.meta.env.VITE_API_URL}/mfg-sales-orders/${row.doc_no}/payments`, { headers }),
     ]);
-    if (!detailRes.ok) { alert(`Failed to load SO ${row.doc_no}`); return; }
+    if (!detailRes.ok) { notify({ title: `Failed to load SO ${row.doc_no}`, tone: 'error' }); return; }
     const json = (await detailRes.json()) as { salesOrder: unknown; items: unknown[]; pwpCodes?: unknown[] };
     /* Payments endpoint is best-effort: if it fails the PDF still renders
        with an empty Payments table rather than blocking Preview/Print. */
@@ -827,7 +829,7 @@ export const MfgSalesOrdersList = () => {
     updateStatus.mutate(
       { docNo: row.doc_no, status: 'CANCELLED' },
       {
-        onError: (e) => alert(`Failed: ${e instanceof Error ? e.message : String(e)}`),
+        onError: (e) => notify({ title: 'Failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }),
       },
     );
   };
@@ -842,7 +844,11 @@ export const MfgSalesOrdersList = () => {
     // (so the operator never thinks the feature vanished). When there's nothing
     // left to deliver, tell them plainly instead of silently doing nothing.
     if (!row.has_undelivered || ['CANCELLED', 'CLOSED', 'ON_HOLD'].includes(row.status)) {
-      window.alert('Nothing to be converted — every line on this Sales Order is already delivered (or the order is closed / cancelled / on hold).');
+      notify({
+        title: 'Nothing to be converted',
+        body: 'every line on this Sales Order is already delivered (or the order is closed / cancelled / on hold).',
+        tone: 'error',
+      });
       return;
     }
     navigate(`/mfg-delivery-orders/new?fromSo=${encodeURIComponent(row.doc_no)}`);
@@ -1060,7 +1066,11 @@ export const MfgSalesOrdersList = () => {
               danger: true,
               onClick: async () => {
                 if (!(await askConfirm({ title: `Permanently delete ${row.doc_no}?`, body: 'This cannot be undone.', confirmLabel: 'Delete', danger: true }))) return;
-                alert('Hard delete is not implemented yet — the SO will stay CANCELLED.');
+                notify({
+                  title: 'Hard delete is not implemented yet',
+                  body: 'the SO will stay CANCELLED.',
+                  tone: 'error',
+                });
               },
             });
           }

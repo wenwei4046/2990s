@@ -25,6 +25,7 @@ import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import {
   useSalesInvoiceDetail,
   useUpdateSalesInvoiceHeader,
@@ -177,6 +178,7 @@ const draftFromItem = (it: SiItem): SoLineDraft => ({
 export const SalesInvoiceDetail = () => {
   const { id } = useParams<{ id: string }>();
   const askConfirm = useConfirm();
+  const notify = useNotify();
   const [searchParams] = useSearchParams();
   const detail = useSalesInvoiceDetail(id ?? null);
   const updateHeader = useUpdateSalesInvoiceHeader();
@@ -404,7 +406,7 @@ export const SalesInvoiceDetail = () => {
   const handlePrint = () => {
     import('../lib/sales-invoice-pdf')
       .then(({ generateSalesInvoicePdf }) => generateSalesInvoicePdf(header as never, items as never))
-      .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e) => notify({ title: 'PDF generation failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }));
   };
 
   const handleCancel = async () => {

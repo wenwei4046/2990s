@@ -32,6 +32,7 @@ import { poStatusLabel } from '../lib/po-status';
 import { ItemGroupPill } from '../lib/category-badges';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -208,6 +209,7 @@ export const PurchaseOrders = () => {
   const [drawer, setDrawer] = useState<Drawer>({ kind: 'closed' });
   const navigate = useNavigate();
   const askConfirm = useConfirm();
+  const notify = useNotify();
   // Multi-select state — batch-convert N POs into one GRN.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // Bump to collapse every expanded drill-down in the list at once.
@@ -284,7 +286,7 @@ export const PurchaseOrders = () => {
         await pdf.generateCombinedPurchaseOrderPdf(pos, { fileName: `purchase-orders-${new Date().toISOString().slice(0, 10)}.pdf` });
       }
     } catch (e) {
-      alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`);
+      notify({ title: 'PDF generation failed', body: `${e instanceof Error ? e.message : String(e)}`, tone: 'error' });
     } finally {
       setPrintingDocs(false);
     }
@@ -309,7 +311,7 @@ export const PurchaseOrders = () => {
   const convertToGrn = () => {
     if (selectedRows.length === 0) return;
     if (selectedSuppliers.size > 1) {
-      alert('All selected POs must be from the same supplier. Convert per supplier in separate batches.');
+      notify({ title: 'All selected POs must be from the same supplier', body: 'Convert per supplier in separate batches.', tone: 'error' });
       return;
     }
     setSelectedIds(new Set());
@@ -323,7 +325,7 @@ export const PurchaseOrders = () => {
     // the PO has no goods left inbound (already fully received / cancelled),
     // tell the operator plainly instead of silently doing nothing.
     if (po.status !== 'SUBMITTED' && po.status !== 'PARTIALLY_RECEIVED') {
-      window.alert('Nothing to be converted — this Purchase Order has no goods left to receive (already fully received or cancelled).');
+      notify({ title: 'Nothing to be converted', body: 'This Purchase Order has no goods left to receive (already fully received or cancelled).', tone: 'error' });
       return;
     }
     navigate(`/grns/from-po?poId=${po.id}`);
@@ -331,7 +333,7 @@ export const PurchaseOrders = () => {
   const doCancelPo = async (po: PoHeaderRow) => {
     if (!(await askConfirm({ title: `Cancel ${po.po_number}?`, body: 'It will stop proceeding and any converted SO lines are released back.', confirmLabel: 'Cancel', danger: true }))) return;
     cancelPo.mutate(po.id, {
-      onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
+      onError: (e) => notify({ title: 'Cancel failed', body: `${e instanceof Error ? e.message : String(e)}`, tone: 'error' }),
     });
   };
   // Reopen — inverse of Cancel (Commander 2026-06-16). CANCELLED → SUBMITTED;
@@ -339,7 +341,7 @@ export const PurchaseOrders = () => {
   const doReopenPo = async (po: PoHeaderRow) => {
     if (!(await askConfirm({ title: `Reopen ${po.po_number}?`, body: 'Status returns to SUBMITTED and its converted SO lines re-claim their quota.', confirmLabel: 'Reopen' }))) return;
     reopenPo.mutate(po.id, {
-      onError: (e) => alert(`Reopen failed: ${e instanceof Error ? e.message : String(e)}`),
+      onError: (e) => notify({ title: 'Reopen failed', body: `${e instanceof Error ? e.message : String(e)}`, tone: 'error' }),
     });
   };
 
@@ -720,6 +722,7 @@ const ExpandedPoLines = ({ po }: { po: PoHeaderRow }) => {
 
 const DetailPoDrawer = ({ poId, onClose }: { poId: string; onClose: () => void }) => {
   const detail = usePurchaseOrderDetail(poId);
+  const notify = useNotify();
   // PR-DRAFT-removal — Submit/Cancel removed from the list drawer. Use
   // /purchase-orders/:id detail for cancel + delete actions.
 
@@ -797,7 +800,7 @@ const DetailPoDrawer = ({ poId, onClose }: { poId: string; onClose: () => void }
                 // after first use on any flow.
                 import('../lib/purchase-order-pdf').then(({ generatePurchaseOrderPdf }) =>
                   generatePurchaseOrderPdf(po, items),
-                ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+                ).catch((e) => notify({ title: 'PDF generation failed', body: `${e instanceof Error ? e.message : String(e)}`, tone: 'error' }));
               }}
             >
               <Printer {...ICON} />

@@ -24,6 +24,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowRightLeft, ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { useNotify } from '../components/NotifyDialog';
 import {
   useCreateDeliveryReturn, useMfgDeliveryOrderDetail,
 } from '../lib/flow-queries';
@@ -51,6 +52,7 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 
 export const DeliveryReturnNew = () => {
   const navigate = useNavigate();
+  const notify = useNotify();
   const [searchParams] = useSearchParams();
   const fromDo = searchParams.get('fromDo');
   const fromPicks = searchParams.get('fromPicks') === '1';
@@ -215,11 +217,11 @@ export const DeliveryReturnNew = () => {
   const canSave = debtorName.trim().length > 0;
 
   const onSave = () => {
-    if (loadingPrefill) { window.alert('Still loading the Delivery Order — please wait a moment.'); return; }
-    if (!canSave) { window.alert('Customer name is required.'); return; }
+    if (loadingPrefill) { notify({ title: 'Still loading the Delivery Order', body: 'please wait a moment.' }); return; }
+    if (!canSave) { notify({ title: 'Customer name is required.', tone: 'error' }); return; }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
-      window.alert('Add at least one item via "+ Add Line Item".');
+      notify({ title: 'Add at least one item via "+ Add Line Item".', tone: 'error' });
       return;
     }
 
@@ -269,7 +271,7 @@ export const DeliveryReturnNew = () => {
         onSuccess: (res: { id: string; returnNumber: string }) => {
           navigate(`/delivery-returns/${res.id}`);
         },
-        onError: (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError: (err) => notify({ title: 'Save failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
       },
     );
   };

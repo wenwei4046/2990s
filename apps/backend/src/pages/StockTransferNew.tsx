@@ -13,6 +13,7 @@ import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, ArrowRight, Save, X, Plus, Trash2, AlertTriangle } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import {
   useWarehouses,
   useInventoryBalances,
@@ -49,6 +50,7 @@ export const StockTransferNew = () => {
   const create   = useCreateStockTransfer();
 
   const askConfirm = useConfirm();
+  const notify = useNotify();
 
   // ── Header state ─────────────────────────────────────────────────────
   const [fromWarehouseId, setFromWarehouseId] = useState<string>('');
@@ -118,7 +120,7 @@ export const StockTransferNew = () => {
 
   const onSave = async () => {
     if (!canSave) {
-      window.alert('Pick From + To warehouses (must differ), date, and at least one valid line.');
+      notify({ title: 'Pick From + To warehouses (must differ), date, and at least one valid line.', tone: 'error' });
       return;
     }
     if (overdrawn.length > 0) {
@@ -147,7 +149,7 @@ export const StockTransferNew = () => {
       },
       {
         onSuccess: (res) => navigate(`/inventory/transfers/${res.id}`),
-        onError:   (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError:   (err) => notify({ title: 'Save failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
       },
     );
   };

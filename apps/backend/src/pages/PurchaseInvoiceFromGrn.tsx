@@ -25,6 +25,7 @@ import {
   useOutstandingGrnItems,
   type OutstandingGrnItem,
 } from '../lib/suppliers-queries';
+import { useNotify } from '../components/NotifyDialog';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -37,6 +38,7 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 export const PurchaseInvoiceFromGrn = () => {
   const navigate = useNavigate();
   const itemsQ   = useOutstandingGrnItems();
+  const notify   = useNotify();
 
   const [picks, setPicks] = useState<Record<string, { picked: boolean; qty: number }>>({});
 
@@ -89,7 +91,7 @@ export const PurchaseInvoiceFromGrn = () => {
   const pickedCount = picked.length;
 
   const onContinue = () => {
-    if (pickedCount === 0 || !activeGrnId) { window.alert('Tick at least one line from one note first.'); return; }
+    if (pickedCount === 0 || !activeGrnId) { notify({ title: 'Tick at least one line from one note first.', tone: 'error' }); return; }
     const stash = picked.map(([grnItemId, v]) => ({ grnItemId, qty: v.qty }));
     sessionStorage.setItem('piFromGrnPicks', JSON.stringify(stash));
     navigate(`/purchase-invoices/new?grnId=${encodeURIComponent(activeGrnId)}&fromPicks=1`);

@@ -18,6 +18,7 @@ import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
@@ -320,6 +321,7 @@ const STORAGE_KEY = 'pr-g.si-list.layout.v1';
 export const SalesInvoicesList = () => {
   const navigate = useNavigate();
   const askConfirm = useConfirm();
+  const notify = useNotify();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
 
@@ -384,17 +386,17 @@ export const SalesInvoicesList = () => {
       const res = await fetch(`${import.meta.env.VITE_API_URL}/sales-invoices/${row.id}`, {
         headers: { authorization: `Bearer ${token}` },
       });
-      if (!res.ok) { alert(`Failed to load invoice ${row.invoice_number}`); return; }
+      if (!res.ok) { notify({ title: `Failed to load invoice ${row.invoice_number}`, tone: 'error' }); return; }
       const json = (await res.json()) as { salesInvoice: unknown; items: unknown[] };
       const { generateSalesInvoicePdf } = await import('../lib/sales-invoice-pdf');
       await generateSalesInvoicePdf(json.salesInvoice as never, json.items as never);
-    })().catch((e) => alert(`PDF failed: ${e instanceof Error ? e.message : String(e)}`));
+    })().catch((e) => notify({ title: 'PDF failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }));
   };
 
   const doCancel = async (row: SiRow) => {
     if (!(await askConfirm({ title: `Cancel invoice ${row.invoice_number}?`, body: 'This sets status = CANCELLED.', confirmLabel: 'Cancel', danger: true }))) return;
     updateStatus.mutate({ id: row.id, status: 'CANCELLED' },
-      { onError: (e) => alert(`Failed: ${e instanceof Error ? e.message : String(e)}`) });
+      { onError: (e) => notify({ title: 'Failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }) });
   };
 
   const kpiTile = (label: string, value: string, accent?: 'good' | 'bad' | 'burnt'): JSX.Element => (

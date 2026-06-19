@@ -18,6 +18,7 @@ import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { StatusPill } from '../components/StatusPill';
 import { statusLabel } from '../lib/status-pill';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
@@ -196,6 +197,7 @@ const ExpandedPrLines = ({ pr }: { pr: PrRow }) => {
 export const PurchaseReturns = () => {
   const navigate = useNavigate();
   const askConfirm = useConfirm();
+  const notify = useNotify();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
   const setStatusChip = (s: string) => {
@@ -219,7 +221,7 @@ export const PurchaseReturns = () => {
   const doCancelPr = async (r: PrRow) => {
     if (!(await askConfirm({ title: `Cancel return ${r.return_number}?`, body: 'This reverses the return — the goods are put back into stock. Line items stay for audit.', confirmLabel: 'Cancel', danger: true }))) return;
     cancelPr.mutate(r.id, {
-      onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
+      onError: (e) => notify({ title: 'Cancel failed', body: `${e instanceof Error ? e.message : String(e)}`, tone: 'error' }),
     });
   };
 

@@ -22,6 +22,7 @@ import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { StatusPill } from '../components/StatusPill';
 import { statusLabel } from '../lib/status-pill';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
@@ -249,6 +250,7 @@ const ExpandedGrnLines = ({ grn }: { grn: GrnRow }) => {
 export const GoodsReceived = () => {
   const navigate = useNavigate();
   const askConfirm = useConfirm();
+  const notify = useNotify();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
   const setStatusChip = (s: string) => {
@@ -277,14 +279,14 @@ export const GoodsReceived = () => {
   const convertToPr = (g: GrnRow) => {
     prFromGrn.mutate(g.id, {
       onSuccess: (res) => navigate(`/purchase-returns/${res.id}`),
-      onError: (e) => alert(`To Purchase Return failed: ${e instanceof Error ? e.message : String(e)}`),
+      onError: (e) => notify({ title: 'To Purchase Return failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }),
     });
   };
   // Cancel a GRN (right-click) — reverses the receipt server-side. Confirm first.
   const doCancelGrn = async (g: GrnRow) => {
     if (!(await askConfirm({ title: `Cancel GRN ${g.grn_number}?`, body: "This reverses the receipt — stock is taken back out and the source PO's received qty is rolled back. Line items stay for audit.", confirmLabel: 'Cancel', danger: true }))) return;
     cancelGrn.mutate(g.id, {
-      onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
+      onError: (e) => notify({ title: 'Cancel failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }),
     });
   };
 

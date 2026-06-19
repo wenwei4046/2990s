@@ -35,6 +35,7 @@ import { supabase } from '../lib/supabase';
 import styles from './ProductModelDetail.module.css';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
@@ -94,6 +95,7 @@ export const ProductModelDetail = ({
   const activateOneShotMut = useActivateOneShot();
   const maintenance = useMaintenanceConfig('master');
   const askConfirm = useConfirm();
+  const notify = useNotify();
   // Branding datalist — maintenance Brandings pool first, DISTINCT fallback.
   const brandingPool = useBrandingPool();
   // Fabric library — pool of active fabric slugs displayed in the FABRICS
@@ -203,7 +205,7 @@ export const ProductModelDetail = ({
     if (!id) return;
     const code = modelCode.trim();
     if (!code) {
-      window.alert('Model code is required.');
+      notify({ title: 'Model code is required.', tone: 'error' });
       return;
     }
     updateMut.mutate({
@@ -880,6 +882,7 @@ function AddCodesModal({
   onClose: () => void;
 }) {
   const generateMut = useGenerateModelSkus();
+  const notify = useNotify();
   const existingSet = useMemo(() => new Set(existingCodes), [existingCodes]);
   const candidates = useMemo(
     () => computeCandidates(category, modelCode, modelName, branding, allowed, mattressThicknessCm, formats, { sizeLabels }),
@@ -904,7 +907,7 @@ function AddCodesModal({
 
   const submit = () => {
     if (picked.size === 0) {
-      window.alert('Pick at least one code to add.');
+      notify({ title: 'Pick at least one code to add.', tone: 'error' });
       return;
     }
     // PR #69 — send the FULL rows the modal computed locally so the API
@@ -922,15 +925,15 @@ function AddCodesModal({
     generateMut.mutate(
       { id: modelId, rows },
       {
-        onSuccess: (res) => {
-          window.alert(
-            `Added ${res.generated} code${res.generated === 1 ? '' : 's'}.`
-            + (res.skipped > 0 ? ` Skipped ${res.skipped} (already existed).` : ''),
-          );
+        onSuccess: async (res) => {
+          await notify({
+            title: `Added ${res.generated} code${res.generated === 1 ? '' : 's'}.`,
+            body: res.skipped > 0 ? `Skipped ${res.skipped} (already existed).` : undefined,
+          });
           onClose();
         },
         onError: (err) => {
-          window.alert(`Add failed: ${err instanceof Error ? err.message : err}`);
+          notify({ title: 'Add failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
         },
       },
     );

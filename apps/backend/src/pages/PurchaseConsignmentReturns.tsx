@@ -26,6 +26,7 @@ import {
 } from '../lib/purchase-consignment-return-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
@@ -223,6 +224,7 @@ export const PurchaseConsignmentReturns = () => {
   const { data, isLoading, error } = usePurchaseConsignmentReturns();
   const cancelPr = useCancelPurchaseConsignmentReturn();
   const askConfirm = useConfirm();
+  const notify = useNotify();
 
   const allRows = useMemo<PrRow[]>(() => (data?.purchaseReturns ?? []) as PrRow[], [data]);
   const rows = useMemo<PrRow[]>(
@@ -239,7 +241,7 @@ export const PurchaseConsignmentReturns = () => {
       danger: true,
     }))) return;
     cancelPr.mutate(r.id, {
-      onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
+      onError: (e) => notify({ title: 'Cancel failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }),
     });
   };
 

@@ -8,6 +8,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { authedFetch, humanApiError } from './authed-fetch';
 import { supabase } from './supabase';
+import { serviceNotify } from './dialog-service';
 import { verifiedSave, readbackGet, friendlySaveMessage } from './verified-save';
 
 // Direct multipart upload (useUploadSoItemPhoto) needs the raw token + URL —
@@ -169,7 +170,7 @@ export const useCancelGrn = () => {
       qc.invalidateQueries({ queryKey: ['inventory'] });
     },
     onError: (err) => {
-      window.alert(`Cancel GRN failed: ${err instanceof Error ? err.message : String(err)}`);
+      serviceNotify({ title: 'Cancel GRN failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
     },
   });
 };
@@ -248,7 +249,7 @@ export const useCancelPurchaseInvoice = () => {
       qc.invalidateQueries({ queryKey: ['purchase-invoice-detail', id] });
     },
     onError: (err) => {
-      window.alert(`Cancel invoice failed: ${err instanceof Error ? err.message : String(err)}`);
+      serviceNotify({ title: 'Cancel invoice failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
     },
   });
 };
@@ -554,7 +555,7 @@ export const useUpdateSoItemStockStatus = () => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
     },
     onError: (err) => {
-      window.alert(`Stock status update failed: ${err instanceof Error ? err.message : String(err)}`);
+      serviceNotify({ title: 'Stock status update failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
     },
   });
 };
@@ -901,7 +902,7 @@ export const useUpdateMfgDeliveryOrderStatus = () => {
       releaseSoSideQueries(qc);
     },
     onError: (err) => {
-      window.alert(`Status update failed: ${err instanceof Error ? err.message : String(err)}`);
+      serviceNotify({ title: 'Status update failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
     },
   });
 };
@@ -1066,7 +1067,7 @@ export const useUpdateSalesInvoiceStatus = () => {
       qc.invalidateQueries({ queryKey: ['ar-aging'] });
     },
     onError: (err) => {
-      window.alert(`Status update failed: ${err instanceof Error ? err.message : String(err)}`);
+      serviceNotify({ title: 'Status update failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
     },
   });
 };
@@ -1336,7 +1337,7 @@ export const useCancelPurchaseReturn = () => {
       qc.invalidateQueries({ queryKey: ['purchase-return-detail', id] });
     },
     onError: (err) => {
-      window.alert(`Cancel return failed: ${err instanceof Error ? err.message : String(err)}`);
+      serviceNotify({ title: 'Cancel return failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
     },
   });
 };
@@ -1477,7 +1478,7 @@ export const useUpdateDeliveryReturnStatus = () => {
       qc.invalidateQueries({ queryKey: ['inventory'] });
     },
     onError: (err) => {
-      window.alert(`Status update failed: ${err instanceof Error ? err.message : String(err)}`);
+      serviceNotify({ title: 'Status update failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
     },
   });
 };

@@ -46,6 +46,7 @@ import {
 } from '../lib/sofa-combos-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { useSupplierDetail, useSuppliers, type SupplierRow } from '../lib/suppliers-queries';
+import { useNotify } from './NotifyDialog';
 import { todayMyt } from '../lib/dates';
 
 // Seat-height columns mirror the live Maintenance pool (Products → Maintenance
@@ -584,6 +585,7 @@ function ComposerModal({
   supplierId?: string;
   onClose: () => void;
 }) {
+  const notify = useNotify();
   const create = useCreateSofaCombo();
   const update = useUpdateSofaCombo();
 
@@ -669,12 +671,12 @@ function ComposerModal({
   };
 
   const submit = async () => {
-    if (!baseModel) return alert('Base model is required.');
+    if (!baseModel) { notify({ title: 'Base model is required.', tone: 'error' }); return; }
     // Drop empty slots + de-dupe codes within each slot.
     const orderedModules = modules
       .map((slot) => [...new Set(slot.map((c) => c.trim()).filter(Boolean))])
       .filter((slot) => slot.length > 0);
-    if (orderedModules.length === 0) return alert('Add at least one module slot.');
+    if (orderedModules.length === 0) { notify({ title: 'Add at least one module slot.', tone: 'error' }); return; }
 
     const pricesByHeight: Record<string, number | null> = {};
     for (const h of heights) {
@@ -682,7 +684,7 @@ function ComposerModal({
       if (!raw) pricesByHeight[h] = null;
       else {
         const n = Number(raw);
-        if (!Number.isFinite(n) || n < 0) return alert(`Bad price at ${h}".`);
+        if (!Number.isFinite(n) || n < 0) { notify({ title: `Bad price at ${h}".`, tone: 'error' }); return; }
         pricesByHeight[h] = Math.round(n * 100);
       }
     }
@@ -737,7 +739,7 @@ function ComposerModal({
       }
       onClose();
     } catch (e) {
-      alert(`Save failed: ${String(e)}`);
+      notify({ title: 'Save failed', body: String(e), tone: 'error' });
     }
   };
 
@@ -949,6 +951,7 @@ function BatchEditModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const notify = useNotify();
   const create = useCreateSofaCombo();
 
   const [effectiveFrom, setEffectiveFrom] = useState(todayIso());
@@ -1002,7 +1005,7 @@ function BatchEditModal({
       }
     }
     setApplying(false);
-    window.alert(`Updated ${ok} combo${ok === 1 ? '' : 's'} (${fail} failed)`);
+    await notify({ title: `Updated ${ok} combo${ok === 1 ? '' : 's'} (${fail} failed)` });
     onDone();
   };
 

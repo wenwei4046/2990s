@@ -22,6 +22,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { useNotify } from '../components/NotifyDialog';
 import {
   useCreateMfgDeliveryOrder, useAddDeliveryOrderPayment,
   useMfgSalesOrderDetail, useSalesOrderPayments,
@@ -54,6 +55,7 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 
 export const DeliveryOrderNew = () => {
   const navigate = useNavigate();
+  const notify = useNotify();
   const [searchParams] = useSearchParams();
   const fromSo = searchParams.get('fromSo');
   const fromPicks = searchParams.get('fromPicks') === '1';
@@ -274,11 +276,11 @@ export const DeliveryOrderNew = () => {
   };
 
   const onSave = () => {
-    if (loadingPrefill) { window.alert('Still loading the Sales Order — please wait a moment.'); return; }
-    if (!canSave) { window.alert('Customer name is required.'); return; }
+    if (loadingPrefill) { notify({ title: 'Still loading the Sales Order', body: 'please wait a moment.' }); return; }
+    if (!canSave) { notify({ title: 'Customer name is required.', tone: 'error' }); return; }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
-      window.alert('Add at least one item via "+ Add Line Item".');
+      notify({ title: 'Add at least one item via "+ Add Line Item".', tone: 'error' });
       return;
     }
 
@@ -330,11 +332,12 @@ export const DeliveryOrderNew = () => {
         onSuccess: async (res: { id: string; doNumber: string }) => {
           const { failed } = await flushPaymentDrafts(res.id);
           if (failed > 0) {
-            window.alert(
-              `Delivery order ${res.doNumber} was created, but ${failed} payment ` +
-              `row${failed === 1 ? '' : 's'} failed to save. Please re-enter ` +
-              `${failed === 1 ? 'it' : 'them'} on the Detail page.`,
-            );
+            await notify({
+              title: `Delivery order ${res.doNumber} was created, but ${failed} payment ` +
+                `row${failed === 1 ? '' : 's'} failed to save. Please re-enter ` +
+                `${failed === 1 ? 'it' : 'them'} on the Detail page.`,
+              tone: 'error',
+            });
           }
           navigate(`/mfg-delivery-orders/${res.id}`);
         },
@@ -344,7 +347,7 @@ export const DeliveryOrderNew = () => {
              re-throws the original 409) — they chose not to ship, so swallow
              the raw payload instead of dumping it. */
           if (raw.includes('"short_stock"')) return;
-          window.alert(`Save failed: ${raw}`);
+          notify({ title: 'Save failed', body: raw, tone: 'error' });
         },
       },
     );

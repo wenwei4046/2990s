@@ -16,6 +16,7 @@ import { Plus, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
@@ -341,6 +342,7 @@ const STORAGE_KEY = 'pr-g.do-list.layout.v1';
 export const MfgDeliveryOrdersList = () => {
   const navigate = useNavigate();
   const askConfirm = useConfirm();
+  const notify = useNotify();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
 
@@ -396,17 +398,17 @@ export const MfgDeliveryOrdersList = () => {
       const res = await fetch(`${import.meta.env.VITE_API_URL}/delivery-orders-mfg/${row.id}`, {
         headers: { authorization: `Bearer ${token}` },
       });
-      if (!res.ok) { alert(`Failed to load DO ${row.do_number}`); return; }
+      if (!res.ok) { notify({ title: `Failed to load DO ${row.do_number}`, tone: 'error' }); return; }
       const json = (await res.json()) as { deliveryOrder: unknown; items: unknown[] };
       const { generateDeliveryOrderPdf } = await import('../lib/delivery-order-pdf');
       await generateDeliveryOrderPdf(json.deliveryOrder as never, json.items as never);
-    })().catch((e) => alert(`PDF failed: ${e instanceof Error ? e.message : String(e)}`));
+    })().catch((e) => notify({ title: 'PDF failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }));
   };
 
   const doCancel = async (row: DoRow) => {
     if (!(await askConfirm({ title: `Cancel DO ${row.do_number}?`, body: 'This sets status = CANCELLED.', confirmLabel: 'Cancel', danger: true }))) return;
     updateStatus.mutate({ id: row.id, status: 'CANCELLED' },
-      { onError: (e) => alert(`Failed: ${e instanceof Error ? e.message : String(e)}`) });
+      { onError: (e) => notify({ title: 'Failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }) });
   };
 
   const kpiTile = (label: string, value: string, accent?: 'good' | 'bad' | 'burnt'): JSX.Element => (
@@ -511,14 +513,14 @@ export const MfgDeliveryOrdersList = () => {
           items.push({
             label: 'To Sales Invoice',
             onClick: () => {
-              if (status === 'CANCELLED') { window.alert('Nothing to be converted — this Delivery Order is cancelled.'); return; }
+              if (status === 'CANCELLED') { notify({ title: 'Nothing to be converted', body: 'this Delivery Order is cancelled.', tone: 'error' }); return; }
               navigate(`/sales-invoices/new?fromDo=${row.id}`);
             },
           });
           items.push({
             label: 'To Delivery Return',
             onClick: () => {
-              if (status === 'CANCELLED') { window.alert('Nothing to be converted — this Delivery Order is cancelled.'); return; }
+              if (status === 'CANCELLED') { notify({ title: 'Nothing to be converted', body: 'this Delivery Order is cancelled.', tone: 'error' }); return; }
               navigate(`/delivery-returns/new?fromDo=${row.id}`);
             },
           });

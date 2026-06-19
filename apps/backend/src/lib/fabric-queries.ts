@@ -9,6 +9,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
+import { serviceNotify } from './dialog-service';
 import { authedFetch } from './authed-fetch';
 
 export type FabricCategoryValue = 'B.M-FABR' | 'S-FABR' | 'S.M-FABR' | 'LINING' | 'WEBBING';
@@ -137,12 +138,13 @@ export function useUpdateFabricTier() {
       if (res.affectedProducts > 0) {
         const tierLabel = vars.tier.replace('PRICE_', 'P');
         const fieldLabel = vars.field === 'bedframePriceTier' ? 'bedframe' : 'sofa';
-        // Light-touch toast — for now use alert since 2990s has no toast system.
-        // eslint-disable-next-line no-alert
-        alert(
-          `Tier updated → ${tierLabel}. ${res.affectedProducts} ${fieldLabel} product${res.affectedProducts === 1 ? '' : 's'} ` +
-          `tagged with fabric ${res.fabricCode ?? ''} now reflect the new tier when read.`,
-        );
+        // Light-touch in-app toast via the app-wide NotifyDialog (serviceNotify bridge).
+        serviceNotify({
+          title: `Tier updated → ${tierLabel}`,
+          body:
+            `${res.affectedProducts} ${fieldLabel} product${res.affectedProducts === 1 ? '' : 's'} ` +
+            `tagged with fabric ${res.fabricCode ?? ''} now reflect the new tier when read.`,
+        });
       }
     },
   });

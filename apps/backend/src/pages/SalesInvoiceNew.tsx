@@ -23,6 +23,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { useNotify } from '../components/NotifyDialog';
 import {
   useCreateSalesInvoice, useAddSalesInvoicePayment,
   useMfgDeliveryOrderDetail, useDeliveryOrderPayments,
@@ -54,6 +55,7 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 
 export const SalesInvoiceNew = () => {
   const navigate = useNavigate();
+  const notify = useNotify();
   const [searchParams] = useSearchParams();
   const fromDo = searchParams.get('fromDo');
   const fromPicks = searchParams.get('fromPicks') === '1';
@@ -278,10 +280,10 @@ export const SalesInvoiceNew = () => {
   };
 
   const onSave = () => {
-    if (!canSave) { window.alert('Customer name is required.'); return; }
+    if (!canSave) { notify({ title: 'Customer name is required.', tone: 'error' }); return; }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
-      window.alert('Add at least one item via "+ Add Line Item".');
+      notify({ title: 'Add at least one item via "+ Add Line Item".', tone: 'error' });
       return;
     }
 
@@ -333,15 +335,16 @@ export const SalesInvoiceNew = () => {
         onSuccess: async (res: { id: string; invoiceNumber: string }) => {
           const { failed } = await flushPaymentDrafts(res.id);
           if (failed > 0) {
-            window.alert(
-              `Invoice ${res.invoiceNumber} was created, but ${failed} payment ` +
-              `row${failed === 1 ? '' : 's'} failed to save. Please re-enter ` +
-              `${failed === 1 ? 'it' : 'them'} on the Detail page.`,
-            );
+            await notify({
+              title: `Invoice ${res.invoiceNumber} was created, but ${failed} payment ` +
+                `row${failed === 1 ? '' : 's'} failed to save. Please re-enter ` +
+                `${failed === 1 ? 'it' : 'them'} on the Detail page.`,
+              tone: 'error',
+            });
           }
           navigate(`/sales-invoices/${res.id}`);
         },
-        onError: (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError: (err) => notify({ title: 'Save failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
       },
     );
   };

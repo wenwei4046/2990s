@@ -12,6 +12,7 @@ import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, Save, X, ClipboardList } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { useWarehouses, useInventoryBalances } from '../lib/inventory-queries';
 import { useMfgProducts } from '../lib/mfg-products-queries';
 import {
@@ -41,6 +42,7 @@ export const StockTakeNew = () => {
   const create   = useCreateStockTake();
 
   const askConfirm = useConfirm();
+  const notify = useNotify();
 
   const [warehouseId, setWarehouseId] = useState<string>('');
   const [takeDate,    setTakeDate]    = useState<string>(todayISO());
@@ -96,7 +98,7 @@ export const StockTakeNew = () => {
 
   const onCreate = async () => {
     if (!canCreate) {
-      window.alert('Pick a warehouse, date, and (for Category/Prefix scopes) a scope value.');
+      notify({ title: 'Pick a warehouse, date, and (for Category/Prefix scopes) a scope value.', tone: 'error' });
       return;
     }
     if (previewCount === 0) {
@@ -117,7 +119,7 @@ export const StockTakeNew = () => {
       },
       {
         onSuccess: (res) => navigate(`/inventory/stock-takes/${res.id}`),
-        onError:   (err) => window.alert(`Create failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError:   (err) => notify({ title: 'Create failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
       },
     );
   };

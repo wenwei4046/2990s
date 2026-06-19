@@ -39,6 +39,7 @@ import { usePurchaseOrderDetail, useSuppliers } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { MoneyInput } from '../components/MoneyInput';
+import { useNotify } from '../components/NotifyDialog';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -115,6 +116,7 @@ const newLine = (): DraftLine => ({
 
 export const PurchaseReturnNew = () => {
   const navigate = useNavigate();
+  const notify   = useNotify();
   const [params] = useSearchParams();
   const grnId    = params.get('grnId');
   const poId     = params.get('poId');
@@ -259,7 +261,7 @@ export const PurchaseReturnNew = () => {
   const canSave = !!supplierId && validLines.length > 0;
 
   const onSave = async () => {
-    if (!canSave) { window.alert('Need supplier + at least one line with an item code and qty > 0.'); return; }
+    if (!canSave) { notify({ title: 'Need supplier + at least one line with an item code and qty > 0.', tone: 'error' }); return; }
     try {
       const createRes = await create.mutateAsync({
         supplierId,
@@ -287,10 +289,10 @@ export const PurchaseReturnNew = () => {
         })),
       });
       await post.mutateAsync(createRes.id);
-      window.alert(`Purchase Return ${createRes.returnNumber} created + posted. Stock OUT recorded.`);
+      await notify({ title: `Purchase Return ${createRes.returnNumber} created + posted`, body: 'Stock OUT recorded.' });
       navigate(`/purchase-returns/${createRes.id}`);
     } catch (err) {
-      window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+      notify({ title: 'Save failed', body: `${err instanceof Error ? err.message : String(err)}`, tone: 'error' });
     }
   };
 

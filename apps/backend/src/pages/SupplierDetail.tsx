@@ -62,6 +62,7 @@ import { parseSupplierCategories, displaySupplierCategories } from '../lib/suppl
 import { SupplyCategoryPicker, useSupplierCategoryPool } from '../components/SupplyCategoryPicker';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import { maintValues } from '@2990s/shared/maintenance-pools';
 import { PhoneInput } from '../components/PhoneInput';
@@ -2347,6 +2348,7 @@ const SkuFormDialog = ({
 }) => {
   const create = useCreateBinding();
   const update = useUpdateBinding();
+  const notify = useNotify();
   /* PR — Commander 2026-05-27 ("为什么不能 auto-bind"): when commander types
      an internal SKU code and the supplier_sku field is still empty, look up
      the SKU row in the mfg_products cache and auto-derive the supplier_sku
@@ -2418,7 +2420,7 @@ const SkuFormDialog = ({
 
   const submit = () => {
     if (!draft.materialCode.trim() || !draft.materialName.trim() || !draft.supplierSku.trim()) {
-      alert('Internal code, description and supplier SKU are required.');
+      notify({ title: 'Internal code, description and supplier SKU are required.', tone: 'error' });
       return;
     }
     if (editing) {
@@ -2586,6 +2588,7 @@ const SupplierInfoCard = ({
   onClose: () => void;
 }) => {
   const update = useUpdateSupplier();
+  const notify = useNotify();
   // Owner spec 2026-06-12 — maintained Supply Category pool, for rendering
   // the stored comma-joined list with canonical casing.
   const categoryPool = useSupplierCategoryPool();
@@ -2622,7 +2625,7 @@ const SupplierInfoCard = ({
       onSuccess: onClose,
       // Never fail silently (Commander 2026-06-16 — "Save 没有反应"): surface the
       // real error so a server reject (e.g. a stale DB constraint) is visible.
-      onError: (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+      onError: (err) => notify({ title: 'Save failed', body: `${err instanceof Error ? err.message : String(err)}`, tone: 'error' }),
     });
   };
 
@@ -2887,6 +2890,7 @@ const ModelSkuPickerDialog = ({
   onClose: () => void;
 }) => {
   const batch = useCreateBindingsBatch();
+  const notify = useNotify();
   const [step, setStep] = useState<1 | 2>(1);
   // PR #208 — seed the category chip from the supplier's category. Commander
   // can still flip to "All" if they need to bind a Model from another category
@@ -3049,12 +3053,13 @@ const ModelSkuPickerDialog = ({
     }
     if (list.length === 0) { onClose(); return; }
     batch.mutate({ supplierId, bindings: list }, {
-      onSuccess: (res) => {
+      onSuccess: async (res) => {
         if (res.skipped > 0) {
-          alert(
-            `Inserted ${res.inserted} SKU mapping${res.inserted === 1 ? '' : 's'}; ` +
-            `skipped ${res.skipped} already bound.`,
-          );
+          await notify({
+            title:
+              `Inserted ${res.inserted} SKU mapping${res.inserted === 1 ? '' : 's'}; ` +
+              `skipped ${res.skipped} already bound.`,
+          });
         }
         onClose();
       },
@@ -3434,6 +3439,7 @@ const MultiSkuPickerDialog = ({
   onClose: () => void;
 }) => {
   const batch = useCreateBindingsBatch();
+  const notify = useNotify();
   const [step, setStep] = useState<1 | 2>(1);
   const [category, setCategory] = useState<'all' | MfgCategory>('all');
   const [search, setSearch] = useState('');
@@ -3496,9 +3502,9 @@ const MultiSkuPickerDialog = ({
     }));
     if (list.length === 0) { onClose(); return; }
     batch.mutate({ supplierId, bindings: list }, {
-      onSuccess: (res) => {
+      onSuccess: async (res) => {
         if (res.skipped > 0) {
-          alert(`Inserted ${res.inserted} mapping${res.inserted === 1 ? '' : 's'}; skipped ${res.skipped} already bound.`);
+          await notify({ title: `Inserted ${res.inserted} mapping${res.inserted === 1 ? '' : 's'}; skipped ${res.skipped} already bound.` });
         }
         onClose();
       },

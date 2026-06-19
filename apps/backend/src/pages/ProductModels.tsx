@@ -32,6 +32,7 @@ import { composeSupplierSku } from '../lib/supplier-sku-helpers';
 import { MultiSupplierPicker } from '../components/MultiSupplierPicker';
 import { MoneyInput } from '../components/MoneyInput';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import styles from './ProductModels.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -79,6 +80,7 @@ export const ProductModels = () => {
   const [assigningSupplier, setAssigningSupplier] = useState(false);
   const deleteMut = useDeleteProductModel();
   const askConfirm = useConfirm();
+  const notify = useNotify();
 
   const { data: models = [], isLoading, error } = useProductModels(
     filter === 'all' ? undefined : { category: filter },
@@ -337,8 +339,11 @@ export const ProductModels = () => {
                 const failed = results.filter((r) => !r.ok);
                 if (failed.length > 0) {
                   const sample = failed.slice(0, 3).map((f) => `· ${'err' in f ? f.err.slice(0, 160) : ''}`).join('\n');
-                  // eslint-disable-next-line no-alert
-                  alert(`Deleted ${results.length - failed.length} / ${results.length}. ${failed.length} failed:\n${sample}`);
+                  notify({
+                    title: `Deleted ${results.length - failed.length} / ${results.length}`,
+                    body: `${failed.length} failed:\n${sample}`,
+                    tone: 'error',
+                  });
                 }
               }}
             >
@@ -723,6 +728,7 @@ export function NewModelDialog({
   // SKU generation produced zero rows, so we never leave an empty phantom model.
   const deleteMut   = useDeleteProductModel();
   const askConfirm  = useConfirm();
+  const notify      = useNotify();
 
   // (A) Wei Siang 2026-06-09 — optional one-step supplier assignment is now
   // PER MODEL: each row carries its own supplier + code, and every SKU that
@@ -929,11 +935,11 @@ export function NewModelDialog({
               const res = await bindingsBatchMut.mutateAsync({ supplierId: sup.supplierId, bindings });
               boundInserted += res.inserted;
             } catch {
-              // eslint-disable-next-line no-alert
-              alert(
-                `The SKUs for ${r.model.model_code} were created, but linking them to one of the suppliers didn't go through. ` +
-                `You can link them later from “Supplier codes by Model”.`,
-              );
+              notify({
+                title: `The SKUs for ${r.model.model_code} were created, but linking them to one of the suppliers didn't go through.`,
+                body: 'You can link them later from “Supplier codes by Model”.',
+                tone: 'error',
+              });
             }
           }
         }
@@ -944,10 +950,11 @@ export function NewModelDialog({
       if (rows.length === 1 && createdModels[0] && onCreated) {
         onCreated(createdModels[0].id, category);
       } else {
-        // eslint-disable-next-line no-alert
-        alert(`Created ${createdModels.length} Model${createdModels.length === 1 ? '' : 's'}` +
-          (totalGenerated > 0 ? ` · auto-generated ${totalGenerated} SKU${totalGenerated === 1 ? '' : 's'}` : '') +
-          (boundInserted > 0 ? ` · bound ${boundInserted} to supplier` : '') + '.');
+        await notify({
+          title: `Created ${createdModels.length} Model${createdModels.length === 1 ? '' : 's'}` +
+            (totalGenerated > 0 ? ` · auto-generated ${totalGenerated} SKU${totalGenerated === 1 ? '' : 's'}` : '') +
+            (boundInserted > 0 ? ` · bound ${boundInserted} to supplier` : '') + '.',
+        });
         onClose();
       }
     } catch (e2) {
@@ -1485,6 +1492,7 @@ function EditModelDialog({
   const maintenance = useMaintenanceConfig('master');
   const brandingPool = useBrandingPool();
   const qc = useQueryClient();
+  const notify = useNotify();
 
   const cfg = maintenance.data?.data;
   const isSofa      = model.category === 'SOFA';
@@ -1556,14 +1564,16 @@ function EditModelDialog({
         ...(hasSizeAxis ? { allowedOptions: ao } : {}),
       },
       {
-        onSuccess: (res) => {
+        onSuccess: async (res) => {
           // The SOFA PATCH may have auto-created SKUs for newly-activated
           // compartments — refresh the SKU Master too.
           qc.invalidateQueries({ queryKey: ['mfg-products'] });
           const created = (res as { autoCreatedSkus?: string[] }).autoCreatedSkus ?? [];
           if (created.length > 0) {
-            // eslint-disable-next-line no-alert
-            alert(`Saved. ${created.length} new SKU${created.length === 1 ? '' : 's'} auto-created: ${created.join(', ')}`);
+            await notify({
+              title: 'Saved',
+              body: `${created.length} new SKU${created.length === 1 ? '' : 's'} auto-created: ${created.join(', ')}`,
+            });
           }
           onClose();
         },
@@ -1735,6 +1745,7 @@ function ModularAssignSupplierDialog({
   // the alternative (one query per Model) is wasteful.
   const productsQ  = useMfgProducts();
   const batchMut   = useCreateBindingsBatch();
+  const notify     = useNotify();
 
   // PR — Commander 2026-05-27: multi-select suppliers. Each row in the table
   // below is one (Model × Supplier) pair. We key drafts by `modelId::supplierId`.
@@ -1864,18 +1875,18 @@ function ModularAssignSupplierDialog({
       batchMut.mutateAsync({ supplierId, bindings }),
     );
     Promise.all(calls)
-      .then((results) => {
+      .then(async (results) => {
         for (const res of results) {
           totalInserted += res.inserted;
           totalSkipped  += res.skipped;
         }
         if (totalSkipped > 0) {
-          // eslint-disable-next-line no-alert
-          alert(
-            `Inserted ${totalInserted} SKU mapping${totalInserted === 1 ? '' : 's'} across ` +
-            `${bySupplier.size} supplier${bySupplier.size === 1 ? '' : 's'}; ` +
-            `skipped ${totalSkipped} already bound.`,
-          );
+          await notify({
+            title:
+              `Inserted ${totalInserted} SKU mapping${totalInserted === 1 ? '' : 's'} across ` +
+              `${bySupplier.size} supplier${bySupplier.size === 1 ? '' : 's'}; ` +
+              `skipped ${totalSkipped} already bound.`,
+          });
         }
         onSaved();
       })

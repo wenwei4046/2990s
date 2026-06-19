@@ -44,6 +44,7 @@ import {
 import { useSuppliers, useSupplierDetail, type SupplierRow } from '../lib/suppliers-queries';
 import { MoneyInput } from '../components/MoneyInput';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
@@ -119,6 +120,7 @@ export const PurchaseReturnDetail = () => {
   const updateItem = useUpdatePurchaseReturnItem();
   const deleteItem = useDeletePurchaseReturnItem();
   const askConfirm = useConfirm();
+  const notify = useNotify();
   const cancel = useCancelPurchaseReturn();
 
   const pr = detail.data?.purchaseReturn ?? null;
@@ -222,7 +224,7 @@ export const PurchaseReturnDetail = () => {
       setHeaderDraft(null);
       setLineDrafts({});
     } catch (e) {
-      window.alert(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
+      notify({ title: 'Save failed', body: `${e instanceof Error ? e.message : String(e)}`, tone: 'error' });
     } finally {
       setSavingDraft(false);
     }
@@ -233,7 +235,7 @@ export const PurchaseReturnDetail = () => {
     // PO/GRN/PI's handlePrint wiring its own purchase-return-pdf helper.
     import('../lib/purchase-return-pdf').then(({ generatePurchaseReturnPdf }) =>
       generatePurchaseReturnPdf(pr, items as any),
-    ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+    ).catch((e) => notify({ title: 'PDF generation failed', body: `${e instanceof Error ? e.message : String(e)}`, tone: 'error' }));
   };
 
   return (
@@ -276,7 +278,7 @@ export const PurchaseReturnDetail = () => {
               onClick={() => {
                 if (!confirm(`Cancel return ${pr.return_number}? This reverses the return — the goods are put back into stock. Line items stay for audit.`)) return;
                 cancel.mutate(pr.id, {
-                  onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
+                  onError: (err) => notify({ title: 'Cancel failed', body: `${err instanceof Error ? err.message : String(err)}`, tone: 'error' }),
                 });
               }}
               disabled={cancel.isPending}>

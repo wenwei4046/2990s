@@ -23,6 +23,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { useNotify } from '../components/NotifyDialog';
 import {
   useCreateConsignmentOrder, useConsignmentDebtorSearch, useAddConsignmentOrderPayment,
   useUploadConsignmentItemPhoto, useConsignmentOrderDetail,
@@ -66,6 +67,7 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 
 export const ConsignmentOrderNew = () => {
   const navigate = useNavigate();
+  const notify = useNotify();
   /* Copy-to-new: ?copyFrom=<docNo> seeds this form from an existing consignment
      order (customer + line items only — dates, payments, customer ref, doc no
      and status are left blank so the operator starts fresh). */
@@ -424,36 +426,38 @@ export const ConsignmentOrderNew = () => {
 
   const onSave = () => {
     if (!debtorName.trim()) {
-      window.alert('Customer name is required.');
+      notify({ title: 'Customer name is required.', tone: 'error' });
       return;
     }
     if (!phone.trim()) {
-      window.alert('Phone number is required — every consignment order must have a contact number.');
+      notify({ title: 'Phone number is required', body: 'Every consignment order must have a contact number.', tone: 'error' });
       return;
     }
     if (datesXor) {
-      window.alert(
-        'Processing Date and Delivery Date must be set together.\n\n' +
-        'Either fill in BOTH dates, or leave BOTH empty — partial dates ' +
-        'cause scheduling issues.',
-      );
+      notify({
+        title: 'Processing Date and Delivery Date must be set together.',
+        body:
+          'Either fill in BOTH dates, or leave BOTH empty — partial dates ' +
+          'cause scheduling issues.',
+        tone: 'error',
+      });
       return;
     }
     if (processingDate && processingDate < today) {
-      window.alert('Processing Date cannot be in the past — pick today or a future date.');
+      notify({ title: 'Processing Date cannot be in the past', body: 'Pick today or a future date.', tone: 'error' });
       return;
     }
     if (deliveryDate && deliveryDate < today) {
-      window.alert('Delivery Date cannot be in the past — pick today or a future date.');
+      notify({ title: 'Delivery Date cannot be in the past', body: 'Pick today or a future date.', tone: 'error' });
       return;
     }
     if (processingDate && deliveryDate && processingDate > deliveryDate) {
-      window.alert('Processing Date cannot be later than the Delivery Date.');
+      notify({ title: 'Processing Date cannot be later than the Delivery Date.', tone: 'error' });
       return;
     }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
-      window.alert('Add at least one item via "+ Add Line Item".');
+      notify({ title: 'Add at least one item via "+ Add Line Item".', tone: 'error' });
       return;
     }
     if (processingDate) {
@@ -461,10 +465,11 @@ export const ConsignmentOrderNew = () => {
         .map((l) => ({ code: l.itemCode, miss: missingRequiredVariants(l.itemGroup, l.variants) }))
         .filter((x) => x.miss.length > 0);
       if (variantGaps.length > 0) {
-        window.alert(
-          'Complete all variant selections before saving:\n\n'
-          + variantGaps.map((x) => `• ${x.code}: ${x.miss.join(', ')}`).join('\n'),
-        );
+        notify({
+          title: 'Complete all variant selections before saving',
+          body: variantGaps.map((x) => `• ${x.code}: ${x.miss.join(', ')}`).join('\n'),
+          tone: 'error',
+        });
         return;
       }
     }
@@ -514,22 +519,28 @@ export const ConsignmentOrderNew = () => {
           const { failed: photoFailed, skipped: photoSkipped } =
             await flushPendingPhotos(res.docNo, validLines);
           if (failed > 0) {
-            window.alert(
-              `Consignment order ${res.docNo} was created, but ${failed} ` +
-              `payment row${failed === 1 ? '' : 's'} failed to save. ` +
-              `Please re-enter ${failed === 1 ? 'it' : 'them'} on the Detail page.`,
-            );
+            await notify({
+              title: 'Some payments failed to save',
+              body:
+                `Consignment order ${res.docNo} was created, but ${failed} ` +
+                `payment row${failed === 1 ? '' : 's'} failed to save. ` +
+                `Please re-enter ${failed === 1 ? 'it' : 'them'} on the Detail page.`,
+              tone: 'error',
+            });
           }
           if (photoFailed > 0 || photoSkipped > 0) {
-            window.alert(
-              `Consignment order ${res.docNo} was created, but ${photoFailed + photoSkipped} ` +
-              `staged photo${(photoFailed + photoSkipped) === 1 ? '' : 's'} could not be ` +
-              `uploaded. Please re-attach on the Detail page.`,
-            );
+            await notify({
+              title: 'Some photos could not be uploaded',
+              body:
+                `Consignment order ${res.docNo} was created, but ${photoFailed + photoSkipped} ` +
+                `staged photo${(photoFailed + photoSkipped) === 1 ? '' : 's'} could not be ` +
+                `uploaded. Please re-attach on the Detail page.`,
+              tone: 'error',
+            });
           }
           navigate(`/consignment/${res.docNo}`);
         },
-        onError:   (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError:   (err) => notify({ title: 'Save failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
       },
     );
   };

@@ -26,6 +26,7 @@ import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import {
   useDeliveryReturnDetail,
   useUpdateDeliveryReturnHeader,
@@ -162,6 +163,7 @@ export const DeliveryReturnDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const askConfirm = useConfirm();
+  const notify = useNotify();
   const [searchParams] = useSearchParams();
   const detail = useDeliveryReturnDetail(id ?? null);
   const updateHeader = useUpdateDeliveryReturnHeader();
@@ -363,7 +365,7 @@ export const DeliveryReturnDetail = () => {
           refund_centi: it.line_total_centi,
         })),
       ),
-    ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+    ).catch((e) => notify({ title: 'PDF generation failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }));
   };
 
   return (

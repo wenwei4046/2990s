@@ -12,6 +12,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { MaintPoolEntry } from '@2990s/shared';
 import { supabase } from './supabase';
 import { authedFetch, humanApiError } from './authed-fetch';
+import { serviceNotify } from './dialog-service';
 import { verifiedSave, readbackGet, friendlySaveMessage } from './verified-save';
 
 const API_URL = import.meta.env.VITE_API_URL;
@@ -331,8 +332,7 @@ export function useUpdateMfgProductPrices() {
     onError: (err) => {
       // Surface a money-save failure LOUDLY — a silent miss would let the
       // operator believe a price stuck when it didn't (verified-save).
-      // eslint-disable-next-line no-alert
-      window.alert(err instanceof Error ? err.message : String(err));
+      serviceNotify({ title: 'Save failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mfg-products'] });

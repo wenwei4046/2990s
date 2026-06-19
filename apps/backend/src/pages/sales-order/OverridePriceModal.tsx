@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { DollarSign, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useOverrideMfgSoLinePrice } from '../../lib/flow-queries';
+import { useNotify } from '../../components/NotifyDialog';
 import type { SoItem } from './types';
 import { fmtRm, ICON } from './types';
 import styles from '../SalesOrderDetail.module.css';
@@ -21,6 +22,7 @@ type Props = {
 
 export const OverridePriceModal = ({ item, docNo, currency, onClose }: Props) => {
   const override = useOverrideMfgSoLinePrice();
+  const notify = useNotify();
   const [overrideRm, setOverrideRm] = useState(
     (item.unit_price_centi / 100).toFixed(2),
   );
@@ -29,11 +31,11 @@ export const OverridePriceModal = ({ item, docNo, currency, onClose }: Props) =>
   const submit = () => {
     const newSen = Math.round(Number(overrideRm) * 100);
     if (!Number.isFinite(newSen) || newSen <= 0) {
-      alert('Override price must be a positive number.');
+      notify({ title: 'Override price must be a positive number.', tone: 'error' });
       return;
     }
     if (reason.trim().length < 10) {
-      alert('Reason must be at least 10 characters.');
+      notify({ title: 'Reason must be at least 10 characters.', tone: 'error' });
       return;
     }
     override.mutate(

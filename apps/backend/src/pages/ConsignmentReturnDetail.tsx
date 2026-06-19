@@ -20,6 +20,7 @@ import {
 import { Link, useParams, useSearchParams } from 'react-router';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import {
   ArrowLeft, Pencil, Plus, Printer, Save, Undo2, ChevronDown, Ban, RotateCcw,
@@ -152,6 +153,7 @@ const draftFromItem = (it: CrnItem): SoLineDraft => ({
 export const ConsignmentReturnDetail = () => {
   const { id } = useParams<{ id: string }>();
   const askConfirm = useConfirm();
+  const notify = useNotify();
   const [searchParams] = useSearchParams();
   const detail = useConsignmentReturnDetail(id ?? null);
   const updateHeader = useUpdateConsignmentReturnHeader();
@@ -332,7 +334,7 @@ export const ConsignmentReturnDetail = () => {
           docTitle: 'CONSIGNMENT RETURN', docNoLabel: 'CR No',
           amountLabel: 'Value', totalLabel: 'TOTAL VALUE',
         }))
-      .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e) => notify({ title: 'PDF generation failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }));
   };
 
   const handleCancel = async () => {

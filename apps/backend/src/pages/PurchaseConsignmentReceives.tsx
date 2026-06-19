@@ -27,6 +27,7 @@ import {
 } from '../lib/purchase-consignment-receive-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { StatusPill } from '../components/StatusPill';
 import { statusLabel } from '../lib/status-pill';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
@@ -237,6 +238,7 @@ export const PurchaseConsignmentReceives = () => {
   const { data, isLoading, error } = usePurchaseConsignmentReceives();
   const cancelReceive = useCancelPurchaseConsignmentReceive();
   const askConfirm = useConfirm();
+  const notify = useNotify();
 
   const allRows = useMemo<GrnRow[]>(() => (data?.grns ?? []) as GrnRow[], [data]);
   const rows = useMemo<GrnRow[]>(
@@ -253,7 +255,7 @@ export const PurchaseConsignmentReceives = () => {
       danger: true,
     }))) return;
     cancelReceive.mutate(g.id, {
-      onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
+      onError: (e) => notify({ title: 'Cancel failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }),
     });
   };
 

@@ -22,6 +22,7 @@ import {
 import {
   ListingPickerDialog, ListingPickerTrigger, type ListingChoice,
 } from '../components/ListingPickerDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './FlowPages.module.css';
 
@@ -194,6 +195,7 @@ const GRN_CHIPS: Chip[] = [
 ];
 
 export const Grns = () => {
+  const notify = useNotify();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   // PR — Smart Buttons fan-out: /grns?poId=xxx narrows the list to GRNs
@@ -224,15 +226,15 @@ export const Grns = () => {
 
   const convertToPr = () => {
     if (selected.length === 0) return;
-    if (!allPosted) { alert('Only POSTED GRNs can be converted to a Purchase Return.'); return; }
-    if (!sameSupplier) { alert('All selected GRNs must be from the same supplier.'); return; }
+    if (!allPosted) { notify({ title: 'Only POSTED GRNs can be converted to a Purchase Return.', tone: 'error' }); return; }
+    if (!sameSupplier) { notify({ title: 'All selected GRNs must be from the same supplier.', tone: 'error' }); return; }
     prFromGrns.mutate({ grnIds: [...selectedIds] }, {
-      onSuccess: (res) => {
-        alert(`Created Purchase Return ${res.returnNumber} from ${res.grnCount} GRNs (${res.lineCount} rejected lines).`);
+      onSuccess: async (res) => {
+        await notify({ title: `Created Purchase Return ${res.returnNumber} from ${res.grnCount} GRNs (${res.lineCount} rejected lines).` });
         setSelectedIds(new Set());
         navigate(`/purchase-returns/${res.id}`);
       },
-      onError: (e) => alert(`Failed: ${e instanceof Error ? e.message : String(e)}`),
+      onError: (e) => notify({ title: `Failed: ${e instanceof Error ? e.message : String(e)}`, tone: 'error' }),
     });
   };
 

@@ -24,6 +24,7 @@ import {
 import { Button } from '@2990s/design-system';
 import { formatVariantKey } from '@2990s/shared';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useNotify } from '../components/NotifyDialog';
 import {
   useWarehouses,
   useInventoryProductTotals,
@@ -1384,6 +1385,7 @@ const WarehouseDrawer = ({
 }) => {
   const create = useCreateWarehouse();
   const update = useUpdateWarehouse();
+  const notify = useNotify();
   const [form, setForm] = useState({
     code: editing?.code ?? '',
     name: editing?.name ?? '',
@@ -1394,7 +1396,7 @@ const WarehouseDrawer = ({
 
   const submit = () => {
     if (!form.code.trim() || !form.name.trim()) {
-      alert('Code and Name are required.');
+      notify({ title: 'Code and Name are required.', tone: 'error' });
       return;
     }
     if (editing) {

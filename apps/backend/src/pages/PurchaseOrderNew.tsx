@@ -41,6 +41,7 @@ import {
 } from '@2990s/shared/mfg-pricing';
 import { MoneyInput } from '../components/MoneyInput';
 import { ActionResultDialog } from '../components/ActionResultDialog';
+import { useNotify } from '../components/NotifyDialog';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -143,6 +144,7 @@ const SpecialsCheckboxes = ({
 export const PurchaseOrderNew = () => {
   const navigate = useNavigate();
   const create   = useCreatePurchaseOrder();
+  const notify   = useNotify();
 
   // ── Header state ────────────────────────────────────────────────────
   const [supplierId, setSupplierId]   = useState<string>('');
@@ -599,7 +601,7 @@ export const PurchaseOrderNew = () => {
 
   const onSave = () => {
     if (!supplierId) {
-      window.alert('Pick a Creditor (supplier) first.');
+      notify({ title: 'Pick a Creditor (supplier) first.', tone: 'error' });
       return;
     }
     // PR #157 — Commander 2026-05-26: "这些没有 expected delivery date 和
@@ -607,11 +609,11 @@ export const PurchaseOrderNew = () => {
     // submit — they fan out to per-line warehouse + delivery date and are
     // needed downstream for GRN. Defense-in-depth: API also rejects missing.
     if (!expectedAt) {
-      window.alert('Expected Delivery date is required.');
+      notify({ title: 'Expected Delivery date is required.', tone: 'error' });
       return;
     }
     if (!purchaseLocationId) {
-      window.alert('Purchase Location is required.');
+      notify({ title: 'Purchase Location is required.', tone: 'error' });
       return;
     }
     const validLines = lines.filter((l) => l.materialCode.trim() && l.qty > 0);
@@ -649,7 +651,7 @@ export const PurchaseOrderNew = () => {
       },
       {
         onSuccess: (res) => navigate(`/purchase-orders/${res.id}`),
-        onError:   (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError:   (err) => notify({ title: 'Save failed', body: `${err instanceof Error ? err.message : String(err)}`, tone: 'error' }),
       },
     );
   };

@@ -15,6 +15,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
+import { serviceNotify } from './dialog-service';
 import { authedFetch } from './authed-fetch';
 
 /* ── List ────────────────────────────────────────────────────────────── */
@@ -91,7 +92,7 @@ export const useUpdateConsignmentNoteStatus = () => {
       qc.invalidateQueries({ queryKey: ['consignment-note-detail', vars.id] });
     },
     onError: (err) => {
-      window.alert(`Status update failed: ${err instanceof Error ? err.message : String(err)}`);
+      serviceNotify({ title: 'Status update failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
     },
   });
 };

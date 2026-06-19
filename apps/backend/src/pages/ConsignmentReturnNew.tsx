@@ -26,6 +26,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { useNotify } from '../components/NotifyDialog';
 import { useCreateConsignmentReturn } from '../lib/consignment-return-queries';
 import { useConsignmentNoteDetail } from '../lib/consignment-note-queries';
 import { useStaff } from '../lib/admin-queries';
@@ -52,6 +53,7 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 
 export const ConsignmentReturnNew = () => {
   const navigate = useNavigate();
+  const notify = useNotify();
   const [searchParams] = useSearchParams();
   // Convert-from: a Consignment Note (=DO) this return collects back. Mirrors the
   // DR's ?fromDo= prefill — seed header + lines from the note, free-edit after.
@@ -221,10 +223,10 @@ export const ConsignmentReturnNew = () => {
   const canSave = debtorName.trim().length > 0;
 
   const onSave = () => {
-    if (!canSave) { window.alert('Customer name is required.'); return; }
+    if (!canSave) { notify({ title: 'Customer name is required.', tone: 'error' }); return; }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
-      window.alert('Add at least one item via "+ Add Line Item".');
+      notify({ title: 'Add at least one item via "+ Add Line Item".', tone: 'error' });
       return;
     }
 
@@ -272,7 +274,7 @@ export const ConsignmentReturnNew = () => {
         onSuccess: (res: { id: string; returnNumber: string }) => {
           navigate(`/consignment-return/${res.id}`);
         },
-        onError: (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError: (err) => notify({ title: 'Save failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
       },
     );
   };

@@ -15,6 +15,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
+import { serviceNotify } from './dialog-service';
 import { authedFetch } from './authed-fetch';
 
 /* ── List ────────────────────────────────────────────────────────────── */
@@ -96,7 +97,7 @@ export const useCancelPurchaseConsignmentReturn = () => {
       qc.invalidateQueries({ queryKey: ['pc-return-detail', id] });
     },
     onError: (err) => {
-      window.alert(`Cancel return failed: ${err instanceof Error ? err.message : String(err)}`);
+      serviceNotify({ title: 'Cancel return failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
     },
   });
 };

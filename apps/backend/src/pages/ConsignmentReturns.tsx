@@ -19,6 +19,7 @@ import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
@@ -302,6 +303,7 @@ const STORAGE_KEY = 'pr-g.crn-list.layout.v1';
 export const ConsignmentReturns = () => {
   const navigate = useNavigate();
   const askConfirm = useConfirm();
+  const notify = useNotify();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
 
@@ -363,7 +365,7 @@ export const ConsignmentReturns = () => {
       danger: true,
     }))) return;
     updateStatus.mutate({ id: row.id, status: 'CANCELLED' },
-      { onError: (e) => alert(`Failed: ${e instanceof Error ? e.message : String(e)}`) });
+      { onError: (e) => notify({ title: 'Failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }) });
   };
 
   const kpiTile = (label: string, value: string, accent?: 'good' | 'bad' | 'burnt'): JSX.Element => (

@@ -51,6 +51,8 @@ import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } fr
 import { PaymentsTable } from '../components/PaymentsTable';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import { useConfirm } from '../components/ConfirmDialog';
+import { usePrompt } from '../components/PromptDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { fetchSoSlipUrl } from '../lib/slip';
 import {
   useLocalities,
@@ -325,6 +327,8 @@ export const SalesOrderDetail = () => {
   const updateHeader = useUpdateMfgSalesOrderHeader();
   const updateStatus = useUpdateMfgSalesOrderStatus();
   const askConfirm = useConfirm();
+  const askPrompt = usePrompt();
+  const notify = useNotify();
   const addItem = useAddMfgSalesOrderItem();
   const updateItem = useUpdateMfgSalesOrderItem();
   const deleteItem = useDeleteMfgSalesOrderItem();
@@ -407,7 +411,11 @@ export const SalesOrderDetail = () => {
        guard so Edit can't blank it out (the backend PATCH now rejects an
        empty phone too; this keeps the operator from a confusing 400). */
     if (!handle.getPhone().trim()) {
-      window.alert('Phone number is required — every sales order must have a contact number.');
+      notify({
+        title: 'Phone number is required',
+        body: 'every sales order must have a contact number.',
+        tone: 'error',
+      });
       return;
     }
 
@@ -709,10 +717,13 @@ export const SalesOrderDetail = () => {
         }
       }
       if (failed > 0) {
-        window.alert(
-          `Line added, but ${failed} staged photo${failed === 1 ? '' : 's'} ` +
-          `failed to upload. Please re-attach on the row.`,
-        );
+        notify({
+          title:
+            `Line added, but ${failed} staged photo${failed === 1 ? '' : 's'} ` +
+            `failed to upload.`,
+          body: 'Please re-attach on the row.',
+          tone: 'error',
+        });
       }
     }
   };
@@ -775,7 +786,7 @@ export const SalesOrderDetail = () => {
        the query is still loading we surface a brief notice and bail out
        rather than printing a PDF with an empty Payments table. */
     if (printPaymentsQ.isLoading) {
-      alert('Loading payments… please try again in a moment.');
+      notify({ title: 'Loading payments… please try again in a moment.' });
       return;
     }
     const payments = printPaymentsQ.data ?? [];
@@ -785,7 +796,11 @@ export const SalesOrderDetail = () => {
     generateSalesOrderPdf(header, items, payments, 'save', pwpCodes).catch((e) => {
       // eslint-disable-next-line no-console
       console.error('PDF generation failed:', e);
-      alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`);
+      notify({
+        title: 'PDF generation failed',
+        body: `${e instanceof Error ? e.message : String(e)}`,
+        tone: 'error',
+      });
     });
   };
 
@@ -954,13 +969,17 @@ export const SalesOrderDetail = () => {
               : <>This SO is <strong>{header.status.replace(/_/g, ' ')}</strong>. Line item edits + addresses are locked. Click <em>Override</em> if you must change something.</>}
           </span>
           <Button variant={unlockOverride ? 'ghost' : 'primary'} size="sm"
-            onClick={() => {
+            onClick={async () => {
               if (!unlockOverride) {
-                const reason = window.prompt('Reason for override?', '');
-                if (!reason || reason.trim().length < 10) {
-                  alert('Override needs a reason ≥ 10 chars.');
-                  return;
-                }
+                const reason = await askPrompt({
+                  title: 'Reason for override?',
+                  body: 'This unlocks editing on a locked SO. The override is tracked in the status timeline.',
+                  placeholder: 'At least 10 characters',
+                  multiline: true,
+                  confirmLabel: 'Override',
+                  validate: (v) => (v.trim().length < 10 ? 'Override needs a reason ≥ 10 chars.' : null),
+                });
+                if (reason == null) return;
                 // Audit the override via a status change row (we re-affirm the
                 // current status with an OVERRIDE notes prefix).
                 updateStatus.mutate({ docNo: header.doc_no, status: header.status });
@@ -1395,6 +1414,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   //   • venue              → reused for Building Type (POS dropdown)
   // Agent + Branding kept (B2B-specific, commander 2026-05-26).
   // POS field "Salesperson" → Agent column on the SO.
+  const notify = useNotify();
   const localities = useLocalities();
   const localityRows = useMemo(() => localities.data ?? [], [localities.data]);
   const staffQ = useStaff();
@@ -1675,7 +1695,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     const err = validateDates();
     if (err) {
       if (cb?.onError) cb.onError(err);
-      else window.alert(err);
+      else notify({ title: 'Check the dates', body: err, tone: 'error' });
       return;
     }
     onSave(buildPayload(), cb);
@@ -2291,6 +2311,7 @@ const OverridePriceModal = ({
   onClose: () => void;
 }) => {
   const override = useOverrideMfgSoLinePrice();
+  const notify = useNotify();
   const [overrideRm, setOverrideRm] = useState(
     (item.unit_price_centi / 100).toFixed(2),
   );
@@ -2299,11 +2320,11 @@ const OverridePriceModal = ({
   const submit = () => {
     const newSen = Math.round(Number(overrideRm) * 100);
     if (!Number.isFinite(newSen) || newSen <= 0) {
-      alert('Override price must be a positive number.');
+      notify({ title: 'Override price must be a positive number.', tone: 'error' });
       return;
     }
     if (reason.trim().length < 10) {
-      alert('Reason must be at least 10 characters.');
+      notify({ title: 'Reason must be at least 10 characters.', tone: 'error' });
       return;
     }
     override.mutate(

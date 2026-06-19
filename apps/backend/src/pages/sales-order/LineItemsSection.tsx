@@ -26,6 +26,7 @@ import {
   useUpdateSoItemStockStatus,
 } from '../../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../../components/SoLineCard';
+import { useNotify } from '../../components/NotifyDialog';
 import { VariantsPills } from './VariantsPills';
 import type { SoHeader, SoItem } from './types';
 import { fmtRm, ICON, SM_ICON } from './types';
@@ -49,6 +50,7 @@ const LineItemsSectionInner = ({ header, items, isEditing, isLocked }: Props) =>
   const updateItem = useUpdateMfgSalesOrderItem();
   const deleteItem = useDeleteMfgSalesOrderItem();
   const updateStock = useUpdateSoItemStockStatus();
+  const notify = useNotify();
 
   const [editingLineIds, setEditingLineIds] = useState<Set<string>>(new Set());
   const [editingDrafts, setEditingDrafts] = useState<Record<string, SoLineDraft>>({});
@@ -121,7 +123,7 @@ const LineItemsSectionInner = ({ header, items, isEditing, isLocked }: Props) =>
   const submitEditingDraft = (id: string) => {
     const d = editingDrafts[id];
     if (!d) return;
-    if (!d.itemCode.trim()) { window.alert('Pick a product first.'); return; }
+    if (!d.itemCode.trim()) { notify({ title: 'Pick a product first.', tone: 'error' }); return; }
     updateItem.mutate(
       {
         docNo: header.doc_no,
@@ -161,7 +163,7 @@ const LineItemsSectionInner = ({ header, items, isEditing, isLocked }: Props) =>
 
   const submitAddLine = () => {
     if (!addingDraft) return;
-    if (!addingDraft.itemCode.trim()) { window.alert('Pick a product first.'); return; }
+    if (!addingDraft.itemCode.trim()) { notify({ title: 'Pick a product first.', tone: 'error' }); return; }
     addItem.mutate(
       {
         docNo: header.doc_no,

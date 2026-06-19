@@ -54,6 +54,7 @@ import { useDebouncedValue } from '../lib/hooks';
 import { useAuth, isAdminLevel, isHatchSales } from '../lib/auth';
 import { CATEGORY_BADGE } from '../lib/category-badges';
 import { posRemarkSpecialOf } from '../lib/pos-remark-special';
+import { useNotify } from './NotifyDialog';
 import styles from './SoLineCard.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -159,6 +160,7 @@ const SoLineCardInner = ({
   itemId?:   string;
   isEditing?: boolean;
 }) => {
+  const notify = useNotify();
   const maintQ   = useMaintenanceConfig('master');
   const maint    = maintQ.data?.data ?? null;
   /* fabric_trackings stays ONLY for the read-only pricing-tier breakdown
@@ -1013,7 +1015,7 @@ const SoLineCardInner = ({
                           } catch (err) {
                             // eslint-disable-next-line no-console
                             console.error('[so-line-photo] upload failed:', err);
-                            window.alert(`Photo upload failed for ${f.name}: ${err instanceof Error ? err.message : String(err)}`);
+                            notify({ title: `Photo upload failed for ${f.name}`, body: err instanceof Error ? err.message : String(err), tone: 'error' });
                           }
                         }
                         if (newKeys.length > 0) {

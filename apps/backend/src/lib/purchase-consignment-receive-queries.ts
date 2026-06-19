@@ -15,6 +15,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
+import { serviceNotify } from './dialog-service';
 import { authedFetch } from './authed-fetch';
 
 /* ── List ────────────────────────────────────────────────────────────── */
@@ -154,7 +155,7 @@ export const useCancelPurchaseConsignmentReceive = () => {
       qc.invalidateQueries({ queryKey: ['pc-receive'] });
     },
     onError: (err) => {
-      window.alert(`Cancel receive failed: ${err instanceof Error ? err.message : String(err)}`);
+      serviceNotify({ title: 'Cancel receive failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
     },
   });
 };

@@ -16,6 +16,7 @@ import {
   type Warehouse,
 } from '../lib/inventory-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useNotify } from '../components/NotifyDialog';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -138,6 +139,7 @@ const WarehouseDrawer = ({
 }) => {
   const create = useCreateWarehouse();
   const update = useUpdateWarehouse();
+  const notify = useNotify();
   const [form, setForm] = useState({
     code: editing?.code ?? '',
     name: editing?.name ?? '',
@@ -148,7 +150,7 @@ const WarehouseDrawer = ({
 
   const submit = () => {
     if (!form.code.trim() || !form.name.trim()) {
-      alert('Code and Name are required.');
+      notify({ title: 'Code and Name are required.', tone: 'error' });
       return;
     }
     if (editing) {

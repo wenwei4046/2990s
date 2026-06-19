@@ -22,6 +22,7 @@ import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-29 — GRN shows the variant config like PO
 import { LoadingButton } from '../components/LoadingButton';
 import { SkeletonDetailPage } from '../components/Skeleton';
+import { useNotify } from '../components/NotifyDialog';
 import {
   useGrnDetail,
   usePostGrn,
@@ -80,6 +81,7 @@ const GRN_STATUS_CLASS: Record<string, string> = {
 };
 
 export const GrnDetail = () => {
+  const notify = useNotify();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const detail = useGrnDetail(id ?? null);
@@ -113,7 +115,7 @@ export const GrnDetail = () => {
 
   const raisePurchaseReturn = () => {
     if (rejectedItems.length === 0) {
-      alert('No rejected qty on any line. Add rejected qty to the GRN first.');
+      notify({ title: 'No rejected qty on any line.', body: 'Add rejected qty to the GRN first.', tone: 'error' });
       return;
     }
     createPr.mutate({
@@ -172,7 +174,7 @@ export const GrnDetail = () => {
           <span className={`${styles.statusPill} ${GRN_STATUS_CLASS[grn.status] ?? ''}`}>{grn.status}</span>
           <Button variant="ghost" size="md" onClick={() => {
             import('../lib/grn-pdf').then(({ generateGrnPdf }) => generateGrnPdf(grn, items))
-              .catch((e) => alert(`PDF failed: ${e instanceof Error ? e.message : String(e)}`));
+              .catch((e) => notify({ title: `PDF failed: ${e instanceof Error ? e.message : String(e)}`, tone: 'error' }));
           }}>
             <Printer {...ICON} />
             <span>Print PDF</span>
@@ -307,6 +309,7 @@ const PI_STATUS_CLASS: Record<string, string> = {
 };
 
 export const PurchaseInvoiceDetail = () => {
+  const notify = useNotify();
   const { id } = useParams<{ id: string }>();
   const detail = usePurchaseInvoiceDetail(id ?? null);
   const linked = usePurchaseInvoiceLinked(id ?? null);
@@ -367,7 +370,7 @@ export const PurchaseInvoiceDetail = () => {
           </span>
           <Button variant="ghost" size="md" onClick={() => {
             import('../lib/purchase-invoice-pdf').then(({ generatePurchaseInvoicePdf }) => generatePurchaseInvoicePdf(pi, items))
-              .catch((e) => alert(`PDF failed: ${e instanceof Error ? e.message : String(e)}`));
+              .catch((e) => notify({ title: `PDF failed: ${e instanceof Error ? e.message : String(e)}`, tone: 'error' }));
           }}>
             <Printer {...ICON} />
             <span>Print PDF</span>
@@ -502,6 +505,7 @@ const SI_STATUS_CLASS: Record<string, string> = {
 };
 
 export const SalesInvoiceDetail = () => {
+  const notify = useNotify();
   const { id } = useParams<{ id: string }>();
   const detail = useSalesInvoiceDetail(id ?? null);
   // PR-DRAFT-removal — useUpdateSalesInvoiceStatus unused now (no Issue button).
@@ -552,7 +556,7 @@ export const SalesInvoiceDetail = () => {
           </span>
           <Button variant="ghost" size="md" onClick={() => {
             import('../lib/sales-invoice-pdf').then(({ generateSalesInvoicePdf }) => generateSalesInvoicePdf(si, items))
-              .catch((e) => alert(`PDF failed: ${e instanceof Error ? e.message : String(e)}`));
+              .catch((e) => notify({ title: `PDF failed: ${e instanceof Error ? e.message : String(e)}`, tone: 'error' }));
           }}>
             <Printer {...ICON} />
             <span>Print PDF</span>
@@ -699,12 +703,13 @@ const PaymentModal = ({
   onSubmit: (amountCenti: number, notes?: string) => void;
   saving: boolean;
 }) => {
+  const notify = useNotify();
   const [amountStr, setAmountStr] = useState((outstanding / 100).toFixed(2));
   const [notes, setNotes] = useState('');
 
   const submit = () => {
     const amt = Math.round(Number(amountStr) * 100);
-    if (!Number.isFinite(amt) || amt <= 0) { alert('Enter a valid amount.'); return; }
+    if (!Number.isFinite(amt) || amt <= 0) { notify({ title: 'Enter a valid amount.', tone: 'error' }); return; }
     onSubmit(amt, notes || undefined);
   };
 
@@ -753,6 +758,7 @@ const PR_STATUS_CLASS: Record<string, string> = {
 };
 
 export const PurchaseReturnDetail = () => {
+  const notify = useNotify();
   const { id } = useParams<{ id: string }>();
   const detail = usePurchaseReturnDetail(id ?? null);
   const linked = usePurchaseReturnLinked(id ?? null);
@@ -809,7 +815,7 @@ export const PurchaseReturnDetail = () => {
           <span className={`${styles.statusPill} ${PR_STATUS_CLASS[pr.status] ?? ''}`}>{pr.status}</span>
           <Button variant="ghost" size="md" onClick={() => {
             import('../lib/purchase-return-pdf').then(({ generatePurchaseReturnPdf }) => generatePurchaseReturnPdf(pr, items))
-              .catch((e) => alert(`PDF failed: ${e instanceof Error ? e.message : String(e)}`));
+              .catch((e) => notify({ title: `PDF failed: ${e instanceof Error ? e.message : String(e)}`, tone: 'error' }));
           }}>
             <Printer {...ICON} />
             <span>Print PDF</span>

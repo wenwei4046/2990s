@@ -40,6 +40,7 @@ import {
 import { useWarehouses } from '../lib/inventory-queries';
 import { MoneyInput } from '../components/MoneyInput';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
@@ -106,6 +107,7 @@ export const PurchaseConsignmentOrderDetail = () => {
   const updateItem = useUpdatePurchaseConsignmentOrderItem();
   const deleteItem = useDeletePurchaseConsignmentOrderItem();
   const askConfirm = useConfirm();
+  const notify = useNotify();
 
   const po = detail.data?.purchaseOrder ?? null;
   const items = detail.data?.items ?? [];
@@ -195,7 +197,7 @@ export const PurchaseConsignmentOrderDetail = () => {
     import('../lib/purchase-order-pdf')
       .then(({ generatePurchaseOrderPdf }) =>
         generatePurchaseOrderPdf(po as never, items as never, { docTitle: 'PURCHASE CONSIGNMENT ORDER' }))
-      .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e) => notify({ title: 'PDF generation failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }));
   };
 
   const setHeaderField = (k: keyof HeaderDraft, v: string) => {
@@ -247,7 +249,7 @@ export const PurchaseConsignmentOrderDetail = () => {
       setHeaderDraft(null);
       setLineDrafts({});
     } catch (e) {
-      window.alert(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
+      notify({ title: 'Save failed', body: e instanceof Error ? e.message : String(e), tone: 'error' });
     } finally {
       setSavingDraft(false);
     }
@@ -286,7 +288,7 @@ export const PurchaseConsignmentOrderDetail = () => {
               onClick={() => {
                 if (!confirm(`Cancel ${po.po_number}? This sets status to CANCELLED — line items + linked docs stay for audit.`)) return;
                 cancel.mutate(po.id, {
-                  onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
+                  onError: (err) => notify({ title: 'Cancel failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
                 });
               }}
               disabled={cancel.isPending}>
@@ -300,7 +302,7 @@ export const PurchaseConsignmentOrderDetail = () => {
                 if (!confirm(`Permanently delete ${po.po_number}? This removes the header + all line items and cannot be undone.`)) return;
                 deletePo.mutate(po.id, {
                   onSuccess: () => navigate('/purchase-consignment'),
-                  onError:   (err) => window.alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),
+                  onError:   (err) => notify({ title: 'Delete failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
                 });
               }}
               disabled={deletePo.isPending}>
