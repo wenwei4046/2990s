@@ -18,7 +18,7 @@
 import { todayMyt } from '../lib/dates';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Plus, Save, Trash2, X, ArrowRightLeft } from 'lucide-react';
+import { ArrowLeft, Plus, Save, X, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useCreatePurchaseOrder,
@@ -27,25 +27,22 @@ import {
   useSuppliersForMaterial,
   type BindingRow,
   type NewPoItem,
-  type MaterialKind,
   type OutstandingSoItem,
 } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
-import { activeOptions, maintPickerValues } from '@2990s/shared';
-import { useFabricTrackings, fabricOptionLabel } from '../lib/fabric-queries';
+import { useFabricTrackings } from '../lib/fabric-queries';
 import { useWarehouses } from '../lib/inventory-queries';
 import {
   computeMfgPoUnitCost,
   type MfgFabricTier,
   type PoPriceMatrix,
 } from '@2990s/shared/mfg-pricing';
-import { MoneyInput } from '../components/MoneyInput';
+import { PoLineCard, emptyPoLine, type PoLineDraft } from '../components/PoLineCard';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { useNotify } from '../components/NotifyDialog';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
-const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
 
 const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   const v = centi ?? 0;
@@ -54,92 +51,13 @@ const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   })}`;
 };
 
-/** Per-line draft row. PR #97 — materialKind uses the schema's lowercase
-    enum ('mfg_product' | 'fabric' | 'raw') so the POST body lines up with
-    apps/api/src/routes/mfg-purchase-orders.ts §VALID_KINDS.
-    PR #126 — Commander 2026-05-26: "Item Code 需要显示两行（internal +
-    supplier code）+ description 也要显示两行 + 根据 category 带出变体属性".
-    `category` is set when an SKU is picked; drives which variant editor
-    unfolds beneath the line. `variants` JSON ships to API as part of
-    NewPoItem.variants — already supported by the API §POST handler. */
-type DraftLine = {
-  rid: string;
-  bindingId?: string;
-  materialKind: MaterialKind;
-  materialCode: string;
-  materialName: string;
-  supplierSku?: string;
-  qty: number;
-  unitPriceCenti: number;
-  discountCenti?: number;
-  deliveryDate?: string;
-  warehouseId?: string;
-  /* PR #126 — set when materialCode matches an mfg_product so the row knows
-     which variant editor to render (sofa / bedframe / mattress). Lowercase
-     to match SoLineCard's itemGroup convention. */
-  category?: string;
-  /** PR #126 — variant payload (fabric / color / design / total height /
-      seat / leg / size depending on category). Shipped to API as
-      NewPoItem.variants. */
-  variants: Record<string, unknown>;
-  /** Phase 3 (2026-05-29) — true once the operator types into Unit Price.
-      A manual override always wins: auto-pricing from the supplier price
-      table + maintenance surcharges stops touching this line's cost. */
-  priceTouched?: boolean;
-  /** Commander 2026-05-29 (BUG 1) — the source SO line this PO line came from
-      (set only when added via "From SO"). Threaded through the create payload
-      so the API increments mfg_sales_order_items.po_qty_picked, which drops the
-      line from the From-SO picker. NULL for manual / one-off PO lines. */
-  soItemId?: string | null;
-};
-
-const newLine = (): DraftLine => ({
-  rid: `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-  materialKind: 'mfg_product',
-  materialCode: '',
-  materialName: '',
-  qty: 1,
-  unitPriceCenti: 0,
-  variants: {},
-});
-
-/* Commander 2026-05-28 — Special Orders multi-select, mirroring the Sales
-   Order variant editor (PO previously had none). Writes variants.specials as
-   a string[] so it flows into Description 2 like SO does. */
-const SpecialsCheckboxes = ({
-  pool, picked, onChange,
-}: {
-  pool: Array<{ value: string }> | undefined;
-  picked: string[];
-  onChange: (arr: string[]) => void;
-}) => {
-  if (!pool || pool.length === 0) return null;
-  return (
-    <div style={{ marginTop: 'var(--space-2)' }}>
-      <div style={{
-        fontSize: 'var(--fs-11)', fontWeight: 700, letterSpacing: '0.08em',
-        textTransform: 'uppercase', color: 'var(--fg-muted)', marginBottom: 4,
-      }}>
-        Special Orders
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px' }}>
-        {pool.map((o) => {
-          const on = picked.includes(o.value);
-          return (
-            <label key={o.value} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--fs-12)', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={on}
-                onChange={() => onChange(on ? picked.filter((x) => x !== o.value) : [...picked, o.value])}
-              />
-              {o.value}
-            </label>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
+/* Per-line draft row. The shape (incl. the §PR #126 variant payload + Phase 3
+   priceTouched override flag) now lives on the shared PoLineCard as PoLineDraft
+   so Create + Edit share one editor; alias it locally to keep this file's
+   references terse. The DraftLine-only `soItemId` (the source SO line for
+   From-SO converts) rides on PoLineDraft too. */
+type DraftLine = PoLineDraft;
+const newLine = emptyPoLine;
 
 export const PurchaseOrderNew = () => {
   const navigate = useNavigate();
@@ -897,395 +815,31 @@ export const PurchaseOrderNew = () => {
           </span>
         </div>
         <div className={styles.cardBody} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-          {/* PR #129 — Card-per-line layout. Commander 2026-05-26: "其实有很
-              多字都塞在了一个小小的格子里，你可能 UI 整个要再整理过一下".
-              Replaces the 9-column cramped grid with breathing-room cards
-              (same shape as SoLineCard from PR #125). Each card has 4
-              sections: identity (item + supplier code), description,
-              variants (per category), pricing. */}
-          {lines.map((l, idx) => {
-            const lineTotalCenti = Math.max(0, l.qty * l.unitPriceCenti - (l.discountCenti ?? 0));
-            const categoryLabel = l.category?.toUpperCase() ?? 'UNSET';
-            // PR #135 — drop mattress from the variant editor list.
-            // Commander 2026-05-26: "mattress variant 还有 branding 为什么要带
-            // 出来呢？不需要带出来啊". For mattress SKUs the size + branding
-            // are already encoded in the SKU code itself (e.g. "HAPPI.S
-            // DEWCOOL MATT (S)"), so the editor was just visual noise.
-            const showVariants  = l.category && ['sofa', 'bedframe'].includes(l.category) && maint;
-
-            return (
-              <div
-                key={l.rid}
-                style={{
-                  background: 'var(--c-paper)',
-                  border: '1px solid var(--line)',
-                  borderRadius: 'var(--radius-lg)',
-                  padding: 'var(--space-4)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 'var(--space-3)',
-                }}
-              >
-                {/* Card header — Line N · category badge · line total · remove */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-                    <span style={{
-                      fontFamily: 'var(--font-button)',
-                      fontSize: 'var(--fs-12)',
-                      fontWeight: 700,
-                      letterSpacing: '0.10em',
-                      color: 'var(--fg-muted)',
-                    }}>
-                      LINE {idx + 1}
-                    </span>
-                    {l.category && (
-                      <span style={{
-                        fontFamily: 'var(--font-button)',
-                        fontSize: 'var(--fs-11)',
-                        fontWeight: 700,
-                        letterSpacing: '0.10em',
-                        padding: '2px 8px',
-                        borderRadius: 'var(--radius-pill)',
-                        background: 'rgba(166, 71, 30, 0.12)',
-                        color: 'var(--c-burnt)',
-                      }}>
-                        {categoryLabel}
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                    <span className={styles.previewPrice}>{fmtRm(lineTotalCenti, currency)}</span>
-                    <button
-                      type="button"
-                      onClick={() => dropLine(l.rid)}
-                      title="Remove line"
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        cursor: 'pointer',
-                        color: 'var(--c-festive-b, #B8331F)',
-                        padding: 4,
-                        display: 'inline-flex',
-                      }}
-                    >
-                      <Trash2 {...ICON} />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Identity row — Internal code + Supplier SKU side by side */}
-                <div className={styles.formGrid2}>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Item Code (Internal)</span>
-                    <input
-                      type="text"
-                      list={`bindings-${l.rid}`}
-                      value={l.materialCode}
-                      onChange={(e) => {
-                        const code = e.target.value;
-                        // Bound match wins (autofills supplier SKU + price).
-                        const match = supplierId
-                          ? bindings.find((b) => b.material_code === code)
-                          : undefined;
-                        if (match) { pickBinding(l.rid, match); return; }
-                        // No binding (no supplier yet, OR supplier has no binding
-                        // for this code) → one-off line: pull name + category
-                        // from the master SKU list so the row isn't left blank.
-                        const sku = (allSkus.data ?? []).find((p) => p.code === code);
-                        setLine(l.rid, {
-                          materialCode: code,
-                          materialName: sku?.name ?? l.materialName,
-                          bindingId: undefined,
-                          category: sku?.category.toLowerCase() ?? categoryForCode(code),
-                        });
-                        // Reverse supplier lookup only matters before a supplier
-                        // is chosen; once one is picked we don't re-narrow.
-                        if (!supplierId) setPendingItemPick(code ? { rid: l.rid, code } : null);
-                      }}
-                      placeholder="Type or pick our internal SKU…"
-                      className={styles.fieldInput}
-                      style={{ fontFamily: 'var(--font-mono)' }}
-                    />
-                    <datalist id={`bindings-${l.rid}`}>
-                      {/* PR — Commander 2026-05-28: only show bound SKUs when the
-                          supplier actually HAS bindings; otherwise fall back to
-                          the full catalogue so the picker is never dead. */}
-                      {supplierId && bindings.length > 0
-                        ? bindings.map((b) => (
-                            <option key={b.id} value={b.material_code}>
-                              {b.material_name} · {b.supplier_sku} · {fmtRm(b.unit_price_centi, b.currency)}
-                            </option>
-                          ))
-                        : (allSkus.data ?? []).map((p) => (
-                            <option key={p.id} value={p.code}>
-                              {p.name} · {p.category}
-                            </option>
-                          ))
-                      }
-                    </datalist>
-                  </label>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Supplier SKU</span>
-                    {/* PR #134 — Bi-directional picker: typing/picking a
-                        supplier_sku reverse-fills the matching binding's
-                        internal materialCode + name + price (same as
-                        picking from the Item Code side). Commander: "怎么
-                        不能选 Supplier Code 呢". Requires supplier picked
-                        first (we only know which bindings to search). */}
-                    <input
-                      type="text"
-                      list={`supplier-skus-${l.rid}`}
-                      value={l.supplierSku ?? ''}
-                      onChange={(e) => {
-                        const sku = e.target.value;
-                        if (supplierId) {
-                          const match = bindings.find((b) => b.supplier_sku === sku);
-                          if (match) {
-                            pickBinding(l.rid, match);
-                          } else {
-                            setLine(l.rid, { supplierSku: sku });
-                          }
-                        } else {
-                          setLine(l.rid, { supplierSku: sku });
-                        }
-                      }}
-                      placeholder={supplierId
-                        ? 'Type or pick supplier’s code…'
-                        : 'Pick a supplier first to enable picker'}
-                      className={styles.fieldInput}
-                      style={{ fontFamily: 'var(--font-mono)' }}
-                    />
-                    <datalist id={`supplier-skus-${l.rid}`}>
-                      {supplierId && bindings.map((b) => (
-                        <option key={b.id} value={b.supplier_sku || ''}>
-                          {b.material_code} · {b.material_name} · {fmtRm(b.unit_price_centi, b.currency)}
-                        </option>
-                      ))}
-                    </datalist>
-                  </label>
-                </div>
-
-                {/* Description — full width */}
-                <label className={styles.field}>
-                  <span className={styles.fieldLabel}>Description</span>
-                  <input
-                    type="text"
-                    value={l.materialName}
-                    onChange={(e) => setLine(l.rid, { materialName: e.target.value })}
-                    placeholder="(auto-filled if bound — editable for one-off purchases)"
-                    className={styles.fieldInput}
-                  />
-                </label>
-
-                {/* Per-category variant editor (PR #126 logic, PR #129 card layout) */}
-                {showVariants && (
-                  <div style={{
-                    background: 'var(--c-cream)',
-                    border: '1px solid var(--line)',
-                    borderRadius: 'var(--radius-md)',
-                    padding: 'var(--space-3)',
-                  }}>
-                    <div style={{
-                      fontFamily: 'var(--font-button)',
-                      fontSize: 'var(--fs-11)',
-                      fontWeight: 700,
-                      letterSpacing: '0.16em',
-                      textTransform: 'uppercase',
-                      color: 'var(--fg-muted)',
-                      marginBottom: 'var(--space-2)',
-                    }}>
-                      {l.category} Variants
-                    </div>
-
-                    {/* BEDFRAME — Commander 2026-05-28: mirror the Sales Order
-                        variant editor exactly — Fabrics · Gaps · Divan · Leg
-                        (dropdowns) + Special Orders. Dropped the free-text
-                        Color + Design fields. */}
-                    {l.category === 'bedframe' && (
-                      <>
-                        <div className={styles.formGrid4}>
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Fabrics</span>
-                            <select
-                              className={styles.fieldSelect}
-                              value={String(l.variants.fabricCode ?? '')}
-                              onChange={(e) => setVariant(l.rid, 'fabricCode', e.target.value)}
-                            >
-                              <option value="" disabled>Select…</option>
-                              {fabrics.filter((f) => f.is_active !== false || f.fabric_code === String(l.variants.fabricCode ?? '')).map((f) => (
-                                <option key={f.id} value={f.fabric_code}>
-                                  {fabricOptionLabel(f)}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Gaps</span>
-                            <select
-                              className={styles.fieldSelect}
-                              value={String(l.variants.gap ?? '')}
-                              onChange={(e) => setVariant(l.rid, 'gap', e.target.value)}
-                            >
-                              <option value="" disabled>Select…</option>
-                              {maintPickerValues(maint!.gaps, String(l.variants.gap ?? '')).map((g) => (<option key={g} value={g}>{g}</option>))}
-                            </select>
-                          </label>
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Divan Heights</span>
-                            <select
-                              className={styles.fieldSelect}
-                              value={String(l.variants.divanHeight ?? '')}
-                              onChange={(e) => setVariant(l.rid, 'divanHeight', e.target.value)}
-                            >
-                              <option value="" disabled>Select…</option>
-                              {activeOptions(maint!.divanHeights, String(l.variants.divanHeight ?? '')).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
-                            </select>
-                          </label>
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Leg Heights</span>
-                            <select
-                              className={styles.fieldSelect}
-                              value={String(l.variants.legHeight ?? '')}
-                              onChange={(e) => setVariant(l.rid, 'legHeight', e.target.value)}
-                            >
-                              <option value="" disabled>Select…</option>
-                              {activeOptions(maint!.legHeights, String(l.variants.legHeight ?? '')).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
-                            </select>
-                          </label>
-                          {/* Total Heights — Commander 2026-05-29: removed the
-                              manual picker. Total Height is AUTO-COMPUTED from
-                              Divan + Leg + Gap (see setVariant), so there's
-                              nothing to choose here. */}
-                        </div>
-                        <SpecialsCheckboxes
-                          pool={specialsPools.bedframe}
-                          picked={Array.isArray(l.variants.specials) ? (l.variants.specials as string[]) : []}
-                          onChange={(arr) => setVariant(l.rid, 'specials', arr)}
-                        />
-                      </>
-                    )}
-
-                    {/* SOFA — Commander 2026-05-28: mirror the SO editor —
-                        Fabrics · Seat · Leg + Special Orders. Dropped free-text
-                        Color. */}
-                    {l.category === 'sofa' && (
-                      <>
-                        <div className={styles.formGrid4}>
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Fabrics</span>
-                            <select
-                              className={styles.fieldSelect}
-                              value={String(l.variants.fabricCode ?? '')}
-                              onChange={(e) => setVariant(l.rid, 'fabricCode', e.target.value)}
-                            >
-                              <option value="" disabled>Select…</option>
-                              {fabrics.filter((f) => f.is_active !== false || f.fabric_code === String(l.variants.fabricCode ?? '')).map((f) => (
-                                <option key={f.id} value={f.fabric_code}>
-                                  {fabricOptionLabel(f)}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Seat Size</span>
-                            <select
-                              className={styles.fieldSelect}
-                              value={String(l.variants.seatHeight ?? '')}
-                              onChange={(e) => setVariant(l.rid, 'seatHeight', e.target.value)}
-                            >
-                              <option value="" disabled>Select…</option>
-                              {maintPickerValues(maint!.sofaSizes, String(l.variants.seatHeight ?? '')).map((s) => (<option key={s} value={s}>{s}</option>))}
-                            </select>
-                          </label>
-                          <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Leg Heights</span>
-                            <select
-                              className={styles.fieldSelect}
-                              value={String(l.variants.legHeight ?? '')}
-                              onChange={(e) => setVariant(l.rid, 'legHeight', e.target.value)}
-                            >
-                              <option value="" disabled>Select…</option>
-                              {activeOptions(maint!.sofaLegHeights, String(l.variants.legHeight ?? '')).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
-                            </select>
-                          </label>
-                          <span />
-                        </div>
-                        <SpecialsCheckboxes
-                          pool={specialsPools.sofa}
-                          picked={Array.isArray(l.variants.specials) ? (l.variants.specials as string[]) : []}
-                          onChange={(arr) => setVariant(l.rid, 'specials', arr)}
-                        />
-                      </>
-                    )}
-
-                    {/* PR #135 — mattress block removed: size + branding are
-                        already encoded in the mattress SKU code itself, no
-                        need for a separate editor. */}
-                  </div>
-                )}
-
-                {/* Pricing row — Qty · Unit Price · Discount · Delivery · Ship-to */}
-                <div className={styles.formGrid4} style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Qty</span>
-                    <input
-                      type="number" min={0} step={1}
-                      value={l.qty}
-                      onChange={(e) => setLine(l.rid, { qty: Number(e.target.value) })}
-                      className={styles.fieldInput}
-                      style={{ textAlign: 'right' }}
-                    />
-                  </label>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Unit Price ({currency})</span>
-                    {/* MoneyInput — free typing, no mid-keystroke reformat
-                        (Commander "500→5" fix). Phase 3 — manual edit wins:
-                        flag priceTouched so supplier-price auto-fill stops
-                        overwriting this line. */}
-                    <MoneyInput
-                      bare
-                      valueSen={l.unitPriceCenti}
-                      onCommit={(sen) => setLine(l.rid, { unitPriceCenti: sen ?? 0, priceTouched: true })}
-                      inputClassName={styles.fieldInput}
-                      selectOnFocus
-                    />
-                  </label>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Discount ({currency})</span>
-                    <MoneyInput
-                      bare
-                      valueSen={l.discountCenti ?? 0}
-                      onCommit={(sen) => setLine(l.rid, { discountCenti: sen ?? 0 })}
-                      inputClassName={styles.fieldInput}
-                      selectOnFocus
-                    />
-                  </label>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Delivery Date</span>
-                    <input
-                      type="date"
-                      value={l.deliveryDate ?? ''}
-                      onChange={(e) => setLine(l.rid, { deliveryDate: e.target.value })}
-                      className={styles.fieldInput}
-                    />
-                  </label>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Ship-to Location</span>
-                    <select
-                      value={l.warehouseId ?? ''}
-                      onChange={(e) => setLine(l.rid, { warehouseId: e.target.value })}
-                      className={styles.fieldInput}
-                    >
-                      <option value="">— Inherit Purchase Location —</option>
-                      {(warehouses.data ?? []).map((w) => (
-                        <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-              </div>
-            );
-          })}
+          {/* PR-pdf-rollout (owner 2026-06-19) — the inline per-line card was
+              extracted to the shared PoLineCard so PO Edit can reuse the exact
+              same rich editor. Behaviour is identical; the parent still owns the
+              cost auto-recompute effect, the bedframe Total-Height auto-compute
+              (setVariant), pickBinding, and the item-first pendingItemPick. */}
+          {lines.map((l, idx) => (
+            <PoLineCard
+              key={l.rid}
+              index={idx}
+              line={l}
+              currency={currency}
+              supplierId={supplierId}
+              bindings={bindings}
+              allSkus={allSkus.data ?? []}
+              warehouses={warehouses.data ?? []}
+              maint={maint}
+              fabrics={fabrics}
+              specialsPools={specialsPools}
+              onChange={(patch) => setLine(l.rid, patch)}
+              onPickBinding={(b) => pickBinding(l.rid, b)}
+              onSetVariant={(k, v) => setVariant(l.rid, k, v)}
+              onPendingItemPick={(code) => setPendingItemPick(code ? { rid: l.rid, code } : null)}
+              onRemove={() => dropLine(l.rid)}
+            />
+          ))}
 
           <button
             type="button"
