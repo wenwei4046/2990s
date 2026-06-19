@@ -9,7 +9,7 @@
 // + inline bindings table inside the drawer.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Search, Plus, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
@@ -18,6 +18,7 @@ import { PhoneInput } from '../components/PhoneInput';
 import {
   useSuppliers,
   useCreateSupplier,
+  useUpdateSupplier,
   type SupplierRow,
   type SupplierStatus,
 } from '../lib/suppliers-queries';
@@ -65,6 +66,32 @@ export const Suppliers = () => {
   const [category, setCategory] = useState<string>(FILTER_ALL);
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);
+
+  /* Batch edit (Commander 2026-06-19 — HOOKKA parity). Selection lives in the
+     parent so it survives DataGrid re-renders and drives the batch modal. */
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchOpen, setBatchOpen] = useState(false);
+
+  const toggle = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  const toggleAll = (keys: string[], allSelected: boolean) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allSelected) for (const k of keys) next.delete(k);
+      else for (const k of keys) next.add(k);
+      return next;
+    });
+
+  /* Clear the selection whenever the status / category filter changes — the
+     visible row set shifts, so a lingering selection would batch-edit rows the
+     operator can no longer see. */
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [status, category]);
 
   const { data, isLoading, error } = useSuppliers({
     status: status === 'all' ? undefined : status,
@@ -179,10 +206,17 @@ export const Suppliers = () => {
         <div>
           <h1 className={styles.title}>Suppliers</h1>
         </div>
-        <Button variant="primary" size="md" onClick={() => setCreating(true)}>
-          <Plus {...ICON} />
-          <span>New Supplier</span>
-        </Button>
+        <div className={styles.actionsRow}>
+          {selectedIds.size > 0 && (
+            <Button variant="secondary" size="md" onClick={() => setBatchOpen(true)}>
+              <span>Batch edit ({selectedIds.size})</span>
+            </Button>
+          )}
+          <Button variant="primary" size="md" onClick={() => setCreating(true)}>
+            <Plus {...ICON} />
+            <span>New Supplier</span>
+          </Button>
+        </div>
       </div>
 
       <div className={styles.headerRow}>
@@ -249,10 +283,19 @@ export const Suppliers = () => {
         isLoading={isLoading}
         emptyMessage="No suppliers yet."
         onRowClick={(r) => navigate(`/suppliers/${r.id}`)}
+        selectable={{ selectedKeys: selectedIds, onToggle: toggle, onToggleAll: toggleAll }}
       />
 
       {creating && (
         <SupplierCreateDrawer onClose={() => setCreating(false)} />
+      )}
+
+      {batchOpen && (
+        <BatchEditModal
+          ids={[...selectedIds]}
+          onClose={() => setBatchOpen(false)}
+          onDone={() => { setSelectedIds(new Set()); setBatchOpen(false); }}
+        />
       )}
     </div>
   );
@@ -286,6 +329,146 @@ const StatusChip = ({
     {children}
   </button>
 );
+
+/* ════════════════════════════════════════════════════════════════════════
+   Batch edit modal (Commander 2026-06-19 — HOOKKA parity)
+
+   Sets ONE shared SAFE field across the selected suppliers. Only Payment
+   Terms (free-text) and Status (enum) are offered — name / code are unique
+   identity and unsafe to bulk-set. Applies one PATCH per supplier (the chosen
+   field only), counts ok / fail, then reports + clears the selection.
+   ════════════════════════════════════════════════════════════════════════ */
+
+type BatchField = 'payment_terms' | 'status';
+
+const STATUS_OPTIONS: { value: SupplierStatus; label: string }[] = [
+  { value: 'ACTIVE', label: 'Active' },
+  { value: 'INACTIVE', label: 'Inactive' },
+  { value: 'BLOCKED', label: 'Blocked' },
+];
+
+const BatchEditModal = ({
+  ids,
+  onClose,
+  onDone,
+}: {
+  ids: string[];
+  onClose: () => void;
+  onDone: () => void;
+}) => {
+  const update = useUpdateSupplier();
+  const [field, setField] = useState<BatchField>('payment_terms');
+  const [paymentTerms, setPaymentTerms] = useState('');
+  const [statusValue, setStatusValue] = useState<SupplierStatus>('ACTIVE');
+  const [applying, setApplying] = useState(false);
+
+  const apply = async () => {
+    setApplying(true);
+    let ok = 0;
+    let fail = 0;
+    for (const id of ids) {
+      try {
+        if (field === 'payment_terms') {
+          await update.mutateAsync({ id, payment_terms: paymentTerms.trim() || null });
+        } else {
+          await update.mutateAsync({ id, status: statusValue });
+        }
+        ok += 1;
+      } catch {
+        fail += 1;
+      }
+    }
+    setApplying(false);
+    window.alert(`Updated ${ok} suppliers (${fail} failed)`);
+    onDone();
+  };
+
+  return (
+    <>
+      <div className={styles.backdrop} onClick={applying ? undefined : onClose} />
+      <div className={styles.modal} role="dialog" aria-modal="true" aria-label="Batch edit suppliers">
+        <header className={styles.drawerHeader}>
+          <h2 className={styles.drawerTitle}>Batch edit ({ids.length})</h2>
+          <button
+            type="button"
+            className={styles.iconBtn}
+            onClick={onClose}
+            disabled={applying}
+            aria-label="Close"
+          >
+            <X {...ICON} />
+          </button>
+        </header>
+
+        <div className={styles.modalBody}>
+          <p className={styles.subtitle} style={{ margin: 0 }}>
+            Set one field on the {ids.length} selected supplier{ids.length === 1 ? '' : 's'}.
+          </p>
+
+          <div className={styles.section}>
+            <p className={styles.eyebrow}>Field</p>
+            <label className={styles.fieldRow} style={{ cursor: 'pointer' }}>
+              <input
+                type="radio"
+                name="batch-field"
+                checked={field === 'payment_terms'}
+                onChange={() => setField('payment_terms')}
+              />
+              <span style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)' }}>
+                Payment Terms
+              </span>
+            </label>
+            <label className={styles.fieldRow} style={{ cursor: 'pointer' }}>
+              <input
+                type="radio"
+                name="batch-field"
+                checked={field === 'status'}
+                onChange={() => setField('status')}
+              />
+              <span style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)' }}>
+                Status
+              </span>
+            </label>
+          </div>
+
+          <div className={styles.section}>
+            {field === 'payment_terms' ? (
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>New Payment Terms</span>
+                <input
+                  className={styles.fieldInput}
+                  value={paymentTerms}
+                  placeholder="e.g. 30 days"
+                  onChange={(e) => setPaymentTerms(e.target.value)}
+                />
+              </label>
+            ) : (
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>New Status</span>
+                <select
+                  className={styles.fieldSelect}
+                  value={statusValue}
+                  onChange={(e) => setStatusValue(e.target.value as SupplierStatus)}
+                >
+                  {STATUS_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+        </div>
+
+        <footer className={styles.drawerFooter}>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={applying}>Cancel</Button>
+          <Button variant="primary" size="md" onClick={apply} disabled={applying}>
+            {applying ? 'Applying…' : `Apply (${ids.length})`}
+          </Button>
+        </footer>
+      </div>
+    </>
+  );
+};
 
 /* ════════════════════════════════════════════════════════════════════════
    Create drawer (edit lives on the full /suppliers/:id page now)

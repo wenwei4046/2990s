@@ -205,6 +205,34 @@
   overflow: hidden;
 }
 
+/* ── Batch edit modal (centered dialog; reuses drawer header/footer) ──── */
+
+.modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(440px, 92vw);
+  max-height: 88vh;
+  background: var(--c-cream);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-3);
+  border-radius: var(--radius-xl);
+  display: flex;
+  flex-direction: column;
+  z-index: 51;
+  overflow: hidden;
+}
+
+.modalBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
 .drawerHeader {
   display: flex;
   align-items: center;
