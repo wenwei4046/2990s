@@ -15,7 +15,7 @@ import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { Plus, X, FileText, Printer, ArrowRightLeft, ChevronsDownUp } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
+import { buildVariantSummary, fmtDateOrDash, effectiveDelivery } from '@2990s/shared';
 import {
   usePurchaseOrders,
   usePurchaseOrderDetail,
@@ -86,6 +86,27 @@ const PO_LIST_STORAGE_KEY = 'po-list.layout.v1';
    set actually changes. Columns mirror the plain table this replaced:
    leading checkbox · PO No. · Supplier · Items · Date · Expected · Currency ·
    Total · Status. */
+/* Migration 0180 — the EFFECTIVE (latest revised) header delivery date: MAX
+   over non-null of [expected_at, _2, _3, _4]. Every "Expected" reader uses this
+   so a supplier revision shows on the list / sort / filter. */
+const poEffectiveExpected = (po: PoHeaderRow): string | null =>
+  effectiveDelivery(
+    po.expected_at,
+    po.supplier_delivery_date_2,
+    po.supplier_delivery_date_3,
+    po.supplier_delivery_date_4,
+  );
+
+/* Migration 0180 — the EFFECTIVE (latest revised) per-line delivery date: MAX
+   over non-null of [delivery_date, _2, _3, _4]. */
+const lineEffectiveDelivery = (it: PoItemRow): string | null =>
+  effectiveDelivery(
+    it.delivery_date,
+    it.supplier_delivery_date_2,
+    it.supplier_delivery_date_3,
+    it.supplier_delivery_date_4,
+  );
+
 const buildPoColumns = (
   selectedIds: Set<string>,
   toggleSelect: (id: string) => void,
@@ -158,11 +179,20 @@ const buildPoColumns = (
     filterType: 'date', dateValue: (po) => po.po_date,
   },
   {
-    key: 'expected_at', label: 'Expected', width: 120, sortable: true,
-    accessor: (po) => fmtDateOrDash(po.expected_at),
-    searchValue: (po) => po.expected_at ?? '',
-    sortFn: (a, b) => (a.expected_at ?? '').localeCompare(b.expected_at ?? ''),
-    filterType: 'date', dateValue: (po) => po.expected_at,
+    /* Migration 0180 — accessor/sort/filter all key off the EFFECTIVE (latest
+       revised) delivery date, not the raw expected_at. A small "(revised)" hint
+       shows when a supplier revision pushed it past the original. */
+    key: 'expected_at', label: 'Expected', width: 130, sortable: true,
+    accessor: (po) => {
+      const eff = poEffectiveExpected(po);
+      const revised = eff && po.expected_at && eff !== po.expected_at;
+      return revised
+        ? `${fmtDateOrDash(eff)} (revised)`
+        : fmtDateOrDash(eff);
+    },
+    searchValue: (po) => poEffectiveExpected(po) ?? '',
+    sortFn: (a, b) => (poEffectiveExpected(a) ?? '').localeCompare(poEffectiveExpected(b) ?? ''),
+    filterType: 'date', dateValue: (po) => poEffectiveExpected(po),
   },
   {
     key: 'currency', label: 'Currency', width: 90, sortable: true, groupable: true,
@@ -626,15 +656,21 @@ const buildPoDrilldownColumns = (
     searchValue: (it) => (it.receipts ?? []).map((r) => r.grnNumber).join(' '),
   },
   {
+    /* Migration 0180 — show the EFFECTIVE (latest revised) per-line delivery
+       date: MAX over non-null of [delivery_date, _2, _3, _4], falling back to
+       the header's effective expected date (headerExpectedAt is already the
+       header's effective value). */
     key: 'delivery_date', label: 'Delivery Date', width: 120,
     accessor: (it) => {
-      const due = it.delivery_date ?? headerExpectedAt ?? null;
+      const due = lineEffectiveDelivery(it) ?? headerExpectedAt ?? null;
       return due
         ? <span style={{ whiteSpace: 'nowrap' }}>{fmtDateOrDash(due)}</span>
         : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
     },
-    searchValue: (it) => it.delivery_date ?? headerExpectedAt ?? '',
-    sortFn: (a, b) => (a.delivery_date ?? headerExpectedAt ?? '').localeCompare(b.delivery_date ?? headerExpectedAt ?? ''),
+    searchValue: (it) => lineEffectiveDelivery(it) ?? headerExpectedAt ?? '',
+    sortFn: (a, b) =>
+      (lineEffectiveDelivery(a) ?? headerExpectedAt ?? '')
+        .localeCompare(lineEffectiveDelivery(b) ?? headerExpectedAt ?? ''),
   },
   {
     key: 'unit_price', label: 'Unit Price', width: 100, align: 'right',
@@ -691,7 +727,9 @@ const ExpandedPoLines = ({ po }: { po: PoHeaderRow }) => {
   for (const it of items) subtotal += Number(it.line_total_centi ?? 0);
 
   const whName = (id: string | null | undefined) => (id ? whById.get(id) ?? '' : '');
-  const columns = buildPoDrilldownColumns(po.currency, po.expected_at ?? null, whName);
+  // Migration 0180 — pass the header's EFFECTIVE (latest revised) expected date
+  // so a line with no own date falls back to the revised header date.
+  const columns = buildPoDrilldownColumns(po.currency, poEffectiveExpected(po), whName);
 
   return (
     <div style={{ padding: 'var(--space-2) var(--space-3) var(--space-3) 40px', background: 'var(--c-cream)' }}>
@@ -753,7 +791,7 @@ const DetailPoDrawer = ({ poId, onClose }: { poId: string; onClose: () => void }
 
               <div className={styles.formGrid}>
                 <SmallStat label="PO Date" value={fmtDateOrDash(po.po_date)} />
-                <SmallStat label="Expected" value={fmtDateOrDash(po.expected_at)} />
+                <SmallStat label="Expected" value={fmtDateOrDash(poEffectiveExpected(po))} />
                 <SmallStat label="Currency" value={po.currency} />
                 <SmallStat label="Status" value={poStatusLabel(po.status)} />
                 <SmallStat label="Subtotal" value={fmtMoney(po.subtotal_centi, po.currency)} />

@@ -57,6 +57,12 @@ export type PoLineDraft = {
   unitPriceCenti: number;
   discountCenti?: number;
   deliveryDate?: string;
+  /* Supplier-revised per-line delivery dates (migration 0180). All optional;
+     the supplier pushes the date back. The EFFECTIVE line date readers use =
+     MAX over non-null of [deliveryDate, date2, date3, date4]. */
+  supplierDeliveryDate2?: string;
+  supplierDeliveryDate3?: string;
+  supplierDeliveryDate4?: string;
   warehouseId?: string;
   /* Set when materialCode matches an mfg_product — drives which variant editor
      renders (sofa / bedframe). Lowercase to match SoLineCard's itemGroup. */
@@ -556,6 +562,42 @@ export const PoLineCard = ({
               <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
             ))}
           </select>
+        </label>
+      </div>
+
+      {/* Supplier-revised delivery dates (migration 0180). The supplier pushes
+          the delivery back; the latest non-empty date is the effective one used
+          downstream (MRP / GRN / on-time). All optional. */}
+      <div className={styles.formGrid4} style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Supplier Date 2</span>
+          <input
+            type="date"
+            value={l.supplierDeliveryDate2 ?? ''}
+            disabled={disabled}
+            onChange={(e) => onChange({ supplierDeliveryDate2: e.target.value })}
+            className={styles.fieldInput}
+          />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Supplier Date 3</span>
+          <input
+            type="date"
+            value={l.supplierDeliveryDate3 ?? ''}
+            disabled={disabled}
+            onChange={(e) => onChange({ supplierDeliveryDate3: e.target.value })}
+            className={styles.fieldInput}
+          />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Supplier Date 4</span>
+          <input
+            type="date"
+            value={l.supplierDeliveryDate4 ?? ''}
+            disabled={disabled}
+            onChange={(e) => onChange({ supplierDeliveryDate4: e.target.value })}
+            className={styles.fieldInput}
+          />
         </label>
       </div>
     </div>

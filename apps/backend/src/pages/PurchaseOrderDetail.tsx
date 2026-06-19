@@ -32,7 +32,7 @@ import {
   ChevronDown, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
+import { buildVariantSummary, effectiveDelivery } from '@2990s/shared'; // Commander 2026-05-28 — Description 2; 2026-06-19 effective delivery
 import {
   usePurchaseOrderDetail,
   useUpdatePurchaseOrderHeader,
@@ -78,6 +78,10 @@ type HeaderDraft = {
   supplierId: string;
   poDate: string;
   expectedAt: string;
+  /* Supplier-revised header delivery dates (migration 0180). */
+  supplierDeliveryDate2: string;
+  supplierDeliveryDate3: string;
+  supplierDeliveryDate4: string;
   currency: string;
   notes: string;
   purchaseLocationId: string;
@@ -93,6 +97,9 @@ const headerSnapshot = (p: any): HeaderDraft => ({
   supplierId:         p.supplier_id ?? '',
   poDate:             p.po_date ?? '',
   expectedAt:         p.expected_at ?? '',
+  supplierDeliveryDate2: p.supplier_delivery_date_2 ?? '',
+  supplierDeliveryDate3: p.supplier_delivery_date_3 ?? '',
+  supplierDeliveryDate4: p.supplier_delivery_date_4 ?? '',
   currency:           p.currency ?? 'MYR',
   notes:              p.notes ?? '',
   purchaseLocationId: p.purchase_location_id ?? '',
@@ -113,6 +120,10 @@ const draftFromItem = (it: PoItemRow): EditLine => ({
   unitPriceCenti: it.unit_price_centi,
   discountCenti:  it.discount_centi ?? 0,
   deliveryDate:   it.delivery_date ?? undefined,
+  /* Migration 0180 — per-line supplier-revised delivery dates. */
+  supplierDeliveryDate2: it.supplier_delivery_date_2 ?? undefined,
+  supplierDeliveryDate3: it.supplier_delivery_date_3 ?? undefined,
+  supplierDeliveryDate4: it.supplier_delivery_date_4 ?? undefined,
   warehouseId:    it.warehouse_id ?? undefined,
   category:       it.item_group ?? undefined,
   variants:       (it.variants as Record<string, unknown> | null) ?? {},
@@ -362,6 +373,18 @@ export const PurchaseOrderDetail = () => {
     if (k === 'expectedAt') {
       setEditLines((prev) => prev.map((d) => ({ ...d, deliveryDate: v || undefined })));
     }
+    /* Migration 0180 — header supplier-revised dates fan down to lines too, but
+       a line's OWN override survives (only stamp lines whose matching field is
+       still empty). Mirrors the server-side header→line cascade. */
+    const lineKey: Partial<Record<keyof HeaderDraft, keyof EditLine>> = {
+      supplierDeliveryDate2: 'supplierDeliveryDate2',
+      supplierDeliveryDate3: 'supplierDeliveryDate3',
+      supplierDeliveryDate4: 'supplierDeliveryDate4',
+    };
+    const lk = lineKey[k];
+    if (lk && v) {
+      setEditLines((prev) => prev.map((d) => (d[lk] ? d : { ...d, [lk]: v })));
+    }
   };
 
   /* Patch one editLine by rid (mirrors Create's setLine). */
@@ -472,6 +495,10 @@ export const PurchaseOrderDetail = () => {
             bindingId:      d.bindingId,
             discountCenti:  d.discountCenti,
             deliveryDate:   d.deliveryDate || undefined,
+            /* Migration 0180 — per-line supplier-revised delivery dates. */
+            supplierDeliveryDate2: d.supplierDeliveryDate2 || undefined,
+            supplierDeliveryDate3: d.supplierDeliveryDate3 || undefined,
+            supplierDeliveryDate4: d.supplierDeliveryDate4 || undefined,
             warehouseId:    d.warehouseId  || undefined,
             itemGroup:      d.category,
             variants:       Object.keys(d.variants).length ? d.variants : undefined,
@@ -490,6 +517,10 @@ export const PurchaseOrderDetail = () => {
           d.unitPriceCenti !== it.unit_price_centi ||
           (d.discountCenti ?? 0) !== (it.discount_centi ?? 0) ||
           (d.deliveryDate ?? null) !== (it.delivery_date ?? null) ||
+          /* Migration 0180 — revised dates participate in the dirty check. */
+          (d.supplierDeliveryDate2 ?? null) !== (it.supplier_delivery_date_2 ?? null) ||
+          (d.supplierDeliveryDate3 ?? null) !== (it.supplier_delivery_date_3 ?? null) ||
+          (d.supplierDeliveryDate4 ?? null) !== (it.supplier_delivery_date_4 ?? null) ||
           (d.warehouseId ?? null) !== (it.warehouse_id ?? null) ||
           JSON.stringify(d.variants ?? {}) !== JSON.stringify((it.variants as Record<string, unknown> | null) ?? {});
         if (!changed) continue;
@@ -502,6 +533,10 @@ export const PurchaseOrderDetail = () => {
           unitPriceCenti: d.unitPriceCenti,
           discountCenti:  d.discountCenti ?? 0,
           deliveryDate:   d.deliveryDate ?? null,
+          /* Migration 0180 — per-line supplier-revised delivery dates. */
+          supplierDeliveryDate2: d.supplierDeliveryDate2 ?? null,
+          supplierDeliveryDate3: d.supplierDeliveryDate3 ?? null,
+          supplierDeliveryDate4: d.supplierDeliveryDate4 ?? null,
           warehouseId:    d.warehouseId ?? null,
           itemGroup:      d.category,
           variants:       d.variants ?? {},
@@ -896,7 +931,23 @@ const SupplierCard = ({
             <InfoCell label="Currency" value={po.currency || null} />
             <div />
             <InfoCell label="PO Date" value={po.po_date || null} />
-            <InfoCell label="Expected Delivery" value={po.expected_at || null} />
+            {/* Migration 0180 — show the EFFECTIVE (latest revised) delivery date.
+                When a revision pushed it back, hint with the original date. */}
+            {(() => {
+              const eff = effectiveDelivery(
+                po.expected_at,
+                po.supplier_delivery_date_2,
+                po.supplier_delivery_date_3,
+                po.supplier_delivery_date_4,
+              );
+              const revised = eff && po.expected_at && eff !== po.expected_at;
+              return (
+                <InfoCell
+                  label={revised ? 'Expected Delivery (revised)' : 'Expected Delivery'}
+                  value={revised ? `${eff} (was ${po.expected_at})` : (eff || null)}
+                />
+              );
+            })()}
             <InfoCell label="Purchase Location"
               value={(() => {
                 const wh = warehouses.find((w) => w.id === po.purchase_location_id);
@@ -953,6 +1004,24 @@ const SupplierCard = ({
                 Delivery Date (handled in the page's setHeaderField). */}
             <input type="date" className={styles.fieldInput} value={draft.expectedAt} disabled={locked}
               onChange={(e) => onField('expectedAt', e.target.value)} />
+          </label>
+          {/* Migration 0180 — supplier-revised header delivery dates. Optional;
+              cascade to lines that have no own value (page setHeaderField). The
+              latest non-empty date becomes the effective ETA downstream. */}
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Supplier Delivery Date 2</span>
+            <input type="date" className={styles.fieldInput} value={draft.supplierDeliveryDate2} disabled={locked}
+              onChange={(e) => onField('supplierDeliveryDate2', e.target.value)} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Supplier Delivery Date 3</span>
+            <input type="date" className={styles.fieldInput} value={draft.supplierDeliveryDate3} disabled={locked}
+              onChange={(e) => onField('supplierDeliveryDate3', e.target.value)} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Supplier Delivery Date 4</span>
+            <input type="date" className={styles.fieldInput} value={draft.supplierDeliveryDate4} disabled={locked}
+              onChange={(e) => onField('supplierDeliveryDate4', e.target.value)} />
           </label>
           {/* PR #77 — Purchase Location: default ship-to warehouse for
               every line on this PO. */}

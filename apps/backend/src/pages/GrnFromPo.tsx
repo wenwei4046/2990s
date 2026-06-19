@@ -71,6 +71,10 @@ const DATE_FIELD_OPTIONS = [
 ] as const;
 type DateField = typeof DATE_FIELD_OPTIONS[number]['value'];
 
+/* Migration 0180 — `expectedAt` is now the EFFECTIVE (latest revised) header
+   delivery date: the API (grns.ts) returns MAX over non-null of the PO's
+   [expected_at, supplier_delivery_date_2/3/4]. The filter/column read it
+   straight, so they already key off the latest committed date. */
 const rowDateFor = (r: OutstandingPoItem, field: DateField): string | null =>
   field === 'poDate' ? (r.poDate ?? null) : (r.expectedAt ?? null);
 

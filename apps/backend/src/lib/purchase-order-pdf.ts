@@ -36,6 +36,7 @@
 // autotable didDrawPage hook + jsPDF putTotalPages.
 // ----------------------------------------------------------------------------
 
+import { effectiveDelivery } from '@2990s/shared';
 import { COMPANY, amountInWordsMyr, drawInfoColumns, fmtDocDate, fmtDocStamp } from './pdf-common';
 import {
   loadSupplierDocData,
@@ -53,6 +54,11 @@ type PoHeader = {
   status:        string;
   po_date:       string;
   expected_at:   string | null;
+  /* Migration 0180 — supplier-revised header delivery dates. The printed
+     "Delivery Date" uses the EFFECTIVE (latest) of these + expected_at. */
+  supplier_delivery_date_2?: string | null;
+  supplier_delivery_date_3?: string | null;
+  supplier_delivery_date_4?: string | null;
   currency:      string;
   subtotal_centi: number;
   tax_centi:     number;
@@ -94,6 +100,11 @@ type PoItem = {
   uom?:           string | null;
   discount_centi?: number | null;
   delivery_date?: string | null;
+  /* Migration 0180 — per-line supplier-revised dates; the printed per-line
+     "Delivery:" uses the EFFECTIVE (latest) of these + delivery_date. */
+  supplier_delivery_date_2?: string | null;
+  supplier_delivery_date_3?: string | null;
+  supplier_delivery_date_4?: string | null;
   notes?:         string | null;
   /** Supplier-facing dual-code layout — variants drive the Specs segment
       (fabric shows the SUPPLIER's colour code with ours alongside, plus
@@ -197,7 +208,16 @@ async function renderPurchaseOrderInto(
         ['Your Ref No', yourRef],
         ['Terms', sFull.payment_terms ?? header.supplier?.payment_terms ?? ''],
         ['Date', fmtDocDate(header.po_date)],
-        ['Delivery Date', header.expected_at ? fmtDocDate(header.expected_at) : ''],
+        /* Migration 0180 — print the EFFECTIVE (latest revised) delivery date. */
+        ['Delivery Date', (() => {
+          const eff = effectiveDelivery(
+            header.expected_at,
+            header.supplier_delivery_date_2,
+            header.supplier_delivery_date_3,
+            header.supplier_delivery_date_4,
+          );
+          return eff ? fmtDocDate(eff) : '';
+        })()],
       ],
     },
     margin,
@@ -247,11 +267,19 @@ async function renderPurchaseOrderInto(
     // which slipped past the Set-dedup and printed the variant twice. Matches
     // how the SO / GRN / PI PDFs already compose their description.
     const specs = specsLine(it, fabricMap) || (it.description2 ?? '').trim();
+    /* Migration 0180 — per-line "Delivery:" prints the EFFECTIVE (latest
+       revised) line date: MAX over non-null of [delivery_date, _2, _3, _4]. */
+    const lineEff = effectiveDelivery(
+      it.delivery_date,
+      it.supplier_delivery_date_2,
+      it.supplier_delivery_date_3,
+      it.supplier_delivery_date_4,
+    );
     const descParts = [
       it.description ?? it.material_name,
       specs || null,
       (it.notes ?? '').trim() ? `Remark: ${(it.notes ?? '').trim()}` : null,
-      it.delivery_date ? `Delivery: ${fmtDocDate(it.delivery_date)}` : null,
+      lineEff ? `Delivery: ${fmtDocDate(lineEff)}` : null,
     ].filter(Boolean) as string[];
     return [
       it.so_doc_no ?? '—',

@@ -154,7 +154,10 @@ const MODULE_COLUMNS: Record<OutstandingModule, ColSpec[]> = {
   po: [
     { key: 'po_number', label: 'PO No' },
     { key: 'po_date',   label: 'Date', kind: 'date' },
-    { key: 'expected_at', label: 'Expected', kind: 'date' },
+    /* Migration 0180 — show the EFFECTIVE (latest revised) delivery date from
+       v_po_outstanding.effective_expected_at (GREATEST over the base +
+       supplier_delivery_date_2/3/4), not the raw expected_at. */
+    { key: 'effective_expected_at', label: 'Expected', kind: 'date' },
     { key: 'status',    label: 'Status' },
     { key: 'qty_outstanding', label: 'Qty Outstanding', kind: 'qty' },
     { key: 'total_centi', label: 'Total', kind: 'money' },

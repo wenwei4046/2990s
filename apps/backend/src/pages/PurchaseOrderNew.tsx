@@ -68,6 +68,12 @@ export const PurchaseOrderNew = () => {
   const [supplierId, setSupplierId]   = useState<string>('');
   const [poDate, setPoDate]           = useState<string>(() => todayMyt());
   const [expectedAt, setExpectedAt]   = useState<string>('');
+  /* Supplier-revised header delivery dates (migration 0180). Optional; the
+     supplier pushes the delivery back. These fan out to each line's matching
+     per-line date on the server (a line's own override survives). */
+  const [supplierDeliveryDate2, setSupplierDeliveryDate2] = useState<string>('');
+  const [supplierDeliveryDate3, setSupplierDeliveryDate3] = useState<string>('');
+  const [supplierDeliveryDate4, setSupplierDeliveryDate4] = useState<string>('');
   const [purchaseLocationId, setPurchaseLocationId] = useState<string>('');
   const [notes, setNotes]             = useState<string>('');
 
@@ -545,6 +551,10 @@ export const PurchaseOrderNew = () => {
       bindingId:      l.bindingId,
       discountCenti:  l.discountCenti,
       deliveryDate:   l.deliveryDate || undefined,
+      /* Migration 0180 — per-line supplier-revised delivery dates. */
+      supplierDeliveryDate2: l.supplierDeliveryDate2 || undefined,
+      supplierDeliveryDate3: l.supplierDeliveryDate3 || undefined,
+      supplierDeliveryDate4: l.supplierDeliveryDate4 || undefined,
       warehouseId:    l.warehouseId  || undefined,
       /* PR #126 — Per-line variants + itemGroup. NewPoItem already supports
          these (PR #41 schema). The API §POST handler persists them onto
@@ -563,6 +573,10 @@ export const PurchaseOrderNew = () => {
         currency,
         poDate,
         expectedAt,
+        /* Migration 0180 — supplier-revised header delivery dates. */
+        supplierDeliveryDate2: supplierDeliveryDate2 || undefined,
+        supplierDeliveryDate3: supplierDeliveryDate3 || undefined,
+        supplierDeliveryDate4: supplierDeliveryDate4 || undefined,
         notes: notes || undefined,
         purchaseLocationId,
         items,
@@ -680,6 +694,37 @@ export const PurchaseOrderNew = () => {
                 onChange={(e) => setExpectedAt(e.target.value)}
                 className={styles.fieldInput}
                 required
+              />
+            </label>
+
+            {/* Supplier-revised header delivery dates (migration 0180). Optional —
+                set when the supplier pushes the delivery back. The latest non-empty
+                date becomes the effective ETA downstream. */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Supplier Delivery Date 2</span>
+              <input
+                type="date"
+                value={supplierDeliveryDate2}
+                onChange={(e) => setSupplierDeliveryDate2(e.target.value)}
+                className={styles.fieldInput}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Supplier Delivery Date 3</span>
+              <input
+                type="date"
+                value={supplierDeliveryDate3}
+                onChange={(e) => setSupplierDeliveryDate3(e.target.value)}
+                className={styles.fieldInput}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Supplier Delivery Date 4</span>
+              <input
+                type="date"
+                value={supplierDeliveryDate4}
+                onChange={(e) => setSupplierDeliveryDate4(e.target.value)}
+                className={styles.fieldInput}
               />
             </label>
 

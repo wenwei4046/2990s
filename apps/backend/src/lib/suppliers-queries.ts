@@ -109,6 +109,12 @@ export type PoHeaderRow = {
   status: PoStatus;
   po_date: string;
   expected_at: string | null;
+  /* Migration 0180 — supplier-revised header delivery dates. The effective
+     (latest revised) date = MAX over non-null of [expected_at, _2, _3, _4]
+     via effectiveDelivery from @2990s/shared. */
+  supplier_delivery_date_2?: string | null;
+  supplier_delivery_date_3?: string | null;
+  supplier_delivery_date_4?: string | null;
   currency: Currency;
   subtotal_centi: number;
   tax_centi: number;
@@ -184,6 +190,11 @@ export type PoItemRow = {
   /** PR #77 — per-line delivery date + ship-to warehouse (both inherit from
       PO header when null). */
   delivery_date?: string | null;
+  /** Migration 0180 — per-line supplier-revised delivery dates. Effective line
+      date = MAX over non-null of [delivery_date, _2, _3, _4]. */
+  supplier_delivery_date_2?: string | null;
+  supplier_delivery_date_3?: string | null;
+  supplier_delivery_date_4?: string | null;
   warehouse_id?: string | null;
   /** Per-line GR breakdown (which goods receipt took how much) — set by
       GET /:id so the PO list expansion can show a "Received" column identical
@@ -477,6 +488,11 @@ export type NewPoItem = {
   variants?: Record<string, unknown>;
   /* PR #77 — per-line ship-to overrides; both null = inherit from PO header */
   deliveryDate?: string | null;
+  /* Migration 0180 — per-line supplier-revised delivery dates. Optional; the
+     effective line date downstream = MAX over non-null of these + deliveryDate. */
+  supplierDeliveryDate2?: string | null;
+  supplierDeliveryDate3?: string | null;
+  supplierDeliveryDate4?: string | null;
   warehouseId?: string | null;
   /* Commander 2026-05-29 (BUG 1) — source SO line id for lines added via the
      "From SO" picker. The generic create handler increments this SO line's
@@ -732,6 +748,10 @@ export function useCreatePurchaseOrder() {
       currency?: Currency;
       poDate?: string;
       expectedAt?: string;
+      /* Migration 0180 — supplier-revised header delivery dates (optional). */
+      supplierDeliveryDate2?: string;
+      supplierDeliveryDate3?: string;
+      supplierDeliveryDate4?: string;
       notes?: string;
       items?: NewPoItem[];                     // PR #41 — optional, allow blank-draft
       /** PR #97 — AutoCount Purchase Location at create time. NULL → can be
@@ -752,6 +772,10 @@ export function useUpdatePurchaseOrderHeader() {
   return useMutation({
     mutationFn: ({ id, ...body }: {
       id: string; poDate?: string; expectedAt?: string;
+      /* Migration 0180 — supplier-revised header delivery dates (optional). */
+      supplierDeliveryDate2?: string;
+      supplierDeliveryDate3?: string;
+      supplierDeliveryDate4?: string;
       currency?: Currency; notes?: string; supplierId?: string;
       /** PR #77 — default ship-to warehouse for every line on this PO. */
       purchaseLocationId?: string | null;
