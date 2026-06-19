@@ -1,15 +1,22 @@
 // ----------------------------------------------------------------------------
-// Delivery Order PDF — same pattern as sales-order-pdf.ts but customer-facing
-// signed POD. Driver / vehicle / delivered date prominent. Dashed signature
-// box for customer to sign at delivery.
+// Delivery Order PDF — customer-facing signed POD. Driver / vehicle / expected
+// date in the DELIVERY DETAILS column; dashed signature boxes for the customer
+// to sign at delivery.
+//
+// 2026-06-19 — adopts the unified "Hookka-tidy" layout shared with the Sales
+// Order / Purchase Order PDFs: real letterhead header, the drawInfoColumns
+// info block (DELIVER TO label-gutter + DELIVERY DETAILS colon-aligned), and a
+// consistent footer (doc no · portal · page n of m) on every page. A4 portrait,
+// pure black & white for printing. No field dropped from the previous layout.
 // ----------------------------------------------------------------------------
 
+import { formatPhone } from '@2990s/shared/phone';
 import {
+  COMPANY,
   drawHeader,
-  drawTwoColInfo,
+  drawInfoColumns,
   drawSignatureBoxes,
   fmtDocDate,
-  fmtDocStamp,
   fmtRm,
   safeName,
 } from './pdf-common';
@@ -61,39 +68,59 @@ export async function generateDeliveryOrderPdf(
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 14;
 
-  // ── Header (shared pdf-common layout) ─────────────────────────────
+  // ── Header (shared pdf-common letterhead) ─────────────────────────
   let y = drawHeader(doc, {
     docTitle: opts?.docTitle ?? 'DELIVERY ORDER',
     rightMeta: [
       { label: opts?.docNoLabel ?? 'DO No', value: header.do_number },
       { label: 'Date', value: fmtDocDate(header.do_date) },
-      ...(header.so_doc_no ? [{ label: 'SO Ref', value: header.so_doc_no }] : []),
-      { label: 'Status', value: header.status.replace(/_/g, ' ') },
     ],
   });
 
-  // ── Customer + delivery (driver / vehicle) info ──────────────────
-  const addrLine = [header.address1, header.address2, [header.postcode, header.city, header.state].filter(Boolean).join(' ')]
-    .filter(Boolean).join('\n').split('\n').filter(Boolean);
-  y = drawTwoColInfo(doc, y, 'DELIVER TO', 'LOGISTICS',
-    [
-      header.debtor_name,
-      header.debtor_code ? `Code: ${header.debtor_code}` : null,
-      ...addrLine,
-      header.phone ? `Tel: ${header.phone}` : null,
-    ],
-    [
-      header.driver_name ? `Driver: ${header.driver_name}` : null,
-      header.vehicle ? `Vehicle: ${header.vehicle}` : null,
-      header.expected_delivery_at ? `Expected: ${fmtDocDate(header.expected_delivery_at)}` : null,
-      header.m3_total_milli ? `Volume: ${(header.m3_total_milli / 1000).toFixed(3)} m³` : null,
-      header.notes ? `Note: ${header.notes}` : null,
-    ],
+  // ── DELIVER TO + DELIVERY DETAILS (unified Hookka-tidy info block) ─
+  const addressValue = [
+    header.address1,
+    header.address2,
+    [header.postcode, header.city, header.state]
+      .map((s) => (typeof s === 'string' ? s.trim() : ''))
+      .filter(Boolean)
+      .join(' '),
+  ]
+    .map((s) => (typeof s === 'string' ? s.trim() : ''))
+    .filter(Boolean)
+    .join(', ');
+  const statusText = header.status.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+  const volumeText = header.m3_total_milli ? `${(header.m3_total_milli / 1000).toFixed(3)} m³` : null;
+  y = drawInfoColumns(doc, y,
+    {
+      title: 'DELIVER TO',
+      rows: [
+        ['Company', header.debtor_name],
+        ['Code', header.debtor_code],
+        ['Address', addressValue],
+        ['Tel', header.phone ? formatPhone(header.phone) : null],
+        ['Note', header.notes],
+      ],
+    },
+    {
+      title: 'DELIVERY DETAILS',
+      rows: [
+        [opts?.docNoLabel ?? 'DO No', header.do_number],
+        ['SO Ref', header.so_doc_no],
+        ['Date', fmtDocDate(header.do_date)],
+        ['Expected', header.expected_delivery_at ? fmtDocDate(header.expected_delivery_at) : null],
+        ['Driver', header.driver_name],
+        ['Vehicle', header.vehicle],
+        ['Volume', volumeText],
+        ['Status', statusText],
+      ],
+    },
   );
 
-  // Line items — description cell = SKU description + the UNIFIED variant line
-  // (same composer as SO/DR/SI/consignment), so the line reads identically on
-  // every customer document (Commander 2026-06-16).
+  // ── Line items ────────────────────────────────────────────────────
+  // Description cell = SKU description + the UNIFIED variant line (same composer
+  // as SO/DR/SI/consignment), so the line reads identically on every customer
+  // document (Commander 2026-06-16).
   const fabric = await loadCustomerFabricMaps(items);
   const rows = items.map((it, idx) => [
     String(idx + 1),
@@ -106,29 +133,39 @@ export async function generateDeliveryOrderPdf(
 
   autoTable(doc, {
     startY: y,
-    head: [['#', 'Item', 'Description', 'Qty', 'm³', 'Unit Price']],
+    head: [['#', 'Item Code', 'Description', 'Qty', 'm³', 'Unit Price']],
     body: rows,
     theme: 'striped',
-    styles: { fontSize: 8.5, cellPadding: 2 },
+    styles: { fontSize: 8.5, cellPadding: 2, valign: 'top' },
     headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
     columnStyles: {
-      0: { cellWidth: 8, halign: 'right' },
+      0: { cellWidth: 8, halign: 'right', fontSize: 7.5 },
       1: { cellWidth: 30 },
-      2: { cellWidth: 78 },
-      3: { cellWidth: 14, halign: 'right' },
-      4: { cellWidth: 18, halign: 'right' },
-      5: { cellWidth: 30, halign: 'right' },
+      2: { cellWidth: 'auto' },
+      3: { cellWidth: 14, halign: 'right', fontSize: 7.5 },
+      4: { cellWidth: 18, halign: 'right', fontSize: 7.5 },
+      5: { cellWidth: 28, halign: 'right', fontSize: 7.5 },
     },
     margin: { left: margin, right: margin },
   });
   const lastY = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y) + 6;
 
-  // Signature blocks: customer + driver (shared pdf-common layout)
-  const ty = drawSignatureBoxes(doc, lastY, 'Customer Acknowledged Receipt', "2990's Home Driver Signature");
-
+  // ── Signature boxes: customer + driver (shared pdf-common layout) ──
+  const ty = drawSignatureBoxes(doc, lastY, 'Customer Acknowledged Receipt', `${COMPANY.name} Driver Signature`);
   doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(110);
   doc.text('Note: By signing above, the customer confirms receipt of the items listed in good order and condition.', margin, ty);
-  doc.text(`Generated ${fmtDocStamp()}`, pageW - margin, ty, { align: 'right' });
+  doc.setTextColor(0);
+
+  // ── Footer: doc no · portal · page n of m on every page ───────────
+  const pageCount = doc.getNumberOfPages();
+  for (let p = 1; p <= pageCount; p += 1) {
+    doc.setPage(p);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
+    doc.text(header.do_number, margin, 290);
+    doc.text(`${COMPANY.portalLabel} · ${fmtDocDate(header.do_date)}`, pageW / 2, 290, { align: 'center' });
+    doc.text(`Page ${p} of ${pageCount}`, pageW - margin, 290, { align: 'right' });
+    doc.setTextColor(0);
+  }
 
   doc.save(`${header.do_number}-${safeName(header.debtor_name || 'customer')}.pdf`);
 }
