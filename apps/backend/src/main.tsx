@@ -8,6 +8,7 @@ import { AuthProvider } from './lib/auth';
 import { ConfirmProvider, useConfirm } from './components/ConfirmDialog';
 import { NotifyProvider, useNotify } from './components/NotifyDialog';
 import { PromptProvider } from './components/PromptDialog';
+import { ChoiceProvider } from './components/ChoiceDialog';
 import { registerDialogService, serviceNotify } from './lib/dialog-service';
 import { router } from './router';
 
@@ -59,8 +60,10 @@ createRoot(rootEl).render(
         <ConfirmProvider>
           <NotifyProvider>
             <PromptProvider>
-              <DialogServiceBridge />
-              <RouterProvider router={router} />
+              <ChoiceProvider>
+                <DialogServiceBridge />
+                <RouterProvider router={router} />
+              </ChoiceProvider>
             </PromptProvider>
           </NotifyProvider>
         </ConfirmProvider>
