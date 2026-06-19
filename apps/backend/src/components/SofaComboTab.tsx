@@ -482,28 +482,42 @@ function ComboCard({
 }) {
   const label = rule.label || buildComboLabel(rule.modules);
   const isActive = rule.effectiveFrom <= todayIso();
+  // Whole card is the select target (job-card behaviour, commander T8). The
+  // inner action buttons stopPropagation so Edit / History / Delete don't also
+  // toggle selection. The CheckSquare/Square icon stays as an affordance.
   return (
-    <div style={{
-      background: 'var(--c-paper)',
-      border: '1px solid var(--line)',
-      borderRadius: 'var(--radius-md)',
-      padding: 12,
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 8,
-    }}>
+    <div
+      onClick={onToggleSelect}
+      title={selected ? 'Click to deselect for batch edit' : 'Click to select for batch edit'}
+      style={{
+        background: selected ? 'var(--c-cream)' : 'var(--c-paper)',
+        border: selected
+          ? '2px solid var(--c-orange, #c47b2f)'
+          : '1px solid var(--line)',
+        // Keep the box the same size selected vs not — compensate the extra 1px
+        // of border with 1px less padding so cards don't jump in the grid.
+        borderRadius: 'var(--radius-md)',
+        padding: selected ? 11 : 12,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        cursor: 'pointer',
+      }}
+    >
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}
-          title={selected ? 'Deselect for batch edit' : 'Select for batch edit'}
+        <span
+          aria-hidden
+          title={selected ? 'Selected for batch edit' : 'Not selected'}
           style={{
-            ...iconBtnStyle,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 4,
             color: selected ? 'var(--c-orange, #c47b2f)' : 'var(--fg-muted)',
           }}
         >
           {selected ? <CheckSquare size={16} strokeWidth={1.75} /> : <Square size={16} strokeWidth={1.75} />}
-        </button>
+        </span>
         <span style={chipStyleStrong}>{rule.baseModel}</span>
         {supplierCode && (
           <span style={chipStyleSupplierCode} title="Supplier's own model code">
@@ -522,7 +536,7 @@ function ComboCard({
         {rule.tier && <span style={chipStyleSoft}>{rule.tier}</span>}
         <button
           type="button"
-          onClick={onDelete}
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
           title="Soft-delete"
           style={iconBtnStyle}
         >
@@ -568,10 +582,21 @@ function ComboCard({
           {isActive ? 'Active' : 'Pending'}
         </span>
         <div style={{ flex: 1 }} />
-        <button type="button" onClick={onEdit} style={ghostBtnStyle}>
-          <Pencil size={12} strokeWidth={1.75} /> Edit
+        {/* Composition editing is Composer-only (never batch) — this opens the
+            single-combo Composer where modules/slots can change. */}
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onEdit(); }}
+          title="Edit composition + price (opens the Composer)"
+          style={ghostBtnStyle}
+        >
+          <Pencil size={12} strokeWidth={1.75} /> Edit composition…
         </button>
-        <button type="button" onClick={onHistory} style={ghostBtnStyle}>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onHistory(); }}
+          style={ghostBtnStyle}
+        >
           <History size={12} strokeWidth={1.75} /> History
         </button>
       </div>
@@ -923,13 +948,16 @@ function ComposerModal({
 // ─── Batch price edit modal (#39) ─────────────────────────────────────
 // Multi-select combos → POST one fresher-effective row per selected combo with
 // adjusted prices. APPEND-ONLY: each combo's scope (baseModel/modules/tier/
-// customerId/supplierId) + label + notes are preserved; only non-null height
-// prices are adjusted. Never PUT/overwrite an existing row.
+// customerId/supplierId) + label + notes are preserved; only the height prices
+// change. Composition is NEVER touched here (changing modules = a different
+// logical combo → that's the Composer's job, not batch). Never PUT/overwrite.
 //   · percent: round(old * (1 + pct/100)) for each non-null height
 //   · set:     setCenti for each EXISTING (key present) height; null stays null
+//   · grid:    per-combo × per-height inputs — each combo's map is rebuilt from
+//              its own grid row (job-card style edit, commander T8).
 // Mirrors HOOKKA's batch price tool.
 
-type BatchMode = 'percent' | 'set';
+type BatchMode = 'percent' | 'set' | 'grid';
 
 /** Compute the adjusted pricesByHeight for one combo. Keys are unchanged; only
  *  non-null values are touched. Returns integer-centi values. */
@@ -967,13 +995,56 @@ function BatchEditModal({
   const [setRmStr, setSetRmStr] = useState('');
   const [applying, setApplying] = useState(false);
 
+  // Per-combo × per-height grid (mode === 'grid'). Seeded from each combo's
+  // current pricesByHeight as RM strings ('' = leave that height null). Keyed
+  // by combo id then height. Empty inputs persist as null — same convention as
+  // the single-combo Composer.
+  const [grid, setGrid] = useState<Record<string, Record<string, string>>>(() => {
+    const seed: Record<string, Record<string, string>> = {};
+    for (const r of rules) {
+      const row: Record<string, string> = {};
+      for (const h of heights) {
+        const v = r.pricesByHeight?.[h];
+        row[h] = v == null ? '' : (v / 100).toFixed(2);
+      }
+      seed[r.id] = row;
+    }
+    return seed;
+  });
+  const setGridCell = (id: string, h: string, value: string) => {
+    setGrid((cur) => ({ ...cur, [id]: { ...(cur[id] ?? {}), [h]: value } }));
+  };
+
   const pct = Number(pctStr);
   const setRm = Number(setRmStr);
   const setCenti = Math.round((Number.isFinite(setRm) ? setRm : 0) * 100);
+  // Build one combo's pricesByHeight from its grid row: parse each cell to
+  // centi, blank → null. Returns null when any cell is a non-empty bad number
+  // so apply can reject before POSTing.
+  const gridMapFor = (r: SofaComboRule): Record<string, number | null> | null => {
+    const row = grid[r.id] ?? {};
+    const out: Record<string, number | null> = {};
+    // Carry any legacy height keys the heights list doesn't cover, untouched.
+    for (const [h, v] of Object.entries(r.pricesByHeight ?? {})) {
+      if (!heights.includes(h)) out[h] = v;
+    }
+    for (const h of heights) {
+      const raw = (row[h] ?? '').trim();
+      if (!raw) { out[h] = null; continue; }
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) return null;
+      out[h] = Math.round(n * 100);
+    }
+    return out;
+  };
+  const gridValid =
+    mode !== 'grid' || rules.every((r) => gridMapFor(r) !== null);
   const inputsValid =
     mode === 'percent'
       ? Number.isFinite(pct)
-      : Number.isFinite(setRm) && setRm >= 0 && setRmStr.trim() !== '';
+      : mode === 'set'
+        ? Number.isFinite(setRm) && setRm >= 0 && setRmStr.trim() !== ''
+        : gridValid;
 
   // The first representative non-null height for a combo (preview anchor).
   const firstPricedHeight = (r: SofaComboRule): string | null => {
@@ -993,6 +1064,15 @@ function BatchEditModal({
     let ok = 0;
     let fail = 0;
     for (const r of rules) {
+      // Build this combo's new price map. APPEND-ONLY: identity (baseModel /
+      // modules / tier / customerId / supplierId) is carried forward verbatim;
+      // ONLY pricesByHeight + effectiveFrom change. Composition is never
+      // mutated in batch.
+      const pricesByHeight =
+        mode === 'grid'
+          ? gridMapFor(r)
+          : adjustPrices(r.pricesByHeight ?? {}, mode, pct, setCenti);
+      if (pricesByHeight == null) { fail += 1; continue; } // bad grid cell
       const newCombo: NewSofaCombo = {
         baseModel: r.baseModel,
         modules: r.modules,
@@ -1002,7 +1082,7 @@ function BatchEditModal({
         label: r.label,
         notes: r.notes,
         effectiveFrom,
-        pricesByHeight: adjustPrices(r.pricesByHeight ?? {}, mode, pct, setCenti),
+        pricesByHeight,
       };
       try {
         await create.mutateAsync(newCombo);
@@ -1023,9 +1103,10 @@ function BatchEditModal({
           fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)',
           color: 'var(--fg-soft)', margin: 0,
         }}>
-          Appends a new effective-dated row for each selected combo with the
-          adjusted prices. Existing rows stay in history; scope, label, and notes
-          are preserved. Only priced (non-empty) heights are changed.
+          Appends a new effective-dated row for each selected combo with the new
+          prices. Existing rows stay in history; composition, scope, label, and
+          notes are preserved — only the seat-height prices change. To change a
+          combo's modules, use <strong>Edit composition…</strong> on the card.
         </p>
 
         <Field label="Effective from">
@@ -1075,42 +1156,105 @@ function BatchEditModal({
                 style={{ ...inputStyle, width: 120, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
               />
             </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="radio"
+                name="batch-mode"
+                checked={mode === 'grid'}
+                onChange={() => setMode('grid')}
+              />
+              <span style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', color: 'var(--c-ink)' }}>
+                Edit each height individually (grid)
+              </span>
+            </label>
           </div>
         </Field>
 
-        <Field label="Preview">
-          <div style={{
-            display: 'flex', flexDirection: 'column', gap: 6,
-            padding: 8, background: 'var(--c-cream)',
-            borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)',
-          }}>
-            {rules.slice(0, 3).map((r) => {
-              const h = firstPricedHeight(r);
-              const oldV = h ? (r.pricesByHeight?.[h] ?? null) : null;
-              const newV = h
-                ? adjustPrices(r.pricesByHeight ?? {}, mode, pct, setCenti)[h] ?? null
-                : null;
-              return (
-                <div key={r.id} style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', color: 'var(--c-ink)',
-                }}>
-                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {r.label || r.baseModel}{h ? ` · ${h}` : ''}
-                  </span>
-                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-soft)' }}>{fmtRm(oldV)}</span>
-                  <span style={{ color: 'var(--fg-muted)' }}>→</span>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{fmtRm(newV)}</span>
+        {mode === 'grid' ? (
+          <Field label="Per-combo prices by seat height (RM) — blank leaves that height empty">
+            {/* Per-combo × per-height grid (job-card edit). Reuses the
+                Composer's height-input markup; each combo's map is rebuilt from
+                its own row on apply. Composition is shown read-only — it is NOT
+                editable here (append-only identity stays intact). */}
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 360 }}>
+                <thead>
+                  <tr>
+                    <th style={gridHeadCellStickyStyle}>Combo</th>
+                    {heights.map((h) => (
+                      <th key={h} style={gridHeadCellStyle}>
+                        {h}{/^\d/.test(h) ? '"' : ''}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rules.map((r) => (
+                    <tr key={r.id}>
+                      <td style={gridLabelCellStyle} title={r.label || buildComboLabel(r.modules)}>
+                        <div style={{ fontWeight: 600, color: 'var(--c-ink)' }}>{r.baseModel}</div>
+                        <div style={{
+                          fontSize: 'var(--fs-11)', color: 'var(--fg-soft)',
+                          maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {r.label || buildComboLabel(r.modules)}
+                          {r.tier ? ` · ${r.tier}` : ''}
+                        </div>
+                      </td>
+                      {heights.map((h) => (
+                        <td key={h} style={gridInputCellStyle}>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={grid[r.id]?.[h] ?? ''}
+                            onChange={(e) => setGridCell(r.id, h, e.target.value)}
+                            placeholder="—"
+                            style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)', padding: '4px 6px' }}
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Field>
+        ) : (
+          <Field label="Preview">
+            <div style={{
+              display: 'flex', flexDirection: 'column', gap: 6,
+              padding: 8, background: 'var(--c-cream)',
+              borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)',
+            }}>
+              {rules.slice(0, 3).map((r) => {
+                const h = firstPricedHeight(r);
+                const oldV = h ? (r.pricesByHeight?.[h] ?? null) : null;
+                const newV = h
+                  ? adjustPrices(r.pricesByHeight ?? {}, mode, pct, setCenti)[h] ?? null
+                  : null;
+                return (
+                  <div key={r.id} style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', color: 'var(--c-ink)',
+                  }}>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.label || r.baseModel}{h ? ` · ${h}` : ''}
+                    </span>
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-soft)' }}>{fmtRm(oldV)}</span>
+                    <span style={{ color: 'var(--fg-muted)' }}>→</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{fmtRm(newV)}</span>
+                  </div>
+                );
+              })}
+              {rules.length > 3 && (
+                <div style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                  …and {rules.length - 3} more
                 </div>
-              );
-            })}
-            {rules.length > 3 && (
-              <div style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
-                …and {rules.length - 3} more
-              </div>
-            )}
-          </div>
-        </Field>
+              )}
+            </div>
+          </Field>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
@@ -1365,4 +1509,34 @@ const moduleChipOff: CSSProperties = {
   background: 'var(--c-paper)',
   color: 'var(--c-ink)',
   border: '1px solid var(--line-strong)',
+};
+
+// Batch per-height grid (mode === 'grid') ─────────────────────────────
+const gridHeadCellStyle: CSSProperties = {
+  fontFamily: 'var(--font-sans)',
+  fontSize: 'var(--fs-11)',
+  fontWeight: 600,
+  color: 'var(--fg-muted)',
+  textAlign: 'center',
+  padding: '4px 6px',
+  whiteSpace: 'nowrap',
+};
+
+const gridHeadCellStickyStyle: CSSProperties = {
+  ...gridHeadCellStyle,
+  textAlign: 'left',
+  minWidth: 120,
+};
+
+const gridLabelCellStyle: CSSProperties = {
+  fontFamily: 'var(--font-sans)',
+  fontSize: 'var(--fs-12)',
+  padding: '4px 8px 4px 0',
+  verticalAlign: 'middle',
+  whiteSpace: 'nowrap',
+};
+
+const gridInputCellStyle: CSSProperties = {
+  padding: '2px 3px',
+  verticalAlign: 'middle',
 };
