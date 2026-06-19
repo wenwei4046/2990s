@@ -24,6 +24,7 @@ import {
   summarizeSofaCells,
   findDuplicateCombo,
   matchComboSubset,
+  sofaTierComboApplies,
   type Bbox,
   type Cell,
   type Depth,
@@ -877,10 +878,23 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       fabricHydratedRef.current = true;
     }
   }, [initialFabric]);
+  // Combo Price 1/2/3 (Option B, migration 0179): suppress the flat fabric-tier
+  // add-on when this build's dominant combo carries an explicit price2/price3 for
+  // the chosen tier (the tier premium is already in the combo's tier map, which
+  // the parent already merged into `pricing.combos`). The parent passes the
+  // combos with their price2/price3 maps intact, so detection here matches the
+  // engine. No such combo → keep the flat add-on, byte-identical to today.
+  const sofaTierComboSuppressAddon = (() => {
+    const tier = (fabricSel?.sofaTier as FabricTier | null) ?? null;
+    if (tier !== 'PRICE_2' && tier !== 'PRICE_3') return false;
+    if (cells.length === 0) return false;
+    return sofaTierComboApplies(cells, depth, pricing.combos ?? [], tier);
+  })();
   // Fabric-tier add-on (migration 0124): per-item flat Δ from the chosen
   // fabric's SELLING tier — replaces the old per-fabric surcharge. Server adds
   // the same Δ per line via the shared fabricTierAddon, so it can't drift.
-  const sofaFabricDelta = fabricSel && addonCfgQ.data
+  // Suppressed (0) when an Option-B tier-priced combo dominates the build.
+  const sofaFabricDelta = (fabricSel && addonCfgQ.data && !sofaTierComboSuppressAddon)
     ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data, modelFabricOverride)
     : 0;
   // Fabric is OPTIONAL at Add-to-Cart (Loo 2026-06-11) — some customers can't

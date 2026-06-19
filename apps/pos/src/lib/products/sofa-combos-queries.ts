@@ -48,6 +48,13 @@ export type SofaComboRule = {
   sellingPricesByHeight: Record<string, number | null>;
   /** PWP (换购) selling price per height (Phase 2). {} = unset. POS-only. */
   pwpPricesByHeight?: Record<string, number | null>;
+  /** Combo Price 2/3 by fabric tier (Option B, migration 0179). EXPLICIT per-tier
+   *  SELLING price per height. price1 = sellingPricesByHeight above. {} = inherit
+   *  price1 + the flat fabric-tier add-on (byte-identical to pre-Option-B). The
+   *  pricing engine charges these when the line's fabric resolves to PRICE_2 /
+   *  PRICE_3 and the map is non-empty. POS-only (selling side). */
+  price2ByHeight?: Record<string, number | null>;
+  price3ByHeight?: Record<string, number | null>;
   /** 0170 — accessory free gifts granted when this combo is the cart's sofa build (trigger by combo, D9). */
   defaultFreeGifts?: { giftProductId: string; qty: number; campaignName?: string | null }[];
   label: string | null;
@@ -72,6 +79,10 @@ export type NewSofaCombo = {
   /** Optional COST override — normally omitted so the server auto-detects it. */
   pricesByHeight?: Record<string, number | null>;
   pwpPricesByHeight?: Record<string, number | null>;
+  /** Combo Price 2/3 by fabric tier (Option B, migration 0179). Omit / {} =
+   *  inherit price1 + the flat add-on. */
+  price2ByHeight?: Record<string, number | null>;
+  price3ByHeight?: Record<string, number | null>;
   defaultFreeGifts?: { giftProductId: string; qty: number; campaignName?: string | null }[];
   label?: string | null;
   effectiveFrom: string;
@@ -144,7 +155,7 @@ export function useUpdateSofaCombo() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
-      id, pricesByHeight, sellingPricesByHeight, pwpPricesByHeight, defaultFreeGifts, label, effectiveFrom, notes,
+      id, pricesByHeight, sellingPricesByHeight, pwpPricesByHeight, price2ByHeight, price3ByHeight, defaultFreeGifts, label, effectiveFrom, notes,
     }: {
       id: string;
       /** Existing COST, passed back UNCHANGED (the PUT requires the field) so an
@@ -152,6 +163,10 @@ export function useUpdateSofaCombo() {
       pricesByHeight: Record<string, number | null>;
       sellingPricesByHeight?: Record<string, number | null>;
       pwpPricesByHeight?: Record<string, number | null>;
+      /** Combo Price 2/3 by fabric tier (Option B, migration 0179). Omitting a
+       *  field leaves the existing map untouched (the PUT carries it forward). */
+      price2ByHeight?: Record<string, number | null>;
+      price3ByHeight?: Record<string, number | null>;
       defaultFreeGifts?: { giftProductId: string; qty: number; campaignName?: string | null }[];
       label?: string | null;
       effectiveFrom: string;
@@ -163,6 +178,8 @@ export function useUpdateSofaCombo() {
           pricesByHeight, label, effectiveFrom, notes,
           ...(sellingPricesByHeight !== undefined ? { sellingPricesByHeight } : {}),
           ...(pwpPricesByHeight !== undefined ? { pwpPricesByHeight } : {}),
+          ...(price2ByHeight !== undefined ? { price2ByHeight } : {}),
+          ...(price3ByHeight !== undefined ? { price3ByHeight } : {}),
           ...(defaultFreeGifts !== undefined ? { defaultFreeGifts } : {}),
         }),
       }),

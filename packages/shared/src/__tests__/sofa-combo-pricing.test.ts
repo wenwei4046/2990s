@@ -10,6 +10,8 @@ import {
   comboSlotsKey,
   buildComboLabel,
   comboChargedPrices,
+  comboChargedPricesForTier,
+  comboTierPriceActive,
   findDuplicateCombo,
   type SofaComboRow,
 } from '../sofa-combo-pricing';
@@ -382,6 +384,88 @@ describe('comboChargedPrices', () => {
   });
   it('null / undefined cost → just the set selling entries', () => {
     expect(comboChargedPrices({ '24': 380000 }, null)).toEqual({ '24': 380000 });
+  });
+});
+
+describe('Combo Price 1/2/3 — comboTierPriceActive (Option B, migration 0179)', () => {
+  it('PRICE_1 is never an Option-B override (price1 is the base map)', () => {
+    expect(comboTierPriceActive({ price2ByHeight: { '24': 1 }, price3ByHeight: { '24': 1 } }, 'PRICE_1')).toBe(false);
+  });
+  it('null / undefined tier → false', () => {
+    expect(comboTierPriceActive({ price2ByHeight: { '24': 1 } }, null)).toBe(false);
+    expect(comboTierPriceActive({ price2ByHeight: { '24': 1 } }, undefined)).toBe(false);
+  });
+  it('PRICE_2 active only when price2 has a non-null entry', () => {
+    expect(comboTierPriceActive({ price2ByHeight: { '24': 264000 } }, 'PRICE_2')).toBe(true);
+    expect(comboTierPriceActive({ price2ByHeight: {} }, 'PRICE_2')).toBe(false);
+    expect(comboTierPriceActive({ price2ByHeight: { '24': null } }, 'PRICE_2')).toBe(false);
+    expect(comboTierPriceActive({ price3ByHeight: { '24': 1 } }, 'PRICE_2')).toBe(false); // price3 ≠ price2
+  });
+  it('PRICE_3 active only when price3 has a non-null entry', () => {
+    expect(comboTierPriceActive({ price3ByHeight: { '24': 300000 } }, 'PRICE_3')).toBe(true);
+    expect(comboTierPriceActive({ price3ByHeight: {} }, 'PRICE_3')).toBe(false);
+  });
+  it('absent maps / null combo → false', () => {
+    expect(comboTierPriceActive({}, 'PRICE_2')).toBe(false);
+    expect(comboTierPriceActive(null, 'PRICE_2')).toBe(false);
+    expect(comboTierPriceActive(undefined, 'PRICE_3')).toBe(false);
+  });
+});
+
+describe('Combo Price 1/2/3 — comboChargedPricesForTier (Option B, migration 0179)', () => {
+  const selling = { '24': 380000, '28': 390000 };
+  const cost = { '24': 300000, '28': 310000, '32': 320000 };
+
+  // BACKWARD-COMPAT (NON-NEGOTIABLE): a combo with NO price2/price3 must be
+  // BYTE-IDENTICAL to comboChargedPrices(selling, cost) for EVERY tier.
+  describe('backward-compat: no price2/price3 → identical to comboChargedPrices', () => {
+    for (const tier of ['PRICE_1', 'PRICE_2', 'PRICE_3'] as const) {
+      it(`tier ${tier} with empty {} tier maps`, () => {
+        expect(comboChargedPricesForTier(selling, {}, {}, cost, tier))
+          .toEqual(comboChargedPrices(selling, cost));
+      });
+      it(`tier ${tier} with undefined tier maps`, () => {
+        expect(comboChargedPricesForTier(selling, undefined, undefined, cost, tier))
+          .toEqual(comboChargedPrices(selling, cost));
+      });
+      it(`tier ${tier} with all-null tier maps (treated as not-set)`, () => {
+        expect(comboChargedPricesForTier(selling, { '24': null }, { '24': null }, cost, tier))
+          .toEqual(comboChargedPrices(selling, cost));
+      });
+    }
+  });
+
+  it('PRICE_1 ALWAYS uses price1 selling, even when price2/price3 are set', () => {
+    // price1 is never overridden by an Option-B tier map; the flat add-on (0 for
+    // PRICE_1) is what differentiates it.
+    expect(comboChargedPricesForTier(selling, { '24': 999999 }, { '24': 888888 }, cost, 'PRICE_1'))
+      .toEqual(comboChargedPrices(selling, cost));
+  });
+
+  it('PRICE_2 with a non-empty price2 map → charges price2 merged over cost', () => {
+    const price2 = { '24': 420000 };
+    expect(comboChargedPricesForTier(selling, price2, {}, cost, 'PRICE_2'))
+      .toEqual({ '24': 420000, '28': 310000, '32': 320000 }); // price2 over cost, NOT selling
+  });
+
+  it('PRICE_3 with a non-empty price3 map → charges price3 merged over cost', () => {
+    const price3 = { '24': 500000, '28': 510000 };
+    expect(comboChargedPricesForTier(selling, {}, price3, cost, 'PRICE_3'))
+      .toEqual({ '24': 500000, '28': 510000, '32': 320000 });
+  });
+
+  it('a height missing from price2 falls back to COST (mirrors selling-over-cost)', () => {
+    const price2 = { '24': 420000 }; // 28 + 32 not priced in price2
+    const out = comboChargedPricesForTier(selling, price2, {}, cost, 'PRICE_2');
+    expect(out['24']).toBe(420000);
+    expect(out['28']).toBe(310000); // cost, not selling 390000
+    expect(out['32']).toBe(320000);
+  });
+
+  it('PRICE_2 set but PRICE_3 empty → PRICE_3 line still falls back to price1', () => {
+    const price2 = { '24': 420000 };
+    expect(comboChargedPricesForTier(selling, price2, {}, cost, 'PRICE_3'))
+      .toEqual(comboChargedPrices(selling, cost));
   });
 });
 
