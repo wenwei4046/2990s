@@ -19,7 +19,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
+import { buildVariantSummary, fmtDateOrDash, effectiveDelivery } from '@2990s/shared';
 import {
   usePurchaseConsignmentOrders,
   usePurchaseConsignmentOrderDetail,
@@ -60,6 +60,27 @@ const summarizeItems = (items: PoHeaderRow['items']): string | null => {
 };
 
 const PC_ORDER_LIST_STORAGE_KEY = 'pc-order-list.layout.v1';
+
+/* Migration 0181 — the EFFECTIVE (latest revised) header delivery date: MAX over
+   non-null of [expected_at, _2, _3, _4]. Mirrors PurchaseOrders.tsx so the list
+   "Expected" column / sort / filter reflect a supplier revision. */
+const pcoEffectiveExpected = (po: PoHeaderRow): string | null =>
+  effectiveDelivery(
+    po.expected_at,
+    po.supplier_delivery_date_2,
+    po.supplier_delivery_date_3,
+    po.supplier_delivery_date_4,
+  );
+
+/* Migration 0181 — the EFFECTIVE (latest revised) per-line delivery date: MAX
+   over non-null of [delivery_date, _2, _3, _4]. */
+const lineEffectiveDelivery = (it: PoItemRow): string | null =>
+  effectiveDelivery(
+    it.delivery_date,
+    it.supplier_delivery_date_2,
+    it.supplier_delivery_date_3,
+    it.supplier_delivery_date_4,
+  );
 
 const buildColumns = (): DataGridColumn<PoHeaderRow>[] => [
   {
@@ -107,11 +128,20 @@ const buildColumns = (): DataGridColumn<PoHeaderRow>[] => [
     filterType: 'date', dateValue: (po) => po.po_date,
   },
   {
-    key: 'expected_at', label: 'Expected', width: 120, sortable: true,
-    accessor: (po) => fmtDateOrDash(po.expected_at),
-    searchValue: (po) => po.expected_at ?? '',
-    sortFn: (a, b) => (a.expected_at ?? '').localeCompare(b.expected_at ?? ''),
-    filterType: 'date', dateValue: (po) => po.expected_at,
+    /* Migration 0181 — accessor/sort/filter all key off the EFFECTIVE (latest
+       revised) delivery date, not the raw expected_at. A small "(revised)" hint
+       shows when a supplier revision pushed it past the original. */
+    key: 'expected_at', label: 'Expected', width: 130, sortable: true,
+    accessor: (po) => {
+      const eff = pcoEffectiveExpected(po);
+      const revised = eff && po.expected_at && eff !== po.expected_at;
+      return revised
+        ? `${fmtDateOrDash(eff)} (revised)`
+        : fmtDateOrDash(eff);
+    },
+    searchValue: (po) => pcoEffectiveExpected(po) ?? '',
+    sortFn: (a, b) => (pcoEffectiveExpected(a) ?? '').localeCompare(pcoEffectiveExpected(b) ?? ''),
+    filterType: 'date', dateValue: (po) => pcoEffectiveExpected(po),
   },
   {
     key: 'currency', label: 'Currency', width: 90, sortable: true, groupable: true,
@@ -298,16 +328,22 @@ const buildDrilldownColumns = (
     sortFn: (a, b) => Number(a.qty ?? 0) - Number(b.qty ?? 0),
   },
   {
+    /* Migration 0181 — show the EFFECTIVE (latest revised) per-line delivery
+       date: MAX over non-null of [delivery_date, _2, _3, _4], falling back to
+       the header's effective expected date (headerExpectedAt is already the
+       header's effective value). */
     key: 'delivery_date', label: 'Delivery Date', width: 120,
     accessor: (it) => {
-      const due = it.delivery_date ?? headerExpectedAt ?? null;
+      const due = lineEffectiveDelivery(it) ?? headerExpectedAt ?? null;
       return due
         ? <span style={{ whiteSpace: 'nowrap' }}>{fmtDateOrDash(due)}</span>
         : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
     },
-    searchValue: (it) => it.delivery_date ?? headerExpectedAt ?? '',
-    sortFn: (a, b) => (a.delivery_date ?? headerExpectedAt ?? '').localeCompare(b.delivery_date ?? headerExpectedAt ?? ''),
-    filterType: 'date', dateValue: (it) => it.delivery_date ?? headerExpectedAt,
+    searchValue: (it) => lineEffectiveDelivery(it) ?? headerExpectedAt ?? '',
+    sortFn: (a, b) =>
+      (lineEffectiveDelivery(a) ?? headerExpectedAt ?? '')
+        .localeCompare(lineEffectiveDelivery(b) ?? headerExpectedAt ?? ''),
+    filterType: 'date', dateValue: (it) => lineEffectiveDelivery(it) ?? headerExpectedAt,
   },
   {
     key: 'unit_price', label: 'Unit Price', width: 100, align: 'right',
@@ -355,7 +391,7 @@ const ExpandedLines = ({ po }: { po: PoHeaderRow }) => {
   let subtotal = 0;
   for (const it of items) subtotal += Number(it.line_total_centi ?? 0);
 
-  const columns = buildDrilldownColumns(po.currency, po.expected_at ?? null);
+  const columns = buildDrilldownColumns(po.currency, pcoEffectiveExpected(po));
 
   return (
     <div style={{ padding: 'var(--space-2) var(--space-3) var(--space-3) 40px', background: 'var(--c-cream)' }}>

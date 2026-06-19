@@ -64,6 +64,10 @@ export function useCreatePurchaseConsignmentOrder() {
       currency?: Currency;
       poDate?: string;
       expectedAt?: string;
+      /* Migration 0181 — supplier-revised header delivery dates. */
+      supplierDeliveryDate2?: string;
+      supplierDeliveryDate3?: string;
+      supplierDeliveryDate4?: string;
       notes?: string;
       items?: NewPoItem[];
       purchaseLocationId?: string | null;
@@ -84,6 +88,10 @@ export function useUpdatePurchaseConsignmentOrderHeader() {
       id: string; poDate?: string; expectedAt?: string;
       currency?: Currency; notes?: string; supplierId?: string;
       purchaseLocationId?: string | null;
+      /* Migration 0181 — supplier-revised header delivery dates. */
+      supplierDeliveryDate2?: string;
+      supplierDeliveryDate3?: string;
+      supplierDeliveryDate4?: string;
     }) => authedFetch<{ purchaseOrder: PoHeaderRow }>(`/purchase-consignment-orders/${id}`, {
       method: 'PATCH', body: JSON.stringify(body),
     }),

@@ -74,7 +74,9 @@ const HEADER_COLS =
   'id, pc_number, supplier_id, status, po_date, expected_at, currency, ' +
   'subtotal_centi, tax_centi, total_centi, notes, submitted_at, received_at, ' +
   'cancelled_at, created_at, created_by, updated_at, ' +
-  'purchase_location_id';
+  'purchase_location_id, ' +
+  /* supplier-revised header delivery dates (migration 0181) */
+  'supplier_delivery_date_2, supplier_delivery_date_3, supplier_delivery_date_4';
 
 const ITEM_COLS =
   'id, purchase_consignment_order_id, binding_id, material_kind, material_code, material_name, ' +
@@ -84,7 +86,9 @@ const ITEM_COLS =
   'gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, ' +
   'custom_specials, line_suffix, special_order_price_sen, variants, ' +
   /* per-line delivery date + ship-to warehouse */
-  'delivery_date, warehouse_id';
+  'delivery_date, warehouse_id, ' +
+  /* supplier-revised per-line delivery dates (migration 0181) */
+  'supplier_delivery_date_2, supplier_delivery_date_3, supplier_delivery_date_4';
 
 // ── List ──────────────────────────────────────────────────────────────
 purchaseConsignmentOrders.get('/', async (c) => {
@@ -302,6 +306,9 @@ purchaseConsignmentOrders.post('/', async (c) => {
       notes: (it.notes as string | undefined) ?? null,
       discount_centi: discountCenti,
       delivery_date: (it.deliveryDate as string | undefined) ?? null,
+      supplier_delivery_date_2: (it.supplierDeliveryDate2 as string | undefined) ?? null,
+      supplier_delivery_date_3: (it.supplierDeliveryDate3 as string | undefined) ?? null,
+      supplier_delivery_date_4: (it.supplierDeliveryDate4 as string | undefined) ?? null,
       warehouse_id:  (it.warehouseId  as string | undefined) ?? null,
       item_group:   (it.itemGroup as string | undefined) ?? null,
       variants:     (it.variants as unknown) ?? null,
@@ -318,6 +325,9 @@ purchaseConsignmentOrders.post('/', async (c) => {
     submitted_at: new Date().toISOString(),
     currency,
     expected_at: expectedAt,
+    supplier_delivery_date_2: (body.supplierDeliveryDate2 as string | undefined) ?? null,
+    supplier_delivery_date_3: (body.supplierDeliveryDate3 as string | undefined) ?? null,
+    supplier_delivery_date_4: (body.supplierDeliveryDate4 as string | undefined) ?? null,
     notes: (body.notes as string | undefined) ?? null,
     subtotal_centi: subtotal,
     tax_centi: 0,
@@ -367,6 +377,9 @@ purchaseConsignmentOrders.patch('/:id', async (c) => {
     ['poDate', 'po_date'], ['expectedAt', 'expected_at'], ['currency', 'currency'],
     ['notes', 'notes'], ['supplierId', 'supplier_id'],
     ['purchaseLocationId', 'purchase_location_id'],
+    ['supplierDeliveryDate2', 'supplier_delivery_date_2'],
+    ['supplierDeliveryDate3', 'supplier_delivery_date_3'],
+    ['supplierDeliveryDate4', 'supplier_delivery_date_4'],
   ] as const) {
     if (body[from] !== undefined) updates[to] = body[from];
   }
@@ -432,6 +445,9 @@ purchaseConsignmentOrders.post('/:id/items', async (c) => {
     discount_centi: discountCenti,
     unit_cost_centi: Number(it.unitCostCenti ?? 0),
     delivery_date: (it.deliveryDate as string) ?? null,
+    supplier_delivery_date_2: (it.supplierDeliveryDate2 as string) ?? null,
+    supplier_delivery_date_3: (it.supplierDeliveryDate3 as string) ?? null,
+    supplier_delivery_date_4: (it.supplierDeliveryDate4 as string) ?? null,
     warehouse_id: (it.warehouseId as string) ?? null,
   };
   const { data, error } = await sb.from('purchase_consignment_order_items').insert(row).select('*').single();
@@ -474,6 +490,9 @@ purchaseConsignmentOrders.patch('/:id/items/:itemId', async (c) => {
     ['lineSuffix', 'line_suffix'], ['specialOrderPriceSen', 'special_order_price_sen'],
     ['variants', 'variants'],
     ['deliveryDate', 'delivery_date'], ['warehouseId', 'warehouse_id'],
+    ['supplierDeliveryDate2', 'supplier_delivery_date_2'],
+    ['supplierDeliveryDate3', 'supplier_delivery_date_3'],
+    ['supplierDeliveryDate4', 'supplier_delivery_date_4'],
   ] as const) {
     if (it[from] !== undefined) updates[to] = it[from];
   }

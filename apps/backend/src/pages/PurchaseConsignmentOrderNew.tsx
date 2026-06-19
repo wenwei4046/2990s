@@ -73,6 +73,12 @@ export const PurchaseConsignmentOrderNew = () => {
   const [supplierId, setSupplierId]   = useState<string>('');
   const [poDate, setPoDate]           = useState<string>(() => todayMyt());
   const [expectedAt, setExpectedAt]   = useState<string>('');
+  /* Supplier-revised header delivery dates (migration 0181). Optional; the
+     supplier pushes the delivery back. Display-only on consignment (no MRP /
+     outstanding / on-time) — the latest non-empty date is the effective ETA. */
+  const [supplierDeliveryDate2, setSupplierDeliveryDate2] = useState<string>('');
+  const [supplierDeliveryDate3, setSupplierDeliveryDate3] = useState<string>('');
+  const [supplierDeliveryDate4, setSupplierDeliveryDate4] = useState<string>('');
   const [purchaseLocationId, setPurchaseLocationId] = useState<string>('');
   const [notes, setNotes]             = useState<string>('');
 
@@ -292,6 +298,10 @@ export const PurchaseConsignmentOrderNew = () => {
       bindingId:      l.bindingId,
       discountCenti:  l.discountCenti,
       deliveryDate:   l.deliveryDate || undefined,
+      /* Migration 0181 — per-line supplier-revised delivery dates. */
+      supplierDeliveryDate2: l.supplierDeliveryDate2 || undefined,
+      supplierDeliveryDate3: l.supplierDeliveryDate3 || undefined,
+      supplierDeliveryDate4: l.supplierDeliveryDate4 || undefined,
       warehouseId:    l.warehouseId  || undefined,
       itemGroup:      l.category,
       variants:       Object.keys(l.variants).length ? l.variants : undefined,
@@ -303,6 +313,10 @@ export const PurchaseConsignmentOrderNew = () => {
         currency,
         poDate,
         expectedAt,
+        /* Migration 0181 — supplier-revised header delivery dates. */
+        supplierDeliveryDate2: supplierDeliveryDate2 || undefined,
+        supplierDeliveryDate3: supplierDeliveryDate3 || undefined,
+        supplierDeliveryDate4: supplierDeliveryDate4 || undefined,
         notes: notes || undefined,
         purchaseLocationId,
         items,
@@ -411,6 +425,37 @@ export const PurchaseConsignmentOrderNew = () => {
                 onChange={(e) => setExpectedAt(e.target.value)}
                 className={styles.fieldInput}
                 required
+              />
+            </label>
+
+            {/* Supplier-revised header delivery dates (migration 0181). Optional —
+                set when the supplier pushes the delivery back. The latest non-empty
+                date becomes the effective ETA. Display-only on consignment. */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Supplier Delivery Date 2</span>
+              <input
+                type="date"
+                value={supplierDeliveryDate2}
+                onChange={(e) => setSupplierDeliveryDate2(e.target.value)}
+                className={styles.fieldInput}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Supplier Delivery Date 3</span>
+              <input
+                type="date"
+                value={supplierDeliveryDate3}
+                onChange={(e) => setSupplierDeliveryDate3(e.target.value)}
+                className={styles.fieldInput}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Supplier Delivery Date 4</span>
+              <input
+                type="date"
+                value={supplierDeliveryDate4}
+                onChange={(e) => setSupplierDeliveryDate4(e.target.value)}
+                className={styles.fieldInput}
               />
             </label>
 
