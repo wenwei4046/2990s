@@ -182,7 +182,13 @@ export function DetailListingShell<R extends DetailListingRow>({
         head: [columns.filter((c) => c.key !== 'check').slice(0, 10).map((c) => c.label)],
         body: data.map((r) =>
           columns.filter((c) => c.key !== 'check').slice(0, 10).map((c) => {
-            if (c.searchValue) return c.searchValue(r);
+            // Clean display value, NOT the global-search blob — searchValue
+            // concatenates representations (doc-no + status, etc.) and printed
+            // duplicated/merged cells just like the Excel export did (commander
+            // 2026-06-20). exportValue → filterValue → plain accessor; never
+            // searchValue.
+            if (c.exportValue) return String(c.exportValue(r));
+            if (c.filterValue) return c.filterValue(r);
             const v = c.accessor(r);
             return typeof v === 'string' || typeof v === 'number' ? String(v) : '';
           }),
@@ -192,7 +198,7 @@ export function DetailListingShell<R extends DetailListingRow>({
         headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
         margin: { left: margin, right: margin },
       });
-      doc.save(`${storageKey}-${new Date().toISOString().slice(0, 10)}.pdf`);
+      doc.save(`${title} ${new Date().toISOString().slice(0, 10)}.pdf`);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('PDF preview failed', e);
@@ -427,6 +433,7 @@ export function DetailListingShell<R extends DetailListingRow>({
           rows={rows}
           columns={columns}
           storageKey={storageKey}
+          exportName={title}
           rowKey={(r) => r.id}
           searchPlaceholder="Search rows…"
           focusSearchNonce={findNonce}
