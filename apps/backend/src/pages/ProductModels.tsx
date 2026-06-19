@@ -209,6 +209,37 @@ export const ProductModels = () => {
         sortFn: (a, b) => Number(b.active) - Number(a.active),
       },
       {
+        // PR — Wei Siang 2026-06-19: surface SKU count so a 0-SKU orphan Model
+        // (all its SKUs deleted from SKU Master) is visibly flagged. Subtle for
+        // count > 0 (plain muted number); amber "0 SKUs" badge when empty.
+        key: 'sku_count',
+        label: 'SKUs',
+        width: 96,
+        accessor: (m) => {
+          const n = m.sku_count ?? 0;
+          if (n === 0) {
+            return (
+              <span
+                className={styles.statusPill}
+                title="No SKUs under this Model — likely an orphan left behind after its SKUs were deleted from SKU Master."
+                style={{
+                  background: 'rgba(232, 107, 58, 0.12)',
+                  color: 'var(--c-burnt)',
+                  borderColor: 'var(--c-orange)',
+                  fontWeight: 600,
+                }}
+              >
+                0 SKUs
+              </span>
+            );
+          }
+          return <span style={{ color: 'var(--fg-muted)' }}>{n}</span>;
+        },
+        searchValue: (m) => String(m.sku_count ?? 0),
+        filterValue: (m) => ((m.sku_count ?? 0) === 0 ? '0 SKUs' : String(m.sku_count ?? 0)),
+        sortFn: (a, b) => (a.sku_count ?? 0) - (b.sku_count ?? 0),
+      },
+      {
         key: 'description',
         label: 'Description',
         width: 240,

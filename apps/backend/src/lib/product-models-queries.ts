@@ -29,6 +29,11 @@ export type ProductModelRow = {
   active: boolean;
   created_at: string;
   updated_at: string;
+  /** PR — Wei Siang 2026-06-19: count of mfg_products SKUs under this Model.
+   *  Surfaces orphan/empty Models (e.g. all SKUs deleted from SKU Master but
+   *  the Model still lingers in Modular). Optional so older cached payloads /
+   *  the detail endpoint (which doesn't compute it) stay type-compatible. */
+  sku_count?: number;
 };
 
 /** Per-category allowed-options pool. Empty `{}` = no restriction. */
