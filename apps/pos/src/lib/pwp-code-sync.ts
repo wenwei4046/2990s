@@ -84,14 +84,29 @@ export function usePwpCodeSync(): void {
           let sofaModules: string[] | undefined;
           let isTrigger = false;
           if (c.kind === 'sofa') {
-            const hasSofaTriggerRule = rules.some((r) =>
+            // By-Combo sofa trigger: send the build's module codes; the server
+            // decides the actual subset match against trigger_combo_ids.
+            const hasSofaComboRule = rules.some((r) =>
               r.triggerCategory === 'SOFA'
               && (r.triggerComboIds?.length ?? 0) > 0
               && !(isReward && r.type === 'promo'));
-            if (hasSofaTriggerRule) {
+            // By-Model sofa trigger (2026-06-20): ANY build of an eligible sofa
+            // Model qualifies — match the line's modelId against a rule whose
+            // combo list is empty + model list non-empty (the derived discriminator,
+            // mirrors the server reserve). Needs no build modules, so a non-modular
+            // sofa (no cells) triggers too.
+            const hasSofaModelRule = rules.some((r) =>
+              r.triggerCategory === 'SOFA'
+              && (r.triggerComboIds?.length ?? 0) === 0
+              && (r.triggerEligibleModelIds?.length ?? 0) > 0
+              && inList(c.modelId ?? null, r.triggerEligibleModelIds)
+              && !(isReward && r.type === 'promo'));
+            if (hasSofaComboRule) {
+              // Carry modules whenever a combo rule could apply, so a build that
+              // satisfies BOTH a combo and a model rule reserves for both.
               sofaModules = (c.cells ?? []).map((cell) => String(cell.moduleId ?? '')).filter(Boolean);
-              isTrigger = sofaModules.length > 0;  // the server decides the actual combo match
             }
+            isTrigger = hasSofaModelRule || (hasSofaComboRule && (sofaModules?.length ?? 0) > 0);
           } else {
             const cat = String(c.category ?? '').toUpperCase();
             isTrigger = rules.some((r) =>

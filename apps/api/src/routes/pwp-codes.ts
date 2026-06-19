@@ -141,28 +141,44 @@ pwpCodes.post('/reserve', async (c) => {
     type: string | null;
   }>;
 
-  // 2b. Rules whose trigger matches this line. SOFA → match the build against the
-  //     rule's trigger_combo_ids (Phase 2); other categories → model match.
+  // 2b. Rules whose trigger matches this line. SOFA can be matched two ways:
+  //     · BY COMBO  — the build's modules subset-match a rule's trigger_combo_ids
+  //                   (Phase 2). Needs the build modules.
+  //     · BY MODEL  — combo ids empty + model ids non-empty → ANY build of an
+  //                   eligible sofa Model qualifies (2026-06-20). Matched on the
+  //                   build's model_id, so it works even for a non-modular sofa
+  //                   (no build modules). NEVER matches "any sofa": the model-id
+  //                   list must be non-empty (editor + /pwp-rules enforce the XOR).
+  //     Other categories → model match.
   let matching: typeof rules;
   if (prodCat === 'SOFA') {
     const sofaModules = (parsed.data.sofaModules ?? []).map((s) => s.trim()).filter(Boolean);
-    if (sofaModules.length === 0) return c.json({ codes: [] });
-    const sofaRules = rules.filter((r) => r.trigger_category === 'SOFA' && (r.trigger_combo_ids ?? []).length > 0);
-    const comboIds = [...new Set(sofaRules.flatMap((r) => r.trigger_combo_ids ?? []))];
-    const combosById = new Map<string, { base_model: string; modules: string[][] }>();
-    if (comboIds.length > 0) {
-      const { data: comboRows } = await supabase
-        .from('sofa_combo_pricing')
-        .select('id, base_model, modules, deleted_at')
-        .in('id', comboIds);
-      for (const cr of (comboRows ?? []) as Array<{ id: string; base_model: string; modules: string[][]; deleted_at: string | null }>) {
-        if (!cr.deleted_at) combosById.set(cr.id, { base_model: cr.base_model, modules: cr.modules ?? [] });
+    const byModelRules = rules.filter((r) =>
+      r.trigger_category === 'SOFA'
+      && (r.trigger_combo_ids ?? []).length === 0
+      && (r.trigger_eligible_model_ids ?? []).length > 0
+      && inList(prod.model_id ?? null, r.trigger_eligible_model_ids ?? []),
+    );
+    let byComboRules: typeof rules = [];
+    if (sofaModules.length > 0) {
+      const sofaRules = rules.filter((r) => r.trigger_category === 'SOFA' && (r.trigger_combo_ids ?? []).length > 0);
+      const comboIds = [...new Set(sofaRules.flatMap((r) => r.trigger_combo_ids ?? []))];
+      const combosById = new Map<string, { base_model: string; modules: string[][] }>();
+      if (comboIds.length > 0) {
+        const { data: comboRows } = await supabase
+          .from('sofa_combo_pricing')
+          .select('id, base_model, modules, deleted_at')
+          .in('id', comboIds);
+        for (const cr of (comboRows ?? []) as Array<{ id: string; base_model: string; modules: string[][]; deleted_at: string | null }>) {
+          if (!cr.deleted_at) combosById.set(cr.id, { base_model: cr.base_model, modules: cr.modules ?? [] });
+        }
       }
+      byComboRules = sofaRules.filter((r) => (r.trigger_combo_ids ?? []).some((cid) => {
+        const combo = combosById.get(cid);
+        return !!combo && (!prod.base_model || combo.base_model === prod.base_model) && matchComboSubset(sofaModules, combo.modules) != null;
+      }));
     }
-    matching = sofaRules.filter((r) => (r.trigger_combo_ids ?? []).some((cid) => {
-      const combo = combosById.get(cid);
-      return !!combo && (!prod.base_model || combo.base_model === prod.base_model) && matchComboSubset(sofaModules, combo.modules) != null;
-    }));
+    matching = [...byComboRules, ...byModelRules];
   } else {
     matching = rules.filter((r) =>
       r.trigger_category === prodCat && inList(prod.model_id ?? null, r.trigger_eligible_model_ids ?? []),
