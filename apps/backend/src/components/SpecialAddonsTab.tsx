@@ -24,6 +24,7 @@ import {
   type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, type AdminAddonRow,
 } from '../lib/mfg-products-queries';
 import { DataGrid, type DataGridColumn } from './DataGrid';
+import { useConfirm } from './ConfirmDialog';
 
 /* Stop-propagation wrapper for interactive cells inside the DataGrid —
    keeps clicks on inputs / buttons from also firing the row click. */
@@ -107,6 +108,7 @@ export const SpecialAddonsManager = ({ categoryFilter }: { categoryFilter?: stri
   const create  = useCreateSpecialAddon();
   const update  = useUpdateSpecialAddon();
   const del     = useDeleteSpecialAddon();
+  const askConfirm = useConfirm();
 
   const [editing, setEditing] = useState<{ id: string | null; draft: SpecialAddonInput } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -165,7 +167,12 @@ export const SpecialAddonsManager = ({ categoryFilter }: { categoryFilter?: stri
   };
 
   const remove = async (row: SpecialAddonRow) => {
-    if (!window.confirm(`Delete "${row.label}"? This removes the add-on definition (existing orders keep their saved text).`)) return;
+    if (!(await askConfirm({
+      title: `Delete "${row.label}"?`,
+      body: 'This removes the add-on definition (existing orders keep their saved text).',
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return;
     setError(null);
     try { await del.mutateAsync(row.id); if (editing?.id === row.id) setEditing(null); }
     catch (err) { setError(String((err as Error).message ?? err)); }
@@ -423,12 +430,18 @@ const OrderAddonsManager = () => {
   const update  = useUpdateAddon();
   const create  = useCreateAddon();
   const del     = useDeleteAddon();
+  const askConfirm = useConfirm();
 
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
   const remove = async (row: AdminAddonRow) => {
-    if (!window.confirm(`Delete "${row.label}"? This permanently removes the add-on. If it's already on existing orders the delete is blocked — use the Off switch to retire it instead.`)) return;
+    if (!(await askConfirm({
+      title: `Delete "${row.label}"?`,
+      body: "This permanently removes the add-on. If it's already on existing orders the delete is blocked — use the Off switch to retire it instead.",
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return;
     setError(null);
     try {
       await del.mutateAsync(row.id);

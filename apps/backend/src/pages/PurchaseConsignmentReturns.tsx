@@ -25,6 +25,7 @@ import {
   usePurchaseConsignmentReturnDetail,
 } from '../lib/purchase-consignment-return-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useConfirm } from '../components/ConfirmDialog';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
@@ -221,6 +222,7 @@ export const PurchaseConsignmentReturns = () => {
 
   const { data, isLoading, error } = usePurchaseConsignmentReturns();
   const cancelPr = useCancelPurchaseConsignmentReturn();
+  const askConfirm = useConfirm();
 
   const allRows = useMemo<PrRow[]>(() => (data?.purchaseReturns ?? []) as PrRow[], [data]);
   const rows = useMemo<PrRow[]>(
@@ -229,8 +231,13 @@ export const PurchaseConsignmentReturns = () => {
   );
   const columns = useMemo(() => buildColumns(), []);
 
-  const doCancelPr = (r: PrRow) => {
-    if (!window.confirm(`Cancel return ${r.return_number}? This reverses the return — the goods are put back into stock. Line items stay for audit.`)) return;
+  const doCancelPr = async (r: PrRow) => {
+    if (!(await askConfirm({
+      title: `Cancel return ${r.return_number}?`,
+      body: 'This reverses the return — the goods are put back into stock. Line items stay for audit.',
+      confirmLabel: 'Cancel return',
+      danger: true,
+    }))) return;
     cancelPr.mutate(r.id, {
       onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
     });

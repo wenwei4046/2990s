@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { SkeletonDetailPage } from '../components/Skeleton';
+import { useConfirm } from '../components/ConfirmDialog';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   useWarehouses,
@@ -53,6 +54,8 @@ export const StockTransferDetail = () => {
   const detail = useStockTransferDetail(id ?? null);
   const cancel = useCancelStockTransfer();
 
+  const askConfirm = useConfirm();
+
   const warehouses = useWarehouses();
 
   // ── Read-only state mirrored from server (no edits post-0078) ────────
@@ -84,11 +87,14 @@ export const StockTransferDetail = () => {
   const isPosted = status === 'POSTED';
 
   // ── Cancel ───────────────────────────────────────────────────────────
-  const onCancel = () => {
+  const onCancel = async () => {
     if (!id) return;
-    const proceed = window.confirm(
-      'Cancel this transfer? The paired stock movements (out of the source warehouse, into the destination) will be reversed automatically — the stock returns to where it started.',
-    );
+    const proceed = await askConfirm({
+      title: 'Cancel this transfer?',
+      body: 'The paired stock movements (out of the source warehouse, into the destination) will be reversed automatically — the stock returns to where it started.',
+      confirmLabel: 'Cancel transfer',
+      danger: true,
+    });
     if (!proceed) return;
     cancel.mutate(id, {
       onSuccess: () => detail.refetch(),

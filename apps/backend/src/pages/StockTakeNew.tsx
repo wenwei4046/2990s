@@ -11,6 +11,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, Save, X, ClipboardList } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { useConfirm } from '../components/ConfirmDialog';
 import { useWarehouses, useInventoryBalances } from '../lib/inventory-queries';
 import { useMfgProducts } from '../lib/mfg-products-queries';
 import {
@@ -38,6 +39,8 @@ const CATEGORIES: Array<{ value: string; label: string }> = [
 export const StockTakeNew = () => {
   const navigate = useNavigate();
   const create   = useCreateStockTake();
+
+  const askConfirm = useConfirm();
 
   const [warehouseId, setWarehouseId] = useState<string>('');
   const [takeDate,    setTakeDate]    = useState<string>(todayISO());
@@ -91,15 +94,17 @@ export const StockTakeNew = () => {
     (!needsScopeValue || scopeValue.trim()),
   );
 
-  const onCreate = () => {
+  const onCreate = async () => {
     if (!canCreate) {
       window.alert('Pick a warehouse, date, and (for Category/Prefix scopes) a scope value.');
       return;
     }
     if (previewCount === 0) {
-      const proceed = window.confirm(
-        'No SKUs match this scope at the chosen warehouse. The count sheet will be empty. Continue?',
-      );
+      const proceed = await askConfirm({
+        title: 'No SKUs match this scope at the chosen warehouse.',
+        body: 'The count sheet will be empty. Continue?',
+        confirmLabel: 'Create',
+      });
       if (!proceed) return;
     }
     create.mutate(

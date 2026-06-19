@@ -61,6 +61,7 @@ import { composeSupplierSku, looksAmbiguous } from '../lib/supplier-sku-helpers'
 import { parseSupplierCategories, displaySupplierCategories } from '../lib/supplier-categories';
 import { SupplyCategoryPicker, useSupplierCategoryPool } from '../components/SupplyCategoryPicker';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useConfirm } from '../components/ConfirmDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import { maintValues } from '@2990s/shared/maintenance-pools';
 import { PhoneInput } from '../components/PhoneInput';
@@ -1739,6 +1740,7 @@ const AutoSuffixButton = ({
   const products = useMfgProducts();
   const update = useUpdateBinding();
   const [running, setRunning] = useState(false);
+  const askConfirm = useConfirm();
 
   // Group bindings by supplier_sku → bindings[]. Anything with ≥2 entries
   // and a dash-less key is a candidate.
@@ -1760,10 +1762,11 @@ const AutoSuffixButton = ({
   const onClick = async () => {
     if (running) return;
     const productsByCode = new Map((products.data ?? []).map((p) => [p.code, p]));
-    const ok = window.confirm(
-      `Auto-suffix ${candidates.length} binding${candidates.length === 1 ? '' : 's'}?\n\n` +
-      'Each row will get its per-SKU suffix appended to its current supplier_sku (e.g. "5539" → "5539-1A(LHF)").',
-    );
+    const ok = await askConfirm({
+      title: `Auto-suffix ${candidates.length} binding${candidates.length === 1 ? '' : 's'}?`,
+      body: 'Each row will get its per-SKU suffix appended to its current supplier_sku (e.g. "5539" → "5539-1A(LHF)").',
+      confirmLabel: 'Auto-suffix',
+    });
     if (!ok) return;
     setRunning(true);
     try {

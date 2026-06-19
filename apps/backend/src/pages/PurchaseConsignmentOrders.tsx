@@ -33,6 +33,7 @@ import {
 import { poStatusLabel } from '../lib/po-status';
 import { ItemGroupPill } from '../lib/category-badges';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useConfirm } from '../components/ConfirmDialog';
 import { StatusPill } from '../components/StatusPill';
 import styles from './Suppliers.module.css';
 
@@ -140,6 +141,7 @@ export const PurchaseConsignmentOrders = () => {
   const [status, setStatus] = useState<StatusFilter>('outstanding');
   const navigate = useNavigate();
   const cancelPo = useCancelPurchaseConsignmentOrder();
+  const askConfirm = useConfirm();
 
   const { data, isLoading, error } = usePurchaseConsignmentOrders();
   const rows = useMemo(() => {
@@ -150,8 +152,13 @@ export const PurchaseConsignmentOrders = () => {
 
   const columns = useMemo(() => buildColumns(), []);
 
-  const doCancelPo = (po: PoHeaderRow) => {
-    if (!window.confirm(`Cancel ${po.po_number}? It will stop proceeding.`)) return;
+  const doCancelPo = async (po: PoHeaderRow) => {
+    if (!(await askConfirm({
+      title: `Cancel ${po.po_number}?`,
+      body: 'It will stop proceeding.',
+      confirmLabel: 'Cancel order',
+      danger: true,
+    }))) return;
     cancelPo.mutate(po.id, {
       onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
     });

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { SkeletonDetailPage } from '../components/Skeleton';
+import { useConfirm } from '../components/ConfirmDialog';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   useStockTakeDetail,
@@ -100,6 +101,8 @@ export const StockTakeDetail = () => {
   const reverse = useReverseStockTake();
   const del     = useDeleteStockTake();
 
+  const askConfirm = useConfirm();
+
   const [lines,  setLines]  = useState<LineDraft[]>([]);
   const [search, setSearch] = useState<string>('');
   const [dirty,  setDirty]  = useState<boolean>(false);
@@ -161,8 +164,12 @@ export const StockTakeDetail = () => {
     setDirty(true);
   };
 
-  const matchAllToSystem = () => {
-    if (!window.confirm('Fill EVERY counted qty with the system qty? This sets variance to 0 for all lines.')) return;
+  const matchAllToSystem = async () => {
+    if (!(await askConfirm({
+      title: 'Fill EVERY counted qty with the system qty?',
+      body: 'This sets variance to 0 for all lines.',
+      confirmLabel: 'Fill all',
+    }))) return;
     setLines((cur) => cur.map((l) => ({ ...l, countedQtyInput: String(l.systemQty) })));
     setDirty(true);
   };
@@ -192,16 +199,18 @@ export const StockTakeDetail = () => {
     );
   };
 
-  const onPost = () => {
+  const onPost = async () => {
     if (!id) return;
     if (dirty) { window.alert('Save your counts before posting.'); return; }
     const summary =
       `Lines: ${totals.totalLines} (${totals.counted} counted, ${totals.uncounted} untouched)\n` +
       `Variance lines: ${totals.nonZeroVarianceLines}\n` +
       `Net variance: ${totals.varianceNet > 0 ? '+' : ''}${totals.varianceNet}`;
-    const proceed = window.confirm(
-      `Post this stock take?\n\n${summary}\n\nOne ADJUSTMENT movement will be written per non-zero-variance line. Untouched lines (no counted qty) are skipped.`,
-    );
+    const proceed = await askConfirm({
+      title: 'Post this stock take?',
+      body: `${summary}\n\nOne ADJUSTMENT movement will be written per non-zero-variance line. Untouched lines (no counted qty) are skipped.`,
+      confirmLabel: 'Post',
+    });
     if (!proceed) return;
     post.mutate(id, {
       onSuccess: (res) => {
@@ -218,23 +227,31 @@ export const StockTakeDetail = () => {
     });
   };
 
-  const onCancel = () => {
+  const onCancel = async () => {
     if (!id) return;
-    if (!window.confirm('Cancel this OPEN stock take? It will be marked cancelled and locked.')) return;
+    if (!(await askConfirm({
+      title: 'Cancel this OPEN stock take?',
+      body: 'It will be marked cancelled and locked.',
+      confirmLabel: 'Cancel take',
+      danger: true,
+    }))) return;
     cancel.mutate(id, {
       onSuccess: () => detail.refetch(),
       onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
     });
   };
 
-  const onReverse = () => {
+  const onReverse = async () => {
     if (!id) return;
-    const proceed = window.confirm(
-      'Undo this posted stock take?\n\n' +
-      'The stock changes it made will be reversed — every item goes back to the quantity it had before this count was posted. ' +
-      'This count will then be marked Cancelled and locked.\n\n' +
-      'To count again, start a new stock take.',
-    );
+    const proceed = await askConfirm({
+      title: 'Undo this posted stock take?',
+      body:
+        'The stock changes it made will be reversed — every item goes back to the quantity it had before this count was posted. ' +
+        'This count will then be marked Cancelled and locked.\n\n' +
+        'To count again, start a new stock take.',
+      confirmLabel: 'Undo',
+      danger: true,
+    });
     if (!proceed) return;
     reverse.mutate(id, {
       onSuccess: (res) => {
@@ -253,9 +270,14 @@ export const StockTakeDetail = () => {
     });
   };
 
-  const onDelete = () => {
+  const onDelete = async () => {
     if (!id) return;
-    if (!window.confirm('Delete this OPEN stock take permanently? The count sheet will be lost.')) return;
+    if (!(await askConfirm({
+      title: 'Delete this OPEN stock take permanently?',
+      body: 'The count sheet will be lost.',
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return;
     del.mutate(id, {
       onSuccess: () => navigate('/inventory/stock-takes'),
       onError: (err) => window.alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),

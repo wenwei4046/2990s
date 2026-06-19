@@ -18,6 +18,7 @@ import { Plus } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
+import { useConfirm } from '../components/ConfirmDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
@@ -305,6 +306,7 @@ const STORAGE_KEY = 'pr-g.cn-list.layout.v1';
 
 export const ConsignmentNotes = () => {
   const navigate = useNavigate();
+  const askConfirm = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
 
@@ -358,8 +360,13 @@ export const ConsignmentNotes = () => {
   const openDetail = (row: CnRow, edit = false) =>
     navigate(`/consignment-note/${row.id}${edit ? '?edit=1' : ''}`);
 
-  const doCancel = (row: CnRow) => {
-    if (!window.confirm(`Cancel consignment note ${row.do_number}? This sets status = CANCELLED.`)) return;
+  const doCancel = async (row: CnRow) => {
+    if (!(await askConfirm({
+      title: `Cancel consignment note ${row.do_number}?`,
+      body: 'This sets status = CANCELLED.',
+      confirmLabel: 'Cancel note',
+      danger: true,
+    }))) return;
     updateStatus.mutate({ id: row.id, status: 'CANCELLED' },
       { onError: (e) => alert(`Failed: ${e instanceof Error ? e.message : String(e)}`) });
   };
@@ -454,8 +461,11 @@ export const ConsignmentNotes = () => {
           if (status === 'CANCELLED') {
             items.push({
               label: 'Reopen Note',
-              onClick: () => {
-                if (!window.confirm(`Reopen ${row.do_number} back to LOADED?`)) return;
+              onClick: async () => {
+                if (!(await askConfirm({
+                  title: `Reopen ${row.do_number} back to LOADED?`,
+                  confirmLabel: 'Reopen',
+                }))) return;
                 updateStatus.mutate({ id: row.id, status: 'LOADED' });
               },
             });

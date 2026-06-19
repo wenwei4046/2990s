@@ -12,6 +12,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, ArrowRight, Save, X, Plus, Trash2, AlertTriangle } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { useConfirm } from '../components/ConfirmDialog';
 import {
   useWarehouses,
   useInventoryBalances,
@@ -46,6 +47,8 @@ const todayISO = () => {
 export const StockTransferNew = () => {
   const navigate = useNavigate();
   const create   = useCreateStockTransfer();
+
+  const askConfirm = useConfirm();
 
   // ── Header state ─────────────────────────────────────────────────────
   const [fromWarehouseId, setFromWarehouseId] = useState<string>('');
@@ -113,17 +116,20 @@ export const StockTransferNew = () => {
     validLines.length > 0,
   );
 
-  const onSave = () => {
+  const onSave = async () => {
     if (!canSave) {
       window.alert('Pick From + To warehouses (must differ), date, and at least one valid line.');
       return;
     }
     if (overdrawn.length > 0) {
-      const proceed = window.confirm(
-        `Some lines exceed available stock at the source warehouse:\n` +
-        overdrawn.map((l) => `  ${l.productCode}: want ${l.qty}, have ${balanceMap.get(l.productCode) ?? 0}`).join('\n') +
-        `\n\nSaving will post immediately and push the source balance negative. Continue?`,
-      );
+      const proceed = await askConfirm({
+        title: 'Some lines exceed available stock at the source warehouse',
+        body:
+          overdrawn.map((l) => `  ${l.productCode}: want ${l.qty}, have ${balanceMap.get(l.productCode) ?? 0}`).join('\n') +
+          `\n\nSaving will post immediately and push the source balance negative. Continue?`,
+        confirmLabel: 'Post anyway',
+        danger: true,
+      });
       if (!proceed) return;
     }
 

@@ -34,6 +34,7 @@ import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
 import { ListingPickerDialog, type ListingChoice } from '../components/ListingPickerDialog';
+import { useConfirm } from '../components/ConfirmDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
@@ -692,6 +693,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
 
 export const ConsignmentOrders = () => {
   const navigate = useNavigate();
+  const askConfirm = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
   /* Task #120 — Outstanding filter overlay. `?outstanding=1` narrows the
      list to rows with live balance > 0; clear-chip restores. Same param
@@ -815,8 +817,13 @@ export const ConsignmentOrders = () => {
 
   /* Soft-delete a SO row (sets status=CANCELLED). Fired from the row
      context menu — the toolbar Delete button is gone. */
-  const doDelete = (row: SoRow) => {
-    if (!window.confirm(`Cancel SO ${row.doc_no}? This sets status = CANCELLED (soft delete).`)) return;
+  const doDelete = async (row: SoRow) => {
+    if (!(await askConfirm({
+      title: `Cancel SO ${row.doc_no}?`,
+      body: 'This sets status = CANCELLED (soft delete).',
+      confirmLabel: 'Cancel order',
+      danger: true,
+    }))) return;
     updateStatus.mutate(
       { docNo: row.doc_no, status: 'CANCELLED' },
       {
@@ -1016,8 +1023,11 @@ export const ConsignmentOrders = () => {
           if (status === 'CANCELLED') {
             items.push({
               label: 'Reopen SO',
-              onClick: () => {
-                if (!window.confirm(`Reopen ${row.doc_no} back to CONFIRMED so it can proceed again?`)) return;
+              onClick: async () => {
+                if (!(await askConfirm({
+                  title: `Reopen ${row.doc_no} back to CONFIRMED so it can proceed again?`,
+                  confirmLabel: 'Reopen',
+                }))) return;
                 updateStatus.mutate({ docNo: row.doc_no, status: 'CONFIRMED' });
               },
             });
@@ -1029,8 +1039,13 @@ export const ConsignmentOrders = () => {
             items.push({
               label: 'Delete permanently',
               danger: true,
-              onClick: () => {
-                if (!window.confirm(`Permanently delete ${row.doc_no}? This cannot be undone.`)) return;
+              onClick: async () => {
+                if (!(await askConfirm({
+                  title: `Permanently delete ${row.doc_no}?`,
+                  body: 'This cannot be undone.',
+                  confirmLabel: 'Delete',
+                  danger: true,
+                }))) return;
                 alert('Hard delete is not implemented yet — the SO will stay CANCELLED.');
               },
             });

@@ -19,6 +19,7 @@ import {
 } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { useConfirm } from '../components/ConfirmDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import {
   ArrowLeft, Pencil, Plus, Printer, Save, Undo2, ChevronDown, Ban, RotateCcw,
@@ -150,6 +151,7 @@ const draftFromItem = (it: CrnItem): SoLineDraft => ({
 
 export const ConsignmentReturnDetail = () => {
   const { id } = useParams<{ id: string }>();
+  const askConfirm = useConfirm();
   const [searchParams] = useSearchParams();
   const detail = useConsignmentReturnDetail(id ?? null);
   const updateHeader = useUpdateConsignmentReturnHeader();
@@ -227,8 +229,12 @@ export const ConsignmentReturnDetail = () => {
     for (const it of items) {
       map.set(it.id, {
         onChange: (patch) => patchEditingDraft(it.id, patch),
-        onRemove: () => {
-          if (confirm(`Remove ${it.item_code} from this return?`)) {
+        onRemove: async () => {
+          if (await askConfirm({
+            title: `Remove ${it.item_code} from this return?`,
+            confirmLabel: 'Remove',
+            danger: true,
+          })) {
             deleteItem.mutate(
               { id: it.delivery_return_id, itemId: it.id },
               { onSuccess: () => removeEditingLine(it.id) },
@@ -238,7 +244,7 @@ export const ConsignmentReturnDetail = () => {
       });
     }
     return map;
-  }, [items, patchEditingDraft, removeEditingLine, deleteItem]);
+  }, [items, patchEditingDraft, removeEditingLine, deleteItem, askConfirm]);
 
   const startAddLine = () => setAddingDraft({ ...emptySoLine() });
   const cancelAddLine = useCallback(() => setAddingDraft(null), []);
@@ -329,12 +335,20 @@ export const ConsignmentReturnDetail = () => {
       .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
-  const handleCancel = () => {
-    if (!window.confirm(`Cancel ${header.return_number}? This sets status = CANCELLED.`)) return;
+  const handleCancel = async () => {
+    if (!(await askConfirm({
+      title: `Cancel ${header.return_number}?`,
+      body: 'This sets status = CANCELLED.',
+      confirmLabel: 'Cancel return',
+      danger: true,
+    }))) return;
     updateStatus.mutate({ id: header.id, status: 'CANCELLED' });
   };
-  const handleReopen = () => {
-    if (!window.confirm(`Reopen ${header.return_number} back to RECEIVED?`)) return;
+  const handleReopen = async () => {
+    if (!(await askConfirm({
+      title: `Reopen ${header.return_number} back to RECEIVED?`,
+      confirmLabel: 'Reopen',
+    }))) return;
     updateStatus.mutate({ id: header.id, status: 'RECEIVED' });
   };
 

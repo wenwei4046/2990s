@@ -23,6 +23,7 @@ import {
 } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { useConfirm } from '../components/ConfirmDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import {
   ArrowLeft, FileText, Pencil, Plus, Printer, Save, Ban, RotateCcw, ChevronDown,
@@ -143,6 +144,7 @@ const draftFromItem = (it: CnItem): SoLineDraft => ({
 export const ConsignmentNoteDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const askConfirm = useConfirm();
   const [searchParams] = useSearchParams();
   const detail = useConsignmentNoteDetail(id ?? null);
   const updateHeader = useUpdateConsignmentNoteHeader();
@@ -220,8 +222,12 @@ export const ConsignmentNoteDetail = () => {
     for (const it of items) {
       map.set(it.id, {
         onChange: (patch) => patchEditingDraft(it.id, patch),
-        onRemove: () => {
-          if (confirm(`Remove ${it.item_code} from this consignment note?`)) {
+        onRemove: async () => {
+          if (await askConfirm({
+            title: `Remove ${it.item_code} from this consignment note?`,
+            confirmLabel: 'Remove',
+            danger: true,
+          })) {
             deleteItem.mutate(
               { id: it.delivery_order_id, itemId: it.id },
               { onSuccess: () => removeEditingLine(it.id) },
@@ -231,7 +237,7 @@ export const ConsignmentNoteDetail = () => {
       });
     }
     return map;
-  }, [items, patchEditingDraft, removeEditingLine, deleteItem]);
+  }, [items, patchEditingDraft, removeEditingLine, deleteItem, askConfirm]);
 
   const startAddLine = () => setAddingDraft({ ...emptySoLine() });
   const cancelAddLine = useCallback(() => setAddingDraft(null), []);
@@ -316,12 +322,20 @@ export const ConsignmentNoteDetail = () => {
       .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
-  const handleCancel = () => {
-    if (!window.confirm(`Cancel ${header.do_number}? This sets status = CANCELLED.`)) return;
+  const handleCancel = async () => {
+    if (!(await askConfirm({
+      title: `Cancel ${header.do_number}?`,
+      body: 'This sets status = CANCELLED.',
+      confirmLabel: 'Cancel note',
+      danger: true,
+    }))) return;
     updateStatus.mutate({ id: header.id, status: 'CANCELLED' });
   };
-  const handleReopen = () => {
-    if (!window.confirm(`Reopen ${header.do_number} back to LOADED?`)) return;
+  const handleReopen = async () => {
+    if (!(await askConfirm({
+      title: `Reopen ${header.do_number} back to LOADED?`,
+      confirmLabel: 'Reopen',
+    }))) return;
     updateStatus.mutate({ id: header.id, status: 'LOADED' });
   };
 

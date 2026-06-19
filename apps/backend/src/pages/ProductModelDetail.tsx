@@ -34,6 +34,7 @@ import { resolveSizeInfo } from '../lib/size-info';
 import { supabase } from '../lib/supabase';
 import styles from './ProductModelDetail.module.css';
 import { SkeletonDetailPage } from '../components/Skeleton';
+import { useConfirm } from '../components/ConfirmDialog';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
@@ -92,6 +93,7 @@ export const ProductModelDetail = ({
   const statusMut = useUpdateMfgProductStatus();
   const activateOneShotMut = useActivateOneShot();
   const maintenance = useMaintenanceConfig('master');
+  const askConfirm = useConfirm();
   // Branding datalist — maintenance Brandings pool first, DISTINCT fallback.
   const brandingPool = useBrandingPool();
   // Fabric library — pool of active fabric slugs displayed in the FABRICS
@@ -219,12 +221,15 @@ export const ProductModelDetail = ({
     updateMut.mutate({ id, active: !model.active });
   };
 
-  const onDelete = () => {
+  const onDelete = async () => {
     if (!id) return;
     const skuCount = data.skus.length;
-    if (!window.confirm(
-      `Delete Model "${model.model_code} · ${model.name}"? ${skuCount} SKU(s) will keep their rows but lose the Model link.`,
-    )) return;
+    if (!(await askConfirm({
+      title: `Delete Model "${model.model_code} · ${model.name}"?`,
+      body: `${skuCount} SKU(s) will keep their rows but lose the Model link.`,
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return;
     deleteMut.mutate(id, {
       onSuccess: () => {
         // Embedded mode: close the drawer + let the parent invalidate the
@@ -567,12 +572,14 @@ export const ProductModelDetail = ({
                   variant="ghost"
                   size="sm"
                   disabled={statusMut.isPending || data.skus.every((s) => s.status !== 'ACTIVE')}
-                  onClick={() => {
+                  onClick={async () => {
                     const active = data.skus.filter((s) => s.status === 'ACTIVE');
                     if (active.length === 0) return;
-                    if (!window.confirm(
-                      `Deactivate all ${active.length} SKU(s) under ${model.model_code}? They stop showing on SO/PO pickers until re-activated.`,
-                    )) return;
+                    if (!(await askConfirm({
+                      title: `Deactivate all ${active.length} SKU(s) under ${model.model_code}?`,
+                      body: 'They stop showing on SO/PO pickers until re-activated.',
+                      confirmLabel: 'Deactivate all',
+                    }))) return;
                     active.forEach((s) => statusMut.mutate({ id: s.id, status: 'INACTIVE' }));
                   }}
                   title="Deactivate every SKU under this Model"

@@ -26,6 +26,7 @@ import {
   usePurchaseConsignmentReceiveDetail,
 } from '../lib/purchase-consignment-receive-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { useConfirm } from '../components/ConfirmDialog';
 import { StatusPill } from '../components/StatusPill';
 import { statusLabel } from '../lib/status-pill';
 import { fmtDateOrDash, buildVariantSummary } from '@2990s/shared';
@@ -235,6 +236,7 @@ export const PurchaseConsignmentReceives = () => {
 
   const { data, isLoading, error } = usePurchaseConsignmentReceives();
   const cancelReceive = useCancelPurchaseConsignmentReceive();
+  const askConfirm = useConfirm();
 
   const allRows = useMemo<GrnRow[]>(() => (data?.grns ?? []) as GrnRow[], [data]);
   const rows = useMemo<GrnRow[]>(
@@ -243,8 +245,13 @@ export const PurchaseConsignmentReceives = () => {
   );
   const columns = useMemo(() => buildColumns(), []);
 
-  const doCancel = (g: GrnRow) => {
-    if (!window.confirm(`Cancel ${g.grn_number}? This reverses the receipt. Line items stay for audit.`)) return;
+  const doCancel = async (g: GrnRow) => {
+    if (!(await askConfirm({
+      title: `Cancel ${g.grn_number}?`,
+      body: 'This reverses the receipt. Line items stay for audit.',
+      confirmLabel: 'Cancel receipt',
+      danger: true,
+    }))) return;
     cancelReceive.mutate(g.id, {
       onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
     });

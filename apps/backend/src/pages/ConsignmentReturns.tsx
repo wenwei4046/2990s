@@ -18,6 +18,7 @@ import { Plus } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useColumnFilter, type FilterColumn } from '../components/ColumnFilterBar';
+import { useConfirm } from '../components/ConfirmDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
@@ -300,6 +301,7 @@ const STORAGE_KEY = 'pr-g.crn-list.layout.v1';
 
 export const ConsignmentReturns = () => {
   const navigate = useNavigate();
+  const askConfirm = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
 
@@ -353,8 +355,13 @@ export const ConsignmentReturns = () => {
   const openDetail = (row: CrnRow, edit = false) =>
     navigate(`/consignment-return/${row.id}${edit ? '?edit=1' : ''}`);
 
-  const doCancel = (row: CrnRow) => {
-    if (!window.confirm(`Cancel return ${row.return_number}? This sets status = CANCELLED.`)) return;
+  const doCancel = async (row: CrnRow) => {
+    if (!(await askConfirm({
+      title: `Cancel return ${row.return_number}?`,
+      body: 'This sets status = CANCELLED.',
+      confirmLabel: 'Cancel return',
+      danger: true,
+    }))) return;
     updateStatus.mutate({ id: row.id, status: 'CANCELLED' },
       { onError: (e) => alert(`Failed: ${e instanceof Error ? e.message : String(e)}`) });
   };
@@ -449,8 +456,11 @@ export const ConsignmentReturns = () => {
           if (status === 'CANCELLED') {
             items.push({
               label: 'Reopen Return',
-              onClick: () => {
-                if (!window.confirm(`Reopen ${row.return_number} back to RECEIVED?`)) return;
+              onClick: async () => {
+                if (!(await askConfirm({
+                  title: `Reopen ${row.return_number} back to RECEIVED?`,
+                  confirmLabel: 'Reopen',
+                }))) return;
                 updateStatus.mutate({ id: row.id, status: 'RECEIVED' });
               },
             });
