@@ -6,7 +6,7 @@ import {
   usePosHandoffToSo,
   cartLinesToSoItems,
   fetchItemCodeMap,
-  inferItemGroup,
+  buildDeliveryFeeCartInputs,
   PosHandoffApiError,
   describePosHandoffError,
   type PosHandoffPayload,
@@ -14,7 +14,7 @@ import {
 import { useDeleteQuote } from '../lib/quotes';
 import { useAddons, useLocalities, useDeliveryFeeConfig, useSpecialDeliveryFees, useCrossCategoryEligibility, useCrossCategoryAutoMatch, useCatalog } from '../lib/queries';
 import { useAuth } from '../lib/auth';
-import { computeSoDeliveryFee, type SpecialModelDeliveryFee } from '@2990s/shared/pricing';
+import { computeSoDeliveryFee } from '@2990s/shared/pricing';
 import {
   validateCustomer, validateAddress, validateEmergency, validateTargetDate,
   validateAddonsPayment, validateConfirmPayment, validateSign,
@@ -205,10 +205,10 @@ export const Handover = () => {
   // Delivery fee (migrations 0029 + 0133) — Backend sets base + cross-category
   // rates; POS adds an optional additional fee at handover. Categories are the
   // cart's distinct DELIVERABLE groups (sofa/mattress/bedframe) via the SAME
-  // inferItemGroup the SO handover sends as item_group — so the fee shown here
-  // equals the fee the server charges. (The old legacy-catalog category lookup
-  // resolved to nothing in production, where `products` is empty, and silently
-  // showed RM 0.)
+  // inferItemGroup the SO handover sends as item_group, MINUS free-item-campaign
+  // lines (a giveaway adds no delivery) — so the fee shown here equals the fee the
+  // server charges. (The old legacy-catalog category lookup resolved to nothing in
+  // production, where `products` is empty, and silently showed RM 0.)
   const productById = new Map((catalog.data ?? []).map((p) => [p.id, p]));
   /* TBC lines (Loo 2026-06-11) — items whose category-mandatory picks (fabric /
      gap / leg / divan, shared so-variant-rule) are still open. A Processing
@@ -221,29 +221,19 @@ export const Handover = () => {
       .map((it) => it.description || it.itemCode),
   ));
   const hasTbcLines = tbcItemNames.length > 0;
-  const DELIVERABLE_GROUPS = new Set(['sofa', 'mattress', 'bedframe']);
-  const cartCategoryIds = lines
-    .map((l) => inferItemGroup(l.config, productById.get(l.config.productId)))
-    .filter((g) => DELIVERABLE_GROUPS.has(g));
   const deliveryCfg = deliveryCfgQuery.data ?? { baseFee: 0, crossCategoryFee: 0 };
-  // Special-model fees (migration 0140) — map model_id → fee, then collect the
-  // specials present in this cart so the shown fee matches the server charge.
+  // Special-model fees (migration 0140) — map model_id → fee. The cart line
+  // carries its own product_models.id (configurator-set on size + bedframe lines);
+  // the catalog lookup misses size-variant SKUs, so config.modelId is what makes
+  // the special fee actually match (e.g. AKKA-FIRM mattress → RM 500).
   const specialFeeByModel = new Map(
     (specialFeesQuery.data ?? []).map((s) => [s.modelId, s]),
   );
-  const cartSpecialModels: SpecialModelDeliveryFee[] = lines
-    .map((l) => {
-      // The cart line carries its own product_models.id (configurator-set on
-      // size + bedframe lines); fall back to the catalog only for older lines.
-      // The catalog lookup misses size-variant SKUs, so config.modelId is what
-      // makes the special fee actually match (e.g. AKKA-FIRM mattress → RM 500).
-      const modelId = ('modelId' in l.config && l.config.modelId)
-        ? l.config.modelId
-        : (productById.get(l.config.productId)?.model_id ?? null);
-      const sf = modelId ? specialFeeByModel.get(modelId) : undefined;
-      return sf ? { standaloneFee: sf.standaloneFee, crossCategoryFollowupFee: sf.crossCatFollowupFee } : null;
-    })
-    .filter((s): s is SpecialModelDeliveryFee => s !== null);
+  // Deliverable categories + special-model fees, with free-item-campaign lines
+  // excluded (a giveaway adds no delivery) — mirrors the server fix so the
+  // previewed fee equals the fee the server persists.
+  const { categoryIds: cartCategoryIds, specialModels: cartSpecialModels } =
+    buildDeliveryFeeCartInputs(lines, productById, specialFeeByModel);
   // Cross-category follow-up — only when the typed SO number is server-validated
   // as eligible (exists / not cancelled / same customer / not already used). The
   // `debouncedSo === current` guard means a stale check result never applies the

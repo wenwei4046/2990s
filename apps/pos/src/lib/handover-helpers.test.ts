@@ -174,6 +174,19 @@ describe('validateConfirmPayment', () => {
     expect(validateConfirmPayment(f, 2990, 0)).toBe(false);
   });
 
+  /* Free Item Campaign giveaway (Loo 2026-06-19) — a fully-free order (total
+     RM 0) has nothing to collect, so the amount-paid / 50%-deposit floor must
+     not block "Continue to signature". Approval code + slip + recorded stay
+     required (they're filled in the POS confirm UI). */
+  it('a fully-free order (total RM 0) proceeds with RM 0 paid', () => {
+    const free = { ...baseForm, paymentMethod: 'cash' as const, amountPaid: 0, approvalCode: '1212', paymentRecorded: true, slipUploadSessionId: 'sess' };
+    expect(validateConfirmPayment(free, 0, 0, 0)).toBe(true);
+  });
+  it('a free order still rejects over-collection (paid > 0 against an RM 0 total)', () => {
+    const f = { ...baseForm, paymentMethod: 'cash' as const, amountPaid: 50, approvalCode: '1212', paymentRecorded: true, slipUploadSessionId: 'sess' };
+    expect(validateConfirmPayment(f, 0, 0, 0)).toBe(false);
+  });
+
   it('the payable total INCLUDES delivery fee (goods 2990 + addon 80 + delivery 500 = 3570)', () => {
     const base = { ...baseForm, paymentMethod: 'cash' as const, approvalCode: '123', paymentRecorded: true, slipUploadSessionId: 'sess' };
     // Full payment must clear at the whole-order total (3570), not the

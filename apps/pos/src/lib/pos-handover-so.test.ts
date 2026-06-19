@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 // exercise only the pure cart→SO-item transforms.
 vi.mock('./supabase', () => ({ supabase: { auth: { getSession: vi.fn() } } }));
 
-import { cartLineToSoItem, cartLinesToSoItems, pickSoItemCode, describePosHandoffError } from './pos-handover-so';
+import { cartLineToSoItem, cartLinesToSoItems, pickSoItemCode, describePosHandoffError, buildDeliveryFeeCartInputs } from './pos-handover-so';
 import type { CartLine, CartConfig } from '../state/cart';
 import type { CatalogProduct } from './queries';
 
@@ -692,5 +692,56 @@ describe('describePosHandoffError — variant_not_allowed legibility', () => {
   it('leaves non-variant errors untouched', () => {
     expect(describePosHandoffError({ error: 'customer_name_required' }))
       .toBe('Order placement failed: customer_name_required');
+  });
+});
+
+/* Free Item Campaign delivery parity (mirrors server commit 6071d647) — a line
+   made free by a campaign carries no delivery charge, so it must be excluded from
+   the deliverable-category set AND from special-model transport fees. The client
+   marker is the flat config.freeItemCampaignId (cart.makeFree); it is only
+   rewritten to variants.freeItem at submit, so the pre-submit preview must test
+   the config field. */
+describe('buildDeliveryFeeCartInputs', () => {
+  const mkLine = (config: CartConfig): CartLine => ({ key: 'k', qty: 1, config } as CartLine);
+  const sofa = (over: Record<string, unknown> = {}): CartConfig =>
+    ({ kind: 'sofa', productId: 'p1', ...over } as unknown as CartConfig);
+  const mattress = (over: Record<string, unknown> = {}): CartConfig =>
+    ({ kind: 'size', productId: 'p2', category: 'mattress', ...over } as unknown as CartConfig);
+
+  it('counts a paid sofa as a deliverable category', () => {
+    const out = buildDeliveryFeeCartInputs([mkLine(sofa())], new Map(), new Map());
+    expect(out.categoryIds).toEqual(['sofa']);
+  });
+
+  it('EXCLUDES a free-item sofa from deliverable categories (no delivery charge)', () => {
+    const out = buildDeliveryFeeCartInputs([mkLine(sofa({ freeItemCampaignId: 'camp-1' }))], new Map(), new Map());
+    expect(out.categoryIds).toEqual([]);
+  });
+
+  it('drops the special-model transport fee for a free-item line', () => {
+    const specials = new Map([['m1', { standaloneFee: 500, crossCatFollowupFee: 100 }]]);
+    const out = buildDeliveryFeeCartInputs(
+      [mkLine(mattress({ modelId: 'm1', freeItemCampaignId: 'camp-1' }))],
+      new Map(),
+      specials,
+    );
+    expect(out.specialModels).toEqual([]);
+    expect(out.categoryIds).toEqual([]);
+  });
+
+  it('keeps the special-model fee for a paid special model', () => {
+    const specials = new Map([['m1', { standaloneFee: 500, crossCatFollowupFee: 100 }]]);
+    const out = buildDeliveryFeeCartInputs([mkLine(mattress({ modelId: 'm1' }))], new Map(), specials);
+    expect(out.specialModels).toEqual([{ standaloneFee: 500, crossCategoryFollowupFee: 100 }]);
+    expect(out.categoryIds).toEqual(['mattress']);
+  });
+
+  it('keeps the paid remainder of a makeFree split — only the free line drops out', () => {
+    const out = buildDeliveryFeeCartInputs(
+      [mkLine(sofa({ freeItemCampaignId: 'camp-1' })), mkLine(sofa())],
+      new Map(),
+      new Map(),
+    );
+    expect(out.categoryIds).toEqual(['sofa']);
   });
 });

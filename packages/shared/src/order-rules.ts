@@ -38,15 +38,20 @@ export interface ProceedGateInput {
  *  (auto-stamp proceeded_at when the handover already arrives complete) so the
  *  two can never drift. Mirrors the four checklist ticks in the POS drawer:
  *  customer info (name + email), delivery address (line 1 + postcode), a
- *  delivery date, and ≥ 50% paid. */
+ *  delivery date, and ≥ 50% paid.
+ *
+ *  Free Item Campaign giveaway (total ≤ 0): there is nothing to collect, so the
+ *  paid check is vacuously met — a complete-info free order may Proceed (and
+ *  auto-Proceeds on create) instead of being stranded in Order Placed. The
+ *  customer/address/date ticks still apply, so an incomplete free order stays
+ *  put. (`total ≤ 0` also avoids the 0/0 = NaN the old `total > 0` guarded.) */
 export const meetsProceedGate = (i: ProceedGateInput): boolean =>
   i.hasCustomerName &&
   i.hasEmail &&
   i.hasAddress &&
   i.hasPostcode &&
   i.hasDeliveryDate &&
-  i.total > 0 &&
-  i.paid / i.total >= PROCEED_PAID_THRESHOLD;
+  (i.total <= 0 || i.paid / i.total >= PROCEED_PAID_THRESHOLD);
 
 /** Total physical pieces in an order (for delivery slot allocation). */
 export const pieceCount = (_orderItems: unknown[]): number => {

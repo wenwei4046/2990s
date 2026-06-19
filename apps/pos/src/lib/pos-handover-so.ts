@@ -26,6 +26,7 @@ import { orderSofaCellsLeftToRight } from '@2990s/shared/sofa-build';
 import { supabase } from './supabase';
 import type { CartLine, CartConfig } from '../state/cart';
 import type { CatalogProduct } from './queries';
+import type { SpecialModelDeliveryFee } from '@2990s/shared/pricing';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
@@ -287,6 +288,45 @@ export const inferItemGroup = (
   // their own kinds). Keeps delivery + revenue correct when the catalog is empty.
   if (config.kind === 'size') return 'mattress';
   return 'others';
+};
+
+/** True when a cart line has been made free by a Free Item Campaign. cart.makeFree
+ *  stamps `config.freeItemCampaignId` (and forces total:0); this flat marker is
+ *  only rewritten to `variants.freeItem` at submit (buildVariants below), so the
+ *  pre-submit delivery preview must test the config field — NOT the shared
+ *  isFreeItemLine(variants), which would silently never match here. */
+export const isFreeItemConfig = (config: CartConfig): boolean =>
+  Boolean((config as { freeItemCampaignId?: string | null }).freeItemCampaignId);
+
+const DELIVERABLE_GROUPS = new Set(['sofa', 'mattress', 'bedframe']);
+
+/** Build computeSoDeliveryFee's `categoryIds` + `specialModels` inputs from POS
+ *  cart lines, EXCLUDING free-item-campaign lines — a giveaway carries no
+ *  delivery charge. Mirrors the server's freeItemByIdx exclusion in
+ *  POST /mfg-sales-orders (commit 6071d647) so the POS preview equals the fee the
+ *  server actually persists (no customer-facing mismatch). A makeFree split keeps
+ *  its paid remainder deliverable — only the free line drops out. */
+export const buildDeliveryFeeCartInputs = <S extends { standaloneFee: number; crossCatFollowupFee: number }>(
+  lines: CartLine[],
+  productById: Map<string, CatalogProduct>,
+  specialFeeByModel: Map<string, S>,
+): { categoryIds: string[]; specialModels: SpecialModelDeliveryFee[] } => {
+  const payable = lines.filter((l) => !isFreeItemConfig(l.config));
+  const categoryIds = payable
+    .map((l) => inferItemGroup(l.config, productById.get(l.config.productId)))
+    .filter((g) => DELIVERABLE_GROUPS.has(g));
+  const specialModels = payable
+    .map((l) => {
+      // The cart line carries its own product_models.id (configurator-set on size
+      // + bedframe lines); fall back to the catalog only for older lines.
+      const modelId = ('modelId' in l.config && l.config.modelId)
+        ? l.config.modelId
+        : (productById.get(l.config.productId)?.model_id ?? null);
+      const sf = modelId ? specialFeeByModel.get(modelId) : undefined;
+      return sf ? { standaloneFee: sf.standaloneFee, crossCategoryFollowupFee: sf.crossCatFollowupFee } : null;
+    })
+    .filter((s): s is SpecialModelDeliveryFee => s !== null);
+  return { categoryIds, specialModels };
 };
 
 /** Build the `variants` JSON column for one cart line. The shape matches what
