@@ -521,7 +521,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DrRow>[] =
     filterType: 'date', dateValue: (r) => r.return_date,
   },
   {
-    key: 'debtor_name', label: 'Debtor Name', width: 220, sortable: true, groupable: true,
+    key: 'debtor_name', label: 'Customer', width: 220, sortable: true, groupable: true,
     accessor: (r) => r.debtor_name,
     searchValue: (r) => r.debtor_name,
   },

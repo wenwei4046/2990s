@@ -217,7 +217,7 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       filterType: 'date', dateValue: (r) => (r.so_date ?? r.line_date) as string | null,
     },
     /* 3 */ {
-      key: 'debtor_name', label: 'Debtor Name', width: 200, sortable: true, groupable: true,
+      key: 'debtor_name', label: 'Customer', width: 200, sortable: true, groupable: true,
       accessor: (r) => r.debtor_name ?? '—',
       searchValue: (r) => r.debtor_name ?? '',
     },

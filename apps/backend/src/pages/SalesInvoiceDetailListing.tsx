@@ -71,7 +71,7 @@ export const SalesInvoiceDetailListing = () => {
       searchValue: (r) => r.debtor_code ?? '',
     },
     {
-      key: 'debtor_name', label: 'Debtor Name', width: 200, sortable: true, groupable: true,
+      key: 'debtor_name', label: 'Customer', width: 200, sortable: true, groupable: true,
       accessor: (r) => r.debtor_name ?? '—',
       searchValue: (r) => r.debtor_name ?? '',
     },
