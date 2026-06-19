@@ -37,6 +37,10 @@
 // ----------------------------------------------------------------------------
 
 import { effectiveDelivery } from '@2990s/shared';
+import {
+  orderSofaModuleRowsWithinBuilds,
+  sortSoLinesByGroupRank,
+} from '@2990s/shared/so-line-display';
 import { COMPANY, amountInWordsMyr, drawInfoColumns, fmtDocDate, fmtDocStamp } from './pdf-common';
 import {
   loadSupplierDocData,
@@ -259,8 +263,19 @@ async function renderPurchaseOrderInto(
   //                   buildVariantSummary inside specsLine) + line remark +
   //                   per-line delivery date
   //   UOM | Qty | U/Price | Disc | Total
+  /* Canonical SKU/build order (sofa modules LHF→NA→RHF, mains→accessories→
+     services) — mirror the sales side. The shared helper keys on `item_code`,
+     but PO lines expose `material_code`; sort a shimmed view that carries the
+     original row back unchanged (render-time only, no persistence touched). */
+  const orderedItems = orderSofaModuleRowsWithinBuilds(
+    sortSoLinesByGroupRank(
+      items.map((it) => ({ ...it, item_code: it.material_code, __row: it })),
+      (r) => r.item_group as string | null | undefined,
+    ),
+  ).map((r) => r.__row);
+
   type Row = [string, string, string, string, string, string, string, string];
-  const rows: Row[] = items.map((it) => {
+  const rows: Row[] = orderedItems.map((it) => {
     // ONE variant line only: the recomputed specs (fabric-mapped) when present,
     // else the stored description2 — never BOTH. They are the same summary with
     // only the fabric segment differing (e.g. "CG-001 …" vs "KN390-1 (CG-001) …"),

@@ -26,6 +26,10 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import {
+  orderSofaModuleRowsWithinBuilds,
+  sortSoLinesByGroupRank,
+} from '@2990s/shared/so-line-display';
 import { writeMovements, defaultWarehouseId, resolveWarehouseLotCosts } from '../lib/inventory-movements';
 
 export const purchaseConsignmentReceives = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -555,7 +559,19 @@ purchaseConsignmentReceives.get('/:id', async (c) => {
 
   /* Surface "received from which PC Order" + receive date per line, plus the
      downstream PC Return breakdown. */
-  const lineItems = (i.data ?? []) as unknown as Array<Record<string, unknown> & { id: string; pc_order_item_id: string | null }>;
+  /* Canonical SKU/build order at READ (sofa modules LHF→NA→RHF, mains→
+     accessories→services), mirroring the SO detail GET. The shared helper keys
+     on `item_code`; PC receive lines expose `material_code`, so sort a shimmed
+     view that carries the original row back unchanged. `.order('created_at')`
+     above stays as the stable tiebreaker — pure ordering, no persistence touched. */
+  type PcrLineRow = Record<string, unknown> & { id: string; pc_order_item_id: string | null; material_code: string; item_code: string };
+  const lineItems = orderSofaModuleRowsWithinBuilds(
+    sortSoLinesByGroupRank(
+      ((i.data ?? []) as unknown as Array<Record<string, unknown> & { id: string; pc_order_item_id: string | null; material_code: string }>)
+        .map((it): PcrLineRow => ({ ...it, item_code: it.material_code })),
+      (r) => r.item_group as string | null | undefined,
+    ),
+  );
   const headerReceivedAt = (h.data as { received_at?: string | null }).received_at ?? null;
   const pcoItemIds = [...new Set(lineItems.map((it) => it.pc_order_item_id).filter((x): x is string => Boolean(x)))];
   const pcoNoByItemId = new Map<string, string>();

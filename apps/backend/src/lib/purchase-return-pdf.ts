@@ -7,6 +7,10 @@
 // real letterhead header, the drawInfoColumns info block (SUPPLIER label-gutter +
 // RETURN DETAILS colon-aligned), and the consistent footer (doc no · portal ·
 // page n of m) on every page. A4 portrait, pure B&W. No field dropped.
+import {
+  orderSofaModuleRowsWithinBuilds,
+  sortSoLinesByGroupRank,
+} from '@2990s/shared/so-line-display';
 import { COMPANY, drawHeader, drawInfoColumns, drawSignatureBoxes, fmtRm, safeName, fmtDocDate } from './pdf-common';
 import { loadSupplierDocData, supplierCodeFor, specsLine } from './supplier-doc-data';
 
@@ -87,7 +91,18 @@ export async function renderPurchaseReturnInto(
   y += 4;
   const { skuMap, fabricMap } = await loadSupplierDocData(header.supplier_id, items);
 
-  const rows = items.map((it, idx) => {
+  /* Canonical SKU/build order (sofa modules LHF→NA→RHF, mains→accessories→
+     services) — mirror the sales side. The shared helper keys on `item_code`;
+     PR lines expose `material_code`, so sort a shimmed view that carries the
+     original row back unchanged (render-time only, no persistence touched). */
+  const orderedItems = orderSofaModuleRowsWithinBuilds(
+    sortSoLinesByGroupRank(
+      items.map((it) => ({ ...it, item_code: it.material_code, __row: it })),
+      (r) => r.item_group as string | null | undefined,
+    ),
+  ).map((r) => r.__row);
+
+  const rows = orderedItems.map((it, idx) => {
     const specs = specsLine(it, fabricMap);
     const desc = it.description ?? it.material_name;
     return [

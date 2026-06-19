@@ -38,6 +38,10 @@
 
 import { Hono } from 'hono';
 import { buildVariantSummary } from '@2990s/shared';
+import {
+  orderSofaModuleRowsWithinBuilds,
+  sortSoLinesByGroupRank,
+} from '@2990s/shared/so-line-display';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
@@ -190,7 +194,19 @@ purchaseConsignmentOrders.get('/:id', async (c) => {
 
   /* Per-line receive breakdown so the PC Order list expansion can show a
      "Received" column (which PC Receive took how much). */
-  const itemRows = (itemsRes.data ?? []) as unknown as Array<Record<string, unknown> & { id: string }>;
+  /* Canonical SKU/build order at READ (sofa modules LHF→NA→RHF, mains→
+     accessories→services), mirroring the SO detail GET. The shared helper keys
+     on `item_code`; PC lines expose `material_code`, so sort a shimmed view
+     that carries the original row back unchanged. `.order('created_at')` above
+     stays as the stable tiebreaker — pure ordering, no persistence touched. */
+  type PcoItemRow = Record<string, unknown> & { id: string; material_code: string; item_code: string };
+  const itemRows = orderSofaModuleRowsWithinBuilds(
+    sortSoLinesByGroupRank(
+      ((itemsRes.data ?? []) as unknown as Array<Record<string, unknown> & { id: string; material_code: string }>)
+        .map((it): PcoItemRow => ({ ...it, item_code: it.material_code })),
+      (r) => r.item_group as string | null | undefined,
+    ),
+  );
   const receiptsMap = await pcoLineReceipts(supabase, itemRows.map((it) => it.id));
   const items = itemRows.map((it) => ({ ...it, receipts: receiptsMap.get(it.id) ?? [] }));
 

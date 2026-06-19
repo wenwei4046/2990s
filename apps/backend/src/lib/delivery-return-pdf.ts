@@ -10,6 +10,10 @@
 // shared doc) + generateDeliveryReturnPdf (single file, unchanged output) +
 // generateCombinedDeliveryReturnPdf (several returns → ONE file, each on its
 // own page) for the batch "Export PDF" action on the Delivery Returns list.
+import {
+  orderSofaModuleRowsWithinBuilds,
+  sortSoLinesByGroupRank,
+} from '@2990s/shared/so-line-display';
 import { COMPANY, drawHeader, drawInfoColumns, drawSignatureBoxes, fmtRm, safeName, fmtDocDate } from './pdf-common';
 import { docVariantLine, loadCustomerFabricMaps } from './supplier-doc-data';
 
@@ -76,7 +80,14 @@ export async function renderDeliveryReturnInto(
   );
 
   const fabric = await loadCustomerFabricMaps(items);
-  const rows = items.map((it, idx) => [
+  /* Canonical SKU/build order — mirror the sales side for consistency. DR rows
+     expose `item_code` natively (no shim). NOTE: DR rows carry no persisted
+     variants / item_group, so both the build walk and the category rank are
+     a harmless NO-OP here; applied anyway so the purchase family is uniform. */
+  const orderedItems = orderSofaModuleRowsWithinBuilds(
+    sortSoLinesByGroupRank(items, (r) => r.item_group as string | null | undefined),
+  );
+  const rows = orderedItems.map((it, idx) => [
     String(idx + 1),
     it.item_code,
     [it.description, docVariantLine(it, fabric.ext, fabric.desc)].filter(Boolean).join('\n') || '—',

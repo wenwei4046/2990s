@@ -28,6 +28,10 @@ import {
   type MaintenanceConfig,
   type PoPriceMatrix,
 } from '@2990s/shared/mfg-pricing';
+import {
+  orderSofaModuleRowsWithinBuilds,
+  sortSoLinesByGroupRank,
+} from '@2990s/shared/so-line-display';
 import { resolveMaintenanceConfigForSupplier } from '../lib/po-pricing';
 import { supabaseAuth } from '../middleware/auth';
 import { computeMrp } from './mrp';
@@ -369,7 +373,20 @@ mfgPurchaseOrders.get('/:id', async (c) => {
 
   /* Per-line GR breakdown so the PO list expansion can show a "Received" column
      (which GR took how much) identical to the SO "Delivered" column. */
-  const itemRows = (itemsRes.data ?? []) as unknown as Array<Record<string, unknown> & { id: string }>;
+  /* Rule-order the rows at READ — canonical SKU/build order (sofa modules
+     LHF→NA→RHF, mains→accessories→services), mirroring the SO detail GET
+     (mfg-sales-orders.ts). The shared helper keys on `item_code`; PO lines
+     expose `material_code`, so sort a shimmed view that carries the original
+     row back unchanged. `.order('created_at')` above stays as the stable
+     tiebreaker — pure ordering, no persistence touched. */
+  type PoItemRow = Record<string, unknown> & { id: string; material_code: string; item_code: string };
+  const itemRows = orderSofaModuleRowsWithinBuilds(
+    sortSoLinesByGroupRank(
+      ((itemsRes.data ?? []) as unknown as Array<Record<string, unknown> & { id: string; material_code: string }>)
+        .map((it): PoItemRow => ({ ...it, item_code: it.material_code })),
+      (r) => r.item_group as string | null | undefined,
+    ),
+  );
   const receiptsMap = await poLineReceipts(supabase, itemRows.map((it) => it.id));
 
   /* 2026-06-12 — "Transferred SO" column on the PO PDF (DSL/AutoCount layout):

@@ -6,6 +6,10 @@ import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
 import { buildVariantSummary, computeVariantKey, effectiveDelivery, type VariantAttrs } from '@2990s/shared';
+import {
+  orderSofaModuleRowsWithinBuilds,
+  sortSoLinesByGroupRank,
+} from '@2990s/shared/so-line-display';
 import { recostFromGrn } from '../lib/recost';
 
 export const grns = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -621,7 +625,19 @@ grns.get('/:id', async (c) => {
      round trip (item → po_item → po). source_po_number is null for manual lines.
      received_at mirrors the GRN header date so the detail/list line table can show
      a per-line column without a separate column on grn_items. */
-  const lineItems = (i.data ?? []) as unknown as Array<Record<string, unknown> & { id: string; purchase_order_item_id: string | null }>;
+  /* Canonical SKU/build order at READ (sofa modules LHF→NA→RHF, mains→
+     accessories→services), mirroring the SO detail GET. The shared helper keys
+     on `item_code`; GRN lines expose `material_code`, so sort a shimmed view
+     that carries the original row back unchanged. `.order('created_at')` above
+     stays as the stable tiebreaker — pure ordering, no persistence touched. */
+  type GrnLineRow = Record<string, unknown> & { id: string; purchase_order_item_id: string | null; material_code: string; item_code: string };
+  const lineItems = orderSofaModuleRowsWithinBuilds(
+    sortSoLinesByGroupRank(
+      ((i.data ?? []) as unknown as Array<Record<string, unknown> & { id: string; purchase_order_item_id: string | null; material_code: string }>)
+        .map((it): GrnLineRow => ({ ...it, item_code: it.material_code })),
+      (r) => r.item_group as string | null | undefined,
+    ),
+  );
   const headerReceivedAt = (h.data as { received_at?: string | null }).received_at ?? null;
   const poItemIds = [...new Set(lineItems.map((it) => it.purchase_order_item_id).filter((x): x is string => Boolean(x)))];
   const poNoByItemId = new Map<string, string>();
