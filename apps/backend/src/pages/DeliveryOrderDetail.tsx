@@ -80,8 +80,12 @@ const STATUS_CLASS: Record<string, string> = {
 /* Document-driven status (latest event wins) — Cancelled / Shipped / Invoiced /
    Delivery Return. Mirrors the DO list. The detail endpoint sends lifecycle_state. */
 type DoLifecycle = 'shipped' | 'invoiced' | 'returned';
+// Kept identical to the DO list pill (MfgDeliveryOrdersList STATUS_LABEL) so the
+// badge reads the same on the list and here — incl. the stored stages
+// (Loaded / In Transit / Signed / Delivered) the old 4-entry map showed raw.
 const DO_STATUS_LABEL: Record<string, string> = {
-  DISPATCHED: 'Shipped', INVOICED: 'Invoiced', RETURNED: 'Delivery Return', CANCELLED: 'Cancelled',
+  LOADED: 'Loaded', DISPATCHED: 'Shipped', IN_TRANSIT: 'In Transit', SIGNED: 'Signed',
+  DELIVERED: 'Delivered', INVOICED: 'Invoiced', RETURNED: 'Delivery Return', CANCELLED: 'Cancelled',
 };
 const doEffectiveKey = (status: string, lifecycle?: DoLifecycle): string => {
   if (status === 'CANCELLED') return 'CANCELLED';
