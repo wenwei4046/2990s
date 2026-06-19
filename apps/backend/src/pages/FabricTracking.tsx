@@ -18,7 +18,7 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo, useRef, useState } from 'react';
-import { Search, Plus, X, Download, Upload } from 'lucide-react';
+import { Search, Plus, X, Download, Upload, FileText } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useFabricTrackings,
@@ -28,7 +28,7 @@ import {
 } from '../lib/fabric-queries';
 import { FabricsTable } from '../components/FabricsTable';
 import { useNotify } from '../components/NotifyDialog';
-import { toCsv, parseCsv, triggerDownload, type ParsedImport } from '../lib/fabric-csv';
+import { toCsv, toHumanCsv, parseCsv, triggerDownload, type ParsedImport } from '../lib/fabric-csv';
 import styles from './FabricTracking.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -55,6 +55,15 @@ export const FabricTracking = () => {
     if (all.length === 0) { notify({ title: 'No fabrics to export.', tone: 'error' }); return; }
     const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     triggerDownload(`fabric-converter-${stamp}.csv`, toCsv(all));
+  };
+
+  // Human-readable export — friendly headers + RM-formatted money, for reading
+  // in Excel (not for re-import; that's what the machine "Export CSV" is for).
+  const onExportHuman = () => {
+    const all = (search.trim() ? exportFetch : rows) ?? rows;
+    if (all.length === 0) { notify({ title: 'No fabrics to export.', tone: 'error' }); return; }
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    triggerDownload(`fabrics-readable-${stamp}.csv`, toHumanCsv(all));
   };
 
   const onPickFile = () => fileInputRef.current?.click();
@@ -86,6 +95,10 @@ export const FabricTracking = () => {
         <Button variant="ghost" size="md" onClick={onExport}>
           <Download {...ICON} />
           <span>Export CSV</span>
+        </Button>
+        <Button variant="ghost" size="md" onClick={onExportHuman}>
+          <FileText {...ICON} />
+          <span>Export (readable)</span>
         </Button>
         <Button variant="ghost" size="md" onClick={onPickFile}>
           <Upload {...ICON} />
