@@ -323,11 +323,15 @@ const cartLineToRuleInput = (
   mfgRow: DeliveryRuleMfgRow | undefined,
 ): RuleLineInput => {
   const cfg = config as {
-    modelId?: string | null;
     sizeId?: string | null;
     cells?: Array<{ moduleId?: unknown }>;
   };
-  const modelId = (cfg.modelId ?? null) || (mfgRow?.modelId ?? null);
+  // Model comes from the mfg catalog row ONLY — mirrors CartContents.tsx (the
+  // canonical Free Item construction) and the server create-path
+  // (mfg-sales-orders.ts uses product.model_id). Preferring config.modelId here
+  // would let the POS preview resolve a different Model than the server recompute
+  // for the same SKU id — an honest-pricing drift seam the server doesn't share.
+  const modelId = mfgRow?.modelId ?? null;
   const builtCompartments = Array.isArray(cfg.cells)
     ? cfg.cells.map((c) => String(c?.moduleId ?? '')).filter(Boolean)
     : [];

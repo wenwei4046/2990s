@@ -713,8 +713,9 @@ describe('buildDeliveryFeeCartInputs', () => {
   // sofa builtCompartments from config.cells — same as the server's RuleLineInput.
   const NO_RULES: SpecialDeliveryFeeRow[] = [];
   const NO_COMBOS = new Map<string, string[][]>();
-  // 'mfg-king' size id → 'K' size code; mattress lines carry sizeId for variant rules.
-  const KING_SIZE_ID = 'sl-king';
+  // size_library id 'king' → 'K' size code (sizeIdToMfgCode, queries.ts); mattress
+  // lines carry sizeId for variant rules.
+  const KING_SIZE_ID = 'king';
 
   it('counts a paid sofa as a deliverable category', () => {
     const out = buildDeliveryFeeCartInputs([mkLine(sofa())], new Map(), new Map(), NO_RULES, NO_COMBOS);
@@ -767,8 +768,9 @@ describe('buildDeliveryFeeCartInputs', () => {
       { id: 'r1', target: [{ modelId: 'm1', scope: 'variant', sizeCodes: ['K'] }], standaloneFee: 500, crossCatFollowupFee: 100, label: null },
     ];
     const out = buildDeliveryFeeCartInputs([mkLine(mattress({ modelId: 'm1', sizeId: KING_SIZE_ID }))], new Map(), mfgById, rules, NO_COMBOS);
-    // Only matches when sizeIdToMfgCode(sizeId) === 'K'; otherwise the variant rule misses.
-    expect(out.specialModels.length === 1 || out.specialModels.length === 0).toBe(true);
+    // sizeIdToMfgCode('king') === 'K', so the variant rule matches end-to-end and
+    // emits its fee — proving the size_code path through sizeIdToMfgCode.
+    expect(out.specialModels).toEqual([{ standaloneFee: 500, crossCategoryFollowupFee: 100 }]);
   });
 
   it('matches a compartment-scoped rule (model-agnostic) off the sofa build', () => {
