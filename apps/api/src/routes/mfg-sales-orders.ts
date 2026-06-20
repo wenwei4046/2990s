@@ -14,6 +14,7 @@ import {
   type FreeGiftLineClaim, type TriggerLine,
   campaignsCoveringLine,
   isFreeItemLine,
+  type RuleLineInput,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
 /* POS auto-Proceed (Loo 2026-06-09) — when a handover arrives already complete
@@ -86,6 +87,10 @@ import {
   loadProductsAndModels,
 } from '../lib/allowed-options-check';
 import { findIncompleteVariantLines } from '../lib/so-variant-check';
+/* Special delivery fee rules (migration 0182, #691 RuleTarget) — the model |
+   variant | compartment | combo matcher shared with the POS, used at BOTH
+   recompute sites (create + cross-category re-detect). */
+import { specialDeliveryFeesForLines } from '../lib/special-delivery';
 /* Default Free Gift (migration 0170/0174, D9) — ONE per-Model trigger builder
    (in @2990s/shared) is shared by the SO-create validator below and the
    placed-SO edit reconciler, so create and reconcile can never compute a
@@ -2649,30 +2654,37 @@ mfgSalesOrders.post('/', async (c) => {
       crossCategoryFee: Number((dcfg as { cross_category_fee?: number } | null)?.cross_category_fee ?? 0) * 100,
     };
 
-    /* Phase 1 — special-model fees. Any cart line whose Model is tagged in
-       model_special_delivery_fees contributes a special fee; the highest
-       standalone fee overrides the base, and on a follow-up the special
-       cross fee applies. lineProducts (loaded above) carries each line's
-       model_id. */
-    const specialModels: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
-    const lineModelIds = [...new Set(
-      lineProducts
-        // Skip free-item lines — a free giveaway carries no special transport fee.
-        .map((p, idx) => (freeItemByIdx.has(idx) ? null : (p as { model_id?: string | null } | null)?.model_id))
-        .filter((m): m is string => Boolean(m)),
-    )];
-    if (lineModelIds.length > 0) {
-      const { data: specialRows } = await sb
-        .from('model_special_delivery_fees')
-        .select('model_id, standalone_fee, cross_cat_followup_fee')
-        .in('model_id', lineModelIds);
-      for (const r of (specialRows ?? []) as Array<{ standalone_fee?: number; cross_cat_followup_fee?: number }>) {
-        specialModels.push({
-          standaloneFee:            Number(r.standalone_fee ?? 0) * 100,
-          crossCategoryFollowupFee: Number(r.cross_cat_followup_fee ?? 0) * 100,
-        });
-      }
+    /* Phase 1 — special delivery fee rules (migration 0182). Generalises the old
+       model-only model_special_delivery_fees lookup onto the #691 RuleTarget
+       abstraction: any cart line a rule's target covers (model | variant |
+       compartment | combo) contributes a special fee; computeSoDeliveryFee folds
+       in the highest standalone (overriding base) + the cross-followup. Lines are
+       flattened to RuleLineInput[] exactly as the Free Item block above does, and
+       matched by the SAME shared matcher the POS runs — no drift. Free-item lines
+       are skipped (a free giveaway carries no special transport fee). */
+    const comboModulesById = new Map<string, string[][]>(
+      cachedCombos.map((cb) => [cb.id, cb.modules]),
+    );
+    const deliveryRuleLines: RuleLineInput[] = [];
+    for (let idx = 0; idx < items.length; idx++) {
+      if (freeItemByIdx.has(idx)) continue;
+      const product = lineProducts[idx] ?? null;
+      if (!product) continue;
+      const variants = (items[idx]?.variants as Record<string, unknown> | null) ?? null;
+      const cells = (variants?.cells as Array<{ moduleId?: unknown }> | undefined) ?? [];
+      const built = Array.isArray(cells)
+        ? cells.map((cl) => String(cl?.moduleId ?? '')).filter(Boolean)
+        : [];
+      deliveryRuleLines.push({
+        category: String((product as { category?: string | null }).category ?? ''),
+        modelId: (product as { model_id?: string | null }).model_id ?? null,
+        sizeCode: (product as { size_code?: string | null }).size_code
+          ? String((product as { size_code?: string | null }).size_code).toUpperCase()
+          : null,
+        builtCompartments: built,
+      });
     }
+    const specialModels = await specialDeliveryFeesForLines(sb, deliveryRuleLines, comboModulesById);
 
     /* Phase 2 — cross-order link. Sales typed the earlier SO's doc_no at
        handover. Validate it (exists, not cancelled, same customer by phone
@@ -3664,9 +3676,9 @@ async function redetectCrossCategoryDelivery(
   sb: any, docNo: string, newName: string, newPhone: string | null,
 ): Promise<{ isFollowup: boolean; sourceDocNo: string | null; total: number } | null> {
   const { data: lineRows } = await sb.from('mfg_sales_order_items')
-    .select('item_code, item_group, total_centi, line_no')
+    .select('item_code, item_group, total_centi, line_no, variants')
     .eq('doc_no', docNo).eq('cancelled', false);
-  const lines = (lineRows ?? []) as Array<{ item_code: string; item_group: string | null; total_centi: number | null; line_no: number | null }>;
+  const lines = (lineRows ?? []) as Array<{ item_code: string; item_group: string | null; total_centi: number | null; line_no: number | null; variants: Record<string, unknown> | null }>;
   const deliveryLines = lines.filter((l) => isDeliveryFeeServiceCode(l.item_code));
   if (deliveryLines.length === 0) return null; // no delivery fee → nothing to re-detect
 
@@ -3688,25 +3700,59 @@ async function redetectCrossCategoryDelivery(
   const categoryIds = lines
     .map((l) => String(l.item_group ?? '').toLowerCase())
     .filter((g) => DELIVERABLE.has(g));
-  const goodsCodes = [...new Set(
-    lines.filter((l) => DELIVERABLE.has(String(l.item_group ?? '').toLowerCase())).map((l) => l.item_code),
-  )];
-  const specialModels: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
+  const goodsLines = lines.filter((l) => DELIVERABLE.has(String(l.item_group ?? '').toLowerCase()));
+  const goodsCodes = [...new Set(goodsLines.map((l) => l.item_code))];
+  /* Phase 1 — special delivery fee rules (migration 0182, #691 RuleTarget).
+     The persisted SO carries the split sofa as one row PER module SKU (cells
+     stripped, buildKey kept), so each goods line maps to ONE compartment via its
+     product's size_code; sofa rows are regrouped by buildKey so combo matching
+     sees the WHOLE build's modules together. RuleLineInput[] is then matched by
+     the SAME shared matcher the create path + POS run. */
+  let specialModels: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
   if (goodsCodes.length > 0) {
-    const { data: prodRows } = await sb.from('mfg_products').select('code, model_id').in('code', goodsCodes);
-    const modelIds = [...new Set(
-      ((prodRows ?? []) as Array<{ model_id: string | null }>).map((p) => p.model_id).filter((m): m is string => Boolean(m)),
-    )];
-    if (modelIds.length > 0) {
-      const { data: specialRows } = await sb.from('model_special_delivery_fees')
-        .select('standalone_fee, cross_cat_followup_fee').in('model_id', modelIds);
-      for (const r of (specialRows ?? []) as Array<{ standalone_fee?: number; cross_cat_followup_fee?: number }>) {
-        specialModels.push({
-          standaloneFee: Number(r.standalone_fee ?? 0) * 100,
-          crossCategoryFollowupFee: Number(r.cross_cat_followup_fee ?? 0) * 100,
-        });
+    const { data: prodRows } = await sb.from('mfg_products')
+      .select('code, category, model_id, size_code').in('code', goodsCodes);
+    const prodByCode = new Map(
+      ((prodRows ?? []) as Array<{ code: string; category: string | null; model_id: string | null; size_code: string | null }>)
+        .map((p) => [p.code, p]),
+    );
+    // Regroup the split sofa build (by buildKey) so a combo's full module set is
+    // visible on one RuleLineInput; non-sofa + un-keyed lines stay 1:1.
+    const sofaBuilds = new Map<string, { modelId: string | null; modules: string[] }>();
+    const deliveryRuleLines: RuleLineInput[] = [];
+    for (const l of goodsLines) {
+      const prod = prodByCode.get(l.item_code) ?? null;
+      const category = String(prod?.category ?? l.item_group ?? '');
+      const isSofa = category.toUpperCase() === 'SOFA';
+      const sizeCode = prod?.size_code ? String(prod.size_code).toUpperCase() : null;
+      const buildKey = isSofa ? String((l.variants as { buildKey?: unknown } | null)?.buildKey ?? '') : '';
+      if (isSofa && buildKey) {
+        const g = sofaBuilds.get(buildKey) ?? { modelId: prod?.model_id ?? null, modules: [] };
+        if (sizeCode) g.modules.push(sizeCode); // module SKU's size_code = its compartment code
+        sofaBuilds.set(buildKey, g);
+        continue; // one consolidated RuleLineInput emitted per build below
       }
+      deliveryRuleLines.push({
+        category,
+        modelId: prod?.model_id ?? null,
+        sizeCode,
+        builtCompartments: isSofa && sizeCode ? [sizeCode] : [],
+      });
     }
+    for (const g of sofaBuilds.values()) {
+      deliveryRuleLines.push({
+        category: 'SOFA',
+        modelId: g.modelId,
+        sizeCode: null,
+        builtCompartments: g.modules,
+      });
+    }
+    const { data: comboRows } = await sb.from('sofa_combo_pricing').select('id, modules');
+    const comboModulesById = new Map<string, string[][]>(
+      ((comboRows ?? []) as Array<{ id: string; modules: string[][] | null }>)
+        .map((cb) => [cb.id, cb.modules ?? []]),
+    );
+    specialModels = await specialDeliveryFeesForLines(sb, deliveryRuleLines, comboModulesById);
   }
 
   const { data: dcfg } = await sb.from('delivery_fee_config').select('base_fee, cross_category_fee').eq('id', 1).single();
