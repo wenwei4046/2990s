@@ -29,6 +29,7 @@ import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { defaultWarehouseId, writeMovements, resolveWarehouseLotBatches } from '../lib/inventory-movements';
+import { nextMonthlyDocNo } from '../lib/doc-no';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 
@@ -83,8 +84,8 @@ const SHIPPED_STATES = ['DISPATCHED', 'IN_TRANSIT', 'SIGNED', 'DELIVERED', 'INVO
 const nextNum = async (sb: any): Promise<string> => {
   const d = new Date();
   const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
-  const { count } = await sb.from('consignment_delivery_orders').select('id', { head: true, count: 'exact' }).like('do_number', `CN-${yymm}-%`);
-  return `CN-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
+  const { data: existing } = await sb.from('consignment_delivery_orders').select('do_number').like('do_number', `CN-${yymm}-%`);
+  return nextMonthlyDocNo(`CN-${yymm}`, ((existing ?? []) as Array<{ do_number: string }>).map((r) => r.do_number));
 };
 
 /* Re-derive the note header's per-category revenue/cost totals + grand total from

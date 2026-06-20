@@ -28,6 +28,7 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
+import { nextMonthlyDocNo } from '../lib/doc-no';
 
 export const stockTakes = new Hono<{ Bindings: Env; Variables: Variables }>();
 stockTakes.use('*', supabaseAuth);
@@ -45,10 +46,10 @@ const VALID_SCOPE  = new Set(['ALL', 'CATEGORY', 'CODE_PREFIX']);
 const nextTakeNo = async (sb: any): Promise<string> => {
   const d = new Date();
   const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
-  const { count } = await sb.from('stock_takes')
-    .select('id', { head: true, count: 'exact' })
+  const { data: existing } = await sb.from('stock_takes')
+    .select('take_no')
     .like('take_no', `STK-${yymm}-%`);
-  return `STK-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
+  return nextMonthlyDocNo(`STK-${yymm}`, ((existing ?? []) as Array<{ take_no: string }>).map((r) => r.take_no));
 };
 
 // ── Resolve in-scope SKUs + their current system_qty at the warehouse ──

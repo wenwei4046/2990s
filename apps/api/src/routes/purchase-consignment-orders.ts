@@ -43,6 +43,7 @@ import {
   sortSoLinesByGroupRank,
 } from '@2990s/shared/so-line-display';
 import { supabaseAuth } from '../middleware/auth';
+import { nextMonthlyDocNo } from '../lib/doc-no';
 import type { Env, Variables } from '../env';
 
 export const purchaseConsignmentOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -277,11 +278,11 @@ purchaseConsignmentOrders.post('/', async (c) => {
     return `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
   })();
 
-  const { count: monthCount } = await supabase
+  const { data: existingPcNos } = await supabase
     .from('purchase_consignment_orders')
-    .select('id', { head: true, count: 'exact' })
+    .select('pc_number')
     .like('pc_number', `PCO-${yymm}-%`);
-  const pcNumber = `PCO-${yymm}-${String((monthCount ?? 0) + 1).padStart(3, '0')}`;
+  const pcNumber = nextMonthlyDocNo(`PCO-${yymm}`, ((existingPcNos ?? []) as Array<{ pc_number: string }>).map((r) => r.pc_number));
 
   // Compute totals.
   let subtotal = 0;

@@ -31,6 +31,7 @@ import {
   sortSoLinesByGroupRank,
 } from '@2990s/shared/so-line-display';
 import { writeMovements, defaultWarehouseId, resolveWarehouseLotCosts } from '../lib/inventory-movements';
+import { nextMonthlyDocNo } from '../lib/doc-no';
 
 export const purchaseConsignmentReceives = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseConsignmentReceives.use('*', supabaseAuth);
@@ -214,8 +215,8 @@ const ITEM =
 const nextNumber = async (sb: any, prefix: string, table: string, col: string): Promise<string> => {
   const d = new Date();
   const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
-  const { count } = await sb.from(table).select('id', { head: true, count: 'exact' }).like(col, `${prefix}-${yymm}-%`);
-  return `${prefix}-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
+  const { data: existing } = await sb.from(table).select(col).like(col, `${prefix}-${yymm}-%`);
+  return nextMonthlyDocNo(`${prefix}-${yymm}`, ((existing ?? []) as Array<Record<string, string>>).map((r) => r[col] as string));
 };
 
 /* ── Recompute PC Receive header money rollups ────────────────────────────

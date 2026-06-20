@@ -23,6 +23,7 @@ import { buildVariantSummary, isServiceLine } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { postSiRevenue, reverseSiRevenue, resyncSiRevenue } from '../lib/post-si-revenue';
+import { nextMonthlyDocNo } from '../lib/doc-no';
 import { doLineRemaining, doRemainingByItemId, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { applyCustomerCreditToSi, creditFromCancelledSi, reverseCancelledSiCredit, getCustomerCreditBalance, reconcileSiOverpay } from '../lib/customer-credits';
@@ -62,8 +63,8 @@ const PAYMENT_COLS =
 const nextNum = async (sb: any): Promise<string> => {
   const d = new Date();
   const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
-  const { count } = await sb.from('sales_invoices').select('id', { head: true, count: 'exact' }).like('invoice_number', `SI-${yymm}-%`);
-  return `SI-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
+  const { data: existing } = await sb.from('sales_invoices').select('invoice_number').like('invoice_number', `SI-${yymm}-%`);
+  return nextMonthlyDocNo(`SI-${yymm}`, ((existing ?? []) as Array<{ invoice_number: string }>).map((r) => r.invoice_number));
 };
 
 /* Re-derive the SI header's per-category revenue/cost totals + grand total

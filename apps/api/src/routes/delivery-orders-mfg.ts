@@ -18,6 +18,7 @@ import { orderSofaModuleRowsWithinBuilds, sortSoLinesByGroupRank } from '@2990s/
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
+import { nextMonthlyDocNo } from '../lib/doc-no';
 import { computeVariantKey, isServiceLine, type VariantAttrs } from '@2990s/shared';
 import { syncSoDeliveredFromDo } from '../lib/so-delivery-sync';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
@@ -93,8 +94,8 @@ const SHIPPED_STATES = ['DISPATCHED', 'IN_TRANSIT', 'SIGNED', 'DELIVERED', 'INVO
 const nextNum = async (sb: any): Promise<string> => {
   const d = new Date();
   const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
-  const { count } = await sb.from('delivery_orders').select('id', { head: true, count: 'exact' }).like('do_number', `DO-${yymm}-%`);
-  return `DO-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
+  const { data: existing } = await sb.from('delivery_orders').select('do_number').like('do_number', `DO-${yymm}-%`);
+  return nextMonthlyDocNo(`DO-${yymm}`, ((existing ?? []) as Array<{ do_number: string }>).map((r) => r.do_number));
 };
 
 /* Re-derive the DO header's per-category revenue/cost totals + grand total

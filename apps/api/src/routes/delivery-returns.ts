@@ -18,6 +18,7 @@ import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
+import { nextMonthlyDocNo } from '../lib/doc-no';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { doLineRemaining, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
@@ -53,8 +54,8 @@ const ITEM =
 const nextNum = async (sb: any): Promise<string> => {
   const d = new Date();
   const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
-  const { count } = await sb.from('delivery_returns').select('id', { head: true, count: 'exact' }).like('return_number', `DR-${yymm}-%`);
-  return `DR-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
+  const { data: existing } = await sb.from('delivery_returns').select('return_number').like('return_number', `DR-${yymm}-%`);
+  return nextMonthlyDocNo(`DR-${yymm}`, ((existing ?? []) as Array<{ return_number: string }>).map((r) => r.return_number));
 };
 
 /* Re-derive the DR header's per-category revenue/cost totals + grand total from

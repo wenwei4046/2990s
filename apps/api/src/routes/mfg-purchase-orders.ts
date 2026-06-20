@@ -33,6 +33,7 @@ import {
   sortSoLinesByGroupRank,
 } from '@2990s/shared/so-line-display';
 import { resolveMaintenanceConfigForSupplier } from '../lib/po-pricing';
+import { nextMonthlyDocNo } from '../lib/doc-no';
 import { supabaseAuth } from '../middleware/auth';
 import { computeMrp } from './mrp';
 import type { Env, Variables } from '../env';
@@ -530,14 +531,14 @@ mfgPurchaseOrders.post('/', async (c) => {
     return `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
   })();
 
-  // Crude PO# generation: count current-month POs + 1. Race-prone in theory;
-  // in practice 4-staff org with <100 POs/month — we'll lose race only with
-  // simultaneous clicks. Fine for now; harden with a SEQUENCE later.
-  const { count: monthCount } = await supabase
+  // PO# generation: max(suffix)+1 over the month's POs (see lib/doc-no.ts).
+  // NOT count+1 — count+1 is non-self-healing (a mid-month delete leaves a gap
+  // and re-mints a surviving number, jamming the NOT NULL UNIQUE po_number).
+  const { data: existingPoNos } = await supabase
     .from('purchase_orders')
-    .select('id', { head: true, count: 'exact' })
+    .select('po_number')
     .like('po_number', `PO-${yymm}-%`);
-  const poNumber = `PO-${yymm}-${String((monthCount ?? 0) + 1).padStart(3, '0')}`;
+  const poNumber = nextMonthlyDocNo(`PO-${yymm}`, ((existingPoNos ?? []) as Array<{ po_number: string }>).map((r) => r.po_number));
 
   // Compute totals
   let subtotal = 0;
@@ -1359,11 +1360,15 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   // Generate PO numbers + create one PO per supplier.
   const d = new Date();
   const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
-  const { count: monthCount } = await supabase
+  // Seed from max(suffix), NOT count — count+1 is non-self-healing (a mid-month
+  // delete re-mints a surviving number → UNIQUE collision). Derive the next
+  // suffix via nextMonthlyDocNo, then counter starts one below it.
+  const { data: existingBatchPoNos } = await supabase
     .from('purchase_orders')
-    .select('id', { head: true, count: 'exact' })
+    .select('po_number')
     .like('po_number', `PO-${yymm}-%`);
-  let counter = monthCount ?? 0;
+  const firstNextPo = nextMonthlyDocNo(`PO-${yymm}`, ((existingBatchPoNos ?? []) as Array<{ po_number: string }>).map((r) => r.po_number));
+  let counter = parseInt(firstNextPo.slice(`PO-${yymm}-`.length), 10) - 1;
 
   const created: Array<{ id: string; poNumber: string; supplierId: string; lineCount: number }> = [];
   for (const bucket of byGroup.values()) {

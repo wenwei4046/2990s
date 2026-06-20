@@ -24,6 +24,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, reverseMovements } from '../lib/inventory-movements';
+import { nextMonthlyDocNo } from '../lib/doc-no';
 
 export const stockTransfers = new Hono<{ Bindings: Env; Variables: Variables }>();
 stockTransfers.use('*', supabaseAuth);
@@ -39,10 +40,10 @@ const VALID_STATUS = new Set(['POSTED', 'CANCELLED']);
 const nextTransferNo = async (sb: any): Promise<string> => {
   const d = new Date();
   const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
-  const { count } = await sb.from('stock_transfers')
-    .select('id', { head: true, count: 'exact' })
+  const { data: existing } = await sb.from('stock_transfers')
+    .select('transfer_no')
     .like('transfer_no', `ST-${yymm}-%`);
-  return `ST-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
+  return nextMonthlyDocNo(`ST-${yymm}`, ((existing ?? []) as Array<{ transfer_no: string }>).map((r) => r.transfer_no));
 };
 
 // ── List ──────────────────────────────────────────────────────────────

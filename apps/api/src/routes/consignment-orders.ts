@@ -24,6 +24,7 @@ import {
 } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
+import { nextMonthlyDocNo } from '../lib/doc-no';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
 import { signSoItemPhotoUrl, soItemPhotoBindings } from '../lib/r2';
 import {
@@ -183,11 +184,11 @@ const nextDocNo = async (sb: any): Promise<string> => {
     const d = new Date();
     return `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
   })();
-  const { count } = await sb
+  const { data: existing } = await sb
     .from('consignment_sales_orders')
-    .select('doc_no', { head: true, count: 'exact' })
+    .select('doc_no')
     .like('doc_no', `CS-${yymm}-%`);
-  return `CS-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
+  return nextMonthlyDocNo(`CS-${yymm}`, ((existing ?? []) as Array<{ doc_no: string }>).map((r) => r.doc_no));
 };
 
 /* ── Cost snapshot ──────────────────────────────────────────────────────
