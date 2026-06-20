@@ -7,6 +7,8 @@ import { pinRateLimiter, createPinRateLimiter } from '../lib/pin-rate-limit';
 import { hashPin, verifyPin } from '../lib/bcrypt';
 import { monthBoundsMy, rangeBoundsMy } from '../lib/my-time';
 import { canViewAllSales, isSelfScopedSales, isPinLoginRole, PIN_LOGIN_ROLES } from '../lib/roles';
+import { loadKpiUnitsByDoc } from '../lib/kpi-units';
+import { unitKpiExcludedCenti, type ItemKpiFlag, type KpiUnit } from '@2990s/shared/hr-commission';
 
 export const pos = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -326,44 +328,97 @@ pos.get('/sales-stats', supabaseAuth, async (c) => {
     showroomStaffIds = (mates ?? []).map((s) => s.id as string);
   }
 
-  // SO money lives in centi (1/100 MYR) — sum then divide once. CANCELLED +
-  // ON_HOLD are excluded (mirrors GET /mfg-sales-orders/mine). created_at is the
-  // placement instant, so the month window means "placed this month".
-  const sumCentiToMyr = (rows: Array<{ total_revenue_centi: number | null }> | null): number =>
-    Math.round((rows ?? []).reduce((s, r) => s + (r.total_revenue_centi ?? 0), 0) / 100);
+  // SO money lives in centi (1/100 MYR). CANCELLED + ON_HOLD are excluded
+  // (mirrors GET /mfg-sales-orders/mine). created_at is the placement instant, so
+  // the month window means "placed this month". We pull the goods category
+  // buckets + total_revenue per order so each card can split into the three
+  // revenue parts Loo wants (2026-06-20):
+  //   · Products = goods − KPI add-ons   (the threshold base, excl. KPI + service)
+  //   · Service  = total_revenue − goods (delivery fee + every SERVICE line)
+  //   · KPI Item = the item-KPI flagged add-on amount (qty × Δ, once per build)
+  // The three sum back to total_revenue (the headline number). Goods + KPI reuse
+  // the SAME kpi-units source as /hr/commission so the dashboard can't diverge
+  // from the commission threshold.
+  const STATS_SELECT = 'doc_no, total_revenue_centi, mattress_sofa_centi, bedframe_centi, accessories_centi, others_centi';
+  type StatsRow = {
+    doc_no: string; total_revenue_centi: number | null;
+    mattress_sofa_centi: number | null; bedframe_centi: number | null;
+    accessories_centi: number | null; others_centi: number | null;
+  };
+  const goodsCentiOf = (r: StatsRow): number =>
+    (r.mattress_sofa_centi ?? 0) + (r.bedframe_centi ?? 0) + (r.accessories_centi ?? 0) + (r.others_centi ?? 0);
 
   let showroomQuery = adminClient
     .from('mfg_sales_orders')
-    .select('total_revenue_centi')
+    .select(STATS_SELECT)
     .not('status', 'in', '("CANCELLED","ON_HOLD")');
   if (monthStartUtc) showroomQuery = showroomQuery.gte('created_at', monthStartUtc);
   if (monthEndUtc)   showroomQuery = showroomQuery.lt('created_at', monthEndUtc);
   if (showroomStaffIds) showroomQuery = showroomQuery.in('salesperson_id', showroomStaffIds);
-  const { data: showroomRows, error: showroomErr } = await showroomQuery;
+  const { data: showroomData, error: showroomErr } = await showroomQuery;
   if (showroomErr) return c.json({ error: 'fetch_failed', detail: showroomErr.message }, 500);
-  const showroomCount = showroomRows?.length ?? 0;
-  const showroomTotal = sumCentiToMyr(showroomRows as Array<{ total_revenue_centi: number | null }> | null);
+  const showroomRows = (showroomData ?? []) as StatsRow[];
 
   let personalQuery = adminClient
     .from('mfg_sales_orders')
-    .select('total_revenue_centi')
+    .select(STATS_SELECT)
     .eq('salesperson_id', personalId)
     .not('status', 'in', '("CANCELLED","ON_HOLD")');
   if (monthStartUtc) personalQuery = personalQuery.gte('created_at', monthStartUtc);
   if (monthEndUtc)   personalQuery = personalQuery.lt('created_at', monthEndUtc);
-  const { data: personalRows, error: personalErr } = await personalQuery;
+  const { data: personalData, error: personalErr } = await personalQuery;
   if (personalErr) return c.json({ error: 'fetch_failed', detail: personalErr.message }, 500);
-  const personalCount = personalRows?.length ?? 0;
-  const personalTotal = sumCentiToMyr(personalRows as Array<{ total_revenue_centi: number | null }> | null);
+  const personalRows = (personalData ?? []) as StatsRow[];
+
+  // item-KPI add-on exclusion, resolved once for every order in view (the
+  // helper short-circuits to empty when no KPI flag is active → KPI = 0,
+  // Products = goods).
+  let flags: ItemKpiFlag[] = [];
+  let unitsByDoc = new Map<string, KpiUnit[]>();
+  try {
+    const allDocs = [...new Set([...showroomRows, ...personalRows].map((r) => r.doc_no))];
+    const kpi = await loadKpiUnitsByDoc(adminClient, allDocs);
+    flags = kpi.flags;
+    unitsByDoc = kpi.unitsByDoc;
+  } catch (e) {
+    return c.json({ error: 'fetch_failed', detail: e instanceof Error ? e.message : String(e) }, 500);
+  }
+  const kpiExcludedCentiOf = (rows: StatsRow[]): number =>
+    rows.reduce(
+      (s, r) => s + (unitsByDoc.get(r.doc_no) ?? []).reduce((u, unit) => u + unitKpiExcludedCenti(unit, flags), 0),
+      0,
+    );
+
+  const centiToMyr = (centi: number): number => Math.round(centi / 100);
+  const breakdownOf = (rows: StatsRow[]) => {
+    const totalCenti = rows.reduce((s, r) => s + (r.total_revenue_centi ?? 0), 0);
+    const goodsCenti = rows.reduce((s, r) => s + goodsCentiOf(r), 0);
+    const kpiCenti = kpiExcludedCentiOf(rows);
+    return {
+      total:    centiToMyr(totalCenti),
+      count:    rows.length,
+      products: centiToMyr(Math.max(0, goodsCenti - kpiCenti)), // threshold base
+      service:  centiToMyr(Math.max(0, totalCenti - goodsCenti)),
+      kpi:      centiToMyr(Math.max(0, kpiCenti)),
+    };
+  };
+  const showroom = breakdownOf(showroomRows);
+  const personal = breakdownOf(personalRows);
 
   return c.json({
     monthLabel,
     monthStart: monthStartUtc,
     monthEnd:   monthEndUtc,
     staffName:  personalName,
-    showroomTotal,
-    showroomCount,
-    personalTotal,
-    personalCount,
+    showroomTotal:    showroom.total,
+    showroomCount:    showroom.count,
+    showroomProducts: showroom.products,
+    showroomService:  showroom.service,
+    showroomKpi:      showroom.kpi,
+    personalTotal:    personal.total,
+    personalCount:    personal.count,
+    personalProducts: personal.products,
+    personalService:  personal.service,
+    personalKpi:      personal.kpi,
   }, 200);
 });
