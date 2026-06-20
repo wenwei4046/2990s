@@ -157,6 +157,21 @@ export const modelFabricTierOverrides = pgTable('model_fabric_tier_overrides', {
   updatedBy:  uuid('updated_by'),        // references staff(id)
 });
 
+/* ──────────────── Per-compartment fabric-tier overrides ──────────────── */
+// Migration 0184. Sibling of model_fabric_tier_overrides (0172), keyed on a
+// custom-build compartment instead of a Model. Effective whole-sofa Δ = MAX
+// over the SET special values (model override + matching compartments),
+// resolved server-side; NULL tier = inherit global P2/P3, 0 = free.
+// FK to compartment_library is in SQL only — compartmentLibrary is declared
+// later in this file, so .references() here would hit a TDZ error.
+export const compartmentFabricTierOverrides = pgTable('compartment_fabric_tier_overrides', {
+  compartmentId: text('compartment_id').primaryKey(),   // references compartment_library(id)
+  tier2Delta:    integer('tier2_delta'),   // NULL = inherit global P2; 0 = free
+  tier3Delta:    integer('tier3_delta'),   // NULL = inherit global P3
+  updatedAt:     timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:     uuid('updated_by'),        // references staff(id)
+});
+
 /* ──────────────── Per-Model default free gifts ───────────────────────── */
 // Migration 0174. Re-keys the per-SKU mfg_products.default_free_gifts (0170)
 // to the Model level. Same jsonb entry shape:
