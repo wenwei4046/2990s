@@ -1879,12 +1879,27 @@ export const Configurator = () => {
     return pickedQP.label!;
   })();
   const qpPickPrice = effectiveQPModules ? (priceForLayout(effectiveQPModules) ?? 0) : 0;
+  // Quick-Pick build cells — the EXACT cells handleAddQuickPick stores in the
+  // snapshot (and the server reprices from). Memoized once so the priced Δ and
+  // the stored cells can never diverge. Empty for bedframe / non-sofa lines.
+  const qpCells = useMemo(
+    () => (effectiveQPModules ? cellsFromComboModules(effectiveQPModules, activeDepth) : []),
+    [effectiveQPModules, activeDepth],
+  );
+  // Quick-Pick fabric-tier override — resolve against the build's OWN cells so a
+  // compartment override (migration 0184, e.g. CNR = Price-2 +RM250) lifts the
+  // chip + stored Δ to match the server recompute. modelFabricOverride above stays
+  // model-only ([] compartments) for bedframe + non-sofa surfaces.
+  const sofaModelFabricOverride = useMemo(
+    () => resolveFabricTierOverride(qpCells.map((c) => c.moduleId).filter(Boolean), baseModelOverride, compartmentOverrideMap),
+    [qpCells, baseModelOverride, compartmentOverrideMap],
+  );
 
   // Fabric-tier add-on (migration 0124): per-item flat Δ from the chosen
   // fabric's SELLING tier — replaces the old per-fabric surcharge. The server
   // adds the SAME Δ via the shared fabricTierAddon, so the figure can't drift.
   const sofaFabricDelta = fabricSel && addonCfgQ.data
-    ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data, modelFabricOverride)
+    ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data, sofaModelFabricOverride)
     : 0;
   const sofaSpecialDelta = specialSelsSurcharge(sofaSpecialSel);
   // Sofa leg height — reuse the bedframe OptionSelect (same look). Options come
@@ -1971,7 +1986,7 @@ export const Configurator = () => {
   // applying any matched Combo, server-side on submit).
   const handleAddQuickPick = () => {
     if (pickedQP == null || effectiveQPModules == null) return;
-    const cells = cellsFromComboModules(effectiveQPModules, activeDepth);
+    const cells = qpCells;
     const label = qpDisplayLabel;
     const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel ?? 'Colour KIV'}` : '';
     // PWP (换购) — stamp the line when this layout matches the applied reward
@@ -2415,7 +2430,7 @@ export const Configurator = () => {
                 onChange={setFabricSel}
                 category="SOFA"
                 addonConfig={addonCfgQ.data ?? null}
-                modelOverride={modelFabricOverride}
+                modelOverride={sofaModelFabricOverride}
                 enabledColourIds={productId?.startsWith('mfg-') ? sofaFabricCodes : null}
                 optional
                 onClear={() => setFabricSel(null)}
