@@ -362,6 +362,10 @@ salesInvoices.post('/', async (c) => {
     }
   }
 
+  // A credit applied above advanced the payments ledger but not paid_centi/
+  // status — without this a fully credit-covered SI reads SENT/unpaid and
+  // invites a duplicate cash payment (bug-hunt 2026-06-20).
+  if (creditApplied > 0) await recomputePaid(sb, h.id);
   return c.json({ id: h.id, invoiceNumber: h.invoice_number, revenue, creditApplied }, 201);
 });
 
@@ -589,6 +593,10 @@ salesInvoices.post('/from-dos', async (c) => {
     console.error(`[customer-credit] apply-on-from-dos failed for ${h.invoice_number}:`, e);
   }
 
+  // A credit applied above advanced the payments ledger but not paid_centi/
+  // status — without this a fully credit-covered SI reads SENT/unpaid and
+  // invites a duplicate cash payment (bug-hunt 2026-06-20).
+  if (creditApplied > 0) await recomputePaid(sb, h.id);
   return c.json({ id: h.id, invoiceNumber: h.invoice_number, revenue, creditApplied }, 201);
 });
 
@@ -655,6 +663,7 @@ salesInvoices.post('/:id/items/from-do/:doId', async (c) => {
   const { error: iErr } = await sb.from('sales_invoice_items').insert(rows);
   if (iErr) return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
   await recomputeTotals(sb, id);
+  await recomputePaid(sb, id); // total changed → re-derive paid_centi/status (bug-hunt 2026-06-20)
   await postSiRevenue(sb, (si as { invoice_number: string }).invoice_number);
   return c.json({ ok: true, added: rows.length }, 201);
 });
@@ -744,6 +753,7 @@ salesInvoices.post('/:id/items', async (c) => {
   const { data, error } = await sb.from('sales_invoice_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  await recomputePaid(sb, id); // total changed → re-derive paid_centi/status (bug-hunt 2026-06-20)
   // Adding a line raises the invoice total. resyncSiRevenue posts the first JE
   // for a blank invoice's first line AND, on an already-posted invoice, voids the
   // stale entry + re-posts at the higher total (a bare postSiRevenue would no-op
@@ -818,6 +828,7 @@ salesInvoices.patch('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('sales_invoice_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  await recomputePaid(sb, id); // total changed → re-derive paid_centi/status (bug-hunt 2026-06-20)
   /* Editing a line changes the invoice total — re-align the revenue entry in the
      accounts (void the stale one + re-post at the new amount). Best-effort: a GL
      hiccup never blocks the edit. */
@@ -848,6 +859,7 @@ salesInvoices.delete('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('sales_invoice_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  await recomputePaid(sb, id); // total changed → re-derive paid_centi/status (bug-hunt 2026-06-20)
   /* Deleting a line lowers the invoice total — re-align the revenue entry (void
      stale + re-post, or void to nothing if it was the last line). Best-effort. */
   try {
