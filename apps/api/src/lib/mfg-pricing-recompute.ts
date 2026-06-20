@@ -719,10 +719,16 @@ export async function loadModelSofaModuleCostRows(
 /** Load a single fabric tracking row by code (tier-resolution data only). */
 export async function loadFabricByCode(sb: any, code: string | null | undefined): Promise<FabricRowLite | null> {
   if (!code) return null;
+  // Audit 2026-06-20 — fabric_code carries only a NON-unique index, so a
+  // duplicate would make .maybeSingle() error → null → the fabric tier surcharge
+  // silently drops in the (non-negotiable) server-side recompute. Resolve
+  // deterministically like the batched twin loadFabricsByCodes instead.
   const { data } = await sb
     .from('fabric_trackings')
     .select('fabric_code, sofa_price_tier, bedframe_price_tier, price_tier')
     .eq('fabric_code', code)
+    .order('id', { ascending: true })
+    .limit(1)
     .maybeSingle();
   if (!data) return null;
   return data as FabricRowLite;

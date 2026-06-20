@@ -296,7 +296,8 @@ function buildItemRow(noteId: string, it: Record<string, unknown>) {
   const unitPrice = Number(it.unitPriceCenti ?? 0);
   const discount = Number(it.discountCenti ?? 0);
   const unitCost = Number(it.unitCostCenti ?? 0);
-  const lineTotal = (qty * unitPrice) - discount;
+  // Audit 2026-06-20 — clamp like the PO create path (negative-money guard).
+  const lineTotal = Math.max(0, (qty * unitPrice) - discount);
   const lineCost = qty * unitCost;
   const itemGroup = (it.itemGroup as string) ?? null;
   const variants = (it.variants as unknown) ?? null;
@@ -636,7 +637,8 @@ consignmentNotes.patch('/:id/items/:itemId', async (c) => {
   const unitPrice = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : Number(prev.unit_price_centi);
   const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : Number(prev.discount_centi);
   const unitCost = it.unitCostCenti !== undefined ? Number(it.unitCostCenti) : Number(prev.unit_cost_centi);
-  const lineTotal = (qty * unitPrice) - discount;
+  // Audit 2026-06-20 — clamp like the PO create path (negative-money guard).
+  const lineTotal = Math.max(0, (qty * unitPrice) - discount);
   const lineCost = qty * unitCost;
 
   const updates: Record<string, unknown> = {
@@ -771,6 +773,14 @@ consignmentNotes.patch('/:id/status', async (c) => {
   const prevStatus = (cur as { status: string }).status;
   if (body.status === 'CANCELLED' && prevStatus === 'CANCELLED') {
     return c.json({ consignmentNote: { id, status: 'CANCELLED' } });
+  }
+
+  /* Audit 2026-06-20 — a CANCELLED Consignment Note is FINAL (mirrors
+     delivery-orders-mfg.ts do_cancelled_final + the consignment-returns/PC-receive
+     guards). Reactivating to a shipped state would re-book the CS_DO inventory OUT
+     (resyncNoteInventory re-ships the stock). Create a new note instead. */
+  if (prevStatus === 'CANCELLED') {
+    return c.json({ error: 'note_cancelled_final', message: 'A cancelled Consignment Note cannot be reactivated — its ship-out was already reversed. Create a new note.' }, 409);
   }
 
   /* Downstream-lock — only the CANCELLED transition is gated. */

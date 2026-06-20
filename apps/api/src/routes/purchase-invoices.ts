@@ -363,7 +363,8 @@ purchaseInvoices.post('/', async (c) => {
        overstated whenever the form sent one). */
     const qty = Number(it.qty ?? 0); const unit = Number(it.unitPriceCenti ?? 0);
     const discount = Number(it.discountCenti ?? 0) || 0;
-    const total = qty * unit - discount; subtotal += total;
+    // Audit 2026-06-20 — clamp like the PO create path (negative-money guard).
+    const total = Math.max(0, qty * unit - discount); subtotal += total;
     return {
       material_kind: it.materialKind,
       material_code: it.materialCode,
@@ -679,7 +680,8 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
       material_name: row.material_name,
       qty,
       unit_price_centi: row.unit_price_centi,
-      line_total_centi: qty * row.unit_price_centi - discFor(row, qty),
+      // Audit 2026-06-20 — clamp like the PO create path (negative-money guard).
+      line_total_centi: Math.max(0, qty * row.unit_price_centi - discFor(row, qty)),
       item_group: row.item_group,
       description: row.description,
       description2: row.description2,
@@ -804,7 +806,8 @@ purchaseInvoices.post('/from-grn', async (c) => {
     material_name: it.material_name,
     qty: it._remaining,
     unit_price_centi: it.unit_price_centi,
-    line_total_centi: it._remaining * it.unit_price_centi - discFor(it),
+    // Audit 2026-06-20 — clamp like the PO create path (negative-money guard).
+    line_total_centi: Math.max(0, it._remaining * it.unit_price_centi - discFor(it)),
     item_group: it.item_group,
     description: it.description,
     description2: it.description2,
@@ -893,7 +896,8 @@ purchaseInvoices.post('/:id/items', async (c) => {
   const qty = Number(it.qty ?? 1);
   const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
   const discountCenti = Number(it.discountCenti ?? 0);
-  const lineTotal = (qty * unitPriceCenti) - discountCenti;
+  // Audit 2026-06-20 — clamp like the PO create path (negative-money guard).
+  const lineTotal = Math.max(0, (qty * unitPriceCenti) - discountCenti);
 
   // GRN-linked line: cap qty at that GRN line's remaining
   // (accepted - invoiced - returned).
@@ -1009,7 +1013,8 @@ purchaseInvoices.patch('/:id/items/:itemId', async (c) => {
      (line_total_centi = qty × unit − discount, discount stored); all four
      create paths now write the same way, so an edit no longer shifts a line's
      total by a stored-but-previously-unapplied discount. */
-  const lineTotal = (qty * unit) - discount;
+  // Audit 2026-06-20 — clamp like the PO create path (negative-money guard).
+  const lineTotal = Math.max(0, (qty * unit) - discount);
 
   const updates: Record<string, unknown> = {
     qty,

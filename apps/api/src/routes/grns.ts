@@ -794,7 +794,8 @@ grns.post('/', async (c) => {
       unit_price_centi: unitPriceCenti,
       discount_centi: discountCenti,
       /* Migration 0101 — GRN line money: qty_received * unit - discount. */
-      line_total_centi: (qtyReceived * unitPriceCenti) - discountCenti,
+      // Audit 2026-06-20 — clamp like the PO create path (negative-money guard).
+      line_total_centi: Math.max(0, (qtyReceived * unitPriceCenti) - discountCenti),
       delivery_date: (it.deliveryDate as string | undefined) ?? null,
       unit_cost_centi: Number(it.unitCostCenti ?? 0),
       notes: (it.notes as string | undefined) ?? null,
@@ -919,7 +920,8 @@ grns.post('/from-pos', async (c) => {
       qty_rejected: 0,
       unit_price_centi: it.unit_price_centi,
       /* Migration 0101 — GRN line money: qty_received * unit - discount. */
-      line_total_centi: (qtyReceived * it.unit_price_centi) - discountCenti,
+      // Audit 2026-06-20 — clamp like the PO create path (negative-money guard).
+      line_total_centi: Math.max(0, (qtyReceived * it.unit_price_centi) - discountCenti),
       unit_cost_centi: it.unit_cost_centi ?? 0,
       /* PR #44 — preserve variants from PO line */
       item_group: it.item_group ?? null,
@@ -1119,7 +1121,8 @@ grns.post('/from-po-items', async (c) => {
         qty_rejected: 0,
         unit_price_centi: row.unit_price_centi,
         /* Migration 0101 — GRN line money: qty_received * unit - discount. */
-        line_total_centi: (qty * row.unit_price_centi) - discountCenti,
+        // Audit 2026-06-20 — clamp like the PO create path (negative-money guard).
+        line_total_centi: Math.max(0, (qty * row.unit_price_centi) - discountCenti),
         // PR #44 — preserve variants from PO line
         item_group: row.item_group,
         description: row.description,
@@ -1434,7 +1437,8 @@ grns.post('/:id/items', async (c) => {
   const qtyReceived = Number(it.qty ?? 1);
   const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
   const discountCenti = Number(it.discountCenti ?? 0);
-  const lineTotal = (qtyReceived * unitPriceCenti) - discountCenti;
+  // Audit 2026-06-20 — clamp like the PO create path (negative-money guard).
+  const lineTotal = Math.max(0, (qtyReceived * unitPriceCenti) - discountCenti);
 
   /* Over-receipt guard — a PO-linked added line can't accept more than the PO
      line's remaining (qty - received_qty). received_qty already counts every
@@ -1621,7 +1625,8 @@ grns.patch('/:id/items/:itemId', async (c) => {
 
   const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : (prev as { unit_price_centi: number }).unit_price_centi;
   const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : ((prev as { discount_centi: number }).discount_centi ?? 0);
-  const lineTotal = (qtyReceived * unit) - discount;
+  // Audit 2026-06-20 — clamp like the PO create path (negative-money guard).
+  const lineTotal = Math.max(0, (qtyReceived * unit) - discount);
 
   const updates: Record<string, unknown> = {
     qty_received: qtyReceived,
