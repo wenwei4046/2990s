@@ -2,6 +2,103 @@
 
 Newest first. Each entry: what broke, root cause, fix (commit), how it was caught.
 
+**Before "fixing" anything, grep here first** — half of what looks like a bug is already fixed, by-design, or a verified false positive (the FALSE-POSITIVE note in BUG-2026-06-20-007 cost real time to disprove).
+
+---
+
+## BUG-2026-06-20-001 — Whole PO module 500'd ("Failed to load POs") for ~a day: migration 0180 silently rolled back
+
+**Symptom (owner screenshot):** Purchase Orders list (+ GRN-from-PO + PO-Outstanding) all returned 500 "Failed to load POs".
+
+**Root cause:** Migration `0180_po_supplier_delivery_dates` wrapped 6 `ALTER TABLE … ADD COLUMN` plus a `CREATE OR REPLACE VIEW v_po_outstanding` in ONE `BEGIN…COMMIT`. The view recreation FAILED — it inserts `effective_expected_at` **mid-column-list**, AND the live `v_po_outstanding` is a hand-altered 28-column custom view whose columns 0180's narrower definition couldn't satisfy — so the whole transaction rolled back. The 6 columns never landed, but the deployed PO route (`mfg-purchase-orders.ts:116` HEADER_COLS) unconditionally SELECTs them → every read 500'd. Verified live via `information_schema` (`po=0/poi=0/view_eff=0`).
+
+**Fix:** applied the 6 `ADD COLUMN IF NOT EXISTS` as **standalone autocommit statements** via the Supabase SQL editor (po/poi back to 3 cols each; PO list recovered). **Lesson (now a rule in DEV-OPERATING-FRAMEWORK):** NEVER bundle column ADDs with a `CREATE OR REPLACE VIEW` in one transaction; recreate views with `DROP VIEW … CREATE VIEW` after capturing the live `pg_get_viewdef` (prod views drift from migration files). **Still pending:** restore `effective_expected_at` to the view (Outstanding "Expected" column blank — cosmetic, no crash; Outstanding route does `select('*')`).
+
+**Caught by:** owner reported the red banner; root-caused by an `information_schema` probe via the Chrome-MCP SQL editor.
+
+---
+
+## BUG-2026-06-20-002 — Doc numbers minted via count+1 on 17 minters: a latent repeat of the 2026-06-12 SO/POS outage
+
+**Symptom (latent):** after any mid-month doc delete, the next create re-mints a surviving number → collides on the `NOT NULL UNIQUE` doc-no column → creation **jams permanently** (this exact mechanism took down SO/POS creation on 2026-06-12; `doc-no.ts` header documents it).
+
+**Root cause:** only SO + Journal Entries used `nextMonthlyDocNo` (max+1, self-healing). PO (self-labelled "Race-prone"), DO, SI, PI, GRN, PR, DR, all 6 consignment minters, stock-transfer + stock-take still used `count(month rows)+1` — race-prone AND non-self-healing. The 2026-06-12 lesson was never propagated.
+
+**Fix (`7d4a5395`):** routed all 17 minters (incl. 3 bulk-loop reseeds + 2 generic helpers) through `nextMonthlyDocNo` — `apps/api/src/routes/*`. Normal months mint identical numbers; only *after a delete* does it now skip the gap instead of jamming.
+
+**Caught by:** HOOKKA bug-history cross-check audit; verified each site at file:line (the `doc-no.ts` header was the smoking gun).
+
+---
+
+## BUG-2026-06-20-003 — Sales Invoice: phantom customer credit + invoices reading PAID while under-collected
+
+**Symptom:** a fully credit-covered invoice showed SENT/unpaid → staff recorded cash again → the over-pay minted a **phantom customer credit** equal to the cash. Separately, editing a line UP on a PAID invoice left it PAID though genuinely under-collected.
+
+**Root cause:** `applyCustomerCreditToSi` advances the `sales_invoice_payments` ledger, but the SI create + from-DOs paths never called `recomputePaid` afterward (so `paid_centi`/status stayed stale → looked unpaid). The line add/edit/delete + append-DO handlers called `recomputeTotals` but not `recomputePaid` (so status didn't re-derive when the total changed).
+
+**Fix (`6947c105`):** call `recomputePaid` (re-derives paid/status from the ledger — the source of truth, already used by payment add/delete) at all 6 sites — `sales-invoices.ts`. The phantom-credit symptom is a downstream consequence; fixing the stale status prevents the duplicate cash payment that caused it.
+
+**Caught by:** money-focused bug-hunt agent; flow verified by reading `recomputePaid` + the create/line handlers.
+
+---
+
+## BUG-2026-06-20-004 — PI payment + SI customer-credit lose a concurrent payment (read-modify-write race)
+
+**Symptom (latent):** two payments on the SAME invoice at once both read `paid_centi=X` and both write `X+amount` → one payment silently lost.
+
+**Root cause:** `paid_centi` updated via read-modify-write in JS. The SI payment add/delete path is safe (re-sums the ledger), but the PI `/payment` handler and `applyCustomerCreditToSi`'s SI bump were not. PI has no payments ledger (so can't "copy SI's recompute"), and PostgREST can't do `col = col + x`.
+
+**Fix (`1355332c`, `ce04e468`):** optimistic-concurrency loop — `UPDATE … WHERE paid_centi = <the value just read>`; a concurrent change matches 0 rows → re-read + retry (6×), else 409. No migration. `purchase-invoices.ts`, `customer-credits.ts`.
+
+**Caught by:** money bug-hunt agent; owner DECIDED (same day) that PI **overpay is allowed** (supplier advance) → no cap added.
+
+---
+
+## BUG-2026-06-20-005 — "Create N SKUs" (and any confirm/delete raised inside a modal) did nothing ("没反应")
+
+**Symptom (owner):** clicking "Create 5 SKUs" in the bulk New-Models dialog looked dead.
+
+**Root cause (whole class):** the in-app Confirm/Notify/Prompt/Choice dialogs sat at z-index 90-92, but page modals go to ~1000. A confirm **raised from inside a modal** (the create-confirm here, but also any delete/void confirm inside any modal) rendered BEHIND the modal — invisible — while the action silently waited for a confirmation the operator couldn't see.
+
+**Fix (`7ad45dae`):** raised the 4 system dialogs to z-index 3000/3001 (above every page modal; verified no blocking modal ≥2000). `ConfirmDialog/NotifyDialog/PromptDialog/ChoiceDialog`.
+
+**Caught by:** owner screenshot of the dead "Create 5 SKUs" button; z-index compared against the modal overlay.
+
+---
+
+## BUG-2026-06-20-006 — Every list's Excel/PDF export dumped duplicated/merged cells + a junk filename
+
+**Symptom (owner):** Doc No exported as "SO-2606-031 CONFIRMED", Payment as "Installment installment", Phone doubled; filename `pr-g-so-list-layout-v1`.
+
+**Root cause:** `DataGrid.exportRows` (and `DetailListingShell`'s "Print all" PDF) used each column's `searchValue` — the global-search blob that concatenates multiple representations of a cell — instead of the clean display value; filename came from `storageKey`.
+
+**Fix (`71274419`, `9f3fa9f9`, `f283174d`):** export `exportValue → filterValue → rendered accessor text`, NEVER `searchValue`; auto column widths; new `exportName` prop threaded to 33 list pages + the shell ("Purchase Orders 2026-06-20.xlsx"). Column visibility + on-screen order were already respected. Same searchValue fix applied to the list "Print all" PDF; per-document PDFs already used doc numbers.
+
+**Caught by:** owner screenshots of garbled exports.
+
+---
+
+## BUG-2026-06-20-007 — Bug-hunt batch (3 parallel agents) + DEFERRED + verified FALSE POSITIVES
+
+Three read-only agents (money / inventory / data-layer) swept apps/api; **every finding hand-verified at file:line before fixing** — which mattered (see false positives).
+
+**Fixed + shipped:**
+1. **DO downstream breakdown showed qty 0 for every Delivery Return** (`6dd19262`) — `delivery-orders-mfg.ts:946` selected `qty` from `delivery_return_items`, but the column is `qty_returned` (the same file reads it right at :714/:841). PostgREST → undefined.
+2. **verifiedSave false-alarmed "save didn't take" on a zeroed money field** (`34c30731`) — `valuesEqual` treated `0 ≠ null`; a money field cleared to 0 reads back null. Now folds `0/null/''/undefined` into one empty bucket (+5 tests, 12 pass). `verified-save.ts`.
+3. **fetch with no timeout hangs the UI forever** (`b9d0035c`) — OCR/slow endpoints could wedge at "Loading…". `AbortSignal.timeout` (30s; 120s for /scan) in `authed-fetch.ts`.
+4. **SI detail dropped the stored description2 → blank spec cell** (`5b08cc6b`) — mirrored DO detail's fallback. `SalesInvoiceDetail.tsx`.
+5. **status PATCH returned opaque 500 instead of 404 on a stale docNo** (`cbf83484`) — `.single()` on a 0-row update throws PGRST116 → 500. `.maybeSingle()` + explicit 404 on SO + consignment status PATCH (PI/PR/GRN remaining — low priority).
+
+**Deferred — real but need owner verification (NOT shipped):**
+- **Stock-take posts a STALE-SNAPSHOT delta (HIGH)** — `stock-takes.ts:438` applies `counted − system_qty(frozen at CREATE)` as a signed ADJUSTMENT, not `counted − live on-hand`. If stock moves between opening and posting a count, on-hand corrupts (the tool meant to FIX drift causes it). **Fix is written + typechecked on branch `fix/stock-take-reconcile`** (re-read live on-hand via `fetchScopedSkus` — the same `v_inventory_all_skus` source the create snapshot used — and `adjustment = counted − current`). NOT merged: it's an inventory-posting change → verify with a real test count first. *(This is the same bug noted "open" in BUG-2026-06-03-004 / the 2026-06-04 audit — now scoped + ready.)*
+
+**Verified FALSE POSITIVES (do NOT re-chase — each cost real time to disprove):**
+- `mfg-purchase-orders.ts:276` "`qty − po_qty_picked` → NaN drops lines" — WRONG: `po_qty_picked` IS selected (typed non-null) and `x − null` is `x` in JS, never NaN.
+- `HrCommission.tsx` "`fmtRM(centi)` → money 100× wrong" — WRONG: that file has its OWN local `fmtRm(centi)` (line 9) dividing by 100, not the shared whole-MYR `fmtRM`.
+- **U6 shared LineItemsTable** (built on branch `refactor/u6-shared-lineitems-table`, HELD not merged) — the component imported `SalesOrderDetail.module.css`, whose 19 `nth-child` fixed widths + `table-layout:fixed` are SO-specific → would have broken the other 9 detail pages' column layouts. Caught pre-deploy by checking which CSS module owns the width rules.
+
+**Caught by:** owner asked to "進行debugs"; 3-agent hunt → individual file:line verification (false-positive rate ~3/8 → verification is mandatory, not optional).
+
 ---
 
 ## BUG-2026-06-11-003 — All Backend FormData uploads broken since 06-07: authedFetch stamped multipart bodies as JSON
