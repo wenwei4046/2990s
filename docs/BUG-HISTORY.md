@@ -6,6 +6,45 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-20-009 — Same-class sweep: 17 confirmed recurrences of the audit's bug-classes (0 refuted)
+
+After fixing the 13-slice audit (008), swept the WHOLE system for OTHER instances of each fixed bug-class — one agent per class, every finding re-verified by reading the code. **17 confirmed across 8 classes, 0 false positives**, plus a dedicated dead-lookup sweep.
+
+**FIXED + shipped (commit `20190257` batch 3, `b30f0bb1` batch 4):**
+
+*negative-money-unclamped ×7 — the dominant recurrence (`Math.max(0,…)` clamp, mirroring the PO create path):*
+- GRN (`grns.ts:797/922/1122/1437/1624`) — negative line → negative GRN header → corrupts valuation + the PI it feeds.
+- Purchase Invoice (`purchase-invoices.ts:366/682/807/896/1012` + header subtotal) — negative AP posted to the GL.
+- Delivery Order (`delivery-orders-mfg.ts:1519/1754/2078`) — negative DO total + doubly-negative margin.
+- Consignment Order (`consignment-orders.ts:657/906/1317/1482`) — negative AR / `balance_centi`.
+- Consignment Note (`consignment-notes.ts:299/639`) — negative header total.
+- Delivery Return (`delivery-returns.ts:586/1176`) — negative refund (customer-owes).
+
+*carry-forward-drop — the combo bug TWINNED onto SKU pricing (HIGH):* `mfg-products.ts` PATCH stored `seat_height_prices` verbatim → a Backend COST edit wiped the POS-authored `sellingPriceSen` per slot. Now merges each incoming slot over the current row **server-side** (so ANY client is safe — the Backend grid client `Products.tsx:254` that strips the field needs no change, the merge covers it).
+
+*terminal-status-reactivation (HIGH):* Consignment Note (CS_DO) status PATCH let CANCELLED reactivate → `resyncNoteInventory` re-shipped the stock OUT. CANCELLED now final (`consignment-notes.ts`, mirrors the DO / consignment-return / PC-receive guards).
+
+*maybeSingle-multirow (MED):* `loadFabricByCode` used `.maybeSingle()` on the non-unique `fabric_code` → a dup errored to null → the fabric tier surcharge silently dropped in the server-side recompute. Now `.order('id').limit(1)` (`mfg-pricing-recompute.ts:722`).
+
+*missing-auth self-scope ×5 (MED/LOW):* `mfg-sales-orders.ts` POST/DELETE `/:docNo/payments`, PATCH `.../stock-status`, POST/DELETE `.../photos` all mutated ANOTHER salesperson's SO by client `docNo` with no `selfScopedSalesBlocked` (the table has NO RLS — the in-handler guard is the only scoping). Added to all 5 (mirrors the header/status/line endpoints fixed in 008's security batch).
+
+*concurrent-docno ×2 (HIGH):* GRN `/from-po-items` + PI `/from-grn-items` minted the batch number from an in-memory counter off a non-locking snapshot and swallowed the 23505 with `if (hErr) continue` → silently dropped a GRN (+ its inventory IN) or a PI (GRN left un-billed). Now retry on 23505 (mirrors `mfg-purchase-orders` from-sos, BUG-2026-06-20-008 #14).
+
+**HELD — owner decision / heavier work (NOT shipped):**
+- **SO payments overpay RACE** (`mfg-sales-orders.ts:7095-7141`, HIGH) — read-then-insert with no atomic guard → concurrent payments breach the order total. Needs a DB-atomic fix (Postgres fn / `SELECT … FOR UPDATE` + migration), not a one-liner. The cap itself exists (Spec D6); only the race is open.
+- **Consignment SO overpay cap MISSING** (`consignment-orders.ts:1857`, MED) — the mfg SO caps overpay, consignment doesn't. Business decision: does consignment allow over-collection?
+- **#9 PO Tier-2 lock on convert/append** — conflicts with the explicit "commander can keep adding lines to a PARTIALLY_RECEIVED PO" design comment (`mfg-purchase-orders.ts:1791`). Owner call.
+
+**Flagged for owner (out of sweep scope, NOT verified):**
+- GL-posting routes (`accounting.ts` post/si, post/pi, journal-entries) + `inventory/adjustments` are reachable by any authenticated role with no in-handler finance gate — acceptability hinges on RLS on `journal_entries` / `inventory_movements` (not verified). Worth a look.
+- Consignment Note payments (`consignment-notes.ts:716`) has no overpay cap — lower priority (the note's billable total is less clearly defined than the SO's).
+
+**Dead-lookup class = CLEAN:** a dedicated sweep cross-referenced all 1,519 `.from()` table refs + ~1,500 column refs in `apps/api` against `schema.ts` + migrations — every name resolves. The product-models `maintenance_config` bug (008) was a true one-off. *(Meta-finding: `schema.ts` has DRIFTED from the live DB — migrations are the source of truth; an audit checking only `schema.ts` would emit dozens of false positives. This is the exact condition under which a real `maintenance_config`-style bug could hide.)*
+
+**Caught by:** owner asked "修完 然後看一下全系統還有沒有同樣的問題" — a same-class sweep after the audit fixes.
+
+---
+
 ## BUG-2026-06-20-008 — Full-system 13-slice audit: 18 confirmed bugs (each adversarially verified)
 
 A background workflow fanned 13 read-only audit agents over every module slice (sales-orders · delivery · sales-invoice · purchasing · grn-pi-pr · inventory-wms · consignment · suppliers-mrp · accounting-gl · products-pricing · frontend-display · auth-rbac-security · pos-readonly), then re-verified every high-signal finding by reading the actual code: **18 confirmed, 1 refuted, 26 low-signal unverified** (33 agents). Full run output: `tasks/wsf18do3k.output`.
