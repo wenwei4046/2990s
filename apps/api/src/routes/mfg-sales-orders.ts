@@ -1696,12 +1696,15 @@ mfgSalesOrders.post('/', async (c) => {
     .select('role, venue_id')
     .eq('id', user.id)
     .maybeSingle();
-  /* Loo 2026-06-05 — a `sales` caller can only create orders under their OWN
-     account: whatever salespersonId the client sent is overridden with the
-     caller's id (the POS locks the picker too; this closes the API hole).
-     Leads / managers / backend roles keep the free pick — entering an SO on
-     behalf of a salesperson is their job. */
-  const salespersonIdToStamp = callerStaff?.role === 'sales'
+  /* Loo 2026-06-05 — a self-scoped sales caller (sales / sales_executive) can
+     only create orders under their OWN account: whatever salespersonId the
+     client sent is overridden with the caller's id (the POS locks the picker
+     too; this closes the API hole). Leads / managers / backend roles keep the
+     free pick — entering an SO on behalf of a salesperson is their job.
+     Audit 2026-06-20 — was `=== 'sales'`, which let a sales_executive stamp an
+     arbitrary salesperson (mis-attributing commission); now uses the same
+     read-scope predicate as the list/detail/line guards. */
+  const salespersonIdToStamp = isSelfScopedSales(callerStaff?.role)
     ? user.id
     : ((body.salespersonId as string) ?? null);
 
@@ -3426,6 +3429,12 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!body.status) return c.json({ error: 'status_required' }, 400);
 
+  /* Audit 2026-06-20 — self-scoped sales (sales / sales_executive) must NOT
+     transition or cancel another salesperson's SO by doc_no — a cancel even
+     converts that SO's deposit into a customer credit. Mirror the
+     line-mutation endpoints' self-scope guard. */
+  if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
+
   const { data: prev } = await sb.from('mfg_sales_orders').select('status').eq('doc_no', docNo).maybeSingle();
   const fromStatus = (prev as { status: string } | null)?.status ?? null;
 
@@ -3818,6 +3827,12 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  /* Audit 2026-06-20 — self-scoped sales may only edit their OWN SO. Without
+     this a sales/sales_executive reaching the Backend SO detail could PATCH any
+     order by doc_no (customer fields, even salesperson_id reassignment). Mirror
+     the line-mutation endpoints' self-scope guard. */
+  if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
 
   /* Owner 2026-06-03 (migration 0144) — phone is COMPULSORY on every SO. The
      CREATE path blocks an empty phone (phone_required); the EDIT path must too,
