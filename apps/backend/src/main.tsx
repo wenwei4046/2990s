@@ -10,6 +10,7 @@ import { NotifyProvider, useNotify } from './components/NotifyDialog';
 import { PromptProvider } from './components/PromptDialog';
 import { ChoiceProvider } from './components/ChoiceDialog';
 import { registerDialogService, serviceNotify } from './lib/dialog-service';
+import { NewVersionBanner } from './components/NewVersionBanner';
 import { router } from './router';
 
 // Registers the live in-app confirm/notify dialogs into the module-level
@@ -62,6 +63,7 @@ createRoot(rootEl).render(
             <PromptProvider>
               <ChoiceProvider>
                 <DialogServiceBridge />
+                <NewVersionBanner />
                 <RouterProvider router={router} />
               </ChoiceProvider>
             </PromptProvider>
