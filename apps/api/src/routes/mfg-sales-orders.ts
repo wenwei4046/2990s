@@ -3439,8 +3439,11 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
     }
   }
   const { data, error } = await sb.from('mfg_sales_orders').update(patch)
-    .eq('doc_no', docNo).select('doc_no, status, proceeded_at').single();
+    .eq('doc_no', docNo).select('doc_no, status, proceeded_at').maybeSingle();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  // Stale/missing docNo (deleted, wrong tab) matches 0 rows → a clean 404
+  // ("no longer found, refresh") instead of an opaque 500 (bug-hunt 2026-06-20).
+  if (!data) return c.json({ error: 'not_found' }, 404);
 
   // Audit row — best-effort. We keep writing the legacy mfg_so_status_changes
   // row for now (the existing StatusTimeline panel still reads it) and ALSO

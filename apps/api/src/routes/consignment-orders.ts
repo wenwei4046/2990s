@@ -853,8 +853,10 @@ consignmentOrders.patch('/:docNo/status', async (c) => {
 
   const patch: Record<string, unknown> = { status: body.status, updated_at: new Date().toISOString() };
   const { data, error } = await sb.from('consignment_sales_orders').update(patch)
-    .eq('doc_no', docNo).select('doc_no, status').single();
+    .eq('doc_no', docNo).select('doc_no, status').maybeSingle();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  // Stale/missing docNo matches 0 rows → clean 404, not an opaque 500.
+  if (!data) return c.json({ error: 'not_found' }, 404);
 
   await recordSoAudit(sb, {
     docNo,
