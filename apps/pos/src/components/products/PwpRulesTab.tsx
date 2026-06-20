@@ -19,7 +19,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Plus, Pencil, Trash2, ArrowRight, ArrowDown, Gift, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildComboLabel, type DefaultFreeGift } from '@2990s/shared';
+import { buildComboLabel, type DefaultFreeGift, type TargetRefinement } from '@2990s/shared';
 import { useProductModels, type ProductModelRow } from '../../lib/products/product-models-queries';
 import { useSofaCombos, type SofaComboRule } from '../../lib/products/sofa-combos-queries';
 import {
@@ -81,6 +81,13 @@ const chipStyle = (on: boolean, disabled: boolean): React.CSSProperties => ({
 
 const GIFT_CATEGORIES = ['MATTRESS', 'BEDFRAME', 'SOFA'] as const;
 
+// Size refinement vocab — only the 4 POS-bookable sizes (a rule targeting a
+// non-pickable size could never match). Shared by the GWP bulk-add size option.
+const SIZE_CODE_LABELS: Record<string, string> = { K: 'King', Q: 'Queen', S: 'Single', SS: 'Super Single' };
+const PICKABLE_SIZE_CODES: string[] = [...POS_PICKABLE_SIZE_CODES];
+const toggleInList = (list: string[], v: string): string[] =>
+  list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
+
 const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; gwpOpen: boolean; onCloseGwp: () => void }) => {
   const mattress = useProductModels({ category: 'MATTRESS' });
   const bedframe = useProductModels({ category: 'BEDFRAME' });
@@ -99,6 +106,9 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
   // Bulk add — pick many Models, define gift(s), append to all of them.
   const [bulkSelected, setBulkSelected] = useState<string[]>([]);
   const [bulkDraft, setBulkDraft] = useState<DefaultFreeGift[]>([{ giftProductId: '', qty: 1, campaignName: null }]);
+  // Optional size refinement (0182) — restricts the bulk gift to specific sizes;
+  // applies to mattress/bedframe models only (a size never matches a sofa line).
+  const [bulkSizeCodes, setBulkSizeCodes] = useState<string[]>([]);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
 
@@ -113,6 +123,7 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
     if (!gwpOpen) return;
     setBulkSelected([]);
     setBulkDraft([{ giftProductId: '', qty: 1, campaignName: null }]);
+    setBulkSizeCodes([]);
     setBulkError(null);
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCloseGwp(); };
     window.addEventListener('keydown', onKey);
@@ -207,16 +218,26 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
   const bulkRemoveRow = (i: number) => setBulkDraft((prev) => (prev.length <= 1 ? prev : prev.filter((_, idx) => idx !== i)));
   const applyBulk = async () => {
     setBulkError(null);
-    const additions = cleanGifts(bulkDraft);
+    const baseAdditions = cleanGifts(bulkDraft);
     if (bulkSelected.length === 0) { setBulkError('Pick at least one Model.'); return; }
-    if (additions.length === 0) { setBulkError('Choose at least one gift accessory.'); return; }
+    if (baseAdditions.length === 0) { setBulkError('Choose at least one gift accessory.'); return; }
     setBulkBusy(true);
     try {
       for (const mid of bulkSelected) {
+        // The size refinement attaches to mattress/bedframe models only — a size
+        // never matches a sofa line, so sofa/accessory selections get the gift
+        // with no size condition (any build / any size).
+        const cat = String(models.find((m) => m.id === mid)?.category ?? '').toUpperCase();
+        const sizeCond: TargetRefinement | null =
+          bulkSizeCodes.length > 0 && (cat === 'MATTRESS' || cat === 'BEDFRAME')
+            ? { scope: 'variant', sizeCodes: bulkSizeCodes }
+            : null;
+        const additions = sizeCond ? baseAdditions.map((g) => ({ ...g, condition: sizeCond })) : baseAdditions;
         await upsert.mutateAsync({ modelId: mid, gifts: mergeGifts(giftsByModel.get(mid) ?? [], additions) });
       }
       setBulkSelected([]);
       setBulkDraft([{ giftProductId: '', qty: 1, campaignName: null }]);
+      setBulkSizeCodes([]);
       onCloseGwp();
     } catch (e) { setBulkError(String((e as Error).message ?? e)); }
     finally { setBulkBusy(false); }
@@ -328,6 +349,27 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
                 ))}
                 <div style={{ marginTop: 'var(--space-2)' }}>
                   <Button variant="ghost" size="md" onClick={bulkAddRow}><Plus size={14} strokeWidth={1.75} style={{ marginRight: 4 }} />Add gift</Button>
+                </div>
+              </div>
+
+              {/* Size refinement (0182) — restrict the gift to specific sizes.
+                  Applies to mattress / bed frame models only (a size never matches
+                  a sofa line); sofa selections always get the gift on any build. */}
+              <div style={{ marginTop: 'var(--space-3)' }}>
+                <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 6 }}>
+                  Only for these sizes (optional — mattress / bed frame; none = any size)
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+                  {PICKABLE_SIZE_CODES.map((code) => (
+                    <button
+                      key={code}
+                      type="button"
+                      onClick={() => setBulkSizeCodes((prev) => toggleInList(prev, code))}
+                      style={chipStyle(bulkSizeCodes.includes(code), false)}
+                    >
+                      {SIZE_CODE_LABELS[code] ?? code}
+                    </button>
+                  ))}
                 </div>
               </div>
 
