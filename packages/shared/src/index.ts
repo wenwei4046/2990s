@@ -11,6 +11,7 @@ export * from './schemas';
 export * from './variant-summary'; // Commander 2026-05-28
 export * from './so-variant-rule'; // 2026-06-04 — POS/Backend variant vocabulary unified
 export * from './fabric-tier-addon';
+export * from './fabric-tier-override-resolve';
 export * from './adjustment-reasons'; // 2026-06-04 — stock adjustment reason codes
 export * from './inventory-adjustment'; // 2026-06-09 — adjustment variant+batch gate
 export * from './sofa-tier'; // 2026-06-09 — sofa price-tier recognition for SKU import
