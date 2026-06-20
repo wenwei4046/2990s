@@ -14,7 +14,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
-import { fmtRM, fabricTierAddon, type FabricTier } from '@2990s/shared';
+import { fmtRM, fabricTierAddon, resolveFabricTierOverride, type FabricTier } from '@2990s/shared';
 import { supabase } from '../lib/supabase';
 import {
   useFabricLibrary,
@@ -26,6 +26,7 @@ import {
   useSpecialAddons,
   useFabricTierAddonConfig,
   useModelFabricTierOverrides,
+  useCompartmentFabricTierOverrides,
   type ProductFabricRow,
   type BedframeOptionRow,
 } from '../lib/queries';
@@ -215,12 +216,26 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
   // migration 0172 — per-Model Δ override for this line's Model (same for the
   // prev/next fabric in the difference; the Model doesn't change on a fill-in).
   const modelOverridesQ = useModelFabricTierOverrides();
-  const modelFabricOverride = useMemo(() => {
+  const baseModelOverride = useMemo(() => {
     const id = product.data?.model_id ?? null;
     if (!id) return null;
     const row = (modelOverridesQ.data ?? []).find((r) => r.modelId === id);
     return row ? { tier2Delta: row.tier2Delta, tier3Delta: row.tier3Delta } : null;
   }, [modelOverridesQ.data, product.data]);
+  // migration 0184 — per-compartment Δ overrides. For a SOFA build the effective
+  // Δ is the MAX over the SET special values (the Model override + every override
+  // whose compartment code is in the build's cells), resolved by the shared
+  // resolveFabricTierOverride so the fill-in difference matches the server.
+  // Non-sofa lines carry no cells → resolve returns the Model override unchanged.
+  const compartmentOverridesQ = useCompartmentFabricTierOverrides();
+  const compartmentOverrideMap = useMemo(
+    () => new Map((compartmentOverridesQ.data ?? []).map((r) => [r.compartmentId, { tier2Delta: r.tier2Delta, tier3Delta: r.tier3Delta }])),
+    [compartmentOverridesQ.data],
+  );
+  const modelFabricOverride = useMemo(
+    () => resolveFabricTierOverride((target.buildCells ?? []).map((c) => c.moduleId).filter(Boolean), baseModelOverride, compartmentOverrideMap),
+    [target.buildCells, baseModelOverride, compartmentOverrideMap],
+  );
   const allowedFabricCodes = allowedFabricsQ.data ?? [];
   // Series rows offered on this Model — same construction the Configurator
   // uses (allowed colour codes → their series, joined to the library).

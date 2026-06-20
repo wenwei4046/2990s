@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type CSSProperties, type Dispatch, type PointerEvent, type ReactNode, type SetStateAction } from 'react';
 import { Trash2, RotateCw, Eraser, Maximize2, Minimize2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, fabricTierAddon, maintActiveValues, type FabricTier } from '@2990s/shared';
+import { fmtRM, fabricTierAddon, maintActiveValues, resolveFabricTierOverride, type FabricTier } from '@2990s/shared';
 import {
   SOFA_MODULES,
   findModule,
@@ -33,7 +33,7 @@ import {
 } from '@2990s/shared';
 import { buildSeamlessRun, renderSeamlessSofa, renderSeamlessGroup, isFunctionalSeat, type SeamlessRun } from '../lib/sofa-seamless';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
-import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useModelFabricTierOverrides, useCreateSofaCombo, useCreateSofaQuickPick, useSofaCombos, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
+import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useModelFabricTierOverrides, useCompartmentFabricTierOverrides, useCreateSofaCombo, useCreateSofaQuickPick, useSofaCombos, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
 import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
@@ -838,11 +838,24 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   const addonCfgQ = useFabricTierAddonConfig();  // migration 0124 — fabric-tier Δ
   // migration 0172 — per-Model Δ override for this build's Model (modelId prop).
   const modelOverridesQ = useModelFabricTierOverrides();
-  const modelFabricOverride = useMemo(() => {
+  const baseModelOverride = useMemo(() => {
     if (!modelId) return null;
     const row = (modelOverridesQ.data ?? []).find((r) => r.modelId === modelId);
     return row ? { tier2Delta: row.tier2Delta, tier3Delta: row.tier3Delta } : null;
   }, [modelOverridesQ.data, modelId]);
+  // migration 0184 — per-compartment Δ overrides. The effective whole-sofa Δ is
+  // the MAX over the SET special values (the Model override + every override
+  // whose compartment code is in THIS build's cells), resolved by the shared
+  // resolveFabricTierOverride so the live figure matches the server recompute.
+  const compartmentOverridesQ = useCompartmentFabricTierOverrides();
+  const compartmentOverrideMap = useMemo(
+    () => new Map((compartmentOverridesQ.data ?? []).map((r) => [r.compartmentId, { tier2Delta: r.tier2Delta, tier3Delta: r.tier3Delta }])),
+    [compartmentOverridesQ.data],
+  );
+  const modelFabricOverride = useMemo(
+    () => resolveFabricTierOverride(cells.map((c) => c.moduleId).filter(Boolean), baseModelOverride, compartmentOverrideMap),
+    [cells, baseModelOverride, compartmentOverrideMap],
+  );
   const fabricCodes = useMemo<string[]>(
     () => (productId?.startsWith('mfg-') ? (modelCustomizer?.fabricIds ?? []) : []),
     [productId, modelCustomizer],
