@@ -10,6 +10,7 @@ import { authedFetch, humanApiError } from './authed-fetch';
 import { supabase } from './supabase';
 import { serviceNotify } from './dialog-service';
 import { verifiedSave, readbackGet, friendlySaveMessage } from './verified-save';
+import { fmtCenti } from '@2990s/shared';
 
 // Direct multipart upload (useUploadSoItemPhoto) needs the raw token + URL —
 // authedFetch is JSON-only, so these stay for that one FormData POST.
@@ -762,7 +763,7 @@ export const useOverrideMfgSoLinePrice = () => {
         throw new Error(friendlySaveMessage(result, {
           noun: 'price override',
           fieldNames: { unit_price_centi: 'Line price' },
-          fmt: (v) => (v == null ? '(blank)' : `RM${(Number(v) / 100).toFixed(2)}`),
+          fmt: (v) => (v == null ? '(blank)' : fmtCenti(Number(v))),
         }));
       }
       return { ok: true as const, itemId, newPrice: overridePriceSen };

@@ -10,6 +10,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { MaintPoolEntry } from '@2990s/shared';
+import { fmtCenti } from '@2990s/shared';
 import { supabase } from './supabase';
 import { authedFetch, humanApiError } from './authed-fetch';
 import { serviceNotify } from './dialog-service';
@@ -324,7 +325,7 @@ export function useUpdateMfgProductPrices() {
         throw new Error(friendlySaveMessage(result, {
           noun: 'price',
           fieldNames: { base_price_sen: 'Base price', price1_sen: 'Price 1', cost_price_sen: 'Cost price' },
-          fmt: (v) => (v == null ? '(blank)' : `RM${(Number(v) / 100).toFixed(2)}`),
+          fmt: (v) => (v == null ? '(blank)' : fmtCenti(Number(v))),
         }));
       }
       return { ok: true as const, changed: 1 };
