@@ -943,10 +943,13 @@ export async function doLineDownstream(
 
   const [siLinesRes, drLinesRes] = await Promise.all([
     sb.from('sales_invoice_items').select('do_item_id, qty, sales_invoice_id').in('do_item_id', ids),
-    sb.from('delivery_return_items').select('do_item_id, qty, delivery_return_id').in('do_item_id', ids),
+    sb.from('delivery_return_items').select('do_item_id, qty_returned, delivery_return_id').in('do_item_id', ids),
   ]);
   const siLines = (siLinesRes.data ?? []) as Array<{ do_item_id: string | null; qty: number; sales_invoice_id: string }>;
-  const drLines = (drLinesRes.data ?? []) as Array<{ do_item_id: string | null; qty: number; delivery_return_id: string }>;
+  // delivery_return_items has NO `qty` column — it's `qty_returned` (the same
+  // file reads it correctly at 714/841). Selecting `qty` returned no/0 qty for
+  // every DR in a DO line's downstream breakdown (bug-hunt 2026-06-20).
+  const drLines = (drLinesRes.data ?? []) as Array<{ do_item_id: string | null; qty_returned: number; delivery_return_id: string }>;
 
   const siIds = [...new Set(siLines.map((r) => r.sales_invoice_id).filter(Boolean))];
   const drIds = [...new Set(drLines.map((r) => r.delivery_return_id).filter(Boolean))];
@@ -979,7 +982,7 @@ export async function doLineDownstream(
   for (const r of drLines) {
     const meta = drMeta.get(r.delivery_return_id);
     if (!meta) continue; // cancelled DR — excluded
-    push(r.do_item_id, { docNumber: meta.docNumber, docType: 'DR', qty: Number(r.qty ?? 0), status: meta.status });
+    push(r.do_item_id, { docNumber: meta.docNumber, docType: 'DR', qty: Number(r.qty_returned ?? 0), status: meta.status });
   }
   return out;
 }
