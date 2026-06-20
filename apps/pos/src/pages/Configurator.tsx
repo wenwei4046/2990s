@@ -331,11 +331,13 @@ export const Configurator = () => {
   }, [modelOverridesQ.data, product.data]);
   // migration 0184 — per-compartment Δ overrides, folded into the effective Δ via
   // the shared resolveFabricTierOverride (MAX over the SET model + matching
-  // compartment values). This Configurator surface drives the Quick-Pick sofa +
-  // bedframe paths, which both use the Model override ONLY (Quick-Pick bundles and
-  // non-sofa lines have no custom cells to match) — so resolve is called with no
-  // compartments and returns the Model override unchanged. Custom sofa builds run
-  // through the CustomBuilder child, which resolves against its own live cells.
+  // compartment values). modelFabricOverride below resolves with NO compartments
+  // ([]) — the model-only Δ — and feeds the bedframe + fixed-bundle (cells-less)
+  // sofa surfaces. The Quick-Pick PERSONAL-pick path is now compartment-aware: it
+  // resolves against its build's own cells via sofaModelFabricOverride (below), so
+  // a per-compartment override (e.g. CNR = Price-2 +RM250) lifts its chip + stored
+  // Δ to match the server recompute. Custom sofa builds resolve against their live
+  // cells inside the CustomBuilder child.
   const compartmentOverridesQ = useCompartmentFabricTierOverrides();
   const compartmentOverrideMap = useMemo(
     () => new Map((compartmentOverridesQ.data ?? []).map((r) => [r.compartmentId, { tier2Delta: r.tier2Delta, tier3Delta: r.tier3Delta }])),
@@ -1173,6 +1175,32 @@ export const Configurator = () => {
     return [];
   }, [mode, sofaCells, pickedQP, qpMirror]);
 
+  // Quick Pick selection's effective module layout — applies the L↔R mirror
+  // toggle (2026-06-01). Hoisted ABOVE the early-return guard (Rules of Hooks)
+  // because the qpCells / sofaModelFabricOverride memos below it derive from it;
+  // a hook must not sit behind the loading/empty returns. Null when no pick.
+  const effectiveQPModules = useMemo(
+    () => (pickedQP ? (qpMirror ? mirrorModules(pickedQP.modules) : pickedQP.modules) : null),
+    [pickedQP, qpMirror],
+  );
+  // Quick-Pick build cells — the EXACT cells handleAddQuickPick stores in the
+  // snapshot (and the server reprices from). Memoized once so the priced Δ and
+  // the stored cells can never diverge. Empty for bedframe / non-sofa lines.
+  // Hoisted above the guard with effectiveQPModules (Rules of Hooks).
+  const qpCells = useMemo(
+    () => (effectiveQPModules ? cellsFromComboModules(effectiveQPModules, activeDepth) : []),
+    [effectiveQPModules, activeDepth],
+  );
+  // Quick-Pick fabric-tier override — resolve against the build's OWN cells so a
+  // compartment override (migration 0184, e.g. CNR = Price-2 +RM250) lifts the
+  // chip + stored Δ to match the server recompute. modelFabricOverride (above)
+  // stays model-only ([] compartments) for bedframe + non-sofa surfaces.
+  // Hoisted above the guard (Rules of Hooks).
+  const sofaModelFabricOverride = useMemo(
+    () => resolveFabricTierOverride(qpCells.map((c) => c.moduleId).filter(Boolean), baseModelOverride, compartmentOverrideMap),
+    [qpCells, baseModelOverride, compartmentOverrideMap],
+  );
+
   // Combo ids the current build matches — the reward a sofa code must name.
   const sofaMatchedComboIds = useMemo(
     () => (sofaPricing.combos ?? []).filter((c) => matchComboSubset(sofaBuiltModules, c.modules) != null).map((c) => c.id),
@@ -1860,13 +1888,8 @@ export const Configurator = () => {
     return { bundle: b, price: row?.price ?? null, active: row?.active ?? false };
   });
   const pickedSofaRow = sofaBundleRows.find((r) => r.bundle.id === picked) ?? null;
-
-  // Quick Pick selection price: computed from its layout via the engine.
-  // effectiveQPModules applies the L↔R mirror toggle (2026-06-01) so the price,
-  // hero preview, and cart line all reflect the flipped orientation.
-  const effectiveQPModules = pickedQP
-    ? (qpMirror ? mirrorModules(pickedQP.modules) : pickedQP.modules)
-    : null;
+  // Quick Pick label + price: derived from effectiveQPModules (hoisted above the
+  // early-return guard, with the L↔R mirror toggle already applied).
   // Topbar label + the cart summary minted from it (Loo 2026-06-12): a
   // curated human name survives; a code-sequence label re-reads in walk order
   // (qpWalkLabel). A mirrored pick can't reuse its stored label either way
@@ -1879,21 +1902,6 @@ export const Configurator = () => {
     return pickedQP.label!;
   })();
   const qpPickPrice = effectiveQPModules ? (priceForLayout(effectiveQPModules) ?? 0) : 0;
-  // Quick-Pick build cells — the EXACT cells handleAddQuickPick stores in the
-  // snapshot (and the server reprices from). Memoized once so the priced Δ and
-  // the stored cells can never diverge. Empty for bedframe / non-sofa lines.
-  const qpCells = useMemo(
-    () => (effectiveQPModules ? cellsFromComboModules(effectiveQPModules, activeDepth) : []),
-    [effectiveQPModules, activeDepth],
-  );
-  // Quick-Pick fabric-tier override — resolve against the build's OWN cells so a
-  // compartment override (migration 0184, e.g. CNR = Price-2 +RM250) lifts the
-  // chip + stored Δ to match the server recompute. modelFabricOverride above stays
-  // model-only ([] compartments) for bedframe + non-sofa surfaces.
-  const sofaModelFabricOverride = useMemo(
-    () => resolveFabricTierOverride(qpCells.map((c) => c.moduleId).filter(Boolean), baseModelOverride, compartmentOverrideMap),
-    [qpCells, baseModelOverride, compartmentOverrideMap],
-  );
 
   // Fabric-tier add-on (migration 0124): per-item flat Δ from the chosen
   // fabric's SELLING tier — replaces the old per-fabric surcharge. The server
