@@ -149,6 +149,9 @@ export type ProductRowLite = {
   /** Sofa Model grouping — used to scope combos to this Model (Phase 4b), so
    *  the server matches the SAME combo set the POS did. */
   base_model:         string | null;
+  /** mfg size_code (K/Q/S/SS/SK/SP) of this SKU — the line's variant. Feeds the
+   *  unified rule matcher (variant-scope targeting, 2026-06-20). */
+  size_code?:         string | null;
   /** SELLING price — the Master Account store (Phase-1 migration 0109,
    *  backfilled = base_price_sen). The authoritative customer-facing price the
    *  D4 drift gate validates a client submission against (non-sofa lines). */
@@ -573,7 +576,7 @@ export async function loadProductByCode(sb: any, code: string): Promise<ProductR
   if (!code) return null;
   const { data } = await sb
     .from('mfg_products')
-    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, pwp_price_sen, model_id, base_model, branding, default_free_gifts')
+    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, pwp_price_sen, model_id, base_model, size_code, branding, default_free_gifts')
     .eq('code', code)
     .maybeSingle();
   if (!data) return null;
@@ -590,7 +593,7 @@ export async function loadProductsByCodes(sb: any, codes: Array<string | null | 
   if (uniq.length === 0) return new Map();
   const { data } = await sb
     .from('mfg_products')
-    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, pwp_price_sen, model_id, base_model, branding, default_free_gifts')
+    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, pwp_price_sen, model_id, base_model, size_code, branding, default_free_gifts')
     .in('code', uniq);
   return new Map((((data as ProductRowLite[]) ?? [])).map((r) => [r.code, r]));
 }

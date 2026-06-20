@@ -5,7 +5,7 @@
 // Mirrors fabric-tier-addon.ts /special.
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
-import { parseDefaultFreeGifts } from '@2990s/shared';
+import { parseDefaultFreeGifts, targetRefinementSchema } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
@@ -20,6 +20,9 @@ const giftEntry = z.object({
   giftProductId: z.string().min(1),
   qty: z.number().int().positive(),
   campaignName: z.string().nullable().optional(),
+  // Optional size/compartment gate (2026-06-20). parseDefaultFreeGifts drops a
+  // 'model'-scope condition so a whole-Model gift serializes unchanged.
+  condition: targetRefinementSchema.nullable().optional(),
 });
 const putSchema = z.object({
   modelId: z.string().uuid(),
