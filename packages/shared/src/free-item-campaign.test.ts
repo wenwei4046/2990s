@@ -82,6 +82,12 @@ describe('campaignsCoveringLine', () => {
     expect(noMatch).toEqual([]);
   });
 
+  it('an empty-eligible campaign covers NOTHING (not the whole catalog)', () => {
+    const c = camp({ eligible: [] });
+    expect(campaignsCoveringLine(ln({ modelId: 'm1' }), [c], combos)).toEqual([]);
+    expect(campaignsCoveringLine(ln({ category: 'SOFA', modelId: 'sofaM', builtModuleIds: ['2A(LHF)'] }), [c], combos)).toEqual([]);
+  });
+
   it('returns ALL covering campaigns (multi-campaign)', () => {
     const a = camp({ id: 'a', eligible: [{ modelId: 'm1', scope: 'model' }] });
     const b = camp({ id: 'b', eligible: [{ modelId: 'm1', scope: 'model' }] });

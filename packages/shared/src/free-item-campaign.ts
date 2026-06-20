@@ -57,5 +57,12 @@ export function campaignsCoveringLine(
     sizeCode: line.sizeCode,
     builtCompartments: line.builtModuleIds,
   };
-  return campaigns.filter((c) => c.active && lineMatchesTargets(li, c.eligible, comboModulesById));
+  // A Free Item Campaign must list explicit targets — an EMPTY eligible covers
+  // NOTHING (mirrors the original `eligible.some()`, where [].some() === false).
+  // The matcher's "empty = all of category" is a PWP-only semantic (PWP carries
+  // a trigger/reward category to scope it); applying it here would make every
+  // Model in every category free-eligible. Guard before delegating.
+  return campaigns.filter(
+    (c) => c.active && c.eligible.length > 0 && lineMatchesTargets(li, c.eligible, comboModulesById),
+  );
 }
