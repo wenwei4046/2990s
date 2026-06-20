@@ -15,6 +15,30 @@ import { serviceConfirm } from './dialog-service';
 
 const API_URL = import.meta.env.VITE_API_URL;
 
+/* ── Request timeout ───────────────────────────────────────────────────────
+   A fetch with no timeout hangs the UI forever on a stalled connection — the
+   operator stares at "Loading…" with no way out (OCR / slow report endpoints
+   are the worst). Apply a default deadline when the caller didn't pass its OWN
+   AbortSignal (uploads / cancellable flows control their own); OCR/scan paths
+   get a longer one. A timeout becomes a plain-language error; a caller-initiated
+   abort is never rewritten. */
+function timeoutSignal(path: string): AbortSignal | undefined {
+  const ms = /\/scan-/.test(path) ? 120_000 : 30_000;
+  try { return AbortSignal.timeout(ms); } catch { return undefined; } // pre-2022 browsers
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, path: string): Promise<Response> {
+  const callerSignal = init.signal;
+  try {
+    return await fetch(url, { ...init, signal: callerSignal ?? timeoutSignal(path) });
+  } catch (e) {
+    if (!callerSignal && e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+      throw new Error('The request took too long — please check your connection and try again.');
+    }
+    throw e;
+  }
+}
+
 /* ── Session-expiry recovery ───────────────────────────────────────────────
    A 401 from the API means GoTrue rejected our bearer token: the Supabase
    session behind it is gone (revoked / rotated away / cleared server-side).
@@ -83,7 +107,7 @@ export async function authedFetch<T>(path: string, init?: RequestInit): Promise<
     authorization: `Bearer ${token}`,
     ...(typeof init?.body === 'string' ? { 'content-type': 'application/json' } : {}),
   };
-  let res = await fetch(`${API_URL}${path}`, { ...init, headers });
+  let res = await fetchWithTimeout(`${API_URL}${path}`, { ...init, headers }, path);
 
   /* Session-expiry recovery — a 401 means GoTrue rejected our token (a token is
      always present here; authedFetch threw 'not_authenticated' above otherwise).
@@ -97,10 +121,10 @@ export async function authedFetch<T>(path: string, init?: RequestInit): Promise<
       refreshedToken = refreshed.session?.access_token;
     } catch { /* refresh failed — session is gone */ }
     if (refreshedToken && refreshedToken !== token) {
-      res = await fetch(`${API_URL}${path}`, {
+      res = await fetchWithTimeout(`${API_URL}${path}`, {
         ...init,
         headers: { ...headers, authorization: `Bearer ${refreshedToken}` },
-      });
+      }, path);
     }
     if (res.status === 401) {
       await handleSessionExpired();
@@ -115,7 +139,7 @@ export async function authedFetch<T>(path: string, init?: RequestInit): Promise<
     const text = await res.clone().text();
     if (text.includes('"short_stock"') && await confirmShortStock(text)) {
       const retryBody = JSON.stringify({ ...JSON.parse(init.body), confirmShortStock: true });
-      res = await fetch(`${API_URL}${path}`, { ...init, headers, body: retryBody });
+      res = await fetchWithTimeout(`${API_URL}${path}`, { ...init, headers, body: retryBody }, path);
     }
   }
 
