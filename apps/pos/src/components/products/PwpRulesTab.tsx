@@ -88,6 +88,16 @@ const PICKABLE_SIZE_CODES: string[] = [...POS_PICKABLE_SIZE_CODES];
 const toggleInList = (list: string[], v: string): string[] =>
   list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
 
+// Stable signature of a gift's size/compartment condition. Two same-product
+// gifts with DIFFERENT conditions (e.g. a pillow for Queen vs for King) must NOT
+// merge into one — keying gift dedupe on this keeps them as separate entries so
+// adding the King batch never overwrites the Queen one (2026-06-20 fix).
+const giftCondKey = (c?: TargetRefinement | null): string => {
+  if (!c || c.scope === 'model') return '';
+  const norm = (a?: string[]): string => (a ?? []).map((x) => x.trim().toUpperCase()).sort().join('+');
+  return `${c.scope}:${norm(c.sizeCodes)}/${norm(c.compartments)}/${norm(c.comboIds)}`;
+};
+
 const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; gwpOpen: boolean; onCloseGwp: () => void }) => {
   const mattress = useProductModels({ category: 'MATTRESS' });
   const bedframe = useProductModels({ category: 'BEDFRAME' });
@@ -162,11 +172,13 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
         };
       });
 
-  // Append `additions` to `existing`, keyed by (giftProductId, campaignName): a
-  // matching key updates its qty, a new key is appended — so one Model can carry
-  // several distinct gifts (e.g. 2 pillows + 1 protector) built up over time.
+  // Append `additions` to `existing`, keyed by (giftProductId, campaignName,
+  // size/compartment condition): a matching key updates its qty, a new key is
+  // appended — so one Model can carry several distinct gifts (e.g. 2 pillows + 1
+  // protector), AND the SAME product under different sizes (pillow for Queen vs
+  // for King) stays as separate entries instead of overwriting each other.
   const mergeGifts = (existing: DefaultFreeGift[], additions: DefaultFreeGift[]): DefaultFreeGift[] => {
-    const keyOf = (g: DefaultFreeGift) => `${g.giftProductId} ${g.campaignName ?? ''}`;
+    const keyOf = (g: DefaultFreeGift) => `${g.giftProductId} ${g.campaignName ?? ''} ${giftCondKey(g.condition)}`;
     const out = existing.map((g) => ({ ...g }));
     const at = new Map(out.map((g, i) => [keyOf(g), i] as const));
     for (const a of additions) {
