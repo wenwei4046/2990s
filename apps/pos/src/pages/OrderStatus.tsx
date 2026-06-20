@@ -1107,7 +1107,6 @@ const KpiBreakdown = ({
         <span className={styles.kpiBreakUnit}>RM</span>{fmtMoney(kpi)}
       </span>
     </div>
-    <div className={styles.kpiBreakNote}>Products counts toward your threshold (excl. service &amp; KPI)</div>
   </div>
 );
 

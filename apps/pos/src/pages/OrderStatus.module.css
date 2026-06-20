@@ -271,13 +271,6 @@
   font-size: 15px;
 }
 
-.kpiBreakNote {
-  margin-top: 2px;
-  font-family: var(--font-sans);
-  font-size: 11px;
-  color: var(--fg-muted);
-}
-
 .kpiError {
   margin-top: 8px;
   font-size: 13px;
