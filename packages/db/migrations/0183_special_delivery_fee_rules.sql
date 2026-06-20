@@ -1,4 +1,4 @@
--- 0182_special_delivery_fee_rules.sql
+-- 0183_special_delivery_fee_rules.sql
 -- Generalises model_special_delivery_fees (0140) onto the #691 RuleTarget
 -- abstraction. A rule's `target` jsonb is RuleTarget[] (scopes
 -- model | variant | compartment | combo). standalone_fee OVERRIDES the base
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS special_delivery_fee_rules (
 );
 
 COMMENT ON TABLE special_delivery_fee_rules IS
-  'Special transport-fee rules keyed on the #691 RuleTarget abstraction (target jsonb = RuleTarget[]). standalone_fee overrides the base delivery fee; cross_cat_followup_fee applies on a cross-category follow-up SO. Fees are whole MYR (server scales ×100 to sen). Generalises model_special_delivery_fees (0140). Migration 0182.';
+  'Special transport-fee rules keyed on the #691 RuleTarget abstraction (target jsonb = RuleTarget[]). standalone_fee overrides the base delivery fee; cross_cat_followup_fee applies on a cross-category follow-up SO. Fees are whole MYR (server scales ×100 to sen). Generalises model_special_delivery_fees (0140). Migration 0183.';
 
 -- Data move: each existing per-Model tag → one rule targeting that Model (scope='model').
 -- Guarded so a re-run (this repo has duplicate-numbered migrations) seeds only once.

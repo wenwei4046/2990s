@@ -747,7 +747,7 @@ export const Configurator = () => {
     // isn't counted against its own allowance).
     const others = cartLines.filter((l) => !(editKey && l.key === editKey));
     const baseInputs: PwpLineInput[] = others.map((l, i) => {
-      const c = l.config as { kind: string; category?: string; modelId?: string | null; productName?: string; pwp?: boolean };
+      const c = l.config as { kind: string; category?: string; modelId?: string | null; productName?: string; pwp?: boolean; sizeId?: string; cells?: Array<{ moduleId?: unknown }> };
       return {
         idx: i,
         category: String(c.category ?? '').toUpperCase(),
@@ -755,6 +755,9 @@ export const Configurator = () => {
         qty: l.qty,
         productName: c.productName,
         pwpRequested: c.kind === 'bedframe' ? c.pwp === true : false,
+        // 0182 refinement inputs — size_code (mattress/bedframe) + sofa modules.
+        sizeCode: sizeIdToMfgCode(c.sizeId),
+        builtCompartments: c.kind === 'sofa' ? (c.cells ?? []).map((x) => String(x?.moduleId ?? '')).filter(Boolean) : [],
         /* Promo one-way (Loo 2026-06-06) — a line already bought with a code
            never opens promo allowance (a free ARRUS can't fund the next free
            ARRUS), while 'pwp' chains stay allowed. */
@@ -765,10 +768,15 @@ export const Configurator = () => {
     const candidate: PwpLineInput = {
       idx: candidateIdx, category: candCategory, modelId: candModelId, qty: 1,
       productName: product.data?.name, pwpRequested: true,
+      // The candidate is the REWARD being configured. A sofa reward is by-combo
+      // (reward compartment refinement is always empty), so only its size_code is
+      // consulted — builtCompartments is never used on the reward side.
+      sizeCode: sizeIdToMfgCode(pickedSizeId),
+      builtCompartments: [],
     };
     const grant = resolvePwp(rules, [...baseInputs, candidate]).find((g) => g.idx === candidateIdx);
     return { available: !!grant, triggerLabel: grant?.triggerRef?.name ?? null };
-  }, [pwpRulesQ.data, product.data, cartLines, editKey]);
+  }, [pwpRulesQ.data, product.data, cartLines, editKey, pickedSizeId]);
 
   // ── PWP Code Voucher (0130) — the reward this product would redeem against. ──
   const reservedCodesQ = useMyReservedPwpCodes();

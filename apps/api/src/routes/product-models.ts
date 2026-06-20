@@ -427,7 +427,7 @@ productModels.post('/:id/generate-skus', async (c) => {
   let sizeOverrides: Record<string, { label?: string; dimensions?: string }> | null = null;
   try {
     const { data: cfgRow } = await supabase
-      .from('maintenance_config')
+      .from('maintenance_config_history')
       .select('config')
       .eq('scope', 'master')
       .lte('effective_from', new Date().toISOString().slice(0, 10))

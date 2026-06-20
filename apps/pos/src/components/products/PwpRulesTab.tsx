@@ -19,7 +19,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Plus, Pencil, Trash2, ArrowRight, ArrowDown, Gift, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildComboLabel, type DefaultFreeGift } from '@2990s/shared';
+import { buildComboLabel, type DefaultFreeGift, type TargetRefinement } from '@2990s/shared';
 import { useProductModels, type ProductModelRow } from '../../lib/products/product-models-queries';
 import { useSofaCombos, type SofaComboRule } from '../../lib/products/sofa-combos-queries';
 import {
@@ -34,6 +34,7 @@ import {
   useModelDefaultGifts,
   useUpsertModelDefaultGifts,
   useDeleteModelDefaultGifts,
+  POS_PICKABLE_SIZE_CODES,
 } from '../../lib/queries';
 import { FreeItemCampaignSection } from './FreeItemCampaignSection';
 import { RuleTargetRefinement, finalizeRefinement } from './RuleTargetPicker';
@@ -80,6 +81,13 @@ const chipStyle = (on: boolean, disabled: boolean): React.CSSProperties => ({
 
 const GIFT_CATEGORIES = ['MATTRESS', 'BEDFRAME', 'SOFA'] as const;
 
+// Size refinement vocab — only the 4 POS-bookable sizes (a rule targeting a
+// non-pickable size could never match). Shared by the GWP bulk-add size option.
+const SIZE_CODE_LABELS: Record<string, string> = { K: 'King', Q: 'Queen', S: 'Single', SS: 'Super Single' };
+const PICKABLE_SIZE_CODES: string[] = [...POS_PICKABLE_SIZE_CODES];
+const toggleInList = (list: string[], v: string): string[] =>
+  list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
+
 const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; gwpOpen: boolean; onCloseGwp: () => void }) => {
   const mattress = useProductModels({ category: 'MATTRESS' });
   const bedframe = useProductModels({ category: 'BEDFRAME' });
@@ -98,6 +106,9 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
   // Bulk add — pick many Models, define gift(s), append to all of them.
   const [bulkSelected, setBulkSelected] = useState<string[]>([]);
   const [bulkDraft, setBulkDraft] = useState<DefaultFreeGift[]>([{ giftProductId: '', qty: 1, campaignName: null }]);
+  // Optional size refinement (0182) — restricts the bulk gift to specific sizes;
+  // applies to mattress/bedframe models only (a size never matches a sofa line).
+  const [bulkSizeCodes, setBulkSizeCodes] = useState<string[]>([]);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
 
@@ -112,6 +123,7 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
     if (!gwpOpen) return;
     setBulkSelected([]);
     setBulkDraft([{ giftProductId: '', qty: 1, campaignName: null }]);
+    setBulkSizeCodes([]);
     setBulkError(null);
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCloseGwp(); };
     window.addEventListener('keydown', onKey);
@@ -206,16 +218,26 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
   const bulkRemoveRow = (i: number) => setBulkDraft((prev) => (prev.length <= 1 ? prev : prev.filter((_, idx) => idx !== i)));
   const applyBulk = async () => {
     setBulkError(null);
-    const additions = cleanGifts(bulkDraft);
+    const baseAdditions = cleanGifts(bulkDraft);
     if (bulkSelected.length === 0) { setBulkError('Pick at least one Model.'); return; }
-    if (additions.length === 0) { setBulkError('Choose at least one gift accessory.'); return; }
+    if (baseAdditions.length === 0) { setBulkError('Choose at least one gift accessory.'); return; }
     setBulkBusy(true);
     try {
       for (const mid of bulkSelected) {
+        // The size refinement attaches to mattress/bedframe models only — a size
+        // never matches a sofa line, so sofa/accessory selections get the gift
+        // with no size condition (any build / any size).
+        const cat = String(models.find((m) => m.id === mid)?.category ?? '').toUpperCase();
+        const sizeCond: TargetRefinement | null =
+          bulkSizeCodes.length > 0 && (cat === 'MATTRESS' || cat === 'BEDFRAME')
+            ? { scope: 'variant', sizeCodes: bulkSizeCodes }
+            : null;
+        const additions = sizeCond ? baseAdditions.map((g) => ({ ...g, condition: sizeCond })) : baseAdditions;
         await upsert.mutateAsync({ modelId: mid, gifts: mergeGifts(giftsByModel.get(mid) ?? [], additions) });
       }
       setBulkSelected([]);
       setBulkDraft([{ giftProductId: '', qty: 1, campaignName: null }]);
+      setBulkSizeCodes([]);
       onCloseGwp();
     } catch (e) { setBulkError(String((e as Error).message ?? e)); }
     finally { setBulkBusy(false); }
@@ -330,6 +352,27 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
                 </div>
               </div>
 
+              {/* Size refinement (0182) — restrict the gift to specific sizes.
+                  Applies to mattress / bed frame models only (a size never matches
+                  a sofa line); sofa selections always get the gift on any build. */}
+              <div style={{ marginTop: 'var(--space-3)' }}>
+                <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 6 }}>
+                  Only for these sizes (optional — mattress / bed frame; none = any size)
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+                  {PICKABLE_SIZE_CODES.map((code) => (
+                    <button
+                      key={code}
+                      type="button"
+                      onClick={() => setBulkSizeCodes((prev) => toggleInList(prev, code))}
+                      style={chipStyle(bulkSizeCodes.includes(code), false)}
+                    >
+                      {SIZE_CODE_LABELS[code] ?? code}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {bulkError && <div role="alert" style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginTop: 'var(--space-2)' }}>{bulkError}</div>}
             </div>
             <footer style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-3)', padding: 'var(--space-4)', borderTop: '1px solid var(--line)', alignItems: 'center' }}>
@@ -412,6 +455,12 @@ interface Draft {
   triggerSofaMode: SofaMode;
   rewardCategory: Cat;
   rewardModelIds: string[];   // models (mattress/bedframe) OR combo ids (sofa reward)
+  /** Optional size/compartment refinement (0182). Size codes for a mattress/
+   *  bedframe side; compartments for an any-build sofa trigger. [] = none. */
+  triggerSizeCodes: string[];
+  triggerCompartments: string[];
+  rewardSizeCodes: string[];
+  rewardCompartments: string[];
   qty: number;
   active: boolean;
 }
@@ -423,6 +472,10 @@ const emptyDraft = (type: RuleType = 'pwp'): Draft => ({
   triggerSofaMode: 'combo',
   rewardCategory: type === 'promo' ? 'MATTRESS' : 'BEDFRAME',
   rewardModelIds: [],
+  triggerSizeCodes: [],
+  triggerCompartments: [],
+  rewardSizeCodes: [],
+  rewardCompartments: [],
   qty: 1,
   active: true,
 });
@@ -469,6 +522,39 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
     return m;
   }, [mattressQ.data, bedframeQ.data, sofaQ.data, combosQ.data]);
 
+  // ── 0182 refinement helpers ──
+  const SIZE_LABELS: Record<string, string> = { K: 'King', Q: 'Queen', S: 'Single', SS: 'Super Single' };
+  const PICKABLE_SIZES = [...POS_PICKABLE_SIZE_CODES];
+  const toggleRefine = (list: string[], v: string): string[] =>
+    list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
+  // Union of allowed compartments across the selected (by-Model) sofa triggers.
+  const compartmentsForModels = (modelIds: string[]): string[] => {
+    const set = new Set<string>();
+    for (const m of sofaQ.data ?? []) {
+      if (!modelIds.includes(m.id)) continue;
+      for (const cp of m.allowed_options?.compartments ?? []) if (cp.trim()) set.add(cp.trim());
+    }
+    return [...set];
+  };
+  const RefineChips = ({ options, labels, selected, onToggle, hint }: {
+    options: string[]; labels?: Record<string, string>; selected: string[];
+    onToggle: (v: string) => void; hint: string;
+  }) => {
+    if (options.length === 0) return null;
+    return (
+      <div style={{ marginTop: 'var(--space-2)' }}>
+        <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginBottom: 4 }}>{hint}</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+          {options.map((o) => (
+            <button key={o} type="button" disabled={!canEdit} onClick={() => onToggle(o)} style={chipStyle(selected.includes(o), !canEdit)}>
+              {labels?.[o] ?? o}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   const catLabel = (c: string) => CATEGORIES.find((x) => x.value === c)?.label ?? c;
   const itemSummary = (ids: string[], cat: string) =>
     ids.length === 0 ? `Any ${catLabel(cat)}` : ids.map((id) => labelById.get(id) ?? id).join(', ');
@@ -491,6 +577,10 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
       triggerSofaMode: tSofaMode,
       rewardCategory: rCat,
       rewardModelIds: rCat === 'SOFA' ? r.rewardComboIds : r.eligibleRewardModelIds,
+      triggerSizeCodes: r.triggerSizeCodes ?? [],
+      triggerCompartments: r.triggerCompartments ?? [],
+      rewardSizeCodes: r.rewardSizeCodes ?? [],
+      rewardCompartments: r.rewardCompartments ?? [],
       qty: r.qtyPerTrigger,
       active: r.active,
     });
@@ -529,6 +619,12 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
       rewardCategory: draft.rewardCategory,
       eligibleRewardModelIds: draft.rewardCategory === 'SOFA' ? [] : draft.rewardModelIds,
       rewardComboIds: draft.rewardCategory === 'SOFA' ? draft.rewardModelIds : [],
+      // Refinement (0182), cleared on the dimension it doesn't apply to. Reward
+      // sofa is by Combo, so a sofa reward never carries a compartment refinement.
+      triggerSizeCodes: draft.triggerCategory === 'MATTRESS' || draft.triggerCategory === 'BEDFRAME' ? draft.triggerSizeCodes : [],
+      triggerCompartments: trigByModel ? draft.triggerCompartments : [],
+      rewardSizeCodes: draft.rewardCategory === 'MATTRESS' || draft.rewardCategory === 'BEDFRAME' ? draft.rewardSizeCodes : [],
+      rewardCompartments: [],
       qtyPerTrigger: draft.qty,
       type: draft.type,
       active: draft.active,
@@ -631,12 +727,27 @@ export const PwpRulesTab = ({ mode }: { mode: Mode }) => {
             </div>
           )}
           <ChipRow cat={draft.triggerCategory} sofaMode={draft.triggerSofaMode} selected={draft.triggerModelIds} onToggle={(id) => setDraft({ ...draft, triggerModelIds: draft.triggerModelIds.includes(id) ? draft.triggerModelIds.filter((x) => x !== id) : [...draft.triggerModelIds, id] })} />
+          {(draft.triggerCategory === 'MATTRESS' || draft.triggerCategory === 'BEDFRAME') && (
+            <RefineChips options={PICKABLE_SIZES} labels={SIZE_LABELS} selected={draft.triggerSizeCodes}
+              onToggle={(v) => setDraft({ ...draft, triggerSizeCodes: toggleRefine(draft.triggerSizeCodes, v) })}
+              hint="Only these sizes trigger (optional — none = any size)" />
+          )}
+          {draft.triggerCategory === 'SOFA' && draft.triggerSofaMode === 'model' && (
+            <RefineChips options={compartmentsForModels(draft.triggerModelIds)} selected={draft.triggerCompartments}
+              onToggle={(v) => setDraft({ ...draft, triggerCompartments: toggleRefine(draft.triggerCompartments, v) })}
+              hint="Only builds containing (optional — none = any build)" />
+          )}
         </div>
 
         <div style={{ marginBottom: 'var(--space-5)' }}>
           <span style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-2)' }}>2 · Reward — redeemable at PWP price</span>
           <CatPicker value={draft.rewardCategory} onChange={(c) => setDraft({ ...draft, rewardCategory: c, rewardModelIds: [] })} />
           <ChipRow cat={draft.rewardCategory} selected={draft.rewardModelIds} onToggle={(id) => setDraft({ ...draft, rewardModelIds: draft.rewardModelIds.includes(id) ? draft.rewardModelIds.filter((x) => x !== id) : [...draft.rewardModelIds, id] })} />
+          {(draft.rewardCategory === 'MATTRESS' || draft.rewardCategory === 'BEDFRAME') && (
+            <RefineChips options={PICKABLE_SIZES} labels={SIZE_LABELS} selected={draft.rewardSizeCodes}
+              onToggle={(v) => setDraft({ ...draft, rewardSizeCodes: toggleRefine(draft.rewardSizeCodes, v) })}
+              hint="Only these sizes redeem at PWP price (optional — none = any size)" />
+          )}
         </div>
 
         <div style={{ marginBottom: 'var(--space-5)', maxWidth: 420 }}>

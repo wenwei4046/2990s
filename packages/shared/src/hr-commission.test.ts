@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   computeShowroomCommission,
   lineKpiCenti,
+  unitKpiCenti,
+  unitKpiExcludedCenti,
   type CommissionConfig,
   type ItemKpiFlag,
+  type KpiUnit,
 } from './hr-commission';
 
 const cfg: CommissionConfig = {
@@ -144,5 +147,87 @@ describe('lineKpiCenti', () => {
 
   it('returns 0 when nothing matches', () => {
     expect(lineKpiCenti({ itemCode: 'X', qty: 9, fabricId: null, specialCodes: [] }, flags)).toBe(0);
+  });
+});
+
+describe('item-KPI as a goods exclusion (unitKpiCenti / unitKpiExcludedCenti)', () => {
+  // RM 50 fixed bonus on fabric 'fab-D'.
+  const fabricFlag: ItemKpiFlag[] = [{ flagType: 'fabric', ref: 'fab-D', bonusCenti: 5_000 }];
+
+  // Loo's worked example: a single-line sofa, base RM 3,000 + RM 125 fabric Δ.
+  const sofa: KpiUnit = {
+    itemCodes: ['ANNSA-3S'],
+    qty: 1,
+    fabricId: 'fab-D',
+    specialCodes: [],
+    lineTotalCenti: 312_500, // RM 3,125 (base + fabric Δ)
+    fabricAddonUnitCenti: 12_500, // RM 125
+    specialSurchargeUnitCenti: 0,
+  };
+
+  it('fabric flag: bonus is the fixed amount, exclusion is the fabric Δ only', () => {
+    expect(unitKpiCenti(sofa, fabricFlag)).toBe(5_000); // RM 50, once
+    expect(unitKpiExcludedCenti(sofa, fabricFlag)).toBe(12_500); // drop only the RM 125 Δ
+    // → goods that count = 312,500 − 12,500 = 300,000 (RM 3,000), exactly Loo's case.
+    expect(sofa.lineTotalCenti - unitKpiExcludedCenti(sofa, fabricFlag)).toBe(300_000);
+  });
+
+  it('a split sofa (N module lines, one build) counts the bonus + exclusion ONCE', () => {
+    // Three module lines collapsed into one unit: total goods is the build sum,
+    // the fabric Δ is the per-build flat figure (NOT × module count).
+    const splitSofa: KpiUnit = {
+      itemCodes: ['ANNSA-1A(LHF)', 'ANNSA-CNR', 'ANNSA-1B(RHF)'],
+      qty: 1,
+      fabricId: 'fab-D',
+      specialCodes: [],
+      lineTotalCenti: 800_000, // RM 8,000 build total
+      fabricAddonUnitCenti: 12_500, // RM 125 once, not 3×
+      specialSurchargeUnitCenti: 0,
+    };
+    expect(unitKpiCenti(splitSofa, fabricFlag)).toBe(5_000); // RM 50, not 3×50
+    expect(unitKpiExcludedCenti(splitSofa, fabricFlag)).toBe(12_500); // RM 125, not 3×125
+  });
+
+  it('qty multiplies both the bonus and the fabric exclusion', () => {
+    const two = { ...sofa, qty: 2, lineTotalCenti: 625_000 };
+    expect(unitKpiCenti(two, fabricFlag)).toBe(10_000); // 2 × RM 50
+    expect(unitKpiExcludedCenti(two, fabricFlag)).toBe(25_000); // 2 × RM 125
+  });
+
+  it('product flag excludes the WHOLE unit total (the product is the KPI item)', () => {
+    const flags: ItemKpiFlag[] = [{ flagType: 'product', ref: 'MAT-001', bonusCenti: 8_000 }];
+    const mattress: KpiUnit = {
+      itemCodes: ['MAT-001'], qty: 1, fabricId: null, specialCodes: [],
+      lineTotalCenti: 150_000, fabricAddonUnitCenti: 0, specialSurchargeUnitCenti: 0,
+    };
+    expect(unitKpiCenti(mattress, flags)).toBe(8_000);
+    expect(unitKpiExcludedCenti(mattress, flags)).toBe(150_000); // whole line
+  });
+
+  it('special flag excludes the special-order surcharge (qty × per-item)', () => {
+    const flags: ItemKpiFlag[] = [{ flagType: 'special', ref: 'no_side_panel', bonusCenti: 2_000 }];
+    const unit: KpiUnit = {
+      itemCodes: ['SOF-9'], qty: 2, fabricId: null, specialCodes: ['no_side_panel'],
+      lineTotalCenti: 400_000, fabricAddonUnitCenti: 0, specialSurchargeUnitCenti: 30_000,
+    };
+    expect(unitKpiCenti(unit, flags)).toBe(4_000); // 2 × RM 20
+    expect(unitKpiExcludedCenti(unit, flags)).toBe(60_000); // 2 × RM 300
+  });
+
+  it('exclusion is capped at the unit total (never drives goods negative)', () => {
+    const tiny: KpiUnit = {
+      itemCodes: ['BF-1'], qty: 1, fabricId: 'fab-D', specialCodes: [],
+      lineTotalCenti: 9_000, fabricAddonUnitCenti: 12_500, specialSurchargeUnitCenti: 0,
+    };
+    expect(unitKpiExcludedCenti(tiny, fabricFlag)).toBe(9_000); // capped, not 12,500
+  });
+
+  it('no exclusion and no bonus when no flag fires', () => {
+    const plain: KpiUnit = {
+      itemCodes: ['ANNSA-3S'], qty: 1, fabricId: 'fab-OTHER', specialCodes: [],
+      lineTotalCenti: 300_000, fabricAddonUnitCenti: 12_500, specialSurchargeUnitCenti: 0,
+    };
+    expect(unitKpiCenti(plain, fabricFlag)).toBe(0);
+    expect(unitKpiExcludedCenti(plain, fabricFlag)).toBe(0); // non-flagged fabric Δ stays goods
   });
 });
