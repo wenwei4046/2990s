@@ -419,11 +419,26 @@ stockTakes.patch('/:id/post', async (c) => {
 
   const header = posted as unknown as {
     id: string; take_no: string; warehouse_id: string;
+    scope_type: 'ALL' | 'CATEGORY' | 'CODE_PREFIX'; scope_value: string | null;
   };
 
   const { data: lines } = await sb.from('stock_take_lines')
     .select('product_code, product_name, system_qty, counted_qty, variance, notes')
     .eq('stock_take_id', id);
+
+  // Reconcile to LIVE on-hand at POST time, NOT the create-time snapshot. A
+  // stock-take must make the book equal the physical COUNT; applying
+  // `counted − system_qty(frozen at create)` as a signed delta corrupts on-hand
+  // whenever a movement landed during the open count — the take then re-introduces
+  // the very drift it exists to remove (bug-hunt 2026-06-20). Re-read current
+  // on-hand from the SAME source the create snapshot used (v_inventory_all_skus
+  // via fetchScopedSkus). Status is already flipped POSTED but the adjustment
+  // movements aren't written yet, so this view is on-hand immediately BEFORE the
+  // take posts → adjustment = counted − current → after posting, book == count.
+  const live = await fetchScopedSkus(sb, header.warehouse_id, header.scope_type, header.scope_value);
+  if (live.error) return c.json({ error: 'onhand_reload_failed', reason: live.error }, 500);
+  const onHandByCode = new Map<string, number>();
+  for (const r of live.rows) onHandByCode.set(r.product_code, r.qty);
 
   const movementErrors: string[] = [];
   const adjustmentRows: Array<Record<string, unknown>> = [];
@@ -434,16 +449,18 @@ stockTakes.patch('/:id/post', async (c) => {
     variance: number | null; notes: string | null;
   }>) ?? []) {
     if (ln.counted_qty == null) continue;
-    // Recompute defensively — variance is generated in DB but be safe.
-    const variance = ln.variance ?? (ln.counted_qty - ln.system_qty);
-    if (variance === 0) continue;
+    // Reconcile to the COUNTED absolute against LIVE on-hand (re-read above),
+    // NOT the stale create-time system_qty — so after posting, book == count.
+    const current = onHandByCode.get(ln.product_code) ?? 0;
+    const adjustment = ln.counted_qty - current;
+    if (adjustment === 0) continue;
 
     adjustmentRows.push({
       movement_type:   'ADJUSTMENT',
       warehouse_id:    header.warehouse_id,
       product_code:    ln.product_code,
       product_name:    ln.product_name,
-      qty:             variance,                       // SIGNED — see /inventory/adjustments
+      qty:             adjustment,                     // SIGNED — see /inventory/adjustments
       unit_cost_sen:   0,
       source_doc_type: 'STOCK_TAKE',
       source_doc_id:   header.id,
