@@ -3,6 +3,7 @@ import {
   lineMatchesTargets,
   parseRuleTargets,
   parseTargetRefinement,
+  passesRefinementColumns,
   type RuleTarget,
   type RuleLineInput,
 } from './rule-target';
@@ -88,6 +89,27 @@ describe('lineMatchesTargets — combo scope', () => {
   it('does not match an unknown / deleted combo', () => {
     const t: RuleTarget[] = [{ modelId: 'm-sofa', scope: 'combo', comboIds: ['gone'] }];
     expect(lineMatchesTargets(sofa(['2A', 'CNR', '1A(LHF)']), t, combos)).toBe(false);
+  });
+});
+
+describe('passesRefinementColumns (PWP additive gate)', () => {
+  it('passes when both refinement lists are empty (no refinement)', () => {
+    expect(passesRefinementColumns(line({ sizeCode: 'K' }), [], [])).toBe(true);
+    expect(passesRefinementColumns(line({ sizeCode: 'K' }), null, null)).toBe(true);
+  });
+  it('size refinement gates a non-sofa line by size_code', () => {
+    expect(passesRefinementColumns(line({ sizeCode: 'Q' }), ['Q', 'K'], [])).toBe(true);
+    expect(passesRefinementColumns(line({ sizeCode: 'S' }), ['Q', 'K'], [])).toBe(false);
+  });
+  it('compartment refinement gates a sofa line by built modules', () => {
+    const s = (b: string[]) => line({ category: 'SOFA', modelId: 'm', sizeCode: null, builtCompartments: b });
+    expect(passesRefinementColumns(s(['2A', 'CNR']), [], ['CNR'])).toBe(true);
+    expect(passesRefinementColumns(s(['2A', '1A(LHF)']), [], ['CNR'])).toBe(false);
+  });
+  it('size refinement never matches a sofa line; compartment never a non-sofa line', () => {
+    const sofa = line({ category: 'SOFA', modelId: 'm', sizeCode: null, builtCompartments: ['2A'] });
+    expect(passesRefinementColumns(sofa, ['Q'], [])).toBe(false);
+    expect(passesRefinementColumns(line({ sizeCode: 'Q' }), [], ['CNR'])).toBe(false);
   });
 });
 

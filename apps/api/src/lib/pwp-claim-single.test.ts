@@ -52,6 +52,8 @@ function makeCodeRow(overrides: Partial<PwpCodeRow> = {}): PwpCodeRow {
     reward_category: 'MATTRESS',
     eligible_reward_model_ids: null,      // null = no restriction
     reward_combo_ids: null,
+    reward_size_codes: null,              // null = no size refinement
+    reward_compartments: null,
     customer_id: null,
     source_doc_no: null,
     redeemed_doc_no: null,
@@ -100,6 +102,33 @@ function makeCombo(moduleIds: string[][]): SofaComboRow {
     defaultFreeGifts: [],
   };
 }
+
+// ---------------------------------------------------------------------------
+// reward refinement (0182) — size_codes / compartments snapshot on the code
+// ---------------------------------------------------------------------------
+
+describe('checkPwpEligibility — reward refinement (0182)', () => {
+  it('no refinement on the code → any size passes', () => {
+    expect(checkPwpEligibility(baseArgs({ product: makeProduct({ size_code: 'K' }) })).ok).toBe(true);
+  });
+  it('non-sofa reward_size_codes gates by the reward SKU size_code', () => {
+    const codeRow = makeCodeRow({ reward_size_codes: ['Q'] });
+    expect(checkPwpEligibility(baseArgs({ codeRow, product: makeProduct({ size_code: 'Q' }) })).ok).toBe(true);
+    expect(checkPwpEligibility(baseArgs({ codeRow, product: makeProduct({ size_code: 'K' }) })).ok).toBe(false);
+  });
+  it('sofa reward_compartments gates by the built modules', () => {
+    const codeRow = makeCodeRow({
+      reward_category: 'SOFA', reward_combo_ids: [COMBO_ID], reward_compartments: ['CNR'],
+    });
+    const product = makeProduct({ category: 'SOFA', base_model: 'ANNSA' });
+    const sofaCombos = [makeCombo([['2A'], ['CNR']])];
+    expect(checkPwpEligibility(baseArgs({ codeRow, product, sofaCombos, sofaModules: ['2A', 'CNR'] })).ok).toBe(true);
+    const codeRecliner = makeCodeRow({
+      reward_category: 'SOFA', reward_combo_ids: [COMBO_ID], reward_compartments: ['RECLINER'],
+    });
+    expect(checkPwpEligibility(baseArgs({ codeRow: codeRecliner, product, sofaCombos, sofaModules: ['2A', 'CNR'] })).ok).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // qty check
