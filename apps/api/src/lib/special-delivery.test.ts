@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { specialDeliveryFeesForLines } from './special-delivery';
+import { specialDeliveryFeesForLines, reconstructDeliveryRuleLines, type PersistedGoodsLine } from './special-delivery';
 import type { RuleLineInput } from '@2990s/shared';
 
 // Minimal sb stub: `.from('special_delivery_fee_rules').select(...)` resolves to
@@ -71,5 +71,36 @@ describe('specialDeliveryFeesForLines', () => {
     await expect(
       specialDeliveryFeesForLines(sbWith(null, { message: 'boom' }), [mattress('m1', 'K')], NO_COMBOS),
     ).rejects.toBeTruthy();
+  });
+});
+
+describe('reconstructDeliveryRuleLines (customer-change redetect)', () => {
+  // The whole bug: persisted sofa module rows carry size_code = NULL — their
+  // compartment code lives in the item_code suffix. Reading size_code (as the
+  // pre-fix inline code did) produced empty builtCompartments, so compartment /
+  // combo-scope rules silently stopped matching on the redetect path.
+  it('derives sofa compartments from item_code suffix (size_code NULL) and keeps mattress size_code', () => {
+    const rows: PersistedGoodsLine[] = [
+      // split-sofa build: TWO module rows sharing one buildKey, both size_code NULL
+      { itemCode: 'ANNSA-1A(LHF)', category: 'SOFA', modelId: 'mSofa', sizeCode: null, buildKey: 'bk-1' },
+      { itemCode: 'ANNSA-2A(RHF)', category: 'SOFA', modelId: 'mSofa', sizeCode: null, buildKey: 'bk-1' },
+      // mattress: size_code IS the variant code
+      { itemCode: 'AKKA-K', category: 'MATTRESS', modelId: 'mMatt', sizeCode: 'k', buildKey: null },
+    ];
+    const out = reconstructDeliveryRuleLines(rows);
+    // one consolidated sofa RuleLineInput (both modules) + one mattress
+    expect(out).toEqual<RuleLineInput[]>([
+      { category: 'MATTRESS', modelId: 'mMatt', sizeCode: 'K', builtCompartments: [] },
+      { category: 'SOFA', modelId: 'mSofa', sizeCode: null, builtCompartments: ['1A(LHF)', '2A(RHF)'] },
+    ]);
+  });
+
+  it('a sofa row without a buildKey stays 1:1 with its single compartment', () => {
+    const out = reconstructDeliveryRuleLines([
+      { itemCode: 'BLATT-2S', category: 'SOFA', modelId: 'mB', sizeCode: null, buildKey: null },
+    ]);
+    expect(out).toEqual<RuleLineInput[]>([
+      { category: 'SOFA', modelId: 'mB', sizeCode: null, builtCompartments: ['2S'] },
+    ]);
   });
 });

@@ -90,7 +90,7 @@ import { findIncompleteVariantLines } from '../lib/so-variant-check';
 /* Special delivery fee rules (migration 0182, #691 RuleTarget) — the model |
    variant | compartment | combo matcher shared with the POS, used at BOTH
    recompute sites (create + cross-category re-detect). */
-import { specialDeliveryFeesForLines } from '../lib/special-delivery';
+import { specialDeliveryFeesForLines, reconstructDeliveryRuleLines } from '../lib/special-delivery';
 /* Default Free Gift (migration 0170/0174, D9) — ONE per-Model trigger builder
    (in @2990s/shared) is shared by the SO-create validator below and the
    placed-SO edit reconciler, so create and reconcile can never compute a
@@ -3675,9 +3675,10 @@ async function repointMintedVouchers(sb: any, docNo: string, newCustomerId: stri
 async function redetectCrossCategoryDelivery(
   sb: any, docNo: string, newName: string, newPhone: string | null,
 ): Promise<{ isFollowup: boolean; sourceDocNo: string | null; total: number } | null> {
-  const { data: lineRows } = await sb.from('mfg_sales_order_items')
+  const { data: lineRows, error: lineErr } = await sb.from('mfg_sales_order_items')
     .select('item_code, item_group, total_centi, line_no, variants')
     .eq('doc_no', docNo).eq('cancelled', false);
+  if (lineErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] line load failed:', lineErr.message); }
   const lines = (lineRows ?? []) as Array<{ item_code: string; item_group: string | null; total_centi: number | null; line_no: number | null; variants: Record<string, unknown> | null }>;
   const deliveryLines = lines.filter((l) => isDeliveryFeeServiceCode(l.item_code));
   if (deliveryLines.length === 0) return null; // no delivery fee → nothing to re-detect
@@ -3704,50 +3705,35 @@ async function redetectCrossCategoryDelivery(
   const goodsCodes = [...new Set(goodsLines.map((l) => l.item_code))];
   /* Phase 1 — special delivery fee rules (migration 0182, #691 RuleTarget).
      The persisted SO carries the split sofa as one row PER module SKU (cells
-     stripped, buildKey kept), so each goods line maps to ONE compartment via its
-     product's size_code; sofa rows are regrouped by buildKey so combo matching
-     sees the WHOLE build's modules together. RuleLineInput[] is then matched by
-     the SAME shared matcher the create path + POS run. */
+     stripped, buildKey kept). A sofa module's compartment code lives in its
+     item_code SUFFIX (every sofa SKU has size_code = NULL); size_code is the
+     real variant code ONLY for mattress/bedframe. Sofa rows are regrouped by
+     buildKey so combo matching sees the WHOLE build's modules together. The
+     reconstruction is a pure, unit-tested helper (reconstructDeliveryRuleLines)
+     and the result is matched by the SAME shared matcher the create path runs. */
   let specialModels: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
   if (goodsCodes.length > 0) {
-    const { data: prodRows } = await sb.from('mfg_products')
+    const { data: prodRows, error: prodErr } = await sb.from('mfg_products')
       .select('code, category, model_id, size_code').in('code', goodsCodes);
+    if (prodErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] product load failed:', prodErr.message); }
     const prodByCode = new Map(
       ((prodRows ?? []) as Array<{ code: string; category: string | null; model_id: string | null; size_code: string | null }>)
         .map((p) => [p.code, p]),
     );
-    // Regroup the split sofa build (by buildKey) so a combo's full module set is
-    // visible on one RuleLineInput; non-sofa + un-keyed lines stay 1:1.
-    const sofaBuilds = new Map<string, { modelId: string | null; modules: string[] }>();
-    const deliveryRuleLines: RuleLineInput[] = [];
-    for (const l of goodsLines) {
-      const prod = prodByCode.get(l.item_code) ?? null;
-      const category = String(prod?.category ?? l.item_group ?? '');
-      const isSofa = category.toUpperCase() === 'SOFA';
-      const sizeCode = prod?.size_code ? String(prod.size_code).toUpperCase() : null;
-      const buildKey = isSofa ? String((l.variants as { buildKey?: unknown } | null)?.buildKey ?? '') : '';
-      if (isSofa && buildKey) {
-        const g = sofaBuilds.get(buildKey) ?? { modelId: prod?.model_id ?? null, modules: [] };
-        if (sizeCode) g.modules.push(sizeCode); // module SKU's size_code = its compartment code
-        sofaBuilds.set(buildKey, g);
-        continue; // one consolidated RuleLineInput emitted per build below
-      }
-      deliveryRuleLines.push({
-        category,
-        modelId: prod?.model_id ?? null,
-        sizeCode,
-        builtCompartments: isSofa && sizeCode ? [sizeCode] : [],
-      });
-    }
-    for (const g of sofaBuilds.values()) {
-      deliveryRuleLines.push({
-        category: 'SOFA',
-        modelId: g.modelId,
-        sizeCode: null,
-        builtCompartments: g.modules,
-      });
-    }
-    const { data: comboRows } = await sb.from('sofa_combo_pricing').select('id, modules');
+    const deliveryRuleLines = reconstructDeliveryRuleLines(
+      goodsLines.map((l) => {
+        const prod = prodByCode.get(l.item_code) ?? null;
+        return {
+          itemCode: l.item_code,
+          category: prod?.category ?? l.item_group ?? null,
+          modelId: prod?.model_id ?? null,
+          sizeCode: prod?.size_code ?? null, // NULL for sofa; the helper reads the item_code suffix
+          buildKey: ((l.variants as { buildKey?: unknown } | null)?.buildKey as string | null) ?? null,
+        };
+      }),
+    );
+    const { data: comboRows, error: comboErr } = await sb.from('sofa_combo_pricing').select('id, modules');
+    if (comboErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] combo load failed:', comboErr.message); }
     const comboModulesById = new Map<string, string[][]>(
       ((comboRows ?? []) as Array<{ id: string; modules: string[][] | null }>)
         .map((cb) => [cb.id, cb.modules ?? []]),
@@ -3755,7 +3741,8 @@ async function redetectCrossCategoryDelivery(
     specialModels = await specialDeliveryFeesForLines(sb, deliveryRuleLines, comboModulesById);
   }
 
-  const { data: dcfg } = await sb.from('delivery_fee_config').select('base_fee, cross_category_fee').eq('id', 1).single();
+  const { data: dcfg, error: dcfgErr } = await sb.from('delivery_fee_config').select('base_fee, cross_category_fee').eq('id', 1).single();
+  if (dcfgErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] delivery_fee_config load failed:', dcfgErr.message); }
   const cfgSen = {
     baseFee: Number((dcfg as { base_fee?: number } | null)?.base_fee ?? 0) * 100,
     crossCategoryFee: Number((dcfg as { cross_category_fee?: number } | null)?.cross_category_fee ?? 0) * 100,
@@ -3765,17 +3752,19 @@ async function redetectCrossCategoryDelivery(
   let sourceDocNo: string | null = null;
   const normPhone = newPhone ? (normalizePhone(newPhone) ?? newPhone) : null;
   if (newName && normPhone) {
-    const { data: candRows } = await sb.from('mfg_sales_orders')
+    const { data: candRows, error: candErr } = await sb.from('mfg_sales_orders')
       .select('doc_no, debtor_name, created_at')
       .eq('phone', normPhone).neq('status', 'CANCELLED').neq('doc_no', docNo)
       .order('created_at', { ascending: false }).limit(50);
+    if (candErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] candidate load failed:', candErr.message); }
     const candidates: AutoMatchCandidate[] = ((candRows ?? []) as Array<{ doc_no: string; debtor_name: string | null }>)
       .map((r) => ({ docNo: r.doc_no, debtorName: r.debtor_name }));
     if (candidates.length > 0) {
-      const { data: usedRows } = await sb.from('mfg_sales_orders')
+      const { data: usedRows, error: usedErr } = await sb.from('mfg_sales_orders')
         .select('cross_category_source_doc_no')
         .in('cross_category_source_doc_no', candidates.map((x) => x.docNo))
         .neq('doc_no', docNo); // self-excluded: this SO's own link must not burn its own source
+      if (usedErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] used-link load failed:', usedErr.message); }
       const used = ((usedRows ?? []) as Array<{ cross_category_source_doc_no: string | null }>)
         .map((r) => r.cross_category_source_doc_no).filter((v): v is string => !!v);
       const match = pickCrossCategoryMatch(candidates, newName, used);
@@ -3791,8 +3780,9 @@ async function redetectCrossCategoryDelivery(
   const specs = buildDeliveryFeeServiceLines(fee, sourceDocNo);
 
   // Header context for the rebuilt service rows.
-  const { data: hdr } = await sb.from('mfg_sales_orders')
+  const { data: hdr, error: hdrErr } = await sb.from('mfg_sales_orders')
     .select('debtor_name, venue, customer_delivery_date').eq('doc_no', docNo).maybeSingle();
+  if (hdrErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] header load failed:', hdrErr.message); }
   const h = (hdr ?? {}) as { debtor_name?: string | null; venue?: string | null; customer_delivery_date?: string | null };
 
   // Replace the SVC-DELIVERY* lines: delete the old, insert the recomputed.

@@ -22,10 +22,12 @@ COMMENT ON TABLE special_delivery_fee_rules IS
   'Special transport-fee rules keyed on the #691 RuleTarget abstraction (target jsonb = RuleTarget[]). standalone_fee overrides the base delivery fee; cross_cat_followup_fee applies on a cross-category follow-up SO. Fees are whole MYR (server scales ×100 to sen). Generalises model_special_delivery_fees (0140). Migration 0182.';
 
 -- Data move: each existing per-Model tag → one rule targeting that Model (scope='model').
+-- Guarded so a re-run (this repo has duplicate-numbered migrations) seeds only once.
 INSERT INTO special_delivery_fee_rules (target, standalone_fee, cross_cat_followup_fee, updated_at, updated_by)
 SELECT jsonb_build_array(jsonb_build_object('modelId', model_id::text, 'scope', 'model')),
        standalone_fee, cross_cat_followup_fee, updated_at, updated_by
-FROM model_special_delivery_fees;
+FROM model_special_delivery_fees
+WHERE NOT EXISTS (SELECT 1 FROM special_delivery_fee_rules);
 
 -- RLS — read for any authenticated staff (the order POST reads it to recompute
 -- the fee); write for the same fee-editor roles as 0140 (master_account retired
@@ -43,7 +45,7 @@ CREATE POLICY sdfr_write_fee_editors
       SELECT 1 FROM staff
        WHERE id = auth.uid()
          AND active = TRUE
-         AND role IN ('admin', 'coordinator', 'sales_director')
+         AND role IN ('admin', 'coordinator', 'sales_director', 'super_admin')
     )
   )
   WITH CHECK (
@@ -51,6 +53,6 @@ CREATE POLICY sdfr_write_fee_editors
       SELECT 1 FROM staff
        WHERE id = auth.uid()
          AND active = TRUE
-         AND role IN ('admin', 'coordinator', 'sales_director')
+         AND role IN ('admin', 'coordinator', 'sales_director', 'super_admin')
     )
   );

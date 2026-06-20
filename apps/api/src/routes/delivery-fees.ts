@@ -13,7 +13,7 @@ deliveryFees.use('*', supabaseAuth);
 // admin + coordinator (legacy) plus sales_director — cost/sell split Phase 2
 // moved the delivery fee onto the POS Master Account surface. Kept in lockstep
 // with the delivery_fee_config UPDATE RLS policy (migration 0112).
-const WRITE_ROLES = new Set(['admin', 'coordinator', 'sales_director']);
+const WRITE_ROLES = new Set(['admin', 'coordinator', 'sales_director', 'super_admin']);
 
 // Same form holds fees + lead days. Each field is independent so the PATCH
 // can partial-update either group without nuking the other.
