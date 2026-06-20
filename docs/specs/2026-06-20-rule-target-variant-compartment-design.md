@@ -163,7 +163,21 @@ gifts: [{ giftProductId, qty, campaignName?, condition?: TargetRefinement }]
 
 `condition` reuses `TargetRefinement` (modelId is implicit = the row's `model_id`).
 
-### 3.3 PWP / Promo / GWP — **migration + dual-read**
+> **⚠️ REVISED 2026-06-20 (during implementation).** The premise below — that the server gates PWP
+> via `resolvePwp` on `pwp_rules` — is WRONG. `resolvePwp` is **POS-preview only**
+> (`Configurator.tsx`). The SERVER enforces PWP eligibility through a **voucher-snapshot flow**:
+> `pwp_codes` rows carry `eligible_reward_model_ids` + `reward_combo_ids` snapshots, validated by
+> `checkPwpEligibility` / `claimPwpForSingleLine` (`apps/api/src/lib/pwp-claim-single.ts`) and the
+> create-path PWP loop in `mfg-sales-orders.ts`. Adding variant/compartment PWP targeting therefore
+> requires: (a) snapshotting a reward refinement onto `pwp_codes` (a SECOND migration) + enforcing it
+> in `checkPwpEligibility` against the reward line's `size_code`/compartments; (b) a trigger
+> refinement on `pwp_rules` checked at code MINT/reserve time; (c) POS `resolvePwp` + `PwpRulesTab`
+> made refinement-aware. This is a larger, live-money-path change than this section describes, it
+> needs TWO migrations, and it overlaps the just-landed sofa-by-Model PWP work. **Wave 2 is deferred
+> pending a revised design + Loo's coordination — NOT implemented in the Wave 1 ship.** Wave 1
+> (Free Item Campaign + Free Gifts), which has no voucher layer, is complete and correct.
+
+### 3.3 PWP / Promo / GWP — **migration + dual-read** (superseded — see the revision note above)
 
 Add two JSONB columns to `pwp_rules`:
 
