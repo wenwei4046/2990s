@@ -9,6 +9,7 @@ import {
 } from '../lib/hr-queries';
 import { useAuth, isAdminLevel } from '../lib/auth';
 import { useConfirm } from '../components/ConfirmDialog';
+import { fmtCenti } from '@2990s/shared';
 import styles from './Hr.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -232,7 +233,7 @@ const HrSettingsInner = () => {
               <tr key={it.id}>
                 <td>{it.flagType}</td>
                 <td>{it.label || it.ref}</td>
-                <td className={styles.num}>RM {(it.bonusCenti / 100).toFixed(2)}</td>
+                <td className={styles.num}>{fmtCenti(it.bonusCenti)}</td>
                 <td>{it.active ? 'Yes' : 'No'}</td>
                 <td>
                   <button className={styles.iconBtn} onClick={async () => { if (await askConfirm({ title: 'Remove this item KPI?', confirmLabel: 'Remove', danger: true })) deleteItemKpi.mutate(it.id); }} aria-label="Remove item KPI">
