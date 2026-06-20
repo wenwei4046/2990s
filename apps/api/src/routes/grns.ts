@@ -188,9 +188,9 @@ async function verifyGrnOverReceipt(
     );
     // Live accepted per PO line across all non-cancelled GRN lines.
     const { data: sib } = await sb.from('grn_items')
-      .select('purchase_order_item_id, qty_accepted, grn_id')
+      .select('purchase_order_item_id, qty_accepted, returned_qty, grn_id')
       .in('purchase_order_item_id', ids);
-    const sibRows = (sib ?? []) as Array<{ purchase_order_item_id: string; qty_accepted: number; grn_id: string }>;
+    const sibRows = (sib ?? []) as Array<{ purchase_order_item_id: string; qty_accepted: number; returned_qty: number; grn_id: string }>;
     const grnIds = [...new Set(sibRows.map((r) => r.grn_id).filter(Boolean))];
     const cancelled = new Set<string>();
     if (grnIds.length > 0) {
@@ -204,7 +204,10 @@ async function verifyGrnOverReceipt(
     const thisGrnByPoi = new Map<string, number>();
     for (const r of sibRows) {
       if (cancelled.has(r.grn_id)) continue;
-      const q = Number(r.qty_accepted ?? 0);
+      // Audit 2026-06-20 — net of returns (qty_accepted − returned_qty), matching
+      // recomputePoReceived, so a legitimate replacement GRN after a purchase
+      // return isn't falsely rejected by a gross-qty over-receipt cap.
+      const q = Math.max(0, Number(r.qty_accepted ?? 0) - Number(r.returned_qty ?? 0));
       liveByPoi.set(r.purchase_order_item_id, (liveByPoi.get(r.purchase_order_item_id) ?? 0) + q);
       if (r.grn_id === grnId) thisGrnByPoi.set(r.purchase_order_item_id, (thisGrnByPoi.get(r.purchase_order_item_id) ?? 0) + q);
     }

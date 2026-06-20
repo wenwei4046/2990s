@@ -993,7 +993,9 @@ const convertDoLinesToReturn = async (c: any) => {
     qtyReturned: pickQtyById.get(line.doItemId)!,
     condition: conditionById.get(line.doItemId) ?? 'NEW',
     unitPriceCenti: line.unitPriceCenti,
-    discountCenti: 0,
+    // Audit 2026-06-20 — carry the DO line's discount (was hardcoded 0, which
+    // overstated the refund); mirrors the SI convert-from-DO path.
+    discountCenti: line.discountCenti,
     unitCostCenti: line.unitCostCenti,
     variants: line.variants,
   }));
