@@ -450,21 +450,34 @@ purchaseInvoices.patch('/:id/payment', async (c) => {
   const amount = Number(body.amountCenti ?? 0);
   if (!Number.isFinite(amount) || amount <= 0) return c.json({ error: 'invalid_amount' }, 400);
 
-  const { data: cur } = await sb.from('purchase_invoices').select('paid_centi, total_centi, status').eq('id', id).maybeSingle();
-  if (!cur) return c.json({ error: 'not_found' }, 404);
-  const c0 = cur as { paid_centi: number; total_centi: number; status: string };
-  // DRAFT removed in migration 0078 — only block CANCELLED now.
-  if (c0.status === 'CANCELLED') return c.json({ error: 'not_payable', message: 'PI is cancelled' }, 409);
+  // Optimistic-concurrency loop (Bug#5, Wei Siang 2026-06-20). The old code did
+  // read-modify-write — two payments hitting the SAME PI at once both read X and
+  // both wrote X+amount, silently LOSING one. PI has no payment ledger to re-sum
+  // (unlike SI's recomputePaid), and PostgREST can't do `col = col + x`, so we
+  // gate the UPDATE on `paid_centi = <the value we just read>`: if a concurrent
+  // payment moved it, the update matches 0 rows and we retry with a fresh read.
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const { data: cur } = await sb.from('purchase_invoices')
+      .select('paid_centi, total_centi, status').eq('id', id).maybeSingle();
+    if (!cur) return c.json({ error: 'not_found' }, 404);
+    const c0 = cur as { paid_centi: number; total_centi: number; status: string };
+    // DRAFT removed in migration 0078 — only block CANCELLED now.
+    if (c0.status === 'CANCELLED') return c.json({ error: 'not_payable', message: 'PI is cancelled' }, 409);
 
-  const newPaid = c0.paid_centi + amount;
-  const newStatus = newPaid >= c0.total_centi ? 'PAID' : 'PARTIALLY_PAID';
-  const ts: Record<string, string> = { updated_at: new Date().toISOString() };
+    const newPaid = c0.paid_centi + amount;
+    const newStatus = newPaid >= c0.total_centi ? 'PAID' : 'PARTIALLY_PAID';
 
-  const { data, error } = await sb.from('purchase_invoices').update({
-    paid_centi: newPaid, status: newStatus, ...ts,
-  }).eq('id', id).select('id, paid_centi, status').single();
-  if (error) return c.json({ error: 'payment_failed', reason: error.message }, 500);
-  return c.json({ purchaseInvoice: data });
+    const { data, error } = await sb.from('purchase_invoices').update({
+      paid_centi: newPaid, status: newStatus, updated_at: new Date().toISOString(),
+    })
+      .eq('id', id)
+      .eq('paid_centi', c0.paid_centi) // only if nobody else moved it since the read
+      .select('id, paid_centi, status');
+    if (error) return c.json({ error: 'payment_failed', reason: error.message }, 500);
+    if (data && data.length > 0) return c.json({ purchaseInvoice: data[0] });
+    // 0 rows updated → a concurrent payment changed paid_centi; loop re-reads + retries.
+  }
+  return c.json({ error: 'payment_conflict', message: 'Another payment was recorded at the same moment — please check the balance and retry.' }, 409);
 });
 
 purchaseInvoices.patch('/:id/cancel', async (c) => {
