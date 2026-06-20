@@ -3691,16 +3691,19 @@ async function repointMintedVouchers(sb: any, docNo: string, newCustomerId: stri
   return ((data ?? []) as Array<{ code: string }>).length;
 }
 
-/* Re-detect the cross-category delivery fee against a (re-resolved) customer.
-   Auto-matches the new customer's eligible source SO with the SAME logic as the
-   handover Auto-match button (pickCrossCategoryMatch), self-excluding THIS SO so
-   changing BACK to the original customer restores the discount. Recomputes the
-   fee on the authoritative computeSoDeliveryFee (preserving the operator's
-   free-form additional fee, recovered from the existing SVC-DELIVERY-ADD line)
-   and rebuilds the SVC-DELIVERY* lines. No eligible source → plain delivery fee.
-   Only runs when the SO already carries a delivery fee. Best-effort. */
-async function redetectCrossCategoryDelivery(
-  sb: any, docNo: string, newName: string, newPhone: string | null,
+/* Core delivery-fee recompute — re-derives the authoritative delivery FEE from
+   the SO's CURRENT items, for a CALLER-SUPPLIED cross-category sourceDocNo. It
+   does NOT auto-match a source: the caller decides whether to re-run the
+   customer auto-match (the customer-change path, redetectCrossCategoryDelivery)
+   or to pass the SO's already-stored source through unchanged (the item-edit
+   path, rederiveDeliveryFee). Preserves the operator's free-form additional fee
+   (recovered from the existing SVC-DELIVERY-ADD line), recomputes on the
+   authoritative computeSoDeliveryFee, and rebuilds the SVC-DELIVERY* lines. Only
+   runs when the SO already carries a delivery fee (else returns null BEFORE
+   recomputeTotals — the caller is responsible for any totals refresh).
+   Best-effort: logs DB errors, never throws. */
+export async function recomputeDeliveryFeeCore(
+  sb: any, docNo: string, sourceDocNo: string | null,
 ): Promise<{ isFollowup: boolean; sourceDocNo: string | null; total: number } | null> {
   const { data: lineRows, error: lineErr } = await sb.from('mfg_sales_order_items')
     .select('item_code, item_group, total_centi, line_no, variants')
@@ -3775,30 +3778,9 @@ async function redetectCrossCategoryDelivery(
     crossCategoryFee: Number((dcfg as { cross_category_fee?: number } | null)?.cross_category_fee ?? 0) * 100,
   };
 
-  // Auto-match the new customer for an eligible cross-category source SO.
-  let sourceDocNo: string | null = null;
-  const normPhone = newPhone ? (normalizePhone(newPhone) ?? newPhone) : null;
-  if (newName && normPhone) {
-    const { data: candRows, error: candErr } = await sb.from('mfg_sales_orders')
-      .select('doc_no, debtor_name, created_at')
-      .eq('phone', normPhone).neq('status', 'CANCELLED').neq('doc_no', docNo)
-      .order('created_at', { ascending: false }).limit(50);
-    if (candErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] candidate load failed:', candErr.message); }
-    const candidates: AutoMatchCandidate[] = ((candRows ?? []) as Array<{ doc_no: string; debtor_name: string | null }>)
-      .map((r) => ({ docNo: r.doc_no, debtorName: r.debtor_name }));
-    if (candidates.length > 0) {
-      const { data: usedRows, error: usedErr } = await sb.from('mfg_sales_orders')
-        .select('cross_category_source_doc_no')
-        .in('cross_category_source_doc_no', candidates.map((x) => x.docNo))
-        .neq('doc_no', docNo); // self-excluded: this SO's own link must not burn its own source
-      if (usedErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] used-link load failed:', usedErr.message); }
-      const used = ((usedRows ?? []) as Array<{ cross_category_source_doc_no: string | null }>)
-        .map((r) => r.cross_category_source_doc_no).filter((v): v is string => !!v);
-      const match = pickCrossCategoryMatch(candidates, newName, used);
-      if (match) sourceDocNo = match.docNo;
-    }
-  }
-
+  /* sourceDocNo is the caller's responsibility (see the function doc). No
+     auto-match here — the item-edit path MUST pass the SO's stored source
+     through unchanged. */
   const isFollowup = !!sourceDocNo;
   const fee = computeSoDeliveryFee(
     { categoryIds, specialModels, isCrossCategoryFollowup: isFollowup, additionalFee: additionalSen },
@@ -3822,7 +3804,7 @@ async function redetectCrossCategoryDelivery(
       doc_no: docNo,                                    // ⚠️ NOT NULL — omitting it silently dropped the line (the bug)
       line_no: keptMaxLineNo >= 0 ? keptMaxLineNo + 1 + i : null,
       line_date: lineDateToday,
-      debtor_name: h.debtor_name ?? newName,
+      debtor_name: h.debtor_name ?? null,
       item_group: 'service',
       item_code: spec.itemCode,
       description: spec.description,
@@ -3861,6 +3843,62 @@ async function redetectCrossCategoryDelivery(
   }).eq('doc_no', docNo);
   await recomputeTotals(sb, docNo);
   return { isFollowup, sourceDocNo, total: fee.total };
+}
+
+/* Re-detect the cross-category delivery fee against a (re-resolved) customer —
+   the CUSTOMER-CHANGE path. Auto-matches the new customer's eligible source SO
+   with the SAME logic as the handover Auto-match button (pickCrossCategoryMatch),
+   self-excluding THIS SO so changing BACK to the original customer restores the
+   discount. The match (or null) is then handed to recomputeDeliveryFeeCore which
+   rebuilds the SVC-DELIVERY* lines + header on the authoritative
+   computeSoDeliveryFee. Only runs when the SO already carries a delivery fee.
+   Best-effort. */
+async function redetectCrossCategoryDelivery(
+  sb: any, docNo: string, newName: string, newPhone: string | null,
+): Promise<{ isFollowup: boolean; sourceDocNo: string | null; total: number } | null> {
+  // Auto-match the new customer for an eligible cross-category source SO.
+  let sourceDocNo: string | null = null;
+  const normPhone = newPhone ? (normalizePhone(newPhone) ?? newPhone) : null;
+  if (newName && normPhone) {
+    const { data: candRows, error: candErr } = await sb.from('mfg_sales_orders')
+      .select('doc_no, debtor_name, created_at')
+      .eq('phone', normPhone).neq('status', 'CANCELLED').neq('doc_no', docNo)
+      .order('created_at', { ascending: false }).limit(50);
+    if (candErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] candidate load failed:', candErr.message); }
+    const candidates: AutoMatchCandidate[] = ((candRows ?? []) as Array<{ doc_no: string; debtor_name: string | null }>)
+      .map((r) => ({ docNo: r.doc_no, debtorName: r.debtor_name }));
+    if (candidates.length > 0) {
+      const { data: usedRows, error: usedErr } = await sb.from('mfg_sales_orders')
+        .select('cross_category_source_doc_no')
+        .in('cross_category_source_doc_no', candidates.map((x) => x.docNo))
+        .neq('doc_no', docNo); // self-excluded: this SO's own link must not burn its own source
+      if (usedErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] used-link load failed:', usedErr.message); }
+      const used = ((usedRows ?? []) as Array<{ cross_category_source_doc_no: string | null }>)
+        .map((r) => r.cross_category_source_doc_no).filter((v): v is string => !!v);
+      const match = pickCrossCategoryMatch(candidates, newName, used);
+      if (match) sourceDocNo = match.docNo;
+    }
+  }
+  return recomputeDeliveryFeeCore(sb, docNo, sourceDocNo);
+}
+
+/* Re-derive the delivery fee from the SO's CURRENT items — the ITEM-EDIT path.
+   Unlike the customer-change path, this MUST NOT re-run the customer auto-match:
+   it reads the SO's already-stored cross_category_source_doc_no and passes it
+   THROUGH unchanged, so a benign item edit never drops or flips an operator-
+   pinned cross-category source link. Only the FEE re-derives (special-delivery
+   triggers + sofa↔mattress cross-category mix follow the current items). When
+   the SO carries no delivery fee, the core early-bails (null) before
+   recomputeTotals, so we still refresh the header totals for the edit.
+   Best-effort. */
+export async function rederiveDeliveryFee(sb: any, docNo: string): Promise<void> {
+  let storedSource: string | null = null;
+  const { data: hdr, error: hdrErr } = await sb.from('mfg_sales_orders')
+    .select('cross_category_source_doc_no').eq('doc_no', docNo).maybeSingle();
+  if (hdrErr) { /* eslint-disable-next-line no-console */ console.error('[so-rederive] source load failed:', hdrErr.message); }
+  storedSource = (hdr as { cross_category_source_doc_no?: string | null } | null)?.cross_category_source_doc_no ?? null;
+  const res = await recomputeDeliveryFeeCore(sb, docNo, storedSource);
+  if (res === null) await recomputeTotals(sb, docNo);
 }
 
 mfgSalesOrders.patch('/:docNo', async (c) => {
@@ -4799,6 +4837,9 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
 
       // Default Free Gift — adding a sofa trigger may grant a gift.
       await reconcileFreeGiftLinesForSo(sb, docNo);
+      // Re-derive the delivery fee — a new sofa can introduce a cross-category
+      // mix or a special-delivery trigger. Stored cross-category source kept.
+      await rederiveDeliveryFee(sb, docNo);
 
       await recordSoAudit(sb, {
         docNo,
@@ -4836,6 +4877,9 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   // Default Free Gift (0170) — adding a trigger line may grant a new accessory
   // gift; reconcile auto-inserts/deletes gift lines, then recomputes totals.
   await reconcileFreeGiftLinesForSo(sb, docNo);
+  // Re-derive the delivery fee — a new goods line can introduce a cross-category
+  // mix or a special-delivery trigger. Stored cross-category source kept.
+  await rederiveDeliveryFee(sb, docNo);
 
   // PR-D — emit ADD_LINE audit row. Capture item code + qty + unit price
   // so the timeline shows the meaningful what-was-added without an explosion
@@ -5148,6 +5192,9 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   // Default Free Gift (0170) — editing a line (code/qty) may add or drop a
   // trigger; reconcile auto-syncs the gift lines, then recomputes totals.
   await reconcileFreeGiftLinesForSo(sb, docNo);
+  // Re-derive the delivery fee — a line code/qty change can flip a cross-category
+  // mix or a special-delivery trigger. Stored cross-category source kept.
+  await rederiveDeliveryFee(sb, docNo);
 
   // PR-D — diff old vs new and emit one UPDATE_LINE row only if any field
   // moved. Compare across both the derived columns (qty/price/discount)
@@ -5235,6 +5282,9 @@ mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
   // Default Free Gift (0170) — removing a trigger line (e.g. a mattress) must
   // auto-delete its free gift; reconcile drops orphaned gifts, then recomputes.
   await reconcileFreeGiftLinesForSo(sb, docNo);
+  // Re-derive the delivery fee — removing a goods line can drop a cross-category
+  // mix or a special-delivery trigger. Stored cross-category source kept.
+  await rederiveDeliveryFee(sb, docNo);
 
   // Task #93 — orphan cleanup. Loop over the photo keys and best-effort
   // delete each from R2. Failures are swallowed (logged) so a flaky R2
@@ -5500,6 +5550,9 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-update', async (c) => {
   // Default Free Gift (0170) — a sofa/variant build change may newly match (or
   // stop matching) a gifting combo; reconcile syncs the gift lines, then totals.
   await reconcileFreeGiftLinesForSo(sb, docNo);
+  // Re-derive the delivery fee — a TBC variant fill-in can resolve a special-
+  // delivery trigger (model/variant/combo). Stored cross-category source kept.
+  await rederiveDeliveryFee(sb, docNo);
   await recordSoAudit(sb, {
     docNo,
     action: 'UPDATE_LINE',
@@ -5901,6 +5954,9 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
   // of the final recomputeTotals: a product swap can add/drop a trigger, so
   // reconcile syncs the accessory gift lines and then recomputes header totals.
   await reconcileFreeGiftLinesForSo(sb, docNo);
+  // Re-derive the delivery fee — a product swap can flip a cross-category mix or
+  // a special-delivery trigger. Stored cross-category source kept.
+  await rederiveDeliveryFee(sb, docNo);
   await recordSoAudit(sb, {
     docNo,
     action: 'UPDATE_LINE',
@@ -6609,6 +6665,9 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
   // stop matching) a gifting combo, so reconcile syncs the accessory gift lines
   // and then recomputes header totals.
   await reconcileFreeGiftLinesForSo(sb, docNo);
+  // Re-derive the delivery fee — a sofa build swap can flip a cross-category mix
+  // or a special-delivery trigger (model/combo/compartment). Source kept.
+  await rederiveDeliveryFee(sb, docNo);
   await recordSoAudit(sb, {
     docNo,
     action: 'UPDATE_LINE',
