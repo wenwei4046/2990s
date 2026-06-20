@@ -53,9 +53,9 @@ const combos = new Map<string, string[][]>([
 // ---------------------------------------------------------------------------
 describe('Task 5 — eligible line (handler grants forced-zero)', () => {
   it('returns the matching campaign for a mattress model', () => {
-    const c = camp({ eligible: [{ modelId: 'mattress-m1', scope: 'model', comboId: null }] });
+    const c = camp({ eligible: [{ modelId: 'mattress-m1', scope: 'model' }] });
     const result = campaignsCoveringLine(
-      { category: 'MATTRESS', modelId: 'mattress-m1', builtModuleIds: [] },
+      { category: 'MATTRESS', modelId: 'mattress-m1', sizeCode: null, builtModuleIds: [] },
       [c],
       noCombos,
     );
@@ -67,9 +67,9 @@ describe('Task 5 — eligible line (handler grants forced-zero)', () => {
   });
 
   it('returns the matching campaign for a bedframe model', () => {
-    const c = camp({ eligible: [{ modelId: 'bf-m1', scope: 'model', comboId: null }] });
+    const c = camp({ eligible: [{ modelId: 'bf-m1', scope: 'model' }] });
     const result = campaignsCoveringLine(
-      { category: 'BEDFRAME', modelId: 'bf-m1', builtModuleIds: [] },
+      { category: 'BEDFRAME', modelId: 'bf-m1', sizeCode: null, builtModuleIds: [] },
       [c],
       noCombos,
     );
@@ -84,9 +84,9 @@ describe('Task 5 — eligible line (handler grants forced-zero)', () => {
 // ---------------------------------------------------------------------------
 describe('Task 5 — ineligible line → handler returns 409 free_item_not_eligible', () => {
   it('campaign inactive → not covered (covering = []) → not_eligible', () => {
-    const c = camp({ active: false, eligible: [{ modelId: 'm1', scope: 'model', comboId: null }] });
+    const c = camp({ active: false, eligible: [{ modelId: 'm1', scope: 'model' }] });
     const result = campaignsCoveringLine(
-      { category: 'MATTRESS', modelId: 'm1', builtModuleIds: [] },
+      { category: 'MATTRESS', modelId: 'm1', sizeCode: null, builtModuleIds: [] },
       [c],
       noCombos,
     );
@@ -95,9 +95,9 @@ describe('Task 5 — ineligible line → handler returns 409 free_item_not_eligi
   });
 
   it('model mismatch → not covered → not_eligible', () => {
-    const c = camp({ eligible: [{ modelId: 'm1', scope: 'model', comboId: null }] });
+    const c = camp({ eligible: [{ modelId: 'm1', scope: 'model' }] });
     const result = campaignsCoveringLine(
-      { category: 'MATTRESS', modelId: 'WRONG-MODEL', builtModuleIds: [] },
+      { category: 'MATTRESS', modelId: 'WRONG-MODEL', sizeCode: null, builtModuleIds: [] },
       [c],
       noCombos,
     );
@@ -107,7 +107,7 @@ describe('Task 5 — ineligible line → handler returns 409 free_item_not_eligi
 
   it('no campaigns at all → not covered → not_eligible', () => {
     const result = campaignsCoveringLine(
-      { category: 'MATTRESS', modelId: 'm1', builtModuleIds: [] },
+      { category: 'MATTRESS', modelId: 'm1', sizeCode: null, builtModuleIds: [] },
       [],
       noCombos,
     );
@@ -115,9 +115,9 @@ describe('Task 5 — ineligible line → handler returns 409 free_item_not_eligi
   });
 
   it('null modelId on line → not covered (short-circuit)', () => {
-    const c = camp({ eligible: [{ modelId: 'm1', scope: 'model', comboId: null }] });
+    const c = camp({ eligible: [{ modelId: 'm1', scope: 'model' }] });
     const result = campaignsCoveringLine(
-      { category: 'MATTRESS', modelId: null, builtModuleIds: [] },
+      { category: 'MATTRESS', modelId: null, sizeCode: null, builtModuleIds: [] },
       [c],
       noCombos,
     );
@@ -127,9 +127,9 @@ describe('Task 5 — ineligible line → handler returns 409 free_item_not_eligi
   it('over_cap: qty > maxFreeQty → handler rejects (pure logic: qty guard)', () => {
     // campaignsCoveringLine returns the campaign but the handler then checks qty.
     // Simulate: maxFreeQty = 1, line qty = 3.
-    const c = camp({ maxFreeQty: 1, eligible: [{ modelId: 'm1', scope: 'model', comboId: null }] });
+    const c = camp({ maxFreeQty: 1, eligible: [{ modelId: 'm1', scope: 'model' }] });
     const result = campaignsCoveringLine(
-      { category: 'MATTRESS', modelId: 'm1', builtModuleIds: [] },
+      { category: 'MATTRESS', modelId: 'm1', sizeCode: null, builtModuleIds: [] },
       [c],
       noCombos,
     );
@@ -143,9 +143,9 @@ describe('Task 5 — ineligible line → handler returns 409 free_item_not_eligi
   });
 
   it('qty = maxFreeQty → allowed (boundary: not over cap)', () => {
-    const c = camp({ maxFreeQty: 2, eligible: [{ modelId: 'm1', scope: 'model', comboId: null }] });
+    const c = camp({ maxFreeQty: 2, eligible: [{ modelId: 'm1', scope: 'model' }] });
     const result = campaignsCoveringLine(
-      { category: 'MATTRESS', modelId: 'm1', builtModuleIds: [] },
+      { category: 'MATTRESS', modelId: 'm1', sizeCode: null, builtModuleIds: [] },
       [c],
       noCombos,
     );
@@ -164,11 +164,11 @@ describe('Task 5 — ineligible line → handler returns 409 free_item_not_eligi
 describe('Task 5 — sofa build: combo-scope campaign covers matching build', () => {
   it('matching sofa combo build → covered → unit forced to 0 on all module rows', () => {
     const c = camp({
-      eligible: [{ modelId: 'sofa-m1', scope: 'combo', comboId: 'combo-X' }],
+      eligible: [{ modelId: 'sofa-m1', scope: 'combo', comboIds: ['combo-X'] }],
     });
     // The built modules match combo-X slots [2A(RHF)|2A(LHF)] + [L(LHF)|L(RHF)]
     const result = campaignsCoveringLine(
-      { category: 'SOFA', modelId: 'sofa-m1', builtModuleIds: ['2A(RHF)', 'L(LHF)'] },
+      { category: 'SOFA', modelId: 'sofa-m1', sizeCode: null, builtModuleIds: ['2A(RHF)', 'L(LHF)'] },
       [c],
       combos,
     );
@@ -180,11 +180,11 @@ describe('Task 5 — sofa build: combo-scope campaign covers matching build', ()
 
   it('non-matching sofa combo build → not covered → 409 not_eligible', () => {
     const c = camp({
-      eligible: [{ modelId: 'sofa-m1', scope: 'combo', comboId: 'combo-X' }],
+      eligible: [{ modelId: 'sofa-m1', scope: 'combo', comboIds: ['combo-X'] }],
     });
     // Different module set — does not match combo-X
     const result = campaignsCoveringLine(
-      { category: 'SOFA', modelId: 'sofa-m1', builtModuleIds: ['1A(LHF)'] },
+      { category: 'SOFA', modelId: 'sofa-m1', sizeCode: null, builtModuleIds: ['1A(LHF)'] },
       [c],
       combos,
     );
@@ -194,10 +194,10 @@ describe('Task 5 — sofa build: combo-scope campaign covers matching build', ()
 
   it('sofa scope model (not combo) covers any build of the model', () => {
     const c = camp({
-      eligible: [{ modelId: 'sofa-m1', scope: 'model', comboId: null }],
+      eligible: [{ modelId: 'sofa-m1', scope: 'model' }],
     });
     const result = campaignsCoveringLine(
-      { category: 'SOFA', modelId: 'sofa-m1', builtModuleIds: ['1A(LHF)'] },
+      { category: 'SOFA', modelId: 'sofa-m1', sizeCode: null, builtModuleIds: ['1A(LHF)'] },
       [c],
       noCombos,
     );
@@ -213,9 +213,9 @@ describe('Task 5 — sofa build: combo-scope campaign covers matching build', ()
 // ---------------------------------------------------------------------------
 describe('Task 5 — anti-tamper: fabricated campaignId → 409', () => {
   it('campaignId not in covering list → chosen = undefined → 409', () => {
-    const c = camp({ id: 'real-campaign', eligible: [{ modelId: 'm1', scope: 'model', comboId: null }] });
+    const c = camp({ id: 'real-campaign', eligible: [{ modelId: 'm1', scope: 'model' }] });
     const result = campaignsCoveringLine(
-      { category: 'MATTRESS', modelId: 'm1', builtModuleIds: [] },
+      { category: 'MATTRESS', modelId: 'm1', sizeCode: null, builtModuleIds: [] },
       [c],
       noCombos,
     );
@@ -228,7 +228,7 @@ describe('Task 5 — anti-tamper: fabricated campaignId → 409', () => {
   it('no active campaigns at all + freeItem tag → not covered → 409', () => {
     // If table returns [] (no active campaigns), covering = [], chosen = undefined → 409.
     const result = campaignsCoveringLine(
-      { category: 'MATTRESS', modelId: 'm1', builtModuleIds: [] },
+      { category: 'MATTRESS', modelId: 'm1', sizeCode: null, builtModuleIds: [] },
       [],    // loadActiveFreeItemCampaigns returns []
       noCombos,
     );
@@ -241,9 +241,9 @@ describe('Task 5 — anti-tamper: fabricated campaignId → 409', () => {
   it('active campaign covers a DIFFERENT model → not covered → 409', () => {
     // Client tags a line for model 'victim-m' under campaign c1, but c1 only
     // covers 'other-m'. Anti-tamper: cannot cross-apply a campaign to a wrong Model.
-    const c = camp({ id: 'c1', eligible: [{ modelId: 'other-m', scope: 'model', comboId: null }] });
+    const c = camp({ id: 'c1', eligible: [{ modelId: 'other-m', scope: 'model' }] });
     const result = campaignsCoveringLine(
-      { category: 'MATTRESS', modelId: 'victim-m', builtModuleIds: [] },
+      { category: 'MATTRESS', modelId: 'victim-m', sizeCode: null, builtModuleIds: [] },
       [c],
       noCombos,
     );

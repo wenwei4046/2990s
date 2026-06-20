@@ -4,7 +4,7 @@
 // admin/super_admin/coordinator/sales_director.
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
-import { parseFreeItemEligible } from '@2990s/shared';
+import { parseFreeItemEligible, ruleTargetSchema } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
@@ -15,16 +15,14 @@ freeItemCampaigns.use('*', supabaseAuth);
 
 const WRITE_ROLES = new Set(['admin', 'super_admin', 'coordinator', 'sales_director']);
 
-const eligibleEntry = z.object({
-  modelId: z.string().min(1),
-  scope: z.enum(['model', 'combo']),
-  comboId: z.string().nullable().optional(),
-});
+// eligible entries are unified RuleTargets (model / variant / combo / compartment);
+// ruleTargetSchema enforces the per-scope fields. parseFreeItemEligible re-coerces
+// on read (and tolerates legacy {scope:'combo', comboId} rows).
 const writeSchema = z.object({
   name: z.string().min(1),
   active: z.boolean(),
   maxFreeQty: z.number().int().positive(),
-  eligible: z.array(eligibleEntry),
+  eligible: z.array(ruleTargetSchema),
 });
 
 const requireCampaignEditor = async (c: AppContext) => {

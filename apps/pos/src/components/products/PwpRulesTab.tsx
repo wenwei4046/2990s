@@ -36,6 +36,7 @@ import {
   useDeleteModelDefaultGifts,
 } from '../../lib/queries';
 import { FreeItemCampaignSection } from './FreeItemCampaignSection';
+import { RuleTargetRefinement, finalizeRefinement } from './RuleTargetPicker';
 
 type Mode = 'view' | 'add-only' | 'full';
 // SOFA is matched by Combo (Phase 2); Mattress/Bedframe by Model.
@@ -84,6 +85,7 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
   const bedframe = useProductModels({ category: 'BEDFRAME' });
   const sofa     = useProductModels({ category: 'SOFA' });
   const accessoriesQ = useMfgProducts({ category: 'ACCESSORY' });
+  const combosQ  = useSofaCombos();
   const giftsQ   = useModelDefaultGifts();
   const upsert   = useUpsertModelDefaultGifts();
   const remove   = useDeleteModelDefaultGifts();
@@ -132,11 +134,21 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
   const giftModelLabel = (m: { branding?: string | null; name: string; model_code: string }) =>
     [m.branding, m.name].filter(Boolean).join(' ') || m.model_code;
 
-  // Clean draft rows → storable entries (drop empty, floor qty, trim campaign).
+  // Clean draft rows → storable entries (drop empty, floor qty, trim campaign,
+  // finalize the optional size/compartment condition — an empty refinement
+  // collapses to no condition = whole Model).
   const cleanGifts = (rows: DefaultFreeGift[]): DefaultFreeGift[] =>
     rows
       .filter((g) => g.giftProductId)
-      .map((g) => ({ giftProductId: g.giftProductId, qty: Math.max(1, Math.floor(g.qty)), campaignName: g.campaignName?.trim() || null }));
+      .map((g) => {
+        const cond = finalizeRefinement(g.condition);
+        return {
+          giftProductId: g.giftProductId,
+          qty: Math.max(1, Math.floor(g.qty)),
+          campaignName: g.campaignName?.trim() || null,
+          ...(cond ? { condition: cond } : {}),
+        };
+      });
 
   // Append `additions` to `existing`, keyed by (giftProductId, campaignName): a
   // matching key updates its qty, a new key is appended — so one Model can carry
@@ -211,6 +223,13 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
 
   const inputStyle = { padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' } as const;
   const withGifts = models.filter((m) => (giftsByModel.get(m.id)?.length ?? 0) > 0);
+  // The Model being edited + its combos (for a sofa size/compartment condition).
+  const editModel = models.find((m) => m.id === editModelId) ?? null;
+  const editModelCombos: SofaComboRule[] = editModel
+    ? (combosQ.data ?? []).filter(
+        (cb) => cb.baseModel?.toUpperCase() === editModel.model_code.toUpperCase() && !cb.deletedAt,
+      )
+    : [];
   const groups = GIFT_CATEGORIES
     .map((cat) => ({ cat, list: models.filter((m) => m.category === cat) }))
     .filter((g) => g.list.length > 0);
@@ -337,14 +356,29 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
             <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)' }}>
               {draft.length === 0 && <div style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-5)' }}>No gift configured. Add one below — or save empty to clear.</div>}
               {draft.map((g, i) => (
-                <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 64px 1fr auto', gap: 8, alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--line-strong)' }}>
-                  <select value={g.giftProductId} onChange={(e) => setRow(i, { giftProductId: e.target.value })} style={inputStyle} aria-label="Gift accessory">
-                    <option value="">Choose accessory…</option>
-                    {accessories.map((a) => (<option key={a.id} value={a.id}>{a.code} - {a.name}</option>))}
-                  </select>
-                  <input type="number" min={1} value={g.qty} onChange={(e) => setRow(i, { qty: Math.max(1, Math.floor(Number(e.target.value) || 1)) })} style={{ ...inputStyle, textAlign: 'center' }} aria-label="Quantity" />
-                  <input type="text" value={g.campaignName ?? ''} onChange={(e) => setRow(i, { campaignName: e.target.value })} placeholder="Campaign name (optional)" style={inputStyle} aria-label="Campaign name" />
-                  <button type="button" aria-label="Remove gift row" onClick={() => removeRow(i)} style={{ background: 'transparent', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', cursor: 'pointer' }}><X size={14} strokeWidth={1.75} /></button>
+                <div key={i} style={{ padding: '10px 0', borderBottom: '1px solid var(--line-strong)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 64px 1fr auto', gap: 8, alignItems: 'center' }}>
+                    <select value={g.giftProductId} onChange={(e) => setRow(i, { giftProductId: e.target.value })} style={inputStyle} aria-label="Gift accessory">
+                      <option value="">Choose accessory…</option>
+                      {accessories.map((a) => (<option key={a.id} value={a.id}>{a.code} - {a.name}</option>))}
+                    </select>
+                    <input type="number" min={1} value={g.qty} onChange={(e) => setRow(i, { qty: Math.max(1, Math.floor(Number(e.target.value) || 1)) })} style={{ ...inputStyle, textAlign: 'center' }} aria-label="Quantity" />
+                    <input type="text" value={g.campaignName ?? ''} onChange={(e) => setRow(i, { campaignName: e.target.value })} placeholder="Campaign name (optional)" style={inputStyle} aria-label="Campaign name" />
+                    <button type="button" aria-label="Remove gift row" onClick={() => removeRow(i)} style={{ background: 'transparent', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)', padding: '6px 8px', cursor: 'pointer' }}><X size={14} strokeWidth={1.75} /></button>
+                  </div>
+                  {/* Optional size/compartment gate (2026-06-20) — none picked = whole Model. */}
+                  {editModel && g.giftProductId && (editModel.category === 'MATTRESS' || editModel.category === 'BEDFRAME' || editModel.category === 'SOFA') && (
+                    <div style={{ marginTop: 8, paddingLeft: 2 }}>
+                      <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-soft)', marginBottom: 4 }}>Only for (optional):</div>
+                      <RuleTargetRefinement
+                        category={editModel.category}
+                        model={editModel}
+                        combos={editModelCombos}
+                        value={g.condition ?? { scope: 'model' }}
+                        onChange={(ref) => setRow(i, { condition: ref })}
+                      />
+                    </div>
+                  )}
                 </div>
               ))}
               <div style={{ marginTop: 'var(--space-4)' }}>

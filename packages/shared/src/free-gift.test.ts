@@ -225,7 +225,7 @@ const G = (id: string, qty = 1): { giftProductId: string; qty: number; campaignN
 
 const line = (over: Partial<TriggerLine>): TriggerLine => ({
   triggerKey: 'k', itemCode: 'CODE', category: 'MATTRESS', qty: 1,
-  modelId: null, buildKey: null, isFreeGift: false, gifts: [], ...over,
+  modelId: null, buildKey: null, isFreeGift: false, sizeCode: null, builtCompartments: [], gifts: [], ...over,
 });
 
 describe('buildFreeGiftTriggers (per-Model)', () => {
@@ -280,5 +280,46 @@ describe('buildFreeGiftTriggers (per-Model)', () => {
     expect(t).toHaveLength(2);
     expect(t.map((x) => x.triggerKey)).toEqual(['idx-0', 'build-1']);
     expect(t.map((x) => x.triggerRef)).toEqual(['CODE', 'annsa']);
+  });
+
+  it('size-gated gift fires only for the matching size_code', () => {
+    const gift = { giftProductId: 'g1', qty: 1, campaignName: null, condition: { scope: 'variant' as const, sizeCodes: ['Q'] } };
+    const mk = (sc: string) => line({ category: 'MATTRESS', modelId: 'm', sizeCode: sc, gifts: [gift] });
+    expect(buildFreeGiftTriggers([mk('Q')])).toHaveLength(1);
+    expect(buildFreeGiftTriggers([mk('K')])).toHaveLength(0);
+  });
+
+  it('compartment-gated sofa gift sees the UNION of split-row compartments', () => {
+    const gift = { giftProductId: 'g1', qty: 1, campaignName: null, condition: { scope: 'compartment' as const, compartments: ['CNR'] } };
+    // build split into two module rows; only the 2nd row carries the CNR cell.
+    const rows: TriggerLine[] = [
+      line({ triggerKey: 'r1', category: 'SOFA', buildKey: 'b1', modelId: 'annsa', builtCompartments: ['2A(LHF)'], gifts: [gift] }),
+      line({ triggerKey: 'r2', category: 'SOFA', buildKey: 'b1', modelId: 'annsa', builtCompartments: ['CNR'], gifts: [gift] }),
+    ];
+    const t = buildFreeGiftTriggers(rows);
+    expect(t).toHaveLength(1);
+    expect(t[0]).toMatchObject({ triggerKey: 'b1', gifts: [gift] });
+  });
+
+  it('compartment-gated sofa gift does not fire when no row has the module', () => {
+    const gift = { giftProductId: 'g1', qty: 1, campaignName: null, condition: { scope: 'compartment' as const, compartments: ['CNR'] } };
+    const rows: TriggerLine[] = [
+      line({ triggerKey: 'r1', category: 'SOFA', buildKey: 'b1', modelId: 'annsa', builtCompartments: ['2A(LHF)'], gifts: [gift] }),
+      line({ triggerKey: 'r2', category: 'SOFA', buildKey: 'b1', modelId: 'annsa', builtCompartments: ['2A(RHF)'], gifts: [gift] }),
+    ];
+    expect(buildFreeGiftTriggers(rows)).toHaveLength(0);
+  });
+});
+
+describe('parseDefaultFreeGifts — condition', () => {
+  it('keeps a variant condition and ignores a model-scope condition', () => {
+    const out = parseDefaultFreeGifts([
+      { giftProductId: 'a', qty: 1, condition: { scope: 'variant', sizeCodes: ['Q'] } },
+      { giftProductId: 'b', qty: 1, condition: { scope: 'model' } },
+    ]);
+    expect(out).toEqual([
+      { giftProductId: 'a', qty: 1, campaignName: null, condition: { scope: 'variant', sizeCodes: ['Q'] } },
+      { giftProductId: 'b', qty: 1, campaignName: null },
+    ]);
   });
 });
