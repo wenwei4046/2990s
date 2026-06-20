@@ -1035,6 +1035,11 @@ const SalesKpis = ({
               {stats.data?.showroomCount ?? 0}{' '}
               {(stats.data?.showroomCount ?? 0) === 1 ? 'order' : 'orders'}
             </div>
+            <KpiBreakdown
+              products={stats.data?.showroomProducts ?? 0}
+              service={stats.data?.showroomService ?? 0}
+              kpi={stats.data?.showroomKpi ?? 0}
+            />
           </>
         )}
       </div>
@@ -1059,12 +1064,52 @@ const SalesKpis = ({
               {stats.data?.personalCount ?? 0}{' '}
               {(stats.data?.personalCount ?? 0) === 1 ? 'order' : 'orders'}
             </div>
+            <KpiBreakdown
+              products={stats.data?.personalProducts ?? 0}
+              service={stats.data?.personalService ?? 0}
+              kpi={stats.data?.personalKpi ?? 0}
+            />
           </>
         )}
       </div>
     </section>
   );
 };
+
+/* Revenue split under each card (Loo 2026-06-20). Products is the threshold
+   base — it excludes the Service and KPI-item rows — so it reads first + bold.
+   The three rows sum to the headline total above. */
+const KpiBreakdown = ({
+  products,
+  service,
+  kpi,
+}: {
+  products: number;
+  service: number;
+  kpi: number;
+}) => (
+  <div className={styles.kpiBreakdown}>
+    <div className={`${styles.kpiBreakRow} ${styles.kpiBreakPrimary}`}>
+      <span className={styles.kpiBreakLabel}>Products sales revenue</span>
+      <span className={styles.kpiBreakValue}>
+        <span className={styles.kpiBreakUnit}>RM</span>{fmtMoney(products)}
+      </span>
+    </div>
+    <div className={styles.kpiBreakRow}>
+      <span className={styles.kpiBreakLabel}>Service sales revenue</span>
+      <span className={styles.kpiBreakValue}>
+        <span className={styles.kpiBreakUnit}>RM</span>{fmtMoney(service)}
+      </span>
+    </div>
+    <div className={styles.kpiBreakRow}>
+      <span className={styles.kpiBreakLabel}>KPI item sales revenue</span>
+      <span className={styles.kpiBreakValue}>
+        <span className={styles.kpiBreakUnit}>RM</span>{fmtMoney(kpi)}
+      </span>
+    </div>
+    <div className={styles.kpiBreakNote}>Products counts toward your threshold (excl. service &amp; KPI)</div>
+  </div>
+);
 
 const KpiPlaceholder = () => (
   <div className={styles.kpiLoading}>

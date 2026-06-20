@@ -2178,6 +2178,15 @@ export interface SalesStatsRow {
   showroomCount:  number;
   personalTotal:  number;
   personalCount:  number;
+  // Revenue split per card (Loo 2026-06-20). Products = goods − KPI add-ons (the
+  // threshold base, excl. KPI + service); Service = delivery + every SERVICE
+  // line; KPI = the item-KPI flagged add-on amount. The three sum to *Total.
+  showroomProducts: number;
+  showroomService:  number;
+  showroomKpi:      number;
+  personalProducts: number;
+  personalService:  number;
+  personalKpi:      number;
 }
 
 /* `window` = the My-orders toolbar period (MY-local YYYY-MM-DD, `to` inclusive).
