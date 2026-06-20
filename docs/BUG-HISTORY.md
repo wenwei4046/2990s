@@ -6,6 +6,40 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-20-008 — Full-system 13-slice audit: 18 confirmed bugs (each adversarially verified)
+
+A background workflow fanned 13 read-only audit agents over every module slice (sales-orders · delivery · sales-invoice · purchasing · grn-pi-pr · inventory-wms · consignment · suppliers-mrp · accounting-gl · products-pricing · frontend-display · auth-rbac-security · pos-readonly), then re-verified every high-signal finding by reading the actual code: **18 confirmed, 1 refuted, 26 low-signal unverified** (33 agents). Full run output: `tasks/wsf18do3k.output`.
+
+**FIXED + shipped (commit `3e288239`) — security + dead-config batch:**
+1. **SO header `PATCH /:docNo` had NO self-scope guard** (auth, HIGH) — a self-scoped `sales`/`sales_executive` could edit/reassign ANY salesperson's SO by doc_no (customer fields, salesperson_id). Added `selfScopedSalesBlocked` (mirrors the 6 line-mutation endpoints). `mfg-sales-orders.ts:3803`.
+2. **SO `PATCH /:docNo/status` same gap** (auth, HIGH) — cross-salesperson cancel/transition; a cancel even converts that SO's deposit into a customer credit. Added the guard. `mfg-sales-orders.ts:3409`.
+3. **SO-create salesperson self-lock used `=== 'sales'`, missing `sales_executive`** (auth, MED) — a sales_executive could stamp an arbitrary salesperson (mis-attributed commission). Now `isSelfScopedSales()`. `mfg-sales-orders.ts:1703`.
+4. **product-models generate-skus queried nonexistent table `maintenance_config`** (products, MED) — commander's Maintenance size-label relabels (PR #92) silently never reached generated SKU names. → `maintenance_config_history` (column shape verified against the sibling loaders). `product-models.ts:430`.
+
+**CONFIRMED — queued, backend-safe mirror-fixes (next batch, await go):**
+5. **Combo COST edit overwrites customer SELLING price** (products, HIGH, $$) — Backend Combo Pricing `PUT /:id` doesn't carry forward `selling_prices_by_height`, so a cost edit after the selling price was set in POS collapses the charged price down to cost → silent revenue loss on every edited combo. `sofa-combos.ts:607`.
+6. **Cancelled PC Receive is re-postable → re-books consignment stock IN** (consignment, HIGH) — `/:id/post` only early-returns on POSTED, not CANCELLED; the update predicate excludes only CLOSED. On-hand permanently inflated. `purchase-consignment-receives.ts:862`.
+7. **Sofa demand dropped when item_code not yet in SKU Master** (mrp, HIGH) — section 8 lacks the `catFromGroup` fallback section 6 got (2026-06-16) → an uncatalogued sofa line shows on no MRP tab and never gets a PO. `mrp.ts:625`.
+8. **PO line add/edit allows a negative `line_total_centi`** (purchasing, MED) — a per-line discount > qty×price isn't clamped (the create path clamps with `Math.max(0,…)`) → corrupts the PO subtotal. `mfg-purchase-orders.ts:1615/1678`.
+9. **PO Tier-2 downstream lock bypassed by convert-from-so / from-sos targetPoId append** (purchasing, MED) — new lines spliced onto a PARTIALLY_RECEIVED PO (which has a non-cancelled GRN) because neither path calls `poHasDownstream`. `mfg-purchase-orders.ts:1316/1794`.
+10. **Cancelled Consignment Return is re-activatable** (consignment, MED) — missing the terminal-status guard its clone-source `delivery-returns.ts:1257` has → re-arms a double-IN on the next line edit. `consignment-returns.ts:677`.
+11. **Legacy quick-pay endpoint books no customer credit on overpay** (sales-invoice, MED, $$) — `PATCH /:id/payment` omits `reconcileSiOverpay` (the modern POST path has it) → overpayment via the Outstanding page is silently lost. `sales-invoices.ts:1208`.
+12. **Multiple `is_default` warehouses → `defaultWarehouseId()` returns null** (inventory, MED) — no single-default enforcement; `.maybeSingle()` errors on 2+ rows → GRN/DO/return/consignment posts that rely on the fallback lose their warehouse (stock lands nowhere / insert fails). `inventory.ts` + `inventory-movements.ts:106`.
+13. **`PUT /sofa-combos/:id` missing the all-null guard POST has** (products, MED) — an empty/all-null price edit is accepted as the newest effective row → the combo silently stops applying. `sofa-combos.ts:631`.
+14. **from-sos batch PO-number minted in-memory → duplicate `po_number` on concurrent convert** (purchasing, HIGH sev / med conf) — two concurrent SO→PO converts mint the same `PO-YYMM-NNN`; the 23505 is swallowed as a silently dropped bucket. Needs retry-on-conflict (or a sequence). `mfg-purchase-orders.ts:1366`.
+
+**CONFIRMED — need owner verify before shipping (display / inventory-posting / schema — don't ship blind):**
+15. **Stock-take posts variance into the `''` variant bucket** (inventory, HIGH) — the count snapshot is the SKU total across all variants but the posted ADJUSTMENT carries no `variant_key` → corrupts per-variant on-hand + valuation for any attributed SKU (sofa/bedframe/mattress). Needs a schema change (`variant_key` on `stock_take_lines` + per-variant count sheet). This SUPERSEDES + is distinct from the stale-snapshot reconcile already scoped on `fix/stock-take-reconcile`. `stock-takes.ts:441`.
+16. **SI detail shows Deposit Paid 0.00 / full Balance when VIEWING (not editing)** (frontend, HIGH) — `PaymentsTable` is rendered in DRAFT mode (`docNo={null}`) off an empty draft array on a plain view, so a paid invoice reads "0 transactions / Balance = full total / no PAID badge"; the SI list shows it correctly → list-vs-detail disagree. `SalesInvoiceDetail.tsx:597`.
+17. **DO detail same Deposit-Paid-0 on view** (frontend, HIGH) — identical draft-mode pattern; the SO detail (which uses SAVED mode) is correct. `DeliveryOrderDetail.tsx:773`.
+18. **MRP Sofa tab shows on-hand stock under "PO Outstanding", Stock column hardcoded 0** (mrp, MED) — `SofaSet` emits no per-set stock figure; the adapter never increments `stock`. Operator can't tell stock-covered from PO-covered sofa. `mrp.ts` + `Mrp.tsx` adapter.
+
+**Refuted (1):** recorded in the run output (a verifier read the code and confirmed it's not a bug).
+
+**Caught by:** owner asked to "覆盖全部系统"; the audit ran as a background workflow (first attempt rate-limited at 14-concurrent → re-run in 3-slice sequential batches). Every confirmed bug above was independently re-verified by a second agent reading the actual code at the cited file:line.
+
+---
+
 ## BUG-2026-06-20-001 — Whole PO module 500'd ("Failed to load POs") for ~a day: migration 0180 silently rolled back
 
 **Symptom (owner screenshot):** Purchase Orders list (+ GRN-from-PO + PO-Outstanding) all returned 500 "Failed to load POs".
