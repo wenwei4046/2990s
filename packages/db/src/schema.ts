@@ -2027,6 +2027,15 @@ export const pwpRules = pgTable('pwp_rules', {
   // Sofa rules use these; mattress/bedframe rules use the *_model_ids above.
   triggerComboIds:         jsonb('trigger_combo_ids').$type<string[]>().notNull().default([]),
   rewardComboIds:          jsonb('reward_combo_ids').$type<string[]>().notNull().default([]),
+  // Variant/compartment refinement (migration 0182). ADDITIVE on top of the
+  // model/combo arrays: mfg size_code[] narrows a mattress/bedframe trigger/reward
+  // to specific sizes; compartment code[] narrows an any-build sofa trigger to
+  // builds that contain a module. [] = no refinement (legacy). Matched by the
+  // shared passesRefinementColumns (rule-target.ts).
+  triggerSizeCodes:        jsonb('trigger_size_codes').$type<string[]>().notNull().default([]),
+  triggerCompartments:     jsonb('trigger_compartments').$type<string[]>().notNull().default([]),
+  rewardSizeCodes:         jsonb('reward_size_codes').$type<string[]>().notNull().default([]),
+  rewardCompartments:      jsonb('reward_compartments').$type<string[]>().notNull().default([]),
   qtyPerTrigger:           integer('qty_per_trigger').notNull().default(1),
   // 'pwp' (reward needs pwp_price_sen > 0) | 'promo' (reward may redeem free; 0 = free, not unset). Migration 0145.
   type:                    text('type').notNull().default('pwp'),
@@ -2054,6 +2063,10 @@ export const pwpCodes = pgTable('pwp_codes', {
   rewardCategory:           mfgProductCategory('reward_category').notNull(),                       // snapshot from the rule
   eligibleRewardModelIds:   jsonb('eligible_reward_model_ids').$type<string[]>().notNull().default([]), // snapshot; [] = whole reward category
   rewardComboIds:           jsonb('reward_combo_ids').$type<string[]>().notNull().default([]),     // snapshot of rule.reward_combo_ids (SOFA rewards); migration 0132
+  // Snapshot of the rule's REWARD refinement (migration 0182) — enforced at claim
+  // so a later rule edit can't loosen an outstanding code. [] = no refinement.
+  rewardSizeCodes:          jsonb('reward_size_codes').$type<string[]>().notNull().default([]),
+  rewardCompartments:       jsonb('reward_compartments').$type<string[]>().notNull().default([]),
   type:                     text('type').notNull().default('pwp'),                                 // snapshot of rule.type; 'promo' prices a 0 reward as free. Migration 0145
   status:                   text('status').notNull().default('RESERVED'),                         // RESERVED | USED | AVAILABLE
   ownerStaffId:             uuid('owner_staff_id').references(() => staff.id, { onDelete: 'set null' }),

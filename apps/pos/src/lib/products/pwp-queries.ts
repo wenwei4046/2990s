@@ -45,6 +45,11 @@ export type PwpRuleRow = {
   rewardCategory: MfgCategory;
   eligibleRewardModelIds: string[];
   rewardComboIds: string[];    // SOFA reward (Phase 2)
+  // Variant/compartment refinement (migration 0182); [] = none.
+  triggerSizeCodes: string[];
+  triggerCompartments: string[];
+  rewardSizeCodes: string[];
+  rewardCompartments: string[];
   qtyPerTrigger: number;
   type: 'pwp' | 'promo';       // promo lets a 0 reward redeem free (migration 0145)
   active: boolean;
@@ -59,6 +64,10 @@ export type PwpRuleInput = {
   rewardCategory: MfgCategory;
   eligibleRewardModelIds: string[];
   rewardComboIds?: string[];
+  triggerSizeCodes?: string[];
+  triggerCompartments?: string[];
+  rewardSizeCodes?: string[];
+  rewardCompartments?: string[];
   qtyPerTrigger: number;
   type: 'pwp' | 'promo';
   active: boolean;

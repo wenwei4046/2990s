@@ -28,7 +28,7 @@
 //   if restoring to RESERVED also nulls source_doc_no (we stamped it on claim).
 // ---------------------------------------------------------------------------
 
-import { matchComboSubset } from '@2990s/shared';
+import { matchComboSubset, passesRefinementColumns } from '@2990s/shared';
 import type { SofaComboRow } from '@2990s/shared/sofa-build';
 
 // ---------------------------------------------------------------------------
@@ -62,6 +62,8 @@ export interface PwpClaimSingleArgs {
     model_id: string | null;
     base_model: string | null;
     pwp_price_sen?: number | null;
+    /** mfg size_code of the reward SKU — for the 0182 reward size refinement. */
+    size_code?: string | null;
   };
   customerId: string | null;
   ownerStaffId: string;
@@ -82,6 +84,9 @@ export interface PwpCodeRow {
   reward_category: string;
   eligible_reward_model_ids: string[] | null;
   reward_combo_ids: string[] | null;
+  /** Snapshot of the rule's reward refinement (0182); [] = none. */
+  reward_size_codes: string[] | null;
+  reward_compartments: string[] | null;
   customer_id: string | null;
   source_doc_no: string | null;
   redeemed_doc_no: string | null;
@@ -157,6 +162,16 @@ export function checkPwpEligibility(args: PureEligibilityArgs): PureEligibilityR
     return { ok: false, reason: 'code belongs to a different customer' };
   }
 
+  // Reward size/compartment refinement (0182): the code snapshots the rule's
+  // reward refinement at mint; the reward line must satisfy it. [] = no refinement.
+  const rewardLine = {
+    category: prodCat,
+    modelId: product.model_id ?? null,
+    sizeCode: product.size_code ? String(product.size_code).toUpperCase() : null,
+    builtCompartments: sofaModules,
+  };
+  const refinementOk = passesRefinementColumns(rewardLine, cRow.reward_size_codes, cRow.reward_compartments);
+
   // Rule 6/7: eligibility split by category (mirrors create ~line 1951-1977).
   if (prodCat === 'SOFA') {
     const rewardComboIds = (cRow.reward_combo_ids ?? []) as string[];
@@ -168,6 +183,7 @@ export function checkPwpEligibility(args: PureEligibilityArgs): PureEligibilityR
     if (!candidate.some((c) => matchComboSubset(sofaModules, c.modules) != null)) {
       return { ok: false, reason: "sofa build doesn't match the voucher's reward combo" };
     }
+    if (!refinementOk) return { ok: false, reason: "sofa build doesn't match the voucher's reward compartment" };
     return { ok: true, grantPwpPrice: 0, grantSofaComboIds: rewardComboIds };
   } else {
     const pwpPrice = Math.round(Number(product.pwp_price_sen ?? 0));
@@ -176,6 +192,7 @@ export function checkPwpEligibility(args: PureEligibilityArgs): PureEligibilityR
     const elig = (cRow.eligible_reward_model_ids ?? []) as string[];
     const modelOk = elig.length === 0 || (product.model_id != null && elig.includes(product.model_id));
     if (!modelOk) return { ok: false, reason: 'code is not valid for this model' };
+    if (!refinementOk) return { ok: false, reason: 'code is not valid for this size' };
     return { ok: true, grantPwpPrice: isPromo ? 0 : pwpPrice, grantSofaComboIds: null };
   }
 }
@@ -244,7 +261,7 @@ export async function claimPwpForSingleLine(
   // ── Rule 2: prefetch pwp_codes row ────────────────────────────────────────
   const { data: codeRows, error: fetchErr } = await sb
     .from('pwp_codes')
-    .select('code, status, owner_staff_id, reward_category, eligible_reward_model_ids, reward_combo_ids, customer_id, source_doc_no, redeemed_doc_no, type')
+    .select('code, status, owner_staff_id, reward_category, eligible_reward_model_ids, reward_combo_ids, reward_size_codes, reward_compartments, customer_id, source_doc_no, redeemed_doc_no, type')
     .eq('code', args.code)
     .limit(1);
   if (fetchErr) return reject('could not verify the code — please try again');
