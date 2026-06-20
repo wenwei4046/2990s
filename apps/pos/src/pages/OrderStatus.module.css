@@ -224,6 +224,60 @@
   font-family: var(--font-sans);
 }
 
+.kpiBreakdown {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+}
+
+.kpiBreakRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.kpiBreakLabel {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
+
+.kpiBreakValue {
+  font-family: var(--font-button);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--c-ink);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.kpiBreakUnit {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--fg-muted);
+  padding-right: 4px;
+}
+
+/* Products = the threshold base — emphasised over the Service / KPI rows. */
+.kpiBreakPrimary .kpiBreakLabel {
+  color: var(--c-ink);
+  font-weight: 600;
+}
+
+.kpiBreakPrimary .kpiBreakValue {
+  font-size: 15px;
+}
+
+.kpiBreakNote {
+  margin-top: 2px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
 .kpiError {
   margin-top: 8px;
   font-size: 13px;
