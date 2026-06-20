@@ -5461,9 +5461,9 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
   }
 
   const { data: prodRow } = await sb.from('mfg_products')
-    .select('code, name, category, status, pos_active, sell_price_sen, cost_price_sen, pwp_price_sen, model_id')
+    .select('code, name, category, status, pos_active, sell_price_sen, cost_price_sen, pwp_price_sen, model_id, size_code')
     .eq('code', newCode).maybeSingle();
-  const prod = prodRow as { code: string; name: string; category: string; status: string; pos_active: boolean; sell_price_sen: number | null; cost_price_sen: number | null; pwp_price_sen: number | null; model_id: string | null } | null;
+  const prod = prodRow as { code: string; name: string; category: string; status: string; pos_active: boolean; sell_price_sen: number | null; cost_price_sen: number | null; pwp_price_sen: number | null; model_id: string | null; size_code: string | null } | null;
   if (!prod) return c.json(unknownItemCodeResponse([newCode]), 409);
   if (String(prod.category).toUpperCase() === 'SOFA') {
     return c.json({ error: 'sofa_swap_not_supported', reason: 'A sofa build is added through the configurator, not a line swap.' }, 400);
@@ -5513,16 +5513,21 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
       return c.json({ error: 'pwp_line_locked', reason: 'This PWP reward carries no voucher code — ask the coordinator to exchange it.' }, 409);
     }
     const { data: codeRow } = await sb.from('pwp_codes')
-      .select('code, reward_category, eligible_reward_model_ids, type')
+      .select('code, reward_category, eligible_reward_model_ids, reward_size_codes, reward_compartments, type')
       .eq('code', rewardPwpCode).maybeSingle();
-    const codeTyped = codeRow as { code: string; reward_category: string; eligible_reward_model_ids: string[] | null; type: string } | null;
+    const codeTyped = codeRow as { code: string; reward_category: string; eligible_reward_model_ids: string[] | null; reward_size_codes: string[] | null; reward_compartments: string[] | null; type: string } | null;
     if (!codeTyped) {
       return c.json({ error: 'pwp_line_locked', reason: 'This PWP voucher could not be found — ask the coordinator to exchange it.' }, 409);
     }
     const inCategory = String(prod.category).toUpperCase() === String(codeTyped.reward_category).toUpperCase();
     const eligibleModels = codeTyped.eligible_reward_model_ids ?? [];
     const inModels = eligibleModels.length === 0 || (prod.model_id != null && eligibleModels.includes(prod.model_id));
-    if (!inCategory || !inModels) {
+    // 0182 reward refinement — a refined voucher's size narrowing applies to a swap too.
+    const inRefinement = passesRefinementColumns(
+      { category: String(prod.category), modelId: prod.model_id ?? null, sizeCode: prod.size_code ? String(prod.size_code).toUpperCase() : null, builtCompartments: [] },
+      codeTyped.reward_size_codes, codeTyped.reward_compartments,
+    );
+    if (!inCategory || !inModels || !inRefinement) {
       return c.json({
         error: 'pwp_swap_out_of_range',
         reason: 'A PWP reward can only be exchanged for another item inside the promotion\'s reward range.',
