@@ -14,6 +14,7 @@
 import { buildComboLabel, type RuleTarget, type TargetRefinement, type RuleTargetScope } from '@2990s/shared';
 import { useProductModels, type ProductModelRow } from '../../lib/products/product-models-queries';
 import { useSofaCombos, type SofaComboRule } from '../../lib/products/sofa-combos-queries';
+import { POS_PICKABLE_SIZE_CODES } from '../../lib/queries';
 
 const CATEGORY_ORDER = ['SOFA', 'MATTRESS', 'BEDFRAME', 'ACCESSORY'];
 /** mfg size_code → display label. Unknown codes fall through to the raw code. */
@@ -28,10 +29,13 @@ const modelLabel = (m: ProductModelRow): string =>
 const comboLabel = (c: SofaComboRule): string => c.label ?? buildComboLabel(c.modules);
 
 /** The size_codes a mattress/bedframe Model offers (allowed_options.sizes), or
- *  the 4 standard codes when the Model is unrestricted (empty pool). */
+ *  the 4 standard codes when the Model is unrestricted (empty pool). Filtered to
+ *  POS-pickable codes so we never offer an SK/SP size that a cart line can't
+ *  carry (it would be an un-matchable rule). */
 const modelSizeCodes = (m: ProductModelRow): string[] => {
   const pool = m.allowed_options?.sizes ?? [];
-  return pool.length > 0 ? pool.map((s) => s.toUpperCase()) : FALLBACK_SIZE_CODES;
+  if (pool.length === 0) return FALLBACK_SIZE_CODES;
+  return pool.map((s) => s.toUpperCase()).filter((c) => POS_PICKABLE_SIZE_CODES.has(c));
 };
 /** The compartment codes a sofa Model offers (allowed_options.compartments). */
 const modelCompartments = (m: ProductModelRow): string[] =>

@@ -806,6 +806,12 @@ const SIZE_ID_TO_MFG: Record<string, string> = Object.fromEntries(
 export const sizeIdToMfgCode = (sizeId: string | null | undefined): string | null =>
   sizeId ? (SIZE_ID_TO_MFG[sizeId] ?? null) : null;
 
+/** The mfg size_codes a POS line can actually carry (each maps to a size_library
+ *  id, so a cart line can be configured + booked at that size). SK/SP SKUs exist
+ *  but aren't tablet-pickable, so a rule targeting them would never match — the
+ *  RuleTargetPicker only offers these to avoid that dead/confusing config. */
+export const POS_PICKABLE_SIZE_CODES: ReadonlySet<string> = new Set(Object.keys(MFG_SIZE_CODE_TO_LIB));
+
 export const useProductSizes = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
