@@ -826,15 +826,17 @@ export async function loadModelFabricTierOverrides(
 /** Load all per-compartment fabric-tier Δ overrides (migration 0184) keyed by
  *  compartment_id. Small table (one row per special compartment) → one query.
  *  resolveFabricTierOverride takes the MAX of these + the Model override per
- *  tier for a SOFA custom build. */
+ *  tier for a SOFA custom build. Missing / error → empty map (every build
+ *  falls back to the Model-only path; back-compatible if 0184 hasn't landed
+ *  yet — the table may not exist before the migration is applied). */
 export async function loadCompartmentFabricTierOverrides(
   sb: any,
 ): Promise<Map<string, FabricTierModelOverride>> {
-  const { data, error } = await sb
+  const { data } = await sb
     .from('compartment_fabric_tier_overrides')
     .select('compartment_id, tier2_delta, tier3_delta');
-  if (error) throw error;
-  return new Map((data ?? []).map((r: any) => [r.compartment_id, { tier2Delta: r.tier2_delta, tier3Delta: r.tier3_delta }]));
+  const rows = (data as Array<{ compartment_id: string; tier2_delta: number | null; tier3_delta: number | null }>) ?? [];
+  return new Map(rows.map((r) => [r.compartment_id, { tier2Delta: r.tier2_delta, tier3Delta: r.tier3_delta }]));
 }
 
 /** Load all per-Model default free gifts (migration 0174) keyed by model_id.
