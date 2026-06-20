@@ -10,6 +10,7 @@ import { NotifyProvider, useNotify } from './components/NotifyDialog';
 import { PromptProvider } from './components/PromptDialog';
 import { ChoiceProvider } from './components/ChoiceDialog';
 import { registerDialogService, serviceNotify } from './lib/dialog-service';
+import { installCrossTabSync, broadcastDataChanged } from './lib/cross-tab-sync';
 import { NewVersionBanner } from './components/NewVersionBanner';
 import { router } from './router';
 
@@ -48,8 +49,14 @@ const queryClient = new QueryClient({
         tone: 'error',
       });
     },
+    // A3 — every successful write tells other open tabs to refetch (cross-tab
+    // sync). One central hook, so no per-mutation wiring is needed.
+    onSuccess: () => { broadcastDataChanged(); },
   }),
 });
+
+// A3 — listen for other tabs' writes and invalidate our active queries.
+installCrossTabSync(queryClient);
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root not found in index.html');
