@@ -19,6 +19,7 @@ import {
   passesRefinementColumns,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
+import { buildCompartmentsFromModuleLines } from '../lib/compartments-from-module-lines';
 /* POS auto-Proceed (Loo 2026-06-09) — when a handover arrives already complete
    (customer + address + delivery date + ≥50% paid) we stamp proceeded_at at
    create so the order lands in Proceed without a manual click. Same gate the
@@ -5401,9 +5402,33 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-update', async (c) => {
   // migration 0184 — folded with any matching per-compartment Δ (MAX per tier)
   // over the build's cells; cells don't change on a TBC fill-in (fabric only).
   const tbcBaseOverride = (modelOverrides && prodLite?.model_id) ? (modelOverrides.get(prodLite.model_id) ?? null) : null;
-  const tbcCells = String(prodLite?.category ?? '').toUpperCase() === 'SOFA' && Array.isArray((nextVariants as { cells?: unknown }).cells)
-    ? ((nextVariants as { cells?: Array<{ moduleId?: unknown }> }).cells ?? []).map((cl) => String(cl?.moduleId ?? '')).filter(Boolean)
-    : [];
+  /* A persisted split-sofa module line STRIPS `variants.cells`, so the build's
+     compartment codes can't be read off `nextVariants` — that yielded `[]` and
+     resolved model-only, under-charging a build that carries a per-compartment
+     Δ (the POS preview showed the higher Δ but the server billed less; no drift
+     gate here). Reconstruct them from the SIBLING module lines' item_code
+     suffix, the same way planSofaRewardRevert / the create path do. */
+  let tbcCells: string[] = [];
+  if (category === 'SOFA') {
+    const buildKeyForCells = (prevVariants.buildKey as string | undefined) ?? null;
+    if (buildKeyForCells) {
+      const { data: cellRows } = await sb.from('mfg_sales_order_items')
+        .select('item_code, variants')
+        .eq('doc_no', docNo).eq('cancelled', false)
+        .filter('variants->>buildKey', 'eq', buildKeyForCells);
+      tbcCells = buildCompartmentsFromModuleLines(
+        ((cellRows ?? []) as Array<{ item_code: string; variants: Record<string, unknown> | null }>)
+          .map((r) => ({ item_code: r.item_code, buildKey: String((r.variants ?? {}).buildKey ?? '') })),
+        buildKeyForCells,
+      );
+    } else {
+      // Not a split build (whole-unit code carries cells inline) — fall back to
+      // the inline cells if present.
+      tbcCells = Array.isArray((nextVariants as { cells?: unknown }).cells)
+        ? ((nextVariants as { cells?: Array<{ moduleId?: unknown }> }).cells ?? []).map((cl) => String(cl?.moduleId ?? '')).filter(Boolean)
+        : [];
+    }
+  }
   const tbcOverride = resolveFabricTierOverride(tbcCells, tbcBaseOverride, compartmentOverrides ?? new Map());
   const tierDeltaCenti = (addonCfg && (category === 'SOFA' || category === 'BEDFRAME'))
     ? (fabricTierAddon(category, (category === 'SOFA' ? tiersNext?.sofaTier : tiersNext?.bedframeTier) ?? null, addonCfg, tbcOverride)

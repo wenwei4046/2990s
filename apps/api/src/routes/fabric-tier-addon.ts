@@ -169,8 +169,8 @@ fabricTierAddonConfig.delete('/special/:modelId', async (c) => {
 
 const compartmentSpecialSchema = z.object({
   compartmentId: z.string().min(1),
-  tier2Delta:    z.number().int().nullable(),
-  tier3Delta:    z.number().int().nullable(),
+  tier2Delta:    z.number().int().nonnegative().nullable(),
+  tier3Delta:    z.number().int().nonnegative().nullable(),
 });
 
 // GET — list every compartment override row.

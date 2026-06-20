@@ -832,9 +832,12 @@ export async function loadModelFabricTierOverrides(
 export async function loadCompartmentFabricTierOverrides(
   sb: any,
 ): Promise<Map<string, FabricTierModelOverride>> {
-  const { data } = await sb
+  const { data, error } = await sb
     .from('compartment_fabric_tier_overrides')
     .select('compartment_id, tier2_delta, tier3_delta');
+  // Intentional model-only fallback on error (table may not exist pre-0184) —
+  // we DON'T throw, but a real misconfiguration must not be silent.
+  if (error) console.error('loadCompartmentFabricTierOverrides failed (falling back to model-only Δ):', error.message ?? error);
   const rows = (data as Array<{ compartment_id: string; tier2_delta: number | null; tier3_delta: number | null }>) ?? [];
   return new Map(rows.map((r) => [r.compartment_id, { tier2Delta: r.tier2_delta, tier3Delta: r.tier3_delta }]));
 }
