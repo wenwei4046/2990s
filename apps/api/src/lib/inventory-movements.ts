@@ -104,9 +104,15 @@ export async function writeMovements(
  * — e.g. legacy GRN rows back-filled to KL.
  */
 export async function defaultWarehouseId(sb: any): Promise<string | null> {
+  /* Audit 2026-06-20 — resilient to >1 default row: order + limit(1) so two
+     defaults degrade to one deterministic pick instead of maybeSingle() erroring
+     to null (the single-default enforcement on write should prevent multiples,
+     but legacy data may already have them). */
   const { data } = await sb.from('warehouses')
     .select('id')
     .eq('is_default', true)
+    .order('code', { ascending: true })
+    .limit(1)
     .maybeSingle();
   return (data as { id: string } | null)?.id ?? null;
 }

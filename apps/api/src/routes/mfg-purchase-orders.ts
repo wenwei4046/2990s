@@ -1374,7 +1374,6 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   for (const bucket of byGroup.values()) {
     const supplierId = bucket.supplierId;
     counter += 1;
-    const poNumber = `PO-${yymm}-${String(counter).padStart(3, '0')}`;
     const subtotal = bucket.lines.reduce((s, l) => s + l.qty * l.unitPriceCenti, 0);
 
     /* Commander 2026-05-28 — derive the PO HEADER fields from this PO's lines:
@@ -1391,28 +1390,44 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     const headerExpectedAt = lineDates[0] ?? null;
     const headerPurchaseLocationId: string | null = bucket.warehouseId;
 
-    const { data: headerData, error: hErr } = await supabase
-      .from('purchase_orders')
-      .insert({
-        po_number: poNumber,
-        supplier_id: supplierId,
-        // PR #131 — Convert-from-SO bulk path also lands SUBMITTED.
-        status: 'SUBMITTED',
-        submitted_at: new Date().toISOString(),
-        currency: bucket.currency,
-        subtotal_centi: subtotal,
-        tax_centi: 0,
-        total_centi: subtotal,
-        notes: `From SOs: ${[...bucket.soDocNos].join(', ')}`,
-        created_by: user.id,
-        /* Commander 2026-05-28 — derived from the source SO lines, not asked. */
-        expected_at: headerExpectedAt,
-        purchase_location_id: headerPurchaseLocationId,
-      })
-      .select('id, po_number')
-      .single();
-    if (hErr) continue;
-    const header = headerData as unknown as { id: string; po_number: string };
+    const headerPayload = {
+      supplier_id: supplierId,
+      // PR #131 — Convert-from-SO bulk path also lands SUBMITTED.
+      status: 'SUBMITTED',
+      submitted_at: new Date().toISOString(),
+      currency: bucket.currency,
+      subtotal_centi: subtotal,
+      tax_centi: 0,
+      total_centi: subtotal,
+      notes: `From SOs: ${[...bucket.soDocNos].join(', ')}`,
+      created_by: user.id,
+      /* Commander 2026-05-28 — derived from the source SO lines, not asked. */
+      expected_at: headerExpectedAt,
+      purchase_location_id: headerPurchaseLocationId,
+    };
+    /* Audit 2026-06-20 — the PO suffix is an in-memory counter off a non-locking
+       snapshot, so a CONCURRENT SO→PO convert can mint the same po_number. It is
+       UNIQUE, so a collision previously hit `if (hErr) continue` and SILENTLY
+       DROPPED the whole bucket (the convert reported fewer POs with no error).
+       Retry on 23505: re-derive the next free suffix from the live table + bump,
+       so the loser re-mints instead of vanishing. */
+    let header: { id: string; po_number: string } | null = null;
+    for (let attempt = 0; attempt < 8 && !header; attempt += 1) {
+      const poNumber = `PO-${yymm}-${String(counter).padStart(3, '0')}`;
+      const { data: hd, error: hErr } = await supabase
+        .from('purchase_orders')
+        .insert({ po_number: poNumber, ...headerPayload })
+        .select('id, po_number')
+        .single();
+      if (!hErr && hd) { header = hd as { id: string; po_number: string }; break; }
+      if (!hErr || (hErr as { code?: string }).code !== '23505') break;
+      const { data: live } = await supabase
+        .from('purchase_orders').select('po_number').like('po_number', `PO-${yymm}-%`);
+      counter = parseInt(
+        nextMonthlyDocNo(`PO-${yymm}`, ((live ?? []) as Array<{ po_number: string }>).map((r) => r.po_number))
+          .slice(`PO-${yymm}-`.length), 10);
+    }
+    if (!header) continue;
 
     const rows = bucket.lines.map((l) => ({
       purchase_order_id: header.id,
@@ -1612,7 +1627,10 @@ mfgPurchaseOrders.post('/:id/items', async (c) => {
   const qty = Number(it.qty ?? 1);
   const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
   const discountCenti = Number(it.discountCenti ?? 0);
-  const lineTotal = (qty * unitPriceCenti) - discountCenti;
+  // Audit 2026-06-20 — clamp like the create path (mfg-purchase-orders POST /):
+  // a per-line discount exceeding qty×price must not persist a negative
+  // line_total_centi (it sums straight into the PO subtotal/total).
+  const lineTotal = Math.max(0, (qty * unitPriceCenti) - discountCenti);
 
   const row: Record<string, unknown> = {
     purchase_order_id: poId,
@@ -1675,7 +1693,8 @@ mfgPurchaseOrders.patch('/:id/items/:itemId', async (c) => {
   const qty = it.qty !== undefined ? Number(it.qty) : prev.qty;
   const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : prev.unit_price_centi;
   const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : prev.discount_centi;
-  const lineTotal = (qty * unit) - discount;
+  // Audit 2026-06-20 — clamp like the create path (see POST /:id/items).
+  const lineTotal = Math.max(0, (qty * unit) - discount);
 
   const updates: Record<string, unknown> = {
     qty, unit_price_centi: unit, discount_centi: discount, line_total_centi: lineTotal,
