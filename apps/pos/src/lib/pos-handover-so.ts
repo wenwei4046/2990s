@@ -23,9 +23,11 @@
 
 import { useMutation } from '@tanstack/react-query';
 import { orderSofaCellsLeftToRight } from '@2990s/shared/sofa-build';
+import { deliveryTargetMatchesAnyLine, parseRuleTargets, type RuleLineInput } from '@2990s/shared';
 import { supabase } from './supabase';
+import { sizeIdToMfgCode } from './queries';
 import type { CartLine, CartConfig } from '../state/cart';
-import type { CatalogProduct } from './queries';
+import type { CatalogProduct, SpecialDeliveryFeeRow } from './queries';
 import type { SpecialModelDeliveryFee } from '@2990s/shared/pricing';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -301,32 +303,72 @@ export const isFreeItemConfig = (config: CartConfig): boolean =>
 
 const DELIVERABLE_GROUPS = new Set(['sofa', 'mattress', 'bedframe']);
 
+/** One mfg-catalog row, narrowed to what the delivery-fee rule matcher needs.
+ *  The Handover passes `useMfgCatalogIndex()` (Map<sku id, MfgCatalogRow>) here —
+ *  the same index CartContents uses for Free Item eligibility — so the line's
+ *  Model + category resolve even for size-variant SKUs the legacy catalog misses. */
+interface DeliveryRuleMfgRow {
+  category?: string | null;
+  modelId?: string | null;
+}
+
+/** Flatten one cart line to the shared RuleLineInput the special-delivery matcher
+ *  expects. Mirrors the server's RuleLineInput construction in
+ *  POST /mfg-sales-orders so client preview + server recompute match exactly:
+ *    - category / modelId from the mfg catalog row (not the legacy catalog),
+ *    - sizeCode from the configured size id (mattress / bedframe variant rules),
+ *    - builtCompartments from the sofa build cells (combo / compartment rules). */
+const cartLineToRuleInput = (
+  config: CartConfig,
+  mfgRow: DeliveryRuleMfgRow | undefined,
+): RuleLineInput => {
+  const cfg = config as {
+    modelId?: string | null;
+    sizeId?: string | null;
+    cells?: Array<{ moduleId?: unknown }>;
+  };
+  const modelId = (cfg.modelId ?? null) || (mfgRow?.modelId ?? null);
+  const builtCompartments = Array.isArray(cfg.cells)
+    ? cfg.cells.map((c) => String(c?.moduleId ?? '')).filter(Boolean)
+    : [];
+  return {
+    category: String(mfgRow?.category ?? ''),
+    modelId,
+    sizeCode: sizeIdToMfgCode(cfg.sizeId),
+    builtCompartments,
+  };
+};
+
 /** Build computeSoDeliveryFee's `categoryIds` + `specialModels` inputs from POS
  *  cart lines, EXCLUDING free-item-campaign lines — a giveaway carries no
  *  delivery charge. Mirrors the server's freeItemByIdx exclusion in
  *  POST /mfg-sales-orders (commit 6071d647) so the POS preview equals the fee the
  *  server actually persists (no customer-facing mismatch). A makeFree split keeps
- *  its paid remainder deliverable — only the free line drops out. */
-export const buildDeliveryFeeCartInputs = <S extends { standaloneFee: number; crossCatFollowupFee: number }>(
+ *  its paid remainder deliverable — only the free line drops out.
+ *
+ *  Special fees are matched via the #691 RuleTarget abstraction (migration 0182):
+ *  each special-delivery rule's `target` (model / variant / compartment / combo)
+ *  is run against the cart's RuleLineInput[] with the SAME shared
+ *  `deliveryTargetMatchesAnyLine` the server uses — every matching rule contributes
+ *  one special fee entry. Fees stay whole-MYR here (the entire POS preview pipeline
+ *  is whole-MYR: subtotal + base + delivery all in RM); the server works in sen. */
+export const buildDeliveryFeeCartInputs = (
   lines: CartLine[],
   productById: Map<string, CatalogProduct>,
-  specialFeeByModel: Map<string, S>,
+  mfgById: Map<string, DeliveryRuleMfgRow>,
+  rules: SpecialDeliveryFeeRow[],
+  comboModulesById: Map<string, string[][]>,
 ): { categoryIds: string[]; specialModels: SpecialModelDeliveryFee[] } => {
   const payable = lines.filter((l) => !isFreeItemConfig(l.config));
   const categoryIds = payable
     .map((l) => inferItemGroup(l.config, productById.get(l.config.productId)))
     .filter((g) => DELIVERABLE_GROUPS.has(g));
-  const specialModels = payable
-    .map((l) => {
-      // The cart line carries its own product_models.id (configurator-set on size
-      // + bedframe lines); fall back to the catalog only for older lines.
-      const modelId = ('modelId' in l.config && l.config.modelId)
-        ? l.config.modelId
-        : (productById.get(l.config.productId)?.model_id ?? null);
-      const sf = modelId ? specialFeeByModel.get(modelId) : undefined;
-      return sf ? { standaloneFee: sf.standaloneFee, crossCategoryFollowupFee: sf.crossCatFollowupFee } : null;
-    })
-    .filter((s): s is SpecialModelDeliveryFee => s !== null);
+  // Flatten payable lines to RuleLineInput[] (free-item lines already dropped —
+  // a giveaway carries no special transport fee, mirroring the server).
+  const ruleLines = payable.map((l) => cartLineToRuleInput(l.config, mfgById.get(l.config.productId)));
+  const specialModels = rules
+    .filter((r) => deliveryTargetMatchesAnyLine(ruleLines, parseRuleTargets(r.target), comboModulesById))
+    .map((r) => ({ standaloneFee: r.standaloneFee, crossCategoryFollowupFee: r.crossCatFollowupFee }));
   return { categoryIds, specialModels };
 };
 

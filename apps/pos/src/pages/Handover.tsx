@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import { useCart, cartSubtotal } from '../state/cart';
@@ -12,7 +12,8 @@ import {
   type PosHandoffPayload,
 } from '../lib/pos-handover-so';
 import { useDeleteQuote } from '../lib/quotes';
-import { useAddons, useLocalities, useDeliveryFeeConfig, useSpecialDeliveryFees, useCrossCategoryEligibility, useCrossCategoryAutoMatch, useCatalog } from '../lib/queries';
+import { useAddons, useLocalities, useDeliveryFeeConfig, useSpecialDeliveryFees, useCrossCategoryEligibility, useCrossCategoryAutoMatch, useCatalog, useSofaCombos } from '../lib/queries';
+import { useMfgCatalogIndex } from '../lib/cart-display';
 import { useAuth } from '../lib/auth';
 import { computeSoDeliveryFee } from '@2990s/shared/pricing';
 import {
@@ -141,6 +142,17 @@ export const Handover = () => {
   const addons = useAddons();
   const localities = useLocalities();
   const catalog = useCatalog();
+  // The mfg-catalog index (Model + category per SKU id) drives the special-delivery
+  // RuleTarget matching — same index CartContents uses for Free Item eligibility,
+  // so size-variant SKUs the legacy catalog misses still resolve their Model.
+  const mfgById = useMfgCatalogIndex();
+  // Sofa combos → comboModulesById, the slot map a `combo`-scoped rule matches a
+  // build against (mirrors CartContents + the server recompute).
+  const { data: sofaCombos = [] } = useSofaCombos();
+  const comboModulesById = useMemo(
+    () => new Map(sofaCombos.map((cb) => [cb.id, cb.modules])),
+    [sofaCombos],
+  );
   const deliveryCfgQuery = useDeliveryFeeConfig();
   const specialFeesQuery = useSpecialDeliveryFees();
 
@@ -222,18 +234,14 @@ export const Handover = () => {
   ));
   const hasTbcLines = tbcItemNames.length > 0;
   const deliveryCfg = deliveryCfgQuery.data ?? { baseFee: 0, crossCategoryFee: 0 };
-  // Special-model fees (migration 0140) — map model_id → fee. The cart line
-  // carries its own product_models.id (configurator-set on size + bedframe lines);
-  // the catalog lookup misses size-variant SKUs, so config.modelId is what makes
-  // the special fee actually match (e.g. AKKA-FIRM mattress → RM 500).
-  const specialFeeByModel = new Map(
-    (specialFeesQuery.data ?? []).map((s) => [s.modelId, s]),
-  );
-  // Deliverable categories + special-model fees, with free-item-campaign lines
-  // excluded (a giveaway adds no delivery) — mirrors the server fix so the
-  // previewed fee equals the fee the server persists.
+  // Deliverable categories + special-delivery fees (migration 0182, #691
+  // RuleTarget). Each special-delivery rule's target (model / variant /
+  // compartment / combo) is matched against the cart's RuleLineInput[] with the
+  // SAME shared deliveryTargetMatchesAnyLine the server runs at recompute — so
+  // this previewed fee equals the fee the server persists. Free-item-campaign
+  // lines are excluded (a giveaway adds no delivery).
   const { categoryIds: cartCategoryIds, specialModels: cartSpecialModels } =
-    buildDeliveryFeeCartInputs(lines, productById, specialFeeByModel);
+    buildDeliveryFeeCartInputs(lines, productById, mfgById, specialFeesQuery.data ?? [], comboModulesById);
   // Cross-category follow-up — only when the typed SO number is server-validated
   // as eligible (exists / not cancelled / same customer / not already used). The
   // `debouncedSo === current` guard means a stale check result never applies the
