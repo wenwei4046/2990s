@@ -15,6 +15,7 @@ import {
   Settings,
   Plus,
   ExternalLink,
+  ArrowLeft,
   type LucideIcon,
 } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
@@ -223,12 +224,17 @@ export const Catalog = () => {
   /* Sofa-exclusivity (Commander 2026-05-30): a sofa is sold on its own ticket.
      When the cart holds a sofa, non-sofa cards are disabled (and vice versa);
      multiple sofas together are fine. Mirrors the cart store guard
-     (cartCategoryConflict) + the Sales Order backend rule. */
+     (cartCategoryConflict) + the Sales Order backend rule.
+
+     In addToOrder mode the sales cart is irrelevant — products go to the placed
+     SO, not the cart — so the cart's composition must NOT gate the cards or show
+     the cart banner here. The server still enforces the order's own composition
+     on POST /:docNo/items (Loo 2026-06-21). */
   const cartLines = useCart((s) => s.lines);
-  const hasSofa = cartHasSofa(cartLines);
+  const hasSofa = !addToOrderParam && cartHasSofa(cartLines);
   // Accessories pair with anything, so only mattress/bedframe ("MAIN non-sofa")
   // constrains a sofa — mirrors cartCategoryConflict + the server rule.
-  const hasMainNonSofa = cartHasMainNonSofa(cartLines);
+  const hasMainNonSofa = !addToOrderParam && cartHasMainNonSofa(cartLines);
 
   // Categories come from the categories table directly (not derived from
   // products) so TBC ones still render even with zero products. Brandings
@@ -289,7 +295,7 @@ export const Catalog = () => {
 
   return (
     <>
-      <Topbar step="cart" />
+      <Topbar step="cart" hideCart={!!addToOrderParam} />
       <main className={styles.app}>
       {catalog.isLoading ? (
         <p className={styles.empty}>Loading catalog…</p>
@@ -465,6 +471,38 @@ export const Catalog = () => {
               </span>
             </div>
 
+            {/* Add-product-to-placed-SO mode (Loo 2026-06-21): this is a fresh,
+                order-scoped catalog — the sales cart is hidden (topbar chip +
+                Customer order button) and its composition no longer gates the
+                cards. Pick a product, confirm it on the next screen, and it's
+                added straight to the order. */}
+            {addToOrderParam && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '10px 14px', marginBottom: 12,
+                background: 'var(--c-paper)',
+                border: '1px solid var(--line-strong)',
+                borderRadius: 'var(--radius-md, 10px)',
+                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', color: 'var(--c-ink)',
+              }}>
+                <Plus size={16} strokeWidth={1.75} />
+                <span>
+                  Adding to <strong>{addToOrderParam}</strong> — pick a product and confirm it
+                  on the next screen to add it to this order. Your cart isn't touched.
+                </span>
+                <Link
+                  to="/my-orders"
+                  style={{
+                    marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4,
+                    color: 'var(--c-ink)', textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap',
+                  }}
+                >
+                  <ArrowLeft size={14} strokeWidth={1.75} />
+                  Back to order
+                </Link>
+              </div>
+            )}
+
             {(hasSofa || hasMainNonSofa) && (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 8,
@@ -551,7 +589,9 @@ export const Catalog = () => {
         </span>
       </footer>
     </main>
-    <CustomerOrderFab />
+    {/* The sales-cart FAB is hidden in addToOrder mode — selected products go to
+        the placed SO, not the cart, so showing the cart entry point misleads. */}
+    {!addToOrderParam && <CustomerOrderFab />}
     </>
   );
 };
