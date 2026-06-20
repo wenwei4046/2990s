@@ -648,11 +648,8 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
 
   for (const bucket of buckets.values()) {
     counter += 1;
-    const invoiceNumber = `PI-${yymm}-${String(counter).padStart(3, '0')}`;
-    const subtotal = bucket.lines.reduce((s, { row, qty }) => s + (qty * row.unit_price_centi - discFor(row, qty)), 0);
-
-    const { data: header, error: hErr } = await sb.from('purchase_invoices').insert({
-      invoice_number: invoiceNumber,
+    const subtotal = bucket.lines.reduce((s, { row, qty }) => s + Math.max(0, qty * row.unit_price_centi - discFor(row, qty)), 0);
+    const piPayload = {
       supplier_invoice_ref: body.supplierInvoiceNumber ?? null,
       supplier_id: bucket.supplierId,
       purchase_order_id: bucket.purchaseOrderId,
@@ -668,9 +665,23 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
       posted_at: new Date().toISOString(),
       notes: body.notes ? `Multi-pick from ${bucket.grnNumber} · ${body.notes}` : `Multi-pick from ${bucket.grnNumber}`,
       created_by: user.id,
-    }).select('id, invoice_number').single();
-    if (hErr) continue;
-    const h = header as unknown as { id: string; invoice_number: string };
+    };
+    /* Audit 2026-06-20 — concurrent PI creation can collide on invoice_number
+       (UNIQUE); the old `if (hErr) continue` silently dropped the PI (GRN left
+       un-billed, no AP posting). Retry on 23505 (mirrors mfg-purchase-orders
+       from-sos). */
+    let h: { id: string; invoice_number: string } | null = null;
+    for (let attempt = 0; attempt < 8 && !h; attempt += 1) {
+      const invoiceNumber = `PI-${yymm}-${String(counter).padStart(3, '0')}`;
+      const { data: header, error: hErr } = await sb.from('purchase_invoices')
+        .insert({ invoice_number: invoiceNumber, ...piPayload })
+        .select('id, invoice_number').single();
+      if (!hErr && header) { h = header as unknown as { id: string; invoice_number: string }; break; }
+      if (!hErr || (hErr as { code?: string }).code !== '23505') break;
+      const { data: live } = await sb.from('purchase_invoices').select('invoice_number').like('invoice_number', `PI-${yymm}-%`);
+      counter = parseInt(nextMonthlyDocNo(`PI-${yymm}`, ((live ?? []) as Array<{ invoice_number: string }>).map((r) => r.invoice_number)).slice(`PI-${yymm}-`.length), 10);
+    }
+    if (!h) continue;
 
     const rows = bucket.lines.map(({ row, qty }) => ({
       purchase_invoice_id: h.id,

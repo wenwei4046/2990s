@@ -6747,6 +6747,8 @@ mfgSalesOrders.post('/:docNo/items/:itemId/photos', async (c) => {
   const docNo = c.req.param('docNo');
   const itemId = c.req.param('itemId');
   const user = c.get('user');
+  // Audit 2026-06-20 — self-scoped sales may only touch their OWN SO (mirror the line/header guards).
+  if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
 
   if (!c.env.SO_ITEM_PHOTOS) {
     return c.json({ error: 'photo_bucket_not_configured' }, 500);
@@ -6937,6 +6939,8 @@ mfgSalesOrders.delete('/:docNo/items/:itemId/photos/:photoKey', async (c) => {
   const itemId = c.req.param('itemId');
   const photoKey = decodeURIComponent(c.req.param('photoKey'));
   const user = c.get('user');
+  // Audit 2026-06-20 — self-scoped sales may only touch their OWN SO (mirror the line/header guards).
+  if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
 
   if (!c.env.SO_ITEM_PHOTOS) {
     return c.json({ error: 'photo_bucket_not_configured' }, 500);
@@ -7073,6 +7077,8 @@ const paymentCreateSchema = z.object({
 
 mfgSalesOrders.post('/:docNo/payments', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
+  // Audit 2026-06-20 — self-scoped sales may only touch their OWN SO (mirror the line/header guards).
+  if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
 
   // Ensure the SO exists before inserting a child row (gives a cleaner
   // 404 than a deferred FK violation).
@@ -7208,6 +7214,8 @@ mfgSalesOrders.post('/:docNo/payments', async (c) => {
 mfgSalesOrders.delete('/:docNo/payments/:id', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const id = c.req.param('id');
   const user = c.get('user');
+  // Audit 2026-06-20 — self-scoped sales may only touch their OWN SO (mirror the line/header guards).
+  if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
 
   // Guard: only delete if the row belongs to this docNo. Prevents a
   // mis-routed call from nuking another SO's payment.
@@ -7305,6 +7313,8 @@ mfgSalesOrders.patch('/:docNo/items/:itemId/stock-status', async (c) => {
   const docNo = c.req.param('docNo');
   const itemId = c.req.param('itemId');
   const user = c.get('user');
+  // Audit 2026-06-20 — self-scoped sales may only touch their OWN SO (mirror the line/header guards).
+  if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
 
   let body: { status?: string };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }

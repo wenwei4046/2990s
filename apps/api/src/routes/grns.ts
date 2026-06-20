@@ -1093,9 +1093,7 @@ grns.post('/from-po-items', async (c) => {
 
   for (const bucket of buckets.values()) {
     counter += 1;
-    const grnNumber = `GRN-${yymm}-${String(counter).padStart(3, '0')}`;
-    const { data: header, error: hErr } = await sb.from('grns').insert({
-      grn_number: grnNumber,
+    const grnPayload = {
       purchase_order_id: bucket.primaryPoId,
       supplier_id: bucket.supplierId,
       received_at: receivedAt,
@@ -1104,9 +1102,25 @@ grns.post('/from-po-items', async (c) => {
         ? `Received from ${[...bucket.poNumbers].join(', ')} · ${body.notes}`
         : `Received from ${[...bucket.poNumbers].join(', ')}`,
       created_by: user.id,
-    }).select('id, grn_number').single();
-    if (hErr) continue;
-    const h = header as unknown as { id: string; grn_number: string };
+    };
+    /* Audit 2026-06-20 — the GRN suffix is an in-memory counter off a non-locking
+       snapshot, so a CONCURRENT multi-GRN receive can mint the same grn_number
+       (UNIQUE). A collision previously hit `if (hErr) continue` and SILENTLY
+       DROPPED the bucket (its inventory-IN lost, caller still got 201). Retry on
+       23505: re-derive the next free suffix + bump (mirrors mfg-purchase-orders
+       from-sos). */
+    let h: { id: string; grn_number: string } | null = null;
+    for (let attempt = 0; attempt < 8 && !h; attempt += 1) {
+      const grnNumber = `GRN-${yymm}-${String(counter).padStart(3, '0')}`;
+      const { data: header, error: hErr } = await sb.from('grns')
+        .insert({ grn_number: grnNumber, ...grnPayload })
+        .select('id, grn_number').single();
+      if (!hErr && header) { h = header as unknown as { id: string; grn_number: string }; break; }
+      if (!hErr || (hErr as { code?: string }).code !== '23505') break;
+      const { data: live } = await sb.from('grns').select('grn_number').like('grn_number', `GRN-${yymm}-%`);
+      counter = parseInt(nextMonthlyDocNo(`GRN-${yymm}`, ((live ?? []) as Array<{ grn_number: string }>).map((r) => r.grn_number)).slice(`GRN-${yymm}-`.length), 10);
+    }
+    if (!h) continue;
 
     const rows = bucket.lines.map(({ row, qty }) => {
       const discountCenti = row.discount_centi ?? 0;
