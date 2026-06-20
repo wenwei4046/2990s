@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { campaignsCoveringLine } from '@2990s/shared';
 import { useCart, cartItemCount, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
-import { useCatalog, useActiveFreeItemCampaigns, useSofaCombos, type CatalogProduct, type MfgCatalogRow, type FreeItemCampaignRow } from '../lib/queries';
+import { useCatalog, useActiveFreeItemCampaigns, useSofaCombos, sizeIdToMfgCode, type CatalogProduct, type MfgCatalogRow, type FreeItemCampaignRow } from '../lib/queries';
 import { cartLineTitle, useMfgCatalogIndex } from '../lib/cart-display';
 import { useSaveQuote, useUpdateQuote } from '../lib/quotes';
 import { useFreePwpCodes } from '../lib/products/pwp-queries';
@@ -350,6 +350,7 @@ const CartItem = ({ line, product, mfgRow, activeCampaigns, comboModulesById, on
     freeItemCampaign?: string | null;
     pwp?: boolean;
     isFreeGift?: boolean;
+    sizeId?: string;
     cells?: Array<{ moduleId?: string }>;
   };
   const alreadyFree = Boolean(cfgAny.freeItemCampaignId);
@@ -359,6 +360,7 @@ const CartItem = ({ line, product, mfgRow, activeCampaigns, comboModulesById, on
     {
       category: String(mfgRow?.category ?? ''),
       modelId: mfgRow?.modelId ?? null,
+      sizeCode: sizeIdToMfgCode(cfgAny.sizeId),
       builtModuleIds: (cfgAny.cells ?? []).map((c) => String(c?.moduleId ?? '')).filter(Boolean),
     },
     activeCampaigns,

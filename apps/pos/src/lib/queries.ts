@@ -797,6 +797,15 @@ const MFG_SIZE_CODE_TO_LIB: Record<string, string> = {
   K: 'king', Q: 'queen', S: 'single', SS: 'super-single',
 };
 
+/** Inverse of MFG_SIZE_CODE_TO_LIB: size_library.id → mfg size_code (UPPERCASE).
+ *  Used to feed the unified rule matcher a cart line's variant size_code
+ *  (the booked SKU's size_code equals this, so client/server stay drift-safe). */
+const SIZE_ID_TO_MFG: Record<string, string> = Object.fromEntries(
+  Object.entries(MFG_SIZE_CODE_TO_LIB).map(([code, id]) => [id, code]),
+);
+export const sizeIdToMfgCode = (sizeId: string | null | undefined): string | null =>
+  sizeId ? (SIZE_ID_TO_MFG[sizeId] ?? null) : null;
+
 export const useProductSizes = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,

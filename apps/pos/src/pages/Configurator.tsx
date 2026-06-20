@@ -53,6 +53,7 @@ import {
   useSoHeaderForAdd,
   useAddProductToPlacedSo,
   useRedeemablePwpCodesForOrder,
+  sizeIdToMfgCode,
   AddSoItemApiError,
   type AddSoItemBody,
   type RedeemablePwpCode,
@@ -1318,6 +1319,7 @@ export const Configurator = () => {
       {
         category: ficProductCategory,
         modelId: ficProductModelId,
+        sizeCode: sizeIdToMfgCode(pickedSizeId),
         builtModuleIds: sofaBuiltModules,
       },
       activeCampaigns,
@@ -1326,7 +1328,7 @@ export const Configurator = () => {
   }, [
     isAddToOrderMode,
     usePwp, insertedCode, sofaPwpApplied, orderPwpAutoApplied,
-    ficProductCategory, ficProductModelId, sofaBuiltModules,
+    ficProductCategory, ficProductModelId, pickedSizeId, sofaBuiltModules,
     activeCampaigns, comboModulesByIdForFic,
   ]);
   const ficSingleCampaign = ficCovering.length === 1 ? ficCovering[0]! : null;

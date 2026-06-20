@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useAuth } from './auth';
 import { useCart } from '../state/cart';
 import { useMfgProducts } from './products/mfg-products-queries';
-import { useModelDefaultGifts } from './queries';
+import { useModelDefaultGifts, sizeIdToMfgCode } from './queries';
 import {
   buildFreeGiftTriggers,
   computeDesiredFreeGifts,
@@ -40,16 +40,24 @@ export function useFreeGiftSync(): void {
 
     const triggerLines: TriggerLine[] = [];
     for (const l of useCart.getState().lines) {
-      const cfg = l.config as { kind?: string; productId?: string; isFreeGift?: boolean; modelId?: string | null };
+      const cfg = l.config as {
+        kind?: string; productId?: string; isFreeGift?: boolean; modelId?: string | null;
+        sizeId?: string; cells?: Array<{ moduleId?: unknown }>;
+      };
       const modelId = cfg.modelId ?? null;
+      const isSofa = cfg.kind === 'sofa';
       triggerLines.push({
         triggerKey: l.key,
         itemCode:   cfg.productId ?? l.key,
-        category:   cfg.kind === 'sofa' ? 'SOFA' : 'OTHER',
+        category:   isSofa ? 'SOFA' : 'OTHER',
         qty:        l.qty,
         modelId,
         buildKey:   l.key,                         // one cart line = one build
         isFreeGift: Boolean(cfg.isFreeGift),
+        sizeCode:   sizeIdToMfgCode(cfg.sizeId),
+        builtCompartments: isSofa
+          ? (cfg.cells ?? []).map((c) => String(c?.moduleId ?? '')).filter(Boolean)
+          : [],
         gifts:      modelId ? (giftsByModel.get(modelId) ?? []) : [],
       });
     }

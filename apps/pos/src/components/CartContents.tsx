@@ -7,7 +7,7 @@ import { useCart, cartSubtotal, cartSummary, type CartLine } from '../state/cart
 import { cartLineTitle, useMfgCatalogIndex } from '../lib/cart-display';
 import { useSaveQuote } from '../lib/quotes';
 import { useFreePwpCodes } from '../lib/products/pwp-queries';
-import { useActiveFreeItemCampaigns, useSofaCombos, type FreeItemCampaignRow } from '../lib/queries';
+import { useActiveFreeItemCampaigns, useSofaCombos, sizeIdToMfgCode, type FreeItemCampaignRow } from '../lib/queries';
 import { ProductThumb } from './ProductThumb';
 import { CountryPhoneInput } from './CountryPhoneInput';
 import styles from './CartContents.module.css';
@@ -218,6 +218,7 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit, activeCampaigns, comb
     freeItemCampaign?: string | null;
     pwp?: boolean;
     isFreeGift?: boolean;
+    sizeId?: string;
     cells?: Array<{ moduleId?: string }>;
   };
   const alreadyFree = Boolean(cfgAny.freeItemCampaignId);
@@ -227,6 +228,7 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit, activeCampaigns, comb
     {
       category: String(mfgRow?.category ?? ''),
       modelId: mfgRow?.modelId ?? null,
+      sizeCode: sizeIdToMfgCode(cfgAny.sizeId),
       builtModuleIds: (cfgAny.cells ?? []).map((c) => String(c?.moduleId ?? '')).filter(Boolean),
     },
     activeCampaigns,
