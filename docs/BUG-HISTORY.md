@@ -6,6 +6,34 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-20-010 — Candidate verification: 14 low-signal candidates triaged → 11 real, 3 confirmed non-bugs
+
+Verified the audit's remaining un-triaged low-signal candidates (one agent per themed group, each read the cited code). **11 confirmed real, 3 confirmed NOT bugs.** Backlog now fully triaged — nothing left in "needs investigation".
+
+**FIXED + shipped (commit `073cc6d0` batch 5):**
+- **C1** (MED) — SO/DO/SI HEADER select consts omitted `service_centi`/`service_cost_centi` though `recomputeTotals` writes them and the Totals card renders a Services row → a SERVICE line never showed in the per-category breakdown + the 4 rows didn't tie to the grand total. Added both columns to all 3 HEADER selects.
+- **C2** (MED) — DR convert-from-DO hardcoded `discountCenti:0` → refund/line-total overstated on a discounted DO line. Now carries `line.discountCenti` (mirrors the SI path). `delivery-returns.ts:996`.
+- **C6** (MED) — `verifyGrnOverReceipt` summed gross `qty_accepted` (ignored `returned_qty`) → a legit replacement GRN after a purchase return was falsely 409'd. Now nets `qty_accepted − returned_qty` (matches `recomputePoReceived`). `grns.ts`.
+
+**CONFIRMED real — NOT yet fixed (need decision / more than a one-liner):**
+- **C4** (MED) — deleting a `method='credit'` SI payment never reverses the `APPLIED_TO_SI` customer-credit ledger entry → the customer's credit balance is permanently destroyed. `sales-invoices.ts` DELETE payment + `customer-credits.ts`. Fix = write a positive contra entry on credit-payment delete (new ledger reversal — money/AR, do carefully).
+- **C12** (MED) — GRN warehouse-relocation re-enters stock at the stale GR price (`grn_items.unit_price_centi`), ignoring a PI recost → mis-valued lot + wrong future COGS. `grns.ts:1396`. Fix = source the unit cost from the live lot. (Inventory valuation — verify, don't ship blind.)
+- **C10** (MED) — Consignment-note payment POST has no over-payment cap (clones the un-capped DO path; the mfg SO caps). `consignment-notes.ts:718`. **Business decision** (same family as the consignment-SO cap): do consignment notes/DOs cap over-collection?
+- **C13** (LOW, LATENT) — SI/PI post the full tax-inclusive total to Revenue(4000)/Inventory(1200) with no tax-account split. **Harmless today (tax=0); breaks the moment SST/GST turns on.** Fix when tax is enabled.
+- **C9** (LOW) — DO/DR single-create + add-line paths read-before-write but never re-derive+rollback post-insert (the bulk paths do) → a true concurrent submit can over-deliver/over-return. `delivery-orders-mfg.ts`, `delivery-returns.ts`. (Single paths write inventory inline → a clean rollback is harder.)
+- **C5** (LOW) — PO from-sos validates each pick against the same snapshot with no per-`soItemId` aggregation → two picks of one line both pass. `mfg-purchase-orders.ts:843`. (Normal picker sends one pick per line, so edge-only.)
+- **C14** (LOW, partially mitigated) — no request-idempotency on stock-transfer/GRN/PR create; the UNIQUE doc-no serializes a true concurrent race, but a sequential double-submit mints two stock-moving docs. Fix = a client idempotency key (needs client+server, deferred per migration 0109 which dropped the movement unique indexes).
+- **C8** (LOW) — `POST /recompute-allocation` has no role gate (any staffer can trigger a global idempotent readiness recompute; no data exposure). `mfg-sales-orders.ts:3433`. Fix = `isPriceOverrideCaller` 403, **but verify no non-admin flow calls it first**.
+
+**Confirmed NON-bugs (3) — recorded, DO NOT re-chase:**
+- **C3** — `recomputePaid` else-branch resets to SENT and would clobber OVERDUE, BUT nothing in the system ever SETS SI status=OVERDUE (no cron/aging job; the status PATCH rejects hand-setting it). Unreachable state → dead defensive code, not a bug.
+- **C7** — `recostFromGrn` weighted-average is computed over PI lines (a qty-independent unit price), NOT gross `qty_accepted`; returns are separate reversal movements. The "ignores returned_qty" premise is factually wrong — no over-statement.
+- **C11** — multi-row consignment-warehouse state is unreachable: migration 0152 seeds exactly one under a `NOT EXISTS` guard, and no API write path accepts/writes `is_consignment`. `.maybeSingle()` can never see >1 row → latent-only, not a live bug.
+
+**Caught by:** owner asked "确保我们的 bugs 全系统都审核過了" — verified the last un-triaged candidates so every one is now either a pinned fix or a recorded non-bug.
+
+---
+
 ## BUG-2026-06-20-009 — Same-class sweep: 17 confirmed recurrences of the audit's bug-classes (0 refuted)
 
 After fixing the 13-slice audit (008), swept the WHOLE system for OTHER instances of each fixed bug-class — one agent per class, every finding re-verified by reading the code. **17 confirmed across 8 classes, 0 false positives**, plus a dedicated dead-lookup sweep.
