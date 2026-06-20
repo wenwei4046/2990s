@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Package, Trash2, FlipHorizontal2, Gift } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, matchComboSubset, comboChargedPrices, orderSofaCellsLeftToRight, campaignsCoveringLine, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, resolveFabricTierOverride, matchComboSubset, comboChargedPrices, orderSofaCellsLeftToRight, campaignsCoveringLine, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
 import { resolvePwp, type PwpLineInput } from '@2990s/shared/pwp';
 import { usePwpRules, useMyReservedPwpCodes, validatePwpCode } from '../lib/products/pwp-queries';
 import {
@@ -20,6 +20,7 @@ import {
   useSpecialAddons,
   useFabricTierAddonConfig,
   useModelFabricTierOverrides,
+  useCompartmentFabricTierOverrides,
   useAddons,
   useBedframeColours,
   useBedframeCustomizerData,
@@ -322,12 +323,28 @@ export const Configurator = () => {
   // migration 0172 — per-Model fabric-tier Δ override, resolved by this product's
   // model_id. Fed to every Δ surface so the figure matches the server recompute.
   const modelOverridesQ = useModelFabricTierOverrides();
-  const modelFabricOverride = useMemo(() => {
+  const baseModelOverride = useMemo(() => {
     const id = (product.data as { model_id?: string | null } | null)?.model_id ?? null;
     if (!id) return null;
     const row = (modelOverridesQ.data ?? []).find((r) => r.modelId === id);
     return row ? { tier2Delta: row.tier2Delta, tier3Delta: row.tier3Delta } : null;
   }, [modelOverridesQ.data, product.data]);
+  // migration 0184 — per-compartment Δ overrides, folded into the effective Δ via
+  // the shared resolveFabricTierOverride (MAX over the SET model + matching
+  // compartment values). This Configurator surface drives the Quick-Pick sofa +
+  // bedframe paths, which both use the Model override ONLY (Quick-Pick bundles and
+  // non-sofa lines have no custom cells to match) — so resolve is called with no
+  // compartments and returns the Model override unchanged. Custom sofa builds run
+  // through the CustomBuilder child, which resolves against its own live cells.
+  const compartmentOverridesQ = useCompartmentFabricTierOverrides();
+  const compartmentOverrideMap = useMemo(
+    () => new Map((compartmentOverridesQ.data ?? []).map((r) => [r.compartmentId, { tier2Delta: r.tier2Delta, tier3Delta: r.tier3Delta }])),
+    [compartmentOverridesQ.data],
+  );
+  const modelFabricOverride = useMemo(
+    () => resolveFabricTierOverride([], baseModelOverride, compartmentOverrideMap),
+    [baseModelOverride, compartmentOverrideMap],
+  );
 
   // Fabrics are a SERIES (fabric_library) / COLOUR (fabric_colours) library
   // synced from the Backend Fabric Converter (migration 0127). A Model offers a

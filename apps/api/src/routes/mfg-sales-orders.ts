@@ -10,6 +10,7 @@ import {
   buildVariantSummary, comboChargedPrices, matchComboSubset, type SofaComboRow, type SofaPriceTier,
   oneShotSofaCode, oneShotSimpleCode, remarkSlug,
   fabricTierAddon,
+  resolveFabricTierOverride,
   validateFreeGiftClaims, buildFreeGiftTriggers,
   type FreeGiftLineClaim, type TriggerLine,
   campaignsCoveringLine,
@@ -18,6 +19,7 @@ import {
   passesRefinementColumns,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
+import { buildCompartmentsFromModuleLines } from '../lib/compartments-from-module-lines';
 /* POS auto-Proceed (Loo 2026-06-09) — when a handover arrives already complete
    (customer + address + delivery date + ≥50% paid) we stamp proceeded_at at
    create so the order lands in Proceed without a manual click. Same gate the
@@ -70,6 +72,7 @@ import {
   loadFabricSellingTiersByIds,
   loadFabricTierAddonConfig,
   loadModelFabricTierOverrides,
+  loadCompartmentFabricTierOverrides,
   loadModelDefaultGifts,
   loadModelSofaModulePrices,
   loadModelSofaModuleCostRows,
@@ -1801,6 +1804,7 @@ mfgSalesOrders.post('/', async (c) => {
   const cachedCombos = await loadActiveSofaCombos(sb);  // Phase 4b — sofa selling recompute
   const cachedFabricAddonConfig = await loadFabricTierAddonConfig(sb);  // migration 0124 — fabric-tier Δ
   const cachedModelOverrides = await loadModelFabricTierOverrides(sb);  // migration 0172 — per-Model Δ
+  const cachedCompartmentOverrides = await loadCompartmentFabricTierOverrides(sb);  // migration 0184 — per-compartment Δ
 
   /* Loo 2026-06-05 — maintained-dropdown 409 gate. Runs BEFORE any side
      effect (customer upsert, PWP claims) so a rejected request leaves
@@ -2275,7 +2279,7 @@ mfgSalesOrders.post('/', async (c) => {
     // change. PWP always wins if both somehow apply (a gift is non-sofa, no code).
     const pwpBaseSen = pwpBaseByIdx.get(idx) ?? freeGiftBaseByIdx.get(idx) ?? null;
     const pwpSofaComboIds = pwpSofaByIdx.get(idx) ?? null;
-    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, pwpBaseSen, pwpSofaComboIds, cachedSpecialAddons, sofaModuleCostRows, cachedModelOverrides);
+    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig, pwpBaseSen, pwpSofaComboIds, cachedSpecialAddons, sofaModuleCostRows, cachedModelOverrides, cachedCompartmentOverrides);
   }));
   /* Commander 2026-05-29 (system-wide) — the SELLING unit price is now
      operator-authored on every SO line. The product price tables are COST,
@@ -4451,7 +4455,7 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     );
     if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeStr }, 400);
   }
-  const [cachedConfig, productLite, fabricLite, sofaCombosLite, sellingTiersLite, fabricAddonConfigLite, specialAddonsLite, modelOverridesLite] = await Promise.all([
+  const [cachedConfig, productLite, fabricLite, sofaCombosLite, sellingTiersLite, fabricAddonConfigLite, specialAddonsLite, modelOverridesLite, compartmentOverridesLite] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadProductByCode(sb, itemCodeStr),
     loadFabricByCode(sb, variantsObj?.fabricCode ?? null),
@@ -4460,6 +4464,7 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     loadFabricTierAddonConfig(sb),
     loadSpecialAddons(sb),
     loadModelFabricTierOverrides(sb),
+    loadCompartmentFabricTierOverrides(sb),
   ]);
   // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
   // Audit 2026-06-11 C2 — module COST rows so a build's cost = Σ module costs.
@@ -4589,6 +4594,7 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     specialAddonsLite,
     sofaModuleCostRowsLite,
     modelOverridesLite,      // migration 0172 — per-Model Δ
+    compartmentOverridesLite, // migration 0184 — per-compartment Δ
   );
   /* Pricing trust boundary (Owner 2026-05-31, see isPosTabletCaller). POS tablet
      roles are drift-rejected + take the server price; Backend / office authors
@@ -4951,7 +4957,7 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeAfter }, 400);
   }
   if (shouldRecompute && itemCodeAfter) {
-    const [cfg, prodLite, fabLite, sofaCombosPatch, sellingTiersPatch, fabricAddonConfigPatch, specialAddonsPatch, modelOverridesPatch] = await Promise.all([
+    const [cfg, prodLite, fabLite, sofaCombosPatch, sellingTiersPatch, fabricAddonConfigPatch, specialAddonsPatch, modelOverridesPatch, compartmentOverridesPatch] = await Promise.all([
       loadMaintenanceConfig(sb),
       loadProductByCode(sb, itemCodeAfter),
       loadFabricByCode(sb, variantsAfter?.fabricCode ?? null),
@@ -4960,6 +4966,7 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       loadFabricTierAddonConfig(sb),
       loadSpecialAddons(sb),
       loadModelFabricTierOverrides(sb),
+      loadCompartmentFabricTierOverrides(sb),
     ]);
     // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
     // Audit 2026-06-11 C2 — module COST rows so a build's cost = Σ module costs.
@@ -4993,6 +5000,7 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       specialAddonsPatch,
       sofaModuleCostRowsPatch,
       modelOverridesPatch, // migration 0172 — per-Model Δ
+      compartmentOverridesPatch, // migration 0184 — per-compartment Δ
     );
     /* Task 6 — grandfathering: a line already carrying variants.freeItem was
        made free at create time and must STAY at RM 0 on edit recompute, even
@@ -5359,7 +5367,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-update', async (c) => {
     if (aoErr) return c.json({ ...aoErr, itemCode: prev.item_code }, 400);
   }
 
-  const [cfg, prodLite, fabPrev, fabNext, tiersPrev, tiersNext, addonCfg, specialDefs, modelOverrides] = await Promise.all([
+  const [cfg, prodLite, fabPrev, fabNext, tiersPrev, tiersNext, addonCfg, specialDefs, modelOverrides, compartmentOverrides] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadProductByCode(sb, prev.item_code),
     loadFabricByCode(sb, (prevVariants.fabricCode as string | undefined) ?? null),
@@ -5369,6 +5377,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-update', async (c) => {
     loadFabricTierAddonConfig(sb),
     loadSpecialAddons(sb),
     loadModelFabricTierOverrides(sb),
+    loadCompartmentFabricTierOverrides(sb),
   ]);
   /* Two snapshots, identical base inputs — only `variants` (and its fabric
      row) differ, so base / combo / PWP terms cancel in the difference. The
@@ -5390,7 +5399,37 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-update', async (c) => {
   const category = String(prodLite?.category ?? '').toUpperCase();
   // migration 0172 — per-Model Δ override (same for prev/next; the Model doesn't
   // change on a TBC fill-in). Resolved by the line's model_id, replaces global.
-  const tbcOverride = (modelOverrides && prodLite?.model_id) ? (modelOverrides.get(prodLite.model_id) ?? null) : null;
+  // migration 0184 — folded with any matching per-compartment Δ (MAX per tier)
+  // over the build's cells; cells don't change on a TBC fill-in (fabric only).
+  const tbcBaseOverride = (modelOverrides && prodLite?.model_id) ? (modelOverrides.get(prodLite.model_id) ?? null) : null;
+  /* A persisted split-sofa module line STRIPS `variants.cells`, so the build's
+     compartment codes can't be read off `nextVariants` — that yielded `[]` and
+     resolved model-only, under-charging a build that carries a per-compartment
+     Δ (the POS preview showed the higher Δ but the server billed less; no drift
+     gate here). Reconstruct them from the SIBLING module lines' item_code
+     suffix, the same way planSofaRewardRevert / the create path do. */
+  let tbcCells: string[] = [];
+  if (category === 'SOFA') {
+    const buildKeyForCells = (prevVariants.buildKey as string | undefined) ?? null;
+    if (buildKeyForCells) {
+      const { data: cellRows } = await sb.from('mfg_sales_order_items')
+        .select('item_code, variants')
+        .eq('doc_no', docNo).eq('cancelled', false)
+        .filter('variants->>buildKey', 'eq', buildKeyForCells);
+      tbcCells = buildCompartmentsFromModuleLines(
+        ((cellRows ?? []) as Array<{ item_code: string; variants: Record<string, unknown> | null }>)
+          .map((r) => ({ item_code: r.item_code, buildKey: String((r.variants ?? {}).buildKey ?? '') })),
+        buildKeyForCells,
+      );
+    } else {
+      // Not a split build (whole-unit code carries cells inline) — fall back to
+      // the inline cells if present.
+      tbcCells = Array.isArray((nextVariants as { cells?: unknown }).cells)
+        ? ((nextVariants as { cells?: Array<{ moduleId?: unknown }> }).cells ?? []).map((cl) => String(cl?.moduleId ?? '')).filter(Boolean)
+        : [];
+    }
+  }
+  const tbcOverride = resolveFabricTierOverride(tbcCells, tbcBaseOverride, compartmentOverrides ?? new Map());
   const tierDeltaCenti = (addonCfg && (category === 'SOFA' || category === 'BEDFRAME'))
     ? (fabricTierAddon(category, (category === 'SOFA' ? tiersNext?.sofaTier : tiersNext?.bedframeTier) ?? null, addonCfg, tbcOverride)
      - fabricTierAddon(category, (category === 'SOFA' ? tiersPrev?.sofaTier : tiersPrev?.bedframeTier) ?? null, addonCfg, tbcOverride)) * 100
@@ -5768,11 +5807,12 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
   }
   if (rewardLinesToRevert.length > 0 || pwpDeleteCodes.length > 0 || pwpRevertCodes.length > 0 || pwpNewlyTriggered.length > 0) {
     // Loaders only when the re-evaluation actually has work to do.
-    const [cfgX, addonCfgX, specialDefsX, modelOverridesX] = await Promise.all([
+    const [cfgX, addonCfgX, specialDefsX, modelOverridesX, compartmentOverridesX] = await Promise.all([
       loadMaintenanceConfig(sb),
       loadFabricTierAddonConfig(sb),
       loadSpecialAddons(sb),
       loadModelFabricTierOverrides(sb),
+      loadCompartmentFabricTierOverrides(sb),
     ]);
     // 1. Rewards whose trigger is gone revert to their normal price (picks +
     //    surcharges survive; pwp markers stripped). clientUnit 0 lets the
@@ -5787,7 +5827,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap', async (c) => {
       ]);
       const rec = recomputeFromSnapshot(
         { itemCode: line.item_code, itemGroup: String(line.item_group ?? 'others'), qty: Number(line.qty), unitPriceCenti: 0, variants: v as MfgItemForRecompute['variants'] },
-        rp, rfab, cfgX, null, null, rtiers, addonCfgX, null, null, specialDefsX, null, modelOverridesX,
+        rp, rfab, cfgX, null, null, rtiers, addonCfgX, null, null, specialDefsX, null, modelOverridesX, compartmentOverridesX,
       );
       const revertUnit = rec.unit_price_sen > 0 ? rec.unit_price_sen : Number(line.unit_price_centi);
       const lqty = Number(line.qty);
@@ -5955,7 +5995,7 @@ async function planSofaRewardRevert(
     };
   });
   const depth = String(leadV.depth ?? '24');
-  const [cfg, prodLite, fabLite, combos, sellingTiers, addonCfg, specialDefs, modulePrices, modelOverridesLead] = await Promise.all([
+  const [cfg, prodLite, fabLite, combos, sellingTiers, addonCfg, specialDefs, modulePrices, modelOverridesLead, compartmentOverridesLead] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadProductByCode(sb, lead.item_code),
     loadFabricByCode(sb, (leadV.fabricCode as string | undefined) ?? null),
@@ -5965,6 +6005,7 @@ async function planSofaRewardRevert(
     loadSpecialAddons(sb),
     loadModelSofaModulePrices(sb, splitSofaCode(lead.item_code).baseModel, depth),
     loadModelFabricTierOverrides(sb),
+    loadCompartmentFabricTierOverrides(sb),
   ]);
   if (!prodLite || !modulePrices) return { ok: false };
   const pricingVariants: Record<string, unknown> = { ...leadV, cells };
@@ -5975,7 +6016,7 @@ async function planSofaRewardRevert(
     { itemCode: lead.item_code, itemGroup: 'sofa', qty: Number(lead.qty), unitPriceCenti: 0, variants: pricingVariants as MfgItemForRecompute['variants'] },
     prodLite, fabLite, cfg, combos, modulePrices, sellingTiers, addonCfg,
     null, null,   // NO pwp grant — this IS the revert
-    specialDefs, null, modelOverridesLead,
+    specialDefs, null, modelOverridesLead, compartmentOverridesLead,
   );
   if (rec.unit_price_sen <= 0) return { ok: false };
   const split = splitSofaBuildIntoModuleLines({
@@ -6125,7 +6166,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
 
   /* Authoritative reprice — the SAME inputs as SO create / item PATCH. */
   const depth = String((newVariants as { depth?: unknown }).depth ?? '24');
-  const [cfg, fabLite, combos, sellingTiers, fabricAddonCfg, specialDefs, modulePrices, moduleCostRows, modelOverridesSwap] = await Promise.all([
+  const [cfg, fabLite, combos, sellingTiers, fabricAddonCfg, specialDefs, modulePrices, moduleCostRows, modelOverridesSwap, compartmentOverridesSwap] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadFabricByCode(sb, (newVariants.fabricCode as string | undefined) ?? null),
     loadActiveSofaCombos(sb),
@@ -6135,6 +6176,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
     loadModelSofaModulePrices(sb, prodLite.base_model, depth),
     loadModelSofaModuleCostRows(sb, prodLite.base_model),
     loadModelFabricTierOverrides(sb),
+    loadCompartmentFabricTierOverrides(sb),
   ]);
   const qty = Math.max(1, Math.floor(Number(item.qty ?? 1)));
   const clientUnit = Math.max(0, Math.round(Number(item.unitPriceCenti ?? 0)));
@@ -6157,7 +6199,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
     prodLite, fabLite, cfg, combos, modulePrices, sellingTiers, fabricAddonCfg,
     null,
     rewardComboMatch && rewardCtx ? rewardCtx.comboIds : null,
-    specialDefs, moduleCostRows, modelOverridesSwap,
+    specialDefs, moduleCostRows, modelOverridesSwap, compartmentOverridesSwap,
   );
   const posTablet = await isPosTabletCaller(sb, user.id);
   /* Reward swaps skip the drift COMPARISON (the POS configurator prices the
@@ -6492,7 +6534,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
       ]);
       const rec = recomputeFromSnapshot(
         { itemCode: line.item_code, itemGroup: String(line.item_group ?? 'others'), qty: Number(line.qty), unitPriceCenti: 0, variants: v as MfgItemForRecompute['variants'] },
-        rp, rfab, cfg, null, null, rtiers, fabricAddonCfg, null, null, specialDefs, null, modelOverridesSwap,
+        rp, rfab, cfg, null, null, rtiers, fabricAddonCfg, null, null, specialDefs, null, modelOverridesSwap, compartmentOverridesSwap,
       );
       const revertUnit = rec.unit_price_sen > 0 ? rec.unit_price_sen : Number(line.unit_price_centi);
       const lqty = Number(line.qty);

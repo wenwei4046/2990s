@@ -20,12 +20,15 @@ import {
   type FabricTier,
   type FabricTierModelOverride,
 } from '@2990s/shared/fabric-tier-addon';
+import { resolveFabricTierOverride } from '@2990s/shared';
 import {
+  loadCompartmentFabricTierOverrides,
   loadFabricSellingTiersByIds,
   loadFabricTierAddonConfig,
   loadModelFabricTierOverrides,
   loadProductsByCodes,
 } from './mfg-pricing-recompute';
+import { buildCompartmentsFromModuleLines } from './compartments-from-module-lines';
 
 const chunk = <T>(arr: T[], size: number): T[][] => {
   const out: T[][] = [];
@@ -101,11 +104,36 @@ export async function loadKpiUnitsByDoc(sb: any, docNos: string[]): Promise<KpiU
   const tiersByFabricId = new Map<string, TierLite>();
   const addonConfig = hasFabricFlag ? await loadFabricTierAddonConfig(sb) : null;
   const modelOverrides = hasFabricFlag ? await loadModelFabricTierOverrides(sb) : new Map<string, FabricTierModelOverride>();
+  // migration 0184 — per-compartment Δ map. A sofa billed a compartment-driven Δ
+  // would under-report on model-only resolution, so the reported Δ matches what
+  // was billed (keeps the "never drift" promise true).
+  const compartmentOverrides = hasFabricFlag ? await loadCompartmentFabricTierOverrides(sb) : new Map<string, FabricTierModelOverride>();
   if (hasFabricFlag) {
     for (const b of chunk(uniqNonEmpty(fabricFlaggedLines.map((l) => l.item_code)), 200))
       for (const [k, v] of await loadProductsByCodes(sb, b)) productByCode.set(k, v as ProductLite);
     for (const b of chunk(uniqNonEmpty(fabricFlaggedLines.map((l) => fabricIdOf(l.variants) ?? '')), 200))
       for (const [k, v] of await loadFabricSellingTiersByIds(sb, b)) tiersByFabricId.set(k, v);
+  }
+  // Reconstruct each split sofa build's compartment codes from its module lines'
+  // item_code suffix (a persisted split build STRIPS variants.cells). Keyed by
+  // `${doc}::${buildKey}` so a build's per-compartment Δ resolves across modules.
+  const compartmentsByBuild = new Map<string, string[]>();
+  if (hasFabricFlag) {
+    const buildGroups = new Map<string, LineRow[]>();
+    for (const l of lines) {
+      const bk = norm((l.variants ?? {}).buildKey);
+      if (!bk) continue;
+      const key = `${l.doc_no}::${bk}`;
+      const arr = buildGroups.get(key) ?? [];
+      arr.push(l); buildGroups.set(key, arr);
+    }
+    for (const [key, group] of buildGroups) {
+      const bk = key.slice(key.indexOf('::') + 2);
+      compartmentsByBuild.set(key, buildCompartmentsFromModuleLines(
+        group.map((l) => ({ item_code: l.item_code, buildKey: norm((l.variants ?? {}).buildKey) })),
+        bk,
+      ));
+    }
   }
 
   // The flat fabric-tier Δ a single built item charged (centi). SOFA / BEDFRAME
@@ -125,7 +153,15 @@ export async function loadKpiUnitsByDoc(sb: any, docNos: string[]): Promise<KpiU
     const category: FabricAddonCategory = cat;
     const tiers = tiersByFabricId.get(fid);
     const tier = category === 'SOFA' ? tiers?.sofaTier : tiers?.bedframeTier;
-    const override = product?.model_id ? (modelOverrides.get(product.model_id) ?? null) : null;
+    const baseOverride = product?.model_id ? (modelOverrides.get(product.model_id) ?? null) : null;
+    // Fold the per-Model Δ with any per-compartment Δ matching this build's
+    // cells (MAX per tier), exactly as the SO recompute billed — SOFA only
+    // (a bedframe has no per-module compartments). Reconstructed from the build.
+    const bk = norm((l.variants ?? {}).buildKey);
+    const buildCompartments = category === 'SOFA' && bk
+      ? (compartmentsByBuild.get(`${l.doc_no}::${bk}`) ?? [])
+      : [];
+    const override = resolveFabricTierOverride(buildCompartments, baseOverride, compartmentOverrides);
     return fabricTierAddon(category, tier ?? null, addonConfig, override) * 100;
   };
 

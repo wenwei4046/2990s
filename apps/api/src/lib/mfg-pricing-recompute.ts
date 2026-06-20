@@ -48,6 +48,7 @@ import {
   type FabricTierAddonConfig,
   type FabricTierModelOverride,
 } from '@2990s/shared/fabric-tier-addon';
+import { resolveFabricTierOverride } from '@2990s/shared';
 import { type PwpRule } from '@2990s/shared/pwp';
 import { parseDefaultFreeGifts, type DefaultFreeGift, type FreeItemCampaign, parseFreeItemEligible } from '@2990s/shared';
 
@@ -261,6 +262,13 @@ export function recomputeFromSnapshot(
    *  → global (back-compatible). Resolved here so every caller only passes the
    *  map (loaded once). Selling-only; POS resolves the same map by model_id. */
   modelFabricOverrides: Map<string, FabricTierModelOverride> | null = null,
+  /* Per-compartment fabric-tier Δ overrides (migration 0184), keyed by
+     compartment_id. For a SOFA custom build, the effective Δ per tier is the
+     MAX over the SET special values (the Model override + every override whose
+     compartment code is in the build's cells); resolved via the shared
+     resolveFabricTierOverride so POS and server agree. null map → model-only
+     path (back-compatible). Quick-Pick bundles + non-sofa lines: model only. */
+  compartmentFabricOverrides: Map<string, FabricTierModelOverride> | null = null,
 ): RecomputedLine {
   const category = toMfgCategory(item.itemGroup, product?.category ?? '');
   const variants = item.variants ?? {};
@@ -492,9 +500,20 @@ export function recomputeFromSnapshot(
     : category === 'BEDFRAME'
       ? (sellingFabricTiers?.bedframeTier ?? null)
       : null;
-  const modelOverride = (modelFabricOverrides && product?.model_id)
+  const baseModelOverride = (modelFabricOverrides && product?.model_id)
     ? (modelFabricOverrides.get(product.model_id) ?? null)
     : null;
+  // Compartment matching is on the custom build's cells (normalized inside
+  // resolveFabricTierOverride). Quick-Pick / non-sofa lines have no cells →
+  // empty list → resolve returns the Model override unchanged.
+  const buildCompartments = (category === 'SOFA' && Array.isArray(sofaCells))
+    ? (sofaCells as Array<{ moduleId?: unknown }>).map((c) => String(c?.moduleId ?? '')).filter(Boolean)
+    : [];
+  const modelOverride = resolveFabricTierOverride(
+    buildCompartments,
+    baseModelOverride,
+    compartmentFabricOverrides ?? new Map(),
+  );
   const fabricAddonCenti = (fabricAddonConfig && (category === 'SOFA' || category === 'BEDFRAME'))
     ? fabricTierAddon(category, sellingTier, fabricAddonConfig, modelOverride) * 100
     : 0;
@@ -804,6 +823,25 @@ export async function loadModelFabricTierOverrides(
   return new Map(rows.map((r) => [r.model_id, { tier2Delta: r.tier2_delta, tier3Delta: r.tier3_delta }]));
 }
 
+/** Load all per-compartment fabric-tier Δ overrides (migration 0184) keyed by
+ *  compartment_id. Small table (one row per special compartment) → one query.
+ *  resolveFabricTierOverride takes the MAX of these + the Model override per
+ *  tier for a SOFA custom build. Missing / error → empty map (every build
+ *  falls back to the Model-only path; back-compatible if 0184 hasn't landed
+ *  yet — the table may not exist before the migration is applied). */
+export async function loadCompartmentFabricTierOverrides(
+  sb: any,
+): Promise<Map<string, FabricTierModelOverride>> {
+  const { data, error } = await sb
+    .from('compartment_fabric_tier_overrides')
+    .select('compartment_id, tier2_delta, tier3_delta');
+  // Intentional model-only fallback on error (table may not exist pre-0184) —
+  // we DON'T throw, but a real misconfiguration must not be silent.
+  if (error) console.error('loadCompartmentFabricTierOverrides failed (falling back to model-only Δ):', error.message ?? error);
+  const rows = (data as Array<{ compartment_id: string; tier2_delta: number | null; tier3_delta: number | null }>) ?? [];
+  return new Map(rows.map((r) => [r.compartment_id, { tier2Delta: r.tier2_delta, tier3Delta: r.tier3_delta }]));
+}
+
 /** Load all per-Model default free gifts (migration 0174) keyed by model_id.
  *  Small table (one row per gifted Model) → one query. Missing/error → empty
  *  map (Models with no row grant no gift). */
@@ -863,12 +901,13 @@ export async function recomputeOneLine(
   cachedConfig?: MaintenanceConfig | null,
 ): Promise<RecomputedLine> {
   const config = cachedConfig ?? await loadMaintenanceConfig(sb);
-  const [product, fabric, sellingTiers, fabricAddonConfig, modelOverrides] = await Promise.all([
+  const [product, fabric, sellingTiers, fabricAddonConfig, modelOverrides, compartmentOverrides] = await Promise.all([
     loadProductByCode(sb, item.itemCode),
     loadFabricByCode(sb, item.variants?.fabricCode ?? null),
     loadFabricSellingTiers(sb, item.variants?.fabricId ?? null),
     loadFabricTierAddonConfig(sb),
     loadModelFabricTierOverrides(sb),
+    loadCompartmentFabricTierOverrides(sb),
   ]);
   const [sofaModulePrices, sofaModuleCostRows] = product?.category === 'SOFA'
     ? await Promise.all([
@@ -880,5 +919,5 @@ export async function recomputeOneLine(
         loadModelSofaModuleCostRows(sb, product.base_model),
       ])
     : [null, null];
-  return recomputeFromSnapshot(item, product, fabric, config, null, sofaModulePrices, sellingTiers, fabricAddonConfig, null, null, null, sofaModuleCostRows, modelOverrides);
+  return recomputeFromSnapshot(item, product, fabric, config, null, sofaModulePrices, sellingTiers, fabricAddonConfig, null, null, null, sofaModuleCostRows, modelOverrides, compartmentOverrides);
 }

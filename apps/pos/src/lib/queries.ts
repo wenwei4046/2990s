@@ -1914,6 +1914,77 @@ export const useDeleteModelFabricTierOverride = () => {
   });
 };
 
+/* ─── Per-compartment fabric-tier Δ overrides (migration 0184) ─── */
+
+export interface CompartmentFabricTierOverrideRow {
+  compartmentId: string;
+  tier2Delta:    number | null;   // whole MYR; null = inherit global
+  tier3Delta:    number | null;
+}
+
+/** List compartment codes tagged with a fabric-tier override. Read by the
+ *  Master editor AND every POS Δ surface so the shown add-on matches what
+ *  the server charges for a special compartment on a custom build. */
+export const useCompartmentFabricTierOverrides = () =>
+  useQuery({
+    queryKey: ['compartment-fabric-tier-overrides'],
+    queryFn: async (): Promise<CompartmentFabricTierOverrideRow[]> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/fabric-tier-addon/compartment-special`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`GET /fabric-tier-addon/compartment-special failed (${res.status})`);
+      return (await res.json()) as CompartmentFabricTierOverrideRow[];
+    },
+    staleTime: 60_000,
+  });
+
+export const useUpsertCompartmentFabricTierOverride = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (row: { compartmentId: string; tier2Delta: number | null; tier3Delta: number | null }) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/fabric-tier-addon/compartment-special`, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(row),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `PUT /fabric-tier-addon/compartment-special failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['compartment-fabric-tier-overrides'] }); },
+  });
+};
+
+export const useDeleteCompartmentFabricTierOverride = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (compartmentId: string) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/fabric-tier-addon/compartment-special/${encodeURIComponent(compartmentId)}`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `DELETE /fabric-tier-addon/compartment-special failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['compartment-fabric-tier-overrides'] }); },
+  });
+};
+
 /* ─── Per-Model default free gifts (migration 0174) ────────────────────
  *
  * GET /model-free-gifts   → list of ModelDefaultGiftRow
