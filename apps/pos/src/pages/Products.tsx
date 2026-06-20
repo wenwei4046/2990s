@@ -100,7 +100,7 @@ import {
   type ProductSupplierRow,
 } from '../lib/products/mfg-products-queries';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
-import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useModelFabricTierOverrides, useUpsertModelFabricTierOverride, useDeleteModelFabricTierOverride, useAddons, type AddonRow, type FabricLibraryRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, useAllAddons, useUpdateAddon, useCreateAddon, useDeleteAddon, type AdminAddonRow } from '../lib/queries';
+import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useModelFabricTierOverrides, useUpsertModelFabricTierOverride, useDeleteModelFabricTierOverride, useCompartmentPool, useCompartmentFabricTierOverrides, useUpsertCompartmentFabricTierOverride, useDeleteCompartmentFabricTierOverride, useAddons, type AddonRow, type FabricLibraryRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, useAllAddons, useUpdateAddon, useCreateAddon, useDeleteAddon, type AdminAddonRow } from '../lib/queries';
 import {
   useProductModels,
   useProductModel,
@@ -4827,6 +4827,28 @@ const FabricPricingPanel = () => {
     } catch (err) { setOvError(String((err as Error).message ?? err)); }
   };
 
+  // Per-compartment special prices (migration 0184).
+  const compartmentPool   = useCompartmentPool();
+  const cmpOverrides      = useCompartmentFabricTierOverrides();
+  const upsertCmpOverride = useUpsertCompartmentFabricTierOverride();
+  const deleteCmpOverride = useDeleteCompartmentFabricTierOverride();
+  const [cmpId, setCmpId] = useState('');
+  const [cmpP2, setCmpP2] = useState<number | ''>('');
+  const [cmpP3, setCmpP3] = useState<number | ''>('');
+  const [cmpError, setCmpError] = useState<string | null>(null);
+  const saveCmpOverride = async () => {
+    setCmpError(null);
+    if (!cmpId) { setCmpError('Pick a compartment.'); return; }
+    try {
+      await upsertCmpOverride.mutateAsync({
+        compartmentId: cmpId,
+        tier2Delta:    cmpP2 === '' ? null : (cmpP2 as number),
+        tier3Delta:    cmpP3 === '' ? null : (cmpP3 as number),
+      });
+      setCmpId(''); setCmpP2(''); setCmpP3('');
+    } catch (err) { setCmpError(String((err as Error).message ?? err)); }
+  };
+
   const [sofa2, setSofa2] = useState<number | ''>('');
   const [sofa3, setSofa3] = useState<number | ''>('');
   const [bed2, setBed2]   = useState<number | ''>('');
@@ -5022,6 +5044,90 @@ const FabricPricingPanel = () => {
                   <td style={{ padding: '6px 8px' }}>
                     <button
                       type="button" onClick={() => deleteOverride.mutate(r.modelId)} disabled={deleteOverride.isPending}
+                      style={{ padding: '4px 10px', fontSize: 'var(--fs-13)', borderRadius: 'var(--radius-md)', border: '1px solid var(--line)', background: 'transparent', cursor: 'pointer' }}
+                    >
+                      Clear
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <h3 style={{ fontSize: 'var(--fs-15)', fontWeight: 600, margin: 'var(--space-6) 0 var(--space-1)' }}>Per-compartment special prices</h3>
+      <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
+        给个别部件（compartment）设特别的 fabric-tier 加价，只在 custom build 命中该部件时生效。留空 = 沿用上面的标准；填 0 = 该部件该档免费。
+      </p>
+      <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
+        取最高 — 一张沙发同时命中型号和部件（或多个部件）时,用最贵的那个;设 0(免费)只在没有更贵的特别价时生效。
+      </p>
+
+      {canEdit && (
+        <>
+          <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 'var(--space-1)' }}>
+            <div style={{ minWidth: 220, flex: '1 1 220px' }}>
+              <label htmlFor="cmp-ov-id" style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>Compartment</label>
+              <select
+                id="cmp-ov-id" value={cmpId} onChange={(e) => setCmpId(e.target.value)}
+                style={{ width: '100%', height: 38, boxSizing: 'border-box', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' }}
+              >
+                <option value="">Select a compartment…</option>
+                {compartmentPool.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ minWidth: 150, flex: '1 1 150px' }}>
+              <label htmlFor="cmp-ov-p2" style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>Price 2 (+RM)</label>
+              <input
+                id="cmp-ov-p2" type="number" min={0} step={1} value={cmpP2}
+                onChange={(e) => setCmpP2(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
+                style={{ width: '100%', height: 38, boxSizing: 'border-box', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' }}
+              />
+            </div>
+            <div style={{ minWidth: 150, flex: '1 1 150px' }}>
+              <label htmlFor="cmp-ov-p3" style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>Price 3 (+RM)</label>
+              <input
+                id="cmp-ov-p3" type="number" min={0} step={1} value={cmpP3}
+                onChange={(e) => setCmpP3(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
+                style={{ width: '100%', height: 38, boxSizing: 'border-box', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: 'var(--c-cream)' }}
+              />
+            </div>
+            <Button variant="primary" onClick={() => void saveCmpOverride()} disabled={upsertCmpOverride.isPending}>
+              {upsertCmpOverride.isPending ? 'Saving…' : 'Add / Save'}
+            </Button>
+          </div>
+          <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>留空 = 沿用上面的标准；填 0 = 该档免费。</p>
+        </>
+      )}
+      {cmpError && <div role="alert" style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }}>{cmpError}</div>}
+
+      {cmpOverrides.isLoading ? (
+        <div style={{ color: 'var(--fg-muted)' }}>Loading…</div>
+      ) : (cmpOverrides.data ?? []).length === 0 ? (
+        <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>No per-compartment specials — every compartment uses the standard above.</div>
+      ) : (
+        <table style={{ borderCollapse: 'collapse', width: '100%', maxWidth: 640 }}>
+          <thead>
+            <tr style={{ textAlign: 'left', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+              <th style={{ padding: '6px 8px' }}>Compartment</th>
+              <th style={{ padding: '6px 8px' }}>Price 2</th>
+              <th style={{ padding: '6px 8px' }}>Price 3</th>
+              {canEdit && <th style={{ padding: '6px 8px' }} />}
+            </tr>
+          </thead>
+          <tbody>
+            {(cmpOverrides.data ?? []).map((r) => (
+              <tr key={r.compartmentId} style={{ borderTop: '1px solid var(--line)' }}>
+                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>{r.compartmentId}</td>
+                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>{r.tier2Delta === null ? 'standard' : `+RM${r.tier2Delta}`}</td>
+                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>{r.tier3Delta === null ? 'standard' : `+RM${r.tier3Delta}`}</td>
+                {canEdit && (
+                  <td style={{ padding: '6px 8px' }}>
+                    <button
+                      type="button" onClick={() => deleteCmpOverride.mutate(r.compartmentId)} disabled={deleteCmpOverride.isPending}
                       style={{ padding: '4px 10px', fontSize: 'var(--fs-13)', borderRadius: 'var(--radius-md)', border: '1px solid var(--line)', background: 'transparent', cursor: 'pointer' }}
                     >
                       Clear
