@@ -68,8 +68,15 @@ export function computeSaveDiffs<T>(
   return diffs;
 }
 
+/** A money/qty field cleared to 0 reads back as null (or '') and vice-versa —
+ *  that is NOT a failed save, so 0 / null / undefined / '' are ONE "empty"
+ *  bucket (HOOKKA BUG-2026-06-12-006: zeroing a money field must not false-alarm
+ *  "save did not take effect"). A genuine change (0 → 100) is still flagged. */
+const emptyish = (v: unknown): boolean => v == null || v === '' || v === 0;
+
 function valuesEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
+  if (emptyish(a) && emptyish(b)) return true;
   if (a == null || b == null) return a === b;
   if (typeof a === 'object' || typeof b === 'object') {
     try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }

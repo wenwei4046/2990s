@@ -20,6 +20,13 @@ describe('computeSaveDiffs', () => {
     expect(computeSaveDiffs({ x: null }, { x: null })).toEqual([]);
     expect(computeSaveDiffs({}, { x: 'y' })).toEqual([{ field: 'x', expected: 'y', actual: undefined }]);
   });
+  it('folds 0 / null / "" into one empty bucket (zeroing money is not a failed save)', () => {
+    expect(computeSaveDiffs({ x: null }, { x: 0 })).toEqual([]);   // saved 0, reads null
+    expect(computeSaveDiffs({ x: 0 }, { x: null })).toEqual([]);   // saved null, reads 0
+    expect(computeSaveDiffs({ x: '' }, { x: 0 })).toEqual([]);     // saved 0, reads ''
+    expect(computeSaveDiffs({ x: 0 }, { x: 100 })).toHaveLength(1); // real change still flagged
+    expect(computeSaveDiffs({ x: 100 }, { x: 0 })).toHaveLength(1); // 100 → 0 still flagged
+  });
   it('supports a custom accessor', () => {
     const data = { jobCards: [{ pic: 'A' }] };
     const acc = (d: typeof data, f: string) => (f === 'pic1' ? d.jobCards[0]!.pic : undefined);
