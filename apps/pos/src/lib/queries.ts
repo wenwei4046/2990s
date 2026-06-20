@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sofaModulePricesFromSkus, normalizeCompartmentCode, representativeArtCode } from '@2990s/shared/sofa-build';
-import { comboChargedPrices, type MfgSeatHeightPrice, type DefaultFreeGift, type FreeItemEligibility, type FreeItemCampaign } from '@2990s/shared';
+import { comboChargedPrices, maintActiveValues, type MfgSeatHeightPrice, type DefaultFreeGift, type FreeItemEligibility, type FreeItemCampaign, type RuleTarget } from '@2990s/shared';
 import { supabase } from './supabase';
+import { useMaintenanceConfig } from './products/mfg-products-queries';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
@@ -1633,20 +1634,26 @@ export const useUpdateDeliveryFeeConfig = () => {
   });
 };
 
-/* ─── Per-Model special delivery fees (migration 0140) ─── */
+/* ─── Special delivery fee rules (RuleTarget targeting, migration 0182) ───
+ *
+ * Reuses the #691 RuleTarget abstraction. A rule's `target` is a RuleTarget[]:
+ * each entry scopes by model / variant (size codes) / combo / compartment.
+ * model & variant carry a real modelId; combo & compartment are model-agnostic
+ * (modelId may be empty). The server (deliveryTargetMatchesAnyLine) runs the
+ * SAME shared matcher when it recomputes the fee — these hooks only drive the
+ * Master editor + the Handover summary preview. */
 
 export interface SpecialDeliveryFeeRow {
-  modelId:             string;
-  modelName:           string;
-  modelCode:           string | null;
-  category:            string | null;
-  standaloneFee:       number;   // whole MYR
-  crossCatFollowupFee: number;   // whole MYR
+  id:                  string;
+  target:              RuleTarget[];
+  standaloneFee:       number;        // whole MYR
+  crossCatFollowupFee: number;        // whole MYR
+  label:               string | null;
 }
 
-/** List the Models tagged with a special delivery fee. Read by the Master
- *  editor AND the Handover summary (so the shown fee matches what the server
- *  charges when a special model is in the cart). */
+/** List the special delivery fee rules. Read by the Master editor AND the
+ *  Handover summary (so the shown fee matches what the server charges when a
+ *  matching line is in the cart). */
 export const useSpecialDeliveryFees = () =>
   useQuery({
     queryKey: ['special-delivery-fees'],
@@ -1664,10 +1671,19 @@ export const useSpecialDeliveryFees = () =>
     staleTime: 60_000,
   });
 
+/** PUT body mirrors Task 3: omit `id` to insert, pass it to update. */
+export interface UpsertSpecialDeliveryFeeInput {
+  id?:                 string;
+  target:              RuleTarget[];
+  standaloneFee:       number;        // whole MYR, >= 0
+  crossCatFollowupFee: number;        // whole MYR, >= 0
+  label?:              string;
+}
+
 export const useUpsertSpecialDeliveryFee = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (row: { modelId: string; standaloneFee: number; crossCatFollowupFee: number }) => {
+    mutationFn: async (row: UpsertSpecialDeliveryFeeInput) => {
       if (!API_URL) throw new Error('VITE_API_URL is not set');
       const session = await supabase.auth.getSession();
       const token   = session.data.session?.access_token;
@@ -1689,12 +1705,12 @@ export const useUpsertSpecialDeliveryFee = () => {
 export const useDeleteSpecialDeliveryFee = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (modelId: string) => {
+    mutationFn: async (id: string) => {
       if (!API_URL) throw new Error('VITE_API_URL is not set');
       const session = await supabase.auth.getSession();
       const token   = session.data.session?.access_token;
       if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/delivery-fees/special/${encodeURIComponent(modelId)}`, {
+      const res = await fetch(`${API_URL}/delivery-fees/special/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         headers: { authorization: `Bearer ${token}` },
       });
@@ -1705,6 +1721,14 @@ export const useDeleteSpecialDeliveryFee = () => {
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-delivery-fees'] }); },
   });
+};
+
+/** Global sofa compartment code pool (canonical parens form, e.g. '1A(LHF)').
+ *  Sourced from the master maintenance config's `sofaCompartments` pool — the
+ *  same list the RuleTargetPicker offers for `scope: 'compartment'` rules. */
+export const useCompartmentPool = (): string[] => {
+  const { data } = useMaintenanceConfig('master');
+  return maintActiveValues(data?.data?.sofaCompartments ?? []);
 };
 
 /* ─── Cross-category link eligibility (migration 0141) ─── */

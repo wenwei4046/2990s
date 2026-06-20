@@ -24,3 +24,4 @@ export * from './free-item-campaign'; // 2026-06-17 — free item campaign match
 export * from './hr-commission'; // 2026-06-14 — HR commission math + KPI line matcher
 export * from './effective-delivery'; // 2026-06-19 — PO effective (latest revised) delivery date
 export * from './rule-target'; // 2026-06-20 — unified rule targeting (variant/compartment matcher)
+export * from './special-delivery-match'; // 2026-06-20 — model-agnostic delivery trigger matcher (reuses rule-target)

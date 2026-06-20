@@ -54,6 +54,7 @@ import {
   Package,
   Trash2,
   Plus,
+  Pencil,
   X,
   Truck,
   Star,
@@ -75,6 +76,8 @@ import {
   SOFA_MODULES,
   resolveSofaQuickPresets,
   type SofaQuickPreset,
+  buildComboLabel,
+  type RuleTarget,
 } from '@2990s/shared';
 import {
   useMfgProducts,
@@ -107,6 +110,8 @@ import {
 import { FabricsTable } from '../components/products/FabricsTable';
 import { SofaComboTab } from '../components/products/SofaComboTab';
 import { PwpRulesTab } from '../components/products/PwpRulesTab';
+import { RuleTargetPicker, finalizeRuleTargets } from '../components/products/RuleTargetPicker';
+import { useSofaCombos } from '../lib/products/sofa-combos-queries';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/products/size-info';
 import { useStaff } from '../lib/staff';
 import { useQueryClient } from '@tanstack/react-query';
@@ -546,26 +551,73 @@ const DeliveryFeeTab = ({ mode }: { mode: ProductsMode }) => {
    follow-up linked to an earlier SO, the cross-category price applies instead.
    There is no auto "latex" signal — a row here IS the manual tag. Fees whole RM.
    ════════════════════════════════════════════════════════════════════════ */
+/** Draft for the special-delivery rule editor. `target` is the unified #691
+ *  RuleTarget[] (model / variant / combo / compartment); the server runs the
+ *  SAME shared matcher when it recomputes the fee. */
+interface SpecialDeliveryDraft {
+  id?: string;
+  target: RuleTarget[];
+  standaloneFee: number | '';
+  crossCatFollowupFee: number | '';
+  label: string;
+}
+
+const emptySpecialDeliveryDraft = (): SpecialDeliveryDraft => ({
+  target: [], standaloneFee: '', crossCatFollowupFee: '', label: '',
+});
+
 const SpecialDeliveryFeesSection = ({ canEdit }: { canEdit: boolean }) => {
   const list   = useSpecialDeliveryFees();
   const upsert = useUpsertSpecialDeliveryFee();
   const del    = useDeleteSpecialDeliveryFee();
   const models = useProductModels();
+  const combos = useSofaCombos();
 
-  const [modelId, setModelId]     = useState('');
-  const [standalone, setStandalone] = useState<number | ''>('');
-  const [crossFee, setCrossFee]   = useState<number | ''>('');
-  const [err, setErr]             = useState<string | null>(null);
+  const [draft, setDraft] = useState<SpecialDeliveryDraft | null>(null);
+  const [err, setErr]     = useState<string | null>(null);
 
-  const onAdd = async () => {
+  /* Render a rule's RuleTarget[] as a short human line: "Annsa (King), Lyyar".
+     Model names come from useProductModels; combos from useSofaCombos; sizes /
+     compartments read straight off the target. Keeps the table self-describing
+     without a server round-trip. */
+  const describeTarget = (target: RuleTarget[]): string => {
+    const modelById = new Map((models.data ?? []).map((m) => [m.id, m]));
+    const comboById = new Map((combos.data ?? []).map((c) => [c.id, c]));
+    const parts = target.map((t) => {
+      const m = modelById.get(t.modelId);
+      const name = m ? ([m.branding, m.name].filter(Boolean).join(' ') || m.model_code) : t.modelId;
+      let refine = '';
+      if (t.scope === 'variant' && (t.sizeCodes?.length ?? 0) > 0) refine = ` (${t.sizeCodes!.join(', ')})`;
+      else if (t.scope === 'compartment' && (t.compartments?.length ?? 0) > 0) refine = ` (${t.compartments!.join(', ')})`;
+      else if (t.scope === 'combo' && (t.comboIds?.length ?? 0) > 0) {
+        const labels = t.comboIds!.map((id) => {
+          const c = comboById.get(id);
+          return c ? (c.label ?? buildComboLabel(c.modules)) : id;
+        });
+        refine = ` (${labels.join(', ')})`;
+      }
+      return `${name}${refine}`;
+    });
+    return parts.join(', ');
+  };
+
+  const onSave = async () => {
+    if (!draft) return;
     setErr(null);
-    if (!modelId) { setErr('Pick a Model.'); return; }
-    if (typeof standalone !== 'number' || typeof crossFee !== 'number') {
+    const target = finalizeRuleTargets(draft.target);
+    if (target.length === 0) { setErr('Pick at least one Model.'); return; }
+    if (typeof draft.standaloneFee !== 'number' || typeof draft.crossCatFollowupFee !== 'number') {
       setErr('Enter both fees as whole-RM numbers.'); return;
     }
     try {
-      await upsert.mutateAsync({ modelId, standaloneFee: standalone, crossCatFollowupFee: crossFee });
-      setModelId(''); setStandalone(''); setCrossFee('');
+      await upsert.mutateAsync({
+        id: draft.id,
+        target,
+        standaloneFee: draft.standaloneFee,
+        crossCatFollowupFee: draft.crossCatFollowupFee,
+        label: draft.label.trim() || undefined,
+      });
+      setDraft(null);
     } catch (e) { setErr(String((e as Error).message ?? e)); }
   };
 
@@ -573,39 +625,47 @@ const SpecialDeliveryFeesSection = ({ canEdit }: { canEdit: boolean }) => {
 
   return (
     <section style={DF_CARD}>
-      <h2 style={{ ...DF_SECTION_TITLE, marginBottom: 'var(--space-2)' }}>
-        <Star size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
-        Special-model delivery fees
-      </h2>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-2)' }}>
+        <h2 style={{ ...DF_SECTION_TITLE, margin: 0 }}>
+          <Star size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
+          Special-model delivery fees
+        </h2>
+        {canEdit && (
+          <Button variant="secondary" onClick={() => { setErr(null); setDraft(emptySpecialDeliveryDraft()); }}>
+            <Plus size={16} strokeWidth={1.75} />
+            New rule
+          </Button>
+        )}
+      </div>
       <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', margin: '0 0 var(--space-5)', maxWidth: 560, lineHeight: 1.5 }}>
-        Pick a Model that costs more to transport (e.g. a full-latex mattress).
-        Its standalone fee replaces the base fee. The cross-category price is
-        charged instead when this Model is bought as a linked follow-up to an
-        earlier order. Whole RM.
+        Target Models that cost more to transport (e.g. a full-latex mattress, a
+        special sofa build). Narrow by size, combo, or compartment. The standalone
+        fee replaces the base fee. The cross-category price is charged instead when
+        a matching line is bought as a linked follow-up to an earlier order. Whole RM.
       </p>
 
       <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <table className={styles.table}>
           <thead>
             <tr>
-              <th>Model</th>
+              <th>Target</th>
               <th style={{ textAlign: 'right' }}>Standalone (RM)</th>
               <th style={{ textAlign: 'right' }}>Cross-category (RM)</th>
-              {canEdit && <th style={{ width: 56 }} aria-label="Actions" />}
+              {canEdit && <th style={{ width: 96 }} aria-label="Actions" />}
             </tr>
           </thead>
           <tbody>
             {list.isLoading ? (
               <tr><td colSpan={canEdit ? 4 : 3} style={{ color: 'var(--fg-muted)' }}>Loading…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={canEdit ? 4 : 3} style={{ color: 'var(--fg-muted)' }}>No special models yet. Add one below.</td></tr>
+              <tr><td colSpan={canEdit ? 4 : 3} style={{ color: 'var(--fg-muted)' }}>No special-model rules yet. Add one above.</td></tr>
             ) : rows.map((r) => (
-              <tr key={r.modelId}>
+              <tr key={r.id}>
                 <td>
-                  <div style={{ fontWeight: 700, color: 'var(--c-ink)' }}>{r.modelName}</div>
-                  {(r.modelCode || r.category) && (
+                  <div style={{ fontWeight: 700, color: 'var(--c-ink)' }}>{r.label || describeTarget(r.target)}</div>
+                  {r.label && (
                     <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 2 }}>
-                      {[r.modelCode, r.category].filter(Boolean).join(' · ')}
+                      {describeTarget(r.target)}
                     </div>
                   )}
                 </td>
@@ -613,15 +673,26 @@ const SpecialDeliveryFeesSection = ({ canEdit }: { canEdit: boolean }) => {
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-ink)', fontWeight: 600 }}>RM {r.crossCatFollowupFee}</td>
                 {canEdit && (
                   <td style={{ textAlign: 'right' }}>
-                    <button
-                      type="button"
-                      title="Remove"
-                      aria-label={`Remove ${r.modelName}`}
-                      onClick={() => void del.mutate(r.modelId)}
-                      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', background: '#fff', color: 'var(--c-festive-b)', cursor: 'pointer' }}
-                    >
-                      <Trash2 size={16} strokeWidth={1.75} />
-                    </button>
+                    <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+                      <button
+                        type="button"
+                        title="Edit"
+                        aria-label="Edit rule"
+                        onClick={() => { setErr(null); setDraft({ id: r.id, target: r.target, standaloneFee: r.standaloneFee, crossCatFollowupFee: r.crossCatFollowupFee, label: r.label ?? '' }); }}
+                        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', background: '#fff', color: 'var(--c-ink)', cursor: 'pointer' }}
+                      >
+                        <Pencil size={16} strokeWidth={1.75} />
+                      </button>
+                      <button
+                        type="button"
+                        title="Remove"
+                        aria-label="Remove rule"
+                        onClick={() => void del.mutate(r.id)}
+                        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', background: '#fff', color: 'var(--c-festive-b)', cursor: 'pointer' }}
+                      >
+                        <Trash2 size={16} strokeWidth={1.75} />
+                      </button>
+                    </div>
                   </td>
                 )}
               </tr>
@@ -630,24 +701,39 @@ const SpecialDeliveryFeesSection = ({ canEdit }: { canEdit: boolean }) => {
         </table>
       </div>
 
-      {canEdit && (
-        <div style={{ marginTop: 'var(--space-5)', paddingTop: 'var(--space-5)', borderTop: '1px solid var(--line)' }}>
-          <div style={{ ...DF_LABEL, marginBottom: 'var(--space-3)' }}>Add a special model</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 2fr) 1fr 1fr auto', gap: 'var(--space-3)', alignItems: 'end' }}>
-            <div>
-              <label style={DF_LABEL}>Model</label>
-              <select value={modelId} onChange={(e) => setModelId(e.target.value)} style={DF_INPUT}>
-                <option value="">Pick a Model…</option>
-                {(models.data ?? []).map((m) => (
-                  <option key={m.id} value={m.id}>{m.name} ({m.category})</option>
-                ))}
-              </select>
-            </div>
-            {numberInputCell('Standalone (RM)', standalone, setStandalone)}
-            {numberInputCell('Cross-category (RM)', crossFee, setCrossFee)}
-            <Button variant="primary" onClick={() => void onAdd()} disabled={upsert.isPending}>
-              <Plus size={16} strokeWidth={1.75} />
-              {upsert.isPending ? 'Saving…' : 'Add'}
+      {canEdit && draft && (
+        <div
+          role="dialog"
+          aria-label="Special-model delivery rule"
+          style={{ marginTop: 'var(--space-5)', paddingTop: 'var(--space-5)', borderTop: '1px solid var(--line)' }}
+        >
+          <div style={{ ...DF_LABEL, marginBottom: 'var(--space-3)' }}>{draft.id ? 'Edit rule' : 'Add a rule'}</div>
+          <div style={{ marginBottom: 'var(--space-3)' }}>
+            <label style={DF_LABEL}>Label (optional)</label>
+            <input
+              type="text"
+              value={draft.label}
+              onChange={(e) => setDraft((d) => (d ? { ...d, label: e.target.value } : d))}
+              placeholder="e.g. Full-latex mattresses"
+              style={DF_INPUT}
+            />
+          </div>
+          <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-2)' }}>
+            Target models — tick a Model, then narrow by size (mattress / bed frame)
+            or combo / compartment (sofa).
+          </div>
+          <RuleTargetPicker
+            value={draft.target}
+            onChange={(target) => setDraft((d) => (d ? { ...d, target } : d))}
+          />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)', alignItems: 'end', marginTop: 'var(--space-3)' }}>
+            {numberInputCell('Standalone (RM)', draft.standaloneFee, (v) => setDraft((d) => (d ? { ...d, standaloneFee: v } : d)))}
+            {numberInputCell('Cross-category (RM)', draft.crossCatFollowupFee, (v) => setDraft((d) => (d ? { ...d, crossCatFollowupFee: v } : d)))}
+          </div>
+          <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 'var(--space-4)' }}>
+            <Button variant="ghost" onClick={() => { setDraft(null); setErr(null); }}>Cancel</Button>
+            <Button variant="primary" onClick={() => void onSave()} disabled={upsert.isPending}>
+              {upsert.isPending ? 'Saving…' : 'Save'}
             </Button>
           </div>
           {err && <div style={{ color: 'var(--c-festive-b)', fontSize: 'var(--fs-13)', marginTop: 'var(--space-3)' }} role="alert">{err}</div>}

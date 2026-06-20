@@ -1,0 +1,400 @@
+# Special-model Delivery Fee Triggers (RuleTarget) Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
+
+**Goal:** Widen special-model delivery fees from Model-only to a `RuleTarget` trigger (by model / variant / combo / compartment), reusing #691's shared `rule-target` abstraction — sofa compartment is the headline (model-agnostic).
+
+**Architecture:** A `special_delivery_fee_rules` table stores `{ target: RuleTarget[], standalone_fee, cross_cat_followup_fee }`. A thin shared `deliveryTargetMatchesAnyLine` reuses `refinementMatchesLine` (#691) to decide if any order line matches a rule's target; matched fees feed the **unchanged** `computeSoDeliveryFee` (highest-fee-wins). Server recompute and POS live preview build `RuleLineInput[]` + `comboModulesById` exactly like the existing Free Item Campaign code.
+
+**Tech Stack:** Drizzle/Supabase, Hono/CF Workers, React 19 + TanStack Query, Zod, vitest, pnpm.
+
+## Global Constraints
+
+- Reuse #691's `rule-target.ts` (`RuleTarget`, `refinementMatchesLine`, `RuleLineInput`, `parseRuleTargets`), `sizeIdToMfgCode`, `useSofaCombos`, and the `comboModulesById` builder. Do NOT write a parallel matcher or a new size-code path. Do NOT modify shared rule-target behavior.
+- Fees are whole-MYR integers in the DB; ×100 → sen before `computeSoDeliveryFee` (sen at every call site).
+- Server-side recompute is non-negotiable; the matcher is the SAME shared code on client + server.
+- Compartment & combo delivery matching is **model-agnostic** (call `refinementMatchesLine` directly, skipping the model check); model & variant require the line's Model.
+- Migrations append-only; do NOT apply to prod (controller applies). Next number is **0182**.
+- RLS write role is `sales_director` (the retired `master_account` must NOT appear). Mirror migration 0140.
+- No new libraries; CSS Modules + design-system; Lucide stroke 1.75; sentence-case copy.
+- Spec: `docs/superpowers/specs/2026-06-20-special-model-delivery-fee-triggers-design.md`.
+
+---
+
+### Task 1: Shared delivery matcher
+
+**Files:**
+- Create: `packages/shared/src/special-delivery-match.ts`
+- Create: `packages/shared/src/special-delivery-match.test.ts`
+- Modify: `packages/shared/src/index.ts` (export) — or confirm deep-import via package `exports`.
+
+**Interfaces:**
+- Consumes: `refinementMatchesLine`, `RuleTarget`, `RuleLineInput` from `./rule-target`.
+- Produces: `deliveryTargetMatchesAnyLine(lines: RuleLineInput[], targets: RuleTarget[], comboModulesById: Map<string,string[][]>): boolean`.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// packages/shared/src/special-delivery-match.test.ts
+import { describe, it, expect } from 'vitest';
+import { deliveryTargetMatchesAnyLine } from './special-delivery-match';
+import type { RuleLineInput, RuleTarget } from './rule-target';
+
+const sofa = (modelId: string, built: string[]): RuleLineInput =>
+  ({ category: 'SOFA', modelId, sizeCode: null, builtCompartments: built });
+const mattress = (modelId: string, sizeCode: string): RuleLineInput =>
+  ({ category: 'MATTRESS', modelId, sizeCode, builtCompartments: [] });
+const NO_COMBOS = new Map<string, string[][]>();
+
+describe('deliveryTargetMatchesAnyLine', () => {
+  it('model: matches any line of that model', () => {
+    const t: RuleTarget[] = [{ modelId: 'm1', scope: 'model' }];
+    expect(deliveryTargetMatchesAnyLine([mattress('m1', 'K')], t, NO_COMBOS)).toBe(true);
+    expect(deliveryTargetMatchesAnyLine([mattress('mX', 'K')], t, NO_COMBOS)).toBe(false);
+  });
+
+  it('variant: needs model AND size_code', () => {
+    const t: RuleTarget[] = [{ modelId: 'm1', scope: 'variant', sizeCodes: ['K'] }];
+    expect(deliveryTargetMatchesAnyLine([mattress('m1', 'K')], t, NO_COMBOS)).toBe(true);
+    expect(deliveryTargetMatchesAnyLine([mattress('m1', 'Q')], t, NO_COMBOS)).toBe(false);
+    expect(deliveryTargetMatchesAnyLine([mattress('mX', 'K')], t, NO_COMBOS)).toBe(false);
+  });
+
+  it('compartment: model-AGNOSTIC, normalized', () => {
+    const t: RuleTarget[] = [{ modelId: '', scope: 'compartment', compartments: ['1A(LHF)'] }];
+    // different model, dash-form code on the line → still matches
+    expect(deliveryTargetMatchesAnyLine([sofa('whatever', ['1A-LHF'])], t, NO_COMBOS)).toBe(true);
+    expect(deliveryTargetMatchesAnyLine([sofa('whatever', ['2A(RHF)'])], t, NO_COMBOS)).toBe(false);
+  });
+
+  it('combo: model-AGNOSTIC subset match', () => {
+    const combos = new Map<string, string[][]>([['c1', [['1A(LHF)']]]]);
+    const t: RuleTarget[] = [{ modelId: '', scope: 'combo', comboIds: ['c1'] }];
+    expect(deliveryTargetMatchesAnyLine([sofa('anyModel', ['1A(LHF)'])], t, combos)).toBe(true);
+    expect(deliveryTargetMatchesAnyLine([sofa('anyModel', ['2A(LHF)'])], t, combos)).toBe(false);
+  });
+
+  it('empty targets or empty lines → false', () => {
+    expect(deliveryTargetMatchesAnyLine([], [{ modelId: 'm1', scope: 'model' }], NO_COMBOS)).toBe(false);
+    expect(deliveryTargetMatchesAnyLine([mattress('m1', 'K')], [], NO_COMBOS)).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pnpm --filter @2990s/shared test special-delivery-match`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write minimal implementation**
+
+```ts
+// packages/shared/src/special-delivery-match.ts
+import { refinementMatchesLine, type RuleTarget, type RuleLineInput } from './rule-target';
+
+/**
+ * Does ANY order/cart line satisfy ANY of this rule's targets?
+ * Delivery treats `combo` and `compartment` as MODEL-AGNOSTIC (a heavy module or
+ * combo ships the same in any sofa), so it calls refinementMatchesLine directly and
+ * skips the model check that lineMatchesTarget would impose. `model` and `variant`
+ * still require the line's Model. Reuses #691's refinementMatchesLine — no parallel logic.
+ */
+export function deliveryTargetMatchesAnyLine(
+  lines: RuleLineInput[],
+  targets: RuleTarget[],
+  comboModulesById: Map<string, string[][]>,
+): boolean {
+  return targets.some((t) =>
+    lines.some((line) => {
+      const needsModel = t.scope === 'model' || t.scope === 'variant';
+      if (needsModel && t.modelId && t.modelId !== line.modelId) return false;
+      return refinementMatchesLine(line, t, comboModulesById);
+    }),
+  );
+}
+```
+
+- [ ] **Step 4: Add the export**
+
+Add `export * from './special-delivery-match';` to `packages/shared/src/index.ts` (next to `export * from './rule-target';`). If consumers deep-import, confirm `package.json` `exports` covers `./*`.
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `pnpm --filter @2990s/shared test special-delivery-match`
+Expected: PASS (5 tests).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/shared/src/special-delivery-match.ts packages/shared/src/special-delivery-match.test.ts packages/shared/src/index.ts
+git commit -m "feat(shared): deliveryTargetMatchesAnyLine reusing rule-target refinementMatchesLine"
+```
+
+---
+
+### Task 2: Schema + migration 0182
+
+**Files:**
+- Modify: `packages/db/src/schema.ts` (add `specialDeliveryFeeRules` near `freeItemCampaigns` ~line 177, to follow the jsonb-target pattern)
+- Create: `packages/db/migrations/0182_special_delivery_fee_rules.sql`
+- Reference: `0140_model_special_delivery_fees.sql` (copy RLS verbatim; role = sales_director)
+
+- [ ] **Step 1: Read the RLS reference + the freeItemCampaigns table**
+
+Read `0140_model_special_delivery_fees.sql` (RLS policies + role helpers) and the `freeItemCampaigns` Drizzle table (jsonb `eligible` pattern to mirror).
+
+- [ ] **Step 2: Add the Drizzle table**
+
+```ts
+export const specialDeliveryFeeRules = pgTable('special_delivery_fee_rules', {
+  id:                  uuid('id').primaryKey().defaultRandom(),
+  target:              jsonb('target').notNull().default([]), // RuleTarget[]
+  standaloneFee:       integer('standalone_fee').notNull().default(0),
+  crossCatFollowupFee: integer('cross_cat_followup_fee').notNull().default(0),
+  label:               text('label'),
+  updatedAt:           timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:           uuid('updated_by'),
+});
+```
+
+- [ ] **Step 3: Write the migration**
+
+```sql
+-- packages/db/migrations/0182_special_delivery_fee_rules.sql
+CREATE TABLE IF NOT EXISTS special_delivery_fee_rules (
+  id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  target                  jsonb NOT NULL DEFAULT '[]'::jsonb,
+  standalone_fee          integer NOT NULL DEFAULT 0 CHECK (standalone_fee >= 0),
+  cross_cat_followup_fee  integer NOT NULL DEFAULT 0 CHECK (cross_cat_followup_fee >= 0),
+  label                   text,
+  updated_at              timestamptz NOT NULL DEFAULT now(),
+  updated_by              uuid
+);
+
+-- Data move: each Model tag → one rule targeting that Model (scope='model').
+INSERT INTO special_delivery_fee_rules (target, standalone_fee, cross_cat_followup_fee, updated_at, updated_by)
+SELECT jsonb_build_array(jsonb_build_object('modelId', model_id::text, 'scope', 'model')),
+       standalone_fee, cross_cat_followup_fee, updated_at, updated_by
+FROM model_special_delivery_fees;
+
+ALTER TABLE special_delivery_fee_rules ENABLE ROW LEVEL SECURITY;
+-- >>> paste 0140's two policies, renamed to special_delivery_fee_rules, write role = sales_director <<<
+```
+Replace the RLS comment with 0140's literal policies (read = authenticated true; write = admin/coordinator/sales_director). Do not invent helper names.
+
+- [ ] **Step 4: Typecheck the schema** (do NOT apply to prod — controller applies)
+
+Run: `pnpm typecheck` (or `pnpm --filter @2990s/db typecheck` if present).
+Expected: no errors. Note in the report that the migration is authored but intentionally not applied.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/db/src/schema.ts packages/db/migrations/0182_special_delivery_fee_rules.sql
+git commit -m "feat(db): special_delivery_fee_rules (RuleTarget jsonb) + migrate model tags (0182)"
+```
+
+---
+
+### Task 3: API — RuleTarget rule routes
+
+**Files:**
+- Modify: `apps/api/src/routes/delivery-fees.ts` (the `special` endpoints, ~113-174)
+- Reference: `apps/api/src/routes/free-item-campaigns.ts` (RuleTarget jsonb GET/POST/PATCH/DELETE pattern) + `packages/shared/src/schemas/rule-target.ts` (`ruleTargetSchema`)
+
+**Interfaces:**
+- GET `/delivery-fees/special` → `[{ id, target: RuleTarget[], standaloneFee, crossCatFollowupFee, label, updatedAt }]`
+- PUT `/delivery-fees/special` body `{ id?: string, target: RuleTarget[], standaloneFee: int>=0, crossCatFollowupFee: int>=0, label?: string }`
+- DELETE `/delivery-fees/special/:id`
+
+- [ ] **Step 1: Read both references**
+
+Read `delivery-fees.ts` (WRITE_ROLES, supabase helper, current special handlers) and `free-item-campaigns.ts` (how it validates `eligible: RuleTarget[]` + upserts jsonb).
+
+- [ ] **Step 2: Define a delivery target Zod schema (relaxed modelId)**
+
+```ts
+import { targetRefinementSchema } from '@2990s/shared/schemas/rule-target';
+import { z } from 'zod';
+// model/variant require modelId; combo/compartment allow empty modelId (model-agnostic).
+const deliveryTargetSchema = targetRefinementSchema.and(z.object({ modelId: z.string() })).superRefine((t, ctx) => {
+  if ((t.scope === 'model' || t.scope === 'variant') && !t.modelId) {
+    ctx.addIssue({ code: 'custom', message: 'modelId required for model/variant' });
+  }
+});
+const putBody = z.object({
+  id: z.string().uuid().optional(),
+  target: z.array(deliveryTargetSchema).min(1),
+  standaloneFee: z.number().int().min(0),
+  crossCatFollowupFee: z.number().int().min(0),
+  label: z.string().optional(),
+});
+```
+Confirm `targetRefinementSchema` is exported (the explore map shows `ruleTargetSchema, targetRefinementSchema` in `schemas/rule-target.ts`). If `targetRefinementSchema` does not compose this way, fall back to `ruleTargetSchema` and pre-fill an empty `modelId` string for combo/compartment before validation. Pick one and keep it consistent.
+
+- [ ] **Step 3: Implement GET / PUT / DELETE**
+
+GET: `select id, target, standalone_fee, cross_cat_followup_fee, label, updated_at` → camelCase, `target` passed through (jsonb). PUT: upsert — `update ... where id` when `id` present, else `insert`; set `updated_by` from authed staff; `.select()` and assert ≥1 row. DELETE by `id`, 404 if no row. Keep WRITE_ROLES (admin/coordinator/sales_director).
+
+- [ ] **Step 4: Typecheck**
+
+Run: `pnpm --filter @2990s/api typecheck`. Expected: clean.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add apps/api/src/routes/delivery-fees.ts
+git commit -m "feat(api): special delivery fee rules with RuleTarget[] targeting"
+```
+
+---
+
+### Task 4: Server recompute — match rules at both sites
+
+**Files:**
+- Modify: `apps/api/src/routes/mfg-sales-orders.ts` (create path; `redetectCrossCategoryDelivery`)
+- Reference: the Free Item Campaign block in the SAME file (~2129-2175) — copy its `RuleLineInput` + `comboModulesById` construction.
+- Check: `apps/api/src/routes/consignment-orders.ts`
+
+**Interfaces:**
+- Consumes: `deliveryTargetMatchesAnyLine`, `parseRuleTargets`, `RuleLineInput` from `@2990s/shared`; `comboModulesById` already built for Free Item in the create path.
+
+- [ ] **Step 1: Read the Free Item block + both delivery-fee sites**
+
+Read `mfg-sales-orders.ts` ~2129-2175 (Free Item: line-input + comboModulesById + lineMatchesTargets) and the existing special-model delivery loading at the create path (~2649) and `redetectCrossCategoryDelivery` (~3688).
+
+- [ ] **Step 2: Add a loader + matcher helper**
+
+`apps/api/src/lib/special-delivery.ts`:
+```ts
+import { deliveryTargetMatchesAnyLine, parseRuleTargets, type RuleLineInput } from '@2990s/shared';
+
+export async function specialDeliveryFeesForLines(sb, lines: RuleLineInput[], comboModulesById: Map<string,string[][]>) {
+  const { data, error } = await sb.from('special_delivery_fee_rules')
+    .select('target, standalone_fee, cross_cat_followup_fee');
+  if (error) throw error;
+  const out: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
+  for (const r of (data ?? [])) {
+    if (deliveryTargetMatchesAnyLine(lines, parseRuleTargets(r.target), comboModulesById)) {
+      out.push({ standaloneFee: Number(r.standalone_fee ?? 0) * 100, crossCategoryFollowupFee: Number(r.cross_cat_followup_fee ?? 0) * 100 });
+    }
+  }
+  return out;
+}
+```
+
+- [ ] **Step 3: Wire the create path**
+
+Build `RuleLineInput[]` for the order's goods lines exactly as the Free Item block does (`category`, `model_id`, UPPERCASE `size_code`, `builtCompartments` from `variants.cells[].moduleId`). Reuse the already-built `comboModulesById`. Replace the model-only `specialModels` lookup with `await specialDeliveryFeesForLines(sb, ruleLines, comboModulesById)`. Leave `computeSoDeliveryFee(...)` unchanged.
+
+- [ ] **Step 4: Wire `redetectCrossCategoryDelivery`**
+
+Build `RuleLineInput[]` + a `comboModulesById` (load `sofa_combo_pricing` if not already in scope there) from the existing items; call `specialDeliveryFeesForLines`. Keep the rest intact.
+
+- [ ] **Step 5: consignment-orders.ts** — port if it has the model-only special lookup; else leave (note in commit).
+
+- [ ] **Step 6: Typecheck + commit**
+
+Run: `pnpm --filter @2990s/api typecheck`.
+```bash
+git add apps/api/src/routes/mfg-sales-orders.ts apps/api/src/lib/special-delivery.ts apps/api/src/routes/consignment-orders.ts
+git commit -m "feat(api): special delivery fees match RuleTarget rules at both recompute sites"
+```
+
+---
+
+### Task 5: POS hooks
+
+**Files:**
+- Modify: `apps/pos/src/lib/queries.ts` (the 3 special-fee hooks)
+- Reuse: `useSofaCombos` (exists), `sizeIdToMfgCode`, `useProductModels`; add a global compartment pool hook if none exists.
+
+- [ ] **Step 1: Read current hooks + find a compartment pool source**
+
+Read the special-fee hooks. `grep -n "compartment_library\|sofaCompartments" apps/pos/src/lib` to find a global compartment list (table or maintenance pool) to reuse.
+
+- [ ] **Step 2: Update hooks**
+
+`useSpecialDeliveryFees` → rows `{ id, target, standaloneFee, crossCatFollowupFee, label }`. `useUpsertSpecialDeliveryFee` → PUT body from Task 3. `useDeleteSpecialDeliveryFee` → DELETE by `id`. Add `useCompartmentPool()` if missing (global compartment codes).
+
+- [ ] **Step 3: Typecheck (expect Products.tsx old-shape errors until Task 7)**
+
+Run: `pnpm --filter @2990s/pos typecheck`. Note residual errors fixed in Task 7.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add apps/pos/src/lib/queries.ts
+git commit -m "feat(pos): special delivery fee hooks (RuleTarget rules) + compartment pool"
+```
+
+---
+
+### Task 6: POS live preview
+
+**Files:**
+- Modify: `apps/pos/src/pages/Handover.tsx` + its `buildDeliveryFeeCartInputs`
+- Reference: `apps/pos/src/components/CartContents.tsx` (`comboModulesById` from `useSofaCombos`; `RuleLineInput` from cart lines)
+
+- [ ] **Step 1: Read CartContents' line-input + comboModulesById construction and Handover's current delivery calc.**
+
+- [ ] **Step 2: Build RuleLineInput[] from cart lines + match each rule**
+
+Build `comboModulesById` (mirror CartContents) and `RuleLineInput[]` from cart lines; for each special-delivery rule, `deliveryTargetMatchesAnyLine(lines, parseRuleTargets(rule.target), comboModulesById)` → push fee (×100). Feed the existing live `computeSoDeliveryFee`. Keep additional/cross-category logic untouched.
+
+- [ ] **Step 3: Typecheck + commit**
+
+Run: `pnpm --filter @2990s/pos typecheck`.
+```bash
+git add apps/pos/src/pages/Handover.tsx
+git commit -m "feat(pos): live delivery-fee preview matches RuleTarget rules"
+```
+
+---
+
+### Task 7: POS UI editor
+
+**Files:**
+- Modify: `apps/pos/src/pages/Products.tsx` (`SpecialDeliveryFeesSection`)
+- Reuse: `RuleTargetRefinement` (if it drops in), `useProductModels`, `useSofaCombos`, `useCompartmentPool`, `sizeIdToMfgCode`.
+
+- [ ] **Step 1: Read the section + RuleTargetPicker/RuleTargetRefinement props.**
+
+- [ ] **Step 2: Build the thin target editor**
+
+Add form: scope select (By model / By variant / By combo (any sofa) / By compartment (any sofa)); conditional target controls (model dropdown; size multiselect for variant; combo multiselect; compartment multiselect); standalone + cross fee inputs. Build a `RuleTarget[]` (single entry; combo/compartment with `modelId: ''`). On Add, call `useUpsertSpecialDeliveryFee`.
+
+- [ ] **Step 3: Render list rows with a target summary**
+
+Per row, summarize `target[]` (e.g. `Booqit · model`, `AKKA-SOFT K/Q · variant`, `1A(LHF) · compartment`, `<combo label> · combo`). Delete → `del.mutate(r.id)`.
+
+- [ ] **Step 4: Typecheck + lint + POS tests**
+
+Run: `pnpm --filter @2990s/pos typecheck` then `pnpm --filter @2990s/pos lint`. Clean up residual Task-5 errors.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add apps/pos/src/pages/Products.tsx
+git commit -m "feat(pos): special delivery fee target editor (model/variant/combo/compartment)"
+```
+
+---
+
+### Task 8: Verify + deploy (controller-gated)
+
+- [ ] **Step 1: Monorepo gates** — `pnpm typecheck && pnpm test && pnpm lint` (incl. Task 1 vitest). All green.
+- [ ] **Step 2: Build** — `pnpm build` (POS may need `ALLOW_LOCAL_API_URL=1` for a local build check only).
+- [ ] **Step 3: Deploy (after owner go)** — apply 0182 (Supabase MCP, verify objects), `wrangler deploy` (api), `scripts/deploy-pos.sh` (pos).
+- [ ] **Step 4: Prod smoke** — add a `By compartment` rule (e.g. `1A(LHF)`, standalone RM 800); build a sofa order using it → fee = RM 800 on POS live preview and the saved SO `Delivery fee (special model)` line; delete the test rule.
+- [ ] **Step 5: PWA hard-refresh reminder.**
+
+---
+
+## Self-Review notes
+- Spec coverage: matcher (T1), schema+migration+data-move (T2), API (T3), server ×2 sites (T4), hooks (T5), live preview (T6), UI (T7), gates+deploy (T8).
+- Reuse honored: `refinementMatchesLine`/`RuleLineInput`/`parseRuleTargets`/`comboModulesById`/`useSofaCombos`/`sizeIdToMfgCode` — no parallel matcher.
+- Model-agnostic compartment/combo via the delivery wrapper, shared rule-target untouched (verified T1 tests).
+- `computeSoDeliveryFee` math unchanged.
+- Carry-forward fixes baked in: RLS `sales_director` (T2); real combo UUID + compartment extraction mirrors the working Free Item block (T4).
+- Open verification points for implementers: `targetRefinementSchema` composition (T3.2); compartment pool source (T5.1); `RuleTargetRefinement` drop-in fit (T7).

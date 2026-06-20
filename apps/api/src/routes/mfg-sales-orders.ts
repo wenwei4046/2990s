@@ -14,6 +14,7 @@ import {
   type FreeGiftLineClaim, type TriggerLine,
   campaignsCoveringLine,
   isFreeItemLine,
+  type RuleLineInput,
   passesRefinementColumns,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
@@ -87,6 +88,10 @@ import {
   loadProductsAndModels,
 } from '../lib/allowed-options-check';
 import { findIncompleteVariantLines } from '../lib/so-variant-check';
+/* Special delivery fee rules (migration 0182, #691 RuleTarget) — the model |
+   variant | compartment | combo matcher shared with the POS, used at BOTH
+   recompute sites (create + cross-category re-detect). */
+import { specialDeliveryFeesForLines, reconstructDeliveryRuleLines } from '../lib/special-delivery';
 /* Default Free Gift (migration 0170/0174, D9) — ONE per-Model trigger builder
    (in @2990s/shared) is shared by the SO-create validator below and the
    placed-SO edit reconciler, so create and reconcile can never compute a
@@ -2666,30 +2671,37 @@ mfgSalesOrders.post('/', async (c) => {
       crossCategoryFee: Number((dcfg as { cross_category_fee?: number } | null)?.cross_category_fee ?? 0) * 100,
     };
 
-    /* Phase 1 — special-model fees. Any cart line whose Model is tagged in
-       model_special_delivery_fees contributes a special fee; the highest
-       standalone fee overrides the base, and on a follow-up the special
-       cross fee applies. lineProducts (loaded above) carries each line's
-       model_id. */
-    const specialModels: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
-    const lineModelIds = [...new Set(
-      lineProducts
-        // Skip free-item lines — a free giveaway carries no special transport fee.
-        .map((p, idx) => (freeItemByIdx.has(idx) ? null : (p as { model_id?: string | null } | null)?.model_id))
-        .filter((m): m is string => Boolean(m)),
-    )];
-    if (lineModelIds.length > 0) {
-      const { data: specialRows } = await sb
-        .from('model_special_delivery_fees')
-        .select('model_id, standalone_fee, cross_cat_followup_fee')
-        .in('model_id', lineModelIds);
-      for (const r of (specialRows ?? []) as Array<{ standalone_fee?: number; cross_cat_followup_fee?: number }>) {
-        specialModels.push({
-          standaloneFee:            Number(r.standalone_fee ?? 0) * 100,
-          crossCategoryFollowupFee: Number(r.cross_cat_followup_fee ?? 0) * 100,
-        });
-      }
+    /* Phase 1 — special delivery fee rules (migration 0182). Generalises the old
+       model-only model_special_delivery_fees lookup onto the #691 RuleTarget
+       abstraction: any cart line a rule's target covers (model | variant |
+       compartment | combo) contributes a special fee; computeSoDeliveryFee folds
+       in the highest standalone (overriding base) + the cross-followup. Lines are
+       flattened to RuleLineInput[] exactly as the Free Item block above does, and
+       matched by the SAME shared matcher the POS runs — no drift. Free-item lines
+       are skipped (a free giveaway carries no special transport fee). */
+    const comboModulesById = new Map<string, string[][]>(
+      cachedCombos.map((cb) => [cb.id, cb.modules]),
+    );
+    const deliveryRuleLines: RuleLineInput[] = [];
+    for (let idx = 0; idx < items.length; idx++) {
+      if (freeItemByIdx.has(idx)) continue;
+      const product = lineProducts[idx] ?? null;
+      if (!product) continue;
+      const variants = (items[idx]?.variants as Record<string, unknown> | null) ?? null;
+      const cells = (variants?.cells as Array<{ moduleId?: unknown }> | undefined) ?? [];
+      const built = Array.isArray(cells)
+        ? cells.map((cl) => String(cl?.moduleId ?? '')).filter(Boolean)
+        : [];
+      deliveryRuleLines.push({
+        category: String((product as { category?: string | null }).category ?? ''),
+        modelId: (product as { model_id?: string | null }).model_id ?? null,
+        sizeCode: (product as { size_code?: string | null }).size_code
+          ? String((product as { size_code?: string | null }).size_code).toUpperCase()
+          : null,
+        builtCompartments: built,
+      });
     }
+    const specialModels = await specialDeliveryFeesForLines(sb, deliveryRuleLines, comboModulesById);
 
     /* Phase 2 — cross-order link. Sales typed the earlier SO's doc_no at
        handover. Validate it (exists, not cancelled, same customer by phone
@@ -3686,10 +3698,11 @@ async function repointMintedVouchers(sb: any, docNo: string, newCustomerId: stri
 async function redetectCrossCategoryDelivery(
   sb: any, docNo: string, newName: string, newPhone: string | null,
 ): Promise<{ isFollowup: boolean; sourceDocNo: string | null; total: number } | null> {
-  const { data: lineRows } = await sb.from('mfg_sales_order_items')
-    .select('item_code, item_group, total_centi, line_no')
+  const { data: lineRows, error: lineErr } = await sb.from('mfg_sales_order_items')
+    .select('item_code, item_group, total_centi, line_no, variants')
     .eq('doc_no', docNo).eq('cancelled', false);
-  const lines = (lineRows ?? []) as Array<{ item_code: string; item_group: string | null; total_centi: number | null; line_no: number | null }>;
+  if (lineErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] line load failed:', lineErr.message); }
+  const lines = (lineRows ?? []) as Array<{ item_code: string; item_group: string | null; total_centi: number | null; line_no: number | null; variants: Record<string, unknown> | null }>;
   const deliveryLines = lines.filter((l) => isDeliveryFeeServiceCode(l.item_code));
   if (deliveryLines.length === 0) return null; // no delivery fee → nothing to re-detect
 
@@ -3711,28 +3724,48 @@ async function redetectCrossCategoryDelivery(
   const categoryIds = lines
     .map((l) => String(l.item_group ?? '').toLowerCase())
     .filter((g) => DELIVERABLE.has(g));
-  const goodsCodes = [...new Set(
-    lines.filter((l) => DELIVERABLE.has(String(l.item_group ?? '').toLowerCase())).map((l) => l.item_code),
-  )];
-  const specialModels: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
+  const goodsLines = lines.filter((l) => DELIVERABLE.has(String(l.item_group ?? '').toLowerCase()));
+  const goodsCodes = [...new Set(goodsLines.map((l) => l.item_code))];
+  /* Phase 1 — special delivery fee rules (migration 0182, #691 RuleTarget).
+     The persisted SO carries the split sofa as one row PER module SKU (cells
+     stripped, buildKey kept). A sofa module's compartment code lives in its
+     item_code SUFFIX (every sofa SKU has size_code = NULL); size_code is the
+     real variant code ONLY for mattress/bedframe. Sofa rows are regrouped by
+     buildKey so combo matching sees the WHOLE build's modules together. The
+     reconstruction is a pure, unit-tested helper (reconstructDeliveryRuleLines)
+     and the result is matched by the SAME shared matcher the create path runs. */
+  let specialModels: { standaloneFee: number; crossCategoryFollowupFee: number }[] = [];
   if (goodsCodes.length > 0) {
-    const { data: prodRows } = await sb.from('mfg_products').select('code, model_id').in('code', goodsCodes);
-    const modelIds = [...new Set(
-      ((prodRows ?? []) as Array<{ model_id: string | null }>).map((p) => p.model_id).filter((m): m is string => Boolean(m)),
-    )];
-    if (modelIds.length > 0) {
-      const { data: specialRows } = await sb.from('model_special_delivery_fees')
-        .select('standalone_fee, cross_cat_followup_fee').in('model_id', modelIds);
-      for (const r of (specialRows ?? []) as Array<{ standalone_fee?: number; cross_cat_followup_fee?: number }>) {
-        specialModels.push({
-          standaloneFee: Number(r.standalone_fee ?? 0) * 100,
-          crossCategoryFollowupFee: Number(r.cross_cat_followup_fee ?? 0) * 100,
-        });
-      }
-    }
+    const { data: prodRows, error: prodErr } = await sb.from('mfg_products')
+      .select('code, category, model_id, size_code').in('code', goodsCodes);
+    if (prodErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] product load failed:', prodErr.message); }
+    const prodByCode = new Map(
+      ((prodRows ?? []) as Array<{ code: string; category: string | null; model_id: string | null; size_code: string | null }>)
+        .map((p) => [p.code, p]),
+    );
+    const deliveryRuleLines = reconstructDeliveryRuleLines(
+      goodsLines.map((l) => {
+        const prod = prodByCode.get(l.item_code) ?? null;
+        return {
+          itemCode: l.item_code,
+          category: prod?.category ?? l.item_group ?? null,
+          modelId: prod?.model_id ?? null,
+          sizeCode: prod?.size_code ?? null, // NULL for sofa; the helper reads the item_code suffix
+          buildKey: ((l.variants as { buildKey?: unknown } | null)?.buildKey as string | null) ?? null,
+        };
+      }),
+    );
+    const { data: comboRows, error: comboErr } = await sb.from('sofa_combo_pricing').select('id, modules');
+    if (comboErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] combo load failed:', comboErr.message); }
+    const comboModulesById = new Map<string, string[][]>(
+      ((comboRows ?? []) as Array<{ id: string; modules: string[][] | null }>)
+        .map((cb) => [cb.id, cb.modules ?? []]),
+    );
+    specialModels = await specialDeliveryFeesForLines(sb, deliveryRuleLines, comboModulesById);
   }
 
-  const { data: dcfg } = await sb.from('delivery_fee_config').select('base_fee, cross_category_fee').eq('id', 1).single();
+  const { data: dcfg, error: dcfgErr } = await sb.from('delivery_fee_config').select('base_fee, cross_category_fee').eq('id', 1).single();
+  if (dcfgErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] delivery_fee_config load failed:', dcfgErr.message); }
   const cfgSen = {
     baseFee: Number((dcfg as { base_fee?: number } | null)?.base_fee ?? 0) * 100,
     crossCategoryFee: Number((dcfg as { cross_category_fee?: number } | null)?.cross_category_fee ?? 0) * 100,
@@ -3742,17 +3775,19 @@ async function redetectCrossCategoryDelivery(
   let sourceDocNo: string | null = null;
   const normPhone = newPhone ? (normalizePhone(newPhone) ?? newPhone) : null;
   if (newName && normPhone) {
-    const { data: candRows } = await sb.from('mfg_sales_orders')
+    const { data: candRows, error: candErr } = await sb.from('mfg_sales_orders')
       .select('doc_no, debtor_name, created_at')
       .eq('phone', normPhone).neq('status', 'CANCELLED').neq('doc_no', docNo)
       .order('created_at', { ascending: false }).limit(50);
+    if (candErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] candidate load failed:', candErr.message); }
     const candidates: AutoMatchCandidate[] = ((candRows ?? []) as Array<{ doc_no: string; debtor_name: string | null }>)
       .map((r) => ({ docNo: r.doc_no, debtorName: r.debtor_name }));
     if (candidates.length > 0) {
-      const { data: usedRows } = await sb.from('mfg_sales_orders')
+      const { data: usedRows, error: usedErr } = await sb.from('mfg_sales_orders')
         .select('cross_category_source_doc_no')
         .in('cross_category_source_doc_no', candidates.map((x) => x.docNo))
         .neq('doc_no', docNo); // self-excluded: this SO's own link must not burn its own source
+      if (usedErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] used-link load failed:', usedErr.message); }
       const used = ((usedRows ?? []) as Array<{ cross_category_source_doc_no: string | null }>)
         .map((r) => r.cross_category_source_doc_no).filter((v): v is string => !!v);
       const match = pickCrossCategoryMatch(candidates, newName, used);
@@ -3768,8 +3803,9 @@ async function redetectCrossCategoryDelivery(
   const specs = buildDeliveryFeeServiceLines(fee, sourceDocNo);
 
   // Header context for the rebuilt service rows.
-  const { data: hdr } = await sb.from('mfg_sales_orders')
+  const { data: hdr, error: hdrErr } = await sb.from('mfg_sales_orders')
     .select('debtor_name, venue, customer_delivery_date').eq('doc_no', docNo).maybeSingle();
+  if (hdrErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] header load failed:', hdrErr.message); }
   const h = (hdr ?? {}) as { debtor_name?: string | null; venue?: string | null; customer_delivery_date?: string | null };
 
   // Replace the SVC-DELIVERY* lines: delete the old, insert the recomputed.

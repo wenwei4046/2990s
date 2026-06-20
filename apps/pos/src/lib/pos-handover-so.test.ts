@@ -8,7 +8,7 @@ vi.mock('./supabase', () => ({ supabase: { auth: { getSession: vi.fn() } } }));
 
 import { cartLineToSoItem, cartLinesToSoItems, pickSoItemCode, describePosHandoffError, buildDeliveryFeeCartInputs } from './pos-handover-so';
 import type { CartLine, CartConfig } from '../state/cart';
-import type { CatalogProduct } from './queries';
+import type { CatalogProduct, SpecialDeliveryFeeRow } from './queries';
 
 const product = (over: Partial<CatalogProduct> = {}): CatalogProduct => ({
   id: 'prod-1',
@@ -708,32 +708,87 @@ describe('buildDeliveryFeeCartInputs', () => {
   const mattress = (over: Record<string, unknown> = {}): CartConfig =>
     ({ kind: 'size', productId: 'p2', category: 'mattress', ...over } as unknown as CartConfig);
 
+  // The rule matcher reads the line's Model + category off the mfg catalog index
+  // (mirrors CartContents). sizeCode comes from sizeIdToMfgCode(config.sizeId);
+  // sofa builtCompartments from config.cells — same as the server's RuleLineInput.
+  const NO_RULES: SpecialDeliveryFeeRow[] = [];
+  const NO_COMBOS = new Map<string, string[][]>();
+  // size_library id 'king' → 'K' size code (sizeIdToMfgCode, queries.ts); mattress
+  // lines carry sizeId for variant rules.
+  const KING_SIZE_ID = 'king';
+
   it('counts a paid sofa as a deliverable category', () => {
-    const out = buildDeliveryFeeCartInputs([mkLine(sofa())], new Map(), new Map());
+    const out = buildDeliveryFeeCartInputs([mkLine(sofa())], new Map(), new Map(), NO_RULES, NO_COMBOS);
     expect(out.categoryIds).toEqual(['sofa']);
   });
 
   it('EXCLUDES a free-item sofa from deliverable categories (no delivery charge)', () => {
-    const out = buildDeliveryFeeCartInputs([mkLine(sofa({ freeItemCampaignId: 'camp-1' }))], new Map(), new Map());
+    const out = buildDeliveryFeeCartInputs([mkLine(sofa({ freeItemCampaignId: 'camp-1' }))], new Map(), new Map(), NO_RULES, NO_COMBOS);
     expect(out.categoryIds).toEqual([]);
   });
 
-  it('drops the special-model transport fee for a free-item line', () => {
-    const specials = new Map([['m1', { standaloneFee: 500, crossCatFollowupFee: 100 }]]);
+  it('drops the special-fee match for a free-item line', () => {
+    const mfgById = new Map([['p2', { category: 'MATTRESS', modelId: 'm1' }]]);
+    const rules: SpecialDeliveryFeeRow[] = [
+      { id: 'r1', target: [{ modelId: 'm1', scope: 'model' }], standaloneFee: 500, crossCatFollowupFee: 100, label: null },
+    ];
     const out = buildDeliveryFeeCartInputs(
       [mkLine(mattress({ modelId: 'm1', freeItemCampaignId: 'camp-1' }))],
       new Map(),
-      specials,
+      mfgById,
+      rules,
+      NO_COMBOS,
     );
     expect(out.specialModels).toEqual([]);
     expect(out.categoryIds).toEqual([]);
   });
 
-  it('keeps the special-model fee for a paid special model', () => {
-    const specials = new Map([['m1', { standaloneFee: 500, crossCatFollowupFee: 100 }]]);
-    const out = buildDeliveryFeeCartInputs([mkLine(mattress({ modelId: 'm1' }))], new Map(), specials);
+  it('matches a model-scoped rule and emits its fee (whole MYR)', () => {
+    const mfgById = new Map([['p2', { category: 'MATTRESS', modelId: 'm1' }]]);
+    const rules: SpecialDeliveryFeeRow[] = [
+      { id: 'r1', target: [{ modelId: 'm1', scope: 'model' }], standaloneFee: 500, crossCatFollowupFee: 100, label: null },
+    ];
+    const out = buildDeliveryFeeCartInputs([mkLine(mattress({ modelId: 'm1' }))], new Map(), mfgById, rules, NO_COMBOS);
     expect(out.specialModels).toEqual([{ standaloneFee: 500, crossCategoryFollowupFee: 100 }]);
     expect(out.categoryIds).toEqual(['mattress']);
+  });
+
+  it('does NOT match a model-scoped rule for a different model', () => {
+    const mfgById = new Map([['p2', { category: 'MATTRESS', modelId: 'mX' }]]);
+    const rules: SpecialDeliveryFeeRow[] = [
+      { id: 'r1', target: [{ modelId: 'm1', scope: 'model' }], standaloneFee: 500, crossCatFollowupFee: 100, label: null },
+    ];
+    const out = buildDeliveryFeeCartInputs([mkLine(mattress({ modelId: 'mX' }))], new Map(), mfgById, rules, NO_COMBOS);
+    expect(out.specialModels).toEqual([]);
+  });
+
+  it('matches a variant-scoped rule by the line size_code', () => {
+    const mfgById = new Map([['p2', { category: 'MATTRESS', modelId: 'm1' }]]);
+    const rules: SpecialDeliveryFeeRow[] = [
+      { id: 'r1', target: [{ modelId: 'm1', scope: 'variant', sizeCodes: ['K'] }], standaloneFee: 500, crossCatFollowupFee: 100, label: null },
+    ];
+    const out = buildDeliveryFeeCartInputs([mkLine(mattress({ modelId: 'm1', sizeId: KING_SIZE_ID }))], new Map(), mfgById, rules, NO_COMBOS);
+    // sizeIdToMfgCode('king') === 'K', so the variant rule matches end-to-end and
+    // emits its fee — proving the size_code path through sizeIdToMfgCode.
+    expect(out.specialModels).toEqual([{ standaloneFee: 500, crossCategoryFollowupFee: 100 }]);
+  });
+
+  it('matches a compartment-scoped rule (model-agnostic) off the sofa build', () => {
+    const mfgById = new Map([['p1', { category: 'SOFA', modelId: 'mSofa' }]]);
+    // parseRuleTargets requires a modelId on a compartment entry to survive, but
+    // deliveryTargetMatchesAnyLine ignores it for compartment scope — so an anchor
+    // modelId that differs from the line's model still matches (model-agnostic).
+    const rules: SpecialDeliveryFeeRow[] = [
+      { id: 'r1', target: [{ modelId: 'mAnchor', scope: 'compartment', compartments: ['1A(LHF)'] }], standaloneFee: 800, crossCatFollowupFee: 200, label: null },
+    ];
+    const out = buildDeliveryFeeCartInputs(
+      [mkLine(sofa({ cells: [{ moduleId: '1A(LHF)' }] }))],
+      new Map(),
+      mfgById,
+      rules,
+      NO_COMBOS,
+    );
+    expect(out.specialModels).toEqual([{ standaloneFee: 800, crossCategoryFollowupFee: 200 }]);
   });
 
   it('keeps the paid remainder of a makeFree split — only the free line drops out', () => {
@@ -741,6 +796,8 @@ describe('buildDeliveryFeeCartInputs', () => {
       [mkLine(sofa({ freeItemCampaignId: 'camp-1' })), mkLine(sofa())],
       new Map(),
       new Map(),
+      NO_RULES,
+      NO_COMBOS,
     );
     expect(out.categoryIds).toEqual(['sofa']);
   });
