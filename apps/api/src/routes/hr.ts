@@ -2,11 +2,26 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import {
   computeShowroomCommission,
-  lineKpiCenti,
+  kpiFlagFiresOnUnit,
+  unitKpiCenti,
+  unitKpiExcludedCenti,
   type CommissionConfig,
   type ItemKpiFlag,
+  type KpiUnit,
   type SalespersonInput,
 } from '@2990s/shared/hr-commission';
+import {
+  fabricTierAddon,
+  type FabricAddonCategory,
+  type FabricTier,
+  type FabricTierModelOverride,
+} from '@2990s/shared/fabric-tier-addon';
+import {
+  loadFabricSellingTiersByIds,
+  loadFabricTierAddonConfig,
+  loadModelFabricTierOverrides,
+  loadProductsByCodes,
+} from '../lib/mfg-pricing-recompute';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
@@ -338,6 +353,13 @@ type OrderRow = {
   others_centi: number | null;
 };
 
+/* Goods that drive commission = the four GOODS category buckets only. Delivery
+ * fee + SERVICE-category lines (SVC-DELIVERY* / dispose / lift) live in their own
+ * `service_centi` bucket (recomputeTotals routes them there FIRST so they can
+ * never leak into goods) and `delivery_fee_centi` is a separate header column —
+ * neither is summed here. So delivery + service are ALREADY excluded from both
+ * the % commission and the 100k/400k thresholds (Loo 2026-06-20). The item-KPI
+ * add-on exclusion below removes the remaining flagged-add-on amounts. */
 const goodsOf = (o: OrderRow): number =>
   (o.mattress_sofa_centi ?? 0) + (o.bedframe_centi ?? 0) + (o.accessories_centi ?? 0) + (o.others_centi ?? 0);
 
@@ -401,52 +423,154 @@ hr.get('/commission', async (c) => {
   }
 
   // item-KPI: only fetch lines if there are active flags.
-  const itemKpiCenti = new Map<string, number>(); // salesperson_id → bonus centi
+  const itemKpiCenti = new Map<string, number>();       // salesperson_id → fixed bonus centi
+  const kpiExcludedGoods = new Map<string, number>();   // salesperson_id → goods to remove
   const kpiDetail = new Map<string, Map<string, { label: string; qty: number; bonusCenti: number; lineCenti: number }>>();
   const flagsRes = await supabase.from('hr_item_kpi').select('flag_type, ref, label, bonus_centi').eq('active', true);
   if (flagsRes.error) return c.json({ error: 'flags_failed', reason: flagsRes.error.message }, 500);
   const flags: ItemKpiFlag[] = (flagsRes.data ?? []).map((f) => ({ flagType: f.flag_type, ref: f.ref, bonusCenti: f.bonus_centi }));
   const flagLabel = new Map<string, string>((flagsRes.data ?? []).map((f) => [`${f.flag_type}:${f.ref}`, (f.label as string) ?? f.ref]));
+  const hasFabricFlag = flags.some((f) => f.flagType === 'fabric');
 
   if (flags.length > 0 && docToSalesperson.size > 0) {
+    type LineRow = {
+      doc_no: string; item_code: string; qty: number; total_centi: number;
+      special_order_price_sen: number; item_group: string | null; variants: Record<string, unknown> | null;
+    };
+    // 1. gather every non-cancelled line for the in-range docs.
+    const lines: LineRow[] = [];
     const docNos = [...docToSalesperson.keys()];
     for (const batch of chunk(docNos, 200)) {
       const lineRes = await supabase
         .from('mfg_sales_order_items')
-        .select('doc_no, item_code, qty, variants')
+        .select('doc_no, item_code, qty, total_centi, special_order_price_sen, item_group, variants')
         .eq('cancelled', false)
         .in('doc_no', batch);
       if (lineRes.error) return c.json({ error: 'lines_failed', reason: lineRes.error.message }, 500);
-      for (const ln of lineRes.data ?? []) {
-        const sp = docToSalesperson.get(ln.doc_no as string);
-        if (!sp) continue;
-        const v = (ln.variants ?? {}) as { fabricId?: string | null; specials?: Array<{ code?: string }> };
-        const specialCodes = Array.isArray(v.specials)
-          ? v.specials.map((s) => s.code).filter((x): x is string => !!x)
-          : [];
-        const line = { itemCode: (ln.item_code as string) ?? '', qty: (ln.qty as number) ?? 0, fabricId: v.fabricId ?? null, specialCodes };
-        const bonus = lineKpiCenti(line, flags);
-        if (bonus <= 0) continue;
-        itemKpiCenti.set(sp, (itemKpiCenti.get(sp) ?? 0) + bonus);
-        for (const f of flags) {
-          const matched =
-            (f.flagType === 'product' && line.itemCode === f.ref) ||
-            (f.flagType === 'fabric' && line.fabricId === f.ref) ||
-            (f.flagType === 'special' && line.specialCodes.includes(f.ref));
-          if (!matched) continue;
-          const key = `${f.flagType}:${f.ref}`;
-          if (!kpiDetail.has(sp)) kpiDetail.set(sp, new Map());
-          const m = kpiDetail.get(sp)!;
-          const prev = m.get(key) ?? { label: flagLabel.get(key) ?? f.ref, qty: 0, bonusCenti: f.bonusCenti, lineCenti: 0 };
-          prev.qty += line.qty;
-          prev.lineCenti += line.qty * f.bonusCenti;
-          m.set(key, prev);
-        }
+      for (const ln of lineRes.data ?? []) lines.push(ln as LineRow);
+    }
+
+    // 2. fabric-tier add-on inputs — loaded only when a fabric flag is active.
+    //    The Δ a line actually charged is reproduced with the SAME shared
+    //    fabricTierAddon the SO recompute used (current config; the Δ is stable
+    //    mid-period, so a config change between sale and payout is not double-
+    //    counted here). Chunked in()s keep the subrequest count bounded.
+    type ProductLite = { category?: string | null; model_id?: string | null };
+    type TierLite = { sofaTier: FabricTier | null; bedframeTier: FabricTier | null };
+    const uniqNonEmpty = (xs: string[]) => [...new Set(xs.map((x) => (x ?? '').trim()).filter(Boolean))];
+    const loadProductsChunked = async (codes: string[]) => {
+      const out = new Map<string, ProductLite>();
+      for (const b of chunk(uniqNonEmpty(codes), 200))
+        for (const [k, v] of await loadProductsByCodes(supabase, b)) out.set(k, v as ProductLite);
+      return out;
+    };
+    const loadTiersChunked = async (ids: string[]) => {
+      const out = new Map<string, TierLite>();
+      for (const b of chunk(uniqNonEmpty(ids), 200))
+        for (const [k, v] of await loadFabricSellingTiersByIds(supabase, b)) out.set(k, v);
+      return out;
+    };
+    const norm = (v: unknown) => String(v ?? '').trim();
+    const fabricIdOf = (variants: Record<string, unknown> | null): string | null =>
+      norm((variants ?? {}).fabricId) || null;
+    const specialsOf = (variants: Record<string, unknown> | null): string[] => {
+      const arr = (variants ?? {}).specials;
+      return Array.isArray(arr) ? arr.map((s) => norm((s as { code?: unknown })?.code)).filter(Boolean) : [];
+    };
+
+    // Only lines whose fabric is actually flagged need a Δ — scope the product /
+    // tier loads to them so the report stays O(flagged lines), not O(all lines).
+    const fabricFlagRefs = new Set(flags.filter((f) => f.flagType === 'fabric').map((f) => f.ref));
+    const fabricFlaggedLines = lines.filter((l) => {
+      const fid = fabricIdOf(l.variants);
+      return !!fid && fabricFlagRefs.has(fid);
+    });
+    const addonConfig = hasFabricFlag ? await loadFabricTierAddonConfig(supabase) : null;
+    const modelOverrides = hasFabricFlag
+      ? await loadModelFabricTierOverrides(supabase)
+      : new Map<string, FabricTierModelOverride>();
+    const productByCode = hasFabricFlag ? await loadProductsChunked(fabricFlaggedLines.map((l) => l.item_code)) : new Map();
+    const tiersByFabricId = hasFabricFlag ? await loadTiersChunked(fabricFlaggedLines.map((l) => fabricIdOf(l.variants) ?? '')) : new Map();
+
+    // The flat fabric-tier Δ a single built item charged (centi). SOFA / BEDFRAME
+    // only (the shared fn returns 0 elsewhere). For a sofa the Δ is per BUILD, so
+    // every module line reports the SAME figure — the unit collapse below keeps
+    // one, never the sum.
+    const fabricAddonUnitCentiOf = (l: LineRow): number => {
+      if (!hasFabricFlag || !addonConfig) return 0;
+      const fid = fabricIdOf(l.variants);
+      if (!fid || !fabricFlagRefs.has(fid)) return 0; // unflagged fabric → its Δ stays goods
+      const product = productByCode.get(norm(l.item_code)) as ProductLite | undefined;
+      let cat = norm(product?.category).toUpperCase();
+      if (cat !== 'SOFA' && cat !== 'BEDFRAME') {
+        const g = norm(l.item_group).toLowerCase(); // product-lookup miss → fall back to the line group
+        cat = g.includes('sofa') ? 'SOFA' : g.includes('bedframe') ? 'BEDFRAME' : '';
+      }
+      if (cat !== 'SOFA' && cat !== 'BEDFRAME') return 0;
+      const category: FabricAddonCategory = cat;
+      const tiers = tiersByFabricId.get(fid) as TierLite | undefined;
+      const tier = category === 'SOFA' ? tiers?.sofaTier : tiers?.bedframeTier;
+      const override = product?.model_id ? (modelOverrides.get(product.model_id) ?? null) : null;
+      return fabricTierAddon(category, tier ?? null, addonConfig, override) * 100;
+    };
+
+    // 3. collapse split-sofa module lines (shared variants.buildKey, same doc)
+    //    into ONE KPI unit so the bonus + exclusion count once per built item,
+    //    not once per module. Every other line is its own unit.
+    const unitByKey = new Map<string, KpiUnit & { docNo: string }>();
+    const units: Array<KpiUnit & { docNo: string }> = [];
+    for (const l of lines) {
+      const unit: KpiUnit & { docNo: string } = {
+        docNo: l.doc_no,
+        itemCodes: [norm(l.item_code)],
+        qty: Number(l.qty) || 0,
+        fabricId: fabricIdOf(l.variants),
+        specialCodes: specialsOf(l.variants),
+        lineTotalCenti: Number(l.total_centi) || 0,
+        fabricAddonUnitCenti: fabricAddonUnitCentiOf(l),
+        specialSurchargeUnitCenti: Number(l.special_order_price_sen) || 0,
+      };
+      const buildKey = norm((l.variants ?? {}).buildKey);
+      if (!buildKey) { units.push(unit); continue; }
+      const key = `${l.doc_no}::${buildKey}`;
+      const existing = unitByKey.get(key);
+      if (!existing) { unitByKey.set(key, unit); units.push(unit); continue; }
+      // merge a module line into its build's unit.
+      existing.itemCodes.push(...unit.itemCodes);
+      existing.lineTotalCenti += unit.lineTotalCenti;        // Σ → whole build's goods
+      // fabric Δ + special surcharge are per-BUILD figures sitting on the lead
+      // module line; keep the lead's value (max picks it over the 0s), never sum.
+      existing.fabricAddonUnitCenti = Math.max(existing.fabricAddonUnitCenti, unit.fabricAddonUnitCenti);
+      existing.specialSurchargeUnitCenti = Math.max(existing.specialSurchargeUnitCenti, unit.specialSurchargeUnitCenti);
+      // qty is uniform across the build's modules — keep the first.
+    }
+
+    // 4. per unit → fixed bonus + goods exclusion + per-flag detail, by salesperson.
+    for (const u of units) {
+      const sp = docToSalesperson.get(u.docNo);
+      if (!sp) continue;
+      const bonus = unitKpiCenti(u, flags);
+      const excluded = unitKpiExcludedCenti(u, flags);
+      if (bonus > 0) itemKpiCenti.set(sp, (itemKpiCenti.get(sp) ?? 0) + bonus);
+      if (excluded > 0) kpiExcludedGoods.set(sp, (kpiExcludedGoods.get(sp) ?? 0) + excluded);
+      if (bonus <= 0) continue;
+      for (const f of flags) {
+        if (!kpiFlagFiresOnUnit(f, u)) continue;
+        const key = `${f.flagType}:${f.ref}`;
+        if (!kpiDetail.has(sp)) kpiDetail.set(sp, new Map());
+        const m = kpiDetail.get(sp)!;
+        const prev = m.get(key) ?? { label: flagLabel.get(key) ?? f.ref, qty: 0, bonusCenti: f.bonusCenti, lineCenti: 0 };
+        prev.qty += u.qty;
+        prev.lineCenti += u.qty * f.bonusCenti;
+        m.set(key, prev);
       }
     }
   }
 
-  // group profiles by their HR-assigned showroom, then compute
+  // group profiles by their HR-assigned showroom, then compute. The KPI add-on
+  // exclusion is subtracted from each salesperson's goods (clamped ≥ 0): a
+  // flagged add-on earns the fixed bonus above instead of % commission, and is
+  // dropped from the goods the % rate + the 100k/400k thresholds run on.
   const byShowroom = new Map<string, SalespersonInput[]>();
   for (const p of profiles) {
     const sid = p.showroom_id;
@@ -454,7 +578,7 @@ hr.get('/commission', async (c) => {
     byShowroom.get(sid)!.push({
       staffId: p.staff_id,
       tier: p.tier as 'sales' | 'manager',
-      personalGoodsCenti: personalGoods.get(p.staff_id) ?? 0,
+      personalGoodsCenti: Math.max(0, (personalGoods.get(p.staff_id) ?? 0) - (kpiExcludedGoods.get(p.staff_id) ?? 0)),
       itemKpiCenti: itemKpiCenti.get(p.staff_id) ?? 0,
     });
   }
