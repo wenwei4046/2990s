@@ -185,6 +185,23 @@ export const freeItemCampaigns = pgTable('free_item_campaigns', {
   updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/* ──────────────── Special Delivery Fee Rules (RuleTarget jsonb) ───────── */
+// Migration 0182. Generalises model_special_delivery_fees (0140) onto the
+// #691 RuleTarget abstraction: a rule's target jsonb is RuleTarget[] (scopes
+// model | variant | compartment | combo). standalone_fee overrides the base
+// delivery fee; cross_cat_followup_fee applies when the matched SO is a
+// cross-category follow-up. Fees are whole MYR (server scales ×100 to sen).
+// RLS: read any staff; write admin/coordinator/sales_director.
+export const specialDeliveryFeeRules = pgTable('special_delivery_fee_rules', {
+  id:                  uuid('id').primaryKey().defaultRandom(),
+  target:              jsonb('target').notNull().default([]), // RuleTarget[]
+  standaloneFee:       integer('standalone_fee').notNull().default(0),
+  crossCatFollowupFee: integer('cross_cat_followup_fee').notNull().default(0),
+  label:               text('label'),
+  updatedAt:           timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:           uuid('updated_by'),                     // references staff(id)
+});
+
 /* ─────────────────────────── Venues ─────────────────────────────────── */
 // Migration 0086 (2026-05-27). Parallel concept to showrooms — venues are
 // where the sales force (sales / sales_executive / outlet_manager) actually
