@@ -827,10 +827,20 @@ export const PurchaseOrderDetail = () => {
                       return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
                     })()}
                     {showDrift && it.so_drift && (
-                      <div style={{ marginTop: 3, fontSize: 'var(--fs-11)', fontWeight: 700, color: 'var(--c-danger, #b8331f)' }}>
-                        {it.so_drift.itemChanged
-                          ? <>⚠ SO 已换产品 → {it.so_drift.itemSo}(本单仍是 {it.so_drift.itemPo}),建议取消重开</>
-                          : <>⚠ SO 现规格:{it.so_drift.specSo || '—'}(本单仍是 {it.so_drift.specPo || '—'})</>}
+                      <div style={{ marginTop: 3, fontSize: 'var(--fs-11)', fontWeight: 700, color: 'var(--c-danger, #b8331f)', display: 'grid', gap: 2 }}>
+                        {it.so_drift.itemChanged && (
+                          <div>⚠ SO 已换产品 → {it.so_drift.itemSo}(本单仍是 {it.so_drift.itemPo}),建议取消重开</div>
+                        )}
+                        {!it.so_drift.itemChanged && it.so_drift.specSo !== it.so_drift.specPo && (
+                          <div>⚠ SO 现规格:{it.so_drift.specSo || '—'}(本单仍是 {it.so_drift.specPo || '—'})</div>
+                        )}
+                        {/* Staff #12 — SO line's ship-from warehouse moved after this PO
+                            was raised; the PO still points at the old warehouse. Rebind
+                            via Edit → change this line's warehouse → Save (the line PATCH
+                            is GRN-gated, so a received PO can't be rebound). */}
+                        {it.so_drift.warehouseChanged && (
+                          <div>⚠ SO 仓库已改 —— 本单仍指向原仓库;请「编辑」把本行仓库改成 SO 的仓库后保存(已收货的 PO 不可改)。</div>
+                        )}
                       </div>
                     )}
                   </td>

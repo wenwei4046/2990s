@@ -403,7 +403,7 @@ mfgPurchaseOrders.get('/:id', async (c) => {
      printed / sent to the supplier); instead we SURFACE the drift so the
      purchaser re-sends. The variant summary is recomputed apples-to-apples
      (same helper both sides) so a formatter change can't false-trip it. */
-  type SoSnap = { item_code: string; item_group: string | null; description: string | null; variants: Record<string, unknown> | null };
+  type SoSnap = { item_code: string; item_group: string | null; description: string | null; variants: Record<string, unknown> | null; warehouse_id: string | null };
   const soLineById = new Map<string, SoSnap>();
   try {
     const soItemIds = [...new Set(
@@ -412,11 +412,11 @@ mfgPurchaseOrders.get('/:id', async (c) => {
     if (soItemIds.length > 0) {
       const { data: soLines } = await supabase
         .from('mfg_sales_order_items')
-        .select('id, doc_no, item_code, item_group, description, variants')
+        .select('id, doc_no, item_code, item_group, description, variants, warehouse_id')
         .in('id', soItemIds);
       for (const r of (soLines ?? []) as Array<{ id: string; doc_no: string } & SoSnap>) {
         soDocByItem.set(r.id, r.doc_no);
-        soLineById.set(r.id, { item_code: r.item_code, item_group: r.item_group, description: r.description, variants: r.variants });
+        soLineById.set(r.id, { item_code: r.item_code, item_group: r.item_group, description: r.description, variants: r.variants, warehouse_id: r.warehouse_id });
       }
     }
   } catch { /* leave so_doc_no / drift null */ }
@@ -424,19 +424,28 @@ mfgPurchaseOrders.get('/:id', async (c) => {
   const items = itemRows.map((it) => {
     const soId = it.so_item_id as string | null;
     const so = soId ? soLineById.get(soId) ?? null : null;
-    /* Drift = the live SO spec no longer matches this PO line's snapshot. Item
+    /* Drift = the live SO line no longer matches this PO line's snapshot. Item
        code change = a product swap on the SO (a different SKU → maybe a
        different supplier), flagged separately so the purchaser redoes the PO
-       rather than just re-printing it. */
-    let so_drift: null | { specPo: string; specSo: string; itemPo: string; itemSo: string; itemChanged: boolean } = null;
+       rather than just re-printing it. Warehouse change (staff #12) = the SO
+       line's ship-from warehouse moved after the PO was raised → the PO points
+       at the wrong warehouse; carried so the UI can offer a one-click rebind to
+       the SO's current warehouse. */
+    let so_drift: null | {
+      specPo: string; specSo: string; itemPo: string; itemSo: string; itemChanged: boolean;
+      warehouseChanged: boolean; warehousePoId: string | null; warehouseSoId: string | null;
+    } = null;
     if (so) {
       const specPo = buildVariantSummary(String(it.item_group ?? ''), (it.variants as Record<string, unknown> | null) ?? null);
       const specSo = buildVariantSummary(String(so.item_group ?? ''), so.variants ?? null);
       const itemPo = String(it.material_code ?? '');
       const itemSo = String(so.item_code ?? '');
       const itemChanged = itemPo !== itemSo;
-      if (specPo !== specSo || itemChanged) {
-        so_drift = { specPo, specSo, itemPo, itemSo, itemChanged };
+      const warehousePoId = (it.warehouse_id as string | null) ?? null;
+      const warehouseSoId = so.warehouse_id ?? null;
+      const warehouseChanged = warehousePoId !== warehouseSoId;
+      if (specPo !== specSo || itemChanged || warehouseChanged) {
+        so_drift = { specPo, specSo, itemPo, itemSo, itemChanged, warehouseChanged, warehousePoId, warehouseSoId };
       }
     }
     return {
