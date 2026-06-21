@@ -2621,6 +2621,11 @@ export const stockTakeLines = pgTable('stock_take_lines', {
   stockTakeId:     uuid('stock_take_id').notNull().references(() => stockTakes.id, { onDelete: 'cascade' }),
   productCode:     text('product_code').notNull(),
   productName:     text('product_name'),
+  // migration 0183 — count + adjust per (product_code, variant_key); an
+  // attributed SKU (sofa/bedframe/mattress) gets one line per real variant
+  // bucket so the posted ADJUSTMENT lands in the bucket it measured.
+  variantKey:      text('variant_key').notNull().default(''),
+  variantLabel:    text('variant_label'),
   systemQty:       integer('system_qty').notNull().default(0),  // snapshot at create time
   countedQty:      integer('counted_qty'),                      // nullable until commander enters it
   // variance is a generated column in the DB — we model it as a plain
@@ -2632,7 +2637,7 @@ export const stockTakeLines = pgTable('stock_take_lines', {
   createdAt:       timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxTake:    index('idx_stock_take_lines_take').on(t.stockTakeId),
-  uniqLine:   uniqueIndex('stock_take_lines_take_product_unique').on(t.stockTakeId, t.productCode),
+  uniqLine:   uniqueIndex('stock_take_lines_take_product_variant_unique').on(t.stockTakeId, t.productCode, t.variantKey),
 }));
 
 export const inventoryLotConsumptions = pgTable('inventory_lot_consumptions', {

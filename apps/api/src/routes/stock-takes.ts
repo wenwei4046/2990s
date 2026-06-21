@@ -37,8 +37,8 @@ const HEADER =
   'id, take_no, status, warehouse_id, scope_type, scope_value, take_date, ' +
   'notes, posted_at, cancelled_at, created_at, created_by';
 const LINE =
-  'id, stock_take_id, product_code, product_name, system_qty, counted_qty, ' +
-  'variance, notes, created_at';
+  'id, stock_take_id, product_code, product_name, variant_key, variant_label, ' +
+  'system_qty, counted_qty, variance, notes, created_at';
 
 const VALID_STATUS = new Set(['OPEN', 'POSTED', 'CANCELLED']);
 const VALID_SCOPE  = new Set(['ALL', 'CATEGORY', 'CODE_PREFIX']);
@@ -52,38 +52,86 @@ const nextTakeNo = async (sb: any): Promise<string> => {
   return nextMonthlyDocNo(`STK-${yymm}`, ((existing ?? []) as Array<{ take_no: string }>).map((r) => r.take_no));
 };
 
-// ── Resolve in-scope SKUs + their current system_qty at the warehouse ──
-// Hits v_inventory_all_skus (warehouse × SKU cross-join with COALESCE qty=0)
-// so even SKUs with no movements yet end up in the count sheet.
-type ScopedSku = { product_code: string; product_name: string | null; qty: number };
+// ── Resolve in-scope SKUs PER (product_code, variant_key) + current on-hand ──
+// Migration 0183 (#15): the count sheet is variant-grained. Scope (ALL /
+// CATEGORY / CODE_PREFIX) is resolved against v_inventory_all_skus (which carries
+// category + every SKU incl. zero-stock); the per-variant on-hand comes from
+// inventory_balances. An attributed SKU (sofa/bedframe/mattress) yields one line
+// per real variant bucket; a plain SKU yields a single '' line; a SKU that has
+// never moved yields one '' line at qty 0 so it still appears to be counted.
+type ScopedSku = {
+  product_code: string; product_name: string | null;
+  variant_key: string; variant_label: string | null; qty: number;
+};
+
+// Humanise a variant_key ("fabriccode=bf-16|gap=16|legheight=2") for display.
+const labelFromVariantKey = (vk: string): string | null => {
+  if (!vk) return null;
+  return vk.split('|').map((p) => p.replace('=', ' ')).join(' · ');
+};
+
 const fetchScopedSkus = async (
   sb: any,
   warehouseId: string,
   scopeType: 'ALL' | 'CATEGORY' | 'CODE_PREFIX',
   scopeValue: string | null,
 ): Promise<{ rows: ScopedSku[]; error?: string }> => {
+  // 1) Scope → the set of product_codes (+ names) at this warehouse.
   let q = sb.from('v_inventory_all_skus')
-    .select('product_code, product_name, category, qty')
+    .select('product_code, product_name, category')
     .eq('warehouse_id', warehouseId);
-
   if (scopeType === 'CATEGORY' && scopeValue) {
     q = q.eq('category', scopeValue);
   } else if (scopeType === 'CODE_PREFIX' && scopeValue) {
     q = q.ilike('product_code', `${scopeValue}%`);
   }
+  const { data: skuData, error: skuErr } = await q.order('product_code');
+  if (skuErr) return { rows: [], error: skuErr.message };
+  const skus = ((skuData as Array<{ product_code: string; product_name: string | null }>) ?? []);
+  if (skus.length === 0) return { rows: [] };
+  const nameByCode = new Map(skus.map((s) => [s.product_code, s.product_name] as const));
+  const codes = [...nameByCode.keys()];
 
-  const { data, error } = await q.order('product_code');
-  if (error) return { rows: [], error: error.message };
-  const rows = (data as unknown as Array<{
-    product_code: string; product_name: string | null; qty: number | null;
-  }> | null) ?? [];
-  return {
-    rows: rows.map((r) => ({
-      product_code: r.product_code,
-      product_name: r.product_name,
-      qty:          Number(r.qty ?? 0),
-    })),
-  };
+  // 2) Per-variant on-hand for those codes at this warehouse (chunk the .in()).
+  const balByCode = new Map<string, Array<{ variant_key: string; product_name: string | null; qty: number }>>();
+  for (let i = 0; i < codes.length; i += 200) {
+    const chunk = codes.slice(i, i + 200);
+    const { data: balData, error: balErr } = await sb.from('inventory_balances')
+      .select('product_code, variant_key, product_name, qty')
+      .eq('warehouse_id', warehouseId)
+      .in('product_code', chunk);
+    if (balErr) return { rows: [], error: balErr.message };
+    for (const b of (balData as Array<{
+      product_code: string; variant_key: string | null; product_name: string | null; qty: number | null;
+    }>) ?? []) {
+      const list = balByCode.get(b.product_code) ?? [];
+      list.push({ variant_key: b.variant_key ?? '', product_name: b.product_name, qty: Number(b.qty ?? 0) });
+      balByCode.set(b.product_code, list);
+    }
+  }
+
+  // 3) One line per (code, variant). No balance row at all → a single '' line @0.
+  const rows: ScopedSku[] = [];
+  for (const code of codes) {
+    const name = nameByCode.get(code) ?? null;
+    const buckets = balByCode.get(code);
+    if (buckets && buckets.length > 0) {
+      for (const b of buckets) {
+        rows.push({
+          product_code: code,
+          product_name: b.product_name ?? name,
+          variant_key: b.variant_key,
+          variant_label: labelFromVariantKey(b.variant_key),
+          qty: b.qty,
+        });
+      }
+    } else {
+      rows.push({ product_code: code, product_name: name, variant_key: '', variant_label: null, qty: 0 });
+    }
+  }
+  rows.sort((a, b) =>
+    a.product_code.localeCompare(b.product_code) || a.variant_key.localeCompare(b.variant_key));
+  return { rows };
 };
 
 // ── List ──────────────────────────────────────────────────────────────
@@ -216,6 +264,8 @@ stockTakes.post('/', async (c) => {
     stock_take_id: header.id,
     product_code:  r.product_code,
     product_name:  r.product_name,
+    variant_key:   r.variant_key,
+    variant_label: r.variant_label,
     system_qty:    r.qty,
     counted_qty:   null,
   }));
@@ -422,28 +472,51 @@ stockTakes.patch('/:id/post', async (c) => {
   };
 
   const { data: lines } = await sb.from('stock_take_lines')
-    .select('product_code, product_name, system_qty, counted_qty, variance, notes')
+    .select('product_code, product_name, variant_key, counted_qty, notes')
     .eq('stock_take_id', id);
+  const counted = ((lines as Array<{
+    product_code: string; product_name: string | null;
+    variant_key: string | null; counted_qty: number | null; notes: string | null;
+  }>) ?? []).filter((ln) => ln.counted_qty != null);
+
+  // Audit 2026-06-20 (#15) — re-read LIVE on-hand per (product_code, variant_key)
+  // at post time, NOT the frozen create-time snapshot, so:
+  //   adjustment = counted − live_on_hand(code, variant)
+  // drives the exact bucket the operator counted to exactly the counted qty.
+  // This stamps variant_key (an attributed SKU lands in its REAL bucket, not the
+  // '' bucket that corrupted on-hand/valuation) AND closes the stale-snapshot gap
+  // — stock that moved during the count no longer skews the correction
+  // (supersedes branch fix/stock-take-reconcile).
+  const liveByKey = new Map<string, number>();
+  const codes = [...new Set(counted.map((ln) => ln.product_code))];
+  for (let i = 0; i < codes.length; i += 200) {
+    const chunk = codes.slice(i, i + 200);
+    if (chunk.length === 0) break;
+    const { data: bal } = await sb.from('inventory_balances')
+      .select('product_code, variant_key, qty')
+      .eq('warehouse_id', header.warehouse_id)
+      .in('product_code', chunk);
+    for (const b of (bal as Array<{ product_code: string; variant_key: string | null; qty: number | null }>) ?? []) {
+      liveByKey.set(`${b.product_code} ${b.variant_key ?? ''}`, Number(b.qty ?? 0));
+    }
+  }
 
   const movementErrors: string[] = [];
   const adjustmentRows: Array<Record<string, unknown>> = [];
 
-  for (const ln of (lines as Array<{
-    product_code: string; product_name: string | null;
-    system_qty: number; counted_qty: number | null;
-    variance: number | null; notes: string | null;
-  }>) ?? []) {
-    if (ln.counted_qty == null) continue;
-    // Recompute defensively — variance is generated in DB but be safe.
-    const variance = ln.variance ?? (ln.counted_qty - ln.system_qty);
-    if (variance === 0) continue;
+  for (const ln of counted) {
+    const variantKey = ln.variant_key ?? '';
+    const live = liveByKey.get(`${ln.product_code} ${variantKey}`) ?? 0;
+    const adjustment = ln.counted_qty! - live;
+    if (adjustment === 0) continue;
 
     adjustmentRows.push({
       movement_type:   'ADJUSTMENT',
       warehouse_id:    header.warehouse_id,
       product_code:    ln.product_code,
       product_name:    ln.product_name,
-      qty:             variance,                       // SIGNED — see /inventory/adjustments
+      variant_key:     variantKey,                     // #15 — land in the counted bucket
+      qty:             adjustment,                     // SIGNED — see /inventory/adjustments
       unit_cost_sen:   0,
       source_doc_type: 'STOCK_TAKE',
       source_doc_id:   header.id,
