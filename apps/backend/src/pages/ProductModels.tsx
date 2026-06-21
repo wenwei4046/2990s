@@ -1770,7 +1770,7 @@ type AssignDraft = {
   isMainSupplier: boolean;
 };
 
-function ModularAssignSupplierDialog({
+export function ModularAssignSupplierDialog({
   modelIds, onClose, onSaved,
 }: {
   modelIds: string[];

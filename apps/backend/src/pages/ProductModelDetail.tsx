@@ -18,9 +18,9 @@
 // allowed_options to bulk-INSERT mfg_products rows.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ArrowLeft, ImagePlus, Layers, Save, Trash2, Wand2, X, Power, PowerOff } from 'lucide-react';
+import { ArrowLeft, ImagePlus, Layers, Save, Store, Trash2, Wand2, X, Power, PowerOff } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { maintActiveValues } from '@2990s/shared';
 import {
@@ -36,6 +36,13 @@ import styles from './ProductModelDetail.module.css';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
+
+// Staff #5 — reuse the proven multi-supplier assign dialog from the Models list,
+// scoped to this single model, so an operator can bind suppliers to an EXISTING
+// model's SKUs from the edit page. Lazy-imported to break the ProductModels ⇄
+// ProductModelDetail circular import (ProductModels renders this page as a drawer).
+const AssignSupplierDialog = lazy(() =>
+  import('./ProductModels').then((m) => ({ default: m.ModularAssignSupplierDialog })));
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
@@ -96,6 +103,8 @@ export const ProductModelDetail = ({
   const maintenance = useMaintenanceConfig('master');
   const askConfirm = useConfirm();
   const notify = useNotify();
+  // Staff #5 — supplier-assign dialog (reuses ModularAssignSupplierDialog).
+  const [assigning, setAssigning] = useState(false);
   // Branding datalist — maintenance Brandings pool first, DISTINCT fallback.
   const brandingPool = useBrandingPool();
   // Fabric library — pool of active fabric slugs displayed in the FABRICS
@@ -313,6 +322,9 @@ export const ProductModelDetail = ({
           </span>
         </div>
         <div className={styles.headerActions}>
+          <Button variant="ghost" size="sm" onClick={() => setAssigning(true)}>
+            <Store {...ICON} /> Assign supplier
+          </Button>
           <Button variant="ghost" size="sm" onClick={onToggleActive}>
             {model.active ? 'Deactivate' : 'Activate'}
           </Button>
@@ -324,6 +336,16 @@ export const ProductModelDetail = ({
           </Button>
         </div>
       </header>
+
+      {assigning && id && (
+        <Suspense fallback={null}>
+          <AssignSupplierDialog
+            modelIds={[id]}
+            onClose={() => setAssigning(false)}
+            onSaved={() => setAssigning(false)}
+          />
+        </Suspense>
+      )}
 
       {updateMut.isError && (
         <div className={styles.errorBanner}>
