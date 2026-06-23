@@ -79,6 +79,7 @@ export const StockTakes = () => {
       ),
       searchValue: (t) => t.take_no,
       filterValue: (t) => t.take_no,
+      exportValue: (t) => t.take_no,
       sortFn: (a, b) => a.take_no.localeCompare(b.take_no),
     },
     {
@@ -88,6 +89,7 @@ export const StockTakes = () => {
       accessor: (t) => <span className={styles.numCellZero}>{fmtDate(t.take_date)}</span>,
       searchValue: (t) => fmtDate(t.take_date),
       filterValue: (t) => fmtDate(t.take_date),
+      exportValue: (t) => fmtDate(t.take_date),
       sortFn: (a, b) => a.take_date.localeCompare(b.take_date),
       filterType: 'date', dateValue: (t) => t.take_date,
     },
@@ -116,6 +118,10 @@ export const StockTakes = () => {
         const wh = t.warehouse ?? wmap.get(t.warehouse_id);
         return wh ? `${wh.code} · ${wh.name}` : '—';
       },
+      exportValue: (t) => {
+        const wh = t.warehouse ?? wmap.get(t.warehouse_id);
+        return wh ? `${wh.code} · ${wh.name}` : '';
+      },
     },
     {
       key: 'scope',
@@ -124,6 +130,7 @@ export const StockTakes = () => {
       accessor: (t) => <span style={{ fontSize: 'var(--fs-13)' }}>{scopeLabel(t.scope_type, t.scope_value)}</span>,
       searchValue: (t) => scopeLabel(t.scope_type, t.scope_value),
       filterValue: (t) => scopeLabel(t.scope_type, t.scope_value),
+      exportValue: (t) => scopeLabel(t.scope_type, t.scope_value),
     },
     {
       key: 'status',
@@ -144,6 +151,7 @@ export const StockTakes = () => {
       },
       searchValue: (t) => STATUS_TONE[t.status].label,
       filterValue: (t) => STATUS_TONE[t.status].label,
+      exportValue: (t) => STATUS_TONE[t.status].label,
       sortFn: (a, b) => a.status.localeCompare(b.status),
     },
     {
@@ -158,6 +166,7 @@ export const StockTakes = () => {
       ),
       searchValue: (t) => String(t.line_count ?? 0),
       filterValue: (t) => String(t.line_count ?? 0),
+      exportValue: (t) => t.line_count ?? 0,
       sortFn: (a, b) => (a.line_count ?? 0) - (b.line_count ?? 0),
     },
     {
@@ -181,6 +190,7 @@ export const StockTakes = () => {
       },
       searchValue: (t) => String(t.variance_total ?? 0),
       filterValue: (t) => String(t.variance_total ?? 0),
+      exportValue: (t) => t.variance_total ?? 0,
       sortFn: (a, b) => (a.variance_total ?? 0) - (b.variance_total ?? 0),
     },
   ], [wmap]);

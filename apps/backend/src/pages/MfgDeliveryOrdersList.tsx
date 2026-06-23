@@ -690,6 +690,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     searchValue: (r) => deriveBranding(r),
     groupValue: (r) => deriveBranding(r) || '(none)',
     sortFn: (a, b) => deriveBranding(a).localeCompare(deriveBranding(b)),
+    exportValue: (r) => deriveBranding(r),
   },
   {
     key: 'venue', label: 'Venue', width: 180, sortable: true, groupable: true,
@@ -711,6 +712,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     searchValue: (r) => fmtRm(r.local_total_centi),
     sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
     filterType: 'number', numberValue: (r) => r.local_total_centi,
+    exportValue: (r) => (r.local_total_centi ?? 0) / 100,
   },
   {
     key: 'mattress_sofa_centi', label: 'Mattress/Sofa', width: 130, sortable: true, align: 'right',
@@ -721,6 +723,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     },
     searchValue: (r) => fmtRm(r.mattress_sofa_centi ?? 0),
     sortFn: (a, b) => (a.mattress_sofa_centi ?? 0) - (b.mattress_sofa_centi ?? 0),
+    exportValue: (r) => (r.mattress_sofa_centi ?? 0) / 100,
   },
   {
     key: 'bedframe_centi', label: 'Bedframe', width: 120, sortable: true, align: 'right',
@@ -731,6 +734,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     },
     searchValue: (r) => fmtRm(r.bedframe_centi ?? 0),
     sortFn: (a, b) => (a.bedframe_centi ?? 0) - (b.bedframe_centi ?? 0),
+    exportValue: (r) => (r.bedframe_centi ?? 0) / 100,
   },
   {
     key: 'accessories_centi', label: 'Accessories', width: 120, sortable: true, align: 'right',
@@ -741,6 +745,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     },
     searchValue: (r) => fmtRm(r.accessories_centi ?? 0),
     sortFn: (a, b) => (a.accessories_centi ?? 0) - (b.accessories_centi ?? 0),
+    exportValue: (r) => (r.accessories_centi ?? 0) / 100,
   },
   {
     key: 'phone', label: 'Phone', width: 130, sortable: true,
@@ -822,18 +827,21 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     accessor: (r) => <span className={styles.money}>{fmtRm(r.mattress_sofa_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.mattress_sofa_cost_centi ?? 0),
     sortFn: (a, b) => (a.mattress_sofa_cost_centi ?? 0) - (b.mattress_sofa_cost_centi ?? 0),
+    exportValue: (r) => (r.mattress_sofa_cost_centi ?? 0) / 100,
   },
   {
     key: 'bedframe_cost_centi', label: 'Bedframe Cost', width: 130, sortable: true, align: 'right', defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.bedframe_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.bedframe_cost_centi ?? 0),
     sortFn: (a, b) => (a.bedframe_cost_centi ?? 0) - (b.bedframe_cost_centi ?? 0),
+    exportValue: (r) => (r.bedframe_cost_centi ?? 0) / 100,
   },
   {
     key: 'total_cost_centi', label: 'Cost Total', width: 120, sortable: true, align: 'right', defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.total_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.total_cost_centi ?? 0),
     sortFn: (a, b) => (a.total_cost_centi ?? 0) - (b.total_cost_centi ?? 0),
+    exportValue: (r) => (r.total_cost_centi ?? 0) / 100,
   },
   {
     key: 'total_margin_centi', label: 'Margin', width: 120, sortable: true, align: 'right', defaultHidden: true,
@@ -845,5 +853,6 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     },
     searchValue: (r) => fmtRm(r.total_margin_centi ?? 0),
     sortFn: (a, b) => (a.total_margin_centi ?? 0) - (b.total_margin_centi ?? 0),
+    exportValue: (r) => ((r.local_total_centi ?? 0) <= 0 ? '' : (r.total_margin_centi ?? 0) / 100),
   },
 ];

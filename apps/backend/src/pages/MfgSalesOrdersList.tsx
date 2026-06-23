@@ -1215,6 +1215,7 @@ const buildColumns = (
     ),
     searchValue: (r) => r.current_doc_no ?? r.doc_no ?? '',
     filterValue: (r) => r.current_doc_no ?? r.doc_no ?? '—',
+    exportValue: (r) => r.current_doc_no ?? r.doc_no ?? '',
   },
   {
     key: 'so_date', label: 'Date', width: 110, sortable: true,
@@ -1276,6 +1277,7 @@ const buildColumns = (
     searchValue: (r) => deriveBranding(r),
     groupValue: (r) => deriveBranding(r) || '(none)',
     sortFn: (a, b) => deriveBranding(a).localeCompare(deriveBranding(b)),
+    exportValue: (r) => deriveBranding(r),
   },
   {
     key: 'venue', label: 'Venue', width: 180, sortable: true, groupable: true,
@@ -1295,6 +1297,7 @@ const buildColumns = (
     searchValue: (r) => fmtRm(r.local_total_centi),
     sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
     filterType: 'number', numberValue: (r) => r.local_total_centi,
+    exportValue: (r) => (r.local_total_centi ?? 0) / 100,
   },
   {
     /* Commander 2026-05-30 — Stock Status column rebuilt around the operator's
@@ -1333,6 +1336,7 @@ const buildColumns = (
       );
     },
     searchValue: (r) => (r.stock_remark ?? '').toLowerCase(),
+    exportValue: (r) => (r.stock_remark ?? '').trim(),
     sortFn: (a, b) => {
       /* Sort: full READY first, then READY (PARTIAL), then pending (any
          categories shown), then blank. Within "pending" group, longer remark
@@ -1360,6 +1364,7 @@ const buildColumns = (
     },
     searchValue: (r) => fmtRm(r.mattress_sofa_centi ?? 0),
     sortFn: (a, b) => (a.mattress_sofa_centi ?? 0) - (b.mattress_sofa_centi ?? 0),
+    exportValue: (r) => (r.mattress_sofa_centi ?? 0) / 100,
   },
   {
     key: 'bedframe_centi', label: 'Bedframe', width: 120, sortable: true, align: 'right', groupable: false,
@@ -1373,6 +1378,7 @@ const buildColumns = (
     },
     searchValue: (r) => fmtRm(r.bedframe_centi ?? 0),
     sortFn: (a, b) => (a.bedframe_centi ?? 0) - (b.bedframe_centi ?? 0),
+    exportValue: (r) => (r.bedframe_centi ?? 0) / 100,
   },
   {
     key: 'accessories_centi', label: 'Accessories', width: 120, sortable: true, align: 'right', groupable: false,
@@ -1386,24 +1392,28 @@ const buildColumns = (
     },
     searchValue: (r) => fmtRm(r.accessories_centi ?? 0),
     sortFn: (a, b) => (a.accessories_centi ?? 0) - (b.accessories_centi ?? 0),
+    exportValue: (r) => (r.accessories_centi ?? 0) / 100,
   },
   {
     key: 'mattress_sofa_cost_centi', label: 'Mattress/Sofa Cost', width: 140, sortable: true, align: 'right', groupable: false,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.mattress_sofa_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.mattress_sofa_cost_centi ?? 0),
     sortFn: (a, b) => (a.mattress_sofa_cost_centi ?? 0) - (b.mattress_sofa_cost_centi ?? 0),
+    exportValue: (r) => (r.mattress_sofa_cost_centi ?? 0) / 100,
   },
   {
     key: 'bedframe_cost_centi', label: 'Bedframe Cost', width: 130, sortable: true, align: 'right', groupable: false,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.bedframe_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.bedframe_cost_centi ?? 0),
     sortFn: (a, b) => (a.bedframe_cost_centi ?? 0) - (b.bedframe_cost_centi ?? 0),
+    exportValue: (r) => (r.bedframe_cost_centi ?? 0) / 100,
   },
   {
     key: 'accessories_cost_centi', label: 'Accessories Cost', width: 140, sortable: true, align: 'right', groupable: false,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.accessories_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.accessories_cost_centi ?? 0),
     sortFn: (a, b) => (a.accessories_cost_centi ?? 0) - (b.accessories_cost_centi ?? 0),
+    exportValue: (r) => (r.accessories_cost_centi ?? 0) / 100,
   },
   {
     /* Task #91 — display the pretty Malaysian format. searchValue keeps the
@@ -1539,6 +1549,7 @@ const buildColumns = (
     accessor: (r) => <span className={styles.money}>{fmtRm(r.others_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.others_centi ?? 0),
     sortFn: (a, b) => (a.others_centi ?? 0) - (b.others_centi ?? 0),
+    exportValue: (r) => (r.others_centi ?? 0) / 100,
   },
   {
     key: 'others_cost_centi', label: 'Others Cost', width: 120, sortable: true, align: 'right', groupable: false,
@@ -1546,6 +1557,7 @@ const buildColumns = (
     accessor: (r) => <span className={styles.money}>{fmtRm(r.others_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.others_cost_centi ?? 0),
     sortFn: (a, b) => (a.others_cost_centi ?? 0) - (b.others_cost_centi ?? 0),
+    exportValue: (r) => (r.others_cost_centi ?? 0) / 100,
   },
   /* Task #114 — Overall cost / margin / margin% on the SO header. */
   {
@@ -1554,6 +1566,7 @@ const buildColumns = (
     accessor: (r) => <span className={styles.money}>{fmtRm(r.total_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.total_cost_centi ?? 0),
     sortFn: (a, b) => (a.total_cost_centi ?? 0) - (b.total_cost_centi ?? 0),
+    exportValue: (r) => (r.total_cost_centi ?? 0) / 100,
   },
   {
     key: 'total_margin_centi', label: 'Margin', width: 120, sortable: true, align: 'right', groupable: false,
@@ -1566,6 +1579,7 @@ const buildColumns = (
     },
     searchValue: (r) => fmtRm(r.total_margin_centi ?? 0),
     sortFn: (a, b) => (a.total_margin_centi ?? 0) - (b.total_margin_centi ?? 0),
+    exportValue: (r) => ((r.local_total_centi ?? 0) <= 0 ? '' : (r.total_margin_centi ?? 0) / 100),
   },
   {
     key: 'margin_pct_basis', label: 'Margin %', width: 100, sortable: true, align: 'right', groupable: false,
@@ -1583,6 +1597,7 @@ const buildColumns = (
     },
     searchValue: (r) => `${((r.margin_pct_basis ?? 0) / 100).toFixed(1)}%`,
     sortFn: (a, b) => (a.margin_pct_basis ?? 0) - (b.margin_pct_basis ?? 0),
+    exportValue: (r) => ((r.local_total_centi ?? 0) <= 0 ? '' : `${((r.margin_pct_basis ?? 0) / 100).toFixed(1)}%`),
   },
   {
     key: 'deposit_centi', label: 'Deposit', width: 110, sortable: true, align: 'right', groupable: false,
@@ -1590,6 +1605,7 @@ const buildColumns = (
     accessor: (r) => <span className={styles.money}>{fmtRm(r.deposit_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.deposit_centi ?? 0),
     sortFn: (a, b) => (a.deposit_centi ?? 0) - (b.deposit_centi ?? 0),
+    exportValue: (r) => (r.deposit_centi ?? 0) / 100,
   },
   {
     key: 'paid_total_centi', label: 'Paid', width: 110, sortable: true, align: 'right', groupable: false,
@@ -1597,6 +1613,7 @@ const buildColumns = (
     accessor: (r) => <span className={styles.money}>{fmtRm(r.paid_total_centi ?? r.paid_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.paid_total_centi ?? r.paid_centi ?? 0),
     sortFn: (a, b) => (a.paid_total_centi ?? a.paid_centi ?? 0) - (b.paid_total_centi ?? b.paid_centi ?? 0),
+    exportValue: (r) => (r.paid_total_centi ?? r.paid_centi ?? 0) / 100,
   },
   {
     /* Follow-up #83 — prefer the view's live balance. */
@@ -1605,6 +1622,7 @@ const buildColumns = (
     accessor: (r) => <span className={styles.money}>{fmtRm(liveBalance(r))}</span>,
     searchValue: (r) => fmtRm(liveBalance(r)),
     sortFn: (a, b) => liveBalance(a) - liveBalance(b),
+    exportValue: (r) => liveBalance(r) / 100,
   },
   {
     key: 'status', label: 'Status', width: 130, sortable: true, groupable: true,
@@ -1613,5 +1631,9 @@ const buildColumns = (
     searchValue: (r) => r.status,
     groupValue: (r) => r.status,
     sortFn: (a, b) => a.status.localeCompare(b.status),
+    exportValue: (r) => {
+      const eff = soStatusDisplay(r.status, r.delivery_state, r.lifecycle_state);
+      return eff.label ?? STATUS_LABEL[r.status] ?? r.status.replace(/_/g, ' ');
+    },
   },
 ];

@@ -64,6 +64,8 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
     key: 'grn_number', label: 'GRN No.', width: 150, sortable: true,
     accessor: (g) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{g.grn_number}</span>,
     searchValue: (g) => g.grn_number,
+    // accessor is JSX → export the raw GRN-no string so GRN No. isn't blank.
+    exportValue: (g) => g.grn_number,
     sortFn: (a, b) => a.grn_number.localeCompare(b.grn_number),
   },
   {
@@ -79,6 +81,8 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
     accessor: (g) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{g.purchase_order?.po_number ?? '—'}</span>,
     searchValue: (g) => g.purchase_order?.po_number ?? '',
     groupValue: (g) => g.purchase_order?.po_number ?? '(none)',
+    // accessor is JSX → export the source PO doc-no string.
+    exportValue: (g) => g.purchase_order?.po_number ?? '—',
   },
   {
     key: 'received_at', label: 'Received Date', width: 120, sortable: true,
@@ -100,6 +104,8 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
       </span>
     ),
     searchValue: (g) => fmtMoney(Number(g.total_centi ?? 0), g.currency),
+    // accessor is JSX money → export the NUMBER (currency units) so Excel SUMs it.
+    exportValue: (g) => Number(g.total_centi ?? 0) / 100,
     sortFn: (a, b) => Number(a.total_centi ?? 0) - Number(b.total_centi ?? 0),
   },
   {
@@ -107,6 +113,8 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
     accessor: (g) => <StatusPill docType="grn" status={g.status} />,
     searchValue: (g) => statusLabel('grn', g.status),
     groupValue: (g) => statusLabel('grn', g.status),
+    // accessor is a <StatusPill> JSX → export the plain status label text.
+    exportValue: (g) => statusLabel('grn', g.status),
     sortFn: (a, b) => a.status.localeCompare(b.status),
   },
 ];

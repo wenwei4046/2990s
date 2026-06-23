@@ -87,6 +87,8 @@ const buildColumns = (): DataGridColumn<PoHeaderRow>[] => [
     key: 'po_number', label: 'P/CO No.', width: 150, sortable: true,
     accessor: (po) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{po.po_number}</span>,
     searchValue: (po) => po.po_number,
+    /* Accessor is JSX → export the raw doc-no string or the cell exports blank. */
+    exportValue: (po) => po.po_number,
     sortFn: (a, b) => a.po_number.localeCompare(b.po_number),
   },
   {
@@ -119,6 +121,8 @@ const buildColumns = (): DataGridColumn<PoHeaderRow>[] => [
       );
     },
     searchValue: (po) => (po.items ?? []).map((it) => `${it.material_code} ${it.qty}`).join(' '),
+    /* Accessor is JSX → export the readable "code×qty · …" summary string. */
+    exportValue: (po) => summarizeItems(po.items) ?? '',
   },
   {
     key: 'po_date', label: 'Date', width: 120, sortable: true,
@@ -157,12 +161,17 @@ const buildColumns = (): DataGridColumn<PoHeaderRow>[] => [
       </span>
     ),
     searchValue: (po) => fmtMoney(po.total_centi, po.currency),
+    /* Accessor is JSX → export the NUMBER in ringgit (not "MYR 1,234.00") so
+       Excel can SUM the column. */
+    exportValue: (po) => (po.total_centi ?? 0) / 100,
     sortFn: (a, b) => a.total_centi - b.total_centi,
   },
   {
     key: 'status', label: 'Status', width: 160, sortable: true, groupable: true,
     accessor: (po) => <StatusPill docType="po" status={po.status} />,
     searchValue: (po) => poStatusLabel(po.status),
+    /* Accessor is JSX → export the human status label, not blank. */
+    exportValue: (po) => poStatusLabel(po.status),
     groupValue: (po) => poStatusLabel(po.status),
     sortFn: (a, b) => poStatusLabel(a.status).localeCompare(poStatusLabel(b.status)),
   },

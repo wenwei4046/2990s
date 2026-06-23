@@ -137,6 +137,7 @@ export const Suppliers = () => {
       accessor: (r) => <span className={styles.codeChip}>{r.code}</span>,
       searchValue: (r) => r.code,
       filterValue: (r) => r.code,
+      exportValue: (r) => r.code,
       sortFn: (a, b) => a.code.localeCompare(b.code),
     },
     {
@@ -157,6 +158,7 @@ export const Suppliers = () => {
       ),
       searchValue: (r) => displaySupplierCategories(r.category, pool),
       filterValue: (r) => displaySupplierCategories(r.category, pool) || '—',
+      exportValue: (r) => displaySupplierCategories(r.category, pool),
     },
     {
       key: 'contact',
@@ -198,6 +200,7 @@ export const Suppliers = () => {
       ),
       searchValue: (r) => r.status,
       filterValue: (r) => r.status,
+      exportValue: (r) => r.status,
     },
   ], [pool]);
 

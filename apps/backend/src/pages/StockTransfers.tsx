@@ -73,6 +73,7 @@ export const StockTransfers = () => {
       ),
       searchValue: (t) => t.transfer_no,
       filterValue: (t) => t.transfer_no,
+      exportValue: (t) => t.transfer_no,
       sortFn: (a, b) => a.transfer_no.localeCompare(b.transfer_no),
     },
     {
@@ -82,6 +83,7 @@ export const StockTransfers = () => {
       accessor: (t) => <span className={styles.numCellZero}>{fmtDate(t.transfer_date)}</span>,
       searchValue: (t) => fmtDate(t.transfer_date),
       filterValue: (t) => fmtDate(t.transfer_date),
+      exportValue: (t) => fmtDate(t.transfer_date),
       sortFn: (a, b) => a.transfer_date.localeCompare(b.transfer_date),
       filterType: 'date', dateValue: (t) => t.transfer_date,
     },
@@ -110,6 +112,11 @@ export const StockTransfers = () => {
         const toW   = t.to_warehouse   ?? wmap.get(t.to_warehouse_id);
         return `${fromW?.code ?? '—'} → ${toW?.code ?? '—'}`;
       },
+      exportValue: (t) => {
+        const fromW = t.from_warehouse ?? wmap.get(t.from_warehouse_id);
+        const toW   = t.to_warehouse   ?? wmap.get(t.to_warehouse_id);
+        return `${fromW?.code ?? ''} → ${toW?.code ?? ''}`;
+      },
     },
     {
       key: 'status',
@@ -130,6 +137,7 @@ export const StockTransfers = () => {
       },
       searchValue: (t) => STATUS_TONE[t.status].label,
       filterValue: (t) => STATUS_TONE[t.status].label,
+      exportValue: (t) => STATUS_TONE[t.status].label,
       sortFn: (a, b) => a.status.localeCompare(b.status),
     },
     {
@@ -144,6 +152,7 @@ export const StockTransfers = () => {
       ),
       searchValue: (t) => String(t.line_count ?? 0),
       filterValue: (t) => String(t.line_count ?? 0),
+      exportValue: (t) => t.line_count ?? 0,
       sortFn: (a, b) => (a.line_count ?? 0) - (b.line_count ?? 0),
     },
     {
@@ -157,6 +166,7 @@ export const StockTransfers = () => {
       ),
       searchValue: (t) => t.created_by ?? '',
       filterValue: (t) => t.created_by ? t.created_by.slice(0, 8) : '—',
+      exportValue: (t) => t.created_by ?? '',
     },
   ], [wmap]);
 
