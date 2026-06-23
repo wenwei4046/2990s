@@ -39,6 +39,7 @@ import { usePurchaseOrderDetail, useSuppliers } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { MoneyInput } from '../components/MoneyInput';
+import { DateField } from '../components/DateField';
 import { useNotify } from '../components/NotifyDialog';
 import styles from './SalesOrderDetail.module.css';
 
@@ -345,7 +346,7 @@ export const PurchaseReturnNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Return Date *</span>
-              <input type="date" value={returnDate} onChange={(e) => setReturnDate(e.target.value)} className={styles.fieldInput} required />
+              <DateField value={returnDate ?? ''} onChange={(iso) => setReturnDate(iso)} className={styles.fieldInput} fullWidth />
             </label>
 
             <label className={styles.field}>

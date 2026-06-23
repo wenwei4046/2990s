@@ -17,6 +17,7 @@ import { SkeletonDetailPage } from '../components/Skeleton';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { StatusPill } from '../components/StatusPill';
+import { DateField } from '../components/DateField';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   useWarehouses,
@@ -182,7 +183,7 @@ export const StockTransferDetail = () => {
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Transfer Date</span>
-              <input type="date" value={transferDate} className={styles.fieldInput} disabled />
+              <DateField value={transferDate ?? ''} onChange={() => {}} className={styles.fieldInput} disabled fullWidth />
             </label>
 
             <label className={styles.field}>

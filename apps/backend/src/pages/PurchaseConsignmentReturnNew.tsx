@@ -33,6 +33,7 @@ import { useFabricTrackings } from '../lib/fabric-queries';
 import { PcVariantEditor } from '../components/PcVariantEditor';
 import { ItemGroupPill } from '../lib/category-badges';
 import { MoneyInput } from '../components/MoneyInput';
+import { DateField } from '../components/DateField';
 import { useNotify } from '../components/NotifyDialog';
 import styles from './SalesOrderDetail.module.css';
 
@@ -342,7 +343,7 @@ export const PurchaseConsignmentReturnNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Return Date *</span>
-              <input type="date" value={returnDate} onChange={(e) => setReturnDate(e.target.value)} className={styles.fieldInput} required />
+              <DateField value={returnDate ?? ''} onChange={(iso) => setReturnDate(iso)} className={styles.fieldInput} fullWidth />
             </label>
 
             <label className={styles.field}>

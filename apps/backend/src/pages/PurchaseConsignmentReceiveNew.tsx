@@ -42,6 +42,7 @@ import { useWarehouses } from '../lib/inventory-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { MoneyInput } from '../components/MoneyInput';
+import { DateField } from '../components/DateField';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -517,7 +518,7 @@ export const PurchaseConsignmentReceiveNew = () => {
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Received Date *</span>
-              <input type="date" value={receivedAt} onChange={(e) => setReceivedAt(e.target.value)} className={styles.fieldInput} required />
+              <DateField value={receivedAt ?? ''} onChange={(iso) => setReceivedAt(iso)} className={styles.fieldInput} fullWidth />
             </label>
 
             <label className={styles.field}>

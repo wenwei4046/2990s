@@ -26,6 +26,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { DateField } from '../components/DateField';
 import { useNotify } from '../components/NotifyDialog';
 import {
   useCreateConsignmentNote, useAddConsignmentNotePayment,
@@ -416,8 +417,8 @@ export const ConsignmentNoteNew = () => {
           <div className={styles.formGrid4}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Note Date</span>
-              <input type="date" className={styles.fieldInput} value={doDate}
-                onChange={(e) => setDoDate(e.target.value)} />
+              <DateField fullWidth className={styles.fieldInput} value={doDate ?? ''}
+                onChange={(iso) => setDoDate(iso)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Driver</span>
@@ -456,11 +457,11 @@ export const ConsignmentNoteNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Expected Delivery</span>
-              <input type="date" className={styles.fieldInput} value={expectedDeliveryAt} onChange={(e) => setExpectedDeliveryAt(e.target.value)} />
+              <DateField fullWidth className={styles.fieldInput} value={expectedDeliveryAt ?? ''} onChange={(iso) => setExpectedDeliveryAt(iso)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Customer Delivery Date</span>
-              <input type="date" className={styles.fieldInput} value={customerDeliveryDate} onChange={(e) => setCustomerDeliveryDate(e.target.value)} />
+              <DateField fullWidth className={styles.fieldInput} value={customerDeliveryDate ?? ''} onChange={(iso) => setCustomerDeliveryDate(iso)} />
             </label>
             <label className={styles.field} style={{ gridColumn: 'span 2' }}>
               <span className={styles.fieldLabel}>Note</span>

@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { DateField } from '../components/DateField';
 import { StatusPill } from '../components/StatusPill';
 import {
   useConsignmentReturnDetail,
@@ -690,8 +691,8 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
           <div className={styles.formGrid4}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Return Date</span>
-              <input type="date" className={styles.fieldInput} value={form.returnDate}
-                disabled={inputsDisabled} onChange={(e) => set('returnDate', e.target.value)} />
+              <DateField className={styles.fieldInput} fullWidth value={form.returnDate ?? ''}
+                disabled={inputsDisabled} onChange={(iso) => set('returnDate', iso)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Building Type</span>

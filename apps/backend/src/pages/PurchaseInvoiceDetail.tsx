@@ -60,6 +60,7 @@ import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import { StatusPill } from '../components/StatusPill';
+import { DateField } from '../components/DateField';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -763,13 +764,13 @@ const SupplierCard = ({
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Invoice Date</span>
-            <input type="date" className={styles.fieldInput} value={draft.invoiceDate} disabled={locked}
-              onChange={(e) => onField('invoiceDate', e.target.value)} />
+            <DateField fullWidth className={styles.fieldInput} value={draft.invoiceDate ?? ''} disabled={locked}
+              onChange={(iso) => onField('invoiceDate', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Due Date</span>
-            <input type="date" className={styles.fieldInput} value={draft.dueDate} disabled={locked}
-              onChange={(e) => onField('dueDate', e.target.value)} />
+            <DateField fullWidth className={styles.fieldInput} value={draft.dueDate ?? ''} disabled={locked}
+              onChange={(iso) => onField('dueDate', iso)} />
           </label>
           <label className={styles.field} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Notes</span>

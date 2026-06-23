@@ -42,6 +42,7 @@ import { useFabricTrackings } from '../lib/fabric-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { PcVariantEditor } from '../components/PcVariantEditor';
 import { MoneyInput } from '../components/MoneyInput';
+import { DateField } from '../components/DateField';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { StatusPill } from '../components/StatusPill';
@@ -597,10 +598,10 @@ export const PurchaseConsignmentReceiveDetail = () => {
                     <label className={styles.field}>
                       <span className={styles.fieldLabel}>Delivery Date</span>
                       {isEditing ? (
-                        <input
-                          type="date" className={styles.fieldInput}
+                        <DateField
+                          className={styles.fieldInput} fullWidth
                           value={d.deliveryDate ?? ''} disabled={isLocked}
-                          onChange={(e) => setLine(it, { deliveryDate: e.target.value || null })}
+                          onChange={(iso) => setLine(it, { deliveryDate: iso || null })}
                         />
                       ) : (
                         <input
@@ -730,8 +731,8 @@ const SupplierCard = ({
           <div />
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Received Date</span>
-            <input type="date" className={styles.fieldInput} value={draft.receivedAt} disabled={locked}
-              onChange={(e) => onField('receivedAt', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.receivedAt ?? ''} disabled={locked}
+              onChange={(iso) => onField('receivedAt', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Delivery Note Ref</span>

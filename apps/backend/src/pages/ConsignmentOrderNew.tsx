@@ -23,6 +23,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { DateField } from '../components/DateField';
 import { useNotify } from '../components/NotifyDialog';
 import {
   useCreateConsignmentOrder, useConsignmentDebtorSearch, useAddConsignmentOrderPayment,
@@ -718,24 +719,24 @@ export const ConsignmentOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Processing Date</span>
-              <input
-                type="date"
+              <DateField
+                fullWidth
                 className={styles.fieldInput}
-                value={processingDate}
+                value={processingDate ?? ''}
                 min={today}
-                onChange={(e) => setProcessingDate(e.target.value)}
-                style={datesXor && !processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
+                onChange={(iso) => setProcessingDate(iso)}
+                invalid={datesXor && !processingDate}
               />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Delivery Date</span>
-              <input
-                type="date"
+              <DateField
+                fullWidth
                 className={styles.fieldInput}
-                value={deliveryDate}
+                value={deliveryDate ?? ''}
                 min={today}
-                onChange={(e) => setDeliveryDate(e.target.value)}
-                style={datesXor && !deliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
+                onChange={(iso) => setDeliveryDate(iso)}
+                invalid={datesXor && !deliveryDate}
               />
             </label>
             <label className={styles.field} style={{ gridColumn: 'span 4' }}>

@@ -34,6 +34,7 @@ import { useRacks } from '../lib/warehouse-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { MoneyInput } from '../components/MoneyInput';
+import { DateField } from '../components/DateField';
 import type { GrnFromPoPick } from './GrnFromPo';
 import styles from './SalesOrderDetail.module.css';
 
@@ -667,7 +668,7 @@ export const GrnNew = () => {
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Received Date *</span>
-              <input type="date" value={receivedAt} onChange={(e) => setReceivedAt(e.target.value)} className={styles.fieldInput} required />
+              <DateField value={receivedAt ?? ''} onChange={(iso) => setReceivedAt(iso)} className={styles.fieldInput} fullWidth />
             </label>
 
             <label className={styles.field}>

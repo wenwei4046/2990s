@@ -23,6 +23,7 @@ import {
   useCreateStockTransfer,
   type StockTransferItemInput,
 } from '../lib/stock-transfers-queries';
+import { DateField } from '../components/DateField';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -216,11 +217,11 @@ export const StockTransferNew = () => {
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Transfer Date *</span>
-              <input
-                type="date"
-                value={transferDate}
-                onChange={(e) => setTransferDate(e.target.value)}
+              <DateField
+                value={transferDate ?? ''}
+                onChange={(iso) => setTransferDate(iso)}
                 className={styles.fieldInput}
+                fullWidth
               />
             </label>
 

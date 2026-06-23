@@ -54,6 +54,7 @@ import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { DateField } from '../components/DateField';
 import { StatusPill } from '../components/StatusPill';
 import styles from './SalesOrderDetail.module.css';
 
@@ -808,31 +809,31 @@ const SupplierCard = ({
           <div />
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Date</span>
-            <input type="date" className={styles.fieldInput} value={draft.poDate} disabled={locked}
-              onChange={(e) => onField('poDate', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.poDate ?? ''} disabled={locked}
+              onChange={(iso) => onField('poDate', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Expected Delivery</span>
-            <input type="date" className={styles.fieldInput} value={draft.expectedAt} disabled={locked}
-              onChange={(e) => onField('expectedAt', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.expectedAt ?? ''} disabled={locked}
+              onChange={(iso) => onField('expectedAt', iso)} />
           </label>
           {/* Migration 0181 — supplier-revised header delivery dates. Optional;
               cascade to lines that have no own value (page setHeaderField). The
               latest non-empty date becomes the effective ETA. Display-only. */}
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Supplier Delivery Date 2</span>
-            <input type="date" className={styles.fieldInput} value={draft.supplierDeliveryDate2} disabled={locked}
-              onChange={(e) => onField('supplierDeliveryDate2', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.supplierDeliveryDate2 ?? ''} disabled={locked}
+              onChange={(iso) => onField('supplierDeliveryDate2', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Supplier Delivery Date 3</span>
-            <input type="date" className={styles.fieldInput} value={draft.supplierDeliveryDate3} disabled={locked}
-              onChange={(e) => onField('supplierDeliveryDate3', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.supplierDeliveryDate3 ?? ''} disabled={locked}
+              onChange={(iso) => onField('supplierDeliveryDate3', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Supplier Delivery Date 4</span>
-            <input type="date" className={styles.fieldInput} value={draft.supplierDeliveryDate4} disabled={locked}
-              onChange={(e) => onField('supplierDeliveryDate4', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.supplierDeliveryDate4 ?? ''} disabled={locked}
+              onChange={(iso) => onField('supplierDeliveryDate4', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Purchase Location</span>

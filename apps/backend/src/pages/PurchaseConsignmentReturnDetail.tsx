@@ -34,6 +34,7 @@ import { useFabricTrackings } from '../lib/fabric-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { PcVariantEditor } from '../components/PcVariantEditor';
 import { MoneyInput } from '../components/MoneyInput';
+import { DateField } from '../components/DateField';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { StatusPill } from '../components/StatusPill';
@@ -569,8 +570,8 @@ const SupplierCard = ({
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Return Date</span>
-            <input type="date" className={styles.fieldInput} value={draft.returnDate} disabled={locked}
-              onChange={(e) => onField('returnDate', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.returnDate ?? ''} disabled={locked}
+              onChange={(iso) => onField('returnDate', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Credit Note Ref</span>

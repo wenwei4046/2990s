@@ -32,6 +32,7 @@ import {
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import { PhoneInput } from '../components/PhoneInput';
+import { DateField } from '../components/DateField';
 import { StatusPill } from '../components/StatusPill';
 import {
   useConsignmentNoteDetail,
@@ -679,8 +680,8 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
           <div className={styles.formGrid4}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Note Date</span>
-              <input type="date" className={styles.fieldInput} value={form.doDate}
-                disabled={inputsDisabled} onChange={(e) => set('doDate', e.target.value)} />
+              <DateField className={styles.fieldInput} fullWidth value={form.doDate ?? ''}
+                disabled={inputsDisabled} onChange={(iso) => set('doDate', iso)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Driver</span>
@@ -713,13 +714,13 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Expected Delivery</span>
-              <input type="date" className={styles.fieldInput} value={form.expectedDeliveryAt}
-                disabled={inputsDisabled} onChange={(e) => set('expectedDeliveryAt', e.target.value)} />
+              <DateField className={styles.fieldInput} fullWidth value={form.expectedDeliveryAt ?? ''}
+                disabled={inputsDisabled} onChange={(iso) => set('expectedDeliveryAt', iso)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Customer Delivery Date</span>
-              <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate}
-                disabled={inputsDisabled} onChange={(e) => set('customerDeliveryDate', e.target.value)} />
+              <DateField className={styles.fieldInput} fullWidth value={form.customerDeliveryDate ?? ''}
+                disabled={inputsDisabled} onChange={(iso) => set('customerDeliveryDate', iso)} />
             </label>
             <label className={styles.field} style={{ gridColumn: 'span 2' }}>
               <span className={styles.fieldLabel}>Note</span>

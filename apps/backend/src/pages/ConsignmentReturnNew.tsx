@@ -26,6 +26,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { DateField } from '../components/DateField';
 import { useNotify } from '../components/NotifyDialog';
 import { useCreateConsignmentReturn } from '../lib/consignment-return-queries';
 import { useConsignmentNoteDetail } from '../lib/consignment-note-queries';
@@ -366,7 +367,7 @@ export const ConsignmentReturnNew = () => {
           <div className={styles.formGrid4}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Return Date</span>
-              <input type="date" className={styles.fieldInput} value={returnDate} onChange={(e) => setReturnDate(e.target.value)} />
+              <DateField fullWidth className={styles.fieldInput} value={returnDate ?? ''} onChange={(iso) => setReturnDate(iso)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Building Type</span>

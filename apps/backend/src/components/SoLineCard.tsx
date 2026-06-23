@@ -55,6 +55,7 @@ import { useAuth, isAdminLevel, isHatchSales } from '../lib/auth';
 import { CATEGORY_BADGE } from '../lib/category-badges';
 import { posRemarkSpecialOf } from '../lib/pos-remark-special';
 import { useNotify } from './NotifyDialog';
+import { DateField } from './DateField';
 import styles from './SoLineCard.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -697,21 +698,16 @@ const SoLineCardInner = ({
         />
 
         {/* 6. Delivery Date (2990 addition between Unit Price and Amount) */}
-        <input
-          type="date"
+        <DateField
           className={styles.input}
           value={draft.lineDeliveryDate ?? ''}
           disabled={!isEditing}
           title={!draft.lineDeliveryDateOverridden && draft.lineDeliveryDate ? 'Auto-inherited from SO header' : undefined}
-          onChange={(e) => onChange({
-            lineDeliveryDate: e.target.value || null,
+          highlight={!draft.lineDeliveryDateOverridden && !!draft.lineDeliveryDate}
+          onChange={(iso) => onChange({
+            lineDeliveryDate: iso || null,
             lineDeliveryDateOverridden: true,
           })}
-          style={
-            !draft.lineDeliveryDateOverridden && draft.lineDeliveryDate
-              ? { borderColor: 'var(--c-orange)', background: 'var(--c-cream)' }
-              : undefined
-          }
         />
 
         {/* 7. Amount */}

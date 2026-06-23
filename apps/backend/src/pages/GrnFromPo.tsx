@@ -29,6 +29,7 @@ import {
 import { useGrnDetail, useAddGrnItem } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ActionResultDialog } from '../components/ActionResultDialog';
+import { DateField } from '../components/DateField';
 import { ItemGroupPill } from '../lib/category-badges';
 import styles from './SalesOrderDetail.module.css';
 
@@ -69,13 +70,13 @@ const DATE_FIELD_OPTIONS = [
   { value: 'poDate',   label: 'PO Date' },
   { value: 'expected', label: 'Expected Delivery' },
 ] as const;
-type DateField = typeof DATE_FIELD_OPTIONS[number]['value'];
+type DateFieldKey = typeof DATE_FIELD_OPTIONS[number]['value'];
 
 /* Migration 0180 — `expectedAt` is now the EFFECTIVE (latest revised) header
    delivery date: the API (grns.ts) returns MAX over non-null of the PO's
    [expected_at, supplier_delivery_date_2/3/4]. The filter/column read it
    straight, so they already key off the latest committed date. */
-const rowDateFor = (r: OutstandingPoItem, field: DateField): string | null =>
+const rowDateFor = (r: OutstandingPoItem, field: DateFieldKey): string | null =>
   field === 'poDate' ? (r.poDate ?? null) : (r.expectedAt ?? null);
 
 type Pick = { picked: boolean; qty: number };
@@ -119,7 +120,7 @@ export const GrnFromPo = () => {
 
   // Toolbar filters — identical to Create-PO-from-SO.
   const [category, setCategory]   = useState<string>('all');
-  const [dateField, setDateField] = useState<DateField>('poDate');
+  const [dateField, setDateField] = useState<DateFieldKey>('poDate');
   const [dateFrom, setDateFrom]   = useState<string>('');
   const [dateTo, setDateTo]       = useState<string>('');
 
@@ -491,25 +492,21 @@ export const GrnFromPo = () => {
       {/* Date-range filter */}
       <select
         value={dateField}
-        onChange={(e) => setDateField(e.target.value as DateField)}
+        onChange={(e) => setDateField(e.target.value as DateFieldKey)}
         style={FILTER_INPUT}
         aria-label="Date field"
       >
         {DATE_FIELD_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
-      <input
-        type="date"
-        value={dateFrom}
-        onChange={(e) => setDateFrom(e.target.value)}
-        style={FILTER_INPUT}
+      <DateField
+        value={dateFrom ?? ''}
+        onChange={(iso) => setDateFrom(iso)}
         aria-label="Date from"
       />
       <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-11)' }}>→</span>
-      <input
-        type="date"
-        value={dateTo}
-        onChange={(e) => setDateTo(e.target.value)}
-        style={FILTER_INPUT}
+      <DateField
+        value={dateTo ?? ''}
+        onChange={(iso) => setDateTo(iso)}
         aria-label="Date to"
       />
       {(category !== 'all' || dateFrom || dateTo) && (

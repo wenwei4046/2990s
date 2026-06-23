@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { CreditCard, CalendarClock, QrCode, Banknote, Search } from 'lucide-react';
 import type { AuditLogFilters } from '../lib/audit-log-queries';
 import { useStaff } from '../lib/admin-queries';
+import { DateField } from './DateField';
 import styles from './AuditLogFilterBar.module.css';
 
 const METHODS = [
@@ -44,14 +45,14 @@ export function AuditLogFilterBar({
           <div className={styles.periodRow}>
             <label className={styles.field}>
               <span className={styles.subLabel}>From</span>
-              <input type="date" className={styles.input} value={filters.from ?? ''}
-                onChange={(e) => onChange({ ...filters, from: e.target.value || undefined })} />
+              <DateField className={styles.input} value={filters.from ?? ''}
+                onChange={(iso) => onChange({ ...filters, from: iso || undefined })} />
             </label>
             <span className={styles.arrow} aria-hidden="true">→</span>
             <label className={styles.field}>
               <span className={styles.subLabel}>To</span>
-              <input type="date" className={styles.input} value={filters.to ?? ''}
-                onChange={(e) => onChange({ ...filters, to: e.target.value || undefined })} />
+              <DateField className={styles.input} value={filters.to ?? ''}
+                onChange={(iso) => onChange({ ...filters, to: iso || undefined })} />
             </label>
           </div>
         </div>

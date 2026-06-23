@@ -30,6 +30,7 @@ import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary, canonicalizeVariants, fmtDateOrDash, fmtDateTime, missingVariantAxes } from '@2990s/shared'; // Commander 2026-05-28
 import { PhoneInput } from '../components/PhoneInput';
+import { DateField } from '../components/DateField';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import {
   useMfgSalesOrderDetail,
@@ -1927,20 +1928,20 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Processing Date</span>
-              <input type="date" className={styles.fieldInput} value={form.processingDate}
+              <DateField className={styles.fieldInput} fullWidth value={form.processingDate ?? ''}
                 disabled={inputsDisabled || processingLocked}
                 title={processingLocked ? 'Processing date has passed — locked.' : undefined}
                 min={processingLocked ? undefined : today}
-                onChange={(e) => set('processingDate', e.target.value)}
-                style={datesXor && !form.processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
+                onChange={(iso) => set('processingDate', iso)}
+                invalid={datesXor && !form.processingDate} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Delivery Date</span>
-              <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate}
+              <DateField className={styles.fieldInput} fullWidth value={form.customerDeliveryDate ?? ''}
                 disabled={inputsDisabled}
                 min={today}
-                onChange={(e) => { set('customerDeliveryDate', e.target.value); onDeliveryDateChange?.(e.target.value); }}
-                style={datesXor && !form.customerDeliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
+                onChange={(iso) => { set('customerDeliveryDate', iso); onDeliveryDateChange?.(iso); }}
+                invalid={datesXor && !form.customerDeliveryDate} />
             </label>
             {/* Proceed Date field removed per request 2026-06-05 — the POS still
                 stamps proceeded_at server-side; it's just no longer surfaced here. */}

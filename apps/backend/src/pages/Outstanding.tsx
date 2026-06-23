@@ -20,6 +20,7 @@ import {
   type OutstandingFilterMode,
 } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { DateField } from '../components/DateField';
 import styles from './Suppliers.module.css';
 
 const MODULES: { value: OutstandingModule; label: string; icon: React.ReactNode; route: (row: Record<string, unknown>) => string }[] = [
@@ -57,11 +58,11 @@ export const Outstanding = () => {
         <div className={styles.actionsRow}>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-13)' }}>
             <span style={{ color: 'var(--fg-muted)' }}>From</span>
-            <input type="date" className={styles.searchInput} value={from} onChange={(e) => setFrom(e.target.value)} style={{ width: 150 }} />
+            <DateField className={styles.searchInput} value={from ?? ''} onChange={(iso) => setFrom(iso)} />
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-13)' }}>
             <span style={{ color: 'var(--fg-muted)' }}>To</span>
-            <input type="date" className={styles.searchInput} value={to} onChange={(e) => setTo(e.target.value)} style={{ width: 150 }} />
+            <DateField className={styles.searchInput} value={to ?? ''} onChange={(iso) => setTo(iso)} />
           </label>
           <div className={styles.statusChips}>
             <FilterChip label="Outstanding" active={mode === 'outstanding'} onClick={() => setMode('outstanding')} />

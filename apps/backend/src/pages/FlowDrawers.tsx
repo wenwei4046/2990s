@@ -25,6 +25,7 @@ import {
 } from '../lib/suppliers-queries';
 import { useMfgDeliveryOrders } from '../lib/flow-queries';
 import { MoneyInput } from '../components/MoneyInput';
+import { DateField } from '../components/DateField';
 import { useNotify } from '../components/NotifyDialog';
 import sup from './Suppliers.module.css';
 
@@ -49,6 +50,14 @@ const Field = ({
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
+      />
+    ) : type === 'date' ? (
+      <DateField
+        className={sup.fieldInput}
+        fullWidth
+        value={String(value ?? '')}
+        placeholder={placeholder}
+        onChange={(iso) => onChange(iso)}
       />
     ) : (
       <input

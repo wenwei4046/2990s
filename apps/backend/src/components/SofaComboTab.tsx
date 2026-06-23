@@ -945,11 +945,10 @@ function ComposerModal({
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
           <Field label="Effective from">
-            <input
-              type="date"
-              value={effectiveFrom}
-              onChange={(e) => setEffectiveFrom(e.target.value)}
-              style={inputStyle}
+            <DateField
+              value={effectiveFrom ?? ''}
+              onChange={(iso) => setEffectiveFrom(iso)}
+              fullWidth
             />
           </Field>
           <Field label="Label (optional)">

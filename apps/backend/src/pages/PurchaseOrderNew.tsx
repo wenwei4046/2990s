@@ -40,6 +40,7 @@ import {
 import { PoLineCard, emptyPoLine, type PoLineDraft } from '../components/PoLineCard';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { useNotify } from '../components/NotifyDialog';
+import { DateField } from '../components/DateField';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -666,10 +667,10 @@ export const PurchaseOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Date *</span>
-              <input
-                type="date"
-                value={poDate}
-                onChange={(e) => setPoDate(e.target.value)}
+              <DateField
+                fullWidth
+                value={poDate ?? ''}
+                onChange={(iso) => setPoDate(iso)}
                 className={styles.fieldInput}
               />
             </label>
@@ -688,12 +689,11 @@ export const PurchaseOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Expected Delivery *</span>
-              <input
-                type="date"
-                value={expectedAt}
-                onChange={(e) => setExpectedAt(e.target.value)}
+              <DateField
+                fullWidth
+                value={expectedAt ?? ''}
+                onChange={(iso) => setExpectedAt(iso)}
                 className={styles.fieldInput}
-                required
               />
             </label>
 
@@ -702,28 +702,28 @@ export const PurchaseOrderNew = () => {
                 date becomes the effective ETA downstream. */}
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Supplier Delivery Date 2</span>
-              <input
-                type="date"
-                value={supplierDeliveryDate2}
-                onChange={(e) => setSupplierDeliveryDate2(e.target.value)}
+              <DateField
+                fullWidth
+                value={supplierDeliveryDate2 ?? ''}
+                onChange={(iso) => setSupplierDeliveryDate2(iso)}
                 className={styles.fieldInput}
               />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Supplier Delivery Date 3</span>
-              <input
-                type="date"
-                value={supplierDeliveryDate3}
-                onChange={(e) => setSupplierDeliveryDate3(e.target.value)}
+              <DateField
+                fullWidth
+                value={supplierDeliveryDate3 ?? ''}
+                onChange={(iso) => setSupplierDeliveryDate3(iso)}
                 className={styles.fieldInput}
               />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Supplier Delivery Date 4</span>
-              <input
-                type="date"
-                value={supplierDeliveryDate4}
-                onChange={(e) => setSupplierDeliveryDate4(e.target.value)}
+              <DateField
+                fullWidth
+                value={supplierDeliveryDate4 ?? ''}
+                onChange={(iso) => setSupplierDeliveryDate4(iso)}
                 className={styles.fieldInput}
               />
             </label>

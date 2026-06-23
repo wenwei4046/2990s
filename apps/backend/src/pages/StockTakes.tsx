@@ -16,6 +16,7 @@ import {
   type StockTakeStatus,
 } from '../lib/stock-takes-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { DateField } from '../components/DateField';
 import styles from './Inventory.module.css';
 
 const ICON    = { size: 14, strokeWidth: 1.75 } as const;
@@ -241,21 +242,11 @@ export const StockTakes = () => {
         </label>
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
           Date from
-          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
-            style={{
-              fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)',
-              background: 'var(--c-paper)', border: '1px solid var(--line)',
-              borderRadius: 'var(--radius-md)', padding: '6px 8px', color: 'var(--c-ink)',
-            }} />
+          <DateField value={dateFrom ?? ''} onChange={(iso) => setDateFrom(iso)} />
         </label>
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
           to
-          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
-            style={{
-              fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)',
-              background: 'var(--c-paper)', border: '1px solid var(--line)',
-              borderRadius: 'var(--radius-md)', padding: '6px 8px', color: 'var(--c-ink)',
-            }} />
+          <DateField value={dateTo ?? ''} onChange={(iso) => setDateTo(iso)} />
         </label>
         {(warehouseId || dateFrom || dateTo || status !== 'ALL') && (
           <button

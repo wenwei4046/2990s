@@ -45,6 +45,7 @@ import { useSuppliers, useSupplierDetail, type SupplierRow } from '../lib/suppli
 import { useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { MoneyInput } from '../components/MoneyInput';
+import { DateField } from '../components/DateField';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
@@ -661,8 +662,8 @@ const SupplierCard = ({
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Return Date</span>
-            <input type="date" className={styles.fieldInput} value={draft.returnDate} disabled={locked}
-              onChange={(e) => onField('returnDate', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.returnDate ?? ''} disabled={locked}
+              onChange={(iso) => onField('returnDate', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Credit Note Ref</span>

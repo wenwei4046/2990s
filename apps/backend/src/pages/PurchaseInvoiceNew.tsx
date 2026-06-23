@@ -37,6 +37,7 @@ import { useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
 import { MoneyInput } from '../components/MoneyInput';
 import { ActionResultDialog } from '../components/ActionResultDialog';
+import { DateField } from '../components/DateField';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -496,14 +497,14 @@ export const PurchaseInvoiceNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Invoice Date *</span>
-              <input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className={styles.fieldInput} required />
+              <DateField fullWidth value={invoiceDate ?? ''} onChange={(iso) => setInvoiceDate(iso)} className={styles.fieldInput} />
             </label>
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Due Date</span>
               {/* Commander 2026-05-29 — auto = Invoice Date + supplier term days
                   (default 30) until the operator edits it (dueTouched). */}
-              <input type="date" value={dueDate} onChange={(e) => { setDueTouched(true); setDueDate(e.target.value); }} className={styles.fieldInput} />
+              <DateField fullWidth value={dueDate ?? ''} onChange={(iso) => { setDueTouched(true); setDueDate(iso); }} className={styles.fieldInput} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Notes</span>

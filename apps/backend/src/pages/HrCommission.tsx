@@ -2,6 +2,7 @@ import { Fragment, useMemo, useState } from 'react';
 import { Download, ChevronRight, ChevronDown } from 'lucide-react';
 import { useHrCommission } from '../lib/hr-queries';
 import { downloadBlob } from '../lib/audit-export';
+import { DateField } from '../components/DateField';
 import styles from './Hr.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -75,11 +76,11 @@ export const HrCommission = () => {
       <div className={styles.toolbar}>
         <div className={styles.field}>
           <span className={styles.label}>From</span>
-          <input className={styles.input} type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          <DateField className={styles.input} value={from ?? ''} onChange={(iso) => setFrom(iso)} />
         </div>
         <div className={styles.field}>
           <span className={styles.label}>To</span>
-          <input className={styles.input} type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+          <DateField className={styles.input} value={to ?? ''} onChange={(iso) => setTo(iso)} />
         </div>
         <button
           className={`${styles.btn} ${styles.btnPrimary}`}

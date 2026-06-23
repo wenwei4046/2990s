@@ -19,6 +19,7 @@ import {
   useCreateStockTake,
   type StockTakeScopeType,
 } from '../lib/stock-takes-queries';
+import { DateField } from '../components/DateField';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -166,11 +167,11 @@ export const StockTakeNew = () => {
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Take Date *</span>
-              <input
-                type="date"
-                value={takeDate}
-                onChange={(e) => setTakeDate(e.target.value)}
+              <DateField
+                value={takeDate ?? ''}
+                onChange={(iso) => setTakeDate(iso)}
                 className={styles.fieldInput}
+                fullWidth
               />
             </label>
 
