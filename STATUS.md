@@ -36,11 +36,13 @@ Last updated: 2026-06-24
 | **Purchase PO/GRN/PI list `.limit(500)`** (same 1000-row truncation class) | MED | mfg-purchase-orders.ts ~152, grns.ts ~386, purchase-invoices.ts ~168 | ⏳ |
 | **Inventory stock-transfers/takes/warehouse `.limit(5000)`** | LOW | stock-transfers.ts, stock-takes.ts, warehouse.ts | ⏳ |
 
-### Batch 2 — needs DB migration (write SQL → apply to prod → then code)
+### Batch 2 — ✅ CODE DONE (committed on branch, typecheck green) — migrations WRITTEN + verified, NOT yet applied to prod
 | item | value | migration | status |
 |---|---|---|---|
-| **Specials Edit→Save+History (effective-dated)** — closes 2990's "Specials true-history" open item | HIGH | `special_addons_history` (Houzs 0032 DDL) | ⏳ |
-| **Supplier AutoCount columns** ×4 (registration_no / nature_of_business / exemption_no / phone2) | HIGH | add 4 cols + **CREATE OR REPLACE `suppliers_with_derived_category` view** (or list 500s) | ⏳ |
+| **Specials Edit→Save+History (effective-dated)** — closes 2990's "Specials true-history" open item | HIGH | `0185_special_addons_history` (table+RLS+idempotent baseline seed) — ✅ written | ✅ code |
+| **Supplier AutoCount columns** ×4 (registration_no / nature_of_business / exemption_no / phone2) | HIGH | `0186` add 4 cols + `0187` recreate `suppliers_with_derived_category` view (re-emits 0088 `s.*`) — ✅ written | ✅ code |
+
+> ⚠️ **Migrate-before-deploy gate:** 0185/0186/0187 must be applied to prod via Chrome BEFORE this branch merges to main, or the Specials Save 500s and the supplier list 500s. Apply at merge-time.
 
 ### Batch 3 — broad, no migration, lower priority
 | item | value | note | status |
