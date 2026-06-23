@@ -934,6 +934,13 @@ export const suppliers = pgTable('suppliers', {
   website:        text('website'),
   attention:      text('attention'),
   businessNature: text('business_nature'),
+  /* Migration 0186 — AutoCount creditor-export parity (Houzs-led port).
+     Distinct from business_reg_no / business_nature above. phone2 normalizes
+     to E.164 like the other phone fields. */
+  registrationNo:    text('registration_no'),
+  natureOfBusiness:  text('nature_of_business'),
+  exemptionNo:       text('exemption_no'),
+  phone2:            text('phone2'),
   currency:       text('currency').notNull().default('MYR'),
   statementType:  text('statement_type').notNull().default('OPEN_ITEM'),    // OPEN_ITEM | BALANCE_FORWARD | NO_STATEMENT
   agingBasis:     text('aging_basis').notNull().default('INVOICE_DATE'),    // INVOICE_DATE | DUE_DATE

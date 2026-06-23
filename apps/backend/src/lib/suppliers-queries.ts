@@ -40,6 +40,12 @@ export type SupplierRow = {
   website: string | null;
   attention: string | null;
   business_nature: string | null;
+  /* Mig 0186 — AutoCount creditor-export parity (Houzs-led port). Distinct
+     from business_reg_no / business_nature above. */
+  registration_no: string | null;
+  nature_of_business: string | null;
+  exemption_no: string | null;
+  phone2: string | null;
   country: string;                          // PR #47 — default 'Malaysia'
   currency: Currency;
   statement_type: StatementType;
