@@ -27,8 +27,8 @@ Last updated: 2026-06-24
 
 **Headline:** 2990 is the upstream parent and is AHEAD almost everywhere (sales-invoices, doc-numbering `nextMonthlyDocNo`, DateField, Excel exports, DataGrid, all PDF libs). The genuine Houzs-ahead gaps are tight:
 
-### Batch 1 — no migration, high value (DOING FIRST)
-| item | value | files | status |
+### Batch 1 — ✅ DONE (committed on `sync/houzs-to-2990`, typecheck green, NOT yet on main) — no migration, high value
+| item | value | files | status (all ✅) |
 |---|---|---|---|
 | **Consignment `.limit()` correctness** — orders-rollup drops category/branding pills + notes `has_children` mis-stamps (Edit/Cancel a note that already has a child) past 1000 child rows | HIGH | consignment-orders.ts ~235, consignment-notes.ts ~341 | ⏳ |
 | **reconcile-ledger lib + 4→9 doc-type coverage** (adds stock-transfer, both consignment, both PC) | HIGH | new lib reconcile-ledger.ts + inventory.ts `/reconcile` | ⏳ |
