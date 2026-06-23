@@ -270,6 +270,48 @@ export const useResetTestDataKeepSo = () => {
   });
 };
 
+/* ─── Inventory ledger integrity (System Health panel) ───
+   Calls the API Worker's GET /health/ledger, which runs the read-only ledger
+   reconcile sweep (same as GET /inventory/reconcile) and returns an OK/WARN
+   indicator plus the first 50 silent partial-write issues. Read-only + bounded;
+   the endpoint never throws to the client (a DB stall comes back as
+   status:'unknown'). */
+export interface LedgerIssue {
+  docType: string;
+  id: string;
+  docNo: string;
+  status: string;
+}
+
+export interface LedgerHealth {
+  check: string;
+  label: string;
+  ok: boolean;
+  status: 'ok' | 'warn' | 'unknown';
+  issueCount: number;
+  issues: LedgerIssue[];
+  asOf?: string;
+  error?: string;
+}
+
+export const useLedgerHealth = () =>
+  useQuery({
+    queryKey: ['ledger-health'],
+    queryFn: async (): Promise<LedgerHealth> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const token = await getToken();
+      const res = await fetch(`${API_URL}/health/ledger`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '<no body>');
+        throw new Error(humanApiError(res.status, text));
+      }
+      return (await res.json()) as LedgerHealth;
+    },
+    staleTime: 60_000,
+  });
+
 /* ─── App config ─── */
 
 export interface AppConfigRow {
