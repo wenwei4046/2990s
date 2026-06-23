@@ -2428,6 +2428,23 @@ export const warehouses = pgTable('warehouses', {
   idxActive: index('idx_warehouses_active').on(t.isActive),
 }));
 
+/* MRP per-category lead times (migration 0099). Commander 2026-06-22 (migration
+   0184) — extended with a per-WAREHOUSE dimension: `warehouseId` NULL = the
+   GLOBAL DEFAULT (existing category-only rows become globals automatically).
+   Uniqueness is (warehouse_id, category). NOTE: a Postgres PRIMARY KEY can't
+   hold a nullable column, so 0184 drops the old PK and uses a NULLS NOT DISTINCT
+   unique index — Drizzle can't express NULLS NOT DISTINCT, so we model the plain
+   unique index here (the migration is the source of truth). Lookup cascade in
+   the MRP / PO calc: (warehouse, category) → (NULL, category) → 0. */
+export const mrpCategoryLeadTimes = pgTable('mrp_category_lead_times', {
+  warehouseId: uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'cascade' }),
+  category:    text('category').notNull(),
+  leadDays:    integer('lead_days').notNull().default(0),
+  updatedAt:   timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  uniqWhCat: uniqueIndex('mrp_category_lead_times_wh_cat_uniq').on(t.warehouseId, t.category),
+}));
+
 /* PR #158 — Migration 0071. Commander 2026-05-27: "什么 State 对应哪个
    Warehouse 也需要设置清楚". One row per Malaysian state mapping to the
    warehouse that handles dispatch for that region. Used by SO routing +

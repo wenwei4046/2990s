@@ -784,13 +784,27 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   // supplier delivers ahead of the customer date (mrp_category_lead_times — the
   // same table the MRP order-by-date hint reads). Keyed lowercase by category,
   // which on a SO/PO line is the item_group.
+  // Commander 2026-06-22 (migration 0184) — also per-WAREHOUSE: warehouse_id NULL
+  // = the GLOBAL DEFAULT. Cascade: (warehouse, category) → (NULL, category) → 0.
+  // Two maps: per-warehouse rows keyed `${warehouseId}|${cat}`, NULL-warehouse
+  // globals keyed `cat`.
   const { data: leadRows } = await supabase
     .from('mrp_category_lead_times')
-    .select('category, lead_days');
+    .select('warehouse_id, category, lead_days');
+  const leadDaysByWhCat = new Map<string, number>();
   const leadDaysByCat = new Map<string, number>();
-  for (const lr of (leadRows ?? []) as Array<{ category: string; lead_days: number }>) {
-    leadDaysByCat.set((lr.category ?? '').toLowerCase(), lr.lead_days ?? 0);
+  for (const lr of (leadRows ?? []) as Array<{ warehouse_id: string | null; category: string; lead_days: number }>) {
+    const cat = (lr.category ?? '').toLowerCase();
+    const days = lr.lead_days ?? 0;
+    if (lr.warehouse_id) leadDaysByWhCat.set(`${lr.warehouse_id}|${cat}`, days);
+    else leadDaysByCat.set(cat, days);
   }
+  // (warehouse, category) → (NULL, category) → 0 cascade.
+  const leadDaysFor = (whId: string | null, category: string | null): number => {
+    const cat = (category ?? '').toLowerCase();
+    return (whId ? leadDaysByWhCat.get(`${whId}|${cat}`) : undefined)
+      ?? leadDaysByCat.get(cat) ?? 0;
+  };
 
   const resolveWarehouseId = (salesLocation: string | null | undefined): string | null => {
     const needle = (salesLocation ?? '').trim().toLowerCase();
@@ -922,7 +936,7 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       row.line_delivery_date
       ?? row.so?.customer_delivery_date
       ?? null;
-    const lineLeadDays = leadDaysByCat.get((row.item_group ?? '').toLowerCase()) ?? 0;
+    const lineLeadDays = leadDaysFor(lineWarehouseId, row.item_group);
     const lineDeliveryDate =
       (expectedAtOverride as string | undefined)
       ?? subtractCalendarDays(rawDeliveryDate, lineLeadDays);
