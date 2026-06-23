@@ -148,7 +148,9 @@ inventory.get('/', async (c) => {
   if (search) { const s = escapeForOr(search); if (s) q = q.or(`product_code.ilike.%${s}%,product_name.ilike.%${s}%`); }
   if (showAll && category && category !== 'all') q = q.eq('category', category);
 
-  const { data, error } = await q.order('product_code');
+  // PostgREST silently caps at 1000 rows — bound explicitly so a partial stock
+  // list never reads as MISSING stock (Houzs PR back-ported 2026-06-24).
+  const { data, error } = await q.order('product_code').limit(5000);
   if (error) {
     if (/relation .* does not exist/i.test(error.message) || /column .* does not exist/i.test(error.message)) {
       return c.json({ error: 'migration_pending', reason: 'Run migrations 0050 + 0053 against Supabase.' }, 500);

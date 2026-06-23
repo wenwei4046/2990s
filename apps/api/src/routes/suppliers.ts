@@ -227,7 +227,8 @@ suppliers.get('/', async (c) => {
   let q = supabase
     .from('suppliers_with_derived_category')
     .select(SUPPLIER_LIST_COLS)
-    .order('name', { ascending: true });
+    .order('name', { ascending: true })
+    .limit(2000); // PostgREST 1000-row cap guard (Houzs PR back-ported 2026-06-24)
   if (status && SUPPLIER_STATUSES.has(status)) q = q.eq('status', status);
   if (search) { const s = escapeForOr(search); if (s) q = q.or(`code.ilike.%${s}%,name.ilike.%${s}%,contact_person.ilike.%${s}%`); }
 
