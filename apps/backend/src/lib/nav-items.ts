@@ -44,13 +44,13 @@ export const NAV_ITEMS: NavItem[] = [
   // Transportation
   { label: 'Drivers', path: '/drivers', group: 'Transportation' },
 
-  // Warehouse
+  // Warehouse — master first (create a warehouse / set Transit here), then ops.
+  { label: 'Warehouses', path: '/warehouses', group: 'Warehouse', keywords: 'create new warehouse master location transit china overseas' },
   { label: 'Inventory', path: '/inventory', group: 'Warehouse', keywords: 'stock balance' },
   { label: 'Adjustments', path: '/inventory/adjustments', group: 'Warehouse' },
   { label: 'Transfers', path: '/inventory/transfers', group: 'Warehouse' },
   { label: 'Stock Take', path: '/inventory/stock-takes', group: 'Warehouse' },
-  { label: 'Warehouse', path: '/warehouse', group: 'Warehouse', keywords: 'rack bin' },
-  { label: 'Warehouses', path: '/warehouses', group: 'Warehouse', keywords: 'locations' },
+  { label: 'Racks & Bins', path: '/warehouse', group: 'Warehouse', keywords: 'rack bin shelf warehouse' },
 
   // Finance
   { label: 'Accounting', path: '/accounting', group: 'Finance', keywords: 'gl journal ledger' },
