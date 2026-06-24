@@ -1397,6 +1397,10 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
      / 36_45 / above_45); customer_race stores the value. */
   customerRace:                   text('customer_race'),
   customerAgeFrame:               text('customer_age_frame'),
+  /* Sales Analysis test-data filter (2026-06-25, migration 0186) — excludes
+     smoke-test SOs from analytics by default. NOT NULL default false; flagging
+     real test rows is an owner-confirmed backfill, not automated. */
+  isTest:                         boolean('is_test').notNull().default(false),
   targetDate:                     date('target_date'),
   /* P1 (Owner 2026-06-03, migration 0142) — POS handover customer signature as
      a data URL (image/png base64). Mirrors customer_po_image_b64's base64-in-
