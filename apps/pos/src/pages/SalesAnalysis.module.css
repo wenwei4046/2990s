@@ -1,0 +1,38 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6) var(--space-7);
+  background: var(--c-cream);
+  min-height: 100%;
+}
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.titleBlock { display: flex; align-items: center; gap: var(--space-3); }
+.backBtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--c-ink); text-decoration: none; font-size: var(--fs-14);
+}
+.title { font-size: var(--fs-20); margin: 0; color: var(--c-ink); }
+.controls { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; }
+.controls select { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff; }
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-14); color: var(--c-ink); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-3); }
+.card { background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-4); display: flex; flex-direction: column; gap: 4px; }
+.cardLabel { font-size: var(--fs-12); color: #6b6b6b; text-transform: uppercase; letter-spacing: 0.03em; }
+.cardValue { font-size: var(--fs-24); color: var(--c-ink); font-weight: 600; }
+.cardSub { font-size: var(--fs-13); color: #6b6b6b; }
+
+.section { background: #fff; border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-4); }
+.sectionTitle { font-size: var(--fs-16); margin: 0 0 var(--space-3); color: var(--c-ink); }
+.trendRow { display: grid; grid-template-columns: 80px 1fr 160px; align-items: center; gap: var(--space-3); padding: 4px 0; }
+.barTrack { background: #f0ebe4; border-radius: 3px; }
+.bar { display: block; height: 14px; background: var(--c-accent, #b06a3b); border-radius: 3px; min-width: 2px; }
+.muted { color: #9a9a9a; }
+.note { font-size: var(--fs-13); color: #9a6a2a; }

@@ -25,6 +25,7 @@ const SalesOrderPrint = lazy(() => import('./pages/SalesOrderPrint').then((m) =>
 const Products = lazy(() => import('./pages/Products').then((m) => ({ default: m.Products })));
 const SalesOrderMaintenance = lazy(() => import('./pages/SalesOrderMaintenance').then((m) => ({ default: m.SalesOrderMaintenance })));
 const NewOrder = lazy(() => import('./pages/NewOrder').then((m) => ({ default: m.NewOrder })));
+const SalesAnalysis = lazy(() => import('./pages/SalesAnalysis').then((m) => ({ default: m.SalesAnalysis })));
 
 /* Root layout — hosts <ScrollRestoration> for the whole app. It restores window
    scroll on history POP (the browser/swipe Back AND the configurator's in-app
@@ -102,6 +103,7 @@ export const router = createBrowserRouter([
      SO header to /mfg-sales-orders, lands on the existing POS-native
      /handover-confirmed thank-you screen. */
   { path: '/new-order', element: <AuthGate><MaintainGate><NewOrder /></MaintainGate></AuthGate> },
+  { path: '/sales-analysis', element: <AuthGate><MaintainGate><SalesAnalysis /></MaintainGate></AuthGate> },
   { path: '/', element: <Navigate to="/catalog" replace /> },
   { path: '*', element: <Navigate to="/catalog" replace /> },
     ],

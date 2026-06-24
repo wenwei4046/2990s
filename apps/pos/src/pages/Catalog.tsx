@@ -14,6 +14,7 @@ import {
   ImageOff,
   Settings,
   Plus,
+  BarChart3,
   ExternalLink,
   type LucideIcon,
 } from 'lucide-react';
@@ -426,6 +427,10 @@ export const Catalog = () => {
                 <Link to="/sales-order-maintenance" className={styles.sideItem}>
                   <Settings size={16} strokeWidth={1.75} />
                   <span className={styles.sideLabel}>SO Maintenance</span>
+                </Link>
+                <Link to="/sales-analysis" className={styles.sideItem}>
+                  <BarChart3 size={16} strokeWidth={1.75} />
+                  <span className={styles.sideLabel}>Sales analysis</span>
                 </Link>
               </>
             )}
