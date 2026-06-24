@@ -41,7 +41,7 @@ import {
   orderSofaModuleRowsWithinBuilds,
   sortSoLinesByGroupRank,
 } from '@2990s/shared/so-line-display';
-import { findModule, SOFA_MODULES, type Cell, type Depth } from '@2990s/shared';
+import { buildDefaultSofaCells, findModule, SOFA_MODULES, type Cell, type Depth } from '@2990s/shared';
 import { COMPANY, amountInWordsMyr, drawInfoColumns, fmtDocDate, fmtDocStamp } from './pdf-common';
 import { drawSofaLayout } from './sofa-layout-pdf';
 import {
@@ -160,6 +160,41 @@ function sofaCellFromLine(
   const groupKey = typeof v.summary === 'string' && v.summary.trim() ? v.summary.trim() : '';
   const idx = typeof v.cellIndex === 'number' && Number.isFinite(v.cellIndex) ? v.cellIndex : 0;
   return { cell: { moduleId, x, y, rot }, depth, groupKey, idx };
+}
+
+/* Resolve a sofa MODULE id (+ the BASE model it belongs to) from a
+   geometry-less BACKEND line — a sofa added via SO New / Maintenance stores
+   the module only as a per-line SKU ("{MODEL}-2A(RHF)"), never x/y/cells, so
+   `sofaCellFromLine` (which needs stored x/y) returns null for it. The module
+   is the longest SOFA_MODULES suffix the SKU code ENDS with; the base model is
+   whatever precedes it ("XAMMAR-2A(RHF)" → base "XAMMAR", module "2A(RHF)").
+   When the code carries no recognisable suffix we fall back to the trailing
+   "MODULE(HAND)" token of the material_name / description ("SOFA XAMMAR
+   2A(RHF)" → "2A(RHF)"). Returns null for non-sofa / unresolvable lines so the
+   caller can skip them. Never throws. */
+const SOFA_MODULE_TOKEN_RE = /([A-Za-z0-9]+(?:\([A-Za-z]+\))+|CNR|Console|STOOL|1NA|2NA|1S|2S|3S)\s*$/;
+function sofaModuleFromLine(
+  materialCode: string | null | undefined,
+  fallbackText: string | null | undefined,
+): { moduleId: string; baseModel: string } | null {
+  // Preferred: the SKU code's longest known-module suffix.
+  const code = (materialCode ?? '').trim();
+  if (code) {
+    const suffix = SOFA_MODULE_IDS_BY_LEN.find((id) => code.endsWith(id));
+    if (suffix && findModule(suffix)) {
+      // Base model = the code minus the module suffix (drop a trailing '-').
+      const base = code.slice(0, code.length - suffix.length).replace(/[-\s]+$/, '');
+      return { moduleId: suffix, baseModel: base };
+    }
+  }
+  // Fallback: the trailing "MODULE(HAND)" token of the name / description.
+  const text = (fallbackText ?? '').trim();
+  const m = text.match(SOFA_MODULE_TOKEN_RE);
+  const token = m?.[1]?.trim();
+  if (token && findModule(token)) {
+    return { moduleId: token, baseModel: '' };
+  }
+  return null;
 }
 
 type JsPdf = import('jspdf').jsPDF;
@@ -428,37 +463,84 @@ async function renderPurchaseOrderInto(
   }
 
   // ── Sofa layout schematics (orientation aid for the supplier) ─────
-  // A sofa is split across per-module lines that share a `variants.summary`;
-  // group those lines (by SO no + summary) and build the full cells array,
-  // ordered by cellIndex. Non-sofa / malformed lines fall through and are
-  // skipped. Purely additive; most POs draw nothing here.
+  // A POS sofa is split across per-module lines that share a `variants.summary`
+  // AND carry stored x/y geometry; group those lines (by SO no + summary) and
+  // build the full cells array, ordered by cellIndex. A BACKEND sofa (SO New /
+  // Maintenance) stores the module SKU per line but NO geometry — there was
+  // never a real arrangement to lose — so we RECONSTRUCT a default left→right
+  // layout from its module list (grouped by SO no + base model). Non-sofa /
+  // malformed lines fall through and are skipped. Purely additive; most POs
+  // draw nothing here. A group is EITHER geometry-based OR reconstructed, never
+  // both: a POS sofa's lines all carry geometry (never enter the fallback map)
+  // and a backend sofa's lines never carry geometry — and we additionally drop
+  // any reconstructed group whose (SO, base model) already drew from geometry.
   type DistinctSofa = { cells: Cell[]; depth: Depth; model: string; soNo: string };
   const sofaGroups = new Map<
     string,
     { parts: Array<{ cell: Cell; idx: number }>; depth: Depth; model: string; soNo: string }
   >();
+  /* Geometry-less backend sofa lines, grouped by SO no + base model, modules
+     kept in line (= display) order for a deterministic left→right layout. */
+  const fallbackGroups = new Map<
+    string,
+    { modules: Array<{ moduleId: string }>; depth: Depth; model: string; soNo: string }
+  >();
+  /* (SO, base model) keys that already produced a geometry-based sofa — used to
+     suppress any reconstructed group that would double-draw the same build. */
+  const geometryKeys = new Set<string>();
+  const baseModelKey = (soNo: string, baseModel: string): string => `${soNo}|${baseModel.toUpperCase()}`;
+
   for (const it of items) {
-    const part = sofaCellFromLine(it.variants, it.material_code);
-    if (!part) continue;
     const soNo = (it.so_doc_no ?? '').trim();
-    const gk = `${soNo}|${part.groupKey}`;
-    let g = sofaGroups.get(gk);
-    if (!g) {
-      // Caption = the whole-sofa modules ("L(LHF) + 2A(RHF)", the summary up to
-      // the first '·'), else the per-line model name.
-      const model = (part.groupKey ? (part.groupKey.split('·')[0] ?? '').trim() : '')
-        || (it.material_name ?? '').trim()
-        || (it.material_code ?? '').trim();
-      g = { parts: [], depth: part.depth, model, soNo };
-      sofaGroups.set(gk, g);
+    const part = sofaCellFromLine(it.variants, it.material_code);
+    if (part) {
+      // ── Stored-geometry path (POS-configured sofas) — UNCHANGED. ──
+      const gk = `${soNo}|${part.groupKey}`;
+      let g = sofaGroups.get(gk);
+      if (!g) {
+        // Caption = the whole-sofa modules ("L(LHF) + 2A(RHF)", the summary up
+        // to the first '·'), else the per-line model name.
+        const model = (part.groupKey ? (part.groupKey.split('·')[0] ?? '').trim() : '')
+          || (it.material_name ?? '').trim()
+          || (it.material_code ?? '').trim();
+        g = { parts: [], depth: part.depth, model, soNo };
+        sofaGroups.set(gk, g);
+      }
+      g.parts.push({ cell: part.cell, idx: part.idx });
+      // Record the base model so a reconstructed group can't double-draw it.
+      const bm = sofaModuleFromLine(it.material_code, it.material_name ?? it.description);
+      if (bm) geometryKeys.add(baseModelKey(soNo, bm.baseModel));
+      continue;
     }
-    g.parts.push({ cell: part.cell, idx: part.idx });
+    // ── Reconstruction path (geometry-less BACKEND / old sofas). ──
+    if ((it.item_group ?? '').toLowerCase() !== 'sofa') continue;
+    const mod = sofaModuleFromLine(it.material_code, it.material_name ?? it.description);
+    if (!mod) continue;
+    const depthRaw = (it.variants as { depth?: unknown } | null)?.depth;
+    const depth: Depth = typeof depthRaw === 'string' && depthRaw.trim() ? depthRaw : '24';
+    const fk = baseModelKey(soNo, mod.baseModel);
+    let fg = fallbackGroups.get(fk);
+    if (!fg) {
+      const model = (it.material_name ?? '').trim() || (it.material_code ?? '').trim();
+      fg = { modules: [], depth, model, soNo };
+      fallbackGroups.set(fk, fg);
+    }
+    fg.modules.push({ moduleId: mod.moduleId });
   }
+
   const distinctSofas: DistinctSofa[] = [];
   for (const g of sofaGroups.values()) {
     const cells = g.parts.sort((a, b) => a.idx - b.idx).map((p) => p.cell);
     if (cells.length === 0) continue;
     distinctSofas.push({ cells, depth: g.depth, model: g.model, soNo: g.soNo });
+  }
+  for (const [fk, g] of fallbackGroups) {
+    if (geometryKeys.has(fk)) continue; // already drawn from real geometry
+    const cells = buildDefaultSofaCells(g.modules, g.depth);
+    if (cells.length === 0) continue;
+    // Caption from the module list ("L(LHF) + 2A(RHF)"), else the per-line name.
+    const caption = cells.map((c) => c.moduleId).join(' + ') || g.model;
+    distinctSofas.push({ cells, depth: g.depth, model: caption, soNo: g.soNo });
   }
 
   if (distinctSofas.length > 0) {
