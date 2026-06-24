@@ -106,9 +106,15 @@ must encode them as shared helpers so no query re-derives them ad hoc.
 ## Part A — Demographics capture
 
 ### A.1 Data model
-Add two **nullable** columns to `customers` (`packages/db/src/schema.ts`, ~line 561) via a
-new append-only migration: `race text`, `age_frame text`. Nullable; never overwrite an
-existing non-null with NULL. Validation is app-level against shared constants (no DB CHECK).
+Follow the existing **emergency-contact precedent**: a customer attribute captured at
+handover and prefilled from search is stored on the **SO snapshot**, not the `customers`
+registry (`customers` has no emergency-contact columns — those live only on the SO). Add
+two **nullable** snapshot columns to `mfg_sales_orders` (`packages/db/src/schema.ts`, near
+the `emergency_contact_*` columns) via a new append-only migration (next number **0185**):
+`customer_race text`, `customer_age_frame text`. Nullable; validation is app-level against
+the shared constants (no DB CHECK). Part B reads each customer's demographics from their
+**most recent SO snapshot**. (A durable `customers`-registry column + Backend-directory
+editing is a noted future option, not built now.)
 
 ### A.2 Shared constants
 `packages/shared/src/customer-demographics.ts` (exported), single source for the POS form
@@ -131,11 +137,16 @@ Two dropdowns (Race, Age frame) from the shared constants.
 - **Never** rendered on the SO doc / PDF / any customer-facing surface.
 
 ### A.4 Persistence
-POS sends `race` + `ageFrame` in the order's customer payload. On `POST /mfg-sales-orders`,
-after the customer is resolved (`upsert_customer_by_name_phone` flow), perform a
-**non-destructive** update of the resolved row: set `race`/`age_frame` **only when the
-incoming value is non-empty**. The Proceed "change customer" (`recustomer`) PATCH carries
-the same fields. The customer-search snapshot returns `race`/`age_frame` for prefill.
+POS sends `customerRace` + `customerAgeFrame` in the order payload. On
+`POST /mfg-sales-orders`, write them to the new SO snapshot columns alongside the existing
+emergency-contact writes — coercing through the shared validators (write the value only if
+it is a valid option, else NULL). The Proceed "change customer" (`recustomer`) PATCH writes
+them the same way **when a POS edit UI later sends them** (server-side PATCH support is
+deferred in the Part A plan — no caller exists yet). The customer-search endpoint (which already powers prefill
+from the latest SO snapshot) returns `race`/`ageFrame` so an existing pick prefills.
+**No change to the shared `upsert_customer_by_name_phone` RPC.** The required-for-new gate
+keys off the existing `form.customerType` ('NEW' vs 'EXISTING', already derived in the
+Customer step from the search match).
 
 ---
 
@@ -184,7 +195,8 @@ Period-scoped headline cards, **each labelled with its n** and min-sample guard:
 
 **3. Customers (marketing)**
 One row per customer (deduped on normalised phone): name, phone, email, customer code,
-postcode/city/state, **race, age frame**, last salesperson, # orders, total spend (RM),
+postcode/city/state, **race, age frame** (from the customer's most recent SO snapshot),
+last salesperson, # orders, total spend (RM),
 categories/brands/models bought, last purchase date. Client-side filters: category, brand,
 race, age frame, state, free-text. **No export.** Plus:
 - **New vs returning** split (cohort revenue/margin/basket) — cross-check the SO
@@ -233,11 +245,13 @@ fetch. Simple CSS bars; **no charting library**.
 ## Files likely touched
 
 **Part A**
-- `packages/db/src/schema.ts` + migration (add `race`, `age_frame` to `customers`).
-- `packages/shared/src/customer-demographics.ts` (+ export).
-- POS handover Customer-step component — two dropdowns + required-for-new validation.
-- `apps/api/src/routes/mfg-sales-orders.ts` — persist demographics on create + `recustomer`.
-- Customer-search snapshot — return the two fields.
+- `packages/db/src/schema.ts` + migration **0185** (add `customer_race`, `customer_age_frame` to **`mfg_sales_orders`**).
+- `packages/shared/src/customer-demographics.ts` (+ `index.ts` export) — constants + `isValidRace`/`isValidAgeFrame`/`ageFrameLabel`.
+- `apps/pos/src/lib/handover-helpers.ts` — `HandoverForm` fields + `validateCustomer`/`customerBlockers` required-for-new (keyed on `form.customerType`).
+- `apps/pos/src/components/handover/CustomerStep.tsx` — two `<select>` dropdowns + `pickCustomer` prefill.
+- `apps/pos/src/lib/pos-handover-so.ts` + `apps/pos/src/pages/Handover.tsx` — `PosHandoffPayload` fields + payload assembly.
+- `apps/pos/src/lib/customer-search.ts` — `CustomerSearchHit` fields + query mapping.
+- `apps/api/src/routes/mfg-sales-orders.ts` — persist on create + `recustomer` PATCH; add `race`/`age_frame` to the customer-search SELECT + output.
 
 **Part B**
 - `packages/db/src/schema.ts` + migration (add `is_test` to `mfg_sales_orders`) + one-time
