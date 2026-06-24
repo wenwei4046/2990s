@@ -17,6 +17,7 @@ import {
   isFreeItemLine,
   type RuleLineInput,
   passesRefinementColumns,
+  isValidRace, isValidAgeFrame,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
 import { buildCompartmentsFromModuleLines } from '../lib/compartments-from-module-lines';
@@ -1193,7 +1194,7 @@ mfgSalesOrders.get('/customer-search', async (c) => {
   const esc = q.replace(/[\\%_]/g, (m) => `\\${m}`);
   const { data, error } = await sb
     .from('mfg_sales_orders')
-    .select('doc_no, debtor_name, phone, email, customer_type, address1, address2, city, postcode, customer_state, building_type, emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, created_at')
+    .select('doc_no, debtor_name, phone, email, customer_type, address1, address2, city, postcode, customer_state, building_type, emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, customer_race, customer_age_frame, created_at')
     .ilike('debtor_name', `%${esc}%`)
     .neq('status', 'CANCELLED')
     .order('created_at', { ascending: false })
@@ -1207,6 +1208,7 @@ mfgSalesOrders.get('/customer-search', async (c) => {
     building_type: string | null;
     emergency_contact_name: string | null; emergency_contact_phone: string | null;
     emergency_contact_relationship: string | null;
+    customer_race: string | null; customer_age_frame: string | null;
     created_at: string;
   };
   /* Per-identity COALESCE (Loo 2026-06-06 follow-up: "link them with address
@@ -1221,6 +1223,7 @@ mfgSalesOrders.get('/customer-search', async (c) => {
     ['address1', 'address1'], ['address2', 'address2'], ['city', 'city'],
     ['postcode', 'postcode'], ['customerState', 'customer_state'],
     ['buildingType', 'building_type'],
+    ['race', 'customer_race'], ['ageFrame', 'customer_age_frame'],
   ] as const;
   /* Emergency contact coalesces as a GROUP, not per field (Loo 2026-06-12:
      copy it over like the address) — name/phone/relationship describe ONE
@@ -1260,6 +1263,8 @@ mfgSalesOrders.get('/customer-search', async (c) => {
       customerState: r.customer_state,
       buildingType:  r.building_type,
       ...emergencyOf(r),
+      race:          r.customer_race,
+      ageFrame:      r.customer_age_frame,
       lastDocNo:     r.doc_no,
       lastOrderAt:   r.created_at,
     });
@@ -3057,6 +3062,10 @@ mfgSalesOrders.post('/', async (c) => {
       ? (normalizePhone(body.emergencyContactPhone) ?? body.emergencyContactPhone)
       : null,
     emergency_contact_relationship: (body.emergencyContactRelationship as string) ?? null,
+    /* Marketing demographics (2026-06-25, mig 0185) — coerced to a known option
+       or NULL; never shown on the SO/PDF. Read by Sales Analysis. */
+    customer_race: isValidRace(body.customerRace) ? (body.customerRace as string) : null,
+    customer_age_frame: isValidAgeFrame(body.customerAgeFrame) ? (body.customerAgeFrame as string) : null,
     target_date: (body.targetDate as string) ?? null,
     customer_id: orderCustomerId,
     customer_state: (body.customerState as string) ?? null,
