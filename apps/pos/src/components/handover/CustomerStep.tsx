@@ -11,6 +11,7 @@ import {
   type CustomerSearchHit,
 } from '../../lib/customer-search';
 import styles from '../../pages/Handover.module.css';
+import { RACE_OPTIONS, AGE_FRAMES } from '@2990s/shared';
 
 /* Shown until /so-dropdown-options loads — mirrors the seeded customer_type
    rows (values 'NEW' / 'EXISTING', the vocabulary the Backend SO pages use). */
@@ -53,6 +54,8 @@ export const CustomerStep = ({
     if (h.emergencyContactName) update('emergencyName', h.emergencyContactName);
     if (h.emergencyContactPhone) update('emergencyPhone', h.emergencyContactPhone);
     if (h.emergencyContactRelationship) update('emergencyRelation', h.emergencyContactRelationship);
+    if (h.race) update('race', h.race);
+    if (h.ageFrame) update('ageFrame', h.ageFrame);
   };
 
   /* Customer type is DERIVED, not picked (Loo 2026-06-06: "if there is the
@@ -141,6 +144,30 @@ export const CustomerStep = ({
           </p>
         </Field>
       </div>
+
+      <div className="fieldRow">
+        <Field label={`Race${matched ? '' : ' *'}`}>
+          <select value={form.race} onChange={(e) => update('race', e.target.value)}>
+            <option value="">{matched ? '— optional —' : '— select —'}</option>
+            {RACE_OPTIONS.map((r) => (
+              <option key={r} value={r}>{r}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label={`Age group${matched ? '' : ' *'}`}>
+          <select value={form.ageFrame} onChange={(e) => update('ageFrame', e.target.value)}>
+            <option value="">{matched ? '— optional —' : '— select —'}</option>
+            {AGE_FRAMES.map((a) => (
+              <option key={a.code} value={a.code}>{a.label}</option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      {!matched && (
+        <p className={styles.signCaption}>
+          Race and age group are recorded for marketing only — not shown on the order.
+        </p>
+      )}
     </section>
   );
 };
