@@ -72,10 +72,11 @@ export function drawSofaLayout(
   const ox = x + Math.max(0, (maxW - sofaW) / 2);
   const oy = y;
 
-  // ── Cells: light-filled rect + thin border, faithful positions ──────
-  doc.setLineWidth(0.2);
-  doc.setDrawColor(120);
-  doc.setFillColor(238, 238, 238); // light grey fill
+  // ── Cells: each module = a cream SEAT with a tan BACKREST strip on its back
+  //    edge (the side away from the TV — the whole sofa faces the TV at the
+  //    bottom/+y). Faithful positions → the L-shape notch + LHF/RHF come out
+  //    automatically. NO outer union outline: that boxed an L-shape back into a
+  //    rectangle (owner: "看起来整个是长方形").
   for (const c of cells) {
     if (!c || typeof c.moduleId !== 'string') continue;
     if (!Number.isFinite(c.x) || !Number.isFinite(c.y)) continue;
@@ -85,13 +86,24 @@ export function drawSofaLayout(
     if (!(fp.w > 0) || !(fp.h > 0)) continue;
     const px = ox + (c.x - bbox.x) * scale;
     const py = oy + (c.y - bbox.y) * scale;
-    doc.rect(px, py, fp.w * scale, fp.h * scale, 'FD'); // fill + border
+    const w = fp.w * scale;
+    const h = fp.h * scale;
+    // Seat — cream fill + thin border.
+    doc.setLineWidth(0.2);
+    doc.setDrawColor(120);
+    doc.setFillColor(244, 238, 226);
+    doc.rect(px, py, w, h, 'FD');
+    // Backrest + outer ARMS — tan strips forming a U-frame (back on top, arms on
+    // the sofa's exposed outer left/right edges), open at the FRONT (toward the
+    // TV). Arms only land on outer edges (a cell flush with the union's min/max
+    // x), so an L-shape and LHF/RHF read correctly.
+    const t = Math.max(0.8, Math.min(h * 0.26, 2.4)); // strip thickness (mm)
+    const eps = 0.5; // cm tolerance
+    doc.setFillColor(196, 162, 110); // tan
+    doc.rect(px, py, w, t, 'F'); // backrest (top / back)
+    if (Math.abs(c.x - bbox.x) < eps) doc.rect(px, py, t, h, 'F'); // left arm
+    if (Math.abs((c.x + fp.w) - (bbox.x + bbox.w)) < eps) doc.rect(px + w - t, py, t, h, 'F'); // right arm
   }
-
-  // Slightly thicker outline around the whole union.
-  doc.setLineWidth(0.4);
-  doc.setDrawColor(90);
-  doc.rect(ox, oy, sofaW, sofaH, 'S');
 
   // ── TV marker BELOW the sofa (greater y = front / viewing direction) ─
   // Small filled triangle pointing UP (toward the sofa), then a dark TV rect
