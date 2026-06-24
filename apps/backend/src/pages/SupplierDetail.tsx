@@ -2636,6 +2636,8 @@ const SupplierInfoCard = ({
     website: supplier.website ?? '',
     whatsappNumber: supplier.whatsapp_number ?? '',
     paymentTerms: supplier.payment_terms ?? '',
+    /* Supplier currency — MYR/RMB/USD/SGD; flows to PO + PI pricing once set. */
+    currency: supplier.currency,
     address: supplier.address ?? '',
     postcode: supplier.postcode ?? '',
     area: supplier.area ?? '',
@@ -2785,6 +2787,9 @@ const SupplierInfoCard = ({
             <EditField label="Website" value={form.website} onChange={(v) => setF('website', v)} />
             {/* Commercial */}
             <PaymentTermsSelect value={form.paymentTerms} onChange={(v) => setF('paymentTerms', v)} />
+            {/* Supplier currency — fixed MYR/RMB/USD/SGD enum (order canonical,
+                NOT sorted). Flows to PO + PI pricing once set. */}
+            <CurrencyEditSelect value={form.currency} onChange={(v) => setF('currency', v)} />
             <EditField label="Business Nature" value={form.businessNature} onChange={(v) => setF('businessNature', v)} />
             {/* Address — PR #47: Country + State cascade */}
             <CountrySelect value={form.country} onChange={(v) => {
@@ -3945,3 +3950,24 @@ const PaymentTermsSelect = ({ value, onChange }: { value: string; onChange: (v: 
     </label>
   );
 };
+
+/* Supplier currency picker (edit mode). Fixed MYR/RMB/USD/SGD enum — order is
+   canonical, NOT alphabetically sorted. Once saved, supplier.currency flows to
+   PurchaseOrderNew + the PI pages. */
+const CURRENCY_OPTIONS: readonly Currency[] = ['MYR', 'RMB', 'USD', 'SGD'];
+
+const CurrencyEditSelect = ({ value, onChange }: { value: Currency; onChange: (v: Currency) => void }) => (
+  <label className={styles.field}>
+    <span className={styles.fieldLabel}>Currency</span>
+    <span className={styles.selectWrap}>
+      <select
+        className={styles.fieldSelect}
+        value={value}
+        onChange={(e) => onChange(e.target.value as Currency)}
+      >
+        {CURRENCY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+    </span>
+  </label>
+);
