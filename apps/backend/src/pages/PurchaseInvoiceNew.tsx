@@ -34,6 +34,7 @@ import {
   useGrnDetail,
 } from '../lib/flow-queries';
 import { useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
+import { useActiveCurrencies, rateFor } from '../lib/currencies-queries';
 import { useMfgProducts, useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
 import { sortByText, sortByNumeric } from '../lib/sort-options';
 import { MoneyInput } from '../components/MoneyInput';
@@ -145,6 +146,9 @@ export const PurchaseInvoiceNew = () => {
      a foreign-currency supplier; MYR posts 1:1. Kept as a string so the numeric
      input round-trips empty/partial typing. */
   const [exchangeRate, setExchangeRate] = useState<string>('1');
+  /* Migration 0193 — track whether the operator hand-edited the rate so the
+     master-rate auto-fill below stops overwriting their value. */
+  const [rateTouched, setRateTouched] = useState<boolean>(false);
   /* Commander 2026-05-29 — "Bill date 都是 standard 的，放 30 天之内，根据这个
      supplier 的设定": Due Date auto-defaults to Invoice Date + the supplier's
      payment-term days. Track whether the operator has hand-edited Due Date so
@@ -286,8 +290,16 @@ export const PurchaseInvoiceNew = () => {
      AP posting to MYR at GL-post time (server-side). */
   const currency = (supplierDetail?.currency ?? 'MYR').toUpperCase();
   const isForeign = currency !== 'MYR';
-  // Reset the rate to 1 whenever the PI settles on MYR (no foreign rate applies).
-  useEffect(() => { if (!isForeign) setExchangeRate('1'); }, [isForeign]);
+  /* Migration 0193 — auto-fill the rate from the currencies MASTER when the PI
+     settles on a foreign currency (still editable). MYR resets to 1. A manual
+     edit (rateTouched) wins. */
+  const currenciesQ = useActiveCurrencies();
+  useEffect(() => {
+    if (!isForeign) { setExchangeRate('1'); setRateTouched(false); return; }
+    if (rateTouched) return;
+    const master = rateFor(currenciesQ.data, currency);
+    setExchangeRate(String(master));
+  }, [isForeign, currency, currenciesQ.data, rateTouched]);
 
   // ── Manual product search (gated by min query length, mirrors GrnNew). ───
   const [productQuery, setProductQuery] = useState<string>('');
@@ -537,7 +549,7 @@ export const PurchaseInvoiceNew = () => {
                 <span className={styles.fieldLabel}>Exchange rate (MYR per 1 {currency})</span>
                 <input
                   type="number" min={0} step="0.000001" inputMode="decimal"
-                  value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)}
+                  value={exchangeRate} onChange={(e) => { setRateTouched(true); setExchangeRate(e.target.value); }}
                   placeholder="e.g. 0.62"
                   className={styles.fieldInput} style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}
                 />

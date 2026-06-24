@@ -30,6 +30,7 @@ import {
   Handshake,
   Wallet,
   KeyRound,
+  Coins,
 } from 'lucide-react';
 import { useAuth, POS_ONLY_ROLES, SALES_DESK_ROLES } from '../lib/auth';
 import styles from './Sidebar.module.css';
@@ -164,6 +165,7 @@ export const Sidebar = () => {
       items: [
         { to: '/products', icon: <Package2 {...ICON_PROPS} />, label: 'Products & Maintenance' },
         { to: '/suppliers', icon: <Truck {...ICON_PROPS} />, label: 'Suppliers' },
+        { to: '/currencies', icon: <Coins {...ICON_PROPS} />, label: 'Currencies' },
         { to: '/mrp', icon: <ListTree {...ICON_PROPS} />, label: 'MRP · Stock Status' },
         { to: '/purchase-orders', icon: <ScrollText {...ICON_PROPS} />, label: 'Purchase Orders' },
         { to: '/grns', icon: <PackageCheck {...ICON_PROPS} />, label: 'Goods Receipt' },

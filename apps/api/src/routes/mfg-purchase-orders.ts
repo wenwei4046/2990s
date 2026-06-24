@@ -34,6 +34,7 @@ import {
 } from '@2990s/shared/so-line-display';
 import { resolveMaintenanceConfigForSupplier } from '../lib/po-pricing';
 import { nextMonthlyDocNo } from '../lib/doc-no';
+import { normalizeCurrency } from '../lib/fx';
 import { supabaseAuth } from '../middleware/auth';
 import { computeMrp } from './mrp';
 import type { Env, Variables } from '../env';
@@ -102,7 +103,9 @@ async function poHasDownstream(sb: any, poId: string): Promise<{ error: string; 
 }
 
 const VALID_STATUSES = new Set(['SUBMITTED', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED']);
-const VALID_CURRENCIES = new Set(['MYR', 'RMB', 'USD', 'SGD']);
+/* Currency is validated by the currencies MASTER (migration 0193) + the PO FK,
+   not a hardcoded allow-list — normalizeCurrency upper-cases/trims (blank → MYR)
+   and the FK rejects a code not in the master. */
 const VALID_KINDS = new Set(['mfg_product', 'fabric', 'raw']);
 
 const HEADER_COLS =
@@ -531,8 +534,7 @@ mfgPurchaseOrders.post('/', async (c) => {
   // line-by-line on the detail page (matches SO flow).
   const items = (body.items as Array<Record<string, unknown>> | undefined) ?? [];
 
-  const currency = ((body.currency as string) ?? 'MYR').toUpperCase();
-  if (!VALID_CURRENCIES.has(currency)) return c.json({ error: 'invalid_currency' }, 400);
+  const currency = normalizeCurrency(body.currency);
 
   // Generate human-readable PO number. Format: PO-YYMM-NNN (counts within month).
   const supabase = c.get('supabase');

@@ -54,6 +54,7 @@ import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import { StatusPill } from '../components/StatusPill';
 import { DateField } from '../components/DateField';
+import { CurrencyOptions } from '../lib/currencies-queries';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -937,10 +938,8 @@ const SupplierCard = ({
             <span className={styles.selectWrap}>
               <select className={styles.fieldSelect} value={draft.currency} disabled={locked}
                 onChange={(e) => onField('currency', e.target.value)}>
-                <option value="MYR">MYR</option>
-                <option value="RMB">RMB</option>
-                <option value="USD">USD</option>
-                <option value="SGD">SGD</option>
+                {/* Active currencies from the master (migration 0193). */}
+                <CurrencyOptions current={draft.currency} />
               </select>
               <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
             </span>

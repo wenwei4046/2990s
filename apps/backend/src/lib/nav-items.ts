@@ -33,6 +33,7 @@ export const NAV_ITEMS: NavItem[] = [
   // Procurement
   { label: 'Products & Maintenance', path: '/products', group: 'Procurement', keywords: 'modular combo fabric' },
   { label: 'Suppliers', path: '/suppliers', group: 'Procurement', keywords: 'vendor creditor' },
+  { label: 'Currencies', path: '/currencies', group: 'Procurement', keywords: 'currency exchange rate fx myr rmb usd sgd forex' },
   { label: 'MRP · Stock Status', path: '/mrp', group: 'Procurement', keywords: 'requirements planning shortage order' },
   { label: 'Purchase Orders', path: '/purchase-orders', group: 'Procurement', keywords: 'po' },
   { label: 'New Purchase Order', path: '/purchase-orders/new', group: 'Procurement', keywords: 'create po add' },

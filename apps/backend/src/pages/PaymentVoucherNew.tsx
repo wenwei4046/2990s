@@ -19,6 +19,7 @@ import { ArrowLeft, Save, Trash2, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useCreatePaymentVoucher, useAccounts, type Account } from '../lib/flow-queries';
 import { useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
+import { useActiveCurrencies, rateFor } from '../lib/currencies-queries';
 import { sortByText } from '../lib/sort-options';
 import { MoneyInput } from '../components/MoneyInput';
 import { ActionResultDialog } from '../components/ActionResultDialog';
@@ -64,6 +65,9 @@ export const PaymentVoucherNew = () => {
   const [voucherDate, setVoucherDate]     = useState<string>(() => todayMyt());
   const [notes, setNotes]                 = useState<string>('');
   const [exchangeRate, setExchangeRate]   = useState<string>('1');
+  /* Migration 0193 — track a manual rate edit so the master-rate auto-fill
+     stops overwriting it. */
+  const [rateTouched, setRateTouched]     = useState<boolean>(false);
   const [lines, setLines]                 = useState<DraftLine[]>([newLine()]);
   const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
 
@@ -80,7 +84,15 @@ export const PaymentVoucherNew = () => {
 
   const currency  = (supplierDetail?.currency ?? supplierRow?.currency ?? 'MYR').toUpperCase();
   const isForeign = currency !== 'MYR';
-  useEffect(() => { if (!isForeign) setExchangeRate('1'); }, [isForeign]);
+  /* Migration 0193 — auto-fill the rate from the currencies MASTER when the PV
+     settles on a foreign currency (still editable). MYR resets to 1; a manual
+     edit wins. */
+  const currenciesQ = useActiveCurrencies();
+  useEffect(() => {
+    if (!isForeign) { setExchangeRate('1'); setRateTouched(false); return; }
+    if (rateTouched) return;
+    setExchangeRate(String(rateFor(currenciesQ.data, currency)));
+  }, [isForeign, currency, currenciesQ.data, rateTouched]);
 
   const setLine  = (rid: string, patch: Partial<DraftLine>) =>
     setLines((prev) => prev.map((l) => (l.rid === rid ? { ...l, ...patch } : l)));
@@ -191,7 +203,7 @@ export const PaymentVoucherNew = () => {
               <label className={styles.field}>
                 <span className={styles.fieldLabel}>Exchange rate (MYR per 1 {currency})</span>
                 <input type="number" min={0} step="0.000001" inputMode="decimal"
-                  value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)}
+                  value={exchangeRate} onChange={(e) => { setRateTouched(true); setExchangeRate(e.target.value); }}
                   placeholder="e.g. 0.62"
                   className={styles.fieldInput} style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }} />
                 <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginTop: 2 }}>

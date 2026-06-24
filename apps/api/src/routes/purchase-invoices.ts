@@ -11,6 +11,7 @@ import {
 import { reversePiAccounting, resyncPiAccounting } from './accounting';
 import { recostForPi, recostFromGrn } from '../lib/recost';
 import { nextMonthlyDocNo } from '../lib/doc-no';
+import { normalizeCurrency, masterRateForCurrency } from '../lib/fx';
 
 export const purchaseInvoices = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseInvoices.use('*', supabaseAuth);
@@ -398,11 +399,18 @@ purchaseInvoices.post('/', async (c) => {
   /* PR-DRAFT-removal — PIs are now created as POSTED directly. PI is
      AP-only (no inventory impact — that landed at GRN time), so there's
      no side-effect helper to call after insert. */
-  const currency = ((body.currency as string) ?? 'MYR').toUpperCase();
+  const currency = normalizeCurrency(body.currency);
   // Multi-currency AP (migration 0188) — accept exchangeRate on create. MYR is
   // forced to 1; a foreign rate must be finite > 0 (else 1). subtotal/total stay
   // in the PI's currency; the rate only converts the AP posting to MYR later.
-  const exchangeRate = normalizeExchangeRate(body.exchangeRate, currency);
+  // Migration 0193 — AUTO-FILL: for a foreign currency with NO explicit rate on
+  // the request, default the rate from the currencies MASTER (rate_to_myr). An
+  // explicit rate still wins (normalizeExchangeRate uses body.exchangeRate when
+  // present). MYR always resolves to 1.
+  const piRateRaw = (body.exchangeRate === undefined || body.exchangeRate === null)
+    ? await masterRateForCurrency(sb, currency)
+    : body.exchangeRate;
+  const exchangeRate = normalizeExchangeRate(piRateRaw, currency);
   const { data: header, error: hErr } = await sb.from('purchase_invoices').insert({
     invoice_number: invoiceNumber,
     supplier_invoice_ref: (body.supplierInvoiceRef as string) ?? null,

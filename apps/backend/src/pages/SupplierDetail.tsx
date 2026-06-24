@@ -68,6 +68,7 @@ import { maintValues } from '@2990s/shared/maintenance-pools';
 import { PhoneInput } from '../components/PhoneInput';
 import { MoneyInput } from '../components/MoneyInput';
 import { sortByText } from '../lib/sort-options';
+import { useActiveCurrencies, currencyCodesWith } from '../lib/currencies-queries';
 import styles from './SupplierDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -2490,22 +2491,8 @@ const SkuFormDialog = ({
               </span>
             </label>
 
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Currency</span>
-              <span className={styles.selectWrap}>
-                <select
-                  className={styles.fieldSelect}
-                  value={draft.currency}
-                  onChange={(e) => set('currency', e.target.value as Currency)}
-                >
-                  <option>MYR</option>
-                  <option>RMB</option>
-                  <option>USD</option>
-                  <option>SGD</option>
-                </select>
-                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
-              </span>
-            </label>
+            {/* Currency dropdown reads the ACTIVE master currencies (0193). */}
+            <CurrencyEditSelect value={draft.currency} onChange={(v) => set('currency', v)} />
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Our Internal Code *</span>
@@ -3951,23 +3938,26 @@ const PaymentTermsSelect = ({ value, onChange }: { value: string; onChange: (v: 
   );
 };
 
-/* Supplier currency picker (edit mode). Fixed MYR/RMB/USD/SGD enum — order is
-   canonical, NOT alphabetically sorted. Once saved, supplier.currency flows to
-   PurchaseOrderNew + the PI pages. */
-const CURRENCY_OPTIONS: readonly Currency[] = ['MYR', 'RMB', 'USD', 'SGD'];
-
-const CurrencyEditSelect = ({ value, onChange }: { value: Currency; onChange: (v: Currency) => void }) => (
-  <label className={styles.field}>
-    <span className={styles.fieldLabel}>Currency</span>
-    <span className={styles.selectWrap}>
-      <select
-        className={styles.fieldSelect}
-        value={value}
-        onChange={(e) => onChange(e.target.value as Currency)}
-      >
-        {CURRENCY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
-      </select>
-      <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
-    </span>
-  </label>
-);
+/* Supplier currency picker (edit mode). Reads the ACTIVE currencies from the
+   master (migration 0193) — adding a currency is fully UI. The saved value is
+   always kept in the list even if deactivated. Once saved, supplier.currency
+   flows to PurchaseOrderNew + the PI pages. */
+const CurrencyEditSelect = ({ value, onChange }: { value: Currency; onChange: (v: Currency) => void }) => {
+  const { data: rows } = useActiveCurrencies();
+  const codes = currencyCodesWith(rows, value);
+  return (
+    <label className={styles.field}>
+      <span className={styles.fieldLabel}>Currency</span>
+      <span className={styles.selectWrap}>
+        <select
+          className={styles.fieldSelect}
+          value={value}
+          onChange={(e) => onChange(e.target.value as Currency)}
+        >
+          {codes.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+      </span>
+    </label>
+  );
+};

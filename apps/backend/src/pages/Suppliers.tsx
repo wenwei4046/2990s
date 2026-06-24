@@ -33,6 +33,7 @@ import {
 } from '../components/SupplyCategoryPicker';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useNotify } from '../components/NotifyDialog';
+import { useActiveCurrencies, currencyCodesWith } from '../lib/currencies-queries';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -668,29 +669,31 @@ const Field = ({
   </label>
 );
 
-/* Supplier currency picker. Fixed MYR/RMB/USD/SGD enum (NOT sorted — the
-   order is canonical). The backend defaults to MYR if unset, but we send an
-   explicit default so the create payload always carries a currency. */
-const CURRENCY_OPTIONS = ['MYR', 'RMB', 'USD', 'SGD'] as const;
-
+/* Supplier currency picker. Reads the ACTIVE currencies from the master
+   (migration 0193), so adding a currency is fully UI. The currently-saved value
+   is always included even if it's since been deactivated (so it still shows). */
 const CurrencySelect = ({
   value, onChange,
 }: {
   value: string; onChange: (v: string) => void;
-}) => (
-  <label className={styles.field}>
-    <span className={styles.fieldLabel}>Currency</span>
-    <select
-      className={styles.fieldSelect}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      {CURRENCY_OPTIONS.map((c) => (
-        <option key={c} value={c}>{c}</option>
-      ))}
-    </select>
-  </label>
-);
+}) => {
+  const { data: rows } = useActiveCurrencies();
+  const codes = currencyCodesWith(rows, value);
+  return (
+    <label className={styles.field}>
+      <span className={styles.fieldLabel}>Currency</span>
+      <select
+        className={styles.fieldSelect}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {codes.map((c) => (
+          <option key={c} value={c}>{c}</option>
+        ))}
+      </select>
+    </label>
+  );
+};
 
 /* Task #91 — Phone variant of Field. Same label/layout, but the input runs
    through PhoneInput so its value is normalized to E.164 on blur. */

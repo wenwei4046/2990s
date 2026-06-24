@@ -896,7 +896,25 @@ export const pendingSlipUploads = pgTable('pending_slip_uploads', {
 
 export const supplierStatus = pgEnum('supplier_status', ['ACTIVE', 'INACTIVE', 'BLOCKED']);
 
+/* Migration 0193 — the `currency_code` enum is SUPERSEDED by the `currencies`
+   master table (below). It is kept here ONLY because the type still exists in
+   the DB (not dropped) and other migration-only modules may still reference it;
+   the document currency columns are now plain text + FK → currencies(code), so
+   ANY active master currency is valid with no code change. */
 export const currencyCode = pgEnum('currency_code', ['MYR', 'RMB', 'USD', 'SGD']);
+
+/* Currencies MASTER (migration 0193) — owner-maintained source of truth for the
+   currency list + each currency's current rate to MYR. The currency dropdowns
+   read the ACTIVE rows; GRN/PI/PV auto-fill exchange_rate from rate_to_myr. */
+export const currencies = pgTable('currencies', {
+  code:       text('code').primaryKey(),               // 'MYR' / 'RMB' / 'USD' / 'SGD' / …
+  name:       text('name').notNull(),                  // 'Malaysian Ringgit'
+  symbol:     text('symbol'),                           // 'RM' / '¥' / '$' / 'S$'
+  rateToMyr:  numeric('rate_to_myr', { precision: 14, scale: 6 }).notNull().default('1'),  // MYR per 1 unit (1 for MYR)
+  isActive:   boolean('is_active').notNull().default(true),
+  sortOrder:  integer('sort_order').notNull().default(0),
+  updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const poStatus = pgEnum('po_status', [
   'SUBMITTED',            // sent to supplier, awaiting acknowledgement (default on create)
@@ -971,7 +989,8 @@ export const supplierMaterialBindings = pgTable('supplier_material_bindings', {
   materialName:      text('material_name').notNull(),    // snapshot for the binding row
   supplierSku:       text('supplier_sku').notNull(),     // SUPPLIER's own SKU
   unitPriceCenti:    integer('unit_price_centi').notNull().default(0),  // × 100; works for both MYR + RMB
-  currency:          currencyCode('currency').notNull().default('MYR'),
+  /* Migration 0193 — text + FK → currencies(code) (was the currency_code enum). */
+  currency:          text('currency').notNull().default('MYR'),
   leadTimeDays:      integer('lead_time_days').notNull().default(0),
   paymentTermsOverride: text('payment_terms_override'),  // overrides supplier.payment_terms if set
   moq:               integer('moq').notNull().default(0),                // min order quantity
@@ -1017,7 +1036,8 @@ export const purchaseOrders = pgTable('purchase_orders', {
   // AutoCount's header "Purchase Location"). Per-line warehouse_id on the
   // items table overrides when commander wants split delivery.
   purchaseLocationId: uuid('purchase_location_id').references(() => warehouses.id, { onDelete: 'set null' }),
-  currency:    currencyCode('currency').notNull().default('MYR'),
+  /* Migration 0193 — text + FK → currencies(code) (was the currency_code enum). */
+  currency:    text('currency').notNull().default('MYR'),
   subtotalCenti: integer('subtotal_centi').notNull().default(0),
   taxCenti:    integer('tax_centi').notNull().default(0),
   totalCenti:  integer('total_centi').notNull().default(0),
@@ -1134,8 +1154,9 @@ export const grns = pgTable('grns', {
   notes:             text('notes'),
   /* Migration 0101 — GRN ↔ PO money parity. currency reuses the same
      currency_code enum as purchase_orders. subtotal/total are recomputed
-     server-side as Σ grn_items.line_total_centi (no tax for GRN). */
-  currency:          currencyCode('currency').notNull().default('MYR'),
+     server-side as Σ grn_items.line_total_centi (no tax for GRN).
+     Migration 0193 — text + FK → currencies(code) (was the currency_code enum). */
+  currency:          text('currency').notNull().default('MYR'),
   /* Landed-cost core (migration 0190): MYR per 1 unit of `currency` (1 for MYR).
      Used to convert the inventory IN unit cost (FIFO lot) to MYR at receive
      time — subtotal/total stay in the GRN's own currency. Mirrors
@@ -1217,7 +1238,8 @@ export const purchaseInvoices = pgTable('purchase_invoices', {
   grnId:             uuid('grn_id').references(() => grns.id, { onDelete: 'set null' }),
   invoiceDate:       date('invoice_date').notNull().defaultNow(),
   dueDate:           date('due_date'),
-  currency:          currencyCode('currency').notNull().default('MYR'),
+  /* Migration 0193 — text + FK → currencies(code) (was the currency_code enum). */
+  currency:          text('currency').notNull().default('MYR'),
   /* Multi-currency AP (migration 0188): MYR per 1 unit of `currency` (1 for
      MYR). Used ONLY to convert the AP journal entry to MYR at GL-post time —
      subtotal/total stay in the PI's own currency. */
@@ -1296,7 +1318,8 @@ export const paymentVouchers = pgTable('payment_vouchers', {
   supplierId:        uuid('supplier_id').references(() => suppliers.id, { onDelete: 'set null' }),  // optional link
   // The bank/cash/AP account the money is paid FROM (GL credit leg).
   creditAccountCode: text('credit_account_code').notNull(),
-  currency:          currencyCode('currency').notNull().default('MYR'),
+  /* Migration 0193 — text + FK → currencies(code) (was the currency_code enum). */
+  currency:          text('currency').notNull().default('MYR'),
   /* Multi-currency (mirror PI 0188): MYR per 1 unit of `currency` (1 for MYR).
      Converts the GL post to MYR at post time — total stays in the PV's own
      currency. */
@@ -1416,7 +1439,8 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   // non-null values (one follow-up per source SO).
   crossCategorySourceDocNo: text('cross_category_source_doc_no'),
 
-  currency:          currencyCode('currency').notNull().default('MYR'),
+  /* Migration 0193 — text + FK → currencies(code) (was the currency_code enum). */
+  currency:          text('currency').notNull().default('MYR'),
   status:            mfgSoStatus('status').notNull().default('CONFIRMED'),
   remark2:           text('remark2'),
   remark3:           text('remark3'),
@@ -1796,7 +1820,8 @@ export const salesInvoices = pgTable('sales_invoices', {
   debtorName:        text('debtor_name').notNull(),
   invoiceDate:       date('invoice_date').notNull().defaultNow(),
   dueDate:           date('due_date'),
-  currency:          currencyCode('currency').notNull().default('MYR'),
+  /* Migration 0193 — text + FK → currencies(code) (was the currency_code enum). */
+  currency:          text('currency').notNull().default('MYR'),
   subtotalCenti:     integer('subtotal_centi').notNull().default(0),
   discountCenti:     integer('discount_centi').notNull().default(0),
   taxCenti:          integer('tax_centi').notNull().default(0),

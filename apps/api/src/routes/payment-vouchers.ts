@@ -20,6 +20,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { nextMonthlyDocNo } from '../lib/doc-no';
+import { normalizeCurrency, masterRateForCurrency } from '../lib/fx';
 
 export const paymentVouchers = new Hono<{ Bindings: Env; Variables: Variables }>();
 paymentVouchers.use('*', supabaseAuth);
@@ -141,8 +142,14 @@ paymentVouchers.post('/', async (c) => {
   if ('error' in built) return c.json({ error: built.error }, 400);
 
   const sb = c.get('supabase'); const user = c.get('user');
-  const currency = ((body.currency as string) ?? 'MYR').toUpperCase();
-  const exchangeRate = normalizeExchangeRate(body.exchangeRate, currency);
+  const currency = normalizeCurrency(body.currency);
+  // Migration 0193 — AUTO-FILL: a foreign PV with NO explicit rate defaults its
+  // rate from the currencies MASTER (rate_to_myr); an explicit rate still wins.
+  // MYR always resolves to 1.
+  const pvRateRaw = (body.exchangeRate === undefined || body.exchangeRate === null)
+    ? await masterRateForCurrency(sb, currency)
+    : body.exchangeRate;
+  const exchangeRate = normalizeExchangeRate(pvRateRaw, currency);
   const pvNumber = await nextPvNo(sb);
 
   const { data: header, error: hErr } = await sb.from('payment_vouchers').insert({

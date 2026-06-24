@@ -28,6 +28,7 @@ import { Button } from '@2990s/design-system';
 import { activeOptions, buildVariantSummary, fmtDateOrDash, isServiceLine, maintPickerValues } from '@2990s/shared';
 import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
 import { usePurchaseOrderDetail, usePurchaseOrders, useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
+import { useActiveCurrencies, rateFor } from '../lib/currencies-queries';
 import { useMfgProducts, useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
 import { useWarehouses } from '../lib/inventory-queries';
 import { useRacks } from '../lib/warehouse-queries';
@@ -180,6 +181,9 @@ export const GrnNew = () => {
      inherited from the source PO server-side; the rate converts the FIFO lot
      cost to MYR. */
   const [exchangeRate, setExchangeRate]       = useState<string>('1');
+  /* Migration 0193 — track a manual rate edit so the master-rate auto-fill
+     stops overwriting it. */
+  const [rateTouched, setRateTouched]         = useState<boolean>(false);
   /* Landed-cost allocation (migration 0191) — how a SERVICE-line freight charge
      ("平摊" / transportation) is split across the goods lines into the FIFO lot
      cost: QTY (default) | VALUE | CBM. Sent on create; the server allocates. */
@@ -413,7 +417,15 @@ export const GrnNew = () => {
      resolved currency is (or becomes) MYR so a stale foreign rate can't ride in. */
   const isForeign  = String(currency).toUpperCase() !== 'MYR';
   const rateNum    = (Number(exchangeRate) > 0 && Number.isFinite(Number(exchangeRate))) ? Number(exchangeRate) : 0;
-  useEffect(() => { if (!isForeign) setExchangeRate('1'); }, [isForeign]);
+  /* Migration 0193 — auto-fill the rate from the currencies MASTER when the GRN
+     settles on a foreign currency (still editable). MYR resets to 1; a manual
+     edit wins. */
+  const currenciesQ = useActiveCurrencies();
+  useEffect(() => {
+    if (!isForeign) { setExchangeRate('1'); setRateTouched(false); return; }
+    if (rateTouched) return;
+    setExchangeRate(String(rateFor(currenciesQ.data, String(currency).toUpperCase())));
+  }, [isForeign, currency, currenciesQ.data, rateTouched]);
 
   // Commander 2026-05-29 — make the MANUAL item picker supplier-binding-aware,
   // exactly like New PO. Once a supplier is chosen the per-line Item Code
@@ -747,7 +759,7 @@ export const GrnNew = () => {
                 <span className={styles.fieldLabel}>Exchange rate (MYR per 1 {currency})</span>
                 <input
                   type="number" min={0} step="0.000001" inputMode="decimal"
-                  value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)}
+                  value={exchangeRate} onChange={(e) => { setRateTouched(true); setExchangeRate(e.target.value); }}
                   placeholder="e.g. 0.62"
                   className={styles.fieldInput} style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}
                 />

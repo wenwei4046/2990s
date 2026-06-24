@@ -12,7 +12,7 @@ import {
 } from '@2990s/shared/so-line-display';
 import { recostFromGrn } from '../lib/recost';
 import { nextMonthlyDocNo } from '../lib/doc-no';
-import { normalizeExchangeRate, toMyrSen } from '../lib/fx';
+import { normalizeExchangeRate, toMyrSen, normalizeCurrency, masterRateForCurrency } from '../lib/fx';
 import { allocateLandedCharges, normalizeAllocationMethod } from '../lib/landed-allocation';
 
 export const grns = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -888,15 +888,21 @@ grns.post('/', async (c) => {
      the effective currency so MYR is always 1 and a foreign rate is finite > 0
      (else 1). subtotal/total stay in the GRN currency; the rate only converts
      the inventory IN cost (FIFO lot) to MYR. Mirrors PI create (0188). */
-  let grnCurrency = ((body.currency as string | undefined) ?? 'MYR').toUpperCase();
+  let grnCurrency = normalizeCurrency(body.currency);
   const sourcePoId = (body.purchaseOrderId as string | undefined) ?? null;
   if (sourcePoId) {
     const { data: poRow } = await sb.from('purchase_orders')
       .select('currency').eq('id', sourcePoId).maybeSingle();
     const poCur = (poRow as { currency?: string | null } | null)?.currency;
-    if (poCur) grnCurrency = String(poCur).toUpperCase();
+    if (poCur) grnCurrency = normalizeCurrency(poCur);
   }
-  const grnExchangeRate = normalizeExchangeRate(body.exchangeRate, grnCurrency);
+  // Migration 0193 — AUTO-FILL: a foreign GRN with NO explicit rate defaults its
+  // rate from the currencies MASTER (rate_to_myr); an explicit rate still wins.
+  // MYR always resolves to 1. The rate converts the FIFO lot cost to MYR.
+  const grnRateRaw = (body.exchangeRate === undefined || body.exchangeRate === null)
+    ? await masterRateForCurrency(sb, grnCurrency)
+    : body.exchangeRate;
+  const grnExchangeRate = normalizeExchangeRate(grnRateRaw, grnCurrency);
   // Landed-cost allocation (migration 0191) — basis for splitting SERVICE-line
   // freight across the goods lines. Default QTY when omitted.
   const grnAllocationMethod = normalizeAllocationMethod(body.allocationMethod);

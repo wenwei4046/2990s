@@ -52,6 +52,7 @@ const Products = lazyRetry(() => import('./pages/Products').then(m => ({ default
 const ProductModels = lazyRetry(() => import('./pages/ProductModels').then(m => ({ default: m.ProductModels })));
 const ProductModelDetail = lazyRetry(() => import('./pages/ProductModelDetail').then(m => ({ default: m.ProductModelDetail })));
 const FabricTracking = lazyRetry(() => import('./pages/FabricTracking').then(m => ({ default: m.FabricTracking })));
+const Currencies = lazyRetry(() => import('./pages/Currencies').then(m => ({ default: m.Currencies })));
 const Suppliers = lazyRetry(() => import('./pages/Suppliers').then(m => ({ default: m.Suppliers })));
 const SupplierDetail = lazyRetry(() => import('./pages/SupplierDetail').then(m => ({ default: m.SupplierDetail })));
 const PurchaseOrders = lazyRetry(() => import('./pages/PurchaseOrders').then(m => ({ default: m.PurchaseOrders })));
@@ -202,6 +203,9 @@ export const router = createBrowserRouter([
       { path: 'drivers', element: <Drivers /> },
       { path: 'suppliers', element: <Suppliers /> },
       { path: 'suppliers/:id', element: <SupplierDetail /> },
+      // Currencies MASTER (migration 0193) — owner-maintained currency list +
+      // rates. Lives in the Procurement group next to Suppliers.
+      { path: 'currencies', element: <Currencies /> },
       { path: 'mrp', element: <Mrp /> },
       { path: 'purchase-orders',      element: <PurchaseOrders /> },
       { path: 'purchase-orders/new',     element: <PurchaseOrderNew /> },
