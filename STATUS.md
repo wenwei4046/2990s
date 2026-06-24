@@ -44,10 +44,17 @@ Last updated: 2026-06-24
 
 > ⚠️ **Migrate-before-deploy gate:** 0185/0186/0187 must be applied to prod via Chrome BEFORE this branch merges to main, or the Specials Save 500s and the supplier list 500s. Apply at merge-time.
 
-### Batch 3 — broad, no migration, lower priority
+### Batch 3 — ✅ DONE (committed on branch, typecheck green) — no migration
 | item | value | note | status |
 |---|---|---|---|
-| **sort-options.ts system-wide dropdown auto-sort** (text-alpha + numeric-natural) | MED | ONE helper + wrap option `.map()` sites across ~43 pages; LEAVE status enums / `sort_order` lists alone | ⏳ |
+| **sort-options.ts system-wide dropdown auto-sort** (text-alpha + numeric-natural) | MED | helper + wrapped ~35 pages + PoLineCard, each mirroring its Houzs twin; status enums / `sort_order` / owner option lists left alone | ✅ |
+
+---
+
+## 🚦 MERGE GATE — all 3 batches done in worktree; remaining before main:
+1. ❓ **SP label** `220X220CM → CUSTOM` (owner decision — 1-line, do with the merge if yes).
+2. **Apply migrations `0185`/`0186`/`0187` to prod** via Chrome (migrate-before-deploy) + verify.
+3. **Merge `sync/houzs-to-2990` → main** (rebase on latest main first; Loo's tree is live).
 
 ### Decisions needed (owner)
 - **SP custom-size label** — 2990 `product-models.ts` still has `SP: 220X220CM` (fake fixed size on generated SP SKU names); Houzs = `CUSTOM`. One-line. Owner confirm it's wanted (memory doesn't say the old value is deliberate). ⏳
