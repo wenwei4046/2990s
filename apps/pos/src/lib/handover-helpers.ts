@@ -81,6 +81,11 @@ export interface HandoverForm {
 
   emergencyName: string; emergencyRelation: string; emergencyPhone: string;
 
+  /** Marketing demographics (2026-06-25). Captured at handover, stored on the
+   *  SO snapshot, never shown on the SO/PDF. REQUIRED when customerType==='NEW'
+   *  (a brand-new customer); optional + prefilled for an existing pick. */
+  race: string; ageFrame: string;
+
   deliveryDate: string; deliveryDateLater: boolean;
   /** Factory start date ("Process Date") — when production should begin so we
    *  don't pull stock too early for a far-out delivery. Must be today-or-future
@@ -141,7 +146,10 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const validateCustomer = (f: HandoverForm): boolean =>
   f.name.trim().length > 0
   && f.phone.trim().length > 0
-  && EMAIL_RE.test(f.email.trim());
+  && EMAIL_RE.test(f.email.trim())
+  // Race + age band are compulsory for a NEW customer (the first time we record
+  // them); an existing pick already carries them / can be left as prefilled.
+  && (f.customerType !== 'NEW' || (f.race.trim().length > 0 && f.ageFrame.trim().length > 0));
 
 export const validateAddress = (f: HandoverForm): boolean => {
   if (f.addressLater) return true;
@@ -245,6 +253,8 @@ const customerBlockers = (f: HandoverForm): string[] => {
   if (!f.phone.trim()) b.push('Phone required');
   if (!f.email.trim()) b.push('Email required');
   else if (!EMAIL_RE.test(f.email.trim())) b.push('Email format invalid (e.g. name@example.com)');
+  if (f.customerType === 'NEW' && !f.race.trim()) b.push('Race required for a new customer');
+  if (f.customerType === 'NEW' && !f.ageFrame.trim()) b.push('Age group required for a new customer');
   return b;
 };
 

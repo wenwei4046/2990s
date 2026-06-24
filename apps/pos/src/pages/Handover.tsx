@@ -63,6 +63,7 @@ const empty: HandoverForm = {
   billingAddress: '', billingAddressLine2: '',
   billingPostcode: '', billingCity: '', billingState: '',
   emergencyName: '', emergencyRelation: '', emergencyPhone: '',
+  race: '', ageFrame: '',
   deliveryDate: '', deliveryDateLater: false,
   processDate: '',
   addons: {}, paymentMethod: '',

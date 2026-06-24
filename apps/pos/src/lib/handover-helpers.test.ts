@@ -24,6 +24,7 @@ const baseForm: HandoverForm = {
   billingAddress: '', billingAddressLine2: '',
   billingPostcode: '', billingCity: '', billingState: '',
   emergencyName: '', emergencyRelation: '', emergencyPhone: '',
+  race: '', ageFrame: '',
   deliveryDate: '', deliveryDateLater: false,
   processDate: '',
   addons: {}, paymentMethod: '',
@@ -44,6 +45,23 @@ describe('validateCustomer', () => {
     expect(validateCustomer({ ...baseForm, name: 'Loo', email: 'a@b.com' })).toBe(false);
     expect(validateCustomer({ ...baseForm, name: 'Loo', phone: '0123456789', email: 'invalid' })).toBe(false);
     expect(validateCustomer({ ...baseForm, name: 'Loo', phone: '0123456789', email: 'a@b.com' })).toBe(true);
+  });
+});
+
+describe('validateCustomer — race/age required for NEW customers', () => {
+  // A complete, valid contact; only customerType/race/ageFrame vary per case.
+  const okContact = { ...baseForm, name: 'Loo', phone: '0123456789', email: 'a@b.com' };
+  it('NEW customer missing both race and age is invalid', () => {
+    expect(validateCustomer({ ...okContact, customerType: 'NEW', race: '', ageFrame: '' })).toBe(false);
+  });
+  it('NEW customer with race + age is valid', () => {
+    expect(validateCustomer({ ...okContact, customerType: 'NEW', race: 'Malay', ageFrame: '18_25' })).toBe(true);
+  });
+  it('NEW customer missing only age is invalid', () => {
+    expect(validateCustomer({ ...okContact, customerType: 'NEW', race: 'Indian', ageFrame: '' })).toBe(false);
+  });
+  it('EXISTING customer missing race/age is still valid (not blocked)', () => {
+    expect(validateCustomer({ ...okContact, customerType: 'EXISTING', race: '', ageFrame: '' })).toBe(true);
   });
 });
 
