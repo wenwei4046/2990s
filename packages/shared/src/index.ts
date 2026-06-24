@@ -27,3 +27,4 @@ export * from './effective-delivery'; // 2026-06-19 — PO effective (latest rev
 export * from './rule-target'; // 2026-06-20 — unified rule targeting (variant/compartment matcher)
 export * from './special-delivery-match'; // 2026-06-20 — model-agnostic delivery trigger matcher (reuses rule-target)
 export * from './customer-demographics'; // 2026-06-25 — race/age-frame constants + validators (marketing capture)
+export * from './sales-analysis'; // 2026-06-25 — Sales Analysis pure aggregation core (Part B)
