@@ -41,7 +41,7 @@ import {
   orderSofaModuleRowsWithinBuilds,
   sortSoLinesByGroupRank,
 } from '@2990s/shared/so-line-display';
-import { findModule, type Cell, type Depth } from '@2990s/shared';
+import { findModule, SOFA_MODULES, type Cell, type Depth } from '@2990s/shared';
 import { COMPANY, amountInWordsMyr, drawInfoColumns, fmtDocDate, fmtDocStamp } from './pdf-common';
 import { drawSofaLayout } from './sofa-layout-pdf';
 import {
@@ -131,33 +131,35 @@ const fmtMoney = (centi: number, currency: string): string =>
 const fmtAmount = (centi: number): string =>
   (centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-/* Safely pull a sofa's spatial layout (cells + depth) off a PO line's
-   `variants`. Returns null for non-sofa lines, Quick-Pick bundles (which carry
-   `variants.bundleId` but NO `cells`), or any malformed / absent shape — the
-   caller skips those. Only a non-empty array of cells with finite x/y and a
-   known module counts; the depth defaults to '24' (the configurator baseline)
-   when missing. Never throws. */
-function sofaCellsFromVariants(
+/* A sofa is split into per-MODULE PO lines. Each line's `variants` carries that
+   ONE module's spatial slot at the TOP LEVEL (x / y / rot + cellIndex), its module
+   code lives in `material_code` ("{MODEL}-2A(RHF)"), and a shared `summary` string
+   describes the whole sofa. So we build ONE cell per line and the caller groups
+   lines by `summary` into the full layout. (The earlier `variants.cells`-array
+   assumption was wrong — real lines store the slot flat, so nothing ever drew.)
+   Returns null for non-sofa / malformed / unknown-module lines. Never throws. */
+const SOFA_MODULE_IDS_BY_LEN = SOFA_MODULES.map((m) => m.id).sort((a, b) => b.length - a.length);
+function sofaCellFromLine(
   variants: Record<string, unknown> | null | undefined,
-): { cells: Cell[]; depth: Depth } | null {
+  materialCode: string | null | undefined,
+): { cell: Cell; depth: Depth; groupKey: string; idx: number } | null {
   if (!variants || typeof variants !== 'object') return null;
-  const raw = (variants as { cells?: unknown }).cells;
-  if (!Array.isArray(raw) || raw.length === 0) return null;
-  const cells: Cell[] = [];
-  for (const c of raw) {
-    if (!c || typeof c !== 'object') continue;
-    const cell = c as { moduleId?: unknown; x?: unknown; y?: unknown; rot?: unknown };
-    if (typeof cell.moduleId !== 'string') continue;
-    if (typeof cell.x !== 'number' || !Number.isFinite(cell.x)) continue;
-    if (typeof cell.y !== 'number' || !Number.isFinite(cell.y)) continue;
-    if (!findModule(cell.moduleId)) continue; // unknown module → can't draw faithfully
-    const rot = cell.rot === 90 || cell.rot === 180 || cell.rot === 270 ? cell.rot : 0;
-    cells.push({ moduleId: cell.moduleId, x: cell.x, y: cell.y, rot });
-  }
-  if (cells.length === 0) return null;
-  const depthRaw = (variants as { depth?: unknown }).depth;
+  const v = variants as Record<string, unknown>;
+  const x = v.x;
+  const y = v.y;
+  if (typeof x !== 'number' || !Number.isFinite(x)) return null;
+  if (typeof y !== 'number' || !Number.isFinite(y)) return null;
+  // Module id = the SOFA_MODULES id the material_code ENDS with (longest match):
+  // "XAMMAR-2A(RHF)" → "2A(RHF)".
+  const code = (materialCode ?? '').trim();
+  const moduleId = SOFA_MODULE_IDS_BY_LEN.find((id) => code.endsWith(id)) ?? null;
+  if (!moduleId || !findModule(moduleId)) return null;
+  const rot: 0 | 90 | 180 | 270 = v.rot === 90 || v.rot === 180 || v.rot === 270 ? v.rot : 0;
+  const depthRaw = v.depth;
   const depth: Depth = typeof depthRaw === 'string' && depthRaw.trim() ? depthRaw : '24';
-  return { cells, depth };
+  const groupKey = typeof v.summary === 'string' && v.summary.trim() ? v.summary.trim() : '';
+  const idx = typeof v.cellIndex === 'number' && Number.isFinite(v.cellIndex) ? v.cellIndex : 0;
+  return { cell: { moduleId, x, y, rot }, depth, groupKey, idx };
 }
 
 type JsPdf = import('jspdf').jsPDF;
@@ -426,27 +428,37 @@ async function renderPurchaseOrderInto(
   }
 
   // ── Sofa layout schematics (orientation aid for the supplier) ─────
-  // Collect DISTINCT sofas: lines whose `variants.cells` is a non-empty array.
-  // A sofa split into several module-lines shares the SAME cells — dedupe by a
-  // signature (SO no + the cells JSON) so it draws ONCE. Quick-Pick bundles
-  // (variants.bundleId, no cells) and all non-sofa lines fall through to null
-  // and are skipped. Purely additive; most POs draw nothing here.
+  // A sofa is split across per-module lines that share a `variants.summary`;
+  // group those lines (by SO no + summary) and build the full cells array,
+  // ordered by cellIndex. Non-sofa / malformed lines fall through and are
+  // skipped. Purely additive; most POs draw nothing here.
   type DistinctSofa = { cells: Cell[]; depth: Depth; model: string; soNo: string };
-  const distinctSofas: DistinctSofa[] = [];
-  const seenSofaSigs = new Set<string>();
+  const sofaGroups = new Map<
+    string,
+    { parts: Array<{ cell: Cell; idx: number }>; depth: Depth; model: string; soNo: string }
+  >();
   for (const it of items) {
-    const layout = sofaCellsFromVariants(it.variants);
-    if (!layout) continue;
+    const part = sofaCellFromLine(it.variants, it.material_code);
+    if (!part) continue;
     const soNo = (it.so_doc_no ?? '').trim();
-    const sig = `${soNo}|${JSON.stringify(layout.cells)}`;
-    if (seenSofaSigs.has(sig)) continue;
-    seenSofaSigs.add(sig);
-    distinctSofas.push({
-      cells: layout.cells,
-      depth: layout.depth,
-      model: (it.material_name ?? '').trim() || (it.material_code ?? '').trim(),
-      soNo,
-    });
+    const gk = `${soNo}|${part.groupKey}`;
+    let g = sofaGroups.get(gk);
+    if (!g) {
+      // Caption = the whole-sofa modules ("L(LHF) + 2A(RHF)", the summary up to
+      // the first '·'), else the per-line model name.
+      const model = (part.groupKey ? (part.groupKey.split('·')[0] ?? '').trim() : '')
+        || (it.material_name ?? '').trim()
+        || (it.material_code ?? '').trim();
+      g = { parts: [], depth: part.depth, model, soNo };
+      sofaGroups.set(gk, g);
+    }
+    g.parts.push({ cell: part.cell, idx: part.idx });
+  }
+  const distinctSofas: DistinctSofa[] = [];
+  for (const g of sofaGroups.values()) {
+    const cells = g.parts.sort((a, b) => a.idx - b.idx).map((p) => p.cell);
+    if (cells.length === 0) continue;
+    distinctSofas.push({ cells, depth: g.depth, model: g.model, soNo: g.soNo });
   }
 
   if (distinctSofas.length > 0) {
