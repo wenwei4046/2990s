@@ -41,7 +41,9 @@ import {
   orderSofaModuleRowsWithinBuilds,
   sortSoLinesByGroupRank,
 } from '@2990s/shared/so-line-display';
+import { findModule, type Cell, type Depth } from '@2990s/shared';
 import { COMPANY, amountInWordsMyr, drawInfoColumns, fmtDocDate, fmtDocStamp } from './pdf-common';
+import { drawSofaLayout } from './sofa-layout-pdf';
 import {
   loadSupplierDocData,
   supplierCodeFor,
@@ -128,6 +130,35 @@ const fmtMoney = (centi: number, currency: string): string =>
 
 const fmtAmount = (centi: number): string =>
   (centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/* Safely pull a sofa's spatial layout (cells + depth) off a PO line's
+   `variants`. Returns null for non-sofa lines, Quick-Pick bundles (which carry
+   `variants.bundleId` but NO `cells`), or any malformed / absent shape — the
+   caller skips those. Only a non-empty array of cells with finite x/y and a
+   known module counts; the depth defaults to '24' (the configurator baseline)
+   when missing. Never throws. */
+function sofaCellsFromVariants(
+  variants: Record<string, unknown> | null | undefined,
+): { cells: Cell[]; depth: Depth } | null {
+  if (!variants || typeof variants !== 'object') return null;
+  const raw = (variants as { cells?: unknown }).cells;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const cells: Cell[] = [];
+  for (const c of raw) {
+    if (!c || typeof c !== 'object') continue;
+    const cell = c as { moduleId?: unknown; x?: unknown; y?: unknown; rot?: unknown };
+    if (typeof cell.moduleId !== 'string') continue;
+    if (typeof cell.x !== 'number' || !Number.isFinite(cell.x)) continue;
+    if (typeof cell.y !== 'number' || !Number.isFinite(cell.y)) continue;
+    if (!findModule(cell.moduleId)) continue; // unknown module → can't draw faithfully
+    const rot = cell.rot === 90 || cell.rot === 180 || cell.rot === 270 ? cell.rot : 0;
+    cells.push({ moduleId: cell.moduleId, x: cell.x, y: cell.y, rot });
+  }
+  if (cells.length === 0) return null;
+  const depthRaw = (variants as { depth?: unknown }).depth;
+  const depth: Depth = typeof depthRaw === 'string' && depthRaw.trim() ? depthRaw : '24';
+  return { cells, depth };
+}
 
 type JsPdf = import('jspdf').jsPDF;
 type AutoTableFn = (typeof import('jspdf-autotable'))['default'];
@@ -392,6 +423,81 @@ async function renderPurchaseOrderInto(
       lastY += 4;
     });
     lastY += 4;
+  }
+
+  // ── Sofa layout schematics (orientation aid for the supplier) ─────
+  // Collect DISTINCT sofas: lines whose `variants.cells` is a non-empty array.
+  // A sofa split into several module-lines shares the SAME cells — dedupe by a
+  // signature (SO no + the cells JSON) so it draws ONCE. Quick-Pick bundles
+  // (variants.bundleId, no cells) and all non-sofa lines fall through to null
+  // and are skipped. Purely additive; most POs draw nothing here.
+  type DistinctSofa = { cells: Cell[]; depth: Depth; model: string; soNo: string };
+  const distinctSofas: DistinctSofa[] = [];
+  const seenSofaSigs = new Set<string>();
+  for (const it of items) {
+    const layout = sofaCellsFromVariants(it.variants);
+    if (!layout) continue;
+    const soNo = (it.so_doc_no ?? '').trim();
+    const sig = `${soNo}|${JSON.stringify(layout.cells)}`;
+    if (seenSofaSigs.has(sig)) continue;
+    seenSofaSigs.add(sig);
+    distinctSofas.push({
+      cells: layout.cells,
+      depth: layout.depth,
+      model: (it.material_name ?? '').trim() || (it.material_code ?? '').trim(),
+      soNo,
+    });
+  }
+
+  if (distinctSofas.length > 0) {
+    const contentW = pageW - margin * 2;
+    const DIAGRAM_W = 36;   // mm — ~32–38mm wide per owner
+    const DIAGRAM_H = 34;   // mm — sofa + TV block
+    const CAP_H = 4;        // mm — model + SO caption under each diagram
+    const GAP_X = 6;        // mm — horizontal gap between diagrams
+    const ROW_H = DIAGRAM_H + CAP_H + 6; // mm — one row of diagrams + caption + padding
+    const perRow = Math.max(1, Math.floor((contentW + GAP_X) / (DIAGRAM_W + GAP_X)));
+
+    // Section needs room for the title + at least one row; else new page.
+    const TITLE_H = 8;
+    if (lastY + TITLE_H + ROW_H > 285) {
+      doc.addPage(); drawPageHeader(doc.getNumberOfPages()); lastY = 20;
+    }
+
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(0);
+    doc.text('Sofa layout — front faces TV (orientation / LHF·RHF)', margin, lastY);
+    lastY += 6;
+
+    let col = 0;
+    let rowTop = lastY;
+    for (const sofa of distinctSofas) {
+      // New row when the current row is full.
+      if (col >= perRow) {
+        col = 0;
+        rowTop += ROW_H;
+      }
+      // New page when this row would overflow.
+      if (rowTop + ROW_H > 290) {
+        doc.addPage(); drawPageHeader(doc.getNumberOfPages());
+        rowTop = 20;
+        col = 0;
+        // Repeat the section title at the top of the continued page.
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(0);
+        doc.text('Sofa layout — front faces TV (orientation / LHF·RHF) (cont.)', margin, rowTop);
+        rowTop += 6;
+      }
+      const dx = margin + col * (DIAGRAM_W + GAP_X);
+      const drawn = drawSofaLayout(doc, sofa.cells, sofa.depth, dx, rowTop, DIAGRAM_W, DIAGRAM_H);
+      // Caption: model + SO no, wrapped to the diagram width.
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(80);
+      const capParts = [sofa.model, sofa.soNo].filter(Boolean);
+      const capLines = doc.splitTextToSize(capParts.join(' · ') || 'Sofa', DIAGRAM_W) as string[];
+      const capY = rowTop + Math.max(drawn, DIAGRAM_H) + 2.5;
+      doc.text(capLines, dx + DIAGRAM_W / 2, capY, { align: 'center' });
+      doc.setTextColor(0);
+      col += 1;
+    }
+    lastY = rowTop + ROW_H;
   }
 
   // ── Signature block ──────────────────────────────────────────────
