@@ -1253,6 +1253,63 @@ export const purchaseInvoiceItems = pgTable('purchase_invoice_items', {
 }));
 
 /* ════════════════════════════════════════════════════════════════════════
+   Payment Vouchers (PV) — migration 0189.
+   A standalone "very plain" cash-out voucher to pay a vendor that is NOT a
+   goods invoice (e.g. freight forwarder, one-off service): payee + a credit
+   account (paid FROM) + a few expense lines (description + debit account +
+   amount) + a total that posts to the GL (source_type 'PV').
+     Dr each line.debit_account_code  (the expense/charge)
+     Cr header.credit_account_code    (the bank/cash/AP the money left)
+   currency / exchange_rate mirror purchase_invoices (0188): the voucher stays
+   in its own currency; the rate converts the JE to MYR at GL-post time only.
+   STANDALONE for v1 — the landed-cost LINK (allocating a charge into a PO's
+   goods cost) is a separate later step, NOT modelled here.
+   ════════════════════════════════════════════════════════════════════════ */
+
+export const paymentVoucherStatus = pgEnum('payment_voucher_status', [
+  'DRAFT', 'POSTED', 'CANCELLED',
+]);
+
+export const paymentVouchers = pgTable('payment_vouchers', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  pvNumber:          text('pv_number').notNull().unique(),            // 'PV-2606-001'
+  voucherDate:       date('voucher_date').notNull().defaultNow(),
+  payeeName:         text('payee_name').notNull(),                    // who we're paying (free text)
+  supplierId:        uuid('supplier_id').references(() => suppliers.id, { onDelete: 'set null' }),  // optional link
+  // The bank/cash/AP account the money is paid FROM (GL credit leg).
+  creditAccountCode: text('credit_account_code').notNull(),
+  currency:          currencyCode('currency').notNull().default('MYR'),
+  /* Multi-currency (mirror PI 0188): MYR per 1 unit of `currency` (1 for MYR).
+     Converts the GL post to MYR at post time — total stays in the PV's own
+     currency. */
+  exchangeRate:      numeric('exchange_rate', { precision: 14, scale: 6 }).notNull().default('1'),
+  notes:             text('notes'),
+  totalCenti:        integer('total_centi').notNull().default(0),     // Σ lines.amount_centi (PV currency)
+  status:            paymentVoucherStatus('status').notNull().default('DRAFT'),
+  postedAt:          timestamp('posted_at', { withTimezone: true }),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:         uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+  updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxDate:     index('idx_pv_date').on(t.voucherDate),
+  idxSupplier: index('idx_pv_supplier').on(t.supplierId),
+  idxStatus:   index('idx_pv_status').on(t.status),
+}));
+
+export const paymentVoucherLines = pgTable('payment_voucher_lines', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  pvId:              uuid('pv_id').notNull().references(() => paymentVouchers.id, { onDelete: 'cascade' }),
+  lineNo:            integer('line_no').notNull(),
+  description:       text('description'),
+  // The expense/charge account (GL debit leg).
+  debitAccountCode:  text('debit_account_code').notNull(),
+  amountCenti:       integer('amount_centi').notNull().default(0),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxPv: index('idx_pv_lines_pv').on(t.pvId),
+}));
+
+/* ════════════════════════════════════════════════════════════════════════
    B2B Sales: SO → DO → Sales Invoice
    HOUZS ERP风格 — separate from retail `orders` (which is POS-style).
    `mfg_sales_orders` because we have two coexisting "sales order" concepts:

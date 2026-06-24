@@ -329,6 +329,61 @@ export const useAddPurchaseInvoiceItem = () => {
   });
 };
 
+/* ── Payment Voucher (PV) — standalone cash-out voucher (migration 0189) ────
+   A "very plain" voucher to pay a vendor that is NOT a goods invoice: payee +
+   credit account (paid FROM) + a few expense lines (description + debit account
+   + amount) + a total that posts to the GL (source_type 'PV'). Mirrors the PI
+   hook shape (list / detail / create / update / post / cancel). */
+export const usePaymentVouchers = (status?: string) => baseQuery<{ paymentVouchers: any[] }>(
+  ['payment-vouchers', status ?? 'all'], `/payment-vouchers${status ? `?status=${status}` : ''}`,
+);
+export const usePaymentVoucherDetail = (id: string | null) => useQuery({
+  queryKey: ['payment-voucher-detail', id],
+  queryFn: () => authedFetch<{ paymentVoucher: any; lines: any[] }>(`/payment-vouchers/${id}`),
+  enabled: Boolean(id), staleTime: 30_000, retry: 1, retryDelay: 800,
+});
+export const useCreatePaymentVoucher = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: unknown) => authedFetch<{ id: string; pvNumber: string }>(`/payment-vouchers`, { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['payment-vouchers'] }),
+  });
+};
+export const useUpdatePaymentVoucher = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string } & Record<string, unknown>) =>
+      authedFetch<{ paymentVoucher: any }>(`/payment-vouchers/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['payment-voucher-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['payment-vouchers'] });
+    },
+  });
+};
+export const usePostPaymentVoucher = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => authedFetch<{ ok: true; jeNo?: string }>(`/payment-vouchers/${id}/post`, { method: 'POST' }),
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ['payment-vouchers'] });
+      qc.invalidateQueries({ queryKey: ['payment-voucher-detail', id] });
+    },
+  });
+};
+export const useCancelPaymentVoucher = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => authedFetch(`/payment-vouchers/${id}/cancel`, { method: 'POST' }),
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ['payment-vouchers'] });
+      qc.invalidateQueries({ queryKey: ['payment-voucher-detail', id] });
+    },
+    onError: (err) => {
+      serviceNotify({ title: 'Cancel voucher failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
+    },
+  });
+};
+
 /* ── Mfg Sales Order ─────────────────────────────────────────────────── */
 export const useMfgSalesOrders = (status?: string) => baseQuery<{ salesOrders: any[] }>(['mfg-sales-orders', status ?? 'all'], `/mfg-sales-orders${status ? `?status=${status}` : ''}`);
 /* Dashboard-only lightweight read: 6 columns, no payment-totals view, no

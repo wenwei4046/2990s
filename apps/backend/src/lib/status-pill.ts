@@ -23,7 +23,7 @@ export const STATUS_TONES: Record<StatusTone, { bg: string; fg: string }> = {
 };
 
 export type StatusDocType =
-  | 'po' | 'grn' | 'pi' | 'pr'
+  | 'po' | 'grn' | 'pi' | 'pr' | 'pv'
   | 'so' | 'do' | 'si' | 'dr'
   | 'stockTransfer' | 'stockTake';
 
@@ -49,6 +49,12 @@ const PI: Record<string, Entry> = {
 const PR: Record<string, Entry> = {
   POSTED:    { label: 'Confirmed', tone: 'info' },
   COMPLETED: { label: 'Completed', tone: 'success' },
+  CANCELLED: { label: 'Cancelled', tone: 'danger' },
+};
+// payment_voucher_status enum (migration 0189): DRAFT / POSTED / CANCELLED.
+const PV: Record<string, Entry> = {
+  DRAFT:     { label: 'Draft',    tone: 'pending' },
+  POSTED:    { label: 'Posted',   tone: 'success' },
   CANCELLED: { label: 'Cancelled', tone: 'danger' },
 };
 const SO: Record<string, Entry> = {
@@ -98,7 +104,7 @@ const STOCK_TAKE: Record<string, Entry> = {
 };
 
 const MAPS: Record<StatusDocType, Record<string, Entry>> = {
-  po: PO, grn: GRN, pi: PI, pr: PR,
+  po: PO, grn: GRN, pi: PI, pr: PR, pv: PV,
   so: SO, do: DO, si: SI, dr: DR,
   stockTransfer: STOCK_TRANSFER, stockTake: STOCK_TAKE,
 };

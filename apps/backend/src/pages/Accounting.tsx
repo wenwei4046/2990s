@@ -186,6 +186,7 @@ const JeTab = () => {
             <option value="">All sources</option>
             <option value="SI">SI — Sales Invoice</option>
             <option value="PI">PI — Purchase Invoice</option>
+            <option value="PV">PV — Payment Voucher</option>
             <option value="SI_PAYMENT">SI Payment</option>
             <option value="PI_PAYMENT">PI Payment</option>
             <option value="MANUAL">Manual</option>

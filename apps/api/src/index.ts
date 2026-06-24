@@ -33,6 +33,7 @@ import { suppliers } from './routes/suppliers';
 import { mfgPurchaseOrders } from './routes/mfg-purchase-orders';
 import { grns } from './routes/grns';
 import { purchaseInvoices } from './routes/purchase-invoices';
+import { paymentVouchers } from './routes/payment-vouchers';
 import { mfgSalesOrders } from './routes/mfg-sales-orders';
 import { scanSo, distillAllSalespersonRules } from './routes/scan-so';
 import { stateWarehouseMappings } from './routes/state-warehouse-mappings';
@@ -116,6 +117,7 @@ app.route('/suppliers', suppliers);
 app.route('/mfg-purchase-orders', mfgPurchaseOrders);
 app.route('/grns', grns);
 app.route('/purchase-invoices', purchaseInvoices);
+app.route('/payment-vouchers', paymentVouchers);
 app.route('/mfg-sales-orders', mfgSalesOrders);
 // Scan Order — handwritten showroom slip OCR → New SO prefill.
 app.route('/scan-so', scanSo);

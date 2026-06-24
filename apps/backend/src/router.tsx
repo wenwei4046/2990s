@@ -116,6 +116,10 @@ const GrnNew = lazyRetry(() => import('./pages/GrnNew').then(m => ({ default: m.
 const GrnFromPo = lazyRetry(() => import('./pages/GrnFromPo').then(m => ({ default: m.GrnFromPo })));
 const PurchaseInvoiceNew = lazyRetry(() => import('./pages/PurchaseInvoiceNew').then(m => ({ default: m.PurchaseInvoiceNew })));
 const PurchaseInvoiceFromGrn = lazyRetry(() => import('./pages/PurchaseInvoiceFromGrn').then(m => ({ default: m.PurchaseInvoiceFromGrn })));
+// Payment Vouchers (standalone cash-out voucher — migration 0189).
+const PaymentVouchers = lazyRetry(() => import('./pages/PaymentVouchers').then(m => ({ default: m.PaymentVouchers })));
+const PaymentVoucherNew = lazyRetry(() => import('./pages/PaymentVoucherNew').then(m => ({ default: m.PaymentVoucherNew })));
+const PaymentVoucherDetail = lazyRetry(() => import('./pages/PaymentVoucherDetail').then(m => ({ default: m.PaymentVoucherDetail })));
 const PurchaseReturnNew = lazyRetry(() => import('./pages/PurchaseReturnNew').then(m => ({ default: m.PurchaseReturnNew })));
 const Outstanding = lazyRetry(() => import('./pages/Outstanding').then(m => ({ default: m.Outstanding })));
 const Mrp = lazyRetry(() => import('./pages/Mrp').then(m => ({ default: m.Mrp })));
@@ -213,6 +217,10 @@ export const router = createBrowserRouter([
       { path: 'purchase-invoices/new', element: <PurchaseInvoiceNew /> },
       { path: 'purchase-invoices/from-grn', element: <PurchaseInvoiceFromGrn /> },
       { path: 'purchase-invoices/:id', element: <PurchaseInvoiceDetail /> },
+      { path: 'payment-vouchers', element: <PaymentVouchers /> },
+      // /new is a STATIC path — must precede the :id param route.
+      { path: 'payment-vouchers/new', element: <PaymentVoucherNew /> },
+      { path: 'payment-vouchers/:id', element: <PaymentVoucherDetail /> },
       { path: 'mfg-sales-orders', element: <MfgSalesOrdersPage /> },
       // PR #106 — must come BEFORE :docNo so /new isn't caught as a doc number.
       { path: 'mfg-sales-orders/new', element: <SalesOrderNew /> },

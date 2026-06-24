@@ -54,6 +54,7 @@ export const NAV_ITEMS: NavItem[] = [
 
   // Finance
   { label: 'Accounting', path: '/accounting', group: 'Finance', keywords: 'gl journal ledger' },
+  { label: 'Payment Vouchers', path: '/payment-vouchers', group: 'Finance', keywords: 'pv voucher pay vendor freight cash out expense' },
   { label: 'Outstanding', path: '/outstanding', group: 'Finance', keywords: 'aging overdue' },
 
   // Reference
