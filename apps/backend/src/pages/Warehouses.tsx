@@ -62,6 +62,16 @@ export const Warehouses = () => {
       sortFn: (a, b) => Number(a.is_default) - Number(b.is_default),
     },
     {
+      // Migration 0192 — flags the overseas / China landing warehouse. A
+      // transfer OUT of a transit warehouse can carry a sea-freight uplift.
+      key: 'transit',
+      label: 'Transit',
+      width: 110,
+      accessor: (w) => (w.is_transit ? 'Transit' : '—'),
+      filterValue: (w) => (w.is_transit ? 'Transit' : '—'),
+      sortFn: (a, b) => Number(Boolean(a.is_transit)) - Number(Boolean(b.is_transit)),
+    },
+    {
       key: 'status',
       label: 'Status',
       width: 110,
@@ -147,6 +157,7 @@ const WarehouseDrawer = ({
     location: editing?.location ?? '',
     isActive: editing?.is_active ?? true,
     isDefault: editing?.is_default ?? false,
+    isTransit: editing?.is_transit ?? false,
   });
 
   const submit = () => {
@@ -162,6 +173,7 @@ const WarehouseDrawer = ({
         location: form.location,
         isActive: form.isActive,
         isDefault: form.isDefault,
+        isTransit: form.isTransit,
       }, { onSuccess: onClose });
     } else {
       create.mutate({
@@ -169,6 +181,7 @@ const WarehouseDrawer = ({
         name: form.name,
         location: form.location || undefined,
         isDefault: form.isDefault,
+        isTransit: form.isTransit,
       }, { onSuccess: onClose });
     }
   };
@@ -205,6 +218,14 @@ const WarehouseDrawer = ({
             <input type="checkbox" checked={form.isDefault}
               onChange={(e) => setForm((s) => ({ ...s, isDefault: e.target.checked }))} />
             Default warehouse
+          </label>
+          {/* Migration 0192 — mark the overseas / China landing warehouse. A
+              stock transfer OUT of it can carry a sea-freight cost uplift onto
+              the receiving (MY) lot. */}
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 'var(--space-4)' }}>
+            <input type="checkbox" checked={form.isTransit}
+              onChange={(e) => setForm((s) => ({ ...s, isTransit: e.target.checked }))} />
+            Transit (overseas) warehouse
           </label>
           {editing && (
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>

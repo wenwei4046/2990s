@@ -14,6 +14,9 @@ export type StockTransferWarehouse = {
   name: string;
 };
 
+// Migration 0192 — basis for splitting sea-freight across the transfer lines.
+export type StockTransferAllocationMethod = 'QTY' | 'VALUE' | 'CBM';
+
 export type StockTransferRow = {
   id: string;
   transfer_no: string;
@@ -21,6 +24,9 @@ export type StockTransferRow = {
   from_warehouse_id: string;
   to_warehouse_id: string;
   transfer_date: string;
+  // Migration 0192 — sea-freight (MYR sen) folded into the receiving lot cost.
+  freight_centi?: number;
+  allocation_method?: StockTransferAllocationMethod;
   notes: string | null;
   posted_at: string | null;
   cancelled_at: string | null;
@@ -37,6 +43,8 @@ export type StockTransferLine = {
   product_code: string;
   product_name: string | null;
   qty: number;
+  // Migration 0192 — sea-freight (MYR sen) allocated to this line.
+  allocated_charge_centi?: number;
   notes: string | null;
   created_at: string;
 };
@@ -95,6 +103,10 @@ export type CreateStockTransferInput = {
   fromWarehouseId: string;
   toWarehouseId: string;
   transferDate?: string;
+  // Migration 0192 — sea-freight (MYR sen, a MY forwarder bill — no FX) +
+  // allocation basis. Default 0/QTY ⇒ cost-neutral transfer (no uplift).
+  freightCenti?: number;
+  allocationMethod?: StockTransferAllocationMethod;
   notes?: string;
   items: StockTransferItemInput[];
 };

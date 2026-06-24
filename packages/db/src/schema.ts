@@ -2508,6 +2508,10 @@ export const warehouses = pgTable('warehouses', {
   location:   text('location'),
   isActive:   boolean('is_active').notNull().default(true),
   isDefault:  boolean('is_default').notNull().default(false),
+  // Migration 0192 — marks an overseas / in-transit warehouse (the China
+  // landing warehouse). A stock transfer OUT of a transit warehouse can carry a
+  // sea-freight cost uplift onto the receiving (MY) lot.
+  isTransit:  boolean('is_transit').notNull().default(false),
   createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
@@ -2665,6 +2669,11 @@ export const stockTransfers = pgTable('stock_transfers', {
   fromWarehouseId:   uuid('from_warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
   toWarehouseId:     uuid('to_warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
   transferDate:      date('transfer_date').notNull().defaultNow(),
+  // Migration 0192 — sea-freight (MYR sen, a MY forwarder bill — NO FX) pooled +
+  // allocated across the lines into each receiving lot's cost (China → MY landed
+  // cost). 0 ⇒ cost-neutral transfer (no uplift; existing behaviour unchanged).
+  freightCenti:      integer('freight_centi').notNull().default(0),
+  allocationMethod:  chargeAllocationMethod('allocation_method').notNull().default('QTY'),
   notes:             text('notes'),
   postedAt:          timestamp('posted_at', { withTimezone: true }),
   cancelledAt:       timestamp('cancelled_at', { withTimezone: true }),
@@ -2685,6 +2694,10 @@ export const stockTransferLines = pgTable('stock_transfer_lines', {
   productName:       text('product_name'),
   variantKey:        text('variant_key').notNull().default(''),  // migration 0117 — FIFO variant bucket
   qty:               integer('qty').notNull(),
+  // Migration 0192 — sea-freight (MYR sen) allocated to THIS line at post-time
+  // (Σ over lines === stock_transfers.freight_centi); folded per-unit into the
+  // IN movement unit_cost_sen. 0 ⇒ no uplift (existing behaviour unchanged).
+  allocatedChargeCenti: integer('allocated_charge_centi').notNull().default(0),
   notes:             text('notes'),
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({

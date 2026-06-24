@@ -42,7 +42,7 @@ inventory.get('/warehouses', async (c) => {
   const sb = c.get('supabase');
   const includeInactive = c.req.query('includeInactive') === 'true';
   let q = sb.from('warehouses')
-    .select('id, code, name, location, is_active, is_default')
+    .select('id, code, name, location, is_active, is_default, is_transit')
     .order('code');
   if (!includeInactive) q = q.eq('is_active', true);
   const { data, error } = await q;
@@ -64,7 +64,9 @@ inventory.post('/warehouses', async (c) => {
     location: (body.location as string) ?? null,
     is_active: body.isActive === false ? false : true,
     is_default: body.isDefault === true,
-  }).select('id, code, name, location, is_active, is_default').single();
+    // Migration 0192 — transit (overseas/China) warehouse flag.
+    is_transit: body.isTransit === true,
+  }).select('id, code, name, location, is_active, is_default, is_transit').single();
   if (error) {
     if (error.code === '23505') return c.json({ error: 'duplicate_code' }, 409);
     return c.json({ error: 'insert_failed', reason: error.message }, 500);
@@ -91,10 +93,12 @@ inventory.patch('/warehouses/:id', async (c) => {
   if (typeof body.location === 'string')  updates.location = body.location;
   if (typeof body.isActive === 'boolean') updates.is_active = body.isActive;
   if (typeof body.isDefault === 'boolean') updates.is_default = body.isDefault;
+  // Migration 0192 — transit (overseas/China) warehouse flag.
+  if (typeof body.isTransit === 'boolean') updates.is_transit = body.isTransit;
   if (Object.keys(updates).length === 0) return c.json({ error: 'no_changes' }, 400);
 
   const { data, error } = await sb.from('warehouses').update(updates).eq('id', id)
-    .select('id, code, name, location, is_active, is_default').single();
+    .select('id, code, name, location, is_active, is_default, is_transit').single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   /* Audit 2026-06-20 — single-default enforcement (see POST): promoting this
      warehouse to default demotes every other one. */
