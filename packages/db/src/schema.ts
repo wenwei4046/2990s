@@ -1131,6 +1131,11 @@ export const grns = pgTable('grns', {
      currency_code enum as purchase_orders. subtotal/total are recomputed
      server-side as Σ grn_items.line_total_centi (no tax for GRN). */
   currency:          currencyCode('currency').notNull().default('MYR'),
+  /* Landed-cost core (migration 0190): MYR per 1 unit of `currency` (1 for MYR).
+     Used to convert the inventory IN unit cost (FIFO lot) to MYR at receive
+     time — subtotal/total stay in the GRN's own currency. Mirrors
+     purchase_invoices.exchange_rate (migration 0188). */
+  exchangeRate:      numeric('exchange_rate', { precision: 14, scale: 6 }).notNull().default('1'),
   subtotalCenti:     integer('subtotal_centi').notNull().default(0),
   taxCenti:          integer('tax_centi').notNull().default(0),
   totalCenti:        integer('total_centi').notNull().default(0),

@@ -591,7 +591,7 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
       variants, gap_inches, divan_height_inches, divan_price_sen,
       leg_height_inches, leg_price_sen, custom_specials, line_suffix,
       special_order_price_sen, discount_centi,
-      grn:grns!inner ( id, grn_number, supplier_id, purchase_order_id, status )
+      grn:grns!inner ( id, grn_number, supplier_id, purchase_order_id, status, currency, exchange_rate )
     `)
     .in('id', ids);
   if (itemsErr) return c.json({ error: 'load_failed', reason: itemsErr.message }, 500);
@@ -605,7 +605,7 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
     divan_price_sen: number; leg_height_inches: number | null; leg_price_sen: number;
     custom_specials: unknown; line_suffix: string | null; special_order_price_sen: number;
     discount_centi: number;
-    grn: { id: string; grn_number: string; supplier_id: string; purchase_order_id: string | null; status: string };
+    grn: { id: string; grn_number: string; supplier_id: string; purchase_order_id: string | null; status: string; currency?: string | null; exchange_rate?: string | number | null };
   };
 
   const itemList = (itemsData ?? []) as unknown as ItemRow[];
@@ -631,6 +631,7 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
   // Group picks by GRN (each PI ↔ one GRN, per single FK).
   type Bucket = {
     grnId: string; grnNumber: string; supplierId: string; purchaseOrderId: string | null;
+    currency: string; exchangeRate: string | number;
     lines: Array<{ row: ItemRow; qty: number }>;
   };
   const buckets = new Map<string, Bucket>();
@@ -639,6 +640,12 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
     const cur = buckets.get(row.grn.id) ?? {
       grnId: row.grn.id, grnNumber: row.grn.grn_number,
       supplierId: row.grn.supplier_id, purchaseOrderId: row.grn.purchase_order_id,
+      /* Landed-cost core (migration 0190) — a PI from a foreign GRN inherits the
+         GRN's currency + rate. The PI lines carry the GRN's FOREIGN prices, so
+         the PI must record the SAME rate (0188) or the recost would treat the
+         foreign price as MYR (rate 1) and book a wrong MYR lot cost. */
+      currency: String(row.grn.currency ?? 'MYR').toUpperCase(),
+      exchangeRate: row.grn.exchange_rate ?? 1,
       lines: [],
     };
     cur.lines.push({ row, qty: p.qty });
@@ -677,7 +684,9 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
       grn_id: bucket.grnId,
       invoice_date: invoiceDate,
       due_date: body.dueDate ?? null,
-      currency: 'MYR',
+      // Landed-cost core (0190) — inherit the GRN's currency + rate (0188 normalise).
+      currency: bucket.currency,
+      exchange_rate: normalizeExchangeRate(bucket.exchangeRate, bucket.currency),
       subtotal_centi: subtotal,
       tax_centi: 0,
       total_centi: subtotal,
@@ -773,11 +782,11 @@ purchaseInvoices.post('/from-grn', async (c) => {
   if (!grnId) return c.json({ error: 'grn_id_required' }, 400);
 
   const { data: grn, error: grnErr } = await sb.from('grns')
-    .select('id, grn_number, supplier_id, purchase_order_id, status')
+    .select('id, grn_number, supplier_id, purchase_order_id, status, currency, exchange_rate')
     .eq('id', grnId).maybeSingle();
   if (grnErr) return c.json({ error: 'load_failed', reason: grnErr.message }, 500);
   if (!grn) return c.json({ error: 'grn_not_found' }, 404);
-  const g = grn as { id: string; grn_number: string; supplier_id: string; purchase_order_id: string | null; status: string };
+  const g = grn as { id: string; grn_number: string; supplier_id: string; purchase_order_id: string | null; status: string; currency?: string | null; exchange_rate?: string | number | null };
   if (g.status !== 'POSTED') return c.json({ error: 'grn_not_posted', status: g.status }, 409);
 
   const { data: items, error: iErr } = await sb.from('grn_items')
@@ -818,7 +827,10 @@ purchaseInvoices.post('/from-grn', async (c) => {
     purchase_order_id: g.purchase_order_id,
     grn_id: g.id,
     invoice_date: new Date().toISOString().slice(0, 10),
-    currency: 'MYR',
+    /* Landed-cost core (0190) — inherit the GRN's currency + rate so the PI's
+       FOREIGN line prices recost to MYR at the right rate (0188 normalise). */
+    currency: String(g.currency ?? 'MYR').toUpperCase(),
+    exchange_rate: normalizeExchangeRate(g.exchange_rate, String(g.currency ?? 'MYR')),
     subtotal_centi: subtotal,
     tax_centi: 0,
     total_centi: subtotal,

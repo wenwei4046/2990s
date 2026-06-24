@@ -39,6 +39,7 @@
 
 import { computeVariantKey } from '@2990s/shared';
 import { restampDoActualCost } from '../routes/delivery-orders-mfg';
+import { toMyrSen } from './fx';
 
 /* Re-derive a Sales Invoice header's per-category revenue/cost totals from its
    line items. Mirror of the SI route's recomputeTotals (kept in lockstep). */
@@ -149,6 +150,14 @@ export async function recostFromGrn(sb: any, grnId: string) {
       variants: Record<string, unknown> | null; unit_price_centi: number | null;
     }>;
 
+    /* Landed-cost core (migration 0190) — the GRN's exchange_rate (MYR per 1 unit
+       of the GRN currency, 1 for MYR). Used to convert the GR-price FALLBACK
+       (g.unit_price_centi, in the GRN's currency) to MYR. The PI path below uses
+       the PI's OWN rate instead. rate 1 ⇒ toMyrSen is a no-op, so an MYR GRN
+       recosts byte-for-byte as before. */
+    const { data: grnHead } = await sb.from('grns').select('exchange_rate').eq('id', grnId).maybeSingle();
+    const grnRate = (grnHead as { exchange_rate?: string | number | null } | null)?.exchange_rate ?? 1;
+
     // 2. PI lines billing those GRN lines — the AUTHORITATIVE price (overrides
     //    GR). Weighted-average across all live (non-cancelled) PI lines per
     //    grn_item, so a partial / corrected invoice resolves cleanly.
@@ -159,19 +168,29 @@ export async function recostFromGrn(sb: any, grnId: string) {
     const piList = (piRows ?? []) as Array<{ grn_item_id: string | null; qty: number; unit_price_centi: number | null; purchase_invoice_id: string }>;
     const piIds = [...new Set(piList.map((r) => r.purchase_invoice_id).filter(Boolean))];
     const piCancelled = new Set<string>();
+    /* Landed-cost core (migration 0190) — each PI's OWN exchange_rate (0188). A PI
+       line price is in the PI's currency; the AUTHORITATIVE MYR lot cost is that
+       price × the PI's rate. Different PIs billing the same GRN can carry
+       different rates, so key the rate per purchase_invoice_id. */
+    const piRateById = new Map<string, string | number | null>();
     if (piIds.length > 0) {
-      const { data: pis } = await sb.from('purchase_invoices').select('id, status').in('id', piIds);
-      for (const p of (pis ?? []) as Array<{ id: string; status: string }>) {
+      const { data: pis } = await sb.from('purchase_invoices').select('id, status, exchange_rate').in('id', piIds);
+      for (const p of (pis ?? []) as Array<{ id: string; status: string; exchange_rate?: string | number | null }>) {
         if ((p.status ?? '').toUpperCase() === 'CANCELLED') piCancelled.add(p.id);
+        piRateById.set(p.id, p.exchange_rate ?? 1);
       }
     }
+    // Aggregate the PI lines per grn_item as a weighted-average MYR cost: convert
+    // EACH line's foreign price to MYR at its own PI's rate BEFORE averaging, so a
+    // grn_item billed across PIs with different rates resolves correctly.
     const piAgg = new Map<string, { qty: number; amt: number }>();
     for (const r of piList) {
       if (!r.grn_item_id || piCancelled.has(r.purchase_invoice_id)) continue;
       const a = piAgg.get(r.grn_item_id) ?? { qty: 0, amt: 0 };
       const q = Number(r.qty ?? 0);
+      const unitMyr = toMyrSen(Number(r.unit_price_centi ?? 0), piRateById.get(r.purchase_invoice_id) ?? 1);
       a.qty += q;
-      a.amt += q * Number(r.unit_price_centi ?? 0);
+      a.amt += q * unitMyr;
       piAgg.set(r.grn_item_id, a);
     }
 
@@ -183,8 +202,9 @@ export async function recostFromGrn(sb: any, grnId: string) {
       const key = `${g.material_code}::${vkey}`;
       const pi = piAgg.get(g.id);
       let cost: number | null;
+      // PI price (already MYR via piAgg) > GR price × GRN rate (→ MYR) > Pending.
       if (pi && pi.qty > 0) cost = Math.round(pi.amt / pi.qty);
-      else if (Number(g.unit_price_centi ?? 0) > 0) cost = Number(g.unit_price_centi);
+      else if (Number(g.unit_price_centi ?? 0) > 0) cost = toMyrSen(Number(g.unit_price_centi), grnRate);
       else cost = null; // Pending — no price anywhere yet.
       const existing = costByBucket.get(key);
       if (existing === undefined) costByBucket.set(key, cost);

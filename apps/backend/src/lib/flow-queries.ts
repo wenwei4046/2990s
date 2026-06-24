@@ -107,6 +107,8 @@ export const useUpdateGrnHeader = () => {
     mutationFn: ({ id, ...body }: {
       id: string; supplierId?: string; receivedAt?: string; deliveryNoteRef?: string;
       warehouseId?: string; notes?: string; currency?: string;
+      // Landed-cost core (migration 0190) — MYR per 1 unit of the GRN currency.
+      exchangeRate?: number | string;
     }) => authedFetch<{ grn: any }>(`/grns/${id}`, {
       method: 'PATCH', body: JSON.stringify(body),
     }),

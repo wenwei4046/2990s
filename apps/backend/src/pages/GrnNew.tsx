@@ -173,6 +173,12 @@ export const GrnNew = () => {
   const [receivedAt, setReceivedAt]           = useState<string>(() => todayMyt());
   const [deliveryNoteRef, setDeliveryNoteRef] = useState<string>('');
   const [notes, setNotes]                     = useState<string>('');
+  /* Landed-cost core (migration 0190) — MYR per 1 unit of the GRN currency.
+     Shown only for a foreign-currency PO (RMB / USD / SGD); MYR receives 1:1.
+     Kept as a string so the numeric input stays editable. The GRN's currency is
+     inherited from the source PO server-side; the rate converts the FIFO lot
+     cost to MYR. */
+  const [exchangeRate, setExchangeRate]       = useState<string>('1');
   const [lines, setLines]                     = useState<DraftLine[]>([]);
   /* Commander 2026-05-29 — New GRN must mirror New PO's header, including a
      "Receive into" Warehouse picker (PO calls it Purchase Location). The chosen
@@ -363,6 +369,13 @@ export const GrnNew = () => {
   // Header PO id: picks → first pick's PO; single-PO → that PO; manual → null.
   const headerPoId = hasPicks ? pickPoId : (po?.id ?? null);
   const currency   = po?.currency ?? 'MYR';
+  /* Landed-cost core (migration 0190) — show the Exchange rate field + MYR cost
+     previews only for a foreign-currency receipt. An MYR GRN posts 1:1 (rate 1),
+     so the lot cost / COGS are unchanged. Reset the rate to 1 whenever the
+     resolved currency is (or becomes) MYR so a stale foreign rate can't ride in. */
+  const isForeign  = String(currency).toUpperCase() !== 'MYR';
+  const rateNum    = (Number(exchangeRate) > 0 && Number.isFinite(Number(exchangeRate))) ? Number(exchangeRate) : 0;
+  useEffect(() => { if (!isForeign) setExchangeRate('1'); }, [isForeign]);
 
   // Commander 2026-05-29 — make the MANUAL item picker supplier-binding-aware,
   // exactly like New PO. Once a supplier is chosen the per-line Item Code
@@ -497,6 +510,12 @@ export const GrnNew = () => {
         receivedAt,
         deliveryNoteRef: deliveryNoteRef || undefined,
         notes:           notes || undefined,
+        /* Landed-cost core (migration 0190) — send the resolved currency + rate.
+           The server re-derives the currency from the source PO when PO-linked;
+           the rate (MYR per 1 unit) converts the FIFO lot cost to MYR. MYR forces
+           1 server-side, so a manual MYR receipt is unaffected. */
+        currency,
+        exchangeRate:    isForeign ? (rateNum > 0 ? rateNum : 1) : 1,
         items: realLines.map((l) => ({
           purchaseOrderItemId: l.purchaseOrderItemId,
           materialKind:        l.materialKind,
@@ -680,6 +699,23 @@ export const GrnNew = () => {
               <span className={styles.fieldLabel}>Notes</span>
               <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Receiving notes — visible on the GRN detail page" className={styles.fieldInput} rows={2} style={{ resize: 'vertical', minHeight: 60 }} />
             </label>
+            {/* Landed-cost core (migration 0190) — Exchange rate shown ONLY for a
+                foreign-currency PO. The line prices stay in the PO's currency;
+                this rate converts the recorded inventory cost (FIFO lot) to MYR. */}
+            {isForeign && (
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>Exchange rate (MYR per 1 {currency})</span>
+                <input
+                  type="number" min={0} step="0.000001" inputMode="decimal"
+                  value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)}
+                  placeholder="e.g. 0.62"
+                  className={styles.fieldInput} style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+                />
+                <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginTop: 2 }}>
+                  ≈ {fmtRm(Math.round(subtotalCenti * rateNum), 'MYR')} recorded as inventory cost
+                </span>
+              </label>
+            )}
           </div>
 
           {/* Read-only supplier-info bar — same markup/classes as New PO. */}
@@ -804,7 +840,15 @@ export const GrnNew = () => {
                       {l.itemGroup && <ItemGroupPill group={l.itemGroup} />}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                      <span className={styles.previewPrice}>{fmtRm(lineValueCenti, currency)}</span>
+                      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                        <span className={styles.previewPrice}>{fmtRm(lineValueCenti, currency)}</span>
+                        {/* Landed-cost core (0190) — MYR cost preview for a foreign GRN. */}
+                        {isForeign && (
+                          <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                            ≈ {fmtRm(Math.round(lineValueCenti * rateNum), 'MYR')}
+                          </span>
+                        )}
+                      </span>
                       <button
                         type="button"
                         onClick={() => dropLine(l.rid)}
@@ -1084,6 +1128,13 @@ export const GrnNew = () => {
               <span>Total</span>
               <span style={{ fontFamily: 'var(--font-mono)' }}>{fmtRm(subtotalCenti, currency)}</span>
             </div>
+            {/* Landed-cost core (0190) — MYR inventory cost for a foreign GRN. */}
+            {isForeign && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginTop: 'var(--space-2)' }}>
+                <span>Inventory cost (MYR)</span>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>{fmtRm(Math.round(subtotalCenti * rateNum), 'MYR')}</span>
+              </div>
+            )}
           </div>
         </section>
       </div>

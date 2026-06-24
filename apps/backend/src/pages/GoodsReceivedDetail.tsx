@@ -113,6 +113,9 @@ type HeaderDraft = {
   deliveryNoteRef: string;
   warehouseId: string;
   currency: string;
+  /* Landed-cost core (migration 0190) — MYR per 1 unit of the GRN currency, kept
+     as a string for the numeric input. Editing it re-costs the FIFO lot to MYR. */
+  exchangeRate: string;
   notes: string;
 };
 type LineDraft = {
@@ -159,6 +162,8 @@ const headerSnapshot = (g: any): HeaderDraft => ({
   deliveryNoteRef: g.delivery_note_ref ?? '',
   warehouseId:     g.warehouse_id ?? '',
   currency:        g.currency ?? 'MYR',
+  // Landed-cost core (0190) — numeric(14,6) comes back as a string; default '1'.
+  exchangeRate:    g.exchange_rate != null ? String(g.exchange_rate) : '1',
   notes:           g.notes ?? '',
 });
 
@@ -272,6 +277,15 @@ export const GoodsReceivedDetail = () => {
   const grandTotal = itemsSubtotal + (grn.tax_centi ?? 0);
 
   const headerView = headerDraft ?? headerSnapshot(grn);
+  /* Landed-cost core (migration 0190) — the effective FX rate (draft in Edit,
+     stored in View) + whether this GRN is foreign, for the MYR cost preview.
+     The line prices stay in the GRN currency; this rate converts the recorded
+     inventory cost (FIFO lot) to MYR. */
+  const isForeignGrn = String(grn.currency ?? 'MYR').toUpperCase() !== 'MYR';
+  const grnRateNum = (() => {
+    const n = Number(headerView.exchangeRate);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  })();
 
   const setHeaderField = (k: keyof HeaderDraft, v: string) => {
     setHeaderDraft((h) => ({ ...(h ?? headerSnapshot(grn)), [k]: v }));
@@ -768,6 +782,13 @@ export const GoodsReceivedDetail = () => {
               <span className={styles.totalLabel}>Total</span>
               <span className={`${styles.totalValue} ${styles.grandTotal}`}>{fmtRm(grandTotal, grn.currency)}</span>
             </div>
+            {/* Landed-cost core (0190) — MYR inventory cost for a foreign GRN. */}
+            {isForeignGrn && (
+              <div className={styles.totalRow}>
+                <span className={styles.totalLabel}>Inventory cost (MYR)</span>
+                <span className={styles.totalValue}>{fmtRm(Math.round(grandTotal * grnRateNum), 'MYR')}</span>
+              </div>
+            )}
           </div>
         </div>
       </section>
@@ -824,7 +845,11 @@ const SupplierCard = ({
                 value={grn.supplier?.name ?? grn.supplier?.code ?? supplier?.name ?? supplier?.code ?? null} />
             </div>
             <InfoCell label="Currency" value={grn.currency || null} />
-            <div />
+            {/* Landed-cost core (0190) — show the FX rate only for a foreign GRN. */}
+            {String(grn.currency ?? 'MYR').toUpperCase() !== 'MYR'
+              ? <InfoCell label={`Exchange rate (MYR per 1 ${grn.currency})`}
+                  value={grn.exchange_rate != null ? String(grn.exchange_rate) : null} />
+              : <div />}
             <InfoCell label="Received Date" value={grn.received_at ? fmtDateOrDash(grn.received_at) : null} />
             <InfoCell label="Delivery Note Ref" value={grn.delivery_note_ref || null} />
             <InfoCell label="Receive Into"
@@ -864,7 +889,20 @@ const SupplierCard = ({
               <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
             </span>
           </label>
-          <div />
+          {/* Landed-cost core (0190) — Exchange rate, shown only for a foreign
+              GRN currency. Editing it re-costs the FIFO lot to MYR on Save. */}
+          {String(draft.currency).toUpperCase() !== 'MYR' ? (
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Exchange rate (MYR per 1 {draft.currency})</span>
+              <input
+                type="number" min={0} step="0.000001" inputMode="decimal"
+                value={draft.exchangeRate} disabled={locked}
+                onChange={(e) => onField('exchangeRate', e.target.value)}
+                placeholder="e.g. 0.62"
+                className={styles.fieldInput} style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+              />
+            </label>
+          ) : <div />}
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Received Date</span>
             {/* Changing this cascades to every line's Delivery Date (handled in
