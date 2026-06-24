@@ -273,7 +273,7 @@ export const useUpdatePurchaseInvoiceHeader = () => {
   return useMutation({
     mutationFn: ({ id, ...body }: {
       id: string; supplierId?: string; supplierInvoiceRef?: string; invoiceDate?: string;
-      dueDate?: string; currency?: string; notes?: string;
+      dueDate?: string; currency?: string; exchangeRate?: number; notes?: string;
     }) => authedFetch<{ purchaseInvoice: any }>(`/purchase-invoices/${id}`, {
       method: 'PATCH', body: JSON.stringify(body),
     }),

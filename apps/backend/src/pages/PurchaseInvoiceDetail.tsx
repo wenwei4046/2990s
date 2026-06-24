@@ -80,6 +80,9 @@ type HeaderDraft = {
   invoiceDate: string;
   dueDate: string;
   currency: string;
+  /* Multi-currency AP (0188) — MYR per 1 unit of `currency` (string so the
+     numeric input round-trips empty/partial typing). MYR is always '1'. */
+  exchangeRate: string;
   notes: string;
 };
 
@@ -113,6 +116,9 @@ const headerSnapshot = (p: any): HeaderDraft => ({
   invoiceDate:        (p.invoice_date ?? '').slice(0, 10),
   dueDate:            (p.due_date ?? '').slice(0, 10),
   currency:           p.currency ?? 'MYR',
+  // exchange_rate arrives as a numeric string ('1.000000') or number; show a
+  // tidy value (strip trailing zeros) and default to '1'.
+  exchangeRate:       p.exchange_rate != null ? String(Number(p.exchange_rate)) : '1',
   notes:              p.notes ?? '',
 });
 
@@ -410,7 +416,17 @@ export const PurchaseInvoiceDetail = () => {
     setSavingDraft(true);
     try {
       if (headerDraft) {
-        await updateHeader.mutateAsync({ id: pi.id, ...(headerDraft as Record<string, unknown>) });
+        // Multi-currency AP (0188) — send exchangeRate as a number. MYR forces 1
+        // (the server also enforces this); a blank/invalid foreign rate → 1.
+        const parsedRate = Number(headerDraft.exchangeRate);
+        const exchangeRate = headerDraft.currency === 'MYR'
+          ? 1
+          : (Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : 1);
+        await updateHeader.mutateAsync({
+          id: pi.id,
+          ...(headerDraft as Record<string, unknown>),
+          exchangeRate,
+        });
       }
       const byId = new Map(items.map((it) => [it.id, it]));
       for (const d of editLines) {
@@ -546,6 +562,7 @@ export const PurchaseInvoiceDetail = () => {
         onField={setHeaderField}
         locked={isLocked}
         isEditing={isEditing}
+        grandTotalCenti={grandTotal}
       />
 
       {/* ── Line items ──────────────────────────────────────────── */}
@@ -680,7 +697,7 @@ export const PurchaseInvoiceDetail = () => {
    ════════════════════════════════════════════════════════════════════════ */
 
 const SupplierCard = ({
-  pi, draft, onField, locked, isEditing = true,
+  pi, draft, onField, locked, isEditing = true, grandTotalCenti,
 }: {
   pi: any;
   /** Draft header values (page-owned). In View these mirror the saved PI. */
@@ -690,6 +707,8 @@ const SupplierCard = ({
   locked: boolean;
   /** View → Edit gate. When false the card renders read-only display text. */
   isEditing?: boolean;
+  /** PI grand total (in the PI's own currency, centi) for the MYR-equiv hint. */
+  grandTotalCenti: number;
 }) => {
   const suppliersQ = useSuppliers();
   const suppliers = suppliersQ.data ?? [];
@@ -720,7 +739,16 @@ const SupplierCard = ({
                 value={pi.supplier?.name ?? pi.supplier?.code ?? supplier?.name ?? supplier?.code ?? null} />
             </div>
             <InfoCell label="Currency" value={pi.currency || null} />
-            <div />
+            {/* Multi-currency AP (0188) — rate + MYR-equiv shown only for a
+                foreign-currency PI; MYR posts 1:1 so it's omitted. */}
+            {pi.currency && pi.currency !== 'MYR' ? (
+              <InfoCell
+                label={`Exchange rate (MYR per 1 ${pi.currency})`}
+                value={`${Number(pi.exchange_rate ?? 1)} · ≈ ${fmtRm(Math.round(grandTotalCenti * Number(pi.exchange_rate ?? 1)), 'MYR')} to GL`}
+              />
+            ) : (
+              <div />
+            )}
             <InfoCell label="Supplier Invoice Ref" value={pi.supplier_invoice_ref || null} />
             <InfoCell label="Invoice Date" value={pi.invoice_date ? fmtDateOrDash(pi.invoice_date) : null} />
             <InfoCell label="Due Date" value={pi.due_date ? fmtDateOrDash(pi.due_date) : null} />
@@ -756,7 +784,26 @@ const SupplierCard = ({
               <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
             </span>
           </label>
-          <div />
+          {/* Multi-currency AP (0188) — Exchange rate is shown ONLY for a
+              foreign currency. MYR posts 1:1 so no input is needed. The MYR-equiv
+              total below is purely informational (the invoice itself stays in its
+              own currency; only the GL post converts). */}
+          {draft.currency !== 'MYR' ? (
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Exchange rate (MYR per 1 {draft.currency})</span>
+              <input
+                type="number" min={0} step="0.000001" inputMode="decimal"
+                className={styles.fieldInput} style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+                value={draft.exchangeRate} disabled={locked}
+                onChange={(e) => onField('exchangeRate', e.target.value)}
+              />
+              <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginTop: 2 }}>
+                ≈ {fmtRm(Math.round(grandTotalCenti * (Number(draft.exchangeRate) || 0)), 'MYR')} posted to GL
+              </span>
+            </label>
+          ) : (
+            <div />
+          )}
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Supplier Invoice Ref</span>
             <input className={styles.fieldInput} value={draft.supplierInvoiceRef} disabled={locked}

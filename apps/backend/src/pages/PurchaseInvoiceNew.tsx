@@ -141,6 +141,10 @@ export const PurchaseInvoiceNew = () => {
   const [supplierInvoiceRef, setSupplierInvoiceRef] = useState<string>('');
   const [invoiceDate, setInvoiceDate] = useState<string>(() => todayMyt());
   const [dueDate, setDueDate]         = useState<string>('');
+  /* Multi-currency AP (0188) — MYR per 1 unit of the PI currency. Shown only for
+     a foreign-currency supplier; MYR posts 1:1. Kept as a string so the numeric
+     input round-trips empty/partial typing. */
+  const [exchangeRate, setExchangeRate] = useState<string>('1');
   /* Commander 2026-05-29 — "Bill date 都是 standard 的，放 30 天之内，根据这个
      supplier 的设定": Due Date auto-defaults to Invoice Date + the supplier's
      payment-term days. Track whether the operator has hand-edited Due Date so
@@ -230,7 +234,6 @@ export const PurchaseInvoiceNew = () => {
   const grn      = grnQ.data?.grn as GrnDetail | undefined;
   const supplier = grn?.supplier;
   const po       = grn?.purchase_order;
-  const currency = 'MYR';
 
   // Effective supplier id + display name (from GRN, or the manual <select>).
   const manualSupplierRow = isManual
@@ -276,6 +279,15 @@ export const PurchaseInvoiceNew = () => {
      so the PI header can auto-fill Name + Address + the Contact · Phone · Email ·
      Terms · Currency info bar, mirroring New PO. No warehouse (PI is AP only). */
   const supplierDetail  = supplierDetailQ.data?.supplier ?? null;
+
+  /* Multi-currency AP (0188) — the PI's currency follows the resolved supplier's
+     default currency (e.g. a China supplier billing RMB); MYR when unset. The
+     invoice itself stays in this currency — the exchange rate only converts the
+     AP posting to MYR at GL-post time (server-side). */
+  const currency = (supplierDetail?.currency ?? 'MYR').toUpperCase();
+  const isForeign = currency !== 'MYR';
+  // Reset the rate to 1 whenever the PI settles on MYR (no foreign rate applies).
+  useEffect(() => { if (!isForeign) setExchangeRate('1'); }, [isForeign]);
 
   // ── Manual product search (gated by min query length, mirrors GrnNew). ───
   const [productQuery, setProductQuery] = useState<string>('');
@@ -362,6 +374,12 @@ export const PurchaseInvoiceNew = () => {
         invoiceDate,
         dueDate:            dueDate || undefined,
         notes:              notes || undefined,
+        // Multi-currency AP (0188) — send the resolved currency + rate. MYR forces
+        // 1 (server enforces too); a blank/invalid foreign rate → 1.
+        currency,
+        exchangeRate:       isForeign
+          ? ((Number(exchangeRate) > 0 && Number.isFinite(Number(exchangeRate))) ? Number(exchangeRate) : 1)
+          : 1,
         items: realLines.map((l) => ({
           grnItemId:      l.grnItemId,
           materialKind:   l.materialKind,
@@ -511,6 +529,23 @@ export const PurchaseInvoiceNew = () => {
               <span className={styles.fieldLabel}>Notes</span>
               <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Internal notes for AP" className={styles.fieldInput} rows={2} style={{ resize: 'vertical', minHeight: 60 }} />
             </label>
+            {/* Multi-currency AP (0188) — Exchange rate shown ONLY for a
+                foreign-currency supplier. The invoice stays in its own currency;
+                this rate converts the AP posting to MYR at GL-post time. */}
+            {isForeign && (
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>Exchange rate (MYR per 1 {currency})</span>
+                <input
+                  type="number" min={0} step="0.000001" inputMode="decimal"
+                  value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)}
+                  placeholder="e.g. 0.62"
+                  className={styles.fieldInput} style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+                />
+                <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginTop: 2 }}>
+                  ≈ {fmtRm(Math.round(subtotalCenti * (Number(exchangeRate) || 0)), 'MYR')} posted to GL
+                </span>
+              </label>
+            )}
           </div>
 
           {/* Read-only supplier-info bar — same markup/classes as New PO. */}

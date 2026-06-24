@@ -243,7 +243,7 @@ export async function postPiAccounting(sb: any, invoiceNumber: string): Promise<
 
   const { data: piRaw, error } = await sb
     .from('purchase_invoices')
-    .select('id, invoice_number, invoice_date, supplier_id, total_centi, suppliers(code, name)')
+    .select('id, invoice_number, invoice_date, supplier_id, total_centi, currency, exchange_rate, suppliers(code, name)')
     .eq('invoice_number', invoiceNumber)
     .single();
   if (error || !piRaw) return { ok: false, status: 'invoice_not_found' };
@@ -256,11 +256,27 @@ export async function postPiAccounting(sb: any, invoiceNumber: string): Promise<
     invoice_date: string;
     supplier_id: string | null;
     total_centi: number;
+    currency: string | null;
+    exchange_rate: string | number | null;
     suppliers: { code: string | null; name: string | null } | null;
   };
 
-  const totalSen = Number(pi.total_centi);
-  if (totalSen <= 0) return { ok: false, status: 'zero_total' };
+  /* Multi-currency AP (migration 0188) — the PI's total_centi is in the PI's
+     OWN currency (RMB / USD / SGD / MYR). The GL must be MYR, so convert AT
+     POST TIME: exchange_rate = MYR per 1 unit of `currency` (1 for MYR), and
+     amount_myr_centi = round(amount_foreign_centi * exchange_rate). The PI row
+     is untouched — only the JE legs below carry the converted amount. For an
+     MYR PI rate is 1, so this is a no-op (totalSen unchanged) and existing MYR
+     GL behaviour is byte-for-byte identical. The single Dr/Cr pair both post
+     the SAME converted figure, so the JE always balances. */
+  const rate = Number(pi.exchange_rate ?? 1);
+  // Guard a missing / non-positive / non-finite rate → treat as 1 (never zero
+  // out the AP posting). currency==='MYR' always implies rate 1 (enforced on
+  // PI create/update), so this only ever matters for a malformed foreign rate.
+  const fxRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
+  const foreignTotalSen = Number(pi.total_centi);
+  if (foreignTotalSen <= 0) return { ok: false, status: 'zero_total' };
+  const totalSen = Math.round(foreignTotalSen * fxRate); // MYR amount posted to the GL
 
   const supplier = pi.suppliers ?? { code: null, name: null };
   const lines: JeLineIn[] = [

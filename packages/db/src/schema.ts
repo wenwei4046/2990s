@@ -13,7 +13,7 @@
 // ----------------------------------------------------------------------------
 
 import {
-  pgTable, pgEnum, uuid, text, integer, boolean, timestamp, date, jsonb,
+  pgTable, pgEnum, uuid, text, integer, numeric, boolean, timestamp, date, jsonb,
   primaryKey, index, check, uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
@@ -1200,6 +1200,10 @@ export const purchaseInvoices = pgTable('purchase_invoices', {
   invoiceDate:       date('invoice_date').notNull().defaultNow(),
   dueDate:           date('due_date'),
   currency:          currencyCode('currency').notNull().default('MYR'),
+  /* Multi-currency AP (migration 0188): MYR per 1 unit of `currency` (1 for
+     MYR). Used ONLY to convert the AP journal entry to MYR at GL-post time —
+     subtotal/total stay in the PI's own currency. */
+  exchangeRate:      numeric('exchange_rate', { precision: 14, scale: 6 }).notNull().default('1'),
   subtotalCenti:     integer('subtotal_centi').notNull().default(0),
   taxCenti:          integer('tax_centi').notNull().default(0),
   totalCenti:        integer('total_centi').notNull().default(0),

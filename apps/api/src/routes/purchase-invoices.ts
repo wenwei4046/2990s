@@ -16,7 +16,19 @@ export const purchaseInvoices = new Hono<{ Bindings: Env; Variables: Variables }
 purchaseInvoices.use('*', supabaseAuth);
 
 const HEADER =
-  'id, invoice_number, supplier_invoice_ref, supplier_id, purchase_order_id, grn_id, invoice_date, due_date, currency, subtotal_centi, tax_centi, total_centi, paid_centi, status, notes, posted_at, created_at, created_by, updated_at';
+  'id, invoice_number, supplier_invoice_ref, supplier_id, purchase_order_id, grn_id, invoice_date, due_date, currency, exchange_rate, subtotal_centi, tax_centi, total_centi, paid_centi, status, notes, posted_at, created_at, created_by, updated_at';
+
+/* Multi-currency AP (migration 0188) — normalise an incoming exchange rate.
+   exchange_rate = MYR per 1 unit of the PI currency. MYR is ALWAYS rate 1
+   (a foreign rate makes no sense for the base currency). A foreign rate must be
+   a finite number > 0; anything else (missing / 0 / negative / NaN) falls back
+   to 1 so the AP posting can never be zeroed out. Returns a JS number;
+   PostgREST stores it into the numeric(14,6) column. */
+function normalizeExchangeRate(raw: unknown, currency: string): number {
+  if (String(currency).toUpperCase() === 'MYR') return 1;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
 const ITEM =
   'id, purchase_invoice_id, grn_item_id, material_kind, material_code, material_name, qty, unit_price_centi, line_total_centi, notes, ' +
   /* PR #42 — variant fields (migration 0057) */
@@ -386,6 +398,11 @@ purchaseInvoices.post('/', async (c) => {
   /* PR-DRAFT-removal — PIs are now created as POSTED directly. PI is
      AP-only (no inventory impact — that landed at GRN time), so there's
      no side-effect helper to call after insert. */
+  const currency = ((body.currency as string) ?? 'MYR').toUpperCase();
+  // Multi-currency AP (migration 0188) — accept exchangeRate on create. MYR is
+  // forced to 1; a foreign rate must be finite > 0 (else 1). subtotal/total stay
+  // in the PI's currency; the rate only converts the AP posting to MYR later.
+  const exchangeRate = normalizeExchangeRate(body.exchangeRate, currency);
   const { data: header, error: hErr } = await sb.from('purchase_invoices').insert({
     invoice_number: invoiceNumber,
     supplier_invoice_ref: (body.supplierInvoiceRef as string) ?? null,
@@ -394,7 +411,8 @@ purchaseInvoices.post('/', async (c) => {
     grn_id: (body.grnId as string) ?? null,
     invoice_date: (body.invoiceDate as string) ?? new Date().toISOString().slice(0, 10),
     due_date: (body.dueDate as string) ?? null,
-    currency: ((body.currency as string) ?? 'MYR').toUpperCase(),
+    currency,
+    exchange_rate: exchangeRate,
     subtotal_centi: subtotal,
     total_centi: subtotal,
     notes: (body.notes as string) ?? null,
@@ -889,6 +907,29 @@ purchaseInvoices.patch('/:id', async (c) => {
   // currency is an enum — normalise to upper-case like POST does.
   if (updates.currency !== undefined) updates.currency = String(updates.currency).toUpperCase();
   const sb = c.get('supabase');
+
+  /* Multi-currency AP (migration 0188) — keep exchange_rate consistent with the
+     effective currency. Resolve the effective currency = the new currency if the
+     PATCH sets one, else the PI's current stored currency. Then:
+       · currency is/becomes MYR → force rate 1 (clear any stale foreign rate),
+       · exchangeRate explicitly sent → normalise it against the effective
+         currency (finite > 0, else 1),
+       · neither sent + currency unchanged → leave exchange_rate untouched.
+     subtotal/total are never touched here — the rate only converts the GL post. */
+  if (body.exchangeRate !== undefined || updates.currency !== undefined) {
+    let effectiveCurrency = updates.currency as string | undefined;
+    if (effectiveCurrency === undefined) {
+      const { data: cur } = await sb.from('purchase_invoices').select('currency').eq('id', id).maybeSingle();
+      effectiveCurrency = (cur as { currency?: string } | null)?.currency ?? 'MYR';
+    }
+    if (body.exchangeRate !== undefined) {
+      updates.exchange_rate = normalizeExchangeRate(body.exchangeRate, effectiveCurrency);
+    } else if (String(effectiveCurrency).toUpperCase() === 'MYR') {
+      // Currency flipped to MYR without an explicit rate → reset to 1.
+      updates.exchange_rate = 1;
+    }
+  }
+
   const { data, error } = await sb.from('purchase_invoices').update(updates).eq('id', id).select(HEADER).single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   return c.json({ purchaseInvoice: data });
