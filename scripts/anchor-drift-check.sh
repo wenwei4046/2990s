@@ -33,7 +33,7 @@ for r in $ROUTES; do
   la=$(grep -vc '^\s*import' "$a")
   lb=$(grep -vc '^\s*import' "$b")
   # changed non-import lines (both directions)
-  d=$(diff <(grep -v '^\s*import' "$a") <(grep -v '^\s*import' "$b") 2>/dev/null | grep -c '^[<>]')
+  d=$(diff --strip-trailing-cr <(grep -v '^\s*import' "$a") <(grep -v '^\s*import' "$b") 2>/dev/null | grep -c '^[<>]')
   total=$((total + d))
   flag=""
   if [ "$d" -eq 0 ]; then flag="✓ in sync"; elif [ "$d" -lt 30 ]; then flag="~ minor"; else flag="⚠ DRIFTED"; fi
