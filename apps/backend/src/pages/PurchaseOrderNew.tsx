@@ -38,6 +38,7 @@ import {
   type PoPriceMatrix,
 } from '@2990s/shared/mfg-pricing';
 import { PoLineCard, emptyPoLine, type PoLineDraft } from '../components/PoLineCard';
+import { sortByText } from '../lib/sort-options';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { DateField } from '../components/DateField';
@@ -636,7 +637,7 @@ export const PurchaseOrderNew = () => {
                 className={styles.fieldInput}
               >
                 <option value="">— Pick a supplier —</option>
-                {(suppliers.data ?? []).map((s) => (
+                {sortByText(suppliers.data ?? []).map((s) => (
                   <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                 ))}
               </select>
@@ -737,7 +738,7 @@ export const PurchaseOrderNew = () => {
                 required
               >
                 <option value="">— Pick a warehouse —</option>
-                {(warehouses.data ?? []).map((w) => (
+                {sortByText(warehouses.data ?? []).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                 ))}
               </select>

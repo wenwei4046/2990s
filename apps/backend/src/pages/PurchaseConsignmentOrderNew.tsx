@@ -41,6 +41,7 @@ import {
 } from '@2990s/shared/mfg-pricing';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { DateField } from '../components/DateField';
+import { sortByText } from '../lib/sort-options';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -368,7 +369,7 @@ export const PurchaseConsignmentOrderNew = () => {
                 className={styles.fieldInput}
               >
                 <option value="">— Pick a supplier —</option>
-                {(suppliers.data ?? []).map((s) => (
+                {sortByText(suppliers.data ?? []).map((s) => (
                   <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                 ))}
               </select>
@@ -468,7 +469,7 @@ export const PurchaseConsignmentOrderNew = () => {
                 required
               >
                 <option value="">— Pick a warehouse —</option>
-                {(warehouses.data ?? []).map((w) => (
+                {sortByText(warehouses.data ?? []).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                 ))}
               </select>

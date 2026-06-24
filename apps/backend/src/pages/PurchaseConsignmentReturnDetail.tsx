@@ -38,6 +38,7 @@ import { DateField } from '../components/DateField';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { StatusPill } from '../components/StatusPill';
+import { sortByText } from '../lib/sort-options';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -561,7 +562,7 @@ const SupplierCard = ({
               <select className={styles.fieldSelect} value={draft.supplierId} disabled={locked}
                 onChange={(e) => onField('supplierId', e.target.value)}>
                 <option value="">— Pick supplier —</option>
-                {suppliers.map((s) => (
+                {sortByText(suppliers).map((s) => (
                   <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                 ))}
               </select>

@@ -32,6 +32,7 @@ import { authedFetch } from '../lib/authed-fetch';
 import { useAuth, isAdminLevel } from '../lib/auth';
 import { useCreatePosFromSoItems } from '../lib/suppliers-queries';
 import { fmtDateOrDash } from '@2990s/shared';
+import { sortByText } from '../lib/sort-options';
 import { DateField } from '../components/DateField';
 import styles from './Mrp.module.css';
 
@@ -905,7 +906,7 @@ export const Mrp = () => {
           <span className={styles.filterLabel}>Warehouse</span>
           <select className={styles.filterSelect} value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
             <option value="all">All warehouses</option>
-            {(data?.warehouses ?? []).map((w) => (
+            {sortByText(data?.warehouses ?? []).map((w) => (
               <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
             ))}
           </select>
@@ -1074,7 +1075,7 @@ const LineSupplierCell = ({ suppliers, chosenSupplierId, onSupplierChange }: {
       onClick={(e) => e.stopPropagation()}
       title="Supplier for this SO line — defaults to the SKU's main supplier"
     >
-      {suppliers.map((s) => (
+      {sortByText(suppliers).map((s) => (
         <option key={s.supplierId} value={s.supplierId}>
           {s.name}{s.isMain ? ' ★' : ''} · {s.code}
         </option>

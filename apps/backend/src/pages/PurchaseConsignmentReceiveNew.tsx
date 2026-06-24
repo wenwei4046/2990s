@@ -43,6 +43,7 @@ import { ItemGroupPill } from '../lib/category-badges';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { MoneyInput } from '../components/MoneyInput';
 import { DateField } from '../components/DateField';
+import { sortByText } from '../lib/sort-options';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -442,7 +443,7 @@ export const PurchaseConsignmentReceiveNew = () => {
                     : outstanding.length === 0 ? 'No outstanding orders — receive manually below'
                     : '— Pick an outstanding order (or leave blank for a manual receipt) —'}
                 </option>
-                {outstanding.map((p) => (
+                {sortByText(outstanding).map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.po_number} · {p.supplier?.name ?? p.supplier?.code ?? '—'} · {fmtDateOrDash(p.po_date)}
                     {p.status === 'PARTIALLY_RECEIVED' ? ' (partial)' : ''}
@@ -465,7 +466,7 @@ export const PurchaseConsignmentReceiveNew = () => {
                   disabled={suppliersQ.isLoading}
                 >
                   <option value="">{suppliersQ.isLoading ? 'Loading suppliers…' : '— Pick a supplier —'}</option>
-                  {(suppliersQ.data ?? []).map((s) => (
+                  {sortByText(suppliersQ.data ?? []).map((s) => (
                     <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                   ))}
                 </select>
@@ -507,7 +508,7 @@ export const PurchaseConsignmentReceiveNew = () => {
                 required
               >
                 <option value="">{warehousesQ.isLoading ? 'Loading warehouses…' : '— Pick a warehouse —'}</option>
-                {(warehousesQ.data ?? []).map((w) => (
+                {sortByText(warehousesQ.data ?? []).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                 ))}
               </select>
@@ -681,12 +682,12 @@ export const PurchaseConsignmentReceiveNew = () => {
                           />
                           <datalist id={`pcr-products-${l.rid}`}>
                             {supplierId && bindings.length > 0
-                              ? bindings.map((b) => (
+                              ? sortByText(bindings).map((b) => (
                                   <option key={b.id} value={b.material_code}>
                                     {b.material_name} · {b.supplier_sku} · {fmtRm(b.unit_price_centi, b.currency)}
                                   </option>
                                 ))
-                              : (productsQ.data ?? []).map((p) => (
+                              : sortByText(productsQ.data ?? []).map((p) => (
                                   <option key={p.id} value={p.code}>{p.name} · {p.category}</option>
                                 ))}
                           </datalist>

@@ -67,6 +67,7 @@ import { formatPhone } from '@2990s/shared/phone';
 import { maintValues } from '@2990s/shared/maintenance-pools';
 import { PhoneInput } from '../components/PhoneInput';
 import { MoneyInput } from '../components/MoneyInput';
+import { sortByText } from '../lib/sort-options';
 import styles from './SupplierDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -3869,7 +3870,7 @@ const CountrySelect = ({ value, onChange }: { value: string; onChange: (v: strin
     <span className={styles.fieldLabel}>Country</span>
     <span className={styles.selectWrap}>
       <select className={styles.fieldSelect} value={value || 'Malaysia'} onChange={(e) => onChange(e.target.value)}>
-        {COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        {sortByText(COUNTRIES).map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
       <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
     </span>
@@ -3894,7 +3895,7 @@ const StateSelect = ({
           <select className={styles.fieldSelect} value={value} onChange={(e) => onChange(e.target.value)}
             disabled={localities.isLoading}>
             <option value="">{localities.isLoading ? 'Loading…' : '— Pick state —'}</option>
-            {malaysiaStates.map((s) => <option key={s} value={s}>{s}</option>)}
+            {sortByText(malaysiaStates).map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
           <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
         </span>

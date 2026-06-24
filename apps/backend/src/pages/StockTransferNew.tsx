@@ -24,6 +24,7 @@ import {
   type StockTransferItemInput,
 } from '../lib/stock-transfers-queries';
 import { DateField } from '../components/DateField';
+import { sortByText } from '../lib/sort-options';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -190,7 +191,7 @@ export const StockTransferNew = () => {
                 className={styles.fieldSelect}
               >
                 <option value="">— Pick source —</option>
-                {(warehouses.data ?? []).map((w) => (
+                {sortByText(warehouses.data ?? []).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                 ))}
               </select>
@@ -207,7 +208,7 @@ export const StockTransferNew = () => {
                 className={styles.fieldSelect}
               >
                 <option value="">— Pick destination —</option>
-                {(warehouses.data ?? []).map((w) => (
+                {sortByText(warehouses.data ?? []).map((w) => (
                   <option key={w.id} value={w.id} disabled={w.id === fromWarehouseId}>
                     {w.code} · {w.name}{w.id === fromWarehouseId ? ' (source)' : ''}
                   </option>
@@ -291,7 +292,7 @@ export const StockTransferNew = () => {
                         style={{ fontFamily: 'var(--font-mono)' }}
                       />
                       <datalist id={`xfer-skus-${ln._key}`}>
-                        {(allSkus.data ?? []).map((p) => (
+                        {sortByText(allSkus.data ?? []).map((p) => (
                           <option key={p.id} value={p.code}>{p.name}</option>
                         ))}
                       </datalist>

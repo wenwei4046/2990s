@@ -20,6 +20,7 @@ import {
   type StockTakeScopeType,
 } from '../lib/stock-takes-queries';
 import { DateField } from '../components/DateField';
+import { sortByText } from '../lib/sort-options';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -159,7 +160,7 @@ export const StockTakeNew = () => {
                 className={styles.fieldSelect}
               >
                 <option value="">— Pick warehouse —</option>
-                {(warehouses.data ?? []).map((w) => (
+                {sortByText(warehouses.data ?? []).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                 ))}
               </select>
@@ -204,7 +205,7 @@ export const StockTakeNew = () => {
                   className={styles.fieldSelect}
                 >
                   <option value="">— Pick category —</option>
-                  {CATEGORIES.map((c) => (
+                  {sortByText(CATEGORIES).map((c) => (
                     <option key={c.value} value={c.value}>{c.label}</option>
                   ))}
                 </select>
