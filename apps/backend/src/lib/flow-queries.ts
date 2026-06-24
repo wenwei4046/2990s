@@ -109,6 +109,8 @@ export const useUpdateGrnHeader = () => {
       warehouseId?: string; notes?: string; currency?: string;
       // Landed-cost core (migration 0190) — MYR per 1 unit of the GRN currency.
       exchangeRate?: number | string;
+      // Landed-cost allocation (migration 0191) — freight "平摊" basis.
+      allocationMethod?: 'QTY' | 'VALUE' | 'CBM';
     }) => authedFetch<{ grn: any }>(`/grns/${id}`, {
       method: 'PATCH', body: JSON.stringify(body),
     }),

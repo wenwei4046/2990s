@@ -25,7 +25,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Plus, Save, Trash2, X, ArrowRightLeft, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { activeOptions, buildVariantSummary, fmtDateOrDash, maintPickerValues } from '@2990s/shared';
+import { activeOptions, buildVariantSummary, fmtDateOrDash, isServiceLine, maintPickerValues } from '@2990s/shared';
 import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
 import { usePurchaseOrderDetail, usePurchaseOrders, useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
@@ -118,6 +118,7 @@ type GrnNewDraft = {
   warehouseId?:     string;
   selPoId?:         string;
   manualSupplierId?: string;
+  allocationMethod?: 'QTY' | 'VALUE' | 'CBM';
 };
 
 export const GrnNew = () => {
@@ -179,6 +180,10 @@ export const GrnNew = () => {
      inherited from the source PO server-side; the rate converts the FIFO lot
      cost to MYR. */
   const [exchangeRate, setExchangeRate]       = useState<string>('1');
+  /* Landed-cost allocation (migration 0191) — how a SERVICE-line freight charge
+     ("平摊" / transportation) is split across the goods lines into the FIFO lot
+     cost: QTY (default) | VALUE | CBM. Sent on create; the server allocates. */
+  const [allocationMethod, setAllocationMethod] = useState<'QTY' | 'VALUE' | 'CBM'>('QTY');
   const [lines, setLines]                     = useState<DraftLine[]>([]);
   /* Commander 2026-05-29 — New GRN must mirror New PO's header, including a
      "Receive into" Warehouse picker (PO calls it Purchase Location). The chosen
@@ -239,6 +244,7 @@ export const GrnNew = () => {
       if (draft.warehouseId) setWarehouseId(draft.warehouseId);
       if (draft.selPoId) setSelPoId(draft.selPoId);
       if (draft.manualSupplierId) setManualSupplierId(draft.manualSupplierId);
+      if (draft.allocationMethod) setAllocationMethod(draft.allocationMethod);
     }
 
     // Merge: restored draft lines + only the new picks not already drafted.
@@ -338,7 +344,7 @@ export const GrnNew = () => {
   const goToFromPo = () => {
     const draft: GrnNewDraft = {
       lines, picks, receivedAt, deliveryNoteRef, notes, warehouseId,
-      selPoId, manualSupplierId,
+      selPoId, manualSupplierId, allocationMethod,
     };
     try { sessionStorage.setItem('grnNewDraft', JSON.stringify(draft)); } catch { /* quota */ }
     navigate('/grns/from-po');
@@ -348,6 +354,38 @@ export const GrnNew = () => {
     () => lines.reduce((s, l) => s + l.qtyReceived * l.unitPriceCenti, 0),
     [lines],
   );
+
+  /* Landed-cost allocation preview (migration 0191) — mirror the server math so
+     the operator SEES the freight ("平摊") split across goods lines before
+     posting. The charge pool = Σ SERVICE-line values; the per-line allocated
+     freight uses the chosen basis (QTY / VALUE / CBM). All in the GRN currency
+     for display (the server stores MYR via the exchange rate). Keyed by rid. */
+  const allocPreview = useMemo(() => {
+    const isSvc = (l: DraftLine) => isServiceLine({ itemGroup: l.itemGroup, itemCode: l.materialCode });
+    const goods = lines.filter((l) => l.materialCode.trim() && !isSvc(l));
+    const chargePool = lines
+      .filter((l) => l.materialCode.trim() && isSvc(l))
+      .reduce((s, l) => s + l.qtyReceived * l.unitPriceCenti, 0);
+    const basisOf = (l: DraftLine): number => {
+      if (allocationMethod === 'VALUE') return l.qtyReceived * l.unitPriceCenti;
+      if (allocationMethod === 'CBM') return l.qtyReceived; // volume unknown client-side → qty proxy
+      return l.qtyReceived;
+    };
+    let sumBasis = goods.reduce((s, l) => s + basisOf(l), 0);
+    if (sumBasis <= 0) sumBasis = goods.reduce((s, l) => s + l.qtyReceived, 0);
+    const allocByRid = new Map<string, number>();
+    let used = 0;
+    goods.forEach((l, i) => {
+      const isLast = i === goods.length - 1;
+      let alloc = 0;
+      if (chargePool > 0 && sumBasis > 0) {
+        alloc = isLast ? chargePool - used : Math.round((chargePool * basisOf(l)) / sumBasis);
+        if (!isLast) used += alloc;
+      }
+      allocByRid.set(l.rid, alloc);
+    });
+    return { chargePool, allocByRid };
+  }, [lines, allocationMethod]);
 
   // ── Mode + resolved supplier / header PO. ──────────────────────────────
   // Manual mode = no picks AND no single PO chosen. Then the operator picks a
@@ -516,6 +554,8 @@ export const GrnNew = () => {
            1 server-side, so a manual MYR receipt is unaffected. */
         currency,
         exchangeRate:    isForeign ? (rateNum > 0 ? rateNum : 1) : 1,
+        // Landed-cost allocation (migration 0191) — the freight "平摊" basis.
+        allocationMethod,
         items: realLines.map((l) => ({
           purchaseOrderItemId: l.purchaseOrderItemId,
           materialKind:        l.materialKind,
@@ -716,6 +756,30 @@ export const GrnNew = () => {
                 </span>
               </label>
             )}
+            {/* Landed-cost allocation (migration 0191) — choose how a SERVICE-line
+                freight charge ("平摊" / transportation) is spread across the goods
+                lines into their FIFO lot cost. Only meaningful once a charge line
+                exists, but always selectable so it's set before posting. */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Charge allocation</span>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={allocationMethod}
+                  onChange={(e) => setAllocationMethod(e.target.value as 'QTY' | 'VALUE' | 'CBM')}
+                >
+                  <option value="QTY">By quantity (default)</option>
+                  <option value="VALUE">By value</option>
+                  <option value="CBM">By volume (CBM)</option>
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
+              {allocPreview.chargePool > 0 && (
+                <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginTop: 2 }}>
+                  {fmtRm(allocPreview.chargePool, currency)} freight spread across {lines.filter((l) => l.materialCode.trim() && !isServiceLine({ itemGroup: l.itemGroup, itemCode: l.materialCode })).length} goods line(s)
+                </span>
+              )}
+            </label>
           </div>
 
           {/* Read-only supplier-info bar — same markup/classes as New PO. */}
@@ -788,6 +852,12 @@ export const GrnNew = () => {
             lines.map((l, idx) => {
               const lineValueCenti = l.qtyReceived * l.unitPriceCenti;
               const variantSummary = buildVariantSummary(l.itemGroup, l.variants);
+              /* Landed-cost allocation (0191) — this goods line's share of the
+                 freight pool + its landed unit cost (base + per-unit freight),
+                 shown only when there's a charge to spread. Service lines get 0. */
+              const lineIsSvc = isServiceLine({ itemGroup: l.itemGroup, itemCode: l.materialCode });
+              const lineAllocCenti = allocPreview.allocByRid.get(l.rid) ?? 0;
+              const landedUnitCenti = l.unitPriceCenti + (l.qtyReceived > 0 ? Math.round(lineAllocCenti / l.qtyReceived) : 0);
               // Manual lines have no outstanding cap — qty inputs go uncapped.
               const cap = l.outstanding;
               const isManualLine = l.purchaseOrderItemId === null;
@@ -846,6 +916,13 @@ export const GrnNew = () => {
                         {isForeign && (
                           <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
                             ≈ {fmtRm(Math.round(lineValueCenti * rateNum), 'MYR')}
+                          </span>
+                        )}
+                        {/* Landed-cost allocation (0191) — +freight & landed unit
+                            cost, on goods lines only when there's a charge pool. */}
+                        {allocPreview.chargePool > 0 && !lineIsSvc && (
+                          <span style={{ fontSize: 'var(--fs-11)', color: 'var(--c-accent, #8a6d3b)', marginTop: 2 }}>
+                            +{fmtRm(lineAllocCenti, currency)} freight · landed {fmtRm(landedUnitCenti, currency)}/unit
                           </span>
                         )}
                       </span>

@@ -141,13 +141,16 @@ export async function restampSiFromDo(sb: any, deliveryOrderId: string) {
 export async function recostFromGrn(sb: any, grnId: string) {
   try {
     // 1. GRN lines — the received buckets + their GR (fallback) price.
+    //    Migration 0191 — also read allocated_charge_centi + qty_accepted so the
+    //    landed FREIGHT folded in at receive time survives a PI recost.
     const { data: grnItems } = await sb.from('grn_items')
-      .select('id, material_code, item_group, variants, unit_price_centi')
+      .select('id, material_code, item_group, variants, unit_price_centi, qty_accepted, allocated_charge_centi')
       .eq('grn_id', grnId);
     if (!grnItems || grnItems.length === 0) return;
     const giList = grnItems as Array<{
       id: string; material_code: string; item_group: string | null;
       variants: Record<string, unknown> | null; unit_price_centi: number | null;
+      qty_accepted: number | null; allocated_charge_centi: number | null;
     }>;
 
     /* Landed-cost core (migration 0190) — the GRN's exchange_rate (MYR per 1 unit
@@ -194,17 +197,44 @@ export async function recostFromGrn(sb: any, grnId: string) {
       piAgg.set(r.grn_item_id, a);
     }
 
+    /* Landed-cost allocation (migration 0191) — per-bucket FREIGHT per unit. The
+       allocated_charge_centi was folded into the lot at receive time as
+       round(allocated / qty) per unit. A PI recost re-derives the GOODS cost, so
+       we must re-add the SAME per-unit freight or it would silently drop out.
+       Aggregate per bucket as a qty-weighted average of each line's
+       round(allocated / qty), so a bucket spanning several received lines
+       resolves to one stable per-unit freight. 0 everywhere when no charge. */
+    const freightByBucket = new Map<string, number>();
+    {
+      const acc = new Map<string, { freight: number; qty: number }>();
+      for (const g of giList) {
+        const vkey = computeVariantKey(g.item_group, g.variants);
+        const key = `${g.material_code}::${vkey}`;
+        const qty = Math.max(0, Number(g.qty_accepted ?? 0));
+        const perUnit = qty > 0 ? Math.round(Number(g.allocated_charge_centi ?? 0) / qty) : 0;
+        const a = acc.get(key) ?? { freight: 0, qty: 0 };
+        a.freight += perUnit * qty; // total freight sen across this line
+        a.qty += qty;
+        acc.set(key, a);
+      }
+      for (const [key, a] of acc) freightByBucket.set(key, a.qty > 0 ? Math.round(a.freight / a.qty) : 0);
+    }
+
     // 3. Authoritative unit cost per (product_code, variant_key) bucket.
-    //    PI price > GR price > Pending (null → leave the lot untouched).
+    //    PI price > GR price > Pending (null → leave the lot untouched). The
+    //    per-unit landed FREIGHT (0191) is ADDED on top of whichever GOODS cost
+    //    source wins, so the freight stays folded after a PI recost.
     const costByBucket = new Map<string, number | null>();
     for (const g of giList) {
       const vkey = computeVariantKey(g.item_group, g.variants);
       const key = `${g.material_code}::${vkey}`;
       const pi = piAgg.get(g.id);
+      const freight = freightByBucket.get(key) ?? 0;
       let cost: number | null;
       // PI price (already MYR via piAgg) > GR price × GRN rate (→ MYR) > Pending.
-      if (pi && pi.qty > 0) cost = Math.round(pi.amt / pi.qty);
-      else if (Number(g.unit_price_centi ?? 0) > 0) cost = toMyrSen(Number(g.unit_price_centi), grnRate);
+      // Goods cost + per-unit allocated freight = the landed lot cost.
+      if (pi && pi.qty > 0) cost = Math.round(pi.amt / pi.qty) + freight;
+      else if (Number(g.unit_price_centi ?? 0) > 0) cost = toMyrSen(Number(g.unit_price_centi), grnRate) + freight;
       else cost = null; // Pending — no price anywhere yet.
       const existing = costByBucket.get(key);
       if (existing === undefined) costByBucket.set(key, cost);

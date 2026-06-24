@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
-import { buildVariantSummary, computeVariantKey, effectiveDelivery, type VariantAttrs } from '@2990s/shared';
+import { buildVariantSummary, computeVariantKey, effectiveDelivery, isServiceLine, type VariantAttrs } from '@2990s/shared';
 import {
   orderSofaModuleRowsWithinBuilds,
   sortSoLinesByGroupRank,
@@ -13,6 +13,7 @@ import {
 import { recostFromGrn } from '../lib/recost';
 import { nextMonthlyDocNo } from '../lib/doc-no';
 import { normalizeExchangeRate, toMyrSen } from '../lib/fx';
+import { allocateLandedCharges, normalizeAllocationMethod } from '../lib/landed-allocation';
 
 export const grns = new Hono<{ Bindings: Env; Variables: Variables }>();
 grns.use('*', supabaseAuth);
@@ -46,16 +47,89 @@ export async function resolvePoBatchByItem(
   return out;
 }
 
+/* ── Landed-cost allocation (migration 0191) — "平摊" ────────────────────────
+   Compute each goods line's share of the SERVICE-line (freight) charge pool and
+   PERSIST it onto grn_items.allocated_charge_centi, so the FIFO lot cost and a
+   later PI recost both fold it in deterministically. Returns the allocation
+   result (with per-line landed unit cost) so the caller can stamp the IN
+   movements. Pure-on-empty: chargePool === 0 ⇒ allocation 0 everywhere ⇒ no
+   writes ⇒ byte-for-byte no-op for a GRN with no service lines.
+   `items` must carry id / item_group / material_code / qty_accepted /
+   unit_price_centi / line_total_centi. Best-effort persistence (the post that
+   called us already committed). */
+type AllocItemRow = {
+  id: string; qty_accepted: number; material_code: string;
+  unit_price_centi: number | null; line_total_centi?: number | null;
+  item_group?: string | null;
+};
+async function computeAndStoreGrnAllocation(
+  sb: any,
+  items: AllocItemRow[],
+  grnRate: unknown,
+  method: ReturnType<typeof normalizeAllocationMethod>,
+) {
+  // CBM basis needs each goods line's product volume (unit_m3_milli). Resolve
+  // per material_code in one round trip; default 0 (the allocator falls back to
+  // QTY when the CBM Σ is 0, so a missing volume never divides by zero).
+  const m3ByCode = new Map<string, number>();
+  const codes = [...new Set(items.map((it) => it.material_code).filter(Boolean))];
+  if (codes.length > 0) {
+    const { data: prods } = await sb.from('mfg_products').select('code, unit_m3_milli').in('code', codes);
+    for (const p of (prods ?? []) as Array<{ code: string; unit_m3_milli: number | null }>) {
+      m3ByCode.set(p.code, Number(p.unit_m3_milli ?? 0));
+    }
+  }
+  const alloc = allocateLandedCharges(
+    items.map((it) => ({
+      id: it.id,
+      itemGroup: it.item_group ?? null,
+      materialCode: it.material_code,
+      qty: Number(it.qty_accepted ?? 0),
+      // Pool by the SERVICE line's line total; allocate ONTO goods unit price.
+      amountCenti: Number(it.line_total_centi ?? 0),
+      unitPriceCenti: Number(it.unit_price_centi ?? 0),
+      unitM3Milli: m3ByCode.get(it.material_code) ?? 0,
+    })),
+    method,
+    grnRate,
+  );
+  // Persist allocated_charge_centi per goods line. ALWAYS write the computed
+  // value (incl. resetting to 0) so a charge that was removed / a method change
+  // that re-splits is reflected — but only when there's something to reconcile
+  // (a non-zero pool now, OR any line currently carries a non-zero allocation).
+  const anyToReset = items.some((it) => Number((it as { allocated_charge_centi?: number | null }).allocated_charge_centi ?? 0) !== 0);
+  if (alloc.chargePoolMyr > 0 || anyToReset) {
+    await Promise.all(alloc.goods.map((g) =>
+      sb.from('grn_items').update({ allocated_charge_centi: g.allocatedChargeCenti }).eq('id', g.id),
+    ));
+  }
+  return alloc;
+}
+
+/* Recompute + persist a GRN's landed allocation from its CURRENT lines + header
+   (used after the allocation_method / rate is changed on PATCH, before recost).
+   Reads everything off the DB so it's self-contained. Best-effort. */
+async function reallocateGrnCharges(sb: any, grnId: string): Promise<void> {
+  const { data: head } = await sb.from('grns')
+    .select('exchange_rate, allocation_method').eq('id', grnId).maybeSingle();
+  const grnRate = (head as { exchange_rate?: string | number | null } | null)?.exchange_rate ?? 1;
+  const method = normalizeAllocationMethod((head as { allocation_method?: string | null } | null)?.allocation_method);
+  const { data: items } = await sb.from('grn_items')
+    .select('id, qty_accepted, material_code, unit_price_centi, line_total_centi, item_group, allocated_charge_centi')
+    .eq('grn_id', grnId);
+  await computeAndStoreGrnAllocation(sb, (items ?? []) as AllocItemRow[], grnRate, method);
+}
+
 /* ── Shared helper: post a GRN, roll up to PO items, write inventory IN ──
    Pulled out of the PATCH /:id/post handler so both single-doc post and
    the multi-PO `/from-po-items` route can reuse the same logic.
    Best-effort inventory write (matches existing /post behaviour). */
 async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise<{ ok: true } | { ok: false; reason: string; status?: number }> {
   const { data: grnHeader } = await sb.from('grns')
-    .select('grn_number, warehouse_id, exchange_rate')
+    .select('grn_number, warehouse_id, exchange_rate, allocation_method')
     .eq('id', grnId).maybeSingle();
   const { data: items } = await sb.from('grn_items')
-    .select('purchase_order_item_id, qty_accepted, material_code, material_name, unit_price_centi, item_group, variants')
+    .select('id, purchase_order_item_id, qty_accepted, material_code, material_name, unit_price_centi, line_total_centi, item_group, variants')
     .eq('grn_id', grnId);
 
   // Recount received_qty + re-evaluate PO status from live GRN lines.
@@ -88,13 +162,36 @@ async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise
      MYR lot costs / COGS / margins are unchanged. A later PI recost OVERWRITES
      this with the PI line price × the PI's own rate (the authoritative cost). */
   const grnRate = (grnHeader as { exchange_rate?: string | number | null } | null)?.exchange_rate ?? 1;
+
+  /* ── Landed-cost allocation (migration 0191) — "平摊" ──────────────────────
+     A SERVICE line (item_group='service' — TRANSPORTATION / freight, no
+     supplier, just a description + amount) is NOT goods: it must create NO
+     inventory movement. Its amount is POOLED and allocated across the goods
+     lines (QTY / VALUE / CBM, header allocation_method) so each goods line's
+     FIFO lot cost = base MYR cost + its per-unit share of the freight. We store
+     allocated_charge_centi per goods line so a later PI recost can re-add it.
+     chargePool === 0 (no service lines) ⇒ allocation 0 everywhere ⇒ the lot
+     cost is identical to the 0190 path (byte-for-byte no-op for existing GRNs). */
+  type GrnItemRowLocal = {
+    id: string; purchase_order_item_id: string | null; qty_accepted: number;
+    material_code: string; material_name: string | null; unit_price_centi: number | null;
+    line_total_centi?: number | null; item_group?: string | null; variants?: VariantAttrs | null;
+  };
+  const itemRows = (items ?? []) as GrnItemRowLocal[];
+  const method = normalizeAllocationMethod((grnHeader as { allocation_method?: string | null } | null)?.allocation_method);
+  const alloc = await computeAndStoreGrnAllocation(sb, itemRows, grnRate, method);
+  const allocByItemId = new Map(alloc.goods.map((g) => [g.id, g]));
+
   if (warehouseId && items) {
     // Migration 0120 — stamp each IN with its source PO number as the batch.
     const batchByItem = await resolvePoBatchByItem(
       sb,
-      (items as Array<{ purchase_order_item_id: string | null }>).map((it) => it.purchase_order_item_id),
+      itemRows.map((it) => it.purchase_order_item_id),
     );
-    const movements = (items as Array<{ purchase_order_item_id: string | null; qty_accepted: number; material_code: string; material_name: string | null; unit_price_centi: number | null; item_group?: string | null; variants?: VariantAttrs | null }>)
+    const movements = itemRows
+      // SERVICE lines (freight) never enter inventory — skip them here. Their
+      // amount has already been allocated INTO the goods lines' lot cost above.
+      .filter((it) => !isServiceLine({ itemGroup: it.item_group ?? null, itemCode: it.material_code }))
       .filter((it) => it.qty_accepted > 0)
       .map((it) => ({
         movement_type: 'IN' as const,
@@ -104,8 +201,11 @@ async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise
         variant_key: computeVariantKey(it.item_group, it.variants ?? null),
         product_name: it.material_name,
         qty: it.qty_accepted,
-        // Foreign GRN line price → MYR lot cost (rate 1 = no-op, migration 0190).
-        unit_cost_sen: toMyrSen(Number(it.unit_price_centi ?? 0), grnRate),
+        // Landed MYR lot cost = base (0190) + per-unit allocated freight (0191).
+        // When the GRN has no service lines this === toMyrSen(unit_price, rate),
+        // so existing GRNs are byte-for-byte unchanged.
+        unit_cost_sen: allocByItemId.get(it.id)?.landedUnitCostMyr
+          ?? toMyrSen(Number(it.unit_price_centi ?? 0), grnRate),
         source_doc_type: 'GRN' as const,
         source_doc_id: grnId,
         source_doc_no: grnNo,
@@ -132,8 +232,9 @@ async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise
 
 const HEADER =
   'id, grn_number, purchase_order_id, supplier_id, warehouse_id, received_at, delivery_note_ref, status, notes, ' +
-  /* Migration 0101 — GRN ↔ PO money parity; 0190 — exchange_rate (FX→MYR cost) */
-  'currency, exchange_rate, subtotal_centi, tax_centi, total_centi, ' +
+  /* Migration 0101 — GRN ↔ PO money parity; 0190 — exchange_rate (FX→MYR cost);
+     0191 — allocation_method (landed-cost "平摊" basis). */
+  'currency, exchange_rate, allocation_method, subtotal_centi, tax_centi, total_centi, ' +
   'posted_at, created_at, created_by, updated_at';
 const ITEM =
   'id, grn_id, purchase_order_item_id, material_kind, material_code, material_name, supplier_sku, ' +
@@ -146,6 +247,8 @@ const ITEM =
   'line_total_centi, delivery_date, unit_cost_centi, ' +
   /* Migration 0106 — GRN line consumption (downstream PI/PR draw) */
   'invoiced_qty, returned_qty, created_at, ' +
+  /* Migration 0191 — landed freight allocated to this goods line (MYR sen) */
+  'allocated_charge_centi, ' +
   /* Migration 0151 — physical rack placement */
   'rack_id';
 
@@ -794,6 +897,9 @@ grns.post('/', async (c) => {
     if (poCur) grnCurrency = String(poCur).toUpperCase();
   }
   const grnExchangeRate = normalizeExchangeRate(body.exchangeRate, grnCurrency);
+  // Landed-cost allocation (migration 0191) — basis for splitting SERVICE-line
+  // freight across the goods lines. Default QTY when omitted.
+  const grnAllocationMethod = normalizeAllocationMethod(body.allocationMethod);
 
   const { data: header, error: hErr } = await sb.from('grns').insert({
     grn_number: grnNumber,
@@ -805,6 +911,7 @@ grns.post('/', async (c) => {
     notes: (body.notes as string) ?? null,
     currency: grnCurrency,
     exchange_rate: grnExchangeRate,
+    allocation_method: grnAllocationMethod,
     status: 'POSTED',
     posted_at: new Date().toISOString(),
     created_by: user.id,
@@ -1472,6 +1579,15 @@ grns.patch('/:id', async (c) => {
   // currency is an enum — normalise to upper-case like the create paths do.
   if (updates.currency !== undefined) updates.currency = String(updates.currency).toUpperCase();
 
+  /* Landed-cost allocation (migration 0191) — the "平摊" basis. Changing it
+     re-splits the freight pool across the goods lines, so we re-allocate +
+     recost below (allocationChanged). */
+  let allocationChanged = false;
+  if (body.allocationMethod !== undefined) {
+    updates.allocation_method = normalizeAllocationMethod(body.allocationMethod);
+    allocationChanged = true;
+  }
+
   /* Landed-cost core (migration 0190) — keep exchange_rate consistent with the
      effective currency, mirroring PI's PATCH (0188). Resolve the effective
      currency = the PATCH's new currency if set, else the GRN's stored currency.
@@ -1499,11 +1615,14 @@ grns.patch('/:id', async (c) => {
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
 
   /* When the rate (or currency) was corrected — e.g. the GRN was created at the
-     default rate 1 and the receiver then enters the real RMB→MYR rate — the lot
-     was already booked at the OLD MYR basis. Re-cost this GRN so the lot →
-     consumptions → DO → SI cascade re-derives in MYR at the new rate (GR price ×
-     new GRN rate, unless a PI has already superseded it). Best-effort. */
-  if (rateOrCurrencyChanged) {
+     default rate 1 and the receiver then enters the real RMB→MYR rate — OR the
+     landed-cost allocation_method changed, the lot was booked at the OLD basis.
+     Re-allocate the freight (so allocated_charge_centi reflects the new rate /
+     method), then re-cost this GRN so the lot → consumptions → DO → SI cascade
+     re-derives in MYR (GR price × rate + per-unit freight, unless a PI has
+     already superseded it). Best-effort. */
+  if (rateOrCurrencyChanged || allocationChanged) {
+    try { await reallocateGrnCharges(sb, id); } catch { /* best-effort */ }
     try { await recostFromGrn(sb, id); } catch { /* best-effort */ }
   }
   return c.json({ grn: data });
@@ -1635,7 +1754,11 @@ grns.post('/:id/items', async (c) => {
   // this one line so add/edit/delete all converge. Best-effort throughout.
   const addedPoiId = (it.purchaseOrderItemId as string) ?? null;
   try { await recomputePoReceived(sb, [addedPoiId]); } catch { /* best-effort */ }
-  if (qtyReceived > 0) {
+  // Landed-cost (migration 0191) — a SERVICE line (freight) is not goods: it
+  // must NOT write an inventory movement (mirrors the post path's skip). Its
+  // amount is a charge, allocated into goods lot cost, never its own lot.
+  const addIsService = isServiceLine({ itemGroup: (it.itemGroup as string) ?? null, itemCode: String(it.materialCode ?? '') });
+  if (qtyReceived > 0 && !addIsService) {
     try {
       const { data: grnHeader } = await sb.from('grns')
         .select('grn_number, warehouse_id, exchange_rate').eq('id', grnId).maybeSingle();

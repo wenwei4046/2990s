@@ -30,7 +30,7 @@ import {
   ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown, ArrowRightLeft,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { activeOptions, buildVariantSummary, fmtDateOrDash, maintPickerValues } from '@2990s/shared';
+import { activeOptions, buildVariantSummary, fmtDateOrDash, isServiceLine, maintPickerValues } from '@2990s/shared';
 import {
   useGrnDetail,
   useUpdateGrnHeader,
@@ -57,6 +57,14 @@ import { DateField } from '../components/DateField';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
+
+/* Landed-cost allocation (migration 0191) — display labels for the freight
+   "平摊" basis. */
+const ALLOC_LABEL: Record<string, string> = {
+  QTY: 'By quantity',
+  VALUE: 'By value',
+  CBM: 'By volume (CBM)',
+};
 
 const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   const v = centi ?? 0;
@@ -116,6 +124,11 @@ type HeaderDraft = {
   /* Landed-cost core (migration 0190) — MYR per 1 unit of the GRN currency, kept
      as a string for the numeric input. Editing it re-costs the FIFO lot to MYR. */
   exchangeRate: string;
+  /* Landed-cost allocation (migration 0191) — freight "平摊" basis ('QTY' |
+     'VALUE' | 'CBM'). Kept as string (like currency) so the page's generic
+     setHeaderField(k, v: string) accepts it; the server normalises. Changing it
+     re-splits the charge pool + re-costs the lot on Save. */
+  allocationMethod: string;
   notes: string;
 };
 type LineDraft = {
@@ -139,6 +152,9 @@ type GrnItemRow = Record<string, unknown> & {
   unit_price_centi: number;
   discount_centi?: number;
   line_total_centi?: number;
+  /* Landed-cost allocation (migration 0191) — freight (MYR sen) allocated to
+     this goods line at GRN-post; folded into the FIFO lot cost. */
+  allocated_charge_centi?: number;
   delivery_date?: string | null;
   item_group?: string | null;
   material_kind?: string | null;
@@ -164,6 +180,8 @@ const headerSnapshot = (g: any): HeaderDraft => ({
   currency:        g.currency ?? 'MYR',
   // Landed-cost core (0190) — numeric(14,6) comes back as a string; default '1'.
   exchangeRate:    g.exchange_rate != null ? String(g.exchange_rate) : '1',
+  // Landed-cost allocation (0191) — freight basis; default QTY.
+  allocationMethod: (g.allocation_method as string) ?? 'QTY',
   notes:           g.notes ?? '',
 });
 
@@ -277,6 +295,17 @@ export const GoodsReceivedDetail = () => {
   const grandTotal = itemsSubtotal + (grn.tax_centi ?? 0);
 
   const headerView = headerDraft ?? headerSnapshot(grn);
+
+  /* Landed-cost allocation (migration 0191) — the stored per-line freight +
+     total charge pool. In VIEW we show the SAVED allocation (allocated_charge_centi
+     persisted at post). The header select is read-only in View, editable in Edit
+     (re-allocates + re-costs on Save). chargePool = Σ SERVICE-line line totals. */
+  const isSvcItem = (it: GrnItemRow) =>
+    isServiceLine({ itemGroup: it.item_group ?? null, itemCode: it.material_code });
+  const chargePoolCenti = visibleItems
+    .filter(isSvcItem)
+    .reduce((s, it) => s + lineTotalOf(it), 0);
+  const allocatedOf = (it: GrnItemRow): number => it.allocated_charge_centi ?? 0;
   /* Landed-cost core (migration 0190) — the effective FX rate (draft in Edit,
      stored in View) + whether this GRN is foreign, for the MYR cost preview.
      The line prices stay in the GRN currency; this rate converts the recorded
@@ -509,6 +538,13 @@ export const GoodsReceivedDetail = () => {
               const variantSummary = buildVariantSummary(it.item_group ?? null, it.variants as Record<string, unknown> | null)
                 || it.description
                 || it.material_name;
+              /* Landed-cost allocation (0191) — this goods line's stored freight +
+                 landed unit cost (base unit + per-unit freight). Goods lines only,
+                 shown when the GRN carries a charge pool. */
+              const lineIsSvc = isSvcItem(it);
+              const lineAllocCenti = allocatedOf(it);
+              const lineQty = it.qty_received ?? 0;
+              const landedUnitCenti = it.unit_price_centi + (lineQty > 0 ? Math.round(lineAllocCenti / lineQty) : 0);
               return (
                 <div
                   key={it.id}
@@ -537,7 +573,16 @@ export const GoodsReceivedDetail = () => {
                       {it.item_group && <ItemGroupPill group={it.item_group} />}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                      <span className={styles.previewPrice}>{fmtRm(lineValueCenti, grn.currency)}</span>
+                      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                        <span className={styles.previewPrice}>{fmtRm(lineValueCenti, grn.currency)}</span>
+                        {/* Landed-cost allocation (0191) — +freight & landed unit
+                            cost on goods lines when the GRN carries a charge. */}
+                        {chargePoolCenti > 0 && !lineIsSvc && lineAllocCenti > 0 && (
+                          <span style={{ fontSize: 'var(--fs-11)', color: 'var(--c-accent, #8a6d3b)', marginTop: 2 }}>
+                            +{fmtRm(lineAllocCenti, grn.currency)} freight · landed {fmtRm(landedUnitCenti, grn.currency)}/unit
+                          </span>
+                        )}
+                      </span>
                       {/* Remove — Edit mode only. Commander 2026-06-15 — confirm
                           before delete (no more 裸奔). On confirm the line is
                           removed and the server releases the PO's received_qty back. */}
@@ -782,6 +827,14 @@ export const GoodsReceivedDetail = () => {
               <span className={styles.totalLabel}>Total</span>
               <span className={`${styles.totalValue} ${styles.grandTotal}`}>{fmtRm(grandTotal, grn.currency)}</span>
             </div>
+            {/* Landed-cost allocation (0191) — the SERVICE-line freight pool being
+                spread across goods lines ("平摊"). Shown only when there's a charge. */}
+            {chargePoolCenti > 0 && (
+              <div className={styles.totalRow}>
+                <span className={styles.totalLabel}>Freight allocated ({ALLOC_LABEL[String(grn.allocation_method ?? 'QTY')] ?? 'By quantity'})</span>
+                <span className={styles.totalValue}>{fmtRm(chargePoolCenti, grn.currency)}</span>
+              </div>
+            )}
             {/* Landed-cost core (0190) — MYR inventory cost for a foreign GRN. */}
             {isForeignGrn && (
               <div className={styles.totalRow}>
@@ -857,6 +910,9 @@ const SupplierCard = ({
                 const wh = warehouses.find((w) => w.id === grn.warehouse_id);
                 return wh ? `${wh.code} · ${wh.name}` : null;
               })()} />
+            {/* Landed-cost allocation (0191) — the freight "平摊" basis. */}
+            <InfoCell label="Charge allocation"
+              value={ALLOC_LABEL[String(grn.allocation_method ?? 'QTY')] ?? 'By quantity'} />
             <div style={{ gridColumn: 'span 2' }}>
               <InfoCell label="Notes" value={grn.notes || null} />
             </div>
@@ -925,6 +981,21 @@ const SupplierCard = ({
                 {sortByText(warehouses.filter((w) => w.is_active)).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                 ))}
+              </select>
+              <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+            </span>
+          </label>
+          {/* Landed-cost allocation (0191) — choose how a SERVICE-line freight
+              charge is spread across goods lines into the FIFO lot cost. Changing
+              it re-allocates + re-costs the lot on Save. */}
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Charge allocation</span>
+            <span className={styles.selectWrap}>
+              <select className={styles.fieldSelect} value={draft.allocationMethod} disabled={locked}
+                onChange={(e) => onField('allocationMethod', e.target.value)}>
+                <option value="QTY">By quantity (default)</option>
+                <option value="VALUE">By value</option>
+                <option value="CBM">By volume (CBM)</option>
               </select>
               <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
             </span>

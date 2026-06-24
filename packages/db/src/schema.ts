@@ -1114,6 +1114,11 @@ export const purchaseOrderLines = pgTable('purchase_order_lines', {
 // decrement). No Draft/lifecycle: POSTED reads as "Confirmed".
 export const grnStatus = pgEnum('grn_status', ['POSTED', 'CLOSED', 'CANCELLED']);
 
+/* Landed-cost allocation basis (migration 0191) — how a SERVICE-line freight
+   charge is split across the GRN's goods lines into the FIFO lot cost:
+   QTY (default) | VALUE (qty × base MYR cost) | CBM (qty × unit_m3_milli). */
+export const chargeAllocationMethod = pgEnum('charge_allocation_method', ['QTY', 'VALUE', 'CBM']);
+
 export const purchaseInvoiceStatus = pgEnum('purchase_invoice_status', [
   'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED',
 ]);
@@ -1136,6 +1141,10 @@ export const grns = pgTable('grns', {
      time — subtotal/total stay in the GRN's own currency. Mirrors
      purchase_invoices.exchange_rate (migration 0188). */
   exchangeRate:      numeric('exchange_rate', { precision: 14, scale: 6 }).notNull().default('1'),
+  /* Landed-cost allocation (migration 0191) — basis for splitting SERVICE-line
+     freight charges across the goods lines into the FIFO lot cost. QTY default
+     ⇒ existing GRNs (no charge lines) allocate 0 → byte-for-byte unchanged. */
+  allocationMethod:  chargeAllocationMethod('allocation_method').notNull().default('QTY'),
   subtotalCenti:     integer('subtotal_centi').notNull().default(0),
   taxCenti:          integer('tax_centi').notNull().default(0),
   totalCenti:        integer('total_centi').notNull().default(0),
@@ -1190,6 +1199,10 @@ export const grnItems = pgTable('grn_items', {
      - returned_qty). Either > 0 ⇒ the GRN has a downstream child (edit-lock). */
   invoicedQty:           integer('invoiced_qty').notNull().default(0),
   returnedQty:           integer('returned_qty').notNull().default(0),
+  /* Landed-cost allocation (migration 0191) — freight (MYR sen) allocated to
+     THIS goods line at GRN-post (Σ over goods lines === the charge pool). Stored
+     so recost re-adds it deterministically after a PI recost. SERVICE lines 0. */
+  allocatedChargeCenti:  integer('allocated_charge_centi').notNull().default(0),
   createdAt:             timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxGrn: index('idx_grn_items_grn').on(t.grnId),
