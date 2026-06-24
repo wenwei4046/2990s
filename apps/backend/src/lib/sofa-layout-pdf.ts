@@ -57,9 +57,8 @@ export function drawSofaLayout(
 
   // Reserve a small block under the sofa for the TV marker + the up-triangle.
   const TV_BLOCK = 6;   // mm — gap + triangle + TV rect + "TV" label
-  const CAPTION = 3.5;  // mm — dims caption line below everything
 
-  const usableH = maxH - TV_BLOCK - CAPTION;
+  const usableH = maxH - TV_BLOCK;
   if (usableH <= 1) return 0;
 
   // Scale so the sofa + TV block fit the box. cm → mm.
@@ -127,15 +126,6 @@ export function drawSofaLayout(
   doc.text('TV', cx, tvY + tvH - 0.7, { align: 'center' });
   doc.setTextColor(0);
 
-  // ── Dims caption ────────────────────────────────────────────────────
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6);
-  doc.setTextColor(120);
-  const caption = `≈ ${Math.round(bbox.w)} × ${Math.round(bbox.h)} cm`;
-  const captionY = tvY + tvH + CAPTION - 0.5;
-  doc.text(caption, cx, captionY, { align: 'center' });
-  doc.setTextColor(0);
-
-  // Total drawn height: top of sofa → caption baseline.
-  return captionY - oy + 0.5;
+  // Total drawn height: top of sofa → TV block bottom (no dims caption).
+  return (tvY + tvH) - oy + 0.5;
 }
