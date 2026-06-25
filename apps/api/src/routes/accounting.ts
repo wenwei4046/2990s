@@ -204,6 +204,19 @@ accounting.post('/post/si/:invoiceNumber', async (c) => {
   const invoiceNumber = c.req.param('invoiceNumber');
   const sb = c.get('supabase');
 
+  /* LEAK GUARD (DRAFT, two-state 2026-06-25) — a DRAFT SI has not committed any
+     revenue; the manual re-post endpoint must refuse it, or an operator could
+     post a draft's revenue out-of-band (the SI route's confirm transition is the
+     ONLY path that should post a draft). postSiRevenue itself does not check
+     status, so the guard lives here at the caller. */
+  {
+    const { data: si } = await sb.from('sales_invoices').select('status').eq('invoice_number', invoiceNumber).maybeSingle();
+    if (!si) return c.json({ error: 'invoice_not_found' }, 404);
+    if ((si as { status?: string }).status === 'DRAFT') {
+      return c.json({ error: 'not_postable', message: 'SI is a draft — confirm it (DRAFT → Issued) before posting revenue.' }, 409);
+    }
+  }
+
   // Delegates to the shared idempotent poster (post-si-revenue). Same code path
   // the SI POST handler uses on confirm, so manual + auto posting can never
   // diverge or double-post.
@@ -537,9 +550,14 @@ accounting.get('/balances', async (c) => {
 
 accounting.get('/ar-aging', async (c) => {
   const sb = c.get('supabase');
+  /* LEAK GUARD (DRAFT, two-state 2026-06-25) — v_ar_aging filters CANCELLED/VOID
+     but NOT DRAFT (the view predates the SI two-state). A DRAFT SI has posted no
+     AR yet, so it must never appear in the aging buckets; the view exposes
+     s.status, so filter DRAFT out here at the route (migrations are frozen). */
   const { data, error } = await sb
     .from('v_ar_aging')
     .select('*')
+    .neq('status', 'DRAFT')
     .order('days_overdue', { ascending: false });
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   return c.json({ arAging: data ?? [] });

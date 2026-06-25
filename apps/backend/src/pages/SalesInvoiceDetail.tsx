@@ -19,7 +19,7 @@ import {
 } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Plus, Printer, Save, ChevronDown, Ban, RotateCcw,
+  ArrowLeft, FileText, Pencil, Plus, Printer, Save, ChevronDown, Ban, RotateCcw, Check,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
@@ -57,7 +57,7 @@ import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-type SiStatus = 'SENT' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' | 'CANCELLED';
+type SiStatus = 'DRAFT' | 'SENT' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' | 'CANCELLED';
 
 const fmtRm = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -393,6 +393,11 @@ export const SalesInvoiceDetail = () => {
 
   const isLocked = lockedStatuses.includes(header.status);
   const isCancelled = header.status === 'CANCELLED';
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT SI is staging-only:
+     it has posted NO revenue/AR, minted NO credit and cannot take a payment until
+     Confirm flips it to Issued (SENT), which fires the AR/GL posting + credit
+     auto-apply once. Lines are still editable on a DRAFT; payments are not. */
+  const isDraft = header.status === 'DRAFT';
   const grandTotal = header.local_total_centi || header.total_centi || 0;
 
   const handlePrint = () => {
@@ -409,9 +414,28 @@ export const SalesInvoiceDetail = () => {
     if (!(await askConfirm({ title: `Reopen ${header.invoice_number} back to Issued?`, confirmLabel: 'Reopen' }))) return;
     updateStatus.mutate({ id: header.id, status: 'SENT' });
   };
+  /* Confirm a DRAFT SI → SENT (Issued). This is the commit: the server posts the
+     AR/GL revenue JE + auto-applies any customer credit ONCE on this transition.
+     Mirrors the SO/DO Confirm action. */
+  const handleConfirmDraft = async () => {
+    if (!(await askConfirm({
+      title: `Confirm ${header.invoice_number}?`,
+      body: 'This issues the invoice — it records revenue (Dr AR / Cr Sales) and lets you record payments. You can still cancel it afterwards.',
+      confirmLabel: 'Confirm Invoice',
+    }))) return;
+    updateStatus.mutate({ id: header.id, status: 'SENT' });
+  };
 
   return (
     <div className={styles.page} style={isCancelled ? { filter: 'grayscale(0.7)' } : undefined}>
+      {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — a clear banner that this
+          invoice is uncommitted: no revenue/AR posted, no payments yet. */}
+      {isDraft && (
+        <div className={styles.bannerWarn} style={{ background: 'var(--c-cream)', border: '1px solid var(--line)', color: 'var(--fg-muted)' }}>
+          This invoice is a <strong>Draft</strong> — no revenue has been recorded and it can't take a payment yet.
+          Click <strong>Confirm Invoice</strong> to issue it.
+        </div>
+      )}
       {/* ── Header ── */}
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
@@ -444,6 +468,14 @@ export const SalesInvoiceDetail = () => {
               invoice" path was removed when DO→Invoice became line-level + partial.
               New invoices are created from the line-level picker at
               /sales-invoices/from-do (one invoice per convert). */}
+          {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — Confirm commits the
+              invoice (server posts revenue + applies credit once). Shown only on a
+              DRAFT in view mode. */}
+          {isDraft && !isEditing && (
+            <Button variant="primary" size="md" onClick={handleConfirmDraft} disabled={updateStatus.isPending}>
+              <Check {...ICON} /><span>Confirm Invoice</span>
+            </Button>
+          )}
           {isCancelled ? (
             <Button variant="primary" size="md" onClick={handleReopen} disabled={updateStatus.isPending}>
               <RotateCcw {...ICON} /><span>Reopen Invoice</span>
@@ -596,13 +628,16 @@ export const SalesInvoiceDetail = () => {
 
       <TotalsCard header={header} costPending={items.some((it) => lineCostPending(it, isCancelled))} />
 
+      {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT SI is not payable
+          (the server 409s any payment), so keep the payments ledger locked even
+          in edit mode. Confirm the invoice first, then record payments. */}
       <PaymentsTable
         docNo={null}
         payments={paymentDrafts}
         onChange={setPaymentDrafts}
         grandTotalCenti={grandTotal}
         currency={header.currency}
-        locked={isLocked || !isEditing}
+        locked={isLocked || isDraft || !isEditing}
       />
     </div>
   );

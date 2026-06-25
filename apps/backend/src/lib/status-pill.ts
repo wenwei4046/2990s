@@ -86,6 +86,11 @@ const DO: Record<string, Entry> = {
   CANCELLED:  { label: 'Cancelled',  tone: 'danger' },
 };
 const SI: Record<string, Entry> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT SI is an uncommitted
+  // invoice (neutral/grey: NO revenue/AR posting, NO credit, not payable, kept
+  // out of AR outstanding/aging) until Confirm flips it to Issued (SENT). Mirrors
+  // the SO/DO DRAFT pill.
+  DRAFT:          { label: 'Draft',          tone: 'neutral' },
   SENT:           { label: 'Issued',         tone: 'info' },
   PARTIALLY_PAID: { label: 'Partially Paid', tone: 'progress' },
   PAID:           { label: 'Paid',           tone: 'success' },

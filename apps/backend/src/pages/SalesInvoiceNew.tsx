@@ -281,7 +281,13 @@ export const SalesInvoiceNew = () => {
     return { failed: results.filter((ok) => !ok).length };
   };
 
-  const onSave = () => {
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25, ported from Houzs) — asDraft=true
+     posts the SI as a DRAFT (the "Save as Draft" button); it commits NOTHING (no
+     AR/GL revenue, no customer credit, not payable, kept out of AR outstanding /
+     aging) until it is Confirmed on the Detail page (status PATCH DRAFT→SENT). The
+     default "Create Sales Invoice" path leaves asDraft undefined → the server
+     records revenue immediately (status SENT). */
+  const onSave = (asDraft = false) => {
     if (!canSave) { notify({ title: 'Customer name is required.', tone: 'error' }); return; }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
@@ -291,6 +297,9 @@ export const SalesInvoiceNew = () => {
 
     create.mutate(
       {
+        /* DRAFT/Confirmed two-state — only sent when the operator picked "Save as
+           Draft"; omitted otherwise so the server defaults to SENT (revenue now). */
+        asDraft: asDraft || undefined,
         deliveryOrderId: fromDo || undefined,
         debtorName,
         debtorCode: debtorCode || undefined,
@@ -335,6 +344,21 @@ export const SalesInvoiceNew = () => {
       },
       {
         onSuccess: async (res: { id: string; invoiceNumber: string }) => {
+          /* DRAFT/Confirmed two-state — a DRAFT SI is not payable (the server 409s
+             a payment on a draft), so skip flushing the payment drafts. The
+             operator records payments after confirming it on the Detail page; any
+             prefilled deposit rows carry over there as drafts. */
+          if (asDraft) {
+            if (paymentDrafts.some((d) => d.amountCenti > 0)) {
+              await notify({
+                title: `Draft invoice ${res.invoiceNumber} saved. Payments aren't recorded on a ` +
+                  `draft — confirm it on the Detail page, then add the payment rows.`,
+                tone: 'info',
+              });
+            }
+            navigate(`/sales-invoices/${res.id}`);
+            return;
+          }
           const { failed } = await flushPaymentDrafts(res.id);
           if (failed > 0) {
             await notify({
@@ -372,7 +396,15 @@ export const SalesInvoiceNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/sales-invoices')}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending}>
+          {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — "Save as Draft" posts
+              the SI as DRAFT (commits nothing: no revenue/AR, no credit, not
+              payable, out of AR outstanding/aging until Confirmed on the Detail
+              page). Same validation gate as Create. */}
+          <Button variant="ghost" size="md" onClick={() => onSave(true)} disabled={create.isPending}>
+            <Save {...ICON} />
+            {create.isPending ? 'Saving…' : 'Save as Draft'}
+          </Button>
+          <Button variant="primary" size="md" onClick={() => onSave(false)} disabled={create.isPending}>
             <Save {...ICON} />
             {create.isPending ? 'Saving…' : 'Create Sales Invoice'}
           </Button>
