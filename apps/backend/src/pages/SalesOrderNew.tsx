@@ -174,6 +174,15 @@ export const SalesOrderNew = () => {
   const [deliveryDate,   setDeliveryDate]   = useState('');
   const [note,           setNote]           = useState('');
 
+  /* ── HC delivery-sheet SO-context raw-data fields (migration 0197) ───────────
+     Surfaced on the SO form (also editable from the Delivery Planning "Edit HC
+     fields" drawer). possession date + house type (New House / Replacement),
+     the replacement disposal note, and the referral source. */
+  const [possessionDate,      setPossessionDate]      = useState('');
+  const [houseType,           setHouseType]           = useState<string>('');
+  const [replacementDisposal, setReplacementDisposal] = useState('');
+  const [referral,            setReferral]            = useState('');
+
   // ── Delivery address ───────────────────────────────────────────────
   /* "Fill in address later" affordance: New-SO only (the address can be
      unknown at quote time). Detail doesn't need it because by the time
@@ -742,6 +751,11 @@ export const SalesOrderNew = () => {
            see it without a separate edit. */
         salesLocation: salesLocation || undefined,
         buildingType: buildingType || undefined,
+        /* HC delivery-sheet SO-context raw-data fields (migration 0197). */
+        possessionDate:      possessionDate      || undefined,
+        houseType:           houseType           || undefined,
+        replacementDisposal: replacementDisposal || undefined,
+        referral:            referral            || undefined,
         emergencyContactName:         emergencyName  || undefined,
         emergencyContactRelationship: emergencyRel   || undefined,
         emergencyContactPhone:        emergencyPhone || undefined,
@@ -1025,6 +1039,51 @@ export const SalesOrderNew = () => {
                 min={today}
                 onChange={(iso) => setDeliveryDate(iso)}
                 invalid={datesXor && !deliveryDate}
+              />
+            </label>
+            {/* ── HC delivery-sheet SO-context fields (migration 0197) ─────────
+                Possession date + house type (dropdown), replacement disposal,
+                referral. Same card + same field layout as Detail's Order Info. */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Possession Date</span>
+              <DateField
+                className={styles.fieldInput}
+                fullWidth
+                value={possessionDate ?? ''}
+                onChange={(iso) => setPossessionDate(iso)}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>House Type</span>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={houseType}
+                  onChange={(e) => setHouseType(e.target.value)}
+                >
+                  <option value="">—</option>
+                  <option value="New House">New House</option>
+                  <option value="Replacement">Replacement</option>
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
+            </label>
+            <label className={styles.field} style={{ gridColumn: 'span 2' }}>
+              <span className={styles.fieldLabel}>Replacement / Disposal</span>
+              <input
+                className={styles.fieldInput}
+                value={replacementDisposal}
+                onChange={(e) => setReplacementDisposal(e.target.value)}
+                placeholder="What's being disposed / how the old set is handled"
+              />
+            </label>
+            <label className={styles.field} style={{ gridColumn: 'span 4' }}>
+              <span className={styles.fieldLabel}>Referral</span>
+              <input
+                className={styles.fieldInput}
+                value={referral}
+                onChange={(e) => setReferral(e.target.value)}
+                placeholder="Referral source / channel"
               />
             </label>
             <label className={styles.field} style={{ gridColumn: 'span 4' }}>

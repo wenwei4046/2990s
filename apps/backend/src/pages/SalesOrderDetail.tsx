@@ -260,6 +260,12 @@ type SoHeader = {
   city: string | null;
   postcode: string | null;
   building_type: string | null;
+  /* HC delivery-sheet SO-context raw-data fields (migration 0197) — surfaced on
+     the SO form + the Delivery Planning "Edit HC fields" drawer. */
+  possession_date: string | null;
+  house_type: string | null;
+  replacement_disposal: string | null;
+  referral: string | null;
   emergency_contact_name: string | null;
   emergency_contact_phone: string | null;
   emergency_contact_relationship: string | null;
@@ -1546,6 +1552,12 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     customerType: h.customer_type ?? '',
     salespersonId: h.salesperson_id ?? '',
     buildingType: h.building_type ?? '',
+    /* HC delivery-sheet SO-context raw-data fields (migration 0197). Dual-read
+       camelCase — the pg driver camelCases result columns. */
+    possessionDate:      h.possession_date ?? (h as Record<string, unknown>).possessionDate as string ?? '',
+    houseType:           h.house_type ?? (h as Record<string, unknown>).houseType as string ?? '',
+    replacementDisposal: h.replacement_disposal ?? (h as Record<string, unknown>).replacementDisposal as string ?? '',
+    referral:            h.referral ?? '',
     /* PR #156 — Commander 2026-05-27: "开单的 venue 呢也没有". Reinstate
        venue as a free-text field separate from Building Type.
 
@@ -1695,6 +1707,11 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     customerType: form.customerType,
     salespersonId: form.salespersonId || null,
     buildingType: form.buildingType,
+    /* HC delivery-sheet SO-context raw-data fields (migration 0197). */
+    possessionDate:      form.possessionDate || null,
+    houseType:           form.houseType || null,
+    replacementDisposal: form.replacementDisposal || null,
+    referral:            form.referral || null,
     /* Commander 2026-05-27: Venue is locked to the salesperson's
        staff.venue_id. We persist both the FK + the resolved name. */
     venue: form.venue,
@@ -1998,6 +2015,46 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             {/* Proceed Date field removed per request 2026-06-05 — the POS still
                 stamps proceeded_at server-side; it's just no longer surfaced here. */}
+            {/* ── HC delivery-sheet SO-context fields (migration 0197) ──────────
+                Possession date + house type (dropdown), replacement disposal,
+                referral. Also editable from the Delivery Planning "Edit HC
+                fields" drawer; surfaced here so they live on the SO form too. */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Possession Date</span>
+              <DateField className={styles.fieldInput} fullWidth value={form.possessionDate ?? ''}
+                disabled={inputsDisabled}
+                onChange={(iso) => set('possessionDate', iso)} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>House Type</span>
+              <span className={styles.selectWrap}>
+                <select className={styles.fieldSelect} value={form.houseType}
+                  disabled={inputsDisabled}
+                  onChange={(e) => set('houseType', e.target.value)}>
+                  <option value="">—</option>
+                  <option value="New House">New House</option>
+                  <option value="Replacement">Replacement</option>
+                  {form.houseType && !['New House', 'Replacement'].includes(form.houseType) && (
+                    <option value={form.houseType}>{form.houseType}</option>
+                  )}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
+            </label>
+            <label className={styles.field} style={{ gridColumn: 'span 2' }}>
+              <span className={styles.fieldLabel}>Replacement / Disposal</span>
+              <input className={styles.fieldInput} value={form.replacementDisposal}
+                disabled={inputsDisabled}
+                placeholder="What's being disposed / how the old set is handled"
+                onChange={(e) => set('replacementDisposal', e.target.value)} />
+            </label>
+            <label className={styles.field} style={{ gridColumn: 'span 4' }}>
+              <span className={styles.fieldLabel}>Referral</span>
+              <input className={styles.fieldInput} value={form.referral}
+                disabled={inputsDisabled}
+                placeholder="Referral source / channel"
+                onChange={(e) => set('referral', e.target.value)} />
+            </label>
             <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
               <span className={styles.fieldLabel}>Note</span>
               <input className={styles.fieldInput} value={form.note}

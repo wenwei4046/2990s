@@ -59,6 +59,7 @@ import { useDrivers } from '../lib/drivers-queries';
 import { useHelpers } from '../lib/helpers-queries';
 import { useLorries } from '../lib/lorries-queries';
 import { useSetDoCrew, type DoCrewRow } from '../lib/crew-queries';
+import { HC_SUBSTATUS_VALUES } from '../lib/delivery-planning-queries';
 import { sortByText, sortByNumeric } from '../lib/sort-options';
 import styles from './SalesOrderDetail.module.css';
 
@@ -179,6 +180,17 @@ type DoHeader = {
   margin_pct_basis: number;
   line_count: number;
   currency: string;
+  /* HC delivery-sheet DO-execution raw-data fields (migration 0197) — surfaced on
+     the Delivery Execution card + the Delivery Planning "Edit HC fields" drawer.
+     Snake_case from the API; the pg driver may camelCase, so dual-read on init. */
+  time_range: string | null;
+  time_confirmed: boolean | null;
+  arrival_at: string | null;
+  departure_at: string | null;
+  shipout_date: string | null;
+  customer_delivered_date: string | null;
+  eta_arriving_port: string | null;
+  delivery_substatus: string | null;
   /* Tier 2 downstream-lock — detail endpoint stamps this when any non-cancelled
      DR / SI references the DO. Locks line edits + the Cancel transition;
      convert-to-DR / convert-to-SI remain available via the list. */
@@ -651,6 +663,9 @@ export const DeliveryOrderDetail = () => {
 
       {/* ── Delivery crew (2 drivers + 2 helpers + 1 lorry) ── */}
       <DeliveryCrewCard doId={header.id} crew={header.crew ?? null} locked={isLocked} />
+
+      {/* ── Delivery execution (HC delivery-sheet fields, migration 0197) ── */}
+      <DeliveryExecCard header={header} locked={isLocked} />
 
       {/* ── Line items ── */}
       <section className={styles.card}>
@@ -1384,6 +1399,206 @@ const DeliveryCrewCard = ({
             </label>
             {infoLine([['Plate', lp]])}
           </div>
+        </div>
+      </div>
+    </section>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   Delivery Execution card (HC delivery-sheet DO-execution fields, migration
+   0197). Time window + confirmed, arrival/departure clock, shipout date,
+   customer-delivered date, ETA / arriving port, and the HC "Remark 4" delivery
+   sub-status. Self-contained View→Edit gate (mirrors DeliveryCrewCard), saved
+   via PATCH /delivery-orders-mfg/:id (useUpdateMfgDeliveryOrderHeader) — the
+   SAME columns the Delivery Planning "Edit HC fields" drawer edits. Dates use the
+   typeable DateField; arrival/departure are a date + time pair combined into a
+   TIMESTAMPTZ; house-type-style master fields (delivery sub-status) are a select.
+   Locked once the DO has a downstream SI/DR (same lock the page honours).
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* A TIMESTAMPTZ ISO string → {date: YYYY-MM-DD, time: HH:mm} for the date+time
+   pair; '' parts when null. Best-effort slice — the value is round-tripped as the
+   local-ish clock the coordinator typed (matches the planning drawer's slice). */
+const splitDt = (iso: string | null): { date: string; time: string } => {
+  if (!iso) return { date: '', time: '' };
+  const s = String(iso);
+  return { date: s.slice(0, 10), time: s.slice(11, 16) };
+};
+/* {date, time} → an ISO-ish 'YYYY-MM-DDTHH:mm' (or null when no date). When a date
+   is set but no time, default 00:00 so it's still a valid timestamp. */
+const joinDt = (date: string, time: string): string | null =>
+  date ? `${date}T${time || '00:00'}` : null;
+
+const DeliveryExecCard = ({
+  header, locked = false,
+}: { header: DoHeader; locked?: boolean }) => {
+  const update = useUpdateMfgDeliveryOrderHeader();
+  const notify = useNotify();
+
+  /* Seed from the persisted DO. Dual-read camelCase — the pg driver camelCases
+     result columns, so a snake_case-only read can come back undefined. */
+  const h = header as DoHeader & Record<string, unknown>;
+  const initial = useCallback(() => {
+    const arr = splitDt((header.arrival_at ?? (h.arrivalAt as string)) ?? null);
+    const dep = splitDt((header.departure_at ?? (h.departureAt as string)) ?? null);
+    return {
+      timeRange: (header.time_range ?? (h.timeRange as string)) ?? '',
+      timeConfirmed: (header.time_confirmed ?? (h.timeConfirmed as boolean)) ?? false,
+      arrivalDate: arr.date, arrivalTime: arr.time,
+      departureDate: dep.date, departureTime: dep.time,
+      shipoutDate: ((header.shipout_date ?? (h.shipoutDate as string)) ?? '').slice(0, 10),
+      customerDeliveredDate: ((header.customer_delivered_date ?? (h.customerDeliveredDate as string)) ?? '').slice(0, 10),
+      etaArrivingPort: (header.eta_arriving_port ?? (h.etaArrivingPort as string)) ?? '',
+      deliverySubstatus: (header.delivery_substatus ?? (h.deliverySubstatus as string)) ?? '',
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [header]);
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [form, setForm] = useState(initial);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Re-seed from the persisted DO whenever it changes (refetch / save).
+  useEffect(() => { if (!isEditing) setForm(initial()); }, [initial, isEditing]);
+
+  const set = <K extends keyof ReturnType<typeof initial>>(k: K, v: ReturnType<typeof initial>[K]) =>
+    setForm((s) => ({ ...s, [k]: v }));
+
+  const enterEdit = () => { setSaveError(null); setIsEditing(true); };
+  const cancelEdit = () => { setForm(initial()); setSaveError(null); setIsEditing(false); };
+
+  const onSave = () => {
+    setSaveError(null);
+    update.mutate(
+      {
+        id: header.id,
+        timeRange: form.timeRange || null,
+        timeConfirmed: form.timeConfirmed,
+        arrivalAt: joinDt(form.arrivalDate, form.arrivalTime),
+        departureAt: joinDt(form.departureDate, form.departureTime),
+        shipoutDate: form.shipoutDate || null,
+        customerDeliveredDate: form.customerDeliveredDate || null,
+        etaArrivingPort: form.etaArrivingPort || null,
+        deliverySubstatus: form.deliverySubstatus || null,
+      },
+      {
+        onSuccess: () => setIsEditing(false),
+        onError: (e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          setSaveError(msg);
+          notify({ title: 'Delivery execution save failed', body: msg, tone: 'error' });
+        },
+      },
+    );
+  };
+
+  const disabled = !isEditing || locked;
+
+  return (
+    <section className={styles.card}>
+      <header className={styles.cardHeader}>
+        <h2 className={styles.cardTitle}>Delivery Execution</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            HC delivery-sheet fields
+          </span>
+          {!isEditing ? (
+            <Button variant="ghost" size="sm" onClick={enterEdit} disabled={locked}>
+              <Pencil {...ICON} /><span>Edit</span>
+            </Button>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={update.isPending}>
+                <span>Cancel</span>
+              </Button>
+              <Button variant="primary" size="sm" onClick={onSave} disabled={update.isPending}>
+                <Save {...ICON} /><span>{update.isPending ? 'Saving…' : 'Save'}</span>
+              </Button>
+            </>
+          )}
+        </div>
+      </header>
+      <div className={styles.cardBody}>
+        {saveError && (
+          <div className={styles.bannerWarn} style={{ marginBottom: 'var(--space-3)' }}>
+            <strong>Delivery execution save failed.</strong><span>{saveError}</span>
+          </div>
+        )}
+        <div className={styles.formGrid4}>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Time Range</span>
+            <input className={styles.fieldInput} value={form.timeRange}
+              disabled={disabled} placeholder="e.g. 10am-12pm"
+              onChange={(e) => set('timeRange', e.target.value)} />
+          </label>
+          <label className={styles.field} style={{ alignSelf: 'end' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-13)' }}>
+              <input type="checkbox" checked={form.timeConfirmed}
+                disabled={disabled}
+                onChange={(e) => set('timeConfirmed', e.target.checked)} />
+              Time confirmed with customer
+            </span>
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Shipout Date (EM/SG)</span>
+            <DateField className={styles.fieldInput} fullWidth value={form.shipoutDate}
+              disabled={disabled}
+              onChange={(iso) => set('shipoutDate', iso)} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Customer Delivered Date</span>
+            <DateField className={styles.fieldInput} fullWidth value={form.customerDeliveredDate}
+              disabled={disabled}
+              onChange={(iso) => set('customerDeliveredDate', iso)} />
+          </label>
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Arrival Date</span>
+            <DateField className={styles.fieldInput} fullWidth value={form.arrivalDate}
+              disabled={disabled}
+              onChange={(iso) => set('arrivalDate', iso)} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Arrival Time</span>
+            <input type="time" className={styles.fieldInput} value={form.arrivalTime}
+              disabled={disabled}
+              onChange={(e) => set('arrivalTime', e.target.value)} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Departure Date</span>
+            <DateField className={styles.fieldInput} fullWidth value={form.departureDate}
+              disabled={disabled}
+              onChange={(iso) => set('departureDate', iso)} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Departure Time</span>
+            <input type="time" className={styles.fieldInput} value={form.departureTime}
+              disabled={disabled}
+              onChange={(e) => set('departureTime', e.target.value)} />
+          </label>
+
+          <label className={styles.field} style={{ gridColumn: 'span 2' }}>
+            <span className={styles.fieldLabel}>ETA / Arriving Port (EM/SG)</span>
+            <input className={styles.fieldInput} value={form.etaArrivingPort}
+              disabled={disabled} placeholder="Port / shipment ref e.g. KUC3012008"
+              onChange={(e) => set('etaArrivingPort', e.target.value)} />
+          </label>
+          <label className={styles.field} style={{ gridColumn: 'span 2' }}>
+            <span className={styles.fieldLabel}>Delivery Status (Remark 4)</span>
+            <span className={styles.selectWrap}>
+              <select className={styles.fieldSelect} value={form.deliverySubstatus}
+                disabled={disabled}
+                onChange={(e) => set('deliverySubstatus', e.target.value)}>
+                <option value="">—</option>
+                {HC_SUBSTATUS_VALUES.map((v) => <option key={v} value={v}>{v}</option>)}
+                {form.deliverySubstatus && !(HC_SUBSTATUS_VALUES as readonly string[]).includes(form.deliverySubstatus) && (
+                  <option value={form.deliverySubstatus}>{form.deliverySubstatus}</option>
+                )}
+              </select>
+              <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+            </span>
+          </label>
         </div>
       </div>
     </section>

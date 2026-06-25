@@ -393,6 +393,9 @@ const HEADER =
   'ship_to_address, bill_to_address, install_to_address, subtotal_sen, overdue, ' +
   /* PR #46 — POS handover */
   'email, customer_type, salesperson_id, city, postcode, building_type, ' +
+  /* HC delivery-sheet SO-context raw-data fields (migration 0197) — surfaced on
+     the SO form + the Delivery Planning "Edit HC fields" drawer. */
+  'possession_date, house_type, replacement_disposal, referral, ' +
   'emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, target_date, ' +
   /* PR #143 + #150 + #157 — Payment (migrations 0068 + 0069 + 0070) */
   'payment_method, installment_months, merchant_provider, approval_code, payment_date, deposit_centi, paid_centi, ' +
@@ -3061,6 +3064,12 @@ mfgSalesOrders.post('/', async (c) => {
     city: (body.city as string) ?? null,
     postcode: (body.postcode as string) ?? null,
     building_type: (body.buildingType as string) ?? null,
+    /* HC delivery-sheet SO-context raw-data fields (migration 0197). Also editable
+       from the Delivery Planning "Edit HC fields" drawer; surfaced on the SO form. */
+    possession_date: (body.possessionDate as string) ?? null,
+    house_type: (body.houseType as string) ?? null,
+    replacement_disposal: (body.replacementDisposal as string) ?? null,
+    referral: (body.referral as string) ?? null,
     emergency_contact_name: (body.emergencyContactName as string) ?? null,
     /* Task #91 — also normalize the emergency contact phone. */
     emergency_contact_phone: typeof body.emergencyContactPhone === 'string'
@@ -3972,6 +3981,12 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     ['email', 'email'], ['customerType', 'customer_type'],
     ['salespersonId', 'salesperson_id'],
     ['city', 'city'], ['postcode', 'postcode'], ['buildingType', 'building_type'],
+    /* HC delivery-sheet SO-context raw-data fields (migration 0197) — also editable
+       from the Delivery Planning "Edit HC fields" drawer. */
+    ['possessionDate', 'possession_date'],
+    ['houseType', 'house_type'],
+    ['replacementDisposal', 'replacement_disposal'],
+    ['referral', 'referral'],
     ['emergencyContactName', 'emergency_contact_name'],
     ['emergencyContactPhone', 'emergency_contact_phone'],
     ['emergencyContactRelationship', 'emergency_contact_relationship'],

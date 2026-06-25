@@ -31,6 +31,14 @@ import { paginateAll } from '../lib/paginate-all';
 export const deliveryOrdersMfg = new Hono<{ Bindings: Env; Variables: Variables }>();
 deliveryOrdersMfg.use('*', supabaseAuth);
 
+/* HC "Remark 4" delivery sub-status — the known values (mirrors the whitelist in
+   the Delivery Planning fields route + HC_SUBSTATUS_VALUES on the frontend). Blank
+   ('' / null) always clears it. */
+const HC_SUBSTATUS_VALUES = [
+  'Pending Pickup', 'Done Shipout', 'Arrives EM Warehouse',
+  'Done Delivered', 'Confirm', 'House Not Ready', 'Request Hold',
+] as const;
+
 /* ── DO child-lock guard (Tier 2 — downstream lock) ─────────────────────────
    A DO locks (read-only — no line edit / no CANCELLED transition) once it has
    ANY non-cancelled Delivery Return (DR) OR Sales Invoice (SI) referencing it.
@@ -73,6 +81,9 @@ const HEADER =
   'mattress_sofa_cost_centi, bedframe_cost_centi, accessories_cost_centi, others_cost_centi, service_cost_centi, ' +
   'local_total_centi, total_cost_centi, total_margin_centi, margin_pct_basis, line_count, ' +
   'currency, warehouse_id, ' +
+  /* HC delivery-sheet DO-execution raw-data fields (migration 0197) — surfaced on
+     the DO detail form + the Delivery Planning "Edit HC fields" drawer. */
+  'time_range, time_confirmed, arrival_at, departure_at, shipout_date, customer_delivered_date, eta_arriving_port, delivery_substatus, ' +
   'pod_r2_key, signature_data, status, notes, created_at, created_by, updated_at';
 
 const ITEM =
@@ -1933,6 +1944,17 @@ deliveryOrdersMfg.patch('/:id', async (c) => {
     ['emergencyContactName', 'emergency_contact_name'],
     ['emergencyContactPhone', 'emergency_contact_phone'],
     ['emergencyContactRelationship', 'emergency_contact_relationship'],
+    /* HC delivery-sheet DO-execution raw-data fields (migration 0197) — also
+       editable from the Delivery Planning "Edit HC fields" drawer; surfaced on
+       the DO detail form's Delivery Execution card. */
+    ['timeRange', 'time_range'],
+    ['timeConfirmed', 'time_confirmed'],
+    ['arrivalAt', 'arrival_at'],
+    ['departureAt', 'departure_at'],
+    ['shipoutDate', 'shipout_date'],
+    ['customerDeliveredDate', 'customer_delivered_date'],
+    ['etaArrivingPort', 'eta_arriving_port'],
+    ['deliverySubstatus', 'delivery_substatus'],
   ];
   const PHONE_FIELDS = new Set(['phone', 'emergencyContactPhone']);
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -1946,6 +1968,15 @@ deliveryOrdersMfg.patch('/:id', async (c) => {
     }
   }
   if (Object.keys(updates).length === 1) return c.json({ ok: true, changed: 0 });
+
+  /* Whitelist the HC "Remark 4" delivery sub-status to the known values (blank /
+     null always clears it) — mirrors the Delivery Planning fields route, so the
+     same column can't be set to a stray value from either edit surface. */
+  if (updates.delivery_substatus != null && updates.delivery_substatus !== '' &&
+      !(HC_SUBSTATUS_VALUES as readonly string[]).includes(String(updates.delivery_substatus))) {
+    return c.json({ error: 'invalid_substatus', reason: `delivery_substatus must be one of: ${HC_SUBSTATUS_VALUES.join(', ')} (or blank).` }, 400);
+  }
+  if (updates.delivery_substatus === '') updates.delivery_substatus = null;
 
   /* Header is locked once a Sales Invoice / Delivery Return exists — mirrors the
      line-add / line-edit / cancel guards. Prevents editing a DO that a child
