@@ -34,6 +34,7 @@ import {
   HardHat,
   Container,
   CalendarClock,
+  Gauge,
 } from 'lucide-react';
 import { useAuth, POS_ONLY_ROLES, SALES_DESK_ROLES } from '../lib/auth';
 import styles from './Sidebar.module.css';
@@ -187,6 +188,8 @@ export const Sidebar = () => {
         { to: '/drivers', icon: <Truck {...ICON_PROPS} />, label: 'Drivers' },
         { to: '/helpers', icon: <HardHat {...ICON_PROPS} />, label: 'Helpers' },
         { to: '/lorries', icon: <Container {...ICON_PROPS} />, label: 'Lorries' },
+        // Stage 5B (final) — the fleet performance dashboard.
+        { to: '/lorry-capacity', icon: <Gauge {...ICON_PROPS} />, label: 'Lorry Capacity' },
       ],
     },
     {

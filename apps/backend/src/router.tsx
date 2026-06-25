@@ -107,6 +107,8 @@ const Helpers = lazyRetry(() => import('./pages/Helpers').then(m => ({ default: 
 const Lorries = lazyRetry(() => import('./pages/Lorries').then(m => ({ default: m.Lorries })));
 // Delivery Planning board (Stage 4) — the 4-state × region planning view.
 const DeliveryPlanning = lazyRetry(() => import('./pages/DeliveryPlanning').then(m => ({ default: m.DeliveryPlanning })));
+// Lorry Capacity dashboard (Stage 5B, final) — fleet performance metrics.
+const LorryCapacity = lazyRetry(() => import('./pages/LorryCapacity').then(m => ({ default: m.LorryCapacity })));
 const Accounting = lazyRetry(() => import('./pages/Accounting').then(m => ({ default: m.Accounting })));
 const Warehouses = lazyRetry(() => import('./pages/Warehouses').then(m => ({ default: m.Warehouses })));
 // Migration 0094 — Warehouse rack/bin management (ported from Hookka ERP).
@@ -211,6 +213,8 @@ export const router = createBrowserRouter([
       { path: 'lorries', element: <Lorries /> },
       // Delivery Planning board (Stage 4).
       { path: 'delivery-planning', element: <DeliveryPlanning /> },
+      // Lorry Capacity dashboard (Stage 5B, final).
+      { path: 'lorry-capacity', element: <LorryCapacity /> },
       { path: 'suppliers', element: <Suppliers /> },
       { path: 'suppliers/:id', element: <SupplierDetail /> },
       // Currencies MASTER (migration 0193) — owner-maintained currency list +

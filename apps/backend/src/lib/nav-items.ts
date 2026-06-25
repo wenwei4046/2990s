@@ -48,6 +48,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Drivers', path: '/drivers', group: 'Transportation', keywords: 'driver fleet tms crew' },
   { label: 'Helpers', path: '/helpers', group: 'Transportation', keywords: 'helper fleet tms crew loader' },
   { label: 'Lorries', path: '/lorries', group: 'Transportation', keywords: 'lorry truck van fleet tms vehicle outsource' },
+  { label: 'Lorry Capacity', path: '/lorry-capacity', group: 'Transportation', keywords: 'lorry capacity utilisation utilization performance fleet trips revenue dashboard repair days kpi tms' },
 
   // Warehouse — master first (create a warehouse / set Transit here), then ops.
   { label: 'Warehouses', path: '/warehouses', group: 'Warehouse', keywords: 'create new warehouse master location transit china overseas' },
