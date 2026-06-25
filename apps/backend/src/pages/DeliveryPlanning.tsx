@@ -3,12 +3,13 @@
 //
 // The planning board: which live Sales Orders still need delivering, organised
 // by a top row of 4 DELIVERY-STATE tabs (Pending Delivery / Pending Schedule /
-// Overdue / Delivered, each with a live count) and a region chip row (All ·
-// PJ·KL · Penang · Sabah · Sarawak · Singapore). Both the active state tab and
-// the active region live in the URL (useSearchParams) so a link / refresh keeps
-// the view. The HC-sheet columns render in the shared DataGrid; the delivery
-// state shows as an inline pill, and a legged order (one with delivery_legs)
-// surfaces under each of its leg regions with that leg's date.
+// Overdue / Delivered, each with a live count) and a region chip row of FOUR
+// FIXED buckets classified by customer STATE (All · KL · Penang · EM · SG).
+// Both the active state tab and the active region (bucket key) live in the URL
+// (useSearchParams) so a link / refresh keeps the view. The HC-sheet columns
+// render in the shared DataGrid; the delivery state shows as an inline pill, and
+// a legged order (one with delivery_legs) surfaces under each of its leg buckets
+// (mapped from the leg's warehouse code) with that leg's date.
 //
 // Backend-derived: delivery_state, region grouping, readiness, crew, legs, and
 // days_left all come from GET /delivery-planning — this page only filters by
@@ -20,7 +21,7 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo } from 'react';
-import { useSearchParams } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { Split } from 'lucide-react';
 import { fmtCenti, fmtDateOrDash } from '@2990s/shared';
 import { formatPhone } from '@2990s/shared/phone';
@@ -34,17 +35,24 @@ import {
 } from '../lib/delivery-planning-queries';
 import styles from './DeliveryPlanning.module.css';
 
-/* Region tabs — ONE per delivery warehouse. 'ALL' + the 5 region keys. The
-   region key is sent verbatim to the API (which also accepts a warehouseId).
-   CHINA WAREHOUSE (transit) + CONSIGN-OUT are NOT delivery regions → absent. */
-const REGION_TABS: Array<{ key: string; label: string; sg?: boolean }> = [
+/* Region chips — FOUR FIXED buckets classified by customer STATE, hardcoded (no
+   longer the dynamic per-warehouse chips): "All" first, then KL · Penang · EM ·
+   SG. SG is visually distinct (dashed teal chip — cross-border, no MY
+   warehouse). The chip's key is sent verbatim as ?region= to the API, which
+   buckets every order by customer state (ALL | KL | PENANG | EM | SG). */
+type RegionBucket = 'KL' | 'PENANG' | 'EM' | 'SG';
+type RegionTab = { key: 'ALL' | RegionBucket; label: string; sg?: boolean };
+const REGION_TABS: RegionTab[] = [
   { key: 'ALL', label: 'All' },
-  { key: 'PJKL', label: 'PJ·KL' },
+  { key: 'KL', label: 'KL' },
   { key: 'PENANG', label: 'Penang' },
-  { key: 'SABAH', label: 'Sabah' },
-  { key: 'SARAWAK', label: 'Sarawak' },
-  { key: 'SINGAPORE', label: 'Singapore', sg: true },
+  { key: 'EM', label: 'EM' },
+  { key: 'SG', label: 'SG', sg: true },
 ];
+/* Clean bucket label for the re-added Region grid column. */
+const REGION_LABEL: Record<RegionBucket, string> = {
+  KL: 'KL', PENANG: 'Penang', EM: 'EM', SG: 'SG',
+};
 
 /* The 4 state tabs (the top row). */
 const STATE_TABS = DELIVERY_STATES;
@@ -64,6 +72,12 @@ function DeliveryStatePill({ state }: { state: DeliveryState }) {
   );
 }
 
+/* Balance source-of-truth (mirrors the SO list's liveBalance, PR #83):
+   the payment-totals view's balance_centi_live (local_total − Σpayments) when
+   present, else the header's stored balance_centi. */
+const liveBalance = (o: PlanningOrder): number =>
+  typeof o.balance_centi_live === 'number' ? o.balance_centi_live : o.balance_centi;
+
 /* days_left cell — overdue (<0) red, due-soon (0..3) burnt, else plain. */
 function DaysLeftCell({ days }: { days: number | null }) {
   if (days == null) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
@@ -73,9 +87,13 @@ function DaysLeftCell({ days }: { days: number | null }) {
 }
 
 export const DeliveryPlanning = () => {
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const activeState = (params.get('state') ?? 'ALL').toUpperCase();
-  const activeRegion = params.get('region') ?? 'ALL';
+  const activeRegion = (params.get('region') ?? 'ALL').toUpperCase();
+
+  /* Region chips = the 4 FIXED state buckets (+ All), hardcoded. */
+  const activeRegionLabel = REGION_TABS.find((r) => r.key === activeRegion)?.label ?? 'All';
 
   const setState = (s: string) => {
     const next = new URLSearchParams(params);
@@ -103,14 +121,13 @@ export const DeliveryPlanning = () => {
     [allOrders, activeState],
   );
 
-  /* For a legged order under a specific region tab, surface THAT leg's date as
-     the row's planned date. Helper: pick the leg matching the active region (if
-     any) so the same order shows its transit date in KL and its final date in
-     Penang/SG. */
+  /* For a legged order under a specific region bucket, surface THAT leg's date
+     as the row's planned date. Helper: pick the leg whose bucket == the active
+     region so the same order shows its transit date in KL and its final date in
+     Penang/EM. (No SG warehouse exists, so SG never matches a leg.) */
   const legDateForRegion = (o: PlanningOrder): string | null => {
     if (activeRegion === 'ALL' || o.legs.length === 0) return null;
-    const wantSg = activeRegion === 'SG' || activeRegion === 'SINGAPORE';
-    const leg = o.legs.find((l) => (wantSg ? l.region === 'SINGAPORE' : l.region === activeRegion));
+    const leg = o.legs.find((l) => l.region === activeRegion);
     return leg?.leg_date ?? null;
   };
 
@@ -150,16 +167,54 @@ export const DeliveryPlanning = () => {
       groupValue: (o) => o.branding ?? '(none)',
     },
     {
-      key: 'warehouse', label: 'Warehouse', width: 150, sortable: true, groupable: true,
-      accessor: (o) => o.warehouse_code ?? (o.regions.includes('SINGAPORE') ? 'SINGAPORE (SG)' : '—'),
-      searchValue: (o) => `${o.warehouse_code ?? ''} ${o.warehouse_name ?? ''}`.trim(),
-      groupValue: (o) => o.warehouse_code ?? (o.regions.includes('SINGAPORE') ? 'SINGAPORE' : '(none)'),
+      key: 'address', label: 'Address', width: 220, defaultHidden: true,
+      accessor: (o) => o.address ?? '—',
+      searchValue: (o) => o.address ?? '',
     },
     {
-      key: 'region', label: 'Region', width: 130, groupable: true,
-      accessor: (o) => o.regions.join(' · ') || '—',
-      searchValue: (o) => o.regions.join(' '),
-      groupValue: (o) => o.regions[0] ?? '(none)',
+      key: 'postcode', label: 'Postcode', width: 100, defaultHidden: true,
+      accessor: (o) => o.postcode ?? '—',
+      searchValue: (o) => o.postcode ?? '',
+    },
+    {
+      key: 'customer_state', label: 'State', width: 120, groupable: true, defaultHidden: true,
+      accessor: (o) => o.customer_state ?? '—',
+      searchValue: (o) => o.customer_state ?? '',
+      groupValue: (o) => o.customer_state ?? '(none)',
+    },
+    {
+      key: 'building_type', label: 'Property', width: 120, groupable: true, defaultHidden: true,
+      accessor: (o) => o.building_type ?? '—',
+      searchValue: (o) => o.building_type ?? '',
+      groupValue: (o) => o.building_type ?? '(none)',
+    },
+    {
+      key: 'region', label: 'Region', width: 110, sortable: true, groupable: true,
+      accessor: (o) => REGION_LABEL[o.region] ?? o.region,
+      searchValue: (o) => REGION_LABEL[o.region] ?? o.region,
+      groupValue: (o) => REGION_LABEL[o.region] ?? o.region,
+      exportValue: (o) => REGION_LABEL[o.region] ?? o.region,
+      sortFn: (a, b) => (REGION_LABEL[a.region] ?? '').localeCompare(REGION_LABEL[b.region] ?? ''),
+    },
+    {
+      key: 'warehouse', label: 'Warehouse', width: 150, sortable: true, groupable: true, defaultHidden: true,
+      accessor: (o) => o.warehouse_code ?? '—',
+      searchValue: (o) => `${o.warehouse_code ?? ''} ${o.warehouse_name ?? ''}`.trim(),
+      groupValue: (o) => o.warehouse_code ?? '(none)',
+    },
+    {
+      key: 'so_date', label: 'SO Date', width: 120, sortable: true, defaultHidden: true,
+      accessor: (o) => fmtDateOrDash(o.so_date),
+      searchValue: (o) => o.so_date ?? '',
+      sortFn: (a, b) => String(a.so_date ?? '').localeCompare(String(b.so_date ?? '')),
+      filterType: 'date', dateValue: (o) => o.so_date,
+    },
+    {
+      key: 'processing_date', label: 'Processing', width: 120, sortable: true, defaultHidden: true,
+      accessor: (o) => fmtDateOrDash(o.processing_date),
+      searchValue: (o) => o.processing_date ?? '',
+      sortFn: (a, b) => String(a.processing_date ?? '').localeCompare(String(b.processing_date ?? '')),
+      filterType: 'date', dateValue: (o) => o.processing_date,
     },
     {
       key: 'customer_delivery_date', label: 'Delivery Date', width: 130, sortable: true,
@@ -210,26 +265,54 @@ export const DeliveryPlanning = () => {
       exportValue: (o) => DELIVERY_STATE_LABEL[o.delivery_state],
       sortFn: (a, b) => a.delivery_state.localeCompare(b.delivery_state),
     },
+    /* Crew — split into the HC delivery-sheet columns. Driver + Lorry show by
+       default; IC / contact / driver 2 / helpers are in the show/hide menu. */
     {
-      key: 'crew', label: 'Driver / Lorry', width: 180,
-      accessor: (o) => {
-        if (!o.crew) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
-        const parts = [o.crew.driver, o.crew.lorry].filter(Boolean);
-        return parts.length > 0 ? parts.join(' · ') : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
-      },
-      searchValue: (o) => [o.crew?.driver, o.crew?.helper, o.crew?.lorry].filter(Boolean).join(' '),
+      key: 'driver', label: 'Driver', width: 150,
+      accessor: (o) => o.crew?.driver_1_name || <span style={{ color: 'var(--fg-muted)' }}>—</span>,
+      searchValue: (o) => o.crew?.driver_1_name ?? '',
     },
     {
-      key: 'balance_centi', label: 'Outstanding', width: 130, align: 'right', sortable: true,
+      key: 'driver_ic', label: 'Driver IC', width: 140, defaultHidden: true,
+      accessor: (o) => o.crew?.driver_1_ic || <span style={{ color: 'var(--fg-muted)' }}>—</span>,
+      searchValue: (o) => o.crew?.driver_1_ic ?? '',
+    },
+    {
+      key: 'driver_contact', label: 'Driver Contact', width: 150, defaultHidden: true,
+      accessor: (o) => (o.crew?.driver_1_contact ? formatPhone(o.crew.driver_1_contact) || o.crew.driver_1_contact : <span style={{ color: 'var(--fg-muted)' }}>—</span>),
+      searchValue: (o) => o.crew?.driver_1_contact ?? '',
+    },
+    {
+      key: 'driver_2', label: 'Driver 2', width: 150, defaultHidden: true,
+      accessor: (o) => o.crew?.driver_2_name || <span style={{ color: 'var(--fg-muted)' }}>—</span>,
+      searchValue: (o) => o.crew?.driver_2_name ?? '',
+    },
+    {
+      key: 'helper_1', label: 'Helper 1', width: 150, defaultHidden: true,
+      accessor: (o) => o.crew?.helper_1_name || <span style={{ color: 'var(--fg-muted)' }}>—</span>,
+      searchValue: (o) => o.crew?.helper_1_name ?? '',
+    },
+    {
+      key: 'helper_2', label: 'Helper 2', width: 150, defaultHidden: true,
+      accessor: (o) => o.crew?.helper_2_name || <span style={{ color: 'var(--fg-muted)' }}>—</span>,
+      searchValue: (o) => o.crew?.helper_2_name ?? '',
+    },
+    {
+      key: 'lorry', label: 'Lorry', width: 130,
+      accessor: (o) => o.crew?.lorry_plate || <span style={{ color: 'var(--fg-muted)' }}>—</span>,
+      searchValue: (o) => o.crew?.lorry_plate ?? '',
+    },
+    {
+      key: 'balance_centi', label: 'Balance', width: 130, align: 'right', sortable: true,
       accessor: (o) => (
-        <span style={{ fontFamily: 'var(--font-mark)', fontWeight: 700, color: o.balance_centi > 0 ? 'var(--c-burnt)' : 'var(--fg-muted)' }}>
-          {fmtCenti(o.balance_centi)}
+        <span style={{ fontFamily: 'var(--font-mark)', fontWeight: 700, color: liveBalance(o) > 0 ? 'var(--c-burnt)' : 'var(--fg-muted)' }}>
+          {fmtCenti(liveBalance(o))}
         </span>
       ),
-      searchValue: (o) => String(o.balance_centi),
-      exportValue: (o) => o.balance_centi / 100,
-      sortFn: (a, b) => a.balance_centi - b.balance_centi,
-      numberValue: (o) => o.balance_centi / 100,
+      searchValue: (o) => String(liveBalance(o)),
+      exportValue: (o) => liveBalance(o) / 100,
+      sortFn: (a, b) => liveBalance(a) - liveBalance(b),
+      numberValue: (o) => liveBalance(o) / 100,
     },
     {
       key: 'do', label: 'DO', width: 130, groupable: true,
@@ -247,7 +330,7 @@ export const DeliveryPlanning = () => {
             Delivery Planning
           </h1>
           <p style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', margin: '2px 0 0' }}>
-            Orders that need delivering · grouped by region · {counts.ALL} in {REGION_TABS.find((r) => r.key === activeRegion)?.label ?? 'All'}
+            Orders that need delivering · grouped by region (customer state) · {counts.ALL} in {activeRegionLabel}
           </p>
         </div>
       </div>
@@ -277,7 +360,8 @@ export const DeliveryPlanning = () => {
         ))}
       </div>
 
-      {/* REGION chip row — All · PJ·KL · Penang · Sabah · Sarawak · Singapore. */}
+      {/* REGION chip row — the 4 FIXED state buckets (All · KL · Penang · EM ·
+          SG). SG is dashed-teal (cross-border). Classified by customer state. */}
       <div className={styles.regionChips}>
         {REGION_TABS.map((r) => (
           <button
@@ -312,7 +396,8 @@ export const DeliveryPlanning = () => {
         groupBanner={false}
         isLoading={isLoading}
         emptyMessage="No orders need delivering in this view."
-        rowStyle={(o) => (o.regions.includes('SINGAPORE') ? { boxShadow: 'inset 3px 0 0 var(--c-secondary-a)' } : undefined)}
+        onRowDoubleClick={(row) => navigate('/mfg-sales-orders/' + row.so_doc_no)}
+        rowStyle={(o) => (o.region === 'SG' ? { boxShadow: 'inset 3px 0 0 var(--c-secondary-a)' } : undefined)}
       />
     </div>
   );

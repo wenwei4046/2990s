@@ -20,9 +20,10 @@ export const DELIVERY_STATE_LABEL: Record<DeliveryState, string> = {
   DELIVERED: 'Delivered',
 };
 
-// Region keys mirror the server (one per delivery warehouse). 'ALL' + 'SG' are
-// the special filter params; the warehouse-backed regions use the warehouse id.
-export type RegionKey = 'PJKL' | 'PENANG' | 'SABAH' | 'SARAWAK' | 'SINGAPORE';
+// A region is one of FOUR fixed buckets, derived from the customer's STATE (not
+// the line warehouse): KL · Penang · EM (East Malaysia: Sabah/Sarawak/Labuan) ·
+// SG (Singapore). 'ALL' is the no-filter param; the rest are the bucket keys.
+export type RegionKey = 'ALL' | 'KL' | 'PENANG' | 'EM' | 'SG';
 
 export type DeliveryLeg = {
   id: string;
@@ -31,7 +32,9 @@ export type DeliveryLeg = {
   leg_no: number;
   warehouse_id: string | null;
   warehouse_code: string | null;
-  region: RegionKey | null;
+  // The leg's region bucket, mapped from its TRANSIT/FINAL warehouse code
+  // (SLGR/PJ→KL, PG→PENANG, SBH/SRK→EM; CHINA/CONSIGN-OUT → null/skip).
+  region: Exclude<RegionKey, 'ALL'> | null;
   trip_id: string | null;
   leg_date: string | null;
   leg_kind: 'transit' | 'final';
@@ -48,21 +51,37 @@ export type PlanningOrder = {
   delivery_state: DeliveryState;
   delivery_state_override: string | null;
   balance_centi: number;
+  /* Live balance (= local_total − Σpayments, from the SO-list payment-totals
+     view); null when the view has no row → fall back to balance_centi. */
+  balance_centi_live: number | null;
   local_total_centi: number;
+  so_date: string | null;
+  processing_date: string | null;
   customer_delivery_date: string | null;
   internal_expected_dd: string | null;
   days_left: number | null;
+  /* HC delivery-sheet address columns. */
+  address: string | null;
+  postcode: string | null;
+  building_type: string | null;
   stock_status: string;
   stock_remark: string;
   is_main_ready: boolean;
-  regions: RegionKey[];
+  region: Exclude<RegionKey, 'ALL'>;   // the order's primary bucket (from customer_state)
+  regions: Array<Exclude<RegionKey, 'ALL'>>;  // primary + any leg buckets
   warehouse_id: string | null;
   warehouse_code: string | null;
   warehouse_name: string | null;
   customer_state: string | null;
   delivered_qty: number;
   remaining_qty: number;
-  crew: { driver: string | null; helper: string | null; lorry: string | null } | null;
+  crew: {
+    driver: string | null; helper: string | null; lorry: string | null;
+    driver_1_name: string | null; driver_1_ic: string | null; driver_1_contact: string | null;
+    driver_2_name: string | null;
+    helper_1_name: string | null; helper_2_name: string | null;
+    lorry_plate: string | null;
+  } | null;
   delivery_orders: Array<{ id: string; do_number: string; status: string }>;
   legs: DeliveryLeg[];
 };
@@ -75,7 +94,7 @@ export type PlanningResponse = {
   regions: Array<{ key: RegionKey; label: string }>;
 };
 
-/* The board. region = warehouseId | 'ALL' | 'SG'; state = DeliveryState | 'ALL'.
+/* The board. region = ALL | KL | PENANG | EM | SG; state = DeliveryState | 'ALL'.
    Counts come back scoped to the active region (not the state) so the 4 state
    tab badges stay stable as the operator switches between state tabs. */
 export function useDeliveryPlanning(opts: { region?: string; state?: string }) {

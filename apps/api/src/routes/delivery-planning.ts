@@ -3,10 +3,11 @@
 //
 // The Delivery Planning board: which live Sales Orders still need delivering,
 // bucketed into 4 DERIVED states (PENDING_DELIVERY / PENDING_SCHEDULE /
-// OVERDUE / DELIVERED) and grouped by delivery REGION (one per delivery
-// warehouse). One order can be split across TWO region trips on two dates via
-// delivery_legs (a KL transit leg then a Penang/SG final leg) — so it surfaces
-// under every leg's region tab with that leg's date.
+// OVERDUE / DELIVERED) and grouped by delivery REGION — FOUR fixed buckets
+// derived from the customer's STATE: KL · Penang · EM · SG. One order can be
+// split across TWO region trips on two dates via delivery_legs (a KL transit
+// leg then a Penang/SG final leg) — so it surfaces under every leg's region tab
+// (the leg's region maps from its warehouse code) with that leg's date.
 //
 // delivery_state is DERIVED LIVE here (migration 0195 added a nullable
 // mfg_sales_orders.delivery_state / delivery_orders.delivery_state column, but
@@ -22,11 +23,13 @@
 //   - PENDING_DELIVERY — NOT ready and not yet inside the 3-day window.
 // A manual override stored on the SO header (delivery_state) wins when present.
 //
-// Region = the SO LINE warehouse_id grouped to one of:
-//   PJ·KL (PJ SHOWROOM + SLGR WAREHOUSE) · Penang (PG WAREHOUSE) ·
-//   Sabah (SBH WAREHOUSE) · Sarawak (SRK WAREHOUSE) · Singapore (no warehouse
-//   — filtered by customer_state = Singapore). CHINA WAREHOUSE (transit) and
-//   CONSIGN-OUT are NOT delivery regions and are skipped.
+// Region = FOUR fixed buckets classified by the customer's STATE (NOT the line
+//   warehouse): KL (Selangor/WP/Johor/Melaka/N.Sembilan/Perak/Kedah/Perlis/
+//   Pahang/Terengganu/Kelantan…), Penang (Pulau Pinang), EM (East Malaysia:
+//   Sabah/Sarawak/Labuan), SG (Singapore). stateToRegion() is the single
+//   normalizer. Legs add a SECOND bucket: a leg's region maps from its warehouse
+//   CODE (SLGR/PJ→KL, PG→PENANG, SBH/SRK→EM; CHINA/CONSIGN-OUT skipped), so a
+//   KL-transit leg on an SG-customer order surfaces it under both KL and SG.
 //
 // DRAFT / CANCELLED SOs (and DRAFT / CANCELLED DOs) are excluded everywhere —
 // the DRAFT guards just shipped on the SO/DO side and an uncommitted doc must
@@ -48,35 +51,72 @@ export const deliveryPlanning = new Hono<{ Bindings: Env; Variables: Variables }
 deliveryPlanning.use('*', supabaseAuth);
 
 /* ── Region model ─────────────────────────────────────────────────────────
-   ONE region per DELIVERY warehouse (CLAUDE.md: stock never crosses
-   warehouses). Codes verified live in prod. PJ·KL pools the two Klang-valley
-   warehouses (PJ SHOWROOM + SLGR WAREHOUSE) into one delivery region. CHINA
-   WAREHOUSE (transit) + CONSIGN-OUT are NOT delivery regions → SKIP. Singapore
-   has no warehouse — it is detected from customer_state instead. */
-type RegionKey = 'PJKL' | 'PENANG' | 'SABAH' | 'SARAWAK' | 'SINGAPORE';
+   FOUR fixed buckets, classified by the customer's STATE (not the line
+   warehouse): KL · PENANG · EM · SG. stateToRegion() is the single normalizer,
+   used to bucket every order; a leg's region is mapped from its warehouse CODE
+   (codeToRegion) so the dual-trip still surfaces an order under two tabs. */
+export type Region = 'KL' | 'PENANG' | 'EM' | 'SG';
+const REGIONS: Region[] = ['KL', 'PENANG', 'EM', 'SG'];
+const REGION_LABEL: Record<Region, string> = { KL: 'KL', PENANG: 'Penang', EM: 'EM', SG: 'SG' };
 
-const WAREHOUSE_CODE_TO_REGION: Record<string, RegionKey> = {
-  'PJ SHOWROOM': 'PJKL',
-  'SLGR WAREHOUSE': 'PJKL',
-  'PG WAREHOUSE': 'PENANG',
-  'SBH WAREHOUSE': 'SABAH',
-  'SRK WAREHOUSE': 'SARAWAK',
-};
-/* Warehouse codes that are NOT delivery regions (transit / consignment). */
-const NON_REGION_CODES = new Set(['CHINA WAREHOUSE', 'CONSIGN-OUT']);
+/* Normalize free-text for tolerant matching: upper, strip punctuation/accents,
+   collapse whitespace. "Pulau  Pinang" / "P.Pinang" / "pulau-pinang" all align. */
+function normState(s: string | null | undefined): string {
+  return (s ?? '')
+    .normalize('NFKD').replace(/[̀-ͯ]/g, '')   // drop accents
+    .toUpperCase()
+    .replace(/[._\-,/]/g, ' ')                            // punctuation → space
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-const REGION_LABEL: Record<RegionKey, string> = {
-  PJKL: 'PJ·KL',
-  PENANG: 'Penang',
-  SABAH: 'Sabah',
-  SARAWAK: 'Sarawak',
-  SINGAPORE: 'Singapore',
-};
+/* customer_state (+ customer_country fallback) → one of the 4 fixed buckets.
+   Tolerant of casing/spacing/common variants. Default bucket is KL (every other
+   Peninsular state). */
+export function stateToRegion(
+  state: string | null | undefined,
+  country?: string | null | undefined,
+): Region {
+  const c = normState(country);
+  // Country says Singapore → SG (covers SO with blank/foreign state).
+  if (c === 'SINGAPORE' || c === 'SG' || c === 'SGP' || c === 'SINGAPURA') return 'SG';
 
-/* Is a free-text customer_state Singapore? (SG SOs carry no MY warehouse.) */
-function isSingaporeState(state: string | null | undefined): boolean {
-  const s = (state ?? '').trim().toUpperCase();
-  return s === 'SINGAPORE' || s === 'SG' || s === 'SGP';
+  const s = normState(state);
+  if (s === '') {
+    // No state — fall back to country only (already handled SG above) → KL.
+    return 'KL';
+  }
+  // SG by state.
+  if (s === 'SINGAPORE' || s === 'SG' || s === 'SGP' || s === 'SINGAPURA') return 'SG';
+
+  // EM = East Malaysia: Sabah, Sarawak, Labuan (incl. "Wilayah Persekutuan
+  // Labuan" / "WP Labuan" / "W P Labuan").
+  if (s.includes('SARAWAK')) return 'EM';
+  if (s.includes('SABAH')) return 'EM';
+  if (s.includes('LABUAN')) return 'EM';
+
+  // Penang = Pulau Pinang / Penang / "P Pinang" / "Pinang".
+  if (s.includes('PINANG') || s === 'PENANG') return 'PENANG';
+
+  // Everything else (Selangor, KL/WP, Johor, Melaka, N. Sembilan, Perak, Kedah,
+  // Perlis, Pahang, Terengganu, Kelantan, Putrajaya, …) → KL.
+  return 'KL';
+}
+
+/* A leg's region bucket from its warehouse CODE (the dual-trip transit/final
+   hop). SLGR WAREHOUSE + PJ SHOWROOM → KL; PG WAREHOUSE → PENANG; SBH + SRK
+   WAREHOUSE → EM. CHINA WAREHOUSE + CONSIGN-OUT are skipped (no leg region — a
+   transit hop through China / a consignment-out isn't a delivery region). There
+   is no SG warehouse (SG orders carry no MY warehouse). Tolerant of code
+   casing/spacing. */
+function codeToRegion(code: string | null | undefined): Region | null {
+  const c = normState(code);   // upper + collapse spaces (reuse the normalizer)
+  if (c === '') return null;
+  if (c.startsWith('CHINA') || c.startsWith('CONSIGN')) return null;   // skip
+  if (c.startsWith('SLGR') || c.startsWith('PJ')) return 'KL';
+  if (c.startsWith('PG')) return 'PENANG';
+  if (c.startsWith('SBH') || c.startsWith('SRK')) return 'EM';
+  return null;   // unknown warehouse code → no leg region
 }
 
 type DeliveryState = 'PENDING_DELIVERY' | 'PENDING_SCHEDULE' | 'OVERDUE' | 'DELIVERED';
@@ -106,7 +146,7 @@ type LegOut = {
   leg_no: number;
   warehouse_id: string | null;
   warehouse_code: string | null;
-  region: RegionKey | null;
+  region: Region | null;     // the leg's bucket, mapped from its warehouse CODE
   trip_id: string | null;
   leg_date: string | null;
   leg_kind: 'transit' | 'final';
@@ -114,37 +154,37 @@ type LegOut = {
 };
 
 /* ──────────────────────────────────────────────────────────────────────────
-   GET /delivery-planning?region=<warehouseId|ALL|SG>&state=<delivery_state|ALL>
+   GET /delivery-planning?region=<ALL|KL|PENANG|EM|SG>&state=<delivery_state|ALL>
    The board. Source = live (status NOT DRAFT/CANCELLED) mfg_sales_orders that
    need delivery (have a customer_delivery_date or internal_expected_dd) +
-   their DOs. delivery_state derived LIVE per SO. Region grouped from the SO
-   LINE warehouse_id; SG by customer_state. Legs let an order appear in two
-   regions with two dates.
+   their DOs. delivery_state derived LIVE per SO. Region = one of the 4 fixed
+   buckets, classified from the customer's STATE (stateToRegion). Legs let an
+   order appear in a SECOND bucket (mapped from the leg's warehouse code) with
+   its own date.
    ─────────────────────────────────────────────────────────────────────────*/
 deliveryPlanning.get('/', async (c) => {
   const sb = c.get('supabase');
   const today = todayMY();
 
-  const regionParam = (c.req.query('region') ?? 'ALL').trim();   // warehouseId | ALL | SG
+  const regionParam = (c.req.query('region') ?? 'ALL').trim().toUpperCase();   // ALL | KL | PENANG | EM | SG
   const stateParam = (c.req.query('state') ?? 'ALL').trim().toUpperCase();
 
-  /* 1. Warehouse master → code map + region map (read-only label lookup). */
+  /* 1. Warehouse master → code + name maps (read-only label lookup + the
+        leg-region mapping, which keys off the warehouse CODE). */
   const { data: whRows, error: whErr } = await sb
     .from('warehouses')
     .select('id, code, name');
   if (whErr) return c.json({ error: 'load_failed', reason: whErr.message }, 500);
   const whCode = new Map<string, string>();
   const whName = new Map<string, string>();
-  const whRegion = new Map<string, RegionKey>();
   for (const w of (whRows ?? []) as Array<{ id: string; code: string | null; name: string | null }>) {
     const code = (w.code ?? '').trim();
     whCode.set(w.id, code);
     whName.set(w.id, w.name ?? code);
-    const region = WAREHOUSE_CODE_TO_REGION[code.toUpperCase()] ?? WAREHOUSE_CODE_TO_REGION[code];
-    if (region) whRegion.set(w.id, region);
   }
-  const regionForWarehouse = (id: string | null | undefined): RegionKey | null =>
-    (id && whRegion.get(id)) || null;
+  /* A leg's region maps from its warehouse CODE (null = no region / skipped). */
+  const regionForWarehouse = (id: string | null | undefined): Region | null =>
+    id ? codeToRegion(whCode.get(id)) : null;
 
   /* 2. Live SO headers needing delivery — NOT DRAFT / CANCELLED, and carrying a
         delivery date signal (customer_delivery_date or internal_expected_dd).
@@ -154,11 +194,13 @@ deliveryPlanning.get('/', async (c) => {
     phone: string | null; branding: string | null; status: string | null; delivery_state: string | null;
     customer_state: string | null; customer_country: string | null;
     customer_delivery_date: string | null; internal_expected_dd: string | null; processing_date: string | null;
+    so_date: string | null; address1: string | null; address2: string | null;
+    postcode: string | null; building_type: string | null;
     local_total_centi: number | null; balance_centi: number | null;
   };
   const { data: soRowsRaw, error: soErr } = await paginateAll<SoHeaderRow>((from, to) =>
     sb.from('mfg_sales_orders')
-      .select('doc_no, debtor_code, debtor_name, phone, branding, status, delivery_state, customer_state, customer_country, customer_delivery_date, internal_expected_dd, processing_date, local_total_centi, balance_centi')
+      .select('doc_no, debtor_code, debtor_name, phone, branding, status, delivery_state, customer_state, customer_country, customer_delivery_date, internal_expected_dd, processing_date, so_date, address1, address2, postcode, building_type, local_total_centi, balance_centi')
       .neq('status', 'DRAFT')
       .neq('status', 'CANCELLED')
       .order('customer_delivery_date', { ascending: true, nullsFirst: false })
@@ -175,6 +217,25 @@ deliveryPlanning.get('/', async (c) => {
 
   if (docNos.length === 0) {
     return c.json({ orders: [], counts: emptyCounts(), regions: regionList() });
+  }
+
+  /* 2b. LIVE balance per SO — same source-of-truth as the SO list Balance column
+        (mfg_sales_orders_with_payment_totals.balance_centi_live = local_total −
+        Σpayments, migration 0076). Looked up by doc_no; the base-table
+        balance_centi above stays as the fallback when the view row is absent. */
+  const liveBalanceByDoc = new Map<string, number>();
+  {
+    const { data: balRows } = await paginateAll<{ doc_no: string | null; balance_centi_live: number | null }>((from, to) =>
+      sb.from('mfg_sales_orders_with_payment_totals')
+        .select('doc_no, balance_centi_live')
+        .in('doc_no', docNos)
+        .range(from, to),
+    );
+    for (const b of (balRows ?? [])) {
+      if (b.doc_no != null && b.balance_centi_live != null) {
+        liveBalanceByDoc.set(String(b.doc_no), Number(b.balance_centi_live));
+      }
+    }
   }
 
   /* 3. Per-line readiness + per-line warehouse. One batched, paginated read of
@@ -246,14 +307,25 @@ deliveryPlanning.get('/', async (c) => {
 
   /* Crew snapshot per DO (Stage 3). Best-effort — read the assign-time snapshot
      so the board shows the driver/helper/lorry without joining the masters. */
-  const crewByDo = new Map<string, { driver: string | null; helper: string | null; lorry: string | null }>();
+  type CrewOut = {
+    // legacy collapsed strings (kept for back-compat search / fallback)
+    driver: string | null; helper: string | null; lorry: string | null;
+    // expanded per-person fields (HC delivery-sheet columns, Stage 3 snapshot)
+    driver_1_name: string | null; driver_1_ic: string | null; driver_1_contact: string | null;
+    driver_2_name: string | null;
+    helper_1_name: string | null; helper_2_name: string | null;
+    lorry_plate: string | null;
+  };
+  const crewByDo = new Map<string, CrewOut>();
   if (doIds.length > 0) {
     const { data: crewRows } = await paginateAll<{
-      do_id: string; driver_1_name: string | null; driver_2_name: string | null;
+      do_id: string;
+      driver_1_name: string | null; driver_1_ic: string | null; driver_1_contact: string | null;
+      driver_2_name: string | null;
       helper_1_name: string | null; helper_2_name: string | null; lorry_plate: string | null;
     }>((from, to) =>
       sb.from('delivery_order_crew')
-        .select('do_id, driver_1_name, driver_2_name, helper_1_name, helper_2_name, lorry_plate')
+        .select('do_id, driver_1_name, driver_1_ic, driver_1_contact, driver_2_name, helper_1_name, helper_2_name, lorry_plate')
         .in('do_id', doIds)
         .range(from, to),
     );
@@ -262,6 +334,13 @@ deliveryPlanning.get('/', async (c) => {
         driver: [cr.driver_1_name, cr.driver_2_name].filter(Boolean).join(' / ') || null,
         helper: [cr.helper_1_name, cr.helper_2_name].filter(Boolean).join(' / ') || null,
         lorry: cr.lorry_plate ?? null,
+        driver_1_name: cr.driver_1_name ?? null,
+        driver_1_ic: cr.driver_1_ic ?? null,
+        driver_1_contact: cr.driver_1_contact ?? null,
+        driver_2_name: cr.driver_2_name ?? null,
+        helper_1_name: cr.helper_1_name ?? null,
+        helper_2_name: cr.helper_2_name ?? null,
+        lorry_plate: cr.lorry_plate ?? null,
       });
     }
   }
@@ -300,11 +379,11 @@ deliveryPlanning.get('/', async (c) => {
     }
   }
 
-  /* 7. Assemble one board row per SO with its derived state + regions. An SO's
-        "home" region(s) = the distinct regions of its LINE warehouses; an SG SO
-        (no MY warehouse) maps to SINGAPORE by customer_state. Legged orders ALSO
-        carry each leg's region so the UI can place the same order under two
-        tabs with two dates. */
+  /* 7. Assemble one board row per SO with its derived state + region. An SO's
+        "home" bucket = stateToRegion(customer_state, customer_country) — one of
+        KL · PENANG · EM · SG. Legged orders ALSO carry each leg's bucket (mapped
+        from the leg's warehouse code) so the UI can place the same order under
+        two tabs with two dates. */
   const orders = soRows.map((r) => {
     const docNo = String(r.doc_no ?? '');
     const readiness = summariseReadiness(linesByDoc.get(docNo) ?? []);
@@ -314,6 +393,14 @@ deliveryPlanning.get('/', async (c) => {
     const customerDD = r.customer_delivery_date ?? null;
     const internalDD = r.internal_expected_dd ?? r.processing_date ?? null;
 
+    /* "Ready to ship" gate. summariseReadiness.isMainReady is VACUOUSLY true when
+       mainCount === 0 (an accessory-only / service-only SO has no MAIN line), so
+       it must NOT be used directly — that wrongly jumps an acc-only SO to
+       PENDING_SCHEDULE (and out of OVERDUE) before every accessory is in. Use
+       isMainReady only when there IS a main; otherwise require isFullyReady
+       (every line READY). (Commander 2026-06-19, matches stockRemark gating.) */
+    const readyToShip = readiness.mainCount > 0 ? readiness.isMainReady : readiness.isFullyReady;
+
     /* delivery_state derivation (the core rule). A manual override stored on the
        SO header wins; else compute live. */
     const stored = r.delivery_state ?? null;
@@ -322,7 +409,7 @@ deliveryPlanning.get('/', async (c) => {
       state = stored as DeliveryState;
     } else if (status === 'DELIVERED' || (delivered > 0 && remaining <= 0)) {
       state = 'DELIVERED';
-    } else if (readiness.isMainReady) {
+    } else if (readyToShip) {
       state = 'PENDING_SCHEDULE';
     } else {
       // NOT ready. OVERDUE once we're within 3 days of (or past) the customer
@@ -331,15 +418,11 @@ deliveryPlanning.get('/', async (c) => {
       state = daysLeft != null && daysLeft <= 3 ? 'OVERDUE' : 'PENDING_DELIVERY';
     }
 
-    /* Regions for this SO. Distinct line-warehouse regions; SG by state. */
-    const regionSet = new Set<RegionKey>();
-    for (const wid of (warehousesByDoc.get(docNo) ?? new Set<string>())) {
-      const reg = regionForWarehouse(wid);
-      if (reg) regionSet.add(reg);
-    }
-    if (isSingaporeState(r.customer_state) || isSingaporeState(r.customer_country)) {
-      regionSet.add('SINGAPORE');
-    }
+    /* Region for this SO = its customer-STATE bucket (the single source). Legs
+       add a SECOND bucket (mapped from each leg's warehouse code) so a legged
+       order surfaces under both its state bucket and its transit bucket. */
+    const primaryRegion = stateToRegion(r.customer_state, r.customer_country);
+    const regionSet = new Set<Region>([primaryRegion]);
     const legs = legsByDoc.get(docNo) ?? [];
     for (const lg of legs) if (lg.region) regionSet.add(lg.region);
 
@@ -357,18 +440,30 @@ deliveryPlanning.get('/', async (c) => {
       status,
       delivery_state: state,
       delivery_state_override: stored && (DELIVERY_STATES as string[]).includes(stored) ? stored : null,
-      // money — balance / outstanding (centi). local_total_centi is the SO grand total.
+      // money — balance / outstanding (centi). Live balance (= local_total −
+      // Σpayments, from mfg_sales_orders_with_payment_totals view) is the SO list
+      // source-of-truth; base-table balance_centi is the fallback.
       balance_centi: Number(r.balance_centi ?? 0),
+      balance_centi_live: liveBalanceByDoc.has(docNo) ? liveBalanceByDoc.get(docNo)! : null,
       local_total_centi: Number(r.local_total_centi ?? 0),
       // dates
+      so_date: r.so_date ?? null,
+      processing_date: r.processing_date ?? null,
       customer_delivery_date: customerDD,
       internal_expected_dd: internalDD,
       days_left: daysBetween(today, customerDD),
-      // stock
-      stock_status: readiness.isFullyReady ? 'READY' : readiness.isMainReady ? 'READY (PARTIAL)' : 'PENDING',
+      // address (HC delivery-sheet columns)
+      address: [r.address1, r.address2].filter(Boolean).join(', ') || null,
+      postcode: r.postcode ?? null,
+      building_type: r.building_type ?? null,
+      // stock — stock_remark is the correctly-gated label (never "READY (PARTIAL)"
+      // for an acc-only / service-only SO); stock_status mirrors it.
+      stock_status: readiness.isFullyReady ? 'READY' : readyToShip ? 'READY (PARTIAL)' : 'PENDING',
       stock_remark: readiness.stockRemark,
       is_main_ready: readiness.isMainReady,
-      // region(s) + warehouse label
+      // region(s): the customer-state bucket (primary) + any leg buckets; plus
+      // the warehouse label (kept for the Warehouse column, not the region).
+      region: primaryRegion,
       regions: [...regionSet],
       warehouse_id: primaryWh,
       warehouse_code: primaryWh ? (whCode.get(primaryWh) ?? null) : null,
@@ -388,7 +483,7 @@ deliveryPlanning.get('/', async (c) => {
   /* 8. Counts per state — computed over the REGION-filtered set so the 4 state
         tab badges reflect the active region. The state filter is applied AFTER
         counting (so switching state tabs doesn't change the badge numbers). */
-  const regionFiltered = orders.filter((o) => matchesRegion(o, regionParam, whRegion));
+  const regionFiltered = orders.filter((o) => matchesRegion(o, regionParam));
   const counts = emptyCounts();
   for (const o of regionFiltered) counts[o.delivery_state] += 1;
   counts.ALL = regionFiltered.length;
@@ -400,37 +495,28 @@ deliveryPlanning.get('/', async (c) => {
   return c.json({ orders: stateFiltered, counts, regions: regionList() });
 });
 
-/* Region match: ALL → everything; SG → Singapore region; a RegionKey (PJKL /
-   PENANG / SABAH / SARAWAK / SINGAPORE) → that region directly; else a
-   warehouseId → resolve to its region key (any of the order's line / leg
-   warehouses mapping to it). The frontend tabs send a RegionKey; a warehouseId
-   is still accepted for callers that pass one. */
-const REGION_KEYS = new Set<RegionKey>(['PJKL', 'PENANG', 'SABAH', 'SARAWAK', 'SINGAPORE']);
+/* Region match: ALL → everything; else one of the 4 fixed buckets → orders
+   whose region set (customer-state bucket + leg buckets) includes it. The
+   frontend tabs send ALL | KL | PENANG | EM | SG. */
 function matchesRegion(
-  o: { regions: RegionKey[] },
+  o: { regions: Region[] },
   regionParam: string,
-  whRegion: Map<string, RegionKey>,
 ): boolean {
   if (regionParam === 'ALL' || regionParam === '') return true;
-  if (regionParam === 'SG' || regionParam.toUpperCase() === 'SINGAPORE') {
-    return o.regions.includes('SINGAPORE');
+  if ((REGIONS as string[]).includes(regionParam)) {
+    return o.regions.includes(regionParam as Region);
   }
-  if (REGION_KEYS.has(regionParam as RegionKey)) {
-    return o.regions.includes(regionParam as RegionKey);
-  }
-  // regionParam is a warehouse id → resolve to its region key.
-  const reg = whRegion.get(regionParam);
-  if (!reg) return false;
-  return o.regions.includes(reg);
+  return true;   // unknown param → no-op filter (defensive)
 }
 
 function emptyCounts(): Record<'ALL' | DeliveryState, number> {
   return { ALL: 0, PENDING_DELIVERY: 0, PENDING_SCHEDULE: 0, OVERDUE: 0, DELIVERED: 0 };
 }
 
-/* Static region descriptor for the UI tab row. */
-function regionList(): Array<{ key: RegionKey; label: string }> {
-  return (Object.keys(REGION_LABEL) as RegionKey[]).map((k) => ({ key: k, label: REGION_LABEL[k] }));
+/* Region descriptor for the UI tab row — the 4 FIXED buckets (KL · Penang · EM
+   · SG), classified by customer state. The frontend prepends its own "All". */
+function regionList(): Array<{ key: Region; label: string }> {
+  return REGIONS.map((k) => ({ key: k, label: REGION_LABEL[k] }));
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
