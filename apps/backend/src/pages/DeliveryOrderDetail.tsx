@@ -56,6 +56,9 @@ import {
 } from '../lib/so-dropdown-options-queries';
 import { useStaff } from '../lib/admin-queries';
 import { useDrivers } from '../lib/drivers-queries';
+import { useHelpers } from '../lib/helpers-queries';
+import { useLorries } from '../lib/lorries-queries';
+import { useSetDoCrew, type DoCrewRow } from '../lib/crew-queries';
 import { sortByText, sortByNumeric } from '../lib/sort-options';
 import styles from './SalesOrderDetail.module.css';
 
@@ -180,6 +183,9 @@ type DoHeader = {
      DR / SI references the DO. Locks line edits + the Cancel transition;
      convert-to-DR / convert-to-SI remain available via the list. */
   has_children?: boolean;
+  /* Stage 3 — the per-DO crew (delivery_order_crew, migration 0195), joined onto
+     the detail response. Null until a crew is assigned. */
+  crew?: DoCrewRow | null;
 };
 
 type DoItem = {
@@ -642,6 +648,9 @@ export const DeliveryOrderDetail = () => {
         locked={isLocked}
         isEditing={isEditing}
       />
+
+      {/* ── Delivery crew (2 drivers + 2 helpers + 1 lorry) ── */}
+      <DeliveryCrewCard doId={header.id} crew={header.crew ?? null} locked={isLocked} />
 
       {/* ── Line items ── */}
       <section className={styles.card}>
@@ -1167,6 +1176,219 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
 });
 CustomerCardInner.displayName = 'CustomerCardInner';
 const CustomerCard = memo(CustomerCardInner) as typeof CustomerCardInner;
+
+/* ════════════════════════════════════════════════════════════════════════
+   Delivery crew card (Stage 3 — delivery_order_crew, migration 0195).
+   Up to 2 drivers + 2 helpers + 1 lorry, each picked from its active fleet
+   master (useDrivers / useHelpers / useLorries). When a person/lorry is picked
+   we show their IC + contact / plate as read-only auto-filled text beside the
+   select (read from the chosen master row). On Save → PUT /:id/crew, which
+   snapshots name/ic/contact/plate and keeps the DO's primary-driver field in
+   sync with driver 1. Self-contained View→Edit gate, locked once the DO has a
+   downstream SI/DR (same lock the rest of the page honours).
+   ════════════════════════════════════════════════════════════════════════ */
+
+const dualIc = (d: { ic_number?: string | null } | undefined): string | null => d?.ic_number ?? null;
+
+const DeliveryCrewCard = ({
+  doId, crew, locked = false,
+}: { doId: string; crew: DoCrewRow | null; locked?: boolean }) => {
+  const driversQ = useDrivers();
+  const helpersQ = useHelpers();
+  const lorriesQ = useLorries();
+  const setCrew = useSetDoCrew();
+  const notify = useNotify();
+
+  const drivers = useMemo(() => driversQ.data ?? [], [driversQ.data]);
+  const helpers = useMemo(() => helpersQ.data ?? [], [helpersQ.data]);
+  const lorries = useMemo(() => lorriesQ.data ?? [], [lorriesQ.data]);
+
+  const initial = useCallback(() => ({
+    driver1Id: crew?.driver_1_id ?? '',
+    driver2Id: crew?.driver_2_id ?? '',
+    helper1Id: crew?.helper_1_id ?? '',
+    helper2Id: crew?.helper_2_id ?? '',
+    lorryId: crew?.lorry_id ?? '',
+  }), [crew]);
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [form, setForm] = useState(initial);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Re-seed from the persisted crew whenever it changes (refetch / save).
+  useEffect(() => { if (!isEditing) setForm(initial()); }, [initial, isEditing]);
+
+  const set = (k: keyof ReturnType<typeof initial>, v: string) => setForm((s) => ({ ...s, [k]: v }));
+
+  const driverById = useMemo(() => new Map(drivers.map((d) => [d.id, d])), [drivers]);
+  const helperById = useMemo(() => new Map(helpers.map((h) => [h.id, h])), [helpers]);
+  const lorryById = useMemo(() => new Map(lorries.map((l) => [l.id, l])), [lorries]);
+
+  const enterEdit = () => { setSaveError(null); setIsEditing(true); };
+  const cancelEdit = () => { setForm(initial()); setSaveError(null); setIsEditing(false); };
+
+  const onSave = () => {
+    setSaveError(null);
+    setCrew.mutate(
+      {
+        id: doId,
+        driver1Id: form.driver1Id || null,
+        driver2Id: form.driver2Id || null,
+        helper1Id: form.helper1Id || null,
+        helper2Id: form.helper2Id || null,
+        lorryId: form.lorryId || null,
+      },
+      {
+        onSuccess: () => setIsEditing(false),
+        onError: (e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          setSaveError(msg);
+          notify({ title: 'Crew save failed', body: msg, tone: 'error' });
+        },
+      },
+    );
+  };
+
+  // Read-only auto-fill text beside each select — live from the chosen master
+  // row in edit mode, from the saved snapshot when viewing.
+  const driverInfo = (id: string, snapName: string | null, snapIc: string | null, snapContact: string | null) => {
+    if (isEditing) {
+      const d = id ? driverById.get(id) : undefined;
+      if (!d) return null;
+      return { ic: dualIc(d), contact: d.phone ?? null, vehicle: d.vehicle ?? null };
+    }
+    if (!snapName) return null;
+    return { ic: snapIc, contact: snapContact, vehicle: null };
+  };
+  const helperInfo = (id: string, snapName: string | null, snapContact: string | null) => {
+    if (isEditing) {
+      const h = id ? helperById.get(id) : undefined;
+      if (!h) return null;
+      return { ic: h.ic_number ?? null, contact: h.contact ?? null };
+    }
+    if (!snapName) return null;
+    return { ic: null, contact: snapContact };
+  };
+  const lorryInfo = (id: string, snapPlate: string | null) => {
+    if (isEditing) {
+      const l = id ? lorryById.get(id) : undefined;
+      return l ? l.plate : null;
+    }
+    return snapPlate;
+  };
+
+  const d1 = driverInfo(form.driver1Id, crew?.driver_1_name ?? null, crew?.driver_1_ic ?? null, crew?.driver_1_contact ?? null);
+  const d2 = driverInfo(form.driver2Id, crew?.driver_2_name ?? null, crew?.driver_2_ic ?? null, crew?.driver_2_contact ?? null);
+  const h1 = helperInfo(form.helper1Id, crew?.helper_1_name ?? null, crew?.helper_1_contact ?? null);
+  const h2 = helperInfo(form.helper2Id, crew?.helper_2_name ?? null, crew?.helper_2_contact ?? null);
+  const lp = lorryInfo(form.lorryId, crew?.lorry_plate ?? null);
+
+  const infoLine = (parts: Array<[string, string | null | undefined]>) => {
+    const shown = parts.filter(([, v]) => v && String(v).trim());
+    if (shown.length === 0) return null;
+    return (
+      <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 4, display: 'block' }}>
+        {shown.map(([label, v]) => `${label} ${v}`).join('  ·  ')}
+      </span>
+    );
+  };
+
+  const personSelect = (
+    slotKey: keyof ReturnType<typeof initial>,
+    label: string,
+    options: Array<{ id: string; name: string }>,
+    currentId: string,
+    fallbackName: string | null,
+  ) => (
+    <label className={styles.field}>
+      <span className={styles.fieldLabel}>{label}</span>
+      <span className={styles.selectWrap}>
+        <select className={styles.fieldSelect} value={currentId}
+          disabled={!isEditing || locked}
+          onChange={(e) => set(slotKey, e.target.value)}>
+          <option value="">— None —</option>
+          {sortByText(options).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          {currentId && !options.some((o) => o.id === currentId) && (
+            <option value={currentId}>{fallbackName || '(inactive)'}</option>
+          )}
+        </select>
+        <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+      </span>
+    </label>
+  );
+
+  return (
+    <section className={styles.card}>
+      <header className={styles.cardHeader}>
+        <h2 className={styles.cardTitle}>Delivery Crew</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            Up to 2 drivers + 2 helpers + 1 lorry
+          </span>
+          {!isEditing ? (
+            <Button variant="ghost" size="sm" onClick={enterEdit} disabled={locked}>
+              <Pencil {...ICON} /><span>Edit Crew</span>
+            </Button>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={setCrew.isPending}>
+                <span>Cancel</span>
+              </Button>
+              <Button variant="primary" size="sm" onClick={onSave} disabled={setCrew.isPending}>
+                <Save {...ICON} /><span>{setCrew.isPending ? 'Saving…' : 'Save Crew'}</span>
+              </Button>
+            </>
+          )}
+        </div>
+      </header>
+      <div className={styles.cardBody}>
+        {saveError && (
+          <div className={styles.bannerWarn} style={{ marginBottom: 'var(--space-3)' }}>
+            <strong>Crew save failed.</strong><span>{saveError}</span>
+          </div>
+        )}
+        <div className={styles.formGrid4}>
+          <div className={styles.field}>
+            {personSelect('driver1Id', 'Driver 1', drivers, form.driver1Id, crew?.driver_1_name ?? null)}
+            {infoLine([['IC', d1?.ic], ['Tel', d1?.contact], ['Vehicle', d1?.vehicle]])}
+          </div>
+          <div className={styles.field}>
+            {personSelect('driver2Id', 'Driver 2', drivers, form.driver2Id, crew?.driver_2_name ?? null)}
+            {infoLine([['IC', d2?.ic], ['Tel', d2?.contact], ['Vehicle', d2?.vehicle]])}
+          </div>
+          <div className={styles.field}>
+            {personSelect('helper1Id', 'Helper 1', helpers, form.helper1Id, crew?.helper_1_name ?? null)}
+            {infoLine([['IC', h1?.ic], ['Tel', h1?.contact]])}
+          </div>
+          <div className={styles.field}>
+            {personSelect('helper2Id', 'Helper 2', helpers, form.helper2Id, crew?.helper_2_name ?? null)}
+            {infoLine([['IC', h2?.ic], ['Tel', h2?.contact]])}
+          </div>
+          <div className={styles.field}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Lorry</span>
+              <span className={styles.selectWrap}>
+                <select className={styles.fieldSelect} value={form.lorryId}
+                  disabled={!isEditing || locked}
+                  onChange={(e) => set('lorryId', e.target.value)}>
+                  <option value="">— None —</option>
+                  {sortByText(lorries.map((l) => ({ id: l.id, name: l.plate }))).map((o) => (
+                    <option key={o.id} value={o.id}>{o.name}</option>
+                  ))}
+                  {form.lorryId && !lorries.some((l) => l.id === form.lorryId) && (
+                    <option value={form.lorryId}>{crew?.lorry_plate || '(inactive)'}</option>
+                  )}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
+            </label>
+            {infoLine([['Plate', lp]])}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+};
 
 /* ════════════════════════════════════════════════════════════════════════
    Totals card (mirror of SalesOrderDetail's TotalsCard)
