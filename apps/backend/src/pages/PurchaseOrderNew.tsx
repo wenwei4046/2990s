@@ -525,7 +525,10 @@ export const PurchaseOrderNew = () => {
     [lines],
   );
 
-  const onSave = () => {
+  // Draft/Confirmed (Owner 2026-06-25) — asDraft saves the PO as DRAFT (review
+  // queue; no MRP supply, no SO-quota lock) instead of a live SUBMITTED PO.
+  // Omitted/false keeps the original "Create Purchase Order" → SUBMITTED flow.
+  const onSave = (asDraft = false) => {
     if (!supplierId) {
       notify({ title: 'Pick a Creditor (supplier) first.', tone: 'error' });
       return;
@@ -582,6 +585,7 @@ export const PurchaseOrderNew = () => {
         notes: notes || undefined,
         purchaseLocationId,
         items,
+        asDraft,
       },
       {
         onSuccess: (res) => navigate(`/purchase-orders/${res.id}`),
@@ -609,13 +613,23 @@ export const PurchaseOrderNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders')}>
             <X {...ICON} /> Cancel
           </Button>
+          {/* Draft/Confirmed (Owner 2026-06-25) — opt-in DRAFT save. Lands the PO
+              in the Draft review queue (no MRP supply, no SO-quota lock) until
+              Confirmed on the detail page. Mirrors SO/DO/SI Save-as-Draft. */}
           <Button
-            variant="primary" size="md"
-            onClick={onSave}
+            variant="ghost" size="md"
+            onClick={() => onSave(true)}
             disabled={create.isPending}
           >
             <Save {...ICON} />
-            {/* PR #131 + 0078 — POST creates SUBMITTED; DRAFT removed entirely. */}
+            {create.isPending ? 'Saving…' : 'Save as Draft'}
+          </Button>
+          <Button
+            variant="primary" size="md"
+            onClick={() => onSave(false)}
+            disabled={create.isPending}
+          >
+            <Save {...ICON} />
             {create.isPending ? 'Saving…' : 'Create Purchase Order'}
           </Button>
         </div>

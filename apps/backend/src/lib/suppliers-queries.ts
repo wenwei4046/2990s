@@ -9,7 +9,7 @@ export type SupplierStatus = 'ACTIVE' | 'INACTIVE' | 'BLOCKED';
 export type Currency = 'MYR' | 'RMB' | 'USD' | 'SGD';
 export type MaterialKind = 'mfg_product' | 'fabric' | 'raw';
 // PR-DRAFT-removal — DRAFT dropped from po_status (migration 0078).
-export type PoStatus = 'SUBMITTED' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'CANCELLED';
+export type PoStatus = 'DRAFT' | 'SUBMITTED' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'CANCELLED';
 
 export type StatementType = 'OPEN_ITEM' | 'BALANCE_FORWARD' | 'NO_STATEMENT';
 export type AgingBasis    = 'INVOICE_DATE' | 'DUE_DATE';
@@ -768,6 +768,10 @@ export function useCreatePurchaseOrder() {
       /** PR #97 — AutoCount Purchase Location at create time. NULL → can be
           set on the detail page after creation. */
       purchaseLocationId?: string | null;
+      /** Draft/Confirmed two-state (Owner 2026-06-25) — true saves the PO as
+          DRAFT (review queue: no MRP supply, no SO-quota lock) instead of a live
+          SUBMITTED PO. Omitted/false keeps the original create→SUBMITTED flow. */
+      asDraft?: boolean;
     }) =>
       authedFetch<{ id: string; poNumber: string }>(`/mfg-purchase-orders`, {
         method: 'POST',
@@ -857,6 +861,27 @@ export function useSubmitPurchaseOrder() {
         { method: 'PATCH' },
       ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] }),
+  });
+}
+
+/** Confirm a DRAFT PO → SUBMITTED (Draft/Confirmed two-state). Commits the
+ *  SO-quota advance (those lines leave the From-SO picker), makes the PO live
+ *  MRP supply, and unlocks GRN-receivability. Mirrors useConfirm on SO/SI. */
+export function useConfirmPurchaseOrder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch<{ purchaseOrder: { id: string; status: PoStatus; submitted_at: string | null } }>(
+        `/mfg-purchase-orders/${id}/confirm`,
+        { method: 'PATCH' },
+      ),
+    onSuccess: (_, id) => {
+      // Confirm advances po_qty_picked, so the From-SO picker (prefix
+      // ['mfg-purchase-orders','outstanding-so-items']) must refetch — those
+      // lines leave the picker — plus this PO's detail + the list pill.
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', id] });
+    },
   });
 }
 

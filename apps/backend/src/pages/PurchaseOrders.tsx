@@ -52,7 +52,9 @@ const STATUS_CHIPS: { value: StatusFilter; label: string }[] = [
 // active = burnt · in-progress = darker burnt · complete = green · cancelled = red.
 // Keeps the PO list pill colours identical to the PO detail page.
 const STATUS_COLOR: Record<PoStatus, string> = {
-  // DRAFT removed in migration 0078.
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — uncommitted PO, neutral/grey
+  // so it reads visible-but-distinct from the burnt "Confirmed" pill.
+  DRAFT: 'rgba(34, 31, 32, 0.08)',
   SUBMITTED: 'rgba(166, 71, 30, 0.12)',
   PARTIALLY_RECEIVED: 'rgba(166, 71, 30, 0.18)',
   RECEIVED: 'rgba(47, 93, 79, 0.28)',

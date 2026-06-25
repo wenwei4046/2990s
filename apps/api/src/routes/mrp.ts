@@ -53,8 +53,10 @@ mrp.use('*', supabaseAuth);
    Leak guard (DRAFT) — a DRAFT SO commits nothing, so it must generate NO MRP
    demand (no shortage, no PO-picker line) until it is confirmed. */
 const SO_DONE = new Set(['DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED', 'DRAFT']);
-/* PO statuses that no longer supply goods. */
-const PO_DEAD = new Set(['CANCELLED']);
+/* PO statuses that no longer supply goods. DRAFT is included: a draft PO is
+   uncommitted (it hasn't really been ordered yet), so it must NOT count as MRP
+   supply until it is Confirmed (DRAFT -> SUBMITTED). Mirrors SO_DONE's DRAFT. */
+const PO_DEAD = new Set(['CANCELLED', 'DRAFT']);
 
 type DemandRow = {
   id: string;

@@ -16,6 +16,8 @@
 import type { PoStatus } from './suppliers-queries';
 
 export const PO_STATUS_LABEL: Record<PoStatus, string> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — uncommitted review-queue PO.
+  DRAFT: 'Draft',
   SUBMITTED: 'Confirmed',
   PARTIALLY_RECEIVED: 'Partially Received',
   RECEIVED: 'Received',

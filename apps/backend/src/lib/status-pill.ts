@@ -30,6 +30,10 @@ export type StatusDocType =
 type Entry = { label: string; tone: StatusTone };
 
 const PO: Record<string, Entry> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT PO is uncommitted: it
+  // counts as no MRP supply, locks no source SO line, and isn't GRN-receivable
+  // until Confirm flips it to SUBMITTED. Neutral/grey, mirroring the SO/DO/SI pill.
+  DRAFT:              { label: 'Draft',              tone: 'neutral' },
   SUBMITTED:          { label: 'Confirmed',          tone: 'info' },
   PARTIALLY_RECEIVED: { label: 'Partially Received', tone: 'progress' },
   RECEIVED:           { label: 'Received',           tone: 'success' },
