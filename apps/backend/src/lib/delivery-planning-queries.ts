@@ -64,6 +64,21 @@ export type PlanningOrder = {
   address: string | null;
   postcode: string | null;
   building_type: string | null;
+  /* HC SO-context raw-data fields (migration 0197), always editable. */
+  possession_date: string | null;
+  house_type: string | null;
+  replacement_disposal: string | null;
+  referral: string | null;
+  /* HC DO-execution raw-data fields (migration 0197), from the latest DO;
+     null when this SO has no DO yet (editable only once a DO exists). */
+  time_range: string | null;
+  time_confirmed: boolean | null;
+  arrival_at: string | null;
+  departure_at: string | null;
+  shipout_date: string | null;
+  customer_delivered_date: string | null;
+  eta_arriving_port: string | null;
+  delivery_substatus: string | null;
   stock_status: string;
   stock_remark: string;
   is_main_ready: boolean;
@@ -151,6 +166,57 @@ export function useDeleteLeg() {
   return useMutation({
     mutationFn: (id: string) =>
       authedFetch<{ ok: true }>(`/delivery-planning/legs/${id}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['delivery-planning'] }),
+  });
+}
+
+/* HC "Remark 4" delivery sub-status — the known values (must mirror the API
+   whitelist). Blank ('') is always allowed (clears it). */
+export const HC_SUBSTATUS_VALUES = [
+  'Pending Pickup', 'Done Shipout', 'Arrives EM Warehouse',
+  'Done Delivered', 'Confirm', 'House Not Ready', 'Request Hold',
+] as const;
+export type HcSubstatus = (typeof HC_SUBSTATUS_VALUES)[number];
+
+/* The editable HC fields (migration 0197), split by where they're owned. The
+   SO-context fields always save; the DO-execution fields need a DO to land on. */
+export type HcFieldsPatch = {
+  // SO-context (→ mfg_sales_orders)
+  possessionDate?: string | null;
+  houseType?: string | null;
+  replacementDisposal?: string | null;
+  referral?: string | null;
+  // DO-execution (→ delivery_orders, when a DO exists)
+  timeRange?: string | null;
+  timeConfirmed?: boolean | null;
+  arrivalAt?: string | null;
+  departureAt?: string | null;
+  shipoutDate?: string | null;
+  customerDeliveredDate?: string | null;
+  etaArrivingPort?: string | null;
+  deliverySubstatus?: string | null;
+};
+
+export type HcFieldsResult = {
+  ok: true;
+  written: { so: boolean; do: boolean };
+  do_id: string | null;
+  so_doc_no: string | null;
+  /* Set when DO-execution fields were submitted but no DO exists yet. */
+  no_do_hint: string | null;
+};
+
+/* Save the HC raw-data fields for an order. type = 'so' | 'do'; id = SO doc_no
+   or DO id. Calls PATCH /delivery-planning/:type/:id/fields and invalidates the
+   planning board. The result's no_do_hint tells the UI when DO-execution fields
+   were skipped because there's no DO. */
+export function useUpdateDeliveryFields() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ type, id, ...body }: { type: 'so' | 'do'; id: string } & HcFieldsPatch) =>
+      authedFetch<HcFieldsResult>(`/delivery-planning/${type}/${id}/fields`, {
+        method: 'PATCH', body: JSON.stringify(body),
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['delivery-planning'] }),
   });
 }

@@ -20,12 +20,13 @@
 // visually distinct (dashed teal chip + a teal row accent).
 // ----------------------------------------------------------------------------
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Split } from 'lucide-react';
-import { fmtCenti, fmtDateOrDash } from '@2990s/shared';
+import { fmtCenti, fmtDateOrDash, fmtDateTime } from '@2990s/shared';
 import { formatPhone } from '@2990s/shared/phone';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { DeliveryFieldsDrawer } from '../components/DeliveryFieldsDrawer';
 import {
   useDeliveryPlanning,
   DELIVERY_STATES,
@@ -34,6 +35,31 @@ import {
   type PlanningOrder,
 } from '../lib/delivery-planning-queries';
 import styles from './DeliveryPlanning.module.css';
+
+/* HC "Remark 4" delivery sub-status → a small pill class (reuse the cream
+   palette; unknown/blank → muted). Default-shown column. */
+const SUBSTATUS_TONE: Record<string, string> = {
+  'Pending Pickup': 'var(--fg-muted)',
+  'Done Shipout': 'var(--c-secondary-a)',
+  'Arrives EM Warehouse': 'var(--c-secondary-a)',
+  'Done Delivered': 'var(--c-green, #2e7d32)',
+  'Confirm': 'var(--c-secondary-a)',
+  'House Not Ready': 'var(--c-burnt)',
+  'Request Hold': 'var(--c-burnt)',
+};
+function SubstatusPill({ value }: { value: string | null }) {
+  if (!value) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+  const tone = SUBSTATUS_TONE[value] ?? 'var(--fg-muted)';
+  return (
+    <span style={{
+      display: 'inline-block', padding: '1px 8px', borderRadius: 999,
+      border: `1px solid ${tone}`, color: tone, fontSize: 'var(--fs-10)',
+      fontWeight: 600, whiteSpace: 'nowrap',
+    }}>{value}</span>
+  );
+}
+/* A datetime-or-dash cell (TIMESTAMPTZ columns). */
+const dtOrDash = (iso: string | null): string => (iso ? fmtDateTime(iso) : '—');
 
 /* Region chips — FOUR FIXED buckets classified by customer STATE, hardcoded (no
    longer the dynamic per-warehouse chips): "All" first, then KL · Penang · EM ·
@@ -91,6 +117,14 @@ export const DeliveryPlanning = () => {
   const [params, setParams] = useSearchParams();
   const activeState = (params.get('state') ?? 'ALL').toUpperCase();
   const activeRegion = (params.get('region') ?? 'ALL').toUpperCase();
+
+  /* The order whose HC fields are being edited (drawer open when non-null). */
+  const [editing, setEditing] = useState<PlanningOrder | null>(null);
+
+  /* EM/SG nicety: when the active region is EM or SG, the cross-border columns
+     (shipout date, port ref, customer-delivered date) default-SHOW; elsewhere
+     they sit in the Columns menu like the rest. */
+  const isEmSg = activeRegion === 'EM' || activeRegion === 'SG';
 
   /* Region chips = the 4 FIXED state buckets (+ All), hardcoded. */
   const activeRegionLabel = REGION_TABS.find((r) => r.key === activeRegion)?.label ?? 'All';
@@ -188,6 +222,32 @@ export const DeliveryPlanning = () => {
       searchValue: (o) => o.building_type ?? '',
       groupValue: (o) => o.building_type ?? '(none)',
     },
+    /* HC SO-context raw-data fields (migration 0197) — all default-HIDDEN,
+       available in the Columns menu. */
+    {
+      key: 'possession_date', label: 'Possession', width: 120, sortable: true, defaultHidden: true,
+      accessor: (o) => fmtDateOrDash(o.possession_date),
+      searchValue: (o) => o.possession_date ?? '',
+      sortFn: (a, b) => String(a.possession_date ?? '').localeCompare(String(b.possession_date ?? '')),
+      filterType: 'date', dateValue: (o) => o.possession_date,
+    },
+    {
+      key: 'house_type', label: 'House Type', width: 130, groupable: true, defaultHidden: true,
+      accessor: (o) => o.house_type ?? '—',
+      searchValue: (o) => o.house_type ?? '',
+      groupValue: (o) => o.house_type ?? '(none)',
+    },
+    {
+      key: 'replacement_disposal', label: 'Replacement/Disposal', width: 180, defaultHidden: true,
+      accessor: (o) => o.replacement_disposal ?? '—',
+      searchValue: (o) => o.replacement_disposal ?? '',
+    },
+    {
+      key: 'referral', label: 'Referral', width: 140, groupable: true, defaultHidden: true,
+      accessor: (o) => o.referral ?? '—',
+      searchValue: (o) => o.referral ?? '',
+      groupValue: (o) => o.referral ?? '(none)',
+    },
     {
       key: 'region', label: 'Region', width: 110, sortable: true, groupable: true,
       accessor: (o) => REGION_LABEL[o.region] ?? o.region,
@@ -265,6 +325,58 @@ export const DeliveryPlanning = () => {
       exportValue: (o) => DELIVERY_STATE_LABEL[o.delivery_state],
       sortFn: (a, b) => a.delivery_state.localeCompare(b.delivery_state),
     },
+    /* HC DO-execution raw-data fields (migration 0197). delivery_substatus (a
+       small pill) + customer_delivered_date default-SHOW; the rest default-HIDE.
+       The cross-border ones (shipout_date, eta_arriving_port,
+       customer_delivered_date) default-SHOW when the active region is EM/SG. */
+    {
+      key: 'delivery_substatus', label: 'Delivery Status', width: 160, groupable: true,
+      accessor: (o) => <SubstatusPill value={o.delivery_substatus} />,
+      searchValue: (o) => o.delivery_substatus ?? '',
+      groupValue: (o) => o.delivery_substatus ?? '(none)',
+      exportValue: (o) => o.delivery_substatus ?? '',
+    },
+    {
+      key: 'customer_delivered_date', label: 'Delivered Date', width: 130, sortable: true,
+      accessor: (o) => fmtDateOrDash(o.customer_delivered_date),
+      searchValue: (o) => o.customer_delivered_date ?? '',
+      sortFn: (a, b) => String(a.customer_delivered_date ?? '').localeCompare(String(b.customer_delivered_date ?? '')),
+      filterType: 'date', dateValue: (o) => o.customer_delivered_date,
+    },
+    {
+      key: 'time_range', label: 'Time Range', width: 120, defaultHidden: true,
+      accessor: (o) => o.time_range ?? '—',
+      searchValue: (o) => o.time_range ?? '',
+    },
+    {
+      key: 'time_confirmed', label: 'Time OK', width: 90, align: 'right', defaultHidden: true,
+      accessor: (o) => (o.time_confirmed == null ? '—' : o.time_confirmed ? 'Yes' : 'No'),
+      searchValue: (o) => (o.time_confirmed == null ? '' : o.time_confirmed ? 'Yes' : 'No'),
+    },
+    {
+      key: 'arrival_at', label: 'Arrival', width: 150, sortable: true, defaultHidden: true,
+      accessor: (o) => dtOrDash(o.arrival_at),
+      searchValue: (o) => o.arrival_at ?? '',
+      sortFn: (a, b) => String(a.arrival_at ?? '').localeCompare(String(b.arrival_at ?? '')),
+    },
+    {
+      key: 'departure_at', label: 'Departure', width: 150, sortable: true, defaultHidden: true,
+      accessor: (o) => dtOrDash(o.departure_at),
+      searchValue: (o) => o.departure_at ?? '',
+      sortFn: (a, b) => String(a.departure_at ?? '').localeCompare(String(b.departure_at ?? '')),
+    },
+    {
+      key: 'shipout_date', label: 'Shipout', width: 120, sortable: true, defaultHidden: !isEmSg,
+      accessor: (o) => fmtDateOrDash(o.shipout_date),
+      searchValue: (o) => o.shipout_date ?? '',
+      sortFn: (a, b) => String(a.shipout_date ?? '').localeCompare(String(b.shipout_date ?? '')),
+      filterType: 'date', dateValue: (o) => o.shipout_date,
+    },
+    {
+      key: 'eta_arriving_port', label: 'ETA / Port', width: 150, defaultHidden: !isEmSg,
+      accessor: (o) => o.eta_arriving_port ?? '—',
+      searchValue: (o) => o.eta_arriving_port ?? '',
+    },
     /* Crew — split into the HC delivery-sheet columns. Driver + Lorry show by
        default; IC / contact / driver 2 / helpers are in the show/hide menu. */
     {
@@ -319,7 +431,8 @@ export const DeliveryPlanning = () => {
       accessor: (o) => (o.delivery_orders.length > 0 ? o.delivery_orders.map((d) => d.do_number).join(', ') : '—'),
       searchValue: (o) => o.delivery_orders.map((d) => d.do_number).join(' '),
     },
-  // legDateForRegion depends on activeRegion → recompute the date column on region change.
+  // legDateForRegion + the EM/SG cross-border default-show (isEmSg) depend on
+  // activeRegion → recompute the columns on region change.
   ], [activeRegion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -398,7 +511,18 @@ export const DeliveryPlanning = () => {
         emptyMessage="No orders need delivering in this view."
         onRowDoubleClick={(row) => navigate('/mfg-sales-orders/' + row.so_doc_no)}
         rowStyle={(o) => (o.region === 'SG' ? { boxShadow: 'inset 3px 0 0 var(--c-secondary-a)' } : undefined)}
+        contextMenu={(row) => [
+          { label: 'Edit HC fields…', onClick: () => setEditing(row) },
+          { divider: true },
+          { label: 'Open Sales Order', onClick: () => navigate('/mfg-sales-orders/' + row.so_doc_no) },
+        ]}
       />
+
+      {/* Per-row HC fields editor (right-click → Edit HC fields). SO-context
+          always editable; DO-execution editable only when the order has a DO. */}
+      {editing && (
+        <DeliveryFieldsDrawer order={editing} onClose={() => setEditing(null)} />
+      )}
     </div>
   );
 };

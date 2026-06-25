@@ -197,10 +197,15 @@ deliveryPlanning.get('/', async (c) => {
     so_date: string | null; address1: string | null; address2: string | null;
     postcode: string | null; building_type: string | null;
     local_total_centi: number | null; balance_centi: number | null;
+    // HC SO-context raw-data fields (migration 0197). dual-read camelCase below.
+    possession_date: string | null; house_type: string | null;
+    replacement_disposal: string | null; referral: string | null;
+    possessionDate?: string | null; houseType?: string | null;
+    replacementDisposal?: string | null;
   };
   const { data: soRowsRaw, error: soErr } = await paginateAll<SoHeaderRow>((from, to) =>
     sb.from('mfg_sales_orders')
-      .select('doc_no, debtor_code, debtor_name, phone, branding, status, delivery_state, customer_state, customer_country, customer_delivery_date, internal_expected_dd, processing_date, so_date, address1, address2, postcode, building_type, local_total_centi, balance_centi')
+      .select('doc_no, debtor_code, debtor_name, phone, branding, status, delivery_state, customer_state, customer_country, customer_delivery_date, internal_expected_dd, processing_date, so_date, address1, address2, postcode, building_type, local_total_centi, balance_centi, possession_date, house_type, replacement_disposal, referral')
       .neq('status', 'DRAFT')
       .neq('status', 'CANCELLED')
       .order('customer_delivery_date', { ascending: true, nullsFirst: false })
@@ -283,16 +288,36 @@ deliveryPlanning.get('/', async (c) => {
 
   /* 5. DOs for these SOs — the cut DO doc_no + status + per-DO crew (driver /
         helper / lorry from delivery_order_crew, Stage 3). Non-DRAFT/CANCELLED. */
+  /* HC DO-execution raw-data fields (migration 0197) surface alongside the DO.
+     dual-read camelCase (the pg driver camelCases result columns). */
+  type DoExecOut = {
+    time_range: string | null; time_confirmed: boolean | null;
+    arrival_at: string | null; departure_at: string | null;
+    shipout_date: string | null; customer_delivered_date: string | null;
+    eta_arriving_port: string | null; delivery_substatus: string | null;
+  };
   const { data: doRowsRaw } = await paginateAll<{
     id: string; do_number: string | null; so_doc_no: string | null; status: string | null;
     delivery_state: string | null; customer_delivery_date: string | null;
+    time_range: string | null; time_confirmed: boolean | null;
+    arrival_at: string | null; departure_at: string | null;
+    shipout_date: string | null; customer_delivered_date: string | null;
+    eta_arriving_port: string | null; delivery_substatus: string | null;
+    // camelCase aliases (pg driver) for dual-read
+    timeRange?: string | null; timeConfirmed?: boolean | null;
+    arrivalAt?: string | null; departureAt?: string | null;
+    shipoutDate?: string | null; customerDeliveredDate?: string | null;
+    etaArrivingPort?: string | null; deliverySubstatus?: string | null;
   }>((from, to) =>
     sb.from('delivery_orders')
-      .select('id, do_number, so_doc_no, status, delivery_state, customer_delivery_date')
+      .select('id, do_number, so_doc_no, status, delivery_state, customer_delivery_date, time_range, time_confirmed, arrival_at, departure_at, shipout_date, customer_delivered_date, eta_arriving_port, delivery_substatus')
       .in('so_doc_no', docNos)
       .range(from, to),
   );
   const doByDoc = new Map<string, Array<{ id: string; doNumber: string; status: string }>>();
+  /* Latest non-DRAFT/CANCELLED DO's HC exec fields, keyed by SO doc_no — the
+     same DO whose crew is shown (the last in doByDoc). null when no DO. */
+  const doExecByDoc = new Map<string, DoExecOut>();
   const doIds: string[] = [];
   for (const d of (doRowsRaw ?? [])) {
     const st = (d.status ?? '').toUpperCase();
@@ -303,6 +328,17 @@ deliveryPlanning.get('/', async (c) => {
     arr.push({ id: d.id, doNumber: d.do_number ?? '—', status: st });
     doByDoc.set(dn, arr);
     doIds.push(d.id);
+    // overwrite so the LAST DO wins (matches the crew = latest-DO convention)
+    doExecByDoc.set(dn, {
+      time_range: d.timeRange ?? d.time_range ?? null,
+      time_confirmed: d.timeConfirmed ?? d.time_confirmed ?? null,
+      arrival_at: d.arrivalAt ?? d.arrival_at ?? null,
+      departure_at: d.departureAt ?? d.departure_at ?? null,
+      shipout_date: d.shipoutDate ?? d.shipout_date ?? null,
+      customer_delivered_date: d.customerDeliveredDate ?? d.customer_delivered_date ?? null,
+      eta_arriving_port: d.etaArrivingPort ?? d.eta_arriving_port ?? null,
+      delivery_substatus: d.deliverySubstatus ?? d.delivery_substatus ?? null,
+    });
   }
 
   /* Crew snapshot per DO (Stage 3). Best-effort — read the assign-time snapshot
@@ -456,6 +492,21 @@ deliveryPlanning.get('/', async (c) => {
       address: [r.address1, r.address2].filter(Boolean).join(', ') || null,
       postcode: r.postcode ?? null,
       building_type: r.building_type ?? null,
+      // HC SO-context raw-data fields (migration 0197) — dual-read camelCase.
+      possession_date: r.possessionDate ?? r.possession_date ?? null,
+      house_type: r.houseType ?? r.house_type ?? null,
+      replacement_disposal: r.replacementDisposal ?? r.replacement_disposal ?? null,
+      referral: r.referral ?? null,
+      // HC DO-execution raw-data fields (migration 0197) — from the latest DO,
+      // null when this SO has no (non-DRAFT/CANCELLED) DO yet.
+      time_range: doExecByDoc.get(docNo)?.time_range ?? null,
+      time_confirmed: doExecByDoc.get(docNo)?.time_confirmed ?? null,
+      arrival_at: doExecByDoc.get(docNo)?.arrival_at ?? null,
+      departure_at: doExecByDoc.get(docNo)?.departure_at ?? null,
+      shipout_date: doExecByDoc.get(docNo)?.shipout_date ?? null,
+      customer_delivered_date: doExecByDoc.get(docNo)?.customer_delivered_date ?? null,
+      eta_arriving_port: doExecByDoc.get(docNo)?.eta_arriving_port ?? null,
+      delivery_substatus: doExecByDoc.get(docNo)?.delivery_substatus ?? null,
       // stock — stock_remark is the correctly-gated label (never "READY (PARTIAL)"
       // for an acc-only / service-only SO); stock_status mirrors it.
       stock_status: readiness.isFullyReady ? 'READY' : readyToShip ? 'READY (PARTIAL)' : 'PENDING',
@@ -661,6 +712,144 @@ async function nextTripNo(sb: any): Promise<string> {
   return nextMonthlyDocNo(`TRIP-${yymm}`, ((existing ?? []) as Array<{ trip_no?: string; tripNo?: string }>)
     .map((r) => r.tripNo ?? r.trip_no ?? ''));
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   PATCH /delivery-planning/:type/:id/fields — set the HC delivery-sheet raw-data
+   fields (migration 0197). :type = so | do; :id = SO doc_no or DO id.
+   - SO-CONTEXT fields (possession_date, house_type, replacement_disposal,
+     referral) always update mfg_sales_orders, keyed by doc_no.
+   - DO-EXECUTION fields (time_range, time_confirmed, arrival_at, departure_at,
+     shipout_date, customer_delivered_date, eta_arriving_port, delivery_substatus)
+     update the delivery_orders ROW — directly when :type=do, else the latest
+     non-DRAFT/CANCELLED DO for the SO. Skipped (with a hint) when no DO exists.
+   Field names are whitelisted; only present keys are written; idempotent. The SO
+   doc_no for a :type=do request is resolved from the DO so SO-context fields can
+   still land on the order. Best-effort partials: each table is its own update.
+   ─────────────────────────────────────────────────────────────────────────*/
+const HC_SUBSTATUS_VALUES = [
+  'Pending Pickup', 'Done Shipout', 'Arrives EM Warehouse',
+  'Done Delivered', 'Confirm', 'House Not Ready', 'Request Hold',
+] as const;
+
+const fieldsSchema = z.object({
+  // SO-context (→ mfg_sales_orders)
+  possessionDate: z.string().nullable().optional(),       // YYYY-MM-DD
+  houseType: z.string().nullable().optional(),            // New House / Replacement (free text)
+  replacementDisposal: z.string().nullable().optional(),
+  referral: z.string().nullable().optional(),
+  // DO-execution (→ delivery_orders)
+  timeRange: z.string().nullable().optional(),
+  timeConfirmed: z.boolean().nullable().optional(),
+  arrivalAt: z.string().nullable().optional(),            // ISO datetime
+  departureAt: z.string().nullable().optional(),
+  shipoutDate: z.string().nullable().optional(),          // YYYY-MM-DD
+  customerDeliveredDate: z.string().nullable().optional(),
+  etaArrivingPort: z.string().nullable().optional(),      // port / shipment ref e.g. KUC3012008
+  deliverySubstatus: z.string().nullable().optional(),    // HC "Remark 4" (whitelisted, blank allowed)
+});
+
+/* Map the camelCase request keys → the snake_case columns, split by table. */
+const SO_FIELD_COLS: Record<string, string> = {
+  possessionDate: 'possession_date',
+  houseType: 'house_type',
+  replacementDisposal: 'replacement_disposal',
+  referral: 'referral',
+};
+const DO_FIELD_COLS: Record<string, string> = {
+  timeRange: 'time_range',
+  timeConfirmed: 'time_confirmed',
+  arrivalAt: 'arrival_at',
+  departureAt: 'departure_at',
+  shipoutDate: 'shipout_date',
+  customerDeliveredDate: 'customer_delivered_date',
+  etaArrivingPort: 'eta_arriving_port',
+  deliverySubstatus: 'delivery_substatus',
+};
+
+deliveryPlanning.patch('/:type/:id/fields', async (c) => {
+  const type = c.req.param('type').toLowerCase();
+  const id = c.req.param('id');
+  if (type !== 'so' && type !== 'do') return c.json({ error: 'bad_type', reason: 'type must be so | do' }, 400);
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const parsed = fieldsSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: 'invalid_body', reason: parsed.error.message }, 400);
+  const p = parsed.data as Record<string, unknown>;
+
+  // Whitelist delivery_substatus to the known HC values (blank/null always ok).
+  if (p.deliverySubstatus != null && p.deliverySubstatus !== '' &&
+      !(HC_SUBSTATUS_VALUES as readonly string[]).includes(String(p.deliverySubstatus))) {
+    return c.json({ error: 'invalid_substatus', reason: `delivery_substatus must be one of: ${HC_SUBSTATUS_VALUES.join(', ')} (or blank).` }, 400);
+  }
+
+  const sb = c.get('supabase');
+
+  // Split the present keys into the two column maps.
+  const soUpdates: Record<string, unknown> = {};
+  for (const [k, col] of Object.entries(SO_FIELD_COLS)) {
+    if (p[k] !== undefined) soUpdates[col] = p[k] === '' ? null : p[k];
+  }
+  const doUpdates: Record<string, unknown> = {};
+  for (const [k, col] of Object.entries(DO_FIELD_COLS)) {
+    if (p[k] !== undefined) doUpdates[col] = p[k] === '' ? null : p[k];
+  }
+  if (Object.keys(soUpdates).length === 0 && Object.keys(doUpdates).length === 0) {
+    return c.json({ error: 'no_changes' }, 400);
+  }
+
+  // Resolve the SO doc_no + the target DO id (latest non-DRAFT/CANCELLED).
+  let soDocNo: string | null = null;
+  let doId: string | null = null;
+  if (type === 'so') {
+    soDocNo = id;
+    if (Object.keys(doUpdates).length > 0) {
+      const { data: doRows } = await sb.from('delivery_orders')
+        .select('id, status').eq('so_doc_no', id);
+      const live = ((doRows ?? []) as Array<{ id: string; status: string | null }>)
+        .filter((d) => { const s = (d.status ?? '').toUpperCase(); return s !== 'DRAFT' && s !== 'CANCELLED'; });
+      doId = live.length > 0 ? live[live.length - 1]!.id : null;
+    }
+  } else {
+    doId = id;
+    const { data: doRow } = await sb.from('delivery_orders')
+      .select('so_doc_no').eq('id', id).maybeSingle();
+    soDocNo = (doRow as { soDocNo?: string | null; so_doc_no?: string | null } | null)
+      ? ((doRow as { soDocNo?: string | null; so_doc_no?: string | null }).soDocNo
+         ?? (doRow as { so_doc_no?: string | null }).so_doc_no ?? null)
+      : null;
+  }
+
+  const written: { so: boolean; do: boolean } = { so: false, do: false };
+  let noDoHint: string | null = null;
+
+  // SO-context update.
+  if (Object.keys(soUpdates).length > 0 && soDocNo) {
+    soUpdates.updated_at = new Date().toISOString();
+    const { error } = await sb.from('mfg_sales_orders').update(soUpdates).eq('doc_no', soDocNo);
+    if (error) {
+      if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message }, 403);
+      return c.json({ error: 'update_failed', reason: error.message }, 500);
+    }
+    written.so = true;
+  }
+
+  // DO-execution update — only when a DO exists; otherwise hint, don't error.
+  if (Object.keys(doUpdates).length > 0) {
+    if (doId) {
+      doUpdates.updated_at = new Date().toISOString();
+      const { error } = await sb.from('delivery_orders').update(doUpdates).eq('id', doId);
+      if (error) {
+        if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message }, 403);
+        return c.json({ error: 'update_failed', reason: error.message }, 500);
+      }
+      written.do = true;
+    } else {
+      noDoHint = 'No delivery order exists yet for this order — DO-execution fields were not saved. Create a DO first.';
+    }
+  }
+
+  return c.json({ ok: true, written, do_id: doId, so_doc_no: soDocNo, no_do_hint: noDoHint });
+});
 
 deliveryPlanning.patch('/:type/:id/schedule', async (c) => {
   const type = c.req.param('type').toLowerCase();
