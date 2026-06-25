@@ -851,6 +851,17 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     // through to the PO line.
     item_group: string | null;
     variants: Record<string, unknown> | null;
+    // Migration 0058 — dedicated sofa/bedframe variant-breakdown columns +
+    // discount; carried onto the PO line so the convert doesn't drop them.
+    discount_centi: number | null;
+    gap_inches: number | null;
+    divan_height_inches: number | null;
+    divan_price_sen: number | null;
+    leg_height_inches: number | null;
+    leg_price_sen: number | null;
+    custom_specials: unknown;
+    line_suffix: string | null;
+    special_order_price_sen: number | null;
     // Commander 2026-05-31 (warehouse-flow bug) — the SO LINE's OWN ship-to
     // warehouse (migration 0118). This is the AUTHORITATIVE per-line warehouse;
     // it must flow through to the PO line so a KL SO line never lands stock in
@@ -860,6 +871,8 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   };
   const SO_ITEM_SELECT =
     'id, doc_no, item_code, description, item_group, variants, qty, po_qty_picked, unit_price_centi, line_delivery_date, warehouse_id, ' +
+    'discount_centi, gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, ' +
+    'custom_specials, line_suffix, special_order_price_sen, ' +
     'so:mfg_sales_orders!inner ( sales_location, customer_delivery_date )';
   // supabase-js returns the embedded parent as an object OR a 1-element array
   // depending on the relationship — normalise to a single object.
@@ -918,6 +931,10 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
           id: '', doc_no: it.soDocNo, item_code: it.itemCode, description: it.itemName,
           qty: it.qty, po_qty_picked: 0, unit_price_centi: 0,
           line_delivery_date: null, item_group: null, variants: null,
+          // Migration 0058 — no variant breakdown on the legacy fabricated row.
+          discount_centi: 0, gap_inches: null, divan_height_inches: null,
+          divan_price_sen: 0, leg_height_inches: null, leg_price_sen: 0,
+          custom_specials: null, line_suffix: null, special_order_price_sen: 0,
           // No SO line warehouse on the legacy fabricated row → falls back to
           // the SO header sales_location resolution below.
           warehouse_id: null, so: null,
@@ -972,6 +989,17 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       // variant through to the PO line).
       itemGroup: row.item_group,
       variants:  row.variants,
+      // Migration 0058 — carry the dedicated variant-breakdown columns + discount
+      // through to the PO line (pg driver camelCases results → dual-read).
+      discountCenti: ((row as Record<string, unknown>).discountCenti ?? row.discount_centi ?? 0) as number,
+      gapInches: (((row as Record<string, unknown>).gapInches ?? row.gap_inches) ?? null) as number | null,
+      divanHeightInches: (((row as Record<string, unknown>).divanHeightInches ?? row.divan_height_inches) ?? null) as number | null,
+      divanPriceSen: (((row as Record<string, unknown>).divanPriceSen ?? row.divan_price_sen) ?? 0) as number,
+      legHeightInches: (((row as Record<string, unknown>).legHeightInches ?? row.leg_height_inches) ?? null) as number | null,
+      legPriceSen: (((row as Record<string, unknown>).legPriceSen ?? row.leg_price_sen) ?? 0) as number,
+      customSpecials: ((row as Record<string, unknown>).customSpecials ?? row.custom_specials) ?? null,
+      lineSuffix: (((row as Record<string, unknown>).lineSuffix ?? row.line_suffix) ?? null) as string | null,
+      specialOrderPriceSen: (((row as Record<string, unknown>).specialOrderPriceSen ?? row.special_order_price_sen) ?? 0) as number,
       // Commander 2026-05-29 — the source SO line id, threaded to the PO line so
       // the append-to-existing-PO path can persist so_item_id (release-on-delete).
       soItemId:  row.id || null,
@@ -1289,6 +1317,11 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     warehouseId: string | null; deliveryDate: string | null;
     itemGroup: string | null; variants: Record<string, unknown> | null;
     soItemId: string | null;
+    // Migration 0058 — dedicated sofa/bedframe variant-breakdown columns + discount.
+    discountCenti: number;
+    gapInches: number | null; divanHeightInches: number | null; divanPriceSen: number;
+    legHeightInches: number | null; legPriceSen: number;
+    customSpecials: unknown; lineSuffix: string | null; specialOrderPriceSen: number;
   };
   type Bucket = {
     supplierId: string; warehouseId: string | null; currency: string;
@@ -1330,6 +1363,16 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       itemGroup: it.itemGroup,
       variants: it.variants,
       soItemId: it.soItemId,
+      // Migration 0058 — carry the dedicated variant-breakdown columns + discount.
+      discountCenti: it.discountCenti ?? 0,
+      gapInches: it.gapInches ?? null,
+      divanHeightInches: it.divanHeightInches ?? null,
+      divanPriceSen: it.divanPriceSen ?? 0,
+      legHeightInches: it.legHeightInches ?? null,
+      legPriceSen: it.legPriceSen ?? 0,
+      customSpecials: it.customSpecials ?? null,
+      lineSuffix: it.lineSuffix ?? null,
+      specialOrderPriceSen: it.specialOrderPriceSen ?? 0,
     });
     bucket.soDocNos.add(it.soDocNo);
     byGroup.set(groupKey, bucket);
@@ -1385,6 +1428,17 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       item_group: l.itemGroup,
       variants: l.variants,
       description2: buildVariantSummary(String(l.itemGroup ?? ''), l.variants ?? null) || null,
+      // Migration 0058 — carry the dedicated variant-breakdown columns + discount
+      // from the SO line (mirror of the fresh-insert path above).
+      discount_centi: l.discountCenti ?? 0,
+      gap_inches: l.gapInches ?? null,
+      divan_height_inches: l.divanHeightInches ?? null,
+      divan_price_sen: l.divanPriceSen ?? 0,
+      leg_height_inches: l.legHeightInches ?? null,
+      leg_price_sen: l.legPriceSen ?? 0,
+      custom_specials: l.customSpecials ?? null,
+      line_suffix: l.lineSuffix ?? null,
+      special_order_price_sen: l.specialOrderPriceSen ?? 0,
       // Release-on-delete link (migration 0098).
       so_item_id: l.soItemId,
       // Commander 2026-05-31 — MRP-origin lines are reference-only (no SO lock).
@@ -1491,6 +1545,20 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       item_group: l.itemGroup,
       variants: l.variants,
       description2: buildVariantSummary(String(l.itemGroup ?? ''), l.variants ?? null) || null,
+      // Migration 0058 — carry the dedicated variant-breakdown columns + discount
+      // from the SO line. gap/divan/leg height + discount are NOT re-derived by the
+      // auto-pricing pre-pass, so they'd be lost without this. The *_price_sen /
+      // custom_specials are re-derived from variants by the pre-pass — carried too
+      // for consistency; the pricing pass is untouched.
+      discount_centi: l.discountCenti ?? 0,
+      gap_inches: l.gapInches ?? null,
+      divan_height_inches: l.divanHeightInches ?? null,
+      divan_price_sen: l.divanPriceSen ?? 0,
+      leg_height_inches: l.legHeightInches ?? null,
+      leg_price_sen: l.legPriceSen ?? 0,
+      custom_specials: l.customSpecials ?? null,
+      line_suffix: l.lineSuffix ?? null,
+      special_order_price_sen: l.specialOrderPriceSen ?? 0,
       // Release-on-delete link (migration 0098) — every from-SO line carries
       // its source SO line so recomputeSoPicked can release it on delete/cancel.
       so_item_id: l.soItemId,

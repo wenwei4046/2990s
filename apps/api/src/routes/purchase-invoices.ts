@@ -676,7 +676,7 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
     .select(`
       id, grn_id, material_kind, material_code, material_name, item_group,
       description, description2, uom, qty_accepted, invoiced_qty, returned_qty, unit_price_centi,
-      variants, gap_inches, divan_height_inches, divan_price_sen,
+      unit_cost_centi, variants, gap_inches, divan_height_inches, divan_price_sen,
       leg_height_inches, leg_price_sen, custom_specials, line_suffix,
       special_order_price_sen, discount_centi,
       grn:grns!inner ( id, grn_number, supplier_id, purchase_order_id, status, currency, exchange_rate )
@@ -689,6 +689,7 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
     material_name: string; item_group: string | null; description: string | null;
     description2: string | null; uom: string | null;
     qty_accepted: number; invoiced_qty: number; returned_qty: number; unit_price_centi: number;
+    unit_cost_centi: number;
     variants: unknown; gap_inches: number | null; divan_height_inches: number | null;
     divan_price_sen: number; leg_height_inches: number | null; leg_price_sen: number;
     custom_specials: unknown; line_suffix: string | null; special_order_price_sen: number;
@@ -809,6 +810,9 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
       material_name: row.material_name,
       qty,
       unit_price_centi: row.unit_price_centi,
+      /* FIX 4 — carry the GRN line's unit_cost_centi (recost re-derives it, but be
+         consistent with the other convert paths). */
+      unit_cost_centi: row.unit_cost_centi ?? 0,
       // Audit 2026-06-20 — clamp like the PO create path (negative-money guard).
       line_total_centi: Math.max(0, qty * row.unit_price_centi - discFor(row, qty)),
       item_group: row.item_group,

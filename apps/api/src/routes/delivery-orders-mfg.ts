@@ -767,6 +767,20 @@ type DeliverableLine = {
   unitCostCenti: number;
   discountCenti: number;
   variants: unknown;
+  /* Migration 0058 — dedicated sofa/bedframe variant-breakdown columns. Carried
+     so the SO→DO picker convert keeps them (delivery_order_items has them too). */
+  gapInches: number | null;
+  divanHeightInches: number | null;
+  divanPriceSen: number;
+  legHeightInches: number | null;
+  legPriceSen: number;
+  customSpecials: unknown;
+  lineSuffix: string | null;
+  specialOrderPriceSen: number;
+  /* Migration 0074/0100 — per-line delivery date (+ override flag) carried onto
+     the DO line so a converted DO shows the SO line's delivery date. */
+  lineDeliveryDate: string | null;
+  lineDeliveryDateOverridden: boolean;
   delivered: number;
   returned: number;
   remaining: number;
@@ -793,7 +807,10 @@ export async function soDeliverableRemaining(
     .from('mfg_sales_order_items')
     .select(
       'id, doc_no, debtor_code, debtor_name, item_code, item_group, description, description2, ' +
-      'uom, qty, unit_price_centi, unit_cost_centi, discount_centi, variants',
+      'uom, qty, unit_price_centi, unit_cost_centi, discount_centi, variants, ' +
+      'gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, ' +
+      'custom_specials, line_suffix, special_order_price_sen, ' +
+      'line_delivery_date, line_delivery_date_overridden',
     )
     .in('doc_no', soDocNos)
     .eq('cancelled', false)
@@ -895,6 +912,18 @@ export async function soDeliverableRemaining(
       unitCostCenti: Number(l.unit_cost_centi ?? 0),
       discountCenti: Number(l.discount_centi ?? 0),
       variants: l.variants ?? null,
+      /* Migration 0058 — carry the dedicated variant-breakdown columns onto the
+         deliverable descriptor (pg driver camelCases results → dual-read). */
+      gapInches: (l.gapInches ?? l.gap_inches ?? null) as number | null,
+      divanHeightInches: (l.divanHeightInches ?? l.divan_height_inches ?? null) as number | null,
+      divanPriceSen: Number(l.divanPriceSen ?? l.divan_price_sen ?? 0),
+      legHeightInches: (l.legHeightInches ?? l.leg_height_inches ?? null) as number | null,
+      legPriceSen: Number(l.legPriceSen ?? l.leg_price_sen ?? 0),
+      customSpecials: l.customSpecials ?? l.custom_specials ?? null,
+      lineSuffix: (l.lineSuffix ?? l.line_suffix ?? null) as string | null,
+      specialOrderPriceSen: Number(l.specialOrderPriceSen ?? l.special_order_price_sen ?? 0),
+      lineDeliveryDate: (l.lineDeliveryDate ?? l.line_delivery_date ?? null) as string | null,
+      lineDeliveryDateOverridden: Boolean(l.lineDeliveryDateOverridden ?? l.line_delivery_date_overridden ?? false),
       delivered,
       returned,
       remaining: qty - delivered + returned,
@@ -1570,6 +1599,16 @@ function buildItemRow(deliveryOrderId: string, it: Record<string, unknown>, line
     line_cost_centi: lineCost,
     line_margin_centi: lineTotal - lineCost,
     variants,
+    /* Migration 0058 — carry the dedicated variant-breakdown columns from the
+       client line payload (manual add already carries variants + line date). */
+    gap_inches: (it.gapInches as number | null) ?? null,
+    divan_height_inches: (it.divanHeightInches as number | null) ?? null,
+    divan_price_sen: Number(it.divanPriceSen ?? 0),
+    leg_height_inches: (it.legHeightInches as number | null) ?? null,
+    leg_price_sen: Number(it.legPriceSen ?? 0),
+    custom_specials: (it.customSpecials as unknown) ?? null,
+    line_suffix: (it.lineSuffix as string | null) ?? null,
+    special_order_price_sen: Number(it.specialOrderPriceSen ?? 0),
     notes: (it.notes as string) ?? null,
     line_delivery_date: (it.lineDeliveryDate as string | null) ?? null,
     line_delivery_date_overridden: Boolean(it.lineDeliveryDateOverridden ?? false),
@@ -1809,6 +1848,20 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
       line_cost_centi: lineCost,
       line_margin_centi: lineTotal - lineCost,
       variants,
+      /* Migration 0058 — carry the dedicated variant-breakdown columns from the
+         SO line onto the DO line (the picker previously dropped all 8). */
+      gap_inches: line.gapInches ?? null,
+      divan_height_inches: line.divanHeightInches ?? null,
+      divan_price_sen: line.divanPriceSen ?? 0,
+      leg_height_inches: line.legHeightInches ?? null,
+      leg_price_sen: line.legPriceSen ?? 0,
+      custom_specials: line.customSpecials ?? null,
+      line_suffix: line.lineSuffix ?? null,
+      special_order_price_sen: line.specialOrderPriceSen ?? 0,
+      /* Migration 0074/0100 — carry the SO line's delivery date (+ override flag)
+         onto the DO line (picker previously dropped them; manual path carries them). */
+      line_delivery_date: line.lineDeliveryDate ?? null,
+      line_delivery_date_overridden: line.lineDeliveryDateOverridden ?? false,
     };
   });
   const { error: iErr } = await sb.from('delivery_order_items').insert(doRows);

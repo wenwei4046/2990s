@@ -1225,7 +1225,7 @@ grns.post('/from-po-items', async (c) => {
     .select(`
       id, purchase_order_id, material_kind, material_code, material_name,
       item_group, description, description2, uom, qty, received_qty,
-      unit_price_centi, variants, gap_inches, divan_height_inches, divan_price_sen,
+      unit_price_centi, unit_cost_centi, variants, gap_inches, divan_height_inches, divan_price_sen,
       leg_height_inches, leg_price_sen, custom_specials, line_suffix,
       special_order_price_sen, discount_centi, delivery_date,
       supplier_delivery_date_2, supplier_delivery_date_3, supplier_delivery_date_4,
@@ -1238,7 +1238,7 @@ grns.post('/from-po-items', async (c) => {
     id: string; purchase_order_id: string; material_kind: string; material_code: string;
     material_name: string; item_group: string | null; description: string | null;
     description2: string | null; uom: string | null;
-    qty: number; received_qty: number; unit_price_centi: number;
+    qty: number; received_qty: number; unit_price_centi: number; unit_cost_centi: number;
     variants: unknown; gap_inches: number | null; divan_height_inches: number | null;
     divan_price_sen: number; leg_height_inches: number | null; leg_price_sen: number;
     custom_specials: unknown; line_suffix: string | null; special_order_price_sen: number;
@@ -1351,6 +1351,9 @@ grns.post('/from-po-items', async (c) => {
         qty_accepted: qty,
         qty_rejected: 0,
         unit_price_centi: row.unit_price_centi,
+        /* FIX 4 — carry the PO line's unit_cost_centi (the single-PO /from-pos
+           path does; this multi-pick path previously left it 0). */
+        unit_cost_centi: row.unit_cost_centi ?? 0,
         /* Migration 0101 — GRN line money: qty_received * unit - discount. */
         // Audit 2026-06-20 — clamp like the PO create path (negative-money guard).
         line_total_centi: Math.max(0, (qty * row.unit_price_centi) - discountCenti),
