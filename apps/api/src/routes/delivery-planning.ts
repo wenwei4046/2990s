@@ -206,6 +206,52 @@ function codeToRegion(code: string | null | undefined): Region | null {
   return null;   // unknown warehouse code → no leg region
 }
 
+/* ── Branding derivation (mirrors the SO list 1:1) ────────────────────────────
+   The Delivery Planning Branding column must show the SAME derived value the SO
+   list shows. Both halves are PORTED VERBATIM from the SO list so the two pages
+   never disagree:
+     · normCategory   — the SO list's category normalizer (routes/
+                        mfg-sales-orders.ts) used for item_group + mfg_products
+                        .category.
+     · deriveBranding — the SO list's display mapping (apps/backend/src/pages/
+                        MfgSalesOrdersList.tsx). first_item_category drives it;
+                        MATTRESS follows its own branding (the 2990 house brand →
+                        "2990 Mattress", any other brand shown as-is).
+   Keep these in lock-step with the SO list — if either changes there, change it
+   here too. */
+function normCategory(raw: string): string {
+  const g = (raw ?? '').trim().toUpperCase();
+  if (g.includes('BEDFRAME')) return 'BEDFRAME';
+  if (g.includes('SOFA'))     return 'SOFA';
+  if (g.includes('MATTRESS')) return 'MATTRESS';
+  if (g.includes('ACCESSOR')) return 'ACCESSORY';
+  if (g.includes('SERVICE'))  return 'SERVICE';
+  return 'OTHERS';
+}
+
+/* deriveBranding — the EXACT SO list mapping (MfgSalesOrdersList.deriveBranding):
+     · first item SOFA      → "2990 Sofa"
+     · first item BEDFRAME  → "Bedframe"
+     · first item MATTRESS  → the mattress's OWN brand; the 2990 house brand
+                              ("2990" / "2990's") displays as "2990 Mattress",
+                              other brands (HAPPISLEEP / CARRES / MyMattress…)
+                              show as-is; blank brand → "2990 Mattress"
+     · ACCESSORY / OTHERS / SERVICE / no items → ""  (column renders "—")
+   On the SO list the empty string ("—") never appears for a real order because
+   the first-MAIN-line representative always resolves to SOFA/BEDFRAME/MATTRESS. */
+function deriveBranding(firstItemCategory: string | null, firstItemBranding: string | null): string {
+  const cat = firstItemCategory;
+  if (!cat) return '';                       // no items → "—"
+  if (cat === 'SOFA')     return '2990 Sofa';
+  if (cat === 'BEDFRAME') return 'Bedframe';
+  if (cat === 'MATTRESS') {
+    const b = (firstItemBranding ?? '').trim();
+    if (!b || /^2990('?s)?$/i.test(b)) return '2990 Mattress';
+    return b;
+  }
+  return '';                                 // accessory / others / service → none ("—")
+}
+
 type DeliveryState = 'PENDING_DELIVERY' | 'PENDING_SCHEDULE' | 'OVERDUE' | 'DELIVERED';
 const DELIVERY_STATES: DeliveryState[] = ['PENDING_DELIVERY', 'PENDING_SCHEDULE', 'OVERDUE', 'DELIVERED'];
 
@@ -343,25 +389,42 @@ deliveryPlanning.get('/', async (c) => {
   /* 3. Per-line readiness + per-line warehouse. One batched, paginated read of
         the non-cancelled lines for every candidate SO. stock_status drives
         summariseReadiness (isMainReady = every MAIN line READY); warehouse_id
-        (per SO line, migration 0118) drives the region grouping. */
+        (per SO line, migration 0118) drives the region grouping.
+        Ordered (doc_no, line_no, created_at ASC) — IDENTICAL to the SO list's
+        item fetch (routes/mfg-sales-orders.ts) so the FIRST line we see per
+        doc_no is its earliest-created one; that drives the SO-list-matching
+        Branding derivation below. */
   const { data: itemRowsRaw } = await paginateAll<{
     doc_no: string; item_group: string | null; item_code: string | null;
     stock_status: string | null; cancelled: boolean | null; warehouse_id: string | null;
-    branding: string | null;
+    branding: string | null; created_at: string | null;
   }>((from, to) =>
     sb.from('mfg_sales_order_items')
-      .select('doc_no, item_group, item_code, stock_status, cancelled, warehouse_id, branding')
+      .select('doc_no, item_group, item_code, stock_status, cancelled, warehouse_id, branding, created_at')
       .in('doc_no', docNos)
       .eq('cancelled', false)
+      .order('doc_no')
+      .order('line_no', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: true })
       .range(from, to),
   );
   const linesByDoc = new Map<string, ReadinessLine[]>();
   const warehousesByDoc = new Map<string, Set<string>>();
-  /* Distinct non-empty per-LINE branding per SO (mfg_sales_order_items.branding,
-     e.g. AKEMI / ZANOTTI / 2990 SOFA). The real branding lives on the lines; the
-     SO HEADER field is empty for most orders. Insertion-ordered Set keeps the
-     order's lines' branding stable for the " / "-joined aggregate below. */
-  const lineBrandingByDoc = new Map<string, Set<string>>();
+  /* Branding auto-derive — REPLICATES the SO list grid exactly (routes/
+     mfg-sales-orders.ts list handler + MfgSalesOrdersList.deriveBranding). The
+     Branding column follows the SO's FIRST line item, catalog-resolved +
+     mains-first:
+       · firstCat / firstBranding / firstItemCode — earliest-created line (the
+         fallback when an SO has no sofa/bedframe/mattress line).
+       · allCodes — every item_code in view, to batch-fetch mfg_products.category
+         (resolve a line saved with item_group 'others'/'service' to its true
+         catalog category) + mfg_products.branding (the mattress-brand fallback).
+     The SO HEADER mfg_sales_orders.branding field is NO LONGER consulted — it is
+     empty for most orders and the SO list never reads it. */
+  const firstCat = new Map<string, string>();
+  const firstBranding = new Map<string, string | null>();
+  const firstItemCode = new Map<string, string | null>();
+  const allCodes = new Set<string>();
   for (const it of (itemRowsRaw ?? [])) {
     const dn = it.doc_no;
     if (!dn) continue;
@@ -373,11 +436,57 @@ deliveryPlanning.get('/', async (c) => {
       ws.add(it.warehouse_id);
       warehousesByDoc.set(dn, ws);
     }
-    const brand = (it.branding ?? '').trim();
-    if (brand) {
-      const bs = lineBrandingByDoc.get(dn) ?? new Set<string>();
-      bs.add(brand);
-      lineBrandingByDoc.set(dn, bs);
+    if (it.item_code) allCodes.add(it.item_code);
+    /* Rows arrive ordered by (doc_no, line_no, created_at ASC) so the first time
+       we see a doc_no IS its earliest line — record it once. */
+    if (!firstCat.has(dn)) {
+      firstCat.set(dn, normCategory(it.item_group ?? ''));
+      firstBranding.set(dn, it.branding ?? null);
+      firstItemCode.set(dn, it.item_code ?? null);
+    }
+  }
+
+  /* Catalog category + branding by item_code — the SAME product-branding fetch
+     the SO list runs (mfg_products.category + mfg_products.branding), chunked by
+     the codes in view (bounded .in, never the whole table) so it can't hit the
+     PostgREST row cap. paginateAll per chunk in case a single chunk ever yields
+     > 1000 rows. */
+  const productCategory = new Map<string, string>();
+  const productBranding = new Map<string, string>();
+  {
+    const codeList = [...allCodes];
+    for (let i = 0; i < codeList.length; i += 300) {
+      const chunk = codeList.slice(i, i + 300);
+      if (chunk.length === 0) continue;
+      const { data: prodRows } = await paginateAll<{ code: string; category: string | null; branding: string | null }>((from, to) =>
+        sb.from('mfg_products')
+          .select('code, category, branding')
+          .in('code', chunk)
+          .range(from, to),
+      );
+      for (const p of (prodRows ?? [])) {
+        if (p.category) productCategory.set(p.code, normCategory(p.category));
+        if (p.branding && p.branding.trim()) productBranding.set(p.code, p.branding);
+      }
+    }
+  }
+  const resolveLineCat = (code: string | null, group: string): string =>
+    (code ? productCategory.get(code) : undefined) ?? normCategory(group);
+  const MAIN_CATS = new Set(['SOFA', 'BEDFRAME', 'MATTRESS']);
+  /* First MAIN line per doc (catalog-resolved), re-iterating the already
+     (doc_no, line_no, created_at)-ordered itemRows. Falls back to the earliest
+     line captured above when an SO has no sofa/bedframe/mattress line. */
+  const repCat = new Map<string, string>();
+  const repBranding = new Map<string, string | null>();
+  const repCode = new Map<string, string | null>();
+  for (const it of (itemRowsRaw ?? [])) {
+    const dn = it.doc_no;
+    if (!dn || repCat.has(dn)) continue;
+    const cat = resolveLineCat(it.item_code, it.item_group ?? '');
+    if (MAIN_CATS.has(cat)) {
+      repCat.set(dn, cat);
+      repBranding.set(dn, it.branding ?? null);
+      repCode.set(dn, it.item_code ?? null);
     }
   }
 
@@ -536,12 +645,21 @@ deliveryPlanning.get('/', async (c) => {
         two tabs with two dates. */
   const orders = soRows.map((r) => {
     const docNo = String(r.doc_no ?? '');
-    /* Branding: the HEADER field (mfg_sales_orders.branding) wins when present,
-       else the DISTINCT non-empty per-LINE brandings joined by " / " (the real
-       branding lives on the lines — AKEMI / ZANOTTI / 2990 SOFA), else null. */
-    const headerBranding = (r.branding ?? '').trim();
-    const lineBranding = [...(lineBrandingByDoc.get(docNo) ?? new Set<string>())].join(' / ');
-    const branding = headerBranding || lineBranding || null;
+    /* Branding — derived 1:1 with the SO list (never the empty header field).
+       Pick the catalog-resolved first-MAIN line as the SO's representative
+       (repCat), falling back to the earliest-created line (firstCat); a MATTRESS
+       rep with a blank own-branding falls back to mfg_products.branding. Then map
+       through the ported deriveBranding (SOFA → "2990 Sofa", BEDFRAME →
+       "Bedframe", MATTRESS → its brand / "2990 Mattress", else "—"). Identical
+       chain + display strings as MfgSalesOrdersList, so the two pages agree. */
+    const hasRep = repCat.has(docNo);
+    const fCat = (hasRep ? repCat.get(docNo) : firstCat.get(docNo)) ?? null;
+    let fBranding = (hasRep ? repBranding.get(docNo) : firstBranding.get(docNo)) ?? null;
+    if (fCat === 'MATTRESS' && (!fBranding || !fBranding.trim())) {
+      const code = hasRep ? repCode.get(docNo) : firstItemCode.get(docNo);
+      fBranding = (code && productBranding.get(code)) || fBranding;
+    }
+    const branding = deriveBranding(fCat, fBranding) || null;
     const readiness = summariseReadiness(linesByDoc.get(docNo) ?? []);
     const delivered = deliveredByDoc.get(docNo) ?? 0;
     const remaining = remainingByDoc.get(docNo) ?? 0;
