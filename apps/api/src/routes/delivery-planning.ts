@@ -40,6 +40,7 @@ import { z } from 'zod';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { paginateAll } from '../lib/paginate-all';
+import { nextMonthlyDocNo } from '../lib/doc-no';
 import { summariseReadiness, type ReadinessLine } from '../lib/so-readiness';
 import { soDeliverableRemaining } from './delivery-orders-mfg';
 
@@ -544,7 +545,36 @@ const scheduleSchema = z.object({
   scheduleDate: z.string().nullable().optional(),  // YYYY-MM-DD
   // Optional MANUAL override of the derived delivery_state (cache column).
   deliveryState: z.enum(['PENDING_DELIVERY', 'PENDING_SCHEDULE', 'OVERDUE', 'DELIVERED']).nullable().optional(),
+  // ── Optional trip wiring (Stage 5A) ────────────────────────────────────────
+  // Scheduling an order onto a trip. Either tripId (append to an existing trip)
+  // OR {lorryId, driverId, tripDate?} (find-or-create a trip for that lorry+date).
+  // When given, a trip_stops row (stop_type DELIVERY, do_id/so_id, revenue from
+  // the DO/SO local_total_centi) is created and the matching delivery_leg's
+  // trip_id is set. With no trip info, behaviour is unchanged (date only).
+  tripId: z.string().uuid().nullable().optional(),
+  lorryId: z.string().uuid().nullable().optional(),
+  driverId: z.string().uuid().nullable().optional(),
+  tripDate: z.string().nullable().optional(),       // trip date if creating (defaults to scheduleDate)
+  warehouseId: z.string().uuid().nullable().optional(),  // trip origin region (defaults from leg)
 });
+
+/* is_outsourced derives from the lorry's is_internal (NOT is_internal). */
+async function deriveTripOutsourced(sb: any, lorryId: string | null): Promise<boolean> {
+  if (!lorryId) return false;
+  const { data } = await sb.from('lorries').select('is_internal').eq('id', lorryId).maybeSingle();
+  if (!data) return false;
+  return ((data as { isInternal?: boolean | null; is_internal?: boolean | null }).isInternal
+    ?? (data as { is_internal?: boolean | null }).is_internal) === false;
+}
+
+/* Next TRIP-YYMM-NNN (mirrors trips.ts nextTripNo). */
+async function nextTripNo(sb: any): Promise<string> {
+  const d = new Date();
+  const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const { data: existing } = await sb.from('trips').select('trip_no').like('trip_no', `TRIP-${yymm}-%`);
+  return nextMonthlyDocNo(`TRIP-${yymm}`, ((existing ?? []) as Array<{ trip_no?: string; tripNo?: string }>)
+    .map((r) => r.tripNo ?? r.trip_no ?? ''));
+}
 
 deliveryPlanning.patch('/:type/:id/schedule', async (c) => {
   const type = c.req.param('type').toLowerCase();
@@ -556,10 +586,14 @@ deliveryPlanning.patch('/:type/:id/schedule', async (c) => {
   if (!parsed.success) return c.json({ error: 'invalid_body', reason: parsed.error.message }, 400);
   const p = parsed.data;
 
+  const wantsTrip = p.tripId != null || p.lorryId != null;
+
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (p.scheduleDate !== undefined) updates.customer_delivery_date = p.scheduleDate;
   if (p.deliveryState !== undefined) updates.delivery_state = p.deliveryState;
-  if (Object.keys(updates).length === 1) return c.json({ error: 'no_changes' }, 400);
+  // A trip-only schedule (no date/state) is still a valid change — only 400 when
+  // there's NOTHING to do at all.
+  if (Object.keys(updates).length === 1 && !wantsTrip) return c.json({ error: 'no_changes' }, 400);
 
   const sb = c.get('supabase');
   const table = type === 'so' ? 'mfg_sales_orders' : 'delivery_orders';
@@ -567,11 +601,170 @@ deliveryPlanning.patch('/:type/:id/schedule', async (c) => {
   const selectCols = type === 'so'
     ? 'doc_no, customer_delivery_date, delivery_state, status'
     : 'id, do_number, customer_delivery_date, delivery_state, status';
-  const { data, error } = await sb.from(table).update(updates).eq(keyCol, id).select(selectCols).single();
-  if (error) {
-    if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message }, 403);
-    return c.json({ error: 'update_failed', reason: error.message }, 500);
+
+  let data: Record<string, unknown> | null = null;
+  // Skip the header UPDATE when only trip info changed (nothing to write to the
+  // header) — just re-read it so the response shape is unchanged.
+  if (Object.keys(updates).length > 1) {
+    const res = await sb.from(table).update(updates).eq(keyCol, id).select(selectCols).single();
+    if (res.error) {
+      if (res.error.code === '42501') return c.json({ error: 'forbidden', reason: res.error.message }, 403);
+      return c.json({ error: 'update_failed', reason: res.error.message }, 500);
+    }
+    data = res.data as unknown as Record<string, unknown> | null;
+  } else {
+    const res = await sb.from(table).select(selectCols).eq(keyCol, id).maybeSingle();
+    data = res.data as unknown as Record<string, unknown> | null;
   }
   if (!data) return c.json({ error: 'not_found' }, 404);
-  return c.json({ ok: true, [type]: data });
+
+  // ── Trip wiring (Stage 5A) — find-or-create a trip, append a stop, link leg.
+  let trip: { id: string; trip_no: string } | null = null;
+  if (wantsTrip) {
+    trip = await scheduleOntoTrip(c, sb, type, id, p);
+  }
+
+  return c.json({ ok: true, [type]: data, trip });
 });
+
+/* ──────────────────────────────────────────────────────────────────────────
+   scheduleOntoTrip — the Stage 5A integration. Find-or-create the trip, append a
+   DELIVERY trip_stop for this order (revenue from the DO/SO local_total_centi),
+   and set the matching delivery_leg's trip_id. Idempotent on re-schedule: an
+   existing stop for the same (trip, do_id|so_id) is reused, not duplicated.
+   Best-effort — a wiring failure does not fail the (already-committed) header
+   schedule; it returns null and the date still stands.
+   ─────────────────────────────────────────────────────────────────────────*/
+async function scheduleOntoTrip(
+  c: any,
+  sb: any,
+  type: 'so' | 'do',
+  id: string,
+  p: z.infer<typeof scheduleSchema>,
+): Promise<{ id: string; trip_no: string } | null> {
+  try {
+    const user = c.get('user') as { id?: string } | null;
+
+    /* Resolve the order: its uuid (do_id / so_id), grand total → revenue, and a
+       customer/address snapshot. SO id is its uuid; the SO is keyed by doc_no. */
+    let doId: string | null = null;
+    let soId: string | null = null;
+    let soDocNo: string | null = null;
+    let revenueCenti = 0;
+    let customerName: string | null = null;
+    let address: string | null = null;
+    let legWarehouseId: string | null = p.warehouseId ?? null;
+
+    if (type === 'do') {
+      doId = id;
+      const { data: doRow } = await sb.from('delivery_orders')
+        .select('local_total_centi, debtor_name, address1, address2, warehouse_id').eq('id', id).maybeSingle();
+      if (doRow) {
+        const r = doRow as Record<string, unknown>;
+        revenueCenti = Number((r.localTotalCenti ?? r.local_total_centi) ?? 0);
+        customerName = (r.debtorName ?? r.debtor_name ?? null) as string | null;
+        address = [r.address1, r.address2].filter(Boolean).join(', ') || null;
+        if (!legWarehouseId) legWarehouseId = (r.warehouseId ?? r.warehouse_id ?? null) as string | null;
+      }
+    } else {
+      soDocNo = id;
+      const { data: soRow } = await sb.from('mfg_sales_orders')
+        .select('id, local_total_centi, debtor_name, address1, address2').eq('doc_no', id).maybeSingle();
+      if (soRow) {
+        const r = soRow as Record<string, unknown>;
+        soId = (r.id ?? null) as string | null;
+        revenueCenti = Number((r.localTotalCenti ?? r.local_total_centi) ?? 0);
+        customerName = (r.debtorName ?? r.debtor_name ?? null) as string | null;
+        address = [r.address1, r.address2].filter(Boolean).join(', ') || null;
+      }
+    }
+    revenueCenti = Math.max(0, Math.round(revenueCenti) || 0);
+
+    /* Find-or-create the trip. tripId given → use it; else find an existing
+       PLANNED trip for (lorry, date) or create one. */
+    const tripDate = p.tripDate ?? p.scheduleDate ?? todayMY();
+    let tripId = p.tripId ?? null;
+    if (!tripId && p.lorryId) {
+      const { data: found } = await sb.from('trips').select('id, trip_no')
+        .eq('lorry_id', p.lorryId).eq('trip_date', tripDate).neq('status', 'CANCELLED').limit(1);
+      const hit = ((found ?? []) as Array<{ id: string; trip_no?: string; tripNo?: string }>)[0];
+      if (hit) tripId = hit.id;
+    }
+    if (!tripId) {
+      if (!p.lorryId) return null;  // nothing to create a trip from
+      const isOutsourced = await deriveTripOutsourced(sb, p.lorryId);
+      const tripNo = await nextTripNo(sb);
+      const { data: created, error: tErr } = await sb.from('trips').insert({
+        trip_no:       tripNo,
+        trip_date:     tripDate,
+        lorry_id:      p.lorryId,
+        driver_id:     p.driverId ?? null,
+        warehouse_id:  legWarehouseId,
+        trip_type:     'DELIVERY',
+        status:        'PLANNED',
+        is_outsourced: isOutsourced,
+        created_by:    user?.id ?? null,
+      }).select('id, trip_no').single();
+      if (tErr || !created) return null;
+      tripId = (created as { id: string }).id;
+    }
+    const tripIdStr = tripId as string;
+
+    /* Append the DELIVERY stop — idempotent: reuse an existing stop for the same
+       (trip, do_id|so_id) instead of duplicating on re-schedule. */
+    const stopFilter = sb.from('trip_stops').select('id').eq('trip_id', tripIdStr);
+    const { data: existingStops } = await (doId
+      ? stopFilter.eq('do_id', doId)
+      : stopFilter.eq('so_id', soId));
+    const already = ((existingStops ?? []) as Array<{ id: string }>)[0];
+    if (!already && (doId || soId)) {
+      const { data: cntRows } = await sb.from('trip_stops').select('stop_no').eq('trip_id', tripIdStr);
+      const nextStopNo = ((cntRows ?? []) as Array<{ stop_no?: number; stopNo?: number }>)
+        .reduce((m, r) => Math.max(m, Number(r.stopNo ?? r.stop_no ?? 0)), 0) + 1;
+      await sb.from('trip_stops').insert({
+        trip_id:       tripIdStr,
+        stop_no:       nextStopNo,
+        stop_type:     'DELIVERY',
+        do_id:         doId,
+        so_id:         soId,
+        customer_name: customerName,
+        address,
+        revenue_centi: revenueCenti,
+      });
+    }
+
+    /* Set the matching delivery_leg's trip_id. The leg keys off the SO doc_no
+       (source_type 'SO') — pick the final leg matching the trip's warehouse, else
+       the first leg, else create a leg so the order surfaces under the trip. */
+    const legSourceId = type === 'so' ? (soDocNo ?? id) : (doId ?? id);
+    const legSourceType = type === 'so' ? 'SO' : 'DO';
+    const { data: legs } = await sb.from('delivery_legs').select('id, warehouse_id, leg_no')
+      .eq('source_type', legSourceType).eq('source_id', legSourceId).order('leg_no', { ascending: true });
+    const legRows = (legs ?? []) as Array<{ id: string; warehouse_id?: string | null; warehouseId?: string | null; leg_no?: number }>;
+    const targetLeg = legWarehouseId
+      ? legRows.find((l) => (l.warehouseId ?? l.warehouse_id) === legWarehouseId)
+      : null;
+    const leg = targetLeg ?? legRows[0] ?? null;
+    if (leg) {
+      await sb.from('delivery_legs').update({ trip_id: tripIdStr, updated_at: new Date().toISOString() }).eq('id', leg.id);
+    } else {
+      await sb.from('delivery_legs').insert({
+        source_type: legSourceType,
+        source_id:   legSourceId,
+        leg_no:      1,
+        warehouse_id: legWarehouseId,
+        trip_id:     tripIdStr,
+        leg_date:    tripDate,
+        leg_kind:    'final',
+        created_by:  user?.id ?? null,
+      });
+    }
+
+    /* Echo the trip_no for the response. */
+    const { data: tNo } = await sb.from('trips').select('id, trip_no').eq('id', tripIdStr).maybeSingle();
+    const tr = tNo as { id?: string; trip_no?: string; tripNo?: string } | null;
+    return tr ? { id: tripIdStr, trip_no: (tr.tripNo ?? tr.trip_no ?? '') } : { id: tripIdStr, trip_no: '' };
+  } catch {
+    return null;  // best-effort — never fail the header schedule on a wiring error
+  }
+}
