@@ -20,10 +20,13 @@ export const DELIVERY_STATE_LABEL: Record<DeliveryState, string> = {
   DELIVERED: 'Delivered',
 };
 
-// A region is one of FOUR fixed buckets, derived from the customer's STATE (not
-// the line warehouse): KL · Penang · EM (East Malaysia: Sabah/Sarawak/Labuan) ·
-// SG (Singapore). 'ALL' is the no-filter param; the rest are the bucket keys.
-export type RegionKey = 'ALL' | 'KL' | 'PENANG' | 'EM' | 'SG';
+// A region is a CONFIG-DRIVEN bucket code (migration 0198) derived from the
+// customer's STATE (not the line warehouse). The seeded defaults are KL · Penang
+// · EM (East Malaysia: Sabah/Sarawak/Labuan) · SG (Singapore), but the owner can
+// add more in the Delivery Regions master, so a region code is now an OPEN string
+// (not a fixed union). 'ALL' is the no-filter param; the rest are bucket codes.
+export type RegionCode = string;
+export type RegionKey = 'ALL' | RegionCode;
 
 export type DeliveryLeg = {
   id: string;
@@ -34,7 +37,7 @@ export type DeliveryLeg = {
   warehouse_code: string | null;
   // The leg's region bucket, mapped from its TRANSIT/FINAL warehouse code
   // (SLGR/PJ→KL, PG→PENANG, SBH/SRK→EM; CHINA/CONSIGN-OUT → null/skip).
-  region: Exclude<RegionKey, 'ALL'> | null;
+  region: RegionCode | null;
   trip_id: string | null;
   leg_date: string | null;
   leg_kind: 'transit' | 'final';
@@ -82,8 +85,8 @@ export type PlanningOrder = {
   stock_status: string;
   stock_remark: string;
   is_main_ready: boolean;
-  region: Exclude<RegionKey, 'ALL'>;   // the order's primary bucket (from customer_state)
-  regions: Array<Exclude<RegionKey, 'ALL'>>;  // primary + any leg buckets
+  region: RegionCode;   // the order's primary bucket (from customer_state)
+  regions: RegionCode[];  // primary + any leg buckets
   warehouse_id: string | null;
   warehouse_code: string | null;
   warehouse_name: string | null;

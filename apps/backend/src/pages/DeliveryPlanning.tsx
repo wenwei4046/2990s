@@ -63,24 +63,14 @@ function SubstatusPill({ value }: { value: string | null }) {
 /* A datetime-or-dash cell (TIMESTAMPTZ columns). */
 const dtOrDash = (iso: string | null): string => (iso ? fmtDateTime(iso) : '—');
 
-/* Region chips — FOUR FIXED buckets classified by customer STATE, hardcoded (no
-   longer the dynamic per-warehouse chips): "All" first, then KL · Penang · EM ·
-   SG. SG is visually distinct (dashed teal chip — cross-border, no MY
-   warehouse). The chip's key is sent verbatim as ?region= to the API, which
-   buckets every order by customer state (ALL | KL | PENANG | EM | SG). */
-type RegionBucket = 'KL' | 'PENANG' | 'EM' | 'SG';
-type RegionTab = { key: 'ALL' | RegionBucket; label: string; sg?: boolean };
-const REGION_TABS: RegionTab[] = [
-  { key: 'ALL', label: 'All' },
-  { key: 'KL', label: 'KL' },
-  { key: 'PENANG', label: 'Penang' },
-  { key: 'EM', label: 'EM' },
-  { key: 'SG', label: 'SG', sg: true },
-];
-/* Clean bucket label for the re-added Region grid column. */
-const REGION_LABEL: Record<RegionBucket, string> = {
-  KL: 'KL', PENANG: 'Penang', EM: 'EM', SG: 'SG',
-};
+/* Region chips — CONFIG-DRIVEN buckets (migration 0198) classified by customer
+   STATE. The bucket list now comes from the API's `regions` master (owner-
+   maintained in Delivery Regions), with an "All" tab prepended. SG is visually
+   distinct (dashed teal chip — cross-border, no MY warehouse); that styling keys
+   off the region CODE === 'SG', not a hardcoded position, so it survives the
+   owner reordering / adding buckets. The chip's key is sent verbatim as ?region=
+   to the API, which buckets every order by customer state. */
+type RegionTab = { key: string; label: string; sg?: boolean };
 
 /* The 4 state tabs (the top row). */
 const STATE_TABS = DELIVERY_STATES;
@@ -256,8 +246,35 @@ export const DeliveryPlanning = () => {
      they sit in the Columns menu like the rest. */
   const isEmSg = activeRegion === 'EM' || activeRegion === 'SG';
 
-  /* Region chips = the 4 FIXED state buckets (+ All), hardcoded. */
-  const activeRegionLabel = REGION_TABS.find((r) => r.key === activeRegion)?.label ?? 'All';
+  /* Fetch scoped to the active REGION; counts come back region-scoped so the
+     state-tab badges are stable as the operator flips state tabs. We pass the
+     state to the server too (it filters), but render-time we already have the
+     region-filtered orders so switching states is instant via the cache key. */
+  const { data, isLoading, error } = useDeliveryPlanning({ region: activeRegion, state: 'ALL' });
+
+  /* Region chips = the CONFIG-DRIVEN buckets from the API master (+ "All"
+     prepended). SG (by CODE) is the dashed-teal cross-border chip. Falls back to
+     the four seeded defaults if the API hasn't returned the list yet. */
+  const regionTabs = useMemo<RegionTab[]>(() => {
+    const masters = data?.regions ?? [
+      { key: 'KL', label: 'KL' }, { key: 'PENANG', label: 'Penang' },
+      { key: 'EM', label: 'EM' }, { key: 'SG', label: 'SG' },
+    ];
+    return [
+      { key: 'ALL', label: 'All' },
+      ...masters.map((r) => ({ key: r.key, label: r.label, sg: r.key === 'SG' })),
+    ];
+  }, [data?.regions]);
+
+  /* code → display label, from the master (drives the Region grid column). */
+  const regionLabel = useMemo<Record<string, string>>(() => {
+    const m: Record<string, string> = {};
+    for (const r of data?.regions ?? []) m[r.key] = r.label;
+    return m;
+  }, [data?.regions]);
+  const regionLabelOf = (code: string): string => regionLabel[code] ?? code;
+
+  const activeRegionLabel = regionTabs.find((r) => r.key === activeRegion)?.label ?? 'All';
 
   const setState = (s: string) => {
     const next = new URLSearchParams(params);
@@ -269,12 +286,6 @@ export const DeliveryPlanning = () => {
     if (r === 'ALL') next.delete('region'); else next.set('region', r);
     setParams(next, { replace: true });
   };
-
-  /* Fetch scoped to the active REGION; counts come back region-scoped so the
-     state-tab badges are stable as the operator flips state tabs. We pass the
-     state to the server too (it filters), but render-time we already have the
-     region-filtered orders so switching states is instant via the cache key. */
-  const { data, isLoading, error } = useDeliveryPlanning({ region: activeRegion, state: 'ALL' });
 
   const allOrders = useMemo<PlanningOrder[]>(() => data?.orders ?? [], [data]);
   const counts = data?.counts ?? { ALL: 0, PENDING_DELIVERY: 0, PENDING_SCHEDULE: 0, OVERDUE: 0, DELIVERED: 0 };
@@ -380,11 +391,11 @@ export const DeliveryPlanning = () => {
     },
     {
       key: 'region', label: 'Region', width: 110, sortable: true, groupable: true,
-      accessor: (o) => REGION_LABEL[o.region] ?? o.region,
-      searchValue: (o) => REGION_LABEL[o.region] ?? o.region,
-      groupValue: (o) => REGION_LABEL[o.region] ?? o.region,
-      exportValue: (o) => REGION_LABEL[o.region] ?? o.region,
-      sortFn: (a, b) => (REGION_LABEL[a.region] ?? '').localeCompare(REGION_LABEL[b.region] ?? ''),
+      accessor: (o) => regionLabelOf(o.region),
+      searchValue: (o) => regionLabelOf(o.region),
+      groupValue: (o) => regionLabelOf(o.region),
+      exportValue: (o) => regionLabelOf(o.region),
+      sortFn: (a, b) => regionLabelOf(a.region).localeCompare(regionLabelOf(b.region)),
     },
     {
       key: 'warehouse', label: 'Warehouse', width: 150, sortable: true, groupable: true, defaultHidden: true,
@@ -562,8 +573,9 @@ export const DeliveryPlanning = () => {
       searchValue: (o) => o.delivery_orders.map((d) => d.do_number).join(' '),
     },
   // legDateForRegion + the EM/SG cross-border default-show (isEmSg) depend on
-  // activeRegion → recompute the columns on region change.
-  ], [activeRegion]); // eslint-disable-line react-hooks/exhaustive-deps
+  // activeRegion → recompute the columns on region change. regionLabel feeds the
+  // Region column's display labels (from the config master).
+  ], [activeRegion, regionLabel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className={styles.page ?? ''} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', padding: 'var(--space-3) var(--space-4) var(--space-4)', background: 'var(--c-cream)', minHeight: '100%' }}>
@@ -603,10 +615,11 @@ export const DeliveryPlanning = () => {
         ))}
       </div>
 
-      {/* REGION chip row — the 4 FIXED state buckets (All · KL · Penang · EM ·
-          SG). SG is dashed-teal (cross-border). Classified by customer state. */}
+      {/* REGION chip row — the CONFIG-DRIVEN buckets from the API master (All +
+          whatever the owner maintains in Delivery Regions). SG (by code) is
+          dashed-teal (cross-border). Classified by customer state. */}
       <div className={styles.regionChips}>
-        {REGION_TABS.map((r) => (
+        {regionTabs.map((r) => (
           <button
             key={r.key}
             type="button"

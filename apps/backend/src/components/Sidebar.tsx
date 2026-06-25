@@ -32,6 +32,7 @@ import {
   KeyRound,
   Coins,
   CalendarClock,
+  MapPinned,
   Gauge,
 } from 'lucide-react';
 import { useAuth, POS_ONLY_ROLES, SALES_DESK_ROLES } from '../lib/auth';
@@ -182,6 +183,9 @@ export const Sidebar = () => {
         // Delivery Planning board (Stage 4) — the planning view sits above the
         // fleet masters it dispatches.
         { to: '/delivery-planning', icon: <CalendarClock {...ICON_PROPS} />, label: 'Delivery Planning' },
+        // Delivery Regions — owner-maintained region-bucket master that drives
+        // the board's tabs (migration 0198). Sits right under the board.
+        { to: '/delivery-planning-regions', icon: <MapPinned {...ICON_PROPS} />, label: 'Delivery Regions' },
         // Consolidated "Driver & Helper" / Fleet portal — Driver · Helper ·
         // Lorry masters on one page (migration 0195).
         { to: '/fleet', icon: <Truck {...ICON_PROPS} />, label: 'Driver & Helper' },

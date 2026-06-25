@@ -109,6 +109,9 @@ const StockTakeDetail = lazyRetry(() => import('./pages/StockTakeDetail').then(m
 const Fleet = lazyRetry(() => import('./pages/Fleet').then(m => ({ default: m.Fleet })));
 // Delivery Planning board (Stage 4) — the 4-state × region planning view.
 const DeliveryPlanning = lazyRetry(() => import('./pages/DeliveryPlanning').then(m => ({ default: m.DeliveryPlanning })));
+// Delivery Regions — the owner-maintained region-bucket master that drives the
+// board's tabs (migration 0198).
+const DeliveryPlanningRegions = lazyRetry(() => import('./pages/DeliveryPlanningRegions').then(m => ({ default: m.DeliveryPlanningRegions })));
 // Lorry Capacity dashboard (Stage 5B, final) — fleet performance metrics.
 const LorryCapacity = lazyRetry(() => import('./pages/LorryCapacity').then(m => ({ default: m.LorryCapacity })));
 const Accounting = lazyRetry(() => import('./pages/Accounting').then(m => ({ default: m.Accounting })));
@@ -218,6 +221,8 @@ export const router = createBrowserRouter([
       { path: 'lorries', element: <Navigate to="/fleet" replace /> },
       // Delivery Planning board (Stage 4).
       { path: 'delivery-planning', element: <DeliveryPlanning /> },
+      // Delivery Regions — region-bucket master (drives the board's tabs).
+      { path: 'delivery-planning-regions', element: <DeliveryPlanningRegions /> },
       // Lorry Capacity dashboard (Stage 5B, final).
       { path: 'lorry-capacity', element: <LorryCapacity /> },
       { path: 'suppliers', element: <Suppliers /> },

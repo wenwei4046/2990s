@@ -53,6 +53,14 @@ import {
   type SoDropdownCategory,
   type SoDropdownOption,
 } from '../lib/so-dropdown-options-queries';
+/* Migration 0198 — per-state Delivery Planning region(s) multi-mapping. The
+   region master + the per-state set both live in the delivery-planning-regions
+   route; this page assigns which region(s) a state's orders fall under. */
+import {
+  useDeliveryPlanningRegions,
+  useStateDeliveryRegions,
+  useSetStateDeliveryRegions,
+} from '../lib/delivery-planning-regions-queries';
 import styles from './SalesOrderMaintenance.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -103,6 +111,19 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
   const toast = useToast();
   const notify = useNotify();
   const askConfirm = useConfirm();
+
+  /* Migration 0198 — Delivery Planning region master + the per-state → region(s)
+     multi-mapping. The L2 state rows below expose a multi-select that reads the
+     state's current set and PUTs the new set (keyed by state NAME + country). */
+  const dpRegions = useDeliveryPlanningRegions();
+  const stateRegions = useStateDeliveryRegions();
+  const setStateRegions = useSetStateDeliveryRegions();
+  /* (stateName|country) → its region codes, for the per-row multi-select. */
+  const regionsByStateKey = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const s of stateRegions.data ?? []) m.set(`${s.stateKey}|${s.country}`, s.regionCodes);
+    return m;
+  }, [stateRegions.data]);
 
   const states = useMemo(() => distinctStates(localities.data ?? []), [localities.data]);
   const mappedByState = useMemo(() => {
@@ -474,6 +495,7 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
                     <th style={{ width: 80 }}>Code</th>
                     <th style={{ width: 140 }}>Country</th>
                     <th>Warehouse</th>
+                    <th style={{ width: 200 }}>Delivery Planning region(s)</th>
                     <th>Notes</th>
                     <th style={{ width: 80, textAlign: 'right' }}>Cities</th>
                     <th style={{ width: 90, textAlign: 'right' }}>Postcodes</th>
@@ -542,6 +564,25 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
                               <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                             ))}
                           </select>
+                        </td>
+                        <td onDoubleClick={(e) => e.stopPropagation()}>
+                          <RegionMultiSelect
+                            stateName={s.state}
+                            country={s.country}
+                            options={(dpRegions.data ?? []).filter((r) => r.active)}
+                            selected={regionsByStateKey.get(`${s.state}|${s.country}`) ?? []}
+                            canEdit={canEdit}
+                            saving={setStateRegions.isPending}
+                            onSave={(regionCodes) => {
+                              setStateRegions.mutate(
+                                { stateKey: s.state, regionCodes, country: s.country },
+                                {
+                                  onSuccess: () => toast.success(`Regions saved for ${s.state}`),
+                                  onError: (err) => toast.error(`Regions save failed: ${err instanceof Error ? err.message : String(err)}`),
+                                },
+                              );
+                            }}
+                          />
                         </td>
                         <td onDoubleClick={(e) => e.stopPropagation()}>
                           <input
@@ -1428,6 +1469,76 @@ const VenuesSection = ({ canEdit }: { canEdit: boolean }) => {
         )}
       </div>
     </section>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   RegionMultiSelect — the per-state Delivery Planning region(s) control
+   (migration 0198). A checkbox group of region chips; a state can pick MANY
+   (e.g. KL AND SG, so a Singapore order surfaces under both board tabs).
+   Toggling a chip saves the FULL new set immediately via PUT
+   /delivery-planning-regions/states/:stateName with { regionCodes, country } —
+   the same "save on change" affordance the Warehouse select on this row uses.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const RegionMultiSelect = ({
+  stateName, country, options, selected, canEdit, saving, onSave,
+}: {
+  stateName: string;
+  country: string;
+  options: Array<{ id: string; code: string; name: string }>;
+  selected: string[];
+  canEdit: boolean;
+  saving: boolean;
+  onSave: (regionCodes: string[]) => void;
+}) => {
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+
+  const toggle = (code: string) => {
+    if (!canEdit || saving) return;
+    const next = new Set(selectedSet);
+    if (next.has(code)) next.delete(code); else next.add(code);
+    onSave([...next].sort());
+  };
+
+  if (options.length === 0) {
+    return <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>No regions — add some in Delivery Regions</span>;
+  }
+
+  return (
+    <div
+      style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}
+      aria-label={`Delivery Planning regions for ${stateName} (${country})`}
+    >
+      {options.map((r) => {
+        const on = selectedSet.has(r.code);
+        return (
+          <label
+            key={r.id}
+            title={r.name}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              padding: '3px 9px', borderRadius: 999,
+              border: `1px solid ${on ? 'var(--c-secondary-a)' : 'var(--line)'}`,
+              background: on ? 'rgba(47, 93, 79, 0.10)' : 'var(--c-paper)',
+              color: on ? 'var(--c-secondary-a)' : 'var(--fg-muted)',
+              fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', fontWeight: 600,
+              cursor: canEdit && !saving ? 'pointer' : 'not-allowed',
+              opacity: canEdit ? 1 : 0.7,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={on}
+              disabled={!canEdit || saving}
+              onChange={() => toggle(r.code)}
+              style={{ margin: 0 }}
+            />
+            <span>{r.code}</span>
+          </label>
+        );
+      })}
+    </div>
   );
 };
 
