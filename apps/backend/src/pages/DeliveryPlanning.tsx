@@ -22,16 +22,19 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Split, MapPinned } from 'lucide-react';
+import { Split, MapPinned, Truck } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { fmtCenti, fmtDateOrDash, fmtDateTime, buildVariantSummary } from '@2990s/shared';
 import { formatPhone } from '@2990s/shared/phone';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { DeliveryFieldsDrawer } from '../components/DeliveryFieldsDrawer';
+import { useConfirm } from '../components/ConfirmDialog';
+import { useNotify } from '../components/NotifyDialog';
 import { badgeFor } from '../lib/category-badges';
 import { useMfgSalesOrderDetail } from '../lib/flow-queries';
 import {
   useDeliveryPlanning,
+  useConvertSosToDo,
   DELIVERY_STATES,
   DELIVERY_STATE_LABEL,
   type DeliveryState,
@@ -235,12 +238,63 @@ const PlanningExpandedLines = ({ docNo }: { docNo: string }) => {
 
 export const DeliveryPlanning = () => {
   const navigate = useNavigate();
+  const askConfirm = useConfirm();
+  const notify = useNotify();
   const [params, setParams] = useSearchParams();
   const activeState = (params.get('state') ?? 'ALL').toUpperCase();
   const activeRegion = (params.get('region') ?? 'ALL').toUpperCase();
 
   /* The order whose HC fields are being edited (drawer open when non-null). */
   const [editing, setEditing] = useState<PlanningOrder | null>(null);
+
+  /* Multi-select → bulk "Convert N to DO". Selection keys are so_doc_no strings
+     (the DataGrid rowKey). The convert reuses POST /from-sos one-DO-per-SO. */
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const convertSos = useConvertSosToDo();
+
+  /* Convert a set of SOs → DOs (single row or the bulk selection). Skips SOs
+     with no deliverable remaining (already fully delivered); reports the result
+     via the in-app NotifyDialog. Reused by the row action + the selection bar. */
+  const runConvert = async (docNos: string[]) => {
+    const wanted = [...new Set(docNos.filter(Boolean))];
+    if (wanted.length === 0 || convertSos.isPending) return;
+    try {
+      const res = await convertSos.mutateAsync({ docNos: wanted });
+      setSel(new Set());
+      const parts: string[] = [];
+      if (res.converted.length > 0) {
+        parts.push(`Converted ${res.converted.length} sales order${res.converted.length === 1 ? '' : 's'} to DO (${res.converted.map((r) => r.doNumber).join(', ')}).`);
+      }
+      if (res.skipped.length > 0) {
+        parts.push(`Skipped ${res.skipped.length} already fully delivered: ${res.skipped.map((r) => r.docNo).join(', ')}.`);
+      }
+      if (res.failed.length > 0) {
+        parts.push(`Failed ${res.failed.length}: ${res.failed.map((r) => `${r.docNo} (${r.message})`).join('; ')}.`);
+      }
+      notify({
+        title: res.converted.length > 0 ? 'Conversion complete' : 'Nothing converted',
+        body: parts.join(' ') || 'No deliverable lines were found.',
+        tone: res.failed.length > 0 ? 'error' : 'info',
+      });
+    } catch (e) {
+      notify({ title: 'Convert failed', body: e instanceof Error ? e.message : String(e), tone: 'error' });
+    }
+  };
+
+  /* Single-row convert (context-menu action). */
+  const convertOne = (o: PlanningOrder) => { void runConvert([o.so_doc_no]); };
+
+  /* Bulk convert (selection bar) — confirm first (useConfirm, no window.*). */
+  const convertSelected = async () => {
+    const docNos = [...sel];
+    if (docNos.length === 0) return;
+    if (!(await askConfirm({
+      title: `Convert ${docNos.length} sales order${docNos.length === 1 ? '' : 's'} to delivery orders?`,
+      body: 'Each selected Sales Order’s still-undelivered lines become a new Delivery Order (one DO per SO). Fully delivered orders are skipped.',
+      confirmLabel: `Convert ${docNos.length}`,
+    }))) return;
+    await runConvert(docNos);
+  };
 
   /* EM/SG nicety: when the active region is EM or SG, the cross-border columns
      (shipout date, port ref, customer-delivered date) default-SHOW; elsewhere
@@ -435,6 +489,24 @@ export const DeliveryPlanning = () => {
       sortFn: (a, b) => String(a.customer_delivery_date ?? '').localeCompare(String(b.customer_delivery_date ?? '')),
       filterType: 'date', dateValue: (o) => o.customer_delivery_date,
     },
+    /* Amendment dates (migration 0199). "Amended" (the date WE confirmed / the
+       proposed delivery date) default-SHOWS — it's the firm date the board commits
+       to. "Amend (Cust)" (the customer's requested new date) default-HIDES. The
+       ORIGINAL "Delivery Date" column above is unchanged. */
+    {
+      key: 'amended_delivery_date', label: 'Amended', width: 130, sortable: true,
+      accessor: (o) => fmtDateOrDash(o.amended_delivery_date),
+      searchValue: (o) => o.amended_delivery_date ?? '',
+      sortFn: (a, b) => String(a.amended_delivery_date ?? '').localeCompare(String(b.amended_delivery_date ?? '')),
+      filterType: 'date', dateValue: (o) => o.amended_delivery_date,
+    },
+    {
+      key: 'amend_date_from_customer', label: 'Amend (Cust)', width: 130, sortable: true, defaultHidden: true,
+      accessor: (o) => fmtDateOrDash(o.amend_date_from_customer),
+      searchValue: (o) => o.amend_date_from_customer ?? '',
+      sortFn: (a, b) => String(a.amend_date_from_customer ?? '').localeCompare(String(b.amend_date_from_customer ?? '')),
+      filterType: 'date', dateValue: (o) => o.amend_date_from_customer,
+    },
     {
       key: 'internal_expected_dd', label: 'Est. (New)', width: 120, sortable: true, defaultHidden: true,
       accessor: (o) => fmtDateOrDash(o.internal_expected_dd),
@@ -519,6 +591,16 @@ export const DeliveryPlanning = () => {
       accessor: (o) => o.eta_arriving_port ?? '—',
       searchValue: (o) => o.eta_arriving_port ?? '',
     },
+    /* EM-region cross-border transit-warehouse arrival date (migration 0199).
+       Default-HIDDEN, but auto-SHOWS on the EM/SG region tabs like shipout / ETA
+       (these cross-border columns only matter for the EM trip). */
+    {
+      key: 'arrives_em_warehouse_date', label: 'Arrives EM Whse', width: 150, sortable: true, defaultHidden: !isEmSg,
+      accessor: (o) => fmtDateOrDash(o.arrives_em_warehouse_date),
+      searchValue: (o) => o.arrives_em_warehouse_date ?? '',
+      sortFn: (a, b) => String(a.arrives_em_warehouse_date ?? '').localeCompare(String(b.arrives_em_warehouse_date ?? '')),
+      filterType: 'date', dateValue: (o) => o.arrives_em_warehouse_date,
+    },
     /* Crew — split into the HC delivery-sheet columns. Driver + Lorry show by
        default; IC / contact / driver 2 / helpers are in the show/hide menu. */
     {
@@ -572,6 +654,16 @@ export const DeliveryPlanning = () => {
       key: 'do', label: 'DO', width: 130, groupable: true,
       accessor: (o) => (o.delivery_orders.length > 0 ? o.delivery_orders.map((d) => d.do_number).join(', ') : '—'),
       searchValue: (o) => o.delivery_orders.map((d) => d.do_number).join(' '),
+    },
+    /* DO Date — the latest DO's OWN document date (delivery_orders.do_date), from
+       the same latest-DO lookup the crew / HC fields use. Default-SHOWS so a
+       converted row immediately reads its DO date. "—" until a DO exists. */
+    {
+      key: 'do_date', label: 'DO Date', width: 120, sortable: true,
+      accessor: (o) => fmtDateOrDash(o.do_date),
+      searchValue: (o) => o.do_date ?? '',
+      sortFn: (a, b) => String(a.do_date ?? '').localeCompare(String(b.do_date ?? '')),
+      filterType: 'date', dateValue: (o) => o.do_date,
     },
   // legDateForRegion + the EM/SG cross-border default-show (isEmSg) depend on
   // activeRegion → recompute the columns on region change. regionLabel feeds the
@@ -654,6 +746,28 @@ export const DeliveryPlanning = () => {
         </div>
       )}
 
+      {/* Selection bar — appears once one or more rows are ticked; "Convert N to
+          DO" bulk-converts every selected SO (one DO per SO, useConfirm first). */}
+      {sel.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: 'var(--space-2) var(--space-3)',
+          background: 'rgba(232, 107, 58, 0.06)',
+          border: '1px solid var(--c-orange)',
+          borderRadius: 'var(--radius-md)',
+          gap: 'var(--space-3)',
+        }}>
+          <span style={{ fontWeight: 600, color: 'var(--c-burnt)' }}>{sel.size} selected</span>
+          <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+            <Button variant="ghost" size="sm" onClick={() => setSel(new Set())}>Clear</Button>
+            <Button variant="secondary" size="sm" disabled={convertSos.isPending} onClick={() => void convertSelected()}>
+              <Truck size={14} strokeWidth={1.75} />
+              <span>{convertSos.isPending ? 'Converting…' : `Convert ${sel.size} to DO`}</span>
+            </Button>
+          </span>
+        </div>
+      )}
+
       <DataGrid
         rows={rows}
         columns={columns}
@@ -664,6 +778,21 @@ export const DeliveryPlanning = () => {
         groupBanner={false}
         isLoading={isLoading}
         emptyMessage="No orders need delivering in this view."
+        /* First-class multi-select (so_doc_no keys) → the bulk Convert-to-DO bar. */
+        selectable={{
+          selectedKeys: sel,
+          onToggle: (k) => setSel((p) => {
+            const n = new Set(p);
+            if (n.has(k)) n.delete(k); else n.add(k);
+            return n;
+          }),
+          onToggleAll: (keys, allSel) => setSel((p) => {
+            const n = new Set(p);
+            if (allSel) { for (const k of keys) n.delete(k); }
+            else { for (const k of keys) n.add(k); }
+            return n;
+          }),
+        }}
         onRowDoubleClick={(row) => navigate('/mfg-sales-orders/' + row.so_doc_no)}
         expandable={{
           renderExpansion: (row) => <PlanningExpandedLines docNo={row.so_doc_no} />,
@@ -672,6 +801,7 @@ export const DeliveryPlanning = () => {
         rowStyle={(o) => (o.region === 'SG' ? { boxShadow: 'inset 3px 0 0 var(--c-secondary-a)' } : undefined)}
         contextMenu={(row) => [
           { label: 'Edit HC fields…', onClick: () => setEditing(row) },
+          { label: 'Convert to DO', onClick: () => convertOne(row) },
           { divider: true },
           { label: 'Open Sales Order', onClick: () => navigate('/mfg-sales-orders/' + row.so_doc_no) },
         ]}

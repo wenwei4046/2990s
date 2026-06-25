@@ -515,16 +515,20 @@ deliveryPlanning.get('/', async (c) => {
     eta_arriving_port: string | null; delivery_substatus: string | null;
     // EM-region transit arrival date (migration 0199).
     arrives_em_warehouse_date: string | null;
+    // The latest DO's OWN document date (delivery_orders.do_date) — surfaced as
+    // the planning grid "DO Date" column. From the SAME latest-DO lookup as crew.
+    do_date: string | null;
   };
   const { data: doRowsRaw } = await paginateAll<{
     id: string; do_number: string | null; so_doc_no: string | null; status: string | null;
-    delivery_state: string | null; customer_delivery_date: string | null;
+    delivery_state: string | null; customer_delivery_date: string | null; do_date: string | null;
     time_range: string | null; time_confirmed: boolean | null;
     arrival_at: string | null; departure_at: string | null;
     shipout_date: string | null; customer_delivered_date: string | null;
     eta_arriving_port: string | null; delivery_substatus: string | null;
     arrives_em_warehouse_date: string | null;
     // camelCase aliases (pg driver) for dual-read
+    doDate?: string | null;
     timeRange?: string | null; timeConfirmed?: boolean | null;
     arrivalAt?: string | null; departureAt?: string | null;
     shipoutDate?: string | null; customerDeliveredDate?: string | null;
@@ -532,7 +536,7 @@ deliveryPlanning.get('/', async (c) => {
     arrivesEmWarehouseDate?: string | null;
   }>((from, to) =>
     sb.from('delivery_orders')
-      .select('id, do_number, so_doc_no, status, delivery_state, customer_delivery_date, time_range, time_confirmed, arrival_at, departure_at, shipout_date, customer_delivered_date, eta_arriving_port, delivery_substatus, arrives_em_warehouse_date')
+      .select('id, do_number, so_doc_no, status, delivery_state, customer_delivery_date, do_date, time_range, time_confirmed, arrival_at, departure_at, shipout_date, customer_delivered_date, eta_arriving_port, delivery_substatus, arrives_em_warehouse_date')
       .in('so_doc_no', docNos)
       .range(from, to),
   );
@@ -561,6 +565,7 @@ deliveryPlanning.get('/', async (c) => {
       eta_arriving_port: d.etaArrivingPort ?? d.eta_arriving_port ?? null,
       delivery_substatus: d.deliverySubstatus ?? d.delivery_substatus ?? null,
       arrives_em_warehouse_date: d.arrivesEmWarehouseDate ?? d.arrives_em_warehouse_date ?? null,
+      do_date: d.doDate ?? d.do_date ?? null,
     });
   }
 
@@ -765,6 +770,9 @@ deliveryPlanning.get('/', async (c) => {
       delivery_substatus: doExecByDoc.get(docNo)?.delivery_substatus ?? null,
       // EM-region transit arrival date (migration 0199), from the latest DO.
       arrives_em_warehouse_date: doExecByDoc.get(docNo)?.arrives_em_warehouse_date ?? null,
+      // The latest DO's OWN document date (delivery_orders.do_date), null when
+      // this SO has no (non-DRAFT/CANCELLED) DO yet — drives the "DO Date" column.
+      do_date: doExecByDoc.get(docNo)?.do_date ?? null,
       // stock — stock_remark is the correctly-gated label (never "READY (PARTIAL)"
       // for an acc-only / service-only SO); stock_status mirrors it.
       stock_status: readiness.isFullyReady ? 'READY' : readyToShip ? 'READY (PARTIAL)' : 'PENDING',

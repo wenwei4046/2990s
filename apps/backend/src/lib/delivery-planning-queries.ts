@@ -60,7 +60,14 @@ export type PlanningOrder = {
   local_total_centi: number;
   so_date: string | null;
   processing_date: string | null;
+  /* The customer's ORIGINAL delivery date — never overwritten (migration 0199). */
   customer_delivery_date: string | null;
+  /* Amendment dates (migration 0199): the customer's requested NEW date and the
+     date WE confirmed (the proposed/amended delivery date). effective = amended ??
+     original, what Days Left / OVERDUE actually use. */
+  amend_date_from_customer: string | null;
+  amended_delivery_date: string | null;
+  effective_delivery_date: string | null;
   internal_expected_dd: string | null;
   days_left: number | null;
   /* HC delivery-sheet address columns. */
@@ -82,6 +89,12 @@ export type PlanningOrder = {
   customer_delivered_date: string | null;
   eta_arriving_port: string | null;
   delivery_substatus: string | null;
+  /* EM-region cross-border transit-warehouse arrival date (migration 0199),
+     from the latest DO; null when no DO. */
+  arrives_em_warehouse_date: string | null;
+  /* The latest DO's OWN document date (delivery_orders.do_date); null when this
+     SO has no (non-DRAFT/CANCELLED) DO yet — drives the "DO Date" grid column. */
+  do_date: string | null;
   stock_status: string;
   stock_remark: string;
   is_main_ready: boolean;
@@ -236,5 +249,90 @@ export function useScheduleDelivery() {
         method: 'PATCH', body: JSON.stringify({ scheduleDate, deliveryState }),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['delivery-planning'] }),
+  });
+}
+
+/* ── Convert SO → DO from the Delivery Planning board ──────────────────────────
+   REUSES the existing line-level converter POST /delivery-orders-mfg/from-sos
+   (the variant-carry fix already lives there). That endpoint is LINE-level —
+   it takes picks: [{ soItemId, qty }] and creates ONE DO from those lines,
+   MERGING into one DO when picks span >1 SO. To keep "one DO per Sales Order"
+   semantics here (single + multi-select), we resolve each SO's still-deliverable
+   lines and call from-sos ONCE PER SO (sequential with a small concurrency
+   limit), never one merged call.
+
+   The already-has-DO guard is intrinsic: from-sos only converts the line-level
+   REMAINING (qty − delivered + returned), so an SO with every line fully
+   delivered yields zero deliverable lines → it is reported as `skipped`
+   (already_delivered) and never double-converted. */
+
+type DeliverablePickLine = { soItemId: string; docNo: string; remaining: number };
+
+export type ConvertSoResult = {
+  /** SOs that produced a new DO. */
+  converted: Array<{ docNo: string; doNumber: string }>;
+  /** SOs with nothing left to deliver (no remaining lines) — not converted. */
+  skipped: Array<{ docNo: string; reason: 'already_delivered' }>;
+  /** SOs the endpoint rejected (e.g. sofa no-batch / short-stock / race). */
+  failed: Array<{ docNo: string; message: string }>;
+};
+
+/* Resolve still-deliverable lines for the given SOs, then convert one DO per SO
+   by reusing from-sos. Concurrency capped so a large bulk select doesn't fan out
+   into a burst of Worker subrequests. */
+export function useConvertSosToDo() {
+  const qc = useQueryClient();
+  return useMutation<ConvertSoResult, Error, { docNos: string[] }>({
+    mutationFn: async ({ docNos }) => {
+      const wanted = [...new Set(docNos.filter(Boolean))];
+      const out: ConvertSoResult = { converted: [], skipped: [], failed: [] };
+      if (wanted.length === 0) return out;
+
+      // 1. One batched read of the deliverable (remaining > 0) lines for every
+      //    selected SO, grouped by doc_no.
+      const qs = wanted.map((d) => encodeURIComponent(d)).join(',');
+      const { lines } = await authedFetch<{ lines: DeliverablePickLine[] }>(
+        `/delivery-orders-mfg/deliverable-so-lines?docNos=${qs}`,
+      );
+      const picksByDoc = new Map<string, Array<{ soItemId: string; qty: number }>>();
+      for (const l of lines) {
+        if (!l.soItemId || !(l.remaining > 0)) continue;
+        const arr = picksByDoc.get(l.docNo) ?? [];
+        arr.push({ soItemId: l.soItemId, qty: l.remaining });
+        picksByDoc.set(l.docNo, arr);
+      }
+
+      // 2. SOs with no deliverable lines → already fully delivered (or no lines).
+      for (const docNo of wanted) {
+        if (!picksByDoc.has(docNo)) out.skipped.push({ docNo, reason: 'already_delivered' });
+      }
+
+      // 3. Convert one DO per SO, capped concurrency (4 at a time).
+      const jobs = [...picksByDoc.entries()];
+      const LIMIT = 4;
+      for (let i = 0; i < jobs.length; i += LIMIT) {
+        const batch = jobs.slice(i, i + LIMIT);
+        await Promise.all(batch.map(async ([docNo, picks]) => {
+          try {
+            const res = await authedFetch<{ id: string; doNumber: string }>(
+              `/delivery-orders-mfg/from-sos`,
+              { method: 'POST', body: JSON.stringify({ picks }) },
+            );
+            out.converted.push({ docNo, doNumber: res.doNumber });
+          } catch (e) {
+            out.failed.push({ docNo, message: e instanceof Error ? e.message : String(e) });
+          }
+        }));
+      }
+      return out;
+    },
+    onSuccess: () => {
+      // The new DO(s) + their DO-execution data must appear on the planning rows.
+      qc.invalidateQueries({ queryKey: ['delivery-planning'] });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders', 'deliverable-so-lines'], refetchType: 'all' });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['inventory'] });
+    },
   });
 }
