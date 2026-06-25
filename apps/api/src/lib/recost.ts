@@ -170,7 +170,12 @@ export async function recostFromGrn(sb: any, grnId: string) {
       .in('grn_item_id', giIds);
     const piList = (piRows ?? []) as Array<{ grn_item_id: string | null; qty: number; unit_price_centi: number | null; purchase_invoice_id: string }>;
     const piIds = [...new Set(piList.map((r) => r.purchase_invoice_id).filter(Boolean))];
-    const piCancelled = new Set<string>();
+    /* LEAK GUARD (DRAFT, PI two-state 2026-06-25) — exclude both CANCELLED AND
+       DRAFT PIs from the authoritative-cost aggregate. A DRAFT PI commits no money
+       and is not yet a real bill, so its line price must NEVER become the GRN lot's
+       MYR cost (which would silently flow into DO/SI margins). Only a confirmed
+       POSTED/PARTIALLY_PAID/PAID PI is authoritative. */
+    const piExcluded = new Set<string>();
     /* Landed-cost core (migration 0190) — each PI's OWN exchange_rate (0188). A PI
        line price is in the PI's currency; the AUTHORITATIVE MYR lot cost is that
        price × the PI's rate. Different PIs billing the same GRN can carry
@@ -179,7 +184,8 @@ export async function recostFromGrn(sb: any, grnId: string) {
     if (piIds.length > 0) {
       const { data: pis } = await sb.from('purchase_invoices').select('id, status, exchange_rate').in('id', piIds);
       for (const p of (pis ?? []) as Array<{ id: string; status: string; exchange_rate?: string | number | null }>) {
-        if ((p.status ?? '').toUpperCase() === 'CANCELLED') piCancelled.add(p.id);
+        const st = (p.status ?? '').toUpperCase();
+        if (st === 'CANCELLED' || st === 'DRAFT') piExcluded.add(p.id);
         piRateById.set(p.id, p.exchange_rate ?? 1);
       }
     }
@@ -188,7 +194,7 @@ export async function recostFromGrn(sb: any, grnId: string) {
     // grn_item billed across PIs with different rates resolves correctly.
     const piAgg = new Map<string, { qty: number; amt: number }>();
     for (const r of piList) {
-      if (!r.grn_item_id || piCancelled.has(r.purchase_invoice_id)) continue;
+      if (!r.grn_item_id || piExcluded.has(r.purchase_invoice_id)) continue;
       const a = piAgg.get(r.grn_item_id) ?? { qty: 0, amt: 0 };
       const q = Number(r.qty ?? 0);
       const unitMyr = toMyrSen(Number(r.unit_price_centi ?? 0), piRateById.get(r.purchase_invoice_id) ?? 1);

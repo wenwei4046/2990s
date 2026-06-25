@@ -362,7 +362,12 @@ export const PurchaseInvoiceNew = () => {
 
   const canSave = !!supplierId && lines.length > 0 && lines.every((l) => l.qty > 0);
 
-  const onSave = async () => {
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25, ported from Houzs) — onSave takes
+     an `asDraft` flag. Confirm (asDraft=false, the default) creates the PI then
+     posts it (POSTED — AP/GL + GRN-consume + recost fire on the confirm). Draft
+     (asDraft=true) creates a DRAFT that commits NOTHING and is NOT auto-posted —
+     it can be confirmed later from the detail page. */
+  const onSave = async (asDraft = false) => {
     if (!supplierId) {
       setDialog({ title: 'Pick a supplier', body: isManual
         ? 'Choose a supplier for this manual invoice.'
@@ -386,6 +391,8 @@ export const PurchaseInvoiceNew = () => {
         invoiceDate,
         dueDate:            dueDate || undefined,
         notes:              notes || undefined,
+        // DRAFT/Confirmed two-state — opt-in DRAFT lands the PI uncommitted.
+        asDraft,
         // Multi-currency AP (0188) — send the resolved currency + rate. MYR forces
         // 1 (server enforces too); a blank/invalid foreign rate → 1.
         currency,
@@ -407,7 +414,15 @@ export const PurchaseInvoiceNew = () => {
           variants:       l.variants,
         })),
       });
-      // Auto-post so PI lands in POSTED state (matches PO + GRN behaviour).
+      if (asDraft) {
+        setDialog({
+          title: `Draft PI ${createRes.invoiceNumber} saved`,
+          body: 'Saved as a draft — nothing posted yet. Open it and click Confirm to record the AP liability.',
+          goTo: `/purchase-invoices/${createRes.id}`,
+        });
+        return;
+      }
+      // Confirm — post so PI lands in POSTED state (matches PO + GRN behaviour).
       await post.mutateAsync(createRes.id);
       setDialog({
         title: `PI ${createRes.invoiceNumber} created`,
@@ -439,7 +454,15 @@ export const PurchaseInvoiceNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate(isManual ? '/purchase-invoices' : (grn ? `/grns/${grn.id}` : '/grns'))}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={saving}>
+          {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — "Save as Draft" creates
+              the PI as DRAFT (commits nothing: no AP/GL, no GRN-consume, no recost,
+              not payable, out of AP outstanding/aging until Confirmed on the Detail
+              page). Same validation gate as Create. */}
+          <Button variant="ghost" size="md" onClick={() => onSave(true)} disabled={saving}>
+            <Save {...ICON} />
+            {saving ? 'Saving…' : 'Save as Draft'}
+          </Button>
+          <Button variant="primary" size="md" onClick={() => onSave(false)} disabled={saving}>
             <Save {...ICON} />
             {saving ? 'Saving…' : 'Create Purchase Invoice'}
           </Button>

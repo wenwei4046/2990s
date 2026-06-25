@@ -30,7 +30,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Plus, Printer, Save, Ban, ChevronDown,
+  ArrowLeft, FileText, Pencil, Plus, Printer, Save, Ban, ChevronDown, CheckCircle2,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
@@ -41,6 +41,7 @@ import {
   useUpdatePurchaseInvoiceItem,
   useDeletePurchaseInvoiceItem,
   useCancelPurchaseInvoice,
+  usePostPurchaseInvoice,
 } from '../lib/flow-queries';
 import {
   useSuppliers, useSupplierDetail,
@@ -154,6 +155,7 @@ export const PurchaseInvoiceDetail = () => {
   const askConfirm = useConfirm();
   const notify = useNotify();
   const cancel = useCancelPurchaseInvoice();
+  const confirmPi = usePostPurchaseInvoice();
 
   const pi = detail.data?.purchaseInvoice ?? null;
   /* Memoised so the edit-mode seed + cost-recompute effects don't re-fire on
@@ -213,6 +215,10 @@ export const PurchaseInvoiceDetail = () => {
   // payment recorded (paid_centi > 0) OR is CANCELLED. POSTED with zero payment
   // stays editable.
   const isLocked = pi ? (pi.status === 'CANCELLED' || (pi.paid_centi ?? 0) > 0) : true;
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT PI is uncommitted: it
+     posts NO AP/GL, consumes NO GRN invoiced qty, runs no recost, and can't take a
+     payment until Confirm flips it to POSTED. Lines stay editable on a DRAFT. */
+  const isDraft = pi ? pi.status === 'DRAFT' : false;
 
   /* If the PI locks while we're in Edit mode (e.g. cancelled in another tab),
      drop back to View + discard the draft. */
@@ -479,6 +485,20 @@ export const PurchaseInvoiceDetail = () => {
     }
   };
 
+  /* Confirm a DRAFT PI → POSTED. This is the commit: the server consumes the GRN
+     lines, posts the AP/GL entry (Dr Inventory / Cr Payables) + re-costs the lots
+     ONCE on this transition. Mirrors the SI/GRN/PO Confirm action. */
+  const handleConfirmDraft = async () => {
+    if (!(await askConfirm({
+      title: `Confirm invoice ${pi.invoice_number}?`,
+      body: 'This posts the invoice — it records the AP liability (Dr Inventory / Cr Payables), consumes the source GRN, and lets you record payments. You can still cancel it afterwards.',
+      confirmLabel: 'Confirm Invoice',
+    }))) return;
+    confirmPi.mutate(pi.id, {
+      onError: (err) => notify({ title: 'Confirm failed', body: `${err instanceof Error ? err.message : String(err)}`, tone: 'error' }),
+    });
+  };
+
   const handlePrint = () => {
     // PI PDF (AutoCount layout) — mirrors PO/GRN's handlePrint wiring its own
     // purchase-invoice-pdf helper.
@@ -489,6 +509,14 @@ export const PurchaseInvoiceDetail = () => {
 
   return (
     <div className={styles.page}>
+      {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — a clear banner that this
+          invoice is uncommitted: no AP/GL posted, no GRN consumed, no payments yet. */}
+      {isDraft && (
+        <div className={styles.bannerWarn} style={{ background: 'var(--c-cream)', border: '1px solid var(--line)', color: 'var(--fg-muted)' }}>
+          This invoice is a <strong>Draft</strong> — no payables have been recorded, the source GRN is untouched, and it can't take a payment yet.
+          Click <strong>Confirm Invoice</strong> to post it.
+        </div>
+      )}
       {/* ── Header ──────────────────────────────────────────────── */}
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
@@ -517,6 +545,15 @@ export const PurchaseInvoiceDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
+          {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — Confirm commits the
+              invoice (server posts AP/GL + consumes the GRN + re-costs once). Shown
+              only on a DRAFT in view mode. Mirrors the SI/GRN/PO Confirm. */}
+          {isDraft && !isEditing && (
+            <Button variant="primary" size="md" onClick={handleConfirmDraft} disabled={confirmPi.isPending}>
+              <CheckCircle2 {...ICON} />
+              <span>{confirmPi.isPending ? 'Confirming…' : 'Confirm Invoice'}</span>
+            </Button>
+          )}
           {/* Cancel — only when the PI is not locked (no payment recorded, not
               already cancelled). */}
           {!isLocked && (

@@ -26,9 +26,11 @@ import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-// purchase_invoice_status enum: POSTED / PARTIALLY_PAID / PAID / CANCELLED.
-// Colours + labels come from the canonical lib/status-pill map via <StatusPill>.
-const STATUS_CHIPS = ['all', 'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED'] as const;
+// purchase_invoice_status enum: DRAFT / POSTED / PARTIALLY_PAID / PAID / CANCELLED.
+// DRAFT (Owner 2026-06-25, two-state) is uncommitted — visible-but-distinct (grey
+// pill), filterable here. Colours + labels come from the canonical lib/status-pill
+// map via <StatusPill>.
+const STATUS_CHIPS = ['all', 'DRAFT', 'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED'] as const;
 
 const fmtMoney = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

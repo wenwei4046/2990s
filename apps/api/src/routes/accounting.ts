@@ -354,6 +354,20 @@ export async function postPiAccounting(sb: any, invoiceNumber: string): Promise<
 accounting.post('/post/pi/:invoiceNumber', async (c) => {
   const invoiceNumber = c.req.param('invoiceNumber');
   const sb = c.get('supabase');
+
+  /* LEAK GUARD (DRAFT, PI two-state 2026-06-25) — a DRAFT PI has committed no
+     AP/GL; the manual re-post endpoint must refuse it, or an operator could post
+     a draft's payables out-of-band (the PI route's confirm transition is the ONLY
+     path that should post a draft). postPiAccounting does not check status, so the
+     guard lives here at the caller — mirrors the /post/si DRAFT guard. */
+  {
+    const { data: pi } = await sb.from('purchase_invoices').select('status').eq('invoice_number', invoiceNumber).maybeSingle();
+    if (!pi) return c.json({ error: 'invoice_not_found' }, 404);
+    if ((pi as { status?: string }).status === 'DRAFT') {
+      return c.json({ error: 'not_postable', message: 'PI is a draft — confirm it (DRAFT → Posted) before posting payables.' }, 409);
+    }
+  }
+
   const r = await postPiAccounting(sb, invoiceNumber);
   if (r.ok && r.status === 'already_posted') {
     return c.json({ error: 'already_posted', existingJe: { id: r.jeId, je_no: r.jeNo } }, 409);
@@ -565,9 +579,15 @@ accounting.get('/ar-aging', async (c) => {
 
 accounting.get('/ap-aging', async (c) => {
   const sb = c.get('supabase');
+  /* LEAK GUARD (DRAFT, PI two-state 2026-06-25) — v_ap_aging filters CANCELLED/VOID
+     but NOT DRAFT (the view predates the PI two-state). A DRAFT PI has posted no
+     AP yet, so it must never appear in the aging buckets; the view exposes p.status
+     (migration 0052), so filter DRAFT out here at the route (migrations are frozen).
+     Mirrors the /ar-aging DRAFT fix. */
   const { data, error } = await sb
     .from('v_ap_aging')
     .select('*')
+    .neq('status', 'DRAFT')
     .order('days_overdue', { ascending: false });
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   return c.json({ apAging: data ?? [] });

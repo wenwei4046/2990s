@@ -70,6 +70,11 @@ for (const [slug, { view, dateCol }] of Object.entries(MODULES)) {
          excludes DELIVERED/INVOICED/CLOSED/CANCELLED → it would mark a DRAFT as
          outstanding. The view exposes so.status, so filter DRAFT out here. */
       if (slug === 'so') q = q.neq('status', 'DRAFT');
+      /* LEAK GUARD (DRAFT, PI two-state 2026-06-25) — a DRAFT PI has posted no AP,
+         but v_pi_outstanding's is_outstanding CASE only excludes PAID/CANCELLED →
+         a DRAFT with total>paid would read outstanding. The view exposes pi.status
+         (0059_outstanding_views.sql), so filter DRAFT out here. */
+      if (slug === 'pi') q = q.neq('status', 'DRAFT');
       if (from) q = q.gte(dateCol, from);
       if (to)   q = q.lte(dateCol, to);
       return q.range(pFrom, pTo);
@@ -103,6 +108,8 @@ outstanding.get('/summary', async (c) => {
       if (slug === 'si') q = q.neq('status', 'DRAFT');
       // LEAK GUARD (DRAFT) — keep DRAFT SOs out of the SO outstanding totals.
       if (slug === 'so') q = q.neq('status', 'DRAFT');
+      // LEAK GUARD (DRAFT) — keep DRAFT PIs out of the AP outstanding totals.
+      if (slug === 'pi') q = q.neq('status', 'DRAFT');
       if (from) q = q.gte(dateCol, from);
       if (to)   q = q.lte(dateCol, to);
       return q.range(pFrom, pTo);

@@ -49,6 +49,10 @@ const GRN: Record<string, Entry> = {
   CANCELLED: { label: 'Cancelled', tone: 'danger' },
 };
 const PI: Record<string, Entry> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT PI is uncommitted: it
+  // posts NO AP/GL, consumes NO GRN invoiced qty, and isn't payable until Confirm
+  // flips it to POSTED. Neutral/grey, mirroring the SO/DO/SI/PO/GRN pill.
+  DRAFT:          { label: 'Draft',          tone: 'neutral' },
   POSTED:         { label: 'Confirmed',      tone: 'info' },
   PARTIALLY_PAID: { label: 'Partially Paid', tone: 'progress' },
   PAID:           { label: 'Paid',           tone: 'success' },
