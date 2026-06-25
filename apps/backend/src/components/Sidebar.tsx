@@ -31,8 +31,6 @@ import {
   Wallet,
   KeyRound,
   Coins,
-  HardHat,
-  Container,
   CalendarClock,
   Gauge,
 } from 'lucide-react';
@@ -184,11 +182,10 @@ export const Sidebar = () => {
         // Delivery Planning board (Stage 4) — the planning view sits above the
         // fleet masters it dispatches.
         { to: '/delivery-planning', icon: <CalendarClock {...ICON_PROPS} />, label: 'Delivery Planning' },
-        // TMS fleet masters (Driver · Helper · Lorry), migration 0195.
-        { to: '/drivers', icon: <Truck {...ICON_PROPS} />, label: 'Drivers' },
-        { to: '/helpers', icon: <HardHat {...ICON_PROPS} />, label: 'Helpers' },
-        { to: '/lorries', icon: <Container {...ICON_PROPS} />, label: 'Lorries' },
-        // Stage 5B (final) — the fleet performance dashboard.
+        // Consolidated "Driver & Helper" / Fleet portal — Driver · Helper ·
+        // Lorry masters on one page (migration 0195).
+        { to: '/fleet', icon: <Truck {...ICON_PROPS} />, label: 'Driver & Helper' },
+        // Stage 5B (final) — the fleet performance dashboard (kept separate).
         { to: '/lorry-capacity', icon: <Gauge {...ICON_PROPS} />, label: 'Lorry Capacity' },
       ],
     },

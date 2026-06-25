@@ -101,10 +101,12 @@ const StockTransferDetail = lazyRetry(() => import('./pages/StockTransferDetail'
 const StockTakes = lazyRetry(() => import('./pages/StockTakes').then(m => ({ default: m.StockTakes })));
 const StockTakeNew = lazyRetry(() => import('./pages/StockTakeNew').then(m => ({ default: m.StockTakeNew })));
 const StockTakeDetail = lazyRetry(() => import('./pages/StockTakeDetail').then(m => ({ default: m.StockTakeDetail })));
-const Drivers = lazyRetry(() => import('./pages/Drivers').then(m => ({ default: m.Drivers })));
-// TMS fleet masters (migration 0195) — Helper + Lorry, alongside Drivers.
-const Helpers = lazyRetry(() => import('./pages/Helpers').then(m => ({ default: m.Helpers })));
-const Lorries = lazyRetry(() => import('./pages/Lorries').then(m => ({ default: m.Lorries })));
+// Fleet — consolidated "Driver & Helper" portal (Drivers · Helpers · Lorries on
+// ONE page). Replaces the three former standalone sidebar pages; the old
+// /drivers /helpers /lorries routes now redirect here (see below). The
+// standalone Drivers/Helpers/Lorries page modules are left in place as dead
+// code (no longer routed).
+const Fleet = lazyRetry(() => import('./pages/Fleet').then(m => ({ default: m.Fleet })));
 // Delivery Planning board (Stage 4) — the 4-state × region planning view.
 const DeliveryPlanning = lazyRetry(() => import('./pages/DeliveryPlanning').then(m => ({ default: m.DeliveryPlanning })));
 // Lorry Capacity dashboard (Stage 5B, final) — fleet performance metrics.
@@ -207,10 +209,13 @@ export const router = createBrowserRouter([
       // Rack/bin management — distinct from /warehouses (which is the
       // warehouse master). Sidebar entry added by the parent session.
       { path: 'warehouse', element: <Warehouse /> },
-      { path: 'drivers', element: <Drivers /> },
-      // TMS fleet masters (migration 0195).
-      { path: 'helpers', element: <Helpers /> },
-      { path: 'lorries', element: <Lorries /> },
+      // Consolidated "Driver & Helper" / Fleet portal — Drivers · Helpers ·
+      // Lorries on ONE page (migration 0195 masters). The three former routes
+      // redirect here so old deep links + bookmarks keep working.
+      { path: 'fleet', element: <Fleet /> },
+      { path: 'drivers', element: <Navigate to="/fleet" replace /> },
+      { path: 'helpers', element: <Navigate to="/fleet" replace /> },
+      { path: 'lorries', element: <Navigate to="/fleet" replace /> },
       // Delivery Planning board (Stage 4).
       { path: 'delivery-planning', element: <DeliveryPlanning /> },
       // Lorry Capacity dashboard (Stage 5B, final).

@@ -42,12 +42,11 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Purchase Invoices', path: '/purchase-invoices', group: 'Procurement', keywords: 'pi bill' },
   { label: 'Purchase Returns', path: '/purchase-returns', group: 'Procurement', keywords: 'pr return' },
 
-  // Transportation — Delivery Planning board (Stage 4) + TMS fleet masters
-  // (Driver · Helper · Lorry), migration 0195.
+  // Transportation — Delivery Planning board (Stage 4) + the consolidated
+  // "Driver & Helper" / Fleet portal (Driver · Helper · Lorry masters on one
+  // page, migration 0195) + the standalone Lorry Capacity dashboard.
   { label: 'Delivery Planning', path: '/delivery-planning', group: 'Transportation', keywords: 'delivery plan schedule route trip overdue pending region tms dispatch' },
-  { label: 'Drivers', path: '/drivers', group: 'Transportation', keywords: 'driver fleet tms crew' },
-  { label: 'Helpers', path: '/helpers', group: 'Transportation', keywords: 'helper fleet tms crew loader' },
-  { label: 'Lorries', path: '/lorries', group: 'Transportation', keywords: 'lorry truck van fleet tms vehicle outsource' },
+  { label: 'Driver & Helper', path: '/fleet', group: 'Transportation', keywords: 'fleet driver helper lorry truck van crew loader vehicle tms outsource in-house master' },
   { label: 'Lorry Capacity', path: '/lorry-capacity', group: 'Transportation', keywords: 'lorry capacity utilisation utilization performance fleet trips revenue dashboard repair days kpi tms' },
 
   // Warehouse — master first (create a warehouse / set Transit here), then ops.
