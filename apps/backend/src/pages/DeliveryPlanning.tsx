@@ -23,10 +23,12 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Split } from 'lucide-react';
-import { fmtCenti, fmtDateOrDash, fmtDateTime } from '@2990s/shared';
+import { fmtCenti, fmtDateOrDash, fmtDateTime, buildVariantSummary } from '@2990s/shared';
 import { formatPhone } from '@2990s/shared/phone';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { DeliveryFieldsDrawer } from '../components/DeliveryFieldsDrawer';
+import { badgeFor } from '../lib/category-badges';
+import { useMfgSalesOrderDetail } from '../lib/flow-queries';
 import {
   useDeliveryPlanning,
   DELIVERY_STATES,
@@ -111,6 +113,134 @@ function DaysLeftCell({ days }: { days: number | null }) {
   const label = days < 0 ? `${Math.abs(days)}d overdue` : days === 0 ? 'today' : `${days}d`;
   return <span className={cls}>{label}</span>;
 }
+
+/* ── SO line-item drill-down (parity with the Sales Order list) ───────────────
+   Each planning row expands (▼ caret on the left, added by DataGrid's
+   `expandable` API) to show that SO's line items — same four columns the SO list
+   drill-down shows: Group · Item Code · Description · Description 2.
+
+   Items are sourced EXACTLY the way MfgSalesOrdersList sources them: the shared
+   `useMfgSalesOrderDetail(docNo)` hook (flow-queries.ts), lazy-fetched per row on
+   expand and TanStack-cached by doc_no, so re-expanding the same SO is instant
+   and no new endpoint is introduced. The planning row already carries
+   `so_doc_no`, which keys the fetch.
+
+   Rendering mirrors the SO list: `CategoryPill` via the shared `badgeFor`
+   palette, `buildVariantSummary` for the variant ("Description 2") cell, and the
+   same embedded `DataGrid` chrome so the two pages read identically. */
+type DrillItem = {
+  id: string;
+  /* snake_case off the SO detail REST response (see SoItem in
+     MfgSalesOrdersList) — the API never transforms these. */
+  item_code: string | null;
+  item_group: string | null;
+  description: string | null;
+  variants: Record<string, unknown> | null;
+  cancelled: boolean | null;
+};
+
+/* Inline category pill — same shape + shared `badgeFor` palette as the SO list
+   drill-down's CategoryPill so the colours stay in lockstep across both pages. */
+const CategoryPill = ({ group }: { group: string | null | undefined }) => {
+  const spec = badgeFor(group);
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center',
+      padding: '1px 8px', borderRadius: 999,
+      background: spec.bg, color: spec.fg,
+      fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+      fontWeight: 700, letterSpacing: '0.06em',
+      textTransform: 'uppercase', lineHeight: 1.4, whiteSpace: 'nowrap',
+    }}>
+      {spec.label}
+    </span>
+  );
+};
+
+/* Four drill-down columns — Group · Item Code · Description · Description 2.
+   Matches the SO list's accessors/markup verbatim. Shared layout key so the
+   operator's column prefs persist across every SO they expand. */
+const DRILLDOWN_COLUMNS: DataGridColumn<DrillItem>[] = [
+  {
+    key: 'group', label: 'Group', width: 90, groupable: true,
+    accessor: (it) => <CategoryPill group={it.item_group} />,
+    searchValue: (it) => it.item_group ?? '',
+    groupValue: (it) => it.item_group ?? '(none)',
+    sortFn: (a, b) => (a.item_group ?? '').localeCompare(b.item_group ?? ''),
+  },
+  {
+    key: 'item_code', label: 'Item Code', width: 130,
+    accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{it.item_code ?? '—'}</span>,
+    searchValue: (it) => it.item_code ?? '',
+    sortFn: (a, b) => (a.item_code ?? '').localeCompare(b.item_code ?? ''),
+  },
+  {
+    key: 'description', label: 'Description', width: 240, minWidth: 180,
+    accessor: (it) => {
+      const manual = (it.description ?? '').trim();
+      if (manual) return <div>{manual}</div>;
+      const summary = buildVariantSummary(it.item_group, it.variants);
+      return summary ? <div>{summary}</div> : '—';
+    },
+    searchValue: (it) => `${it.description ?? ''} ${buildVariantSummary(it.item_group, it.variants)}`.trim(),
+  },
+  {
+    key: 'description2', label: 'Description 2', width: 220, minWidth: 160,
+    accessor: (it) => {
+      const summary = buildVariantSummary(it.item_group, it.variants);
+      return summary ? <div>{summary}</div> : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+    },
+    searchValue: (it) => buildVariantSummary(it.item_group, it.variants),
+  },
+];
+
+const PlanningExpandedLines = ({ docNo }: { docNo: string }) => {
+  /* SAME hook the SO list uses (flow-queries.ts) — lazy on expand, cached by
+     doc_no. No new endpoint. */
+  const q = useMfgSalesOrderDetail(docNo);
+  if (q.isLoading) {
+    return (
+      <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+        Loading lines for {docNo}…
+      </div>
+    );
+  }
+  if (q.error) {
+    return (
+      <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--c-festive-b, #B8331F)' }}>
+        Failed to load lines: {q.error instanceof Error ? q.error.message : String(q.error)}
+      </div>
+    );
+  }
+  const allItems = (q.data?.items ?? []) as DrillItem[];
+  /* Filter cancelled lines client-side — the detail endpoint returns them too
+     (matches the SO list drill-down). */
+  const items = allItems.filter((it) => !it.cancelled);
+
+  if (items.length === 0) {
+    return (
+      <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+        No line items.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      padding: 'var(--space-2) var(--space-3) var(--space-2) 40px',
+      background: 'var(--c-cream)',
+    }}>
+      <DataGrid<DrillItem>
+        rows={items}
+        columns={DRILLDOWN_COLUMNS}
+        storageKey="delivery-planning-drilldown-grid.v1"
+        rowKey={(it) => it.id}
+        embedded
+        groupBanner={false}
+      />
+    </div>
+  );
+};
 
 export const DeliveryPlanning = () => {
   const navigate = useNavigate();
@@ -510,6 +640,10 @@ export const DeliveryPlanning = () => {
         isLoading={isLoading}
         emptyMessage="No orders need delivering in this view."
         onRowDoubleClick={(row) => navigate('/mfg-sales-orders/' + row.so_doc_no)}
+        expandable={{
+          renderExpansion: (row) => <PlanningExpandedLines docNo={row.so_doc_no} />,
+          rowExpansionKey: (row) => row.so_doc_no,
+        }}
         rowStyle={(o) => (o.region === 'SG' ? { boxShadow: 'inset 3px 0 0 var(--c-secondary-a)' } : undefined)}
         contextMenu={(row) => [
           { label: 'Edit HC fields…', onClick: () => setEditing(row) },
