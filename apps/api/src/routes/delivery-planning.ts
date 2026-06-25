@@ -340,6 +340,8 @@ deliveryPlanning.get('/', async (c) => {
     // dual-read camelCase below.
     amend_date_from_customer: string | null; amended_delivery_date: string | null;
     amendDateFromCustomer?: string | null; amendedDeliveryDate?: string | null;
+    // HC "Amend Client Date Reason" (migration 0201). dual-read camelCase below.
+    amend_reason: string | null; amendReason?: string | null;
     // HC SO-context raw-data fields (migration 0197). dual-read camelCase below.
     possession_date: string | null; house_type: string | null;
     replacement_disposal: string | null; referral: string | null;
@@ -348,7 +350,7 @@ deliveryPlanning.get('/', async (c) => {
   };
   const { data: soRowsRaw, error: soErr } = await paginateAll<SoHeaderRow>((from, to) =>
     sb.from('mfg_sales_orders')
-      .select('doc_no, debtor_code, debtor_name, phone, branding, status, delivery_state, customer_state, customer_country, customer_delivery_date, amend_date_from_customer, amended_delivery_date, internal_expected_dd, processing_date, so_date, address1, address2, postcode, building_type, local_total_centi, balance_centi, possession_date, house_type, replacement_disposal, referral')
+      .select('doc_no, debtor_code, debtor_name, phone, branding, status, delivery_state, customer_state, customer_country, customer_delivery_date, amend_date_from_customer, amended_delivery_date, amend_reason, internal_expected_dd, processing_date, so_date, address1, address2, postcode, building_type, local_total_centi, balance_centi, possession_date, house_type, replacement_disposal, referral')
       .neq('status', 'DRAFT')
       .neq('status', 'CANCELLED')
       .order('customer_delivery_date', { ascending: true, nullsFirst: false })
@@ -745,6 +747,9 @@ deliveryPlanning.get('/', async (c) => {
       // the date WE confirmed. The Original column above is unchanged.
       amend_date_from_customer: amendDateFromCustomer,
       amended_delivery_date: amendedDD,
+      // HC "Amend Client Date Reason" (migration 0201) — paired with the amend
+      // dates. dual-read camelCase.
+      amend_reason: r.amendReason ?? r.amend_reason ?? null,
       // EFFECTIVE date (amended ?? original) — what the countdown actually uses.
       effective_delivery_date: effectiveDD,
       internal_expected_dd: internalDD,

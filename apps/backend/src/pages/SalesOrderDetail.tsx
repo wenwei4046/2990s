@@ -44,10 +44,13 @@ import {
   useSalesOrderAuditLog,
   useSalesOrderPayments,
   useUploadSoItemPhoto,
+  useMfgDeliveryOrders,
+  useMfgDeliveryOrderDetail,
   type DebtorSuggestion,
   type SoAuditEntry,
   type SoAuditFieldChange,
 } from '../lib/flow-queries';
+import type { DoCrewRow } from '../lib/crew-queries';
 import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
 import { PaymentsTable } from '../components/PaymentsTable';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
@@ -241,6 +244,13 @@ type SoHeader = {
   hub_id: string | null;
   hub_name: string | null;
   customer_delivery_date: string | null;
+  /* Delivery-date amendment columns (migration 0199) + reason (migration 0201).
+     The ORIGINAL customer_delivery_date above is never overwritten; these carry
+     the customer's requested new date, the date WE confirmed, and WHY it changed.
+     Editable here on the SO form (the owning doc); mirrored read-only on the DO. */
+  amend_date_from_customer: string | null;
+  amended_delivery_date: string | null;
+  amend_reason: string | null;
   internal_expected_dd: string | null;
   /* POS "Proceed" timestamp (migration 0110). Auto-stamped server-side when the
      SO first enters IN_PRODUCTION (the POS "Proceed" action). Read-only here —
@@ -1084,6 +1094,13 @@ export const SalesOrderDetail = () => {
         onDeliveryDateChange={cascadeDeliveryDateToLines}
       />
 
+      {/* ── Delivery (DO) status — READ-ONLY mirror ──────────────────
+          The interconnected view: this SO's linked Delivery Order's
+          execution data (crew, times, ship/arrival dates, substatus),
+          surfaced read-only so opening the SO shows the full delivery
+          picture. The real edit lives on the DO / Delivery Planning. */}
+      <DoStatusMirrorCard soDocNo={header.doc_no} />
+
       {/* PR #140 — Commander 2026-05-26: "这个 multi address、customer PO
           这些是什么？" The Multi-Address · Customer PO · Schedule card was
           a HOOKKA leftover (ship-to / bill-to / install-to / customer PO
@@ -1579,6 +1596,11 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     emergencyContactRelationship: h.emergency_contact_relationship ?? '',
     processingDate: h.internal_expected_dd ?? '',
     customerDeliveryDate: h.customer_delivery_date ?? '',
+    /* Delivery-date amendment fields (migration 0199 + 0201). Dual-read camelCase
+       — the pg driver camelCases result columns. */
+    amendDateFromCustomer: h.amend_date_from_customer ?? (h as Record<string, unknown>).amendDateFromCustomer as string ?? '',
+    amendedDeliveryDate:   h.amended_delivery_date ?? (h as Record<string, unknown>).amendedDeliveryDate as string ?? '',
+    amendReason:           h.amend_reason ?? (h as Record<string, unknown>).amendReason as string ?? '',
     note: h.note ?? '',
     /* Commander 2026-05-27 cascade — seeded from the persisted value so we
        don't clobber a manually-entered location on first paint. The cascade
@@ -1730,6 +1752,11 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
        是 Hookka 用的"). targetDate field dropped. */
     internalExpectedDd: form.processingDate || null,
     customerDeliveryDate: form.customerDeliveryDate || null,
+    /* Delivery-date amendment fields (migration 0199 + 0201) — the ORIGINAL
+       customerDeliveryDate above is never overwritten; these record the change. */
+    amendDateFromCustomer: form.amendDateFromCustomer || null,
+    amendedDeliveryDate:   form.amendedDeliveryDate || null,
+    amendReason:           form.amendReason || null,
     note: form.note,
     /* Commander 2026-05-27 (Fix 5) — persist the auto-resolved sales location
        so subsequent edits don't lose it. Empty string → null so we clear the
@@ -2015,6 +2042,31 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             {/* Proceed Date field removed per request 2026-06-05 — the POS still
                 stamps proceeded_at server-side; it's just no longer surfaced here. */}
+            {/* ── Delivery-date amendment (migration 0199 + 0201) ───────────────
+                The ORIGINAL Delivery Date above is never overwritten; these
+                capture the customer's requested NEW date, the date WE confirm,
+                and the HC "Amend Client Date Reason" paired with them. These are
+                also writable from the Delivery Planning amend flow; mirrored
+                read-only on the linked DO. */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Amend Date (from Customer)</span>
+              <DateField className={styles.fieldInput} fullWidth value={form.amendDateFromCustomer ?? ''}
+                disabled={inputsDisabled}
+                onChange={(iso) => set('amendDateFromCustomer', iso)} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Amended Delivery Date</span>
+              <DateField className={styles.fieldInput} fullWidth value={form.amendedDeliveryDate ?? ''}
+                disabled={inputsDisabled}
+                onChange={(iso) => set('amendedDeliveryDate', iso)} />
+            </label>
+            <label className={styles.field} style={{ gridColumn: 'span 2' }}>
+              <span className={styles.fieldLabel}>Amend Reason</span>
+              <input className={styles.fieldInput} value={form.amendReason}
+                disabled={inputsDisabled}
+                placeholder="Why the client delivery date was amended"
+                onChange={(e) => set('amendReason', e.target.value)} />
+            </label>
             {/* ── HC delivery-sheet SO-context fields (migration 0197) ──────────
                 Possession date + house type (dropdown), replacement disposal,
                 referral. Also editable from the Delivery Planning "Edit HC
@@ -2224,6 +2276,110 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
 });
 CustomerCardInner.displayName = 'CustomerCardInner';
 const CustomerCard = memo(CustomerCardInner) as typeof CustomerCardInner;
+
+/* ════════════════════════════════════════════════════════════════════════
+   Delivery (DO) status — READ-ONLY mirror of the linked Delivery Order
+   ════════════════════════════════════════════════════════════════════════
+   The SO ⇄ DO interconnection (owner: "SO 跟 DO 资料互通"): opening the SO
+   surfaces the linked DO's execution data so you see the full delivery
+   picture from either doc. The DO carries `so_doc_no`, so we find this SO's
+   DO via the DO list (filter by so_doc_no) → then load the DO detail (which
+   returns the per-DO crew + the HC execution HEADER fields). REUSES the
+   existing useMfgDeliveryOrders + useMfgDeliveryOrderDetail hooks — no new
+   endpoint. READ-ONLY: every field below is a display span; the real edit
+   lives on the Delivery Order / Delivery Planning. */
+const DO_MIRROR_VALUE_STYLE: CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', minHeight: 26,
+  color: 'var(--fg-muted)',
+};
+const DoMirrorValue = ({ label, value, span }: { label: string; value: string; span?: number }) => (
+  <div className={styles.field} style={span ? { gridColumn: `span ${span}` } : undefined}>
+    <span className={styles.fieldLabel}>{label}</span>
+    <span className={styles.fieldInput} style={DO_MIRROR_VALUE_STYLE}>{value || '—'}</span>
+  </div>
+);
+
+const DoStatusMirrorCard = ({ soDocNo }: { soDocNo: string }) => {
+  /* DO list → the DO(s) for this SO. The list HEADER already carries do_number,
+     so_doc_no, do_date + the HC execution fields; we pick the latest (by do_date
+     then created_at) so a re-cut SO surfaces its current DO. */
+  const dosQ = useMfgDeliveryOrders();
+  const linkedDo = useMemo(() => {
+    const rows = (dosQ.data?.deliveryOrders as Array<Record<string, unknown>> | undefined) ?? [];
+    const mine = rows
+      .filter((d) => (d.so_doc_no ?? (d as { soDocNo?: string }).soDocNo) === soDocNo)
+      .filter((d) => (d.status ?? '') !== 'CANCELLED');
+    if (mine.length === 0) return null;
+    mine.sort((a, b) =>
+      String((b.do_date ?? b.created_at) ?? '').localeCompare(String((a.do_date ?? a.created_at) ?? '')));
+    return mine[0] ?? null;
+  }, [dosQ.data, soDocNo]);
+
+  const doId = (linkedDo?.id as string | undefined) ?? null;
+  /* DO detail — pulls the per-DO crew (driver/helper/lorry) that the list HEADER
+     doesn't carry. The execution fields come from the detail too (same HEADER). */
+  const doDetailQ = useMfgDeliveryOrderDetail(doId);
+  const doHeader = (doDetailQ.data?.deliveryOrder as Record<string, unknown> | undefined) ?? linkedDo ?? null;
+  const crew = (doHeader?.crew as DoCrewRow | null | undefined) ?? null;
+
+  /* Dual-read camelCase (pg driver camelCases result columns). */
+  const g = (snake: string, camel: string): string => {
+    const v = (doHeader?.[snake] ?? doHeader?.[camel]) as unknown;
+    return v == null ? '' : String(v);
+  };
+
+  const crewLine = crew
+    ? [crew.driver_1_name, crew.driver_2_name].filter(Boolean).join(' / ') || '—'
+    : (g('driver_name', 'driverName') || '—');
+  const helperLine = crew
+    ? [crew.helper_1_name, crew.helper_2_name].filter(Boolean).join(' / ') || '—'
+    : '—';
+  const lorryLine = crew
+    ? (crew.lorry_plate || '—')
+    : (g('vehicle', 'vehicle') || '—');
+
+  return (
+    <section className={styles.card}>
+      <header className={styles.cardHeader}>
+        <h2 className={styles.cardTitle}>Delivery (DO) status</h2>
+        <span style={EMERGENCY_HEADER_NOTE_STYLE}>
+          Read-only — edit on the Delivery Order / Delivery Planning
+        </span>
+      </header>
+      <div className={styles.cardBody}>
+        {!linkedDo ? (
+          <p className={styles.emptyRow}>No delivery order yet.</p>
+        ) : (
+          <div className={styles.formGrid4}>
+            <DoMirrorValue label="DO No" value={g('do_number', 'doNumber')} />
+            <DoMirrorValue label="DO Date" value={fmtDateOrDash(g('do_date', 'doDate') || null)} />
+            <DoMirrorValue label="Driver" value={crewLine} />
+            <DoMirrorValue label="Helper" value={helperLine} />
+            <DoMirrorValue label="Lorry" value={lorryLine} />
+            <DoMirrorValue label="Time Range" value={g('time_range', 'timeRange')} />
+            <DoMirrorValue
+              label="Time Confirmed"
+              value={(() => {
+                const v = (doHeader?.time_confirmed ?? doHeader?.timeConfirmed) as unknown;
+                return v == null ? '—' : v ? 'Yes' : 'No';
+              })()} />
+            <DoMirrorValue label="Substatus" value={g('delivery_substatus', 'deliverySubstatus')} />
+            <DoMirrorValue label="Arrival At" value={(() => { const v = g('arrival_at', 'arrivalAt'); return v ? fmtDateTime(v) : '—'; })()} />
+            <DoMirrorValue label="Departure At" value={(() => { const v = g('departure_at', 'departureAt'); return v ? fmtDateTime(v) : '—'; })()} />
+            <DoMirrorValue label="Shipout Date" value={fmtDateOrDash(g('shipout_date', 'shipoutDate') || null)} />
+            <DoMirrorValue
+              label="Customer Delivered"
+              value={fmtDateOrDash(g('customer_delivered_date', 'customerDeliveredDate') || null)} />
+            <DoMirrorValue label="ETA Arriving Port" value={fmtDateOrDash(g('eta_arriving_port', 'etaArrivingPort') || null)} />
+            <DoMirrorValue
+              label="Arrives EM Warehouse"
+              value={fmtDateOrDash(g('arrives_em_warehouse_date', 'arrivesEmWarehouseDate') || null)} />
+          </div>
+        )}
+      </div>
+    </section>
+  );
+};
 
 /* ════════════════════════════════════════════════════════════════════════
    Variants summary pills (for line items table)

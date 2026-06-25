@@ -39,6 +39,7 @@ import {
   useAddDeliveryOrderPayment,
   useDeleteDeliveryOrderPayment,
   useDeliverableSoLinesForDoc,
+  useMfgSalesOrderDetail,
   type DeliverableSoLine,
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
@@ -661,6 +662,14 @@ export const DeliveryOrderDetail = () => {
         isEditing={isEditing}
       />
 
+      {/* ── Sales Order info — READ-ONLY mirror ──────────────────────
+          The interconnected view (owner: "SO 跟 DO 资料互通"): this DO's
+          parent SO context (delivery dates incl. the original/amend trio,
+          possession/house/replacement/referral, amend reason, address),
+          surfaced read-only so opening the DO shows the full picture. The
+          real edit lives on the Sales Order. */}
+      {soDocNo && <SoInfoMirrorCard soDocNo={soDocNo} />}
+
       {/* ── Delivery crew (2 drivers + 2 helpers + 1 lorry) ── */}
       <DeliveryCrewCard doId={header.id} crew={header.crew ?? null} locked={isLocked} />
 
@@ -1191,6 +1200,77 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
 });
 CustomerCardInner.displayName = 'CustomerCardInner';
 const CustomerCard = memo(CustomerCardInner) as typeof CustomerCardInner;
+
+/* ════════════════════════════════════════════════════════════════════════
+   Sales Order info — READ-ONLY mirror of the parent SO
+   ════════════════════════════════════════════════════════════════════════
+   The DO ⇄ SO interconnection (owner: "SO 跟 DO 资料互通"): opening the DO
+   surfaces the parent SO's context so you see the full delivery picture from
+   either doc. The DO carries `so_doc_no`, so we load the SO detail by that
+   doc no (REUSES useMfgSalesOrderDetail — no new endpoint). The SO GET HEADER
+   returns the delivery dates (original + amend trio + reason, just added),
+   possession/house/replacement/referral and address. READ-ONLY: every field
+   is a display span; the real edit lives on the Sales Order. */
+const SO_MIRROR_VALUE_STYLE: CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', minHeight: 26,
+  color: 'var(--fg-muted)',
+};
+const SoMirrorHeaderNoteStyle: CSSProperties = {
+  fontSize: 'var(--fs-11)', color: 'var(--fg-soft)', fontWeight: 500,
+};
+const SoMirrorValue = ({ label, value, span }: { label: string; value: string; span?: number }) => (
+  <div className={styles.field} style={span ? { gridColumn: `span ${span}` } : undefined}>
+    <span className={styles.fieldLabel}>{label}</span>
+    <span className={styles.fieldInput} style={SO_MIRROR_VALUE_STYLE}>{value || '—'}</span>
+  </div>
+);
+
+const SoInfoMirrorCard = ({ soDocNo }: { soDocNo: string }) => {
+  const soQ = useMfgSalesOrderDetail(soDocNo);
+  const so = (soQ.data?.salesOrder as Record<string, unknown> | undefined) ?? null;
+
+  /* Dual-read camelCase (pg driver camelCases result columns). */
+  const g = (snake: string, camel: string): string => {
+    const v = so == null ? null : (so[snake] ?? so[camel]);
+    return v == null ? '' : String(v);
+  };
+
+  const address = so
+    ? [g('address1', 'address1'), g('address2', 'address2')].filter(Boolean).join(', ')
+    : '';
+
+  return (
+    <section className={styles.card}>
+      <header className={styles.cardHeader}>
+        <h2 className={styles.cardTitle}>Sales Order info</h2>
+        <span style={SoMirrorHeaderNoteStyle}>Read-only — edit on the Sales Order</span>
+      </header>
+      <div className={styles.cardBody}>
+        {soQ.isLoading ? (
+          <p className={styles.emptyRow}>Loading sales order…</p>
+        ) : !so ? (
+          <p className={styles.emptyRow}>Sales order not found.</p>
+        ) : (
+          <div className={styles.formGrid4}>
+            <SoMirrorValue label="SO No" value={g('doc_no', 'docNo')} />
+            <SoMirrorValue label="Customer" value={g('debtor_name', 'debtorName')} span={2} />
+            {/* The delivery-date trio: ORIGINAL (customer's pick, never overwritten),
+                the customer's requested amend, and the date WE confirmed. */}
+            <SoMirrorValue label="Delivery Date (Original)" value={fmtDateOrDash(g('customer_delivery_date', 'customerDeliveryDate') || null)} />
+            <SoMirrorValue label="Amend Date (from Customer)" value={fmtDateOrDash(g('amend_date_from_customer', 'amendDateFromCustomer') || null)} />
+            <SoMirrorValue label="Amended Delivery Date" value={fmtDateOrDash(g('amended_delivery_date', 'amendedDeliveryDate') || null)} />
+            <SoMirrorValue label="Possession Date" value={fmtDateOrDash(g('possession_date', 'possessionDate') || null)} />
+            <SoMirrorValue label="House Type" value={g('house_type', 'houseType')} />
+            <SoMirrorValue label="Replacement / Disposal" value={g('replacement_disposal', 'replacementDisposal')} span={2} />
+            <SoMirrorValue label="Referral" value={g('referral', 'referral')} span={2} />
+            <SoMirrorValue label="Amend Reason" value={g('amend_reason', 'amendReason')} span={2} />
+            <SoMirrorValue label="Address" value={address} span={4} />
+          </div>
+        )}
+      </div>
+    </section>
+  );
+};
 
 /* ════════════════════════════════════════════════════════════════════════
    Delivery crew card (Stage 3 — delivery_order_crew, migration 0195).

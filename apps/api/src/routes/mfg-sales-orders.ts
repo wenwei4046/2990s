@@ -1291,8 +1291,10 @@ mfgSalesOrders.get('/:docNo', async (c) => {
        NOT the mfg_sales_orders_with_payment_totals view that the LIST route
        (LIST_COLS = HEADER + …) reads. Keeping it out of the shared HEADER and
        appending it only here means the detail page still gets the Proceed Date
-       while the list view query stays valid. */
-    sb.from('mfg_sales_orders').select(`${HEADER}, proceeded_at, signature_b64, slip_key, slip_state`).eq('doc_no', docNo).maybeSingle(),
+       while the list view query stays valid. amend_reason (migration 0201) is
+       in the SAME boat — the payment-totals view doesn't carry it, so it's
+       appended here on the base-table read only, never in HEADER. */
+    sb.from('mfg_sales_orders').select(`${HEADER}, proceeded_at, amend_reason, signature_b64, slip_key, slip_state`).eq('doc_no', docNo).maybeSingle(),
     /* line_no = the persisted listing order (0165); NULLS LAST so pre-0165
        docs fall back to created_at + the rule re-derive below. */
     sb.from('mfg_sales_order_items').select(ITEM).eq('doc_no', docNo)
@@ -3090,6 +3092,9 @@ mfgSalesOrders.post('/', async (c) => {
        amend path; these carry the customer's requested + our confirmed new dates. */
     amend_date_from_customer: (body.amendDateFromCustomer as string) ?? null,
     amended_delivery_date: (body.amendedDeliveryDate as string) ?? null,
+    /* HC "Amend Client Date Reason" (migration 0201) — free-text reason paired
+       with the amend dates above. Dual-read the camelCase key. */
+    amend_reason: (body.amendReason as string) ?? null,
     /* PR #144 — Commander: "当我已经 create 好了这个 sales order 的时候，
        为什么我点进去 edit processing 的 delivery date 时，怎么没看到呢".
        internal_expected_dd was wired on PATCH (update header) but missed
@@ -3983,6 +3988,8 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
        form. The ORIGINAL customer_delivery_date above stays the customer's pick. */
     ['amendDateFromCustomer', 'amend_date_from_customer'],
     ['amendedDeliveryDate', 'amended_delivery_date'],
+    /* HC "Amend Client Date Reason" (migration 0201) — paired with the amend dates. */
+    ['amendReason', 'amend_reason'],
     ['internalExpectedDd', 'internal_expected_dd'],
     /* POS "Proceed" — sales-side done marker; stamp-once guard below. */
     ['proceededAt', 'proceeded_at'],

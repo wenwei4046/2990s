@@ -172,6 +172,13 @@ export const SalesOrderNew = () => {
      `venueId` (FK) so the API persists the master link. */
   const [processingDate, setProcessingDate] = useState('');
   const [deliveryDate,   setDeliveryDate]   = useState('');
+  /* Delivery-date amendment (migration 0199 + 0201). The ORIGINAL Delivery Date
+     above is never overwritten; these capture the customer's requested NEW date,
+     the date WE confirm, and the HC "Amend Client Date Reason". Rarely set at
+     create time, but the field lives here to match Detail's Order Info layout. */
+  const [amendDateFromCustomer, setAmendDateFromCustomer] = useState('');
+  const [amendedDeliveryDate,   setAmendedDeliveryDate]   = useState('');
+  const [amendReason,           setAmendReason]           = useState('');
   const [note,           setNote]           = useState('');
 
   /* ── HC delivery-sheet SO-context raw-data fields (migration 0197) ───────────
@@ -763,6 +770,11 @@ export const SalesOrderNew = () => {
            customer_delivery_date. */
         internalExpectedDd:   processingDate || undefined,
         customerDeliveryDate: deliveryDate   || undefined,
+        /* Delivery-date amendment (migration 0199 + 0201) — the ORIGINAL
+           customerDeliveryDate above is never overwritten; these record the change. */
+        amendDateFromCustomer: amendDateFromCustomer || undefined,
+        amendedDeliveryDate:   amendedDeliveryDate   || undefined,
+        amendReason:           amendReason           || undefined,
         note: note || undefined,
         /* PR #114 — full variant payload preserved end-to-end. */
         items: validLines.map((l) => ({
@@ -1039,6 +1051,38 @@ export const SalesOrderNew = () => {
                 min={today}
                 onChange={(iso) => setDeliveryDate(iso)}
                 invalid={datesXor && !deliveryDate}
+              />
+            </label>
+            {/* ── Delivery-date amendment (migration 0199 + 0201) ──────────────
+                The ORIGINAL Delivery Date above is never overwritten; these
+                capture the customer's requested NEW date, the date WE confirm,
+                and the HC "Amend Client Date Reason". Same card + field layout as
+                Detail's Order Info. */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Amend Date (from Customer)</span>
+              <DateField
+                className={styles.fieldInput}
+                fullWidth
+                value={amendDateFromCustomer ?? ''}
+                onChange={(iso) => setAmendDateFromCustomer(iso)}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Amended Delivery Date</span>
+              <DateField
+                className={styles.fieldInput}
+                fullWidth
+                value={amendedDeliveryDate ?? ''}
+                onChange={(iso) => setAmendedDeliveryDate(iso)}
+              />
+            </label>
+            <label className={styles.field} style={{ gridColumn: 'span 2' }}>
+              <span className={styles.fieldLabel}>Amend Reason</span>
+              <input
+                className={styles.fieldInput}
+                value={amendReason}
+                onChange={(e) => setAmendReason(e.target.value)}
+                placeholder="Why the client delivery date was amended"
               />
             </label>
             {/* ── HC delivery-sheet SO-context fields (migration 0197) ─────────

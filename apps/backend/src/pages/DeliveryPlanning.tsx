@@ -507,6 +507,13 @@ export const DeliveryPlanning = () => {
       sortFn: (a, b) => String(a.amend_date_from_customer ?? '').localeCompare(String(b.amend_date_from_customer ?? '')),
       filterType: 'date', dateValue: (o) => o.amend_date_from_customer,
     },
+    /* HC "Amend Client Date Reason" (migration 0201) — free-text reason paired
+       with the amend dates above. default-HIDES (off in the Columns menu). */
+    {
+      key: 'amend_reason', label: 'Amend Reason', width: 200, defaultHidden: true,
+      accessor: (o) => o.amend_reason ?? '—',
+      searchValue: (o) => o.amend_reason ?? '',
+    },
     {
       key: 'internal_expected_dd', label: 'Est. (New)', width: 120, sortable: true, defaultHidden: true,
       accessor: (o) => fmtDateOrDash(o.internal_expected_dd),

@@ -67,6 +67,9 @@ export type PlanningOrder = {
      original, what Days Left / OVERDUE actually use. */
   amend_date_from_customer: string | null;
   amended_delivery_date: string | null;
+  /* HC "Amend Client Date Reason" (migration 0201) — free-text reason paired
+     with the amend dates above. */
+  amend_reason: string | null;
   effective_delivery_date: string | null;
   internal_expected_dd: string | null;
   days_left: number | null;
