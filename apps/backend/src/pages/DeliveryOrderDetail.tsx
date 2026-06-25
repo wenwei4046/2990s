@@ -20,7 +20,7 @@ import {
 } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Plus, Printer, Save, Truck, ChevronDown, Ban, RotateCcw,
+  ArrowLeft, FileText, Pencil, Plus, Printer, Save, Truck, ChevronDown, Ban, RotateCcw, Check,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
@@ -61,7 +61,9 @@ import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-const STATUS_FLOW = ['LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED', 'DELIVERED', 'INVOICED', 'CANCELLED'] as const;
+// DRAFT/Confirmed two-state (Owner 2026-06-25) — DRAFT precedes LOADED: an
+// uncommitted DO that ships nothing until Confirmed (status PATCH → DISPATCHED).
+const STATUS_FLOW = ['DRAFT', 'LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED', 'DELIVERED', 'INVOICED', 'CANCELLED'] as const;
 type DoStatus = typeof STATUS_FLOW[number];
 
 /* Commander 2026-05-29 — the linear LOADED→DISPATCHED→… stage walk was retired.
@@ -69,6 +71,8 @@ type DoStatus = typeof STATUS_FLOW[number];
    next-stage map any more; only Cancel / Reopen remain (header buttons). */
 
 const STATUS_CLASS: Record<string, string> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — grey, like the SO DRAFT pill.
+  DRAFT:      styles.statusDraft ?? '',
   LOADED:     styles.statusConfirmed ?? '',
   DISPATCHED: styles.statusShipped ?? '',
   IN_TRANSIT: styles.statusInProd ?? '',
@@ -86,11 +90,16 @@ type DoLifecycle = 'shipped' | 'invoiced' | 'returned';
 // badge reads the same on the list and here — incl. the stored stages
 // (Loaded / In Transit / Signed / Delivered) the old 4-entry map showed raw.
 const DO_STATUS_LABEL: Record<string, string> = {
+  DRAFT: 'Draft',
   LOADED: 'Loaded', DISPATCHED: 'Shipped', IN_TRANSIT: 'In Transit', SIGNED: 'Signed',
   DELIVERED: 'Delivered', INVOICED: 'Invoiced', RETURNED: 'Delivery Return', CANCELLED: 'Cancelled',
 };
 const doEffectiveKey = (status: string, lifecycle?: DoLifecycle): string => {
   if (status === 'CANCELLED') return 'CANCELLED';
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT DO has NOT shipped,
+     so it can't carry an invoiced / returned lifecycle event. DRAFT wins over
+     the shipped baseline → distinct grey "Draft" badge. */
+  if (status === 'DRAFT') return 'DRAFT';
   if (lifecycle === 'returned') return 'RETURNED';
   if (lifecycle === 'invoiced') return 'INVOICED';
   return 'DISPATCHED';
@@ -501,6 +510,11 @@ export const DeliveryOrderDetail = () => {
   const hasChildren = Boolean(header.has_children);
   const isLocked = lockedStatuses.includes(header.status) || hasChildren;
   const isCancelled = header.status === 'CANCELLED';
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT DO is staging-only:
+     it commits NOTHING (no stock OUT, no SO-delivered sync, not invoiceable)
+     until Confirm flips it to DISPATCHED, which fires the stock deduction + SO
+     sync exactly once (server status PATCH, the single chokepoint). */
+  const isDraft = header.status === 'DRAFT';
 
   const handlePrint = () => {
     import('../lib/delivery-order-pdf')
@@ -515,6 +529,17 @@ export const DeliveryOrderDetail = () => {
   const handleReopen = async () => {
     if (!(await askConfirm({ title: `Reopen ${header.do_number} back to LOADED?`, confirmLabel: 'Reopen' }))) return;
     updateStatus.mutate({ id: header.id, status: 'LOADED' });
+  };
+  /* Confirm a DRAFT DO → DISPATCHED. This is the commit: the server fires the
+     stock OUT + the SO-delivered sync (both skipped on draft-create) exactly
+     once on this transition. Mirrors the SO Confirm action. */
+  const handleConfirmDraft = async () => {
+    if (!(await askConfirm({
+      title: `Confirm ${header.do_number}?`,
+      body: 'This ships the delivery: stock is deducted now and the linked Sales Order is updated. The DO can then be invoiced / returned.',
+      confirmLabel: 'Confirm DO',
+    }))) return;
+    updateStatus.mutate({ id: header.id, status: 'DISPATCHED' });
   };
 
   return (
@@ -563,6 +588,13 @@ export const DeliveryOrderDetail = () => {
               <Ban {...ICON} /><span>Cancel DO</span>
             </Button>
           ) : null}
+          {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — Confirm commits the
+              draft (stock OUT + SO sync fire server-side on this transition). */}
+          {isDraft && !isEditing && (
+            <Button variant="primary" size="md" onClick={handleConfirmDraft} disabled={updateStatus.isPending}>
+              <Check {...ICON} /><span>Confirm DO</span>
+            </Button>
+          )}
           {!isEditing ? (
             <Button variant="primary" size="md" onClick={enterEdit} disabled={isLocked}>
               <Pencil {...ICON} /><span>Edit</span>

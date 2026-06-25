@@ -96,6 +96,8 @@ const compactDate = (iso: string | null | undefined): string => {
    plus CANCELLED. Pill styling reuses the SO detail status classes where the
    stages line up; the rest fall back to a neutral pill. */
 const STATUS_CLASS: Record<string, string> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — grey, like the SO DRAFT pill.
+  DRAFT:       soDetailStyles.statusDraft ?? '',
   LOADED:      soDetailStyles.statusConfirmed ?? '',
   DISPATCHED:  soDetailStyles.statusShipped ?? '',
   IN_TRANSIT:  soDetailStyles.statusInProd ?? '',
@@ -106,6 +108,7 @@ const STATUS_CLASS: Record<string, string> = {
   CANCELLED:   soDetailStyles.statusCancelled ?? '',
 };
 const STATUS_LABEL: Record<string, string> = {
+  DRAFT:      'Draft',
   LOADED:     'Loaded',
   DISPATCHED: 'Shipped',
   IN_TRANSIT: 'In Transit',
@@ -122,11 +125,16 @@ const STATUS_LABEL: Record<string, string> = {
 type DoLifecycle = 'shipped' | 'invoiced' | 'returned';
 const doEffectiveKey = (status: string, lifecycle?: DoLifecycle): string => {
   if (status === 'CANCELLED') return 'CANCELLED';
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT DO has NOT shipped
+     (no stock OUT, no SO sync, not invoiceable). It can't have an invoiced /
+     returned lifecycle event yet, so DRAFT always wins over the shipped baseline
+     and reads as its own distinct grey "Draft" badge. */
+  if (status === 'DRAFT') return 'DRAFT';
   if (lifecycle === 'returned') return 'RETURNED';
   if (lifecycle === 'invoiced') return 'INVOICED';
   return 'DISPATCHED'; // shipped baseline
 };
-const STATUS_CHIPS = ['all', 'DISPATCHED', 'INVOICED', 'RETURNED', 'CANCELLED'] as const;
+const STATUS_CHIPS = ['all', 'DRAFT', 'DISPATCHED', 'INVOICED', 'RETURNED', 'CANCELLED'] as const;
 
 const StatusPill = ({ status, lifecycle }: { status: string; lifecycle?: DoLifecycle }) => {
   const key = doEffectiveKey(status, lifecycle);

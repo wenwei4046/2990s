@@ -82,7 +82,11 @@ export async function doLineRemaining(
     id: string; do_number: string; status: string | null;
     debtor_code: string | null; debtor_name: string | null;
   }>) {
-    if ((d.status ?? '').toUpperCase() === 'CANCELLED') continue; // delivered nothing
+    const st = (d.status ?? '').toUpperCase();
+    // LEAK GUARD (DRAFT): a DRAFT DO has NOT shipped — it delivered nothing, so
+    // its lines must never become invoiceable / returnable (the "Pending" pool
+    // both downstream pickers read). Dropped alongside CANCELLED.
+    if (st === 'CANCELLED' || st === 'DRAFT') continue; // delivered nothing
     headerById.set(d.id, { do_number: d.do_number, debtor_code: d.debtor_code, debtor_name: d.debtor_name });
   }
   const activeDoIds = [...headerById.keys()];
@@ -212,8 +216,13 @@ export async function doRemainingByItemId(
 
 /**
  * Resolve the set of candidate DO ids the picker should consider.
- * Explicit ?doIds=A,B wins; otherwise every NON-cancelled DO (capped) so the
- * picker can show all of them. Returns [] when there are none.
+ * Explicit ?doIds=A,B wins; otherwise every shipped (non-cancelled, non-draft)
+ * DO (capped) so the picker can show all of them. Returns [] when there are none.
+ *
+ * LEAK GUARD (DRAFT): a DRAFT DO has NOT shipped, so it must never surface in
+ * the invoiceable-from-DO / returnable-from-DO picker. Even when an explicit
+ * ?doIds= list is passed, doLineRemaining (above) drops DRAFT headers, so a
+ * draft id can't yield invoiceable lines through either entry point.
  */
 export async function resolveCandidateDoIds(sb: any, doIdsParam: string | undefined): Promise<string[]> {
   if (doIdsParam && doIdsParam.trim()) {
@@ -222,7 +231,7 @@ export async function resolveCandidateDoIds(sb: any, doIdsParam: string | undefi
   const { data: dos } = await sb
     .from('delivery_orders')
     .select('id, status')
-    .neq('status', 'CANCELLED')
+    .not('status', 'in', '("CANCELLED","DRAFT")')
     .order('do_date', { ascending: false })
     .limit(1000);
   return ((dos ?? []) as Array<{ id: string }>).map((d) => d.id).filter(Boolean);

@@ -73,6 +73,10 @@ const SO: Record<string, Entry> = {
   CANCELLED:     { label: 'Cancelled',     tone: 'danger' },
 };
 const DO: Record<string, Entry> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT DO is an uncommitted
+  // staging delivery (neutral/grey: no stock OUT + no SO-delivered sync until
+  // Confirm flips it to DISPATCHED). Mirrors the SO DRAFT pill.
+  DRAFT:      { label: 'Draft',      tone: 'neutral' },
   LOADED:     { label: 'Loaded',     tone: 'info' },
   DISPATCHED: { label: 'Shipped',    tone: 'progress' },
   IN_TRANSIT: { label: 'In Transit', tone: 'progress' },

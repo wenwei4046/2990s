@@ -277,7 +277,12 @@ export const DeliveryOrderNew = () => {
     return { failed: results.filter((ok) => !ok).length };
   };
 
-  const onSave = () => {
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25) — asDraft=true posts the DO as
+     a DRAFT (the "Save as Draft" button); it commits nothing (NO stock OUT, NO
+     SO-delivered sync, kept out of the invoiceable-from-DO picker) until it is
+     Confirmed on the Detail page. The default "Create Delivery Order" path
+     leaves asDraft undefined → the server inserts DISPATCHED (ships now). */
+  const onSave = (asDraft = false) => {
     if (loadingPrefill) { notify({ title: 'Still loading the Sales Order', body: 'please wait a moment.' }); return; }
     if (!canSave) { notify({ title: 'Customer name is required.', tone: 'error' }); return; }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
@@ -288,6 +293,9 @@ export const DeliveryOrderNew = () => {
 
     create.mutate(
       {
+        /* DRAFT/Confirmed two-state — only sent when the operator picked
+           "Save as Draft"; omitted otherwise so the server defaults to DISPATCHED. */
+        asDraft: asDraft || undefined,
         soDocNo: fromSo || undefined,
         doDate: doDate || undefined,
         debtorName,
@@ -376,7 +384,15 @@ export const DeliveryOrderNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/mfg-delivery-orders')}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending}>
+          {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — "Save as Draft" posts
+              the DO as DRAFT (commits nothing: no stock OUT + no SO-delivered sync,
+              and it stays out of the create-SI / create-DR pickers until Confirmed
+              on the Detail page). Same validation gate as Create. */}
+          <Button variant="ghost" size="md" onClick={() => onSave(true)} disabled={create.isPending}>
+            <Save {...ICON} />
+            {create.isPending ? 'Saving…' : 'Save as Draft'}
+          </Button>
+          <Button variant="primary" size="md" onClick={() => onSave(false)} disabled={create.isPending}>
             <Save {...ICON} />
             {create.isPending ? 'Saving…' : 'Create Delivery Order'}
           </Button>
