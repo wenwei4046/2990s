@@ -15,9 +15,9 @@
 import { todayMyt } from '../lib/dates';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Save, Trash2, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Save, Trash2, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { useCreatePaymentVoucher, useAccounts, type Account } from '../lib/flow-queries';
+import { useCreatePaymentVoucher, useAccounts, useOutstanding, type Account } from '../lib/flow-queries';
 import { useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
 import { useActiveCurrencies, rateFor } from '../lib/currencies-queries';
 import { sortByText } from '../lib/sort-options';
@@ -49,6 +49,21 @@ const newLine = (): DraftLine => ({
   amountCenti:      0,
 });
 
+/* Migration 0202 — what this voucher is FOR. SUPPLIER_PAYMENT settles a
+   supplier's outstanding PIs at face value (the "Apply to PI" section);
+   FREIGHT / OTHER are plain cash-out vouchers (lines only, no settlement). */
+type PvPurpose = 'SUPPLIER_PAYMENT' | 'FREIGHT' | 'OTHER';
+
+/* One outstanding-PI row in the "Apply to PI" picker, with the amount the
+   operator chooses to apply (centi, PI's currency). */
+type PiAlloc = {
+  piId:             string;
+  invoiceNumber:    string;
+  supplierInvoiceRef: string | null;
+  outstandingCenti: number;
+  amountCenti:      number;
+};
+
 export const PaymentVoucherNew = () => {
   const navigate = useNavigate();
   const create   = useCreatePaymentVoucher();
@@ -61,6 +76,7 @@ export const PaymentVoucherNew = () => {
 
   const [payeeName, setPayeeName]         = useState<string>('');
   const [supplierId, setSupplierId]       = useState<string>('');
+  const [purpose, setPurpose]             = useState<PvPurpose>('SUPPLIER_PAYMENT');
   const [creditAccountCode, setCreditAccountCode] = useState<string>('');
   const [voucherDate, setVoucherDate]     = useState<string>(() => todayMyt());
   const [notes, setNotes]                 = useState<string>('');
@@ -101,17 +117,73 @@ export const PaymentVoucherNew = () => {
 
   const totalCenti = useMemo(() => lines.reduce((s, l) => s + l.amountCenti, 0), [lines]);
 
+  /* ── Apply to PI (migration 0202) ─────────────────────────────────────────
+     Only for a SUPPLIER_PAYMENT voucher with a supplier chosen: list that
+     supplier's outstanding PIs and let the operator apply an amount per PI. The
+     allocations settle AP at face value (the PV's currency is irrelevant to the
+     PI's own balance — amounts are entered in the PI's currency). */
+  const applyToPi = purpose === 'SUPPLIER_PAYMENT' && !!supplierId;
+  const outstandingPiQ = useOutstanding('pi', { supplierId: applyToPi ? supplierId : null });
+  const outstandingPiRows = useMemo(
+    () => (applyToPi ? (outstandingPiQ.data?.rows ?? []) : []),
+    [applyToPi, outstandingPiQ.data],
+  );
+
+  // The per-PI amounts the operator has entered, keyed by PI id. Seeded lazily
+  // (defaults below) the first time a PI row renders, so a manual 0 sticks.
+  const [allocAmounts, setAllocAmounts] = useState<Record<string, number>>({});
+  // Wipe allocations whenever we leave SUPPLIER_PAYMENT or change supplier — a
+  // stale amount must never ride into the create body for a different purpose.
+  useEffect(() => { setAllocAmounts({}); }, [purpose, supplierId]);
+
+  const allocOutForRow = (r: Record<string, any>): number =>
+    Number(r.outstanding_centi ?? r.outstandingCenti ?? 0);
+  const allocPiId = (r: Record<string, any>): string => String(r.id ?? '');
+
+  // Default an unentered row to min(remaining PV total, this PI's outstanding).
+  const allocations: PiAlloc[] = useMemo(() => {
+    let remaining = totalCenti;
+    return outstandingPiRows.map((r) => {
+      const piId = allocPiId(r);
+      const outstanding = allocOutForRow(r);
+      const entered = allocAmounts[piId];
+      const dflt = Math.max(0, Math.min(remaining, outstanding));
+      const amountCenti = entered != null ? entered : dflt;
+      remaining = Math.max(0, remaining - amountCenti);
+      return {
+        piId,
+        invoiceNumber:      String(r.invoice_number ?? r.invoiceNumber ?? piId),
+        supplierInvoiceRef: (r.supplier_invoice_ref ?? r.supplierInvoiceRef ?? null) as string | null,
+        outstandingCenti:   outstanding,
+        amountCenti,
+      };
+    });
+  }, [outstandingPiRows, allocAmounts, totalCenti]);
+
+  const allocatedCenti = useMemo(() => allocations.reduce((s, a) => s + a.amountCenti, 0), [allocations]);
+  const overAllocated  = applyToPi && allocatedCenti > totalCenti;
+
   const realLines = lines.filter((l) => l.debitAccountCode && l.amountCenti > 0);
-  const canSave = !!payeeName.trim() && !!creditAccountCode && realLines.length > 0;
+  const canSave = !!payeeName.trim() && !!creditAccountCode && realLines.length > 0 && !overAllocated;
 
   const onSave = async () => {
     if (!payeeName.trim()) { setDialog({ title: 'Enter a payee', body: 'Who is this voucher paying?' }); return; }
     if (!creditAccountCode) { setDialog({ title: 'Pick a “Paid From” account', body: 'Choose the bank / cash / payables account the money leaves.' }); return; }
     if (realLines.length === 0) { setDialog({ title: 'Add at least one line', body: 'Each line needs a debit account and an amount > 0.' }); return; }
+    if (overAllocated) {
+      setDialog({ title: 'Applied more than the voucher total', body: `You've applied ${fmtRm(allocatedCenti, currency)} to PIs but the voucher total is only ${fmtRm(totalCenti, currency)}. Reduce the applied amounts or raise the voucher total.` });
+      return;
+    }
+    // Only send allocations for a SUPPLIER_PAYMENT voucher, and only rows the
+    // operator actually applied (amount > 0). FREIGHT / OTHER send none.
+    const sendAllocations = applyToPi
+      ? allocations.filter((a) => a.amountCenti > 0).map((a) => ({ piId: a.piId, amountCenti: a.amountCenti }))
+      : [];
     try {
       const res = await create.mutateAsync({
         payeeName:         payeeName.trim(),
         supplierId:        supplierId || null,
+        purpose,
         creditAccountCode,
         voucherDate,
         notes:             notes || undefined,
@@ -124,6 +196,7 @@ export const PaymentVoucherNew = () => {
           debitAccountCode: l.debitAccountCode,
           amountCenti:      l.amountCenti,
         })),
+        ...(sendAllocations.length > 0 ? { allocations: sendAllocations } : {}),
       });
       setDialog({
         title: `Voucher ${res.pvNumber} created`,
@@ -171,13 +244,28 @@ export const PaymentVoucherNew = () => {
             </label>
 
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Supplier (optional)</span>
+              <span className={styles.fieldLabel}>Supplier {purpose === 'SUPPLIER_PAYMENT' ? '*' : '(optional)'}</span>
               <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={styles.fieldInput} disabled={suppliersQ.isLoading}>
                 <option value="">{suppliersQ.isLoading ? 'Loading suppliers…' : '— None (free-text payee) —'}</option>
                 {sortByText(suppliersQ.data ?? []).map((s) => (
                   <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                 ))}
               </select>
+            </label>
+
+            {/* Migration 0202 — what this voucher is for. SUPPLIER_PAYMENT opens
+                the "Apply to PI" settle section; FREIGHT / OTHER are plain
+                cash-out vouchers. */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Purpose</span>
+              <span className={styles.selectWrap}>
+                <select className={styles.fieldSelect} value={purpose} onChange={(e) => setPurpose(e.target.value as PvPurpose)}>
+                  <option value="SUPPLIER_PAYMENT">Supplier payment (settle PI)</option>
+                  <option value="FREIGHT">Freight</option>
+                  <option value="OTHER">Other</option>
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Voucher Date *</span>
@@ -277,6 +365,69 @@ export const PaymentVoucherNew = () => {
           </button>
         </div>
       </section>
+
+      {/* ── Apply to PI (migration 0202) — settle the supplier's outstanding PIs
+          at face value. Only for a SUPPLIER_PAYMENT voucher with a supplier
+          chosen; the operator applies an amount per PI (defaults to the lesser
+          of the remaining voucher total and that PI's outstanding balance). ── */}
+      {purpose === 'SUPPLIER_PAYMENT' && (
+        <section className={styles.card}>
+          <div className={styles.cardHeader}>
+            <h2 className={styles.cardTitle}>Apply to PI</h2>
+            <span style={{ fontSize: 'var(--fs-12)', color: overAllocated ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)' }}>
+              {applyToPi
+                ? `Allocated ${fmtRm(allocatedCenti, currency)} / PV total ${fmtRm(totalCenti, currency)}`
+                : 'Pick a supplier above to list outstanding invoices'}
+            </span>
+          </div>
+          <div className={styles.cardBody} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+            {!applyToPi ? (
+              <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>
+                Choose a supplier in the header to settle their outstanding purchase invoices with this voucher.
+              </p>
+            ) : outstandingPiQ.isLoading ? (
+              <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>Loading outstanding invoices…</p>
+            ) : allocations.length === 0 ? (
+              <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>This supplier has no outstanding purchase invoices.</p>
+            ) : (
+              <>
+                {overAllocated && (
+                  <div style={{ fontSize: 'var(--fs-12)', color: 'var(--c-festive-b, #B8331F)' }}>
+                    You've applied more than the voucher total — reduce the amounts below or raise the voucher total before saving.
+                  </div>
+                )}
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--fs-13)' }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left', color: 'var(--fg-muted)', fontSize: 'var(--fs-11)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      <th style={{ padding: '6px 8px' }}>Invoice</th>
+                      <th style={{ padding: '6px 8px' }}>Supplier Ref</th>
+                      <th style={{ padding: '6px 8px', textAlign: 'right' }}>Outstanding</th>
+                      <th style={{ padding: '6px 8px', textAlign: 'right' }}>Apply</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allocations.map((a) => (
+                      <tr key={a.piId} style={{ borderTop: '1px solid var(--line)' }}>
+                        <td style={{ padding: '6px 8px', fontFamily: 'var(--font-mono)' }}>{a.invoiceNumber}</td>
+                        <td style={{ padding: '6px 8px', color: a.supplierInvoiceRef ? 'var(--fg)' : 'var(--fg-muted)' }}>{a.supplierInvoiceRef || '—'}</td>
+                        <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--fg-muted)' }}>{fmtRm(a.outstandingCenti, currency)}</td>
+                        <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                          <MoneyInput bare valueSen={a.amountCenti}
+                            onCommit={(sen) => {
+                              const v = Math.max(0, Math.min(a.outstandingCenti, sen ?? 0));
+                              setAllocAmounts((prev) => ({ ...prev, [a.piId]: v }));
+                            }}
+                            inputClassName={styles.fieldInput} selectOnFocus />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+        </section>
+      )}
 
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <section className={styles.card} style={{ maxWidth: 360, width: '100%' }}>

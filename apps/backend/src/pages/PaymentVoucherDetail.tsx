@@ -16,7 +16,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, Pencil, Plus, Save, Send, Ban, Trash2, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Pencil, Plus, Save, Send, Ban, Trash2, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { fmtDateOrDash } from '@2990s/shared';
 import {
@@ -25,6 +25,7 @@ import {
   usePostPaymentVoucher,
   useCancelPaymentVoucher,
   useAccounts,
+  useOutstanding,
   type Account,
 } from '../lib/flow-queries';
 import { useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
@@ -45,6 +46,12 @@ const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   const v = centi ?? 0;
   return `${currency} ${(v / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
+
+/* Migration 0202 — human label for the PV purpose. */
+const purposeLabel = (p: string | null | undefined): string =>
+  p === 'FREIGHT' ? 'Freight'
+  : p === 'OTHER' ? 'Other'
+  : 'Supplier payment (settle PI)';
 
 type EditLine = {
   rid:              string;
@@ -78,6 +85,8 @@ export const PaymentVoucherDetail = () => {
   const detailQ = usePaymentVoucherDetail(id || null);
   const pv    = detailQ.data?.paymentVoucher as Record<string, any> | undefined;
   const lines = (detailQ.data?.lines ?? []) as Array<Record<string, any>>;
+  // Migration 0202 — PIs this voucher settles (camelCase, hand-built array).
+  const allocations = ((detailQ.data as Record<string, any> | undefined)?.allocations ?? []) as Array<Record<string, any>>;
 
   const update = useUpdatePaymentVoucher();
   const post   = usePostPaymentVoucher();
@@ -100,11 +109,16 @@ export const PaymentVoucherDetail = () => {
   // Edit draft state.
   const [payeeName, setPayeeName]                 = useState('');
   const [supplierId, setSupplierId]               = useState('');
+  const [purpose, setPurpose]                     = useState<'SUPPLIER_PAYMENT' | 'FREIGHT' | 'OTHER'>('SUPPLIER_PAYMENT');
   const [creditAccountCode, setCreditAccountCode] = useState('');
   const [voucherDate, setVoucherDate]             = useState('');
   const [notes, setNotes]                         = useState('');
   const [exchangeRate, setExchangeRate]           = useState('1');
   const [editLines, setEditLines]                 = useState<EditLine[]>([]);
+  // Migration 0202 — edit allocations: applied amount per PI id (centi). Seeded
+  // from the loaded allocations on enter-edit (alongside the supplier's other
+  // outstanding PIs, so the operator can add a settlement too).
+  const [allocAmounts, setAllocAmounts]           = useState<Record<string, number>>({});
 
   // A POSTED/CANCELLED voucher can never enter edit mode.
   useEffect(() => { if (!isDraft && isEditing) setIsEditing(false); }, [isDraft, isEditing]);
@@ -114,10 +128,15 @@ export const PaymentVoucherDetail = () => {
     if (!isEditing || !pv) return;
     setPayeeName(pv.payee_name ?? '');
     setSupplierId(pv.supplier_id ?? '');
+    setPurpose((pv.purpose ?? 'SUPPLIER_PAYMENT') as 'SUPPLIER_PAYMENT' | 'FREIGHT' | 'OTHER');
     setCreditAccountCode(pv.credit_account_code ?? '');
     setVoucherDate(pv.voucher_date ?? '');
     setNotes(pv.notes ?? '');
     setExchangeRate(String(pv.exchange_rate ?? '1'));
+    // Seed the applied-amount map from the loaded allocations (keyed by PI id).
+    setAllocAmounts(Object.fromEntries(
+      allocations.map((a) => [String(a.piId ?? a.pi_id ?? ''), Number(a.amountCenti ?? a.amount_centi ?? 0)]),
+    ));
     setEditLines(
       lines.length > 0
         ? lines.map((l) => ({
@@ -151,6 +170,55 @@ export const PaymentVoucherDetail = () => {
   const totalCenti = isEditing ? editTotalCenti : viewTotalCenti;
   const rate = Number(isEditing ? exchangeRate : (pv?.exchange_rate ?? 1)) || 0;
 
+  /* ── Edit allocations (migration 0202) ────────────────────────────────────
+     In Edit mode on a SUPPLIER_PAYMENT voucher, list the supplier's outstanding
+     PIs so the operator can add/adjust settlements. The already-allocated PIs
+     stay listed (their outstanding view-row excludes the amount this PV applies,
+     so we add it back into the displayed outstanding). Amounts come from
+     allocAmounts (seeded on enter-edit). */
+  const editApplyToPi = isEditing && purpose === 'SUPPLIER_PAYMENT' && !!supplierId;
+  const outstandingPiQ = useOutstanding('pi', { supplierId: editApplyToPi ? supplierId : null });
+  const editAllocRows = useMemo(() => {
+    if (!editApplyToPi) return [] as Array<{ piId: string; invoiceNumber: string; supplierInvoiceRef: string | null; outstandingCenti: number }>;
+    // Amount already applied by THIS voucher, per PI — add back so the operator
+    // sees the true settle-able amount, not the net-of-this-PV outstanding.
+    const appliedByThisPv = new Map<string, number>(
+      allocations.map((a) => [String(a.piId ?? a.pi_id ?? ''), Number(a.amountCenti ?? a.amount_centi ?? 0)]),
+    );
+    const byId = new Map<string, { piId: string; invoiceNumber: string; supplierInvoiceRef: string | null; outstandingCenti: number }>();
+    for (const r of (outstandingPiQ.data?.rows ?? [])) {
+      const piId = String((r as Record<string, any>).id ?? '');
+      if (!piId) continue;
+      const outstanding = Number((r as Record<string, any>).outstanding_centi ?? (r as Record<string, any>).outstandingCenti ?? 0)
+        + (appliedByThisPv.get(piId) ?? 0);
+      byId.set(piId, {
+        piId,
+        invoiceNumber:      String((r as Record<string, any>).invoice_number ?? (r as Record<string, any>).invoiceNumber ?? piId),
+        supplierInvoiceRef: ((r as Record<string, any>).supplier_invoice_ref ?? (r as Record<string, any>).supplierInvoiceRef ?? null) as string | null,
+        outstandingCenti:   outstanding,
+      });
+    }
+    // Ensure every already-allocated PI is present even if it dropped off the
+    // outstanding view (e.g. now fully covered by this PV).
+    for (const a of allocations) {
+      const piId = String(a.piId ?? a.pi_id ?? '');
+      if (!piId || byId.has(piId)) continue;
+      byId.set(piId, {
+        piId,
+        invoiceNumber:      String(a.invoiceNumber ?? a.invoice_number ?? piId),
+        supplierInvoiceRef: (a.supplierInvoiceRef ?? a.supplier_invoice_ref ?? null) as string | null,
+        outstandingCenti:   Number(a.amountCenti ?? a.amount_centi ?? 0),
+      });
+    }
+    return [...byId.values()];
+  }, [editApplyToPi, outstandingPiQ.data, allocations]);
+
+  const editAllocatedCenti = useMemo(
+    () => editAllocRows.reduce((s, r) => s + (allocAmounts[r.piId] ?? 0), 0),
+    [editAllocRows, allocAmounts],
+  );
+  const editOverAllocated = editApplyToPi && editAllocatedCenti > editTotalCenti;
+
   if (detailQ.isLoading || !pv) return <SkeletonDetailPage />;
 
   const onSave = async () => {
@@ -158,11 +226,23 @@ export const PaymentVoucherDetail = () => {
     if (!payeeName.trim()) { notify({ title: 'Enter a payee', body: 'Who is this voucher paying?', tone: 'error' }); return; }
     if (!creditAccountCode) { notify({ title: 'Pick a “Paid From” account', body: 'Choose the bank / cash / payables account.', tone: 'error' }); return; }
     if (realLines.length === 0) { notify({ title: 'Add at least one line', body: 'Each line needs a debit account and an amount > 0.', tone: 'error' }); return; }
+    if (editOverAllocated) {
+      notify({ title: 'Applied more than the voucher total', body: `You've applied ${fmtRm(editAllocatedCenti, currency)} to PIs but the voucher total is only ${fmtRm(editTotalCenti, currency)}.`, tone: 'error' });
+      return;
+    }
+    // Migration 0202 — settled PIs (SUPPLIER_PAYMENT only). Send the full set of
+    // applied rows (amount > 0) so the server replaces the prior allocations.
+    const sendAllocations = editApplyToPi
+      ? editAllocRows
+          .map((r) => ({ piId: r.piId, amountCenti: allocAmounts[r.piId] ?? 0 }))
+          .filter((a) => a.amountCenti > 0)
+      : [];
     try {
       await update.mutateAsync({
         id,
         payeeName:         payeeName.trim(),
         supplierId:        supplierId || null,
+        purpose,
         creditAccountCode,
         voucherDate,
         notes:             notes || null,
@@ -175,6 +255,9 @@ export const PaymentVoucherDetail = () => {
           debitAccountCode: l.debitAccountCode,
           amountCenti:      l.amountCenti,
         })),
+        // Always send allocations for a SUPPLIER_PAYMENT edit (empty array clears
+        // them); FREIGHT/OTHER omit the key so the server leaves them untouched.
+        ...(editApplyToPi ? { allocations: sendAllocations } : {}),
       });
       setIsEditing(false);
     } catch (err) {
@@ -250,6 +333,7 @@ export const PaymentVoucherDetail = () => {
             <div className={styles.formGrid2}>
               <InfoCell label="Payee" value={pv.payee_name} />
               <InfoCell label="Supplier" value={pv.supplier?.name ?? null} />
+              <InfoCell label="Purpose" value={purposeLabel(pv.purpose)} />
               <InfoCell label="Paid From" value={accountLabel(pv.credit_account_code)} />
               <InfoCell label="Voucher Date" value={pv.voucher_date ? fmtDateOrDash(pv.voucher_date) : null} />
               <InfoCell label="Currency" value={viewCurrency} />
@@ -263,13 +347,24 @@ export const PaymentVoucherDetail = () => {
                 <input type="text" value={payeeName} onChange={(e) => setPayeeName(e.target.value)} className={styles.fieldInput} />
               </label>
               <label className={styles.field}>
-                <span className={styles.fieldLabel}>Supplier (optional)</span>
+                <span className={styles.fieldLabel}>Supplier {purpose === 'SUPPLIER_PAYMENT' ? '*' : '(optional)'}</span>
                 <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={styles.fieldInput} disabled={suppliersQ.isLoading}>
                   <option value="">— None (free-text payee) —</option>
                   {sortByText(suppliersQ.data ?? []).map((s) => (
                     <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                   ))}
                 </select>
+              </label>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>Purpose</span>
+                <span className={styles.selectWrap}>
+                  <select className={styles.fieldSelect} value={purpose} onChange={(e) => setPurpose(e.target.value as 'SUPPLIER_PAYMENT' | 'FREIGHT' | 'OTHER')}>
+                    <option value="SUPPLIER_PAYMENT">Supplier payment (settle PI)</option>
+                    <option value="FREIGHT">Freight</option>
+                    <option value="OTHER">Other</option>
+                  </select>
+                  <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+                </span>
               </label>
               <label className={styles.field}>
                 <span className={styles.fieldLabel}>Paid From (Credit) *</span>
@@ -376,6 +471,107 @@ export const PaymentVoucherDetail = () => {
           )}
         </div>
       </section>
+
+      {/* ── Linked PIs (migration 0202) ───────────────────────────────────
+          View: the PIs this voucher settles (invoice # + amount applied + PI
+          status). Edit (DRAFT only): an editable table of the supplier's
+          outstanding PIs so the operator can add/adjust settlements. POSTED /
+          CANCELLED is read-only. */}
+      {(purpose === 'SUPPLIER_PAYMENT' || allocations.length > 0) && (
+        <section className={styles.card}>
+          <div className={styles.cardHeader}>
+            <h2 className={styles.cardTitle}>Linked Purchase Invoices</h2>
+            {isEditing && editApplyToPi ? (
+              <span style={{ fontSize: 'var(--fs-12)', color: editOverAllocated ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)' }}>
+                Allocated {fmtRm(editAllocatedCenti, currency)} / PV total {fmtRm(editTotalCenti, currency)}
+              </span>
+            ) : (
+              <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                {allocations.length} invoice{allocations.length === 1 ? '' : 's'} settled
+              </span>
+            )}
+          </div>
+          <div className={styles.cardBody}>
+            {isEditing && editApplyToPi ? (
+              !supplierId ? (
+                <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>Pick a supplier to list outstanding invoices.</p>
+              ) : outstandingPiQ.isLoading ? (
+                <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>Loading outstanding invoices…</p>
+              ) : editAllocRows.length === 0 ? (
+                <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>This supplier has no outstanding purchase invoices.</p>
+              ) : (
+                <>
+                  {editOverAllocated && (
+                    <div style={{ fontSize: 'var(--fs-12)', color: 'var(--c-festive-b, #B8331F)', marginBottom: 'var(--space-2)' }}>
+                      You've applied more than the voucher total — reduce the amounts below before saving.
+                    </div>
+                  )}
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--fs-13)' }}>
+                    <thead>
+                      <tr style={{ textAlign: 'left', color: 'var(--fg-muted)', fontSize: 'var(--fs-11)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                        <th style={{ padding: '6px 8px' }}>Invoice</th>
+                        <th style={{ padding: '6px 8px' }}>Supplier Ref</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'right' }}>Outstanding</th>
+                        <th style={{ padding: '6px 8px', textAlign: 'right' }}>Apply</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {editAllocRows.map((r) => (
+                        <tr key={r.piId} style={{ borderTop: '1px solid var(--line)' }}>
+                          <td style={{ padding: '6px 8px', fontFamily: 'var(--font-mono)' }}>{r.invoiceNumber}</td>
+                          <td style={{ padding: '6px 8px', color: r.supplierInvoiceRef ? 'var(--fg)' : 'var(--fg-muted)' }}>{r.supplierInvoiceRef || '—'}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--fg-muted)' }}>{fmtRm(r.outstandingCenti, currency)}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                            <MoneyInput bare valueSen={allocAmounts[r.piId] ?? 0}
+                              onCommit={(sen) => {
+                                const v = Math.max(0, Math.min(r.outstandingCenti, sen ?? 0));
+                                setAllocAmounts((prev) => ({ ...prev, [r.piId]: v }));
+                              }}
+                              inputClassName={styles.fieldInput} selectOnFocus />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )
+            ) : allocations.length === 0 ? (
+              <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>No purchase invoices settled by this voucher.</p>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--fs-13)' }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: 'var(--fg-muted)', fontSize: 'var(--fs-11)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    <th style={{ padding: '6px 8px' }}>Invoice</th>
+                    <th style={{ padding: '6px 8px' }}>Supplier Ref</th>
+                    <th style={{ padding: '6px 8px' }}>Status</th>
+                    <th style={{ padding: '6px 8px', textAlign: 'right' }}>Applied</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allocations.map((a) => {
+                    const piId = String(a.piId ?? a.pi_id ?? '');
+                    const piCurrency = String(a.currency ?? viewCurrency).toUpperCase();
+                    return (
+                      <tr key={a.id ?? piId} style={{ borderTop: '1px solid var(--line)' }}>
+                        <td style={{ padding: '6px 8px', fontFamily: 'var(--font-mono)' }}>
+                          {piId
+                            ? <Link to={`/purchase-invoices/${piId}`} style={{ color: 'var(--c-orange)' }}>{a.invoiceNumber ?? a.invoice_number ?? piId}</Link>
+                            : (a.invoiceNumber ?? a.invoice_number ?? '—')}
+                        </td>
+                        <td style={{ padding: '6px 8px', color: (a.supplierInvoiceRef ?? a.supplier_invoice_ref) ? 'var(--fg)' : 'var(--fg-muted)' }}>{a.supplierInvoiceRef ?? a.supplier_invoice_ref ?? '—'}</td>
+                        <td style={{ padding: '6px 8px' }}>
+                          {a.status ? <StatusPill docType="pi" status={String(a.status)} /> : '—'}
+                        </td>
+                        <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{fmtRm(Number(a.amountCenti ?? a.amount_centi ?? 0), piCurrency)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* ── Totals ────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>

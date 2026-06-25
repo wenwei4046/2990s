@@ -74,6 +74,12 @@ const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   })}`;
 };
 
+/* PI-level freight allocation (migration 0202) — human label for the basis. */
+const allocationMethodLabel = (m: string | null | undefined): string =>
+  m === 'VALUE' ? 'By value'
+  : m === 'CBM' ? 'By volume (CBM)'
+  : 'By quantity';
+
 /* Draft state shapes (mirror PO #194). HeaderDraft mirrors the editable PI
    header fields. */
 type HeaderDraft = {
@@ -85,6 +91,9 @@ type HeaderDraft = {
   /* Multi-currency AP (0188) — MYR per 1 unit of `currency` (string so the
      numeric input round-trips empty/partial typing). MYR is always '1'. */
   exchangeRate: string;
+  /* PI-level freight allocation (migration 0202) — basis the server uses to
+     spread freight SERVICE lines across the goods lines. */
+  allocationMethod: 'QTY' | 'VALUE' | 'CBM';
   notes: string;
 };
 
@@ -105,6 +114,22 @@ type PiItemRow = Record<string, unknown> & {
   /* GRN-sourced lines carry the source GRN line id; identity + variants on those
      stay read-only (only qty/price editable). Free-entry lines have it null. */
   grn_item_id?: string | null;
+  /* PI-level freight allocation (migration 0202) — this line's per-line freight
+     (MYR sen) the server allocated from the PI's SERVICE lines. > 0 only on
+     goods lines once a freight line exists. */
+  allocated_charge_centi?: number | null;
+};
+
+/* PI-level freight allocation (migration 0202) — a PV that has settled this PI
+   (hand-built camelCase array from the detail GET). */
+type PaidByVoucher = {
+  id: string;
+  amountCenti: number;
+  pvId: string;
+  pvNumber: string;
+  pvStatus: string;
+  voucherDate: string | null;
+  currency?: string | null;
 };
 
 /* Whole-line edit (T12) — Edit mode drives one PoLineCard per line, the SAME rich
@@ -121,6 +146,7 @@ const headerSnapshot = (p: any): HeaderDraft => ({
   // exchange_rate arrives as a numeric string ('1.000000') or number; show a
   // tidy value (strip trailing zeros) and default to '1'.
   exchangeRate:       p.exchange_rate != null ? String(Number(p.exchange_rate)) : '1',
+  allocationMethod:   (p.allocation_method === 'VALUE' || p.allocation_method === 'CBM') ? p.allocation_method : 'QTY',
   notes:              p.notes ?? '',
 });
 
@@ -161,6 +187,12 @@ export const PurchaseInvoiceDetail = () => {
   /* Memoised so the edit-mode seed + cost-recompute effects don't re-fire on
      every render (detail.data?.items is a fresh array each time otherwise). */
   const items = useMemo(() => (detail.data?.items ?? []) as PiItemRow[], [detail.data?.items]);
+  /* PI-level freight allocation (migration 0202) — PVs that have settled this PI
+     (camelCase, hand-built array). Shown near the AP/totals summary. */
+  const paidByVouchers = useMemo(
+    () => ((detail.data as Record<string, unknown> | undefined)?.paidByVouchers ?? []) as PaidByVoucher[],
+    [detail.data],
+  );
 
   /* ── Whole-line editor data (T12) — the SAME lookups Create uses so PoLineCard
      renders identically in Edit. Bindings come from the PI's supplier; allSkus is
@@ -678,6 +710,14 @@ export const PurchaseInvoiceDetail = () => {
                         || it.material_name;
                       return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
                     })()}
+                    {/* PI-level freight allocation (0202) — per-line freight (MYR sen)
+                        the server allocated, shown as a muted sub-line when > 0. */}
+                    {(() => {
+                      const freight = Number(it.allocated_charge_centi ?? 0);
+                      return freight > 0
+                        ? <div style={{ fontSize: 'var(--fs-11)', color: 'var(--c-accent, #8a6d3b)' }}>+freight {fmtRm(freight, 'MYR')}</div>
+                        : null;
+                    })()}
                   </td>
                   <td className={styles.muted}>{it.item_group ?? it.material_kind ?? '—'}</td>
                   <td className={styles.tableRight}>{it.qty}</td>
@@ -722,6 +762,28 @@ export const PurchaseInvoiceDetail = () => {
               <span className={styles.totalValue}>{fmtRm(balanceCenti, pi.currency)}</span>
             </div>
           </div>
+
+          {/* PI-level freight allocation (migration 0202) — Payment Vouchers that
+              have settled this PI. Each links to its PV detail. */}
+          {paidByVouchers.length > 0 && (
+            <div style={{ marginTop: 'var(--space-3)', borderTop: '1px solid var(--line)', paddingTop: 'var(--space-3)' }}>
+              <div style={{ fontSize: 'var(--fs-11)', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-muted)', marginBottom: 'var(--space-2)' }}>
+                Paid by vouchers
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
+                {paidByVouchers.map((pv) => (
+                  <div key={pv.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-3)', fontSize: 'var(--fs-13)' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                      <Link to={`/payment-vouchers/${pv.pvId}`} style={{ color: 'var(--c-orange)', fontFamily: 'var(--font-mono)' }}>{pv.pvNumber}</Link>
+                      {pv.voucherDate && <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-11)' }}>{fmtDateOrDash(pv.voucherDate)}</span>}
+                      <StatusPill docType="pv" status={pv.pvStatus} />
+                    </span>
+                    <span style={{ fontFamily: 'var(--font-mono)' }}>{fmtRm(pv.amountCenti, pv.currency ?? pi.currency)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </section>
     </div>
@@ -790,6 +852,9 @@ const SupplierCard = ({
             <InfoCell label="Supplier Invoice Ref" value={pi.supplier_invoice_ref || null} />
             <InfoCell label="Invoice Date" value={pi.invoice_date ? fmtDateOrDash(pi.invoice_date) : null} />
             <InfoCell label="Due Date" value={pi.due_date ? fmtDateOrDash(pi.due_date) : null} />
+            {/* PI-level freight allocation (migration 0202) — basis the server uses
+                to spread freight SERVICE lines across the goods lines. */}
+            <InfoCell label="Charge allocation" value={allocationMethodLabel(pi.allocation_method)} />
             <div style={{ gridColumn: 'span 2' }}>
               <InfoCell label="Notes" value={pi.notes || null} />
             </div>
@@ -854,6 +919,21 @@ const SupplierCard = ({
             <span className={styles.fieldLabel}>Due Date</span>
             <DateField fullWidth className={styles.fieldInput} value={draft.dueDate ?? ''} disabled={locked}
               onChange={(iso) => onField('dueDate', iso)} />
+          </label>
+          {/* PI-level freight allocation (migration 0202) — basis the server uses
+              to spread freight SERVICE lines across the goods lines. Editable on
+              an unlocked PI (mirrors the header allocation picker on Create). */}
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Charge allocation</span>
+            <span className={styles.selectWrap}>
+              <select className={styles.fieldSelect} value={draft.allocationMethod} disabled={locked}
+                onChange={(e) => onField('allocationMethod', e.target.value)}>
+                <option value="QTY">By quantity (default)</option>
+                <option value="VALUE">By value</option>
+                <option value="CBM">By volume (CBM)</option>
+              </select>
+              <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+            </span>
           </label>
           <label className={styles.field} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Notes</span>

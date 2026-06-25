@@ -284,6 +284,9 @@ export const useUpdatePurchaseInvoiceHeader = () => {
     mutationFn: ({ id, ...body }: {
       id: string; supplierId?: string; supplierInvoiceRef?: string; invoiceDate?: string;
       dueDate?: string; currency?: string; exchangeRate?: number; notes?: string;
+      // PI-level freight allocation (migration 0202) — basis the server uses to
+      // spread freight SERVICE lines across the goods lines.
+      allocationMethod?: 'QTY' | 'VALUE' | 'CBM';
     }) => authedFetch<{ purchaseInvoice: any }>(`/purchase-invoices/${id}`, {
       method: 'PATCH', body: JSON.stringify(body),
     }),
@@ -1925,7 +1928,7 @@ export type OutstandingRow = Record<string, unknown> & {
 
 export const useOutstanding = (
   module: OutstandingModule,
-  opts?: { mode?: OutstandingFilterMode; from?: string; to?: string },
+  opts?: { mode?: OutstandingFilterMode; from?: string; to?: string; supplierId?: string | null },
 ) => {
   const params = new URLSearchParams();
   const outstanding = opts?.mode === 'completed' ? 'false'
@@ -1934,6 +1937,9 @@ export const useOutstanding = (
   params.set('outstanding', outstanding);
   if (opts?.from) params.set('from', opts.from);
   if (opts?.to)   params.set('to',   opts.to);
+  // Migration 0202 — optional supplier filter (the PV "Apply to PI" picker lists
+  // a supplier's outstanding PIs). Only the purchase-side views honour it.
+  if (opts?.supplierId) params.set('supplierId', opts.supplierId);
   return baseQuery<{ rows: OutstandingRow[] }>(
     ['outstanding', module, params.toString()],
     `/outstanding/${module}?${params.toString()}`,
@@ -1959,7 +1965,7 @@ export const useOutstandingSummary = (opts?: { from?: string; to?: string }) => 
 
 /* ── Document relationship map (SAP-style flow diagram) ─────────────────── */
 export type FlowNodeType =
-  | 'so' | 'do' | 'si' | 'payment' | 'po' | 'grn' | 'pi' | 'dr' | 'pr'
+  | 'so' | 'do' | 'si' | 'payment' | 'po' | 'grn' | 'pi' | 'pv' | 'dr' | 'pr'
   | 'cso' | 'cdo' | 'cdr' | 'pco' | 'pcr' | 'pcrn';
 export type FlowEdgeKind = 'full' | 'partial' | 'value' | 'payment';
 export type FlowNode = {

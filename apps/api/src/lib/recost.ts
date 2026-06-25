@@ -166,9 +166,9 @@ export async function recostFromGrn(sb: any, grnId: string) {
     //    grn_item, so a partial / corrected invoice resolves cleanly.
     const giIds = giList.map((g) => g.id);
     const { data: piRows } = await sb.from('purchase_invoice_items')
-      .select('grn_item_id, qty, unit_price_centi, purchase_invoice_id')
+      .select('grn_item_id, qty, unit_price_centi, purchase_invoice_id, allocated_charge_centi')
       .in('grn_item_id', giIds);
-    const piList = (piRows ?? []) as Array<{ grn_item_id: string | null; qty: number; unit_price_centi: number | null; purchase_invoice_id: string }>;
+    const piList = (piRows ?? []) as Array<{ grn_item_id: string | null; qty: number; unit_price_centi: number | null; purchase_invoice_id: string; allocated_charge_centi: number | null }>;
     const piIds = [...new Set(piList.map((r) => r.purchase_invoice_id).filter(Boolean))];
     /* LEAK GUARD (DRAFT, PI two-state 2026-06-25) — exclude both CANCELLED AND
        DRAFT PIs from the authoritative-cost aggregate. A DRAFT PI commits no money
@@ -226,16 +226,57 @@ export async function recostFromGrn(sb: any, grnId: string) {
       for (const [key, a] of acc) freightByBucket.set(key, a.qty > 0 ? Math.round(a.freight / a.qty) : 0);
     }
 
+    /* PI-level landed freight (migration 0202) — freight entered on the PI as a
+       SERVICE line is pooled + allocated across the PI's GOODS lines and stored
+       per line as purchase_invoice_items.allocated_charge_centi (already MYR sen
+       via the PI's own rate, computed at PI write time). It is SEPARATE from the
+       GRN freight (0191): the user enters freight on the GRN OR the PI (or both,
+       deliberately), and each capitalises EXACTLY ONCE. We re-add it here as a
+       per-unit MYR figure ON TOP of the GRN freight + goods cost, so it survives
+       a recost without dropping out and without double-counting the GRN charge.
+       Key by the SAME (product_code, variant_key) bucket via each PI line's
+       grn_item_id → grn_item. DRAFT/CANCELLED PIs are excluded (piExcluded). The
+       qty here is the GRN-accepted qty (the lot's qty), matching the GRN-freight
+       per-unit basis so both freights sit on the same denominator. 0 everywhere
+       when no PI freight, so a PI with no service line is byte-for-byte
+       unchanged. */
+    const piFreightByBucket = new Map<string, number>();
+    {
+      const giById = new Map(giList.map((g) => [g.id, g]));
+      const acc = new Map<string, { freight: number; qty: number }>();
+      for (const r of piList) {
+        if (!r.grn_item_id || piExcluded.has(r.purchase_invoice_id)) continue;
+        const alloc = Number(r.allocated_charge_centi ?? 0);
+        if (alloc === 0) continue;
+        const g = giById.get(r.grn_item_id);
+        if (!g) continue;
+        const vkey = computeVariantKey(g.item_group, g.variants);
+        const key = `${g.material_code}::${vkey}`;
+        // Per-unit PI freight = round(allocated / the lot's accepted qty).
+        const lotQty = Math.max(0, Number(g.qty_accepted ?? 0));
+        const perUnit = lotQty > 0 ? Math.round(alloc / lotQty) : 0;
+        const a = acc.get(key) ?? { freight: 0, qty: 0 };
+        a.freight += perUnit * lotQty; // total PI freight sen across this bucket
+        a.qty += lotQty;
+        acc.set(key, a);
+      }
+      for (const [key, a] of acc) piFreightByBucket.set(key, a.qty > 0 ? Math.round(a.freight / a.qty) : 0);
+    }
+
     // 3. Authoritative unit cost per (product_code, variant_key) bucket.
     //    PI price > GR price > Pending (null → leave the lot untouched). The
-    //    per-unit landed FREIGHT (0191) is ADDED on top of whichever GOODS cost
-    //    source wins, so the freight stays folded after a PI recost.
+    //    per-unit landed FREIGHT is ADDED on top of whichever GOODS cost source
+    //    wins: GRN freight (0191) + PI freight (0202), each entered once → each
+    //    capitalised once (additive, NEVER double-counted — they are distinct
+    //    user entries, not the same charge seen twice).
     const costByBucket = new Map<string, number | null>();
     for (const g of giList) {
       const vkey = computeVariantKey(g.item_group, g.variants);
       const key = `${g.material_code}::${vkey}`;
       const pi = piAgg.get(g.id);
-      const freight = freightByBucket.get(key) ?? 0;
+      // GRN-allocated freight (0191) + PI-allocated freight (0202). Both are
+      // per-unit MYR; both fold onto the goods cost once each.
+      const freight = (freightByBucket.get(key) ?? 0) + (piFreightByBucket.get(key) ?? 0);
       let cost: number | null;
       // PI price (already MYR via piAgg) > GR price × GRN rate (→ MYR) > Pending.
       // Goods cost + per-unit allocated freight = the landed lot cost.

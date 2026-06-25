@@ -12,12 +12,13 @@ import { postPiAccounting, reversePiAccounting, resyncPiAccounting } from './acc
 import { recostForPi, recostFromGrn } from '../lib/recost';
 import { nextMonthlyDocNo } from '../lib/doc-no';
 import { normalizeCurrency, masterRateForCurrency } from '../lib/fx';
+import { allocateLandedCharges, normalizeAllocationMethod } from '../lib/landed-allocation';
 
 export const purchaseInvoices = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseInvoices.use('*', supabaseAuth);
 
 const HEADER =
-  'id, invoice_number, supplier_invoice_ref, supplier_id, purchase_order_id, grn_id, invoice_date, due_date, currency, exchange_rate, subtotal_centi, tax_centi, total_centi, paid_centi, status, notes, posted_at, created_at, created_by, updated_at';
+  'id, invoice_number, supplier_invoice_ref, supplier_id, purchase_order_id, grn_id, invoice_date, due_date, currency, exchange_rate, allocation_method, subtotal_centi, tax_centi, total_centi, paid_centi, status, notes, posted_at, created_at, created_by, updated_at';
 
 /* Multi-currency AP (migration 0188) — normalise an incoming exchange rate.
    exchange_rate = MYR per 1 unit of the PI currency. MYR is ALWAYS rate 1
@@ -35,7 +36,7 @@ const ITEM =
   /* PR #42 — variant fields (migration 0057) */
   'item_group, description, description2, uom, discount_centi, variants, ' +
   'gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, ' +
-  'custom_specials, line_suffix, special_order_price_sen, unit_cost_centi, created_at';
+  'custom_specials, line_suffix, special_order_price_sen, unit_cost_centi, allocated_charge_centi, created_at';
 
 const nextNum = async (sb: any, prefix: string): Promise<string> => {
   const d = new Date();
@@ -61,6 +62,70 @@ async function recomputePiTotals(sb: any, piId: string) {
     total_centi: subtotal + tax,
     updated_at: new Date().toISOString(),
   }).eq('id', piId);
+}
+
+/* ── PI-level landed freight allocation (migration 0202) — mirror of grns.ts
+   computeAndStoreGrnAllocation / reallocateGrnCharges ───────────────────────
+   A freight SERVICE line (item_group='service' — no inventory, just a
+   description + amount) can be entered on the PI as well as the GRN. Pool it +
+   allocate across the PI's GOODS lines (QTY | VALUE | CBM) and PERSIST the share
+   onto purchase_invoice_items.allocated_charge_centi (MYR sen, converted at the
+   PI's own rate), so recostFromGrn folds it into landed cost — ON TOP of any GRN
+   freight (each entered once → each capitalised once, never double-counted).
+   Self-contained: reads the PI header (rate + method) + its lines off the DB.
+   chargePool === 0 (no service line) ⇒ allocation 0 everywhere ⇒ no writes ⇒
+   byte-for-byte no-op for a PI without freight. Best-effort. */
+async function reallocatePiCharges(sb: any, piId: string): Promise<void> {
+  const { data: head } = await sb.from('purchase_invoices')
+    .select('exchange_rate, allocation_method').eq('id', piId).maybeSingle();
+  const piRate = (head as { exchange_rate?: string | number | null } | null)?.exchange_rate ?? 1;
+  const method = normalizeAllocationMethod((head as { allocation_method?: string | null } | null)?.allocation_method);
+  const { data: items } = await sb.from('purchase_invoice_items')
+    .select('id, qty, material_code, unit_price_centi, line_total_centi, item_group, allocated_charge_centi')
+    .eq('purchase_invoice_id', piId);
+  const rows = (items ?? []) as Array<{
+    id: string; qty: number | null; material_code: string; unit_price_centi: number | null;
+    line_total_centi: number | null; item_group: string | null; allocated_charge_centi: number | null;
+  }>;
+
+  // CBM basis needs each goods line's product volume (unit_m3_milli). Resolve
+  // per material_code in one round trip; default 0 (the allocator falls back to
+  // QTY when the CBM Σ is 0, so a missing volume never divides by zero). Mirrors
+  // computeAndStoreGrnAllocation.
+  const m3ByCode = new Map<string, number>();
+  const codes = [...new Set(rows.map((r) => r.material_code).filter(Boolean))];
+  if (codes.length > 0) {
+    const { data: prods } = await sb.from('mfg_products').select('code, unit_m3_milli').in('code', codes);
+    for (const p of (prods ?? []) as Array<{ code: string; unit_m3_milli: number | null }>) {
+      m3ByCode.set(p.code, Number(p.unit_m3_milli ?? 0));
+    }
+  }
+
+  const alloc = allocateLandedCharges(
+    rows.map((r) => ({
+      id: r.id,
+      itemGroup: r.item_group ?? null,
+      materialCode: r.material_code,
+      qty: Number(r.qty ?? 0),
+      // Pool by the SERVICE line's line total; allocate ONTO goods unit price.
+      amountCenti: Number(r.line_total_centi ?? 0),
+      unitPriceCenti: Number(r.unit_price_centi ?? 0),
+      unitM3Milli: m3ByCode.get(r.material_code) ?? 0,
+    })),
+    method,
+    piRate, // PI's OWN rate → allocator returns allocatedChargeCenti in MYR sen.
+  );
+
+  // Persist allocated_charge_centi (MYR sen) per goods line — but only when
+  // there's something to reconcile (a non-zero pool now, OR any line currently
+  // carries a non-zero allocation that a removed charge / method change must
+  // reset to 0). True no-op otherwise.
+  const anyToReset = rows.some((r) => Number(r.allocated_charge_centi ?? 0) !== 0);
+  if (alloc.chargePoolMyr > 0 || anyToReset) {
+    await Promise.all(alloc.goods.map((g) =>
+      sb.from('purchase_invoice_items').update({ allocated_charge_centi: g.allocatedChargeCenti }).eq('id', g.id),
+    ));
+  }
 }
 
 /* ── Self-heal GRN invoiced counter (live-count model, mirrors recomputeSoPicked
@@ -290,9 +355,16 @@ purchaseInvoices.get('/outstanding-grn-items', async (c) => {
 
 purchaseInvoices.get('/:id', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
-  const [h, i] = await Promise.all([
+  const [h, i, pvAlloc] = await Promise.all([
     sb.from('purchase_invoices').select(`${HEADER}, supplier:suppliers(id, code, name)`).eq('id', id).maybeSingle(),
     sb.from('purchase_invoice_items').select(ITEM).eq('purchase_invoice_id', id).order('created_at'),
+    /* PV settlement (migration 0202) — the Payment Vouchers that have applied
+       against THIS PI ("Paid by PV-xxxx"). Joins the PV header for the number +
+       status + voucher date; only POSTED PVs have actually moved paid_centi, so
+       surface the status too. */
+    sb.from('pv_allocations')
+      .select('id, amount_centi, pv:payment_vouchers(id, pv_number, status, voucher_date, currency)')
+      .eq('pi_id', id),
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
@@ -309,7 +381,24 @@ purchaseInvoices.get('/:id', async (c) => {
       (r) => r.item_group as string | null | undefined,
     ),
   );
-  return c.json({ purchaseInvoice: h.data, items });
+  /* PV settlement (0202) — flatten the joined PV (Supabase returns a to-one FK as
+     an array). Each entry = one PV's amount applied to this PI. */
+  const paidByVouchers = ((pvAlloc.data ?? []) as Array<{
+    id: string; amount_centi: number;
+    pv: { id: string; pv_number: string; status: string; voucher_date: string; currency: string | null } | Array<{ id: string; pv_number: string; status: string; voucher_date: string; currency: string | null }> | null;
+  }>).map((a) => {
+    const pv = Array.isArray(a.pv) ? a.pv[0] : a.pv;
+    return {
+      id: a.id,
+      amountCenti: Number(a.amount_centi ?? 0),
+      pvId: pv?.id ?? null,
+      pvNumber: pv?.pv_number ?? null,
+      pvStatus: pv?.status ?? null,
+      voucherDate: pv?.voucher_date ?? null,
+      currency: pv?.currency ?? null,
+    };
+  });
+  return c.json({ purchaseInvoice: h.data, items, paidByVouchers });
 });
 
 // ── Linked docs (Smart Buttons fan-out) ─────────────────────────────
@@ -431,6 +520,9 @@ purchaseInvoices.post('/', async (c) => {
     ? await masterRateForCurrency(sb, currency)
     : body.exchangeRate;
   const exchangeRate = normalizeExchangeRate(piRateRaw, currency);
+  // PI-level landed freight (migration 0202) — the SERVICE-line ("平摊") basis,
+  // independent of any GRN allocation_method. Default QTY when omitted.
+  const allocationMethod = normalizeAllocationMethod(body.allocationMethod);
   const { data: header, error: hErr } = await sb.from('purchase_invoices').insert({
     invoice_number: invoiceNumber,
     supplier_invoice_ref: (body.supplierInvoiceRef as string) ?? null,
@@ -441,6 +533,7 @@ purchaseInvoices.post('/', async (c) => {
     due_date: (body.dueDate as string) ?? null,
     currency,
     exchange_rate: exchangeRate,
+    allocation_method: allocationMethod,
     subtotal_centi: subtotal,
     total_centi: subtotal,
     notes: (body.notes as string) ?? null,
@@ -476,6 +569,10 @@ purchaseInvoices.post('/', async (c) => {
     // Self-heal the GRN invoiced counter so the just-billed lines drop out of the
     // outstanding picker (mirrors /from-grn-items line ~523 + /:id/items).
     await recomputeGrnInvoiced(sb, itemRows.map((r) => r.grn_item_id));
+    // PI-level landed freight (migration 0202) — pool + allocate this PI's
+    // SERVICE-line freight onto its goods lines (allocated_charge_centi) BEFORE
+    // recost, so recostFromGrn folds the PI freight in alongside any GRN freight.
+    await reallocatePiCharges(sb, h.id);
     // Costing B — a new PI is the authoritative cost: re-cost the GRN's lots →
     // consumptions → movements → DO → SI so a shipped order's margin reflects the
     // billed price (or its later correction) in real time.
@@ -532,6 +629,9 @@ purchaseInvoices.patch('/:id/post', async (c) => {
     // eslint-disable-next-line no-console
     console.error(`[pi-accounting] confirm post failed for ${curRow.invoice_number}:`, postRes.status, postRes.reason);
   }
+  // PI-level landed freight (migration 0202) — allocate this PI's SERVICE-line
+  // freight onto its goods lines before recost (a DRAFT PI deferred this).
+  await reallocatePiCharges(sb, id);
   // Costing B — the now-confirmed PI is the authoritative cost: re-cost lots/DO/SI.
   await recostForPi(sb, id);
   return c.json({ purchaseInvoice: data });
@@ -1012,6 +1112,16 @@ purchaseInvoices.patch('/:id', async (c) => {
   if (updates.currency !== undefined) updates.currency = String(updates.currency).toUpperCase();
   const sb = c.get('supabase');
 
+  /* PI-level landed freight (migration 0202) — accept the allocation_method on the
+     header PATCH (mirror GRN PATCH). When the rate or the method changes the
+     SERVICE-line freight must be re-split + the lots re-costed (done after the
+     update commits, below). */
+  let allocOrRateChanged = body.exchangeRate !== undefined || body.currency !== undefined;
+  if (body.allocationMethod !== undefined) {
+    updates.allocation_method = normalizeAllocationMethod(body.allocationMethod);
+    allocOrRateChanged = true;
+  }
+
   /* Multi-currency AP (migration 0188) — keep exchange_rate consistent with the
      effective currency. Resolve the effective currency = the new currency if the
      PATCH sets one, else the PI's current stored currency. Then:
@@ -1036,6 +1146,16 @@ purchaseInvoices.patch('/:id', async (c) => {
 
   const { data, error } = await sb.from('purchase_invoices').update(updates).eq('id', id).select(HEADER).single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+
+  /* PI-level landed freight (0202) — a rate / currency / allocation_method change
+     re-splits the freight pool (the per-line MYR allocation depends on the rate +
+     the basis); re-allocate then re-cost so the lots / DO / SI follow. Best-effort
+     (mirror the GRN PATCH reallocate-then-recost). No-op when the PI has no freight
+     line. Skipped on a no-op (only field-only) PATCH. */
+  if (allocOrRateChanged) {
+    await reallocatePiCharges(sb, id);
+    await recostForPi(sb, id);
+  }
   return c.json({ purchaseInvoice: data });
 });
 
@@ -1139,6 +1259,9 @@ purchaseInvoices.post('/:id/items', async (c) => {
   // nothing). Recount invoiced_qty from live PI lines.
   if (grnItemId) await recomputeGrnInvoiced(sb, [grnItemId]);
   await recomputePiTotals(sb, piId);
+  // PI-level landed freight (0202) — a new line (a goods line OR a freight
+  // SERVICE line) changes the pool / the split, so re-allocate before recost.
+  await reallocatePiCharges(sb, piId);
   // Costing B — a newly added PI line bills a GRN line: re-cost its lots / DO / SI.
   await recostForPi(sb, piId);
   return c.json({ item: data }, 201);
@@ -1223,6 +1346,9 @@ purchaseInvoices.patch('/:id/items/:itemId', async (c) => {
   // [0, qty_accepted]).
   if (grnItemId) await recomputeGrnInvoiced(sb, [grnItemId]);
   await recomputePiTotals(sb, piId);
+  // PI-level landed freight (0202) — a line edit (qty / price on a goods line,
+  // or the freight SERVICE line's amount) re-splits the pool; re-allocate first.
+  await reallocatePiCharges(sb, piId);
   // Costing B — a PI price EDIT (incl. human-error correction) re-costs the
   // GRN's lots and cascades to every shipped DO + Sales Invoice in real time.
   await recostForPi(sb, piId);
@@ -1256,15 +1382,17 @@ purchaseInvoices.delete('/:id/items/:itemId', async (c) => {
     const l = line as { qty: number; grn_item_id: string | null };
     // Release: recount invoiced_qty from live PI lines — the deleted line drops out.
     if (l.grn_item_id) await recomputeGrnInvoiced(sb, [l.grn_item_id]);
-    // Costing B — removing a PI line drops its authoritative price; re-cost the
-    // GRN so the bucket falls back to the GR price (or Pending) and DOs/SIs follow.
-    if (l.grn_item_id) {
-      const { data: gi } = await sb.from('grn_items').select('grn_id').eq('id', l.grn_item_id).maybeSingle();
-      const gid = (gi as { grn_id: string | null } | null)?.grn_id ?? null;
-      if (gid) await recostFromGrn(sb, gid);
-    }
   }
   await recomputePiTotals(sb, piId);
+  // PI-level landed freight (0202) — re-allocate after the line is gone (deleting
+  // a goods line OR the freight SERVICE line re-splits / clears the pool). Run
+  // BEFORE recost so the lots see the updated allocation.
+  await reallocatePiCharges(sb, piId);
+  // Costing B — removing a PI line drops its authoritative price / freight; re-cost
+  // every GRN this PI touches so buckets fall back to GR price (or Pending) and the
+  // freight re-folds correctly. recostForPi resolves all the PI's GRNs (incl. the
+  // header grn_id), so it covers a deleted freight SERVICE line that had no GRN link.
+  await recostForPi(sb, piId);
   /* Deleting a line lowers the PI total — if it was posted to the accounts, void
      the stale entry + re-post (or void to nothing if it was the last line). No-op
      when never posted. Best-effort. */

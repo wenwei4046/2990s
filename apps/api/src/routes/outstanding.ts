@@ -47,6 +47,12 @@ for (const [slug, { view, dateCol }] of Object.entries(MODULES)) {
     const outstandingParam = c.req.query('outstanding');
     const from = c.req.query('from');
     const to = c.req.query('to');
+    /* Optional supplier filter (migration 0202) — the PV "Apply to PI" picker
+       lists a chosen supplier's outstanding PIs. The purchase-side views (po /
+       grn / pi / pr) expose supplier_id; the sales-side views do not, so only
+       apply it where the column exists. */
+    const supplierId = c.req.query('supplierId');
+    const hasSupplier = slug === 'po' || slug === 'grn' || slug === 'pi' || slug === 'pr';
 
     // Page through so PostgREST's 1000-row cap can't silently truncate the
     // outstanding list (an "all"/wide-range view can exceed 1000 docs).
@@ -75,6 +81,7 @@ for (const [slug, { view, dateCol }] of Object.entries(MODULES)) {
          a DRAFT with total>paid would read outstanding. The view exposes pi.status
          (0059_outstanding_views.sql), so filter DRAFT out here. */
       if (slug === 'pi') q = q.neq('status', 'DRAFT');
+      if (supplierId && hasSupplier) q = q.eq('supplier_id', supplierId);
       if (from) q = q.gte(dateCol, from);
       if (to)   q = q.lte(dateCol, to);
       return q.range(pFrom, pTo);

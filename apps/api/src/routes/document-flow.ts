@@ -34,7 +34,7 @@ export const documentFlow = new Hono<{ Bindings: Env; Variables: Variables }>();
 documentFlow.use('*', supabaseAuth);
 
 type NodeType =
-  | 'so' | 'do' | 'si' | 'payment' | 'po' | 'grn' | 'pi' | 'dr' | 'pr'
+  | 'so' | 'do' | 'si' | 'payment' | 'po' | 'grn' | 'pi' | 'pv' | 'dr' | 'pr'
   // Consignment family (its own self-contained graph — not linked to the SO root):
   //   sales:    cso ──▶ cdo ──▶ cdr   (Consignment Order / Note / Return)
   //   purchase: pco ──▶ pcr ──▶ pcrn  (PC Order / Receive / Return)
@@ -95,6 +95,15 @@ async function resolveRootSos(sb: any, type: NodeType, id: string): Promise<stri
     case 'pi': {
       const { data } = await sb.from('purchase_invoices').select('grn_id').eq('id', id).maybeSingle();
       return data?.grn_id ? resolveRootSos(sb, 'grn', data.grn_id) : [];
+    }
+    case 'pv': {
+      // A Payment Voucher resolves through the PIs it settles (pv_allocations →
+      // pi → grn → po → so). A FREIGHT/OTHER PV with no PI link is an orphan.
+      const { data } = await sb.from('pv_allocations').select('pi_id').eq('pv_id', id);
+      const piIds = uniq((data ?? []).map((r: any) => r.pi_id));
+      const out = new Set<string>();
+      for (const piId of piIds) for (const s of await resolveRootSos(sb, 'pi', piId)) out.add(s);
+      return [...out];
     }
     case 'dr': {
       // Delivery Return hangs off its Delivery Order — resolve through the DO.
@@ -315,7 +324,7 @@ documentFlow.get('/:type/:id', async (c) => {
   const sb = c.get('supabase');
   const type = c.req.param('type') as NodeType;
   const id = c.req.param('id');
-  const ALL_TYPES: NodeType[] = ['so', 'do', 'si', 'payment', 'po', 'grn', 'pi', 'dr', 'pr', ...CONSIGNMENT_TYPES];
+  const ALL_TYPES: NodeType[] = ['so', 'do', 'si', 'payment', 'po', 'grn', 'pi', 'pv', 'dr', 'pr', ...CONSIGNMENT_TYPES];
   if (!ALL_TYPES.includes(type)) {
     return c.json({ error: 'bad_type' }, 400);
   }
@@ -568,13 +577,36 @@ documentFlow.get('/:type/:id', async (c) => {
       agg.parentItems.add(l.grn_item_id);
       grnToPi.set(k, agg);
     }
+    const piIds: string[] = [];
     for (const p of (pis ?? []) as any[]) {
       const k = keyOf('pi', p.id);
       nodes.set(k, { key: k, type: 'pi', id: p.id, label: p.invoice_number ?? p.id, status: p.status ?? null, isAnchor: k === anchorKey });
+      piIds.push(p.id);
       if (p.grn_id) {
         const agg = grnToPi.get(`${p.grn_id}|${p.id}`);
         const parentQty = agg ? [...agg.parentItems].reduce((s, gi) => s + (grnItemMeta.get(gi)?.qty ?? 0), 0) : 0;
         addEdge(keyOf('grn', p.grn_id), k, agg ? cover(agg.childQty, parentQty) : 'full');
+      }
+    }
+
+    // ── 7a. AP settlement — Payment Vouchers (migration 0202) ───────────────
+    // A PV settles a PI's AP via pv_allocations. Draw the PV as a node + a
+    // 'payment' edge PV→PI (the SAME green payment kind the AR side uses for
+    // SI→Payment). A PV can settle several PIs (one node, several edges).
+    if (piIds.length) {
+      const { data: pvAllocs } = await sb.from('pv_allocations')
+        .select('pv_id, pi_id, amount_centi, pv:payment_vouchers(id, pv_number, status, currency)')
+        .in('pi_id', piIds);
+      const pvSeen = new Set<string>();
+      for (const a of (pvAllocs ?? []) as any[]) {
+        const pv = Array.isArray(a.pv) ? a.pv[0] : a.pv;
+        if (!pv?.id) continue;
+        const k = keyOf('pv', pv.id);
+        if (!pvSeen.has(pv.id)) {
+          nodes.set(k, { key: k, type: 'pv', id: pv.id, label: pv.pv_number ?? pv.id, status: pv.status ?? null, isAnchor: k === anchorKey });
+          pvSeen.add(pv.id);
+        }
+        addEdge(k, keyOf('pi', a.pi_id), 'payment');
       }
     }
   }
