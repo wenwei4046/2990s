@@ -22,7 +22,8 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Split } from 'lucide-react';
+import { Split, MapPinned } from 'lucide-react';
+import { Button } from '@2990s/design-system';
 import { fmtCenti, fmtDateOrDash, fmtDateTime, buildVariantSummary } from '@2990s/shared';
 import { formatPhone } from '@2990s/shared/phone';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
@@ -588,6 +589,17 @@ export const DeliveryPlanning = () => {
             Orders that need delivering · grouped by region (customer state) · {counts.ALL} in {activeRegionLabel}
           </p>
         </div>
+        {/* Secondary header control — open the owner-maintained region-bucket
+            master (formerly a standalone sidebar line; now reached from here). */}
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => navigate('/delivery-planning-regions')}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          <MapPinned size={16} strokeWidth={1.75} />
+          Manage regions
+        </Button>
       </div>
 
       {/* 4 STATE TABS (top row) — Pending Delivery / Pending Schedule / Overdue / Delivered, with counts. */}

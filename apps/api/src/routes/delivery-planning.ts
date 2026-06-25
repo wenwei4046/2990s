@@ -336,15 +336,21 @@ deliveryPlanning.get('/', async (c) => {
   const { data: itemRowsRaw } = await paginateAll<{
     doc_no: string; item_group: string | null; item_code: string | null;
     stock_status: string | null; cancelled: boolean | null; warehouse_id: string | null;
+    branding: string | null;
   }>((from, to) =>
     sb.from('mfg_sales_order_items')
-      .select('doc_no, item_group, item_code, stock_status, cancelled, warehouse_id')
+      .select('doc_no, item_group, item_code, stock_status, cancelled, warehouse_id, branding')
       .in('doc_no', docNos)
       .eq('cancelled', false)
       .range(from, to),
   );
   const linesByDoc = new Map<string, ReadinessLine[]>();
   const warehousesByDoc = new Map<string, Set<string>>();
+  /* Distinct non-empty per-LINE branding per SO (mfg_sales_order_items.branding,
+     e.g. AKEMI / ZANOTTI / 2990 SOFA). The real branding lives on the lines; the
+     SO HEADER field is empty for most orders. Insertion-ordered Set keeps the
+     order's lines' branding stable for the " / "-joined aggregate below. */
+  const lineBrandingByDoc = new Map<string, Set<string>>();
   for (const it of (itemRowsRaw ?? [])) {
     const dn = it.doc_no;
     if (!dn) continue;
@@ -355,6 +361,12 @@ deliveryPlanning.get('/', async (c) => {
       const ws = warehousesByDoc.get(dn) ?? new Set<string>();
       ws.add(it.warehouse_id);
       warehousesByDoc.set(dn, ws);
+    }
+    const brand = (it.branding ?? '').trim();
+    if (brand) {
+      const bs = lineBrandingByDoc.get(dn) ?? new Set<string>();
+      bs.add(brand);
+      lineBrandingByDoc.set(dn, bs);
     }
   }
 
@@ -508,6 +520,12 @@ deliveryPlanning.get('/', async (c) => {
         two tabs with two dates. */
   const orders = soRows.map((r) => {
     const docNo = String(r.doc_no ?? '');
+    /* Branding: the HEADER field (mfg_sales_orders.branding) wins when present,
+       else the DISTINCT non-empty per-LINE brandings joined by " / " (the real
+       branding lives on the lines — AKEMI / ZANOTTI / 2990 SOFA), else null. */
+    const headerBranding = (r.branding ?? '').trim();
+    const lineBranding = [...(lineBrandingByDoc.get(docNo) ?? new Set<string>())].join(' / ');
+    const branding = headerBranding || lineBranding || null;
     const readiness = summariseReadiness(linesByDoc.get(docNo) ?? []);
     const delivered = deliveredByDoc.get(docNo) ?? 0;
     const remaining = remainingByDoc.get(docNo) ?? 0;
@@ -561,7 +579,7 @@ deliveryPlanning.get('/', async (c) => {
       debtor_code: r.debtor_code ?? null,
       debtor_name: r.debtor_name ?? null,
       phone: r.phone ?? null,
-      branding: r.branding ?? null,
+      branding,
       status,
       delivery_state: state,
       delivery_state_override: stored && (DELIVERY_STATES as string[]).includes(stored) ? stored : null,

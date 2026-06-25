@@ -46,7 +46,6 @@ export const NAV_ITEMS: NavItem[] = [
   // "Driver & Helper" / Fleet portal (Driver · Helper · Lorry masters on one
   // page, migration 0195) + the standalone Lorry Capacity dashboard.
   { label: 'Delivery Planning', path: '/delivery-planning', group: 'Transportation', keywords: 'delivery plan schedule route trip overdue pending region tms dispatch' },
-  { label: 'Delivery Regions', path: '/delivery-planning-regions', group: 'Transportation', keywords: 'delivery planning region bucket tab setup master kl penang em sg singapore config maintenance' },
   { label: 'Driver & Helper', path: '/fleet', group: 'Transportation', keywords: 'fleet driver helper lorry truck van crew loader vehicle tms outsource in-house master' },
   { label: 'Lorry Capacity', path: '/lorry-capacity', group: 'Transportation', keywords: 'lorry capacity utilisation utilization performance fleet trips revenue dashboard repair days kpi tms' },
 
