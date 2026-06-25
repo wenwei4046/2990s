@@ -532,7 +532,12 @@ export const GrnNew = () => {
   const canSave = !!supplierId && lines.length > 0 &&
     lines.every((l) => l.qtyReceived >= 0);
 
-  const onSave = async () => {
+  /* Save the GRN. asDraft=true creates a DRAFT (commits NOTHING — no stock IN,
+     no PO received-rollup, not PI-invoiceable) and SKIPS the confirm post; the
+     receiver confirms later from the detail page. asDraft=false (default,
+     "Create Goods Receipt") creates then immediately confirms via /post, which
+     fires the inventory IN + PO rollup. Mirrors the SO/DO/SI/PO Save-as-Draft. */
+  const onSave = async (asDraft = false) => {
     if (!supplierId) {
       setDialog({ title: 'Pick a supplier', body: hasPicks
         ? 'The picks are missing a supplier — go back to the picker and try again.'
@@ -551,6 +556,8 @@ export const GrnNew = () => {
     }
     try {
       const createRes = await create.mutateAsync({
+        // Draft/Confirmed — a DRAFT GRN commits nothing until confirmed.
+        asDraft,
         purchaseOrderId: headerPoId,
         supplierId,
         // Commander 2026-05-29 — chosen "Receive into" warehouse (PO parity).
@@ -591,10 +598,14 @@ export const GrnNew = () => {
           rackId:              l.rackId || undefined,
         })),
       });
-      await post.mutateAsync(createRes.id);
+      // DRAFT skips the confirm post — nothing commits until the receiver
+      // confirms from the detail page. Non-draft posts immediately.
+      if (!asDraft) await post.mutateAsync(createRes.id);
       setDialog({
-        title: `GRN ${createRes.grnNumber} created`,
-        body: 'Received & posted — inventory + PO received qty updated.',
+        title: `GRN ${createRes.grnNumber} ${asDraft ? 'saved as draft' : 'created'}`,
+        body: asDraft
+          ? 'Saved as a draft — no stock moved and no PO received qty changed yet. Open it to review and Confirm to post.'
+          : 'Received & posted — inventory + PO received qty updated.',
         goTo: `/grns/${createRes.id}`,
       });
     } catch (err) {
@@ -619,7 +630,14 @@ export const GrnNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={saving}>
+          {/* Save as Draft — creates a DRAFT GRN that commits nothing (no stock
+              IN, no PO received-rollup, not PI-invoiceable) until confirmed from
+              the detail page. Mirrors the SO/DO/SI/PO Save-as-Draft. */}
+          <Button variant="ghost" size="md" onClick={() => onSave(true)} disabled={saving}>
+            <Save {...ICON} />
+            {saving ? 'Saving…' : 'Save as Draft'}
+          </Button>
+          <Button variant="primary" size="md" onClick={() => onSave(false)} disabled={saving}>
             <Save {...ICON} />
             {saving ? 'Saving…' : 'Create Goods Receipt'}
           </Button>

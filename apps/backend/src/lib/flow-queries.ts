@@ -93,7 +93,13 @@ export const usePostGrn = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => authedFetch(`/grns/${id}/post`, { method: 'PATCH' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['grns'] }),
+    onSuccess: (_, id) => {
+      // Confirm (DRAFT → POSTED) commits stock IN + PO rollup server-side — the
+      // detail pill, the list, and the on-hand drilldown all need to refresh.
+      qc.invalidateQueries({ queryKey: ['grn-detail', id] });
+      qc.invalidateQueries({ queryKey: ['grns'] });
+      qc.invalidateQueries({ queryKey: ['inventory'] });
+    },
   });
 };
 

@@ -40,6 +40,10 @@ const PO: Record<string, Entry> = {
   CANCELLED:          { label: 'Cancelled',          tone: 'danger' },
 };
 const GRN: Record<string, Entry> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT GRN is uncommitted: it
+  // moves NO inventory IN, bumps NO PO received_qty, and isn't PI-invoiceable
+  // until Confirm flips it to POSTED. Neutral/grey, mirroring the SO/DO/SI/PO pill.
+  DRAFT:     { label: 'Draft',     tone: 'neutral' },
   POSTED:    { label: 'Confirmed', tone: 'info' },
   CLOSED:    { label: 'Closed',    tone: 'success' },
   CANCELLED: { label: 'Cancelled', tone: 'danger' },

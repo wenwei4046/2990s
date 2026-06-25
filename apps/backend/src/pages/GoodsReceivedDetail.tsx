@@ -27,7 +27,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown, ArrowRightLeft,
+  ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown, ArrowRightLeft, CheckCircle2,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { activeOptions, buildVariantSummary, fmtDateOrDash, isServiceLine, maintPickerValues } from '@2990s/shared';
@@ -37,6 +37,7 @@ import {
   useUpdateGrnItem,
   useDeleteGrnItem,
   useCancelGrn,
+  usePostGrn,
 } from '../lib/flow-queries';
 import {
   useSuppliers, useSupplierDetail,
@@ -206,6 +207,7 @@ export const GoodsReceivedDetail = () => {
   const askConfirm = useConfirm();
   const notify = useNotify();
   const cancel = useCancelGrn();
+  const confirmGrn = usePostGrn();
 
   const grn = detail.data?.grn ?? null;
   const items = (detail.data?.items ?? []) as GrnItemRow[];
@@ -248,13 +250,16 @@ export const GoodsReceivedDetail = () => {
   const [lineDrafts, setLineDrafts] = useState<Record<string, LineDraft>>({});
   const [savingDraft, setSavingDraft] = useState(false);
 
-  // POSTED ("Confirmed") is editable UNLESS the GRN has a downstream PI/PR
-  // (unified model, migration 0106): once a child exists the page is read-only —
-  // to edit you must delete the downstream doc first. CANCELLED / CLOSED also lock.
+  // DRAFT + POSTED ("Confirmed") are both editable; a DRAFT additionally shows a
+  // Confirm action that posts it (stock IN + PO rollup). Editing locks only once
+  // the GRN has a downstream PI/PR (unified model, migration 0106) — delete the
+  // child first — or once it's CANCELLED / CLOSED.
   const hasChildren = Boolean(grn?.has_children);
-  const isLocked = grn ? (grn.status !== 'POSTED' || hasChildren) : true;
+  const isDraft = grn?.status === 'DRAFT';
+  const isEditableStatus = grn ? (grn.status === 'POSTED' || grn.status === 'DRAFT') : false;
+  const isLocked = grn ? (!isEditableStatus || hasChildren) : true;
   // Distinguish the child-lock case so we can show the "delete it first" note.
-  const lockedDueToChildren = grn ? (grn.status === 'POSTED' && hasChildren) : false;
+  const lockedDueToChildren = grn ? (isEditableStatus && hasChildren) : false;
 
   /* If the GRN locks while we're in Edit mode (e.g. cancelled in another tab),
      drop back to View + discard the draft. */
@@ -457,15 +462,37 @@ export const GoodsReceivedDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
-          {/* Cancel — only when the GRN is still editable (Confirmed) AND has no
-              downstream PI/PR (unified model). Confirm dialog → cancel mutation
-              (reverses the receipt server-side). */}
-          {grn.status === 'POSTED' && !hasChildren && (
+          {/* Confirm — only on a DRAFT (and not child-locked). Posts the GRN:
+              the stock IN + PO received-rollup fire server-side via /post. After
+              that it reads as Confirmed. Mirrors the SO/DO/SI/PO Confirm. */}
+          {isDraft && !hasChildren && (
+            <Button variant="primary" size="md"
+              onClick={async () => {
+                if (!(await askConfirm({
+                  title: `Confirm GRN ${grn.grn_number}?`,
+                  body: 'This posts the receipt — stock moves in and the source PO\'s received qty is updated. You can still cancel afterwards.',
+                  confirmLabel: 'Confirm GRN',
+                }))) return;
+                confirmGrn.mutate(grn.id, {
+                  onError: (err) => notify({ title: 'Confirm failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
+                });
+              }}
+              disabled={confirmGrn.isPending}>
+              <CheckCircle2 {...ICON} />
+              <span>{confirmGrn.isPending ? 'Confirming…' : 'Confirm'}</span>
+            </Button>
+          )}
+          {/* Cancel — when the GRN is still editable (Draft or Confirmed) AND has
+              no downstream PI/PR (unified model). A DRAFT just flips to CANCELLED
+              (nothing to reverse); a POSTED GRN reverses the receipt server-side. */}
+          {(grn.status === 'POSTED' || isDraft) && !hasChildren && (
             <Button variant="ghost" size="md"
               onClick={async () => {
                 if (!(await askConfirm({
                   title: `Cancel GRN ${grn.grn_number}?`,
-                  body: `This reverses the receipt — stock is taken back out and the source PO's received qty is rolled back. Line items stay for audit.`,
+                  body: isDraft
+                    ? 'This cancels the draft. Nothing was posted, so no stock or PO quantities change. Line items stay for audit.'
+                    : `This reverses the receipt — stock is taken back out and the source PO's received qty is rolled back. Line items stay for audit.`,
                   confirmLabel: 'Cancel GRN',
                   danger: true,
                 }))) return;
