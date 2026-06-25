@@ -102,6 +102,9 @@ const StockTakes = lazyRetry(() => import('./pages/StockTakes').then(m => ({ def
 const StockTakeNew = lazyRetry(() => import('./pages/StockTakeNew').then(m => ({ default: m.StockTakeNew })));
 const StockTakeDetail = lazyRetry(() => import('./pages/StockTakeDetail').then(m => ({ default: m.StockTakeDetail })));
 const Drivers = lazyRetry(() => import('./pages/Drivers').then(m => ({ default: m.Drivers })));
+// TMS fleet masters (migration 0195) — Helper + Lorry, alongside Drivers.
+const Helpers = lazyRetry(() => import('./pages/Helpers').then(m => ({ default: m.Helpers })));
+const Lorries = lazyRetry(() => import('./pages/Lorries').then(m => ({ default: m.Lorries })));
 const Accounting = lazyRetry(() => import('./pages/Accounting').then(m => ({ default: m.Accounting })));
 const Warehouses = lazyRetry(() => import('./pages/Warehouses').then(m => ({ default: m.Warehouses })));
 // Migration 0094 — Warehouse rack/bin management (ported from Hookka ERP).
@@ -201,6 +204,9 @@ export const router = createBrowserRouter([
       // warehouse master). Sidebar entry added by the parent session.
       { path: 'warehouse', element: <Warehouse /> },
       { path: 'drivers', element: <Drivers /> },
+      // TMS fleet masters (migration 0195).
+      { path: 'helpers', element: <Helpers /> },
+      { path: 'lorries', element: <Lorries /> },
       { path: 'suppliers', element: <Suppliers /> },
       { path: 'suppliers/:id', element: <SupplierDetail /> },
       // Currencies MASTER (migration 0193) — owner-maintained currency list +

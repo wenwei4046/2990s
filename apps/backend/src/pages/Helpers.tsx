@@ -1,107 +1,97 @@
 // ----------------------------------------------------------------------------
-// Drivers — CRUD page. Replaces free-text driver names on DOs with a proper
-// master list. Inline edit + add-new drawer. Inactive drivers can be toggled
-// back on without losing history (the FK on DO is ON DELETE SET NULL).
+// Helpers — CRUD page (TMS fleet master, migration 0195). Cloned from
+// Drivers.tsx. A helper is a delivery crew member (not a driver). Inline Active
+// toggle + add-new drawer. In-house vs Outsource shown as a column + set via a
+// checkbox in the create drawer (dual-read camelCase `inHouse ?? in_house`).
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
-  useDrivers,
-  useCreateDriver,
-  useUpdateDriver,
-  type DriverRow,
-} from '../lib/drivers-queries';
+  useHelpers,
+  useCreateHelper,
+  useUpdateHelper,
+  type HelperRow,
+} from '../lib/helpers-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useNotify } from '../components/NotifyDialog';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-export const Drivers = () => {
+export const Helpers = () => {
   const [includeInactive, setIncludeInactive] = useState(false);
   const [creating, setCreating] = useState(false);
-  const drivers = useDrivers({ includeInactive });
-  const update = useUpdateDriver();
+  const helpers = useHelpers({ includeInactive });
+  const update = useUpdateHelper();
   const updateMutate = update.mutate;
 
-  /* Shared DataGrid conversion (2026-06-12) — sort / per-column filter /
-     column show-hide / reorder / pin / persisted layout. The Active toggle
-     stays an inline checkbox; stopPropagation so it never reads as a row
-     click. IC Number ships default-hidden (low-value) — re-enable via the
-     Columns popover. */
-  const columns = useMemo<DataGridColumn<DriverRow>[]>(() => [
+  const columns = useMemo<DataGridColumn<HelperRow>[]>(() => [
     {
       key: 'code',
       label: 'Code',
       width: 110,
-      accessor: (d) => <span className={styles.codeChip}>{d.driver_code}</span>,
-      searchValue: (d) => d.driver_code,
-      filterValue: (d) => d.driver_code,
-      sortFn: (a, b) => a.driver_code.localeCompare(b.driver_code),
+      accessor: (h) => <span className={styles.codeChip}>{h.helper_code}</span>,
+      searchValue: (h) => h.helper_code,
+      filterValue: (h) => h.helper_code,
+      sortFn: (a, b) => a.helper_code.localeCompare(b.helper_code),
     },
     {
       key: 'name',
       label: 'Name',
       width: 200,
-      accessor: (d) => d.name,
+      accessor: (h) => h.name,
       sortFn: (a, b) => a.name.localeCompare(b.name),
     },
     {
-      key: 'phone',
-      label: 'Phone',
+      key: 'contact',
+      label: 'Contact',
       width: 160,
-      accessor: (d) => d.phone,
+      accessor: (h) => h.contact ?? '—',
     },
     {
       key: 'ic',
       label: 'IC Number',
       width: 150,
-      accessor: (d) => d.ic_number ?? '—',
+      accessor: (h) => h.ic_number ?? '—',
       defaultHidden: true,
-    },
-    {
-      key: 'vehicle',
-      label: 'Vehicle',
-      width: 170,
-      accessor: (d) => d.vehicle ?? '—',
     },
     {
       key: 'fleet',
       label: 'Fleet',
       width: 130,
       /* Dual-read camelCase: the pg driver camelCases result cols. */
-      accessor: (d) => {
-        const inHouse = (d.inHouse ?? d.in_house) !== false;
+      accessor: (h) => {
+        const inHouse = (h.inHouse ?? h.in_house) !== false;
         return (
           <span style={{ fontSize: 'var(--fs-12)', color: inHouse ? 'var(--c-secondary-a)' : 'var(--fg-muted)' }}>
             {inHouse ? 'In-house' : 'Outsource'}
           </span>
         );
       },
-      searchValue: (d) => ((d.inHouse ?? d.in_house) !== false ? 'In-house' : 'Outsource'),
-      filterValue: (d) => ((d.inHouse ?? d.in_house) !== false ? 'In-house' : 'Outsource'),
+      searchValue: (h) => ((h.inHouse ?? h.in_house) !== false ? 'In-house' : 'Outsource'),
+      filterValue: (h) => ((h.inHouse ?? h.in_house) !== false ? 'In-house' : 'Outsource'),
       sortFn: (a, b) => Number((a.inHouse ?? a.in_house) !== false) - Number((b.inHouse ?? b.in_house) !== false),
     },
     {
       key: 'active',
       label: 'Active',
       width: 130,
-      accessor: (d) => (
+      accessor: (h) => (
         <label
           onClick={(e) => e.stopPropagation()}
           style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
         >
-          <input type="checkbox" checked={d.active}
-            onChange={(e) => updateMutate({ id: d.id, active: e.target.checked })} />
-          <span style={{ fontSize: 'var(--fs-12)', color: d.active ? 'var(--c-secondary-a)' : 'var(--fg-muted)' }}>
-            {d.active ? 'Active' : 'Inactive'}
+          <input type="checkbox" checked={h.active}
+            onChange={(e) => updateMutate({ id: h.id, active: e.target.checked })} />
+          <span style={{ fontSize: 'var(--fs-12)', color: h.active ? 'var(--c-secondary-a)' : 'var(--fg-muted)' }}>
+            {h.active ? 'Active' : 'Inactive'}
           </span>
         </label>
       ),
-      searchValue: (d) => (d.active ? 'Active' : 'Inactive'),
-      filterValue: (d) => (d.active ? 'Active' : 'Inactive'),
+      searchValue: (h) => (h.active ? 'Active' : 'Inactive'),
+      filterValue: (h) => (h.active ? 'Active' : 'Inactive'),
       sortFn: (a, b) => Number(a.active) - Number(b.active),
     },
   ], [updateMutate]);
@@ -110,11 +100,11 @@ export const Drivers = () => {
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div>
-          <h1 className={styles.title}>Drivers</h1>
+          <h1 className={styles.title}>Helpers</h1>
         </div>
         <Button variant="primary" size="md" onClick={() => setCreating(true)}>
           <Plus {...ICON} />
-          <span>New Driver</span>
+          <span>New Helper</span>
         </Button>
       </div>
 
@@ -123,45 +113,43 @@ export const Drivers = () => {
           <input type="checkbox" checked={includeInactive} onChange={(e) => setIncludeInactive(e.target.checked)} />
           <span>Show inactive</span>
         </label>
-        <p className={styles.eyebrow}>{drivers.data?.length ?? 0} drivers</p>
+        <p className={styles.eyebrow}>{helpers.data?.length ?? 0} helpers</p>
       </div>
 
       <DataGrid
-        rows={drivers.data ?? []}
+        rows={helpers.data ?? []}
         columns={columns}
-        storageKey="dg-drivers"
-        exportName="Drivers"
-        rowKey={(d) => d.id}
-        searchPlaceholder="Search drivers…"
+        storageKey="dg-helpers"
+        exportName="Helpers"
+        rowKey={(h) => h.id}
+        searchPlaceholder="Search helpers…"
         groupBanner={false}
-        isLoading={drivers.isLoading}
-        emptyMessage="No drivers yet."
+        isLoading={helpers.isLoading}
+        emptyMessage="No helpers yet."
       />
 
-      {creating && <CreateDriverDrawer onClose={() => setCreating(false)} />}
+      {creating && <CreateHelperDrawer onClose={() => setCreating(false)} />}
     </div>
   );
 };
 
-const CreateDriverDrawer = ({ onClose }: { onClose: () => void }) => {
-  const create = useCreateDriver();
+const CreateHelperDrawer = ({ onClose }: { onClose: () => void }) => {
+  const create = useCreateHelper();
   const notify = useNotify();
   const [form, setForm] = useState({
-    driverCode: '', name: '', phone: '', icNumber: '', vehicle: '',
+    helperCode: '', name: '', contact: '', icNumber: '',
   });
   const [inHouse, setInHouse] = useState(true);
   const set = <K extends keyof typeof form>(k: K, v: string) => setForm((s) => ({ ...s, [k]: v }));
 
   const submit = () => {
-    if (!form.driverCode.trim()) { notify({ title: 'Code required.', tone: 'error' }); return; }
+    if (!form.helperCode.trim()) { notify({ title: 'Code required.', tone: 'error' }); return; }
     if (!form.name.trim()) { notify({ title: 'Name required.', tone: 'error' }); return; }
-    if (!form.phone.trim()) { notify({ title: 'Phone required.', tone: 'error' }); return; }
     create.mutate({
-      driverCode: form.driverCode.trim(),
+      helperCode: form.helperCode.trim(),
       name: form.name.trim(),
-      phone: form.phone.trim(),
+      contact: form.contact.trim() || undefined,
       icNumber: form.icNumber.trim() || undefined,
-      vehicle: form.vehicle.trim() || undefined,
       inHouse,
       active: true,
     }, { onSuccess: onClose });
@@ -172,16 +160,15 @@ const CreateDriverDrawer = ({ onClose }: { onClose: () => void }) => {
       <div className={styles.backdrop} onClick={onClose} />
       <aside className={styles.drawer}>
         <header className={styles.drawerHeader}>
-          <h2 className={styles.drawerTitle}>New Driver</h2>
+          <h2 className={styles.drawerTitle}>New Helper</h2>
           <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON} /></button>
         </header>
         <div className={styles.drawerBody}>
           <div className={styles.formGrid}>
-            <Field label="Code *" value={form.driverCode} onChange={(v) => set('driverCode', v)} placeholder="DRV-01" />
+            <Field label="Code *" value={form.helperCode} onChange={(v) => set('helperCode', v)} placeholder="HLP-01" />
             <Field label="Name *" value={form.name} onChange={(v) => set('name', v)} />
-            <Field label="Phone *" value={form.phone} onChange={(v) => set('phone', v)} placeholder="+60 12-345-6789" />
+            <Field label="Contact" value={form.contact} onChange={(v) => set('contact', v)} placeholder="+60 12-345-6789" />
             <Field label="IC Number" value={form.icNumber} onChange={(v) => set('icNumber', v)} />
-            <Field label="Vehicle" value={form.vehicle} onChange={(v) => set('vehicle', v)} placeholder="e.g. Hilux WMN1234" />
             <label className={styles.field} style={{ flexDirection: 'row', alignItems: 'center', gap: 'var(--space-2)' }}>
               <input type="checkbox" checked={inHouse} onChange={(e) => setInHouse(e.target.checked)} />
               <span className={styles.fieldLabel}>In-house (uncheck for outsourced)</span>
@@ -191,7 +178,7 @@ const CreateDriverDrawer = ({ onClose }: { onClose: () => void }) => {
         <footer className={styles.drawerFooter}>
           <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
           <Button variant="primary" size="md" onClick={submit} disabled={create.isPending}>
-            {create.isPending ? 'Creating…' : 'Create Driver'}
+            {create.isPending ? 'Creating…' : 'Create Helper'}
           </Button>
         </footer>
       </aside>

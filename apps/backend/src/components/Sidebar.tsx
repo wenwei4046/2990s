@@ -31,6 +31,8 @@ import {
   Wallet,
   KeyRound,
   Coins,
+  HardHat,
+  Container,
 } from 'lucide-react';
 import { useAuth, POS_ONLY_ROLES, SALES_DESK_ROLES } from '../lib/auth';
 import styles from './Sidebar.module.css';
@@ -177,7 +179,10 @@ export const Sidebar = () => {
       id: 'transportation',
       label: 'Transportation',
       items: [
+        // TMS fleet masters (Driver · Helper · Lorry), migration 0195.
         { to: '/drivers', icon: <Truck {...ICON_PROPS} />, label: 'Drivers' },
+        { to: '/helpers', icon: <HardHat {...ICON_PROPS} />, label: 'Helpers' },
+        { to: '/lorries', icon: <Container {...ICON_PROPS} />, label: 'Lorries' },
       ],
     },
     {

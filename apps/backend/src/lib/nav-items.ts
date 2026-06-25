@@ -42,8 +42,10 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Purchase Invoices', path: '/purchase-invoices', group: 'Procurement', keywords: 'pi bill' },
   { label: 'Purchase Returns', path: '/purchase-returns', group: 'Procurement', keywords: 'pr return' },
 
-  // Transportation
-  { label: 'Drivers', path: '/drivers', group: 'Transportation' },
+  // Transportation — TMS fleet masters (Driver · Helper · Lorry), migration 0195.
+  { label: 'Drivers', path: '/drivers', group: 'Transportation', keywords: 'driver fleet tms crew' },
+  { label: 'Helpers', path: '/helpers', group: 'Transportation', keywords: 'helper fleet tms crew loader' },
+  { label: 'Lorries', path: '/lorries', group: 'Transportation', keywords: 'lorry truck van fleet tms vehicle outsource' },
 
   // Warehouse — master first (create a warehouse / set Transit here), then ops.
   { label: 'Warehouses', path: '/warehouses', group: 'Warehouse', keywords: 'create new warehouse master location transit china overseas' },
