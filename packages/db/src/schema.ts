@@ -2574,6 +2574,40 @@ export const stateWarehouseMappings = pgTable('state_warehouse_mappings', {
   updatedAt:   timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/* Migration 0198 — CONFIG-DRIVEN Delivery-Planning regions. Replaces the
+   hardcoded stateToRegion() in apps/api/src/routes/delivery-planning.ts with an
+   owner-maintainable list of REGIONS + a per-state MULTI mapping (a state can
+   surface under several region tabs). Master list of delivery-planning region
+   buckets — the tab row on the Delivery Planning board. Seeded with the 4
+   current buckets (KL / PENANG / EM / SG). */
+export const deliveryPlanningRegions = pgTable('delivery_planning_regions', {
+  id:        uuid('id').primaryKey().defaultRandom(),
+  code:      text('code').notNull().unique(),       // 'KL' | 'PENANG' | 'EM' | 'SG' (owner-extensible)
+  name:      text('name').notNull(),                // display label, e.g. 'Penang'
+  sortOrder: integer('sort_order').notNull().default(0),
+  active:    boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/* Migration 0198 — per-STATE MULTI mapping: which delivery-planning region(s) a
+   state's orders appear under. A state can map to MANY regions (e.g. Singapore →
+   [SG, KL] because SG orders ship from the KL/SLGR warehouse and must show under
+   BOTH tabs). state_key matches how a STATE is keyed everywhere else in this
+   subsystem — the state NAME (mfg_sales_orders.customer_state /
+   state_warehouse_mappings.state / my_localities.state). country disambiguates
+   same-named states across countries (Singapore carries country='Singapore'). */
+export const stateDeliveryRegions = pgTable('state_delivery_regions', {
+  id:        uuid('id').primaryKey().defaultRandom(),
+  stateKey:  text('state_key').notNull(),           // the state NAME, e.g. 'Selangor' / 'Singapore'
+  country:   text('country').notNull().default('Malaysia'),
+  regionId:  uuid('region_id').notNull().references(() => deliveryPlanningRegions.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  uniqStateRegion: uniqueIndex('uq_state_delivery_region').on(t.stateKey, t.country, t.regionId),
+  stateKeyIdx:     index('idx_state_delivery_regions_state_key').on(t.stateKey),
+  regionIdx:       index('idx_state_delivery_regions_region_id').on(t.regionId),
+}));
+
 /* Task #118 — Generic SO dropdown options (migration 0081). Commander
    2026-05-27: "customer type, building type, relationship 和 payment
    dropdown where can do maintenance?" The four dropdowns used to be

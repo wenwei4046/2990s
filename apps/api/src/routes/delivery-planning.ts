@@ -23,13 +23,18 @@
 //   - PENDING_DELIVERY — NOT ready and not yet inside the 3-day window.
 // A manual override stored on the SO header (delivery_state) wins when present.
 //
-// Region = FOUR fixed buckets classified by the customer's STATE (NOT the line
-//   warehouse): KL (Selangor/WP/Johor/Melaka/N.Sembilan/Perak/Kedah/Perlis/
-//   Pahang/Terengganu/Kelantan…), Penang (Pulau Pinang), EM (East Malaysia:
-//   Sabah/Sarawak/Labuan), SG (Singapore). stateToRegion() is the single
-//   normalizer. Legs add a SECOND bucket: a leg's region maps from its warehouse
-//   CODE (SLGR/PJ→KL, PG→PENANG, SBH/SRK→EM; CHINA/CONSIGN-OUT skipped), so a
-//   KL-transit leg on an SG-customer order surfaces it under both KL and SG.
+// Region = CONFIG-DRIVEN, owner-maintained (migration 0198). The region buckets
+//   are a master list (delivery_planning_regions) and the per-STATE → region(s)
+//   classification is a MULTI mapping (state_delivery_regions) — a state can map
+//   to SEVERAL regions, so an order surfaces under several tabs (e.g. Singapore →
+//   [SG, KL] because SG orders ship from the KL/SLGR warehouse). Both are loaded
+//   once per request (loadRegionConfig). The seeded defaults reproduce the old
+//   hardcoded buckets exactly (Pulau Pinang/Penang→PENANG, Sabah/Sarawak/Labuan
+//   →EM, every other MY state→KL, Singapore→SG+KL); an unmapped state falls back
+//   to KL — the old default. CRUD for the config lives in the sibling route
+//   /delivery-planning-regions. Legs add a FURTHER bucket: a leg's region maps
+//   from its warehouse CODE (SLGR/PJ→KL, PG→PENANG, SBH/SRK→EM; CHINA/CONSIGN-OUT
+//   skipped), so a KL-transit leg on an SG order also surfaces it under KL.
 //
 // DRAFT / CANCELLED SOs (and DRAFT / CANCELLED DOs) are excluded everywhere —
 // the DRAFT guards just shipped on the SO/DO side and an uncommitted doc must
@@ -51,13 +56,26 @@ export const deliveryPlanning = new Hono<{ Bindings: Env; Variables: Variables }
 deliveryPlanning.use('*', supabaseAuth);
 
 /* ── Region model ─────────────────────────────────────────────────────────
-   FOUR fixed buckets, classified by the customer's STATE (not the line
-   warehouse): KL · PENANG · EM · SG. stateToRegion() is the single normalizer,
-   used to bucket every order; a leg's region is mapped from its warehouse CODE
-   (codeToRegion) so the dual-trip still surfaces an order under two tabs. */
-export type Region = 'KL' | 'PENANG' | 'EM' | 'SG';
-const REGIONS: Region[] = ['KL', 'PENANG', 'EM', 'SG'];
-const REGION_LABEL: Record<Region, string> = { KL: 'KL', PENANG: 'Penang', EM: 'EM', SG: 'SG' };
+   CONFIG-DRIVEN (migration 0198). The region buckets are now an owner-maintained
+   master (delivery_planning_regions) and the per-state → region(s) classification
+   is an owner-maintained MULTI mapping (state_delivery_regions) — a state can map
+   to SEVERAL regions (Singapore → [SG, KL]). Both are loaded once per request
+   (loadRegionConfig). A Region is therefore an open string code (e.g. 'KL',
+   'PENANG', 'EM', 'SG', or any code the owner adds), NOT a fixed union.
+
+   stateToRegionsFromConfig() classifies an order's customer_state via the loaded
+   mapping (default fallback KL — the old hardcoded default — when unmapped). A
+   leg's region is still mapped from its warehouse CODE (codeToRegion) so the
+   dual-trip surfaces an order under a second tab. */
+export type Region = string;
+
+/* The four codes the seeded defaults reproduce — used ONLY as fallbacks when the
+   config tables are empty/unapplied so behaviour never regresses below today. */
+const FALLBACK_DEFAULT_REGION = 'KL';
+const FALLBACK_REGIONS: Array<{ key: Region; label: string }> = [
+  { key: 'KL', label: 'KL' }, { key: 'PENANG', label: 'Penang' },
+  { key: 'EM', label: 'EM' }, { key: 'SG', label: 'SG' },
+];
 
 /* Normalize free-text for tolerant matching: upper, strip punctuation/accents,
    collapse whitespace. "Pulau  Pinang" / "P.Pinang" / "pulau-pinang" all align. */
@@ -70,37 +88,98 @@ function normState(s: string | null | undefined): string {
     .trim();
 }
 
-/* customer_state (+ customer_country fallback) → one of the 4 fixed buckets.
-   Tolerant of casing/spacing/common variants. Default bucket is KL (every other
-   Peninsular state). */
-export function stateToRegion(
+/* The region config loaded once per request from the two 0198 tables. */
+type RegionConfig = {
+  // Ordered, active region masters → the tab row (config-driven regionList()).
+  regions: Array<{ key: Region; label: string }>;
+  // The set of VALID region codes (active) for filtering/membership checks.
+  validCodes: Set<Region>;
+  // Normalised state NAME → region codes[]. Key = normState(state_key); covers
+  // every (state_key, country) row, so e.g. SG state_key 'Singapore' resolves the
+  // same whether the SO carries country Singapore or just the state name.
+  byState: Map<string, Region[]>;
+};
+
+/* Load delivery_planning_regions (active, sorted) + state_delivery_regions into a
+   RegionConfig. Best-effort: on any error / empty config, falls back to the four
+   seeded defaults so the board still works exactly as it did before 0198. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function loadRegionConfig(sb: any): Promise<RegionConfig> {
+  // 1. Region master (id → code, ordered active list).
+  const codeById = new Map<string, Region>();
+  let regions: Array<{ key: Region; label: string }> = [];
+  const validCodes = new Set<Region>();
+  try {
+    const { data: regRows } = await paginateAll<{
+      id: string; code: string | null; name: string | null;
+      sort_order?: number | null; sortOrder?: number | null; active?: boolean | null;
+    }>((from, to) =>
+      sb.from('delivery_planning_regions')
+        .select('id, code, name, sort_order, active')
+        .order('sort_order', { ascending: true })
+        .order('code', { ascending: true })
+        .range(from, to),
+    );
+    for (const r of (regRows ?? [])) {
+      const code = (r.code ?? '').toUpperCase();
+      if (!code) continue;
+      codeById.set(r.id, code);
+      if ((r.active ?? true) !== false) {
+        regions.push({ key: code, label: r.name ?? code });
+        validCodes.add(code);
+      }
+    }
+  } catch { /* fall through to fallback below */ }
+
+  // 2. Per-state mapping → normalised state NAME → region codes[].
+  const byState = new Map<string, Region[]>();
+  if (codeById.size > 0) {
+    try {
+      const { data: mapRows } = await paginateAll<{
+        state_key?: string | null; stateKey?: string | null; region_id?: string | null; regionId?: string | null;
+      }>((from, to) =>
+        sb.from('state_delivery_regions').select('state_key, country, region_id').range(from, to),
+      );
+      for (const row of (mapRows ?? [])) {
+        const stateKey = row.stateKey ?? row.state_key ?? '';
+        const code = codeById.get(row.regionId ?? row.region_id ?? '');
+        if (!stateKey || !code) continue;
+        const k = normState(stateKey);
+        const arr = byState.get(k) ?? [];
+        if (!arr.includes(code)) arr.push(code);
+        byState.set(k, arr);
+      }
+    } catch { /* mapping stays empty → fallback default applies per-order */ }
+  }
+
+  // 3. Fallback when the config tables are empty / unapplied — keep today's tabs.
+  if (regions.length === 0) {
+    regions = [...FALLBACK_REGIONS];
+    for (const r of FALLBACK_REGIONS) validCodes.add(r.key);
+  }
+  return { regions, validCodes, byState };
+}
+
+/* customer_state (+ customer_country fallback) → region code(s) via the loaded
+   config. Returns an ARRAY (a state can map to several regions, e.g. Singapore →
+   [SG, KL]). When the state isn't mapped, falls back to the default bucket (KL)
+   so an unmapped/new state still lands somewhere — exactly the old default. */
+function stateToRegionsFromConfig(
+  cfg: RegionConfig,
   state: string | null | undefined,
   country?: string | null | undefined,
-): Region {
-  const c = normState(country);
-  // Country says Singapore → SG (covers SO with blank/foreign state).
-  if (c === 'SINGAPORE' || c === 'SG' || c === 'SGP' || c === 'SINGAPURA') return 'SG';
-
-  const s = normState(state);
-  if (s === '') {
-    // No state — fall back to country only (already handled SG above) → KL.
-    return 'KL';
-  }
-  // SG by state.
-  if (s === 'SINGAPORE' || s === 'SG' || s === 'SGP' || s === 'SINGAPURA') return 'SG';
-
-  // EM = East Malaysia: Sabah, Sarawak, Labuan (incl. "Wilayah Persekutuan
-  // Labuan" / "WP Labuan" / "W P Labuan").
-  if (s.includes('SARAWAK')) return 'EM';
-  if (s.includes('SABAH')) return 'EM';
-  if (s.includes('LABUAN')) return 'EM';
-
-  // Penang = Pulau Pinang / Penang / "P Pinang" / "Pinang".
-  if (s.includes('PINANG') || s === 'PENANG') return 'PENANG';
-
-  // Everything else (Selangor, KL/WP, Johor, Melaka, N. Sembilan, Perak, Kedah,
-  // Perlis, Pahang, Terengganu, Kelantan, Putrajaya, …) → KL.
-  return 'KL';
+): Region[] {
+  // Try the state name first, then the country (covers a blank-state SG order
+  // whose country is 'Singapore').
+  const sKey = normState(state);
+  const cKey = normState(country);
+  const hit = (sKey && cfg.byState.get(sKey)) || (cKey && cfg.byState.get(cKey)) || null;
+  if (hit && hit.length > 0) return hit;
+  // Unmapped → default bucket (prefer a configured KL; else first region).
+  const fallback = cfg.validCodes.has(FALLBACK_DEFAULT_REGION)
+    ? FALLBACK_DEFAULT_REGION
+    : (cfg.regions[0]?.key ?? FALLBACK_DEFAULT_REGION);
+  return [fallback];
 }
 
 /* A leg's region bucket from its warehouse CODE (the dual-trip transit/final
@@ -108,7 +187,9 @@ export function stateToRegion(
    WAREHOUSE → EM. CHINA WAREHOUSE + CONSIGN-OUT are skipped (no leg region — a
    transit hop through China / a consignment-out isn't a delivery region). There
    is no SG warehouse (SG orders carry no MY warehouse). Tolerant of code
-   casing/spacing. */
+   casing/spacing. The codes returned ('KL'/'PENANG'/'EM') are the seeded region
+   codes; if the owner renames those region codes the leg mapping should be
+   revisited, but the warehouse-code→region hop stays a fixed transit rule. */
 function codeToRegion(code: string | null | undefined): Region | null {
   const c = normState(code);   // upper + collapse spaces (reuse the normalizer)
   if (c === '') return null;
@@ -169,6 +250,11 @@ deliveryPlanning.get('/', async (c) => {
   const regionParam = (c.req.query('region') ?? 'ALL').trim().toUpperCase();   // ALL | KL | PENANG | EM | SG
   const stateParam = (c.req.query('state') ?? 'ALL').trim().toUpperCase();
 
+  /* 0. CONFIG-DRIVEN region model (migration 0198) — load the owner-maintained
+        region master + per-state MULTI mapping once per request. regionList()
+        (the tabs) + each order's region(s) derive from this. */
+  const regionCfg = await loadRegionConfig(sb);
+
   /* 1. Warehouse master → code + name maps (read-only label lookup + the
         leg-region mapping, which keys off the warehouse CODE). */
   const { data: whRows, error: whErr } = await sb
@@ -221,7 +307,7 @@ deliveryPlanning.get('/', async (c) => {
   const docNos = soRows.map((r) => String(r.doc_no ?? '')).filter(Boolean);
 
   if (docNos.length === 0) {
-    return c.json({ orders: [], counts: emptyCounts(), regions: regionList() });
+    return c.json({ orders: [], counts: emptyCounts(), regions: regionCfg.regions });
   }
 
   /* 2b. LIVE balance per SO — same source-of-truth as the SO list Balance column
@@ -454,11 +540,14 @@ deliveryPlanning.get('/', async (c) => {
       state = daysLeft != null && daysLeft <= 3 ? 'OVERDUE' : 'PENDING_DELIVERY';
     }
 
-    /* Region for this SO = its customer-STATE bucket (the single source). Legs
-       add a SECOND bucket (mapped from each leg's warehouse code) so a legged
-       order surfaces under both its state bucket and its transit bucket. */
-    const primaryRegion = stateToRegion(r.customer_state, r.customer_country);
-    const regionSet = new Set<Region>([primaryRegion]);
+    /* Region(s) for this SO = its customer-STATE bucket(s) from the config
+       mapping (a state can map to MANY — e.g. Singapore → [SG, KL]). Legs add a
+       FURTHER bucket (mapped from each leg's warehouse code) so a legged order
+       surfaces under its state buckets AND its transit bucket. primaryRegion =
+       the first mapped bucket (kept for the single `region` field). */
+    const stateRegions = stateToRegionsFromConfig(regionCfg, r.customer_state, r.customer_country);
+    const primaryRegion = stateRegions[0] ?? FALLBACK_DEFAULT_REGION;
+    const regionSet = new Set<Region>(stateRegions);
     const legs = legsByDoc.get(docNo) ?? [];
     for (const lg of legs) if (lg.region) regionSet.add(lg.region);
 
@@ -531,10 +620,11 @@ deliveryPlanning.get('/', async (c) => {
     };
   });
 
-  /* 8. Counts per state — computed over the REGION-filtered set so the 4 state
+  /* 8. Counts per state — computed over the REGION-filtered set so the state
         tab badges reflect the active region. The state filter is applied AFTER
-        counting (so switching state tabs doesn't change the badge numbers). */
-  const regionFiltered = orders.filter((o) => matchesRegion(o, regionParam));
+        counting (so switching state tabs doesn't change the badge numbers). The
+        region param is validated against the config's region codes. */
+  const regionFiltered = orders.filter((o) => matchesRegion(o, regionParam, regionCfg.validCodes));
   const counts = emptyCounts();
   for (const o of regionFiltered) counts[o.delivery_state] += 1;
   counts.ALL = regionFiltered.length;
@@ -543,31 +633,28 @@ deliveryPlanning.get('/', async (c) => {
     ? regionFiltered
     : regionFiltered.filter((o) => o.delivery_state === stateParam);
 
-  return c.json({ orders: stateFiltered, counts, regions: regionList() });
+  return c.json({ orders: stateFiltered, counts, regions: regionCfg.regions });
 });
 
-/* Region match: ALL → everything; else one of the 4 fixed buckets → orders
-   whose region set (customer-state bucket + leg buckets) includes it. The
-   frontend tabs send ALL | KL | PENANG | EM | SG. */
+/* Region match: ALL → everything; else a configured region code → orders whose
+   region set (customer-state buckets + leg buckets) includes it. validCodes is
+   the active region master from the config; an unknown param is a defensive
+   no-op (so an old bookmarked tab never empties the board). The frontend tabs
+   send ALL | <any configured region code>. */
 function matchesRegion(
   o: { regions: Region[] },
   regionParam: string,
+  validCodes: Set<Region>,
 ): boolean {
   if (regionParam === 'ALL' || regionParam === '') return true;
-  if ((REGIONS as string[]).includes(regionParam)) {
-    return o.regions.includes(regionParam as Region);
+  if (validCodes.has(regionParam)) {
+    return o.regions.includes(regionParam);
   }
   return true;   // unknown param → no-op filter (defensive)
 }
 
 function emptyCounts(): Record<'ALL' | DeliveryState, number> {
   return { ALL: 0, PENDING_DELIVERY: 0, PENDING_SCHEDULE: 0, OVERDUE: 0, DELIVERED: 0 };
-}
-
-/* Region descriptor for the UI tab row — the 4 FIXED buckets (KL · Penang · EM
-   · SG), classified by customer state. The frontend prepends its own "All". */
-function regionList(): Array<{ key: Region; label: string }> {
-  return REGIONS.map((k) => ({ key: k, label: REGION_LABEL[k] }));
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
