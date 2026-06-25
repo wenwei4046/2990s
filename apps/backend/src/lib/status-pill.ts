@@ -58,6 +58,9 @@ const PV: Record<string, Entry> = {
   CANCELLED: { label: 'Cancelled', tone: 'danger' },
 };
 const SO: Record<string, Entry> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT SO is an uncommitted
+  // staging order (neutral/grey: it commits nothing until Confirm flips it live).
+  DRAFT:         { label: 'Draft',         tone: 'neutral' },
   CONFIRMED:     { label: 'Confirmed',     tone: 'info' },
   IN_PRODUCTION: { label: 'Proceed',       tone: 'progress' },
   READY_TO_SHIP: { label: 'Ready to Ship', tone: 'success' },

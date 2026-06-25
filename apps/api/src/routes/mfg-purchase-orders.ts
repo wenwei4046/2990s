@@ -278,7 +278,11 @@ mfgPurchaseOrders.get('/outstanding-so-items', async (c) => {
   }
 
   const outstanding = ((items ?? []) as unknown as Row[])
-    .filter((r) => r.so.status !== 'CANCELLED')
+    /* Leak guard (DRAFT) — a DRAFT SO must NOT appear in the From-SO PO picker:
+       it commits nothing until confirmed. (MRP already returns shortage 0 for
+       DRAFT lines via SO_DONE, but this explicit filter also covers the pooled-
+       compute fallback path where MRP didn't run.) */
+    .filter((r) => r.so.status !== 'CANCELLED' && r.so.status !== 'DRAFT')
     .filter((r) => (pooledOk ? (shortageBySoItem.get(r.id) ?? 0) > 0 : r.qty - r.po_qty_picked > 0))
     .map((r) => {
       const remaining = pooledOk ? (shortageBySoItem.get(r.id) ?? 0) : (r.qty - r.po_qty_picked);

@@ -572,6 +572,9 @@ mfgSalesOrders.get('/', async (c) => {
     let sq = sb
       .from('mfg_sales_orders')
       .select('doc_no, status, proceeded_at, local_total_centi, created_at, so_date')
+      /* Leak guard (DRAFT) — the Dashboard summary buckets/counts SOs by status;
+         a DRAFT SO commits nothing, so it must NOT inflate the landing KPIs. */
+      .neq('status', 'DRAFT')
       .order('so_date', { ascending: false })
       .limit(500);
     if (selfScopeId) sq = sq.eq('salesperson_id', selfScopeId);
@@ -908,7 +911,10 @@ mfgSalesOrders.get('/mine', async (c) => {
       'customer_delivery_date, internal_expected_dd, status, payment_method, approval_code, note, so_date, created_at, ' +
       'proceeded_at, total_revenue_centi, line_count, deposit_centi',
     )
-    .not('status', 'in', '("CANCELLED","ON_HOLD")');
+    /* Leak guard (DRAFT) — the My-orders board mirrors the KPI cards; a DRAFT SO
+       commits nothing and must NOT show on the board or count toward those KPIs
+       (alongside the existing CANCELLED / ON_HOLD exclusions). */
+    .not('status', 'in', '("CANCELLED","ON_HOLD","DRAFT")');
   if (targetSalespersonId) query = query.eq('salesperson_id', targetSalespersonId);
 
   if (q) {
@@ -1151,7 +1157,9 @@ mfgSalesOrders.get('/cross-category-match', async (c) => {
     .from('mfg_sales_orders')
     .select('doc_no, debtor_name, created_at')
     .eq('phone', normPhone)
-    .neq('status', 'CANCELLED')
+    /* Leak guard (DRAFT) — an uncommitted DRAFT SO is not real order history, so
+       it must never be an eligible cross-category (sofa×mattress) follow-up source. */
+    .not('status', 'in', '("CANCELLED","DRAFT")')
     .order('created_at', { ascending: false })
     .limit(50);
   const candidates: AutoMatchCandidate[] = ((rows ?? []) as Array<{ doc_no: string; debtor_name: string | null }>)
@@ -1195,7 +1203,9 @@ mfgSalesOrders.get('/customer-search', async (c) => {
     .from('mfg_sales_orders')
     .select('doc_no, debtor_name, phone, email, customer_type, address1, address2, city, postcode, customer_state, building_type, emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, created_at')
     .ilike('debtor_name', `%${esc}%`)
-    .neq('status', 'CANCELLED')
+    /* Leak guard (DRAFT) — the customer autocomplete is built from real order
+       history; an uncommitted DRAFT SO must not surface a customer/address. */
+    .not('status', 'in', '("CANCELLED","DRAFT")')
     .order('created_at', { ascending: false })
     .limit(60);
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
@@ -3099,12 +3109,14 @@ mfgSalesOrders.post('/', async (c) => {
     // of the validated rows (each positive by schema), not the legacy field.
     deposit_centi:      posPaymentsTotalCenti ?? Math.max(0, typeof body.depositCenti === 'number' ? body.depositCenti : 0),
     paid_centi:         typeof body.paidCenti === 'number' ? body.paidCenti : 0,
-    /* PR #154 — Commander 2026-05-27: "我们的整个系统是没有 Draft 功能的，
-       把 Draft 的功能去除掉, 我们 create 的全部都是 confirm 的". 2990 is a
-       trading company; we don't need a DRAFT staging step. Every new SO is
-       CONFIRMED on insert. The DRAFT enum value still exists for legacy
-       row compatibility, but new rows skip it entirely. */
-    status: 'CONFIRMED',
+    /* DRAFT/Confirmed two-state (Owner 2026-06-25, ported from Houzs) — a new SO
+       is CONFIRMED on insert (the default), UNLESS the caller opts in with
+       asDraft:true (the "Save as Draft" button), which lands it as DRAFT. A
+       DRAFT SO commits NOTHING: leak-guards keep it out of KPI/MRP/PO-picker/
+       stock-allocation/DO/credit/list/customer-history until Confirm flips it to
+       CONFIRMED (via PATCH /:docNo/status). DRAFT is reachable ONLY through
+       asDraft — the insert never trusts a raw body.status field. */
+    status: (body as { asDraft?: unknown }).asDraft === true ? 'DRAFT' : 'CONFIRMED',
     created_by: user.id,
   });
   if (hErr) { await rollbackPwpClaims(); return c.json({ error: 'insert_failed', reason: hErr.message }, 500); }
@@ -3522,8 +3534,11 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
   catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-status failed:', e); }
 
   /* Edge #B — SO cancel with deposit paid turns the deposit into a customer
-     credit. Idempotent on (source_type, source_doc_no). Best-effort. */
-  if (body.status === 'CANCELLED' && fromStatus !== 'CANCELLED') {
+     credit. Idempotent on (source_type, source_doc_no). Best-effort.
+     Leak guard (DRAFT) — cancelling a never-confirmed DRAFT must NOT mint a
+     credit: a DRAFT commits nothing (its deposit ledger rows are equally
+     uncommitted), so there is no real money to convert. */
+  if (body.status === 'CANCELLED' && fromStatus !== 'CANCELLED' && fromStatus !== 'DRAFT') {
     try {
       const { data: so } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name').eq('doc_no', docNo).maybeSingle();
       const s = so as { debtor_code: string | null; debtor_name: string | null } | null;
@@ -3861,8 +3876,10 @@ async function redetectCrossCategoryDelivery(
   const normPhone = newPhone ? (normalizePhone(newPhone) ?? newPhone) : null;
   if (newName && normPhone) {
     const { data: candRows, error: candErr } = await sb.from('mfg_sales_orders')
+      /* Leak guard (DRAFT) — a DRAFT SO is not committed order history, so it is
+         never an eligible cross-category follow-up source on header re-detect. */
       .select('doc_no, debtor_name, created_at')
-      .eq('phone', normPhone).neq('status', 'CANCELLED').neq('doc_no', docNo)
+      .eq('phone', normPhone).not('status', 'in', '("CANCELLED","DRAFT")').neq('doc_no', docNo)
       .order('created_at', { ascending: false }).limit(50);
     if (candErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] candidate load failed:', candErr.message); }
     const candidates: AutoMatchCandidate[] = ((candRows ?? []) as Array<{ doc_no: string; debtor_name: string | null }>)

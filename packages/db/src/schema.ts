@@ -917,6 +917,7 @@ export const currencies = pgTable('currencies', {
 });
 
 export const poStatus = pgEnum('po_status', [
+  'DRAFT',                // saved, not yet submitted to supplier (owner 2026-06-25 re-add)
   'SUBMITTED',            // sent to supplier, awaiting acknowledgement (default on create)
   'PARTIALLY_RECEIVED',   // some GRN posted
   'RECEIVED',             // all items GRN'd
@@ -1132,7 +1133,7 @@ export const purchaseOrderLines = pgTable('purchase_order_lines', {
 // 'CANCELLED' added in migration 0105 — GRN is a Confirmed-clone of the PO
 // module; cancelling reverses the receipt (inventory OUT + PO received_qty
 // decrement). No Draft/lifecycle: POSTED reads as "Confirmed".
-export const grnStatus = pgEnum('grn_status', ['POSTED', 'CLOSED', 'CANCELLED']);
+export const grnStatus = pgEnum('grn_status', ['DRAFT', 'POSTED', 'CLOSED', 'CANCELLED']);
 
 /* Landed-cost allocation basis (migration 0191) — how a SERVICE-line freight
    charge is split across the GRN's goods lines into the FIFO lot cost:
@@ -1140,7 +1141,7 @@ export const grnStatus = pgEnum('grn_status', ['POSTED', 'CLOSED', 'CANCELLED'])
 export const chargeAllocationMethod = pgEnum('charge_allocation_method', ['QTY', 'VALUE', 'CBM']);
 
 export const purchaseInvoiceStatus = pgEnum('purchase_invoice_status', [
-  'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED',
+  'DRAFT', 'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED',
 ]);
 
 export const grns = pgTable('grns', {
@@ -1360,17 +1361,17 @@ export const paymentVoucherLines = pgTable('payment_voucher_lines', {
    ════════════════════════════════════════════════════════════════════════ */
 
 export const mfgSoStatus = pgEnum('mfg_so_status', [
-  'CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP', 'SHIPPED',
+  'DRAFT', 'CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP', 'SHIPPED',
   'DELIVERED', 'INVOICED', 'CLOSED', 'ON_HOLD', 'CANCELLED',
 ]);
 
 export const doStatus = pgEnum('do_status', [
-  'LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED',
+  'DRAFT', 'LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED',
   'DELIVERED', 'INVOICED', 'CANCELLED',
 ]);
 
 export const salesInvoiceStatus = pgEnum('sales_invoice_status', [
-  'SENT', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'CANCELLED',
+  'DRAFT', 'SENT', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'CANCELLED',
 ]);
 
 export const mfgSalesOrders = pgTable('mfg_sales_orders', {

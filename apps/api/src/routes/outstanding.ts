@@ -65,6 +65,11 @@ for (const [slug, { view, dateCol }] of Object.entries(MODULES)) {
          would mark a DRAFT outstanding), so filter DRAFT out here. The view
          exposes s.status, so this is safe (0059_outstanding_views.sql). */
       if (slug === 'si') q = q.neq('status', 'DRAFT');
+      /* LEAK GUARD (DRAFT, SO two-state 2026-06-25) — a DRAFT SO commits nothing
+         (no real balance owed), but v_so_outstanding's is_outstanding CASE only
+         excludes DELIVERED/INVOICED/CLOSED/CANCELLED → it would mark a DRAFT as
+         outstanding. The view exposes so.status, so filter DRAFT out here. */
+      if (slug === 'so') q = q.neq('status', 'DRAFT');
       if (from) q = q.gte(dateCol, from);
       if (to)   q = q.lte(dateCol, to);
       return q.range(pFrom, pTo);
@@ -96,6 +101,8 @@ outstanding.get('/summary', async (c) => {
       let q = sb.from(view).select('*').eq('is_outstanding', true);
       // LEAK GUARD (DRAFT) — keep DRAFT SIs out of the AR outstanding totals.
       if (slug === 'si') q = q.neq('status', 'DRAFT');
+      // LEAK GUARD (DRAFT) — keep DRAFT SOs out of the SO outstanding totals.
+      if (slug === 'so') q = q.neq('status', 'DRAFT');
       if (from) q = q.gte(dateCol, from);
       if (to)   q = q.lte(dateCol, to);
       return q.range(pFrom, pTo);

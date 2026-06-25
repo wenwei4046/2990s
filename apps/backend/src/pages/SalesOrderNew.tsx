@@ -631,7 +631,11 @@ export const SalesOrderNew = () => {
     return { failed: results.filter((ok) => !ok).length };
   };
 
-  const onSave = () => {
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25) — asDraft=true posts the SO as
+     a DRAFT (the "Save as Draft" button); it commits nothing (kept out of KPI/
+     MRP/PO-picker/stock/credit) until Confirmed on the Detail page. The default
+     "Create Sales Order" path leaves asDraft undefined → server inserts CONFIRMED. */
+  const onSave = (asDraft = false) => {
     if (!debtorName.trim()) {
       notify({ title: 'Customer name is required.', tone: 'error' });
       return;
@@ -710,6 +714,9 @@ export const SalesOrderNew = () => {
 
     create.mutate(
       {
+        /* DRAFT/Confirmed two-state — only sent when the operator picked
+           "Save as Draft"; omitted otherwise so the server defaults to CONFIRMED. */
+        asDraft: asDraft || undefined,
         debtorName,
         debtorCode: debtorCode || undefined,
         phone: phone || undefined,
@@ -810,9 +817,20 @@ export const SalesOrderNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/mfg-sales-orders')}>
             <X {...ICON} /> Cancel
           </Button>
+          {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — "Save as Draft" posts
+              the SO as DRAFT (commits nothing; stays out of KPI/MRP/PO/stock/credit
+              until Confirmed on the Detail page). Same validation gate as Create. */}
+          <Button
+            variant="ghost" size="md"
+            onClick={() => onSave(true)}
+            disabled={create.isPending}
+          >
+            <Save {...ICON} />
+            {create.isPending ? 'Saving…' : 'Save as Draft'}
+          </Button>
           <Button
             variant="primary" size="md"
-            onClick={onSave}
+            onClick={() => onSave(false)}
             /* Keep the button CLICKABLE even when fields are missing (only block
                while a save is in flight). onSave validates and tells the operator
                EXACTLY what's missing (name / phone / dates / items / variants) —

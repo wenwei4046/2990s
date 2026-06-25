@@ -49,8 +49,10 @@ import type { Env, Variables } from '../env';
 export const mrp = new Hono<{ Bindings: Env; Variables: Variables }>();
 mrp.use('*', supabaseAuth);
 
-/* SO statuses that no longer create demand (already shipped / closed). */
-const SO_DONE = new Set(['DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED']);
+/* SO statuses that no longer create demand (already shipped / closed).
+   Leak guard (DRAFT) — a DRAFT SO commits nothing, so it must generate NO MRP
+   demand (no shortage, no PO-picker line) until it is confirmed. */
+const SO_DONE = new Set(['DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED', 'DRAFT']);
 /* PO statuses that no longer supply goods. */
 const PO_DEAD = new Set(['CANCELLED']);
 

@@ -24,7 +24,7 @@ import { createPortal } from 'react-dom';
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Plus, X, Printer, Save,
-  DollarSign, Lock, History, ChevronDown, ChevronRight, Ban, RotateCcw,
+  DollarSign, Lock, History, ChevronDown, ChevronRight, Ban, RotateCcw, Check,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
@@ -134,15 +134,18 @@ const formatGroupRequirements = (g: string): string =>
   g === 'bedframe' ? 'Divan · Leg · Gap · Fabric' :
   g === 'sofa'     ? 'Seat · Leg · Fabric' : '';
 
-// PR-DRAFT-removal — DRAFT dropped from mfg_so_status (migration 0078).
-// SOs are CONFIRMED on create (PR #154); no DRAFT staging step.
+// DRAFT/Confirmed two-state (Owner 2026-06-25, ported from Houzs) — DRAFT is
+// back as an opt-in staging step: a DRAFT SO commits nothing (out of KPI/MRP/
+// PO-picker/stock/credit) until the operator presses Confirm here (DRAFT →
+// CONFIRMED). It is the lifecycle FIRST step, before CONFIRMED.
 const STATUS_LIST = [
-  'CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP',
+  'DRAFT', 'CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP',
   'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED',
 ] as const;
 type SoStatus = typeof STATUS_LIST[number];
 
 const STATUS_CLASS: Record<string, string> = {
+  DRAFT:          styles.statusDraft ?? '',
   CONFIRMED:      styles.statusConfirmed ?? '',
   IN_PRODUCTION:  styles.statusInProd ?? '',
   READY_TO_SHIP:  styles.statusReady ?? '',
@@ -159,6 +162,7 @@ const STATUS_CLASS: Record<string, string> = {
 // and here (lifecycle states like Delivered/Invoiced/Delivery Return still come
 // from soStatusDisplay; this is only the stored-status fallback).
 const SO_STATUS_LABEL: Record<string, string> = {
+  DRAFT:         'Draft',
   CONFIRMED:     'Confirmed',
   IN_PRODUCTION: 'Proceed',
   READY_TO_SHIP: 'Stock Ready',
@@ -790,6 +794,20 @@ export const SalesOrderDetail = () => {
   const cancellableStatuses: SoStatus[] = ['CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP'];
   const canCancel = cancellableStatuses.includes(header.status);
 
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT SO is staging-only:
+     it commits nothing (no MRP/PO-picker/stock/credit) until Confirm flips it to
+     CONFIRMED, which fires the same side-effects a normal create would (the
+     server re-derives pricing + the SO becomes visible to MRP/PO/allocation). */
+  const isDraft = header.status === 'DRAFT';
+  const handleConfirmDraft = async () => {
+    if (!(await askConfirm({
+      title: `Confirm ${header.doc_no}?`,
+      body: 'This commits the draft: it becomes a live Sales Order — visible in MRP, the PO picker and stock allocation. You can still edit it afterwards (until it ships).',
+      confirmLabel: 'Confirm SO',
+    }))) return;
+    updateStatus.mutate({ docNo: header.doc_no, status: 'CONFIRMED' });
+  };
+
   const handleCancelSo = async () => {
     if (!(await askConfirm({
       title: `Cancel ${header.doc_no}?`,
@@ -902,6 +920,16 @@ export const SalesOrderDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
+          {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT SO shows a
+              prominent Confirm action that commits it (DRAFT → CONFIRMED) and
+              fires the live side-effects (MRP / PO picker / stock allocation). */}
+          {isDraft && (
+            <Button variant="primary" size="md"
+              onClick={handleConfirmDraft} disabled={updateStatus.isPending}>
+              <Check {...ICON} />
+              <span>Confirm SO</span>
+            </Button>
+          )}
           {/* Cancel SO / Reopen SO (Commander 2026-05-29). A cancelled SO
               stops proceeding (greys out, no MRP/PO/DO). Reopen restores it. */}
           {isCancelled ? (
@@ -970,6 +998,30 @@ export const SalesOrderDetail = () => {
           </span>
           <Button variant="primary" size="sm" onClick={handleReopenSo} disabled={updateStatus.isPending}>
             <RotateCcw {...ICON} /> Reopen
+          </Button>
+        </div>
+      ) : null}
+
+      {/* ── Draft banner (Owner 2026-06-25) ─────────────────────────
+          A DRAFT SO commits nothing until Confirmed. Surface that clearly +
+          give a second Confirm entry point inline with the explanation. */}
+      {isDraft ? (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: 'var(--space-3) var(--space-4)',
+          background: 'rgba(34, 31, 32, 0.06)',
+          border: '1px solid var(--border-strong, rgba(34,31,32,0.24))',
+          borderRadius: 'var(--radius-md)',
+          fontSize: 'var(--fs-13)',
+        }}>
+          <span style={LOCK_BANNER_INNER_STYLE}>
+            <FileText {...ICON} />
+            <span>This SO is a <strong>draft</strong> — it commits nothing yet (it
+              won't appear in MRP, the PO picker or stock allocation, and no credit
+              is held). Press <em>Confirm SO</em> to make it live.</span>
+          </span>
+          <Button variant="primary" size="sm" onClick={handleConfirmDraft} disabled={updateStatus.isPending}>
+            <Check {...ICON} /> Confirm
           </Button>
         </div>
       ) : null}

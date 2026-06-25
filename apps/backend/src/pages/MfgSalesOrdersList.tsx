@@ -272,7 +272,9 @@ const deriveBranding = (r: SoRow): string => {
 };
 
 const STATUS_CLASS: Record<string, string> = {
-  // DRAFT removed in migration 0078 — SOs start at CONFIRMED.
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — DRAFT is back as a grey
+  // staging pill; a draft stays visible in the list but commits nothing.
+  DRAFT:          soDetailStyles.statusDraft ?? '',
   CONFIRMED:      soDetailStyles.statusConfirmed ?? '',
   IN_PRODUCTION:  soDetailStyles.statusInProd ?? '',
   READY_TO_SHIP:  soDetailStyles.statusReady ?? '',
@@ -297,6 +299,7 @@ const STATUS_CLASS: Record<string, string> = {
      ON_HOLD        → On Hold
      CANCELLED      → Cancelled */
 const STATUS_LABEL: Record<string, string> = {
+  DRAFT:         'Draft',
   CONFIRMED:     'Confirmed',
   IN_PRODUCTION: 'Proceed',
   READY_TO_SHIP: 'Stock Ready',
@@ -1077,10 +1080,15 @@ export const MfgSalesOrdersList = () => {
         groupBanner={false}
         onRowDoubleClick={(r) => openDetail(r)}
         /* Commander 2026-05-29 — cancelled SOs grey out in the list so they
-           read as dead/inactive (they no longer proceed). */
+           read as dead/inactive (they no longer proceed).
+           DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT SO stays
+           VISIBLE but is visually distinct (a left accent + faint tint) so the
+           operator can tell at a glance it's uncommitted. */
         rowStyle={(r) => r.status === 'CANCELLED'
           ? { opacity: 0.55, filter: 'grayscale(0.6)' }
-          : undefined}
+          : r.status === 'DRAFT'
+            ? { background: 'rgba(34, 31, 32, 0.04)', boxShadow: 'inset 3px 0 0 var(--fg-muted, rgba(34,31,32,0.4))' }
+            : undefined}
         isLoading={isLoading}
         emptyMessage='No sales orders yet — click "+ New Sales Order" to start.'
         expandable={{
@@ -1096,7 +1104,26 @@ export const MfgSalesOrdersList = () => {
              DO / SI references this SO; Issue DO (partial delivery) stays. */
           const status = row.status;
           const hasChildren = Boolean(row.has_children);
+          /* DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT SO commits
+             nothing: it must NOT offer any downstream action (Issue DO, Issue SI)
+             until Confirmed. The menu instead surfaces a Confirm SO action that
+             flips it live (DRAFT → CONFIRMED). */
+          const isDraft = status === 'DRAFT';
           const items: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [];
+          if (isDraft) {
+            items.push({
+              label: 'Confirm SO',
+              onClick: async () => {
+                if (!(await askConfirm({
+                  title: `Confirm ${row.doc_no}?`,
+                  body: 'This commits the draft: it becomes a live Sales Order — visible in MRP, the PO picker and stock allocation.',
+                  confirmLabel: 'Confirm SO',
+                }))) return;
+                updateStatus.mutate({ docNo: row.doc_no, status: 'CONFIRMED' });
+              },
+            });
+            items.push({ divider: true as const });
+          }
           if (!hasChildren) {
             items.push({ label: 'Edit', onClick: () => openDetail(row, true) });
           }
@@ -1104,12 +1131,15 @@ export const MfgSalesOrdersList = () => {
           items.push({ label: 'Preview', onClick: () => void renderPdf(row, 'preview') });
           items.push({ label: 'Print',   onClick: () => void renderPdf(row, 'print') });
           items.push({ divider: true as const });
-          // Issue DO — ALWAYS shown (Commander 2026-05-30) so the operator never
-          // thinks the action disappeared. convertToDo decides at click time
-          // whether there's anything to deliver (has_undelivered is recomputed
-          // live: qty − delivered + returned > 0) and otherwise shows a plain
-          // "Nothing to be converted" message.
-          items.push({ label: 'Issue Delivery Order', onClick: () => convertToDo(row) });
+          // Issue DO — shown for any non-DRAFT SO (Commander 2026-05-30) so the
+          // operator never thinks the action disappeared. convertToDo decides at
+          // click time whether there's anything to deliver (has_undelivered is
+          // recomputed live: qty − delivered + returned > 0) and otherwise shows
+          // a plain "Nothing to be converted" message. A DRAFT SO commits nothing,
+          // so the downstream Issue DO is withheld until it is Confirmed.
+          if (!isDraft) {
+            items.push({ label: 'Issue Delivery Order', onClick: () => convertToDo(row) });
+          }
           // Issue SI — available once the customer has accepted delivery.
           if (['DELIVERED', 'SHIPPED'].includes(status)) {
             items.push({
