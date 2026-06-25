@@ -1659,9 +1659,15 @@ mfgPurchaseOrders.post('/:id/items', async (c) => {
   // a per-line discount exceeding qty×price must not persist a negative
   // line_total_centi (it sums straight into the PO subtotal/total).
   const lineTotal = Math.max(0, (qty * unitPriceCenti) - discountCenti);
+  /* Migration 0098 — carry the source SO line so an appended PO line counts
+     toward the SO's po_qty_picked; without it the From-SO picker re-offers a
+     line a manual add already covers. Dual-read camelCase/snake.
+     (Anchoring port Houzs→2990 2026-06-25.) */
+  const soItemId = ((it.soItemId ?? it.so_item_id) as string | null | undefined) ?? null;
 
   const row: Record<string, unknown> = {
     purchase_order_id: poId,
+    so_item_id: soItemId,
     binding_id: (it.bindingId as string) ?? null,
     material_kind: (it.materialKind as string) ?? 'mfg_product',
     material_code: it.materialCode,

@@ -48,6 +48,7 @@ import {
 } from '../lib/allowed-options-check';
 import { findIncompleteVariantLines } from '../lib/so-variant-check';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
+import { chunkIn } from '../lib/paginate-all';
 import type { Env, Variables } from '../env';
 
 export const consignmentOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -226,16 +227,16 @@ consignmentOrders.get('/', async (c) => {
     /* Per-CO category set + first-item branding source, mirroring the SO list.
        Ordered (doc_no, created_at ASC) so the FIRST line per doc_no is its
        earliest. */
-    const { data: itemRows } = await sb
+    // chunkIn — lines across the listed docs can exceed PostgREST's 1000-row
+    // cap; page so per-doc category/branding rollups aren't dropped.
+    const { data: itemRows } = await chunkIn<Record<string, unknown>>(docNos, (batch, from, to) => sb
       .from('consignment_sales_order_items')
       .select('doc_no, item_group, cancelled, branding, item_code, created_at')
-      .in('doc_no', docNos)
+      .in('doc_no', batch)
       .eq('cancelled', false)
       .order('doc_no')
       .order('created_at', { ascending: true })
-      // .limit(5000): lines across 500 list docs can exceed PostgREST's default
-      // 1000-row cap; truncation would drop per-doc category/branding rollups.
-      .limit(5000);
+      .range(from, to));
     const cats = new Map<string, Set<string>>();
     const firstCat = new Map<string, string>();
     const firstBranding = new Map<string, string | null>();

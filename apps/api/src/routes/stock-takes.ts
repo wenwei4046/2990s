@@ -29,6 +29,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { nextMonthlyDocNo } from '../lib/doc-no';
+import { paginateAll, chunkIn } from '../lib/paginate-all';
 
 export const stockTakes = new Hono<{ Bindings: Env; Variables: Variables }>();
 stockTakes.use('*', supabaseAuth);
@@ -142,17 +143,19 @@ stockTakes.get('/', async (c) => {
   const dateFrom    = c.req.query('dateFrom');
   const dateTo      = c.req.query('dateTo');
 
-  let q = sb.from('stock_takes')
-    .select(`${HEADER}, warehouse:warehouses(id, code, name)`)
-    .order('take_date', { ascending: false })
-    .order('created_at', { ascending: false });
-
-  if (status && VALID_STATUS.has(status)) q = q.eq('status', status);
-  if (warehouseId) q = q.eq('warehouse_id', warehouseId);
-  if (dateFrom)    q = q.gte('take_date', dateFrom);
-  if (dateTo)      q = q.lte('take_date', dateTo);
-
-  const { data, error } = await q;
+  // Page through so PostgREST's default 1000-row cap can't silently truncate
+  // the stock-take list (filters below only narrow the set).
+  const { data, error } = await paginateAll((pFrom, pTo) => {
+    let q = sb.from('stock_takes')
+      .select(`${HEADER}, warehouse:warehouses(id, code, name)`)
+      .order('take_date', { ascending: false })
+      .order('created_at', { ascending: false });
+    if (status && VALID_STATUS.has(status)) q = q.eq('status', status);
+    if (warehouseId) q = q.eq('warehouse_id', warehouseId);
+    if (dateFrom)    q = q.gte('take_date', dateFrom);
+    if (dateTo)      q = q.lte('take_date', dateTo);
+    return q.range(pFrom, pTo);
+  });
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
 
   // line_count + variance_total — cheap follow-up sum at pilot scale.
@@ -161,13 +164,14 @@ stockTakes.get('/', async (c) => {
   const countByTake    = new Map<string, number>();
   const varianceByTake = new Map<string, number>();
   if (ids.length > 0) {
-    const { data: lineRows } = await sb.from('stock_take_lines')
+    // chunkIn — a full-warehouse stock-take has one line per SKU, so lines
+    // across the listed takes can exceed the 1000-row cap (and ids can exceed
+    // 1000 too); batch + page so line_count + variance_total aren't understated.
+    const { data: lineRows } = await chunkIn<{ stock_take_id: string; variance: number | null; counted_qty: number | null }>(ids, (batch, pFrom, pTo) => sb
+      .from('stock_take_lines')
       .select('stock_take_id, variance, counted_qty')
-      .in('stock_take_id', ids)
-      // .limit(5000): a full-warehouse stock-take has one line per SKU, so lines
-      // across the listed takes can exceed PostgREST's default 1000-row cap;
-      // truncation would understate line_count + variance_total.
-      .limit(5000);
+      .in('stock_take_id', batch)
+      .range(pFrom, pTo));
     const list = (lineRows as unknown as Array<{
       stock_take_id: string; variance: number | null; counted_qty: number | null;
     }>) ?? [];

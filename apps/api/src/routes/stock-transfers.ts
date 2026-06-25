@@ -338,7 +338,32 @@ async function writeTransferMovements(
       performed_by:   userId,
       notes:          `Transfer from warehouse ${header.from_warehouse_id}`,
     }]);
-    if (!inOk.ok) movementErrors.push(`IN ${ln.product_code}: ${inOk.reason ?? 'unknown'}`);
+    if (!inOk.ok) {
+      movementErrors.push(`IN ${ln.product_code}: ${inOk.reason ?? 'unknown'}`);
+      /* CRITICAL (anchoring port Houzs→2990) — the OUT@from already committed
+         (FIFO trigger consumed the source lots). If the IN@to fails we must NOT
+         leave the OUT standing: that silently DESTROYS stock (gone from source,
+         never arrived at dest). Book a compensating IN@from at the SOURCE cost
+         (NOT the uplifted cost) so the source bucket is made whole. The POST
+         handler then auto-cancels + returns non-201, so the UI can't read the
+         partial transfer as success. */
+      const compIn = await writeMovements(sb, [{
+        movement_type:  'IN',
+        warehouse_id:   header.from_warehouse_id,
+        product_code:   ln.product_code,
+        variant_key:    p.variantKey,
+        product_name:   ln.product_name,
+        qty:            p.qty,
+        unit_cost_sen:  p.sourceUnitCost,
+        source_doc_type:'STOCK_TRANSFER',
+        source_doc_id:  header.id,
+        source_doc_no:  header.transfer_no,
+        ...(p.batchNo ? { batch_no: p.batchNo } : {}),
+        performed_by:   userId,
+        notes:          `Compensating reversal: IN@to failed, restoring source for transfer ${header.transfer_no}`,
+      }]);
+      if (!compIn.ok) movementErrors.push(`COMPENSATE ${ln.product_code}: ${compIn.reason ?? 'unknown'}`);
+    }
   }
   /* Stock Transfer = net-zero across warehouses, but B2C allocation sums all
      warehouses anyway so the totals don't change. Still re-walk in case any
@@ -428,10 +453,27 @@ stockTransfers.post('/', async (c) => {
   // Write inventory movements (paired OUT/IN) inline.
   const movementErrors = await writeTransferMovements(sb, header, user.id);
 
+  /* Atomicity (anchoring port Houzs→2990) — a transfer is all-or-nothing. If any
+     line's movement failed, the compensating IN above already restored the
+     source (net zero), so mark the header CANCELLED and return 422 — the UI must
+     never read a half-applied transfer as success (the old code returned 201
+     with a movementErrors field, which the UI treated as done → silent stock
+     loss). */
+  if (movementErrors.length) {
+    await sb.from('stock_transfers')
+      .update({ status: 'CANCELLED', cancelled_at: new Date().toISOString() })
+      .eq('id', header.id);
+    return c.json({
+      error: 'transfer_movements_failed',
+      id: header.id,
+      transferNo: header.transfer_no,
+      movementErrors,
+    }, 422);
+  }
+
   return c.json({
     id: header.id,
     transferNo: header.transfer_no,
-    movementErrors: movementErrors.length ? movementErrors : undefined,
   }, 201);
 });
 

@@ -263,9 +263,14 @@ export async function computeMrp(
   // lowercase on lookup. warehouse_id NULL = the GLOBAL DEFAULT. Cascade:
   // (warehouse, category) → (NULL, category) → 0. Two maps: per-warehouse rows
   // keyed `${warehouseId}|${cat}`, and the NULL-warehouse globals keyed `cat`.
-  const { data: leadRows } = await sb
+  const { data: leadRows, error: leadErr } = await sb
     .from('mrp_category_lead_times')
     .select('warehouse_id, category, lead_days');
+  // A transient PostgREST failure here must NOT silently zero EVERY lead time
+  // (which collapses the whole plan's production/order-by date onto the delivery
+  // date) — surface it instead of emitting a wrong-but-plausible schedule.
+  // (Anchoring port Houzs→2990 2026-06-25.)
+  if (leadErr) throw new Error(`mrp_lead_times_load_failed: ${leadErr.message}`);
   const leadDaysByWhCat = new Map<string, number>();
   const leadDaysByCat = new Map<string, number>();
   for (const r of (leadRows ?? []) as Array<{ warehouse_id: string | null; category: string; lead_days: number }>) {
