@@ -105,6 +105,8 @@ const Drivers = lazyRetry(() => import('./pages/Drivers').then(m => ({ default: 
 // TMS fleet masters (migration 0195) — Helper + Lorry, alongside Drivers.
 const Helpers = lazyRetry(() => import('./pages/Helpers').then(m => ({ default: m.Helpers })));
 const Lorries = lazyRetry(() => import('./pages/Lorries').then(m => ({ default: m.Lorries })));
+// Delivery Planning board (Stage 4) — the 4-state × region planning view.
+const DeliveryPlanning = lazyRetry(() => import('./pages/DeliveryPlanning').then(m => ({ default: m.DeliveryPlanning })));
 const Accounting = lazyRetry(() => import('./pages/Accounting').then(m => ({ default: m.Accounting })));
 const Warehouses = lazyRetry(() => import('./pages/Warehouses').then(m => ({ default: m.Warehouses })));
 // Migration 0094 — Warehouse rack/bin management (ported from Hookka ERP).
@@ -207,6 +209,8 @@ export const router = createBrowserRouter([
       // TMS fleet masters (migration 0195).
       { path: 'helpers', element: <Helpers /> },
       { path: 'lorries', element: <Lorries /> },
+      // Delivery Planning board (Stage 4).
+      { path: 'delivery-planning', element: <DeliveryPlanning /> },
       { path: 'suppliers', element: <Suppliers /> },
       { path: 'suppliers/:id', element: <SupplierDetail /> },
       // Currencies MASTER (migration 0193) — owner-maintained currency list +

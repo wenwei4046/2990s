@@ -33,6 +33,7 @@ import {
   Coins,
   HardHat,
   Container,
+  CalendarClock,
 } from 'lucide-react';
 import { useAuth, POS_ONLY_ROLES, SALES_DESK_ROLES } from '../lib/auth';
 import styles from './Sidebar.module.css';
@@ -179,6 +180,9 @@ export const Sidebar = () => {
       id: 'transportation',
       label: 'Transportation',
       items: [
+        // Delivery Planning board (Stage 4) — the planning view sits above the
+        // fleet masters it dispatches.
+        { to: '/delivery-planning', icon: <CalendarClock {...ICON_PROPS} />, label: 'Delivery Planning' },
         // TMS fleet masters (Driver · Helper · Lorry), migration 0195.
         { to: '/drivers', icon: <Truck {...ICON_PROPS} />, label: 'Drivers' },
         { to: '/helpers', icon: <HardHat {...ICON_PROPS} />, label: 'Helpers' },

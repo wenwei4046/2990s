@@ -42,7 +42,9 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Purchase Invoices', path: '/purchase-invoices', group: 'Procurement', keywords: 'pi bill' },
   { label: 'Purchase Returns', path: '/purchase-returns', group: 'Procurement', keywords: 'pr return' },
 
-  // Transportation — TMS fleet masters (Driver · Helper · Lorry), migration 0195.
+  // Transportation — Delivery Planning board (Stage 4) + TMS fleet masters
+  // (Driver · Helper · Lorry), migration 0195.
+  { label: 'Delivery Planning', path: '/delivery-planning', group: 'Transportation', keywords: 'delivery plan schedule route trip overdue pending region tms dispatch' },
   { label: 'Drivers', path: '/drivers', group: 'Transportation', keywords: 'driver fleet tms crew' },
   { label: 'Helpers', path: '/helpers', group: 'Transportation', keywords: 'helper fleet tms crew loader' },
   { label: 'Lorries', path: '/lorries', group: 'Transportation', keywords: 'lorry truck van fleet tms vehicle outsource' },
