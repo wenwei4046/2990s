@@ -84,6 +84,9 @@ const HEADER =
   /* HC delivery-sheet DO-execution raw-data fields (migration 0197) — surfaced on
      the DO detail form + the Delivery Planning "Edit HC fields" drawer. */
   'time_range, time_confirmed, arrival_at, departure_at, shipout_date, customer_delivered_date, eta_arriving_port, delivery_substatus, ' +
+  /* HC EM-region "Arrives EM Warehouse Date" (migration 0199) — cross-border
+     transit-warehouse arrival date. */
+  'arrives_em_warehouse_date, ' +
   'pod_r2_key, signature_data, status, notes, created_at, created_by, updated_at';
 
 const ITEM =
@@ -1955,6 +1958,8 @@ deliveryOrdersMfg.patch('/:id', async (c) => {
     ['customerDeliveredDate', 'customer_delivered_date'],
     ['etaArrivingPort', 'eta_arriving_port'],
     ['deliverySubstatus', 'delivery_substatus'],
+    /* HC EM-region "Arrives EM Warehouse Date" (migration 0199). */
+    ['arrivesEmWarehouseDate', 'arrives_em_warehouse_date'],
   ];
   const PHONE_FIELDS = new Set(['phone', 'emergencyContactPhone']);
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };

@@ -390,6 +390,9 @@ const HEADER =
   /* Task #121 — customer_country snapshot auto-derived from customer_state
      via my_localities lookup on POST/PATCH (migration 0082). */
   'customer_state, customer_country, customer_delivery_date, internal_expected_dd, linked_do_doc_no, ' +
+  /* Delivery-date INTEGRITY (migration 0199) — amendment dates; the ORIGINAL
+     customer_delivery_date above is never overwritten by the schedule/amend path. */
+  'amend_date_from_customer, amended_delivery_date, ' +
   'ship_to_address, bill_to_address, install_to_address, subtotal_sen, overdue, ' +
   /* PR #46 — POS handover */
   'email, customer_type, salesperson_id, city, postcode, building_type, ' +
@@ -3082,6 +3085,11 @@ mfgSalesOrders.post('/', async (c) => {
     /* Task #121 — country snapshot auto-derived above. */
     customer_country: customerCountrySnapshot,
     customer_delivery_date: (body.customerDeliveryDate as string) ?? null,
+    /* Delivery-date INTEGRITY (migration 0199) — amendment dates. customer_delivery_date
+       above is the ORIGINAL (the customer's pick) and is NEVER overwritten by the
+       amend path; these carry the customer's requested + our confirmed new dates. */
+    amend_date_from_customer: (body.amendDateFromCustomer as string) ?? null,
+    amended_delivery_date: (body.amendedDeliveryDate as string) ?? null,
     /* PR #144 — Commander: "当我已经 create 好了这个 sales order 的时候，
        为什么我点进去 edit processing 的 delivery date 时，怎么没看到呢".
        internal_expected_dd was wired on PATCH (update header) but missed
@@ -3971,6 +3979,10 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     ['customerSoNo', 'customer_so_no'],
     ['hubId', 'hub_id'], ['hubName', 'hub_name'],
     ['customerDeliveryDate', 'customer_delivery_date'],
+    /* Delivery-date INTEGRITY (migration 0199) — amendment dates editable on the SO
+       form. The ORIGINAL customer_delivery_date above stays the customer's pick. */
+    ['amendDateFromCustomer', 'amend_date_from_customer'],
+    ['amendedDeliveryDate', 'amended_delivery_date'],
     ['internalExpectedDd', 'internal_expected_dd'],
     /* POS "Proceed" — sales-side done marker; stamp-once guard below. */
     ['proceededAt', 'proceeded_at'],

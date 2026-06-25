@@ -17,11 +17,17 @@
 //                        has shipped).
 //   - PENDING_SCHEDULE — ready to ship (summariseReadiness.isMainReady — every
 //                        MAIN line READY) but not yet fully delivered.
-//   - OVERDUE          — NOT ready AND today >= customer_delivery_date − 3 days
+//   - OVERDUE          — NOT ready AND today >= EFFECTIVE delivery date − 3 days
 //                        (owner rule: "3 days before delivery and goods still
 //                        not ready").
 //   - PENDING_DELIVERY — NOT ready and not yet inside the 3-day window.
 // A manual override stored on the SO header (delivery_state) wins when present.
+//
+// DELIVERY-DATE INTEGRITY (owner rule, migration 0199): the customer's ORIGINAL
+// customer_delivery_date is NEVER overwritten. The schedule action writes the
+// firm/new date to amended_delivery_date instead. The EFFECTIVE delivery date —
+// amended_delivery_date ?? customer_delivery_date — drives Days Left AND the
+// OVERDUE 3-day window; the Original column still shows customer_delivery_date.
 //
 // Region = CONFIG-DRIVEN, owner-maintained (migration 0198). The region buckets
 //   are a master list (delivery_planning_regions) and the per-STATE → region(s)
@@ -283,6 +289,11 @@ deliveryPlanning.get('/', async (c) => {
     so_date: string | null; address1: string | null; address2: string | null;
     postcode: string | null; building_type: string | null;
     local_total_centi: number | null; balance_centi: number | null;
+    // Amendment dates (migration 0199). The ORIGINAL customer_delivery_date is
+    // never overwritten; amended_delivery_date drives the effective countdown.
+    // dual-read camelCase below.
+    amend_date_from_customer: string | null; amended_delivery_date: string | null;
+    amendDateFromCustomer?: string | null; amendedDeliveryDate?: string | null;
     // HC SO-context raw-data fields (migration 0197). dual-read camelCase below.
     possession_date: string | null; house_type: string | null;
     replacement_disposal: string | null; referral: string | null;
@@ -291,7 +302,7 @@ deliveryPlanning.get('/', async (c) => {
   };
   const { data: soRowsRaw, error: soErr } = await paginateAll<SoHeaderRow>((from, to) =>
     sb.from('mfg_sales_orders')
-      .select('doc_no, debtor_code, debtor_name, phone, branding, status, delivery_state, customer_state, customer_country, customer_delivery_date, internal_expected_dd, processing_date, so_date, address1, address2, postcode, building_type, local_total_centi, balance_centi, possession_date, house_type, replacement_disposal, referral')
+      .select('doc_no, debtor_code, debtor_name, phone, branding, status, delivery_state, customer_state, customer_country, customer_delivery_date, amend_date_from_customer, amended_delivery_date, internal_expected_dd, processing_date, so_date, address1, address2, postcode, building_type, local_total_centi, balance_centi, possession_date, house_type, replacement_disposal, referral')
       .neq('status', 'DRAFT')
       .neq('status', 'CANCELLED')
       .order('customer_delivery_date', { ascending: true, nullsFirst: false })
@@ -393,6 +404,8 @@ deliveryPlanning.get('/', async (c) => {
     arrival_at: string | null; departure_at: string | null;
     shipout_date: string | null; customer_delivered_date: string | null;
     eta_arriving_port: string | null; delivery_substatus: string | null;
+    // EM-region transit arrival date (migration 0199).
+    arrives_em_warehouse_date: string | null;
   };
   const { data: doRowsRaw } = await paginateAll<{
     id: string; do_number: string | null; so_doc_no: string | null; status: string | null;
@@ -401,14 +414,16 @@ deliveryPlanning.get('/', async (c) => {
     arrival_at: string | null; departure_at: string | null;
     shipout_date: string | null; customer_delivered_date: string | null;
     eta_arriving_port: string | null; delivery_substatus: string | null;
+    arrives_em_warehouse_date: string | null;
     // camelCase aliases (pg driver) for dual-read
     timeRange?: string | null; timeConfirmed?: boolean | null;
     arrivalAt?: string | null; departureAt?: string | null;
     shipoutDate?: string | null; customerDeliveredDate?: string | null;
     etaArrivingPort?: string | null; deliverySubstatus?: string | null;
+    arrivesEmWarehouseDate?: string | null;
   }>((from, to) =>
     sb.from('delivery_orders')
-      .select('id, do_number, so_doc_no, status, delivery_state, customer_delivery_date, time_range, time_confirmed, arrival_at, departure_at, shipout_date, customer_delivered_date, eta_arriving_port, delivery_substatus')
+      .select('id, do_number, so_doc_no, status, delivery_state, customer_delivery_date, time_range, time_confirmed, arrival_at, departure_at, shipout_date, customer_delivered_date, eta_arriving_port, delivery_substatus, arrives_em_warehouse_date')
       .in('so_doc_no', docNos)
       .range(from, to),
   );
@@ -436,6 +451,7 @@ deliveryPlanning.get('/', async (c) => {
       customer_delivered_date: d.customerDeliveredDate ?? d.customer_delivered_date ?? null,
       eta_arriving_port: d.etaArrivingPort ?? d.eta_arriving_port ?? null,
       delivery_substatus: d.deliverySubstatus ?? d.delivery_substatus ?? null,
+      arrives_em_warehouse_date: d.arrivesEmWarehouseDate ?? d.arrives_em_warehouse_date ?? null,
     });
   }
 
@@ -532,6 +548,14 @@ deliveryPlanning.get('/', async (c) => {
     const status = String(r.status ?? '').toUpperCase();
     const customerDD = r.customer_delivery_date ?? null;
     const internalDD = r.internal_expected_dd ?? r.processing_date ?? null;
+    /* Amendment dates (migration 0199). The ORIGINAL customer_delivery_date is
+       never overwritten; the amended date (when set) is what we now commit to.
+       EFFECTIVE date = amended_delivery_date ?? customer_delivery_date — it drives
+       days_left AND the OVERDUE 3-day window. The Original column still shows
+       customer_delivery_date. dual-read camelCase. */
+    const amendDateFromCustomer = r.amendDateFromCustomer ?? r.amend_date_from_customer ?? null;
+    const amendedDD = r.amendedDeliveryDate ?? r.amended_delivery_date ?? null;
+    const effectiveDD = amendedDD ?? customerDD;
 
     /* "Ready to ship" gate. summariseReadiness.isMainReady is VACUOUSLY true when
        mainCount === 0 (an accessory-only / service-only SO has no MAIN line), so
@@ -552,9 +576,9 @@ deliveryPlanning.get('/', async (c) => {
     } else if (readyToShip) {
       state = 'PENDING_SCHEDULE';
     } else {
-      // NOT ready. OVERDUE once we're within 3 days of (or past) the customer
-      // delivery date and the goods still aren't ready.
-      const daysLeft = daysBetween(today, customerDD);
+      // NOT ready. OVERDUE once we're within 3 days of (or past) the EFFECTIVE
+      // delivery date (amended ?? original) and the goods still aren't ready.
+      const daysLeft = daysBetween(today, effectiveDD);
       state = daysLeft != null && daysLeft <= 3 ? 'OVERDUE' : 'PENDING_DELIVERY';
     }
 
@@ -592,9 +616,16 @@ deliveryPlanning.get('/', async (c) => {
       // dates
       so_date: r.so_date ?? null,
       processing_date: r.processing_date ?? null,
+      // ORIGINAL date (the customer's pick — never overwritten) stays here.
       customer_delivery_date: customerDD,
+      // Amendment dates (migration 0199): the customer's requested new date and
+      // the date WE confirmed. The Original column above is unchanged.
+      amend_date_from_customer: amendDateFromCustomer,
+      amended_delivery_date: amendedDD,
+      // EFFECTIVE date (amended ?? original) — what the countdown actually uses.
+      effective_delivery_date: effectiveDD,
       internal_expected_dd: internalDD,
-      days_left: daysBetween(today, customerDD),
+      days_left: daysBetween(today, effectiveDD),
       // address (HC delivery-sheet columns)
       address: [r.address1, r.address2].filter(Boolean).join(', ') || null,
       postcode: r.postcode ?? null,
@@ -614,6 +645,8 @@ deliveryPlanning.get('/', async (c) => {
       customer_delivered_date: doExecByDoc.get(docNo)?.customer_delivered_date ?? null,
       eta_arriving_port: doExecByDoc.get(docNo)?.eta_arriving_port ?? null,
       delivery_substatus: doExecByDoc.get(docNo)?.delivery_substatus ?? null,
+      // EM-region transit arrival date (migration 0199), from the latest DO.
+      arrives_em_warehouse_date: doExecByDoc.get(docNo)?.arrives_em_warehouse_date ?? null,
       // stock — stock_remark is the correctly-gated label (never "READY (PARTIAL)"
       // for an acc-only / service-only SO); stock_status mirrors it.
       stock_status: readiness.isFullyReady ? 'READY' : readyToShip ? 'READY (PARTIAL)' : 'PENDING',
@@ -782,8 +815,10 @@ deliveryPlanning.delete('/legs/:id', async (c) => {
    :id = SO doc_no or DO id.
    ─────────────────────────────────────────────────────────────────────────*/
 const scheduleSchema = z.object({
-  // The firm trip date the coordinator commits to. Stored on the header's
-  // customer_delivery_date so the existing date column stays the single source.
+  // The firm trip date the coordinator commits to. Written to the header's
+  // amended_delivery_date (migration 0199) — NEVER customer_delivery_date, which
+  // stays the customer's ORIGINAL pick. The effective date for Days Left /
+  // OVERDUE is amended_delivery_date ?? customer_delivery_date.
   scheduleDate: z.string().nullable().optional(),  // YYYY-MM-DD
   // Optional MANUAL override of the derived delivery_state (cache column).
   deliveryState: z.enum(['PENDING_DELIVERY', 'PENDING_SCHEDULE', 'OVERDUE', 'DELIVERED']).nullable().optional(),
@@ -842,6 +877,10 @@ const fieldsSchema = z.object({
   houseType: z.string().nullable().optional(),            // New House / Replacement (free text)
   replacementDisposal: z.string().nullable().optional(),
   referral: z.string().nullable().optional(),
+  // Amendment dates (migration 0199) — the customer's ORIGINAL customer_delivery_date
+  // is NEVER edited here; only the amendment columns are.
+  amendDateFromCustomer: z.string().nullable().optional(),  // YYYY-MM-DD (customer's ask)
+  amendedDeliveryDate: z.string().nullable().optional(),    // YYYY-MM-DD (we confirm)
   // DO-execution (→ delivery_orders)
   timeRange: z.string().nullable().optional(),
   timeConfirmed: z.boolean().nullable().optional(),
@@ -851,6 +890,7 @@ const fieldsSchema = z.object({
   customerDeliveredDate: z.string().nullable().optional(),
   etaArrivingPort: z.string().nullable().optional(),      // port / shipment ref e.g. KUC3012008
   deliverySubstatus: z.string().nullable().optional(),    // HC "Remark 4" (whitelisted, blank allowed)
+  arrivesEmWarehouseDate: z.string().nullable().optional(),  // YYYY-MM-DD (migration 0199)
 });
 
 /* Map the camelCase request keys → the snake_case columns, split by table. */
@@ -859,6 +899,9 @@ const SO_FIELD_COLS: Record<string, string> = {
   houseType: 'house_type',
   replacementDisposal: 'replacement_disposal',
   referral: 'referral',
+  // Amendment dates (migration 0199) — NEVER customer_delivery_date (the original).
+  amendDateFromCustomer: 'amend_date_from_customer',
+  amendedDeliveryDate: 'amended_delivery_date',
 };
 const DO_FIELD_COLS: Record<string, string> = {
   timeRange: 'time_range',
@@ -869,6 +912,7 @@ const DO_FIELD_COLS: Record<string, string> = {
   customerDeliveredDate: 'customer_delivered_date',
   etaArrivingPort: 'eta_arriving_port',
   deliverySubstatus: 'delivery_substatus',
+  arrivesEmWarehouseDate: 'arrives_em_warehouse_date',
 };
 
 deliveryPlanning.patch('/:type/:id/fields', async (c) => {
@@ -969,7 +1013,13 @@ deliveryPlanning.patch('/:type/:id/schedule', async (c) => {
   const wantsTrip = p.tripId != null || p.lorryId != null;
 
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (p.scheduleDate !== undefined) updates.customer_delivery_date = p.scheduleDate;
+  /* DELIVERY-DATE INTEGRITY (owner rule, migration 0199): the customer's ORIGINAL
+     customer_delivery_date must NEVER be overwritten by the schedule action. The
+     firm/new trip date is the AMENDED date — write it to amended_delivery_date on
+     the SO (which exists only on mfg_sales_orders). For a :type=do schedule the SO
+     header is not the target; the DO carries no amend column, so a date is a no-op
+     there (the schedule date flows to the trip / leg below, not onto the DO date). */
+  if (p.scheduleDate !== undefined && type === 'so') updates.amended_delivery_date = p.scheduleDate;
   if (p.deliveryState !== undefined) updates.delivery_state = p.deliveryState;
   // A trip-only schedule (no date/state) is still a valid change — only 400 when
   // there's NOTHING to do at all.
@@ -979,7 +1029,7 @@ deliveryPlanning.patch('/:type/:id/schedule', async (c) => {
   const table = type === 'so' ? 'mfg_sales_orders' : 'delivery_orders';
   const keyCol = type === 'so' ? 'doc_no' : 'id';
   const selectCols = type === 'so'
-    ? 'doc_no, customer_delivery_date, delivery_state, status'
+    ? 'doc_no, customer_delivery_date, amended_delivery_date, amend_date_from_customer, delivery_state, status'
     : 'id, do_number, customer_delivery_date, delivery_state, status';
 
   let data: Record<string, unknown> | null = null;
