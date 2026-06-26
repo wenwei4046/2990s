@@ -4,7 +4,7 @@
 // spec's cross-cutting rules: a "physical purchase" collapses cross-category
 // follow-up SO chains into one; cancelled orders are filtered upstream.
 
-import { ageFromBirthday } from './customer-demographics';
+import { ageFromBirthday, RACE_OPTIONS, GENDER_OPTIONS } from './customer-demographics';
 
 export interface SaOrderRow {
   docNo: string;
@@ -225,5 +225,109 @@ export function summarizeCustomerDemographics(
     avgAge,
     medianAge,
     newVsReturning: { newCount, returningCount },
+  };
+}
+
+export interface TargetProfile {
+  targetAvgAge: number | null;
+  ageToleranceYears: number;
+  raceTargets: Record<string, number> | null;
+  genderTargets: Record<string, number> | null;
+  areaStates: string[];
+  areaCities: string[];
+}
+
+export interface TargetMatchResult {
+  overall: number | null;
+  age: { configured: boolean; score: number; actualAvg: number | null; target: number | null; tolerance: number };
+  race: { configured: boolean; score: number; rows: Array<{ key: string; target: number; actual: number }> };
+  gender: { configured: boolean; score: number; rows: Array<{ key: string; target: number; actual: number }> };
+  area: { configured: boolean; score: number; matched: number; total: number };
+  biggestGap: { dim: 'age' | 'race' | 'gender' | 'area'; label: string } | null;
+}
+
+const normShares = (m: Record<string, number> | null): Record<string, number> => {
+  if (!m) return {};
+  const sum = Object.values(m).reduce((a, b) => a + (Number(b) > 0 ? Number(b) : 0), 0);
+  if (sum <= 0) return {};
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(m)) out[k] = (Number(v) > 0 ? Number(v) : 0) / sum * 100;
+  return out;
+};
+
+const actualShares = (
+  customers: ReadonlyArray<SaCustomerRow>, field: 'race' | 'gender', options: readonly string[],
+): Record<string, number> => {
+  let n = 0; const counts: Record<string, number> = {};
+  for (const c of customers) {
+    const v = c[field];
+    if (v && (options as readonly string[]).includes(v)) { counts[v] = (counts[v] ?? 0) + 1; n += 1; }
+  }
+  const out: Record<string, number> = {};
+  for (const k of options) out[k] = n > 0 ? ((counts[k] ?? 0) / n) * 100 : 0;
+  return out;
+};
+
+const distScore = (
+  customers: ReadonlyArray<SaCustomerRow>, field: 'race' | 'gender',
+  options: readonly string[], targets: Record<string, number> | null,
+): { configured: boolean; score: number; rows: Array<{ key: string; target: number; actual: number }> } => {
+  const tgt = normShares(targets);
+  const configured = Object.values(tgt).some((v) => v > 0);
+  const act = actualShares(customers, field, options);
+  let overlap = 0;
+  const rows = options.map((k) => {
+    const target = tgt[k] ?? 0; const actual = act[k] ?? 0;
+    overlap += Math.min(target, actual);
+    return { key: k, target, actual };
+  });
+  return { configured, score: configured ? overlap : 0, rows };
+};
+
+const eqCI = (a: string | null, set: string[]): boolean =>
+  a != null && set.some((s) => s.trim().toLowerCase() === a.trim().toLowerCase());
+
+/** Match the actual customer set against a target profile. Age uses period-all
+ *  customers (caller passes the unfiltered set). Each dim contributes to the
+ *  overall only when configured. */
+export function computeTargetMatch(
+  customers: ReadonlyArray<SaCustomerRow>,
+  targets: TargetProfile,
+  asOf?: string,
+): TargetMatchResult {
+  const ages = customers.map((c) => ageFromBirthday(c.birthday, asOf)).filter((a): a is number => a !== null);
+  const actualAvg = ages.length ? ages.reduce((a, b) => a + b, 0) / ages.length : null;
+  const ageConfigured = targets.targetAvgAge != null && actualAvg !== null;
+  const tol = Math.max(1, targets.ageToleranceYears || 1);
+  const ageScore = ageConfigured
+    ? Math.max(0, 1 - Math.abs(actualAvg! - targets.targetAvgAge!) / tol) * 100
+    : 0;
+
+  const race = distScore(customers, 'race', RACE_OPTIONS, targets.raceTargets);
+  const gender = distScore(customers, 'gender', GENDER_OPTIONS, targets.genderTargets);
+
+  const areaConfigured = targets.areaStates.length > 0 || targets.areaCities.length > 0;
+  const total = customers.length;
+  const matched = areaConfigured
+    ? customers.filter((c) => eqCI(c.state, targets.areaStates) || eqCI(c.city, targets.areaCities)).length
+    : 0;
+  const areaScore = areaConfigured && total > 0 ? (matched / total) * 100 : 0;
+
+  const dims: Array<{ dim: 'age' | 'race' | 'gender' | 'area'; configured: boolean; score: number; label: string }> = [
+    { dim: 'age', configured: ageConfigured, score: ageScore, label: `Avg age ${actualAvg === null ? '—' : Math.round(actualAvg)} vs ${targets.targetAvgAge}` },
+    { dim: 'race', configured: race.configured, score: race.score, label: 'Race mix' },
+    { dim: 'gender', configured: gender.configured, score: gender.score, label: 'Gender mix' },
+    { dim: 'area', configured: areaConfigured, score: areaScore, label: `Area ${Math.round(areaScore)}%` },
+  ];
+  const configuredDims = dims.filter((d) => d.configured);
+  const overall = configuredDims.length ? configuredDims.reduce((a, d) => a + d.score, 0) / configuredDims.length : null;
+  const gap = configuredDims.length ? configuredDims.reduce((lo, d) => (d.score < lo.score ? d : lo)) : null;
+
+  return {
+    overall,
+    age: { configured: ageConfigured, score: ageScore, actualAvg, target: targets.targetAvgAge, tolerance: tol },
+    race, gender,
+    area: { configured: areaConfigured, score: areaScore, matched, total },
+    biggestGap: gap ? { dim: gap.dim, label: gap.label } : null,
   };
 }

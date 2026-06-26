@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   collapseToPurchases, summarizeOverview, monthlyTrend, type SaOrderRow,
   summarizeCustomerDemographics, type SaCustomerRow,
+  computeTargetMatch, type TargetProfile,
 } from './sales-analysis';
 
 const o = (docNo: string, over: Partial<SaOrderRow> = {}): SaOrderRow => ({
@@ -119,6 +120,60 @@ describe('summarizeCustomerDemographics — city + age stats', () => {
     const s = summarizeCustomerDemographics([cust({ id: 'a' })], { asOf });
     expect(s.avgAge).toBeNull();
     expect(s.medianAge).toBeNull();
+  });
+});
+
+const TP = (over: Partial<TargetProfile> = {}): TargetProfile => ({
+  targetAvgAge: null, ageToleranceYears: 10,
+  raceTargets: null, genderTargets: null, areaStates: [], areaCities: [], ...over,
+});
+
+describe('computeTargetMatch', () => {
+  const asOf = '2026-06-26';
+  it('returns overall null when nothing is configured', () => {
+    const r = computeTargetMatch([cust({ id: 'a', birthday: '1990-06-26' })], TP(), asOf);
+    expect(r.overall).toBeNull();
+    expect(r.age.configured).toBe(false);
+  });
+  it('age dimension fades linearly within tolerance', () => {
+    const customers = [cust({ id: 'a', birthday: '1990-06-26' }), cust({ id: 'b', birthday: '1982-06-26' })]; // 36, 44 → avg 40
+    const r = computeTargetMatch(customers, TP({ targetAvgAge: 45, ageToleranceYears: 10 }), asOf);
+    expect(r.age.actualAvg).toBe(40);
+    expect(r.age.score).toBeCloseTo(50, 6);
+    expect(r.overall).toBeCloseTo(50, 6);
+  });
+  it('race overlap = sum of min(target,actual)', () => {
+    const customers = [
+      cust({ id: 'a', race: 'Malay' }), cust({ id: 'b', race: 'Malay' }),
+      cust({ id: 'c', race: 'Chinese' }), cust({ id: 'd', race: 'Chinese' }),
+    ];
+    const r = computeTargetMatch(customers, TP({ raceTargets: { Malay: 60, Chinese: 40, Indian: 0, Others: 0 } }), asOf);
+    expect(r.race.score).toBeCloseTo(90, 6);
+  });
+  it('area matches state OR city, denominator is everyone', () => {
+    const customers = [
+      cust({ id: 'a', state: 'Kuala Lumpur', city: 'Kuala Lumpur' }),
+      cust({ id: 'b', state: 'Selangor', city: 'Petaling Jaya' }),
+      cust({ id: 'c', state: 'Johor', city: 'Johor Bahru' }),
+      cust({ id: 'd', state: null, city: null }),
+    ];
+    const r = computeTargetMatch(customers, TP({ areaStates: ['Kuala Lumpur', 'Selangor'], areaCities: [] }), asOf);
+    expect(r.area.matched).toBe(2);
+    expect(r.area.total).toBe(4);
+    expect(r.area.score).toBeCloseTo(50, 6);
+  });
+  it('overall averages configured dims and flags the biggest gap', () => {
+    const customers = [cust({ id: 'a', birthday: '1982-06-26', race: 'Malay', state: 'Johor', city: 'Johor Bahru' })]; // 44
+    const r = computeTargetMatch(customers, TP({
+      targetAvgAge: 44, ageToleranceYears: 10,
+      raceTargets: { Malay: 100, Chinese: 0, Indian: 0, Others: 0 },
+      areaStates: ['Kuala Lumpur'], areaCities: [],
+    }), asOf);
+    expect(r.age.score).toBeCloseTo(100, 6);
+    expect(r.race.score).toBeCloseTo(100, 6);
+    expect(r.area.score).toBeCloseTo(0, 6);
+    expect(r.overall).toBeCloseTo((100 + 100 + 0) / 3, 6);
+    expect(r.biggestGap?.dim).toBe('area');
   });
 });
 
