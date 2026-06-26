@@ -175,32 +175,37 @@ export async function authedFetch<T>(path: string, init?: RequestInit): Promise<
     }
   }
 
-  /* Edge #J (systemic) — every ship path returns 409 short_stock unless the body
-     carries confirmShortStock:true. Catch it once: prompt, and on confirm replay
-     with the flag merged in. */
+  /* Confirmable-409 loop (Wei Siang 2026-06-26) — a single DO save can trip MORE
+     THAN ONE guard at once: short_stock (negative stock) AND sofa_no_batch (drop-
+     ship). Each confirm must STACK its flag onto the SAME body — the earlier
+     one-shot blocks each spread the ORIGINAL init.body, so the drop-ship replay
+     dropped a just-confirmed confirmShortStock and the stock guard re-fired
+     ("Save failed: Stock not enough" right after Confirm drop-ship). Loop,
+     accumulating flags, until the server accepts, the operator declines, or a
+     non-confirmable 409 falls through to the terminal handling below. The
+     `!== true` guards stop a re-prompt if the flag is already set (a server that
+     STILL 409s despite the flag breaks out, no infinite loop); 4-iteration cap is
+     a backstop. Body-bearing (mutation) requests only. */
   if (res.status === 409 && typeof init?.body === 'string') {
-    const text = await res.clone().text();
-    if (text.includes('"short_stock"') && await confirmShortStock(text)) {
-      const retryBody = JSON.stringify({ ...JSON.parse(init.body), confirmShortStock: true });
-      res = await fetchWithTimeout(`${API_URL}${path}`, { ...init, headers, body: retryBody }, path);
-    }
-  }
-
-  /* Drop-ship offer (Wei Siang 2026-06-26) — a sofa_no_batch 409 that carries
-     canDropship:true means every affected line is bound to a PO, so the operator
-     can choose to ship supplier-direct. Prompt the approved dialog; on confirm
-     replay with dropShip:true. Body-bearing (mutation) requests only. */
-  if (res.status === 409 && typeof init?.body === 'string') {
-    const text = await res.clone().text();
-    if (text.includes('"sofa_no_batch"') && text.includes('"canDropship":true')) {
-      if (await confirmDropship(text)) {
-        const retryBody = JSON.stringify({ ...JSON.parse(init.body), dropShip: true });
-        res = await fetchWithTimeout(`${API_URL}${path}`, { ...init, headers, body: retryBody }, path);
+    let mergedBody: Record<string, unknown> | null = null;
+    try { mergedBody = JSON.parse(init.body) as Record<string, unknown>; } catch { mergedBody = null; }
+    for (let guard = 0; mergedBody && guard < 4 && res.status === 409; guard++) {
+      const text = await res.clone().text();
+      if (text.includes('"short_stock"') && mergedBody.confirmShortStock !== true) {
+        if (!(await confirmShortStock(text))) break;            // declined → terminal error below
+        mergedBody = { ...mergedBody, confirmShortStock: true };
+      } else if (
+        text.includes('"sofa_no_batch"') && text.includes('"canDropship":true') &&
+        mergedBody.dropShip !== true
+      ) {
+        // Declined drop-ship — deliberate operator choice. Throw a marker the
+        // page's onError swallows (mirrors the silent short_stock decline).
+        if (!(await confirmDropship(text))) throw new Error('declined_dropship:"sofa_no_batch"');
+        mergedBody = { ...mergedBody, dropShip: true };
       } else {
-        // Declined — a deliberate operator choice, not an error. Throw a marker
-        // the page's onError swallows (mirrors the silent short_stock decline).
-        throw new Error('declined_dropship:"sofa_no_batch"');
+        break; // non-confirmable 409 (no-PO no-batch / partial_set / already-flagged)
       }
+      res = await fetchWithTimeout(`${API_URL}${path}`, { ...init, headers, body: JSON.stringify(mergedBody) }, path);
     }
   }
 
