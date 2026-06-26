@@ -63,7 +63,7 @@ const empty: HandoverForm = {
   billingAddress: '', billingAddressLine2: '',
   billingPostcode: '', billingCity: '', billingState: '',
   emergencyName: '', emergencyRelation: '', emergencyPhone: '',
-  race: '', ageFrame: '',
+  race: '', birthday: '', gender: '',
   deliveryDate: '', deliveryDateLater: false,
   processDate: '',
   addons: {}, paymentMethod: '',
@@ -357,7 +357,8 @@ export const Handover = () => {
           ? { emergencyContactRelationship: form.emergencyRelation.trim() }
           : {}),
         ...(form.race.trim() ? { customerRace: form.race.trim() } : {}),
-        ...(form.ageFrame.trim() ? { customerAgeFrame: form.ageFrame.trim() } : {}),
+        ...(form.birthday.trim() ? { customerBirthday: form.birthday } : {}),
+        ...(form.gender.trim() ? { customerGender: form.gender.trim() } : {}),
         // target_date = customer's preference; customer_delivery_date is the
         // operational follower the Backend cascades to every line; internal_-
         // expected_dd = the factory start (Process Date). The SO API requires

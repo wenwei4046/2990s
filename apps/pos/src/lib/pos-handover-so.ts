@@ -69,11 +69,13 @@ export interface PosHandoffPayload {
   emergencyContactPhone?: string;
   emergencyContactRelationship?: string;
 
-  /* Marketing demographics (camelCase; API maps to customer_race /
-     customer_age_frame on the SO snapshot). Optional on the wire — the POS form
-     enforces required-for-new before submit; never shown on the SO/PDF. */
+  /* Marketing demographics (camelCase). The API persists these to the customers
+     table — race / birthday / gender — via upsert_customer_by_name_phone, NOT on
+     the SO. Optional on the wire — the POS form enforces required-for-new before
+     submit; never shown on the SO/PDF. */
   customerRace?: string;
-  customerAgeFrame?: string;
+  customerBirthday?: string; // ISO YYYY-MM-DD
+  customerGender?: string;
 
   /* Dates. */
   /** Customer's target delivery (ISO YYYY-MM-DD). */

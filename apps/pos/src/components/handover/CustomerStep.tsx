@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import type { HandoverForm } from '../../lib/handover-helpers';
+import { useEffect, useMemo } from 'react';
+import { todayLocalIso, type HandoverForm } from '../../lib/handover-helpers';
 import { useAllStaff, useStaff } from '../../lib/staff';
 import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
 import { Field } from './Field';
@@ -11,7 +11,7 @@ import {
   type CustomerSearchHit,
 } from '../../lib/customer-search';
 import styles from '../../pages/Handover.module.css';
-import { RACE_OPTIONS, AGE_FRAMES } from '@2990s/shared';
+import { RACE_OPTIONS, GENDER_OPTIONS, ageFromBirthday } from '@2990s/shared';
 
 /* Shown until /so-dropdown-options loads — mirrors the seeded customer_type
    rows (values 'NEW' / 'EXISTING', the vocabulary the Backend SO pages use). */
@@ -55,7 +55,8 @@ export const CustomerStep = ({
     if (h.emergencyContactPhone) update('emergencyPhone', h.emergencyContactPhone);
     if (h.emergencyContactRelationship) update('emergencyRelation', h.emergencyContactRelationship);
     if (h.race) update('race', h.race);
-    if (h.ageFrame) update('ageFrame', h.ageFrame);
+    if (h.birthday) update('birthday', h.birthday);
+    if (h.gender) update('gender', h.gender);
   };
 
   /* Customer type is DERIVED, not picked (Loo 2026-06-06: "if there is the
@@ -72,6 +73,9 @@ export const CustomerStep = ({
     if (form.customerType !== derivedType) update('customerType', derivedType);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [derivedType]);
+
+  // Exact age derived from the birthday for a read-only caption (never stored).
+  const age = useMemo(() => ageFromBirthday(form.birthday), [form.birthday]);
 
   return (
     <section className={styles.stepBody}>
@@ -154,18 +158,33 @@ export const CustomerStep = ({
             ))}
           </select>
         </Field>
-        <Field label={`Age group${matched ? '' : ' *'}`}>
-          <select value={form.ageFrame} onChange={(e) => update('ageFrame', e.target.value)}>
+        <Field label={`Gender${matched ? '' : ' *'}`}>
+          <select value={form.gender} onChange={(e) => update('gender', e.target.value)}>
             <option value="">{matched ? '— optional —' : '— select —'}</option>
-            {AGE_FRAMES.map((a) => (
-              <option key={a.code} value={a.code}>{a.label}</option>
+            {GENDER_OPTIONS.map((g) => (
+              <option key={g} value={g}>{g}</option>
             ))}
           </select>
         </Field>
       </div>
+
+      <div className="fieldRow">
+        <Field label={`Birthday${matched ? '' : ' *'}`}>
+          <input
+            type="date"
+            value={form.birthday}
+            min="1924-01-01"
+            max={todayLocalIso()}
+            onChange={(e) => update('birthday', e.target.value)}
+          />
+          {age !== null && (
+            <p className={styles.signCaption} style={{ marginTop: 4 }}>Age {age}</p>
+          )}
+        </Field>
+      </div>
       {!matched && (
         <p className={styles.signCaption}>
-          Race and age group are recorded for marketing only — not shown on the order.
+          Race, birthday and gender are recorded for marketing only — not shown on the order.
         </p>
       )}
     </section>

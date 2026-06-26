@@ -37,10 +37,12 @@ export interface CustomerSearchHit {
   emergencyContactName: string | null;
   emergencyContactPhone: string | null;
   emergencyContactRelationship: string | null;
-  /* Marketing demographics carried from the newest SO snapshot (per-field
-     coalesce, server-side). Prefilled into the Customer step on an existing pick. */
+  /* Marketing demographics from the customers table (by the newest order's
+     customer_id, server-side). Prefilled into the Customer step on a pick. */
+  customerId: string | null;
   race: string | null;
-  ageFrame: string | null;
+  birthday: string | null;
+  gender: string | null;
   lastDocNo: string;
   lastOrderAt: string;
 }
