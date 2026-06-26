@@ -50,6 +50,12 @@ const MATERIAL_KINDS = new Set(['mfg_product', 'fabric', 'raw']);
 /* PR #40 — full master record (Commander 2026-05-26 AutoCount parity) */
 /* Mig 0186 — registration_no / nature_of_business / exemption_no / phone2
    (AutoCount creditor-export parity, Houzs-led port). */
+/* ⚠️ VIEW-TRAP (see docs/2026-06-26-so-list-view-trap-coe.md): SUPPLIER_COLS feeds
+   BOTH the base `suppliers` reads AND (via SUPPLIER_LIST_COLS) the list read from
+   the `suppliers_with_derived_category` VIEW. The view is `SELECT s.*`, but `*` is
+   frozen at the view's CREATE — so adding a column here ALSO requires recreating
+   that view in a migration (DROP+CREATE, then re-GRANT) or the suppliers LIST 500s.
+   This already bit us once: 0186 added cols → 0187 had to recreate the view. */
 const SUPPLIER_COLS =
   'id, code, name, whatsapp_number, email, contact_person, phone, address, state, ' +
   'payment_terms, status, rating, notes, supplier_type, category, tin_number, ' +

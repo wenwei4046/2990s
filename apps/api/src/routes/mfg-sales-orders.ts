@@ -375,6 +375,13 @@ function extractSofaComboLookupArgs(
   return { modules, height, tier };
 }
 
+/* ⚠️ VIEW-TRAP (see docs/2026-06-26-so-list-view-trap-coe.md): this HEADER feeds
+   BOTH the SO detail GET (from the `mfg_sales_orders` TABLE) AND the SO list GET
+   (from the `mfg_sales_orders_with_payment_totals` VIEW, which enumerates columns).
+   Adding a column here REQUIRES recreating that view in a migration (CREATE OR
+   REPLACE, new cols appended at the end, re-GRANT) — else the SO LIST 500s
+   ("Failed to load"). For a field only the detail needs, append it to the detail
+   SELECT instead of HEADER (see `amend_reason`). */
 const HEADER =
   'doc_no, transfer_to, so_date, branding, debtor_code, debtor_name, agent, sales_location, ref, po_doc_no, venue, venue_id, ' +
   'address1, address2, address3, address4, phone, ' +
