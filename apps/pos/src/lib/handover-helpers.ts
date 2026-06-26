@@ -81,10 +81,11 @@ export interface HandoverForm {
 
   emergencyName: string; emergencyRelation: string; emergencyPhone: string;
 
-  /** Marketing demographics (2026-06-25). Captured at handover, stored on the
-   *  SO snapshot, never shown on the SO/PDF. REQUIRED when customerType==='NEW'
-   *  (a brand-new customer); optional + prefilled for an existing pick. */
-  race: string; ageFrame: string;
+  /** Marketing demographics (2026-06-26). Captured at handover, persisted to the
+   *  customers table (not the SO/PDF). REQUIRED when customerType==='NEW';
+   *  optional + prefilled for an existing pick. birthday is ISO YYYY-MM-DD;
+   *  gender is a GENDER_OPTIONS value; exact age is derived from birthday. */
+  race: string; birthday: string; gender: string;
 
   deliveryDate: string; deliveryDateLater: boolean;
   /** Factory start date ("Process Date") — when production should begin so we
@@ -149,7 +150,8 @@ export const validateCustomer = (f: HandoverForm): boolean =>
   && EMAIL_RE.test(f.email.trim())
   // Race + age band are compulsory for a NEW customer (the first time we record
   // them); an existing pick already carries them / can be left as prefilled.
-  && (f.customerType !== 'NEW' || (f.race.trim().length > 0 && f.ageFrame.trim().length > 0));
+  && (f.customerType !== 'NEW'
+      || (f.race.trim().length > 0 && f.birthday.trim().length > 0 && f.gender.trim().length > 0));
 
 export const validateAddress = (f: HandoverForm): boolean => {
   if (f.addressLater) return true;
@@ -254,7 +256,8 @@ const customerBlockers = (f: HandoverForm): string[] => {
   if (!f.email.trim()) b.push('Email required');
   else if (!EMAIL_RE.test(f.email.trim())) b.push('Email format invalid (e.g. name@example.com)');
   if (f.customerType === 'NEW' && !f.race.trim()) b.push('Race required for a new customer');
-  if (f.customerType === 'NEW' && !f.ageFrame.trim()) b.push('Age group required for a new customer');
+  if (f.customerType === 'NEW' && !f.birthday.trim()) b.push('Birthday required for a new customer');
+  if (f.customerType === 'NEW' && !f.gender.trim()) b.push('Gender required for a new customer');
   return b;
 };
 
