@@ -5,6 +5,7 @@ import {
   computeTargetMatch, type TargetProfile,
   spendBySegment,
   ageBandLabel, summarizeBuyerDemographics, type ProductUnit,
+  foldProductUnits, type SaItemRow,
 } from './sales-analysis';
 
 const o = (docNo: string, over: Partial<SaOrderRow> = {}): SaOrderRow => ({
@@ -289,6 +290,44 @@ describe('summarizeBuyerDemographics', () => {
     expect(d.race.find((b) => b.key === 'Unknown')?.count).toBe(1);
     expect(d.ageBand.find((b) => b.key === '26–35')?.count).toBe(1);
     expect(d.gender.find((b) => b.key === 'Unknown')?.count).toBe(1);
+  });
+});
+
+// ── Task 2: foldProductUnits ───────────────────────────────────────────────
+
+describe('foldProductUnits', () => {
+  const ctx = {
+    productByCode: new Map([
+      ['HILTON-(Q)', { category: 'MATTRESS', modelId: 'm1', sizeLabel: 'Queen', baseModel: 'HILTON' }],
+      ['ANNSA-1A(LHF)', { category: 'SOFA', modelId: 's1', sizeLabel: null, baseModel: 'ANNSA' }],
+      ['ANNSA-2A(RHF)', { category: 'SOFA', modelId: 's1', sizeLabel: null, baseModel: 'ANNSA' }],
+    ]),
+    modelById: new Map([['m1', 'Hilton'], ['s1', 'Annsa']]),
+    buyerByDoc: new Map([['SO-1', { race: 'Malay', birthday: '2000-06-26', gender: 'Male' }]]),
+  };
+  const row = (over: Partial<SaItemRow>): SaItemRow => ({
+    docNo: 'SO-1', soDate: '2026-06-01', itemCode: '', itemGroup: '', qty: 1,
+    totalCenti: 0, costCenti: 0, buildKey: null, fabricId: null, legHeight: null, seatHeight: null,
+    race: null, birthday: null, gender: null, ...over,
+  });
+  it('maps a mattress line to one unit with size + buyer', () => {
+    const units = foldProductUnits([row({ itemCode: 'HILTON-(Q)', itemGroup: 'mattress', totalCenti: 300000 })], ctx);
+    expect(units).toHaveLength(1);
+    expect(units[0]!.category).toBe('MATTRESS');
+    expect(units[0]!.modelName).toBe('Hilton');
+    expect(units[0]!.variantLabel).toBe('Queen');
+    expect(units[0]!.race).toBe('Malay');
+    expect(units[0]!.revenueCenti).toBe(300000);
+  });
+  it('folds two sofa module lines of one build into a single unit', () => {
+    const units = foldProductUnits([
+      row({ itemCode: 'ANNSA-1A(LHF)', itemGroup: 'sofa', buildKey: 'bk1', totalCenti: 200000 }),
+      row({ itemCode: 'ANNSA-2A(RHF)', itemGroup: 'sofa', buildKey: 'bk1', totalCenti: 150000 }),
+    ], ctx);
+    expect(units).toHaveLength(1);
+    expect(units[0]!.category).toBe('SOFA');
+    expect(units[0]!.revenueCenti).toBe(350000);
+    expect(units[0]!.qty).toBe(1);
   });
 });
 

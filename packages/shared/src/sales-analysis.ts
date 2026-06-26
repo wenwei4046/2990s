@@ -426,7 +426,7 @@ export function summarizeBuyerDemographics(
   };
 }
 
-// ── Task 2 types (added here so Task 1 tests compile; foldProductUnits lands in Task 2 commit) ──
+// ── Task 2: SaItemRow, ProductUnit, ProductCtx, foldProductUnits ──────────────
 
 export interface SaItemRow {
   docNo: string; soDate: string;
@@ -446,4 +446,54 @@ export interface ProductUnit {
   comboLabel: string | null;
   fabricUpgrade: boolean | null;
   race: string | null; birthday: string | null; gender: string | null;
+}
+
+export interface ProductCtx {
+  productByCode: ReadonlyMap<string, { category: string; modelId: string | null; sizeLabel: string | null; baseModel: string | null }>;
+  modelById: ReadonlyMap<string, string>;
+  buyerByDoc: ReadonlyMap<string, { race: string | null; birthday: string | null; gender: string | null }>;
+}
+
+/** Fold raw product lines into units. Sofa module lines sharing (docNo, buildKey)
+ *  collapse to one unit (revenue/margin summed; qty from the lead, not multiplied
+ *  by module count). Non-sofa lines map 1:1. variantLabel = size for
+ *  mattress/bedframe; left as 'Custom' for sofa (overridden by the endpoint). */
+export function foldProductUnits(rows: ReadonlyArray<SaItemRow>, ctx: ProductCtx): ProductUnit[] {
+  const out: ProductUnit[] = [];
+  const sofaGroups = new Map<string, SaItemRow[]>();
+  for (const r of rows) {
+    const p = ctx.productByCode.get(r.itemCode);
+    const category = (p?.category ?? r.itemGroup ?? '').toUpperCase();
+    const isSofa = category === 'SOFA';
+    if (isSofa && r.buildKey) {
+      const k = `${r.docNo}|${r.buildKey}`;
+      const arr = sofaGroups.get(k);
+      if (arr) arr.push(r); else sofaGroups.set(k, [r]);
+      continue;
+    }
+    const buyer = ctx.buyerByDoc.get(r.docNo) ?? { race: null, birthday: null, gender: null };
+    out.push({
+      docNo: r.docNo, category, modelId: p?.modelId ?? null,
+      modelName: (p?.modelId && ctx.modelById.get(p.modelId)) || p?.baseModel || r.itemCode,
+      variantLabel: isSofa ? 'Custom' : (p?.sizeLabel ?? '—'),
+      qty: r.qty, revenueCenti: r.totalCenti, marginCenti: r.totalCenti - r.costCenti,
+      sofaClass: isSofa ? 'custom' : null, comboLabel: null, fabricUpgrade: null,
+      race: buyer.race, birthday: buyer.birthday, gender: buyer.gender,
+    });
+  }
+  for (const [, lines] of sofaGroups) {
+    const lead = lines[0]!;
+    const p = ctx.productByCode.get(lead.itemCode);
+    const buyer = ctx.buyerByDoc.get(lead.docNo) ?? { race: null, birthday: null, gender: null };
+    const revenueCenti = lines.reduce((s, l) => s + l.totalCenti, 0);
+    const marginCenti  = lines.reduce((s, l) => s + (l.totalCenti - l.costCenti), 0);
+    out.push({
+      docNo: lead.docNo, category: 'SOFA', modelId: p?.modelId ?? null,
+      modelName: (p?.modelId && ctx.modelById.get(p.modelId)) || p?.baseModel || lead.itemCode,
+      variantLabel: 'Custom', qty: lead.qty, revenueCenti, marginCenti,
+      sofaClass: 'custom', comboLabel: null, fabricUpgrade: null,
+      race: buyer.race, birthday: buyer.birthday, gender: buyer.gender,
+    });
+  }
+  return out;
 }
