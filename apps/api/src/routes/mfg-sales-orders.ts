@@ -17,7 +17,7 @@ import {
   isFreeItemLine,
   type RuleLineInput,
   passesRefinementColumns,
-  isValidRace, isValidAgeFrame,
+  isValidRace, isValidBirthday, isValidGender,
   canonicalizeVariants,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
@@ -1876,6 +1876,11 @@ mfgSalesOrders.post('/', async (c) => {
       p_name:  customerName,
       p_phone: normPhone,
       p_email: typeof body.email === 'string' && body.email.trim() ? body.email.trim() : null,
+      // Marketing demographics → customers table (keep-first coalesce in the RPC).
+      // Lenient: invalid/missing → null; the POS gate already enforced required-for-NEW.
+      p_race:     isValidRace(body.customerRace) ? (body.customerRace as string) : null,
+      p_birthday: isValidBirthday(body.customerBirthday) ? (body.customerBirthday as string) : null,
+      p_gender:   isValidGender(body.customerGender) ? (body.customerGender as string) : null,
     });
     if (customerErr) {
       console.error('[mfg-so] customer resolve failed:', customerErr.message ?? customerErr);
@@ -3108,10 +3113,6 @@ mfgSalesOrders.post('/', async (c) => {
       ? (normalizePhone(body.emergencyContactPhone) ?? body.emergencyContactPhone)
       : null,
     emergency_contact_relationship: (body.emergencyContactRelationship as string) ?? null,
-    /* Marketing demographics (2026-06-25, mig 0185) — coerced to a known option
-       or NULL; never shown on the SO/PDF. Read by Sales Analysis. */
-    customer_race: isValidRace(body.customerRace) ? (body.customerRace as string) : null,
-    customer_age_frame: isValidAgeFrame(body.customerAgeFrame) ? (body.customerAgeFrame as string) : null,
     target_date: (body.targetDate as string) ?? null,
     customer_id: orderCustomerId,
     customer_state: (body.customerState as string) ?? null,
@@ -4230,6 +4231,9 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
       const { data: rid } = await sb.rpc('upsert_customer_by_name_phone', {
         p_name: nm, p_phone: ph,
         p_email: typeof body['email'] === 'string' && (body['email'] as string).trim() ? (body['email'] as string).trim() : null,
+        p_race:     isValidRace(body['customerRace']) ? (body['customerRace'] as string) : null,
+        p_birthday: isValidBirthday(body['customerBirthday']) ? (body['customerBirthday'] as string) : null,
+        p_gender:   isValidGender(body['customerGender']) ? (body['customerGender'] as string) : null,
       });
       resolvedNewCustomerId = (rid as string | null) ?? null;
       if (resolvedNewCustomerId) {
