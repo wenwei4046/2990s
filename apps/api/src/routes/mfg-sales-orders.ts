@@ -1216,7 +1216,7 @@ mfgSalesOrders.get('/customer-search', async (c) => {
   const esc = q.replace(/[\\%_]/g, (m) => `\\${m}`);
   const { data, error } = await sb
     .from('mfg_sales_orders')
-    .select('doc_no, debtor_name, phone, email, customer_type, address1, address2, city, postcode, customer_state, building_type, emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, customer_race, customer_age_frame, created_at')
+    .select('doc_no, debtor_name, phone, email, customer_type, address1, address2, city, postcode, customer_state, building_type, emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, customer_id, created_at')
     .ilike('debtor_name', `%${esc}%`)
     /* Leak guard (DRAFT) — the customer autocomplete is built from real order
        history; an uncommitted DRAFT SO must not surface a customer/address. */
@@ -1232,7 +1232,7 @@ mfgSalesOrders.get('/customer-search', async (c) => {
     building_type: string | null;
     emergency_contact_name: string | null; emergency_contact_phone: string | null;
     emergency_contact_relationship: string | null;
-    customer_race: string | null; customer_age_frame: string | null;
+    customer_id: string | null;
     created_at: string;
   };
   /* Per-identity COALESCE (Loo 2026-06-06 follow-up: "link them with address
@@ -1247,7 +1247,7 @@ mfgSalesOrders.get('/customer-search', async (c) => {
     ['address1', 'address1'], ['address2', 'address2'], ['city', 'city'],
     ['postcode', 'postcode'], ['customerState', 'customer_state'],
     ['buildingType', 'building_type'],
-    ['race', 'customer_race'], ['ageFrame', 'customer_age_frame'],
+    ['customerId', 'customer_id'],
   ] as const;
   /* Emergency contact coalesces as a GROUP, not per field (Loo 2026-06-12:
      copy it over like the address) — name/phone/relationship describe ONE
@@ -1287,13 +1287,38 @@ mfgSalesOrders.get('/customer-search', async (c) => {
       customerState: r.customer_state,
       buildingType:  r.building_type,
       ...emergencyOf(r),
-      race:          r.customer_race,
-      ageFrame:      r.customer_age_frame,
+      customerId:    r.customer_id,
+      race:          null,    // attached below from the customers table
+      birthday:      null,
+      gender:        null,
       lastDocNo:     r.doc_no,
       lastOrderAt:   r.created_at,
     });
   }
-  return c.json({ customers: [...byKey.values()].slice(0, 8) });
+  // Demographics live on the customers table (not the SO snapshot). Attach
+  // race/birthday/gender by the SO's customer_id (newest order per identity
+  // seeded the entry + its customer_id; FILL_FIELDS coalesced older ones).
+  const hits = [...byKey.values()];
+  const customerIds = [...new Set(
+    hits.map((h) => h.customerId as string | null).filter((x): x is string => !!x),
+  )];
+  if (customerIds.length) {
+    const { data: custRows } = await sb
+      .from('customers')
+      .select('id, race, birthday, gender')
+      .in('id', customerIds);
+    const byId = new Map<string, { race: string | null; birthday: string | null; gender: string | null }>();
+    for (const cr of (custRows ?? []) as Array<{ id: string; race: string | null; birthday: string | null; gender: string | null }>) {
+      byId.set(cr.id, { race: cr.race, birthday: cr.birthday, gender: cr.gender });
+    }
+    for (const h of hits) {
+      const d = h.customerId ? byId.get(h.customerId as string) : undefined;
+      h.race = d?.race ?? null;
+      h.birthday = d?.birthday ?? null;
+      h.gender = d?.gender ?? null;
+    }
+  }
+  return c.json({ customers: hits.slice(0, 8) });
 });
 
 mfgSalesOrders.get('/:docNo', async (c) => {
