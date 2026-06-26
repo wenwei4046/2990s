@@ -7,7 +7,7 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { summarizeOverview, monthlyTrend, type SaOrderRow } from '@2990s/shared';
+import { summarizeOverview, monthlyTrend, collapseToPurchases, type SaOrderRow, type SaCustomerRow } from '@2990s/shared';
 
 const CURATOR_ROLES = new Set(['sales_director', 'admin', 'super_admin']);
 
@@ -32,7 +32,7 @@ salesAnalysis.get('/', async (c) => {
   // the period filter scopes only the Overview below).
   let q = sb
     .from('mfg_sales_orders')
-    .select('doc_no, cross_category_source_doc_no, so_date, total_revenue_centi, total_margin_centi, service_centi, is_test')
+    .select('doc_no, cross_category_source_doc_no, so_date, total_revenue_centi, total_margin_centi, service_centi, is_test, customer_id')
     .not('status', 'in', '("CANCELLED","ON_HOLD")');
   if (!includeTest) q = q.not('is_test', 'is', true);
   const { data: orderRows, error: ordErr } = await q.limit(100000);
@@ -41,6 +41,7 @@ salesAnalysis.get('/', async (c) => {
   type Raw = {
     doc_no: string; cross_category_source_doc_no: string | null; so_date: string;
     total_revenue_centi: number | null; total_margin_centi: number | null; service_centi: number | null;
+    customer_id: string | null;
   };
   const allOrders: SaOrderRow[] = ((orderRows ?? []) as Raw[]).map((r) => ({
     docNo: r.doc_no,
@@ -74,5 +75,51 @@ salesAnalysis.get('/', async (c) => {
   }
 
   const overview = summarizeOverview(scoped, deliveryByDoc);
-  return c.json({ period, includeTest, overview, monthly });
+
+  // Customer Data section — demographics from the customers table for the
+  // customers behind the SCOPED orders. Demographics live on customers (not the
+  // SO); ages + distributions are computed client-side so the precise-age filter
+  // stays flexible. Per-customer order stats are over the scoped window.
+  const custIdByDoc = new Map<string, string | null>();
+  for (const r of ((orderRows ?? []) as Raw[])) custIdByDoc.set(r.doc_no, r.customer_id ?? null);
+  const ordersByCustomer = new Map<string, SaOrderRow[]>();
+  for (const r of scoped) {
+    const cid = custIdByDoc.get(r.docNo);
+    if (!cid) continue;
+    const arr = ordersByCustomer.get(cid);
+    if (arr) arr.push(r); else ordersByCustomer.set(cid, [r]);
+  }
+  let customers: SaCustomerRow[] = [];
+  const custIds = [...ordersByCustomer.keys()];
+  if (custIds.length) {
+    const { data: custRows, error: custErr } = await sb
+      .from('customers')
+      .select('id, name, state, race, birthday, gender')
+      .in('id', custIds);
+    if (custErr) return c.json({ error: 'load_failed', reason: custErr.message }, 500);
+    type CustRow = { id: string; name: string | null; state: string | null; race: string | null; birthday: string | null; gender: string | null };
+    const profile = new Map<string, CustRow>();
+    for (const cr of (custRows ?? []) as CustRow[]) profile.set(cr.id, cr);
+    customers = custIds.map((cid) => {
+      const ords = ordersByCustomer.get(cid)!;
+      const purchases = collapseToPurchases(ords).length;
+      const dates = ords.map((od) => od.soDate).sort();
+      const p = profile.get(cid);
+      return {
+        id: cid,
+        name: p?.name ?? '',
+        race: p?.race ?? null,
+        birthday: p?.birthday ?? null,
+        gender: p?.gender ?? null,
+        state: p?.state ?? null,
+        orderCount: purchases,
+        ltvCenti: ords.reduce((s, od) => s + od.totalRevenueCenti, 0),
+        firstOrderDate: dates[0] ?? null,
+        lastOrderDate: dates[dates.length - 1] ?? null,
+        isReturning: purchases > 1,
+      };
+    });
+  }
+
+  return c.json({ period, includeTest, overview, monthly, customers });
 });
