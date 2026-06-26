@@ -7,7 +7,17 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { summarizeOverview, monthlyTrend, collapseToPurchases, type SaOrderRow, type SaCustomerRow, type TargetProfile } from '@2990s/shared';
+import {
+  summarizeOverview, monthlyTrend, collapseToPurchases,
+  foldProductUnits, buildProductsSection, classifySofaBuild, isFabricUpgrade, splitSofaCode,
+  type SaOrderRow, type SaCustomerRow, type TargetProfile,
+  type SaItemRow, type ProductCtx, type SofaPriceTier,
+} from '@2990s/shared';
+import { loadActiveSofaCombos } from './mfg-sales-orders';
+import {
+  loadFabricSellingTiersByIds, loadFabricTierAddonConfig,
+  loadModelFabricTierOverrides, loadCompartmentFabricTierOverrides,
+} from '../lib/mfg-pricing-recompute';
 
 const CURATOR_ROLES = new Set(['sales_director', 'admin', 'super_admin']);
 
@@ -141,7 +151,143 @@ salesAnalysis.get('/', async (c) => {
     areaCities: tRow?.area_cities ?? [],
   };
 
-  return c.json({ period, includeTest, overview, monthly, customers, targets });
+  // ── Products section — per-category model/variant ranking + buyer demographics.
+  // Scoped to the same period-filtered docNos as the customers section. Combo
+  // classification mirrors the authoritative SELLING billing path
+  // (computeSofaSellingSen): tier PRICE_1, height = variants.depth ?? seatHeight.
+  let products = buildProductsSection([]);
+  if (docNos.length) {
+    // Product lines for the scoped docs, excluding service (its own bucket).
+    const { data: lineRows, error: lineErr } = await sb
+      .from('mfg_sales_order_items')
+      .select('doc_no, item_code, item_group, qty, total_centi, line_cost_centi, variants')
+      .neq('item_group', 'service')
+      .not('item_code', 'like', 'SVC-%')
+      .eq('cancelled', false)
+      .in('doc_no', docNos);
+    if (lineErr) console.error('sales-analysis product-line load failed (products section empty):', lineErr.message ?? lineErr);
+    const rawLines = (lineRows ?? []) as Array<{
+      doc_no: string; item_code: string | null; item_group: string | null;
+      qty: number | null; total_centi: number | null; line_cost_centi: number | null;
+      variants: Record<string, unknown> | null;
+    }>;
+
+    // Product master (distinct item_code) + models (distinct model_id).
+    const codes = [...new Set(rawLines.map((r) => (r.item_code ?? '').trim()).filter(Boolean))];
+    const productByCode = new Map<string, { category: string; modelId: string | null; sizeLabel: string | null; baseModel: string | null }>();
+    if (codes.length) {
+      const { data: prodRows, error: prodErr } = await sb
+        .from('mfg_products')
+        .select('code, category, model_id, size_code, size_label, base_model')
+        .in('code', codes);
+      if (prodErr) console.error('sales-analysis product-master load failed:', prodErr.message ?? prodErr);
+      for (const p of (prodRows ?? []) as Array<{ code: string; category: string | null; model_id: string | null; size_code: string | null; size_label: string | null; base_model: string | null }>) {
+        productByCode.set(p.code, {
+          category: String(p.category ?? ''),
+          modelId: p.model_id ?? null,
+          sizeLabel: p.size_label ?? p.size_code ?? null,
+          baseModel: p.base_model ?? null,
+        });
+      }
+    }
+    const modelIds = [...new Set([...productByCode.values()].map((p) => p.modelId).filter((x): x is string => !!x))];
+    const modelById = new Map<string, string>();
+    if (modelIds.length) {
+      const { data: modelRows, error: modelErr } = await sb
+        .from('product_models')
+        .select('id, name')
+        .in('id', modelIds);
+      if (modelErr) console.error('sales-analysis model load failed:', modelErr.message ?? modelErr);
+      for (const m of (modelRows ?? []) as Array<{ id: string; name: string | null }>) {
+        modelById.set(m.id, m.name ?? '');
+      }
+    }
+
+    // Sofa combos (master scope) + fabric-tier config for upgrade detection.
+    const combos = await loadActiveSofaCombos(sb);
+    const fabricIds = [...new Set(rawLines.map((r) => ((r.variants ?? {}) as Record<string, unknown>).fabricId).filter(Boolean).map(String))];
+    const [fabricTiersById, addonConfig, modelOverrides, compartmentOverrides] = await Promise.all([
+      loadFabricSellingTiersByIds(sb, fabricIds),
+      loadFabricTierAddonConfig(sb),
+      loadModelFabricTierOverrides(sb),
+      loadCompartmentFabricTierOverrides(sb),
+    ]);
+
+    // Buyer demographics per docNo — reuse the customers already loaded (no re-query).
+    const custById = new Map<string, SaCustomerRow>();
+    for (const cust of customers) custById.set(cust.id, cust);
+    const buyerByDoc = new Map<string, { race: string | null; birthday: string | null; gender: string | null }>();
+    for (const docNo of docNos) {
+      const cid = custIdByDoc.get(docNo);
+      const cust = cid ? custById.get(cid) : undefined;
+      buyerByDoc.set(docNo, { race: cust?.race ?? null, birthday: cust?.birthday ?? null, gender: cust?.gender ?? null });
+    }
+
+    const soDateByDoc = new Map(allOrders.map((o) => [o.docNo, o.soDate]));
+
+    const itemRows: SaItemRow[] = rawLines.map((r) => {
+      const v = (r.variants ?? {}) as Record<string, unknown>;
+      // Height carrier mirrors the billing path (sofaHeightKey = depth ?? seatHeight):
+      // POS configurator sofa lines carry variants.depth, not seatHeight.
+      const heightRaw = v.depth ?? v.seatHeight;
+      const seatHeight = heightRaw != null && String(heightRaw).trim() !== '' ? String(heightRaw) : null;
+      const buyer = buyerByDoc.get(r.doc_no) ?? { race: null, birthday: null, gender: null };
+      return {
+        docNo: r.doc_no,
+        soDate: soDateByDoc.get(r.doc_no) ?? '',
+        itemCode: r.item_code ?? '',
+        itemGroup: r.item_group ?? '',
+        qty: Number(r.qty) || 0,
+        totalCenti: Number(r.total_centi) || 0,
+        costCenti: Number(r.line_cost_centi) || 0,
+        buildKey: (v.buildKey as string) ?? null,
+        fabricId: (v.fabricId as string) ?? null,
+        legHeight: (v.legHeight as string) ?? null,
+        seatHeight,
+        isPwp: v.pwp === true,
+        race: buyer.race, birthday: buyer.birthday, gender: buyer.gender,
+      };
+    });
+
+    const ctx: ProductCtx = { productByCode, modelById, buyerByDoc };
+    const units = foldProductUnits(itemRows, ctx);
+    for (const u of units) {
+      if (u.category !== 'SOFA' && u.category !== 'BEDFRAME') continue;
+      const category = u.category as 'SOFA' | 'BEDFRAME';   // narrow (u.category is string)
+      const tiers = u.fabricId ? fabricTiersById.get(u.fabricId) : undefined;
+      const tier = category === 'SOFA' ? (tiers?.sofaTier ?? null) : (tiers?.bedframeTier ?? null);
+      const compartments = category === 'SOFA' ? u.itemCodes.map((c) => splitSofaCode(c).sizeCode).filter(Boolean) : [];
+      u.fabricUpgrade = isFabricUpgrade(
+        { category, tier, buildCompartments: compartments, modelId: u.modelId },
+        addonConfig, modelOverrides, compartmentOverrides,
+      );
+      if (category === 'SOFA') {
+        const lead = u.itemCodes[0] ?? '';
+        const baseModel = productByCode.get(lead)?.baseModel ?? splitSofaCode(lead).baseModel;
+        // FIDELITY: mirror billing — computeSofaSellingSen matches combos at
+        // PRICE_1 (every combo authored at PRICE_1) and keys height = depth ??
+        // seatHeight. Using the fabric's selling tier here would exclude PRICE_1
+        // combos for PRICE_2/3 fabrics and misclassify billed combos as custom.
+        const cls = classifySofaBuild(
+          {
+            baseModel,
+            moduleCodes: compartments,
+            tier: 'PRICE_1' as SofaPriceTier,
+            height: u.seatHeight ?? '24',
+            soDate: soDateByDoc.get(u.docNo) ?? '9999-12-31',
+            isPwp: u.isPwp,
+          },
+          combos,
+        );
+        u.sofaClass = cls.sofaClass;
+        u.comboLabel = cls.comboLabel;
+        u.variantLabel = cls.comboLabel ?? 'Custom';
+      }
+    }
+    products = buildProductsSection(units);
+  }
+
+  return c.json({ period, includeTest, overview, monthly, customers, targets, products });
 });
 
 salesAnalysis.put('/targets', async (c) => {

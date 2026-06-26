@@ -323,7 +323,7 @@ async function soMainMixIntroduced(sb: any, docNo: string, excludeItemId: string
    before the line is persisted; if a sofa line's variants.cells match a
    combo's modules at the line's seat-height tier, the combo price OVERRIDES
    the client-submitted unit_price (anti-tamper). */
-async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
+export async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
   const { data } = await sb
     .from('sofa_combo_pricing')
     .select('id, base_model, modules, tier, customer_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, effective_from, deleted_at, default_free_gifts')
