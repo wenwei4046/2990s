@@ -6,7 +6,10 @@ import {
   spendBySegment,
   ageBandLabel, summarizeBuyerDemographics, type ProductUnit,
   foldProductUnits, type SaItemRow,
+  classifySofaBuild, isFabricUpgrade,
 } from './sales-analysis';
+import type { SofaComboRow } from './sofa-combo-pricing';
+import type { FabricTierAddonConfig, FabricTierModelOverride } from './fabric-tier-addon';
 
 const o = (docNo: string, over: Partial<SaOrderRow> = {}): SaOrderRow => ({
   docNo, sourceDocNo: null, soDate: '2026-06-12',
@@ -328,6 +331,106 @@ describe('foldProductUnits', () => {
     expect(units[0]!.category).toBe('SOFA');
     expect(units[0]!.revenueCenti).toBe(350000);
     expect(units[0]!.qty).toBe(1);
+  });
+});
+
+// ── Task 3: classifySofaBuild + isFabricUpgrade ────────────────────────────
+
+describe('classifySofaBuild', () => {
+  // IMPORTANT: pricesByHeight must include the queried height ('24') with a
+  // numeric value; an empty {} causes pickComboMatch to skip the candidate.
+  const comboXammar: SofaComboRow = {
+    id: 'c1',
+    baseModel: 'XAMMAR',
+    modules: [['2A(LHF)', '2A(RHF)'], ['L(LHF)', 'L(RHF)']],
+    tier: null,
+    customerId: null,
+    pricesByHeight: { '24': 500000 },
+    effectiveFrom: '2026-01-01',
+    label: 'L-shape combo',
+  };
+  const combos = [comboXammar];
+
+  it('build covering the combo slots → combo with label', () => {
+    const r = classifySofaBuild(
+      { baseModel: 'XAMMAR', moduleCodes: ['2A(LHF)', 'L(RHF)'], tier: 'PRICE_1', height: '24', soDate: '2026-06-12', isPwp: false },
+      combos,
+    );
+    expect(r).toEqual({ sofaClass: 'combo', comboLabel: 'L-shape combo' });
+  });
+
+  it('build that cannot cover the slots → custom', () => {
+    const r = classifySofaBuild(
+      { baseModel: 'XAMMAR', moduleCodes: ['1S'], tier: 'PRICE_1', height: '24', soDate: '2026-06-12', isPwp: false },
+      combos,
+    );
+    expect(r).toEqual({ sofaClass: 'custom', comboLabel: null });
+  });
+
+  it('isPwp: true → pwp regardless of combo match', () => {
+    const r = classifySofaBuild(
+      { baseModel: 'XAMMAR', moduleCodes: ['2A(LHF)', 'L(RHF)'], tier: 'PRICE_1', height: '24', soDate: '2026-06-12', isPwp: true },
+      combos,
+    );
+    expect(r).toEqual({ sofaClass: 'pwp', comboLabel: null });
+  });
+
+  it('effective-dating: combo effectiveFrom after soDate → custom', () => {
+    const futureCombo: SofaComboRow = { ...comboXammar, effectiveFrom: '2026-12-01' };
+    const r = classifySofaBuild(
+      { baseModel: 'XAMMAR', moduleCodes: ['2A(LHF)', 'L(RHF)'], tier: 'PRICE_1', height: '24', soDate: '2026-06-12', isPwp: false },
+      [futureCombo],
+    );
+    expect(r).toEqual({ sofaClass: 'custom', comboLabel: null });
+  });
+
+  it('matched combo with null label falls back to buildComboLabel (non-empty string)', () => {
+    const noLabelCombo: SofaComboRow = { ...comboXammar, label: null };
+    const r = classifySofaBuild(
+      { baseModel: 'XAMMAR', moduleCodes: ['2A(LHF)', 'L(RHF)'], tier: 'PRICE_1', height: '24', soDate: '2026-06-12', isPwp: false },
+      [noLabelCombo],
+    );
+    expect(r.sofaClass).toBe('combo');
+    expect(typeof r.comboLabel).toBe('string');
+    expect((r.comboLabel ?? '').length).toBeGreaterThan(0);
+  });
+});
+
+describe('isFabricUpgrade', () => {
+  const config: FabricTierAddonConfig = {
+    sofaTier2Delta: 125, sofaTier3Delta: 0, bedframeTier2Delta: 0, bedframeTier3Delta: 0,
+  };
+  const noOv = new Map<string, FabricTierModelOverride>();
+
+  it('SOFA PRICE_2 with global Δ > 0 → true', () => {
+    expect(
+      isFabricUpgrade({ category: 'SOFA', tier: 'PRICE_2', buildCompartments: ['2A(LHF)'], modelId: 'm1' }, config, noOv, noOv),
+    ).toBe(true);
+  });
+
+  it('SOFA PRICE_1 (base tier) → false', () => {
+    expect(
+      isFabricUpgrade({ category: 'SOFA', tier: 'PRICE_1', buildCompartments: ['2A(LHF)'], modelId: 'm1' }, config, noOv, noOv),
+    ).toBe(false);
+  });
+
+  it('per-Model override tier2Delta=0 on PRICE_2 SOFA → false', () => {
+    const modelOv = new Map<string, FabricTierModelOverride>([['m1', { tier2Delta: 0, tier3Delta: null }]]);
+    expect(
+      isFabricUpgrade({ category: 'SOFA', tier: 'PRICE_2', buildCompartments: ['2A(LHF)'], modelId: 'm1' }, config, modelOv, noOv),
+    ).toBe(false);
+  });
+
+  it('BEDFRAME PRICE_2 with no bedframe Δ → false', () => {
+    expect(
+      isFabricUpgrade({ category: 'BEDFRAME', tier: 'PRICE_2', buildCompartments: [], modelId: 'm2' }, config, noOv, noOv),
+    ).toBe(false);
+  });
+
+  it('SOFA tier: null (unknown fabric) → false', () => {
+    expect(
+      isFabricUpgrade({ category: 'SOFA', tier: null, buildCompartments: ['2A(LHF)'], modelId: 'm1' }, config, noOv, noOv),
+    ).toBe(false);
   });
 });
 

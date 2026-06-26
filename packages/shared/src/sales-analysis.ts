@@ -5,6 +5,9 @@
 // follow-up SO chains into one; cancelled orders are filtered upstream.
 
 import { ageFromBirthday, RACE_OPTIONS, GENDER_OPTIONS } from './customer-demographics';
+import { pickComboMatch, buildComboLabel, type SofaComboRow, type SofaPriceTier } from './sofa-combo-pricing';
+import { fabricTierAddon, type FabricTier, type FabricTierAddonConfig, type FabricTierModelOverride } from './fabric-tier-addon';
+import { resolveFabricTierOverride } from './fabric-tier-override-resolve';
 
 export interface SaOrderRow {
   docNo: string;
@@ -496,4 +499,72 @@ export function foldProductUnits(rows: ReadonlyArray<SaItemRow>, ctx: ProductCtx
     });
   }
   return out;
+}
+
+// ── Task 3: classifySofaBuild + isFabricUpgrade ──────────────────────────────
+
+export interface SofaClassifyInput {
+  baseModel: string;
+  /** Compartment codes from splitSofaCode(item_code).sizeCode, e.g. ['2A(LHF)','L(RHF)'] */
+  moduleCodes: string[];
+  /** Resolved selling tier (caller defaults PRICE_1). */
+  tier: SofaPriceTier;
+  /** Seat height/depth (caller defaults '24'). */
+  height: string;
+  /** SO date as 'YYYY-MM-DD' — used for combo effective-dating. */
+  soDate: string;
+  isPwp: boolean;
+}
+
+/**
+ * Re-derive the SO recompute's combo decision for one folded sofa build.
+ * Returns the string-union shape: sofaClass + comboLabel (null unless combo).
+ *
+ * WHY baseModel:'' + case-insensitive pre-filter:
+ *   pickComboMatch treats empty baseModel as wildcard (skips its CASE-SENSITIVE
+ *   inner check). Pre-filtering case-insensitively avoids missing matches when
+ *   the unit's baseModel (from item_code) differs in case from the stored combo.
+ */
+export function classifySofaBuild(
+  input: SofaClassifyInput,
+  combos: readonly SofaComboRow[],
+): { sofaClass: 'combo' | 'custom' | 'pwp'; comboLabel: string | null } {
+  if (input.isPwp) return { sofaClass: 'pwp', comboLabel: null };
+  const filtered = combos.filter((c) => c.baseModel.toUpperCase() === input.baseModel.toUpperCase());
+  const match = pickComboMatch(
+    { baseModel: '', modules: input.moduleCodes, customerId: null, tier: input.tier, height: input.height, asOf: input.soDate },
+    filtered,
+  );
+  if (match) return { sofaClass: 'combo', comboLabel: match.row.label || buildComboLabel(match.row.modules) };
+  return { sofaClass: 'custom', comboLabel: null };
+}
+
+export interface FabricUpgradeInput {
+  category: 'SOFA' | 'BEDFRAME';
+  /** The fabric's category-appropriate selling tier; null when unknown (→ not an upgrade). */
+  tier: FabricTier | null;
+  /** Sofa: module compartment codes; bedframe: []. */
+  buildCompartments: string[];
+  modelId: string | null;
+}
+
+/**
+ * True when the build's fabric carries a positive tier Δ (after per-Model +
+ * per-compartment overrides) — the same MAX-fold the SO billed at recompute.
+ * A null tier (unknown fabric) → fabricTierAddon returns 0 → false.
+ */
+export function isFabricUpgrade(
+  input: FabricUpgradeInput,
+  config: FabricTierAddonConfig,
+  modelOverrides: ReadonlyMap<string, FabricTierModelOverride>,
+  compartmentOverrides: ReadonlyMap<string, FabricTierModelOverride>,
+): boolean {
+  const baseOverride = input.modelId ? (modelOverrides.get(input.modelId) ?? null) : null;
+  // resolveFabricTierOverride only calls .get() — safe to cast ReadonlyMap → Map.
+  const override = resolveFabricTierOverride(
+    input.buildCompartments,
+    baseOverride,
+    compartmentOverrides as Map<string, FabricTierModelOverride>,
+  );
+  return fabricTierAddon(input.category, input.tier, config, override) > 0;
 }
