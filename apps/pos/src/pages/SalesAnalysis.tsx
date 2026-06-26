@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import { fmtCenti, fmtQty } from '@2990s/shared';
 import { Topbar } from '../components/Topbar';
 import { useSalesAnalysis } from '../lib/sales-analysis-queries';
+import { CustomerDataTab } from '../components/sales-analysis/CustomerDataTab';
 import styles from './SalesAnalysis.module.css';
 
 const MIN_SAMPLE = 10; // below this, rates are noise — flag them.
@@ -13,6 +14,7 @@ const pct = (v: number | null): string => (v == null ? '—' : `${v.toFixed(1)}%
 export const SalesAnalysis = () => {
   const [period, setPeriod] = useState('all');
   const [includeTest, setIncludeTest] = useState(false);
+  const [tab, setTab] = useState<'overview' | 'customers'>('overview');
   const { data, isLoading, error } = useSalesAnalysis(period, includeTest);
 
   // Period options derive from the (always-full) monthly trend.
@@ -50,10 +52,23 @@ export const SalesAnalysis = () => {
           </div>
         </div>
 
+        <div className={styles.tabs}>
+          <button
+            type="button"
+            className={`${styles.tab} ${tab === 'overview' ? styles.tabActive : ''}`}
+            onClick={() => setTab('overview')}
+          >Overview</button>
+          <button
+            type="button"
+            className={`${styles.tab} ${tab === 'customers' ? styles.tabActive : ''}`}
+            onClick={() => setTab('customers')}
+          >Customer Data</button>
+        </div>
+
         {isLoading && <p className={styles.muted}>Loading…</p>}
         {error && <p className={styles.note}>Could not load analytics: {(error as Error).message}</p>}
 
-        {ov && (
+        {tab === 'overview' && ov && (
           <>
             {thin && (
               <p className={styles.note}>
@@ -106,6 +121,8 @@ export const SalesAnalysis = () => {
             </div>
           </>
         )}
+
+        {tab === 'customers' && data && <CustomerDataTab customers={data.customers} />}
       </div>
     </>
   );

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import type { OverviewResult, MonthlyRow } from '@2990s/shared';
+import type { OverviewResult, MonthlyRow, SaCustomerRow } from '@2990s/shared';
 import { supabase } from './supabase';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -9,6 +9,7 @@ export interface SalesAnalysisResponse {
   includeTest: boolean;
   overview: OverviewResult;
   monthly: MonthlyRow[];
+  customers: SaCustomerRow[];
 }
 
 export function useSalesAnalysis(period: string, includeTest: boolean) {
