@@ -596,6 +596,24 @@ export const customers = pgTable('customers', {
     .where(sql`${t.customerCode} IS NOT NULL`),
 }));
 
+/* Sales Analysis "Target profile" (2026-06-26) — a single company-wide row of
+   the ideal-customer targets (avg age + tolerance, race/gender distributions,
+   area states/cities). Drives the Target Match Score. Singleton: id is always 1.
+   RLS: any staff reads; curators (sales_director/admin/super_admin) write. */
+export const analysisCustomerTargets = pgTable('analysis_customer_targets', {
+  id:                integer('id').primaryKey().default(1),
+  targetAvgAge:      integer('target_avg_age'),
+  ageToleranceYears: integer('age_tolerance_years').notNull().default(10),
+  raceTargets:       jsonb('race_targets'),
+  genderTargets:     jsonb('gender_targets'),
+  areaStates:        text('area_states').array(),
+  areaCities:        text('area_cities').array(),
+  updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:         uuid('updated_by'),
+}, (t) => ({
+  singleton: check('analysis_customer_targets_singleton', sql`${t.id} = 1`),
+}));
+
 /* ─────────────────────────── My-Localities (postcode cascade) ───────── */
 // Seed source: vetted public dataset (Pos Malaysia or yusufusoff/malaysia-postcodes).
 // One row per (postcode, city). Postcode is NOT unique — multiple cities
