@@ -4,6 +4,7 @@ import {
   summarizeCustomerDemographics, type SaCustomerRow,
   computeTargetMatch, type TargetProfile,
   spendBySegment,
+  ageBandLabel, summarizeBuyerDemographics, type ProductUnit,
 } from './sales-analysis';
 
 const o = (docNo: string, over: Partial<SaOrderRow> = {}): SaOrderRow => ({
@@ -257,3 +258,37 @@ describe('summarizeCustomerDemographics', () => {
     expect(s.newVsReturning).toEqual({ newCount: 2, returningCount: 1 });
   });
 });
+
+// ── Task 1: age bands + summarizeBuyerDemographics ─────────────────────────
+
+describe('ageBandLabel', () => {
+  it('buckets at boundaries', () => {
+    expect(ageBandLabel(25)).toBe('≤25');
+    expect(ageBandLabel(26)).toBe('26–35');
+    expect(ageBandLabel(55)).toBe('46–55');
+    expect(ageBandLabel(56)).toBe('56+');
+    expect(ageBandLabel(null)).toBe('');
+  });
+});
+
+describe('summarizeBuyerDemographics', () => {
+  const asOf = '2026-06-26';
+  const u = (over: Partial<ProductUnit> = {}): ProductUnit => ({
+    docNo: 'SO-1', category: 'MATTRESS', modelId: 'm1', modelName: 'X', variantLabel: 'Queen',
+    qty: 1, revenueCenti: 0, marginCenti: 0, sofaClass: null, comboLabel: null, fabricUpgrade: null,
+    race: null, birthday: null, gender: null, ...over,
+  });
+  it('tallies race/ageBand/gender with Unknown + n', () => {
+    const d = summarizeBuyerDemographics([
+      u({ race: 'Malay', birthday: '2000-06-26', gender: 'Male' }),   // 26 → 26–35
+      u({ race: 'Malay', birthday: '1980-06-26', gender: 'Female' }), // 46 → 46–55
+      u({ race: null, birthday: null, gender: null }),
+    ], asOf);
+    expect(d.n).toBe(3);
+    expect(d.race.find((b) => b.key === 'Malay')?.count).toBe(2);
+    expect(d.race.find((b) => b.key === 'Unknown')?.count).toBe(1);
+    expect(d.ageBand.find((b) => b.key === '26–35')?.count).toBe(1);
+    expect(d.gender.find((b) => b.key === 'Unknown')?.count).toBe(1);
+  });
+});
+

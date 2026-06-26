@@ -160,6 +160,11 @@ export interface CustomerDemographicsSummary {
 
 export interface AgeFilter { ageMin?: number | null; ageMax?: number | null; asOf?: string }
 
+const toBuckets = (m: Map<string, number>): DistributionBucket[] =>
+  [...m.entries()]
+    .map(([key, count]) => ({ key, count }))
+    .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+
 /** Pure demographics aggregation for the Customer Data tab. Age is computed
  *  EXACTLY from birthday (no buckets). The age filter is inclusive on both
  *  bounds; when any bound is set, rows without a usable age are excluded.
@@ -205,11 +210,6 @@ export function summarizeCustomerDemographics(
         ? sortedAges[(sortedAges.length - 1) / 2]!
         : (sortedAges[sortedAges.length / 2 - 1]! + sortedAges[sortedAges.length / 2]!) / 2)
     : null;
-
-  const toBuckets = (m: Map<string, number>): DistributionBucket[] =>
-    [...m.entries()]
-      .map(([key, count]) => ({ key, count }))
-      .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
 
   return {
     total: perCustomer.length,
@@ -376,4 +376,74 @@ export function spendBySegment(
       marginPct: b.revenueCenti > 0 ? (b.marginCenti / b.revenueCenti) * 100 : null,
     }))
     .sort((a, b) => b.revenueCenti - a.revenueCenti || a.key.localeCompare(b.key));
+}
+
+// ── Task 1: age bands + buyer demographics ──────────────────────────────────
+
+export const AGE_BANDS = [
+  { code: 'le25',   label: '≤25',   min: 0,   max: 25 },
+  { code: '26_35',  label: '26–35', min: 26,  max: 35 },
+  { code: '36_45',  label: '36–45', min: 36,  max: 45 },
+  { code: '46_55',  label: '46–55', min: 46,  max: 55 },
+  { code: '56plus', label: '56+',   min: 56,  max: 200 },
+] as const;
+
+export function ageBandLabel(age: number | null): string {
+  if (age === null || !Number.isFinite(age)) return '';
+  return AGE_BANDS.find((b) => age >= b.min && age <= b.max)?.label ?? '';
+}
+
+/** Public type alias (same shape as DistributionBucket). */
+export interface Distribution { key: string; count: number }
+
+export interface BuyerDemographics {
+  n: number;
+  race: Distribution[];
+  ageBand: Distribution[];
+  gender: Distribution[];
+}
+
+/** Buyer demographics for a set of product units. Race/gender → 'Unknown' for
+ *  blanks; age bucketed via ageBandLabel (blank birthday → 'Unknown'). */
+export function summarizeBuyerDemographics(
+  units: ReadonlyArray<ProductUnit>, asOf?: string,
+): BuyerDemographics {
+  const race = new Map<string, number>();
+  const ageBand = new Map<string, number>();
+  const gender = new Map<string, number>();
+  const bump = (m: Map<string, number>, k: string): void => { m.set(k, (m.get(k) ?? 0) + 1); };
+  for (const u of units) {
+    bump(race,   u.race   && u.race.trim()   ? u.race   : 'Unknown');
+    bump(gender, u.gender && u.gender.trim() ? u.gender : 'Unknown');
+    const lbl = ageBandLabel(ageFromBirthday(u.birthday, asOf));
+    bump(ageBand, lbl || 'Unknown');
+  }
+  return {
+    n: units.length,
+    race: toBuckets(race),
+    ageBand: toBuckets(ageBand),
+    gender: toBuckets(gender),
+  };
+}
+
+// ── Task 2 types (added here so Task 1 tests compile; foldProductUnits lands in Task 2 commit) ──
+
+export interface SaItemRow {
+  docNo: string; soDate: string;
+  itemCode: string; itemGroup: string;
+  qty: number; totalCenti: number; costCenti: number;
+  buildKey: string | null; fabricId: string | null;
+  legHeight: string | null; seatHeight: string | null;
+  // buyer (attached from the SO's customer)
+  race: string | null; birthday: string | null; gender: string | null;
+}
+
+export interface ProductUnit {
+  docNo: string; category: string; modelId: string | null; modelName: string;
+  variantLabel: string;
+  qty: number; revenueCenti: number; marginCenti: number;
+  sofaClass: 'combo' | 'custom' | 'pwp' | null;
+  comboLabel: string | null;
+  fabricUpgrade: boolean | null;
+  race: string | null; birthday: string | null; gender: string | null;
 }
