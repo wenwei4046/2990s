@@ -23,6 +23,7 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ClipboardList, Printer, Eye, Filter, X, SlidersHorizontal, FileSearch } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from './DataGrid';
+import { DateField } from './DateField';
 import { useNotify } from './NotifyDialog';
 import type { UseQueryResult } from '@tanstack/react-query';
 import type { DetailListingFilters, DetailListingRow } from '../lib/flow-queries';
@@ -313,10 +314,10 @@ export function DetailListingShell<R extends DetailListingRow>({
                       <option value="range">Filter by range</option>
                       <option value="none">No filter</option>
                     </select>
-                    <input type="date" className={styles.fieldInput} value={dateFrom}
-                      onChange={(e) => setDateFrom(e.target.value)} disabled={docDateMode !== 'range'} />
-                    <input type="date" className={styles.fieldInput} value={dateTo}
-                      onChange={(e) => setDateTo(e.target.value)} disabled={docDateMode !== 'range'} />
+                    <DateField className={styles.fieldInput} value={dateFrom ?? ''}
+                      onChange={(iso) => setDateFrom(iso)} disabled={docDateMode !== 'range'} />
+                    <DateField className={styles.fieldInput} value={dateTo ?? ''}
+                      onChange={(iso) => setDateTo(iso)} disabled={docDateMode !== 'range'} />
                   </div>
                 </div>
                 <div className={styles.field}>

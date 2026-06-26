@@ -22,6 +22,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { postSiRevenue } from '../lib/post-si-revenue';
+import { paginateAll } from '../lib/paginate-all';
 
 export const accounting = new Hono<{ Bindings: Env; Variables: Variables }>();
 accounting.use('*', supabaseAuth);
@@ -203,6 +204,19 @@ accounting.post('/post/si/:invoiceNumber', async (c) => {
   const invoiceNumber = c.req.param('invoiceNumber');
   const sb = c.get('supabase');
 
+  /* LEAK GUARD (DRAFT, two-state 2026-06-25) — a DRAFT SI has not committed any
+     revenue; the manual re-post endpoint must refuse it, or an operator could
+     post a draft's revenue out-of-band (the SI route's confirm transition is the
+     ONLY path that should post a draft). postSiRevenue itself does not check
+     status, so the guard lives here at the caller. */
+  {
+    const { data: si } = await sb.from('sales_invoices').select('status').eq('invoice_number', invoiceNumber).maybeSingle();
+    if (!si) return c.json({ error: 'invoice_not_found' }, 404);
+    if ((si as { status?: string }).status === 'DRAFT') {
+      return c.json({ error: 'not_postable', message: 'SI is a draft — confirm it (DRAFT → Issued) before posting revenue.' }, 409);
+    }
+  }
+
   // Delegates to the shared idempotent poster (post-si-revenue). Same code path
   // the SI POST handler uses on confirm, so manual + auto posting can never
   // diverge or double-post.
@@ -243,7 +257,7 @@ export async function postPiAccounting(sb: any, invoiceNumber: string): Promise<
 
   const { data: piRaw, error } = await sb
     .from('purchase_invoices')
-    .select('id, invoice_number, invoice_date, supplier_id, total_centi, suppliers(code, name)')
+    .select('id, invoice_number, invoice_date, supplier_id, total_centi, currency, exchange_rate, suppliers(code, name)')
     .eq('invoice_number', invoiceNumber)
     .single();
   if (error || !piRaw) return { ok: false, status: 'invoice_not_found' };
@@ -256,11 +270,27 @@ export async function postPiAccounting(sb: any, invoiceNumber: string): Promise<
     invoice_date: string;
     supplier_id: string | null;
     total_centi: number;
+    currency: string | null;
+    exchange_rate: string | number | null;
     suppliers: { code: string | null; name: string | null } | null;
   };
 
-  const totalSen = Number(pi.total_centi);
-  if (totalSen <= 0) return { ok: false, status: 'zero_total' };
+  /* Multi-currency AP (migration 0188) — the PI's total_centi is in the PI's
+     OWN currency (RMB / USD / SGD / MYR). The GL must be MYR, so convert AT
+     POST TIME: exchange_rate = MYR per 1 unit of `currency` (1 for MYR), and
+     amount_myr_centi = round(amount_foreign_centi * exchange_rate). The PI row
+     is untouched — only the JE legs below carry the converted amount. For an
+     MYR PI rate is 1, so this is a no-op (totalSen unchanged) and existing MYR
+     GL behaviour is byte-for-byte identical. The single Dr/Cr pair both post
+     the SAME converted figure, so the JE always balances. */
+  const rate = Number(pi.exchange_rate ?? 1);
+  // Guard a missing / non-positive / non-finite rate → treat as 1 (never zero
+  // out the AP posting). currency==='MYR' always implies rate 1 (enforced on
+  // PI create/update), so this only ever matters for a malformed foreign rate.
+  const fxRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
+  const foreignTotalSen = Number(pi.total_centi);
+  if (foreignTotalSen <= 0) return { ok: false, status: 'zero_total' };
+  const totalSen = Math.round(foreignTotalSen * fxRate); // MYR amount posted to the GL
 
   const supplier = pi.suppliers ?? { code: null, name: null };
   const lines: JeLineIn[] = [
@@ -324,6 +354,20 @@ export async function postPiAccounting(sb: any, invoiceNumber: string): Promise<
 accounting.post('/post/pi/:invoiceNumber', async (c) => {
   const invoiceNumber = c.req.param('invoiceNumber');
   const sb = c.get('supabase');
+
+  /* LEAK GUARD (DRAFT, PI two-state 2026-06-25) — a DRAFT PI has committed no
+     AP/GL; the manual re-post endpoint must refuse it, or an operator could post
+     a draft's payables out-of-band (the PI route's confirm transition is the ONLY
+     path that should post a draft). postPiAccounting does not check status, so the
+     guard lives here at the caller — mirrors the /post/si DRAFT guard. */
+  {
+    const { data: pi } = await sb.from('purchase_invoices').select('status').eq('invoice_number', invoiceNumber).maybeSingle();
+    if (!pi) return c.json({ error: 'invoice_not_found' }, 404);
+    if ((pi as { status?: string }).status === 'DRAFT') {
+      return c.json({ error: 'not_postable', message: 'PI is a draft — confirm it (DRAFT → Posted) before posting payables.' }, 409);
+    }
+  }
+
   const r = await postPiAccounting(sb, invoiceNumber);
   if (r.ok && r.status === 'already_posted') {
     return c.json({ error: 'already_posted', existingJe: { id: r.jeId, je_no: r.jeNo } }, 409);
@@ -496,12 +540,15 @@ accounting.get('/gl', async (c) => {
   const from = c.req.query('from');
   const to = c.req.query('to');
 
-  let q = sb.from('v_gl_entries').select('*').limit(1000);
-  if (accountCode) q = q.eq('account_code', accountCode);
-  if (from)        q = q.gte('entry_date', from);
-  if (to)          q = q.lte('entry_date', to);
-
-  const { data, error } = await q;
+  // Page through so PostgREST's 1000-row cap can't silently truncate the GL
+  // stream/export over a wide account/date range (anchoring port Houzs→2990).
+  const { data, error } = await paginateAll((pFrom, pTo) => {
+    let q = sb.from('v_gl_entries').select('*');
+    if (accountCode) q = q.eq('account_code', accountCode);
+    if (from)        q = q.gte('entry_date', from);
+    if (to)          q = q.lte('entry_date', to);
+    return q.range(pFrom, pTo);
+  });
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   return c.json({ glEntries: data ?? [] });
 });
@@ -517,9 +564,14 @@ accounting.get('/balances', async (c) => {
 
 accounting.get('/ar-aging', async (c) => {
   const sb = c.get('supabase');
+  /* LEAK GUARD (DRAFT, two-state 2026-06-25) — v_ar_aging filters CANCELLED/VOID
+     but NOT DRAFT (the view predates the SI two-state). A DRAFT SI has posted no
+     AR yet, so it must never appear in the aging buckets; the view exposes
+     s.status, so filter DRAFT out here at the route (migrations are frozen). */
   const { data, error } = await sb
     .from('v_ar_aging')
     .select('*')
+    .neq('status', 'DRAFT')
     .order('days_overdue', { ascending: false });
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   return c.json({ arAging: data ?? [] });
@@ -527,9 +579,15 @@ accounting.get('/ar-aging', async (c) => {
 
 accounting.get('/ap-aging', async (c) => {
   const sb = c.get('supabase');
+  /* LEAK GUARD (DRAFT, PI two-state 2026-06-25) — v_ap_aging filters CANCELLED/VOID
+     but NOT DRAFT (the view predates the PI two-state). A DRAFT PI has posted no
+     AP yet, so it must never appear in the aging buckets; the view exposes p.status
+     (migration 0052), so filter DRAFT out here at the route (migrations are frozen).
+     Mirrors the /ar-aging DRAFT fix. */
   const { data, error } = await sb
     .from('v_ap_aging')
     .select('*')
+    .neq('status', 'DRAFT')
     .order('days_overdue', { ascending: false });
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   return c.json({ apAging: data ?? [] });

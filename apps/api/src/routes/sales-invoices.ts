@@ -147,6 +147,16 @@ function buildItemRow(salesInvoiceId: string, it: Record<string, unknown>, lineN
     line_cost_centi: lineCost,
     line_margin_centi: lineTotal - lineCost,
     variants,
+    /* Migration 0058 — carry the dedicated variant-breakdown columns onto the SI
+       line (sales_invoice_items has all 8). Source is the convert payload `it`. */
+    gap_inches: (it.gapInches as number | null) ?? null,
+    divan_height_inches: (it.divanHeightInches as number | null) ?? null,
+    divan_price_sen: Number(it.divanPriceSen ?? 0),
+    leg_height_inches: (it.legHeightInches as number | null) ?? null,
+    leg_price_sen: Number(it.legPriceSen ?? 0),
+    custom_specials: (it.customSpecials as unknown) ?? null,
+    line_suffix: (it.lineSuffix as string | null) ?? null,
+    special_order_price_sen: Number(it.specialOrderPriceSen ?? 0),
     notes: (it.notes as string) ?? null,
     ...(typeof lineNo === 'number' ? { line_no: lineNo } : {}),
   };
@@ -267,6 +277,15 @@ salesInvoices.post('/', async (c) => {
   const emPhoneRaw = (body.emergencyContactPhone as string | undefined) ?? null;
   const nowIso = new Date().toISOString();
 
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25, ported from Houzs) — opt-in
+     `asDraft` lands the invoice as DRAFT. A DRAFT SI commits NOTHING: no AR/GL
+     revenue, no customer credit, and it leaves sent_at / confirmed_at NULL
+     (stamped on confirm). It is excluded from AR outstanding / AR aging / KPI
+     rollups and cannot take a payment. The confirm transition (PATCH /:id/status
+     DRAFT→SENT) does all the posting. DRAFT is reachable ONLY through asDraft —
+     the insert never trusts a raw body.status field. Mirrors the SO/DO DRAFT. */
+  const isDraft = (body as { asDraft?: unknown }).asDraft === true;
+
   const { data: header, error: hErr } = await sb.from('sales_invoices').insert({
     invoice_number: invoiceNumber,
     so_doc_no: (body.soDocNo as string) ?? null,
@@ -301,12 +320,12 @@ salesInvoices.post('/', async (c) => {
     emergency_contact_phone: emPhoneRaw ? (normalizePhone(emPhoneRaw) ?? emPhoneRaw) : null,
     emergency_contact_relationship: (body.emergencyContactRelationship as string) ?? null,
     currency: ((body.currency as string) ?? 'MYR').toUpperCase(),
-    /* An invoice that's issued is issued — start at SENT (the post-0078 default)
-       and record revenue right after the items insert below. CANCELLED + the
-       paid/partially-paid notion remain via the payments ledger. */
-    status: 'SENT',
-    sent_at: nowIso,
-    confirmed_at: nowIso,
+    /* An issued invoice starts at SENT and records revenue right after the
+       items insert below; a DRAFT starts at DRAFT and posts nothing until
+       confirmed. CANCELLED + paid/partially-paid remain via the payments ledger. */
+    status: isDraft ? 'DRAFT' : 'SENT',
+    sent_at: isDraft ? null : nowIso,
+    confirmed_at: isDraft ? null : nowIso,
     notes: (body.notes as string) ?? null,
     created_by: user.id,
   }).select(HEADER).single();
@@ -318,6 +337,12 @@ salesInvoices.post('/', async (c) => {
     const { error: iErr } = await sb.from('sales_invoice_items').insert(rows);
     if (iErr) { await sb.from('sales_invoices').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
     await recomputeTotals(sb, h.id);
+  }
+
+  /* LEAK GUARD (DRAFT) — a DRAFT SI must NOT post AR/GL revenue nor auto-apply
+     customer credit. Both happen on confirm (PATCH /:id/status DRAFT→SENT). */
+  if (isDraft) {
+    return c.json({ id: h.id, invoiceNumber: h.invoice_number, revenue: { posted: false, status: 'draft' }, creditApplied: 0 }, 201);
   }
 
   /* REVENUE — record it now. Idempotent on the invoice number (existence check
@@ -390,8 +415,12 @@ salesInvoices.post('/', async (c) => {
         post revenue once via the shared idempotent poster. */
 salesInvoices.post('/from-dos', async (c) => {
   const sb = c.get('supabase'); const user = c.get('user');
-  let body: { picks?: Array<{ doItemId?: string; qty?: number }> };
+  let body: { picks?: Array<{ doItemId?: string; qty?: number }>; asDraft?: unknown };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  /* DRAFT/Confirmed two-state — opt-in, identical to POST /. A DRAFT SI off DO
+     lines commits nothing (no AR/GL revenue, no credit) until confirm. A DRAFT
+     is allowed to draw from DO lines — a draft is just a draft; confirm posts. */
+  const isDraft = body.asDraft === true;
 
   // Collapse duplicate doItemIds (sum their qty) so a line can't appear twice.
   const pickQtyById = new Map<string, number>();
@@ -523,11 +552,12 @@ salesInvoices.post('/from-dos', async (c) => {
     emergency_contact_phone: emPhoneRaw ? (normalizePhone(emPhoneRaw) ?? emPhoneRaw) : null,
     emergency_contact_relationship: (head.emergency_contact_relationship as string | null) ?? null,
     currency: ((head.currency as string | null) ?? 'MYR').toUpperCase(),
-    /* An invoice that's issued is issued — start at SENT and record revenue
-       right after the items insert + recompute below. */
-    status: 'SENT',
-    sent_at: nowIso,
-    confirmed_at: nowIso,
+    /* An issued invoice starts at SENT and records revenue right after the
+       items insert + recompute below; a DRAFT starts at DRAFT and posts nothing
+       until confirmed. */
+    status: isDraft ? 'DRAFT' : 'SENT',
+    sent_at: isDraft ? null : nowIso,
+    confirmed_at: isDraft ? null : nowIso,
     created_by: user.id,
   }).select(HEADER).single();
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
@@ -548,6 +578,15 @@ salesInvoices.post('/from-dos', async (c) => {
     discountCenti: line.discountCenti,
     unitCostCenti: line.unitCostCenti,
     variants: line.variants,
+    /* Migration 0058 — carry the dedicated variant-breakdown columns onto the SI line. */
+    gapInches: line.gapInches,
+    divanHeightInches: line.divanHeightInches,
+    divanPriceSen: line.divanPriceSen,
+    legHeightInches: line.legHeightInches,
+    legPriceSen: line.legPriceSen,
+    customSpecials: line.customSpecials,
+    lineSuffix: line.lineSuffix,
+    specialOrderPriceSen: line.specialOrderPriceSen,
   }, lineNo));
   const { error: iErr } = await sb.from('sales_invoice_items').insert(rows);
   if (iErr) {
@@ -559,6 +598,13 @@ salesInvoices.post('/from-dos', async (c) => {
   // 4. Roll up totals BEFORE posting (so revenue == the invoice total), then
   //    record revenue via the shared idempotent poster.
   await recomputeTotals(sb, h.id);
+
+  /* LEAK GUARD (DRAFT) — no AR/GL revenue, no customer credit on a DRAFT SI.
+     Both move to the confirm transition (PATCH /:id/status DRAFT→SENT). */
+  if (isDraft) {
+    return c.json({ id: h.id, invoiceNumber: h.invoice_number, revenue: { posted: false, status: 'draft' }, creditApplied: 0 }, 201);
+  }
+
   let revenue: { posted: boolean; jeNo?: string; status: string } = { posted: false, status: 'skipped' };
   const post = await postSiRevenue(sb, h.invoice_number);
   if (post.ok) {
@@ -619,7 +665,9 @@ salesInvoices.post('/:id/items/from-do/:doId', async (c) => {
 
   const { data: doItems } = await sb.from('delivery_order_items').select(
     'id, item_code, item_group, description, description2, uom, qty, ' +
-    'unit_price_centi, discount_centi, unit_cost_centi, variants, notes',
+    'unit_price_centi, discount_centi, unit_cost_centi, variants, notes, ' +
+    'gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, ' +
+    'custom_specials, line_suffix, special_order_price_sen',
   ).eq('delivery_order_id', doId)
     .order('line_no', { ascending: true, nullsFirst: false })
     .order('created_at');
@@ -657,6 +705,16 @@ salesInvoices.post('/:id/items/from-do/:doId', async (c) => {
       unitCostCenti: it.unit_cost_centi,
       variants: it.variants,
       notes: it.notes,
+      /* Migration 0058 — carry the dedicated variant-breakdown columns (pg driver
+         camelCases results → dual-read camelCase ?? snake_case). */
+      gapInches: it.gapInches ?? it.gap_inches ?? null,
+      divanHeightInches: it.divanHeightInches ?? it.divan_height_inches ?? null,
+      divanPriceSen: it.divanPriceSen ?? it.divan_price_sen ?? 0,
+      legHeightInches: it.legHeightInches ?? it.leg_height_inches ?? null,
+      legPriceSen: it.legPriceSen ?? it.leg_price_sen ?? 0,
+      customSpecials: it.customSpecials ?? it.custom_specials ?? null,
+      lineSuffix: it.lineSuffix ?? it.line_suffix ?? null,
+      specialOrderPriceSen: it.specialOrderPriceSen ?? it.special_order_price_sen ?? 0,
     }, baseLineNo === null ? null : baseLineNo + idx));
   if (rows.length === 0) return c.json({ error: 'do_fully_invoiced' }, 409);
 
@@ -664,7 +722,11 @@ salesInvoices.post('/:id/items/from-do/:doId', async (c) => {
   if (iErr) return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
   await recomputeTotals(sb, id);
   await recomputePaid(sb, id); // total changed → re-derive paid_centi/status (bug-hunt 2026-06-20)
-  await postSiRevenue(sb, (si as { invoice_number: string }).invoice_number);
+  /* LEAK GUARD (DRAFT) — appending DO lines to a DRAFT invoice must NOT post
+     AR/GL revenue. Posting happens once, on confirm (PATCH /:id/status). */
+  if ((si as { status: string }).status !== 'DRAFT') {
+    await postSiRevenue(sb, (si as { invoice_number: string }).invoice_number);
+  }
   return c.json({ ok: true, added: rows.length }, 201);
 });
 
@@ -911,7 +973,12 @@ async function recomputePaid(sb: any, salesInvoiceId: string) {
   if (!cur) return;
   const c0 = cur as { total_centi: number; status: string };
   const updates: Record<string, unknown> = { paid_centi: paid, updated_at: new Date().toISOString() };
-  if (c0.status !== 'CANCELLED') {
+  /* LEAK GUARD (DRAFT, two-state 2026-06-25) — never auto-advance a DRAFT
+     invoice's status off the payments rollup. A DRAFT stays DRAFT until it is
+     explicitly confirmed (DRAFT→SENT); the `else` branch below would otherwise
+     silently flip it to SENT on a line edit / recompute. CANCELLED is likewise
+     frozen. A DRAFT cannot take a payment anyway, so paid stays 0. */
+  if (c0.status !== 'CANCELLED' && c0.status !== 'DRAFT') {
     if (paid >= c0.total_centi && c0.total_centi > 0) {
       updates.status = 'PAID';
       updates.paid_at = new Date().toISOString();
@@ -933,6 +1000,10 @@ salesInvoices.post('/:id/payments', async (c) => {
      the SI_CANCEL_REFUND credit was sized to paid_centi at cancel time, so the
      ledger must not move under it. */
   if ((doc as { status?: string }).status === 'CANCELLED') return c.json({ error: 'not_payable', message: 'SI is cancelled' }, 409);
+  /* LEAK GUARD (DRAFT, two-state 2026-06-25) — a DRAFT invoice is not yet
+     committed; it cannot accept payments. Confirm it first (DRAFT → SENT), then
+     record payments. */
+  if ((doc as { status?: string }).status === 'DRAFT') return c.json({ error: 'not_payable', message: 'SI is a draft — confirm it before recording payments' }, 409);
 
   let body: unknown;
   try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
@@ -1032,6 +1103,67 @@ salesInvoices.patch('/:id/status', async (c) => {
   if (curErr) return c.json({ error: 'load_failed', reason: curErr.message }, 500);
   if (!curRow) return c.json({ error: 'not_found' }, 404);
   const prevStatus = ((curRow as { status: string }).status ?? '').toUpperCase();
+
+  /* ── CONFIRM transition (DRAFT → SENT) ─────────────────────────────────────
+     DRAFT/Confirmed two-state (Owner 2026-06-25, ported from Houzs). A DRAFT SI
+     committed nothing on create. Confirming it is where the posting now happens:
+     stamp sent_at / confirmed_at, post AR/GL revenue (postSiRevenue — idempotent),
+     then auto-apply any customer credit (applyCustomerCreditToSi). A DRAFT may
+     ONLY move to SENT (or be cancelled, handled by the normal path below). This
+     mirrors the SO confirm (status PATCH DRAFT→CONFIRMED) and the DO confirm
+     (DRAFT→DISPATCHED). The conditional UPDATE on `status='DRAFT'` makes the
+     posting fire exactly once even under a double-submit race. */
+  if (prevStatus === 'DRAFT' && status !== 'CANCELLED') {
+    if (status !== 'SENT') {
+      return c.json({
+        error: 'invalid_transition',
+        message: `A draft invoice can only be confirmed (to SENT) or cancelled. Cannot move directly to ${status}.`,
+        from: prevStatus, to: status,
+      }, 409);
+    }
+    const { data: confirmed, error: cErr } = await sb.from('sales_invoices')
+      .update({ status: 'SENT', sent_at: now, confirmed_at: now, updated_at: now })
+      .eq('id', id).eq('status', 'DRAFT')
+      .select('id, status, invoice_number, debtor_code, debtor_name, total_centi, paid_centi')
+      .maybeSingle();
+    if (cErr) return c.json({ error: 'update_failed', reason: cErr.message }, 500);
+    // Lost the race — another submit already confirmed it. Idempotent echo, no
+    // second posting (postSiRevenue is idempotent anyway, but skip the work).
+    if (!confirmed) return c.json({ salesInvoice: { id, status: 'SENT' } });
+    const d = confirmed as { id: string; status: string; invoice_number: string; debtor_code: string | null; debtor_name: string | null; total_centi: number | null; paid_centi: number | null };
+
+    /* POST revenue now (was skipped on draft create). Idempotent + best-effort —
+       a posting failure never un-confirms the invoice; it can be re-posted from
+       /accounting/post/si/:invoiceNumber. zero_total is expected for a blank draft. */
+    const post = await postSiRevenue(sb, d.invoice_number);
+    if (!post.ok && post.status !== 'zero_total' && post.status !== 'invoice_not_found') {
+      // eslint-disable-next-line no-console
+      console.error(`[si-revenue] confirm post failed for ${d.invoice_number}:`, post.status, (post as { reason?: string }).reason);
+    }
+
+    /* Auto-apply customer credit now (was skipped on draft create). Re-fetch the
+       total so we see the value after recomputeTotals ran during line edits. */
+    if (d.debtor_code) {
+      try {
+        const { data: latest } = await sb.from('sales_invoices').select('total_centi, paid_centi').eq('id', id).maybeSingle();
+        const total = Number((latest as { total_centi: number } | null)?.total_centi ?? 0);
+        const paid  = Number((latest as { paid_centi: number } | null)?.paid_centi ?? 0);
+        const res = await applyCustomerCreditToSi(sb, {
+          debtorCode: d.debtor_code,
+          debtorName: d.debtor_name,
+          siId: id,
+          siNumber: d.invoice_number,
+          remainingDueCenti: Math.max(0, total - paid),
+          createdBy: c.get('user')?.id,
+        });
+        if (res.applied > 0) await recomputePaid(sb, id);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error(`[customer-credit] apply-on-confirm failed for ${d.invoice_number}:`, e);
+      }
+    }
+    return c.json({ salesInvoice: { id, status: 'SENT' } });
+  }
 
   // Idempotent cancel — already cancelled and asked to cancel again: echo back
   // WITHOUT re-running the revenue reversal / cancel-credit (would double-book).
@@ -1195,6 +1327,8 @@ salesInvoices.patch('/:id/payment', async (c) => {
   const { data: cur } = await sb.from('sales_invoices').select('status').eq('id', id).maybeSingle();
   if (!cur) return c.json({ error: 'not_found' }, 404);
   if ((cur as { status: string }).status === 'CANCELLED') return c.json({ error: 'not_payable', message: 'SI is cancelled' }, 409);
+  /* LEAK GUARD (DRAFT) — same as POST /:id/payments: a draft can't be paid. */
+  if ((cur as { status: string }).status === 'DRAFT') return c.json({ error: 'not_payable', message: 'SI is a draft — confirm it before recording payments' }, 409);
 
   const { error } = await sb.from('sales_invoice_payments').insert({
     sales_invoice_id: id,

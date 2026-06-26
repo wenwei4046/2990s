@@ -23,24 +23,36 @@ export const STATUS_TONES: Record<StatusTone, { bg: string; fg: string }> = {
 };
 
 export type StatusDocType =
-  | 'po' | 'grn' | 'pi' | 'pr'
+  | 'po' | 'grn' | 'pi' | 'pr' | 'pv'
   | 'so' | 'do' | 'si' | 'dr'
   | 'stockTransfer' | 'stockTake';
 
 type Entry = { label: string; tone: StatusTone };
 
 const PO: Record<string, Entry> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT PO is uncommitted: it
+  // counts as no MRP supply, locks no source SO line, and isn't GRN-receivable
+  // until Confirm flips it to SUBMITTED. Neutral/grey, mirroring the SO/DO/SI pill.
+  DRAFT:              { label: 'Draft',              tone: 'neutral' },
   SUBMITTED:          { label: 'Confirmed',          tone: 'info' },
   PARTIALLY_RECEIVED: { label: 'Partially Received', tone: 'progress' },
   RECEIVED:           { label: 'Received',           tone: 'success' },
   CANCELLED:          { label: 'Cancelled',          tone: 'danger' },
 };
 const GRN: Record<string, Entry> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT GRN is uncommitted: it
+  // moves NO inventory IN, bumps NO PO received_qty, and isn't PI-invoiceable
+  // until Confirm flips it to POSTED. Neutral/grey, mirroring the SO/DO/SI/PO pill.
+  DRAFT:     { label: 'Draft',     tone: 'neutral' },
   POSTED:    { label: 'Confirmed', tone: 'info' },
   CLOSED:    { label: 'Closed',    tone: 'success' },
   CANCELLED: { label: 'Cancelled', tone: 'danger' },
 };
 const PI: Record<string, Entry> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT PI is uncommitted: it
+  // posts NO AP/GL, consumes NO GRN invoiced qty, and isn't payable until Confirm
+  // flips it to POSTED. Neutral/grey, mirroring the SO/DO/SI/PO/GRN pill.
+  DRAFT:          { label: 'Draft',          tone: 'neutral' },
   POSTED:         { label: 'Confirmed',      tone: 'info' },
   PARTIALLY_PAID: { label: 'Partially Paid', tone: 'progress' },
   PAID:           { label: 'Paid',           tone: 'success' },
@@ -51,7 +63,16 @@ const PR: Record<string, Entry> = {
   COMPLETED: { label: 'Completed', tone: 'success' },
   CANCELLED: { label: 'Cancelled', tone: 'danger' },
 };
+// payment_voucher_status enum (migration 0189): DRAFT / POSTED / CANCELLED.
+const PV: Record<string, Entry> = {
+  DRAFT:     { label: 'Draft',    tone: 'pending' },
+  POSTED:    { label: 'Posted',   tone: 'success' },
+  CANCELLED: { label: 'Cancelled', tone: 'danger' },
+};
 const SO: Record<string, Entry> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT SO is an uncommitted
+  // staging order (neutral/grey: it commits nothing until Confirm flips it live).
+  DRAFT:         { label: 'Draft',         tone: 'neutral' },
   CONFIRMED:     { label: 'Confirmed',     tone: 'info' },
   IN_PRODUCTION: { label: 'Proceed',       tone: 'progress' },
   READY_TO_SHIP: { label: 'Ready to Ship', tone: 'success' },
@@ -64,6 +85,10 @@ const SO: Record<string, Entry> = {
   CANCELLED:     { label: 'Cancelled',     tone: 'danger' },
 };
 const DO: Record<string, Entry> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT DO is an uncommitted
+  // staging delivery (neutral/grey: no stock OUT + no SO-delivered sync until
+  // Confirm flips it to DISPATCHED). Mirrors the SO DRAFT pill.
+  DRAFT:      { label: 'Draft',      tone: 'neutral' },
   LOADED:     { label: 'Loaded',     tone: 'info' },
   DISPATCHED: { label: 'Shipped',    tone: 'progress' },
   IN_TRANSIT: { label: 'In Transit', tone: 'progress' },
@@ -73,6 +98,11 @@ const DO: Record<string, Entry> = {
   CANCELLED:  { label: 'Cancelled',  tone: 'danger' },
 };
 const SI: Record<string, Entry> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT SI is an uncommitted
+  // invoice (neutral/grey: NO revenue/AR posting, NO credit, not payable, kept
+  // out of AR outstanding/aging) until Confirm flips it to Issued (SENT). Mirrors
+  // the SO/DO DRAFT pill.
+  DRAFT:          { label: 'Draft',          tone: 'neutral' },
   SENT:           { label: 'Issued',         tone: 'info' },
   PARTIALLY_PAID: { label: 'Partially Paid', tone: 'progress' },
   PAID:           { label: 'Paid',           tone: 'success' },
@@ -98,7 +128,7 @@ const STOCK_TAKE: Record<string, Entry> = {
 };
 
 const MAPS: Record<StatusDocType, Record<string, Entry>> = {
-  po: PO, grn: GRN, pi: PI, pr: PR,
+  po: PO, grn: GRN, pi: PI, pr: PR, pv: PV,
   so: SO, do: DO, si: SI, dr: DR,
   stockTransfer: STOCK_TRANSFER, stockTake: STOCK_TAKE,
 };

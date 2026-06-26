@@ -124,15 +124,22 @@ export function useMrp(params: { category: string; warehouseId: string; includeU
   });
 }
 
-/* ── Per-category lead times (Commander 2026-05-29) ──────────────────────── */
+/* ── Per-category lead times (Commander 2026-05-29), now per-WAREHOUSE
+      (Commander 2026-06-22, migration 0184) ──────────────────────────────── */
 export type LeadCategory = 'sofa' | 'bedframe' | 'mattress' | 'accessory' | 'service';
 export type CategoryLeadTimes = Record<LeadCategory, number>;
 export const LEAD_CATEGORIES: LeadCategory[] = ['sofa', 'bedframe', 'mattress', 'accessory', 'service'];
 
+/* Per-warehouse lead-time map. The global-defaults bucket is under the key
+   "null"; each warehouse under its uuid. A warehouse with no override yet has
+   no entry — callers fall back to the "null" bucket. */
+export const GLOBAL_LEAD_KEY = 'null';
+export type WarehouseLeadTimes = Record<string, CategoryLeadTimes>;
+
 export function useCategoryLeadTimes() {
   return useQuery({
     queryKey: ['mrp-lead-times'],
-    queryFn: () => authedFetch<{ leadTimes: CategoryLeadTimes }>(`/mrp-lead-times`),
+    queryFn: () => authedFetch<{ leadTimes: WarehouseLeadTimes }>(`/mrp-lead-times`),
     staleTime: 60_000,
   });
 }
@@ -140,7 +147,7 @@ export function useCategoryLeadTimes() {
 export function useUpdateCategoryLeadTime() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (body: { category: LeadCategory; leadDays: number }) => {
+    mutationFn: async (body: { warehouseId: string | null; category: LeadCategory; leadDays: number }) => {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
       if (!token) throw new Error('not_authenticated');
@@ -154,7 +161,7 @@ export function useUpdateCategoryLeadTime() {
         try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
         throw new Error(humanApiError(res.status, detail));
       }
-      return (await res.json()) as { ok: true; category: LeadCategory; leadDays: number };
+      return (await res.json()) as { ok: true; warehouseId: string | null; category: LeadCategory; leadDays: number };
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mrp-lead-times'] });

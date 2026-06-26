@@ -35,6 +35,9 @@ const TYPE_META: Record<
   po:      { col: 1, band: 'bottom', title: 'Purchase Order',   route: (id) => `/purchase-orders/${id}`,     bg: '#faf5ff', accent: '#9333ea' },
   grn:     { col: 2, band: 'bottom', title: 'Goods Receive',    route: (id) => `/grns/${id}`,                bg: '#f0f9ff', accent: '#0284c7' },
   pi:      { col: 3, band: 'bottom', title: 'Purchase Invoice', route: (id) => `/purchase-invoices/${id}`,   bg: '#fefce8', accent: '#ca8a04' },
+  // AP settlement — a Payment Voucher settles a PI (migration 0202). Sits one
+  // column right of the PI on the purchase/bottom band, green like the AR Payment.
+  pv:      { col: 4, band: 'bottom', title: 'Payment Voucher',  route: (id) => `/payment-vouchers/${id}`,    bg: '#f0fdf4', accent: '#16a34a' },
   // Returns reverse goods. A Delivery Return hangs off its DO (sales/top band),
   // a Purchase Return off its GRN (purchase/bottom band). Both sit one column
   // right of their parent and share a warm red accent to read as "sent back".

@@ -20,10 +20,11 @@ import {
 } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Plus, Printer, Save, Truck, ChevronDown, Ban, RotateCcw,
+  ArrowLeft, FileText, Pencil, Plus, Printer, Save, Truck, ChevronDown, Ban, RotateCcw, Check,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { DateField } from '../components/DateField';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
@@ -38,6 +39,7 @@ import {
   useAddDeliveryOrderPayment,
   useDeleteDeliveryOrderPayment,
   useDeliverableSoLinesForDoc,
+  useMfgSalesOrderDetail,
   type DeliverableSoLine,
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
@@ -46,7 +48,7 @@ import {
   PaymentsTable, labelToApi, draftMethodFields,
   newPaymentDraft, type PaymentDraft,
 } from '../components/PaymentsTable';
-import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
+import { buildVariantSummary, canonicalizeVariants, fmtDateOrDash } from '@2990s/shared';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
 } from '../lib/localities-queries';
@@ -55,11 +57,18 @@ import {
 } from '../lib/so-dropdown-options-queries';
 import { useStaff } from '../lib/admin-queries';
 import { useDrivers } from '../lib/drivers-queries';
+import { useHelpers } from '../lib/helpers-queries';
+import { useLorries } from '../lib/lorries-queries';
+import { useSetDoCrew, type DoCrewRow } from '../lib/crew-queries';
+import { HC_SUBSTATUS_VALUES } from '../lib/delivery-planning-queries';
+import { sortByText, sortByNumeric } from '../lib/sort-options';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-const STATUS_FLOW = ['LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED', 'DELIVERED', 'INVOICED', 'CANCELLED'] as const;
+// DRAFT/Confirmed two-state (Owner 2026-06-25) — DRAFT precedes LOADED: an
+// uncommitted DO that ships nothing until Confirmed (status PATCH → DISPATCHED).
+const STATUS_FLOW = ['DRAFT', 'LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED', 'DELIVERED', 'INVOICED', 'CANCELLED'] as const;
 type DoStatus = typeof STATUS_FLOW[number];
 
 /* Commander 2026-05-29 — the linear LOADED→DISPATCHED→… stage walk was retired.
@@ -67,6 +76,8 @@ type DoStatus = typeof STATUS_FLOW[number];
    next-stage map any more; only Cancel / Reopen remain (header buttons). */
 
 const STATUS_CLASS: Record<string, string> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — grey, like the SO DRAFT pill.
+  DRAFT:      styles.statusDraft ?? '',
   LOADED:     styles.statusConfirmed ?? '',
   DISPATCHED: styles.statusShipped ?? '',
   IN_TRANSIT: styles.statusInProd ?? '',
@@ -84,35 +95,29 @@ type DoLifecycle = 'shipped' | 'invoiced' | 'returned';
 // badge reads the same on the list and here — incl. the stored stages
 // (Loaded / In Transit / Signed / Delivered) the old 4-entry map showed raw.
 const DO_STATUS_LABEL: Record<string, string> = {
+  DRAFT: 'Draft',
   LOADED: 'Loaded', DISPATCHED: 'Shipped', IN_TRANSIT: 'In Transit', SIGNED: 'Signed',
   DELIVERED: 'Delivered', INVOICED: 'Invoiced', RETURNED: 'Delivery Return', CANCELLED: 'Cancelled',
 };
 const doEffectiveKey = (status: string, lifecycle?: DoLifecycle): string => {
   if (status === 'CANCELLED') return 'CANCELLED';
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT DO has NOT shipped,
+     so it can't carry an invoiced / returned lifecycle event. DRAFT wins over
+     the shipped baseline → distinct grey "Draft" badge. */
+  if (status === 'DRAFT') return 'DRAFT';
   if (lifecycle === 'returned') return 'RETURNED';
   if (lifecycle === 'invoiced') return 'INVOICED';
   return 'DISPATCHED';
 };
 
-/* Costing A (Commander 2026-06-01) — a DO ships (stock deducted) the moment it's
-   created, so the FIFO trigger has already booked the line's COGS. When that cost
-   is still 0 on a live (non-cancelled) line with qty, the goods were received with
-   NO price and no Purchase Invoice yet → cost is PENDING, not free. The recost
-   engine fills the real number the instant a price lands. */
-const lineCostPending = (
-  it: { qty: number; unit_cost_centi: number },
-  isCancelled: boolean,
-): boolean => !isCancelled && Number(it.qty) > 0 && Number(it.unit_cost_centi ?? 0) === 0;
-
-const fmtRm = (centi: number, currency = 'MYR'): string =>
-  `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/* DO is QUANTITY-only (Owner 2026-06-26) — the line-cost `lineCostPending`
+   helper, the `fmtRm` money formatter and the Totals-card KPI style consts were
+   removed along with every money render on the Delivery Order (read-view money
+   columns + Totals · Margin card + header total rail). No amount is displayed on
+   a DO; the figures live on the Sales Invoice. The underlying *_centi data is
+   untouched. */
 
 const TITLE_ICON_STYLE: CSSProperties = { color: 'var(--c-burnt)' };
-const TOTALS_KPI_GRID_STYLE: CSSProperties = {
-  display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-3)',
-  marginBottom: 'var(--space-3)', paddingBottom: 'var(--space-3)', borderBottom: '1px solid var(--line)',
-};
-const TOTALS_KPI_VALUE_STYLE: CSSProperties = { fontSize: 'var(--fs-15, 15px)' };
 
 type DoHeader = {
   id: string;
@@ -165,10 +170,28 @@ type DoHeader = {
   margin_pct_basis: number;
   line_count: number;
   currency: string;
+  /* Migration 0204 — drop-ship: a sofa was shipped supplier-direct before its
+     batch was received. Dual-read camelCase from the pg driver. */
+  is_dropship?: boolean;
+  isDropship?: boolean;
+  /* HC delivery-sheet DO-execution raw-data fields (migration 0197) — surfaced on
+     the Delivery Execution card + the Delivery Planning "Edit HC fields" drawer.
+     Snake_case from the API; the pg driver may camelCase, so dual-read on init. */
+  time_range: string | null;
+  time_confirmed: boolean | null;
+  arrival_at: string | null;
+  departure_at: string | null;
+  shipout_date: string | null;
+  customer_delivered_date: string | null;
+  eta_arriving_port: string | null;
+  delivery_substatus: string | null;
   /* Tier 2 downstream-lock — detail endpoint stamps this when any non-cancelled
      DR / SI references the DO. Locks line edits + the Cancel transition;
      convert-to-DR / convert-to-SI remain available via the list. */
   has_children?: boolean;
+  /* Stage 3 — the per-DO crew (delivery_order_crew, migration 0195), joined onto
+     the detail response. Null until a crew is assigned. */
+  crew?: DoCrewRow | null;
 };
 
 type DoItem = {
@@ -374,7 +397,14 @@ export const DeliveryOrderDetail = () => {
         unitPriceCenti: line.unitPriceCenti,
         discountCenti: line.discountCenti,
         unitCostCenti: line.unitCostCenti,
-        variants: (line.variants as Record<string, unknown>) ?? {},
+        /* Canonicalise POS-vocabulary sofa keys (depth → seatHeight,
+           sofaLegHeight → legHeight) so the Add-from-SO line's Seat/Leg
+           dropdowns prefill a POS-created line instead of showing "Select…".
+           Mirrors SalesOrderDetail.draftFromItem + DeliveryOrderNew seeding. */
+        variants: canonicalizeVariants(
+          line.itemGroup ?? 'others',
+          (line.variants as Record<string, unknown>) ?? {},
+        ),
         remark: '',
       },
     }]);
@@ -499,6 +529,11 @@ export const DeliveryOrderDetail = () => {
   const hasChildren = Boolean(header.has_children);
   const isLocked = lockedStatuses.includes(header.status) || hasChildren;
   const isCancelled = header.status === 'CANCELLED';
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT DO is staging-only:
+     it commits NOTHING (no stock OUT, no SO-delivered sync, not invoiceable)
+     until Confirm flips it to DISPATCHED, which fires the stock deduction + SO
+     sync exactly once (server status PATCH, the single chokepoint). */
+  const isDraft = header.status === 'DRAFT';
 
   const handlePrint = () => {
     import('../lib/delivery-order-pdf')
@@ -513,6 +548,17 @@ export const DeliveryOrderDetail = () => {
   const handleReopen = async () => {
     if (!(await askConfirm({ title: `Reopen ${header.do_number} back to LOADED?`, confirmLabel: 'Reopen' }))) return;
     updateStatus.mutate({ id: header.id, status: 'LOADED' });
+  };
+  /* Confirm a DRAFT DO → DISPATCHED. This is the commit: the server fires the
+     stock OUT + the SO-delivered sync (both skipped on draft-create) exactly
+     once on this transition. Mirrors the SO Confirm action. */
+  const handleConfirmDraft = async () => {
+    if (!(await askConfirm({
+      title: `Confirm ${header.do_number}?`,
+      body: 'This ships the delivery: stock is deducted now and the linked Sales Order is updated. The DO can then be invoiced / returned.',
+      confirmLabel: 'Confirm DO',
+    }))) return;
+    updateStatus.mutate({ id: header.id, status: 'DISPATCHED' });
   };
 
   return (
@@ -535,10 +581,10 @@ export const DeliveryOrderDetail = () => {
           </div>
         </div>
         <div className={styles.actions}>
-          <div className={styles.totalRail}>
-            <span className={styles.totalRailLabel}>Total</span>
-            <span className={styles.totalRailValue}>{fmtRm(header.local_total_centi, header.currency)}</span>
-          </div>
+          {/* DO is a QUANTITY-only document (Owner 2026-06-26) — no money shown.
+              The header total rail (grand total) was removed; amounts live on the
+              Sales Invoice. The underlying *_centi data is untouched and still
+              flows downstream. */}
           {(() => {
             const key = doEffectiveKey(header.status, (header as { lifecycle_state?: DoLifecycle }).lifecycle_state);
             return (
@@ -547,6 +593,16 @@ export const DeliveryOrderDetail = () => {
               </span>
             );
           })()}
+          {/* Drop-ship badge (0204) — warning tone. Dual-read camelCase. */}
+          {(header.isDropship ?? header.is_dropship) && (
+            <span
+              className={styles.statusPill}
+              title="Shipped supplier-direct before the batch was received — stock is negative against the expected PO batch and nets out when its GRN arrives."
+              style={{ background: 'var(--c-amber-bg, #FBEFD6)', color: 'var(--c-amber-ink, #8A5A00)', border: '1px solid var(--c-amber-line, #E3C27A)' }}
+            >
+              Drop-ship · batch not received
+            </span>
+          )}
           <RelationshipMapButton type="do" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} /><span>Print PDF</span>
@@ -561,6 +617,13 @@ export const DeliveryOrderDetail = () => {
               <Ban {...ICON} /><span>Cancel DO</span>
             </Button>
           ) : null}
+          {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — Confirm commits the
+              draft (stock OUT + SO sync fire server-side on this transition). */}
+          {isDraft && !isEditing && (
+            <Button variant="primary" size="md" onClick={handleConfirmDraft} disabled={updateStatus.isPending}>
+              <Check {...ICON} /><span>Confirm DO</span>
+            </Button>
+          )}
           {!isEditing ? (
             <Button variant="primary" size="md" onClick={enterEdit} disabled={isLocked}>
               <Pencil {...ICON} /><span>Edit</span>
@@ -609,6 +672,20 @@ export const DeliveryOrderDetail = () => {
         isEditing={isEditing}
       />
 
+      {/* ── Sales Order info — READ-ONLY mirror ──────────────────────
+          The interconnected view (owner: "SO 跟 DO 资料互通"): this DO's
+          parent SO context (delivery dates incl. the original/amend trio,
+          possession/house/replacement/referral, amend reason, address),
+          surfaced read-only so opening the DO shows the full picture. The
+          real edit lives on the Sales Order. */}
+      {soDocNo && <SoInfoMirrorCard soDocNo={soDocNo} />}
+
+      {/* ── Delivery crew (2 drivers + 2 helpers + 1 lorry) ── */}
+      <DeliveryCrewCard doId={header.id} crew={header.crew ?? null} locked={isLocked} />
+
+      {/* ── Delivery execution (HC delivery-sheet fields, migration 0197) ── */}
+      <DeliveryExecCard header={header} locked={isLocked} />
+
       {/* ── Line items ── */}
       <section className={styles.card}>
         <header className={styles.cardHeader}>
@@ -639,7 +716,7 @@ export const DeliveryOrderDetail = () => {
                   style={{ padding: '6px 10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--c-border, #d8d2c8)', fontSize: 'var(--fs-13)', background: 'var(--c-surface, #fff)' }}
                 >
                   <option value="" disabled>+ Add from Sales Order…</option>
-                  {remainingLines.map((l) => (
+                  {sortByText(remainingLines).map((l) => (
                     <option key={l.soItemId} value={l.soItemId}>
                       {l.itemCode}{l.description ? ` — ${l.description}` : ''} (remaining {l.remaining})
                     </option>
@@ -693,17 +770,14 @@ export const DeliveryOrderDetail = () => {
           <table className={styles.table}>
             <thead>
               <tr>
+                {/* DO is QUANTITY-only (Owner 2026-06-26) — money columns
+                    (Unit / Disc / Total / Unit Cost / Line Cost / Margin) were
+                    removed from this read-view. Qty stays. */}
                 <th>Item</th>
                 <th>Description 2</th>
                 <th>Sales Location</th>
                 <th className={styles.tableRight}>Qty</th>
                 <th>Transfer To</th>
-                <th className={styles.tableRight}>Unit</th>
-                <th className={styles.tableRight}>Disc</th>
-                <th className={styles.tableRight}>Total</th>
-                <th className={styles.tableRight}>Unit Cost</th>
-                <th className={styles.tableRight}>Line Cost</th>
-                <th className={styles.tableRight}>Margin</th>
               </tr>
             </thead>
             <tbody>
@@ -738,29 +812,9 @@ export const DeliveryOrderDetail = () => {
                           </div>
                         ))}
                   </td>
-                  <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, header.currency)}</td>
-                  <td className={styles.tableRight}>{it.discount_centi > 0 ? fmtRm(it.discount_centi, header.currency) : '—'}</td>
-                  <td className={styles.priceCell}>{fmtRm(it.line_total_centi, header.currency)}</td>
-                  <td className={styles.tableRight}>
-                    {lineCostPending(it, isCancelled)
-                      ? <span className={styles.pendingPill}>Pending</span>
-                      : <span className={styles.muted}>{it.unit_cost_centi > 0 ? fmtRm(it.unit_cost_centi, header.currency) : '—'}</span>}
-                  </td>
-                  <td className={styles.tableRight}>
-                    {lineCostPending(it, isCancelled)
-                      ? <span className={styles.pendingPill}>Pending</span>
-                      : <span className={styles.muted}>{it.line_cost_centi > 0 ? fmtRm(it.line_cost_centi, header.currency) : '—'}</span>}
-                  </td>
-                  <td className={styles.tableRight}>
-                    {lineCostPending(it, isCancelled) ? (
-                      <span className={styles.muted}>—</span>
-                    ) : it.line_total_centi > 0 ? (
-                      <span className={it.line_margin_centi > 0 ? styles.marginGood : it.line_margin_centi < 0 ? styles.marginBad : styles.muted}
-                        style={{ fontWeight: 600 }}>
-                        {fmtRm(it.line_margin_centi, header.currency)}
-                      </span>
-                    ) : <span className={styles.muted}>—</span>}
-                  </td>
+                  {/* DO is QUANTITY-only (Owner 2026-06-26) — the 6 money cells
+                      (Unit / Disc / Total / Unit Cost / Line Cost / Margin) were
+                      removed. The *_centi line data still persists + flows to the SI. */}
                 </tr>
               ))}
             </tbody>
@@ -768,7 +822,9 @@ export const DeliveryOrderDetail = () => {
         )}
       </section>
 
-      <TotalsCard header={header} costPending={items.some((it) => lineCostPending(it, isCancelled))} />
+      {/* DO is QUANTITY-only (Owner 2026-06-26) — the Totals · Margin card (grand
+          total, cost, margin, margin %, by-category money) was removed. Amounts
+          belong on the Sales Invoice. Underlying data is untouched. */}
 
       <PaymentsTable
         docNo={null}
@@ -944,7 +1000,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                 <select className={styles.fieldSelect} value={form.salespersonId}
                   disabled={inputsDisabled} onChange={(e) => set('salespersonId', e.target.value)}>
                   <option value="">— Pick staff —</option>
-                  {staffList.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>)}
+                  {sortByText(staffList).map((s) => <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>)}
                   {form.salespersonId && !staffList.some((s) => s.id === form.salespersonId) && (
                     <option value={form.salespersonId}>(former staff)</option>
                   )}
@@ -963,8 +1019,8 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
           <div className={styles.formGrid4}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>DO Date</span>
-              <input type="date" className={styles.fieldInput} value={form.doDate}
-                disabled={inputsDisabled} onChange={(e) => set('doDate', e.target.value)} />
+              <DateField className={styles.fieldInput} fullWidth value={form.doDate ?? ''}
+                disabled={inputsDisabled} onChange={(iso) => set('doDate', iso)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Driver</span>
@@ -976,7 +1032,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                     setForm((s) => ({ ...s, driverId: e.target.value, driverName: d?.name ?? '', vehicle: d?.vehicle ?? s.vehicle }));
                   }}>
                   <option value="">— Pick driver —</option>
-                  {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}{d.vehicle ? ` · ${d.vehicle}` : ''}</option>)}
+                  {sortByText(drivers).map((d) => <option key={d.id} value={d.id}>{d.name}{d.vehicle ? ` · ${d.vehicle}` : ''}</option>)}
                   {form.driverId && !drivers.some((d) => d.id === form.driverId) && (
                     <option value={form.driverId}>{form.driverName || '(driver)'}</option>
                   )}
@@ -1010,13 +1066,13 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Expected Delivery</span>
-              <input type="date" className={styles.fieldInput} value={form.expectedDeliveryAt}
-                disabled={inputsDisabled} onChange={(e) => set('expectedDeliveryAt', e.target.value)} />
+              <DateField className={styles.fieldInput} fullWidth value={form.expectedDeliveryAt ?? ''}
+                disabled={inputsDisabled} onChange={(iso) => set('expectedDeliveryAt', iso)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Customer Delivery Date</span>
-              <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate}
-                disabled={inputsDisabled} onChange={(e) => set('customerDeliveryDate', e.target.value)} />
+              <DateField className={styles.fieldInput} fullWidth value={form.customerDeliveryDate ?? ''}
+                disabled={inputsDisabled} onChange={(iso) => set('customerDeliveryDate', iso)} />
             </label>
             <label className={styles.field} style={{ gridColumn: 'span 2' }}>
               <span className={styles.fieldLabel}>Note</span>
@@ -1090,7 +1146,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                   onChange={(e) => setForm((s) => ({ ...s, state: e.target.value, city: '', postcode: '' }))}
                   disabled={inputsDisabled || localities.isLoading}>
                   <option value="">{localities.isLoading ? 'Loading…' : 'Pick state'}</option>
-                  {states.map((s) => <option key={s} value={s}>{s}</option>)}
+                  {sortByText(states).map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -1102,7 +1158,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                   onChange={(e) => setForm((s) => ({ ...s, city: e.target.value, postcode: '' }))}
                   disabled={inputsDisabled || !form.state}>
                   <option value="">{form.state ? 'Pick city' : '— pick state first'}</option>
-                  {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+                  {sortByText(cities).map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -1114,7 +1170,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                   onChange={(e) => set('postcode', e.target.value)}
                   disabled={inputsDisabled || !form.city}>
                   <option value="">{form.city ? 'Pick postcode' : '— pick city first'}</option>
-                  {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+                  {sortByNumeric(postcodes).map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -1135,83 +1191,491 @@ CustomerCardInner.displayName = 'CustomerCardInner';
 const CustomerCard = memo(CustomerCardInner) as typeof CustomerCardInner;
 
 /* ════════════════════════════════════════════════════════════════════════
-   Totals card (mirror of SalesOrderDetail's TotalsCard)
-   ════════════════════════════════════════════════════════════════════════ */
-const TotalsCard = ({ header, costPending = false }: { header: DoHeader; costPending?: boolean }) => {
-  const marginPct = header.margin_pct_basis / 100;
-  const marginCls =
-    header.total_margin_centi <= 0 ? styles.marginBad
-    : marginPct >= 30 ? styles.marginGood
-    : marginPct >= 15 ? styles.marginWarn
-    : styles.marginBad;
+   Sales Order info — READ-ONLY mirror of the parent SO
+   ════════════════════════════════════════════════════════════════════════
+   The DO ⇄ SO interconnection (owner: "SO 跟 DO 资料互通"): opening the DO
+   surfaces the parent SO's context so you see the full delivery picture from
+   either doc. The DO carries `so_doc_no`, so we load the SO detail by that
+   doc no (REUSES useMfgSalesOrderDetail — no new endpoint). The SO GET HEADER
+   returns the delivery dates (original + amend trio + reason, just added),
+   possession/house/replacement/referral and address. READ-ONLY: every field
+   is a display span; the real edit lives on the Sales Order. */
+const SO_MIRROR_VALUE_STYLE: CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', minHeight: 26,
+  color: 'var(--fg-muted)',
+};
+const SoMirrorHeaderNoteStyle: CSSProperties = {
+  fontSize: 'var(--fs-11)', color: 'var(--fg-soft)', fontWeight: 500,
+};
+const SoMirrorValue = ({ label, value, span }: { label: string; value: string; span?: number }) => (
+  <div className={styles.field} style={span ? { gridColumn: `span ${span}` } : undefined}>
+    <span className={styles.fieldLabel}>{label}</span>
+    <span className={styles.fieldInput} style={SO_MIRROR_VALUE_STYLE}>{value || '—'}</span>
+  </div>
+);
 
-  const categories: Array<{ label: string; rev: number; cost: number }> = [
-    { label: 'Mattress / Sofa', rev: header.mattress_sofa_centi, cost: header.mattress_sofa_cost_centi ?? 0 },
-    { label: 'Bedframe',        rev: header.bedframe_centi,      cost: header.bedframe_cost_centi      ?? 0 },
-    { label: 'Accessories',     rev: header.accessories_centi,   cost: header.accessories_cost_centi   ?? 0 },
-    { label: 'Others',          rev: header.others_centi,        cost: header.others_cost_centi        ?? 0 },
-    /* SO-SKU spec P2 (D1, migration 0155) — SERVICE bucket (delivery fee /
-       dispose / lift lines); hidden when zero so legacy docs keep 4 rows. */
-    ...((((header as unknown as { service_centi?: number | null }).service_centi ?? 0) > 0)
-      ? [{
-          label: 'Services',
-          rev:  (header as unknown as { service_centi?: number | null }).service_centi ?? 0,
-          cost: (header as unknown as { service_cost_centi?: number | null }).service_cost_centi ?? 0,
-        }]
-      : []),
-  ];
+const SoInfoMirrorCard = ({ soDocNo }: { soDocNo: string }) => {
+  const soQ = useMfgSalesOrderDetail(soDocNo);
+  const so = (soQ.data?.salesOrder as Record<string, unknown> | undefined) ?? null;
 
-  const fmtMarginClass = (rev: number, marginCenti: number) => {
-    if (rev <= 0) return styles.muted;
-    if (marginCenti > 0) return styles.marginGood;
-    if (marginCenti < 0) return styles.marginBad;
-    return styles.muted;
+  /* Dual-read camelCase (pg driver camelCases result columns). */
+  const g = (snake: string, camel: string): string => {
+    const v = so == null ? null : (so[snake] ?? so[camel]);
+    return v == null ? '' : String(v);
   };
+
+  const address = so
+    ? [g('address1', 'address1'), g('address2', 'address2')].filter(Boolean).join(', ')
+    : '';
 
   return (
     <section className={styles.card}>
-      <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Totals · Margin</h2></header>
+      <header className={styles.cardHeader}>
+        <h2 className={styles.cardTitle}>Sales Order info</h2>
+        <span style={SoMirrorHeaderNoteStyle}>Read-only — edit on the Sales Order</span>
+      </header>
       <div className={styles.cardBody}>
-        <div style={TOTALS_KPI_GRID_STYLE}>
-          <div>
-            <div className={styles.totalLabel}>Revenue</div>
-            <div className={styles.grandTotal} style={TOTALS_KPI_VALUE_STYLE}>{fmtRm(header.local_total_centi, header.currency)}</div>
+        {soQ.isLoading ? (
+          <p className={styles.emptyRow}>Loading sales order…</p>
+        ) : !so ? (
+          <p className={styles.emptyRow}>Sales order not found.</p>
+        ) : (
+          <div className={styles.formGrid4}>
+            <SoMirrorValue label="SO No" value={g('doc_no', 'docNo')} />
+            <SoMirrorValue label="Customer" value={g('debtor_name', 'debtorName')} span={2} />
+            {/* The delivery-date trio: ORIGINAL (customer's pick, never overwritten),
+                the customer's requested amend, and the date WE confirmed. */}
+            <SoMirrorValue label="Delivery Date (Original)" value={fmtDateOrDash(g('customer_delivery_date', 'customerDeliveryDate') || null)} />
+            <SoMirrorValue label="Amend Date (from Customer)" value={fmtDateOrDash(g('amend_date_from_customer', 'amendDateFromCustomer') || null)} />
+            <SoMirrorValue label="Amended Delivery Date" value={fmtDateOrDash(g('amended_delivery_date', 'amendedDeliveryDate') || null)} />
+            <SoMirrorValue label="Possession Date" value={fmtDateOrDash(g('possession_date', 'possessionDate') || null)} />
+            <SoMirrorValue label="House Type" value={g('house_type', 'houseType')} />
+            <SoMirrorValue label="Replacement / Disposal" value={g('replacement_disposal', 'replacementDisposal')} span={2} />
+            <SoMirrorValue label="Referral" value={g('referral', 'referral')} span={2} />
+            <SoMirrorValue label="Amend Reason" value={g('amend_reason', 'amendReason')} span={2} />
+            <SoMirrorValue label="Address" value={address} span={4} />
           </div>
-          <div>
-            <div className={styles.totalLabel}>Cost</div>
-            <div className={styles.totalValue} style={TOTALS_KPI_VALUE_STYLE}>
-              {fmtRm(header.total_cost_centi, header.currency)}
-              {costPending && <span className={styles.pendingPill} style={{ marginLeft: 'var(--space-2)' }}>Pending</span>}
-            </div>
-          </div>
-          <div>
-            <div className={styles.totalLabel}>Margin</div>
-            <div className={`${styles.totalValue} ${costPending ? styles.muted : marginCls}`} style={TOTALS_KPI_VALUE_STYLE}>
-              {costPending ? <span className={styles.pendingPill}>Pending</span> : fmtRm(header.total_margin_centi, header.currency)}
-            </div>
-          </div>
-          <div>
-            <div className={styles.totalLabel}>Margin %</div>
-            <div className={`${styles.totalValue} ${costPending ? styles.muted : marginCls}`} style={TOTALS_KPI_VALUE_STYLE}>
-              {costPending ? '—' : header.local_total_centi > 0 ? `${marginPct.toFixed(1)}%` : '—'}
-            </div>
-          </div>
+        )}
+      </div>
+    </section>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   Delivery crew card (Stage 3 — delivery_order_crew, migration 0195).
+   Up to 2 drivers + 2 helpers + 1 lorry, each picked from its active fleet
+   master (useDrivers / useHelpers / useLorries). When a person/lorry is picked
+   we show their IC + contact / plate as read-only auto-filled text beside the
+   select (read from the chosen master row). On Save → PUT /:id/crew, which
+   snapshots name/ic/contact/plate and keeps the DO's primary-driver field in
+   sync with driver 1. Self-contained View→Edit gate, locked once the DO has a
+   downstream SI/DR (same lock the rest of the page honours).
+   ════════════════════════════════════════════════════════════════════════ */
+
+const dualIc = (d: { ic_number?: string | null } | undefined): string | null => d?.ic_number ?? null;
+
+const DeliveryCrewCard = ({
+  doId, crew, locked = false,
+}: { doId: string; crew: DoCrewRow | null; locked?: boolean }) => {
+  const driversQ = useDrivers();
+  const helpersQ = useHelpers();
+  const lorriesQ = useLorries();
+  const setCrew = useSetDoCrew();
+  const notify = useNotify();
+
+  const drivers = useMemo(() => driversQ.data ?? [], [driversQ.data]);
+  const helpers = useMemo(() => helpersQ.data ?? [], [helpersQ.data]);
+  const lorries = useMemo(() => lorriesQ.data ?? [], [lorriesQ.data]);
+
+  const initial = useCallback(() => ({
+    driver1Id: crew?.driver_1_id ?? '',
+    driver2Id: crew?.driver_2_id ?? '',
+    helper1Id: crew?.helper_1_id ?? '',
+    helper2Id: crew?.helper_2_id ?? '',
+    lorryId: crew?.lorry_id ?? '',
+  }), [crew]);
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [form, setForm] = useState(initial);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Re-seed from the persisted crew whenever it changes (refetch / save).
+  useEffect(() => { if (!isEditing) setForm(initial()); }, [initial, isEditing]);
+
+  const set = (k: keyof ReturnType<typeof initial>, v: string) => setForm((s) => ({ ...s, [k]: v }));
+
+  const driverById = useMemo(() => new Map(drivers.map((d) => [d.id, d])), [drivers]);
+  const helperById = useMemo(() => new Map(helpers.map((h) => [h.id, h])), [helpers]);
+  const lorryById = useMemo(() => new Map(lorries.map((l) => [l.id, l])), [lorries]);
+
+  const enterEdit = () => { setSaveError(null); setIsEditing(true); };
+  const cancelEdit = () => { setForm(initial()); setSaveError(null); setIsEditing(false); };
+
+  const onSave = () => {
+    setSaveError(null);
+    setCrew.mutate(
+      {
+        id: doId,
+        driver1Id: form.driver1Id || null,
+        driver2Id: form.driver2Id || null,
+        helper1Id: form.helper1Id || null,
+        helper2Id: form.helper2Id || null,
+        lorryId: form.lorryId || null,
+      },
+      {
+        onSuccess: () => setIsEditing(false),
+        onError: (e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          setSaveError(msg);
+          notify({ title: 'Crew save failed', body: msg, tone: 'error' });
+        },
+      },
+    );
+  };
+
+  // Read-only auto-fill text beside each select — live from the chosen master
+  // row in edit mode, from the saved snapshot when viewing.
+  const driverInfo = (id: string, snapName: string | null, snapIc: string | null, snapContact: string | null) => {
+    if (isEditing) {
+      const d = id ? driverById.get(id) : undefined;
+      if (!d) return null;
+      return { ic: dualIc(d), contact: d.phone ?? null, vehicle: d.vehicle ?? null };
+    }
+    if (!snapName) return null;
+    return { ic: snapIc, contact: snapContact, vehicle: null };
+  };
+  const helperInfo = (id: string, snapName: string | null, snapContact: string | null) => {
+    if (isEditing) {
+      const h = id ? helperById.get(id) : undefined;
+      if (!h) return null;
+      return { ic: h.ic_number ?? null, contact: h.contact ?? null };
+    }
+    if (!snapName) return null;
+    return { ic: null, contact: snapContact };
+  };
+  const lorryInfo = (id: string, snapPlate: string | null) => {
+    if (isEditing) {
+      const l = id ? lorryById.get(id) : undefined;
+      return l ? l.plate : null;
+    }
+    return snapPlate;
+  };
+
+  const d1 = driverInfo(form.driver1Id, crew?.driver_1_name ?? null, crew?.driver_1_ic ?? null, crew?.driver_1_contact ?? null);
+  const d2 = driverInfo(form.driver2Id, crew?.driver_2_name ?? null, crew?.driver_2_ic ?? null, crew?.driver_2_contact ?? null);
+  const h1 = helperInfo(form.helper1Id, crew?.helper_1_name ?? null, crew?.helper_1_contact ?? null);
+  const h2 = helperInfo(form.helper2Id, crew?.helper_2_name ?? null, crew?.helper_2_contact ?? null);
+  const lp = lorryInfo(form.lorryId, crew?.lorry_plate ?? null);
+
+  const infoLine = (parts: Array<[string, string | null | undefined]>) => {
+    const shown = parts.filter(([, v]) => v && String(v).trim());
+    if (shown.length === 0) return null;
+    return (
+      <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 4, display: 'block' }}>
+        {shown.map(([label, v]) => `${label} ${v}`).join('  ·  ')}
+      </span>
+    );
+  };
+
+  const personSelect = (
+    slotKey: keyof ReturnType<typeof initial>,
+    label: string,
+    options: Array<{ id: string; name: string }>,
+    currentId: string,
+    fallbackName: string | null,
+  ) => (
+    <label className={styles.field}>
+      <span className={styles.fieldLabel}>{label}</span>
+      <span className={styles.selectWrap}>
+        <select className={styles.fieldSelect} value={currentId}
+          disabled={!isEditing || locked}
+          onChange={(e) => set(slotKey, e.target.value)}>
+          <option value="">— None —</option>
+          {sortByText(options).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          {currentId && !options.some((o) => o.id === currentId) && (
+            <option value={currentId}>{fallbackName || '(inactive)'}</option>
+          )}
+        </select>
+        <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+      </span>
+    </label>
+  );
+
+  return (
+    <section className={styles.card}>
+      <header className={styles.cardHeader}>
+        <h2 className={styles.cardTitle}>Delivery Crew</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            Up to 2 drivers + 2 helpers + 1 lorry
+          </span>
+          {!isEditing ? (
+            <Button variant="ghost" size="sm" onClick={enterEdit} disabled={locked}>
+              <Pencil {...ICON} /><span>Edit Crew</span>
+            </Button>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={setCrew.isPending}>
+                <span>Cancel</span>
+              </Button>
+              <Button variant="primary" size="sm" onClick={onSave} disabled={setCrew.isPending}>
+                <Save {...ICON} /><span>{setCrew.isPending ? 'Saving…' : 'Save Crew'}</span>
+              </Button>
+            </>
+          )}
         </div>
-        <div className={styles.totalLabel} style={{ marginBottom: 'var(--space-2)' }}>By Category</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-          {categories.filter((c) => c.rev > 0 || c.cost > 0).map(({ label, rev, cost }) => {
-            const margin = rev - cost;
-            return (
-              <div key={label} style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr', gap: 'var(--space-3)', alignItems: 'baseline' }}>
-                <div className={styles.totalLabel} style={{ textTransform: 'none', letterSpacing: 0, fontSize: 'var(--fs-13)' }}>{label}</div>
-                <div className={styles.totalValue}>Revenue {fmtRm(rev, header.currency)}</div>
-                <div className={styles.totalValue} style={{ color: 'var(--fg-muted)' }}>Cost {fmtRm(cost, header.currency)}</div>
-                <div className={`${styles.totalValue} ${fmtMarginClass(rev, margin)}`}>Margin {fmtRm(margin, header.currency)}</div>
-              </div>
-            );
-          })}
+      </header>
+      <div className={styles.cardBody}>
+        {saveError && (
+          <div className={styles.bannerWarn} style={{ marginBottom: 'var(--space-3)' }}>
+            <strong>Crew save failed.</strong><span>{saveError}</span>
+          </div>
+        )}
+        <div className={styles.formGrid4}>
+          <div className={styles.field}>
+            {personSelect('driver1Id', 'Driver 1', drivers, form.driver1Id, crew?.driver_1_name ?? null)}
+            {infoLine([['IC', d1?.ic], ['Tel', d1?.contact], ['Vehicle', d1?.vehicle]])}
+          </div>
+          <div className={styles.field}>
+            {personSelect('driver2Id', 'Driver 2', drivers, form.driver2Id, crew?.driver_2_name ?? null)}
+            {infoLine([['IC', d2?.ic], ['Tel', d2?.contact], ['Vehicle', d2?.vehicle]])}
+          </div>
+          <div className={styles.field}>
+            {personSelect('helper1Id', 'Helper 1', helpers, form.helper1Id, crew?.helper_1_name ?? null)}
+            {infoLine([['IC', h1?.ic], ['Tel', h1?.contact]])}
+          </div>
+          <div className={styles.field}>
+            {personSelect('helper2Id', 'Helper 2', helpers, form.helper2Id, crew?.helper_2_name ?? null)}
+            {infoLine([['IC', h2?.ic], ['Tel', h2?.contact]])}
+          </div>
+          <div className={styles.field}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Lorry</span>
+              <span className={styles.selectWrap}>
+                <select className={styles.fieldSelect} value={form.lorryId}
+                  disabled={!isEditing || locked}
+                  onChange={(e) => set('lorryId', e.target.value)}>
+                  <option value="">— None —</option>
+                  {sortByText(lorries.map((l) => ({ id: l.id, name: l.plate }))).map((o) => (
+                    <option key={o.id} value={o.id}>{o.name}</option>
+                  ))}
+                  {form.lorryId && !lorries.some((l) => l.id === form.lorryId) && (
+                    <option value={form.lorryId}>{crew?.lorry_plate || '(inactive)'}</option>
+                  )}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
+            </label>
+            {infoLine([['Plate', lp]])}
+          </div>
         </div>
       </div>
     </section>
   );
 };
+
+/* ════════════════════════════════════════════════════════════════════════
+   Delivery Execution card (HC delivery-sheet DO-execution fields, migration
+   0197). Time window + confirmed, arrival/departure clock, shipout date,
+   customer-delivered date, ETA / arriving port, and the HC "Remark 4" delivery
+   sub-status. Self-contained View→Edit gate (mirrors DeliveryCrewCard), saved
+   via PATCH /delivery-orders-mfg/:id (useUpdateMfgDeliveryOrderHeader) — the
+   SAME columns the Delivery Planning "Edit HC fields" drawer edits. Dates use the
+   typeable DateField; arrival/departure are a date + time pair combined into a
+   TIMESTAMPTZ; house-type-style master fields (delivery sub-status) are a select.
+   Locked once the DO has a downstream SI/DR (same lock the page honours).
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* A TIMESTAMPTZ ISO string → {date: YYYY-MM-DD, time: HH:mm} for the date+time
+   pair; '' parts when null. Best-effort slice — the value is round-tripped as the
+   local-ish clock the coordinator typed (matches the planning drawer's slice). */
+const splitDt = (iso: string | null): { date: string; time: string } => {
+  if (!iso) return { date: '', time: '' };
+  const s = String(iso);
+  return { date: s.slice(0, 10), time: s.slice(11, 16) };
+};
+/* {date, time} → an ISO-ish 'YYYY-MM-DDTHH:mm' (or null when no date). When a date
+   is set but no time, default 00:00 so it's still a valid timestamp. */
+const joinDt = (date: string, time: string): string | null =>
+  date ? `${date}T${time || '00:00'}` : null;
+
+const DeliveryExecCard = ({
+  header, locked = false,
+}: { header: DoHeader; locked?: boolean }) => {
+  const update = useUpdateMfgDeliveryOrderHeader();
+  const notify = useNotify();
+
+  /* Seed from the persisted DO. Dual-read camelCase — the pg driver camelCases
+     result columns, so a snake_case-only read can come back undefined. */
+  const h = header as DoHeader & Record<string, unknown>;
+  const initial = useCallback(() => {
+    const arr = splitDt((header.arrival_at ?? (h.arrivalAt as string)) ?? null);
+    const dep = splitDt((header.departure_at ?? (h.departureAt as string)) ?? null);
+    return {
+      timeRange: (header.time_range ?? (h.timeRange as string)) ?? '',
+      timeConfirmed: (header.time_confirmed ?? (h.timeConfirmed as boolean)) ?? false,
+      arrivalDate: arr.date, arrivalTime: arr.time,
+      departureDate: dep.date, departureTime: dep.time,
+      shipoutDate: ((header.shipout_date ?? (h.shipoutDate as string)) ?? '').slice(0, 10),
+      customerDeliveredDate: ((header.customer_delivered_date ?? (h.customerDeliveredDate as string)) ?? '').slice(0, 10),
+      etaArrivingPort: (header.eta_arriving_port ?? (h.etaArrivingPort as string)) ?? '',
+      deliverySubstatus: (header.delivery_substatus ?? (h.deliverySubstatus as string)) ?? '',
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [header]);
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [form, setForm] = useState(initial);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Re-seed from the persisted DO whenever it changes (refetch / save).
+  useEffect(() => { if (!isEditing) setForm(initial()); }, [initial, isEditing]);
+
+  const set = <K extends keyof ReturnType<typeof initial>>(k: K, v: ReturnType<typeof initial>[K]) =>
+    setForm((s) => ({ ...s, [k]: v }));
+
+  const enterEdit = () => { setSaveError(null); setIsEditing(true); };
+  const cancelEdit = () => { setForm(initial()); setSaveError(null); setIsEditing(false); };
+
+  const onSave = () => {
+    setSaveError(null);
+    update.mutate(
+      {
+        id: header.id,
+        timeRange: form.timeRange || null,
+        timeConfirmed: form.timeConfirmed,
+        arrivalAt: joinDt(form.arrivalDate, form.arrivalTime),
+        departureAt: joinDt(form.departureDate, form.departureTime),
+        shipoutDate: form.shipoutDate || null,
+        customerDeliveredDate: form.customerDeliveredDate || null,
+        etaArrivingPort: form.etaArrivingPort || null,
+        deliverySubstatus: form.deliverySubstatus || null,
+      },
+      {
+        onSuccess: () => setIsEditing(false),
+        onError: (e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          setSaveError(msg);
+          notify({ title: 'Delivery execution save failed', body: msg, tone: 'error' });
+        },
+      },
+    );
+  };
+
+  const disabled = !isEditing || locked;
+
+  return (
+    <section className={styles.card}>
+      <header className={styles.cardHeader}>
+        <h2 className={styles.cardTitle}>Delivery Execution</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            HC delivery-sheet fields
+          </span>
+          {!isEditing ? (
+            <Button variant="ghost" size="sm" onClick={enterEdit} disabled={locked}>
+              <Pencil {...ICON} /><span>Edit</span>
+            </Button>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={update.isPending}>
+                <span>Cancel</span>
+              </Button>
+              <Button variant="primary" size="sm" onClick={onSave} disabled={update.isPending}>
+                <Save {...ICON} /><span>{update.isPending ? 'Saving…' : 'Save'}</span>
+              </Button>
+            </>
+          )}
+        </div>
+      </header>
+      <div className={styles.cardBody}>
+        {saveError && (
+          <div className={styles.bannerWarn} style={{ marginBottom: 'var(--space-3)' }}>
+            <strong>Delivery execution save failed.</strong><span>{saveError}</span>
+          </div>
+        )}
+        <div className={styles.formGrid4}>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Time Range</span>
+            <input className={styles.fieldInput} value={form.timeRange}
+              disabled={disabled} placeholder="e.g. 10am-12pm"
+              onChange={(e) => set('timeRange', e.target.value)} />
+          </label>
+          <label className={styles.field} style={{ alignSelf: 'end' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-13)' }}>
+              <input type="checkbox" checked={form.timeConfirmed}
+                disabled={disabled}
+                onChange={(e) => set('timeConfirmed', e.target.checked)} />
+              Time confirmed with customer
+            </span>
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Shipout Date (EM/SG)</span>
+            <DateField className={styles.fieldInput} fullWidth value={form.shipoutDate}
+              disabled={disabled}
+              onChange={(iso) => set('shipoutDate', iso)} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Customer Delivered Date</span>
+            <DateField className={styles.fieldInput} fullWidth value={form.customerDeliveredDate}
+              disabled={disabled}
+              onChange={(iso) => set('customerDeliveredDate', iso)} />
+          </label>
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Arrival Date</span>
+            <DateField className={styles.fieldInput} fullWidth value={form.arrivalDate}
+              disabled={disabled}
+              onChange={(iso) => set('arrivalDate', iso)} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Arrival Time</span>
+            <input type="time" className={styles.fieldInput} value={form.arrivalTime}
+              disabled={disabled}
+              onChange={(e) => set('arrivalTime', e.target.value)} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Departure Date</span>
+            <DateField className={styles.fieldInput} fullWidth value={form.departureDate}
+              disabled={disabled}
+              onChange={(iso) => set('departureDate', iso)} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Departure Time</span>
+            <input type="time" className={styles.fieldInput} value={form.departureTime}
+              disabled={disabled}
+              onChange={(e) => set('departureTime', e.target.value)} />
+          </label>
+
+          <label className={styles.field} style={{ gridColumn: 'span 2' }}>
+            <span className={styles.fieldLabel}>ETA / Arriving Port (EM/SG)</span>
+            <input className={styles.fieldInput} value={form.etaArrivingPort}
+              disabled={disabled} placeholder="Port / shipment ref e.g. KUC3012008"
+              onChange={(e) => set('etaArrivingPort', e.target.value)} />
+          </label>
+          <label className={styles.field} style={{ gridColumn: 'span 2' }}>
+            <span className={styles.fieldLabel}>Delivery Status (Remark 4)</span>
+            <span className={styles.selectWrap}>
+              <select className={styles.fieldSelect} value={form.deliverySubstatus}
+                disabled={disabled}
+                onChange={(e) => set('deliverySubstatus', e.target.value)}>
+                <option value="">—</option>
+                {HC_SUBSTATUS_VALUES.map((v) => <option key={v} value={v}>{v}</option>)}
+                {form.deliverySubstatus && !(HC_SUBSTATUS_VALUES as readonly string[]).includes(form.deliverySubstatus) && (
+                  <option value={form.deliverySubstatus}>{form.deliverySubstatus}</option>
+                )}
+              </select>
+              <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+            </span>
+          </label>
+        </div>
+      </div>
+    </section>
+  );
+};
+
+/* DO is QUANTITY-only (Owner 2026-06-26) — the TotalsCard (Totals · Margin:
+   grand total, cost, margin, margin %, by-category money) was removed from the
+   Delivery Order. A delivery document shows quantities, not amounts; the money
+   lives on the Sales Invoice. The header *_centi fields still persist and flow
+   downstream — this was a display-only removal. */

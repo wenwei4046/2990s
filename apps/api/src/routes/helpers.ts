@@ -1,0 +1,84 @@
+// ----------------------------------------------------------------------------
+// /helpers — CRUD for the helpers table (TMS fleet master, migration 0195).
+// Cloned from drivers.ts. A helper is a delivery crew member (not a driver);
+// in_house flags in-house staff vs an outsourced/3rd-party helper.
+// ----------------------------------------------------------------------------
+
+import { Hono } from 'hono';
+import { normalizePhone } from '@2990s/shared/phone';
+import { supabaseAuth } from '../middleware/auth';
+import type { Env, Variables } from '../env';
+
+export const helpers = new Hono<{ Bindings: Env; Variables: Variables }>();
+helpers.use('*', supabaseAuth);
+
+const COLS = 'id, helper_code, name, contact, ic_number, in_house, active, created_at';
+
+helpers.get('/', async (c) => {
+  const sb = c.get('supabase');
+  const onlyActive = c.req.query('active') !== 'false';   // default: active only
+  let q = sb.from('helpers').select(COLS).order('helper_code');
+  if (onlyActive) q = q.eq('active', true);
+  const { data, error } = await q;
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  return c.json({ helpers: data ?? [] });
+});
+
+helpers.post('/', async (c) => {
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const helperCode = String(body.helperCode ?? '').trim();
+  const name = String(body.name ?? '').trim();
+  const contact = String(body.contact ?? '').trim();
+  if (!helperCode) return c.json({ error: 'code_required' }, 400);
+  if (!name)       return c.json({ error: 'name_required' }, 400);
+  /* Store helper contact in E.164 (mirrors drivers.phone). Contact is optional. */
+  const normalizedContact = contact ? (normalizePhone(contact) ?? contact) : null;
+
+  const sb = c.get('supabase');
+  const { data, error } = await sb.from('helpers').insert({
+    helper_code: helperCode,
+    name,
+    contact: normalizedContact,
+    ic_number: (body.icNumber as string) ?? null,
+    in_house: body.inHouse === false ? false : true,
+    active: body.active === false ? false : true,
+  }).select(COLS).single();
+  if (error) {
+    if (error.code === '23505') return c.json({ error: 'duplicate_code' }, 409);
+    if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message }, 403);
+    return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  }
+  return c.json({ helper: data }, 201);
+});
+
+helpers.patch('/:id', async (c) => {
+  const id = c.req.param('id');
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  const updates: Record<string, unknown> = {};
+  const map: Array<[string, string]> = [
+    ['helperCode', 'helper_code'], ['name', 'name'], ['contact', 'contact'],
+    ['icNumber', 'ic_number'],
+  ];
+  for (const [from, to] of map) {
+    if (body[from] === undefined) continue;
+    /* Normalize contact to E.164 on PATCH (mirrors drivers.phone). */
+    if (from === 'contact' && typeof body[from] === 'string') {
+      const raw = body[from] as string;
+      updates[to] = raw ? (normalizePhone(raw) ?? raw) : null;
+    } else {
+      updates[to] = body[from];
+    }
+  }
+  if (body.inHouse !== undefined) updates.in_house = Boolean(body.inHouse);
+  if (body.active !== undefined) updates.active = Boolean(body.active);
+
+  if (Object.keys(updates).length === 0) return c.json({ error: 'no_changes' }, 400);
+
+  const sb = c.get('supabase');
+  const { data, error } = await sb.from('helpers').update(updates).eq('id', id).select(COLS).single();
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  return c.json({ helper: data });
+});

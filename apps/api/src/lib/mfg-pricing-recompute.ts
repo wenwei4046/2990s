@@ -524,7 +524,10 @@ export function recomputeFromSnapshot(
   let drift: boolean;
   let unitToPersistSen: number;
   if (canPriceSofa) {
-    const sofaDepth = String((item.variants as { depth?: unknown } | null | undefined)?.depth ?? '24');
+    /* Variants-vocabulary unification (Commander 2026-06-26) — dual-read so a
+       canonical persisted sofa line (seatHeight, no depth) keys its build
+       geometry the same as a raw POS line (depth). Mirrors seatSizeKey above. */
+    const sofaDepth = String((item.variants as { depth?: unknown; seatHeight?: unknown } | null | undefined)?.depth ?? (item.variants as { seatHeight?: unknown } | null | undefined)?.seatHeight ?? '24');
     // Scope combos to this Model's base_model — the POS pre-filters the same
     // way (useSofaCombos(base_model)); without it the server could match a
     // same-shape combo from another Model and false-reject. No base_model
@@ -920,7 +923,10 @@ export async function recomputeOneLine(
         loadModelSofaModulePrices(
           sb,
           product.base_model,
-          String((item.variants as { depth?: unknown } | null | undefined)?.depth ?? '24'),
+          /* Variants-vocabulary unification (Commander 2026-06-26) — dual-read
+             depth ?? seatHeight so a canonical persisted sofa line loads the
+             same module-price grid as a raw POS line. */
+          String((item.variants as { depth?: unknown; seatHeight?: unknown } | null | undefined)?.depth ?? (item.variants as { seatHeight?: unknown } | null | undefined)?.seatHeight ?? '24'),
         ),
         loadModelSofaModuleCostRows(sb, product.base_model),
       ])

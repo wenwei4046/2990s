@@ -62,13 +62,16 @@ export function buildVariantSummary(
   // (variants.fabricId/fabricLabel — its tier add-on is already charged) but
   // confirms the colour later, so there's no fabricCode yet. Surface the
   // series + the open colour so the doc line reads the true state.
-  // Drop a bare part that a RICHER part already leads with (at a token
-  // boundary), so an enriched fabric code "BF-12 (PC151-12)" doesn't get the
-  // bare colour label "BF-12" repeated after it → "BF-12 (PC151-12) BF-12"
-  // (Commander 2026-06-19). Exact repeats still drop via the Set.
+  // Drop a bare part that a RICHER part already leads with OR trails with (at a
+  // token boundary), so an enriched fabric code "BF-12 (PC151-12)" doesn't get
+  // the bare colour label "BF-12" repeated after it → "BF-12 (PC151-12) BF-12",
+  // and a code whose colour is baked into its tail ("A201-7-LIGHT BROWN")
+  // doesn't get the derived colour "BROWN" appended → "A201-7-LIGHT BROWN BROWN"
+  // (Commander 2026-06-19; trailing case back-ported from Houzs PR #112
+  // 2026-06-24). Exact repeats still drop via the Set.
   const presentFabric = fabricParts.filter(Boolean);
   const dedupedFabric = presentFabric.filter((p, i) =>
-    !presentFabric.some((q, j) => j !== i && q !== p && (q.startsWith(`${p} `) || q.startsWith(`${p}(`))),
+    !presentFabric.some((q, j) => j !== i && q !== p && (q.startsWith(`${p} `) || q.startsWith(`${p}(`) || q.endsWith(` ${p}`))),
   );
   const fabric = [...new Set(dedupedFabric)].join(' ')
     || str(variants.fabricColor)

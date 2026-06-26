@@ -34,6 +34,7 @@ import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import { PhoneInput } from '../components/PhoneInput';
+import { DateField } from '../components/DateField';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import {
   useConsignmentOrderDetail,
@@ -66,6 +67,7 @@ import { useAuth } from '../lib/auth';
 import { useVenues } from '../lib/venues-queries';
 import { useStateWarehouseMappings } from '../lib/state-warehouse-queries';
 import { useDebouncedValue } from '../lib/hooks';
+import { sortByText, sortByNumeric } from '../lib/sort-options';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -960,7 +962,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                   disabled={inputsDisabled || !canChangeSalesperson}
                   onChange={(e) => set('salespersonId', e.target.value)}>
                   <option value="">— Pick staff —</option>
-                  {staffList.map((s) => (
+                  {sortByText(staffList).map((s) => (
                     <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
                   ))}
                   {form.salespersonId
@@ -1017,20 +1019,20 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Processing Date</span>
-              <input type="date" className={styles.fieldInput} value={form.processingDate}
+              <DateField className={styles.fieldInput} fullWidth value={form.processingDate ?? ''}
                 disabled={inputsDisabled || processingLocked}
                 title={processingLocked ? 'Processing date has passed — locked.' : undefined}
                 min={processingLocked ? undefined : today}
-                onChange={(e) => set('processingDate', e.target.value)}
-                style={datesXor && !form.processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
+                onChange={(iso) => set('processingDate', iso)}
+                invalid={datesXor && !form.processingDate} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Delivery Date</span>
-              <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate}
+              <DateField className={styles.fieldInput} fullWidth value={form.customerDeliveryDate ?? ''}
                 disabled={inputsDisabled}
                 min={today}
-                onChange={(e) => { set('customerDeliveryDate', e.target.value); onDeliveryDateChange?.(e.target.value); }}
-                style={datesXor && !form.customerDeliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
+                onChange={(iso) => { set('customerDeliveryDate', iso); onDeliveryDateChange?.(iso); }}
+                invalid={datesXor && !form.customerDeliveryDate} />
             </label>
             <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
               <span className={styles.fieldLabel}>Note</span>
@@ -1125,7 +1127,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                   onChange={(e) => setForm((s) => ({ ...s, state: e.target.value, city: '', postcode: '' }))}
                   disabled={inputsDisabled || localities.isLoading}>
                   <option value="">{localities.isLoading ? 'Loading…' : 'Pick state'}</option>
-                  {states.map((s) => <option key={s} value={s}>{s}</option>)}
+                  {sortByText(states).map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -1137,7 +1139,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                   onChange={(e) => setForm((s) => ({ ...s, city: e.target.value, postcode: '' }))}
                   disabled={inputsDisabled || !form.state}>
                   <option value="">{form.state ? 'Pick city' : '— pick state first'}</option>
-                  {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+                  {sortByText(cities).map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -1149,7 +1151,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                   onChange={(e) => set('postcode', e.target.value)}
                   disabled={inputsDisabled || !form.city}>
                   <option value="">{form.city ? 'Pick postcode' : '— pick city first'}</option>
-                  {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+                  {sortByNumeric(postcodes).map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>

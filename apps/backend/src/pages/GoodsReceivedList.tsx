@@ -30,9 +30,10 @@ import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-// GRN status set (grn_status enum): POSTED / CLOSED / CANCELLED. Colours +
-// labels come from the canonical lib/status-pill map via <StatusPill>.
-const STATUS_CHIPS = ['all', 'POSTED', 'CLOSED', 'CANCELLED'] as const;
+// GRN status set (grn_status enum): DRAFT / POSTED / CLOSED / CANCELLED. Colours
+// + labels come from the canonical lib/status-pill map via <StatusPill>. DRAFT
+// (Owner 2026-06-25) is an uncommitted staging GRN — visible but distinct.
+const STATUS_CHIPS = ['all', 'DRAFT', 'POSTED', 'CLOSED', 'CANCELLED'] as const;
 
 const fmtMoney = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -64,6 +65,8 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
     key: 'grn_number', label: 'GRN No.', width: 150, sortable: true,
     accessor: (g) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{g.grn_number}</span>,
     searchValue: (g) => g.grn_number,
+    // accessor is JSX → export the raw GRN-no string so GRN No. isn't blank.
+    exportValue: (g) => g.grn_number,
     sortFn: (a, b) => a.grn_number.localeCompare(b.grn_number),
   },
   {
@@ -79,6 +82,8 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
     accessor: (g) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{g.purchase_order?.po_number ?? '—'}</span>,
     searchValue: (g) => g.purchase_order?.po_number ?? '',
     groupValue: (g) => g.purchase_order?.po_number ?? '(none)',
+    // accessor is JSX → export the source PO doc-no string.
+    exportValue: (g) => g.purchase_order?.po_number ?? '—',
   },
   {
     key: 'received_at', label: 'Received Date', width: 120, sortable: true,
@@ -100,6 +105,8 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
       </span>
     ),
     searchValue: (g) => fmtMoney(Number(g.total_centi ?? 0), g.currency),
+    // accessor is JSX money → export the NUMBER (currency units) so Excel SUMs it.
+    exportValue: (g) => Number(g.total_centi ?? 0) / 100,
     sortFn: (a, b) => Number(a.total_centi ?? 0) - Number(b.total_centi ?? 0),
   },
   {
@@ -107,6 +114,8 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
     accessor: (g) => <StatusPill docType="grn" status={g.status} />,
     searchValue: (g) => statusLabel('grn', g.status),
     groupValue: (g) => statusLabel('grn', g.status),
+    // accessor is a <StatusPill> JSX → export the plain status label text.
+    exportValue: (g) => statusLabel('grn', g.status),
     sortFn: (a, b) => a.status.localeCompare(b.status),
   },
 ];
@@ -440,19 +449,23 @@ export const GoodsReceived = () => {
         contextMenu={(g) => {
           // Unified convert / edit / cancel eligibility (migration 0106). Each
           // action is HIDDEN when not eligible:
-          //   • Edit / Cancel  — only POSTED && no downstream child.
-          //   • Convert to PI  — only POSTED && not fully invoiced.
+          //   • Edit / Cancel  — DRAFT or POSTED, && no downstream child.
+          //   • Convert to PI  — only POSTED && not fully invoiced (a DRAFT GRN is
+          //                       NOT invoiceable — it has committed no receipt).
           //   • Convert to PR  — only POSTED && not fully returned.
           const isPosted = g.status === 'POSTED';
+          const isDraft = g.status === 'DRAFT';
+          const isEditable = isPosted || isDraft;
           const hasChildren = Boolean(g.has_children);
           const menu: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
             { label: 'View', onClick: () => navigate(`/grns/${g.id}`) },
           ];
-          // Edit — only when editable (POSTED, no child).
-          if (isPosted && !hasChildren) {
+          // Edit — when editable (DRAFT or POSTED, no child).
+          if (isEditable && !hasChildren) {
             menu.push({ label: 'Edit', onClick: () => navigate(`/grns/${g.id}?edit=1`) });
           }
-          // Convert actions — hidden when not eligible (fully consumed / not POSTED).
+          // Convert actions — POSTED-only (a DRAFT GRN withholds downstream until
+          // confirmed) and hidden when fully consumed.
           const canPi = isPosted && !g.fully_invoiced;
           const canPr = isPosted && !g.fully_returned;
           if (canPi || canPr) {
@@ -460,8 +473,8 @@ export const GoodsReceived = () => {
             if (canPi) menu.push({ label: 'To Purchase Invoice', onClick: () => convertToPi(g) });
             if (canPr) menu.push({ label: 'To Purchase Return', onClick: () => convertToPr(g) });
           }
-          // Cancel — soft-stop. Only POSTED && no downstream child.
-          if (isPosted && !hasChildren) {
+          // Cancel — soft-stop. DRAFT or POSTED, && no downstream child.
+          if (isEditable && !hasChildren) {
             menu.push({ divider: true as const });
             menu.push({ label: 'Cancel', danger: true, onClick: () => doCancelGrn(g) });
           }

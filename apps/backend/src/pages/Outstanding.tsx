@@ -20,6 +20,7 @@ import {
   type OutstandingFilterMode,
 } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { DateField } from '../components/DateField';
 import styles from './Suppliers.module.css';
 
 const MODULES: { value: OutstandingModule; label: string; icon: React.ReactNode; route: (row: Record<string, unknown>) => string }[] = [
@@ -57,11 +58,11 @@ export const Outstanding = () => {
         <div className={styles.actionsRow}>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-13)' }}>
             <span style={{ color: 'var(--fg-muted)' }}>From</span>
-            <input type="date" className={styles.searchInput} value={from} onChange={(e) => setFrom(e.target.value)} style={{ width: 150 }} />
+            <DateField className={styles.searchInput} value={from ?? ''} onChange={(iso) => setFrom(iso)} />
           </label>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-13)' }}>
             <span style={{ color: 'var(--fg-muted)' }}>To</span>
-            <input type="date" className={styles.searchInput} value={to} onChange={(e) => setTo(e.target.value)} style={{ width: 150 }} />
+            <DateField className={styles.searchInput} value={to ?? ''} onChange={(iso) => setTo(iso)} />
           </label>
           <div className={styles.statusChips}>
             <FilterChip label="Outstanding" active={mode === 'outstanding'} onClick={() => setMode('outstanding')} />
@@ -234,6 +235,16 @@ const ModuleTable = ({
       accessor: (r) => cellText(spec, r),
       searchValue: (r) => cellText(spec, r),
       filterValue: (r) => cellText(spec, r),
+      /* Export the RAW underlying value, not the on-screen text. Money (centi)
+         → ringgit NUMBER so Excel can SUM the column (the "RM 1,234.00" string
+         is dead text in a spreadsheet); qty → NUMBER; dates/text → the plain
+         string (no "—" placeholder in the sheet). */
+      exportValue: (r) => {
+        const v = r[spec.key];
+        if (spec.kind === 'money') return (Number(v) || 0) / 100;
+        if (spec.kind === 'qty')   return Number(v) || 0;
+        return v == null ? '' : String(v);
+      },
       sortFn: spec.kind === 'money' || spec.kind === 'qty'
         ? (a, b) => (Number(a[spec.key]) || 0) - (Number(b[spec.key]) || 0)
         : (a, b) => String(a[spec.key] ?? '').localeCompare(String(b[spec.key] ?? '')),

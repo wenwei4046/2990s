@@ -29,6 +29,7 @@ import { fmtDateOrDash } from '@2990s/shared';
 import { useMfgProducts, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useCreateMfgSalesOrder } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { DateField } from '../components/DateField';
 import { useNotify } from '../components/NotifyDialog';
 import styles from './SalesOrderDetail.module.css';
 
@@ -431,8 +432,8 @@ export const SoFromProducts = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Base date (processing window starts here)</span>
-              <input type="date" value={baseDate} min={todayMY()}
-                onChange={(e) => setBaseDate(e.target.value)} className={styles.fieldInput} />
+              <DateField value={baseDate ?? ''} min={todayMY()}
+                onChange={(iso) => setBaseDate(iso)} className={styles.fieldInput} fullWidth />
             </label>
           </div>
 
@@ -505,11 +506,11 @@ export const SoFromProducts = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Processing date</span>
-              <input type="date" value={manualProc} min={todayMY()} onChange={(e) => setManualProc(e.target.value)} className={styles.fieldInput} />
+              <DateField value={manualProc ?? ''} min={todayMY()} onChange={(iso) => setManualProc(iso)} className={styles.fieldInput} fullWidth />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Delivery date</span>
-              <input type="date" value={manualDeliv} min={todayMY()} onChange={(e) => setManualDeliv(e.target.value)} className={styles.fieldInput} />
+              <DateField value={manualDeliv ?? ''} min={todayMY()} onChange={(iso) => setManualDeliv(iso)} className={styles.fieldInput} fullWidth />
             </label>
           </div>
 

@@ -27,6 +27,7 @@ import { effectiveDelivery } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
 import { bindingToProductPatch } from '../lib/cost-anchor-sync';
+import { normalizeCurrency } from '../lib/fx';
 import type { Env, Variables } from '../env';
 
 /* Task #91 — small helper: normalize a body field to E.164 phone storage,
@@ -41,15 +42,26 @@ export const suppliers = new Hono<{ Bindings: Env; Variables: Variables }>();
 suppliers.use('*', supabaseAuth);
 
 const SUPPLIER_STATUSES = new Set(['ACTIVE', 'INACTIVE', 'BLOCKED']);
-const CURRENCIES = new Set(['MYR', 'RMB', 'USD', 'SGD']);
+/* Currency is no longer a hardcoded allow-list — the currencies MASTER table
+   (migration 0193) + its FK are the validity gate. We just upper-case/trim the
+   incoming code (blank → MYR) and let the FK reject a code not in the master. */
 const MATERIAL_KINDS = new Set(['mfg_product', 'fabric', 'raw']);
 
 /* PR #40 — full master record (Commander 2026-05-26 AutoCount parity) */
+/* Mig 0186 — registration_no / nature_of_business / exemption_no / phone2
+   (AutoCount creditor-export parity, Houzs-led port). */
+/* ⚠️ VIEW-TRAP (see docs/2026-06-26-so-list-view-trap-coe.md): SUPPLIER_COLS feeds
+   BOTH the base `suppliers` reads AND (via SUPPLIER_LIST_COLS) the list read from
+   the `suppliers_with_derived_category` VIEW. The view is `SELECT s.*`, but `*` is
+   frozen at the view's CREATE — so adding a column here ALSO requires recreating
+   that view in a migration (DROP+CREATE, then re-GRANT) or the suppliers LIST 500s.
+   This already bit us once: 0186 added cols → 0187 had to recreate the view. */
 const SUPPLIER_COLS =
   'id, code, name, whatsapp_number, email, contact_person, phone, address, state, ' +
   'payment_terms, status, rating, notes, supplier_type, category, tin_number, ' +
   'business_reg_no, postcode, area, mobile, fax, website, attention, business_nature, ' +
-  'currency, statement_type, aging_basis, credit_limit_sen, country, created_at, updated_at';
+  'currency, statement_type, aging_basis, credit_limit_sen, country, ' +
+  'registration_no, nature_of_business, exemption_no, phone2, created_at, updated_at';
 
 /* PR — Commander 2026-05-27 ("当 Assign SKU 之后，你就会知道它是什么 Category 了呀"):
    List endpoint queries the `suppliers_with_derived_category` view (migration
@@ -227,7 +239,8 @@ suppliers.get('/', async (c) => {
   let q = supabase
     .from('suppliers_with_derived_category')
     .select(SUPPLIER_LIST_COLS)
-    .order('name', { ascending: true });
+    .order('name', { ascending: true })
+    .limit(2000); // PostgREST 1000-row cap guard (Houzs PR back-ported 2026-06-24)
   if (status && SUPPLIER_STATUSES.has(status)) q = q.eq('status', status);
   if (search) { const s = escapeForOr(search); if (s) q = q.or(`code.ilike.%${s}%,name.ilike.%${s}%,contact_person.ilike.%${s}%`); }
 
@@ -293,10 +306,16 @@ suppliers.post('/', async (c) => {
     website: (body.website as string) ?? null,
     attention: (body.attention as string) ?? null,
     business_nature: (body.businessNature as string) ?? null,
-    currency: CURRENCIES.has(body.currency as string) ? body.currency : 'MYR',
+    currency: normalizeCurrency(body.currency),
     statement_type: STATEMENT_TYPES.has(body.statementType as string) ? body.statementType : 'OPEN_ITEM',
     aging_basis: AGING_BASES.has(body.agingBasis as string) ? body.agingBasis : 'INVOICE_DATE',
     credit_limit_sen: typeof body.creditLimitSen === 'number' ? body.creditLimitSen : 0,
+    /* Mig 0186 — AutoCount creditor-export parity. phone2 normalizes to E.164
+       like the other phone fields. */
+    registration_no: (body.registrationNo as string) ?? null,
+    nature_of_business: (body.natureOfBusiness as string) ?? null,
+    exemption_no: (body.exemptionNo as string) ?? null,
+    phone2: normPhone(body.phone2),
   };
 
   const supabase = c.get('supabase');
@@ -329,9 +348,13 @@ suppliers.patch('/:id', async (c) => {
     ['postcode', 'postcode'], ['area', 'area'], ['mobile', 'mobile'],
     ['fax', 'fax'], ['website', 'website'], ['attention', 'attention'],
     ['businessNature', 'business_nature'], ['creditLimitSen', 'credit_limit_sen'],
+    /* Mig 0186 — AutoCount creditor-export parity. */
+    ['registrationNo', 'registration_no'], ['natureOfBusiness', 'nature_of_business'],
+    ['exemptionNo', 'exemption_no'], ['phone2', 'phone2'],
   ];
-  /* Task #91 — normalize phone-like columns to E.164 on PATCH too. */
-  const PHONE_FIELDS = new Set(['phone', 'mobile', 'whatsappNumber']);
+  /* Task #91 — normalize phone-like columns to E.164 on PATCH too.
+     Mig 0186 — phone2 joins the same normalization set. */
+  const PHONE_FIELDS = new Set(['phone', 'mobile', 'whatsappNumber', 'phone2']);
   for (const [from, to] of map) {
     if (body[from] === undefined) continue;
     if (PHONE_FIELDS.has(from as string) && typeof body[from] === 'string') {
@@ -344,8 +367,8 @@ suppliers.patch('/:id', async (c) => {
   if (body.status !== undefined && SUPPLIER_STATUSES.has(body.status as string)) {
     updates.status = body.status;
   }
-  if (body.currency !== undefined && CURRENCIES.has(body.currency as string)) {
-    updates.currency = body.currency;
+  if (body.currency !== undefined) {
+    updates.currency = normalizeCurrency(body.currency);
   }
   if (body.statementType !== undefined && STATEMENT_TYPES.has(body.statementType as string)) {
     updates.statement_type = body.statementType;
@@ -388,8 +411,7 @@ suppliers.post('/:id/bindings', async (c) => {
   if (!body.materialCode) return c.json({ error: 'material_code_required' }, 400);
   if (!body.materialName) return c.json({ error: 'material_name_required' }, 400);
   if (!body.supplierSku) return c.json({ error: 'supplier_sku_required' }, 400);
-  const currency = (body.currency as string) ?? 'MYR';
-  if (!CURRENCIES.has(currency)) return c.json({ error: 'invalid_currency' }, 400);
+  const currency = normalizeCurrency(body.currency);
 
   const supabase = c.get('supabase');
 
@@ -474,8 +496,7 @@ suppliers.post('/:id/bindings/batch', async (c) => {
     if (!b.materialCode || !b.materialName || !b.supplierSku) continue;
     const key = `${kind}|${b.materialCode}`;
     if (seen.has(key)) { skipped += 1; continue; }
-    const currency = String(b.currency ?? 'MYR');
-    if (!CURRENCIES.has(currency)) continue;
+    const currency = normalizeCurrency(b.currency);
     const row: Record<string, unknown> = {
       supplier_id: supplierId,
       material_kind: kind,
@@ -537,7 +558,7 @@ suppliers.patch('/:id/bindings/:bindingId', async (c) => {
     ['notes', 'notes'],
   ];
   for (const [from, to] of map) if (body[from] !== undefined) updates[to] = body[from];
-  if (body.currency !== undefined && CURRENCIES.has(body.currency as string)) updates.currency = body.currency;
+  if (body.currency !== undefined) updates.currency = normalizeCurrency(body.currency);
   if (body.materialKind !== undefined && MATERIAL_KINDS.has(body.materialKind as string)) updates.material_kind = body.materialKind;
   if (body.isMainSupplier !== undefined) updates.is_main_supplier = Boolean(body.isMainSupplier);
 

@@ -624,6 +624,45 @@ export const useDeleteSpecialAddon = () => {
   });
 };
 
+/* ─── Specials effective-dated history + Save-with-effective-date (owner
+   2026-06-22; ported from Houzs scm). Mirrors useMaintenanceConfigHistory /
+   useSaveMaintenanceConfig so the Specials / Sofa Specials Maintenance tabs get
+   the SAME Edit -> Save (effective-date) + History chrome as the other pools. A
+   snapshot row carries the WHOLE add-on set; SO costing keeps reading the live
+   /special-addons table. */
+export interface SpecialAddonSnapshotEntry extends SpecialAddonInput {}
+export type SpecialAddonsHistoryRow = {
+  id: string;
+  addons: SpecialAddonRow[];
+  effectiveFrom: string;
+  notes: string;
+  createdAt: string;
+  createdBy: string | null;
+  isPending: boolean;
+};
+
+export const useSpecialAddonsHistory = () =>
+  useQuery({
+    queryKey: ['special-addons', 'history'],
+    staleTime: 30_000,
+    queryFn: async (): Promise<SpecialAddonsHistoryRow[]> => {
+      const body = await authedFetch<{ history: SpecialAddonsHistoryRow[] }>('/special-addons/history');
+      return body.history ?? [];
+    },
+  });
+
+export const useSaveSpecialAddons = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { effectiveFrom: string; notes?: string; addons: SpecialAddonSnapshotEntry[] }) =>
+      authedFetch<{ id: string; effectiveFrom: string; notes: string }>(
+        '/special-addons/save',
+        { method: 'POST', body: JSON.stringify(args) },
+      ),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['special-addons'] }); },
+  });
+};
+
 /* ─── Order Add-ons (whole-order one-time fees: Dispose, Lift access) ───────
  * The `addons` table, written direct via supabase-js under RLS (SELECT all
  * staff, write is_admin) — same as the POS Order Add-ons section. Distinct

@@ -33,6 +33,7 @@ export const NAV_ITEMS: NavItem[] = [
   // Procurement
   { label: 'Products & Maintenance', path: '/products', group: 'Procurement', keywords: 'modular combo fabric' },
   { label: 'Suppliers', path: '/suppliers', group: 'Procurement', keywords: 'vendor creditor' },
+  { label: 'Currencies', path: '/currencies', group: 'Procurement', keywords: 'currency exchange rate fx myr rmb usd sgd forex' },
   { label: 'MRP · Stock Status', path: '/mrp', group: 'Procurement', keywords: 'requirements planning shortage order' },
   { label: 'Purchase Orders', path: '/purchase-orders', group: 'Procurement', keywords: 'po' },
   { label: 'New Purchase Order', path: '/purchase-orders/new', group: 'Procurement', keywords: 'create po add' },
@@ -41,19 +42,24 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Purchase Invoices', path: '/purchase-invoices', group: 'Procurement', keywords: 'pi bill' },
   { label: 'Purchase Returns', path: '/purchase-returns', group: 'Procurement', keywords: 'pr return' },
 
-  // Transportation
-  { label: 'Drivers', path: '/drivers', group: 'Transportation' },
+  // Transportation — Delivery Planning board (Stage 4) + the consolidated
+  // "Driver & Helper" / Fleet portal (Driver · Helper · Lorry masters on one
+  // page, migration 0195) + the standalone Lorry Capacity dashboard.
+  { label: 'Delivery Planning', path: '/delivery-planning', group: 'Transportation', keywords: 'delivery plan schedule route trip overdue pending region tms dispatch' },
+  { label: 'Driver & Helper', path: '/fleet', group: 'Transportation', keywords: 'fleet driver helper lorry truck van crew loader vehicle tms outsource in-house master' },
+  { label: 'Lorry Capacity', path: '/lorry-capacity', group: 'Transportation', keywords: 'lorry capacity utilisation utilization performance fleet trips revenue dashboard repair days kpi tms' },
 
-  // Warehouse
+  // Warehouse — master first (create a warehouse / set Transit here), then ops.
+  { label: 'Warehouses', path: '/warehouses', group: 'Warehouse', keywords: 'create new warehouse master location transit china overseas' },
   { label: 'Inventory', path: '/inventory', group: 'Warehouse', keywords: 'stock balance' },
   { label: 'Adjustments', path: '/inventory/adjustments', group: 'Warehouse' },
   { label: 'Transfers', path: '/inventory/transfers', group: 'Warehouse' },
   { label: 'Stock Take', path: '/inventory/stock-takes', group: 'Warehouse' },
-  { label: 'Warehouse', path: '/warehouse', group: 'Warehouse', keywords: 'rack bin' },
-  { label: 'Warehouses', path: '/warehouses', group: 'Warehouse', keywords: 'locations' },
+  { label: 'Racks & Bins', path: '/warehouse', group: 'Warehouse', keywords: 'rack bin shelf warehouse' },
 
   // Finance
   { label: 'Accounting', path: '/accounting', group: 'Finance', keywords: 'gl journal ledger' },
+  { label: 'Payment Vouchers', path: '/payment-vouchers', group: 'Finance', keywords: 'pv voucher pay vendor freight cash out expense' },
   { label: 'Outstanding', path: '/outstanding', group: 'Finance', keywords: 'aging overdue' },
 
   // Reference

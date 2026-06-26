@@ -25,15 +25,20 @@ import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, reverseMovements } from '../lib/inventory-movements';
 import { nextMonthlyDocNo } from '../lib/doc-no';
+import { allocateLandedCharges, normalizeAllocationMethod } from '../lib/landed-allocation';
 
 export const stockTransfers = new Hono<{ Bindings: Env; Variables: Variables }>();
 stockTransfers.use('*', supabaseAuth);
 
 const HEADER =
   'id, transfer_no, status, from_warehouse_id, to_warehouse_id, transfer_date, ' +
+  // Migration 0192 — sea-freight (MYR sen) + allocation basis (China → MY landed cost).
+  'freight_centi, allocation_method, ' +
   'notes, posted_at, cancelled_at, created_at, created_by';
 const LINE =
-  'id, stock_transfer_id, product_code, product_name, variant_key, qty, notes, created_at';
+  'id, stock_transfer_id, product_code, product_name, variant_key, qty, ' +
+  // Migration 0192 — freight (MYR sen) allocated to this line.
+  'allocated_charge_centi, notes, created_at';
 
 const VALID_STATUS = new Set(['POSTED', 'CANCELLED']);
 
@@ -62,7 +67,10 @@ stockTransfers.get('/', async (c) => {
       `to_warehouse:warehouses!stock_transfers_to_warehouse_id_fkey(id, code, name)`,
     )
     .order('transfer_date', { ascending: false })
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    // High bound so PostgREST's default 1000-row cap can't silently truncate
+    // the transfer list (filters above only narrow the set).
+    .limit(5000);
 
   if (status && VALID_STATUS.has(status)) q = q.eq('status', status);
   if (fromWarehouseId) q = q.eq('from_warehouse_id', fromWarehouseId);
@@ -83,7 +91,10 @@ stockTransfers.get('/', async (c) => {
   if (ids.length > 0) {
     const { data: lineRows } = await sb.from('stock_transfer_lines')
       .select('stock_transfer_id')
-      .in('stock_transfer_id', ids);
+      .in('stock_transfer_id', ids)
+      // .limit(5000): lines across the listed transfers can exceed PostgREST's
+      // default 1000-row cap; truncation would understate line_count.
+      .limit(5000);
     const lineList = (lineRows as unknown as Array<{ stock_transfer_id: string }>) ?? [];
     for (const l of lineList) {
       countByXfer.set(l.stock_transfer_id, (countByXfer.get(l.stock_transfer_id) ?? 0) + 1);
@@ -123,18 +134,33 @@ stockTransfers.get('/:id', async (c) => {
 /* ── Movement writer (shared by POST + legacy /post) ─────────────────
    For each line:
      1) Insert OUT @from (FIFO trigger fills total_cost_sen).
-     2) Derive IN unit_cost_sen = OUT.total_cost_sen / OUT.qty (weighted avg).
-     3) Insert IN @to with that cost. */
+     2) Derive the SOURCE unit cost = OUT.total_cost_sen / OUT.qty (weighted avg).
+     3) Migration 0192 — if the transfer carries sea-freight, allocate it across
+        the lines (QTY/VALUE/CBM) and ADD the per-unit share onto that source
+        cost, so the destination (MY) lot opens at the TRUE landed cost.
+     4) Insert IN @to with that (uplifted) cost.
+   freight_centi = 0 ⇒ allocation 0 everywhere ⇒ the IN cost === the source
+   weighted-avg, i.e. byte-for-byte the pre-0192 cost-neutral behaviour. */
 async function writeTransferMovements(
   sb: any,
-  header: { id: string; transfer_no: string; from_warehouse_id: string; to_warehouse_id: string },
+  header: {
+    id: string; transfer_no: string; from_warehouse_id: string; to_warehouse_id: string;
+    freight_centi?: number | null; allocation_method?: string | null;
+  },
   userId: string,
 ): Promise<string[]> {
   const movementErrors: string[] = [];
   const { data: lines } = await sb.from('stock_transfer_lines')
-    .select('product_code, product_name, variant_key, qty')
+    .select('id, product_code, product_name, variant_key, qty, allocated_charge_centi')
     .eq('stock_transfer_id', header.id);
-  const lineList = (lines as Array<{ product_code: string; product_name: string | null; variant_key: string | null; qty: number }>) ?? [];
+  const lineList = (lines as Array<{
+    id: string; product_code: string; product_name: string | null;
+    variant_key: string | null; qty: number; allocated_charge_centi?: number | null;
+  }>) ?? [];
+
+  // Migration 0192 — sea-freight pool (MYR sen) to fold into the receiving lots.
+  const freightCenti = Math.max(0, Math.floor(Number(header.freight_centi ?? 0)));
+  const allocationMethod = normalizeAllocationMethod(header.allocation_method);
 
   /* Resolve the dye-lot batch each line moves so a batched (sofa) lot keeps its
      batch_no across the warehouse hop — otherwise the destination can't satisfy
@@ -170,6 +196,33 @@ async function writeTransferMovements(
     }
   } catch { /* view/column absent pre-0120 — every line stays un-batched (plain FIFO) */ }
 
+  /* Migration 0192 — CBM allocation needs each line's product volume
+     (mfg_products.unit_m3_milli). Resolve per product_code in ONE round trip,
+     only when freight is present (no-op transfers skip this entirely). The
+     allocator falls back to QTY when the CBM Σ is 0, so a missing volume never
+     divides by zero. */
+  const m3ByCode = new Map<string, number>();
+  if (freightCenti > 0) {
+    const codes = [...new Set(lineList.map((l) => l.product_code).filter(Boolean))];
+    if (codes.length > 0) {
+      const { data: prods } = await sb.from('mfg_products').select('code, unit_m3_milli').in('code', codes);
+      for (const p of (prods ?? []) as Array<{ code: string; unit_m3_milli: number | null }>) {
+        m3ByCode.set(p.code, Number(p.unit_m3_milli ?? 0));
+      }
+    }
+  }
+
+  /* Pass 1 — write the OUT@from for each line + read back its real consumed
+     (source weighted-avg) cost. We DEFER the IN@to write until after the freight
+     is allocated, so the IN lot can open at the landed (uplifted) cost. */
+  type PostedLine = {
+    line: typeof lineList[number];
+    variantKey: string;
+    batchNo: string | null;
+    sourceUnitCost: number;   // source weighted-avg per unit (the pre-0192 IN cost)
+    qty: number;
+  };
+  const posted: PostedLine[] = [];
   for (const ln of lineList) {
     if (ln.qty <= 0) continue;
     // Variant bucket the line moves; '' = unclassified/legacy. FIFO consumes
@@ -211,25 +264,106 @@ async function writeTransferMovements(
       .single();
     const outQty   = Number((outCosted as { qty: number } | null)?.qty ?? ln.qty);
     const outTotal = Number((outCosted as { total_cost_sen: number | null } | null)?.total_cost_sen ?? 0);
-    const inUnitCost = outQty > 0 ? Math.round(outTotal / outQty) : 0;
+    const sourceUnitCost = outQty > 0 ? Math.round(outTotal / outQty) : 0;
+    posted.push({ line: ln, variantKey, batchNo, sourceUnitCost, qty: ln.qty });
+  }
+
+  /* Migration 0192 — allocate the sea-freight pool across the posted lines and
+     fold each line's per-unit share onto its source cost. REUSE the GRN landed-
+     cost allocator (lib/landed-allocation.ts): pass the goods lines + ONE
+     synthetic SERVICE line carrying freight_centi as the pool, grnRate = 1
+     (freight is already MYR — no FX). VALUE basis uses the SOURCE LOT unit cost
+     as unitPriceCenti; CBM uses unit_m3_milli. freight_centi = 0 ⇒ chargePool 0
+     ⇒ allocated 0 everywhere ⇒ landedUnitCost === sourceUnitCost (the pre-0192
+     cost-neutral path, byte-for-byte). */
+  const SERVICE_ID = '__transfer_freight__';
+  const alloc = allocateLandedCharges(
+    [
+      ...posted.map((p) => ({
+        id: p.line.id,
+        itemGroup: 'goods' as const,
+        materialCode: p.line.product_code,
+        qty: p.qty,
+        amountCenti: 0,
+        unitPriceCenti: p.sourceUnitCost,
+        unitM3Milli: m3ByCode.get(p.line.product_code) ?? 0,
+      })),
+      // Synthetic service line = the freight pool. item_group 'service' so the
+      // allocator pools (not allocates onto) it; it's NOT a posted line.
+      {
+        id: SERVICE_ID,
+        itemGroup: 'service' as const,
+        materialCode: null,
+        qty: 0,
+        amountCenti: freightCenti,
+        unitPriceCenti: 0,
+        unitM3Milli: 0,
+      },
+    ],
+    allocationMethod,
+    1, // freight already MYR — no FX uplift
+  );
+  const allocByLineId = new Map(alloc.goods.map((g) => [g.id, g]));
+
+  /* Persist allocated_charge_centi per line — only when there's something to
+     reconcile (freight now, or a line already carries a non-zero allocation
+     from a prior post). freight = 0 + nothing stored ⇒ no write (no-op). */
+  const anyStored = lineList.some((l) => Number(l.allocated_charge_centi ?? 0) !== 0);
+  if (alloc.chargePoolMyr > 0 || anyStored) {
+    await Promise.all(alloc.goods.map((g) =>
+      sb.from('stock_transfer_lines').update({ allocated_charge_centi: g.allocatedChargeCenti }).eq('id', g.id),
+    ));
+  }
+
+  /* Pass 2 — write the IN@to at the landed (uplifted) cost. When freight = 0 the
+     allocator returns landedUnitCostMyr === sourceUnitCost, so inUnitCost is the
+     exact value the old single-pass loop wrote (no behavioural change). */
+  for (const p of posted) {
+    const ln = p.line;
+    const inUnitCost = allocByLineId.get(ln.id)?.landedUnitCostMyr ?? p.sourceUnitCost;
     const inOk = await writeMovements(sb, [{
       movement_type:  'IN',
       warehouse_id:   header.to_warehouse_id,
       product_code:   ln.product_code,
-      variant_key:    variantKey,
+      variant_key:    p.variantKey,
       product_name:   ln.product_name,
-      qty:            ln.qty,
+      qty:            p.qty,
       unit_cost_sen:  inUnitCost,
       source_doc_type:'STOCK_TRANSFER',
       source_doc_id:  header.id,
       source_doc_no:  header.transfer_no,
       // Mirror the OUT's batch onto the IN so the dye-lot survives the move
       // (destination opens a lot tagged with the same batch).
-      ...(batchNo ? { batch_no: batchNo } : {}),
+      ...(p.batchNo ? { batch_no: p.batchNo } : {}),
       performed_by:   userId,
       notes:          `Transfer from warehouse ${header.from_warehouse_id}`,
     }]);
-    if (!inOk.ok) movementErrors.push(`IN ${ln.product_code}: ${inOk.reason ?? 'unknown'}`);
+    if (!inOk.ok) {
+      movementErrors.push(`IN ${ln.product_code}: ${inOk.reason ?? 'unknown'}`);
+      /* CRITICAL (anchoring port Houzs→2990) — the OUT@from already committed
+         (FIFO trigger consumed the source lots). If the IN@to fails we must NOT
+         leave the OUT standing: that silently DESTROYS stock (gone from source,
+         never arrived at dest). Book a compensating IN@from at the SOURCE cost
+         (NOT the uplifted cost) so the source bucket is made whole. The POST
+         handler then auto-cancels + returns non-201, so the UI can't read the
+         partial transfer as success. */
+      const compIn = await writeMovements(sb, [{
+        movement_type:  'IN',
+        warehouse_id:   header.from_warehouse_id,
+        product_code:   ln.product_code,
+        variant_key:    p.variantKey,
+        product_name:   ln.product_name,
+        qty:            p.qty,
+        unit_cost_sen:  p.sourceUnitCost,
+        source_doc_type:'STOCK_TRANSFER',
+        source_doc_id:  header.id,
+        source_doc_no:  header.transfer_no,
+        ...(p.batchNo ? { batch_no: p.batchNo } : {}),
+        performed_by:   userId,
+        notes:          `Compensating reversal: IN@to failed, restoring source for transfer ${header.transfer_no}`,
+      }]);
+      if (!compIn.ok) movementErrors.push(`COMPENSATE ${ln.product_code}: ${compIn.reason ?? 'unknown'}`);
+    }
   }
   /* Stock Transfer = net-zero across warehouses, but B2C allocation sums all
      warehouses anyway so the totals don't change. Still re-walk in case any
@@ -265,12 +399,20 @@ stockTransfers.post('/', async (c) => {
 
   const transferNo = await nextTransferNo(sb);
 
+  // Migration 0192 — sea-freight (MYR sen) + allocation basis. A MY forwarder
+  // bill (already MYR, no FX); clamp to a non-negative integer. Default 0 ⇒
+  // cost-neutral transfer (the pre-0192 behaviour, unchanged).
+  const freightCenti = Math.max(0, Math.floor(Number(body.freightCenti ?? 0)));
+  const allocationMethod = normalizeAllocationMethod(body.allocationMethod);
+
   const headerInsert: Record<string, unknown> = {
     transfer_no:        transferNo,
     status:             'POSTED',
     posted_at:          new Date().toISOString(),
     from_warehouse_id:  fromWarehouseId,
     to_warehouse_id:    toWarehouseId,
+    freight_centi:      freightCenti,
+    allocation_method:  allocationMethod,
     notes:              (body.notes as string | undefined) ?? null,
     created_by:         user.id,
   };
@@ -282,7 +424,10 @@ stockTransfers.post('/', async (c) => {
     if (hErr.code === '42501') return c.json({ error: 'forbidden', reason: hErr.message }, 403);
     return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
   }
-  const header = headerData as unknown as { id: string; transfer_no: string; from_warehouse_id: string; to_warehouse_id: string };
+  const header = headerData as unknown as {
+    id: string; transfer_no: string; from_warehouse_id: string; to_warehouse_id: string;
+    freight_centi?: number | null; allocation_method?: string | null;
+  };
 
   const lineRows = items.map((it) => {
     const qty = Math.max(0, Math.floor(Number(it.qty ?? 0)));
@@ -308,10 +453,27 @@ stockTransfers.post('/', async (c) => {
   // Write inventory movements (paired OUT/IN) inline.
   const movementErrors = await writeTransferMovements(sb, header, user.id);
 
+  /* Atomicity (anchoring port Houzs→2990) — a transfer is all-or-nothing. If any
+     line's movement failed, the compensating IN above already restored the
+     source (net zero), so mark the header CANCELLED and return 422 — the UI must
+     never read a half-applied transfer as success (the old code returned 201
+     with a movementErrors field, which the UI treated as done → silent stock
+     loss). */
+  if (movementErrors.length) {
+    await sb.from('stock_transfers')
+      .update({ status: 'CANCELLED', cancelled_at: new Date().toISOString() })
+      .eq('id', header.id);
+    return c.json({
+      error: 'transfer_movements_failed',
+      id: header.id,
+      transferNo: header.transfer_no,
+      movementErrors,
+    }, 422);
+  }
+
   return c.json({
     id: header.id,
     transferNo: header.transfer_no,
-    movementErrors: movementErrors.length ? movementErrors : undefined,
   }, 201);
 });
 

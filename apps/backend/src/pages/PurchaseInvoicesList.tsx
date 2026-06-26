@@ -26,9 +26,11 @@ import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-// purchase_invoice_status enum: POSTED / PARTIALLY_PAID / PAID / CANCELLED.
-// Colours + labels come from the canonical lib/status-pill map via <StatusPill>.
-const STATUS_CHIPS = ['all', 'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED'] as const;
+// purchase_invoice_status enum: DRAFT / POSTED / PARTIALLY_PAID / PAID / CANCELLED.
+// DRAFT (Owner 2026-06-25, two-state) is uncommitted — visible-but-distinct (grey
+// pill), filterable here. Colours + labels come from the canonical lib/status-pill
+// map via <StatusPill>.
+const STATUS_CHIPS = ['all', 'DRAFT', 'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED'] as const;
 
 const fmtMoney = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -57,6 +59,8 @@ const buildPiColumns = (): DataGridColumn<PiRow>[] => [
     key: 'invoice_number', label: 'Invoice No.', width: 150, sortable: true,
     accessor: (r) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.invoice_number}</span>,
     searchValue: (r) => r.invoice_number,
+    // accessor is JSX → export the raw invoice-no string so Invoice No. isn't blank.
+    exportValue: (r) => r.invoice_number,
     sortFn: (a, b) => a.invoice_number.localeCompare(b.invoice_number),
   },
   {
@@ -74,6 +78,8 @@ const buildPiColumns = (): DataGridColumn<PiRow>[] => [
     ),
     searchValue: (r) => `${r.grn?.grn_number ?? ''} ${r.purchase_order?.po_number ?? ''}`.trim(),
     groupValue: (r) => r.grn?.grn_number ?? r.purchase_order?.po_number ?? '(none)',
+    // accessor is JSX → export the source GRN/PO doc-no string.
+    exportValue: (r) => r.grn?.grn_number ?? r.purchase_order?.po_number ?? '—',
   },
   {
     key: 'invoice_date', label: 'Invoice Date', width: 120, sortable: true,
@@ -97,6 +103,8 @@ const buildPiColumns = (): DataGridColumn<PiRow>[] => [
       </span>
     ),
     searchValue: (r) => fmtMoney(Number(r.total_centi ?? 0), r.currency),
+    // accessor is JSX money → export the NUMBER (ringgit) so Excel SUMs it.
+    exportValue: (r) => Number(r.total_centi ?? 0) / 100,
     sortFn: (a, b) => Number(a.total_centi ?? 0) - Number(b.total_centi ?? 0),
   },
   {
@@ -104,6 +112,8 @@ const buildPiColumns = (): DataGridColumn<PiRow>[] => [
     accessor: (r) => <StatusPill docType="pi" status={r.status} />,
     searchValue: (r) => statusLabel('pi', r.status),
     groupValue: (r) => statusLabel('pi', r.status),
+    // accessor is a <StatusPill> JSX → export the plain status label text.
+    exportValue: (r) => statusLabel('pi', r.status),
     sortFn: (a, b) => a.status.localeCompare(b.status),
   },
 ];

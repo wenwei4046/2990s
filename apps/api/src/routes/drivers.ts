@@ -11,7 +11,7 @@ import type { Env, Variables } from '../env';
 export const drivers = new Hono<{ Bindings: Env; Variables: Variables }>();
 drivers.use('*', supabaseAuth);
 
-const COLS = 'id, driver_code, name, phone, ic_number, vehicle, active, created_at';
+const COLS = 'id, driver_code, name, phone, ic_number, vehicle, in_house, active, created_at';
 
 drivers.get('/', async (c) => {
   const sb = c.get('supabase');
@@ -42,6 +42,7 @@ drivers.post('/', async (c) => {
     phone: normalizedPhone,
     ic_number: (body.icNumber as string) ?? null,
     vehicle: (body.vehicle as string) ?? null,
+    in_house: body.inHouse === false ? false : true,
     active: body.active === false ? false : true,
   }).select(COLS).single();
   if (error) {
@@ -72,6 +73,7 @@ drivers.patch('/:id', async (c) => {
       updates[to] = body[from];
     }
   }
+  if (body.inHouse !== undefined) updates.in_house = Boolean(body.inHouse);
   if (body.active !== undefined) updates.active = Boolean(body.active);
 
   if (Object.keys(updates).length === 0) return c.json({ error: 'no_changes' }, 400);

@@ -18,6 +18,7 @@ import {
   type RuleLineInput,
   passesRefinementColumns,
   isValidRace, isValidAgeFrame,
+  canonicalizeVariants,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
 import { buildCompartmentsFromModuleLines } from '../lib/compartments-from-module-lines';
@@ -376,6 +377,13 @@ function extractSofaComboLookupArgs(
   return { modules, height, tier };
 }
 
+/* ⚠️ VIEW-TRAP (see docs/2026-06-26-so-list-view-trap-coe.md): this HEADER feeds
+   BOTH the SO detail GET (from the `mfg_sales_orders` TABLE) AND the SO list GET
+   (from the `mfg_sales_orders_with_payment_totals` VIEW, which enumerates columns).
+   Adding a column here REQUIRES recreating that view in a migration (CREATE OR
+   REPLACE, new cols appended at the end, re-GRANT) — else the SO LIST 500s
+   ("Failed to load"). For a field only the detail needs, append it to the detail
+   SELECT instead of HEADER (see `amend_reason`). */
 const HEADER =
   'doc_no, transfer_to, so_date, branding, debtor_code, debtor_name, agent, sales_location, ref, po_doc_no, venue, venue_id, ' +
   'address1, address2, address3, address4, phone, ' +
@@ -391,9 +399,15 @@ const HEADER =
   /* Task #121 — customer_country snapshot auto-derived from customer_state
      via my_localities lookup on POST/PATCH (migration 0082). */
   'customer_state, customer_country, customer_delivery_date, internal_expected_dd, linked_do_doc_no, ' +
+  /* Delivery-date INTEGRITY (migration 0199) — amendment dates; the ORIGINAL
+     customer_delivery_date above is never overwritten by the schedule/amend path. */
+  'amend_date_from_customer, amended_delivery_date, ' +
   'ship_to_address, bill_to_address, install_to_address, subtotal_sen, overdue, ' +
   /* PR #46 — POS handover */
   'email, customer_type, salesperson_id, city, postcode, building_type, ' +
+  /* HC delivery-sheet SO-context raw-data fields (migration 0197) — surfaced on
+     the SO form + the Delivery Planning "Edit HC fields" drawer. */
+  'possession_date, house_type, replacement_disposal, referral, ' +
   'emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, target_date, ' +
   /* PR #143 + #150 + #157 — Payment (migrations 0068 + 0069 + 0070) */
   'payment_method, installment_months, merchant_provider, approval_code, payment_date, deposit_centi, paid_centi, ' +
@@ -573,6 +587,9 @@ mfgSalesOrders.get('/', async (c) => {
     let sq = sb
       .from('mfg_sales_orders')
       .select('doc_no, status, proceeded_at, local_total_centi, created_at, so_date')
+      /* Leak guard (DRAFT) — the Dashboard summary buckets/counts SOs by status;
+         a DRAFT SO commits nothing, so it must NOT inflate the landing KPIs. */
+      .neq('status', 'DRAFT')
       .order('so_date', { ascending: false })
       .limit(500);
     if (selfScopeId) sq = sq.eq('salesperson_id', selfScopeId);
@@ -909,7 +926,10 @@ mfgSalesOrders.get('/mine', async (c) => {
       'customer_delivery_date, internal_expected_dd, status, payment_method, approval_code, note, so_date, created_at, ' +
       'proceeded_at, total_revenue_centi, line_count, deposit_centi',
     )
-    .not('status', 'in', '("CANCELLED","ON_HOLD")');
+    /* Leak guard (DRAFT) — the My-orders board mirrors the KPI cards; a DRAFT SO
+       commits nothing and must NOT show on the board or count toward those KPIs
+       (alongside the existing CANCELLED / ON_HOLD exclusions). */
+    .not('status', 'in', '("CANCELLED","ON_HOLD","DRAFT")');
   if (targetSalespersonId) query = query.eq('salesperson_id', targetSalespersonId);
 
   if (q) {
@@ -1152,7 +1172,9 @@ mfgSalesOrders.get('/cross-category-match', async (c) => {
     .from('mfg_sales_orders')
     .select('doc_no, debtor_name, created_at')
     .eq('phone', normPhone)
-    .neq('status', 'CANCELLED')
+    /* Leak guard (DRAFT) — an uncommitted DRAFT SO is not real order history, so
+       it must never be an eligible cross-category (sofa×mattress) follow-up source. */
+    .not('status', 'in', '("CANCELLED","DRAFT")')
     .order('created_at', { ascending: false })
     .limit(50);
   const candidates: AutoMatchCandidate[] = ((rows ?? []) as Array<{ doc_no: string; debtor_name: string | null }>)
@@ -1196,7 +1218,9 @@ mfgSalesOrders.get('/customer-search', async (c) => {
     .from('mfg_sales_orders')
     .select('doc_no, debtor_name, phone, email, customer_type, address1, address2, city, postcode, customer_state, building_type, emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, customer_race, customer_age_frame, created_at')
     .ilike('debtor_name', `%${esc}%`)
-    .neq('status', 'CANCELLED')
+    /* Leak guard (DRAFT) — the customer autocomplete is built from real order
+       history; an uncommitted DRAFT SO must not surface a customer/address. */
+    .not('status', 'in', '("CANCELLED","DRAFT")')
     .order('created_at', { ascending: false })
     .limit(60);
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
@@ -1280,8 +1304,10 @@ mfgSalesOrders.get('/:docNo', async (c) => {
        NOT the mfg_sales_orders_with_payment_totals view that the LIST route
        (LIST_COLS = HEADER + …) reads. Keeping it out of the shared HEADER and
        appending it only here means the detail page still gets the Proceed Date
-       while the list view query stays valid. */
-    sb.from('mfg_sales_orders').select(`${HEADER}, proceeded_at, signature_b64, slip_key, slip_state`).eq('doc_no', docNo).maybeSingle(),
+       while the list view query stays valid. amend_reason (migration 0201) is
+       in the SAME boat — the payment-totals view doesn't carry it, so it's
+       appended here on the base-table read only, never in HEADER. */
+    sb.from('mfg_sales_orders').select(`${HEADER}, proceeded_at, amend_reason, signature_b64, slip_key, slip_state`).eq('doc_no', docNo).maybeSingle(),
     /* line_no = the persisted listing order (0165); NULLS LAST so pre-0165
        docs fall back to created_at + the rule re-derive below. */
     sb.from('mfg_sales_order_items').select(ITEM).eq('doc_no', docNo)
@@ -2459,7 +2485,13 @@ mfgSalesOrders.post('/', async (c) => {
       total_centi: lineTotal,
       total_inc_centi: lineTotal,
       balance_centi: lineTotal,
-      variants: (it.variants as unknown) ?? null,
+      /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
+         at the LAST step before the DB write: every depth-keyed read (recompute
+         ~2276, split ~2545) + fabricCode/fabricId loads above ran on the raw
+         `it.variants`, so a POS-created sofa line stores seatHeight/legHeight/
+         fabricCode and the 9 read seams stop rendering blank dropdowns / mis-
+         pricing. buildVariantSummary (description2 above) dual-reads, unaffected. */
+      variants: canonicalizeVariants(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null),
       unit_cost_centi: unitCost,
       line_cost_centi: lineCost,
       line_margin_centi: lineTotal - lineCost,
@@ -2526,8 +2558,13 @@ mfgSalesOrders.post('/', async (c) => {
       });
       if (split && split.length > 0) {
         const buildKey = `build-${idx + 1}`;
+        /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
+           BEFORE deriving the split's shared variants so every module row also
+           stores seatHeight/legHeight/fabricCode. Safe: the split's own depth
+           read (~2545) ran on the raw `it.variants` above, so dropping the
+           `depth` alias here doesn't change the geometry. */
         const { cells: _cells, ...sharedVariants } =
-          ((it.variants as Record<string, unknown> | null) ?? {});
+          canonicalizeVariants('sofa', (it.variants as Record<string, unknown> | null) ?? {});
         const moduleRows = split.map((s, i) => {
           const moduleVariants: Record<string, unknown> = {
             ...sharedVariants,
@@ -2827,7 +2864,10 @@ mfgSalesOrders.post('/', async (c) => {
         venue: resolvedVenueName,
         // Not goods — nothing to allocate; READY from birth (spec §4.6).
         stock_status: 'READY',
-      } as (typeof itemRows)[number]);
+        /* Variants-vocabulary unification (Commander 2026-06-26) — goods rows
+           now type `variants` as the non-null canonicalizeVariants result, so a
+           SERVICE row's null variants widens the element type via `unknown`. */
+      } as unknown as (typeof itemRows)[number]);
     }
   }
 
@@ -3056,6 +3096,12 @@ mfgSalesOrders.post('/', async (c) => {
     city: (body.city as string) ?? null,
     postcode: (body.postcode as string) ?? null,
     building_type: (body.buildingType as string) ?? null,
+    /* HC delivery-sheet SO-context raw-data fields (migration 0197). Also editable
+       from the Delivery Planning "Edit HC fields" drawer; surfaced on the SO form. */
+    possession_date: (body.possessionDate as string) ?? null,
+    house_type: (body.houseType as string) ?? null,
+    replacement_disposal: (body.replacementDisposal as string) ?? null,
+    referral: (body.referral as string) ?? null,
     emergency_contact_name: (body.emergencyContactName as string) ?? null,
     /* Task #91 — also normalize the emergency contact phone. */
     emergency_contact_phone: typeof body.emergencyContactPhone === 'string'
@@ -3072,6 +3118,14 @@ mfgSalesOrders.post('/', async (c) => {
     /* Task #121 — country snapshot auto-derived above. */
     customer_country: customerCountrySnapshot,
     customer_delivery_date: (body.customerDeliveryDate as string) ?? null,
+    /* Delivery-date INTEGRITY (migration 0199) — amendment dates. customer_delivery_date
+       above is the ORIGINAL (the customer's pick) and is NEVER overwritten by the
+       amend path; these carry the customer's requested + our confirmed new dates. */
+    amend_date_from_customer: (body.amendDateFromCustomer as string) ?? null,
+    amended_delivery_date: (body.amendedDeliveryDate as string) ?? null,
+    /* HC "Amend Client Date Reason" (migration 0201) — free-text reason paired
+       with the amend dates above. Dual-read the camelCase key. */
+    amend_reason: (body.amendReason as string) ?? null,
     /* PR #144 — Commander: "当我已经 create 好了这个 sales order 的时候，
        为什么我点进去 edit processing 的 delivery date 时，怎么没看到呢".
        internal_expected_dd was wired on PATCH (update header) but missed
@@ -3108,12 +3162,14 @@ mfgSalesOrders.post('/', async (c) => {
     // of the validated rows (each positive by schema), not the legacy field.
     deposit_centi:      posPaymentsTotalCenti ?? Math.max(0, typeof body.depositCenti === 'number' ? body.depositCenti : 0),
     paid_centi:         typeof body.paidCenti === 'number' ? body.paidCenti : 0,
-    /* PR #154 — Commander 2026-05-27: "我们的整个系统是没有 Draft 功能的，
-       把 Draft 的功能去除掉, 我们 create 的全部都是 confirm 的". 2990 is a
-       trading company; we don't need a DRAFT staging step. Every new SO is
-       CONFIRMED on insert. The DRAFT enum value still exists for legacy
-       row compatibility, but new rows skip it entirely. */
-    status: 'CONFIRMED',
+    /* DRAFT/Confirmed two-state (Owner 2026-06-25, ported from Houzs) — a new SO
+       is CONFIRMED on insert (the default), UNLESS the caller opts in with
+       asDraft:true (the "Save as Draft" button), which lands it as DRAFT. A
+       DRAFT SO commits NOTHING: leak-guards keep it out of KPI/MRP/PO-picker/
+       stock-allocation/DO/credit/list/customer-history until Confirm flips it to
+       CONFIRMED (via PATCH /:docNo/status). DRAFT is reachable ONLY through
+       asDraft — the insert never trusts a raw body.status field. */
+    status: (body as { asDraft?: unknown }).asDraft === true ? 'DRAFT' : 'CONFIRMED',
     created_by: user.id,
   });
   if (hErr) { await rollbackPwpClaims(); return c.json({ error: 'insert_failed', reason: hErr.message }, 500); }
@@ -3531,8 +3587,11 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
   catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-status failed:', e); }
 
   /* Edge #B — SO cancel with deposit paid turns the deposit into a customer
-     credit. Idempotent on (source_type, source_doc_no). Best-effort. */
-  if (body.status === 'CANCELLED' && fromStatus !== 'CANCELLED') {
+     credit. Idempotent on (source_type, source_doc_no). Best-effort.
+     Leak guard (DRAFT) — cancelling a never-confirmed DRAFT must NOT mint a
+     credit: a DRAFT commits nothing (its deposit ledger rows are equally
+     uncommitted), so there is no real money to convert. */
+  if (body.status === 'CANCELLED' && fromStatus !== 'CANCELLED' && fromStatus !== 'DRAFT') {
     try {
       const { data: so } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name').eq('doc_no', docNo).maybeSingle();
       const s = so as { debtor_code: string | null; debtor_name: string | null } | null;
@@ -3870,8 +3929,10 @@ async function redetectCrossCategoryDelivery(
   const normPhone = newPhone ? (normalizePhone(newPhone) ?? newPhone) : null;
   if (newName && normPhone) {
     const { data: candRows, error: candErr } = await sb.from('mfg_sales_orders')
+      /* Leak guard (DRAFT) — a DRAFT SO is not committed order history, so it is
+         never an eligible cross-category follow-up source on header re-detect. */
       .select('doc_no, debtor_name, created_at')
-      .eq('phone', normPhone).neq('status', 'CANCELLED').neq('doc_no', docNo)
+      .eq('phone', normPhone).not('status', 'in', '("CANCELLED","DRAFT")').neq('doc_no', docNo)
       .order('created_at', { ascending: false }).limit(50);
     if (candErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] candidate load failed:', candErr.message); }
     const candidates: AutoMatchCandidate[] = ((candRows ?? []) as Array<{ doc_no: string; debtor_name: string | null }>)
@@ -3954,6 +4015,12 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     ['customerSoNo', 'customer_so_no'],
     ['hubId', 'hub_id'], ['hubName', 'hub_name'],
     ['customerDeliveryDate', 'customer_delivery_date'],
+    /* Delivery-date INTEGRITY (migration 0199) — amendment dates editable on the SO
+       form. The ORIGINAL customer_delivery_date above stays the customer's pick. */
+    ['amendDateFromCustomer', 'amend_date_from_customer'],
+    ['amendedDeliveryDate', 'amended_delivery_date'],
+    /* HC "Amend Client Date Reason" (migration 0201) — paired with the amend dates. */
+    ['amendReason', 'amend_reason'],
     ['internalExpectedDd', 'internal_expected_dd'],
     /* POS "Proceed" — sales-side done marker; stamp-once guard below. */
     ['proceededAt', 'proceeded_at'],
@@ -3964,6 +4031,12 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     ['email', 'email'], ['customerType', 'customer_type'],
     ['salespersonId', 'salesperson_id'],
     ['city', 'city'], ['postcode', 'postcode'], ['buildingType', 'building_type'],
+    /* HC delivery-sheet SO-context raw-data fields (migration 0197) — also editable
+       from the Delivery Planning "Edit HC fields" drawer. */
+    ['possessionDate', 'possession_date'],
+    ['houseType', 'house_type'],
+    ['replacementDisposal', 'replacement_disposal'],
+    ['referral', 'referral'],
     ['emergencyContactName', 'emergency_contact_name'],
     ['emergencyContactPhone', 'emergency_contact_phone'],
     ['emergencyContactRelationship', 'emergency_contact_relationship'],
@@ -4736,9 +4809,17 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
        Task 4: if freeItemCampaignId was validated above, re-stamp the server-
        resolved marker (campaignId + campaignName) after stripping. This is the
        same pattern as the create path (strip then re-add validated marker). */
-    variants: addLineFreeItem
-      ? { ...(stripFreeItem(it.variants) as Record<string, unknown> | null ?? {}), freeItem: addLineFreeItem }
-      : (stripFreeItem(it.variants) ?? null),
+    /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize at
+       the LAST step before the DB write. Every depth-keyed read (recompute
+       ~4673, split ~4836) + fabricCode/fabricId/pwpCode loads above ran on the
+       raw `variantsObj`/`it.variants`, so dropping the aliases here is safe and
+       the persisted single-row line stores seatHeight/legHeight/fabricCode. */
+    variants: canonicalizeVariants(
+      String(it.itemGroup ?? ''),
+      addLineFreeItem
+        ? { ...(stripFreeItem(it.variants) as Record<string, unknown> | null ?? {}), freeItem: addLineFreeItem }
+        : ((stripFreeItem(it.variants) as Record<string, unknown> | null) ?? null),
+    ),
     unit_cost_centi: unitCost,
     line_cost_centi: lineCost,
     line_margin_centi: lineTotal - lineCost,
@@ -4788,8 +4869,12 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     });
     if (split && split.length > 0) {
       const buildKey = `build-add-${nextLineNo ?? crypto.randomUUID().slice(0, 8)}`;
+      /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
+         BEFORE deriving the split's shared variants so each module row stores
+         seatHeight/legHeight/fabricCode. Safe: the split's depth read (~4836)
+         ran on the raw `it.variants` above. */
       const { cells: _cells, freeItem: _clientFreeItem, ...sharedVariants } =
-        ((it.variants as Record<string, unknown> | null) ?? {});
+        canonicalizeVariants('sofa', (it.variants as Record<string, unknown> | null) ?? {});
       const moduleRows = split.map((s, i) => {
         const moduleVariants: Record<string, unknown> = {
           ...sharedVariants,
@@ -5162,6 +5247,15 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     updates['variants'] = prevFreeItem !== undefined
       ? { ...(clientVariants as Record<string, unknown> ?? {}), freeItem: prevFreeItem }
       : clientVariants ?? null;
+    /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize the
+       FINAL persisted variants. Recompute (~5085) + the sofa depth load (~5080)
+       already ran on the raw `variantsAfter`, so dropping the aliases here is
+       safe; the persisted row stores seatHeight/legHeight/fabricCode and the
+       description2 block below (dual-read) reads this same canonical object. */
+    updates['variants'] = canonicalizeVariants(
+      itemGroupAfter,
+      updates['variants'] as Record<string, unknown> | null,
+    );
   }
   /* Commander 2026-05-28 — "Description 2" is ALWAYS the server-generated
      variant summary; never trust a client-sent value. Recompute from the
@@ -6059,7 +6153,9 @@ async function planSofaRewardRevert(
       rot: typeof v.rot === 'number' ? v.rot : 0,
     };
   });
-  const depth = String(leadV.depth ?? '24');
+  /* Variants-vocabulary unification (Commander 2026-06-26) — dual-read: post-
+     unification a persisted sofa row stores `seatHeight`, legacy rows `depth`. */
+  const depth = String(leadV.depth ?? leadV.seatHeight ?? '24');
   const [cfg, prodLite, fabLite, combos, sellingTiers, addonCfg, specialDefs, modulePrices, modelOverridesLead, compartmentOverridesLead] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadProductByCode(sb, lead.item_code),
@@ -6230,7 +6326,10 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
   }
 
   /* Authoritative reprice — the SAME inputs as SO create / item PATCH. */
-  const depth = String((newVariants as { depth?: unknown }).depth ?? '24');
+  /* Variants-vocabulary unification (Commander 2026-06-26) — dual-read: a
+     Backend-loaded swap build may carry the canonical `seatHeight`; POS posts
+     `depth`. recomputeFromSnapshot below also reads `depth ?? seatHeight`. */
+  const depth = String((newVariants as { depth?: unknown; seatHeight?: unknown }).depth ?? (newVariants as { seatHeight?: unknown }).seatHeight ?? '24');
   const [cfg, fabLite, combos, sellingTiers, fabricAddonCfg, specialDefs, modulePrices, moduleCostRows, modelOverridesSwap, compartmentOverridesSwap] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadFabricByCode(sb, (newVariants.fabricCode as string | undefined) ?? null),
@@ -6304,6 +6403,16 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
     newVariants.pwp = true;
     newVariants.pwpCode = rewardCtx.code;
   }
+
+  /* Variants-vocabulary unification (Commander 2026-06-26) — the sofa-exchange
+     path is a 4th persist seam (beyond create/add-line/PATCH). Canonicalize the
+     swap build's variants into a separate object that feeds ONLY the persisted
+     rows (~6547 split / ~6587 single-line), so they store seatHeight/legHeight/
+     fabricCode. Safe: the authoritative reprice (recompute ~6344, depth load
+     ~6315) already ran on the raw POS-vocabulary `newVariants`, and
+     splitSofaBuildIntoModuleLines below doesn't read `depth`. PWP markers added
+     just above are preserved. */
+  const persistVariants = canonicalizeVariants('sofa', newVariants);
 
   /* Split into per-module lines (P3) — same decomposition as SO create. */
   const split = splitSofaBuildIntoModuleLines({
@@ -6462,7 +6571,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
   };
   let rows: Array<Record<string, unknown>>;
   if (split && split.length > 0) {
-    const { cells: _cells, ...sharedVariants } = newVariants;
+    const { cells: _cells, ...sharedVariants } = persistVariants;
     rows = split.map((s, i) => {
       const moduleVariants: Record<string, unknown> = {
         ...sharedVariants, buildKey: newBuildKey, cellIndex: s.cellIndex, x: s.x, y: s.y, rot: s.rot,
@@ -6496,13 +6605,13 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
       ...baseRow,
       item_code: newCode,
       description: String(item.description ?? newCode),
-      description2: buildVariantSummary('sofa', newVariants) || null,
+      description2: buildVariantSummary('sofa', persistVariants) || null,
       unit_price_centi: unit,
       discount_centi: discount,
       total_centi: lineTotal,
       total_inc_centi: lineTotal,
       balance_centi: lineTotal,
-      variants: newVariants,
+      variants: persistVariants,
       unit_cost_centi: unitCost,
       line_cost_centi: unitCost * qty,
       line_margin_centi: lineTotal - (unitCost * qty),

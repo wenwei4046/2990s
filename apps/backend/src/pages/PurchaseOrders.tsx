@@ -52,7 +52,9 @@ const STATUS_CHIPS: { value: StatusFilter; label: string }[] = [
 // active = burnt · in-progress = darker burnt · complete = green · cancelled = red.
 // Keeps the PO list pill colours identical to the PO detail page.
 const STATUS_COLOR: Record<PoStatus, string> = {
-  // DRAFT removed in migration 0078.
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — uncommitted PO, neutral/grey
+  // so it reads visible-but-distinct from the burnt "Confirmed" pill.
+  DRAFT: 'rgba(34, 31, 32, 0.08)',
   SUBMITTED: 'rgba(166, 71, 30, 0.12)',
   PARTIALLY_RECEIVED: 'rgba(166, 71, 30, 0.18)',
   RECEIVED: 'rgba(47, 93, 79, 0.28)',
@@ -127,11 +129,17 @@ const buildPoColumns = (
       />
     ),
     searchValue: () => '',
+    /* Decorative selection checkbox — labelled "#" so the export header isn't a
+       blank column, and emits '' so the cell is empty (Wei Siang 2026-06-23). */
+    exportLabel: '#',
+    exportValue: () => '',
   },
   {
     key: 'po_number', label: 'PO No.', width: 150, sortable: true,
     accessor: (po) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{po.po_number}</span>,
     searchValue: (po) => po.po_number,
+    // accessor is JSX → export the raw doc-no string so PO No. isn't blank.
+    exportValue: (po) => po.po_number,
     sortFn: (a, b) => a.po_number.localeCompare(b.po_number),
   },
   {
@@ -167,6 +175,8 @@ const buildPoColumns = (
       );
     },
     searchValue: (po) => (po.items ?? []).map((it) => `${it.material_code} ${it.qty}`).join(' '),
+    // accessor is JSX → export the human items preview ("CODE×qty · …"), or '—'.
+    exportValue: (po) => summarizeItems(po.items) ?? '—',
   },
   {
     /* Date columns formatted to match the SO list ("31 May 2026" not the raw
@@ -208,6 +218,9 @@ const buildPoColumns = (
       </span>
     ),
     searchValue: (po) => fmtMoney(po.total_centi, po.currency),
+    // accessor is JSX money → export the NUMBER (currency units) so Excel SUMs
+    // it. The Currency column carries the unit. (Wei Siang 2026-06-23)
+    exportValue: (po) => (po.total_centi ?? 0) / 100,
     sortFn: (a, b) => a.total_centi - b.total_centi,
   },
   {
@@ -224,6 +237,8 @@ const buildPoColumns = (
     ),
     searchValue: (po) => poStatusLabel(po.status),
     groupValue: (po) => poStatusLabel(po.status),
+    // accessor is a JSX pill → export the plain status label text.
+    exportValue: (po) => poStatusLabel(po.status),
     sortFn: (a, b) => poStatusLabel(a.status).localeCompare(poStatusLabel(b.status)),
   },
 ];

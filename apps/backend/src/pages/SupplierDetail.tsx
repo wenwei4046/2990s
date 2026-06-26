@@ -67,6 +67,8 @@ import { formatPhone } from '@2990s/shared/phone';
 import { maintValues } from '@2990s/shared/maintenance-pools';
 import { PhoneInput } from '../components/PhoneInput';
 import { MoneyInput } from '../components/MoneyInput';
+import { sortByText } from '../lib/sort-options';
+import { useActiveCurrencies, currencyCodesWith } from '../lib/currencies-queries';
 import styles from './SupplierDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -2489,22 +2491,8 @@ const SkuFormDialog = ({
               </span>
             </label>
 
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Currency</span>
-              <span className={styles.selectWrap}>
-                <select
-                  className={styles.fieldSelect}
-                  value={draft.currency}
-                  onChange={(e) => set('currency', e.target.value as Currency)}
-                >
-                  <option>MYR</option>
-                  <option>RMB</option>
-                  <option>USD</option>
-                  <option>SGD</option>
-                </select>
-                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
-              </span>
-            </label>
+            {/* Currency dropdown reads the ACTIVE master currencies (0193). */}
+            <CurrencyEditSelect value={draft.currency} onChange={(v) => set('currency', v)} />
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Our Internal Code *</span>
@@ -2621,15 +2609,22 @@ const SupplierInfoCard = ({
     category: supplier.category ?? '',                       // 'Bedframe', 'Fabric', ...
     tinNumber: supplier.tin_number ?? '',
     businessRegNo: supplier.business_reg_no ?? '',
+    /* Mig 0186 — AutoCount creditor-export parity */
+    registrationNo: supplier.registration_no ?? '',
+    exemptionNo: supplier.exemption_no ?? '',
+    natureOfBusiness: supplier.nature_of_business ?? '',
     contactPerson: supplier.contact_person ?? '',
     attention: supplier.attention ?? '',
     email: supplier.email ?? '',
     phone: supplier.phone ?? '',
+    phone2: supplier.phone2 ?? '',
     mobile: supplier.mobile ?? '',
     fax: supplier.fax ?? '',
     website: supplier.website ?? '',
     whatsappNumber: supplier.whatsapp_number ?? '',
     paymentTerms: supplier.payment_terms ?? '',
+    /* Supplier currency — MYR/RMB/USD/SGD; flows to PO + PI pricing once set. */
+    currency: supplier.currency,
     address: supplier.address ?? '',
     postcode: supplier.postcode ?? '',
     area: supplier.area ?? '',
@@ -2703,6 +2698,10 @@ const SupplierInfoCard = ({
             />
             <InfoCell label="TIN Number" value={supplier.tin_number ?? '—'} />
             <InfoCell label="Business Reg No" value={supplier.business_reg_no ?? '—'} />
+            {/* Mig 0186 — AutoCount creditor-export parity. */}
+            <InfoCell label="Registration No." value={supplier.registration_no ?? '—'} />
+            <InfoCell label="Exemption No." value={supplier.exemption_no ?? '—'} />
+            <InfoCell label="Nature of Business" value={supplier.nature_of_business ?? '—'} />
             <InfoCell label="Contact Person" value={supplier.contact_person ?? '—'} />
             <InfoCell label="Attention" value={supplier.attention ?? '—'} />
             <InfoCell label="Email" value={supplier.email ?? '—'} />
@@ -2710,6 +2709,8 @@ const SupplierInfoCard = ({
                 Malaysian convention. Fax intentionally left raw (rarely MY-
                 formatted), as does an empty value which renders as "—". */}
             <InfoCell label="Phone" value={supplier.phone ? formatPhone(supplier.phone) : '—'} />
+            {/* Mig 0186 — secondary phone. */}
+            <InfoCell label="Phone 2" value={supplier.phone2 ? formatPhone(supplier.phone2) : '—'} />
             <InfoCell label="Mobile" value={supplier.mobile ? formatPhone(supplier.mobile) : '—'} />
             <InfoCell label="Fax" value={supplier.fax ?? '—'} />
             <InfoCell label="WhatsApp" value={supplier.whatsapp_number ? formatPhone(supplier.whatsapp_number) : '—'} />
@@ -2753,6 +2754,10 @@ const SupplierInfoCard = ({
             />
             <EditField label="TIN Number" value={form.tinNumber} onChange={(v) => setF('tinNumber', v)} />
             <EditField label="Business Reg No" value={form.businessRegNo} onChange={(v) => setF('businessRegNo', v)} />
+            {/* Mig 0186 — AutoCount creditor-export parity. */}
+            <EditField label="Registration No." value={form.registrationNo} onChange={(v) => setF('registrationNo', v)} />
+            <EditField label="Exemption No." value={form.exemptionNo} onChange={(v) => setF('exemptionNo', v)} />
+            <EditField label="Nature of Business" value={form.natureOfBusiness} onChange={(v) => setF('natureOfBusiness', v)} />
             {/* Contact */}
             <EditField label="Contact Person" value={form.contactPerson} onChange={(v) => setF('contactPerson', v)} />
             <EditField label="Attention" value={form.attention} onChange={(v) => setF('attention', v)} />
@@ -2761,12 +2766,17 @@ const SupplierInfoCard = ({
                 they normalize to E.164 on blur. Fax stays plain (non-MY format,
                 edge case). */}
             <PhoneEditField label="Phone" value={form.phone} onChange={(v) => setF('phone', v)} />
+            {/* Mig 0186 — secondary phone, same E.164 normalization. */}
+            <PhoneEditField label="Phone 2" value={form.phone2} onChange={(v) => setF('phone2', v)} />
             <PhoneEditField label="Mobile" value={form.mobile} onChange={(v) => setF('mobile', v)} />
             <EditField label="Fax" value={form.fax} onChange={(v) => setF('fax', v)} />
             <PhoneEditField label="WhatsApp" value={form.whatsappNumber} onChange={(v) => setF('whatsappNumber', v)} />
             <EditField label="Website" value={form.website} onChange={(v) => setF('website', v)} />
             {/* Commercial */}
             <PaymentTermsSelect value={form.paymentTerms} onChange={(v) => setF('paymentTerms', v)} />
+            {/* Supplier currency — fixed MYR/RMB/USD/SGD enum (order canonical,
+                NOT sorted). Flows to PO + PI pricing once set. */}
+            <CurrencyEditSelect value={form.currency} onChange={(v) => setF('currency', v)} />
             <EditField label="Business Nature" value={form.businessNature} onChange={(v) => setF('businessNature', v)} />
             {/* Address — PR #47: Country + State cascade */}
             <CountrySelect value={form.country} onChange={(v) => {
@@ -3852,7 +3862,7 @@ const CountrySelect = ({ value, onChange }: { value: string; onChange: (v: strin
     <span className={styles.fieldLabel}>Country</span>
     <span className={styles.selectWrap}>
       <select className={styles.fieldSelect} value={value || 'Malaysia'} onChange={(e) => onChange(e.target.value)}>
-        {COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        {sortByText(COUNTRIES).map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
       <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
     </span>
@@ -3877,7 +3887,7 @@ const StateSelect = ({
           <select className={styles.fieldSelect} value={value} onChange={(e) => onChange(e.target.value)}
             disabled={localities.isLoading}>
             <option value="">{localities.isLoading ? 'Loading…' : '— Pick state —'}</option>
-            {malaysiaStates.map((s) => <option key={s} value={s}>{s}</option>)}
+            {sortByText(malaysiaStates).map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
           <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
         </span>
@@ -3924,6 +3934,30 @@ const PaymentTermsSelect = ({ value, onChange }: { value: string; onChange: (v: 
             onChange={(e) => onChange(e.target.value)} />
         )}
       </div>
+    </label>
+  );
+};
+
+/* Supplier currency picker (edit mode). Reads the ACTIVE currencies from the
+   master (migration 0193) — adding a currency is fully UI. The saved value is
+   always kept in the list even if deactivated. Once saved, supplier.currency
+   flows to PurchaseOrderNew + the PI pages. */
+const CurrencyEditSelect = ({ value, onChange }: { value: Currency; onChange: (v: Currency) => void }) => {
+  const { data: rows } = useActiveCurrencies();
+  const codes = currencyCodesWith(rows, value);
+  return (
+    <label className={styles.field}>
+      <span className={styles.fieldLabel}>Currency</span>
+      <span className={styles.selectWrap}>
+        <select
+          className={styles.fieldSelect}
+          value={value}
+          onChange={(e) => onChange(e.target.value as Currency)}
+        >
+          {codes.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+      </span>
     </label>
   );
 };

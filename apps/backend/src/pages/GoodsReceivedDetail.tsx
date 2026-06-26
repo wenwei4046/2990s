@@ -27,22 +27,24 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown, ArrowRightLeft,
+  ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown, ArrowRightLeft, CheckCircle2,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { activeOptions, buildVariantSummary, fmtDateOrDash, maintPickerValues } from '@2990s/shared';
+import { activeOptions, buildVariantSummary, canonicalizeVariants, fmtDateOrDash, isServiceLine, maintPickerValues } from '@2990s/shared';
 import {
   useGrnDetail,
   useUpdateGrnHeader,
   useUpdateGrnItem,
   useDeleteGrnItem,
   useCancelGrn,
+  usePostGrn,
 } from '../lib/flow-queries';
 import {
   useSuppliers, useSupplierDetail,
   type SupplierRow,
 } from '../lib/suppliers-queries';
 import { useWarehouses } from '../lib/inventory-queries';
+import { sortByText } from '../lib/sort-options';
 import { useRacks } from '../lib/warehouse-queries';
 import { useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
 import { ItemGroupPill } from '../lib/category-badges';
@@ -52,9 +54,19 @@ import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import { StatusPill } from '../components/StatusPill';
+import { DateField } from '../components/DateField';
+import { CurrencyOptions } from '../lib/currencies-queries';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
+
+/* Landed-cost allocation (migration 0191) — display labels for the freight
+   "平摊" basis. */
+const ALLOC_LABEL: Record<string, string> = {
+  QTY: 'By quantity',
+  VALUE: 'By value',
+  CBM: 'By volume (CBM)',
+};
 
 const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   const v = centi ?? 0;
@@ -111,6 +123,14 @@ type HeaderDraft = {
   deliveryNoteRef: string;
   warehouseId: string;
   currency: string;
+  /* Landed-cost core (migration 0190) — MYR per 1 unit of the GRN currency, kept
+     as a string for the numeric input. Editing it re-costs the FIFO lot to MYR. */
+  exchangeRate: string;
+  /* Landed-cost allocation (migration 0191) — freight "平摊" basis ('QTY' |
+     'VALUE' | 'CBM'). Kept as string (like currency) so the page's generic
+     setHeaderField(k, v: string) accepts it; the server normalises. Changing it
+     re-splits the charge pool + re-costs the lot on Save. */
+  allocationMethod: string;
   notes: string;
 };
 type LineDraft = {
@@ -134,6 +154,9 @@ type GrnItemRow = Record<string, unknown> & {
   unit_price_centi: number;
   discount_centi?: number;
   line_total_centi?: number;
+  /* Landed-cost allocation (migration 0191) — freight (MYR sen) allocated to
+     this goods line at GRN-post; folded into the FIFO lot cost. */
+  allocated_charge_centi?: number;
   delivery_date?: string | null;
   item_group?: string | null;
   material_kind?: string | null;
@@ -157,6 +180,10 @@ const headerSnapshot = (g: any): HeaderDraft => ({
   deliveryNoteRef: g.delivery_note_ref ?? '',
   warehouseId:     g.warehouse_id ?? '',
   currency:        g.currency ?? 'MYR',
+  // Landed-cost core (0190) — numeric(14,6) comes back as a string; default '1'.
+  exchangeRate:    g.exchange_rate != null ? String(g.exchange_rate) : '1',
+  // Landed-cost allocation (0191) — freight basis; default QTY.
+  allocationMethod: (g.allocation_method as string) ?? 'QTY',
   notes:           g.notes ?? '',
 });
 
@@ -167,7 +194,9 @@ const lineSnapshot = (it: GrnItemRow): LineDraft => ({
   deliveryDate:   it.delivery_date ?? null,
   materialName:   it.description ?? it.material_name ?? '',
   itemGroup:      it.item_group ?? null,
-  variants:       (it.variants as Record<string, unknown> | null) ?? null,
+  /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize on
+     enter-edit so a stray non-canonical GRN line still prefills the dropdowns. */
+  variants:       canonicalizeVariants(it.item_group ?? 'others', (it.variants as Record<string, unknown> | null) ?? null),
 });
 
 export const GoodsReceivedDetail = () => {
@@ -180,6 +209,7 @@ export const GoodsReceivedDetail = () => {
   const askConfirm = useConfirm();
   const notify = useNotify();
   const cancel = useCancelGrn();
+  const confirmGrn = usePostGrn();
 
   const grn = detail.data?.grn ?? null;
   const items = (detail.data?.items ?? []) as GrnItemRow[];
@@ -222,13 +252,16 @@ export const GoodsReceivedDetail = () => {
   const [lineDrafts, setLineDrafts] = useState<Record<string, LineDraft>>({});
   const [savingDraft, setSavingDraft] = useState(false);
 
-  // POSTED ("Confirmed") is editable UNLESS the GRN has a downstream PI/PR
-  // (unified model, migration 0106): once a child exists the page is read-only —
-  // to edit you must delete the downstream doc first. CANCELLED / CLOSED also lock.
+  // DRAFT + POSTED ("Confirmed") are both editable; a DRAFT additionally shows a
+  // Confirm action that posts it (stock IN + PO rollup). Editing locks only once
+  // the GRN has a downstream PI/PR (unified model, migration 0106) — delete the
+  // child first — or once it's CANCELLED / CLOSED.
   const hasChildren = Boolean(grn?.has_children);
-  const isLocked = grn ? (grn.status !== 'POSTED' || hasChildren) : true;
+  const isDraft = grn?.status === 'DRAFT';
+  const isEditableStatus = grn ? (grn.status === 'POSTED' || grn.status === 'DRAFT') : false;
+  const isLocked = grn ? (!isEditableStatus || hasChildren) : true;
   // Distinguish the child-lock case so we can show the "delete it first" note.
-  const lockedDueToChildren = grn ? (grn.status === 'POSTED' && hasChildren) : false;
+  const lockedDueToChildren = grn ? (isEditableStatus && hasChildren) : false;
 
   /* If the GRN locks while we're in Edit mode (e.g. cancelled in another tab),
      drop back to View + discard the draft. */
@@ -270,6 +303,26 @@ export const GoodsReceivedDetail = () => {
   const grandTotal = itemsSubtotal + (grn.tax_centi ?? 0);
 
   const headerView = headerDraft ?? headerSnapshot(grn);
+
+  /* Landed-cost allocation (migration 0191) — the stored per-line freight +
+     total charge pool. In VIEW we show the SAVED allocation (allocated_charge_centi
+     persisted at post). The header select is read-only in View, editable in Edit
+     (re-allocates + re-costs on Save). chargePool = Σ SERVICE-line line totals. */
+  const isSvcItem = (it: GrnItemRow) =>
+    isServiceLine({ itemGroup: it.item_group ?? null, itemCode: it.material_code });
+  const chargePoolCenti = visibleItems
+    .filter(isSvcItem)
+    .reduce((s, it) => s + lineTotalOf(it), 0);
+  const allocatedOf = (it: GrnItemRow): number => it.allocated_charge_centi ?? 0;
+  /* Landed-cost core (migration 0190) — the effective FX rate (draft in Edit,
+     stored in View) + whether this GRN is foreign, for the MYR cost preview.
+     The line prices stay in the GRN currency; this rate converts the recorded
+     inventory cost (FIFO lot) to MYR. */
+  const isForeignGrn = String(grn.currency ?? 'MYR').toUpperCase() !== 'MYR';
+  const grnRateNum = (() => {
+    const n = Number(headerView.exchangeRate);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  })();
 
   const setHeaderField = (k: keyof HeaderDraft, v: string) => {
     setHeaderDraft((h) => ({ ...(h ?? headerSnapshot(grn)), [k]: v }));
@@ -411,15 +464,37 @@ export const GoodsReceivedDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
-          {/* Cancel — only when the GRN is still editable (Confirmed) AND has no
-              downstream PI/PR (unified model). Confirm dialog → cancel mutation
-              (reverses the receipt server-side). */}
-          {grn.status === 'POSTED' && !hasChildren && (
+          {/* Confirm — only on a DRAFT (and not child-locked). Posts the GRN:
+              the stock IN + PO received-rollup fire server-side via /post. After
+              that it reads as Confirmed. Mirrors the SO/DO/SI/PO Confirm. */}
+          {isDraft && !hasChildren && (
+            <Button variant="primary" size="md"
+              onClick={async () => {
+                if (!(await askConfirm({
+                  title: `Confirm GRN ${grn.grn_number}?`,
+                  body: 'This posts the receipt — stock moves in and the source PO\'s received qty is updated. You can still cancel afterwards.',
+                  confirmLabel: 'Confirm GRN',
+                }))) return;
+                confirmGrn.mutate(grn.id, {
+                  onError: (err) => notify({ title: 'Confirm failed', body: err instanceof Error ? err.message : String(err), tone: 'error' }),
+                });
+              }}
+              disabled={confirmGrn.isPending}>
+              <CheckCircle2 {...ICON} />
+              <span>{confirmGrn.isPending ? 'Confirming…' : 'Confirm'}</span>
+            </Button>
+          )}
+          {/* Cancel — when the GRN is still editable (Draft or Confirmed) AND has
+              no downstream PI/PR (unified model). A DRAFT just flips to CANCELLED
+              (nothing to reverse); a POSTED GRN reverses the receipt server-side. */}
+          {(grn.status === 'POSTED' || isDraft) && !hasChildren && (
             <Button variant="ghost" size="md"
               onClick={async () => {
                 if (!(await askConfirm({
                   title: `Cancel GRN ${grn.grn_number}?`,
-                  body: `This reverses the receipt — stock is taken back out and the source PO's received qty is rolled back. Line items stay for audit.`,
+                  body: isDraft
+                    ? 'This cancels the draft. Nothing was posted, so no stock or PO quantities change. Line items stay for audit.'
+                    : `This reverses the receipt — stock is taken back out and the source PO's received qty is rolled back. Line items stay for audit.`,
                   confirmLabel: 'Cancel GRN',
                   danger: true,
                 }))) return;
@@ -493,6 +568,13 @@ export const GoodsReceivedDetail = () => {
               const variantSummary = buildVariantSummary(it.item_group ?? null, it.variants as Record<string, unknown> | null)
                 || it.description
                 || it.material_name;
+              /* Landed-cost allocation (0191) — this goods line's stored freight +
+                 landed unit cost (base unit + per-unit freight). Goods lines only,
+                 shown when the GRN carries a charge pool. */
+              const lineIsSvc = isSvcItem(it);
+              const lineAllocCenti = allocatedOf(it);
+              const lineQty = it.qty_received ?? 0;
+              const landedUnitCenti = it.unit_price_centi + (lineQty > 0 ? Math.round(lineAllocCenti / lineQty) : 0);
               return (
                 <div
                   key={it.id}
@@ -521,7 +603,16 @@ export const GoodsReceivedDetail = () => {
                       {it.item_group && <ItemGroupPill group={it.item_group} />}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                      <span className={styles.previewPrice}>{fmtRm(lineValueCenti, grn.currency)}</span>
+                      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                        <span className={styles.previewPrice}>{fmtRm(lineValueCenti, grn.currency)}</span>
+                        {/* Landed-cost allocation (0191) — +freight & landed unit
+                            cost on goods lines when the GRN carries a charge. */}
+                        {chargePoolCenti > 0 && !lineIsSvc && lineAllocCenti > 0 && (
+                          <span style={{ fontSize: 'var(--fs-11)', color: 'var(--c-accent, #8a6d3b)', marginTop: 2 }}>
+                            +{fmtRm(lineAllocCenti, grn.currency)} freight · landed {fmtRm(landedUnitCenti, grn.currency)}/unit
+                          </span>
+                        )}
+                      </span>
                       {/* Remove — Edit mode only. Commander 2026-06-15 — confirm
                           before delete (no more 裸奔). On confirm the line is
                           removed and the server releases the PO's received_qty back. */}
@@ -715,10 +806,10 @@ export const GoodsReceivedDetail = () => {
                     <label className={styles.field}>
                       <span className={styles.fieldLabel}>Delivery Date</span>
                       {isEditing ? (
-                        <input
-                          type="date" className={styles.fieldInput}
+                        <DateField
+                          fullWidth className={styles.fieldInput}
                           value={d.deliveryDate ?? ''} disabled={isLocked}
-                          onChange={(e) => setLine(it, { deliveryDate: e.target.value || null })}
+                          onChange={(iso) => setLine(it, { deliveryDate: iso || null })}
                         />
                       ) : (
                         <input
@@ -766,6 +857,21 @@ export const GoodsReceivedDetail = () => {
               <span className={styles.totalLabel}>Total</span>
               <span className={`${styles.totalValue} ${styles.grandTotal}`}>{fmtRm(grandTotal, grn.currency)}</span>
             </div>
+            {/* Landed-cost allocation (0191) — the SERVICE-line freight pool being
+                spread across goods lines ("平摊"). Shown only when there's a charge. */}
+            {chargePoolCenti > 0 && (
+              <div className={styles.totalRow}>
+                <span className={styles.totalLabel}>Freight allocated ({ALLOC_LABEL[String(grn.allocation_method ?? 'QTY')] ?? 'By quantity'})</span>
+                <span className={styles.totalValue}>{fmtRm(chargePoolCenti, grn.currency)}</span>
+              </div>
+            )}
+            {/* Landed-cost core (0190) — MYR inventory cost for a foreign GRN. */}
+            {isForeignGrn && (
+              <div className={styles.totalRow}>
+                <span className={styles.totalLabel}>Inventory cost (MYR)</span>
+                <span className={styles.totalValue}>{fmtRm(Math.round(grandTotal * grnRateNum), 'MYR')}</span>
+              </div>
+            )}
           </div>
         </div>
       </section>
@@ -822,7 +928,11 @@ const SupplierCard = ({
                 value={grn.supplier?.name ?? grn.supplier?.code ?? supplier?.name ?? supplier?.code ?? null} />
             </div>
             <InfoCell label="Currency" value={grn.currency || null} />
-            <div />
+            {/* Landed-cost core (0190) — show the FX rate only for a foreign GRN. */}
+            {String(grn.currency ?? 'MYR').toUpperCase() !== 'MYR'
+              ? <InfoCell label={`Exchange rate (MYR per 1 ${grn.currency})`}
+                  value={grn.exchange_rate != null ? String(grn.exchange_rate) : null} />
+              : <div />}
             <InfoCell label="Received Date" value={grn.received_at ? fmtDateOrDash(grn.received_at) : null} />
             <InfoCell label="Delivery Note Ref" value={grn.delivery_note_ref || null} />
             <InfoCell label="Receive Into"
@@ -830,6 +940,9 @@ const SupplierCard = ({
                 const wh = warehouses.find((w) => w.id === grn.warehouse_id);
                 return wh ? `${wh.code} · ${wh.name}` : null;
               })()} />
+            {/* Landed-cost allocation (0191) — the freight "平摊" basis. */}
+            <InfoCell label="Charge allocation"
+              value={ALLOC_LABEL[String(grn.allocation_method ?? 'QTY')] ?? 'By quantity'} />
             <div style={{ gridColumn: 'span 2' }}>
               <InfoCell label="Notes" value={grn.notes || null} />
             </div>
@@ -842,7 +955,7 @@ const SupplierCard = ({
               <select className={styles.fieldSelect} value={draft.supplierId} disabled={locked}
                 onChange={(e) => onField('supplierId', e.target.value)}>
                 <option value="">— Pick supplier —</option>
-                {suppliers.map((s) => (
+                {sortByText(suppliers).map((s) => (
                   <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                 ))}
               </select>
@@ -854,21 +967,32 @@ const SupplierCard = ({
             <span className={styles.selectWrap}>
               <select className={styles.fieldSelect} value={draft.currency} disabled={locked}
                 onChange={(e) => onField('currency', e.target.value)}>
-                <option value="MYR">MYR</option>
-                <option value="RMB">RMB</option>
-                <option value="USD">USD</option>
-                <option value="SGD">SGD</option>
+                {/* Active currencies from the master (migration 0193). */}
+                <CurrencyOptions current={draft.currency} />
               </select>
               <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
             </span>
           </label>
-          <div />
+          {/* Landed-cost core (0190) — Exchange rate, shown only for a foreign
+              GRN currency. Editing it re-costs the FIFO lot to MYR on Save. */}
+          {String(draft.currency).toUpperCase() !== 'MYR' ? (
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Exchange rate (MYR per 1 {draft.currency})</span>
+              <input
+                type="number" min={0} step="0.000001" inputMode="decimal"
+                value={draft.exchangeRate} disabled={locked}
+                onChange={(e) => onField('exchangeRate', e.target.value)}
+                placeholder="e.g. 0.62"
+                className={styles.fieldInput} style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+              />
+            </label>
+          ) : <div />}
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Received Date</span>
             {/* Changing this cascades to every line's Delivery Date (handled in
                 the page's setHeaderField). */}
-            <input type="date" className={styles.fieldInput} value={draft.receivedAt} disabled={locked}
-              onChange={(e) => onField('receivedAt', e.target.value)} />
+            <DateField fullWidth className={styles.fieldInput} value={draft.receivedAt ?? ''} disabled={locked}
+              onChange={(iso) => onField('receivedAt', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Delivery Note Ref</span>
@@ -882,9 +1006,24 @@ const SupplierCard = ({
               <select className={styles.fieldSelect} value={draft.warehouseId} disabled={locked}
                 onChange={(e) => onField('warehouseId', e.target.value)}>
                 <option value="">— No warehouse —</option>
-                {warehouses.filter((w) => w.is_active).map((w) => (
+                {sortByText(warehouses.filter((w) => w.is_active)).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                 ))}
+              </select>
+              <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+            </span>
+          </label>
+          {/* Landed-cost allocation (0191) — choose how a SERVICE-line freight
+              charge is spread across goods lines into the FIFO lot cost. Changing
+              it re-allocates + re-costs the lot on Save. */}
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Charge allocation</span>
+            <span className={styles.selectWrap}>
+              <select className={styles.fieldSelect} value={draft.allocationMethod} disabled={locked}
+                onChange={(e) => onField('allocationMethod', e.target.value)}>
+                <option value="QTY">By quantity (default)</option>
+                <option value="VALUE">By value</option>
+                <option value="CBM">By volume (CBM)</option>
               </select>
               <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
             </span>

@@ -30,6 +30,7 @@ import {
 import type { SlipUrlResponse } from '@2990s/shared/schemas';
 import { fetchPaymentSlipUrl } from '../lib/slip';
 import { SlipUploadField } from './SlipUploadField';
+import { DateField } from './DateField';
 import { MoneyInput } from './MoneyInput';
 import { useNotify } from './NotifyDialog';
 import { useConfirm } from './ConfirmDialog';
@@ -626,12 +627,11 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
             {drafts.map((d) => (
               <div className={paymentsStyles.row} key={d.uid}>
                 <span className={paymentsStyles.cell}>
-                  <input
-                    type="date"
+                  <DateField
                     className={paymentsStyles.inlineInput}
-                    value={d.paidAt}
+                    value={d.paidAt ?? ''}
                     disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, { paidAt: e.target.value })}
+                    onChange={(iso) => patchDraft(d.uid, { paidAt: iso })}
                   />
                 </span>
                 <span className={paymentsStyles.cell} style={{ flexDirection: 'column', alignItems: 'stretch', gap: 4 }}>

@@ -37,9 +37,12 @@ import {
   type MfgFabricTier,
   type PoPriceMatrix,
 } from '@2990s/shared/mfg-pricing';
+import { canonicalizeVariants } from '@2990s/shared';
 import { PoLineCard, emptyPoLine, type PoLineDraft } from '../components/PoLineCard';
+import { sortByText } from '../lib/sort-options';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { useNotify } from '../components/NotifyDialog';
+import { DateField } from '../components/DateField';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -285,7 +288,11 @@ export const PurchaseOrderNew = () => {
       materialName: p.description ?? p.itemCode,
       qty: p._pickQty ?? (p.remainingQty > 0 ? p.remainingQty : p.qty),
       unitPriceCenti: 0,
-      variants: (p.variants ?? {}) as Record<string, unknown>,
+      /* Variants-vocabulary unification (Commander 2026-06-26) — defense-in-depth:
+         canonicalize the SO line's variants when seeding the editable PO draft so
+         a stray non-canonical row (depth/sofaLegHeight/fabricColor) still prefills
+         the Seat/Leg/Fabric dropdowns. Mirrors DeliveryOrderNew. */
+      variants: canonicalizeVariants(categoryForCode(p.itemCode) ?? 'others', (p.variants ?? {}) as Record<string, unknown>),
       category: categoryForCode(p.itemCode),
       deliveryDate: p.lineDeliveryDate ?? p.deliveryDate ?? undefined,
       // Commander 2026-05-29 (BUG 1) — remember the source SO line so the
@@ -523,7 +530,10 @@ export const PurchaseOrderNew = () => {
     [lines],
   );
 
-  const onSave = () => {
+  // Draft/Confirmed (Owner 2026-06-25) — asDraft saves the PO as DRAFT (review
+  // queue; no MRP supply, no SO-quota lock) instead of a live SUBMITTED PO.
+  // Omitted/false keeps the original "Create Purchase Order" → SUBMITTED flow.
+  const onSave = (asDraft = false) => {
     if (!supplierId) {
       notify({ title: 'Pick a Creditor (supplier) first.', tone: 'error' });
       return;
@@ -580,6 +590,7 @@ export const PurchaseOrderNew = () => {
         notes: notes || undefined,
         purchaseLocationId,
         items,
+        asDraft,
       },
       {
         onSuccess: (res) => navigate(`/purchase-orders/${res.id}`),
@@ -607,13 +618,23 @@ export const PurchaseOrderNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders')}>
             <X {...ICON} /> Cancel
           </Button>
+          {/* Draft/Confirmed (Owner 2026-06-25) — opt-in DRAFT save. Lands the PO
+              in the Draft review queue (no MRP supply, no SO-quota lock) until
+              Confirmed on the detail page. Mirrors SO/DO/SI Save-as-Draft. */}
           <Button
-            variant="primary" size="md"
-            onClick={onSave}
+            variant="ghost" size="md"
+            onClick={() => onSave(true)}
             disabled={create.isPending}
           >
             <Save {...ICON} />
-            {/* PR #131 + 0078 — POST creates SUBMITTED; DRAFT removed entirely. */}
+            {create.isPending ? 'Saving…' : 'Save as Draft'}
+          </Button>
+          <Button
+            variant="primary" size="md"
+            onClick={() => onSave(false)}
+            disabled={create.isPending}
+          >
+            <Save {...ICON} />
             {create.isPending ? 'Saving…' : 'Create Purchase Order'}
           </Button>
         </div>
@@ -635,7 +656,7 @@ export const PurchaseOrderNew = () => {
                 className={styles.fieldInput}
               >
                 <option value="">— Pick a supplier —</option>
-                {(suppliers.data ?? []).map((s) => (
+                {sortByText(suppliers.data ?? []).map((s) => (
                   <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                 ))}
               </select>
@@ -666,10 +687,10 @@ export const PurchaseOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Date *</span>
-              <input
-                type="date"
-                value={poDate}
-                onChange={(e) => setPoDate(e.target.value)}
+              <DateField
+                fullWidth
+                value={poDate ?? ''}
+                onChange={(iso) => setPoDate(iso)}
                 className={styles.fieldInput}
               />
             </label>
@@ -688,12 +709,11 @@ export const PurchaseOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Expected Delivery *</span>
-              <input
-                type="date"
-                value={expectedAt}
-                onChange={(e) => setExpectedAt(e.target.value)}
+              <DateField
+                fullWidth
+                value={expectedAt ?? ''}
+                onChange={(iso) => setExpectedAt(iso)}
                 className={styles.fieldInput}
-                required
               />
             </label>
 
@@ -702,28 +722,28 @@ export const PurchaseOrderNew = () => {
                 date becomes the effective ETA downstream. */}
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Supplier Delivery Date 2</span>
-              <input
-                type="date"
-                value={supplierDeliveryDate2}
-                onChange={(e) => setSupplierDeliveryDate2(e.target.value)}
+              <DateField
+                fullWidth
+                value={supplierDeliveryDate2 ?? ''}
+                onChange={(iso) => setSupplierDeliveryDate2(iso)}
                 className={styles.fieldInput}
               />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Supplier Delivery Date 3</span>
-              <input
-                type="date"
-                value={supplierDeliveryDate3}
-                onChange={(e) => setSupplierDeliveryDate3(e.target.value)}
+              <DateField
+                fullWidth
+                value={supplierDeliveryDate3 ?? ''}
+                onChange={(iso) => setSupplierDeliveryDate3(iso)}
                 className={styles.fieldInput}
               />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Supplier Delivery Date 4</span>
-              <input
-                type="date"
-                value={supplierDeliveryDate4}
-                onChange={(e) => setSupplierDeliveryDate4(e.target.value)}
+              <DateField
+                fullWidth
+                value={supplierDeliveryDate4 ?? ''}
+                onChange={(iso) => setSupplierDeliveryDate4(iso)}
                 className={styles.fieldInput}
               />
             </label>
@@ -737,7 +757,7 @@ export const PurchaseOrderNew = () => {
                 required
               >
                 <option value="">— Pick a warehouse —</option>
-                {(warehouses.data ?? []).map((w) => (
+                {sortByText(warehouses.data ?? []).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                 ))}
               </select>

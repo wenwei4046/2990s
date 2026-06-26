@@ -54,6 +54,8 @@ const buildPrColumns = (): DataGridColumn<PrRow>[] => [
     key: 'return_number', label: 'Return No.', width: 150, sortable: true,
     accessor: (r) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.return_number}</span>,
     searchValue: (r) => r.return_number,
+    // accessor is JSX → export the raw return-no string so Return No. isn't blank.
+    exportValue: (r) => r.return_number,
     sortFn: (a, b) => a.return_number.localeCompare(b.return_number),
   },
   {
@@ -69,6 +71,8 @@ const buildPrColumns = (): DataGridColumn<PrRow>[] => [
     accessor: (r) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.grn?.grn_number ?? '—'}</span>,
     searchValue: (r) => r.grn?.grn_number ?? '',
     groupValue: (r) => r.grn?.grn_number ?? '(none)',
+    // accessor is JSX → export the source GRN doc-no string.
+    exportValue: (r) => r.grn?.grn_number ?? '—',
   },
   {
     key: 'return_date', label: 'Return Date', width: 120, sortable: true,
@@ -85,6 +89,8 @@ const buildPrColumns = (): DataGridColumn<PrRow>[] => [
       </span>
     ),
     searchValue: (r) => fmtMoney(Number(r.refund_centi ?? 0)),
+    // accessor is JSX money → export the NUMBER (ringgit) so Excel SUMs it.
+    exportValue: (r) => Number(r.refund_centi ?? 0) / 100,
     sortFn: (a, b) => Number(a.refund_centi ?? 0) - Number(b.refund_centi ?? 0),
   },
   {
@@ -92,6 +98,8 @@ const buildPrColumns = (): DataGridColumn<PrRow>[] => [
     accessor: (r) => <StatusPill docType="pr" status={r.status} />,
     searchValue: (r) => statusLabel('pr', r.status),
     groupValue: (r) => statusLabel('pr', r.status),
+    // accessor is a <StatusPill> JSX → export the plain status label text.
+    exportValue: (r) => statusLabel('pr', r.status),
     sortFn: (a, b) => a.status.localeCompare(b.status),
   },
 ];

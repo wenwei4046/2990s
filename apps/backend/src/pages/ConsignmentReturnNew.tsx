@@ -26,6 +26,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { DateField } from '../components/DateField';
 import { useNotify } from '../components/NotifyDialog';
 import { useCreateConsignmentReturn } from '../lib/consignment-return-queries';
 import { useConsignmentNoteDetail } from '../lib/consignment-note-queries';
@@ -37,6 +38,7 @@ import {
   useSoDropdownOptions, optionsOrFallback,
 } from '../lib/so-dropdown-options-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
+import { sortByText, sortByNumeric } from '../lib/sort-options';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -349,7 +351,7 @@ export const ConsignmentReturnNew = () => {
               <span className={styles.selectWrap}>
                 <select className={styles.fieldSelect} value={salespersonId} onChange={(e) => setSalespersonId(e.target.value)}>
                   <option value="">— Pick staff —</option>
-                  {staffList.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>)}
+                  {sortByText(staffList).map((s) => <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>)}
                   {salespersonId && !staffList.some((s) => s.id === salespersonId) && <option value={salespersonId}>(former staff)</option>}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
@@ -366,7 +368,7 @@ export const ConsignmentReturnNew = () => {
           <div className={styles.formGrid4}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Return Date</span>
-              <input type="date" className={styles.fieldInput} value={returnDate} onChange={(e) => setReturnDate(e.target.value)} />
+              <DateField fullWidth className={styles.fieldInput} value={returnDate ?? ''} onChange={(iso) => setReturnDate(iso)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Building Type</span>
@@ -450,7 +452,7 @@ export const ConsignmentReturnNew = () => {
                   onChange={(e) => { setState(e.target.value); setCity(''); setPostcode(''); }}
                   disabled={loc.isLoading}>
                   <option value="">{loc.isLoading ? 'Loading…' : 'Pick state'}</option>
-                  {states.map((s) => <option key={s} value={s}>{s}</option>)}
+                  {sortByText(states).map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -461,7 +463,7 @@ export const ConsignmentReturnNew = () => {
                 <select className={styles.fieldSelect} value={city}
                   onChange={(e) => { setCity(e.target.value); setPostcode(''); }} disabled={!state}>
                   <option value="">{state ? 'Pick city' : '— pick state first'}</option>
-                  {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+                  {sortByText(cities).map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -472,7 +474,7 @@ export const ConsignmentReturnNew = () => {
                 <select className={styles.fieldSelect} value={postcode}
                   onChange={(e) => setPostcode(e.target.value)} disabled={!state || !city}>
                   <option value="">{(state && city) ? 'Pick postcode' : '— pick city first'}</option>
-                  {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+                  {sortByNumeric(postcodes).map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>

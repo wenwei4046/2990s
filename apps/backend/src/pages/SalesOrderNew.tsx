@@ -27,6 +27,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { DateField } from '../components/DateField';
 import { useNotify } from '../components/NotifyDialog';
 import {
   useCreateMfgSalesOrder, useDebtorSearch, useAddSalesOrderPayment,
@@ -38,6 +39,7 @@ import { humanApiError } from '../lib/authed-fetch';
 import { useStaff } from '../lib/admin-queries';
 import { useAuth } from '../lib/auth';
 import { useVenues } from '../lib/venues-queries';
+import { sortByText, sortByNumeric } from '../lib/sort-options';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
   countryForState,
@@ -170,7 +172,23 @@ export const SalesOrderNew = () => {
      `venueId` (FK) so the API persists the master link. */
   const [processingDate, setProcessingDate] = useState('');
   const [deliveryDate,   setDeliveryDate]   = useState('');
+  /* Delivery-date amendment (migration 0199 + 0201). The ORIGINAL Delivery Date
+     above is never overwritten; these capture the customer's requested NEW date,
+     the date WE confirm, and the HC "Amend Client Date Reason". Rarely set at
+     create time, but the field lives here to match Detail's Order Info layout. */
+  const [amendDateFromCustomer, setAmendDateFromCustomer] = useState('');
+  const [amendedDeliveryDate,   setAmendedDeliveryDate]   = useState('');
+  const [amendReason,           setAmendReason]           = useState('');
   const [note,           setNote]           = useState('');
+
+  /* ── HC delivery-sheet SO-context raw-data fields (migration 0197) ───────────
+     Surfaced on the SO form (also editable from the Delivery Planning "Edit HC
+     fields" drawer). possession date + house type (New House / Replacement),
+     the replacement disposal note, and the referral source. */
+  const [possessionDate,      setPossessionDate]      = useState('');
+  const [houseType,           setHouseType]           = useState<string>('');
+  const [replacementDisposal, setReplacementDisposal] = useState('');
+  const [referral,            setReferral]            = useState('');
 
   // ── Delivery address ───────────────────────────────────────────────
   /* "Fill in address later" affordance: New-SO only (the address can be
@@ -629,7 +647,11 @@ export const SalesOrderNew = () => {
     return { failed: results.filter((ok) => !ok).length };
   };
 
-  const onSave = () => {
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25) — asDraft=true posts the SO as
+     a DRAFT (the "Save as Draft" button); it commits nothing (kept out of KPI/
+     MRP/PO-picker/stock/credit) until Confirmed on the Detail page. The default
+     "Create Sales Order" path leaves asDraft undefined → server inserts CONFIRMED. */
+  const onSave = (asDraft = false) => {
     if (!debtorName.trim()) {
       notify({ title: 'Customer name is required.', tone: 'error' });
       return;
@@ -708,6 +730,9 @@ export const SalesOrderNew = () => {
 
     create.mutate(
       {
+        /* DRAFT/Confirmed two-state — only sent when the operator picked
+           "Save as Draft"; omitted otherwise so the server defaults to CONFIRMED. */
+        asDraft: asDraft || undefined,
         debtorName,
         debtorCode: debtorCode || undefined,
         phone: phone || undefined,
@@ -733,6 +758,11 @@ export const SalesOrderNew = () => {
            see it without a separate edit. */
         salesLocation: salesLocation || undefined,
         buildingType: buildingType || undefined,
+        /* HC delivery-sheet SO-context raw-data fields (migration 0197). */
+        possessionDate:      possessionDate      || undefined,
+        houseType:           houseType           || undefined,
+        replacementDisposal: replacementDisposal || undefined,
+        referral:            referral            || undefined,
         emergencyContactName:         emergencyName  || undefined,
         emergencyContactRelationship: emergencyRel   || undefined,
         emergencyContactPhone:        emergencyPhone || undefined,
@@ -740,6 +770,11 @@ export const SalesOrderNew = () => {
            customer_delivery_date. */
         internalExpectedDd:   processingDate || undefined,
         customerDeliveryDate: deliveryDate   || undefined,
+        /* Delivery-date amendment (migration 0199 + 0201) — the ORIGINAL
+           customerDeliveryDate above is never overwritten; these record the change. */
+        amendDateFromCustomer: amendDateFromCustomer || undefined,
+        amendedDeliveryDate:   amendedDeliveryDate   || undefined,
+        amendReason:           amendReason           || undefined,
         note: note || undefined,
         /* PR #114 — full variant payload preserved end-to-end. */
         items: validLines.map((l) => ({
@@ -808,9 +843,20 @@ export const SalesOrderNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/mfg-sales-orders')}>
             <X {...ICON} /> Cancel
           </Button>
+          {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — "Save as Draft" posts
+              the SO as DRAFT (commits nothing; stays out of KPI/MRP/PO/stock/credit
+              until Confirmed on the Detail page). Same validation gate as Create. */}
+          <Button
+            variant="ghost" size="md"
+            onClick={() => onSave(true)}
+            disabled={create.isPending}
+          >
+            <Save {...ICON} />
+            {create.isPending ? 'Saving…' : 'Save as Draft'}
+          </Button>
           <Button
             variant="primary" size="md"
-            onClick={onSave}
+            onClick={() => onSave(false)}
             /* Keep the button CLICKABLE even when fields are missing (only block
                while a save is in flight). onSave validates and tells the operator
                EXACTLY what's missing (name / phone / dates / items / variants) —
@@ -929,7 +975,7 @@ export const SalesOrderNew = () => {
                     </option>
                   )}
                   {canChangeSalesperson && <option value="">— Pick staff —</option>}
-                  {canChangeSalesperson && staffList.map((s) => (
+                  {canChangeSalesperson && sortByText(staffList).map((s) => (
                     <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
                   ))}
                 </select>
@@ -987,24 +1033,101 @@ export const SalesOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Processing Date</span>
-              <input
-                type="date"
+              <DateField
                 className={styles.fieldInput}
-                value={processingDate}
+                fullWidth
+                value={processingDate ?? ''}
                 min={today}
-                onChange={(e) => setProcessingDate(e.target.value)}
-                style={datesXor && !processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
+                onChange={(iso) => setProcessingDate(iso)}
+                invalid={datesXor && !processingDate}
               />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Delivery Date</span>
-              <input
-                type="date"
+              <DateField
                 className={styles.fieldInput}
-                value={deliveryDate}
+                fullWidth
+                value={deliveryDate ?? ''}
                 min={today}
-                onChange={(e) => setDeliveryDate(e.target.value)}
-                style={datesXor && !deliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
+                onChange={(iso) => setDeliveryDate(iso)}
+                invalid={datesXor && !deliveryDate}
+              />
+            </label>
+            {/* ── Delivery-date amendment (migration 0199 + 0201) ──────────────
+                The ORIGINAL Delivery Date above is never overwritten; these
+                capture the customer's requested NEW date, the date WE confirm,
+                and the HC "Amend Client Date Reason". Same card + field layout as
+                Detail's Order Info. */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Amend Date (from Customer)</span>
+              <DateField
+                className={styles.fieldInput}
+                fullWidth
+                value={amendDateFromCustomer ?? ''}
+                onChange={(iso) => setAmendDateFromCustomer(iso)}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Amended Delivery Date</span>
+              <DateField
+                className={styles.fieldInput}
+                fullWidth
+                value={amendedDeliveryDate ?? ''}
+                onChange={(iso) => setAmendedDeliveryDate(iso)}
+              />
+            </label>
+            <label className={styles.field} style={{ gridColumn: 'span 2' }}>
+              <span className={styles.fieldLabel}>Amend Reason</span>
+              <input
+                className={styles.fieldInput}
+                value={amendReason}
+                onChange={(e) => setAmendReason(e.target.value)}
+                placeholder="Why the client delivery date was amended"
+              />
+            </label>
+            {/* ── HC delivery-sheet SO-context fields (migration 0197) ─────────
+                Possession date + house type (dropdown), replacement disposal,
+                referral. Same card + same field layout as Detail's Order Info. */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Possession Date</span>
+              <DateField
+                className={styles.fieldInput}
+                fullWidth
+                value={possessionDate ?? ''}
+                onChange={(iso) => setPossessionDate(iso)}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>House Type</span>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={houseType}
+                  onChange={(e) => setHouseType(e.target.value)}
+                >
+                  <option value="">—</option>
+                  <option value="New House">New House</option>
+                  <option value="Replacement">Replacement</option>
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
+            </label>
+            <label className={styles.field} style={{ gridColumn: 'span 2' }}>
+              <span className={styles.fieldLabel}>Replacement / Disposal</span>
+              <input
+                className={styles.fieldInput}
+                value={replacementDisposal}
+                onChange={(e) => setReplacementDisposal(e.target.value)}
+                placeholder="What's being disposed / how the old set is handled"
+              />
+            </label>
+            <label className={styles.field} style={{ gridColumn: 'span 4' }}>
+              <span className={styles.fieldLabel}>Referral</span>
+              <input
+                className={styles.fieldInput}
+                value={referral}
+                onChange={(e) => setReferral(e.target.value)}
+                placeholder="Referral source / channel"
               />
             </label>
             <label className={styles.field} style={{ gridColumn: 'span 4' }}>
@@ -1163,7 +1286,7 @@ export const SalesOrderNew = () => {
                   disabled={loc.isLoading}
                 >
                   <option value="">{loc.isLoading ? 'Loading…' : 'Pick state'}</option>
-                  {states.map((s) => <option key={s} value={s}>{s}</option>)}
+                  {sortByText(states).map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -1178,7 +1301,7 @@ export const SalesOrderNew = () => {
                   disabled={!state}
                 >
                   <option value="">{state ? 'Pick city' : '— pick state first'}</option>
-                  {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+                  {sortByText(cities).map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -1193,7 +1316,7 @@ export const SalesOrderNew = () => {
                   disabled={!state || !city}
                 >
                   <option value="">{(state && city) ? 'Pick postcode' : '— pick city first'}</option>
-                  {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+                  {sortByNumeric(postcodes).map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>

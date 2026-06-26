@@ -34,9 +34,11 @@ import { useFabricTrackings } from '../lib/fabric-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { PcVariantEditor } from '../components/PcVariantEditor';
 import { MoneyInput } from '../components/MoneyInput';
+import { DateField } from '../components/DateField';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { StatusPill } from '../components/StatusPill';
+import { sortByText } from '../lib/sort-options';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -560,7 +562,7 @@ const SupplierCard = ({
               <select className={styles.fieldSelect} value={draft.supplierId} disabled={locked}
                 onChange={(e) => onField('supplierId', e.target.value)}>
                 <option value="">— Pick supplier —</option>
-                {suppliers.map((s) => (
+                {sortByText(suppliers).map((s) => (
                   <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                 ))}
               </select>
@@ -569,8 +571,8 @@ const SupplierCard = ({
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Return Date</span>
-            <input type="date" className={styles.fieldInput} value={draft.returnDate} disabled={locked}
-              onChange={(e) => onField('returnDate', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.returnDate ?? ''} disabled={locked}
+              onChange={(iso) => onField('returnDate', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Credit Note Ref</span>

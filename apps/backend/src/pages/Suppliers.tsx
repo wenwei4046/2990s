@@ -33,6 +33,7 @@ import {
 } from '../components/SupplyCategoryPicker';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useNotify } from '../components/NotifyDialog';
+import { useActiveCurrencies, currencyCodesWith } from '../lib/currencies-queries';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -137,6 +138,7 @@ export const Suppliers = () => {
       accessor: (r) => <span className={styles.codeChip}>{r.code}</span>,
       searchValue: (r) => r.code,
       filterValue: (r) => r.code,
+      exportValue: (r) => r.code,
       sortFn: (a, b) => a.code.localeCompare(b.code),
     },
     {
@@ -157,6 +159,7 @@ export const Suppliers = () => {
       ),
       searchValue: (r) => displaySupplierCategories(r.category, pool),
       filterValue: (r) => displaySupplierCategories(r.category, pool) || '—',
+      exportValue: (r) => displaySupplierCategories(r.category, pool),
     },
     {
       key: 'contact',
@@ -198,6 +201,7 @@ export const Suppliers = () => {
       ),
       searchValue: (r) => r.status,
       filterValue: (r) => r.status,
+      exportValue: (r) => r.status,
     },
   ], [pool]);
 
@@ -503,9 +507,14 @@ const CreateForm = ({ onClose }: { onClose: () => void }) => {
     category: '',
     tinNumber: '',
     businessRegNo: '',
+    /* Mig 0186 — AutoCount creditor-export parity */
+    registrationNo: '',
+    exemptionNo: '',
+    natureOfBusiness: '',
     contactPerson: '',
     attention: '',
     phone: '',
+    phone2: '',
     mobile: '',
     fax: '',
     whatsappNumber: '',
@@ -517,6 +526,9 @@ const CreateForm = ({ onClose }: { onClose: () => void }) => {
     state: '',
     businessNature: '',
     paymentTerms: '',
+    /* Supplier currency — backend supports MYR/RMB/USD/SGD; default MYR.
+       Once set, PurchaseOrderNew + PI pages read supplier.currency. */
+    currency: 'MYR',
     rating: 0,
     notes: '',
   });
@@ -576,6 +588,10 @@ const SupplierFields = ({
       </div>
       <Field label="TIN Number" value={(form.tinNumber as string) ?? ''} onChange={(v) => onChange('tinNumber', v)} />
       <Field label="Business Reg No" value={(form.businessRegNo as string) ?? ''} onChange={(v) => onChange('businessRegNo', v)} />
+      {/* Mig 0186 — AutoCount creditor-export parity. */}
+      <Field label="Registration No." value={(form.registrationNo as string) ?? ''} onChange={(v) => onChange('registrationNo', v)} />
+      <Field label="Exemption No." value={(form.exemptionNo as string) ?? ''} onChange={(v) => onChange('exemptionNo', v)} />
+      <Field label="Nature of Business" value={(form.natureOfBusiness as string) ?? ''} onChange={(v) => onChange('natureOfBusiness', v)} />
     </div>
     <p className={styles.eyebrow} style={{ marginTop: 'var(--space-3)' }}>Contact</p>
     <div className={styles.formGrid}>
@@ -583,6 +599,8 @@ const SupplierFields = ({
       <Field label="Attention" value={(form.attention as string) ?? ''} onChange={(v) => onChange('attention', v)} />
       {/* Task #91 — phone fields normalize to E.164 on blur via PhoneInput. */}
       <PhoneField label="Phone" value={(form.phone as string) ?? ''} onChange={(v) => onChange('phone', v)} />
+      {/* Mig 0186 — secondary phone, same E.164 normalization. */}
+      <PhoneField label="Phone 2" value={(form.phone2 as string) ?? ''} onChange={(v) => onChange('phone2', v)} />
       <PhoneField label="Mobile" value={(form.mobile as string) ?? ''} onChange={(v) => onChange('mobile', v)} />
       <PhoneField label="WhatsApp" value={(form.whatsappNumber as string) ?? ''} onChange={(v) => onChange('whatsappNumber', v)} />
       <Field label="Fax" value={(form.fax as string) ?? ''} onChange={(v) => onChange('fax', v)} />
@@ -592,6 +610,9 @@ const SupplierFields = ({
     <p className={styles.eyebrow} style={{ marginTop: 'var(--space-3)' }}>Commercial</p>
     <div className={styles.formGrid}>
       <Field label="Payment Terms" value={(form.paymentTerms as string) ?? ''} onChange={(v) => onChange('paymentTerms', v)} />
+      {/* Supplier currency — fixed enum (MYR/RMB/USD/SGD), order is canonical.
+          Set RMB here for China suppliers; PO + PI pages pick it up. */}
+      <CurrencySelect value={(form.currency as string) ?? 'MYR'} onChange={(v) => onChange('currency', v)} />
       <Field label="Business Nature" value={(form.businessNature as string) ?? ''} onChange={(v) => onChange('businessNature', v)} />
     </div>
     <p className={styles.eyebrow} style={{ marginTop: 'var(--space-3)' }}>Address</p>
@@ -647,6 +668,32 @@ const Field = ({
     )}
   </label>
 );
+
+/* Supplier currency picker. Reads the ACTIVE currencies from the master
+   (migration 0193), so adding a currency is fully UI. The currently-saved value
+   is always included even if it's since been deactivated (so it still shows). */
+const CurrencySelect = ({
+  value, onChange,
+}: {
+  value: string; onChange: (v: string) => void;
+}) => {
+  const { data: rows } = useActiveCurrencies();
+  const codes = currencyCodesWith(rows, value);
+  return (
+    <label className={styles.field}>
+      <span className={styles.fieldLabel}>Currency</span>
+      <select
+        className={styles.fieldSelect}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {codes.map((c) => (
+          <option key={c} value={c}>{c}</option>
+        ))}
+      </select>
+    </label>
+  );
+};
 
 /* Task #91 — Phone variant of Field. Same label/layout, but the input runs
    through PhoneInput so its value is normalized to E.164 on blur. */

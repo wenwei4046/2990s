@@ -12,17 +12,21 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, ArrowRight, Save, X, Plus, Trash2, AlertTriangle } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { fmtCenti } from '@2990s/shared';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import {
   useWarehouses,
   useInventoryBalances,
+  useInventoryValue,
 } from '../lib/inventory-queries';
 import { useMfgProducts } from '../lib/mfg-products-queries';
 import {
   useCreateStockTransfer,
   type StockTransferItemInput,
 } from '../lib/stock-transfers-queries';
+import { DateField } from '../components/DateField';
+import { sortByText } from '../lib/sort-options';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -57,6 +61,11 @@ export const StockTransferNew = () => {
   const [toWarehouseId,   setToWarehouseId]   = useState<string>('');
   const [transferDate,    setTransferDate]    = useState<string>(todayISO());
   const [notes,           setNotes]           = useState<string>('');
+  // Migration 0192 — sea-freight (MYR, a MY forwarder bill — no FX) that uplifts
+  // the receiving lot cost (China → MY landed cost), + the allocation basis.
+  // Entered in whole MYR for the operator; converted to sen on submit.
+  const [freightMyr,        setFreightMyr]        = useState<string>('');
+  const [allocationMethod,  setAllocationMethod]  = useState<'QTY' | 'VALUE' | 'CBM'>('QTY');
 
   // ── Lines ────────────────────────────────────────────────────────────
   const [lines, setLines] = useState<LineDraft[]>([blankLine()]);
@@ -77,11 +86,48 @@ export const StockTransferNew = () => {
     return m;
   }, [balances.data]);
 
+  // Migration 0192 — average unit cost per SKU at the FROM warehouse, for the
+  // landed-cost PREVIEW only. The authoritative per-line source cost is the FIFO
+  // weighted-avg consumed on post (computed server-side); this avg is a close
+  // proxy good enough to show the operator what the freight uplift will do.
+  const valueQ = useInventoryValue({ warehouseId: fromWarehouseId || undefined });
+  const costMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const v of (valueQ.data ?? [])) {
+      if (v.product_code) m.set(v.product_code, Number(v.avg_unit_cost_sen ?? 0));
+    }
+    return m;
+  }, [valueQ.data]);
+
   // ── Helpers ──────────────────────────────────────────────────────────
   const skuByCode = useMemo(
     () => new Map((allSkus.data ?? []).map((p) => [p.code, p])),
     [allSkus.data],
   );
+
+  // Migration 0192 — surface the freight panel when the FROM warehouse is a
+  // transit (overseas/China) warehouse. The owner can still toggle it open for
+  // any source — a sea-freight uplift is allowed on any transfer.
+  // Dual-read camelCase / snake_case: the pg driver can hand back either casing.
+  const fromIsTransit = useMemo(
+    () => (warehouses.data ?? []).some((w) => {
+      const t = (w as { isTransit?: boolean }).isTransit ?? w.is_transit;
+      return w.id === fromWarehouseId && Boolean(t);
+    }),
+    [warehouses.data, fromWarehouseId],
+  );
+  // For a transit source the sea-freight uplift is the EXPECTED path, so the
+  // panel auto-expands prominently; for an ordinary domestic source it stays
+  // collapsed behind a small "Add sea-freight" affordance (the owner can still
+  // open it). 0 freight stays valid either way (cost-neutral transfer).
+  const [freightOpen, setFreightOpen] = useState(false);
+  const showFreight = fromIsTransit || freightOpen;
+
+  // Sea-freight in MYR sen (centi). Blank / non-positive ⇒ 0 ⇒ cost-neutral.
+  const freightCenti = useMemo(() => {
+    const myr = Number(freightMyr);
+    return Number.isFinite(myr) && myr > 0 ? Math.round(myr * 100) : 0;
+  }, [freightMyr]);
 
   const setLine = (key: string, patch: Partial<LineDraft>) => {
     setLines((cur) => cur.map((l) => (l._key === key ? { ...l, ...patch } : l)));
@@ -118,6 +164,40 @@ export const StockTransferNew = () => {
     validLines.length > 0,
   );
 
+  /* Migration 0192 — client-side landed-cost PREVIEW. Mirrors the server
+     allocator (lib/landed-allocation.ts): pool freightCenti, split across the
+     valid lines by QTY / VALUE (qty × avg source cost) / CBM (qty × unit_m3),
+     last line absorbs the rounding remainder (Σ === pool), fall back to QTY when
+     the chosen basis Σ ≤ 0. Source cost = the FROM-warehouse avg (a proxy for
+     the FIFO weighted-avg the server consumes on post). freight 0 ⇒ landed ===
+     source everywhere. Keyed by line _key. */
+  const preview = useMemo(() => {
+    const out = new Map<string, { sourceUnitSen: number; allocatedCenti: number; landedUnitSen: number }>();
+    const rows = validLines.map((l) => {
+      const sourceUnitSen = costMap.get(l.productCode) ?? 0;
+      const m3 = skuByCode.get(l.productCode)?.unit_m3_milli ?? 0;
+      return { key: l._key, qty: Math.max(0, l.qty), sourceUnitSen, m3 };
+    });
+    const basisOf = (m: 'QTY' | 'VALUE' | 'CBM', r: typeof rows[number]) =>
+      m === 'VALUE' ? r.qty * r.sourceUnitSen
+      : m === 'CBM' ? r.qty * Math.max(0, r.m3)
+      : r.qty;
+    let method = allocationMethod;
+    let sumBasis = rows.reduce((s, r) => s + basisOf(method, r), 0);
+    if (sumBasis <= 0 && method !== 'QTY') { method = 'QTY'; sumBasis = rows.reduce((s, r) => s + basisOf(method, r), 0); }
+    let allocatedSoFar = 0;
+    rows.forEach((r, i) => {
+      const isLast = i === rows.length - 1;
+      let alloc: number;
+      if (freightCenti === 0 || sumBasis <= 0) alloc = 0;
+      else if (isLast) alloc = freightCenti - allocatedSoFar;
+      else { alloc = Math.round((freightCenti * basisOf(method, r)) / sumBasis); allocatedSoFar += alloc; }
+      const perUnit = r.qty > 0 ? Math.round(alloc / r.qty) : 0;
+      out.set(r.key, { sourceUnitSen: r.sourceUnitSen, allocatedCenti: alloc, landedUnitSen: r.sourceUnitSen + perUnit });
+    });
+    return out;
+  }, [validLines, costMap, skuByCode, freightCenti, allocationMethod]);
+
   const onSave = async () => {
     if (!canSave) {
       notify({ title: 'Pick From + To warehouses (must differ), date, and at least one valid line.', tone: 'error' });
@@ -140,6 +220,9 @@ export const StockTransferNew = () => {
         fromWarehouseId,
         toWarehouseId,
         transferDate,
+        // Migration 0192 — only send freight when present, so a normal (no-
+        // freight) transfer posts exactly as before (cost-neutral).
+        ...(freightCenti > 0 ? { freightCenti, allocationMethod } : {}),
         notes: notes.trim() || undefined,
         items: validLines.map(({ _key: _ignored, ...rest }) => ({
           ...rest,
@@ -189,9 +272,17 @@ export const StockTransferNew = () => {
                 className={styles.fieldSelect}
               >
                 <option value="">— Pick source —</option>
-                {(warehouses.data ?? []).map((w) => (
-                  <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
-                ))}
+                {/* Transit warehouses are tagged inline so the operator can spot
+                    the overseas/China landing source (native <option> can't take
+                    a styled pill). Dual-read camelCase / snake_case. */}
+                {sortByText(warehouses.data ?? []).map((w) => {
+                  const t = (w as { isTransit?: boolean }).isTransit ?? w.is_transit;
+                  return (
+                    <option key={w.id} value={w.id}>
+                      {w.code} · {w.name}{t ? ' · Transit' : ''}
+                    </option>
+                  );
+                })}
               </select>
             </label>
 
@@ -206,21 +297,24 @@ export const StockTransferNew = () => {
                 className={styles.fieldSelect}
               >
                 <option value="">— Pick destination —</option>
-                {(warehouses.data ?? []).map((w) => (
-                  <option key={w.id} value={w.id} disabled={w.id === fromWarehouseId}>
-                    {w.code} · {w.name}{w.id === fromWarehouseId ? ' (source)' : ''}
-                  </option>
-                ))}
+                {sortByText(warehouses.data ?? []).map((w) => {
+                  const t = (w as { isTransit?: boolean }).isTransit ?? w.is_transit;
+                  return (
+                    <option key={w.id} value={w.id} disabled={w.id === fromWarehouseId}>
+                      {w.code} · {w.name}{t ? ' · Transit' : ''}{w.id === fromWarehouseId ? ' (source)' : ''}
+                    </option>
+                  );
+                })}
               </select>
             </label>
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Transfer Date *</span>
-              <input
-                type="date"
-                value={transferDate}
-                onChange={(e) => setTransferDate(e.target.value)}
+              <DateField
+                value={transferDate ?? ''}
+                onChange={(iso) => setTransferDate(iso)}
                 className={styles.fieldInput}
+                fullWidth
               />
             </label>
 
@@ -251,6 +345,81 @@ export const StockTransferNew = () => {
               <span>Source and destination warehouses must be different.</span>
             </div>
           )}
+
+          {/* ── Sea-freight (migration 0192) ──────────────────────────────
+              When the FROM warehouse is a TRANSIT (overseas/China) warehouse the
+              sea-freight uplift is the EXPECTED path, so the panel auto-expands
+              and is styled prominently (the is_transit flag DRIVES this). For an
+              ordinary domestic source it stays collapsed behind a small affordance
+              (the owner can still open it). Freight is a MY forwarder bill in MYR
+              (no FX) that lands the cost in the destination (MY) lot. */}
+          <div style={{ marginTop: 'var(--space-3)' }}>
+            {!showFreight && (
+              <Button variant="ghost" size="sm" onClick={() => setFreightOpen(true)}>
+                <Plus size={14} strokeWidth={1.75} /> Add sea-freight (landed cost)
+              </Button>
+            )}
+            {showFreight && (
+              <div style={{
+                padding: 'var(--space-3) var(--space-4)',
+                // Transit source → prominent (secondary-green tint + accent
+                // border) so it reads as the expected step; ordinary source →
+                // quiet cream panel.
+                background: fromIsTransit ? 'rgba(47, 93, 79, 0.06)' : 'var(--c-cream, rgba(0,0,0,0.02))',
+                border: fromIsTransit
+                  ? '1px solid var(--c-secondary-a, #2F5D4F)'
+                  : '1px solid var(--c-line, #E5E1DA)',
+                borderRadius: 'var(--radius-md)',
+              }}>
+                <div style={{
+                  fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-2)',
+                  display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
+                }}>
+                  <ArrowRight size={13} strokeWidth={1.75} />
+                  {fromIsTransit ? 'Sea freight (transit → local)' : 'Sea-freight (landed cost)'}
+                  {fromIsTransit && (
+                    <span style={{
+                      fontSize: 'var(--fs-11)', fontWeight: 600, letterSpacing: '0.02em',
+                      padding: '1px 8px', borderRadius: 'var(--radius-pill, 999px)',
+                      background: 'rgba(47, 93, 79, 0.16)', color: 'var(--c-secondary-a, #2F5D4F)',
+                    }}>
+                      Transit source
+                    </span>
+                  )}
+                </div>
+                <div className={styles.formGrid4}>
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Sea-freight (MYR)</span>
+                    <input
+                      type="number" min={0} step="0.01"
+                      value={freightMyr}
+                      onChange={(e) => setFreightMyr(e.target.value)}
+                      placeholder="0.00"
+                      className={styles.fieldInput}
+                      style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+                    />
+                  </label>
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Allocation method</span>
+                    <select
+                      value={allocationMethod}
+                      onChange={(e) => setAllocationMethod(e.target.value as 'QTY' | 'VALUE' | 'CBM')}
+                      className={styles.fieldSelect}
+                    >
+                      <option value="QTY">By quantity</option>
+                      <option value="VALUE">By value (cost)</option>
+                      <option value="CBM">By volume (CBM)</option>
+                    </select>
+                  </label>
+                </div>
+                <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-soft)', marginTop: 'var(--space-2)' }}>
+                  {fromIsTransit
+                    ? 'Transit stock — add the sea-freight that lands the cost in the destination warehouse. Folded into each receiving lot so MY inventory carries the true landed cost. Leave 0 for a cost-neutral transfer.'
+                    : "Folded into each receiving lot's cost so MY inventory carries the true landed cost. Leave 0 for a cost-neutral transfer."}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </section>
 
@@ -270,6 +439,8 @@ export const StockTransferNew = () => {
                 <th>Description</th>
                 <th style={{ width: 110, textAlign: 'right' }}>Available</th>
                 <th style={{ width: 110, textAlign: 'right' }}>Qty *</th>
+                {/* Migration 0192 — landed unit cost preview (when freight set). */}
+                {showFreight && <th style={{ width: 140, textAlign: 'right' }}>Landed unit cost</th>}
                 <th style={{ width: 40 }} />
               </tr>
             </thead>
@@ -290,7 +461,7 @@ export const StockTransferNew = () => {
                         style={{ fontFamily: 'var(--font-mono)' }}
                       />
                       <datalist id={`xfer-skus-${ln._key}`}>
-                        {(allSkus.data ?? []).map((p) => (
+                        {sortByText(allSkus.data ?? []).map((p) => (
                           <option key={p.id} value={p.code}>{p.name}</option>
                         ))}
                       </datalist>
@@ -340,6 +511,25 @@ export const StockTransferNew = () => {
                         }}
                       />
                     </td>
+                    {/* Migration 0192 — landed unit cost preview (source avg +
+                        allocated freight per unit). Em-dash until a SKU/qty +
+                        freight make it computable. */}
+                    {showFreight && (
+                      <td className={styles.tableRight}
+                          style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>
+                        {(() => {
+                          const pv = preview.get(ln._key);
+                          if (!ln.productCode.trim() || ln.qty <= 0 || !pv) return <span className={styles.muted}>—</span>;
+                          const lifted = pv.landedUnitSen > pv.sourceUnitSen;
+                          return (
+                            <span title={`source ${fmtCenti(pv.sourceUnitSen)} + freight ${fmtCenti(pv.allocatedCenti)}`}
+                              style={{ color: lifted ? 'var(--c-ink)' : 'var(--fg-soft)' }}>
+                              {fmtCenti(pv.landedUnitSen)}
+                            </span>
+                          );
+                        })()}
+                      </td>
+                    )}
                     <td className={styles.actionsCell}>
                       <button
                         type="button"

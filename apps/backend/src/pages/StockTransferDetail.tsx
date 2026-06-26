@@ -17,7 +17,9 @@ import { SkeletonDetailPage } from '../components/Skeleton';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { StatusPill } from '../components/StatusPill';
-import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
+import { DateField } from '../components/DateField';
+import { sortByText } from '../lib/sort-options';
+import { buildVariantSummary, fmtCenti } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   useWarehouses,
 } from '../lib/inventory-queries';
@@ -116,6 +118,19 @@ export const StockTransferDetail = () => {
 
   const t = detail.data.transfer;
 
+  // Migration 0192 — sea-freight (MYR sen) folded into the receiving lots.
+  const freightCenti = Number(t.freight_centi ?? 0);
+  const hasFreight = freightCenti > 0;
+  const allocMethodLabel = t.allocation_method === 'VALUE' ? 'By value (cost)'
+    : t.allocation_method === 'CBM' ? 'By volume (CBM)'
+    : 'By quantity';
+  // Per-line allocated freight, keyed by product line position (lines render in
+  // the same order as the LineDraft rows hydrated from detail.data.lines).
+  const allocByIndex = detail.data.lines.map((l) => ({
+    allocatedCenti: Number(l.allocated_charge_centi ?? 0),
+    qty: l.qty,
+  }));
+
   return (
     <div className={styles.page}>
       <div className={styles.headerRow}>
@@ -161,7 +176,7 @@ export const StockTransferDetail = () => {
               <span className={styles.fieldLabel}>From Warehouse</span>
               <select value={fromWarehouseId} className={styles.fieldSelect} disabled>
                 <option value="">—</option>
-                {(warehouses.data ?? []).map((w) => (
+                {sortByText(warehouses.data ?? []).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                 ))}
               </select>
@@ -174,7 +189,7 @@ export const StockTransferDetail = () => {
               </span>
               <select value={toWarehouseId} className={styles.fieldSelect} disabled>
                 <option value="">—</option>
-                {(warehouses.data ?? []).map((w) => (
+                {sortByText(warehouses.data ?? []).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                 ))}
               </select>
@@ -182,7 +197,7 @@ export const StockTransferDetail = () => {
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Transfer Date</span>
-              <input type="date" value={transferDate} className={styles.fieldInput} disabled />
+              <DateField value={transferDate ?? ''} onChange={() => {}} className={styles.fieldInput} disabled fullWidth />
             </label>
 
             <label className={styles.field}>
@@ -190,6 +205,21 @@ export const StockTransferDetail = () => {
               <input type="text" value={notes} className={styles.fieldInput} disabled />
             </label>
           </div>
+
+          {/* Migration 0192 — sea-freight folded into the receiving lots. */}
+          {hasFreight && (
+            <div style={{ marginTop: 'var(--space-3)' }} className={styles.formGrid4}>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>Sea-freight (MYR)</span>
+                <input type="text" value={fmtCenti(freightCenti)} className={styles.fieldInput}
+                  style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }} disabled />
+              </label>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>Allocation method</span>
+                <input type="text" value={allocMethodLabel} className={styles.fieldInput} disabled />
+              </label>
+            </div>
+          )}
         </div>
       </section>
 
@@ -206,13 +236,15 @@ export const StockTransferDetail = () => {
                 <th>Description</th>
                 <th>Description 2</th>
                 <th style={{ width: 110, textAlign: 'right' }}>Qty</th>
+                {/* Migration 0192 — freight allocated per unit on this line. */}
+                {hasFreight && <th style={{ width: 130, textAlign: 'right' }}>Freight / unit</th>}
               </tr>
             </thead>
             <tbody>
               {lines.length === 0 && (
-                <tr><td colSpan={4} className={styles.emptyRow}>No lines.</td></tr>
+                <tr><td colSpan={hasFreight ? 5 : 4} className={styles.emptyRow}>No lines.</td></tr>
               )}
-              {lines.map((ln) => (
+              {lines.map((ln, i) => (
                 <tr key={ln._key}>
                   <td><span className={styles.codeCell}>{ln.productCode}</span></td>
                   <td>{ln.productName || <span className={styles.muted}>—</span>}</td>
@@ -237,6 +269,17 @@ export const StockTransferDetail = () => {
                   <td className={styles.tableRight} style={{ fontFamily: 'var(--font-mono)' }}>
                     {ln.qty.toLocaleString('en-MY')}
                   </td>
+                  {hasFreight && (() => {
+                    const a = allocByIndex[i];
+                    const perUnit = a && a.qty > 0 ? Math.round(a.allocatedCenti / a.qty) : 0;
+                    return (
+                      <td className={styles.tableRight} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>
+                        {perUnit > 0
+                          ? <span title={`total freight ${fmtCenti(a?.allocatedCenti ?? 0)}`}>{fmtCenti(perUnit)}</span>
+                          : <span className={styles.muted}>—</span>}
+                      </td>
+                    );
+                  })()}
                 </tr>
               ))}
             </tbody>

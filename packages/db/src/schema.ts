@@ -13,7 +13,7 @@
 // ----------------------------------------------------------------------------
 
 import {
-  pgTable, pgEnum, uuid, text, integer, boolean, timestamp, date, jsonb,
+  pgTable, pgEnum, uuid, text, integer, numeric, boolean, timestamp, date, jsonb,
   primaryKey, index, check, uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
@@ -896,9 +896,28 @@ export const pendingSlipUploads = pgTable('pending_slip_uploads', {
 
 export const supplierStatus = pgEnum('supplier_status', ['ACTIVE', 'INACTIVE', 'BLOCKED']);
 
+/* Migration 0193 — the `currency_code` enum is SUPERSEDED by the `currencies`
+   master table (below). It is kept here ONLY because the type still exists in
+   the DB (not dropped) and other migration-only modules may still reference it;
+   the document currency columns are now plain text + FK → currencies(code), so
+   ANY active master currency is valid with no code change. */
 export const currencyCode = pgEnum('currency_code', ['MYR', 'RMB', 'USD', 'SGD']);
 
+/* Currencies MASTER (migration 0193) — owner-maintained source of truth for the
+   currency list + each currency's current rate to MYR. The currency dropdowns
+   read the ACTIVE rows; GRN/PI/PV auto-fill exchange_rate from rate_to_myr. */
+export const currencies = pgTable('currencies', {
+  code:       text('code').primaryKey(),               // 'MYR' / 'RMB' / 'USD' / 'SGD' / …
+  name:       text('name').notNull(),                  // 'Malaysian Ringgit'
+  symbol:     text('symbol'),                           // 'RM' / '¥' / '$' / 'S$'
+  rateToMyr:  numeric('rate_to_myr', { precision: 14, scale: 6 }).notNull().default('1'),  // MYR per 1 unit (1 for MYR)
+  isActive:   boolean('is_active').notNull().default(true),
+  sortOrder:  integer('sort_order').notNull().default(0),
+  updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const poStatus = pgEnum('po_status', [
+  'DRAFT',                // saved, not yet submitted to supplier (owner 2026-06-25 re-add)
   'SUBMITTED',            // sent to supplier, awaiting acknowledgement (default on create)
   'PARTIALLY_RECEIVED',   // some GRN posted
   'RECEIVED',             // all items GRN'd
@@ -934,6 +953,13 @@ export const suppliers = pgTable('suppliers', {
   website:        text('website'),
   attention:      text('attention'),
   businessNature: text('business_nature'),
+  /* Migration 0186 — AutoCount creditor-export parity (Houzs-led port).
+     Distinct from business_reg_no / business_nature above. phone2 normalizes
+     to E.164 like the other phone fields. */
+  registrationNo:    text('registration_no'),
+  natureOfBusiness:  text('nature_of_business'),
+  exemptionNo:       text('exemption_no'),
+  phone2:            text('phone2'),
   currency:       text('currency').notNull().default('MYR'),
   statementType:  text('statement_type').notNull().default('OPEN_ITEM'),    // OPEN_ITEM | BALANCE_FORWARD | NO_STATEMENT
   agingBasis:     text('aging_basis').notNull().default('INVOICE_DATE'),    // INVOICE_DATE | DUE_DATE
@@ -964,7 +990,8 @@ export const supplierMaterialBindings = pgTable('supplier_material_bindings', {
   materialName:      text('material_name').notNull(),    // snapshot for the binding row
   supplierSku:       text('supplier_sku').notNull(),     // SUPPLIER's own SKU
   unitPriceCenti:    integer('unit_price_centi').notNull().default(0),  // × 100; works for both MYR + RMB
-  currency:          currencyCode('currency').notNull().default('MYR'),
+  /* Migration 0193 — text + FK → currencies(code) (was the currency_code enum). */
+  currency:          text('currency').notNull().default('MYR'),
   leadTimeDays:      integer('lead_time_days').notNull().default(0),
   paymentTermsOverride: text('payment_terms_override'),  // overrides supplier.payment_terms if set
   moq:               integer('moq').notNull().default(0),                // min order quantity
@@ -1010,7 +1037,8 @@ export const purchaseOrders = pgTable('purchase_orders', {
   // AutoCount's header "Purchase Location"). Per-line warehouse_id on the
   // items table overrides when commander wants split delivery.
   purchaseLocationId: uuid('purchase_location_id').references(() => warehouses.id, { onDelete: 'set null' }),
-  currency:    currencyCode('currency').notNull().default('MYR'),
+  /* Migration 0193 — text + FK → currencies(code) (was the currency_code enum). */
+  currency:    text('currency').notNull().default('MYR'),
   subtotalCenti: integer('subtotal_centi').notNull().default(0),
   taxCenti:    integer('tax_centi').notNull().default(0),
   totalCenti:  integer('total_centi').notNull().default(0),
@@ -1105,10 +1133,15 @@ export const purchaseOrderLines = pgTable('purchase_order_lines', {
 // 'CANCELLED' added in migration 0105 — GRN is a Confirmed-clone of the PO
 // module; cancelling reverses the receipt (inventory OUT + PO received_qty
 // decrement). No Draft/lifecycle: POSTED reads as "Confirmed".
-export const grnStatus = pgEnum('grn_status', ['POSTED', 'CLOSED', 'CANCELLED']);
+export const grnStatus = pgEnum('grn_status', ['DRAFT', 'POSTED', 'CLOSED', 'CANCELLED']);
+
+/* Landed-cost allocation basis (migration 0191) — how a SERVICE-line freight
+   charge is split across the GRN's goods lines into the FIFO lot cost:
+   QTY (default) | VALUE (qty × base MYR cost) | CBM (qty × unit_m3_milli). */
+export const chargeAllocationMethod = pgEnum('charge_allocation_method', ['QTY', 'VALUE', 'CBM']);
 
 export const purchaseInvoiceStatus = pgEnum('purchase_invoice_status', [
-  'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED',
+  'DRAFT', 'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED',
 ]);
 
 export const grns = pgTable('grns', {
@@ -1122,8 +1155,18 @@ export const grns = pgTable('grns', {
   notes:             text('notes'),
   /* Migration 0101 — GRN ↔ PO money parity. currency reuses the same
      currency_code enum as purchase_orders. subtotal/total are recomputed
-     server-side as Σ grn_items.line_total_centi (no tax for GRN). */
-  currency:          currencyCode('currency').notNull().default('MYR'),
+     server-side as Σ grn_items.line_total_centi (no tax for GRN).
+     Migration 0193 — text + FK → currencies(code) (was the currency_code enum). */
+  currency:          text('currency').notNull().default('MYR'),
+  /* Landed-cost core (migration 0190): MYR per 1 unit of `currency` (1 for MYR).
+     Used to convert the inventory IN unit cost (FIFO lot) to MYR at receive
+     time — subtotal/total stay in the GRN's own currency. Mirrors
+     purchase_invoices.exchange_rate (migration 0188). */
+  exchangeRate:      numeric('exchange_rate', { precision: 14, scale: 6 }).notNull().default('1'),
+  /* Landed-cost allocation (migration 0191) — basis for splitting SERVICE-line
+     freight charges across the goods lines into the FIFO lot cost. QTY default
+     ⇒ existing GRNs (no charge lines) allocate 0 → byte-for-byte unchanged. */
+  allocationMethod:  chargeAllocationMethod('allocation_method').notNull().default('QTY'),
   subtotalCenti:     integer('subtotal_centi').notNull().default(0),
   taxCenti:          integer('tax_centi').notNull().default(0),
   totalCenti:        integer('total_centi').notNull().default(0),
@@ -1178,6 +1221,10 @@ export const grnItems = pgTable('grn_items', {
      - returned_qty). Either > 0 ⇒ the GRN has a downstream child (edit-lock). */
   invoicedQty:           integer('invoiced_qty').notNull().default(0),
   returnedQty:           integer('returned_qty').notNull().default(0),
+  /* Landed-cost allocation (migration 0191) — freight (MYR sen) allocated to
+     THIS goods line at GRN-post (Σ over goods lines === the charge pool). Stored
+     so recost re-adds it deterministically after a PI recost. SERVICE lines 0. */
+  allocatedChargeCenti:  integer('allocated_charge_centi').notNull().default(0),
   createdAt:             timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxGrn: index('idx_grn_items_grn').on(t.grnId),
@@ -1192,7 +1239,12 @@ export const purchaseInvoices = pgTable('purchase_invoices', {
   grnId:             uuid('grn_id').references(() => grns.id, { onDelete: 'set null' }),
   invoiceDate:       date('invoice_date').notNull().defaultNow(),
   dueDate:           date('due_date'),
-  currency:          currencyCode('currency').notNull().default('MYR'),
+  /* Migration 0193 — text + FK → currencies(code) (was the currency_code enum). */
+  currency:          text('currency').notNull().default('MYR'),
+  /* Multi-currency AP (migration 0188): MYR per 1 unit of `currency` (1 for
+     MYR). Used ONLY to convert the AP journal entry to MYR at GL-post time —
+     subtotal/total stay in the PI's own currency. */
+  exchangeRate:      numeric('exchange_rate', { precision: 14, scale: 6 }).notNull().default('1'),
   subtotalCenti:     integer('subtotal_centi').notNull().default(0),
   taxCenti:          integer('tax_centi').notNull().default(0),
   totalCenti:        integer('total_centi').notNull().default(0),
@@ -1242,6 +1294,64 @@ export const purchaseInvoiceItems = pgTable('purchase_invoice_items', {
 }));
 
 /* ════════════════════════════════════════════════════════════════════════
+   Payment Vouchers (PV) — migration 0189.
+   A standalone "very plain" cash-out voucher to pay a vendor that is NOT a
+   goods invoice (e.g. freight forwarder, one-off service): payee + a credit
+   account (paid FROM) + a few expense lines (description + debit account +
+   amount) + a total that posts to the GL (source_type 'PV').
+     Dr each line.debit_account_code  (the expense/charge)
+     Cr header.credit_account_code    (the bank/cash/AP the money left)
+   currency / exchange_rate mirror purchase_invoices (0188): the voucher stays
+   in its own currency; the rate converts the JE to MYR at GL-post time only.
+   STANDALONE for v1 — the landed-cost LINK (allocating a charge into a PO's
+   goods cost) is a separate later step, NOT modelled here.
+   ════════════════════════════════════════════════════════════════════════ */
+
+export const paymentVoucherStatus = pgEnum('payment_voucher_status', [
+  'DRAFT', 'POSTED', 'CANCELLED',
+]);
+
+export const paymentVouchers = pgTable('payment_vouchers', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  pvNumber:          text('pv_number').notNull().unique(),            // 'PV-2606-001'
+  voucherDate:       date('voucher_date').notNull().defaultNow(),
+  payeeName:         text('payee_name').notNull(),                    // who we're paying (free text)
+  supplierId:        uuid('supplier_id').references(() => suppliers.id, { onDelete: 'set null' }),  // optional link
+  // The bank/cash/AP account the money is paid FROM (GL credit leg).
+  creditAccountCode: text('credit_account_code').notNull(),
+  /* Migration 0193 — text + FK → currencies(code) (was the currency_code enum). */
+  currency:          text('currency').notNull().default('MYR'),
+  /* Multi-currency (mirror PI 0188): MYR per 1 unit of `currency` (1 for MYR).
+     Converts the GL post to MYR at post time — total stays in the PV's own
+     currency. */
+  exchangeRate:      numeric('exchange_rate', { precision: 14, scale: 6 }).notNull().default('1'),
+  notes:             text('notes'),
+  totalCenti:        integer('total_centi').notNull().default(0),     // Σ lines.amount_centi (PV currency)
+  status:            paymentVoucherStatus('status').notNull().default('DRAFT'),
+  postedAt:          timestamp('posted_at', { withTimezone: true }),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:         uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+  updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxDate:     index('idx_pv_date').on(t.voucherDate),
+  idxSupplier: index('idx_pv_supplier').on(t.supplierId),
+  idxStatus:   index('idx_pv_status').on(t.status),
+}));
+
+export const paymentVoucherLines = pgTable('payment_voucher_lines', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  pvId:              uuid('pv_id').notNull().references(() => paymentVouchers.id, { onDelete: 'cascade' }),
+  lineNo:            integer('line_no').notNull(),
+  description:       text('description'),
+  // The expense/charge account (GL debit leg).
+  debitAccountCode:  text('debit_account_code').notNull(),
+  amountCenti:       integer('amount_centi').notNull().default(0),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxPv: index('idx_pv_lines_pv').on(t.pvId),
+}));
+
+/* ════════════════════════════════════════════════════════════════════════
    B2B Sales: SO → DO → Sales Invoice
    HOUZS ERP风格 — separate from retail `orders` (which is POS-style).
    `mfg_sales_orders` because we have two coexisting "sales order" concepts:
@@ -1251,17 +1361,17 @@ export const purchaseInvoiceItems = pgTable('purchase_invoice_items', {
    ════════════════════════════════════════════════════════════════════════ */
 
 export const mfgSoStatus = pgEnum('mfg_so_status', [
-  'CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP', 'SHIPPED',
+  'DRAFT', 'CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP', 'SHIPPED',
   'DELIVERED', 'INVOICED', 'CLOSED', 'ON_HOLD', 'CANCELLED',
 ]);
 
 export const doStatus = pgEnum('do_status', [
-  'LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED',
+  'DRAFT', 'LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED',
   'DELIVERED', 'INVOICED', 'CANCELLED',
 ]);
 
 export const salesInvoiceStatus = pgEnum('sales_invoice_status', [
-  'SENT', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'CANCELLED',
+  'DRAFT', 'SENT', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'CANCELLED',
 ]);
 
 export const mfgSalesOrders = pgTable('mfg_sales_orders', {
@@ -1330,7 +1440,8 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   // non-null values (one follow-up per source SO).
   crossCategorySourceDocNo: text('cross_category_source_doc_no'),
 
-  currency:          currencyCode('currency').notNull().default('MYR'),
+  /* Migration 0193 — text + FK → currencies(code) (was the currency_code enum). */
+  currency:          text('currency').notNull().default('MYR'),
   status:            mfgSoStatus('status').notNull().default('CONFIRMED'),
   remark2:           text('remark2'),
   remark3:           text('remark3'),
@@ -1667,6 +1778,10 @@ export const deliveryOrders = pgTable('delivery_orders', {
   podR2Key:          text('pod_r2_key'),                           // proof of delivery photo
   signatureData:     text('signature_data'),                       // base64 png
   status:            doStatus('status').notNull().default('LOADED'),
+  /* Migration 0204 — drop-ship: a sofa shipped supplier-direct before its
+     batch was received (stock went negative against the expected PO batch,
+     nets out on GRN). Drives the "batch not received" UI badge only. */
+  isDropship:        boolean('is_dropship').notNull().default(false),
   notes:             text('notes'),
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy:         uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
@@ -1720,7 +1835,8 @@ export const salesInvoices = pgTable('sales_invoices', {
   debtorName:        text('debtor_name').notNull(),
   invoiceDate:       date('invoice_date').notNull().defaultNow(),
   dueDate:           date('due_date'),
-  currency:          currencyCode('currency').notNull().default('MYR'),
+  /* Migration 0193 — text + FK → currencies(code) (was the currency_code enum). */
+  currency:          text('currency').notNull().default('MYR'),
   subtotalCenti:     integer('subtotal_centi').notNull().default(0),
   discountCenti:     integer('discount_centi').notNull().default(0),
   taxCenti:          integer('tax_centi').notNull().default(0),
@@ -2432,10 +2548,31 @@ export const warehouses = pgTable('warehouses', {
   location:   text('location'),
   isActive:   boolean('is_active').notNull().default(true),
   isDefault:  boolean('is_default').notNull().default(false),
+  // Migration 0192 — marks an overseas / in-transit warehouse (the China
+  // landing warehouse). A stock transfer OUT of a transit warehouse can carry a
+  // sea-freight cost uplift onto the receiving (MY) lot.
+  isTransit:  boolean('is_transit').notNull().default(false),
   createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxActive: index('idx_warehouses_active').on(t.isActive),
+}));
+
+/* MRP per-category lead times (migration 0099). Commander 2026-06-22 (migration
+   0184) — extended with a per-WAREHOUSE dimension: `warehouseId` NULL = the
+   GLOBAL DEFAULT (existing category-only rows become globals automatically).
+   Uniqueness is (warehouse_id, category). NOTE: a Postgres PRIMARY KEY can't
+   hold a nullable column, so 0184 drops the old PK and uses a NULLS NOT DISTINCT
+   unique index — Drizzle can't express NULLS NOT DISTINCT, so we model the plain
+   unique index here (the migration is the source of truth). Lookup cascade in
+   the MRP / PO calc: (warehouse, category) → (NULL, category) → 0. */
+export const mrpCategoryLeadTimes = pgTable('mrp_category_lead_times', {
+  warehouseId: uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'cascade' }),
+  category:    text('category').notNull(),
+  leadDays:    integer('lead_days').notNull().default(0),
+  updatedAt:   timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  uniqWhCat: uniqueIndex('mrp_category_lead_times_wh_cat_uniq').on(t.warehouseId, t.category),
 }));
 
 /* PR #158 — Migration 0071. Commander 2026-05-27: "什么 State 对应哪个
@@ -2450,6 +2587,40 @@ export const stateWarehouseMappings = pgTable('state_warehouse_mappings', {
   createdAt:   timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:   timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/* Migration 0198 — CONFIG-DRIVEN Delivery-Planning regions. Replaces the
+   hardcoded stateToRegion() in apps/api/src/routes/delivery-planning.ts with an
+   owner-maintainable list of REGIONS + a per-state MULTI mapping (a state can
+   surface under several region tabs). Master list of delivery-planning region
+   buckets — the tab row on the Delivery Planning board. Seeded with the 4
+   current buckets (KL / PENANG / EM / SG). */
+export const deliveryPlanningRegions = pgTable('delivery_planning_regions', {
+  id:        uuid('id').primaryKey().defaultRandom(),
+  code:      text('code').notNull().unique(),       // 'KL' | 'PENANG' | 'EM' | 'SG' (owner-extensible)
+  name:      text('name').notNull(),                // display label, e.g. 'Penang'
+  sortOrder: integer('sort_order').notNull().default(0),
+  active:    boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/* Migration 0198 — per-STATE MULTI mapping: which delivery-planning region(s) a
+   state's orders appear under. A state can map to MANY regions (e.g. Singapore →
+   [SG, KL] because SG orders ship from the KL/SLGR warehouse and must show under
+   BOTH tabs). state_key matches how a STATE is keyed everywhere else in this
+   subsystem — the state NAME (mfg_sales_orders.customer_state /
+   state_warehouse_mappings.state / my_localities.state). country disambiguates
+   same-named states across countries (Singapore carries country='Singapore'). */
+export const stateDeliveryRegions = pgTable('state_delivery_regions', {
+  id:        uuid('id').primaryKey().defaultRandom(),
+  stateKey:  text('state_key').notNull(),           // the state NAME, e.g. 'Selangor' / 'Singapore'
+  country:   text('country').notNull().default('Malaysia'),
+  regionId:  uuid('region_id').notNull().references(() => deliveryPlanningRegions.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  uniqStateRegion: uniqueIndex('uq_state_delivery_region').on(t.stateKey, t.country, t.regionId),
+  stateKeyIdx:     index('idx_state_delivery_regions_state_key').on(t.stateKey),
+  regionIdx:       index('idx_state_delivery_regions_region_id').on(t.regionId),
+}));
 
 /* Task #118 — Generic SO dropdown options (migration 0081). Commander
    2026-05-27: "customer type, building type, relationship 和 payment
@@ -2572,6 +2743,11 @@ export const stockTransfers = pgTable('stock_transfers', {
   fromWarehouseId:   uuid('from_warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
   toWarehouseId:     uuid('to_warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
   transferDate:      date('transfer_date').notNull().defaultNow(),
+  // Migration 0192 — sea-freight (MYR sen, a MY forwarder bill — NO FX) pooled +
+  // allocated across the lines into each receiving lot's cost (China → MY landed
+  // cost). 0 ⇒ cost-neutral transfer (no uplift; existing behaviour unchanged).
+  freightCenti:      integer('freight_centi').notNull().default(0),
+  allocationMethod:  chargeAllocationMethod('allocation_method').notNull().default('QTY'),
   notes:             text('notes'),
   postedAt:          timestamp('posted_at', { withTimezone: true }),
   cancelledAt:       timestamp('cancelled_at', { withTimezone: true }),
@@ -2592,6 +2768,10 @@ export const stockTransferLines = pgTable('stock_transfer_lines', {
   productName:       text('product_name'),
   variantKey:        text('variant_key').notNull().default(''),  // migration 0117 — FIFO variant bucket
   qty:               integer('qty').notNull(),
+  // Migration 0192 — sea-freight (MYR sen) allocated to THIS line at post-time
+  // (Σ over lines === stock_transfers.freight_centi); folded per-unit into the
+  // IN movement unit_cost_sen. 0 ⇒ no uplift (existing behaviour unchanged).
+  allocatedChargeCenti: integer('allocated_charge_centi').notNull().default(0),
   notes:             text('notes'),
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({

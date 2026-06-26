@@ -82,7 +82,10 @@ export async function recomputeSoStockAllocation(
     const { data: orderRows } = await sb
       .from('mfg_sales_orders')
       .select('doc_no, status, created_at, customer_delivery_date')
-      .not('status', 'in', '(CANCELLED,CLOSED,SHIPPED,DELIVERED,INVOICED)')
+      /* Leak guard (DRAFT) — a DRAFT SO commits nothing, so it must NOT claim a
+         share of READY stock in the FIFO allocation (else a draft could starve a
+         real CONFIRMED order of stock and mis-flip its line readiness). */
+      .not('status', 'in', '(CANCELLED,CLOSED,SHIPPED,DELIVERED,INVOICED,DRAFT)')
       .order('customer_delivery_date',  { ascending: true, nullsFirst: false })
       .order('created_at',              { ascending: true });
     const orders = (orderRows ?? []) as Array<{

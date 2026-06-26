@@ -35,6 +35,8 @@ import {
   type RackMovement,
   type RackStatus,
 } from '../lib/warehouse-queries';
+import { DateField } from '../components/DateField';
+import { WarehouseFormDrawer } from '../components/WarehouseFormDrawer';
 import styles from './Warehouse.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -59,6 +61,7 @@ const fmtDateTime = (iso: string): string => {
 export const Warehouse = () => {
   const [tab, setTab] = useState<Tab>('grid');
   const [warehouseId, setWarehouseId] = useState<string | null>(null);
+  const [creatingWarehouse, setCreatingWarehouse] = useState(false);
 
   // Detail drawer + cross-tab stock-in/out targets.
   const [detailRack, setDetailRack] = useState<Rack | null>(null);
@@ -107,10 +110,18 @@ export const Warehouse = () => {
             </button>
           ))}
         </div>
-        <Button variant="ghost" size="sm" onClick={() => racksQ.refetch()}>
-          <RefreshCw {...ICON} />
-          <span>Refresh</span>
-        </Button>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <Button variant="ghost" size="sm" onClick={() => racksQ.refetch()}>
+            <RefreshCw {...ICON} />
+            <span>Refresh</span>
+          </Button>
+          {/* Create a warehouse right here — this page already groups racks by
+              warehouse, so it's the natural place to add one (shared form). */}
+          <Button variant="primary" size="sm" onClick={() => setCreatingWarehouse(true)}>
+            <Plus {...ICON} />
+            <span>New Warehouse</span>
+          </Button>
+        </div>
       </div>
 
       {/* KPI tiles */}
@@ -167,6 +178,16 @@ export const Warehouse = () => {
             setDetailRack(null);
             setTab('stockio');
           }}
+        />
+      )}
+
+      {/* Create-warehouse drawer (shared with the Warehouses master page).
+          On save we refetch racks so the new warehouse appears as a chip. */}
+      {creatingWarehouse && (
+        <WarehouseFormDrawer
+          editing={null}
+          onClose={() => setCreatingWarehouse(false)}
+          onSaved={() => racksQ.refetch()}
         />
       )}
     </div>
@@ -626,10 +647,10 @@ const MovementHistoryTab = ({ warehouseId }: { warehouseId: string | null }) => 
             <option value="STOCK_OUT">Stock Out</option>
             <option value="TRANSFER">Transfer</option>
           </select>
-          <input className={styles.input} style={{ width: 'auto' }} type="date"
-            value={from} onChange={(e) => setFrom(e.target.value)} />
-          <input className={styles.input} style={{ width: 'auto' }} type="date"
-            value={to} onChange={(e) => setTo(e.target.value)} />
+          <DateField className={styles.input}
+            value={from ?? ''} onChange={(iso) => setFrom(iso)} />
+          <DateField className={styles.input}
+            value={to ?? ''} onChange={(iso) => setTo(iso)} />
           {(type || from || to) && (
             <Button variant="ghost" size="sm"
               onClick={() => { setType(''); setFrom(''); setTo(''); }}>

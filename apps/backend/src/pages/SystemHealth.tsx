@@ -10,9 +10,9 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
-import { Activity, AlertTriangle, Clock, Gauge, TrendingUp, RefreshCw, Trash2 } from 'lucide-react';
+import { Activity, AlertTriangle, Clock, Gauge, TrendingUp, RefreshCw, Trash2, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../lib/auth';
-import { useResetTestData, useResetTestDataKeepSo } from '../lib/admin-queries';
+import { useResetTestData, useResetTestDataKeepSo, useLedgerHealth } from '../lib/admin-queries';
 import styles from './SystemHealth.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -209,6 +209,82 @@ const ResetKeepSoCard = () => {
   );
 };
 
+/* Inventory ledger integrity — REAL data. Calls GET /health/ledger, which runs
+   the read-only ledger reconcile sweep over all 9 stock-moving doc types and
+   flags any posted/shipped document that silently wrote ZERO inventory
+   movements (a best-effort-write failure). Green when clean; orange WARN with
+   the count + the first issues when something drifted. */
+const LedgerIntegrityPanel = () => {
+  const { data, isLoading, isError, error, refetch, isFetching } = useLedgerHealth();
+
+  const status = isError ? 'unknown' : (data?.status ?? 'unknown');
+  const statusClass =
+    status === 'ok' ? '' : status === 'warn' ? styles.warn : styles.unknown;
+  const headline =
+    isLoading ? 'Checking…'
+    : isError ? 'Check failed'
+    : status === 'ok' ? 'Healthy — every posted document moved stock'
+    : status === 'warn' ? `${data?.issueCount ?? 0} document${(data?.issueCount ?? 0) === 1 ? '' : 's'} moved stock on paper but wrote no inventory movement`
+    : 'Unknown';
+  const sub =
+    isError ? (error as Error).message
+    : data?.error ? data.error
+    : data?.asOf ? `As of ${new Date(data.asOf).toLocaleString()}`
+    : '';
+
+  return (
+    <div className={styles.chartCard}>
+      <h2 className={styles.chartTitle}>
+        <ShieldCheck {...ICON} /> Inventory ledger integrity
+        <button
+          type="button"
+          className={styles.ghostBtn}
+          style={{ marginLeft: 'auto' }}
+          onClick={() => void refetch()}
+          disabled={isFetching}
+        >
+          <RefreshCw {...ICON} /> {isFetching ? 'Checking…' : 'Re-check'}
+        </button>
+      </h2>
+
+      <div className={`${styles.ledgerStatus} ${statusClass}`}>
+        <span className={styles.ledgerDot} />
+        <div>
+          <strong>{headline}</strong>
+          {sub && <div className={styles.ledgerSub}>{sub}</div>}
+        </div>
+      </div>
+
+      {data && data.issues.length > 0 && (
+        <table className={styles.ledgerTable}>
+          <thead>
+            <tr>
+              <th>Document</th>
+              <th>Number</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.issues.map((iss) => (
+              <tr key={`${iss.docType}-${iss.id}`}>
+                <td>{iss.docType}</td>
+                <td>{iss.docNo}</td>
+                <td>{iss.status}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {data && data.status === 'warn' && data.issueCount > data.issues.length && (
+        <div className={styles.ledgerSub} style={{ marginTop: 'var(--space-2)' }}>
+          Showing first {data.issues.length} of {data.issueCount}. Drill into
+          GET /inventory/reconcile for the full list.
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const SystemHealth = () => {
   const { staff } = useAuth();
   const [k, setK] = useState<Kpis>(() => mockKpis());
@@ -267,6 +343,8 @@ export const SystemHealth = () => {
           <span>now</span>
         </div>
       </div>
+
+      <LedgerIntegrityPanel />
 
       {staff?.role === 'super_admin' && <ResetKeepSoCard />}
       {staff?.role === 'super_admin' && <ResetTestDataCard />}

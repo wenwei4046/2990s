@@ -6,6 +6,45 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-24-001 — Excel export: every JSX-rendered column (doc-no, Total, Status) exported BLANK
+
+**What broke:** Exporting any doc list to Excel produced a sheet where the key columns were empty — the owner's `Purchase Orders 2026-06-23.xlsx` had **PO No. and Total blank on every row**, plus a junk leading empty-header column.
+
+**Root cause:** `DataGrid.exportRows` builds each cell as `exportValue(row) ?? filterValue(row) ?? coerceSearchString(accessor(row)) ?? ''`, and `coerceSearchString` returns `''` for a React element (it doesn't walk JSX children). So **any column whose `accessor` returns JSX — a doc-no `<Link>`, a `fmtRm(...)` money string, a `<StatusPill>`, a branding/margin cell — and that defines neither `exportValue` nor `filterValue` exported as `''`.** A whole class of columns, silently blank. (Sequel to BUG-2026-06-20-006, which fixed the *duplicated/merged-blob* facet of the same export path; this is the *blank-JSX* facet it didn't cover.)
+
+**Fix (commit `7cddec65`):** added `exportValue` to every JSX-returning column across all 14+ doc-list pages (PO/PI/PR/GRN, SO/SI/DO/DR, all consignment lists, Outstanding, stock transfer/take/adjust, Suppliers) — doc-no → raw string, money/Total/Subtotal/Refund → the **ringgit number** (`centi/100`, so Excel can SUM), Status → the pill label, margin mirrors the on-screen "—" when total ≤ 0. Added a DataGrid `exportLabel` so a blank-on-screen icon column gets a real sheet header.
+
+**Caught by:** the owner exported a real PO list and sent the file. My earlier cross-repo "audit" had wrongly called 2990's export *ahead* of Houzs because it judged by **how many pages have an export button**, never by whether the exported cells were correct — the Houzs clone has the identical bug.
+
+**Prevention:** any `DataGridColumn` whose `accessor` returns a React element MUST define `exportValue` (or `filterValue`). "Does this cell render JSX?" is the trigger to add an export accessor — part of the column-authoring checklist now.
+
+---
+
+## BUG-2026-06-24-002 — Native `<input type="date">` rendered in the OS locale (MM/DD vs DD/MM) on every create form
+
+**What broke:** "为什么我创建一个新的 date 的时候，它又变成不是这个 format" — a date field showed `DD/MM/YYYY` on one machine and `MM/DD/YYYY` on another, because raw `<input type="date">` renders its value in the **browser/OS locale**, not a fixed format. System-wide across every create/edit form.
+
+**Root cause:** ~86 raw native date inputs across 49 files. The controlled `DateField` (built 2026-06-18 for exactly this — fixed DD/MM/YYYY text display + a hidden native picker, ISO `YYYY-MM-DD` on the wire) had only been adopted on MRP / Proceed-PO.
+
+**Fix (commit `5af69494`):** rolled `DateField` across all remaining inputs — every SO/PO/SI/PI/GRN/DO/PC/return create+detail, the per-line cards (SoLineCard/PoLineCard/PcLineCard), the shared FlowDrawers `Field`, stock transfer/take/adjust, date-range filters. **Two real DateField bugs surfaced + fixed in the same pass:** (1) its `invalid` prop styled the inner `.textInput`, which has `border:0` — so the validation red border **never actually showed**; moved the styling to the wrapper `<span>` (the element that draws the border). (2) added a `highlight` variant (orange/cream) for SoLineCard's "auto-inherited from SO header" cue, which the sweep had mis-mapped to the red `invalid` (wrong signal).
+
+**Caught by:** owner report.
+
+**Prevention:** never use raw `<input type="date">` in `apps/backend` — use `DateField`. A border-colour override is invisible on a `border:0` element; validation/highlight styling must target whatever element actually draws the border (here, the wrapper).
+
+---
+
+## BUG-2026-06-24-003 — Two confirmed bugs back-ported from the Houzs SCM clone (fabric "BROWN BROWN" + 1000-row truncation)
+
+A reverse audit of the Houzs SCM fork (a vendored clone of 2990's SCM) surfaced two fixes Houzs had and 2990 lacked. Both shipped in commit `4f31fca8`:
+
+- **variant-summary "BROWN BROWN":** the fabric dedupe only dropped a bare colour a richer part **leads** with (`"BF-12 (PC151-12)" + "BF-12"`), not one it **trails** with — so `"A201-7-LIGHT BROWN"` + the derived colour `"BROWN"` rendered as `"…LIGHT BROWN BROWN"`. Added a token-boundary `endsWith` clause (`packages/shared/src/variant-summary.ts`). One file fixes it end-to-end — `@2990s/shared` feeds SO lines, all 8 doc PDFs, and the PO drift summary. (Houzs PR #112.)
+- **PostgREST 1000-row truncation:** the inventory main list (`inventory.ts`) and the suppliers list (`suppliers.ts`) ran unbounded; PostgREST silently caps at 1000 rows, so a partial stock list **reads as missing stock**. Added explicit `.limit()` guards.
+
+**Caught by:** the owner's instruction to sync from Houzs. Note the *first* cross-repo audit (commit-subject + export-button-count level) **missed the export bug (BUG-2026-06-24-001) entirely** — only a file-level diff found these. **Lesson (recorded in `DEV-OPERATING-FRAMEWORK.md`): audit cross-repo parity by diffing the actual files, never by commit subjects or feature-presence counts.**
+
+---
+
 ## BUG-2026-06-20-010 — Candidate verification: 14 low-signal candidates triaged → 11 real, 3 confirmed non-bugs
 
 Verified the audit's remaining un-triaged low-signal candidates (one agent per themed group, each read the cited code). **11 confirmed real, 3 confirmed NOT bugs.** Backlog now fully triaged — nothing left in "needs investigation".

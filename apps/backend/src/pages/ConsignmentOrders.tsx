@@ -1141,6 +1141,7 @@ const buildColumns = (
       return b ? <BrandingPill branding={b} /> : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
     },
     searchValue: (r) => deriveBranding(r),
+    exportValue: (r) => deriveBranding(r),
     groupValue: (r) => deriveBranding(r) || '(none)',
     sortFn: (a, b) => deriveBranding(a).localeCompare(deriveBranding(b)),
   },
@@ -1160,6 +1161,8 @@ const buildColumns = (
       }}>{fmtRm(r.local_total_centi)}</span>
     ),
     searchValue: (r) => fmtRm(r.local_total_centi),
+    /* Export the NUMBER in ringgit (not "1,234.00") so Excel can SUM it. */
+    exportValue: (r) => (r.local_total_centi ?? 0) / 100,
     sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
     filterType: 'number', numberValue: (r) => r.local_total_centi,
   },
@@ -1200,6 +1203,8 @@ const buildColumns = (
       );
     },
     searchValue: (r) => (r.stock_remark ?? '').toLowerCase(),
+    /* searchValue is lowercased for the search box — export the real remark. */
+    exportValue: (r) => (r.stock_remark ?? '').trim(),
     sortFn: (a, b) => {
       /* Sort: full READY first, then READY (PARTIAL), then pending (any
          categories shown), then blank. Within "pending" group, longer remark
@@ -1226,6 +1231,7 @@ const buildColumns = (
       }}>{fmtRm(v)}</span>;
     },
     searchValue: (r) => fmtRm(r.mattress_sofa_centi ?? 0),
+    exportValue: (r) => (r.mattress_sofa_centi ?? 0) / 100,
     sortFn: (a, b) => (a.mattress_sofa_centi ?? 0) - (b.mattress_sofa_centi ?? 0),
   },
   {
@@ -1239,6 +1245,7 @@ const buildColumns = (
       }}>{fmtRm(v)}</span>;
     },
     searchValue: (r) => fmtRm(r.bedframe_centi ?? 0),
+    exportValue: (r) => (r.bedframe_centi ?? 0) / 100,
     sortFn: (a, b) => (a.bedframe_centi ?? 0) - (b.bedframe_centi ?? 0),
   },
   {
@@ -1252,24 +1259,28 @@ const buildColumns = (
       }}>{fmtRm(v)}</span>;
     },
     searchValue: (r) => fmtRm(r.accessories_centi ?? 0),
+    exportValue: (r) => (r.accessories_centi ?? 0) / 100,
     sortFn: (a, b) => (a.accessories_centi ?? 0) - (b.accessories_centi ?? 0),
   },
   {
     key: 'mattress_sofa_cost_centi', label: 'Mattress/Sofa Cost', width: 140, sortable: true, align: 'right', groupable: false,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.mattress_sofa_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.mattress_sofa_cost_centi ?? 0),
+    exportValue: (r) => (r.mattress_sofa_cost_centi ?? 0) / 100,
     sortFn: (a, b) => (a.mattress_sofa_cost_centi ?? 0) - (b.mattress_sofa_cost_centi ?? 0),
   },
   {
     key: 'bedframe_cost_centi', label: 'Bedframe Cost', width: 130, sortable: true, align: 'right', groupable: false,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.bedframe_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.bedframe_cost_centi ?? 0),
+    exportValue: (r) => (r.bedframe_cost_centi ?? 0) / 100,
     sortFn: (a, b) => (a.bedframe_cost_centi ?? 0) - (b.bedframe_cost_centi ?? 0),
   },
   {
     key: 'accessories_cost_centi', label: 'Accessories Cost', width: 140, sortable: true, align: 'right', groupable: false,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.accessories_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.accessories_cost_centi ?? 0),
+    exportValue: (r) => (r.accessories_cost_centi ?? 0) / 100,
     sortFn: (a, b) => (a.accessories_cost_centi ?? 0) - (b.accessories_cost_centi ?? 0),
   },
   {
@@ -1405,6 +1416,7 @@ const buildColumns = (
     defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.others_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.others_centi ?? 0),
+    exportValue: (r) => (r.others_centi ?? 0) / 100,
     sortFn: (a, b) => (a.others_centi ?? 0) - (b.others_centi ?? 0),
   },
   {
@@ -1412,6 +1424,7 @@ const buildColumns = (
     defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.others_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.others_cost_centi ?? 0),
+    exportValue: (r) => (r.others_cost_centi ?? 0) / 100,
     sortFn: (a, b) => (a.others_cost_centi ?? 0) - (b.others_cost_centi ?? 0),
   },
   /* Task #114 — Overall cost / margin / margin% on the SO header. */
@@ -1420,6 +1433,7 @@ const buildColumns = (
     defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.total_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.total_cost_centi ?? 0),
+    exportValue: (r) => (r.total_cost_centi ?? 0) / 100,
     sortFn: (a, b) => (a.total_cost_centi ?? 0) - (b.total_cost_centi ?? 0),
   },
   {
@@ -1432,6 +1446,7 @@ const buildColumns = (
       return <span className={styles.money} style={{ color, fontWeight: 600 }}>{fmtRm(m)}</span>;
     },
     searchValue: (r) => fmtRm(r.total_margin_centi ?? 0),
+    exportValue: (r) => (r.total_margin_centi ?? 0) / 100,
     sortFn: (a, b) => (a.total_margin_centi ?? 0) - (b.total_margin_centi ?? 0),
   },
   {
@@ -1449,6 +1464,8 @@ const buildColumns = (
       }}>{pct.toFixed(1)}%</span>;
     },
     searchValue: (r) => `${((r.margin_pct_basis ?? 0) / 100).toFixed(1)}%`,
+    /* Export the percent as a NUMBER (e.g. 42.5) so Excel reads it numerically. */
+    exportValue: (r) => Number(((r.margin_pct_basis ?? 0) / 100).toFixed(1)),
     sortFn: (a, b) => (a.margin_pct_basis ?? 0) - (b.margin_pct_basis ?? 0),
   },
   {
@@ -1456,6 +1473,7 @@ const buildColumns = (
     defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.deposit_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.deposit_centi ?? 0),
+    exportValue: (r) => (r.deposit_centi ?? 0) / 100,
     sortFn: (a, b) => (a.deposit_centi ?? 0) - (b.deposit_centi ?? 0),
   },
   {
@@ -1463,6 +1481,7 @@ const buildColumns = (
     defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.paid_total_centi ?? r.paid_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.paid_total_centi ?? r.paid_centi ?? 0),
+    exportValue: (r) => (r.paid_total_centi ?? r.paid_centi ?? 0) / 100,
     sortFn: (a, b) => (a.paid_total_centi ?? a.paid_centi ?? 0) - (b.paid_total_centi ?? b.paid_centi ?? 0),
   },
   {
@@ -1471,6 +1490,7 @@ const buildColumns = (
     defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(liveBalance(r))}</span>,
     searchValue: (r) => fmtRm(liveBalance(r)),
+    exportValue: (r) => liveBalance(r) / 100,
     sortFn: (a, b) => liveBalance(a) - liveBalance(b),
   },
   {
@@ -1478,6 +1498,12 @@ const buildColumns = (
     defaultHidden: true,
     accessor: (r) => <StatusPill status={r.status} deliveryState={r.delivery_state} lifecycleState={r.lifecycle_state} />,
     searchValue: (r) => r.status,
+    /* Export the human-facing status label the pill shows (latest-event-wins),
+       not the raw enum, so the sheet reads "Delivered" / "Confirmed" etc. */
+    exportValue: (r) => {
+      const eff = soStatusDisplay(r.status, r.delivery_state, r.lifecycle_state);
+      return eff.label ?? STATUS_LABEL[r.status] ?? r.status.replace(/_/g, ' ');
+    },
     groupValue: (r) => r.status,
     sortFn: (a, b) => a.status.localeCompare(b.status),
   },

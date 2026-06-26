@@ -21,6 +21,7 @@ import {
 } from '../lib/inventory-queries';
 import { adjustmentReasonLabel } from '@2990s/shared';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { DateField } from '../components/DateField';
 import styles from './Inventory.module.css';
 
 const ICON    = { size: 14, strokeWidth: 1.75 } as const;
@@ -77,6 +78,7 @@ export const StockAdjustments = () => {
       accessor: (m) => <span className={styles.numCellZero}>{fmtDateTime(m.created_at)}</span>,
       searchValue: (m) => fmtDateTime(m.created_at),
       filterValue: (m) => fmtDateTime(m.created_at),
+      exportValue: (m) => fmtDateTime(m.created_at),
       sortFn: (a, b) => a.created_at.localeCompare(b.created_at),
       filterType: 'date', dateValue: (m) => m.created_at,
     },
@@ -88,6 +90,10 @@ export const StockAdjustments = () => {
         const w = wmap.get(m.warehouse_id);
         return w ? `${w.code} · ${w.name}` : '—';
       },
+      exportValue: (m) => {
+        const w = wmap.get(m.warehouse_id);
+        return w ? `${w.code} · ${w.name}` : '';
+      },
     },
     {
       key: 'sku',
@@ -96,6 +102,7 @@ export const StockAdjustments = () => {
       accessor: (m) => <span className={styles.codeChip}>{m.product_code}</span>,
       searchValue: (m) => m.product_code,
       filterValue: (m) => m.product_code,
+      exportValue: (m) => m.product_code,
       sortFn: (a, b) => a.product_code.localeCompare(b.product_code),
     },
     {
@@ -103,6 +110,7 @@ export const StockAdjustments = () => {
       label: 'Product Name',
       width: 220,
       accessor: (m) => m.product_name ?? '—',
+      exportValue: (m) => m.product_name ?? '',
     },
     {
       key: 'qty',
@@ -119,6 +127,7 @@ export const StockAdjustments = () => {
       },
       searchValue: (m) => String(m.qty),
       filterValue: (m) => String(m.qty),
+      exportValue: (m) => m.qty,
       sortFn: (a, b) => a.qty - b.qty,
     },
     {
@@ -126,6 +135,7 @@ export const StockAdjustments = () => {
       label: 'Reason',
       width: 140,
       accessor: (m) => m.reason_code ? adjustmentReasonLabel(m.reason_code) : '—',
+      exportValue: (m) => m.reason_code ? adjustmentReasonLabel(m.reason_code) : '',
     },
     {
       key: 'notes',
@@ -134,6 +144,7 @@ export const StockAdjustments = () => {
       accessor: (m) => <span className={styles.numCellZero}>{m.notes ?? '—'}</span>,
       searchValue: (m) => m.notes ?? '',
       filterValue: (m) => m.notes ?? '—',
+      exportValue: (m) => m.notes ?? '',
     },
     {
       key: 'performedBy',
@@ -146,6 +157,7 @@ export const StockAdjustments = () => {
       ),
       searchValue: (m) => m.performed_by ?? '',
       filterValue: (m) => m.performed_by ? m.performed_by.slice(0, 8) : '—',
+      exportValue: (m) => m.performed_by ?? '',
     },
   ], [wmap]);
 
@@ -194,21 +206,11 @@ export const StockAdjustments = () => {
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
           <SlidersHorizontal size={12} strokeWidth={1.75} />
           From
-          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
-            style={{
-              fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)',
-              background: 'var(--c-paper)', border: '1px solid var(--line)',
-              borderRadius: 'var(--radius-md)', padding: '6px 8px', color: 'var(--c-ink)',
-            }} />
+          <DateField value={dateFrom ?? ''} onChange={(iso) => setDateFrom(iso)} />
         </label>
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
           To
-          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
-            style={{
-              fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)',
-              background: 'var(--c-paper)', border: '1px solid var(--line)',
-              borderRadius: 'var(--radius-md)', padding: '6px 8px', color: 'var(--c-ink)',
-            }} />
+          <DateField value={dateTo ?? ''} onChange={(iso) => setDateTo(iso)} />
         </label>
         {(dateFrom || dateTo || search || warehouseId) && (
           <button

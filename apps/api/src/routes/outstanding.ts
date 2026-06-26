@@ -25,6 +25,7 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
+import { paginateAll } from '../lib/paginate-all';
 
 export const outstanding = new Hono<{ Bindings: Env; Variables: Variables }>();
 outstanding.use('*', supabaseAuth);
@@ -46,24 +47,50 @@ for (const [slug, { view, dateCol }] of Object.entries(MODULES)) {
     const outstandingParam = c.req.query('outstanding');
     const from = c.req.query('from');
     const to = c.req.query('to');
+    /* Optional supplier filter (migration 0202) — the PV "Apply to PI" picker
+       lists a chosen supplier's outstanding PIs. The purchase-side views (po /
+       grn / pi / pr) expose supplier_id; the sales-side views do not, so only
+       apply it where the column exists. */
+    const supplierId = c.req.query('supplierId');
+    const hasSupplier = slug === 'po' || slug === 'grn' || slug === 'pi' || slug === 'pr';
 
-    let q = sb.from(view).select('*').order(dateCol, { ascending: false });
-
-    // outstanding filter: default = true (only outstanding rows)
-    if (outstandingParam === 'true' || outstandingParam == null) {
-      q = q.eq('is_outstanding', true);
-    } else if (outstandingParam === 'false') {
-      q = q.eq('is_outstanding', false);
-    }
-    // else 'all' (or any other value) → no filter, return both
-
-    if (from) q = q.gte(dateCol, from);
-    if (to)   q = q.lte(dateCol, to);
-
-    const { data, error } = await q.limit(1000);
+    // Page through so PostgREST's 1000-row cap can't silently truncate the
+    // outstanding list (an "all"/wide-range view can exceed 1000 docs).
+    const { data, error } = await paginateAll((pFrom, pTo) => {
+      let q = sb.from(view).select('*').order(dateCol, { ascending: false });
+      // outstanding filter: default = true (only outstanding rows)
+      if (outstandingParam === 'true' || outstandingParam == null) {
+        q = q.eq('is_outstanding', true);
+      } else if (outstandingParam === 'false') {
+        q = q.eq('is_outstanding', false);
+      }
+      // else 'all' (or any other value) → no filter, return both
+      /* LEAK GUARD (DRAFT) — a DRAFT Sales Invoice has not posted AR yet, so it
+         must never appear in the SI Outstanding / AR-aging list. The
+         v_si_outstanding is_outstanding CASE only excludes PAID/CANCELLED (it
+         would mark a DRAFT outstanding), so filter DRAFT out here. The view
+         exposes s.status, so this is safe (0059_outstanding_views.sql). */
+      if (slug === 'si') q = q.neq('status', 'DRAFT');
+      /* LEAK GUARD (DRAFT, SO two-state 2026-06-25) — a DRAFT SO commits nothing
+         (no real balance owed), but v_so_outstanding's is_outstanding CASE only
+         excludes DELIVERED/INVOICED/CLOSED/CANCELLED → it would mark a DRAFT as
+         outstanding. The view exposes so.status, so filter DRAFT out here. */
+      if (slug === 'so') q = q.neq('status', 'DRAFT');
+      /* LEAK GUARD (DRAFT, PI two-state 2026-06-25) — a DRAFT PI has posted no AP,
+         but v_pi_outstanding's is_outstanding CASE only excludes PAID/CANCELLED →
+         a DRAFT with total>paid would read outstanding. The view exposes pi.status
+         (0059_outstanding_views.sql), so filter DRAFT out here. */
+      if (slug === 'pi') q = q.neq('status', 'DRAFT');
+      if (supplierId && hasSupplier) q = q.eq('supplier_id', supplierId);
+      if (from) q = q.gte(dateCol, from);
+      if (to)   q = q.lte(dateCol, to);
+      return q.range(pFrom, pTo);
+    });
     if (error) {
+      // The view is missing entirely → treat as "no data yet" so the page
+      // renders an empty tab instead of 500ing.
       if (/relation .* does not exist/i.test(error.message)) {
-        return c.json({ error: 'migration_pending', reason: 'Run migrations 0057/0058/0059.' }, 500);
+        return c.json({ rows: [] });
       }
       return c.json({ error: 'load_failed', reason: error.message }, 500);
     }
@@ -80,10 +107,20 @@ outstanding.get('/summary', async (c) => {
 
   const summary: Record<string, { count: number; total_centi?: number; total_outstanding_centi?: number }> = {};
   for (const [slug, { view, dateCol }] of Object.entries(MODULES)) {
-    let q = sb.from(view).select('*').eq('is_outstanding', true);
-    if (from) q = q.gte(dateCol, from);
-    if (to)   q = q.lte(dateCol, to);
-    const { data } = await q;
+    // Page through — the count + totals reduce over EVERY row, so PostgREST's
+    // 1000-row cap would understate both on a large outstanding set.
+    const { data } = await paginateAll((pFrom, pTo) => {
+      let q = sb.from(view).select('*').eq('is_outstanding', true);
+      // LEAK GUARD (DRAFT) — keep DRAFT SIs out of the AR outstanding totals.
+      if (slug === 'si') q = q.neq('status', 'DRAFT');
+      // LEAK GUARD (DRAFT) — keep DRAFT SOs out of the SO outstanding totals.
+      if (slug === 'so') q = q.neq('status', 'DRAFT');
+      // LEAK GUARD (DRAFT) — keep DRAFT PIs out of the AP outstanding totals.
+      if (slug === 'pi') q = q.neq('status', 'DRAFT');
+      if (from) q = q.gte(dateCol, from);
+      if (to)   q = q.lte(dateCol, to);
+      return q.range(pFrom, pTo);
+    });
     const rows = (data ?? []) as Array<Record<string, unknown>>;
     summary[slug] = {
       count: rows.length,

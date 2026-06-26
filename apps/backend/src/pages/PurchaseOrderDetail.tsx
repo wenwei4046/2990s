@@ -32,13 +32,14 @@ import {
   ChevronDown, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary, effectiveDelivery } from '@2990s/shared'; // Commander 2026-05-28 — Description 2; 2026-06-19 effective delivery
+import { buildVariantSummary, canonicalizeVariants, effectiveDelivery } from '@2990s/shared'; // Commander 2026-05-28 — Description 2; 2026-06-19 effective delivery
 import {
   usePurchaseOrderDetail,
   useUpdatePurchaseOrderHeader,
   useAddPurchaseOrderItem,
   useUpdatePurchaseOrderItem,
   useDeletePurchaseOrderItem,
+  useConfirmPurchaseOrder,
   useCancelPurchaseOrder,
   useReopenPurchaseOrder,
   useDeletePurchaseOrder,
@@ -57,11 +58,14 @@ import {
   type PoPriceMatrix,
 } from '@2990s/shared/mfg-pricing';
 import { PoLineCard, emptyPoLine, type PoLineDraft } from '../components/PoLineCard';
+import { sortByText } from '../lib/sort-options';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import { StatusPill } from '../components/StatusPill';
+import { DateField } from '../components/DateField';
+import { CurrencyOptions } from '../lib/currencies-queries';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -126,7 +130,10 @@ const draftFromItem = (it: PoItemRow): EditLine => ({
   supplierDeliveryDate4: it.supplier_delivery_date_4 ?? undefined,
   warehouseId:    it.warehouse_id ?? undefined,
   category:       it.item_group ?? undefined,
-  variants:       (it.variants as Record<string, unknown> | null) ?? {},
+  /* Variants-vocabulary unification (Commander 2026-06-26) — defense-in-depth:
+     canonicalize on enter-edit so a stray non-canonical row still prefills the
+     Seat/Leg/Fabric dropdowns. Mirrors SalesOrderDetail.draftFromItem. */
+  variants:       canonicalizeVariants(it.item_group ?? 'others', (it.variants as Record<string, unknown> | null) ?? {}),
   /* An existing line's stored price is authoritative — don't let the cost
      auto-recompute clobber it on enter-edit. Editing the variants re-arms it. */
   priceTouched:   true,
@@ -138,6 +145,8 @@ export const PurchaseOrderDetail = () => {
   const detail = usePurchaseOrderDetail(id ?? null);
   const updateHeader = useUpdatePurchaseOrderHeader();
   // PR-DRAFT-removal — Submit button removed (POs are SUBMITTED on create).
+  // Draft/Confirmed (Owner 2026-06-25) — Confirm flips a DRAFT PO → SUBMITTED.
+  const confirm = useConfirmPurchaseOrder();
   const cancel = useCancelPurchaseOrder();
   const reopen = useReopenPurchaseOrder();
   const deletePo = useDeletePurchaseOrder();
@@ -208,14 +217,17 @@ export const PurchaseOrderDetail = () => {
   const [editLines, setEditLines] = useState<EditLine[]>([]);
   const [savingDraft, setSavingDraft] = useState(false);
 
-  // PR-DRAFT-removal — POs are always SUBMITTED on create (no DRAFT). Header
-  // edits stay open while the PO can still be received (SUBMITTED / PARTIALLY_RECEIVED).
+  // Header edits stay open while the PO can still be received (SUBMITTED /
+  // PARTIALLY_RECEIVED). Draft/Confirmed (Owner 2026-06-25) — a DRAFT PO is also
+  // editable (review + correct before confirming); a DRAFT never has a GRN, so
+  // it's never child-locked.
   // Tier 2 downstream-lock — also lock once a non-cancelled GRN exists; the GRN
   // must be cancelled / deleted before editing again. Partial receiving (more
   // GRNs) is still allowed via the list's Convert-to-GRN action.
   const hasChildren = Boolean(po?.has_children);
-  const isLocked = po ? (!(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') || hasChildren) : true;
-  const lockedDueToChildren = po ? ((po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && hasChildren) : false;
+  const isEditableStatus = po ? (po.status === 'DRAFT' || po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') : false;
+  const isLocked = po ? (!isEditableStatus || hasChildren) : true;
+  const lockedDueToChildren = po ? (isEditableStatus && hasChildren) : false;
 
   /* If a PO locks while we're in Edit mode (e.g. it's Received / Cancelled
      after a status change), drop back to View and discard the draft so the
@@ -620,10 +632,30 @@ export const PurchaseOrderDetail = () => {
               <span>From Sales Order</span>
             </Button>
           )}
+          {/* Draft/Confirmed (Owner 2026-06-25) — a DRAFT PO shows a primary
+              Confirm. Confirming flips DRAFT -> SUBMITTED (commits the SO-quota
+              advance + makes the PO live MRP supply / GRN-receivable). Hidden
+              once committed; also shown in the DRAFT banner below. */}
+          {po.status === 'DRAFT' && !isEditing && (
+            <Button variant="primary" size="md"
+              onClick={async () => {
+                if (!(await askConfirm({
+                  title: `Confirm PO ${po.po_number}?`,
+                  body: 'This turns the draft into a live Purchase Order — it counts as MRP supply, locks the source SO lines, and becomes receivable (GRN).',
+                  confirmLabel: 'Confirm PO',
+                }))) return;
+                confirm.mutate(po.id, {
+                  onError: (err) => notify({ title: 'Confirm failed', body: `${err instanceof Error ? err.message : String(err)}`, tone: 'error' }),
+                });
+              }}
+              disabled={confirm.isPending}>
+              <span>{confirm.isPending ? 'Confirming…' : 'Confirm PO'}</span>
+            </Button>
+          )}
           {/* PR — Commander 2026-05-27: "Cancel/Delete PO 没反应".
-              Cancel: any pre-receipt status. API blocks RECEIVED.
-              Delete: only CANCELLED (after migration 0078; DRAFT no longer exists). */}
-          {(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
+              Cancel: any pre-receipt status (incl. DRAFT). API blocks RECEIVED.
+              Delete: only CANCELLED. */}
+          {(po.status === 'DRAFT' || po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
             <Button variant="ghost" size="md"
               onClick={async () => {
                 if (!(await askConfirm({ title: `Cancel PO ${po.po_number}?`, body: 'This sets status to CANCELLED — line items + linked docs stay for audit.', confirmLabel: 'Cancel PO', danger: true }))) return;
@@ -704,6 +736,45 @@ export const PurchaseOrderDetail = () => {
           )}
         </div>
       </div>
+
+      {/* ── DRAFT banner + Confirm (Draft/Confirmed two-state) ──────────────
+          A DRAFT PO is uncommitted: it does NOT count as MRP supply, does NOT
+          lock its source SO lines, and is NOT GRN-receivable until confirmed.
+          Review + correct, then Confirm to make it live. Mirrors the SO detail
+          DRAFT banner. */}
+      {po.status === 'DRAFT' && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          marginBottom: 'var(--space-3)',
+          padding: 'var(--space-3) var(--space-4)',
+          background: 'rgba(232, 107, 58, 0.08)',
+          border: '1px solid var(--c-orange)',
+          borderRadius: 'var(--radius-md)',
+          fontSize: 'var(--fs-13)',
+        }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+            <FileText {...ICON} />
+            <span>
+              <strong>Draft — not yet confirmed.</strong>{' '}
+              Review and Confirm to make it a live Purchase Order (it stays out of MRP supply, doesn't lock the source SO lines, and can't be received until then).
+            </span>
+          </span>
+          <Button variant="primary" size="sm"
+            onClick={async () => {
+              if (!(await askConfirm({
+                title: `Confirm PO ${po.po_number}?`,
+                body: 'This turns the draft into a live Purchase Order — it counts as MRP supply, locks the source SO lines, and becomes receivable (GRN).',
+                confirmLabel: 'Confirm PO',
+              }))) return;
+              confirm.mutate(po.id, {
+                onError: (err) => notify({ title: 'Confirm failed', body: `${err instanceof Error ? err.message : String(err)}`, tone: 'error' }),
+              });
+            }}
+            disabled={confirm.isPending}>
+            <span>{confirm.isPending ? 'Confirming…' : 'Confirm PO'}</span>
+          </Button>
+        </div>
+      )}
 
       {/* Tier 2 downstream-lock — once any GRN is created from this PO the page
           becomes read-only + un-cancellable. Partial receiving (more GRNs) is
@@ -982,7 +1053,7 @@ const SupplierCard = ({
               <select className={styles.fieldSelect} value={draft.supplierId} disabled={locked}
                 onChange={(e) => onField('supplierId', e.target.value)}>
                 <option value="">— Pick supplier —</option>
-                {suppliers.map((s) => (
+                {sortByText(suppliers).map((s) => (
                   <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                 ))}
               </select>
@@ -994,10 +1065,8 @@ const SupplierCard = ({
             <span className={styles.selectWrap}>
               <select className={styles.fieldSelect} value={draft.currency} disabled={locked}
                 onChange={(e) => onField('currency', e.target.value)}>
-                <option value="MYR">MYR</option>
-                <option value="RMB">RMB</option>
-                <option value="USD">USD</option>
-                <option value="SGD">SGD</option>
+                {/* Active currencies from the master (migration 0193). */}
+                <CurrencyOptions current={draft.currency} />
               </select>
               <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
             </span>
@@ -1005,33 +1074,33 @@ const SupplierCard = ({
           <div />
           <label className={styles.field}>
             <span className={styles.fieldLabel}>PO Date</span>
-            <input type="date" className={styles.fieldInput} value={draft.poDate} disabled={locked}
-              onChange={(e) => onField('poDate', e.target.value)} />
+            <DateField fullWidth className={styles.fieldInput} value={draft.poDate ?? ''} disabled={locked}
+              onChange={(iso) => onField('poDate', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Expected Delivery</span>
             {/* Commander 2026-05-29 — changing this cascades to every line's
                 Delivery Date (handled in the page's setHeaderField). */}
-            <input type="date" className={styles.fieldInput} value={draft.expectedAt} disabled={locked}
-              onChange={(e) => onField('expectedAt', e.target.value)} />
+            <DateField fullWidth className={styles.fieldInput} value={draft.expectedAt ?? ''} disabled={locked}
+              onChange={(iso) => onField('expectedAt', iso)} />
           </label>
           {/* Migration 0180 — supplier-revised header delivery dates. Optional;
               cascade to lines that have no own value (page setHeaderField). The
               latest non-empty date becomes the effective ETA downstream. */}
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Supplier Delivery Date 2</span>
-            <input type="date" className={styles.fieldInput} value={draft.supplierDeliveryDate2} disabled={locked}
-              onChange={(e) => onField('supplierDeliveryDate2', e.target.value)} />
+            <DateField fullWidth className={styles.fieldInput} value={draft.supplierDeliveryDate2 ?? ''} disabled={locked}
+              onChange={(iso) => onField('supplierDeliveryDate2', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Supplier Delivery Date 3</span>
-            <input type="date" className={styles.fieldInput} value={draft.supplierDeliveryDate3} disabled={locked}
-              onChange={(e) => onField('supplierDeliveryDate3', e.target.value)} />
+            <DateField fullWidth className={styles.fieldInput} value={draft.supplierDeliveryDate3 ?? ''} disabled={locked}
+              onChange={(iso) => onField('supplierDeliveryDate3', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Supplier Delivery Date 4</span>
-            <input type="date" className={styles.fieldInput} value={draft.supplierDeliveryDate4} disabled={locked}
-              onChange={(e) => onField('supplierDeliveryDate4', e.target.value)} />
+            <DateField fullWidth className={styles.fieldInput} value={draft.supplierDeliveryDate4 ?? ''} disabled={locked}
+              onChange={(iso) => onField('supplierDeliveryDate4', iso)} />
           </label>
           {/* PR #77 — Purchase Location: default ship-to warehouse for
               every line on this PO. */}
@@ -1041,7 +1110,7 @@ const SupplierCard = ({
               <select className={styles.fieldSelect} value={draft.purchaseLocationId} disabled={locked}
                 onChange={(e) => onField('purchaseLocationId', e.target.value)}>
                 <option value="">— No default —</option>
-                {warehouses.filter((w) => w.is_active).map((w) => (
+                {sortByText(warehouses.filter((w) => w.is_active)).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                 ))}
               </select>

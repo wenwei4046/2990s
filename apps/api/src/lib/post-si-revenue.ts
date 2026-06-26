@@ -286,11 +286,18 @@ export async function resyncSiRevenue(sb: any, invoiceNumber: string): Promise<R
     .maybeSingle();
   const newTotal = Number((si as { total_centi?: number } | null)?.total_centi ?? 0);
 
-  /* A CANCELLED invoice must never (re)post revenue. Its revenue JE was already
-     reversed on cancel; if a line is somehow mutated while cancelled, resync must
-     NOT resurrect revenue onto the GL. (Wei Siang 2026-06-03) */
-  if (((si as { status?: string } | null)?.status ?? '').toUpperCase() === 'CANCELLED') {
-    return { ok: true, status: 'not_posted' };
+  /* A CANCELLED or DRAFT invoice must never (re)post revenue. CANCELLED: its JE
+     was already reversed on cancel; if a line is mutated while cancelled, resync
+     must NOT resurrect revenue. DRAFT (two-state, Owner 2026-06-25): it has not
+     committed any revenue yet — editing/adding a DRAFT line must NOT post the
+     first JE. Both post ONLY on confirm (PATCH /:id/status DRAFT→SENT). Without
+     the DRAFT case, a DRAFT with total > 0 hits the `!active && newTotal > 0`
+     branch below and silently leaks revenue onto the GL. (Wei Siang 2026-06-03) */
+  {
+    const s = ((si as { status?: string } | null)?.status ?? '').toUpperCase();
+    if (s === 'CANCELLED' || s === 'DRAFT') {
+      return { ok: true, status: 'not_posted' };
+    }
   }
 
   if (!active) {

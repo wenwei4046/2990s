@@ -30,8 +30,10 @@ import type { MfgProductRow, MaintenanceConfig } from '../lib/mfg-products-queri
 import type { BindingRow, MaterialKind } from '../lib/suppliers-queries';
 import { activeOptions, maintPickerValues } from '@2990s/shared';
 import { fabricOptionLabel, type FabricTrackingRow } from '../lib/fabric-queries';
+import { sortByText, sortByNumeric, byText } from '../lib/sort-options';
 import type { Warehouse } from '../lib/inventory-queries';
 import { MoneyInput } from './MoneyInput';
+import { DateField } from './DateField';
 import styles from '../pages/SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -305,12 +307,12 @@ export const PoLineCard = ({
                 otherwise fall back to the full catalogue so the picker is never
                 dead. */}
             {supplierId && bindings.length > 0
-              ? bindings.map((b) => (
+              ? sortByText(bindings).map((b) => (
                   <option key={b.id} value={b.material_code}>
                     {b.material_name} · {b.supplier_sku} · {fmtRm(b.unit_price_centi, b.currency)}
                   </option>
                 ))
-              : allSkus.map((p) => (
+              : sortByText(allSkus).map((p) => (
                   <option key={p.id} value={p.code}>
                     {p.name} · {p.category}
                   </option>
@@ -351,7 +353,7 @@ export const PoLineCard = ({
             style={{ fontFamily: 'var(--font-mono)' }}
           />
           <datalist id={`supplier-skus-${l.rid}`}>
-            {supplierId && bindings.map((b) => (
+            {supplierId && sortByText(bindings).map((b) => (
               <option key={b.id} value={b.supplier_sku || ''}>
                 {b.material_code} · {b.material_name} · {fmtRm(b.unit_price_centi, b.currency)}
               </option>
@@ -409,7 +411,7 @@ export const PoLineCard = ({
                     onChange={(e) => onSetVariant('fabricCode', e.target.value)}
                   >
                     <option value="" disabled>Select…</option>
-                    {fabrics.filter((f) => f.is_active !== false || f.fabric_code === String(l.variants.fabricCode ?? '')).map((f) => (
+                    {[...fabrics.filter((f) => f.is_active !== false || f.fabric_code === String(l.variants.fabricCode ?? ''))].sort((a, b) => byText(fabricOptionLabel(a), fabricOptionLabel(b))).map((f) => (
                       <option key={f.id} value={f.fabric_code}>
                         {fabricOptionLabel(f)}
                       </option>
@@ -425,7 +427,7 @@ export const PoLineCard = ({
                     onChange={(e) => onSetVariant('gap', e.target.value)}
                   >
                     <option value="" disabled>Select…</option>
-                    {maintPickerValues(maint!.gaps, String(l.variants.gap ?? '')).map((g) => (<option key={g} value={g}>{g}</option>))}
+                    {sortByNumeric(maintPickerValues(maint!.gaps, String(l.variants.gap ?? ''))).map((g) => (<option key={g} value={g}>{g}</option>))}
                   </select>
                 </label>
                 <label className={styles.field}>
@@ -437,7 +439,7 @@ export const PoLineCard = ({
                     onChange={(e) => onSetVariant('divanHeight', e.target.value)}
                   >
                     <option value="" disabled>Select…</option>
-                    {activeOptions(maint!.divanHeights, String(l.variants.divanHeight ?? '')).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
+                    {sortByNumeric(activeOptions(maint!.divanHeights, String(l.variants.divanHeight ?? ''))).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
                   </select>
                 </label>
                 <label className={styles.field}>
@@ -449,7 +451,7 @@ export const PoLineCard = ({
                     onChange={(e) => onSetVariant('legHeight', e.target.value)}
                   >
                     <option value="" disabled>Select…</option>
-                    {activeOptions(maint!.legHeights, String(l.variants.legHeight ?? '')).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
+                    {sortByNumeric(activeOptions(maint!.legHeights, String(l.variants.legHeight ?? ''))).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
                   </select>
                 </label>
               </div>
@@ -475,7 +477,7 @@ export const PoLineCard = ({
                     onChange={(e) => onSetVariant('fabricCode', e.target.value)}
                   >
                     <option value="" disabled>Select…</option>
-                    {fabrics.filter((f) => f.is_active !== false || f.fabric_code === String(l.variants.fabricCode ?? '')).map((f) => (
+                    {[...fabrics.filter((f) => f.is_active !== false || f.fabric_code === String(l.variants.fabricCode ?? ''))].sort((a, b) => byText(fabricOptionLabel(a), fabricOptionLabel(b))).map((f) => (
                       <option key={f.id} value={f.fabric_code}>
                         {fabricOptionLabel(f)}
                       </option>
@@ -491,7 +493,7 @@ export const PoLineCard = ({
                     onChange={(e) => onSetVariant('seatHeight', e.target.value)}
                   >
                     <option value="" disabled>Select…</option>
-                    {maintPickerValues(maint!.sofaSizes, String(l.variants.seatHeight ?? '')).map((s) => (<option key={s} value={s}>{s}</option>))}
+                    {sortByNumeric(maintPickerValues(maint!.sofaSizes, String(l.variants.seatHeight ?? ''))).map((s) => (<option key={s} value={s}>{s}</option>))}
                   </select>
                 </label>
                 <label className={styles.field}>
@@ -503,7 +505,7 @@ export const PoLineCard = ({
                     onChange={(e) => onSetVariant('legHeight', e.target.value)}
                   >
                     <option value="" disabled>Select…</option>
-                    {activeOptions(maint!.sofaLegHeights, String(l.variants.legHeight ?? '')).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
+                    {sortByNumeric(activeOptions(maint!.sofaLegHeights, String(l.variants.legHeight ?? ''))).map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
                   </select>
                 </label>
                 <span />
@@ -563,12 +565,12 @@ export const PoLineCard = ({
         {!hidePoFields && (
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Delivery Date</span>
-          <input
-            type="date"
+          <DateField
             value={l.deliveryDate ?? ''}
             disabled={disabled}
-            onChange={(e) => onChange({ deliveryDate: e.target.value })}
+            onChange={(iso) => onChange({ deliveryDate: iso })}
             className={styles.fieldInput}
+            fullWidth
           />
         </label>
         )}
@@ -582,7 +584,7 @@ export const PoLineCard = ({
             className={styles.fieldInput}
           >
             <option value="">— Inherit Purchase Location —</option>
-            {warehouses.map((w) => (
+            {sortByText(warehouses).map((w) => (
               <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
             ))}
           </select>
@@ -598,32 +600,32 @@ export const PoLineCard = ({
       <div className={styles.formGrid4} style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Supplier Date 2</span>
-          <input
-            type="date"
+          <DateField
             value={l.supplierDeliveryDate2 ?? ''}
             disabled={disabled}
-            onChange={(e) => onChange({ supplierDeliveryDate2: e.target.value })}
+            onChange={(iso) => onChange({ supplierDeliveryDate2: iso })}
             className={styles.fieldInput}
+            fullWidth
           />
         </label>
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Supplier Date 3</span>
-          <input
-            type="date"
+          <DateField
             value={l.supplierDeliveryDate3 ?? ''}
             disabled={disabled}
-            onChange={(e) => onChange({ supplierDeliveryDate3: e.target.value })}
+            onChange={(iso) => onChange({ supplierDeliveryDate3: iso })}
             className={styles.fieldInput}
+            fullWidth
           />
         </label>
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Supplier Date 4</span>
-          <input
-            type="date"
+          <DateField
             value={l.supplierDeliveryDate4 ?? ''}
             disabled={disabled}
-            onChange={(e) => onChange({ supplierDeliveryDate4: e.target.value })}
+            onChange={(iso) => onChange({ supplierDeliveryDate4: iso })}
             className={styles.fieldInput}
+            fullWidth
           />
         </label>
       </div>

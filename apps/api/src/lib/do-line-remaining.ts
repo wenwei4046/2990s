@@ -47,6 +47,16 @@ export type DoRemainingLine = {
   unitCostCenti: number;
   discountCenti: number;
   variants: unknown;
+  /* Migration 0058 — dedicated sofa/bedframe variant-breakdown columns. Carried
+     so the DO→SI picker convert keeps them (sales_invoice_items has them too). */
+  gapInches: number | null;
+  divanHeightInches: number | null;
+  divanPriceSen: number;
+  legHeightInches: number | null;
+  legPriceSen: number;
+  customSpecials: unknown;
+  lineSuffix: string | null;
+  specialOrderPriceSen: number;
   /** Position of this line within ITS DO listing order (line_no per 0165,
    *  created_at for pre-0165 rows) — SI conversion copies the DO's order
    *  instead of shuffling by uuid (Loo 2026-06-12 line-order rules). */
@@ -82,7 +92,11 @@ export async function doLineRemaining(
     id: string; do_number: string; status: string | null;
     debtor_code: string | null; debtor_name: string | null;
   }>) {
-    if ((d.status ?? '').toUpperCase() === 'CANCELLED') continue; // delivered nothing
+    const st = (d.status ?? '').toUpperCase();
+    // LEAK GUARD (DRAFT): a DRAFT DO has NOT shipped — it delivered nothing, so
+    // its lines must never become invoiceable / returnable (the "Pending" pool
+    // both downstream pickers read). Dropped alongside CANCELLED.
+    if (st === 'CANCELLED' || st === 'DRAFT') continue; // delivered nothing
     headerById.set(d.id, { do_number: d.do_number, debtor_code: d.debtor_code, debtor_name: d.debtor_name });
   }
   const activeDoIds = [...headerById.keys()];
@@ -95,7 +109,9 @@ export async function doLineRemaining(
     .from('delivery_order_items')
     .select(
       'id, delivery_order_id, item_code, item_group, description, description2, uom, qty, ' +
-      'unit_price_centi, unit_cost_centi, discount_centi, variants',
+      'unit_price_centi, unit_cost_centi, discount_centi, variants, ' +
+      'gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, ' +
+      'custom_specials, line_suffix, special_order_price_sen',
     )
     .in('delivery_order_id', activeDoIds)
     .order('line_no', { ascending: true, nullsFirst: false })
@@ -183,6 +199,16 @@ export async function doLineRemaining(
       unitCostCenti: Number(l.unit_cost_centi ?? 0),
       discountCenti: Number(l.discount_centi ?? 0),
       variants: l.variants ?? null,
+      /* Migration 0058 — carry the dedicated variant-breakdown columns (pg driver
+         camelCases results → dual-read camelCase ?? snake_case). */
+      gapInches: (l.gapInches ?? l.gap_inches ?? null) as number | null,
+      divanHeightInches: (l.divanHeightInches ?? l.divan_height_inches ?? null) as number | null,
+      divanPriceSen: Number(l.divanPriceSen ?? l.divan_price_sen ?? 0),
+      legHeightInches: (l.legHeightInches ?? l.leg_height_inches ?? null) as number | null,
+      legPriceSen: Number(l.legPriceSen ?? l.leg_price_sen ?? 0),
+      customSpecials: l.customSpecials ?? l.custom_specials ?? null,
+      lineSuffix: (l.lineSuffix ?? l.line_suffix ?? null) as string | null,
+      specialOrderPriceSen: Number(l.specialOrderPriceSen ?? l.special_order_price_sen ?? 0),
       lineSeq,
     });
   }
@@ -212,8 +238,13 @@ export async function doRemainingByItemId(
 
 /**
  * Resolve the set of candidate DO ids the picker should consider.
- * Explicit ?doIds=A,B wins; otherwise every NON-cancelled DO (capped) so the
- * picker can show all of them. Returns [] when there are none.
+ * Explicit ?doIds=A,B wins; otherwise every shipped (non-cancelled, non-draft)
+ * DO (capped) so the picker can show all of them. Returns [] when there are none.
+ *
+ * LEAK GUARD (DRAFT): a DRAFT DO has NOT shipped, so it must never surface in
+ * the invoiceable-from-DO / returnable-from-DO picker. Even when an explicit
+ * ?doIds= list is passed, doLineRemaining (above) drops DRAFT headers, so a
+ * draft id can't yield invoiceable lines through either entry point.
  */
 export async function resolveCandidateDoIds(sb: any, doIdsParam: string | undefined): Promise<string[]> {
   if (doIdsParam && doIdsParam.trim()) {
@@ -222,7 +253,7 @@ export async function resolveCandidateDoIds(sb: any, doIdsParam: string | undefi
   const { data: dos } = await sb
     .from('delivery_orders')
     .select('id, status')
-    .neq('status', 'CANCELLED')
+    .not('status', 'in', '("CANCELLED","DRAFT")')
     .order('do_date', { ascending: false })
     .limit(1000);
   return ((dos ?? []) as Array<{ id: string }>).map((d) => d.id).filter(Boolean);

@@ -27,6 +27,12 @@ export type DateFieldProps = {
   disabled?: boolean;
   /** Stretch to fill the parent (form fields / dialog rows). */
   fullWidth?: boolean;
+  /** Show a validation-error border (replaces the inline red `style` the raw
+   *  native inputs used, since DateField wraps in a span). */
+  invalid?: boolean;
+  /** Soft informational highlight (orange border + cream fill) — e.g. a value
+   *  auto-inherited from a parent doc. Distinct from `invalid` (red error). */
+  highlight?: boolean;
   placeholder?: string;
   title?: string;
   'aria-label'?: string;
@@ -63,6 +69,8 @@ export function DateField({
   max,
   disabled = false,
   fullWidth = false,
+  invalid = false,
+  highlight = false,
   placeholder = 'dd/mm/yyyy',
   title,
   'aria-label': ariaLabel,
@@ -90,7 +98,16 @@ export function DateField({
   };
 
   return (
-    <span className={`${styles.wrap} ${fullWidth ? styles.fullWidth : ''} ${disabled ? styles.disabled : ''} ${className ?? ''}`}>
+    <span
+      className={`${styles.wrap} ${fullWidth ? styles.fullWidth : ''} ${disabled ? styles.disabled : ''} ${className ?? ''}`}
+      style={
+        invalid
+          ? { borderColor: 'var(--c-festive-b, #B8331F)' }
+          : highlight
+            ? { borderColor: 'var(--c-orange)', background: 'var(--c-cream)' }
+            : undefined
+      }
+    >
       <input
         id={inputId}
         name={name}

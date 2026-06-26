@@ -12,6 +12,9 @@ export type Warehouse = {
   location: string | null;
   is_active: boolean;
   is_default: boolean;
+  // Migration 0192 — overseas / in-transit warehouse (e.g. the China landing
+  // warehouse). A transfer OUT of it can carry a sea-freight cost uplift.
+  is_transit?: boolean;
 };
 
 export type InventoryBalance = {
@@ -300,7 +303,7 @@ export function useInventoryValue(opts?: { warehouseId?: string }) {
 export function useCreateWarehouse() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { code: string; name: string; location?: string; isDefault?: boolean }) =>
+    mutationFn: (body: { code: string; name: string; location?: string; isDefault?: boolean; isTransit?: boolean }) =>
       authedFetch<{ warehouse: Warehouse }>(`/inventory/warehouses`, { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['warehouses'] }),
   });
@@ -309,7 +312,7 @@ export function useCreateWarehouse() {
 export function useUpdateWarehouse() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...body }: { id: string; code?: string; name?: string; location?: string; isActive?: boolean; isDefault?: boolean }) =>
+    mutationFn: ({ id, ...body }: { id: string; code?: string; name?: string; location?: string; isActive?: boolean; isDefault?: boolean; isTransit?: boolean }) =>
       authedFetch<{ warehouse: Warehouse }>(`/inventory/warehouses/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['warehouses'] }),
   });

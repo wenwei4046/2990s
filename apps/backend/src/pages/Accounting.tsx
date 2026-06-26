@@ -26,6 +26,7 @@ import {
   type JournalEntry,
 } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { byText } from '../lib/sort-options';
 import styles from './Suppliers.module.css';
 import { fmtDateOrDash } from '@2990s/shared';
 
@@ -185,6 +186,7 @@ const JeTab = () => {
             <option value="">All sources</option>
             <option value="SI">SI — Sales Invoice</option>
             <option value="PI">PI — Purchase Invoice</option>
+            <option value="PV">PV — Payment Voucher</option>
             <option value="SI_PAYMENT">SI Payment</option>
             <option value="PI_PAYMENT">PI Payment</option>
             <option value="MANUAL">Manual</option>
@@ -212,7 +214,9 @@ const GlTab = () => {
           className={styles.searchInput}
           style={{ maxWidth: 320 }}>
           <option value="">All accounts</option>
-          {(accounts.data?.accounts ?? []).map((a) => (
+          {[...(accounts.data?.accounts ?? [])]
+            .sort((a, b) => byText(a.account_code, b.account_code))
+            .map((a) => (
             <option key={a.account_code} value={a.account_code}>
               {a.account_code} — {a.account_name}
             </option>

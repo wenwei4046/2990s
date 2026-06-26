@@ -33,7 +33,7 @@ import {
   ArrowLeft, Undo2, Pencil, Trash2, Printer, Save, Ban, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { activeOptions, buildVariantSummary, fmtDateOrDash, maintPickerValues } from '@2990s/shared';
+import { activeOptions, buildVariantSummary, canonicalizeVariants, fmtDateOrDash, maintPickerValues } from '@2990s/shared';
 import {
   usePurchaseReturnDetail,
   useUpdatePurchaseReturnHeader,
@@ -45,6 +45,7 @@ import { useSuppliers, useSupplierDetail, type SupplierRow } from '../lib/suppli
 import { useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { MoneyInput } from '../components/MoneyInput';
+import { DateField } from '../components/DateField';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
@@ -147,7 +148,9 @@ const lineSnapshot = (it: PrItemRow): LineDraft => ({
   unitPriceCenti: it.unit_price_centi,
   materialName:   it.description ?? it.material_name ?? '',
   itemGroup:      it.item_group ?? null,
-  variants:       (it.variants as Record<string, unknown> | null) ?? null,
+  /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize on
+     enter-edit so a stray non-canonical PR line prefills the dropdowns. */
+  variants:       canonicalizeVariants(it.item_group ?? 'others', (it.variants as Record<string, unknown> | null) ?? null),
 });
 
 export const PurchaseReturnDetail = () => {
@@ -661,8 +664,8 @@ const SupplierCard = ({
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Return Date</span>
-            <input type="date" className={styles.fieldInput} value={draft.returnDate} disabled={locked}
-              onChange={(e) => onField('returnDate', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.returnDate ?? ''} disabled={locked}
+              onChange={(iso) => onField('returnDate', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Credit Note Ref</span>

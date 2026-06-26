@@ -33,6 +33,7 @@ import {
 } from '../lib/suppliers-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ActionResultDialog } from '../components/ActionResultDialog';
+import { DateField } from '../components/DateField';
 import { ItemGroupPill } from '../lib/category-badges';
 import styles from './SalesOrderDetail.module.css';
 
@@ -74,10 +75,10 @@ const DATE_FIELD_OPTIONS = [
   { value: 'processing',   label: 'Processing Date' },
   { value: 'delivery',     label: 'Delivery Date' },
 ] as const;
-type DateField = typeof DATE_FIELD_OPTIONS[number]['value'];
+type DateFieldKey = typeof DATE_FIELD_OPTIONS[number]['value'];
 
 /** Resolve the date string for a row given the active date-field selector. */
-const rowDateFor = (r: OutstandingSoItem, field: DateField): string | null => {
+const rowDateFor = (r: OutstandingSoItem, field: DateFieldKey): string | null => {
   if (field === 'soDate')     return r.soDate ?? null;
   if (field === 'processing') return r.processingDate ?? null;
   // delivery — prefer the SO line's own date, fall back to the SO header date.
@@ -107,7 +108,7 @@ export const PurchaseOrderFromSo = () => {
 
   // Toolbar filters (commander 2026-05-28).
   const [category, setCategory]   = useState<string>('all');
-  const [dateField, setDateField] = useState<DateField>('soDate');
+  const [dateField, setDateField] = useState<DateFieldKey>('soDate');
   const [dateFrom, setDateFrom]   = useState<string>('');
   const [dateTo, setDateTo]       = useState<string>('');
 
@@ -486,25 +487,21 @@ export const PurchaseOrderFromSo = () => {
       {/* Date-range filter — pick which date field + from/to. */}
       <select
         value={dateField}
-        onChange={(e) => setDateField(e.target.value as DateField)}
+        onChange={(e) => setDateField(e.target.value as DateFieldKey)}
         style={FILTER_INPUT}
         aria-label="Date field"
       >
         {DATE_FIELD_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
-      <input
-        type="date"
-        value={dateFrom}
-        onChange={(e) => setDateFrom(e.target.value)}
-        style={FILTER_INPUT}
+      <DateField
+        value={dateFrom ?? ''}
+        onChange={(iso) => setDateFrom(iso)}
         aria-label="Date from"
       />
       <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-11)' }}>→</span>
-      <input
-        type="date"
-        value={dateTo}
-        onChange={(e) => setDateTo(e.target.value)}
-        style={FILTER_INPUT}
+      <DateField
+        value={dateTo ?? ''}
+        onChange={(iso) => setDateTo(iso)}
         aria-label="Date to"
       />
       {(category !== 'all' || dateFrom || dateTo) && (

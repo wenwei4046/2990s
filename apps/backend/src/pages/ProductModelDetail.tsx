@@ -32,6 +32,7 @@ import { useMaintenanceConfig, useUpdateMfgProductStatus, useSpecialAddons } fro
 import { useFabricLibrary } from '../lib/queries';
 import { resolveSizeInfo } from '../lib/size-info';
 import { supabase } from '../lib/supabase';
+import { sortByText } from '../lib/sort-options';
 import styles from './ProductModelDetail.module.css';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -378,7 +379,7 @@ export const ProductModelDetail = ({
           <label className={styles.field}>
             <span className="t-eyebrow">Branding (optional)</span>
             <datalist id="branding-pool-model-detail">
-              {brandingPool.pool.map((b) => <option key={b} value={b} />)}
+              {sortByText(brandingPool.pool).map((b) => <option key={b} value={b} />)}
             </datalist>
             <input
               type="text"

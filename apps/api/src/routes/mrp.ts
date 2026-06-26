@@ -49,10 +49,14 @@ import type { Env, Variables } from '../env';
 export const mrp = new Hono<{ Bindings: Env; Variables: Variables }>();
 mrp.use('*', supabaseAuth);
 
-/* SO statuses that no longer create demand (already shipped / closed). */
-const SO_DONE = new Set(['DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED']);
-/* PO statuses that no longer supply goods. */
-const PO_DEAD = new Set(['CANCELLED']);
+/* SO statuses that no longer create demand (already shipped / closed).
+   Leak guard (DRAFT) — a DRAFT SO commits nothing, so it must generate NO MRP
+   demand (no shortage, no PO-picker line) until it is confirmed. */
+const SO_DONE = new Set(['DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED', 'DRAFT']);
+/* PO statuses that no longer supply goods. DRAFT is included: a draft PO is
+   uncommitted (it hasn't really been ordered yet), so it must NOT count as MRP
+   supply until it is Confirmed (DRAFT -> SUBMITTED). Mirrors SO_DONE's DRAFT. */
+const PO_DEAD = new Set(['CANCELLED', 'DRAFT']);
 
 type DemandRow = {
   id: string;
@@ -256,19 +260,34 @@ export async function computeMrp(
 ): Promise<MrpResult> {
   const { catFilter, whFilter, includeUndated } = opts;
 
-  // ── 0. Per-category lead times (Commander 2026-05-29) ─────────────────
-  // order-by date = delivery date − lead_days[category]. Keyed lowercase to
-  // match item_group; product category is uppercase so we lowercase on lookup.
-  const { data: leadRows } = await sb
+  // ── 0. Per-category lead times (Commander 2026-05-29), now per-WAREHOUSE
+  //       (Commander 2026-06-22, migration 0184) ──────────────────────────
+  // order-by date = delivery date − lead_days[warehouse,category]. Keyed
+  // lowercase to match item_group; product category is uppercase so we
+  // lowercase on lookup. warehouse_id NULL = the GLOBAL DEFAULT. Cascade:
+  // (warehouse, category) → (NULL, category) → 0. Two maps: per-warehouse rows
+  // keyed `${warehouseId}|${cat}`, and the NULL-warehouse globals keyed `cat`.
+  const { data: leadRows, error: leadErr } = await sb
     .from('mrp_category_lead_times')
-    .select('category, lead_days');
+    .select('warehouse_id, category, lead_days');
+  // A transient PostgREST failure here must NOT silently zero EVERY lead time
+  // (which collapses the whole plan's production/order-by date onto the delivery
+  // date) — surface it instead of emitting a wrong-but-plausible schedule.
+  // (Anchoring port Houzs→2990 2026-06-25.)
+  if (leadErr) throw new Error(`mrp_lead_times_load_failed: ${leadErr.message}`);
+  const leadDaysByWhCat = new Map<string, number>();
   const leadDaysByCat = new Map<string, number>();
-  for (const r of (leadRows ?? []) as Array<{ category: string; lead_days: number }>) {
-    leadDaysByCat.set(r.category.toLowerCase(), r.lead_days ?? 0);
+  for (const r of (leadRows ?? []) as Array<{ warehouse_id: string | null; category: string; lead_days: number }>) {
+    const cat = (r.category ?? '').toLowerCase();
+    const days = r.lead_days ?? 0;
+    if (r.warehouse_id) leadDaysByWhCat.set(`${r.warehouse_id}|${cat}`, days);
+    else leadDaysByCat.set(cat, days);
   }
-  const orderByOf = (deliveryDate: string | null, category: string | null): string | null => {
+  const orderByOf = (deliveryDate: string | null, category: string | null, whId: string | null): string | null => {
     if (!deliveryDate) return null;
-    const days = leadDaysByCat.get((category ?? '').toLowerCase()) ?? 0;
+    const cat = (category ?? '').toLowerCase();
+    const days = (whId ? leadDaysByWhCat.get(`${whId}|${cat}`) : undefined)
+      ?? leadDaysByCat.get(cat) ?? 0;
     if (days <= 0) return deliveryDate;
     const d = new Date(`${deliveryDate.slice(0, 10)}T00:00:00Z`);
     if (Number.isNaN(d.getTime())) return deliveryDate;
@@ -563,7 +582,7 @@ export async function computeMrp(
         soDate: r.so?.so_date ?? null,
         deliveryDate: lineDelivery,
         processingDate: r.so?.internal_expected_dd ?? null,
-        orderByDate: orderByOf(lineDelivery, prod?.category ?? null),
+        orderByDate: orderByOf(lineDelivery, prod?.category ?? null, whId),
         qty: eff,
         source,
         poNumber,
@@ -703,7 +722,7 @@ export async function computeMrp(
         soDate: d.so?.so_date ?? null,
         deliveryDate: setDelivery,
         processingDate: d.so?.internal_expected_dd ?? null,
-        orderByDate: orderByOf(setDelivery, prod?.category ?? null),
+        orderByDate: orderByOf(setDelivery, prod?.category ?? null, whId),
         itemCode: d.item_code,
         description: prod?.name ?? d.description ?? null,
         variantLabel: buildVariantSummary(d.item_group, v) || null,

@@ -40,6 +40,8 @@ import {
   type PoPriceMatrix,
 } from '@2990s/shared/mfg-pricing';
 import { ActionResultDialog } from '../components/ActionResultDialog';
+import { DateField } from '../components/DateField';
+import { sortByText } from '../lib/sort-options';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -367,7 +369,7 @@ export const PurchaseConsignmentOrderNew = () => {
                 className={styles.fieldInput}
               >
                 <option value="">— Pick a supplier —</option>
-                {(suppliers.data ?? []).map((s) => (
+                {sortByText(suppliers.data ?? []).map((s) => (
                   <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                 ))}
               </select>
@@ -397,11 +399,11 @@ export const PurchaseConsignmentOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Date *</span>
-              <input
-                type="date"
-                value={poDate}
-                onChange={(e) => setPoDate(e.target.value)}
+              <DateField
+                value={poDate ?? ''}
+                onChange={(iso) => setPoDate(iso)}
                 className={styles.fieldInput}
+                fullWidth
               />
             </label>
 
@@ -419,12 +421,11 @@ export const PurchaseConsignmentOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Expected Delivery *</span>
-              <input
-                type="date"
-                value={expectedAt}
-                onChange={(e) => setExpectedAt(e.target.value)}
+              <DateField
+                value={expectedAt ?? ''}
+                onChange={(iso) => setExpectedAt(iso)}
                 className={styles.fieldInput}
-                required
+                fullWidth
               />
             </label>
 
@@ -433,29 +434,29 @@ export const PurchaseConsignmentOrderNew = () => {
                 date becomes the effective ETA. Display-only on consignment. */}
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Supplier Delivery Date 2</span>
-              <input
-                type="date"
-                value={supplierDeliveryDate2}
-                onChange={(e) => setSupplierDeliveryDate2(e.target.value)}
+              <DateField
+                value={supplierDeliveryDate2 ?? ''}
+                onChange={(iso) => setSupplierDeliveryDate2(iso)}
                 className={styles.fieldInput}
+                fullWidth
               />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Supplier Delivery Date 3</span>
-              <input
-                type="date"
-                value={supplierDeliveryDate3}
-                onChange={(e) => setSupplierDeliveryDate3(e.target.value)}
+              <DateField
+                value={supplierDeliveryDate3 ?? ''}
+                onChange={(iso) => setSupplierDeliveryDate3(iso)}
                 className={styles.fieldInput}
+                fullWidth
               />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Supplier Delivery Date 4</span>
-              <input
-                type="date"
-                value={supplierDeliveryDate4}
-                onChange={(e) => setSupplierDeliveryDate4(e.target.value)}
+              <DateField
+                value={supplierDeliveryDate4 ?? ''}
+                onChange={(iso) => setSupplierDeliveryDate4(iso)}
                 className={styles.fieldInput}
+                fullWidth
               />
             </label>
 
@@ -468,7 +469,7 @@ export const PurchaseConsignmentOrderNew = () => {
                 required
               >
                 <option value="">— Pick a warehouse —</option>
-                {(warehouses.data ?? []).map((w) => (
+                {sortByText(warehouses.data ?? []).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                 ))}
               </select>

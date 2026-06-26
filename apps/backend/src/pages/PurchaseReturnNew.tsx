@@ -29,7 +29,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, Plus, Save, Trash2, X, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { activeOptions, buildVariantSummary, maintPickerValues } from '@2990s/shared';
+import { activeOptions, buildVariantSummary, canonicalizeVariants, maintPickerValues } from '@2990s/shared';
 import {
   useCreatePurchaseReturn,
   usePostPurchaseReturn,
@@ -37,8 +37,10 @@ import {
 } from '../lib/flow-queries';
 import { usePurchaseOrderDetail, useSuppliers } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
+import { sortByText, sortByNumeric } from '../lib/sort-options';
 import { ItemGroupPill } from '../lib/category-badges';
 import { MoneyInput } from '../components/MoneyInput';
+import { DateField } from '../components/DateField';
 import { useNotify } from '../components/NotifyDialog';
 import styles from './SalesOrderDetail.module.css';
 
@@ -179,7 +181,9 @@ export const PurchaseReturnNew = () => {
         materialCode:   it.material_code,
         materialName:   it.material_name,
         itemGroup:      it.item_group ?? null,
-        variants:       (it.variants as Record<string, unknown> | null) ?? null,
+        /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
+           the GRN line's variants when seeding the PR draft. */
+        variants:       canonicalizeVariants(it.item_group ?? 'others', (it.variants as Record<string, unknown> | null) ?? null),
         qtyReturned:    it.qty_rejected ?? 0,        // pre-fill with rejected qty if any
         unitPriceCenti: it.unit_price_centi ?? 0,
         reason:         it.rejection_reason ?? '',
@@ -200,7 +204,9 @@ export const PurchaseReturnNew = () => {
       materialCode:   it.material_code,
       materialName:   it.material_name,
       itemGroup:      it.item_group ?? null,
-      variants:       (it.variants as Record<string, unknown> | null) ?? null,
+      /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
+         the PO line's variants when seeding the PR draft. */
+      variants:       canonicalizeVariants(it.item_group ?? 'others', (it.variants as Record<string, unknown> | null) ?? null),
       qtyReturned:    0,                              // commander enters
       unitPriceCenti: it.unit_price_centi ?? 0,
       reason:         '',
@@ -337,7 +343,7 @@ export const PurchaseReturnNew = () => {
               ) : (
                 <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={styles.fieldInput} required>
                   <option value="">— Pick a supplier —</option>
-                  {(suppliersQ.data ?? []).map((s) => (
+                  {sortByText(suppliersQ.data ?? []).map((s) => (
                     <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                   ))}
                 </select>
@@ -345,7 +351,7 @@ export const PurchaseReturnNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Return Date *</span>
-              <input type="date" value={returnDate} onChange={(e) => setReturnDate(e.target.value)} className={styles.fieldInput} required />
+              <DateField value={returnDate ?? ''} onChange={(iso) => setReturnDate(iso)} className={styles.fieldInput} fullWidth />
             </label>
 
             <label className={styles.field}>
@@ -482,7 +488,7 @@ export const PurchaseReturnNew = () => {
                             style={{ fontFamily: 'var(--font-mono)' }}
                           />
                           <datalist id={`pr-products-${l.rid}`}>
-                            {(productsQ.data ?? []).map((p) => (
+                            {sortByText(productsQ.data ?? []).map((p) => (
                               <option key={p.id} value={p.code}>{p.name} · {p.category}</option>
                             ))}
                           </datalist>
@@ -534,14 +540,14 @@ export const PurchaseReturnNew = () => {
                       }}>{l.itemGroup} Variants</div>
                       {l.itemGroup === 'bedframe' ? (
                         <div className={styles.formGrid4}>
-                          <VariantSelect label="Divan Height" options={activeOptions(maint!.divanHeights, String(l.variants?.divanHeight ?? ''))}
+                          <VariantSelect label="Divan Height" options={sortByNumeric(activeOptions(maint!.divanHeights, String(l.variants?.divanHeight ?? '')))}
                             value={String(l.variants?.divanHeight ?? '')}
                             onChange={(v) => setVariant('divanHeight', v)} />
                           <VariantSelect label="Gap"
-                            options={maintPickerValues(maint!.gaps, String(l.variants?.gap ?? '')).map((g) => ({ value: g, priceSen: 0 }))}
+                            options={sortByNumeric(maintPickerValues(maint!.gaps, String(l.variants?.gap ?? '')).map((g) => ({ value: g, priceSen: 0 })))}
                             value={String(l.variants?.gap ?? '')}
                             onChange={(v) => setVariant('gap', v)} />
-                          <VariantSelect label="Leg Height" options={activeOptions(maint!.legHeights, String(l.variants?.legHeight ?? ''))}
+                          <VariantSelect label="Leg Height" options={sortByNumeric(activeOptions(maint!.legHeights, String(l.variants?.legHeight ?? '')))}
                             value={String(l.variants?.legHeight ?? '')}
                             onChange={(v) => setVariant('legHeight', v)} />
                           {/* Total Heights removed — auto-computed from Divan +
@@ -553,10 +559,10 @@ export const PurchaseReturnNew = () => {
                       ) : (
                         <div className={styles.formGrid4}>
                           <VariantSelect label="Seat Size"
-                            options={maintPickerValues(maint!.sofaSizes, String(l.variants?.seatHeight ?? '')).map((s) => ({ value: s, priceSen: 0 }))}
+                            options={sortByNumeric(maintPickerValues(maint!.sofaSizes, String(l.variants?.seatHeight ?? '')).map((s) => ({ value: s, priceSen: 0 })))}
                             value={String(l.variants?.seatHeight ?? '')}
                             onChange={(v) => setVariant('seatHeight', v)} />
-                          <VariantSelect label="Leg Height" options={activeOptions(maint!.sofaLegHeights, String(l.variants?.legHeight ?? ''))}
+                          <VariantSelect label="Leg Height" options={sortByNumeric(activeOptions(maint!.sofaLegHeights, String(l.variants?.legHeight ?? '')))}
                             value={String(l.variants?.legHeight ?? '')}
                             onChange={(v) => setVariant('legHeight', v)} />
                           <VariantSelect label="Special" options={specialsPools.sofa}

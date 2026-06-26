@@ -54,7 +54,9 @@ import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
+import { DateField } from '../components/DateField';
 import { StatusPill } from '../components/StatusPill';
+import { sortByText } from '../lib/sort-options';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -785,7 +787,7 @@ const SupplierCard = ({
               <select className={styles.fieldSelect} value={draft.supplierId} disabled={locked}
                 onChange={(e) => onField('supplierId', e.target.value)}>
                 <option value="">— Pick supplier —</option>
-                {suppliers.map((s) => (
+                {sortByText(suppliers).map((s) => (
                   <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                 ))}
               </select>
@@ -808,31 +810,31 @@ const SupplierCard = ({
           <div />
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Date</span>
-            <input type="date" className={styles.fieldInput} value={draft.poDate} disabled={locked}
-              onChange={(e) => onField('poDate', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.poDate ?? ''} disabled={locked}
+              onChange={(iso) => onField('poDate', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Expected Delivery</span>
-            <input type="date" className={styles.fieldInput} value={draft.expectedAt} disabled={locked}
-              onChange={(e) => onField('expectedAt', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.expectedAt ?? ''} disabled={locked}
+              onChange={(iso) => onField('expectedAt', iso)} />
           </label>
           {/* Migration 0181 — supplier-revised header delivery dates. Optional;
               cascade to lines that have no own value (page setHeaderField). The
               latest non-empty date becomes the effective ETA. Display-only. */}
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Supplier Delivery Date 2</span>
-            <input type="date" className={styles.fieldInput} value={draft.supplierDeliveryDate2} disabled={locked}
-              onChange={(e) => onField('supplierDeliveryDate2', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.supplierDeliveryDate2 ?? ''} disabled={locked}
+              onChange={(iso) => onField('supplierDeliveryDate2', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Supplier Delivery Date 3</span>
-            <input type="date" className={styles.fieldInput} value={draft.supplierDeliveryDate3} disabled={locked}
-              onChange={(e) => onField('supplierDeliveryDate3', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.supplierDeliveryDate3 ?? ''} disabled={locked}
+              onChange={(iso) => onField('supplierDeliveryDate3', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Supplier Delivery Date 4</span>
-            <input type="date" className={styles.fieldInput} value={draft.supplierDeliveryDate4} disabled={locked}
-              onChange={(e) => onField('supplierDeliveryDate4', e.target.value)} />
+            <DateField className={styles.fieldInput} fullWidth value={draft.supplierDeliveryDate4 ?? ''} disabled={locked}
+              onChange={(iso) => onField('supplierDeliveryDate4', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Purchase Location</span>
@@ -840,7 +842,7 @@ const SupplierCard = ({
               <select className={styles.fieldSelect} value={draft.purchaseLocationId} disabled={locked}
                 onChange={(e) => onField('purchaseLocationId', e.target.value)}>
                 <option value="">— No default —</option>
-                {warehouses.filter((w) => w.is_active).map((w) => (
+                {sortByText(warehouses.filter((w) => w.is_active)).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                 ))}
               </select>

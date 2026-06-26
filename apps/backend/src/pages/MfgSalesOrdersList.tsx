@@ -272,7 +272,9 @@ const deriveBranding = (r: SoRow): string => {
 };
 
 const STATUS_CLASS: Record<string, string> = {
-  // DRAFT removed in migration 0078 — SOs start at CONFIRMED.
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — DRAFT is back as a grey
+  // staging pill; a draft stays visible in the list but commits nothing.
+  DRAFT:          soDetailStyles.statusDraft ?? '',
   CONFIRMED:      soDetailStyles.statusConfirmed ?? '',
   IN_PRODUCTION:  soDetailStyles.statusInProd ?? '',
   READY_TO_SHIP:  soDetailStyles.statusReady ?? '',
@@ -297,6 +299,7 @@ const STATUS_CLASS: Record<string, string> = {
      ON_HOLD        → On Hold
      CANCELLED      → Cancelled */
 const STATUS_LABEL: Record<string, string> = {
+  DRAFT:         'Draft',
   CONFIRMED:     'Confirmed',
   IN_PRODUCTION: 'Proceed',
   READY_TO_SHIP: 'Stock Ready',
@@ -1077,10 +1080,15 @@ export const MfgSalesOrdersList = () => {
         groupBanner={false}
         onRowDoubleClick={(r) => openDetail(r)}
         /* Commander 2026-05-29 — cancelled SOs grey out in the list so they
-           read as dead/inactive (they no longer proceed). */
+           read as dead/inactive (they no longer proceed).
+           DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT SO stays
+           VISIBLE but is visually distinct (a left accent + faint tint) so the
+           operator can tell at a glance it's uncommitted. */
         rowStyle={(r) => r.status === 'CANCELLED'
           ? { opacity: 0.55, filter: 'grayscale(0.6)' }
-          : undefined}
+          : r.status === 'DRAFT'
+            ? { background: 'rgba(34, 31, 32, 0.04)', boxShadow: 'inset 3px 0 0 var(--fg-muted, rgba(34,31,32,0.4))' }
+            : undefined}
         isLoading={isLoading}
         emptyMessage='No sales orders yet — click "+ New Sales Order" to start.'
         expandable={{
@@ -1096,7 +1104,26 @@ export const MfgSalesOrdersList = () => {
              DO / SI references this SO; Issue DO (partial delivery) stays. */
           const status = row.status;
           const hasChildren = Boolean(row.has_children);
+          /* DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT SO commits
+             nothing: it must NOT offer any downstream action (Issue DO, Issue SI)
+             until Confirmed. The menu instead surfaces a Confirm SO action that
+             flips it live (DRAFT → CONFIRMED). */
+          const isDraft = status === 'DRAFT';
           const items: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [];
+          if (isDraft) {
+            items.push({
+              label: 'Confirm SO',
+              onClick: async () => {
+                if (!(await askConfirm({
+                  title: `Confirm ${row.doc_no}?`,
+                  body: 'This commits the draft: it becomes a live Sales Order — visible in MRP, the PO picker and stock allocation.',
+                  confirmLabel: 'Confirm SO',
+                }))) return;
+                updateStatus.mutate({ docNo: row.doc_no, status: 'CONFIRMED' });
+              },
+            });
+            items.push({ divider: true as const });
+          }
           if (!hasChildren) {
             items.push({ label: 'Edit', onClick: () => openDetail(row, true) });
           }
@@ -1104,12 +1131,15 @@ export const MfgSalesOrdersList = () => {
           items.push({ label: 'Preview', onClick: () => void renderPdf(row, 'preview') });
           items.push({ label: 'Print',   onClick: () => void renderPdf(row, 'print') });
           items.push({ divider: true as const });
-          // Issue DO — ALWAYS shown (Commander 2026-05-30) so the operator never
-          // thinks the action disappeared. convertToDo decides at click time
-          // whether there's anything to deliver (has_undelivered is recomputed
-          // live: qty − delivered + returned > 0) and otherwise shows a plain
-          // "Nothing to be converted" message.
-          items.push({ label: 'Issue Delivery Order', onClick: () => convertToDo(row) });
+          // Issue DO — shown for any non-DRAFT SO (Commander 2026-05-30) so the
+          // operator never thinks the action disappeared. convertToDo decides at
+          // click time whether there's anything to deliver (has_undelivered is
+          // recomputed live: qty − delivered + returned > 0) and otherwise shows
+          // a plain "Nothing to be converted" message. A DRAFT SO commits nothing,
+          // so the downstream Issue DO is withheld until it is Confirmed.
+          if (!isDraft) {
+            items.push({ label: 'Issue Delivery Order', onClick: () => convertToDo(row) });
+          }
           // Issue SI — available once the customer has accepted delivery.
           if (['DELIVERED', 'SHIPPED'].includes(status)) {
             items.push({
@@ -1215,6 +1245,7 @@ const buildColumns = (
     ),
     searchValue: (r) => r.current_doc_no ?? r.doc_no ?? '',
     filterValue: (r) => r.current_doc_no ?? r.doc_no ?? '—',
+    exportValue: (r) => r.current_doc_no ?? r.doc_no ?? '',
   },
   {
     key: 'so_date', label: 'Date', width: 110, sortable: true,
@@ -1276,6 +1307,7 @@ const buildColumns = (
     searchValue: (r) => deriveBranding(r),
     groupValue: (r) => deriveBranding(r) || '(none)',
     sortFn: (a, b) => deriveBranding(a).localeCompare(deriveBranding(b)),
+    exportValue: (r) => deriveBranding(r),
   },
   {
     key: 'venue', label: 'Venue', width: 180, sortable: true, groupable: true,
@@ -1295,6 +1327,7 @@ const buildColumns = (
     searchValue: (r) => fmtRm(r.local_total_centi),
     sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
     filterType: 'number', numberValue: (r) => r.local_total_centi,
+    exportValue: (r) => (r.local_total_centi ?? 0) / 100,
   },
   {
     /* Commander 2026-05-30 — Stock Status column rebuilt around the operator's
@@ -1333,6 +1366,7 @@ const buildColumns = (
       );
     },
     searchValue: (r) => (r.stock_remark ?? '').toLowerCase(),
+    exportValue: (r) => (r.stock_remark ?? '').trim(),
     sortFn: (a, b) => {
       /* Sort: full READY first, then READY (PARTIAL), then pending (any
          categories shown), then blank. Within "pending" group, longer remark
@@ -1360,6 +1394,7 @@ const buildColumns = (
     },
     searchValue: (r) => fmtRm(r.mattress_sofa_centi ?? 0),
     sortFn: (a, b) => (a.mattress_sofa_centi ?? 0) - (b.mattress_sofa_centi ?? 0),
+    exportValue: (r) => (r.mattress_sofa_centi ?? 0) / 100,
   },
   {
     key: 'bedframe_centi', label: 'Bedframe', width: 120, sortable: true, align: 'right', groupable: false,
@@ -1373,6 +1408,7 @@ const buildColumns = (
     },
     searchValue: (r) => fmtRm(r.bedframe_centi ?? 0),
     sortFn: (a, b) => (a.bedframe_centi ?? 0) - (b.bedframe_centi ?? 0),
+    exportValue: (r) => (r.bedframe_centi ?? 0) / 100,
   },
   {
     key: 'accessories_centi', label: 'Accessories', width: 120, sortable: true, align: 'right', groupable: false,
@@ -1386,24 +1422,28 @@ const buildColumns = (
     },
     searchValue: (r) => fmtRm(r.accessories_centi ?? 0),
     sortFn: (a, b) => (a.accessories_centi ?? 0) - (b.accessories_centi ?? 0),
+    exportValue: (r) => (r.accessories_centi ?? 0) / 100,
   },
   {
     key: 'mattress_sofa_cost_centi', label: 'Mattress/Sofa Cost', width: 140, sortable: true, align: 'right', groupable: false,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.mattress_sofa_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.mattress_sofa_cost_centi ?? 0),
     sortFn: (a, b) => (a.mattress_sofa_cost_centi ?? 0) - (b.mattress_sofa_cost_centi ?? 0),
+    exportValue: (r) => (r.mattress_sofa_cost_centi ?? 0) / 100,
   },
   {
     key: 'bedframe_cost_centi', label: 'Bedframe Cost', width: 130, sortable: true, align: 'right', groupable: false,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.bedframe_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.bedframe_cost_centi ?? 0),
     sortFn: (a, b) => (a.bedframe_cost_centi ?? 0) - (b.bedframe_cost_centi ?? 0),
+    exportValue: (r) => (r.bedframe_cost_centi ?? 0) / 100,
   },
   {
     key: 'accessories_cost_centi', label: 'Accessories Cost', width: 140, sortable: true, align: 'right', groupable: false,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.accessories_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.accessories_cost_centi ?? 0),
     sortFn: (a, b) => (a.accessories_cost_centi ?? 0) - (b.accessories_cost_centi ?? 0),
+    exportValue: (r) => (r.accessories_cost_centi ?? 0) / 100,
   },
   {
     /* Task #91 — display the pretty Malaysian format. searchValue keeps the
@@ -1539,6 +1579,7 @@ const buildColumns = (
     accessor: (r) => <span className={styles.money}>{fmtRm(r.others_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.others_centi ?? 0),
     sortFn: (a, b) => (a.others_centi ?? 0) - (b.others_centi ?? 0),
+    exportValue: (r) => (r.others_centi ?? 0) / 100,
   },
   {
     key: 'others_cost_centi', label: 'Others Cost', width: 120, sortable: true, align: 'right', groupable: false,
@@ -1546,6 +1587,7 @@ const buildColumns = (
     accessor: (r) => <span className={styles.money}>{fmtRm(r.others_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.others_cost_centi ?? 0),
     sortFn: (a, b) => (a.others_cost_centi ?? 0) - (b.others_cost_centi ?? 0),
+    exportValue: (r) => (r.others_cost_centi ?? 0) / 100,
   },
   /* Task #114 — Overall cost / margin / margin% on the SO header. */
   {
@@ -1554,6 +1596,7 @@ const buildColumns = (
     accessor: (r) => <span className={styles.money}>{fmtRm(r.total_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.total_cost_centi ?? 0),
     sortFn: (a, b) => (a.total_cost_centi ?? 0) - (b.total_cost_centi ?? 0),
+    exportValue: (r) => (r.total_cost_centi ?? 0) / 100,
   },
   {
     key: 'total_margin_centi', label: 'Margin', width: 120, sortable: true, align: 'right', groupable: false,
@@ -1566,6 +1609,7 @@ const buildColumns = (
     },
     searchValue: (r) => fmtRm(r.total_margin_centi ?? 0),
     sortFn: (a, b) => (a.total_margin_centi ?? 0) - (b.total_margin_centi ?? 0),
+    exportValue: (r) => ((r.local_total_centi ?? 0) <= 0 ? '' : (r.total_margin_centi ?? 0) / 100),
   },
   {
     key: 'margin_pct_basis', label: 'Margin %', width: 100, sortable: true, align: 'right', groupable: false,
@@ -1583,6 +1627,7 @@ const buildColumns = (
     },
     searchValue: (r) => `${((r.margin_pct_basis ?? 0) / 100).toFixed(1)}%`,
     sortFn: (a, b) => (a.margin_pct_basis ?? 0) - (b.margin_pct_basis ?? 0),
+    exportValue: (r) => ((r.local_total_centi ?? 0) <= 0 ? '' : `${((r.margin_pct_basis ?? 0) / 100).toFixed(1)}%`),
   },
   {
     key: 'deposit_centi', label: 'Deposit', width: 110, sortable: true, align: 'right', groupable: false,
@@ -1590,6 +1635,7 @@ const buildColumns = (
     accessor: (r) => <span className={styles.money}>{fmtRm(r.deposit_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.deposit_centi ?? 0),
     sortFn: (a, b) => (a.deposit_centi ?? 0) - (b.deposit_centi ?? 0),
+    exportValue: (r) => (r.deposit_centi ?? 0) / 100,
   },
   {
     key: 'paid_total_centi', label: 'Paid', width: 110, sortable: true, align: 'right', groupable: false,
@@ -1597,6 +1643,7 @@ const buildColumns = (
     accessor: (r) => <span className={styles.money}>{fmtRm(r.paid_total_centi ?? r.paid_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.paid_total_centi ?? r.paid_centi ?? 0),
     sortFn: (a, b) => (a.paid_total_centi ?? a.paid_centi ?? 0) - (b.paid_total_centi ?? b.paid_centi ?? 0),
+    exportValue: (r) => (r.paid_total_centi ?? r.paid_centi ?? 0) / 100,
   },
   {
     /* Follow-up #83 — prefer the view's live balance. */
@@ -1605,6 +1652,7 @@ const buildColumns = (
     accessor: (r) => <span className={styles.money}>{fmtRm(liveBalance(r))}</span>,
     searchValue: (r) => fmtRm(liveBalance(r)),
     sortFn: (a, b) => liveBalance(a) - liveBalance(b),
+    exportValue: (r) => liveBalance(r) / 100,
   },
   {
     key: 'status', label: 'Status', width: 130, sortable: true, groupable: true,
@@ -1613,5 +1661,9 @@ const buildColumns = (
     searchValue: (r) => r.status,
     groupValue: (r) => r.status,
     sortFn: (a, b) => a.status.localeCompare(b.status),
+    exportValue: (r) => {
+      const eff = soStatusDisplay(r.status, r.delivery_state, r.lifecycle_state);
+      return eff.label ?? STATUS_LABEL[r.status] ?? r.status.replace(/_/g, ' ');
+    },
   },
 ];

@@ -27,16 +27,19 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Save, Trash2, X, ChevronDown, ArrowRightLeft } from 'lucide-react';
 import { ItemGroupPill } from '../lib/category-badges';
 import { Button } from '@2990s/design-system';
-import { activeOptions, buildVariantSummary, maintPickerValues } from '@2990s/shared';
+import { activeOptions, buildVariantSummary, canonicalizeVariants, isServiceLine, maintPickerValues } from '@2990s/shared';
 import {
   useCreatePurchaseInvoice,
   usePostPurchaseInvoice,
   useGrnDetail,
 } from '../lib/flow-queries';
 import { useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
+import { useActiveCurrencies, rateFor } from '../lib/currencies-queries';
 import { useMfgProducts, useMaintenanceConfig, useSpecialAddons } from '../lib/mfg-products-queries';
+import { sortByText, sortByNumeric } from '../lib/sort-options';
 import { MoneyInput } from '../components/MoneyInput';
 import { ActionResultDialog } from '../components/ActionResultDialog';
+import { DateField } from '../components/DateField';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -139,12 +142,24 @@ export const PurchaseInvoiceNew = () => {
   const [supplierInvoiceRef, setSupplierInvoiceRef] = useState<string>('');
   const [invoiceDate, setInvoiceDate] = useState<string>(() => todayMyt());
   const [dueDate, setDueDate]         = useState<string>('');
+  /* Multi-currency AP (0188) — MYR per 1 unit of the PI currency. Shown only for
+     a foreign-currency supplier; MYR posts 1:1. Kept as a string so the numeric
+     input round-trips empty/partial typing. */
+  const [exchangeRate, setExchangeRate] = useState<string>('1');
+  /* Migration 0193 — track whether the operator hand-edited the rate so the
+     master-rate auto-fill below stops overwriting their value. */
+  const [rateTouched, setRateTouched] = useState<boolean>(false);
   /* Commander 2026-05-29 — "Bill date 都是 standard 的，放 30 天之内，根据这个
      supplier 的设定": Due Date auto-defaults to Invoice Date + the supplier's
      payment-term days. Track whether the operator has hand-edited Due Date so
      the auto-default stops overwriting their value. */
   const [dueTouched, setDueTouched]   = useState<boolean>(false);
   const [notes, setNotes]             = useState<string>('');
+  /* PI-level freight allocation (migration 0202) — how a freight SERVICE line's
+     charge is spread across the goods lines into their landed cost: QTY
+     (default) | VALUE | CBM. Mirrors GrnNew's "Charge allocation"; sent on
+     create, the server's reallocatePiCharges does the authoritative split. */
+  const [allocationMethod, setAllocationMethod] = useState<'QTY' | 'VALUE' | 'CBM'>('QTY');
   const [lines, setLines]             = useState<DraftLine[]>([]);
   const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
 
@@ -179,7 +194,9 @@ export const PurchaseInvoiceNew = () => {
         // Carried from the GRN line (grns.ts ITEM select returns these) so the
         // PI shows the same variant summary as the GRN it descends from.
         itemGroup:      it.item_group ?? null,
-        variants:       (it.variants as Record<string, unknown> | null) ?? null,
+        /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
+           the GRN line's variants when seeding the PI draft. */
+        variants:       canonicalizeVariants(it.item_group ?? 'others', (it.variants as Record<string, unknown> | null) ?? null),
         qty:            pickQtyById ? (pickQtyById.get(it.id) ?? it._remaining) : it._remaining,
         unitPriceCenti: it.unit_price_centi ?? 0,
         notes:          '',
@@ -214,6 +231,39 @@ export const PurchaseInvoiceNew = () => {
     [lines],
   );
 
+  /* PI-level freight allocation preview (migration 0202) — mirror GrnNew's
+     allocPreview so the operator SEES the freight ("平摊") split across goods
+     lines before saving. Charge pool = Σ SERVICE-line values; per-line freight
+     uses the chosen basis (QTY / VALUE / CBM) with last-line-remainder. The
+     server's reallocatePiCharges is authoritative; this is just the live
+     preview. Keyed by rid. */
+  const allocPreview = useMemo(() => {
+    const isSvc = (l: DraftLine) => isServiceLine({ itemGroup: l.itemGroup, itemCode: l.materialCode });
+    const goods = lines.filter((l) => l.materialCode.trim() && !isSvc(l));
+    const chargePool = lines
+      .filter((l) => l.materialCode.trim() && isSvc(l))
+      .reduce((s, l) => s + l.qty * l.unitPriceCenti, 0);
+    const basisOf = (l: DraftLine): number => {
+      if (allocationMethod === 'VALUE') return l.qty * l.unitPriceCenti;
+      if (allocationMethod === 'CBM') return l.qty; // volume unknown client-side → qty proxy
+      return l.qty;
+    };
+    let sumBasis = goods.reduce((s, l) => s + basisOf(l), 0);
+    if (sumBasis <= 0) sumBasis = goods.reduce((s, l) => s + l.qty, 0);
+    const allocByRid = new Map<string, number>();
+    let used = 0;
+    goods.forEach((l, i) => {
+      const isLast = i === goods.length - 1;
+      let alloc = 0;
+      if (chargePool > 0 && sumBasis > 0) {
+        alloc = isLast ? chargePool - used : Math.round((chargePool * basisOf(l)) / sumBasis);
+        if (!isLast) used += alloc;
+      }
+      allocByRid.set(l.rid, alloc);
+    });
+    return { chargePool, allocByRid, goodsCount: goods.length };
+  }, [lines, allocationMethod]);
+
   // flow-queries.ts types this as `any`; narrow locally to the fields we
   // actually touch here. Keeps the rest of the page honest without forcing
   // a global refactor of the shared queries file.
@@ -228,7 +278,6 @@ export const PurchaseInvoiceNew = () => {
   const grn      = grnQ.data?.grn as GrnDetail | undefined;
   const supplier = grn?.supplier;
   const po       = grn?.purchase_order;
-  const currency = 'MYR';
 
   // Effective supplier id + display name (from GRN, or the manual <select>).
   const manualSupplierRow = isManual
@@ -274,6 +323,23 @@ export const PurchaseInvoiceNew = () => {
      so the PI header can auto-fill Name + Address + the Contact · Phone · Email ·
      Terms · Currency info bar, mirroring New PO. No warehouse (PI is AP only). */
   const supplierDetail  = supplierDetailQ.data?.supplier ?? null;
+
+  /* Multi-currency AP (0188) — the PI's currency follows the resolved supplier's
+     default currency (e.g. a China supplier billing RMB); MYR when unset. The
+     invoice itself stays in this currency — the exchange rate only converts the
+     AP posting to MYR at GL-post time (server-side). */
+  const currency = (supplierDetail?.currency ?? 'MYR').toUpperCase();
+  const isForeign = currency !== 'MYR';
+  /* Migration 0193 — auto-fill the rate from the currencies MASTER when the PI
+     settles on a foreign currency (still editable). MYR resets to 1. A manual
+     edit (rateTouched) wins. */
+  const currenciesQ = useActiveCurrencies();
+  useEffect(() => {
+    if (!isForeign) { setExchangeRate('1'); setRateTouched(false); return; }
+    if (rateTouched) return;
+    const master = rateFor(currenciesQ.data, currency);
+    setExchangeRate(String(master));
+  }, [isForeign, currency, currenciesQ.data, rateTouched]);
 
   // ── Manual product search (gated by min query length, mirrors GrnNew). ───
   const [productQuery, setProductQuery] = useState<string>('');
@@ -334,9 +400,33 @@ export const PurchaseInvoiceNew = () => {
       notes:          '',
     }]);
 
+  /* Append a freight SERVICE line (migration 0202) — a normal line pre-set to
+     itemGroup:'service' with a 'Freight' description. The server pools every
+     service line's value and allocates it across the goods lines per
+     allocationMethod (mirrors GrnNew). materialKind:'service' so isServiceLine
+     detects it via the item_group signal. */
+  const addFreightLine = () =>
+    setLines((prev) => [...prev, {
+      rid:            `f${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      grnItemId:      null,
+      materialKind:   'service',
+      materialCode:   'SVC-FREIGHT',
+      materialName:   'Freight',
+      itemGroup:      'service',
+      variants:       null,
+      qty:            1,
+      unitPriceCenti: 0,
+      notes:          '',
+    }]);
+
   const canSave = !!supplierId && lines.length > 0 && lines.every((l) => l.qty > 0);
 
-  const onSave = async () => {
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25, ported from Houzs) — onSave takes
+     an `asDraft` flag. Confirm (asDraft=false, the default) creates the PI then
+     posts it (POSTED — AP/GL + GRN-consume + recost fire on the confirm). Draft
+     (asDraft=true) creates a DRAFT that commits NOTHING and is NOT auto-posted —
+     it can be confirmed later from the detail page. */
+  const onSave = async (asDraft = false) => {
     if (!supplierId) {
       setDialog({ title: 'Pick a supplier', body: isManual
         ? 'Choose a supplier for this manual invoice.'
@@ -360,6 +450,17 @@ export const PurchaseInvoiceNew = () => {
         invoiceDate,
         dueDate:            dueDate || undefined,
         notes:              notes || undefined,
+        // DRAFT/Confirmed two-state — opt-in DRAFT lands the PI uncommitted.
+        asDraft,
+        // Multi-currency AP (0188) — send the resolved currency + rate. MYR forces
+        // 1 (server enforces too); a blank/invalid foreign rate → 1.
+        currency,
+        exchangeRate:       isForeign
+          ? ((Number(exchangeRate) > 0 && Number.isFinite(Number(exchangeRate))) ? Number(exchangeRate) : 1)
+          : 1,
+        // PI-level freight allocation (migration 0202) — the freight "平摊" basis.
+        // The server pools the SERVICE lines + allocates per this method.
+        allocationMethod,
         items: realLines.map((l) => ({
           grnItemId:      l.grnItemId,
           materialKind:   l.materialKind,
@@ -375,7 +476,15 @@ export const PurchaseInvoiceNew = () => {
           variants:       l.variants,
         })),
       });
-      // Auto-post so PI lands in POSTED state (matches PO + GRN behaviour).
+      if (asDraft) {
+        setDialog({
+          title: `Draft PI ${createRes.invoiceNumber} saved`,
+          body: 'Saved as a draft — nothing posted yet. Open it and click Confirm to record the AP liability.',
+          goTo: `/purchase-invoices/${createRes.id}`,
+        });
+        return;
+      }
+      // Confirm — post so PI lands in POSTED state (matches PO + GRN behaviour).
       await post.mutateAsync(createRes.id);
       setDialog({
         title: `PI ${createRes.invoiceNumber} created`,
@@ -407,7 +516,15 @@ export const PurchaseInvoiceNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate(isManual ? '/purchase-invoices' : (grn ? `/grns/${grn.id}` : '/grns'))}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={saving}>
+          {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — "Save as Draft" creates
+              the PI as DRAFT (commits nothing: no AP/GL, no GRN-consume, no recost,
+              not payable, out of AP outstanding/aging until Confirmed on the Detail
+              page). Same validation gate as Create. */}
+          <Button variant="ghost" size="md" onClick={() => onSave(true)} disabled={saving}>
+            <Save {...ICON} />
+            {saving ? 'Saving…' : 'Save as Draft'}
+          </Button>
+          <Button variant="primary" size="md" onClick={() => onSave(false)} disabled={saving}>
             <Save {...ICON} />
             {saving ? 'Saving…' : 'Create Purchase Invoice'}
           </Button>
@@ -451,7 +568,7 @@ export const PurchaseInvoiceNew = () => {
                     disabled={suppliersQ.isLoading}
                   >
                     <option value="">{suppliersQ.isLoading ? 'Loading suppliers…' : '— Pick a supplier —'}</option>
-                    {(suppliersQ.data ?? []).map((s) => (
+                    {sortByText(suppliersQ.data ?? []).map((s) => (
                       <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
                     ))}
                   </select>
@@ -496,19 +613,61 @@ export const PurchaseInvoiceNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Invoice Date *</span>
-              <input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className={styles.fieldInput} required />
+              <DateField fullWidth value={invoiceDate ?? ''} onChange={(iso) => setInvoiceDate(iso)} className={styles.fieldInput} />
             </label>
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Due Date</span>
               {/* Commander 2026-05-29 — auto = Invoice Date + supplier term days
                   (default 30) until the operator edits it (dueTouched). */}
-              <input type="date" value={dueDate} onChange={(e) => { setDueTouched(true); setDueDate(e.target.value); }} className={styles.fieldInput} />
+              <DateField fullWidth value={dueDate ?? ''} onChange={(iso) => { setDueTouched(true); setDueDate(iso); }} className={styles.fieldInput} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Notes</span>
               <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Internal notes for AP" className={styles.fieldInput} rows={2} style={{ resize: 'vertical', minHeight: 60 }} />
             </label>
+            {/* PI-level freight allocation (migration 0202) — choose how a freight
+                SERVICE line's charge ("平摊" / transportation) is spread across the
+                goods lines into their landed cost. Mirrors GrnNew's "Charge
+                allocation". Only meaningful once a freight line exists, but always
+                selectable so it's set before saving. */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Charge allocation</span>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={allocationMethod}
+                  onChange={(e) => setAllocationMethod(e.target.value as 'QTY' | 'VALUE' | 'CBM')}
+                >
+                  <option value="QTY">By quantity (default)</option>
+                  <option value="VALUE">By value</option>
+                  <option value="CBM">By volume (CBM)</option>
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
+              {allocPreview.chargePool > 0 && (
+                <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginTop: 2 }}>
+                  {fmtRm(allocPreview.chargePool, currency)} freight spread across {allocPreview.goodsCount} goods line(s)
+                </span>
+              )}
+            </label>
+            {/* Multi-currency AP (0188) — Exchange rate shown ONLY for a
+                foreign-currency supplier. The invoice stays in its own currency;
+                this rate converts the AP posting to MYR at GL-post time. */}
+            {isForeign && (
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>Exchange rate (MYR per 1 {currency})</span>
+                <input
+                  type="number" min={0} step="0.000001" inputMode="decimal"
+                  value={exchangeRate} onChange={(e) => { setRateTouched(true); setExchangeRate(e.target.value); }}
+                  placeholder="e.g. 0.62"
+                  className={styles.fieldInput} style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+                />
+                <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginTop: 2 }}>
+                  ≈ {fmtRm(Math.round(subtotalCenti * (Number(exchangeRate) || 0)), 'MYR')} posted to GL
+                </span>
+              </label>
+            )}
           </div>
 
           {/* Read-only supplier-info bar — same markup/classes as New PO. */}
@@ -571,6 +730,12 @@ export const PurchaseInvoiceNew = () => {
             // Commander 2026-05-29 — same muted variant sub-line GrnNew shows,
             // so the PI mirrors what the GRN (and PO upstream) describe.
             const variantSummary = buildVariantSummary(l.itemGroup, l.variants);
+            /* PI-level freight allocation preview (0202) — this goods line's share
+               of the freight pool + landed unit cost, shown only when there's a
+               charge to spread. Service (freight) lines get 0. */
+            const lineIsSvc = isServiceLine({ itemGroup: l.itemGroup, itemCode: l.materialCode });
+            const lineAllocCenti = allocPreview.allocByRid.get(l.rid) ?? 0;
+            const landedUnitCenti = l.unitPriceCenti + (l.qty > 0 ? Math.round(lineAllocCenti / l.qty) : 0);
             // Editable variant section only for MANUAL lines (grnItemId === null)
             // that are bedframe/sofa, once the maintenance pools are loaded.
             // GRN-sourced lines keep their read-only summary.
@@ -604,7 +769,16 @@ export const PurchaseInvoiceNew = () => {
                     {l.itemGroup && <ItemGroupPill group={l.itemGroup} />}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                    <span className={styles.previewPrice}>{fmtRm(lineTotal, currency)}</span>
+                    <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                      <span className={styles.previewPrice}>{fmtRm(lineTotal, currency)}</span>
+                      {/* PI-level freight allocation (0202) — +freight & landed unit
+                          cost, on goods lines only when there's a charge pool. */}
+                      {allocPreview.chargePool > 0 && !lineIsSvc && (
+                        <span style={{ fontSize: 'var(--fs-11)', color: 'var(--c-accent, #8a6d3b)', marginTop: 2 }}>
+                          +{fmtRm(lineAllocCenti, currency)} freight · landed {fmtRm(landedUnitCenti, currency)}/unit
+                        </span>
+                      )}
+                    </span>
                     <button type="button" onClick={() => dropLine(l.rid)} title="Remove line"
                       style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--c-festive-b, #B8331F)', padding: 4, display: 'inline-flex' }}>
                       <Trash2 {...SM_ICON} />
@@ -643,12 +817,12 @@ export const PurchaseInvoiceNew = () => {
                               bound SKUs (New PO parity). Else fall back to the
                               gated full-catalogue search. */}
                           {supplierId && bindings.length > 0
-                            ? bindings.map((b) => (
+                            ? sortByText(bindings).map((b) => (
                                 <option key={b.id} value={b.material_code}>
                                   {b.material_name} · {b.supplier_sku} · {fmtRm(b.unit_price_centi, b.currency)}
                                 </option>
                               ))
-                            : (productsQ.data ?? []).map((p) => (<option key={p.id} value={p.code}>{p.name} · {p.category}</option>))}
+                            : sortByText(productsQ.data ?? []).map((p) => (<option key={p.id} value={p.code}>{p.name} · {p.category}</option>))}
                         </datalist>
                       </>
                     ) : (
@@ -677,11 +851,11 @@ export const PurchaseInvoiceNew = () => {
                     <div style={{ fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', fontWeight: 700, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--fg-muted)', marginBottom: 'var(--space-2)' }}>{l.itemGroup} Variants</div>
                     {l.itemGroup === 'bedframe' ? (
                       <div className={styles.formGrid4}>
-                        <VariantSelect label="Divan Height" options={activeOptions(maint!.divanHeights, String(l.variants?.divanHeight ?? ''))}
+                        <VariantSelect label="Divan Height" options={sortByNumeric(activeOptions(maint!.divanHeights, String(l.variants?.divanHeight ?? '')))}
                           value={String(l.variants?.divanHeight ?? '')} onChange={(v) => setVariant('divanHeight', v)} />
-                        <VariantSelect label="Gap" options={maintPickerValues(maint!.gaps, String(l.variants?.gap ?? '')).map((g) => ({ value: g, priceSen: 0 }))}
+                        <VariantSelect label="Gap" options={sortByNumeric(maintPickerValues(maint!.gaps, String(l.variants?.gap ?? '')).map((g) => ({ value: g, priceSen: 0 })))}
                           value={String(l.variants?.gap ?? '')} onChange={(v) => setVariant('gap', v)} />
-                        <VariantSelect label="Leg Height" options={activeOptions(maint!.legHeights, String(l.variants?.legHeight ?? ''))}
+                        <VariantSelect label="Leg Height" options={sortByNumeric(activeOptions(maint!.legHeights, String(l.variants?.legHeight ?? '')))}
                           value={String(l.variants?.legHeight ?? '')} onChange={(v) => setVariant('legHeight', v)} />
                         {/* Total Heights auto-computed (see setVariant). */}
                         <VariantSelect label="Special" options={specialsPools.bedframe}
@@ -689,9 +863,9 @@ export const PurchaseInvoiceNew = () => {
                       </div>
                     ) : (
                       <div className={styles.formGrid4}>
-                        <VariantSelect label="Seat Size" options={maintPickerValues(maint!.sofaSizes, String(l.variants?.seatHeight ?? '')).map((s) => ({ value: s, priceSen: 0 }))}
+                        <VariantSelect label="Seat Size" options={sortByNumeric(maintPickerValues(maint!.sofaSizes, String(l.variants?.seatHeight ?? '')).map((s) => ({ value: s, priceSen: 0 })))}
                           value={String(l.variants?.seatHeight ?? '')} onChange={(v) => setVariant('seatHeight', v)} />
-                        <VariantSelect label="Leg Height" options={activeOptions(maint!.sofaLegHeights, String(l.variants?.legHeight ?? ''))}
+                        <VariantSelect label="Leg Height" options={sortByNumeric(activeOptions(maint!.sofaLegHeights, String(l.variants?.legHeight ?? '')))}
                           value={String(l.variants?.legHeight ?? '')} onChange={(v) => setVariant('legHeight', v)} />
                         <VariantSelect label="Special" options={specialsPools.sofa}
                           value={String(l.variants?.special ?? '')} onChange={(v) => setVariant('special', v)} />
@@ -729,13 +903,21 @@ export const PurchaseInvoiceNew = () => {
             );
           })}
 
-          {/* "Add another item" — manual mode (mirrors New PO, always shown). */}
-          {isManual && (
-            <button type="button" onClick={addEmptyManualLine}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, width: '100%', padding: '12px 14px', border: '1px dashed var(--c-orange)', borderRadius: 'var(--radius-md)', background: 'transparent', color: 'var(--c-orange)', fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', fontWeight: 600, cursor: 'pointer' }}>
-              + Add another item
+          {/* "Add another item" — manual mode (mirrors New PO, always shown).
+              "Add freight charge" — available on any PI (manual or GRN-sourced):
+              appends a SERVICE line the server pools + allocates across goods. */}
+          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+            {isManual && (
+              <button type="button" onClick={addEmptyManualLine}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, flex: 1, padding: '12px 14px', border: '1px dashed var(--c-orange)', borderRadius: 'var(--radius-md)', background: 'transparent', color: 'var(--c-orange)', fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', fontWeight: 600, cursor: 'pointer' }}>
+                + Add another item
+              </button>
+            )}
+            <button type="button" onClick={addFreightLine}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, flex: 1, padding: '12px 14px', border: '1px dashed var(--c-burnt, #8a6d3b)', borderRadius: 'var(--radius-md)', background: 'transparent', color: 'var(--c-burnt, #8a6d3b)', fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', fontWeight: 600, cursor: 'pointer' }}>
+              + Add freight charge
             </button>
-          )}
+          </div>
         </div>
       </section>
 

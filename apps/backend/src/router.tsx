@@ -52,6 +52,7 @@ const Products = lazyRetry(() => import('./pages/Products').then(m => ({ default
 const ProductModels = lazyRetry(() => import('./pages/ProductModels').then(m => ({ default: m.ProductModels })));
 const ProductModelDetail = lazyRetry(() => import('./pages/ProductModelDetail').then(m => ({ default: m.ProductModelDetail })));
 const FabricTracking = lazyRetry(() => import('./pages/FabricTracking').then(m => ({ default: m.FabricTracking })));
+const Currencies = lazyRetry(() => import('./pages/Currencies').then(m => ({ default: m.Currencies })));
 const Suppliers = lazyRetry(() => import('./pages/Suppliers').then(m => ({ default: m.Suppliers })));
 const SupplierDetail = lazyRetry(() => import('./pages/SupplierDetail').then(m => ({ default: m.SupplierDetail })));
 const PurchaseOrders = lazyRetry(() => import('./pages/PurchaseOrders').then(m => ({ default: m.PurchaseOrders })));
@@ -100,7 +101,19 @@ const StockTransferDetail = lazyRetry(() => import('./pages/StockTransferDetail'
 const StockTakes = lazyRetry(() => import('./pages/StockTakes').then(m => ({ default: m.StockTakes })));
 const StockTakeNew = lazyRetry(() => import('./pages/StockTakeNew').then(m => ({ default: m.StockTakeNew })));
 const StockTakeDetail = lazyRetry(() => import('./pages/StockTakeDetail').then(m => ({ default: m.StockTakeDetail })));
-const Drivers = lazyRetry(() => import('./pages/Drivers').then(m => ({ default: m.Drivers })));
+// Fleet — consolidated "Driver & Helper" portal (Drivers · Helpers · Lorries on
+// ONE page). Replaces the three former standalone sidebar pages; the old
+// /drivers /helpers /lorries routes now redirect here (see below). The
+// standalone Drivers/Helpers/Lorries page modules are left in place as dead
+// code (no longer routed).
+const Fleet = lazyRetry(() => import('./pages/Fleet').then(m => ({ default: m.Fleet })));
+// Delivery Planning board (Stage 4) — the 4-state × region planning view.
+const DeliveryPlanning = lazyRetry(() => import('./pages/DeliveryPlanning').then(m => ({ default: m.DeliveryPlanning })));
+// Delivery Regions — the owner-maintained region-bucket master that drives the
+// board's tabs (migration 0198).
+const DeliveryPlanningRegions = lazyRetry(() => import('./pages/DeliveryPlanningRegions').then(m => ({ default: m.DeliveryPlanningRegions })));
+// Lorry Capacity dashboard (Stage 5B, final) — fleet performance metrics.
+const LorryCapacity = lazyRetry(() => import('./pages/LorryCapacity').then(m => ({ default: m.LorryCapacity })));
 const Accounting = lazyRetry(() => import('./pages/Accounting').then(m => ({ default: m.Accounting })));
 const Warehouses = lazyRetry(() => import('./pages/Warehouses').then(m => ({ default: m.Warehouses })));
 // Migration 0094 — Warehouse rack/bin management (ported from Hookka ERP).
@@ -116,6 +129,10 @@ const GrnNew = lazyRetry(() => import('./pages/GrnNew').then(m => ({ default: m.
 const GrnFromPo = lazyRetry(() => import('./pages/GrnFromPo').then(m => ({ default: m.GrnFromPo })));
 const PurchaseInvoiceNew = lazyRetry(() => import('./pages/PurchaseInvoiceNew').then(m => ({ default: m.PurchaseInvoiceNew })));
 const PurchaseInvoiceFromGrn = lazyRetry(() => import('./pages/PurchaseInvoiceFromGrn').then(m => ({ default: m.PurchaseInvoiceFromGrn })));
+// Payment Vouchers (standalone cash-out voucher — migration 0189).
+const PaymentVouchers = lazyRetry(() => import('./pages/PaymentVouchers').then(m => ({ default: m.PaymentVouchers })));
+const PaymentVoucherNew = lazyRetry(() => import('./pages/PaymentVoucherNew').then(m => ({ default: m.PaymentVoucherNew })));
+const PaymentVoucherDetail = lazyRetry(() => import('./pages/PaymentVoucherDetail').then(m => ({ default: m.PaymentVoucherDetail })));
 const PurchaseReturnNew = lazyRetry(() => import('./pages/PurchaseReturnNew').then(m => ({ default: m.PurchaseReturnNew })));
 const Outstanding = lazyRetry(() => import('./pages/Outstanding').then(m => ({ default: m.Outstanding })));
 const Mrp = lazyRetry(() => import('./pages/Mrp').then(m => ({ default: m.Mrp })));
@@ -195,9 +212,24 @@ export const router = createBrowserRouter([
       // Rack/bin management — distinct from /warehouses (which is the
       // warehouse master). Sidebar entry added by the parent session.
       { path: 'warehouse', element: <Warehouse /> },
-      { path: 'drivers', element: <Drivers /> },
+      // Consolidated "Driver & Helper" / Fleet portal — Drivers · Helpers ·
+      // Lorries on ONE page (migration 0195 masters). The three former routes
+      // redirect here so old deep links + bookmarks keep working.
+      { path: 'fleet', element: <Fleet /> },
+      { path: 'drivers', element: <Navigate to="/fleet" replace /> },
+      { path: 'helpers', element: <Navigate to="/fleet" replace /> },
+      { path: 'lorries', element: <Navigate to="/fleet" replace /> },
+      // Delivery Planning board (Stage 4).
+      { path: 'delivery-planning', element: <DeliveryPlanning /> },
+      // Delivery Regions — region-bucket master (drives the board's tabs).
+      { path: 'delivery-planning-regions', element: <DeliveryPlanningRegions /> },
+      // Lorry Capacity dashboard (Stage 5B, final).
+      { path: 'lorry-capacity', element: <LorryCapacity /> },
       { path: 'suppliers', element: <Suppliers /> },
       { path: 'suppliers/:id', element: <SupplierDetail /> },
+      // Currencies MASTER (migration 0193) — owner-maintained currency list +
+      // rates. Lives in the Procurement group next to Suppliers.
+      { path: 'currencies', element: <Currencies /> },
       { path: 'mrp', element: <Mrp /> },
       { path: 'purchase-orders',      element: <PurchaseOrders /> },
       { path: 'purchase-orders/new',     element: <PurchaseOrderNew /> },
@@ -213,6 +245,10 @@ export const router = createBrowserRouter([
       { path: 'purchase-invoices/new', element: <PurchaseInvoiceNew /> },
       { path: 'purchase-invoices/from-grn', element: <PurchaseInvoiceFromGrn /> },
       { path: 'purchase-invoices/:id', element: <PurchaseInvoiceDetail /> },
+      { path: 'payment-vouchers', element: <PaymentVouchers /> },
+      // /new is a STATIC path — must precede the :id param route.
+      { path: 'payment-vouchers/new', element: <PaymentVoucherNew /> },
+      { path: 'payment-vouchers/:id', element: <PaymentVoucherDetail /> },
       { path: 'mfg-sales-orders', element: <MfgSalesOrdersPage /> },
       // PR #106 — must come BEFORE :docNo so /new isn't caught as a doc number.
       { path: 'mfg-sales-orders/new', element: <SalesOrderNew /> },

@@ -22,6 +22,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { DateField } from '../components/DateField';
 import { useNotify } from '../components/NotifyDialog';
 import {
   useCreateMfgDeliveryOrder, useAddDeliveryOrderPayment,
@@ -29,6 +30,7 @@ import {
 } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
 import { useDrivers } from '../lib/drivers-queries';
+import { sortByText, sortByNumeric } from '../lib/sort-options';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
 } from '../lib/localities-queries';
@@ -36,6 +38,7 @@ import {
   useSoDropdownOptions, optionsOrFallback,
 } from '../lib/so-dropdown-options-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
+import { canonicalizeVariants } from '@2990s/shared';
 import {
   PaymentsTable, labelToApi, draftMethodFields, type PaymentDraft,
 } from '../components/PaymentsTable';
@@ -174,7 +177,15 @@ export const DeliveryOrderNew = () => {
           unitPriceCenti: Number(it.unitPriceCenti ?? 0),
           discountCenti: Number(it.discountCenti ?? 0),
           unitCostCenti: Number(it.unitCostCenti ?? 0),
-          variants: (it.variants as Record<string, unknown>) ?? {},
+          /* Canonicalise POS-vocabulary sofa keys (depth → seatHeight,
+             sofaLegHeight → legHeight) so the DO's Seat/Leg dropdowns prefill a
+             POS-created line instead of showing "Select…". Mirrors
+             SalesOrderDetail.draftFromItem; fabricCode already shares one key,
+             so it was the only axis that carried before. */
+          variants: canonicalizeVariants(
+            (it.itemGroup as string) ?? 'others',
+            (it.variants as Record<string, unknown>) ?? {},
+          ),
           remark: '',
           soItemId: (it.soItemId as string) ?? undefined,
         } as DraftLine & { soItemId?: string })));
@@ -194,7 +205,15 @@ export const DeliveryOrderNew = () => {
           unitPriceCenti: Number(it.unit_price_centi ?? 0),
           discountCenti: Number(it.discount_centi ?? 0),
           unitCostCenti: Number(it.unit_cost_centi ?? 0),
-          variants: (it.variants as Record<string, unknown>) ?? {},
+          /* Canonicalise POS-vocabulary sofa keys (depth → seatHeight,
+             sofaLegHeight → legHeight) so the DO's Seat/Leg dropdowns prefill a
+             POS-created line instead of showing "Select…". Mirrors
+             SalesOrderDetail.draftFromItem; fabricCode already shares one key,
+             so it was the only axis that carried before. */
+          variants: canonicalizeVariants(
+            (it.item_group as string) ?? 'others',
+            (it.variants as Record<string, unknown>) ?? {},
+          ),
           remark: (it.remark as string) ?? '',
           soItemId: (it.id as string) ?? undefined,
         } as DraftLine & { soItemId?: string })));
@@ -275,7 +294,12 @@ export const DeliveryOrderNew = () => {
     return { failed: results.filter((ok) => !ok).length };
   };
 
-  const onSave = () => {
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25) — asDraft=true posts the DO as
+     a DRAFT (the "Save as Draft" button); it commits nothing (NO stock OUT, NO
+     SO-delivered sync, kept out of the invoiceable-from-DO picker) until it is
+     Confirmed on the Detail page. The default "Create Delivery Order" path
+     leaves asDraft undefined → the server inserts DISPATCHED (ships now). */
+  const onSave = (asDraft = false) => {
     if (loadingPrefill) { notify({ title: 'Still loading the Sales Order', body: 'please wait a moment.' }); return; }
     if (!canSave) { notify({ title: 'Customer name is required.', tone: 'error' }); return; }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
@@ -286,6 +310,9 @@ export const DeliveryOrderNew = () => {
 
     create.mutate(
       {
+        /* DRAFT/Confirmed two-state — only sent when the operator picked
+           "Save as Draft"; omitted otherwise so the server defaults to DISPATCHED. */
+        asDraft: asDraft || undefined,
         soDocNo: fromSo || undefined,
         doDate: doDate || undefined,
         debtorName,
@@ -347,6 +374,9 @@ export const DeliveryOrderNew = () => {
              re-throws the original 409) — they chose not to ship, so swallow
              the raw payload instead of dumping it. */
           if (raw.includes('"short_stock"')) return;
+          /* Operator declined the "Ship as drop-ship?" prompt — they chose not to
+             ship, so swallow the no-batch payload instead of showing an error. */
+          if (raw.includes('"sofa_no_batch"')) return;
           notify({ title: 'Save failed', body: raw, tone: 'error' });
         },
       },
@@ -374,7 +404,15 @@ export const DeliveryOrderNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/mfg-delivery-orders')}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending}>
+          {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — "Save as Draft" posts
+              the DO as DRAFT (commits nothing: no stock OUT + no SO-delivered sync,
+              and it stays out of the create-SI / create-DR pickers until Confirmed
+              on the Detail page). Same validation gate as Create. */}
+          <Button variant="ghost" size="md" onClick={() => onSave(true)} disabled={create.isPending}>
+            <Save {...ICON} />
+            {create.isPending ? 'Saving…' : 'Save as Draft'}
+          </Button>
+          <Button variant="primary" size="md" onClick={() => onSave(false)} disabled={create.isPending}>
             <Save {...ICON} />
             {create.isPending ? 'Saving…' : 'Create Delivery Order'}
           </Button>
@@ -427,7 +465,7 @@ export const DeliveryOrderNew = () => {
               <span className={styles.selectWrap}>
                 <select className={styles.fieldSelect} value={salespersonId} onChange={(e) => setSalespersonId(e.target.value)}>
                   <option value="">— Pick staff —</option>
-                  {staffList.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>)}
+                  {sortByText(staffList).map((s) => <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>)}
                   {salespersonId && !staffList.some((s) => s.id === salespersonId) && <option value={salespersonId}>(former staff)</option>}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
@@ -444,8 +482,8 @@ export const DeliveryOrderNew = () => {
           <div className={styles.formGrid4}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>DO Date</span>
-              <input type="date" className={styles.fieldInput} value={doDate}
-                onChange={(e) => setDoDate(e.target.value)} />
+              <DateField fullWidth className={styles.fieldInput} value={doDate ?? ''}
+                onChange={(iso) => setDoDate(iso)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Driver</span>
@@ -458,7 +496,7 @@ export const DeliveryOrderNew = () => {
                     if (d?.vehicle) setVehicle(d.vehicle);
                   }}>
                   <option value="">— Pick driver —</option>
-                  {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}{d.vehicle ? ` · ${d.vehicle}` : ''}</option>)}
+                  {sortByText(drivers).map((d) => <option key={d.id} value={d.id}>{d.name}{d.vehicle ? ` · ${d.vehicle}` : ''}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -484,11 +522,11 @@ export const DeliveryOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Expected Delivery</span>
-              <input type="date" className={styles.fieldInput} value={expectedDeliveryAt} onChange={(e) => setExpectedDeliveryAt(e.target.value)} />
+              <DateField fullWidth className={styles.fieldInput} value={expectedDeliveryAt ?? ''} onChange={(iso) => setExpectedDeliveryAt(iso)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Customer Delivery Date</span>
-              <input type="date" className={styles.fieldInput} value={customerDeliveryDate} onChange={(e) => setCustomerDeliveryDate(e.target.value)} />
+              <DateField fullWidth className={styles.fieldInput} value={customerDeliveryDate ?? ''} onChange={(iso) => setCustomerDeliveryDate(iso)} />
             </label>
             <label className={styles.field} style={{ gridColumn: 'span 2' }}>
               <span className={styles.fieldLabel}>Note</span>
@@ -552,7 +590,7 @@ export const DeliveryOrderNew = () => {
                   onChange={(e) => { setState(e.target.value); setCity(''); setPostcode(''); }}
                   disabled={loc.isLoading}>
                   <option value="">{loc.isLoading ? 'Loading…' : 'Pick state'}</option>
-                  {states.map((s) => <option key={s} value={s}>{s}</option>)}
+                  {sortByText(states).map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -563,7 +601,7 @@ export const DeliveryOrderNew = () => {
                 <select className={styles.fieldSelect} value={city}
                   onChange={(e) => { setCity(e.target.value); setPostcode(''); }} disabled={!state}>
                   <option value="">{state ? 'Pick city' : '— pick state first'}</option>
-                  {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+                  {sortByText(cities).map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -574,7 +612,7 @@ export const DeliveryOrderNew = () => {
                 <select className={styles.fieldSelect} value={postcode}
                   onChange={(e) => setPostcode(e.target.value)} disabled={!state || !city}>
                   <option value="">{(state && city) ? 'Pick postcode' : '— pick city first'}</option>
-                  {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+                  {sortByNumeric(postcodes).map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>

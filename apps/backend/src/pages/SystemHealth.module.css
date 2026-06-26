@@ -103,3 +103,30 @@
 }
 .legendP95 { background: var(--c-orange); }
 .legendP50 { background: #2f5fb3; }
+
+/* Inventory ledger integrity panel */
+.ledgerStatus {
+  display: flex; align-items: center; gap: var(--space-3);
+  font-family: var(--font-sans); color: var(--c-ink); font-size: var(--fs-13);
+}
+.ledgerStatus.warn { color: var(--c-orange); }
+.ledgerStatus.unknown { color: var(--fg-muted); }
+.ledgerDot { width: 12px; height: 12px; border-radius: 50%; background: #1f7a52; flex: none; }
+.ledgerStatus.warn .ledgerDot { background: var(--c-orange); }
+.ledgerStatus.unknown .ledgerDot { background: var(--fg-muted); }
+.ledgerSub { font-size: var(--fs-12); color: var(--fg-muted); }
+
+.ledgerTable {
+  width: 100%; border-collapse: collapse; margin-top: var(--space-3);
+  font-family: var(--font-sans); font-size: var(--fs-12);
+}
+.ledgerTable th {
+  text-align: left; font-weight: 700; color: var(--fg-muted);
+  text-transform: uppercase; letter-spacing: 0.04em; font-size: var(--fs-11);
+  padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line);
+}
+.ledgerTable td {
+  padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line);
+  color: var(--c-ink);
+}
+.ledgerTable tr:last-child td { border-bottom: none; }

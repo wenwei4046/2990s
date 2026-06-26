@@ -17,6 +17,7 @@ import {
   type StockTransferStatus,
 } from '../lib/stock-transfers-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { DateField } from '../components/DateField';
 import styles from './Inventory.module.css';
 
 const ICON    = { size: 14, strokeWidth: 1.75 } as const;
@@ -72,6 +73,7 @@ export const StockTransfers = () => {
       ),
       searchValue: (t) => t.transfer_no,
       filterValue: (t) => t.transfer_no,
+      exportValue: (t) => t.transfer_no,
       sortFn: (a, b) => a.transfer_no.localeCompare(b.transfer_no),
     },
     {
@@ -81,6 +83,7 @@ export const StockTransfers = () => {
       accessor: (t) => <span className={styles.numCellZero}>{fmtDate(t.transfer_date)}</span>,
       searchValue: (t) => fmtDate(t.transfer_date),
       filterValue: (t) => fmtDate(t.transfer_date),
+      exportValue: (t) => fmtDate(t.transfer_date),
       sortFn: (a, b) => a.transfer_date.localeCompare(b.transfer_date),
       filterType: 'date', dateValue: (t) => t.transfer_date,
     },
@@ -109,6 +112,11 @@ export const StockTransfers = () => {
         const toW   = t.to_warehouse   ?? wmap.get(t.to_warehouse_id);
         return `${fromW?.code ?? '—'} → ${toW?.code ?? '—'}`;
       },
+      exportValue: (t) => {
+        const fromW = t.from_warehouse ?? wmap.get(t.from_warehouse_id);
+        const toW   = t.to_warehouse   ?? wmap.get(t.to_warehouse_id);
+        return `${fromW?.code ?? ''} → ${toW?.code ?? ''}`;
+      },
     },
     {
       key: 'status',
@@ -129,6 +137,7 @@ export const StockTransfers = () => {
       },
       searchValue: (t) => STATUS_TONE[t.status].label,
       filterValue: (t) => STATUS_TONE[t.status].label,
+      exportValue: (t) => STATUS_TONE[t.status].label,
       sortFn: (a, b) => a.status.localeCompare(b.status),
     },
     {
@@ -143,6 +152,7 @@ export const StockTransfers = () => {
       ),
       searchValue: (t) => String(t.line_count ?? 0),
       filterValue: (t) => String(t.line_count ?? 0),
+      exportValue: (t) => t.line_count ?? 0,
       sortFn: (a, b) => (a.line_count ?? 0) - (b.line_count ?? 0),
     },
     {
@@ -156,6 +166,7 @@ export const StockTransfers = () => {
       ),
       searchValue: (t) => t.created_by ?? '',
       filterValue: (t) => t.created_by ? t.created_by.slice(0, 8) : '—',
+      exportValue: (t) => t.created_by ?? '',
     },
   ], [wmap]);
 
@@ -233,21 +244,11 @@ export const StockTransfers = () => {
         </label>
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
           Date from
-          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
-            style={{
-              fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)',
-              background: 'var(--c-paper)', border: '1px solid var(--line)',
-              borderRadius: 'var(--radius-md)', padding: '6px 8px', color: 'var(--c-ink)',
-            }} />
+          <DateField value={dateFrom ?? ''} onChange={(iso) => setDateFrom(iso)} />
         </label>
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
           to
-          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
-            style={{
-              fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)',
-              background: 'var(--c-paper)', border: '1px solid var(--line)',
-              borderRadius: 'var(--radius-md)', padding: '6px 8px', color: 'var(--c-ink)',
-            }} />
+          <DateField value={dateTo ?? ''} onChange={(iso) => setDateTo(iso)} />
         </label>
         {(fromWarehouseId || toWarehouseId || dateFrom || dateTo || status !== 'ALL') && (
           <button

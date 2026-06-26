@@ -30,7 +30,9 @@ import {
 } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
+import { paginateAll, chunkIn } from '../lib/paginate-all';
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
+import { reconcileLedger } from '../lib/reconcile-ledger';
 import type { Env, Variables } from '../env';
 
 export const inventory = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -41,7 +43,7 @@ inventory.get('/warehouses', async (c) => {
   const sb = c.get('supabase');
   const includeInactive = c.req.query('includeInactive') === 'true';
   let q = sb.from('warehouses')
-    .select('id, code, name, location, is_active, is_default')
+    .select('id, code, name, location, is_active, is_default, is_transit')
     .order('code');
   if (!includeInactive) q = q.eq('is_active', true);
   const { data, error } = await q;
@@ -63,7 +65,9 @@ inventory.post('/warehouses', async (c) => {
     location: (body.location as string) ?? null,
     is_active: body.isActive === false ? false : true,
     is_default: body.isDefault === true,
-  }).select('id, code, name, location, is_active, is_default').single();
+    // Migration 0192 — transit (overseas/China) warehouse flag.
+    is_transit: body.isTransit === true,
+  }).select('id, code, name, location, is_active, is_default, is_transit').single();
   if (error) {
     if (error.code === '23505') return c.json({ error: 'duplicate_code' }, 409);
     return c.json({ error: 'insert_failed', reason: error.message }, 500);
@@ -90,10 +94,12 @@ inventory.patch('/warehouses/:id', async (c) => {
   if (typeof body.location === 'string')  updates.location = body.location;
   if (typeof body.isActive === 'boolean') updates.is_active = body.isActive;
   if (typeof body.isDefault === 'boolean') updates.is_default = body.isDefault;
+  // Migration 0192 — transit (overseas/China) warehouse flag.
+  if (typeof body.isTransit === 'boolean') updates.is_transit = body.isTransit;
   if (Object.keys(updates).length === 0) return c.json({ error: 'no_changes' }, 400);
 
   const { data, error } = await sb.from('warehouses').update(updates).eq('id', id)
-    .select('id, code, name, location, is_active, is_default').single();
+    .select('id, code, name, location, is_active, is_default, is_transit').single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   /* Audit 2026-06-20 — single-default enforcement (see POST): promoting this
      warehouse to default demotes every other one. */
@@ -143,12 +149,18 @@ inventory.get('/', async (c) => {
     ? 'warehouse_id, warehouse_code, warehouse_name, product_code, product_name, category, size_label, qty, last_movement_at, value_sen, main_supplier_code, main_supplier_name'
     : 'warehouse_id, product_code, variant_key, product_name, qty, last_movement_at';
 
-  let q = sb.from(tableName).select(cols);
-  if (warehouseId) q = q.eq('warehouse_id', warehouseId);
-  if (search) { const s = escapeForOr(search); if (s) q = q.or(`product_code.ilike.%${s}%,product_name.ilike.%${s}%`); }
-  if (showAll && category && category !== 'all') q = q.eq('category', category);
-
-  const { data, error } = await q.order('product_code');
+  // PostgREST's default 1000-row cap silently truncates stock balances —
+  // partial stock reads like MISSING stock (showAll returns >1000 rows live).
+  // Page through with .range() so the full set comes back. Any ?warehouseId/
+  // ?search/?category filter only narrows the set, so filtered views stay correct.
+  const s = search ? escapeForOr(search) : '';
+  const { data, error } = await paginateAll((from, to) => {
+    let q = sb.from(tableName).select(cols);
+    if (warehouseId) q = q.eq('warehouse_id', warehouseId);
+    if (s) q = q.or(`product_code.ilike.%${s}%,product_name.ilike.%${s}%`);
+    if (showAll && category && category !== 'all') q = q.eq('category', category);
+    return q.order('product_code').range(from, to);
+  });
   if (error) {
     if (/relation .* does not exist/i.test(error.message) || /column .* does not exist/i.test(error.message)) {
       return c.json({ error: 'migration_pending', reason: 'Run migrations 0050 + 0053 against Supabase.' }, 500);
@@ -174,11 +186,16 @@ inventory.get('/products', async (c) => {
   const search = c.req.query('search');
   const category = c.req.query('category');
 
-  let q = sb.from('v_inventory_product_totals').select('*');
-  if (search) { const s = escapeForOr(search); if (s) q = q.or(`product_code.ilike.%${s}%,product_name.ilike.%${s}%`); }
-  if (category && category !== 'all') q = q.eq('category', category);
-
-  const { data, error } = await q.order('product_code');
+  // PostgREST's default 1000-row cap silently truncates product totals — page
+  // through with .range() so the full catalogue comes back. Any ?search/?category
+  // filter only narrows the set, so filtered views stay correct.
+  const s = search ? escapeForOr(search) : '';
+  const { data, error } = await paginateAll((from, to) => {
+    let q = sb.from('v_inventory_product_totals').select('*');
+    if (s) q = q.or(`product_code.ilike.%${s}%,product_name.ilike.%${s}%`);
+    if (category && category !== 'all') q = q.eq('category', category);
+    return q.order('product_code').range(from, to);
+  });
   if (error) {
     if (/relation .* does not exist/i.test(error.message)) {
       return c.json({ error: 'migration_pending', reason: 'Run migrations 0050/0053/0054.' }, 500);
@@ -211,10 +228,12 @@ inventory.get('/products', async (c) => {
   const oldestLot = new Map<string, string>();
 
   if (codes.length > 0) {
-    const { data: demand } = await sb
+    // chunkIn — codes can now exceed 1000 (un-truncated catalogue), so batch the
+    // .in() lists and page each batch (PostgREST default cap is 1000 rows).
+    const { data: demand } = await chunkIn(codes, (batch, from, to) => sb
       .from('mfg_sales_order_items')
       .select('item_code, qty, line_delivery_date, cancelled, so:mfg_sales_orders!inner(status, customer_delivery_date)')
-      .in('item_code', codes).eq('cancelled', false).limit(5000);
+      .in('item_code', batch).eq('cancelled', false).range(from, to));
     for (const r of (demand ?? []) as Array<{ item_code: string; qty: number; line_delivery_date: string | null; so: { status: string; customer_delivery_date: string | null } | Array<{ status: string; customer_delivery_date: string | null }> | null }>) {
       const so = Array.isArray(r.so) ? r.so[0] : r.so;
       const qty = Number(r.qty ?? 0);
@@ -228,10 +247,10 @@ inventory.get('/products', async (c) => {
       }
     }
 
-    const { data: poItems } = await sb
+    const { data: poItems } = await chunkIn(codes, (batch, from, to) => sb
       .from('purchase_order_items')
       .select('material_code, qty, received_qty, po:purchase_orders!inner(status)')
-      .in('material_code', codes).limit(5000);
+      .in('material_code', batch).range(from, to));
     for (const r of (poItems ?? []) as Array<{ material_code: string; qty: number; received_qty: number | null; po: { status: string } | Array<{ status: string }> | null }>) {
       const po = Array.isArray(r.po) ? r.po[0] : r.po;
       if (!po || (po.status !== 'SUBMITTED' && po.status !== 'PARTIALLY_RECEIVED')) continue;
@@ -239,9 +258,9 @@ inventory.get('/products', async (c) => {
       if (left > 0) incoming.set(r.material_code, (incoming.get(r.material_code) ?? 0) + left);
     }
 
-    const { data: lots } = await sb
+    const { data: lots } = await chunkIn(codes, (batch, from, to) => sb
       .from('v_inventory_lots_open')
-      .select('product_code, received_at').in('product_code', codes).limit(5000);
+      .select('product_code, received_at').in('product_code', batch).range(from, to));
     for (const r of (lots ?? []) as Array<{ product_code: string; received_at: string | null }>) {
       if (!r.received_at) continue;
       const cur = oldestLot.get(r.product_code);
@@ -464,13 +483,16 @@ inventory.get('/cogs', async (c) => {
   const from = c.req.query('from');
   const to = c.req.query('to');
 
-  let q = sb.from('v_cogs_entries').select('*').limit(1000);
-  if (warehouseId) q = q.eq('warehouse_id', warehouseId);
-  if (productCode) q = q.eq('product_code', productCode);
-  if (from) q = q.gte('consumed_at', from);
-  if (to)   q = q.lte('consumed_at', `${to}T23:59:59Z`);
-
-  const { data, error } = await q;
+  // PostgREST's 1000-row cap silently truncated the COGS export — page through
+  // so a long date range exports every consumption row, not just the first 1000.
+  const { data, error } = await paginateAll((pFrom, pTo) => {
+    let q = sb.from('v_cogs_entries').select('*');
+    if (warehouseId) q = q.eq('warehouse_id', warehouseId);
+    if (productCode) q = q.eq('product_code', productCode);
+    if (from) q = q.gte('consumed_at', from);
+    if (to)   q = q.lte('consumed_at', `${to}T23:59:59Z`);
+    return q.range(pFrom, pTo);
+  });
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   return c.json({ cogs: data ?? [] });
 });
@@ -498,20 +520,27 @@ inventory.get('/analytics', async (c) => {
   const nowMs = Date.now();
   const cutoffIso = new Date(nowMs - days * 86_400_000).toISOString();
 
-  // Open lots → aging buckets + per-product on-hand value + names.
-  let lotsQ = sb.from('v_inventory_lots_open')
-    .select('product_code, product_name, qty_remaining, remaining_value_sen, received_at, warehouse_id')
-    .limit(50_000);
-  if (warehouseId) lotsQ = lotsQ.eq('warehouse_id', warehouseId);
-  const { data: lots, error: lotsErr } = await lotsQ;
+  // Open lots → aging buckets + per-product on-hand value + names. Page through —
+  // a bare .limit(50_000) is still capped at PostgREST's 1000-row ceiling, so a
+  // warehouse with >1000 open lots would silently under-report on-hand value +
+  // aging. The optional warehouse filter stays inside the page query.
+  const { data: lots, error: lotsErr } = await paginateAll((from, to) => {
+    let lotsQ = sb.from('v_inventory_lots_open')
+      .select('product_code, product_name, qty_remaining, remaining_value_sen, received_at, warehouse_id');
+    if (warehouseId) lotsQ = lotsQ.eq('warehouse_id', warehouseId);
+    return lotsQ.range(from, to);
+  });
   if (lotsErr) return c.json({ error: 'load_failed', reason: lotsErr.message }, 500);
 
-  // Full COGS stream → trailing-window sales value per product + all-time last-sold date.
-  let cogsQ = sb.from('v_cogs_entries')
-    .select('product_code, total_cost_sen, consumed_at, warehouse_id')
-    .limit(100_000);
-  if (warehouseId) cogsQ = cogsQ.eq('warehouse_id', warehouseId);
-  const { data: cogs, error: cogsErr } = await cogsQ;
+  // Full COGS stream → trailing-window sales value per product + all-time last-sold
+  // date. Page through (same 1000-row cap as above) so turnover / dead-stock /
+  // ABC aren't computed off a truncated COGS window.
+  const { data: cogs, error: cogsErr } = await paginateAll((from, to) => {
+    let cogsQ = sb.from('v_cogs_entries')
+      .select('product_code, total_cost_sen, consumed_at, warehouse_id');
+    if (warehouseId) cogsQ = cogsQ.eq('warehouse_id', warehouseId);
+    return cogsQ.range(from, to);
+  });
   if (cogsErr) return c.json({ error: 'load_failed', reason: cogsErr.message }, 500);
 
   const lotRows = lots ?? [];
@@ -610,43 +639,23 @@ inventory.get('/analytics', async (c) => {
    Read-only integrity check. Inventory writes are best-effort (a failed
    movement insert does NOT roll back the document), so a doc can be POSTED /
    shipped while its stock movement silently never landed. This flags every
-   non-cancelled GRN / DO / Purchase Return / Delivery Return that should have
-   moved stock but has ZERO movement rows — the operator can then re-post or
-   investigate. (A genuinely zero-qty doc legitimately has none; review each.) */
+   non-cancelled stock-moving document that should have moved stock but has ZERO
+   movement rows — the operator can then re-post or investigate. (A genuinely
+   zero-qty doc legitimately has none; review each.)
+
+   Coverage + match-key logic now live in the shared lib (reconcile-ledger.ts),
+   which sweeps all 9 stock-moving doc types: GRN, DO, Purchase Return, Delivery
+   Return, Stock Transfer, Consignment Note, Consignment Return, PC Receive, and
+   PC Return (Stock Take is deliberately excluded — a zero-variance take
+   legitimately moves nothing). Response shape is unchanged. */
 inventory.get('/reconcile', async (c) => {
   const sb = c.get('supabase');
-
-  const { data: movRows, error: movErr } = await sb.from('inventory_movements')
-    .select('source_doc_type, source_doc_id').limit(200_000);
-  if (movErr) return c.json({ error: 'load_failed', reason: movErr.message }, 500);
-  const hasMov = new Set<string>();
-  for (const m of (movRows ?? []) as Array<{ source_doc_type: string | null; source_doc_id: string | null }>) {
-    if (m.source_doc_id) hasMov.add(`${m.source_doc_type}::${m.source_doc_id}`);
+  try {
+    const result = await reconcileLedger(sb);
+    return c.json(result);
+  } catch (e) {
+    return c.json({ error: 'load_failed', reason: e instanceof Error ? e.message : String(e) }, 500);
   }
-
-  const issues: Array<{ docType: string; id: string; docNo: string; status: string }> = [];
-  const flag = (docType: string, movType: string, rows: Array<Record<string, string>>, numCol: string) => {
-    for (const r of rows) {
-      const id = r.id ?? '';
-      if (id && !hasMov.has(`${movType}::${id}`)) {
-        issues.push({ docType, id, docNo: r[numCol] ?? id, status: r.status ?? '' });
-      }
-    }
-  };
-
-  const SHIPPED = ['DISPATCHED', 'IN_TRANSIT', 'SIGNED', 'DELIVERED', 'INVOICED'];
-  const [grnsR, dosR, prsR, drsR] = await Promise.all([
-    sb.from('grns').select('id, grn_number, status').eq('status', 'POSTED').limit(10_000),
-    sb.from('delivery_orders').select('id, do_number, status').in('status', SHIPPED).limit(10_000),
-    sb.from('purchase_returns').select('id, return_number, status').neq('status', 'CANCELLED').limit(10_000),
-    sb.from('delivery_returns').select('id, return_number, status').neq('status', 'CANCELLED').limit(10_000),
-  ]);
-  flag('GRN', 'GRN', (grnsR.data ?? []) as Array<Record<string, string>>, 'grn_number');
-  flag('Delivery Order', 'DO', (dosR.data ?? []) as Array<Record<string, string>>, 'do_number');
-  flag('Purchase Return', 'PURCHASE_RETURN', (prsR.data ?? []) as Array<Record<string, string>>, 'return_number');
-  flag('Delivery Return', 'DR', (drsR.data ?? []) as Array<Record<string, string>>, 'return_number');
-
-  return c.json({ asOf: new Date().toISOString(), issueCount: issues.length, issues });
 });
 
 /* ── Manual adjustment ───────────────────────────────────────────────── */

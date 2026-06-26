@@ -23,12 +23,14 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { DateField } from '../components/DateField';
 import { useNotify } from '../components/NotifyDialog';
 import {
   useCreateSalesInvoice, useAddSalesInvoicePayment,
   useMfgDeliveryOrderDetail, useDeliveryOrderPayments,
 } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
+import { sortByText, sortByNumeric } from '../lib/sort-options';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
 } from '../lib/localities-queries';
@@ -279,7 +281,13 @@ export const SalesInvoiceNew = () => {
     return { failed: results.filter((ok) => !ok).length };
   };
 
-  const onSave = () => {
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25, ported from Houzs) — asDraft=true
+     posts the SI as a DRAFT (the "Save as Draft" button); it commits NOTHING (no
+     AR/GL revenue, no customer credit, not payable, kept out of AR outstanding /
+     aging) until it is Confirmed on the Detail page (status PATCH DRAFT→SENT). The
+     default "Create Sales Invoice" path leaves asDraft undefined → the server
+     records revenue immediately (status SENT). */
+  const onSave = (asDraft = false) => {
     if (!canSave) { notify({ title: 'Customer name is required.', tone: 'error' }); return; }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
@@ -289,6 +297,9 @@ export const SalesInvoiceNew = () => {
 
     create.mutate(
       {
+        /* DRAFT/Confirmed two-state — only sent when the operator picked "Save as
+           Draft"; omitted otherwise so the server defaults to SENT (revenue now). */
+        asDraft: asDraft || undefined,
         deliveryOrderId: fromDo || undefined,
         debtorName,
         debtorCode: debtorCode || undefined,
@@ -333,6 +344,21 @@ export const SalesInvoiceNew = () => {
       },
       {
         onSuccess: async (res: { id: string; invoiceNumber: string }) => {
+          /* DRAFT/Confirmed two-state — a DRAFT SI is not payable (the server 409s
+             a payment on a draft), so skip flushing the payment drafts. The
+             operator records payments after confirming it on the Detail page; any
+             prefilled deposit rows carry over there as drafts. */
+          if (asDraft) {
+            if (paymentDrafts.some((d) => d.amountCenti > 0)) {
+              await notify({
+                title: `Draft invoice ${res.invoiceNumber} saved. Payments aren't recorded on a ` +
+                  `draft — confirm it on the Detail page, then add the payment rows.`,
+                tone: 'info',
+              });
+            }
+            navigate(`/sales-invoices/${res.id}`);
+            return;
+          }
           const { failed } = await flushPaymentDrafts(res.id);
           if (failed > 0) {
             await notify({
@@ -370,7 +396,15 @@ export const SalesInvoiceNew = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/sales-invoices')}>
             <X {...ICON} /> Cancel
           </Button>
-          <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending}>
+          {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — "Save as Draft" posts
+              the SI as DRAFT (commits nothing: no revenue/AR, no credit, not
+              payable, out of AR outstanding/aging until Confirmed on the Detail
+              page). Same validation gate as Create. */}
+          <Button variant="ghost" size="md" onClick={() => onSave(true)} disabled={create.isPending}>
+            <Save {...ICON} />
+            {create.isPending ? 'Saving…' : 'Save as Draft'}
+          </Button>
+          <Button variant="primary" size="md" onClick={() => onSave(false)} disabled={create.isPending}>
             <Save {...ICON} />
             {create.isPending ? 'Saving…' : 'Create Sales Invoice'}
           </Button>
@@ -412,7 +446,7 @@ export const SalesInvoiceNew = () => {
               <span className={styles.selectWrap}>
                 <select className={styles.fieldSelect} value={customerType} onChange={(e) => setCustomerType(e.target.value)}>
                   <option value="">—</option>
-                  {customerTypeOpts.map((t) => <option key={t.id} value={t.value}>{t.label}</option>)}
+                  {sortByText(customerTypeOpts).map((t) => <option key={t.id} value={t.value}>{t.label}</option>)}
                   {customerType && !customerTypeOpts.some((t) => t.value === customerType) && <option value={customerType}>{customerType}</option>}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
@@ -423,7 +457,7 @@ export const SalesInvoiceNew = () => {
               <span className={styles.selectWrap}>
                 <select className={styles.fieldSelect} value={salespersonId} onChange={(e) => setSalespersonId(e.target.value)}>
                   <option value="">— Pick staff —</option>
-                  {staffList.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>)}
+                  {sortByText(staffList).map((s) => <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>)}
                   {salespersonId && !staffList.some((s) => s.id === salespersonId) && <option value={salespersonId}>(former staff)</option>}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
@@ -440,18 +474,18 @@ export const SalesInvoiceNew = () => {
           <div className={styles.formGrid4}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Invoice Date</span>
-              <input type="date" className={styles.fieldInput} value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
+              <DateField className={styles.fieldInput} fullWidth value={invoiceDate ?? ''} onChange={(iso) => setInvoiceDate(iso)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Due Date</span>
-              <input type="date" className={styles.fieldInput} value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+              <DateField className={styles.fieldInput} fullWidth value={dueDate ?? ''} onChange={(iso) => setDueDate(iso)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Building Type</span>
               <span className={styles.selectWrap}>
                 <select className={styles.fieldSelect} value={buildingType} onChange={(e) => setBuildingType(e.target.value)}>
                   <option value="">—</option>
-                  {buildingTypeOpts.map((b) => <option key={b.id} value={b.value}>{b.label}</option>)}
+                  {sortByText(buildingTypeOpts).map((b) => <option key={b.id} value={b.value}>{b.label}</option>)}
                   {buildingType && !buildingTypeOpts.some((b) => b.value === buildingType) && <option value={buildingType}>{buildingType}</option>}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
@@ -490,7 +524,7 @@ export const SalesInvoiceNew = () => {
               <span className={styles.selectWrap}>
                 <select className={styles.fieldSelect} value={emergencyRel} onChange={(e) => setEmergencyRel(e.target.value)}>
                   <option value="">—</option>
-                  {relationshipOpts.map((r) => <option key={r.id} value={r.value}>{r.label}</option>)}
+                  {sortByText(relationshipOpts).map((r) => <option key={r.id} value={r.value}>{r.label}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -523,7 +557,7 @@ export const SalesInvoiceNew = () => {
                   onChange={(e) => { setState(e.target.value); setCity(''); setPostcode(''); }}
                   disabled={loc.isLoading}>
                   <option value="">{loc.isLoading ? 'Loading…' : 'Pick state'}</option>
-                  {states.map((s) => <option key={s} value={s}>{s}</option>)}
+                  {sortByText(states).map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -534,7 +568,7 @@ export const SalesInvoiceNew = () => {
                 <select className={styles.fieldSelect} value={city}
                   onChange={(e) => { setCity(e.target.value); setPostcode(''); }} disabled={!state}>
                   <option value="">{state ? 'Pick city' : '— pick state first'}</option>
-                  {cities.map((cc) => <option key={cc} value={cc}>{cc}</option>)}
+                  {sortByText(cities).map((cc) => <option key={cc} value={cc}>{cc}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -545,7 +579,7 @@ export const SalesInvoiceNew = () => {
                 <select className={styles.fieldSelect} value={postcode}
                   onChange={(e) => setPostcode(e.target.value)} disabled={!state || !city}>
                   <option value="">{(state && city) ? 'Pick postcode' : '— pick city first'}</option>
-                  {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+                  {sortByNumeric(postcodes).map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>

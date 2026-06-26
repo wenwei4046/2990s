@@ -23,6 +23,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
+import { DateField } from '../components/DateField';
 import { useNotify } from '../components/NotifyDialog';
 import {
   useCreateConsignmentOrder, useConsignmentDebtorSearch, useAddConsignmentOrderPayment,
@@ -42,6 +43,7 @@ import {
   useSoDropdownOptions, optionsOrFallback,
 } from '../lib/so-dropdown-options-queries';
 import { useStateWarehouseMappings } from '../lib/state-warehouse-queries';
+import { sortByText, sortByNumeric } from '../lib/sort-options';
 import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
 import {
   PaymentsTable, labelToApi, draftMethodFields, type PaymentDraft,
@@ -665,7 +667,7 @@ export const ConsignmentOrderNew = () => {
                     </option>
                   )}
                   {canChangeSalesperson && <option value="">— Pick staff —</option>}
-                  {canChangeSalesperson && staffList.map((s) => (
+                  {canChangeSalesperson && sortByText(staffList).map((s) => (
                     <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
                   ))}
                 </select>
@@ -718,24 +720,24 @@ export const ConsignmentOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Processing Date</span>
-              <input
-                type="date"
+              <DateField
+                fullWidth
                 className={styles.fieldInput}
-                value={processingDate}
+                value={processingDate ?? ''}
                 min={today}
-                onChange={(e) => setProcessingDate(e.target.value)}
-                style={datesXor && !processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
+                onChange={(iso) => setProcessingDate(iso)}
+                invalid={datesXor && !processingDate}
               />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Delivery Date</span>
-              <input
-                type="date"
+              <DateField
+                fullWidth
                 className={styles.fieldInput}
-                value={deliveryDate}
+                value={deliveryDate ?? ''}
                 min={today}
-                onChange={(e) => setDeliveryDate(e.target.value)}
-                style={datesXor && !deliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
+                onChange={(iso) => setDeliveryDate(iso)}
+                invalid={datesXor && !deliveryDate}
               />
             </label>
             <label className={styles.field} style={{ gridColumn: 'span 4' }}>
@@ -888,7 +890,7 @@ export const ConsignmentOrderNew = () => {
                   disabled={loc.isLoading}
                 >
                   <option value="">{loc.isLoading ? 'Loading…' : 'Pick state'}</option>
-                  {states.map((s) => <option key={s} value={s}>{s}</option>)}
+                  {sortByText(states).map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -903,7 +905,7 @@ export const ConsignmentOrderNew = () => {
                   disabled={!state}
                 >
                   <option value="">{state ? 'Pick city' : '— pick state first'}</option>
-                  {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+                  {sortByText(cities).map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
@@ -918,7 +920,7 @@ export const ConsignmentOrderNew = () => {
                   disabled={!state || !city}
                 >
                   <option value="">{(state && city) ? 'Pick postcode' : '— pick city first'}</option>
-                  {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+                  {sortByNumeric(postcodes).map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>

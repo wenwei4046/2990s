@@ -23,12 +23,22 @@ import { computeVariantKey, isServiceLine, type VariantAttrs } from '@2990s/shar
 import { syncSoDeliveredFromDo } from '../lib/so-delivery-sync';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { checkStockAvailability, shortStockResponse } from '../lib/check-stock-availability';
-import { findSofaLinesWithoutCompleteBatch, sofaNoCompleteBatchResponse, findIncompleteSofaSets, sofaIncompleteSetResponse } from '../lib/sofa-batch-guard';
+import { findSofaLinesWithoutCompleteBatch, sofaNoCompleteBatchResponse, findIncompleteSofaSets, sofaIncompleteSetResponse, detectSofaSoItemIds } from '../lib/sofa-batch-guard';
 import { loadSofaBatchStock, sofaStockKey } from '../lib/sofa-set-coverage';
+import { resolveExpectedBatchBySoItem, buildDropshipOffenders } from '../lib/dropship-batch';
 import { currentDocNoByKey, type CurrentEvent } from '../lib/current-doc';
+import { paginateAll } from '../lib/paginate-all';
 
 export const deliveryOrdersMfg = new Hono<{ Bindings: Env; Variables: Variables }>();
 deliveryOrdersMfg.use('*', supabaseAuth);
+
+/* HC "Remark 4" delivery sub-status — the known values (mirrors the whitelist in
+   the Delivery Planning fields route + HC_SUBSTATUS_VALUES on the frontend). Blank
+   ('' / null) always clears it. */
+const HC_SUBSTATUS_VALUES = [
+  'Pending Pickup', 'Done Shipout', 'Arrives EM Warehouse',
+  'Done Delivered', 'Confirm', 'House Not Ready', 'Request Hold',
+] as const;
 
 /* ── DO child-lock guard (Tier 2 — downstream lock) ─────────────────────────
    A DO locks (read-only — no line edit / no CANCELLED transition) once it has
@@ -71,7 +81,13 @@ const HEADER =
   'mattress_sofa_centi, bedframe_centi, accessories_centi, others_centi, service_centi, ' +
   'mattress_sofa_cost_centi, bedframe_cost_centi, accessories_cost_centi, others_cost_centi, service_cost_centi, ' +
   'local_total_centi, total_cost_centi, total_margin_centi, margin_pct_basis, line_count, ' +
-  'currency, warehouse_id, ' +
+  'currency, warehouse_id, is_dropship, ' +
+  /* HC delivery-sheet DO-execution raw-data fields (migration 0197) — surfaced on
+     the DO detail form + the Delivery Planning "Edit HC fields" drawer. */
+  'time_range, time_confirmed, arrival_at, departure_at, shipout_date, customer_delivered_date, eta_arriving_port, delivery_substatus, ' +
+  /* HC EM-region "Arrives EM Warehouse Date" (migration 0199) — cross-border
+     transit-warehouse arrival date. */
+  'arrives_em_warehouse_date, ' +
   'pod_r2_key, signature_data, status, notes, created_at, created_by, updated_at';
 
 const ITEM =
@@ -84,6 +100,15 @@ const PAYMENT_COLS =
   'id, delivery_order_id, paid_at, method, merchant_provider, installment_months, ' +
   'online_type, approval_code, amount_centi, account_sheet, collected_by, note, ' +
   'created_at, created_by';
+
+/* delivery_order_crew columns (Stage 3, migration 0195) — the FK ids + the
+   assign-time name/ic/contact/plate snapshot. Read on the DO detail + returned
+   by PUT /:id/crew. */
+const crewSnapshotCols =
+  'id, do_id, driver_1_id, driver_2_id, helper_1_id, helper_2_id, lorry_id, ' +
+  'driver_1_name, driver_1_ic, driver_1_contact, driver_2_name, driver_2_ic, driver_2_contact, ' +
+  'helper_1_name, helper_1_contact, helper_2_name, helper_2_contact, lorry_plate, ' +
+  'assigned_at, assigned_by, updated_at';
 
 /* DO statuses that count as "shipped" — goods have left our hands, so stock
    has been deducted. The FIRST transition into ANY of these fires the
@@ -166,12 +191,18 @@ async function recomputeTotals(sb: any, deliveryOrderId: string) {
    recost.ts) can re-run it after a PI/GR price correction re-costs the lots. */
 export async function restampDoActualCost(sb: any, deliveryOrderId: string) {
   try {
-    const { data: doHeader } = await sb.from('delivery_orders')
-      .select('status, warehouse_id').eq('id', deliveryOrderId).maybeSingle();
+    let hdrRes = await sb.from('delivery_orders')
+      .select('status, warehouse_id, is_dropship').eq('id', deliveryOrderId).maybeSingle();
+    if (hdrRes.error && (hdrRes.error.message ?? '').includes('is_dropship')) {
+      hdrRes = await sb.from('delivery_orders')
+        .select('status, warehouse_id').eq('id', deliveryOrderId).maybeSingle();
+    }
+    const doHeader = hdrRes.data;
     if (!doHeader) return;
     const status = ((doHeader as { status: string | null }).status ?? '').toUpperCase();
     if (!SHIPPED_STATES.includes(status)) return; // no OUT yet → keep benchmark
     const headerWarehouseId = (doHeader as { warehouse_id: string | null }).warehouse_id ?? null;
+    const isDropship = (doHeader as { is_dropship?: boolean }).is_dropship === true;
 
     const { data: items } = await sb.from('delivery_order_items')
       .select('id, so_item_id, item_code, qty, item_group, variants, line_total_centi')
@@ -193,6 +224,23 @@ export async function restampDoActualCost(sb: any, deliveryOrderId: string) {
           if (r.allocated_batch_no) batchBySoItem.set(r.id, r.allocated_batch_no);
         }
       } catch { /* column absent pre-0121 — no batches */ }
+    }
+    /* Drop-ship (0204) — a drop-ship sofa line's OUT was stamped with the EXPECTED
+       (bound PO) batch, not allocated_batch_no. Resolve the SAME expected batch
+       here so the bucket key matches the OUT movement and the line picks up the
+       arriving lot's real cost after the receipt-time reconcile. Sofa lines only. */
+    if (isDropship && soItemIds.length > 0) {
+      const missing = new Set(soItemIds.filter((sid) => !batchBySoItem.has(sid)));
+      if (missing.size > 0) {
+        const sofaRows = (items as Array<{ so_item_id?: string | null; item_code: string; item_group?: string | null }>)
+          .filter((it) => it.so_item_id && missing.has(it.so_item_id))
+          .map((it) => ({ itemCode: it.item_code, itemGroup: it.item_group ?? null, soItemId: it.so_item_id ?? null }));
+        const sofaSoIds = await detectSofaSoItemIds(sb, sofaRows);
+        if (sofaSoIds.size > 0) {
+          const expected = await resolveExpectedBatchBySoItem(sb, [...sofaSoIds]);
+          for (const [sid, eb] of expected) if (eb.poNumber) batchBySoItem.set(sid, eb.poNumber);
+        }
+      }
     }
     const batchAware = batchBySoItem.size > 0;
 
@@ -319,14 +367,22 @@ async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedB
     .eq('movement_type', 'OUT');
   if ((existing ?? 0) > 0) return; // already deducted — no-op
 
-  const { data: doHeader } = await sb.from('delivery_orders')
-    .select('do_number, warehouse_id')
+  let doHeaderRes = await sb.from('delivery_orders')
+    .select('do_number, warehouse_id, is_dropship')
     .eq('id', deliveryOrderId).maybeSingle();
+  /* Forward-compat (0204): is_dropship column may not exist yet — retry without it. */
+  if (doHeaderRes.error && (doHeaderRes.error.message ?? '').includes('is_dropship')) {
+    doHeaderRes = await sb.from('delivery_orders')
+      .select('do_number, warehouse_id')
+      .eq('id', deliveryOrderId).maybeSingle();
+  }
+  const doHeader = doHeaderRes.data;
   const { data: items } = await sb.from('delivery_order_items')
     .select('id, so_item_id, item_code, description, qty, item_group, variants')
     .eq('delivery_order_id', deliveryOrderId);
   const headerWarehouseId = (doHeader as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
   const doNo = (doHeader as { do_number: string } | null)?.do_number ?? deliveryOrderId;
+  const isDropship = (doHeader as { is_dropship?: boolean } | null)?.is_dropship === true;
   if (!items) return;
 
   // Per-line warehouse — each line ships from its SO line's warehouse (0118),
@@ -353,6 +409,29 @@ async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedB
         }
       }
     } catch { /* column absent pre-0121 — no batches, plain FIFO */ }
+  }
+
+  /* Drop-ship (0204) — a drop-ship sofa line ships BEFORE receipt, so the
+     allocator never locked allocated_batch_no. Stamp the OUT with the EXPECTED
+     batch (= bound PO number) so it (a) nets against the GRN's IN in
+     inventory_balances and (b) routes through fn_consume_fifo_batch under the
+     same batch the receipt-time reconcile keys on. Resolve ONLY for SOFA lines
+     missing a batch — a non-sofa line must stay un-batched (plain FIFO). */
+  if (isDropship && soItemIds.length > 0) {
+    const missing = new Set(soItemIds.filter((sid) => !batchBySoItem.has(sid)));
+    if (missing.size > 0) {
+      // Sofa lines only (state-independent category detector) get the expected batch.
+      const sofaRows = (items as Array<{ so_item_id?: string | null; item_code: string; item_group?: string | null }>)
+        .filter((it) => it.so_item_id && missing.has(it.so_item_id))
+        .map((it) => ({ itemCode: it.item_code, itemGroup: it.item_group ?? null, soItemId: it.so_item_id ?? null }));
+      const sofaSoIds = await detectSofaSoItemIds(sb, sofaRows);
+      if (sofaSoIds.size > 0) {
+        const expected = await resolveExpectedBatchBySoItem(sb, [...sofaSoIds]);
+        for (const [sid, eb] of expected) {
+          if (eb.poNumber) batchBySoItem.set(sid, eb.poNumber);
+        }
+      }
+    }
   }
 
   /* Collapse identical (warehouse_id, product_code, variant_key, batch_no) lines
@@ -757,6 +836,20 @@ type DeliverableLine = {
   unitCostCenti: number;
   discountCenti: number;
   variants: unknown;
+  /* Migration 0058 — dedicated sofa/bedframe variant-breakdown columns. Carried
+     so the SO→DO picker convert keeps them (delivery_order_items has them too). */
+  gapInches: number | null;
+  divanHeightInches: number | null;
+  divanPriceSen: number;
+  legHeightInches: number | null;
+  legPriceSen: number;
+  customSpecials: unknown;
+  lineSuffix: string | null;
+  specialOrderPriceSen: number;
+  /* Migration 0074/0100 — per-line delivery date (+ override flag) carried onto
+     the DO line so a converted DO shows the SO line's delivery date. */
+  lineDeliveryDate: string | null;
+  lineDeliveryDateOverridden: boolean;
   delivered: number;
   returned: number;
   remaining: number;
@@ -783,7 +876,10 @@ export async function soDeliverableRemaining(
     .from('mfg_sales_order_items')
     .select(
       'id, doc_no, debtor_code, debtor_name, item_code, item_group, description, description2, ' +
-      'uom, qty, unit_price_centi, unit_cost_centi, discount_centi, variants',
+      'uom, qty, unit_price_centi, unit_cost_centi, discount_centi, variants, ' +
+      'gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, ' +
+      'custom_specials, line_suffix, special_order_price_sen, ' +
+      'line_delivery_date, line_delivery_date_overridden',
     )
     .in('doc_no', soDocNos)
     .eq('cancelled', false)
@@ -819,7 +915,11 @@ export async function soDeliverableRemaining(
   if (doIds.length > 0) {
     const { data: dos } = await sb.from('delivery_orders').select('id, status').in('id', doIds);
     for (const d of (dos ?? []) as Array<{ id: string; status: string | null }>) {
-      if ((d.status ?? '').toUpperCase() !== 'CANCELLED') activeDoIds.add(d.id);
+      /* LEAK GUARD (DRAFT): a DRAFT DO hasn't shipped — it must NOT consume the
+         SO line's deliverable remaining (else the real DO can't be raised and
+         the picker shows phantom-delivered qty). Treated like CANCELLED here. */
+      const st = (d.status ?? '').toUpperCase();
+      if (st !== 'CANCELLED' && st !== 'DRAFT') activeDoIds.add(d.id);
     }
   }
   // DO line id → SO item id (only for active DOs), used to trace returns below.
@@ -881,6 +981,18 @@ export async function soDeliverableRemaining(
       unitCostCenti: Number(l.unit_cost_centi ?? 0),
       discountCenti: Number(l.discount_centi ?? 0),
       variants: l.variants ?? null,
+      /* Migration 0058 — carry the dedicated variant-breakdown columns onto the
+         deliverable descriptor (pg driver camelCases results → dual-read). */
+      gapInches: (l.gapInches ?? l.gap_inches ?? null) as number | null,
+      divanHeightInches: (l.divanHeightInches ?? l.divan_height_inches ?? null) as number | null,
+      divanPriceSen: Number(l.divanPriceSen ?? l.divan_price_sen ?? 0),
+      legHeightInches: (l.legHeightInches ?? l.leg_height_inches ?? null) as number | null,
+      legPriceSen: Number(l.legPriceSen ?? l.leg_price_sen ?? 0),
+      customSpecials: l.customSpecials ?? l.custom_specials ?? null,
+      lineSuffix: (l.lineSuffix ?? l.line_suffix ?? null) as string | null,
+      specialOrderPriceSen: Number(l.specialOrderPriceSen ?? l.special_order_price_sen ?? 0),
+      lineDeliveryDate: (l.lineDeliveryDate ?? l.line_delivery_date ?? null) as string | null,
+      lineDeliveryDateOverridden: Boolean(l.lineDeliveryDateOverridden ?? l.line_delivery_date_overridden ?? false),
       delivered,
       returned,
       remaining: qty - delivered + returned,
@@ -912,8 +1024,11 @@ export async function soLineDeliveries(
   const { data: dos } = await sb.from('delivery_orders').select('id, do_number, status').in('id', doIds);
   const doMeta = new Map<string, { doNumber: string; status: string }>();
   for (const d of (dos ?? []) as Array<{ id: string; do_number: string | null; status: string | null }>) {
-    if ((d.status ?? '').toUpperCase() === 'CANCELLED') continue;
-    doMeta.set(d.id, { doNumber: d.do_number ?? '—', status: (d.status ?? '').toUpperCase() });
+    const st = (d.status ?? '').toUpperCase();
+    // LEAK GUARD (DRAFT): a DRAFT DO hasn't shipped — exclude from the "Delivered"
+    // display (mirrors soDeliverableRemaining so the two never disagree).
+    if (st === 'CANCELLED' || st === 'DRAFT') continue;
+    doMeta.set(d.id, { doNumber: d.do_number ?? '—', status: st });
   }
   for (const r of rows) {
     if (!r.so_item_id) continue;
@@ -1285,12 +1400,14 @@ deliveryOrdersMfg.get('/deliverable-so-lines', async (c) => {
   if (docNosParam && docNosParam.trim()) {
     docNos = [...new Set(docNosParam.split(',').map((d) => d.trim()).filter(Boolean))];
   } else {
-    const { data: sos, error } = await sb
+    // Page through so PostgREST's 1000-row cap can't drop SOs from the picker
+    // (a non-cancelled SO past row 1000 would be undeliverable via the UI).
+    const { data: sos, error } = await paginateAll<{ doc_no: string; status: string }>((from, to) => sb
       .from('mfg_sales_orders')
       .select('doc_no, status')
       .neq('status', 'CANCELLED')
       .order('doc_no', { ascending: false })
-      .limit(1000);
+      .range(from, to));
     if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
     docNos = ((sos ?? []) as Array<{ doc_no: string }>).map((s) => s.doc_no).filter(Boolean);
   }
@@ -1325,10 +1442,17 @@ deliveryOrdersMfg.get('/:id', async (c) => {
       .neq('status', 'CANCELLED'),
   ]);
   const lifecycleByDo = await computeDoLifecycle(sb, [id]);
+  /* Stage 3 — the per-DO crew (delivery_order_crew, migration 0195). One row per
+     DO (UNIQUE do_id); null when no crew has been assigned yet. Surfaced on the
+     detail so the Delivery Crew block can render the FK ids + assign-time
+     snapshots without a second round-trip. */
+  const { data: crew } = await sb.from('delivery_order_crew')
+    .select(crewSnapshotCols).eq('do_id', id).maybeSingle();
   const deliveryOrder = {
     ...(h.data as unknown as Record<string, unknown>),
     has_children: (drCount ?? 0) > 0 || (siCount ?? 0) > 0,
     lifecycle_state: lifecycleByDo.get(id) ?? 'shipped',
+    crew: crew ?? null,
   };
   /* Per-line Warehouse column (Agent D, TASK #32): resolve the SAME ship-from
      warehouse the inventory OUT uses (SO line → DO header → default) and stamp
@@ -1423,15 +1547,29 @@ deliveryOrdersMfg.post('/', async (c) => {
      has no dye-lot batch; shipping it would pull another order's colour lot.
      Block here (applies even to a force-grab: confirmShortStock waives the soft
      stock check, NOT the no-batch rule). Non-sofa lines pass untouched. */
+  let dropShipped = false;
   if (items.length > 0) {
     const sofaOffenders = await findSofaLinesWithoutCompleteBatch(sb, items.map((it) => ({
       itemCode: String(it.itemCode ?? ''),
       itemGroup: (it.itemGroup as string | null) ?? null,
       soItemId: (it.soItemId as string | null) ?? null,
     })));
-    if (sofaOffenders.length > 0) return c.json(sofaNoCompleteBatchResponse(sofaOffenders), 409);
+    if (sofaOffenders.length > 0) {
+      /* Drop-ship waiver (Wei Siang 2026-06-26) — supplier ships the sofa direct,
+         warehouse has no batch. Waive the Type-A no-batch block ONLY when the
+         operator confirmed dropShip AND every affected line has a bound PO (the
+         incoming dye-lot batch must be known). Without dropShip, surface the 409
+         enriched with each line's bound PO + ETA so the UI can offer the dialog. */
+      const dropship = await buildDropshipOffenders(sb, sofaOffenders);
+      const allHavePo = dropship.length > 0 && dropship.every((o) => !!o.poNumber);
+      if (body.dropShip !== true || !allHavePo) {
+        return c.json(sofaNoCompleteBatchResponse(sofaOffenders, dropship), 409);
+      }
+      dropShipped = true;
+    }
     /* Type B — a sofa set must ship WHOLE from one batch. Block a DO that takes
-       only part of an SO's sofa set and leaves the rest behind (orphan dye lot). */
+       only part of an SO's sofa set and leaves the rest behind (orphan dye lot).
+       NEVER waived by drop-ship — half a set must never ship. */
     const partial = await findIncompleteSofaSets(sb, items.map((it) => (it.soItemId as string | null) ?? null));
     if (partial.length > 0) return c.json(sofaIncompleteSetResponse(partial), 409);
   }
@@ -1479,8 +1617,13 @@ deliveryOrdersMfg.post('/', async (c) => {
     currency: (body.currency as string) ?? 'MYR',
     /* Commander 2026-05-29 — a DO means goods are OUT the moment it's created.
        Skip the LOADED→DISPATCHED→IN_TRANSIT… hand-walk: start at DISPATCHED
-       (= shipped) and deduct stock right after the items insert below. */
-    status: 'DISPATCHED',
+       (= shipped) and deduct stock right after the items insert below.
+       DRAFT flow (2026-06-24) — opt-in asDraft lands the DO as DRAFT instead,
+       with NO stock deduction and NO SO-delivered sync; the commit moves to the
+       Confirm transition (PATCH /:id/status → DISPATCHED). Mirror of the SO. */
+    status: (body.asDraft === true) ? 'DRAFT' : 'DISPATCHED',
+    /* Drop-ship (0204) — flags the UI badge; inventory reconcile is ledger-driven. */
+    is_dropship: dropShipped,
     notes: (body.notes as string) ?? null,
     created_by: user.id,
   }).select(HEADER).single();
@@ -1496,13 +1639,16 @@ deliveryOrdersMfg.post('/', async (c) => {
 
   /* A DO = goods shipped on creation → deduct stock now (idempotent: the
      existence check + UNIQUE index mean this never double-deducts even if the
-     status is later advanced). */
-  await deductInventoryForDo(sb, h.id, user.id);
+     status is later advanced). LEAK GUARD (DRAFT): a DRAFT DO has NOT shipped —
+     skip the deduction AND the SO-delivered sync; both fire on Confirm. */
+  if (body.asDraft !== true) {
+    await deductInventoryForDo(sb, h.id, user.id);
 
-  /* Requirement #3 (Loo 2026-05-30) — if this DO now fully covers its SO,
-     auto-advance the SO to DELIVERED (best-effort, never blocks the DO). The
-     POS "My orders" board reflects the flip via Supabase realtime. */
-  await syncSoDeliveredFromDo(sb, [(body.soDocNo as string) ?? null], user.id);
+    /* Requirement #3 (Loo 2026-05-30) — if this DO now fully covers its SO,
+       auto-advance the SO to DELIVERED (best-effort, never blocks the DO). The
+       POS "My orders" board reflects the flip via Supabase realtime. */
+    await syncSoDeliveredFromDo(sb, [(body.soDocNo as string) ?? null], user.id);
+  }
 
   return c.json({ id: h.id, doNumber: h.do_number }, 201);
 });
@@ -1538,6 +1684,16 @@ function buildItemRow(deliveryOrderId: string, it: Record<string, unknown>, line
     line_cost_centi: lineCost,
     line_margin_centi: lineTotal - lineCost,
     variants,
+    /* Migration 0058 — carry the dedicated variant-breakdown columns from the
+       client line payload (manual add already carries variants + line date). */
+    gap_inches: (it.gapInches as number | null) ?? null,
+    divan_height_inches: (it.divanHeightInches as number | null) ?? null,
+    divan_price_sen: Number(it.divanPriceSen ?? 0),
+    leg_height_inches: (it.legHeightInches as number | null) ?? null,
+    leg_price_sen: Number(it.legPriceSen ?? 0),
+    custom_specials: (it.customSpecials as unknown) ?? null,
+    line_suffix: (it.lineSuffix as string | null) ?? null,
+    special_order_price_sen: Number(it.specialOrderPriceSen ?? 0),
     notes: (it.notes as string) ?? null,
     line_delivery_date: (it.lineDeliveryDate as string | null) ?? null,
     line_delivery_date_overridden: Boolean(it.lineDeliveryDateOverridden ?? false),
@@ -1566,7 +1722,7 @@ function buildItemRow(deliveryOrderId: string, it: Record<string, unknown>, line
      4. recomputeTotals + deductInventoryForDo (both idempotent). */
 deliveryOrdersMfg.post('/from-sos', async (c) => {
   const sb = c.get('supabase'); const user = c.get('user');
-  let body: { picks?: Array<{ soItemId?: string; qty?: number }>; confirmShortStock?: boolean; warehouseId?: string };
+  let body: { picks?: Array<{ soItemId?: string; qty?: number }>; confirmShortStock?: boolean; warehouseId?: string; asDraft?: boolean; dropShip?: boolean };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
 
   // Collapse duplicate soItemIds (sum their qty) so a line can't appear twice.
@@ -1649,14 +1805,25 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
   /* Sofa batch guard — block any picked sofa line with no production PO (no
      dye-lot batch ⇒ would steal another order's colour lot). Applies even to a
      force-grab (confirmShortStock waives soft stock, NOT the no-batch rule). */
+  let dropShipped = false;
   {
     const sofaOffenders = await findSofaLinesWithoutCompleteBatch(sb, sortedPicks.map((line) => ({
       itemCode: line.itemCode,
       itemGroup: line.itemGroup ?? null,
       soItemId: line.soItemId,
     })));
-    if (sofaOffenders.length > 0) return c.json(sofaNoCompleteBatchResponse(sofaOffenders), 409);
-    /* Type B — whole sofa set must ship together (no partial set / orphan). */
+    if (sofaOffenders.length > 0) {
+      /* Drop-ship waiver — waive Type-A only on confirmed dropShip + every
+         affected line bound to a PO (the incoming batch must be known). */
+      const dropship = await buildDropshipOffenders(sb, sofaOffenders);
+      const allHavePo = dropship.length > 0 && dropship.every((o) => !!o.poNumber);
+      if (body.dropShip !== true || !allHavePo) {
+        return c.json(sofaNoCompleteBatchResponse(sofaOffenders, dropship), 409);
+      }
+      dropShipped = true;
+    }
+    /* Type B — whole sofa set must ship together (no partial set / orphan).
+       NEVER waived by drop-ship. */
     const partial = await findIncompleteSofaSets(sb, sortedPicks.map((line) => line.soItemId));
     if (partial.length > 0) return c.json(sofaIncompleteSetResponse(partial), 409);
   }
@@ -1737,8 +1904,12 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
     emergency_contact_relationship: (head.emergency_contact_relationship as string | null) ?? null,
     currency: (head.currency as string | null) ?? 'MYR',
     /* A DO means goods are OUT the moment it's created — start at DISPATCHED
-       (= shipped) and deduct stock below. */
-    status: 'DISPATCHED',
+       (= shipped) and deduct stock below. DRAFT flow (2026-06-24) — opt-in
+       asDraft lands the DO as DRAFT (no stock OUT, no SO sync); the commit
+       moves to the Confirm transition. Mirror of the SO. */
+    status: (body.asDraft === true) ? 'DRAFT' : 'DISPATCHED',
+    /* Drop-ship (0204) — flags the UI badge; inventory reconcile is ledger-driven. */
+    is_dropship: dropShipped,
     created_by: user.id,
   }).select('id, do_number').single();
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
@@ -1775,6 +1946,20 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
       line_cost_centi: lineCost,
       line_margin_centi: lineTotal - lineCost,
       variants,
+      /* Migration 0058 — carry the dedicated variant-breakdown columns from the
+         SO line onto the DO line (the picker previously dropped all 8). */
+      gap_inches: line.gapInches ?? null,
+      divan_height_inches: line.divanHeightInches ?? null,
+      divan_price_sen: line.divanPriceSen ?? 0,
+      leg_height_inches: line.legHeightInches ?? null,
+      leg_price_sen: line.legPriceSen ?? 0,
+      custom_specials: line.customSpecials ?? null,
+      line_suffix: line.lineSuffix ?? null,
+      special_order_price_sen: line.specialOrderPriceSen ?? 0,
+      /* Migration 0074/0100 — carry the SO line's delivery date (+ override flag)
+         onto the DO line (picker previously dropped them; manual path carries them). */
+      line_delivery_date: line.lineDeliveryDate ?? null,
+      line_delivery_date_overridden: line.lineDeliveryDateOverridden ?? false,
     };
   });
   const { error: iErr } = await sb.from('delivery_order_items').insert(doRows);
@@ -1807,13 +1992,17 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
     }
   }
 
-  // 4. Roll up the header totals + deduct stock (both idempotent).
+  // 4. Roll up the header totals + deduct stock (both idempotent). LEAK GUARD
+  //    (DRAFT): a DRAFT DO has not shipped — roll up totals but SKIP the stock
+  //    OUT and the SO-delivered sync; both fire on Confirm.
   await recomputeTotals(sb, dh.id);
-  await deductInventoryForDo(sb, dh.id, user.id);
+  if (body.asDraft !== true) {
+    await deductInventoryForDo(sb, dh.id, user.id);
 
-  /* Requirement #3 — a multi-SO DO may complete several SOs at once; check each
-     source SO for full coverage and auto-advance to DELIVERED (best-effort). */
-  await syncSoDeliveredFromDo(sb, [...docNos], user.id);
+    /* Requirement #3 — a multi-SO DO may complete several SOs at once; check each
+       source SO for full coverage and auto-advance to DELIVERED (best-effort). */
+    await syncSoDeliveredFromDo(sb, [...docNos], user.id);
+  }
 
   return c.json({ id: dh.id, doNumber: dh.do_number }, 201);
 });
@@ -1842,6 +2031,19 @@ deliveryOrdersMfg.patch('/:id', async (c) => {
     ['emergencyContactName', 'emergency_contact_name'],
     ['emergencyContactPhone', 'emergency_contact_phone'],
     ['emergencyContactRelationship', 'emergency_contact_relationship'],
+    /* HC delivery-sheet DO-execution raw-data fields (migration 0197) — also
+       editable from the Delivery Planning "Edit HC fields" drawer; surfaced on
+       the DO detail form's Delivery Execution card. */
+    ['timeRange', 'time_range'],
+    ['timeConfirmed', 'time_confirmed'],
+    ['arrivalAt', 'arrival_at'],
+    ['departureAt', 'departure_at'],
+    ['shipoutDate', 'shipout_date'],
+    ['customerDeliveredDate', 'customer_delivered_date'],
+    ['etaArrivingPort', 'eta_arriving_port'],
+    ['deliverySubstatus', 'delivery_substatus'],
+    /* HC EM-region "Arrives EM Warehouse Date" (migration 0199). */
+    ['arrivesEmWarehouseDate', 'arrives_em_warehouse_date'],
   ];
   const PHONE_FIELDS = new Set(['phone', 'emergencyContactPhone']);
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -1856,6 +2058,15 @@ deliveryOrdersMfg.patch('/:id', async (c) => {
   }
   if (Object.keys(updates).length === 1) return c.json({ ok: true, changed: 0 });
 
+  /* Whitelist the HC "Remark 4" delivery sub-status to the known values (blank /
+     null always clears it) — mirrors the Delivery Planning fields route, so the
+     same column can't be set to a stray value from either edit surface. */
+  if (updates.delivery_substatus != null && updates.delivery_substatus !== '' &&
+      !(HC_SUBSTATUS_VALUES as readonly string[]).includes(String(updates.delivery_substatus))) {
+    return c.json({ error: 'invalid_substatus', reason: `delivery_substatus must be one of: ${HC_SUBSTATUS_VALUES.join(', ')} (or blank).` }, 400);
+  }
+  if (updates.delivery_substatus === '') updates.delivery_substatus = null;
+
   /* Header is locked once a Sales Invoice / Delivery Return exists — mirrors the
      line-add / line-edit / cancel guards. Prevents editing a DO that a child
      document already snapshotted. */
@@ -1866,6 +2077,110 @@ deliveryOrdersMfg.patch('/:id', async (c) => {
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'not_found' }, 404);
   return c.json({ ok: true, id });
+});
+
+/* ── Crew assignment (Stage 3 — delivery_order_crew, migration 0195) ──────────
+   PUT /:id/crew — assign up to 2 drivers + 2 helpers + 1 lorry to a DO. The body
+   carries the chosen master ids (any nullable); the handler loads each master row
+   and UPSERTS one delivery_order_crew row (UNIQUE do_id) writing the FK ids PLUS
+   an assign-time SNAPSHOT of name/ic/contact/plate — the same denormalised
+   pattern the DO header already uses for driver_name, so the crew record is
+   stable if a master is later edited. The DO header's existing driver_id /
+   driver_name / vehicle quick-fields are kept in sync with driver 1 so the
+   "primary driver" field still reflects the first driver. */
+deliveryOrdersMfg.put('/:id/crew', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  // The DO must exist (FK target + so the header sync below has a row to update).
+  const { data: doRow, error: doErr } = await sb.from('delivery_orders').select('id').eq('id', id).maybeSingle();
+  if (doErr) return c.json({ error: 'load_failed', reason: doErr.message }, 500);
+  if (!doRow) return c.json({ error: 'not_found' }, 404);
+
+  const str = (v: unknown): string | null => {
+    if (v === undefined || v === null) return null;
+    const s = String(v).trim();
+    return s === '' ? null : s;
+  };
+  const driver1Id = str(body.driver1Id);
+  const driver2Id = str(body.driver2Id);
+  const helper1Id = str(body.helper1Id);
+  const helper2Id = str(body.helper2Id);
+  const lorryId   = str(body.lorryId);
+
+  // Load the chosen master rows so the snapshot captures what's true at assign
+  // time. Batched per master; dual-read camelCase (the pg driver camelCases cols).
+  const driverIds = [...new Set([driver1Id, driver2Id].filter((x): x is string => !!x))];
+  const helperIds = [...new Set([helper1Id, helper2Id].filter((x): x is string => !!x))];
+
+  type DriverRow = { id: string; name?: string | null; ic_number?: string | null; icNumber?: string | null; phone?: string | null; vehicle?: string | null };
+  type HelperRow = { id: string; name?: string | null; contact?: string | null; ic_number?: string | null; icNumber?: string | null };
+  type LorryRow  = { id: string; plate?: string | null };
+
+  const driverById = new Map<string, DriverRow>();
+  const helperById = new Map<string, HelperRow>();
+
+  const [driverRes, helperRes, lorryRes] = await Promise.all([
+    driverIds.length > 0
+      ? sb.from('drivers').select('id, name, ic_number, phone, vehicle').in('id', driverIds)
+      : Promise.resolve({ data: [] as DriverRow[] }),
+    helperIds.length > 0
+      ? sb.from('helpers').select('id, name, contact, ic_number').in('id', helperIds)
+      : Promise.resolve({ data: [] as HelperRow[] }),
+    lorryId
+      ? sb.from('lorries').select('id, plate').eq('id', lorryId).maybeSingle()
+      : Promise.resolve({ data: null as LorryRow | null }),
+  ]);
+  for (const d of (driverRes.data ?? []) as DriverRow[]) driverById.set(d.id, d);
+  for (const h of (helperRes.data ?? []) as HelperRow[]) helperById.set(h.id, h);
+  const lorry = (lorryRes.data ?? null) as LorryRow | null;
+
+  const d1 = driver1Id ? driverById.get(driver1Id) ?? null : null;
+  const d2 = driver2Id ? driverById.get(driver2Id) ?? null : null;
+  const h1 = helper1Id ? helperById.get(helper1Id) ?? null : null;
+  const h2 = helper2Id ? helperById.get(helper2Id) ?? null : null;
+  const driverIc = (d: DriverRow | null) => (d ? (d.ic_number ?? d.icNumber ?? null) : null);
+
+  const now = new Date().toISOString();
+  const crewRow = {
+    do_id: id,
+    driver_1_id: driver1Id, driver_2_id: driver2Id,
+    helper_1_id: helper1Id, helper_2_id: helper2Id,
+    lorry_id: lorryId,
+    // snapshots captured at assign time
+    driver_1_name: d1?.name ?? null, driver_1_ic: driverIc(d1), driver_1_contact: d1?.phone ?? null,
+    driver_2_name: d2?.name ?? null, driver_2_ic: driverIc(d2), driver_2_contact: d2?.phone ?? null,
+    helper_1_name: h1?.name ?? null, helper_1_contact: h1?.contact ?? null,
+    helper_2_name: h2?.name ?? null, helper_2_contact: h2?.contact ?? null,
+    lorry_plate: (lorry as LorryRow | null)?.plate ?? null,
+    assigned_by: user.id,
+    updated_at: now,
+  };
+
+  // UPSERT on the UNIQUE do_id — idempotent (re-assign overwrites the crew row,
+  // keeping a single row per DO). assigned_at defaults on first insert; we leave
+  // it untouched on conflict so it records the original assign time, and bump
+  // updated_at each save.
+  const { data: crew, error: crewErr } = await sb.from('delivery_order_crew')
+    .upsert(crewRow, { onConflict: 'do_id' })
+    .select(crewSnapshotCols).maybeSingle();
+  if (crewErr) {
+    if (crewErr.code === '42501') return c.json({ error: 'forbidden', reason: crewErr.message }, 403);
+    return c.json({ error: 'crew_save_failed', reason: crewErr.message }, 500);
+  }
+
+  /* Keep the DO header's primary-driver quick-fields in lock-step with driver 1
+     (driver_id / driver_name / vehicle), so the existing Driver / Vehicle fields
+     on the DO still reflect the first crew driver. Clearing driver 1 clears them. */
+  await sb.from('delivery_orders').update({
+    driver_id: driver1Id,
+    driver_name: d1?.name ?? null,
+    vehicle: d1?.vehicle ?? (lorry as LorryRow | null)?.plate ?? null,
+    updated_at: now,
+  }).eq('id', id);
+
+  return c.json({ crew });
 });
 
 // ── Item CRUD ─────────────────────────────────────────────────────────────
@@ -1927,15 +2242,26 @@ deliveryOrdersMfg.post('/:id/items', async (c) => {
 
   /* Sofa batch guard — a sofa line with no production PO has no dye-lot batch
      and must not ship (would pull another order's colour lot). */
+  let dropShipped = false;
   {
     const sofaOffenders = await findSofaLinesWithoutCompleteBatch(sb, [{
       itemCode: String(it.itemCode ?? ''),
       itemGroup: (it.itemGroup as string | null) ?? null,
       soItemId: (it.soItemId as string | null) ?? null,
     }]);
-    if (sofaOffenders.length > 0) return c.json(sofaNoCompleteBatchResponse(sofaOffenders), 409);
+    if (sofaOffenders.length > 0) {
+      /* Drop-ship waiver — waive Type-A only on confirmed dropShip + the line
+         bound to a PO (the incoming batch must be known). */
+      const dropship = await buildDropshipOffenders(sb, sofaOffenders);
+      const allHavePo = dropship.length > 0 && dropship.every((o) => !!o.poNumber);
+      if ((it as { dropShip?: boolean }).dropShip !== true || !allHavePo) {
+        return c.json(sofaNoCompleteBatchResponse(sofaOffenders, dropship), 409);
+      }
+      dropShipped = true;
+    }
     /* Type B — after this add, the DO must hold the SO's WHOLE sofa set, not a
-       partial one. Combine the DO's existing SO links with the new line. */
+       partial one. Combine the DO's existing SO links with the new line.
+       NEVER waived by drop-ship. */
     const { data: existingDoLines } = await sb
       .from('delivery_order_items').select('so_item_id').eq('delivery_order_id', id);
     const soIds = [
@@ -1961,6 +2287,14 @@ deliveryOrdersMfg.post('/:id/items', async (c) => {
   const row = buildItemRow(id, it, nextLineNo);
   const { data, error } = await sb.from('delivery_order_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  /* Drop-ship (0204) — once a drop-shipped line is added, stamp the DO so the
+     "batch not received" badge shows. Best-effort (never blocks the add). */
+  if (dropShipped) {
+    const { error: dsErr } = await sb.from('delivery_orders').update({ is_dropship: true }).eq('id', id);
+    if (dsErr && !(dsErr.message ?? '').includes('is_dropship')) {
+      /* eslint-disable-next-line no-console */ console.error('[dropship] flag DO failed:', dsErr.message);
+    }
+  }
   await recomputeTotals(sb, id);
   // TASK #24 — if the DO is already shipped, adding a line MUST extend the
   // OUT booking for that bucket (otherwise the new line ships but inventory
@@ -2030,7 +2364,20 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
         have = sofaStock.remaining.get(sofaStockKey(so.warehouse_id, batch, effCode, variantKey)) ?? 0;
       }
       if (!batch || !so?.warehouse_id || have < delta) {
-        return c.json(sofaNoCompleteBatchResponse([{ itemCode: effCode, soItemId: prev.so_item_id as string }]), 409);
+        /* Drop-ship waiver — the extra units ship supplier-direct against the
+           expected (bound PO) batch. Waive only on confirmed dropShip + a bound
+           PO on this line. Type B is unaffected (a qty bump can't orphan a set). */
+        const offender = { itemCode: effCode, soItemId: prev.so_item_id as string };
+        const dropship = await buildDropshipOffenders(sb, [offender]);
+        const allHavePo = dropship.length > 0 && dropship.every((o) => !!o.poNumber);
+        if ((it as { dropShip?: boolean }).dropShip !== true || !allHavePo) {
+          return c.json(sofaNoCompleteBatchResponse([offender], dropship), 409);
+        }
+        /* Stamp the DO drop-ship flag for the badge (best-effort). */
+        const { error: dsErr } = await sb.from('delivery_orders').update({ is_dropship: true }).eq('id', id);
+        if (dsErr && !(dsErr.message ?? '').includes('is_dropship')) {
+          /* eslint-disable-next-line no-console */ console.error('[dropship] flag DO failed:', dsErr.message);
+        }
       }
     }
   }
@@ -2319,9 +2666,20 @@ deliveryOrdersMfg.patch('/:id/status', async (c) => {
   /* Inventory OUT — fire on the first transition into ANY shipped state.
      deductInventoryForDo is idempotent (existence check + UNIQUE index), so a
      DO that jumps straight to SIGNED/DELIVERED still deducts exactly once, and
-     re-advancing through later shipped states never double-deducts. */
+     re-advancing through later shipped states never double-deducts.
+     DRAFT CONFIRM (2026-06-24) — the Confirm action is exactly DRAFT→DISPATCHED:
+     DISPATCHED ∈ SHIPPED_STATES so the deduction (skipped on draft create) fires
+     HERE, the single chokepoint. This is the commit moving create→confirm. */
   if (SHIPPED_STATES.includes(body.status)) {
     await deductInventoryForDo(sb, id, user.id);
+    /* Mirror the create path: once stock goes out, re-check the source SO for
+       full coverage and auto-advance to DELIVERED (best-effort). A DRAFT confirm
+       reaches this for the first time here, so the SO sync that was skipped on
+       draft-create runs now. Idempotent + best-effort. */
+    if (prevStatus === 'DRAFT') {
+      const { data: doRow } = await sb.from('delivery_orders').select('so_doc_no').eq('id', id).maybeSingle();
+      await syncSoDeliveredFromDo(sb, [(doRow as { so_doc_no?: string } | null)?.so_doc_no], user.id);
+    }
   }
 
   /* Requirement #3 — if a DO is explicitly marked DELIVERED, re-check its SO

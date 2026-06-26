@@ -60,6 +60,10 @@ const buildApp = () => {
     select: () => chain,
     ilike: () => chain,
     neq: () => chain,
+    // DRAFT/Confirmed two-state (2026-06-25) — the live customer-search query now
+    // excludes DRAFT via `.not('status', 'in', ...)`; mirror the real PostgREST
+    // client's .not() so the chainable mock doesn't throw (→ 500).
+    not: () => chain,
     order: () => chain,
     limit: async () => ({ data: queryRows, error: null }),
   };

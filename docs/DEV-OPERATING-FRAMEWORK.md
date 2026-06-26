@@ -217,6 +217,24 @@ symptom (the 06-01 / 06-03 / 06-07 / 06-11 audit batches; the HOOKKA bug-class m
   fixes pre-emptively (`hookka-bug-classes-and-unification.md`).
 - **Verification rate is itself tuned** — the ~3/8 false-positive rate is *why*
   verify-at-file:line became mandatory. Improving the process is in scope.
+- **Cross-repo parity is a FILE diff, never a commit-subject scan.** The 2026-06-24
+  Houzs audit first judged parity by commit titles + "how many pages have an export
+  button" and **missed a system-wide blank-export bug** (BUG-2026-06-24-001). When
+  syncing HOOKKA/Houzs ⇄ 2990, diff the actual corresponding files — commit subjects and
+  feature-presence counts lie about correctness.
+- **Every derived display value must be mirrored into every serialization path.** A
+  DataGrid column that renders JSX (a `<Link>`, formatted money, a `<StatusPill>`) MUST
+  define `exportValue` or it exports blank — the exporter can't read rendered React
+  (BUG-2026-06-24-001). Generalises: a value computed for *display* needs its own accessor
+  for *export / PDF / print / API* — each path re-derives, none reads the DOM.
+- **Style the element that actually draws the thing.** A border / validation-colour
+  override is a no-op on a `border:0` element — DateField's `invalid` painted the inner
+  borderless input and never showed; the border lives on the wrapper (BUG-2026-06-24-002).
+  Confirm which element owns the property before overriding it.
+- **Big cross-cutting batches run on an isolated git worktree + a `STATUS.md`
+  done/not-done tracker**, with regular owner updates — keeps a multi-file sync off the
+  shared live `main` until it's verified as a unit (the Houzs→2990 sync, branch
+  `sync/houzs-to-2990`).
 
 **Maturity: PARTIAL.** The kaizen loop is real and effective but **reactive** (triggered
 by an owner report or a fix). **Gap/next:** make it a *scheduled* cadence — a periodic

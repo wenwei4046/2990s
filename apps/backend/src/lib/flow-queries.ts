@@ -93,7 +93,13 @@ export const usePostGrn = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => authedFetch(`/grns/${id}/post`, { method: 'PATCH' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['grns'] }),
+    onSuccess: (_, id) => {
+      // Confirm (DRAFT → POSTED) commits stock IN + PO rollup server-side — the
+      // detail pill, the list, and the on-hand drilldown all need to refresh.
+      qc.invalidateQueries({ queryKey: ['grn-detail', id] });
+      qc.invalidateQueries({ queryKey: ['grns'] });
+      qc.invalidateQueries({ queryKey: ['inventory'] });
+    },
   });
 };
 
@@ -107,6 +113,10 @@ export const useUpdateGrnHeader = () => {
     mutationFn: ({ id, ...body }: {
       id: string; supplierId?: string; receivedAt?: string; deliveryNoteRef?: string;
       warehouseId?: string; notes?: string; currency?: string;
+      // Landed-cost core (migration 0190) — MYR per 1 unit of the GRN currency.
+      exchangeRate?: number | string;
+      // Landed-cost allocation (migration 0191) — freight "平摊" basis.
+      allocationMethod?: 'QTY' | 'VALUE' | 'CBM';
     }) => authedFetch<{ grn: any }>(`/grns/${id}`, {
       method: 'PATCH', body: JSON.stringify(body),
     }),
@@ -273,7 +283,10 @@ export const useUpdatePurchaseInvoiceHeader = () => {
   return useMutation({
     mutationFn: ({ id, ...body }: {
       id: string; supplierId?: string; supplierInvoiceRef?: string; invoiceDate?: string;
-      dueDate?: string; currency?: string; notes?: string;
+      dueDate?: string; currency?: string; exchangeRate?: number; notes?: string;
+      // PI-level freight allocation (migration 0202) — basis the server uses to
+      // spread freight SERVICE lines across the goods lines.
+      allocationMethod?: 'QTY' | 'VALUE' | 'CBM';
     }) => authedFetch<{ purchaseInvoice: any }>(`/purchase-invoices/${id}`, {
       method: 'PATCH', body: JSON.stringify(body),
     }),
@@ -325,6 +338,61 @@ export const useAddPurchaseInvoiceItem = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['purchase-invoice-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
+    },
+  });
+};
+
+/* ── Payment Voucher (PV) — standalone cash-out voucher (migration 0189) ────
+   A "very plain" voucher to pay a vendor that is NOT a goods invoice: payee +
+   credit account (paid FROM) + a few expense lines (description + debit account
+   + amount) + a total that posts to the GL (source_type 'PV'). Mirrors the PI
+   hook shape (list / detail / create / update / post / cancel). */
+export const usePaymentVouchers = (status?: string) => baseQuery<{ paymentVouchers: any[] }>(
+  ['payment-vouchers', status ?? 'all'], `/payment-vouchers${status ? `?status=${status}` : ''}`,
+);
+export const usePaymentVoucherDetail = (id: string | null) => useQuery({
+  queryKey: ['payment-voucher-detail', id],
+  queryFn: () => authedFetch<{ paymentVoucher: any; lines: any[] }>(`/payment-vouchers/${id}`),
+  enabled: Boolean(id), staleTime: 30_000, retry: 1, retryDelay: 800,
+});
+export const useCreatePaymentVoucher = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: unknown) => authedFetch<{ id: string; pvNumber: string }>(`/payment-vouchers`, { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['payment-vouchers'] }),
+  });
+};
+export const useUpdatePaymentVoucher = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string } & Record<string, unknown>) =>
+      authedFetch<{ paymentVoucher: any }>(`/payment-vouchers/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['payment-voucher-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['payment-vouchers'] });
+    },
+  });
+};
+export const usePostPaymentVoucher = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => authedFetch<{ ok: true; jeNo?: string }>(`/payment-vouchers/${id}/post`, { method: 'POST' }),
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ['payment-vouchers'] });
+      qc.invalidateQueries({ queryKey: ['payment-voucher-detail', id] });
+    },
+  });
+};
+export const useCancelPaymentVoucher = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => authedFetch(`/payment-vouchers/${id}/cancel`, { method: 'POST' }),
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ['payment-vouchers'] });
+      qc.invalidateQueries({ queryKey: ['payment-voucher-detail', id] });
+    },
+    onError: (err) => {
+      serviceNotify({ title: 'Cancel voucher failed', body: err instanceof Error ? err.message : String(err), tone: 'error' });
     },
   });
 };
@@ -1860,7 +1928,7 @@ export type OutstandingRow = Record<string, unknown> & {
 
 export const useOutstanding = (
   module: OutstandingModule,
-  opts?: { mode?: OutstandingFilterMode; from?: string; to?: string },
+  opts?: { mode?: OutstandingFilterMode; from?: string; to?: string; supplierId?: string | null },
 ) => {
   const params = new URLSearchParams();
   const outstanding = opts?.mode === 'completed' ? 'false'
@@ -1869,6 +1937,9 @@ export const useOutstanding = (
   params.set('outstanding', outstanding);
   if (opts?.from) params.set('from', opts.from);
   if (opts?.to)   params.set('to',   opts.to);
+  // Migration 0202 — optional supplier filter (the PV "Apply to PI" picker lists
+  // a supplier's outstanding PIs). Only the purchase-side views honour it.
+  if (opts?.supplierId) params.set('supplierId', opts.supplierId);
   return baseQuery<{ rows: OutstandingRow[] }>(
     ['outstanding', module, params.toString()],
     `/outstanding/${module}?${params.toString()}`,
@@ -1894,7 +1965,7 @@ export const useOutstandingSummary = (opts?: { from?: string; to?: string }) => 
 
 /* ── Document relationship map (SAP-style flow diagram) ─────────────────── */
 export type FlowNodeType =
-  | 'so' | 'do' | 'si' | 'payment' | 'po' | 'grn' | 'pi' | 'dr' | 'pr'
+  | 'so' | 'do' | 'si' | 'payment' | 'po' | 'grn' | 'pi' | 'pv' | 'dr' | 'pr'
   | 'cso' | 'cdo' | 'cdr' | 'pco' | 'pcr' | 'pcrn';
 export type FlowEdgeKind = 'full' | 'partial' | 'value' | 'payment';
 export type FlowNode = {

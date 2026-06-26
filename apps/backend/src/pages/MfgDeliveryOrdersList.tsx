@@ -80,6 +80,9 @@ type DoRow = {
   /* Document-driven status (latest event wins) — 'invoiced' | 'returned', else
      'shipped' baseline. Sent by the list endpoint. */
   lifecycle_state?: 'shipped' | 'invoiced' | 'returned';
+  /* Migration 0204 — drop-ship flag (dual-read camelCase from the pg driver). */
+  is_dropship?: boolean;
+  isDropship?: boolean;
 };
 
 const fmtRm = (centi: number): string =>
@@ -96,6 +99,8 @@ const compactDate = (iso: string | null | undefined): string => {
    plus CANCELLED. Pill styling reuses the SO detail status classes where the
    stages line up; the rest fall back to a neutral pill. */
 const STATUS_CLASS: Record<string, string> = {
+  // DRAFT/Confirmed two-state (Owner 2026-06-25) — grey, like the SO DRAFT pill.
+  DRAFT:       soDetailStyles.statusDraft ?? '',
   LOADED:      soDetailStyles.statusConfirmed ?? '',
   DISPATCHED:  soDetailStyles.statusShipped ?? '',
   IN_TRANSIT:  soDetailStyles.statusInProd ?? '',
@@ -106,6 +111,7 @@ const STATUS_CLASS: Record<string, string> = {
   CANCELLED:   soDetailStyles.statusCancelled ?? '',
 };
 const STATUS_LABEL: Record<string, string> = {
+  DRAFT:      'Draft',
   LOADED:     'Loaded',
   DISPATCHED: 'Shipped',
   IN_TRANSIT: 'In Transit',
@@ -122,11 +128,16 @@ const STATUS_LABEL: Record<string, string> = {
 type DoLifecycle = 'shipped' | 'invoiced' | 'returned';
 const doEffectiveKey = (status: string, lifecycle?: DoLifecycle): string => {
   if (status === 'CANCELLED') return 'CANCELLED';
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT DO has NOT shipped
+     (no stock OUT, no SO sync, not invoiceable). It can't have an invoiced /
+     returned lifecycle event yet, so DRAFT always wins over the shipped baseline
+     and reads as its own distinct grey "Draft" badge. */
+  if (status === 'DRAFT') return 'DRAFT';
   if (lifecycle === 'returned') return 'RETURNED';
   if (lifecycle === 'invoiced') return 'INVOICED';
   return 'DISPATCHED'; // shipped baseline
 };
-const STATUS_CHIPS = ['all', 'DISPATCHED', 'INVOICED', 'RETURNED', 'CANCELLED'] as const;
+const STATUS_CHIPS = ['all', 'DRAFT', 'DISPATCHED', 'INVOICED', 'RETURNED', 'CANCELLED'] as const;
 
 const StatusPill = ({ status, lifecycle }: { status: string; lifecycle?: DoLifecycle }) => {
   const key = doEffectiveKey(status, lifecycle);
@@ -690,6 +701,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     searchValue: (r) => deriveBranding(r),
     groupValue: (r) => deriveBranding(r) || '(none)',
     sortFn: (a, b) => deriveBranding(a).localeCompare(deriveBranding(b)),
+    exportValue: (r) => deriveBranding(r),
   },
   {
     key: 'venue', label: 'Venue', width: 180, sortable: true, groupable: true,
@@ -711,6 +723,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     searchValue: (r) => fmtRm(r.local_total_centi),
     sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
     filterType: 'number', numberValue: (r) => r.local_total_centi,
+    exportValue: (r) => (r.local_total_centi ?? 0) / 100,
   },
   {
     key: 'mattress_sofa_centi', label: 'Mattress/Sofa', width: 130, sortable: true, align: 'right',
@@ -721,6 +734,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     },
     searchValue: (r) => fmtRm(r.mattress_sofa_centi ?? 0),
     sortFn: (a, b) => (a.mattress_sofa_centi ?? 0) - (b.mattress_sofa_centi ?? 0),
+    exportValue: (r) => (r.mattress_sofa_centi ?? 0) / 100,
   },
   {
     key: 'bedframe_centi', label: 'Bedframe', width: 120, sortable: true, align: 'right',
@@ -731,6 +745,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     },
     searchValue: (r) => fmtRm(r.bedframe_centi ?? 0),
     sortFn: (a, b) => (a.bedframe_centi ?? 0) - (b.bedframe_centi ?? 0),
+    exportValue: (r) => (r.bedframe_centi ?? 0) / 100,
   },
   {
     key: 'accessories_centi', label: 'Accessories', width: 120, sortable: true, align: 'right',
@@ -741,6 +756,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     },
     searchValue: (r) => fmtRm(r.accessories_centi ?? 0),
     sortFn: (a, b) => (a.accessories_centi ?? 0) - (b.accessories_centi ?? 0),
+    exportValue: (r) => (r.accessories_centi ?? 0) / 100,
   },
   {
     key: 'phone', label: 'Phone', width: 130, sortable: true,
@@ -754,7 +770,21 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
   },
   {
     key: 'status', label: 'Status', width: 130, sortable: true, groupable: true,
-    accessor: (r) => <StatusPill status={r.status} lifecycle={r.lifecycle_state} />,
+    accessor: (r) => (
+      <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+        <StatusPill status={r.status} lifecycle={r.lifecycle_state} />
+        {/* Drop-ship badge (0204) — warning tone. Dual-read camelCase. */}
+        {(r.isDropship ?? r.is_dropship) && (
+          <span
+            className={soDetailStyles.statusPill}
+            title="Shipped supplier-direct before the batch was received — stock is negative against the expected PO batch and nets out when its GRN arrives."
+            style={{ background: 'var(--c-amber-bg, #FBEFD6)', color: 'var(--c-amber-ink, #8A5A00)', border: '1px solid var(--c-amber-line, #E3C27A)' }}
+          >
+            Drop-ship
+          </span>
+        )}
+      </span>
+    ),
     searchValue: (r) => STATUS_LABEL[doEffectiveKey(r.status, r.lifecycle_state)] ?? r.status,
     filterValue: (r) => STATUS_LABEL[doEffectiveKey(r.status, r.lifecycle_state)] ?? r.status,
     groupValue: (r) => doEffectiveKey(r.status, r.lifecycle_state),
@@ -822,18 +852,21 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     accessor: (r) => <span className={styles.money}>{fmtRm(r.mattress_sofa_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.mattress_sofa_cost_centi ?? 0),
     sortFn: (a, b) => (a.mattress_sofa_cost_centi ?? 0) - (b.mattress_sofa_cost_centi ?? 0),
+    exportValue: (r) => (r.mattress_sofa_cost_centi ?? 0) / 100,
   },
   {
     key: 'bedframe_cost_centi', label: 'Bedframe Cost', width: 130, sortable: true, align: 'right', defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.bedframe_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.bedframe_cost_centi ?? 0),
     sortFn: (a, b) => (a.bedframe_cost_centi ?? 0) - (b.bedframe_cost_centi ?? 0),
+    exportValue: (r) => (r.bedframe_cost_centi ?? 0) / 100,
   },
   {
     key: 'total_cost_centi', label: 'Cost Total', width: 120, sortable: true, align: 'right', defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.total_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.total_cost_centi ?? 0),
     sortFn: (a, b) => (a.total_cost_centi ?? 0) - (b.total_cost_centi ?? 0),
+    exportValue: (r) => (r.total_cost_centi ?? 0) / 100,
   },
   {
     key: 'total_margin_centi', label: 'Margin', width: 120, sortable: true, align: 'right', defaultHidden: true,
@@ -845,5 +878,6 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     },
     searchValue: (r) => fmtRm(r.total_margin_centi ?? 0),
     sortFn: (a, b) => (a.total_margin_centi ?? 0) - (b.total_margin_centi ?? 0),
+    exportValue: (r) => ((r.local_total_centi ?? 0) <= 0 ? '' : (r.total_margin_centi ?? 0) / 100),
   },
 ];

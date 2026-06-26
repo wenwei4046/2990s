@@ -30,6 +30,9 @@ import {
   Handshake,
   Wallet,
   KeyRound,
+  Coins,
+  CalendarClock,
+  Gauge,
 } from 'lucide-react';
 import { useAuth, POS_ONLY_ROLES, SALES_DESK_ROLES } from '../lib/auth';
 import styles from './Sidebar.module.css';
@@ -164,6 +167,7 @@ export const Sidebar = () => {
       items: [
         { to: '/products', icon: <Package2 {...ICON_PROPS} />, label: 'Products & Maintenance' },
         { to: '/suppliers', icon: <Truck {...ICON_PROPS} />, label: 'Suppliers' },
+        { to: '/currencies', icon: <Coins {...ICON_PROPS} />, label: 'Currencies' },
         { to: '/mrp', icon: <ListTree {...ICON_PROPS} />, label: 'MRP · Stock Status' },
         { to: '/purchase-orders', icon: <ScrollText {...ICON_PROPS} />, label: 'Purchase Orders' },
         { to: '/grns', icon: <PackageCheck {...ICON_PROPS} />, label: 'Goods Receipt' },
@@ -175,7 +179,16 @@ export const Sidebar = () => {
       id: 'transportation',
       label: 'Transportation',
       items: [
-        { to: '/drivers', icon: <Truck {...ICON_PROPS} />, label: 'Drivers' },
+        // Delivery Planning board (Stage 4) — the planning view sits above the
+        // fleet masters it dispatches. Delivery Regions (the region-bucket master)
+        // is now reached from a "Regions" button INSIDE the board header (not a
+        // standalone sidebar line); the /delivery-planning-regions route stays.
+        { to: '/delivery-planning', icon: <CalendarClock {...ICON_PROPS} />, label: 'Delivery Planning' },
+        // Consolidated "Driver & Helper" / Fleet portal — Driver · Helper ·
+        // Lorry masters on one page (migration 0195).
+        { to: '/fleet', icon: <Truck {...ICON_PROPS} />, label: 'Driver & Helper' },
+        // Stage 5B (final) — the fleet performance dashboard (kept separate).
+        { to: '/lorry-capacity', icon: <Gauge {...ICON_PROPS} />, label: 'Lorry Capacity' },
       ],
     },
     {

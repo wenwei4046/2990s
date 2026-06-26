@@ -30,10 +30,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Plus, Printer, Save, Ban, ChevronDown,
+  ArrowLeft, FileText, Pencil, Plus, Printer, Save, Ban, ChevronDown, CheckCircle2,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
+import { buildVariantSummary, canonicalizeVariants, fmtDateOrDash } from '@2990s/shared';
 import {
   usePurchaseInvoiceDetail,
   useUpdatePurchaseInvoiceHeader,
@@ -41,6 +41,7 @@ import {
   useUpdatePurchaseInvoiceItem,
   useDeletePurchaseInvoiceItem,
   useCancelPurchaseInvoice,
+  usePostPurchaseInvoice,
 } from '../lib/flow-queries';
 import {
   useSuppliers, useSupplierDetail,
@@ -60,6 +61,8 @@ import { useNotify } from '../components/NotifyDialog';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import { StatusPill } from '../components/StatusPill';
+import { DateField } from '../components/DateField';
+import { CurrencyOptions } from '../lib/currencies-queries';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -71,6 +74,12 @@ const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   })}`;
 };
 
+/* PI-level freight allocation (migration 0202) — human label for the basis. */
+const allocationMethodLabel = (m: string | null | undefined): string =>
+  m === 'VALUE' ? 'By value'
+  : m === 'CBM' ? 'By volume (CBM)'
+  : 'By quantity';
+
 /* Draft state shapes (mirror PO #194). HeaderDraft mirrors the editable PI
    header fields. */
 type HeaderDraft = {
@@ -79,6 +88,12 @@ type HeaderDraft = {
   invoiceDate: string;
   dueDate: string;
   currency: string;
+  /* Multi-currency AP (0188) — MYR per 1 unit of `currency` (string so the
+     numeric input round-trips empty/partial typing). MYR is always '1'. */
+  exchangeRate: string;
+  /* PI-level freight allocation (migration 0202) — basis the server uses to
+     spread freight SERVICE lines across the goods lines. */
+  allocationMethod: 'QTY' | 'VALUE' | 'CBM';
   notes: string;
 };
 
@@ -99,6 +114,22 @@ type PiItemRow = Record<string, unknown> & {
   /* GRN-sourced lines carry the source GRN line id; identity + variants on those
      stay read-only (only qty/price editable). Free-entry lines have it null. */
   grn_item_id?: string | null;
+  /* PI-level freight allocation (migration 0202) — this line's per-line freight
+     (MYR sen) the server allocated from the PI's SERVICE lines. > 0 only on
+     goods lines once a freight line exists. */
+  allocated_charge_centi?: number | null;
+};
+
+/* PI-level freight allocation (migration 0202) — a PV that has settled this PI
+   (hand-built camelCase array from the detail GET). */
+type PaidByVoucher = {
+  id: string;
+  amountCenti: number;
+  pvId: string;
+  pvNumber: string;
+  pvStatus: string;
+  voucherDate: string | null;
+  currency?: string | null;
 };
 
 /* Whole-line edit (T12) — Edit mode drives one PoLineCard per line, the SAME rich
@@ -112,6 +143,10 @@ const headerSnapshot = (p: any): HeaderDraft => ({
   invoiceDate:        (p.invoice_date ?? '').slice(0, 10),
   dueDate:            (p.due_date ?? '').slice(0, 10),
   currency:           p.currency ?? 'MYR',
+  // exchange_rate arrives as a numeric string ('1.000000') or number; show a
+  // tidy value (strip trailing zeros) and default to '1'.
+  exchangeRate:       p.exchange_rate != null ? String(Number(p.exchange_rate)) : '1',
+  allocationMethod:   (p.allocation_method === 'VALUE' || p.allocation_method === 'CBM') ? p.allocation_method : 'QTY',
   notes:              p.notes ?? '',
 });
 
@@ -130,7 +165,10 @@ const draftFromItem = (it: PiItemRow): EditLine => ({
   unitPriceCenti: it.unit_price_centi,
   discountCenti:  it.discount_centi ?? 0,
   category:       it.item_group ?? undefined,
-  variants:       (it.variants as Record<string, unknown> | null) ?? {},
+  /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize on
+     enter-edit so a stray non-canonical PI line prefills the dropdowns AND the
+     cost recompute (which keys off seatHeight/legHeight) doesn't mis-price. */
+  variants:       canonicalizeVariants(it.item_group ?? 'others', (it.variants as Record<string, unknown> | null) ?? {}),
   /* An existing line's stored price is authoritative — don't let the cost
      auto-recompute clobber it on enter-edit. Editing variants re-arms it. */
   priceTouched:   true,
@@ -146,11 +184,18 @@ export const PurchaseInvoiceDetail = () => {
   const askConfirm = useConfirm();
   const notify = useNotify();
   const cancel = useCancelPurchaseInvoice();
+  const confirmPi = usePostPurchaseInvoice();
 
   const pi = detail.data?.purchaseInvoice ?? null;
   /* Memoised so the edit-mode seed + cost-recompute effects don't re-fire on
      every render (detail.data?.items is a fresh array each time otherwise). */
   const items = useMemo(() => (detail.data?.items ?? []) as PiItemRow[], [detail.data?.items]);
+  /* PI-level freight allocation (migration 0202) — PVs that have settled this PI
+     (camelCase, hand-built array). Shown near the AP/totals summary. */
+  const paidByVouchers = useMemo(
+    () => ((detail.data as Record<string, unknown> | undefined)?.paidByVouchers ?? []) as PaidByVoucher[],
+    [detail.data],
+  );
 
   /* ── Whole-line editor data (T12) — the SAME lookups Create uses so PoLineCard
      renders identically in Edit. Bindings come from the PI's supplier; allSkus is
@@ -205,6 +250,10 @@ export const PurchaseInvoiceDetail = () => {
   // payment recorded (paid_centi > 0) OR is CANCELLED. POSTED with zero payment
   // stays editable.
   const isLocked = pi ? (pi.status === 'CANCELLED' || (pi.paid_centi ?? 0) > 0) : true;
+  /* DRAFT/Confirmed two-state (Owner 2026-06-25) — a DRAFT PI is uncommitted: it
+     posts NO AP/GL, consumes NO GRN invoiced qty, runs no recost, and can't take a
+     payment until Confirm flips it to POSTED. Lines stay editable on a DRAFT. */
+  const isDraft = pi ? pi.status === 'DRAFT' : false;
 
   /* If the PI locks while we're in Edit mode (e.g. cancelled in another tab),
      drop back to View + discard the draft. */
@@ -409,7 +458,17 @@ export const PurchaseInvoiceDetail = () => {
     setSavingDraft(true);
     try {
       if (headerDraft) {
-        await updateHeader.mutateAsync({ id: pi.id, ...(headerDraft as Record<string, unknown>) });
+        // Multi-currency AP (0188) — send exchangeRate as a number. MYR forces 1
+        // (the server also enforces this); a blank/invalid foreign rate → 1.
+        const parsedRate = Number(headerDraft.exchangeRate);
+        const exchangeRate = headerDraft.currency === 'MYR'
+          ? 1
+          : (Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : 1);
+        await updateHeader.mutateAsync({
+          id: pi.id,
+          ...(headerDraft as Record<string, unknown>),
+          exchangeRate,
+        });
       }
       const byId = new Map(items.map((it) => [it.id, it]));
       for (const d of editLines) {
@@ -461,6 +520,20 @@ export const PurchaseInvoiceDetail = () => {
     }
   };
 
+  /* Confirm a DRAFT PI → POSTED. This is the commit: the server consumes the GRN
+     lines, posts the AP/GL entry (Dr Inventory / Cr Payables) + re-costs the lots
+     ONCE on this transition. Mirrors the SI/GRN/PO Confirm action. */
+  const handleConfirmDraft = async () => {
+    if (!(await askConfirm({
+      title: `Confirm invoice ${pi.invoice_number}?`,
+      body: 'This posts the invoice — it records the AP liability (Dr Inventory / Cr Payables), consumes the source GRN, and lets you record payments. You can still cancel it afterwards.',
+      confirmLabel: 'Confirm Invoice',
+    }))) return;
+    confirmPi.mutate(pi.id, {
+      onError: (err) => notify({ title: 'Confirm failed', body: `${err instanceof Error ? err.message : String(err)}`, tone: 'error' }),
+    });
+  };
+
   const handlePrint = () => {
     // PI PDF (AutoCount layout) — mirrors PO/GRN's handlePrint wiring its own
     // purchase-invoice-pdf helper.
@@ -471,6 +544,14 @@ export const PurchaseInvoiceDetail = () => {
 
   return (
     <div className={styles.page}>
+      {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — a clear banner that this
+          invoice is uncommitted: no AP/GL posted, no GRN consumed, no payments yet. */}
+      {isDraft && (
+        <div className={styles.bannerWarn} style={{ background: 'var(--c-cream)', border: '1px solid var(--line)', color: 'var(--fg-muted)' }}>
+          This invoice is a <strong>Draft</strong> — no payables have been recorded, the source GRN is untouched, and it can't take a payment yet.
+          Click <strong>Confirm Invoice</strong> to post it.
+        </div>
+      )}
       {/* ── Header ──────────────────────────────────────────────── */}
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
@@ -499,6 +580,15 @@ export const PurchaseInvoiceDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
+          {/* DRAFT/Confirmed two-state (Owner 2026-06-25) — Confirm commits the
+              invoice (server posts AP/GL + consumes the GRN + re-costs once). Shown
+              only on a DRAFT in view mode. Mirrors the SI/GRN/PO Confirm. */}
+          {isDraft && !isEditing && (
+            <Button variant="primary" size="md" onClick={handleConfirmDraft} disabled={confirmPi.isPending}>
+              <CheckCircle2 {...ICON} />
+              <span>{confirmPi.isPending ? 'Confirming…' : 'Confirm Invoice'}</span>
+            </Button>
+          )}
           {/* Cancel — only when the PI is not locked (no payment recorded, not
               already cancelled). */}
           {!isLocked && (
@@ -545,6 +635,7 @@ export const PurchaseInvoiceDetail = () => {
         onField={setHeaderField}
         locked={isLocked}
         isEditing={isEditing}
+        grandTotalCenti={grandTotal}
       />
 
       {/* ── Line items ──────────────────────────────────────────── */}
@@ -622,6 +713,14 @@ export const PurchaseInvoiceDetail = () => {
                         || it.material_name;
                       return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
                     })()}
+                    {/* PI-level freight allocation (0202) — per-line freight (MYR sen)
+                        the server allocated, shown as a muted sub-line when > 0. */}
+                    {(() => {
+                      const freight = Number(it.allocated_charge_centi ?? 0);
+                      return freight > 0
+                        ? <div style={{ fontSize: 'var(--fs-11)', color: 'var(--c-accent, #8a6d3b)' }}>+freight {fmtRm(freight, 'MYR')}</div>
+                        : null;
+                    })()}
                   </td>
                   <td className={styles.muted}>{it.item_group ?? it.material_kind ?? '—'}</td>
                   <td className={styles.tableRight}>{it.qty}</td>
@@ -666,6 +765,28 @@ export const PurchaseInvoiceDetail = () => {
               <span className={styles.totalValue}>{fmtRm(balanceCenti, pi.currency)}</span>
             </div>
           </div>
+
+          {/* PI-level freight allocation (migration 0202) — Payment Vouchers that
+              have settled this PI. Each links to its PV detail. */}
+          {paidByVouchers.length > 0 && (
+            <div style={{ marginTop: 'var(--space-3)', borderTop: '1px solid var(--line)', paddingTop: 'var(--space-3)' }}>
+              <div style={{ fontSize: 'var(--fs-11)', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-muted)', marginBottom: 'var(--space-2)' }}>
+                Paid by vouchers
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
+                {paidByVouchers.map((pv) => (
+                  <div key={pv.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-3)', fontSize: 'var(--fs-13)' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                      <Link to={`/payment-vouchers/${pv.pvId}`} style={{ color: 'var(--c-orange)', fontFamily: 'var(--font-mono)' }}>{pv.pvNumber}</Link>
+                      {pv.voucherDate && <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-11)' }}>{fmtDateOrDash(pv.voucherDate)}</span>}
+                      <StatusPill docType="pv" status={pv.pvStatus} />
+                    </span>
+                    <span style={{ fontFamily: 'var(--font-mono)' }}>{fmtRm(pv.amountCenti, pv.currency ?? pi.currency)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </section>
     </div>
@@ -679,7 +800,7 @@ export const PurchaseInvoiceDetail = () => {
    ════════════════════════════════════════════════════════════════════════ */
 
 const SupplierCard = ({
-  pi, draft, onField, locked, isEditing = true,
+  pi, draft, onField, locked, isEditing = true, grandTotalCenti,
 }: {
   pi: any;
   /** Draft header values (page-owned). In View these mirror the saved PI. */
@@ -689,6 +810,8 @@ const SupplierCard = ({
   locked: boolean;
   /** View → Edit gate. When false the card renders read-only display text. */
   isEditing?: boolean;
+  /** PI grand total (in the PI's own currency, centi) for the MYR-equiv hint. */
+  grandTotalCenti: number;
 }) => {
   const suppliersQ = useSuppliers();
   const suppliers = suppliersQ.data ?? [];
@@ -719,10 +842,22 @@ const SupplierCard = ({
                 value={pi.supplier?.name ?? pi.supplier?.code ?? supplier?.name ?? supplier?.code ?? null} />
             </div>
             <InfoCell label="Currency" value={pi.currency || null} />
-            <div />
+            {/* Multi-currency AP (0188) — rate + MYR-equiv shown only for a
+                foreign-currency PI; MYR posts 1:1 so it's omitted. */}
+            {pi.currency && pi.currency !== 'MYR' ? (
+              <InfoCell
+                label={`Exchange rate (MYR per 1 ${pi.currency})`}
+                value={`${Number(pi.exchange_rate ?? 1)} · ≈ ${fmtRm(Math.round(grandTotalCenti * Number(pi.exchange_rate ?? 1)), 'MYR')} to GL`}
+              />
+            ) : (
+              <div />
+            )}
             <InfoCell label="Supplier Invoice Ref" value={pi.supplier_invoice_ref || null} />
             <InfoCell label="Invoice Date" value={pi.invoice_date ? fmtDateOrDash(pi.invoice_date) : null} />
             <InfoCell label="Due Date" value={pi.due_date ? fmtDateOrDash(pi.due_date) : null} />
+            {/* PI-level freight allocation (migration 0202) — basis the server uses
+                to spread freight SERVICE lines across the goods lines. */}
+            <InfoCell label="Charge allocation" value={allocationMethodLabel(pi.allocation_method)} />
             <div style={{ gridColumn: 'span 2' }}>
               <InfoCell label="Notes" value={pi.notes || null} />
             </div>
@@ -747,15 +882,32 @@ const SupplierCard = ({
             <span className={styles.selectWrap}>
               <select className={styles.fieldSelect} value={draft.currency} disabled={locked}
                 onChange={(e) => onField('currency', e.target.value)}>
-                <option value="MYR">MYR</option>
-                <option value="RMB">RMB</option>
-                <option value="USD">USD</option>
-                <option value="SGD">SGD</option>
+                {/* Active currencies from the master (migration 0193). */}
+                <CurrencyOptions current={draft.currency} />
               </select>
               <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
             </span>
           </label>
-          <div />
+          {/* Multi-currency AP (0188) — Exchange rate is shown ONLY for a
+              foreign currency. MYR posts 1:1 so no input is needed. The MYR-equiv
+              total below is purely informational (the invoice itself stays in its
+              own currency; only the GL post converts). */}
+          {draft.currency !== 'MYR' ? (
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Exchange rate (MYR per 1 {draft.currency})</span>
+              <input
+                type="number" min={0} step="0.000001" inputMode="decimal"
+                className={styles.fieldInput} style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+                value={draft.exchangeRate} disabled={locked}
+                onChange={(e) => onField('exchangeRate', e.target.value)}
+              />
+              <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginTop: 2 }}>
+                ≈ {fmtRm(Math.round(grandTotalCenti * (Number(draft.exchangeRate) || 0)), 'MYR')} posted to GL
+              </span>
+            </label>
+          ) : (
+            <div />
+          )}
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Supplier Invoice Ref</span>
             <input className={styles.fieldInput} value={draft.supplierInvoiceRef} disabled={locked}
@@ -763,13 +915,28 @@ const SupplierCard = ({
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Invoice Date</span>
-            <input type="date" className={styles.fieldInput} value={draft.invoiceDate} disabled={locked}
-              onChange={(e) => onField('invoiceDate', e.target.value)} />
+            <DateField fullWidth className={styles.fieldInput} value={draft.invoiceDate ?? ''} disabled={locked}
+              onChange={(iso) => onField('invoiceDate', iso)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Due Date</span>
-            <input type="date" className={styles.fieldInput} value={draft.dueDate} disabled={locked}
-              onChange={(e) => onField('dueDate', e.target.value)} />
+            <DateField fullWidth className={styles.fieldInput} value={draft.dueDate ?? ''} disabled={locked}
+              onChange={(iso) => onField('dueDate', iso)} />
+          </label>
+          {/* PI-level freight allocation (migration 0202) — basis the server uses
+              to spread freight SERVICE lines across the goods lines. Editable on
+              an unlocked PI (mirrors the header allocation picker on Create). */}
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Charge allocation</span>
+            <span className={styles.selectWrap}>
+              <select className={styles.fieldSelect} value={draft.allocationMethod} disabled={locked}
+                onChange={(e) => onField('allocationMethod', e.target.value)}>
+                <option value="QTY">By quantity (default)</option>
+                <option value="VALUE">By value</option>
+                <option value="CBM">By volume (CBM)</option>
+              </select>
+              <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+            </span>
           </label>
           <label className={styles.field} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Notes</span>
