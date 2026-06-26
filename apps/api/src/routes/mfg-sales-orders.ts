@@ -17,6 +17,7 @@ import {
   isFreeItemLine,
   type RuleLineInput,
   passesRefinementColumns,
+  canonicalizeVariants,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
 import { buildCompartmentsFromModuleLines } from '../lib/compartments-from-module-lines';
@@ -2479,7 +2480,13 @@ mfgSalesOrders.post('/', async (c) => {
       total_centi: lineTotal,
       total_inc_centi: lineTotal,
       balance_centi: lineTotal,
-      variants: (it.variants as unknown) ?? null,
+      /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
+         at the LAST step before the DB write: every depth-keyed read (recompute
+         ~2276, split ~2545) + fabricCode/fabricId loads above ran on the raw
+         `it.variants`, so a POS-created sofa line stores seatHeight/legHeight/
+         fabricCode and the 9 read seams stop rendering blank dropdowns / mis-
+         pricing. buildVariantSummary (description2 above) dual-reads, unaffected. */
+      variants: canonicalizeVariants(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null),
       unit_cost_centi: unitCost,
       line_cost_centi: lineCost,
       line_margin_centi: lineTotal - lineCost,
@@ -2546,8 +2553,13 @@ mfgSalesOrders.post('/', async (c) => {
       });
       if (split && split.length > 0) {
         const buildKey = `build-${idx + 1}`;
+        /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
+           BEFORE deriving the split's shared variants so every module row also
+           stores seatHeight/legHeight/fabricCode. Safe: the split's own depth
+           read (~2545) ran on the raw `it.variants` above, so dropping the
+           `depth` alias here doesn't change the geometry. */
         const { cells: _cells, ...sharedVariants } =
-          ((it.variants as Record<string, unknown> | null) ?? {});
+          canonicalizeVariants('sofa', (it.variants as Record<string, unknown> | null) ?? {});
         const moduleRows = split.map((s, i) => {
           const moduleVariants: Record<string, unknown> = {
             ...sharedVariants,
@@ -2847,7 +2859,10 @@ mfgSalesOrders.post('/', async (c) => {
         venue: resolvedVenueName,
         // Not goods — nothing to allocate; READY from birth (spec §4.6).
         stock_status: 'READY',
-      } as (typeof itemRows)[number]);
+        /* Variants-vocabulary unification (Commander 2026-06-26) — goods rows
+           now type `variants` as the non-null canonicalizeVariants result, so a
+           SERVICE row's null variants widens the element type via `unknown`. */
+      } as unknown as (typeof itemRows)[number]);
     }
   }
 
@@ -4785,9 +4800,17 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
        Task 4: if freeItemCampaignId was validated above, re-stamp the server-
        resolved marker (campaignId + campaignName) after stripping. This is the
        same pattern as the create path (strip then re-add validated marker). */
-    variants: addLineFreeItem
-      ? { ...(stripFreeItem(it.variants) as Record<string, unknown> | null ?? {}), freeItem: addLineFreeItem }
-      : (stripFreeItem(it.variants) ?? null),
+    /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize at
+       the LAST step before the DB write. Every depth-keyed read (recompute
+       ~4673, split ~4836) + fabricCode/fabricId/pwpCode loads above ran on the
+       raw `variantsObj`/`it.variants`, so dropping the aliases here is safe and
+       the persisted single-row line stores seatHeight/legHeight/fabricCode. */
+    variants: canonicalizeVariants(
+      String(it.itemGroup ?? ''),
+      addLineFreeItem
+        ? { ...(stripFreeItem(it.variants) as Record<string, unknown> | null ?? {}), freeItem: addLineFreeItem }
+        : ((stripFreeItem(it.variants) as Record<string, unknown> | null) ?? null),
+    ),
     unit_cost_centi: unitCost,
     line_cost_centi: lineCost,
     line_margin_centi: lineTotal - lineCost,
@@ -4837,8 +4860,12 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     });
     if (split && split.length > 0) {
       const buildKey = `build-add-${nextLineNo ?? crypto.randomUUID().slice(0, 8)}`;
+      /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
+         BEFORE deriving the split's shared variants so each module row stores
+         seatHeight/legHeight/fabricCode. Safe: the split's depth read (~4836)
+         ran on the raw `it.variants` above. */
       const { cells: _cells, freeItem: _clientFreeItem, ...sharedVariants } =
-        ((it.variants as Record<string, unknown> | null) ?? {});
+        canonicalizeVariants('sofa', (it.variants as Record<string, unknown> | null) ?? {});
       const moduleRows = split.map((s, i) => {
         const moduleVariants: Record<string, unknown> = {
           ...sharedVariants,
@@ -5211,6 +5238,15 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     updates['variants'] = prevFreeItem !== undefined
       ? { ...(clientVariants as Record<string, unknown> ?? {}), freeItem: prevFreeItem }
       : clientVariants ?? null;
+    /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize the
+       FINAL persisted variants. Recompute (~5085) + the sofa depth load (~5080)
+       already ran on the raw `variantsAfter`, so dropping the aliases here is
+       safe; the persisted row stores seatHeight/legHeight/fabricCode and the
+       description2 block below (dual-read) reads this same canonical object. */
+    updates['variants'] = canonicalizeVariants(
+      itemGroupAfter,
+      updates['variants'] as Record<string, unknown> | null,
+    );
   }
   /* Commander 2026-05-28 — "Description 2" is ALWAYS the server-generated
      variant summary; never trust a client-sent value. Recompute from the
@@ -6108,7 +6144,9 @@ async function planSofaRewardRevert(
       rot: typeof v.rot === 'number' ? v.rot : 0,
     };
   });
-  const depth = String(leadV.depth ?? '24');
+  /* Variants-vocabulary unification (Commander 2026-06-26) — dual-read: post-
+     unification a persisted sofa row stores `seatHeight`, legacy rows `depth`. */
+  const depth = String(leadV.depth ?? leadV.seatHeight ?? '24');
   const [cfg, prodLite, fabLite, combos, sellingTiers, addonCfg, specialDefs, modulePrices, modelOverridesLead, compartmentOverridesLead] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadProductByCode(sb, lead.item_code),
@@ -6279,7 +6317,10 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
   }
 
   /* Authoritative reprice — the SAME inputs as SO create / item PATCH. */
-  const depth = String((newVariants as { depth?: unknown }).depth ?? '24');
+  /* Variants-vocabulary unification (Commander 2026-06-26) — dual-read: a
+     Backend-loaded swap build may carry the canonical `seatHeight`; POS posts
+     `depth`. recomputeFromSnapshot below also reads `depth ?? seatHeight`. */
+  const depth = String((newVariants as { depth?: unknown; seatHeight?: unknown }).depth ?? (newVariants as { seatHeight?: unknown }).seatHeight ?? '24');
   const [cfg, fabLite, combos, sellingTiers, fabricAddonCfg, specialDefs, modulePrices, moduleCostRows, modelOverridesSwap, compartmentOverridesSwap] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadFabricByCode(sb, (newVariants.fabricCode as string | undefined) ?? null),
@@ -6353,6 +6394,16 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
     newVariants.pwp = true;
     newVariants.pwpCode = rewardCtx.code;
   }
+
+  /* Variants-vocabulary unification (Commander 2026-06-26) — the sofa-exchange
+     path is a 4th persist seam (beyond create/add-line/PATCH). Canonicalize the
+     swap build's variants into a separate object that feeds ONLY the persisted
+     rows (~6547 split / ~6587 single-line), so they store seatHeight/legHeight/
+     fabricCode. Safe: the authoritative reprice (recompute ~6344, depth load
+     ~6315) already ran on the raw POS-vocabulary `newVariants`, and
+     splitSofaBuildIntoModuleLines below doesn't read `depth`. PWP markers added
+     just above are preserved. */
+  const persistVariants = canonicalizeVariants('sofa', newVariants);
 
   /* Split into per-module lines (P3) — same decomposition as SO create. */
   const split = splitSofaBuildIntoModuleLines({
@@ -6511,7 +6562,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
   };
   let rows: Array<Record<string, unknown>>;
   if (split && split.length > 0) {
-    const { cells: _cells, ...sharedVariants } = newVariants;
+    const { cells: _cells, ...sharedVariants } = persistVariants;
     rows = split.map((s, i) => {
       const moduleVariants: Record<string, unknown> = {
         ...sharedVariants, buildKey: newBuildKey, cellIndex: s.cellIndex, x: s.x, y: s.y, rot: s.rot,
@@ -6545,13 +6596,13 @@ mfgSalesOrders.post('/:docNo/items/:itemId/tbc-swap-sofa', async (c) => {
       ...baseRow,
       item_code: newCode,
       description: String(item.description ?? newCode),
-      description2: buildVariantSummary('sofa', newVariants) || null,
+      description2: buildVariantSummary('sofa', persistVariants) || null,
       unit_price_centi: unit,
       discount_centi: discount,
       total_centi: lineTotal,
       total_inc_centi: lineTotal,
       balance_centi: lineTotal,
-      variants: newVariants,
+      variants: persistVariants,
       unit_cost_centi: unitCost,
       line_cost_centi: unitCost * qty,
       line_margin_centi: lineTotal - (unitCost * qty),

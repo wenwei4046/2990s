@@ -33,7 +33,7 @@ import {
   ArrowLeft, FileText, Pencil, Plus, Printer, Save, Ban, ChevronDown, CheckCircle2,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
+import { buildVariantSummary, canonicalizeVariants, fmtDateOrDash } from '@2990s/shared';
 import {
   usePurchaseInvoiceDetail,
   useUpdatePurchaseInvoiceHeader,
@@ -165,7 +165,10 @@ const draftFromItem = (it: PiItemRow): EditLine => ({
   unitPriceCenti: it.unit_price_centi,
   discountCenti:  it.discount_centi ?? 0,
   category:       it.item_group ?? undefined,
-  variants:       (it.variants as Record<string, unknown> | null) ?? {},
+  /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize on
+     enter-edit so a stray non-canonical PI line prefills the dropdowns AND the
+     cost recompute (which keys off seatHeight/legHeight) doesn't mis-price. */
+  variants:       canonicalizeVariants(it.item_group ?? 'others', (it.variants as Record<string, unknown> | null) ?? {}),
   /* An existing line's stored price is authoritative — don't let the cost
      auto-recompute clobber it on enter-edit. Editing variants re-arms it. */
   priceTouched:   true,

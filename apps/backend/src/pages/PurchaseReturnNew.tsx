@@ -29,7 +29,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, Plus, Save, Trash2, X, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { activeOptions, buildVariantSummary, maintPickerValues } from '@2990s/shared';
+import { activeOptions, buildVariantSummary, canonicalizeVariants, maintPickerValues } from '@2990s/shared';
 import {
   useCreatePurchaseReturn,
   usePostPurchaseReturn,
@@ -181,7 +181,9 @@ export const PurchaseReturnNew = () => {
         materialCode:   it.material_code,
         materialName:   it.material_name,
         itemGroup:      it.item_group ?? null,
-        variants:       (it.variants as Record<string, unknown> | null) ?? null,
+        /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
+           the GRN line's variants when seeding the PR draft. */
+        variants:       canonicalizeVariants(it.item_group ?? 'others', (it.variants as Record<string, unknown> | null) ?? null),
         qtyReturned:    it.qty_rejected ?? 0,        // pre-fill with rejected qty if any
         unitPriceCenti: it.unit_price_centi ?? 0,
         reason:         it.rejection_reason ?? '',
@@ -202,7 +204,9 @@ export const PurchaseReturnNew = () => {
       materialCode:   it.material_code,
       materialName:   it.material_name,
       itemGroup:      it.item_group ?? null,
-      variants:       (it.variants as Record<string, unknown> | null) ?? null,
+      /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
+         the PO line's variants when seeding the PR draft. */
+      variants:       canonicalizeVariants(it.item_group ?? 'others', (it.variants as Record<string, unknown> | null) ?? null),
       qtyReturned:    0,                              // commander enters
       unitPriceCenti: it.unit_price_centi ?? 0,
       reason:         '',

@@ -30,7 +30,7 @@ import {
   ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown, ArrowRightLeft, CheckCircle2,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { activeOptions, buildVariantSummary, fmtDateOrDash, isServiceLine, maintPickerValues } from '@2990s/shared';
+import { activeOptions, buildVariantSummary, canonicalizeVariants, fmtDateOrDash, isServiceLine, maintPickerValues } from '@2990s/shared';
 import {
   useGrnDetail,
   useUpdateGrnHeader,
@@ -194,7 +194,9 @@ const lineSnapshot = (it: GrnItemRow): LineDraft => ({
   deliveryDate:   it.delivery_date ?? null,
   materialName:   it.description ?? it.material_name ?? '',
   itemGroup:      it.item_group ?? null,
-  variants:       (it.variants as Record<string, unknown> | null) ?? null,
+  /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize on
+     enter-edit so a stray non-canonical GRN line still prefills the dropdowns. */
+  variants:       canonicalizeVariants(it.item_group ?? 'others', (it.variants as Record<string, unknown> | null) ?? null),
 });
 
 export const GoodsReceivedDetail = () => {

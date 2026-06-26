@@ -32,7 +32,7 @@ import {
   ChevronDown, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary, effectiveDelivery } from '@2990s/shared'; // Commander 2026-05-28 — Description 2; 2026-06-19 effective delivery
+import { buildVariantSummary, canonicalizeVariants, effectiveDelivery } from '@2990s/shared'; // Commander 2026-05-28 — Description 2; 2026-06-19 effective delivery
 import {
   usePurchaseOrderDetail,
   useUpdatePurchaseOrderHeader,
@@ -130,7 +130,10 @@ const draftFromItem = (it: PoItemRow): EditLine => ({
   supplierDeliveryDate4: it.supplier_delivery_date_4 ?? undefined,
   warehouseId:    it.warehouse_id ?? undefined,
   category:       it.item_group ?? undefined,
-  variants:       (it.variants as Record<string, unknown> | null) ?? {},
+  /* Variants-vocabulary unification (Commander 2026-06-26) — defense-in-depth:
+     canonicalize on enter-edit so a stray non-canonical row still prefills the
+     Seat/Leg/Fabric dropdowns. Mirrors SalesOrderDetail.draftFromItem. */
+  variants:       canonicalizeVariants(it.item_group ?? 'others', (it.variants as Record<string, unknown> | null) ?? {}),
   /* An existing line's stored price is authoritative — don't let the cost
      auto-recompute clobber it on enter-edit. Editing the variants re-arms it. */
   priceTouched:   true,

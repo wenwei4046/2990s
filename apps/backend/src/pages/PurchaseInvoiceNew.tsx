@@ -27,7 +27,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Save, Trash2, X, ChevronDown, ArrowRightLeft } from 'lucide-react';
 import { ItemGroupPill } from '../lib/category-badges';
 import { Button } from '@2990s/design-system';
-import { activeOptions, buildVariantSummary, isServiceLine, maintPickerValues } from '@2990s/shared';
+import { activeOptions, buildVariantSummary, canonicalizeVariants, isServiceLine, maintPickerValues } from '@2990s/shared';
 import {
   useCreatePurchaseInvoice,
   usePostPurchaseInvoice,
@@ -194,7 +194,9 @@ export const PurchaseInvoiceNew = () => {
         // Carried from the GRN line (grns.ts ITEM select returns these) so the
         // PI shows the same variant summary as the GRN it descends from.
         itemGroup:      it.item_group ?? null,
-        variants:       (it.variants as Record<string, unknown> | null) ?? null,
+        /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
+           the GRN line's variants when seeding the PI draft. */
+        variants:       canonicalizeVariants(it.item_group ?? 'others', (it.variants as Record<string, unknown> | null) ?? null),
         qty:            pickQtyById ? (pickQtyById.get(it.id) ?? it._remaining) : it._remaining,
         unitPriceCenti: it.unit_price_centi ?? 0,
         notes:          '',

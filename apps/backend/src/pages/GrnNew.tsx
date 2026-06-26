@@ -25,7 +25,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Plus, Save, Trash2, X, ArrowRightLeft, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { activeOptions, buildVariantSummary, fmtDateOrDash, isServiceLine, maintPickerValues } from '@2990s/shared';
+import { activeOptions, buildVariantSummary, canonicalizeVariants, fmtDateOrDash, isServiceLine, maintPickerValues } from '@2990s/shared';
 import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
 import { usePurchaseOrderDetail, usePurchaseOrders, useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
 import { useActiveCurrencies, rateFor } from '../lib/currencies-queries';
@@ -263,7 +263,9 @@ export const GrnNew = () => {
         materialCode:        p.itemCode,
         materialName:        p.description ?? p.itemCode,
         itemGroup:           p.itemGroup || null,
-        variants:            (p.variants as Record<string, unknown> | null) ?? null,
+        /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
+           the converted PO line's variants when seeding the GRN draft. */
+        variants:            canonicalizeVariants(p.itemGroup ?? 'others', (p.variants as Record<string, unknown> | null) ?? null),
         outstanding:         p.remainingQty,
         qtyReceived:         p._pickQty,
         qtyAccepted:         p._pickQty,
@@ -324,7 +326,9 @@ export const GrnNew = () => {
           materialCode:      it.material_code,
           materialName:      it.material_name,
           itemGroup:         it.item_group ?? null,
-          variants:          (it.variants as Record<string, unknown> | null) ?? null,
+          /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
+             the single-PO load's variants when seeding the GRN draft. */
+          variants:          canonicalizeVariants(it.item_group ?? 'others', (it.variants as Record<string, unknown> | null) ?? null),
           outstanding,
           qtyReceived:       outstanding,
           qtyAccepted:       outstanding,

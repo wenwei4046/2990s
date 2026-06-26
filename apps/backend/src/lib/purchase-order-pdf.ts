@@ -155,7 +155,10 @@ function sofaCellFromLine(
   const moduleId = SOFA_MODULE_IDS_BY_LEN.find((id) => code.endsWith(id)) ?? null;
   if (!moduleId || !findModule(moduleId)) return null;
   const rot: 0 | 90 | 180 | 270 = v.rot === 90 || v.rot === 180 || v.rot === 270 ? v.rot : 0;
-  const depthRaw = v.depth;
+  /* Variants-vocabulary unification (Commander 2026-06-26) — dual-read so the
+     layout diagram keeps its seat depth for both legacy (depth) and canonical
+     (seatHeight) rows after the persist-time normalization. */
+  const depthRaw = v.depth ?? v.seatHeight;
   const depth: Depth = typeof depthRaw === 'string' && depthRaw.trim() ? depthRaw : '24';
   const groupKey = typeof v.summary === 'string' && v.summary.trim() ? v.summary.trim() : '';
   const idx = typeof v.cellIndex === 'number' && Number.isFinite(v.cellIndex) ? v.cellIndex : 0;
@@ -516,7 +519,9 @@ async function renderPurchaseOrderInto(
     if ((it.item_group ?? '').toLowerCase() !== 'sofa') continue;
     const mod = sofaModuleFromLine(it.material_code, it.material_name ?? it.description);
     if (!mod) continue;
-    const depthRaw = (it.variants as { depth?: unknown } | null)?.depth;
+    /* Variants-vocabulary unification (Commander 2026-06-26) — dual-read
+       depth ?? seatHeight for the geometry-less reconstruction path too. */
+    const depthRaw = (it.variants as { depth?: unknown; seatHeight?: unknown } | null)?.depth ?? (it.variants as { seatHeight?: unknown } | null)?.seatHeight;
     const depth: Depth = typeof depthRaw === 'string' && depthRaw.trim() ? depthRaw : '24';
     const fk = baseModelKey(soNo, mod.baseModel);
     let fg = fallbackGroups.get(fk);

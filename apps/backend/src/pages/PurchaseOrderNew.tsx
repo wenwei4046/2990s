@@ -37,6 +37,7 @@ import {
   type MfgFabricTier,
   type PoPriceMatrix,
 } from '@2990s/shared/mfg-pricing';
+import { canonicalizeVariants } from '@2990s/shared';
 import { PoLineCard, emptyPoLine, type PoLineDraft } from '../components/PoLineCard';
 import { sortByText } from '../lib/sort-options';
 import { ActionResultDialog } from '../components/ActionResultDialog';
@@ -287,7 +288,11 @@ export const PurchaseOrderNew = () => {
       materialName: p.description ?? p.itemCode,
       qty: p._pickQty ?? (p.remainingQty > 0 ? p.remainingQty : p.qty),
       unitPriceCenti: 0,
-      variants: (p.variants ?? {}) as Record<string, unknown>,
+      /* Variants-vocabulary unification (Commander 2026-06-26) — defense-in-depth:
+         canonicalize the SO line's variants when seeding the editable PO draft so
+         a stray non-canonical row (depth/sofaLegHeight/fabricColor) still prefills
+         the Seat/Leg/Fabric dropdowns. Mirrors DeliveryOrderNew. */
+      variants: canonicalizeVariants(categoryForCode(p.itemCode) ?? 'others', (p.variants ?? {}) as Record<string, unknown>),
       category: categoryForCode(p.itemCode),
       deliveryDate: p.lineDeliveryDate ?? p.deliveryDate ?? undefined,
       // Commander 2026-05-29 (BUG 1) — remember the source SO line so the
