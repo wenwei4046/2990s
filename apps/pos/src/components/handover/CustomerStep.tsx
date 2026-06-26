@@ -176,11 +176,6 @@ export const CustomerStep = ({
           />
         </Field>
       </div>
-      {!matched && (
-        <p className={styles.signCaption}>
-          Race, birthday and gender are recorded for marketing only — not shown on the order.
-        </p>
-      )}
     </section>
   );
 };
