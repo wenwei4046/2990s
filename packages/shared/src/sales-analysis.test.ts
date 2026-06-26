@@ -3,6 +3,7 @@ import {
   collapseToPurchases, summarizeOverview, monthlyTrend, type SaOrderRow,
   summarizeCustomerDemographics, type SaCustomerRow,
   computeTargetMatch, type TargetProfile,
+  spendBySegment,
 } from './sales-analysis';
 
 const o = (docNo: string, over: Partial<SaOrderRow> = {}): SaOrderRow => ({
@@ -174,6 +175,24 @@ describe('computeTargetMatch', () => {
     expect(r.area.score).toBeCloseTo(0, 6);
     expect(r.overall).toBeCloseTo((100 + 100 + 0) / 3, 6);
     expect(r.biggestGap?.dim).toBe('area');
+  });
+});
+
+describe('spendBySegment', () => {
+  it('aggregates revenue/AOV/margin by a dimension, Unknown for blanks, sorted by revenue', () => {
+    const rows = spendBySegment([
+      cust({ id: 'a', race: 'Chinese', ltvCenti: 300000, marginCenti: 150000, orderCount: 1 }),
+      cust({ id: 'b', race: 'Chinese', ltvCenti: 100000, marginCenti: 40000, orderCount: 1 }),
+      cust({ id: 'c', race: 'Malay', ltvCenti: 200000, marginCenti: 80000, orderCount: 2 }),
+      cust({ id: 'd', race: null, ltvCenti: 50000, marginCenti: 10000, orderCount: 1 }),
+    ], 'race');
+    expect(rows.map((r) => r.key)).toEqual(['Chinese', 'Malay', 'Unknown']);
+    const chinese = rows[0]!;
+    expect(chinese.customers).toBe(2);
+    expect(chinese.revenueCenti).toBe(400000);
+    expect(chinese.purchases).toBe(2);
+    expect(chinese.aovCenti).toBe(200000);
+    expect(chinese.marginPct).toBeCloseTo((190000 / 400000) * 100, 6);
   });
 });
 

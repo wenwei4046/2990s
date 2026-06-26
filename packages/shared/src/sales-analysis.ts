@@ -331,3 +331,42 @@ export function computeTargetMatch(
     biggestGap: gap ? { dim: gap.dim, label: gap.label } : null,
   };
 }
+
+export interface SpendBucket {
+  key: string;
+  customers: number;
+  revenueCenti: number;
+  purchases: number;
+  aovCenti: number;        // revenueCenti / purchases
+  marginCenti: number;
+  marginPct: number | null; // marginCenti / revenueCenti × 100
+}
+
+/** Spend power per categorical segment. 'Unknown' for blank keys. Sorted by
+ *  revenue desc. Operates on whatever customer set it is given. */
+export function spendBySegment(
+  customers: ReadonlyArray<SaCustomerRow>, dim: 'race' | 'gender' | 'city',
+): SpendBucket[] {
+  const m = new Map<string, { customers: number; revenueCenti: number; purchases: number; marginCenti: number }>();
+  for (const c of customers) {
+    const raw = c[dim];
+    const key = raw && raw.trim() ? raw : 'Unknown';
+    const b = m.get(key) ?? { customers: 0, revenueCenti: 0, purchases: 0, marginCenti: 0 };
+    b.customers += 1;
+    b.revenueCenti += c.ltvCenti;
+    b.purchases += c.orderCount;
+    b.marginCenti += c.marginCenti;
+    m.set(key, b);
+  }
+  return [...m.entries()]
+    .map(([key, b]) => ({
+      key,
+      customers: b.customers,
+      revenueCenti: b.revenueCenti,
+      purchases: b.purchases,
+      aovCenti: b.purchases > 0 ? Math.round(b.revenueCenti / b.purchases) : 0,
+      marginCenti: b.marginCenti,
+      marginPct: b.revenueCenti > 0 ? (b.marginCenti / b.revenueCenti) * 100 : null,
+    }))
+    .sort((a, b) => b.revenueCenti - a.revenueCenti || a.key.localeCompare(b.key));
+}
