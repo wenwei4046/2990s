@@ -61,13 +61,27 @@ export const Warehouses = () => {
     },
     {
       // Migration 0192 — flags the overseas / China landing warehouse. A
-      // transfer OUT of a transit warehouse can carry a sea-freight uplift.
+      // transfer OUT of a transit warehouse can carry a sea-freight uplift, so
+      // surface it as a badge (not bare text) wherever warehouses are listed.
+      // Dual-read camelCase / snake_case (the pg driver can return either).
       key: 'transit',
       label: 'Transit',
       width: 110,
-      accessor: (w) => (w.is_transit ? 'Transit' : '—'),
-      filterValue: (w) => (w.is_transit ? 'Transit' : '—'),
-      sortFn: (a, b) => Number(Boolean(a.is_transit)) - Number(Boolean(b.is_transit)),
+      accessor: (w) => {
+        const t = (w as { isTransit?: boolean }).isTransit ?? w.is_transit;
+        return t
+          ? <span className={`${styles.statusPill} ${styles.statusActive}`}>Transit</span>
+          : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      },
+      filterValue: (w) => {
+        const t = (w as { isTransit?: boolean }).isTransit ?? w.is_transit;
+        return t ? 'Transit' : '—';
+      },
+      sortFn: (a, b) => {
+        const ta = (a as { isTransit?: boolean }).isTransit ?? a.is_transit;
+        const tb = (b as { isTransit?: boolean }).isTransit ?? b.is_transit;
+        return Number(Boolean(ta)) - Number(Boolean(tb));
+      },
     },
     {
       key: 'status',

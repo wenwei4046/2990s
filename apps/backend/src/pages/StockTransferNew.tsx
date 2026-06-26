@@ -108,10 +108,18 @@ export const StockTransferNew = () => {
   // Migration 0192 — surface the freight panel when the FROM warehouse is a
   // transit (overseas/China) warehouse. The owner can still toggle it open for
   // any source — a sea-freight uplift is allowed on any transfer.
+  // Dual-read camelCase / snake_case: the pg driver can hand back either casing.
   const fromIsTransit = useMemo(
-    () => (warehouses.data ?? []).some((w) => w.id === fromWarehouseId && w.is_transit),
+    () => (warehouses.data ?? []).some((w) => {
+      const t = (w as { isTransit?: boolean }).isTransit ?? w.is_transit;
+      return w.id === fromWarehouseId && Boolean(t);
+    }),
     [warehouses.data, fromWarehouseId],
   );
+  // For a transit source the sea-freight uplift is the EXPECTED path, so the
+  // panel auto-expands prominently; for an ordinary domestic source it stays
+  // collapsed behind a small "Add sea-freight" affordance (the owner can still
+  // open it). 0 freight stays valid either way (cost-neutral transfer).
   const [freightOpen, setFreightOpen] = useState(false);
   const showFreight = fromIsTransit || freightOpen;
 
@@ -264,9 +272,17 @@ export const StockTransferNew = () => {
                 className={styles.fieldSelect}
               >
                 <option value="">— Pick source —</option>
-                {sortByText(warehouses.data ?? []).map((w) => (
-                  <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
-                ))}
+                {/* Transit warehouses are tagged inline so the operator can spot
+                    the overseas/China landing source (native <option> can't take
+                    a styled pill). Dual-read camelCase / snake_case. */}
+                {sortByText(warehouses.data ?? []).map((w) => {
+                  const t = (w as { isTransit?: boolean }).isTransit ?? w.is_transit;
+                  return (
+                    <option key={w.id} value={w.id}>
+                      {w.code} · {w.name}{t ? ' · Transit' : ''}
+                    </option>
+                  );
+                })}
               </select>
             </label>
 
@@ -281,11 +297,14 @@ export const StockTransferNew = () => {
                 className={styles.fieldSelect}
               >
                 <option value="">— Pick destination —</option>
-                {sortByText(warehouses.data ?? []).map((w) => (
-                  <option key={w.id} value={w.id} disabled={w.id === fromWarehouseId}>
-                    {w.code} · {w.name}{w.id === fromWarehouseId ? ' (source)' : ''}
-                  </option>
-                ))}
+                {sortByText(warehouses.data ?? []).map((w) => {
+                  const t = (w as { isTransit?: boolean }).isTransit ?? w.is_transit;
+                  return (
+                    <option key={w.id} value={w.id} disabled={w.id === fromWarehouseId}>
+                      {w.code} · {w.name}{t ? ' · Transit' : ''}{w.id === fromWarehouseId ? ' (source)' : ''}
+                    </option>
+                  );
+                })}
               </select>
             </label>
 
@@ -328,10 +347,12 @@ export const StockTransferNew = () => {
           )}
 
           {/* ── Sea-freight (migration 0192) ──────────────────────────────
-              Surfaced automatically when the FROM warehouse is a transit
-              (overseas/China) warehouse; the owner can also open it for any
-              source. Freight is a MY forwarder bill in MYR (no FX) that uplifts
-              the receiving lot cost (China → MY landed cost). */}
+              When the FROM warehouse is a TRANSIT (overseas/China) warehouse the
+              sea-freight uplift is the EXPECTED path, so the panel auto-expands
+              and is styled prominently (the is_transit flag DRIVES this). For an
+              ordinary domestic source it stays collapsed behind a small affordance
+              (the owner can still open it). Freight is a MY forwarder bill in MYR
+              (no FX) that lands the cost in the destination (MY) lot. */}
           <div style={{ marginTop: 'var(--space-3)' }}>
             {!showFreight && (
               <Button variant="ghost" size="sm" onClick={() => setFreightOpen(true)}>
@@ -341,12 +362,30 @@ export const StockTransferNew = () => {
             {showFreight && (
               <div style={{
                 padding: 'var(--space-3) var(--space-4)',
-                background: 'var(--c-cream, rgba(0,0,0,0.02))',
-                border: '1px solid var(--c-line, #E5E1DA)',
+                // Transit source → prominent (secondary-green tint + accent
+                // border) so it reads as the expected step; ordinary source →
+                // quiet cream panel.
+                background: fromIsTransit ? 'rgba(47, 93, 79, 0.06)' : 'var(--c-cream, rgba(0,0,0,0.02))',
+                border: fromIsTransit
+                  ? '1px solid var(--c-secondary-a, #2F5D4F)'
+                  : '1px solid var(--c-line, #E5E1DA)',
                 borderRadius: 'var(--radius-md)',
               }}>
-                <div style={{ fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-2)' }}>
-                  Sea-freight (landed cost){fromIsTransit ? ' · source is a transit warehouse' : ''}
+                <div style={{
+                  fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-2)',
+                  display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
+                }}>
+                  <ArrowRight size={13} strokeWidth={1.75} />
+                  {fromIsTransit ? 'Sea freight (transit → local)' : 'Sea-freight (landed cost)'}
+                  {fromIsTransit && (
+                    <span style={{
+                      fontSize: 'var(--fs-11)', fontWeight: 600, letterSpacing: '0.02em',
+                      padding: '1px 8px', borderRadius: 'var(--radius-pill, 999px)',
+                      background: 'rgba(47, 93, 79, 0.16)', color: 'var(--c-secondary-a, #2F5D4F)',
+                    }}>
+                      Transit source
+                    </span>
+                  )}
                 </div>
                 <div className={styles.formGrid4}>
                   <label className={styles.field}>
@@ -374,7 +413,9 @@ export const StockTransferNew = () => {
                   </label>
                 </div>
                 <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-soft)', marginTop: 'var(--space-2)' }}>
-                  Folded into each receiving lot's cost so MY inventory carries the true landed cost. Leave 0 for a cost-neutral transfer.
+                  {fromIsTransit
+                    ? 'Transit stock — add the sea-freight that lands the cost in the destination warehouse. Folded into each receiving lot so MY inventory carries the true landed cost. Leave 0 for a cost-neutral transfer.'
+                    : "Folded into each receiving lot's cost so MY inventory carries the true landed cost. Leave 0 for a cost-neutral transfer."}
                 </div>
               </div>
             )}
