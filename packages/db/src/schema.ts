@@ -1768,6 +1768,10 @@ export const deliveryOrders = pgTable('delivery_orders', {
   podR2Key:          text('pod_r2_key'),                           // proof of delivery photo
   signatureData:     text('signature_data'),                       // base64 png
   status:            doStatus('status').notNull().default('LOADED'),
+  /* Migration 0204 — drop-ship: a sofa shipped supplier-direct before its
+     batch was received (stock went negative against the expected PO batch,
+     nets out on GRN). Drives the "batch not received" UI badge only. */
+  isDropship:        boolean('is_dropship').notNull().default(false),
   notes:             text('notes'),
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy:         uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),

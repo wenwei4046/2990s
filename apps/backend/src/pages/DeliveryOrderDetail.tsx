@@ -181,6 +181,10 @@ type DoHeader = {
   margin_pct_basis: number;
   line_count: number;
   currency: string;
+  /* Migration 0204 — drop-ship: a sofa was shipped supplier-direct before its
+     batch was received. Dual-read camelCase from the pg driver. */
+  is_dropship?: boolean;
+  isDropship?: boolean;
   /* HC delivery-sheet DO-execution raw-data fields (migration 0197) — surfaced on
      the Delivery Execution card + the Delivery Planning "Edit HC fields" drawer.
      Snake_case from the API; the pg driver may camelCase, so dual-read on init. */
@@ -600,6 +604,16 @@ export const DeliveryOrderDetail = () => {
               </span>
             );
           })()}
+          {/* Drop-ship badge (0204) — warning tone. Dual-read camelCase. */}
+          {(header.isDropship ?? header.is_dropship) && (
+            <span
+              className={styles.statusPill}
+              title="Shipped supplier-direct before the batch was received — stock is negative against the expected PO batch and nets out when its GRN arrives."
+              style={{ background: 'var(--c-amber-bg, #FBEFD6)', color: 'var(--c-amber-ink, #8A5A00)', border: '1px solid var(--c-amber-line, #E3C27A)' }}
+            >
+              Drop-ship · batch not received
+            </span>
+          )}
           <RelationshipMapButton type="do" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} /><span>Print PDF</span>

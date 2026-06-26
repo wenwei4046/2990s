@@ -23,8 +23,9 @@ import { computeVariantKey, isServiceLine, type VariantAttrs } from '@2990s/shar
 import { syncSoDeliveredFromDo } from '../lib/so-delivery-sync';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { checkStockAvailability, shortStockResponse } from '../lib/check-stock-availability';
-import { findSofaLinesWithoutCompleteBatch, sofaNoCompleteBatchResponse, findIncompleteSofaSets, sofaIncompleteSetResponse } from '../lib/sofa-batch-guard';
+import { findSofaLinesWithoutCompleteBatch, sofaNoCompleteBatchResponse, findIncompleteSofaSets, sofaIncompleteSetResponse, detectSofaSoItemIds } from '../lib/sofa-batch-guard';
 import { loadSofaBatchStock, sofaStockKey } from '../lib/sofa-set-coverage';
+import { resolveExpectedBatchBySoItem, buildDropshipOffenders } from '../lib/dropship-batch';
 import { currentDocNoByKey, type CurrentEvent } from '../lib/current-doc';
 import { paginateAll } from '../lib/paginate-all';
 
@@ -80,7 +81,7 @@ const HEADER =
   'mattress_sofa_centi, bedframe_centi, accessories_centi, others_centi, service_centi, ' +
   'mattress_sofa_cost_centi, bedframe_cost_centi, accessories_cost_centi, others_cost_centi, service_cost_centi, ' +
   'local_total_centi, total_cost_centi, total_margin_centi, margin_pct_basis, line_count, ' +
-  'currency, warehouse_id, ' +
+  'currency, warehouse_id, is_dropship, ' +
   /* HC delivery-sheet DO-execution raw-data fields (migration 0197) — surfaced on
      the DO detail form + the Delivery Planning "Edit HC fields" drawer. */
   'time_range, time_confirmed, arrival_at, departure_at, shipout_date, customer_delivered_date, eta_arriving_port, delivery_substatus, ' +
@@ -190,12 +191,18 @@ async function recomputeTotals(sb: any, deliveryOrderId: string) {
    recost.ts) can re-run it after a PI/GR price correction re-costs the lots. */
 export async function restampDoActualCost(sb: any, deliveryOrderId: string) {
   try {
-    const { data: doHeader } = await sb.from('delivery_orders')
-      .select('status, warehouse_id').eq('id', deliveryOrderId).maybeSingle();
+    let hdrRes = await sb.from('delivery_orders')
+      .select('status, warehouse_id, is_dropship').eq('id', deliveryOrderId).maybeSingle();
+    if (hdrRes.error && (hdrRes.error.message ?? '').includes('is_dropship')) {
+      hdrRes = await sb.from('delivery_orders')
+        .select('status, warehouse_id').eq('id', deliveryOrderId).maybeSingle();
+    }
+    const doHeader = hdrRes.data;
     if (!doHeader) return;
     const status = ((doHeader as { status: string | null }).status ?? '').toUpperCase();
     if (!SHIPPED_STATES.includes(status)) return; // no OUT yet → keep benchmark
     const headerWarehouseId = (doHeader as { warehouse_id: string | null }).warehouse_id ?? null;
+    const isDropship = (doHeader as { is_dropship?: boolean }).is_dropship === true;
 
     const { data: items } = await sb.from('delivery_order_items')
       .select('id, so_item_id, item_code, qty, item_group, variants, line_total_centi')
@@ -217,6 +224,23 @@ export async function restampDoActualCost(sb: any, deliveryOrderId: string) {
           if (r.allocated_batch_no) batchBySoItem.set(r.id, r.allocated_batch_no);
         }
       } catch { /* column absent pre-0121 — no batches */ }
+    }
+    /* Drop-ship (0204) — a drop-ship sofa line's OUT was stamped with the EXPECTED
+       (bound PO) batch, not allocated_batch_no. Resolve the SAME expected batch
+       here so the bucket key matches the OUT movement and the line picks up the
+       arriving lot's real cost after the receipt-time reconcile. Sofa lines only. */
+    if (isDropship && soItemIds.length > 0) {
+      const missing = new Set(soItemIds.filter((sid) => !batchBySoItem.has(sid)));
+      if (missing.size > 0) {
+        const sofaRows = (items as Array<{ so_item_id?: string | null; item_code: string; item_group?: string | null }>)
+          .filter((it) => it.so_item_id && missing.has(it.so_item_id))
+          .map((it) => ({ itemCode: it.item_code, itemGroup: it.item_group ?? null, soItemId: it.so_item_id ?? null }));
+        const sofaSoIds = await detectSofaSoItemIds(sb, sofaRows);
+        if (sofaSoIds.size > 0) {
+          const expected = await resolveExpectedBatchBySoItem(sb, [...sofaSoIds]);
+          for (const [sid, eb] of expected) if (eb.poNumber) batchBySoItem.set(sid, eb.poNumber);
+        }
+      }
     }
     const batchAware = batchBySoItem.size > 0;
 
@@ -343,14 +367,22 @@ async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedB
     .eq('movement_type', 'OUT');
   if ((existing ?? 0) > 0) return; // already deducted — no-op
 
-  const { data: doHeader } = await sb.from('delivery_orders')
-    .select('do_number, warehouse_id')
+  let doHeaderRes = await sb.from('delivery_orders')
+    .select('do_number, warehouse_id, is_dropship')
     .eq('id', deliveryOrderId).maybeSingle();
+  /* Forward-compat (0204): is_dropship column may not exist yet — retry without it. */
+  if (doHeaderRes.error && (doHeaderRes.error.message ?? '').includes('is_dropship')) {
+    doHeaderRes = await sb.from('delivery_orders')
+      .select('do_number, warehouse_id')
+      .eq('id', deliveryOrderId).maybeSingle();
+  }
+  const doHeader = doHeaderRes.data;
   const { data: items } = await sb.from('delivery_order_items')
     .select('id, so_item_id, item_code, description, qty, item_group, variants')
     .eq('delivery_order_id', deliveryOrderId);
   const headerWarehouseId = (doHeader as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
   const doNo = (doHeader as { do_number: string } | null)?.do_number ?? deliveryOrderId;
+  const isDropship = (doHeader as { is_dropship?: boolean } | null)?.is_dropship === true;
   if (!items) return;
 
   // Per-line warehouse — each line ships from its SO line's warehouse (0118),
@@ -377,6 +409,29 @@ async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedB
         }
       }
     } catch { /* column absent pre-0121 — no batches, plain FIFO */ }
+  }
+
+  /* Drop-ship (0204) — a drop-ship sofa line ships BEFORE receipt, so the
+     allocator never locked allocated_batch_no. Stamp the OUT with the EXPECTED
+     batch (= bound PO number) so it (a) nets against the GRN's IN in
+     inventory_balances and (b) routes through fn_consume_fifo_batch under the
+     same batch the receipt-time reconcile keys on. Resolve ONLY for SOFA lines
+     missing a batch — a non-sofa line must stay un-batched (plain FIFO). */
+  if (isDropship && soItemIds.length > 0) {
+    const missing = new Set(soItemIds.filter((sid) => !batchBySoItem.has(sid)));
+    if (missing.size > 0) {
+      // Sofa lines only (state-independent category detector) get the expected batch.
+      const sofaRows = (items as Array<{ so_item_id?: string | null; item_code: string; item_group?: string | null }>)
+        .filter((it) => it.so_item_id && missing.has(it.so_item_id))
+        .map((it) => ({ itemCode: it.item_code, itemGroup: it.item_group ?? null, soItemId: it.so_item_id ?? null }));
+      const sofaSoIds = await detectSofaSoItemIds(sb, sofaRows);
+      if (sofaSoIds.size > 0) {
+        const expected = await resolveExpectedBatchBySoItem(sb, [...sofaSoIds]);
+        for (const [sid, eb] of expected) {
+          if (eb.poNumber) batchBySoItem.set(sid, eb.poNumber);
+        }
+      }
+    }
   }
 
   /* Collapse identical (warehouse_id, product_code, variant_key, batch_no) lines
@@ -1492,15 +1547,29 @@ deliveryOrdersMfg.post('/', async (c) => {
      has no dye-lot batch; shipping it would pull another order's colour lot.
      Block here (applies even to a force-grab: confirmShortStock waives the soft
      stock check, NOT the no-batch rule). Non-sofa lines pass untouched. */
+  let dropShipped = false;
   if (items.length > 0) {
     const sofaOffenders = await findSofaLinesWithoutCompleteBatch(sb, items.map((it) => ({
       itemCode: String(it.itemCode ?? ''),
       itemGroup: (it.itemGroup as string | null) ?? null,
       soItemId: (it.soItemId as string | null) ?? null,
     })));
-    if (sofaOffenders.length > 0) return c.json(sofaNoCompleteBatchResponse(sofaOffenders), 409);
+    if (sofaOffenders.length > 0) {
+      /* Drop-ship waiver (Wei Siang 2026-06-26) — supplier ships the sofa direct,
+         warehouse has no batch. Waive the Type-A no-batch block ONLY when the
+         operator confirmed dropShip AND every affected line has a bound PO (the
+         incoming dye-lot batch must be known). Without dropShip, surface the 409
+         enriched with each line's bound PO + ETA so the UI can offer the dialog. */
+      const dropship = await buildDropshipOffenders(sb, sofaOffenders);
+      const allHavePo = dropship.length > 0 && dropship.every((o) => !!o.poNumber);
+      if (body.dropShip !== true || !allHavePo) {
+        return c.json(sofaNoCompleteBatchResponse(sofaOffenders, dropship), 409);
+      }
+      dropShipped = true;
+    }
     /* Type B — a sofa set must ship WHOLE from one batch. Block a DO that takes
-       only part of an SO's sofa set and leaves the rest behind (orphan dye lot). */
+       only part of an SO's sofa set and leaves the rest behind (orphan dye lot).
+       NEVER waived by drop-ship — half a set must never ship. */
     const partial = await findIncompleteSofaSets(sb, items.map((it) => (it.soItemId as string | null) ?? null));
     if (partial.length > 0) return c.json(sofaIncompleteSetResponse(partial), 409);
   }
@@ -1553,6 +1622,8 @@ deliveryOrdersMfg.post('/', async (c) => {
        with NO stock deduction and NO SO-delivered sync; the commit moves to the
        Confirm transition (PATCH /:id/status → DISPATCHED). Mirror of the SO. */
     status: (body.asDraft === true) ? 'DRAFT' : 'DISPATCHED',
+    /* Drop-ship (0204) — flags the UI badge; inventory reconcile is ledger-driven. */
+    is_dropship: dropShipped,
     notes: (body.notes as string) ?? null,
     created_by: user.id,
   }).select(HEADER).single();
@@ -1651,7 +1722,7 @@ function buildItemRow(deliveryOrderId: string, it: Record<string, unknown>, line
      4. recomputeTotals + deductInventoryForDo (both idempotent). */
 deliveryOrdersMfg.post('/from-sos', async (c) => {
   const sb = c.get('supabase'); const user = c.get('user');
-  let body: { picks?: Array<{ soItemId?: string; qty?: number }>; confirmShortStock?: boolean; warehouseId?: string; asDraft?: boolean };
+  let body: { picks?: Array<{ soItemId?: string; qty?: number }>; confirmShortStock?: boolean; warehouseId?: string; asDraft?: boolean; dropShip?: boolean };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
 
   // Collapse duplicate soItemIds (sum their qty) so a line can't appear twice.
@@ -1734,14 +1805,25 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
   /* Sofa batch guard — block any picked sofa line with no production PO (no
      dye-lot batch ⇒ would steal another order's colour lot). Applies even to a
      force-grab (confirmShortStock waives soft stock, NOT the no-batch rule). */
+  let dropShipped = false;
   {
     const sofaOffenders = await findSofaLinesWithoutCompleteBatch(sb, sortedPicks.map((line) => ({
       itemCode: line.itemCode,
       itemGroup: line.itemGroup ?? null,
       soItemId: line.soItemId,
     })));
-    if (sofaOffenders.length > 0) return c.json(sofaNoCompleteBatchResponse(sofaOffenders), 409);
-    /* Type B — whole sofa set must ship together (no partial set / orphan). */
+    if (sofaOffenders.length > 0) {
+      /* Drop-ship waiver — waive Type-A only on confirmed dropShip + every
+         affected line bound to a PO (the incoming batch must be known). */
+      const dropship = await buildDropshipOffenders(sb, sofaOffenders);
+      const allHavePo = dropship.length > 0 && dropship.every((o) => !!o.poNumber);
+      if (body.dropShip !== true || !allHavePo) {
+        return c.json(sofaNoCompleteBatchResponse(sofaOffenders, dropship), 409);
+      }
+      dropShipped = true;
+    }
+    /* Type B — whole sofa set must ship together (no partial set / orphan).
+       NEVER waived by drop-ship. */
     const partial = await findIncompleteSofaSets(sb, sortedPicks.map((line) => line.soItemId));
     if (partial.length > 0) return c.json(sofaIncompleteSetResponse(partial), 409);
   }
@@ -1826,6 +1908,8 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
        asDraft lands the DO as DRAFT (no stock OUT, no SO sync); the commit
        moves to the Confirm transition. Mirror of the SO. */
     status: (body.asDraft === true) ? 'DRAFT' : 'DISPATCHED',
+    /* Drop-ship (0204) — flags the UI badge; inventory reconcile is ledger-driven. */
+    is_dropship: dropShipped,
     created_by: user.id,
   }).select('id, do_number').single();
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
@@ -2158,15 +2242,26 @@ deliveryOrdersMfg.post('/:id/items', async (c) => {
 
   /* Sofa batch guard — a sofa line with no production PO has no dye-lot batch
      and must not ship (would pull another order's colour lot). */
+  let dropShipped = false;
   {
     const sofaOffenders = await findSofaLinesWithoutCompleteBatch(sb, [{
       itemCode: String(it.itemCode ?? ''),
       itemGroup: (it.itemGroup as string | null) ?? null,
       soItemId: (it.soItemId as string | null) ?? null,
     }]);
-    if (sofaOffenders.length > 0) return c.json(sofaNoCompleteBatchResponse(sofaOffenders), 409);
+    if (sofaOffenders.length > 0) {
+      /* Drop-ship waiver — waive Type-A only on confirmed dropShip + the line
+         bound to a PO (the incoming batch must be known). */
+      const dropship = await buildDropshipOffenders(sb, sofaOffenders);
+      const allHavePo = dropship.length > 0 && dropship.every((o) => !!o.poNumber);
+      if ((it as { dropShip?: boolean }).dropShip !== true || !allHavePo) {
+        return c.json(sofaNoCompleteBatchResponse(sofaOffenders, dropship), 409);
+      }
+      dropShipped = true;
+    }
     /* Type B — after this add, the DO must hold the SO's WHOLE sofa set, not a
-       partial one. Combine the DO's existing SO links with the new line. */
+       partial one. Combine the DO's existing SO links with the new line.
+       NEVER waived by drop-ship. */
     const { data: existingDoLines } = await sb
       .from('delivery_order_items').select('so_item_id').eq('delivery_order_id', id);
     const soIds = [
@@ -2192,6 +2287,14 @@ deliveryOrdersMfg.post('/:id/items', async (c) => {
   const row = buildItemRow(id, it, nextLineNo);
   const { data, error } = await sb.from('delivery_order_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  /* Drop-ship (0204) — once a drop-shipped line is added, stamp the DO so the
+     "batch not received" badge shows. Best-effort (never blocks the add). */
+  if (dropShipped) {
+    const { error: dsErr } = await sb.from('delivery_orders').update({ is_dropship: true }).eq('id', id);
+    if (dsErr && !(dsErr.message ?? '').includes('is_dropship')) {
+      /* eslint-disable-next-line no-console */ console.error('[dropship] flag DO failed:', dsErr.message);
+    }
+  }
   await recomputeTotals(sb, id);
   // TASK #24 — if the DO is already shipped, adding a line MUST extend the
   // OUT booking for that bucket (otherwise the new line ships but inventory
@@ -2261,7 +2364,20 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
         have = sofaStock.remaining.get(sofaStockKey(so.warehouse_id, batch, effCode, variantKey)) ?? 0;
       }
       if (!batch || !so?.warehouse_id || have < delta) {
-        return c.json(sofaNoCompleteBatchResponse([{ itemCode: effCode, soItemId: prev.so_item_id as string }]), 409);
+        /* Drop-ship waiver — the extra units ship supplier-direct against the
+           expected (bound PO) batch. Waive only on confirmed dropShip + a bound
+           PO on this line. Type B is unaffected (a qty bump can't orphan a set). */
+        const offender = { itemCode: effCode, soItemId: prev.so_item_id as string };
+        const dropship = await buildDropshipOffenders(sb, [offender]);
+        const allHavePo = dropship.length > 0 && dropship.every((o) => !!o.poNumber);
+        if ((it as { dropShip?: boolean }).dropShip !== true || !allHavePo) {
+          return c.json(sofaNoCompleteBatchResponse([offender], dropship), 409);
+        }
+        /* Stamp the DO drop-ship flag for the badge (best-effort). */
+        const { error: dsErr } = await sb.from('delivery_orders').update({ is_dropship: true }).eq('id', id);
+        if (dsErr && !(dsErr.message ?? '').includes('is_dropship')) {
+          /* eslint-disable-next-line no-console */ console.error('[dropship] flag DO failed:', dsErr.message);
+        }
       }
     }
   }

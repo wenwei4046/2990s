@@ -63,6 +63,49 @@ async function handleSessionExpired(): Promise<void> {
   }
 }
 
+/* Drop-ship confirm (Wei Siang 2026-06-26) — when a sofa ship is blocked because
+   no batch is received yet (sofa_no_batch) BUT every affected line is bound to a
+   PO (canDropship), the supplier can ship direct. Render the approved
+   "Ship as drop-ship?" dialog (incoming PO + ETA + affected codes) and, on
+   confirm, the caller replays the request with dropShip:true (stock goes
+   negative against the expected batch, nets out + stamps the batch on receipt).
+   Returns true on confirm. */
+type DropshipOffender = { itemCode: string; soItemId: string | null; poNumber: string | null; eta: string | null };
+async function confirmDropship(raw: string): Promise<boolean> {
+  try {
+    const jsonStart = raw.indexOf('{');
+    const body = JSON.parse(raw.slice(jsonStart)) as { dropship?: DropshipOffender[] };
+    const offenders = body.dropship ?? [];
+    // One bullet per distinct incoming PO: the bound batch + ETA + the sofa codes
+    // that ride it. Group by PO so a multi-line set reads as one incoming batch.
+    const byPo = new Map<string, { eta: string | null; codes: Set<string> }>();
+    for (const o of offenders) {
+      if (!o.poNumber) continue;
+      const g = byPo.get(o.poNumber) ?? { eta: o.eta, codes: new Set<string>() };
+      if (o.itemCode) g.codes.add(o.itemCode);
+      byPo.set(o.poNumber, g);
+    }
+    const poLines = [...byPo.entries()].map(([po, g]) => {
+      const eta = g.eta ? `ETA ${g.eta}` : 'ETA not set';
+      return `• Incoming PO ${po} (${eta})\n   Sofa: ${[...g.codes].join(', ')}`;
+    }).join('\n\n');
+    const codes = [...new Set(offenders.map((o) => o.itemCode).filter(Boolean))].join(', ');
+    return await serviceConfirm({
+      title: 'Ship as drop-ship?',
+      body:
+        `No batch has been received yet for this sofa set — the supplier ships it ` +
+        `direct to the customer.\n\n${poLines}\n\n` +
+        `Stock will go negative against ${byPo.size === 1 ? `batch ${[...byPo.keys()][0]}` : 'the incoming batches'}. ` +
+        `It nets out and the batch number stamps onto this Delivery Order when the ` +
+        `Goods Received Note arrives.\n\nAffected: ${codes}`,
+      confirmLabel: 'Confirm drop-ship',
+      danger: true,
+    });
+  } catch {
+    return false;
+  }
+}
+
 /* Edge #J — render the shortage detail out of a 409 short_stock body and ask
    the operator whether to ship anyway (stock goes negative). Returns true on
    confirm; replays the request with confirmShortStock:true. */
@@ -143,8 +186,27 @@ export async function authedFetch<T>(path: string, init?: RequestInit): Promise<
     }
   }
 
+  /* Drop-ship offer (Wei Siang 2026-06-26) — a sofa_no_batch 409 that carries
+     canDropship:true means every affected line is bound to a PO, so the operator
+     can choose to ship supplier-direct. Prompt the approved dialog; on confirm
+     replay with dropShip:true. Body-bearing (mutation) requests only. */
+  if (res.status === 409 && typeof init?.body === 'string') {
+    const text = await res.clone().text();
+    if (text.includes('"sofa_no_batch"') && text.includes('"canDropship":true')) {
+      if (await confirmDropship(text)) {
+        const retryBody = JSON.stringify({ ...JSON.parse(init.body), dropShip: true });
+        res = await fetchWithTimeout(`${API_URL}${path}`, { ...init, headers, body: retryBody }, path);
+      } else {
+        // Declined — a deliberate operator choice, not an error. Throw a marker
+        // the page's onError swallows (mirrors the silent short_stock decline).
+        throw new Error('declined_dropship:"sofa_no_batch"');
+      }
+    }
+  }
+
   /* Sofa whole-set HARD block — a sofa set must ship complete from ONE batch.
-     No "ship anyway" retry; surface the server's plain-English reason. */
+     A no-PO sofa_no_batch (canDropship absent/false) can't drop-ship, so surface
+     the server's plain-English reason (no "ship anyway" retry). */
   if (res.status === 409) {
     const text = await res.clone().text();
     if (text.includes('"sofa_no_batch"')) {
