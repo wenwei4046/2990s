@@ -7,6 +7,7 @@ import {
   ageBandLabel, summarizeBuyerDemographics, type ProductUnit,
   foldProductUnits, type SaItemRow,
   classifySofaBuild, isFabricUpgrade,
+  buildProductsSection,
 } from './sales-analysis';
 import type { SofaComboRow } from './sofa-combo-pricing';
 import type { FabricTierAddonConfig, FabricTierModelOverride } from './fabric-tier-addon';
@@ -431,6 +432,107 @@ describe('isFabricUpgrade', () => {
     expect(
       isFabricUpgrade({ category: 'SOFA', tier: null, buildCompartments: ['2A(LHF)'], modelId: 'm1' }, config, noOv, noOv),
     ).toBe(false);
+  });
+});
+
+// ── Task 4: buildProductsSection ──────────────────────────────────────────────
+
+describe('buildProductsSection', () => {
+  const asOf = '2026-06-26';
+
+  // Local ProductUnit factory for Task 4 tests.
+  const pu = (over: Partial<ProductUnit> = {}): ProductUnit => ({
+    docNo: 'SO-1', category: 'MATTRESS', modelId: 'm1', modelName: 'ModelA',
+    variantLabel: 'Queen', qty: 1, revenueCenti: 100000, marginCenti: 30000,
+    sofaClass: null, comboLabel: null, fabricUpgrade: null,
+    race: null, birthday: null, gender: null, ...over,
+  });
+
+  it('empty input → byCategory: {}', () => {
+    expect(buildProductsSection([], asOf)).toEqual({ byCategory: {} });
+  });
+
+  it('ranks models by units desc, tie broken by revenueCenti desc', () => {
+    // Alpha gets two ProductUnit objects → 1+2 = 3 total units
+    // Beta: 2 units at 500k revenue; Gamma: 2 units at 200k revenue → tied on units, Beta wins
+    const units = [
+      pu({ modelId: 'm1', modelName: 'Alpha', qty: 1, revenueCenti: 100000 }),
+      pu({ docNo: 'SO-2', modelId: 'm1', modelName: 'Alpha', qty: 2, revenueCenti: 200000 }),
+      pu({ docNo: 'SO-3', modelId: 'm2', modelName: 'Beta',  qty: 2, revenueCenti: 500000 }),
+      pu({ docNo: 'SO-4', modelId: 'm3', modelName: 'Gamma', qty: 2, revenueCenti: 200000 }),
+    ];
+    const { byCategory } = buildProductsSection(units, asOf);
+    const models = byCategory['MATTRESS']!;
+    expect(models.map((m) => m.modelName)).toEqual(['Alpha', 'Beta', 'Gamma']);
+    expect(models[0]!.units).toBe(3);      // Alpha: 1+2
+    expect(models[1]!.modelName).toBe('Beta');   // higher revenue wins the tie
+    expect(models[2]!.modelName).toBe('Gamma');
+  });
+
+  it('qty matters: one unit with qty=3 contributes units=3 to model and variant', () => {
+    const units = [pu({ modelId: 'm1', modelName: 'Hilton', qty: 3, variantLabel: 'King' })];
+    const { byCategory } = buildProductsSection(units, asOf);
+    const model = byCategory['MATTRESS']![0]!;
+    expect(model.units).toBe(3);
+    expect(model.variants[0]!.units).toBe(3);
+    expect(model.variants[0]!.label).toBe('King');
+  });
+
+  it('variant grouping + per-variant demographics (n = object count, not qty)', () => {
+    const units = [
+      pu({ docNo: 'SO-1', modelId: 'm1', variantLabel: 'Queen', qty: 1, race: 'Malay' }),
+      pu({ docNo: 'SO-2', modelId: 'm1', variantLabel: 'King',  qty: 2, race: 'Chinese' }),
+    ];
+    const { byCategory } = buildProductsSection(units, asOf);
+    const model = byCategory['MATTRESS']![0]!;
+    expect(model.variants).toHaveLength(2);
+    // King has qty=2 but is ONE object → variant units=2, demographics.n=1
+    const king = model.variants.find((v) => v.label === 'King')!;
+    expect(king.units).toBe(2);
+    expect(king.demographics.n).toBe(1);
+    // Queen: one object, qty=1 → units=1, demographics.n=1
+    const queen = model.variants.find((v) => v.label === 'Queen')!;
+    expect(queen.units).toBe(1);
+    expect(queen.demographics.n).toBe(1);
+  });
+
+  it('sofa tallies: comboUnits (Σqty), customUnits, pwpUnits; combo variant groups under its label', () => {
+    // Give the combo distinct label and higher qty so it clearly ranks first among variants.
+    // PWP uses its own variantLabel so 'Custom' only has 1 unit (no tie).
+    const units = [
+      pu({ category: 'SOFA', modelId: 's1', modelName: 'Annsa', variantLabel: 'L-shape', qty: 2, sofaClass: 'combo', comboLabel: 'L-shape' }),
+      pu({ docNo: 'SO-2', category: 'SOFA', modelId: 's1', modelName: 'Annsa', variantLabel: 'Custom', qty: 1, sofaClass: 'custom' }),
+      pu({ docNo: 'SO-3', category: 'SOFA', modelId: 's1', modelName: 'Annsa', variantLabel: 'Custom (PWP)', qty: 1, sofaClass: 'pwp' }),
+    ];
+    const { byCategory } = buildProductsSection(units, asOf);
+    const model = byCategory['SOFA']![0]!;
+    expect(model.comboUnits).toBe(2);
+    expect(model.customUnits).toBe(1);
+    expect(model.pwpUnits).toBe(1);
+    expect(model.units).toBe(4);  // 2+1+1
+    // Combo variant 'L-shape' has 2 units > 1 unit for Custom and Custom (PWP)
+    expect(model.variants[0]!.label).toBe('L-shape');
+    expect(model.variants[0]!.units).toBe(2);
+  });
+
+  it('fabric tallies: fabricUpgradeUnits = Σqty of true; fabricEligibleUnits = Σqty of true+false (null excluded)', () => {
+    const units = [
+      pu({ docNo: 'SO-1', category: 'SOFA', modelId: 's1', modelName: 'Annsa', qty: 2, fabricUpgrade: true }),
+      pu({ docNo: 'SO-2', category: 'SOFA', modelId: 's1', modelName: 'Annsa', qty: 3, fabricUpgrade: false }),
+      pu({ docNo: 'SO-3', category: 'SOFA', modelId: 's1', modelName: 'Annsa', qty: 1, fabricUpgrade: null }),
+    ];
+    const { byCategory } = buildProductsSection(units, asOf);
+    const model = byCategory['SOFA']![0]!;
+    expect(model.fabricUpgradeUnits).toBe(2);    // only true → qty 2
+    expect(model.fabricEligibleUnits).toBe(5);   // true+false → qty 2+3; null excluded
+  });
+
+  it('demographics.n is object count, not qty sum', () => {
+    const units = [pu({ modelId: 'm1', qty: 5, race: 'Malay' })];
+    const { byCategory } = buildProductsSection(units, asOf);
+    const model = byCategory['MATTRESS']![0]!;
+    expect(model.units).toBe(5);           // qty sum
+    expect(model.demographics.n).toBe(1); // one ProductUnit object = one buyer
   });
 });
 

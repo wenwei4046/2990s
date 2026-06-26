@@ -568,3 +568,129 @@ export function isFabricUpgrade(
   );
   return fabricTierAddon(input.category, input.tier, config, override) > 0;
 }
+
+// ── Task 4: VariantRank, ModelRank, ProductsSection, buildProductsSection ────
+
+export interface VariantRank {
+  label: string;
+  units: number;
+  revenueCenti: number;
+  demographics: BuyerDemographics;
+}
+
+export interface ModelRank {
+  modelId: string | null;
+  modelName: string;
+  category: string;
+  units: number;
+  revenueCenti: number;
+  marginCenti: number;
+  variants: VariantRank[];
+  demographics: BuyerDemographics;
+  comboUnits: number;
+  customUnits: number;
+  pwpUnits: number;
+  fabricUpgradeUnits: number;
+  fabricEligibleUnits: number;
+}
+
+export interface ProductsSection {
+  byCategory: Record<string, ModelRank[]>;
+}
+
+/** Aggregate folded product units into a ranked, per-category products section.
+ *
+ *  Grouping key for a model = modelId when non-null, else '|name:' + modelName
+ *  (keeps null-id models apart from real ids, groups name-synonyms together).
+ *
+ *  Ranking: models sorted by Σqty desc, tie revenueCenti desc.
+ *  Variants: sorted by Σqty desc, tie label asc.
+ *
+ *  CRITICAL: all tallies (units / comboUnits / fabricEligibleUnits / …) are
+ *  Σqty — NOT .length — because one ProductUnit object can carry qty > 1.
+ *  Conversely, demographics counts unit OBJECTS (one buyer per line, regardless
+ *  of qty) — pass the unit array as-is to summarizeBuyerDemographics. */
+export function buildProductsSection(
+  units: ReadonlyArray<ProductUnit>,
+  asOf?: string,
+): ProductsSection {
+  if (units.length === 0) return { byCategory: {} };
+
+  // Phase 1 — group by category → model key → ProductUnit[]
+  const byCat = new Map<string, Map<string, ProductUnit[]>>();
+  for (const u of units) {
+    let catMap = byCat.get(u.category);
+    if (!catMap) { catMap = new Map(); byCat.set(u.category, catMap); }
+    const modelKey = u.modelId != null ? u.modelId : `|name:${u.modelName}`;
+    const arr = catMap.get(modelKey);
+    if (arr) arr.push(u); else catMap.set(modelKey, [u]);
+  }
+
+  // Phase 2 — build ModelRank[] for each category
+  const byCategory: Record<string, ModelRank[]> = {};
+  for (const [category, modelMap] of byCat) {
+    const models: ModelRank[] = [];
+
+    for (const [, modelUnits] of modelMap) {
+      const lead = modelUnits[0]!;
+
+      // Aggregate totals (all Σqty)
+      let totalUnits = 0;
+      let totalRevenue = 0;
+      let totalMargin = 0;
+      let comboUnits = 0;
+      let customUnits = 0;
+      let pwpUnits = 0;
+      let fabricUpgradeUnits = 0;
+      let fabricEligibleUnits = 0;
+
+      for (const u of modelUnits) {
+        totalUnits += u.qty;
+        totalRevenue += u.revenueCenti;
+        totalMargin += u.marginCenti;
+        if (u.sofaClass === 'combo')   comboUnits  += u.qty;
+        if (u.sofaClass === 'custom')  customUnits += u.qty;
+        if (u.sofaClass === 'pwp')     pwpUnits    += u.qty;
+        if (u.fabricUpgrade !== null)  fabricEligibleUnits += u.qty;
+        if (u.fabricUpgrade === true)  fabricUpgradeUnits  += u.qty;
+      }
+
+      // Variants — group by variantLabel, Σqty / Σrevenue, demographics by object count
+      const variantMap = new Map<string, ProductUnit[]>();
+      for (const u of modelUnits) {
+        const arr = variantMap.get(u.variantLabel);
+        if (arr) arr.push(u); else variantMap.set(u.variantLabel, [u]);
+      }
+      const variants: VariantRank[] = [...variantMap.entries()]
+        .map(([label, varUnits]) => ({
+          label,
+          units: varUnits.reduce((s, u) => s + u.qty, 0),
+          revenueCenti: varUnits.reduce((s, u) => s + u.revenueCenti, 0),
+          demographics: summarizeBuyerDemographics(varUnits, asOf),
+        }))
+        .sort((a, b) => b.units - a.units || a.label.localeCompare(b.label));
+
+      models.push({
+        modelId: lead.modelId,
+        modelName: lead.modelName,
+        category,
+        units: totalUnits,
+        revenueCenti: totalRevenue,
+        marginCenti: totalMargin,
+        variants,
+        demographics: summarizeBuyerDemographics(modelUnits, asOf),
+        comboUnits,
+        customUnits,
+        pwpUnits,
+        fabricUpgradeUnits,
+        fabricEligibleUnits,
+      });
+    }
+
+    // Sort models: units desc, tie revenueCenti desc
+    models.sort((a, b) => b.units - a.units || b.revenueCenti - a.revenueCenti);
+    byCategory[category] = models;
+  }
+
+  return { byCategory };
+}
