@@ -38,6 +38,7 @@ import {
   useSoDropdownOptions, optionsOrFallback,
 } from '../lib/so-dropdown-options-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
+import { canonicalizeVariants } from '@2990s/shared';
 import {
   PaymentsTable, labelToApi, draftMethodFields, type PaymentDraft,
 } from '../components/PaymentsTable';
@@ -176,7 +177,15 @@ export const DeliveryOrderNew = () => {
           unitPriceCenti: Number(it.unitPriceCenti ?? 0),
           discountCenti: Number(it.discountCenti ?? 0),
           unitCostCenti: Number(it.unitCostCenti ?? 0),
-          variants: (it.variants as Record<string, unknown>) ?? {},
+          /* Canonicalise POS-vocabulary sofa keys (depth → seatHeight,
+             sofaLegHeight → legHeight) so the DO's Seat/Leg dropdowns prefill a
+             POS-created line instead of showing "Select…". Mirrors
+             SalesOrderDetail.draftFromItem; fabricCode already shares one key,
+             so it was the only axis that carried before. */
+          variants: canonicalizeVariants(
+            (it.itemGroup as string) ?? 'others',
+            (it.variants as Record<string, unknown>) ?? {},
+          ),
           remark: '',
           soItemId: (it.soItemId as string) ?? undefined,
         } as DraftLine & { soItemId?: string })));
@@ -196,7 +205,15 @@ export const DeliveryOrderNew = () => {
           unitPriceCenti: Number(it.unit_price_centi ?? 0),
           discountCenti: Number(it.discount_centi ?? 0),
           unitCostCenti: Number(it.unit_cost_centi ?? 0),
-          variants: (it.variants as Record<string, unknown>) ?? {},
+          /* Canonicalise POS-vocabulary sofa keys (depth → seatHeight,
+             sofaLegHeight → legHeight) so the DO's Seat/Leg dropdowns prefill a
+             POS-created line instead of showing "Select…". Mirrors
+             SalesOrderDetail.draftFromItem; fabricCode already shares one key,
+             so it was the only axis that carried before. */
+          variants: canonicalizeVariants(
+            (it.item_group as string) ?? 'others',
+            (it.variants as Record<string, unknown>) ?? {},
+          ),
           remark: (it.remark as string) ?? '',
           soItemId: (it.id as string) ?? undefined,
         } as DraftLine & { soItemId?: string })));
