@@ -7,7 +7,7 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { summarizeOverview, monthlyTrend, collapseToPurchases, type SaOrderRow, type SaCustomerRow } from '@2990s/shared';
+import { summarizeOverview, monthlyTrend, collapseToPurchases, type SaOrderRow, type SaCustomerRow, type TargetProfile } from '@2990s/shared';
 
 const CURATOR_ROLES = new Set(['sales_director', 'admin', 'super_admin']);
 
@@ -32,7 +32,7 @@ salesAnalysis.get('/', async (c) => {
   // the period filter scopes only the Overview below).
   let q = sb
     .from('mfg_sales_orders')
-    .select('doc_no, cross_category_source_doc_no, so_date, total_revenue_centi, total_margin_centi, service_centi, is_test, customer_id')
+    .select('doc_no, cross_category_source_doc_no, so_date, total_revenue_centi, total_margin_centi, service_centi, is_test, customer_id, city, customer_state')
     .not('status', 'in', '("CANCELLED","ON_HOLD")');
   if (!includeTest) q = q.not('is_test', 'is', true);
   const { data: orderRows, error: ordErr } = await q.limit(100000);
@@ -42,6 +42,8 @@ salesAnalysis.get('/', async (c) => {
     doc_no: string; cross_category_source_doc_no: string | null; so_date: string;
     total_revenue_centi: number | null; total_margin_centi: number | null; service_centi: number | null;
     customer_id: string | null;
+    city: string | null;
+    customer_state: string | null;
   };
   const allOrders: SaOrderRow[] = ((orderRows ?? []) as Raw[]).map((r) => ({
     docNo: r.doc_no,
@@ -100,10 +102,16 @@ salesAnalysis.get('/', async (c) => {
     type CustRow = { id: string; name: string | null; state: string | null; race: string | null; birthday: string | null; gender: string | null };
     const profile = new Map<string, CustRow>();
     for (const cr of (custRows ?? []) as CustRow[]) profile.set(cr.id, cr);
+    const areaByDoc = new Map<string, { city: string | null; state: string | null }>();
+    for (const r of ((orderRows ?? []) as Raw[])) {
+      areaByDoc.set(r.doc_no, { city: r.city ?? null, state: r.customer_state ?? null });
+    }
     customers = custIds.map((cid) => {
       const ords = ordersByCustomer.get(cid)!;
       const purchases = collapseToPurchases(ords).length;
-      const dates = ords.map((od) => od.soDate).sort();
+      const sorted = [...ords].sort((a, b) => a.soDate.localeCompare(b.soDate));
+      const latest = sorted[sorted.length - 1]!;
+      const area = areaByDoc.get(latest.docNo) ?? { city: null, state: null };
       const p = profile.get(cid);
       return {
         id: cid,
@@ -111,15 +119,75 @@ salesAnalysis.get('/', async (c) => {
         race: p?.race ?? null,
         birthday: p?.birthday ?? null,
         gender: p?.gender ?? null,
-        state: p?.state ?? null,
+        state: area.state,
+        city: area.city,
         orderCount: purchases,
-        ltvCenti: ords.reduce((s, od) => s + od.totalRevenueCenti, 0),
-        firstOrderDate: dates[0] ?? null,
-        lastOrderDate: dates[dates.length - 1] ?? null,
+        ltvCenti: ords.reduce((s, o) => s + o.totalRevenueCenti, 0),
+        marginCenti: ords.reduce((s, o) => s + o.totalMarginCenti, 0),
+        firstOrderDate: sorted[0]?.soDate ?? null,
+        lastOrderDate: latest.soDate,
         isReturning: purchases > 1,
       };
     });
   }
 
-  return c.json({ period, includeTest, overview, monthly, customers });
+  const { data: tRow } = await sb.from('analysis_customer_targets').select('*').eq('id', 1).maybeSingle();
+  const targets: TargetProfile = {
+    targetAvgAge: tRow?.target_avg_age ?? null,
+    ageToleranceYears: tRow?.age_tolerance_years ?? 10,
+    raceTargets: tRow?.race_targets ?? null,
+    genderTargets: tRow?.gender_targets ?? null,
+    areaStates: tRow?.area_states ?? [],
+    areaCities: tRow?.area_cities ?? [],
+  };
+
+  return c.json({ period, includeTest, overview, monthly, customers, targets });
+});
+
+salesAnalysis.put('/targets', async (c) => {
+  const sb = c.get('supabase');
+  const userId = c.get('user').id;
+
+  const staffRes = await sb.from('staff').select('role, active').eq('id', userId).maybeSingle();
+  if (staffRes.error) return c.json({ error: 'role_lookup_failed', reason: staffRes.error.message }, 500);
+  if (!staffRes.data || !staffRes.data.active || !CURATOR_ROLES.has(staffRes.data.role)) {
+    return c.json({ error: 'forbidden', reason: 'sales_analysis_curator_only' }, 403);
+  }
+
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const shares = (v: unknown): Record<string, number> | null => {
+    if (!v || typeof v !== 'object') return null;
+    const out: Record<string, number> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      const n = Number(val); if (Number.isFinite(n) && n > 0) out[k] = n;
+    }
+    return Object.keys(out).length ? out : null;
+  };
+  const strArr = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim() !== '') : [];
+
+  const row = {
+    id: 1,
+    target_avg_age: num(body.targetAvgAge),
+    age_tolerance_years: Math.max(1, num(body.ageToleranceYears) ?? 10),
+    race_targets: shares(body.raceTargets),
+    gender_targets: shares(body.genderTargets),
+    area_states: strArr(body.areaStates),
+    area_cities: strArr(body.areaCities),
+    updated_at: new Date().toISOString(),
+    updated_by: userId,
+  };
+  const { error } = await sb.from('analysis_customer_targets').upsert(row, { onConflict: 'id' });
+  if (error) return c.json({ error: 'save_failed', reason: error.message }, 500);
+
+  const targets: TargetProfile = {
+    targetAvgAge: row.target_avg_age,
+    ageToleranceYears: row.age_tolerance_years,
+    raceTargets: row.race_targets,
+    genderTargets: row.gender_targets,
+    areaStates: row.area_states,
+    areaCities: row.area_cities,
+  };
+  return c.json({ targets });
 });
