@@ -133,8 +133,10 @@ export interface SaCustomerRow {
   birthday: string | null;
   gender: string | null;
   state: string | null;
+  city: string | null;
   orderCount: number;     // collapsed physical purchases in scope
   ltvCenti: number;       // sum of total_revenue_centi over scoped orders
+  marginCenti: number;    // sum of total_margin_centi over scoped orders
   firstOrderDate: string | null;
   lastOrderDate: string | null;
   isReturning: boolean;   // >1 physical purchase in scope
@@ -149,7 +151,10 @@ export interface CustomerDemographicsSummary {
   gender: DistributionBucket[];   // includes 'Unknown'
   race: DistributionBucket[];     // includes 'Unknown'
   byState: DistributionBucket[];  // includes 'Unknown'
+  city: DistributionBucket[];     // includes 'Unknown'
   ageHistogram: Array<{ age: number; count: number }>; // per exact year, ascending
+  avgAge: number | null;
+  medianAge: number | null;
   newVsReturning: { newCount: number; returningCount: number };
 }
 
@@ -179,16 +184,27 @@ export function summarizeCustomerDemographics(
   const gender = new Map<string, number>();
   const race = new Map<string, number>();
   const state = new Map<string, number>();
+  const city = new Map<string, number>();
   const ageCounts = new Map<number, number>();
+  const ages: number[] = [];
   let withBirthday = 0; let newCount = 0; let returningCount = 0;
 
   for (const r of perCustomer) {
     bump(gender, r.gender);
     bump(race, r.race);
     bump(state, r.state);
-    if (r.age !== null) { withBirthday += 1; ageCounts.set(r.age, (ageCounts.get(r.age) ?? 0) + 1); }
+    bump(city, r.city);
+    if (r.age !== null) { withBirthday += 1; ages.push(r.age); ageCounts.set(r.age, (ageCounts.get(r.age) ?? 0) + 1); }
     if (r.isReturning) returningCount += 1; else newCount += 1;
   }
+
+  const avgAge = ages.length ? ages.reduce((a, b) => a + b, 0) / ages.length : null;
+  const sortedAges = [...ages].sort((a, b) => a - b);
+  const medianAge = sortedAges.length
+    ? (sortedAges.length % 2
+        ? sortedAges[(sortedAges.length - 1) / 2]!
+        : (sortedAges[sortedAges.length / 2 - 1]! + sortedAges[sortedAges.length / 2]!) / 2)
+    : null;
 
   const toBuckets = (m: Map<string, number>): DistributionBucket[] =>
     [...m.entries()]
@@ -202,9 +218,12 @@ export function summarizeCustomerDemographics(
     gender: toBuckets(gender),
     race: toBuckets(race),
     byState: toBuckets(state),
+    city: toBuckets(city),
     ageHistogram: [...ageCounts.entries()]
       .map(([age, count]) => ({ age, count }))
       .sort((a, b) => a.age - b.age),
+    avgAge,
+    medianAge,
     newVsReturning: { newCount, returningCount },
   };
 }

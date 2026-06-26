@@ -89,9 +89,37 @@ describe('monthlyTrend', () => {
 });
 
 const cust = (over: Partial<SaCustomerRow> = {}): SaCustomerRow => ({
-  id: 'c1', name: 'Cust', race: null, birthday: null, gender: null, state: null,
-  orderCount: 1, ltvCenti: 0, firstOrderDate: '2026-01-01', lastOrderDate: '2026-01-01',
-  isReturning: false, ...over,
+  id: 'c1', name: 'Cust', race: null, birthday: null, gender: null, state: null, city: null,
+  orderCount: 1, ltvCenti: 0, marginCenti: 0,
+  firstOrderDate: '2026-01-01', lastOrderDate: '2026-01-01', isReturning: false, ...over,
+});
+
+describe('summarizeCustomerDemographics — city + age stats', () => {
+  const asOf = '2026-06-26';
+  it('builds a city distribution with Unknown for blanks', () => {
+    const s = summarizeCustomerDemographics([
+      cust({ id: 'a', city: 'Kuala Lumpur' }),
+      cust({ id: 'b', city: 'Kuala Lumpur' }),
+      cust({ id: 'c', city: '' }),
+    ], { asOf });
+    expect(s.city).toEqual([{ key: 'Kuala Lumpur', count: 2 }, { key: 'Unknown', count: 1 }]);
+  });
+  it('computes avg and median age over customers with a birthday', () => {
+    const s = summarizeCustomerDemographics([
+      cust({ id: 'a', birthday: '2000-06-26' }), // 26
+      cust({ id: 'b', birthday: '1996-06-26' }), // 30
+      cust({ id: 'c', birthday: '1990-06-26' }), // 36
+      cust({ id: 'd', birthday: null }),
+    ], { asOf });
+    expect(s.avgAge).toBeCloseTo((26 + 30 + 36) / 3, 6);
+    expect(s.medianAge).toBe(30);
+    expect(s.withBirthday).toBe(3);
+  });
+  it('avg/median age are null when no birthdays', () => {
+    const s = summarizeCustomerDemographics([cust({ id: 'a' })], { asOf });
+    expect(s.avgAge).toBeNull();
+    expect(s.medianAge).toBeNull();
+  });
 });
 
 describe('summarizeCustomerDemographics', () => {
