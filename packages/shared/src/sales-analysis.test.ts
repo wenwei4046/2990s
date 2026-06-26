@@ -125,7 +125,7 @@ describe('summarizeCustomerDemographics — city + age stats', () => {
 });
 
 const TP = (over: Partial<TargetProfile> = {}): TargetProfile => ({
-  targetAvgAge: null, ageToleranceYears: 10,
+  ageRangeMin: null, ageRangeMax: null,
   raceTargets: null, genderTargets: null, areaStates: [], areaCities: [], ...over,
 });
 
@@ -136,12 +136,25 @@ describe('computeTargetMatch', () => {
     expect(r.overall).toBeNull();
     expect(r.age.configured).toBe(false);
   });
-  it('age dimension fades linearly within tolerance', () => {
-    const customers = [cust({ id: 'a', birthday: '1990-06-26' }), cust({ id: 'b', birthday: '1982-06-26' })]; // 36, 44 → avg 40
-    const r = computeTargetMatch(customers, TP({ targetAvgAge: 45, ageToleranceYears: 10 }), asOf);
-    expect(r.age.actualAvg).toBe(40);
+  it('age dimension = % of customers whose age is in the target range', () => {
+    const customers = [cust({ id: 'a', birthday: '1990-06-26' }), cust({ id: 'b', birthday: '1982-06-26' })]; // 36, 44
+    const r = computeTargetMatch(customers, TP({ ageRangeMin: 40, ageRangeMax: 50 }), asOf);
+    expect(r.age.matched).toBe(1);  // only the 44yo is in [40,50]
+    expect(r.age.total).toBe(2);
     expect(r.age.score).toBeCloseTo(50, 6);
     expect(r.overall).toBeCloseTo(50, 6);
+  });
+  it('age range is inclusive and treats missing birthday as out-of-range', () => {
+    const customers = [
+      cust({ id: 'a', birthday: '2000-06-26' }), // 26 — in
+      cust({ id: 'b', birthday: '1996-06-26' }), // 30 — in (max inclusive)
+      cust({ id: 'c', birthday: '1995-06-26' }), // 31 — out
+      cust({ id: 'd', birthday: null }),         // no age — out
+    ];
+    const r = computeTargetMatch(customers, TP({ ageRangeMin: 26, ageRangeMax: 30 }), asOf);
+    expect(r.age.matched).toBe(2);
+    expect(r.age.total).toBe(4);
+    expect(r.age.score).toBeCloseTo(50, 6);
   });
   it('race overlap = sum of min(target,actual)', () => {
     const customers = [
@@ -166,7 +179,7 @@ describe('computeTargetMatch', () => {
   it('overall averages configured dims and flags the biggest gap', () => {
     const customers = [cust({ id: 'a', birthday: '1982-06-26', race: 'Malay', state: 'Johor', city: 'Johor Bahru' })]; // 44
     const r = computeTargetMatch(customers, TP({
-      targetAvgAge: 44, ageToleranceYears: 10,
+      ageRangeMin: 40, ageRangeMax: 50,
       raceTargets: { Malay: 100, Chinese: 0, Indian: 0, Others: 0 },
       areaStates: ['Kuala Lumpur'], areaCities: [],
     }), asOf);

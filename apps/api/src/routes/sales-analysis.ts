@@ -133,8 +133,8 @@ salesAnalysis.get('/', async (c) => {
 
   const { data: tRow } = await sb.from('analysis_customer_targets').select('*').eq('id', 1).maybeSingle();
   const targets: TargetProfile = {
-    targetAvgAge: tRow?.target_avg_age ?? null,
-    ageToleranceYears: tRow?.age_tolerance_years ?? 10,
+    ageRangeMin: tRow?.age_range_min ?? null,
+    ageRangeMax: tRow?.age_range_max ?? null,
     raceTargets: tRow?.race_targets ?? null,
     genderTargets: tRow?.gender_targets ?? null,
     areaStates: tRow?.area_states ?? [],
@@ -169,8 +169,8 @@ salesAnalysis.put('/targets', async (c) => {
 
   const row = {
     id: 1,
-    target_avg_age: num(body.targetAvgAge),
-    age_tolerance_years: Math.max(1, num(body.ageToleranceYears) ?? 10),
+    age_range_min: num(body.ageRangeMin),
+    age_range_max: num(body.ageRangeMax),
     race_targets: shares(body.raceTargets),
     gender_targets: shares(body.genderTargets),
     area_states: strArr(body.areaStates),
@@ -182,8 +182,8 @@ salesAnalysis.put('/targets', async (c) => {
   if (error) return c.json({ error: 'save_failed', reason: error.message }, 500);
 
   const targets: TargetProfile = {
-    targetAvgAge: row.target_avg_age,
-    ageToleranceYears: row.age_tolerance_years,
+    ageRangeMin: row.age_range_min,
+    ageRangeMax: row.age_range_max,
     raceTargets: row.race_targets,
     genderTargets: row.gender_targets,
     areaStates: row.area_states,

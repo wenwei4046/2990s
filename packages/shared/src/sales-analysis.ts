@@ -229,8 +229,8 @@ export function summarizeCustomerDemographics(
 }
 
 export interface TargetProfile {
-  targetAvgAge: number | null;
-  ageToleranceYears: number;
+  ageRangeMin: number | null;
+  ageRangeMax: number | null;
   raceTargets: Record<string, number> | null;
   genderTargets: Record<string, number> | null;
   areaStates: string[];
@@ -239,7 +239,7 @@ export interface TargetProfile {
 
 export interface TargetMatchResult {
   overall: number | null;
-  age: { configured: boolean; score: number; actualAvg: number | null; target: number | null; tolerance: number };
+  age: { configured: boolean; score: number; matched: number; total: number; min: number | null; max: number | null };
   race: { configured: boolean; score: number; rows: Array<{ key: string; target: number; actual: number }> };
   gender: { configured: boolean; score: number; rows: Array<{ key: string; target: number; actual: number }> };
   area: { configured: boolean; score: number; matched: number; total: number };
@@ -295,26 +295,33 @@ export function computeTargetMatch(
   targets: TargetProfile,
   asOf?: string,
 ): TargetMatchResult {
-  const ages = customers.map((c) => ageFromBirthday(c.birthday, asOf)).filter((a): a is number => a !== null);
-  const actualAvg = ages.length ? ages.reduce((a, b) => a + b, 0) / ages.length : null;
-  const ageConfigured = targets.targetAvgAge != null && actualAvg !== null;
-  const tol = Math.max(1, targets.ageToleranceYears || 1);
-  const ageScore = ageConfigured
-    ? Math.max(0, 1 - Math.abs(actualAvg! - targets.targetAvgAge!) / tol) * 100
+  const total = customers.length;
+
+  // Age dimension: % of customers whose exact age falls in the target range
+  // [min, max] (both inclusive, either bound optional). Hit-rate like Area —
+  // customers with no usable birthday count against (denominator = everyone).
+  const ageConfigured = targets.ageRangeMin != null || targets.ageRangeMax != null;
+  const ageLo = targets.ageRangeMin ?? Number.NEGATIVE_INFINITY;
+  const ageHi = targets.ageRangeMax ?? Number.POSITIVE_INFINITY;
+  const ageMatched = ageConfigured
+    ? customers.filter((c) => {
+        const a = ageFromBirthday(c.birthday, asOf);
+        return a !== null && a >= ageLo && a <= ageHi;
+      }).length
     : 0;
+  const ageScore = ageConfigured && total > 0 ? (ageMatched / total) * 100 : 0;
 
   const race = distScore(customers, 'race', RACE_OPTIONS, targets.raceTargets);
   const gender = distScore(customers, 'gender', GENDER_OPTIONS, targets.genderTargets);
 
   const areaConfigured = targets.areaStates.length > 0 || targets.areaCities.length > 0;
-  const total = customers.length;
   const matched = areaConfigured
     ? customers.filter((c) => eqCI(c.state, targets.areaStates) || eqCI(c.city, targets.areaCities)).length
     : 0;
   const areaScore = areaConfigured && total > 0 ? (matched / total) * 100 : 0;
 
   const dims: Array<{ dim: 'age' | 'race' | 'gender' | 'area'; configured: boolean; score: number; label: string }> = [
-    { dim: 'age', configured: ageConfigured, score: ageScore, label: `Avg age ${actualAvg === null ? '—' : Math.round(actualAvg)} vs ${targets.targetAvgAge}` },
+    { dim: 'age', configured: ageConfigured, score: ageScore, label: `Age ${targets.ageRangeMin ?? '0'}–${targets.ageRangeMax ?? '∞'}: ${Math.round(ageScore)}% in range` },
     { dim: 'race', configured: race.configured, score: race.score, label: 'Race mix' },
     { dim: 'gender', configured: gender.configured, score: gender.score, label: 'Gender mix' },
     { dim: 'area', configured: areaConfigured, score: areaScore, label: `Area ${Math.round(areaScore)}%` },
@@ -325,7 +332,7 @@ export function computeTargetMatch(
 
   return {
     overall,
-    age: { configured: ageConfigured, score: ageScore, actualAvg, target: targets.targetAvgAge, tolerance: tol },
+    age: { configured: ageConfigured, score: ageScore, matched: ageMatched, total, min: targets.ageRangeMin, max: targets.ageRangeMax },
     race, gender,
     area: { configured: areaConfigured, score: areaScore, matched, total },
     biggestGap: gap ? { dim: gap.dim, label: gap.label } : null,

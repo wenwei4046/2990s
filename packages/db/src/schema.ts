@@ -602,8 +602,8 @@ export const customers = pgTable('customers', {
    RLS: any staff reads; curators (sales_director/admin/super_admin) write. */
 export const analysisCustomerTargets = pgTable('analysis_customer_targets', {
   id:                integer('id').primaryKey().default(1),
-  targetAvgAge:      integer('target_avg_age'),
-  ageToleranceYears: integer('age_tolerance_years').notNull().default(10),
+  ageRangeMin:       integer('age_range_min'),
+  ageRangeMax:       integer('age_range_max'),
   raceTargets:       jsonb('race_targets'),
   genderTargets:     jsonb('gender_targets'),
   areaStates:        text('area_states').array(),

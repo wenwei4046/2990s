@@ -90,16 +90,17 @@ export const CustomerDataTab = ({ customers, targets }: { customers: SaCustomerR
       {/* Target profile editor */}
       <div className={styles.section}>
         <h2 className={styles.sectionTitle}>Target profile</h2>
+        <p className={styles.cardSub}>Age range (customers whose age falls between, inclusive)</p>
         <div className={styles.targetGrid}>
-          <label className={styles.toggle}>Avg age
+          <label className={styles.toggle}>Min age
             <input className={styles.ageInput} type="number" min={0} max={120}
-              value={draft.targetAvgAge ?? ''}
-              onChange={(e) => setDraft((d) => ({ ...d, targetAvgAge: e.target.value === '' ? null : Number(e.target.value) }))} />
+              value={draft.ageRangeMin ?? ''}
+              onChange={(e) => setDraft((d) => ({ ...d, ageRangeMin: e.target.value === '' ? null : Number(e.target.value) }))} />
           </label>
-          <label className={styles.toggle}>± tolerance (yrs)
-            <input className={styles.ageInput} type="number" min={1} max={100}
-              value={draft.ageToleranceYears}
-              onChange={(e) => setDraft((d) => ({ ...d, ageToleranceYears: Math.max(1, Number(e.target.value) || 1) }))} />
+          <label className={styles.toggle}>Max age
+            <input className={styles.ageInput} type="number" min={0} max={120}
+              value={draft.ageRangeMax ?? ''}
+              onChange={(e) => setDraft((d) => ({ ...d, ageRangeMax: e.target.value === '' ? null : Number(e.target.value) }))} />
           </label>
         </div>
 
@@ -158,9 +159,9 @@ export const CustomerDataTab = ({ customers, targets }: { customers: SaCustomerR
           <span className={styles.cardSub}>over all {fmtQty(customers.length)} customers this period</span>
         </div>
         <div className={styles.card}>
-          <span className={styles.cardLabel}>Age</span>
+          <span className={styles.cardLabel}>Age in range</span>
           <span className={styles.cardValue}>{match.age.configured ? pctStr(match.age.score) : '—'}</span>
-          <span className={styles.cardSub}>{match.age.actualAvg === null ? 'no birthdays' : `avg ${Math.round(match.age.actualAvg)} vs target ${match.age.target}`}</span>
+          <span className={styles.cardSub}>{match.age.configured ? `${fmtQty(match.age.matched)} / ${fmtQty(match.age.total)} in ${match.age.min ?? 0}–${match.age.max ?? '∞'}` : 'no age range set'}</span>
         </div>
         <div className={styles.card}>
           <span className={styles.cardLabel}>Race / Gender</span>
