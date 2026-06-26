@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect } from 'react';
 import { todayLocalIso, type HandoverForm } from '../../lib/handover-helpers';
 import { useAllStaff, useStaff } from '../../lib/staff';
 import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
@@ -11,7 +11,7 @@ import {
   type CustomerSearchHit,
 } from '../../lib/customer-search';
 import styles from '../../pages/Handover.module.css';
-import { RACE_OPTIONS, GENDER_OPTIONS, ageFromBirthday } from '@2990s/shared';
+import { RACE_OPTIONS, GENDER_OPTIONS } from '@2990s/shared';
 
 /* Shown until /so-dropdown-options loads — mirrors the seeded customer_type
    rows (values 'NEW' / 'EXISTING', the vocabulary the Backend SO pages use). */
@@ -73,9 +73,6 @@ export const CustomerStep = ({
     if (form.customerType !== derivedType) update('customerType', derivedType);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [derivedType]);
-
-  // Exact age derived from the birthday for a read-only caption (never stored).
-  const age = useMemo(() => ageFromBirthday(form.birthday), [form.birthday]);
 
   return (
     <section className={styles.stepBody}>
@@ -177,9 +174,6 @@ export const CustomerStep = ({
             max={todayLocalIso()}
             onChange={(e) => update('birthday', e.target.value)}
           />
-          {age !== null && (
-            <p className={styles.signCaption} style={{ marginTop: 4 }}>Age {age}</p>
-          )}
         </Field>
       </div>
       {!matched && (
