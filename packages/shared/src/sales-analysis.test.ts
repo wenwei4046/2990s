@@ -281,6 +281,7 @@ describe('summarizeBuyerDemographics', () => {
   const u = (over: Partial<ProductUnit> = {}): ProductUnit => ({
     docNo: 'SO-1', category: 'MATTRESS', modelId: 'm1', modelName: 'X', variantLabel: 'Queen',
     qty: 1, revenueCenti: 0, marginCenti: 0, sofaClass: null, comboLabel: null, fabricUpgrade: null,
+    itemCodes: [], fabricId: null, seatHeight: null, isPwp: false,
     race: null, birthday: null, gender: null, ...over,
   });
   it('tallies race/ageBand/gender with Unknown + n', () => {
@@ -312,6 +313,7 @@ describe('foldProductUnits', () => {
   const row = (over: Partial<SaItemRow>): SaItemRow => ({
     docNo: 'SO-1', soDate: '2026-06-01', itemCode: '', itemGroup: '', qty: 1,
     totalCenti: 0, costCenti: 0, buildKey: null, fabricId: null, legHeight: null, seatHeight: null,
+    isPwp: false,
     race: null, birthday: null, gender: null, ...over,
   });
   it('maps a mattress line to one unit with size + buyer', () => {
@@ -332,6 +334,29 @@ describe('foldProductUnits', () => {
     expect(units[0]!.category).toBe('SOFA');
     expect(units[0]!.revenueCenti).toBe(350000);
     expect(units[0]!.qty).toBe(1);
+  });
+
+  it('non-sofa unit carries itemCodes=[itemCode], fabricId, seatHeight, isPwp from the row', () => {
+    const units = foldProductUnits([
+      row({ itemCode: 'HILTON-(Q)', itemGroup: 'mattress', fabricId: 'fab-1', seatHeight: '24', isPwp: false }),
+    ], ctx);
+    expect(units[0]!.itemCodes).toEqual(['HILTON-(Q)']);
+    expect(units[0]!.fabricId).toBe('fab-1');
+    expect(units[0]!.seatHeight).toBe('24');
+    expect(units[0]!.isPwp).toBe(false);
+  });
+
+  it('sofa build folds itemCodes, first-non-null fabricId/seatHeight, and OR isPwp across lines', () => {
+    // First line carries fabricId+seatHeight; second line carries isPwp:true
+    const units = foldProductUnits([
+      row({ itemCode: 'ANNSA-1A(LHF)', itemGroup: 'sofa', buildKey: 'bk2', fabricId: 'fab-2', seatHeight: '28', isPwp: false }),
+      row({ itemCode: 'ANNSA-2A(RHF)', itemGroup: 'sofa', buildKey: 'bk2', fabricId: null,    seatHeight: null, isPwp: true }),
+    ], ctx);
+    expect(units).toHaveLength(1);
+    expect(units[0]!.itemCodes).toEqual(['ANNSA-1A(LHF)', 'ANNSA-2A(RHF)']);
+    expect(units[0]!.fabricId).toBe('fab-2');
+    expect(units[0]!.seatHeight).toBe('28');
+    expect(units[0]!.isPwp).toBe(true);
   });
 });
 
@@ -445,6 +470,7 @@ describe('buildProductsSection', () => {
     docNo: 'SO-1', category: 'MATTRESS', modelId: 'm1', modelName: 'ModelA',
     variantLabel: 'Queen', qty: 1, revenueCenti: 100000, marginCenti: 30000,
     sofaClass: null, comboLabel: null, fabricUpgrade: null,
+    itemCodes: [], fabricId: null, seatHeight: null, isPwp: false,
     race: null, birthday: null, gender: null, ...over,
   });
 

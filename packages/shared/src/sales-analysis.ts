@@ -437,6 +437,7 @@ export interface SaItemRow {
   qty: number; totalCenti: number; costCenti: number;
   buildKey: string | null; fabricId: string | null;
   legHeight: string | null; seatHeight: string | null;
+  isPwp: boolean;   // variants.pwp === true (PWP reward line)
   // buyer (attached from the SO's customer)
   race: string | null; birthday: string | null; gender: string | null;
 }
@@ -448,6 +449,14 @@ export interface ProductUnit {
   sofaClass: 'combo' | 'custom' | 'pwp' | null;
   comboLabel: string | null;
   fabricUpgrade: boolean | null;
+  /** All line item_codes folded into this unit (a sofa build's module codes; non-sofa = [itemCode]). */
+  itemCodes: string[];
+  /** Fabric library id for the build (first non-null across lines); null when none. */
+  fabricId: string | null;
+  /** Seat height/depth for the build (first non-null across lines); null when none. */
+  seatHeight: string | null;
+  /** True if any line in the build is a PWP reward line. */
+  isPwp: boolean;
   race: string | null; birthday: string | null; gender: string | null;
 }
 
@@ -481,6 +490,7 @@ export function foldProductUnits(rows: ReadonlyArray<SaItemRow>, ctx: ProductCtx
       variantLabel: isSofa ? 'Custom' : (p?.sizeLabel ?? '—'),
       qty: r.qty, revenueCenti: r.totalCenti, marginCenti: r.totalCenti - r.costCenti,
       sofaClass: isSofa ? 'custom' : null, comboLabel: null, fabricUpgrade: null,
+      itemCodes: [r.itemCode], fabricId: r.fabricId, seatHeight: r.seatHeight, isPwp: r.isPwp,
       race: buyer.race, birthday: buyer.birthday, gender: buyer.gender,
     });
   }
@@ -495,6 +505,10 @@ export function foldProductUnits(rows: ReadonlyArray<SaItemRow>, ctx: ProductCtx
       modelName: (p?.modelId && ctx.modelById.get(p.modelId)) || p?.baseModel || lead.itemCode,
       variantLabel: 'Custom', qty: lead.qty, revenueCenti, marginCenti,
       sofaClass: 'custom', comboLabel: null, fabricUpgrade: null,
+      itemCodes: lines.map((l) => l.itemCode),
+      fabricId: lines.find((l) => l.fabricId)?.fabricId ?? null,
+      seatHeight: lines.find((l) => l.seatHeight)?.seatHeight ?? null,
+      isPwp: lines.some((l) => l.isPwp),
       race: buyer.race, birthday: buyer.birthday, gender: buyer.gender,
     });
   }
