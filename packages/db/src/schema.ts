@@ -1510,12 +1510,6 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   emergencyContactName:           text('emergency_contact_name'),
   emergencyContactPhone:          text('emergency_contact_phone'),
   emergencyContactRelationship:   text('emergency_contact_relationship'),
-  /* Marketing demographics (2026-06-25, migration 0185) — captured at POS
-     handover (required for NEW customers), never shown on the SO/PDF. Read by
-     Sales Analysis. customer_age_frame stores a code (below_18 / 18_25 / 26_35
-     / 36_45 / above_45); customer_race stores the value. */
-  customerRace:                   text('customer_race'),
-  customerAgeFrame:               text('customer_age_frame'),
   /* Sales Analysis test-data filter (2026-06-25, migration 0186) — excludes
      smoke-test SOs from analytics by default. NOT NULL default false; flagging
      real test rows is an owner-confirmed backfill, not automated. */
