@@ -5,6 +5,7 @@ import { fmtCenti, fmtQty } from '@2990s/shared';
 import { Topbar } from '../components/Topbar';
 import { useSalesAnalysis } from '../lib/sales-analysis-queries';
 import { CustomerDataTab } from '../components/sales-analysis/CustomerDataTab';
+import { ProductsTab } from '../components/sales-analysis/ProductsTab';
 import styles from './SalesAnalysis.module.css';
 
 const MIN_SAMPLE = 10; // below this, rates are noise — flag them.
@@ -14,7 +15,7 @@ const pct = (v: number | null): string => (v == null ? '—' : `${v.toFixed(1)}%
 export const SalesAnalysis = () => {
   const [period, setPeriod] = useState('all');
   const [includeTest, setIncludeTest] = useState(false);
-  const [tab, setTab] = useState<'overview' | 'customers'>('overview');
+  const [tab, setTab] = useState<'overview' | 'customers' | 'products'>('overview');
   const { data, isLoading, error } = useSalesAnalysis(period, includeTest);
 
   // Period options derive from the (always-full) monthly trend.
@@ -63,6 +64,11 @@ export const SalesAnalysis = () => {
             className={`${styles.tab} ${tab === 'customers' ? styles.tabActive : ''}`}
             onClick={() => setTab('customers')}
           >Customer Data</button>
+          <button
+            type="button"
+            className={`${styles.tab} ${tab === 'products' ? styles.tabActive : ''}`}
+            onClick={() => setTab('products')}
+          >Products</button>
         </div>
 
         {isLoading && <p className={styles.muted}>Loading…</p>}
@@ -123,6 +129,8 @@ export const SalesAnalysis = () => {
         )}
 
         {tab === 'customers' && data && <CustomerDataTab customers={data.customers} targets={data.targets} />}
+
+        {tab === 'products' && data && <ProductsTab products={data.products} />}
       </div>
     </>
   );

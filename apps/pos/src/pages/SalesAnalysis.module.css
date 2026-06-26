@@ -60,3 +60,15 @@
 .saveBtn:disabled { opacity: 0.6; cursor: default; }
 .spendRow { display: grid; grid-template-columns: 1.4fr 0.8fr 1fr 1fr 0.8fr; gap: var(--space-3); align-items: center; padding: 5px 0; border-top: 1px solid #f0ebe4; font-size: var(--fs-13); color: var(--c-ink); }
 .spendHead { color: #6b6b6b; text-transform: uppercase; letter-spacing: 0.03em; font-size: var(--fs-12); border-top: none; }
+
+/* Products tab — expandable model/variant rows + nested drill */
+.prodRow {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.4fr) 1fr minmax(160px, 240px);
+  align-items: center; gap: var(--space-3);
+  width: 100%; padding: 6px 0;
+  border: none; border-top: 1px solid #f0ebe4;
+  background: none; font: inherit; text-align: left; color: var(--c-ink); cursor: pointer;
+}
+.prodName { font-size: var(--fs-14); color: var(--c-ink); }
+.drill { padding: 4px 0 10px var(--space-4); margin-left: 4px; border-left: 2px solid #f0ebe4; }

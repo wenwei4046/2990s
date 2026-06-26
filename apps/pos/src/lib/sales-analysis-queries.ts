@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { OverviewResult, MonthlyRow, SaCustomerRow, TargetProfile } from '@2990s/shared';
+import type { OverviewResult, MonthlyRow, SaCustomerRow, TargetProfile, ProductsSection } from '@2990s/shared';
 import { supabase } from './supabase';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -11,6 +11,7 @@ export interface SalesAnalysisResponse {
   monthly: MonthlyRow[];
   customers: SaCustomerRow[];
   targets: TargetProfile;
+  products: ProductsSection;
 }
 
 export function useSalesAnalysis(period: string, includeTest: boolean) {
