@@ -4,6 +4,8 @@
 // spec's cross-cutting rules: a "physical purchase" collapses cross-category
 // follow-up SO chains into one; cancelled orders are filtered upstream.
 
+import { ageFromBirthday } from './customer-demographics';
+
 export interface SaOrderRow {
   docNo: string;
   /** cross_category_source_doc_no — the earlier SO this one follows up; null = standalone. */
@@ -122,4 +124,87 @@ export function monthlyTrend(orders: ReadonlyArray<SaOrderRow>): MonthlyRow[] {
     byMonth.set(month, row);
   }
   return [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
+}
+
+export interface SaCustomerRow {
+  id: string;
+  name: string;
+  race: string | null;
+  birthday: string | null;
+  gender: string | null;
+  state: string | null;
+  orderCount: number;     // collapsed physical purchases in scope
+  ltvCenti: number;       // sum of total_revenue_centi over scoped orders
+  firstOrderDate: string | null;
+  lastOrderDate: string | null;
+  isReturning: boolean;   // >1 physical purchase in scope
+}
+
+export interface DistributionBucket { key: string; count: number }
+
+export interface CustomerDemographicsSummary {
+  total: number;          // customers after the age filter
+  withBirthday: number;   // of those, how many have a usable birthday
+  perCustomer: Array<SaCustomerRow & { age: number | null }>;
+  gender: DistributionBucket[];   // includes 'Unknown'
+  race: DistributionBucket[];     // includes 'Unknown'
+  byState: DistributionBucket[];  // includes 'Unknown'
+  ageHistogram: Array<{ age: number; count: number }>; // per exact year, ascending
+  newVsReturning: { newCount: number; returningCount: number };
+}
+
+export interface AgeFilter { ageMin?: number | null; ageMax?: number | null; asOf?: string }
+
+/** Pure demographics aggregation for the Customer Data tab. Age is computed
+ *  EXACTLY from birthday (no buckets). The age filter is inclusive on both
+ *  bounds; when any bound is set, rows without a usable age are excluded.
+ *  Null/blank race/gender/state count as 'Unknown'. */
+export function summarizeCustomerDemographics(
+  rows: ReadonlyArray<SaCustomerRow>,
+  filter: AgeFilter = {},
+): CustomerDemographicsSummary {
+  const { ageMin, ageMax, asOf } = filter;
+  const lo = ageMin ?? Number.NEGATIVE_INFINITY;
+  const hi = ageMax ?? Number.POSITIVE_INFINITY;
+  const bounded = ageMin != null || ageMax != null;
+
+  const perCustomer = rows
+    .map((r) => ({ ...r, age: ageFromBirthday(r.birthday, asOf) }))
+    .filter((r) => (bounded ? r.age !== null && r.age >= lo && r.age <= hi : true));
+
+  const bump = (m: Map<string, number>, k: string | null): void => {
+    const key = k && k.trim() ? k : 'Unknown';
+    m.set(key, (m.get(key) ?? 0) + 1);
+  };
+  const gender = new Map<string, number>();
+  const race = new Map<string, number>();
+  const state = new Map<string, number>();
+  const ageCounts = new Map<number, number>();
+  let withBirthday = 0; let newCount = 0; let returningCount = 0;
+
+  for (const r of perCustomer) {
+    bump(gender, r.gender);
+    bump(race, r.race);
+    bump(state, r.state);
+    if (r.age !== null) { withBirthday += 1; ageCounts.set(r.age, (ageCounts.get(r.age) ?? 0) + 1); }
+    if (r.isReturning) returningCount += 1; else newCount += 1;
+  }
+
+  const toBuckets = (m: Map<string, number>): DistributionBucket[] =>
+    [...m.entries()]
+      .map(([key, count]) => ({ key, count }))
+      .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+
+  return {
+    total: perCustomer.length,
+    withBirthday,
+    perCustomer,
+    gender: toBuckets(gender),
+    race: toBuckets(race),
+    byState: toBuckets(state),
+    ageHistogram: [...ageCounts.entries()]
+      .map(([age, count]) => ({ age, count }))
+      .sort((a, b) => a.age - b.age),
+    newVsReturning: { newCount, returningCount },
+  };
 }
