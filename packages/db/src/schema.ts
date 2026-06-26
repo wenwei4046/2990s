@@ -574,6 +574,14 @@ export const customers = pgTable('customers', {
   notes:        text('notes'),
   firstSeenAt:  timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
   lastSeenAt:   timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+  // Marketing demographics (2026-06-26) — customer-level, captured at POS
+  // handover (required for NEW; client-side gate), never on the SO/PDF. race =
+  // RACE_OPTIONS value, gender = GENDER_OPTIONS value, birthday is an ISO date
+  // (exact age derived at read time — no buckets). Filled keep-first by
+  // upsert_customer_by_name_phone. Read by Sales Analysis (Customer Data tab).
+  race:         text('race'),
+  birthday:     date('birthday'),
+  gender:       text('gender'),
 }, (t) => ({
   phoneIdx: index('idx_customers_phone').on(t.phone),
   /* Identity key (Chairman 2026-06-03, migration 0144): one customer per
