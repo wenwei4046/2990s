@@ -46,8 +46,17 @@
 .tabActive { color: var(--c-ink); border-bottom-color: var(--c-accent, #b06a3b); font-weight: 600; }
 .ageInput { font: inherit; width: 64px; margin-left: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .custRow {
-  display: grid; grid-template-columns: 1.6fr 1fr 1.2fr 0.5fr 0.9fr 0.7fr 1.1fr;
+  display: grid; grid-template-columns: 1.5fr 0.9fr 1.1fr 0.5fr 0.8fr 1.3fr 0.7fr 1.1fr;
   gap: var(--space-3); align-items: center; padding: 6px 0;
   border-top: 1px solid #f0ebe4; font-size: var(--fs-13); color: var(--c-ink);
 }
 .custHead { color: #6b6b6b; text-transform: uppercase; letter-spacing: 0.03em; font-size: var(--fs-12); border-top: none; }
+
+.targetGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-2); margin: 6px 0; }
+.chipRow { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.chip { font: inherit; font-size: var(--fs-13); padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: #fff; color: var(--c-ink); cursor: pointer; }
+.chipOn { background: var(--c-accent, #b06a3b); color: #fff; border-color: var(--c-accent, #b06a3b); }
+.saveBtn { font: inherit; font-size: var(--fs-14); padding: 8px 16px; border: none; border-radius: var(--radius-sm); background: var(--c-accent, #b06a3b); color: #fff; cursor: pointer; }
+.saveBtn:disabled { opacity: 0.6; cursor: default; }
+.spendRow { display: grid; grid-template-columns: 1.4fr 0.8fr 1fr 1fr 0.8fr; gap: var(--space-3); align-items: center; padding: 5px 0; border-top: 1px solid #f0ebe4; font-size: var(--fs-13); color: var(--c-ink); }
+.spendHead { color: #6b6b6b; text-transform: uppercase; letter-spacing: 0.03em; font-size: var(--fs-12); border-top: none; }

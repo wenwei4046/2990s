@@ -122,7 +122,7 @@ export const SalesAnalysis = () => {
           </>
         )}
 
-        {tab === 'customers' && data && <CustomerDataTab customers={data.customers} />}
+        {tab === 'customers' && data && <CustomerDataTab customers={data.customers} targets={data.targets} />}
       </div>
     </>
   );
