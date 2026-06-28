@@ -5230,7 +5230,12 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
        if the campaign has since been toggled off. Skip the drift check too —
        the client always sends 0 for a free-item line so there is no drift to
        gate against. */
-    if (!isFreeItemLine(prev.variants) && posTablet && recomputedPatch.drift) {
+    /* PWP reward lines are grandfathered too (Loo 2026-06-28). The grant price
+       was locked when the voucher was claimed; the edit path passes no
+       pwpBaseSen, so recompute returns FULL RETAIL — comparing the stored grant
+       price against it always "drifts". Skip the gate for a reward line exactly
+       like a free-item line; the unit below is forced back to the stored grant. */
+    if (!isFreeItemLine(prev.variants) && !prevIsReward && posTablet && recomputedPatch.drift) {
       return c.json({
         error:    'pricing_drift',
         reason:   'Client unitPriceCenti differs >0.5% from server compute.',
@@ -5247,6 +5252,12 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
      at RM 0 regardless of what the current recompute produced. */
   const unit = isFreeItemLine(prev.variants)
     ? 0
+    /* PWP reward — keep the grant price locked at claim time. Recompute (no
+       pwpBaseSen on the edit path) would reset it to full retail and the
+       Backend, not being a POS tablet, would save that silently — turning a
+       RM490 加购 into RM990 with no warning (Loo 2026-06-28). */
+    : prevIsReward
+    ? prev.unit_price_centi
     : (recomputedPatch ? recomputedPatch.unit_price_sen : clientUnit);
   /* Audit 2026-06-11 C-2 — same discount gate as POST /: the effective
      (patch-else-stored) discount must sit in [0, qty × unit] against the
