@@ -1,0 +1,74 @@
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  border-bottom: 1px solid var(--line);
+  padding: var(--space-2) var(--space-4);
+  font-family: var(--font-sans);
+  color: var(--c-ink);
+}
+
+.bandGeneral  { background: rgba(232, 107, 58, 0.06); border-color: rgba(232, 107, 58, 0.25); }
+.bandWarning  { background: rgba(184, 51, 31, 0.08); border-color: rgba(184, 51, 31, 0.30); }
+.bandSop      { background: rgba(47, 93, 79, 0.08);  border-color: rgba(47, 93, 79, 0.30); }
+.bandLearning { background: rgba(232, 107, 58, 0.06); border-color: rgba(232, 107, 58, 0.25); }
+
+.iconWell {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.iconWellGeneral  { background: rgba(232, 107, 58, 0.16); color: var(--c-burnt, #E86B3A); }
+.iconWellWarning  { background: rgba(184, 51, 31, 0.18); color: var(--c-festive-b, #B8331F); }
+.iconWellSop      { background: rgba(47, 93, 79, 0.18); color: var(--c-secondary-a, #2f5d4f); }
+.iconWellLearning { background: rgba(232, 107, 58, 0.16); color: var(--c-burnt, #E86B3A); }
+
+.body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.title {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: 700;
+  color: var(--c-ink);
+  margin: 0;
+  line-height: 1.3;
+}
+
+.text {
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  color: var(--c-ink);
+  white-space: pre-wrap;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.ack {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--c-paper);
+  color: var(--c-ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 4px 12px;
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ack:hover { border-color: var(--c-burnt); color: var(--c-burnt); }
+.ack:disabled { opacity: 0.6; cursor: default; }

@@ -7,6 +7,7 @@ import { CommandPalette } from './CommandPalette';
 import { ToastProvider } from './Toast';
 import { ErrorBoundary } from './ErrorBoundary';
 import { SkeletonDetailPage } from './Skeleton';
+import { AnnouncementBanner } from './AnnouncementBanner';
 import styles from './Layout.module.css';
 
 // Auth-gated layout shell. Redirects to /login if no session, /no-access if
@@ -109,6 +110,9 @@ export const Layout = () => {
             searchPlaceholder={meta.searchPlaceholder}
             onOpenSearch={() => setPaletteOpen(true)}
           />
+          {/* Office-wide announcement strip — polls /announcements/banner every
+              60s, hides itself when there's no active notice for this user. */}
+          <AnnouncementBanner />
           <main className={styles.main}>
             {/* Single Suspense boundary for all lazy-loaded route pages.
                 See router.tsx — per-route code splitting means each page

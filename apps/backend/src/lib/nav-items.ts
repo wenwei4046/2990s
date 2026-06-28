@@ -16,6 +16,7 @@ export const NAV_ITEMS: NavItem[] = [
   // Workspace
   { label: 'Dashboard', path: '/dashboard', group: 'Workspace', keywords: 'home today' },
   { label: 'Payment audit log', path: '/audit-log', group: 'Workspace', keywords: 'finance' },
+  { label: 'Announcements', path: '/announcements', group: 'Workspace', keywords: 'notice memo banner broadcast sop warning learning office-wide remind' },
 
   // Sales Order
   { label: 'Sales Orders', path: '/mfg-sales-orders', group: 'Sales Order', keywords: 'so' },

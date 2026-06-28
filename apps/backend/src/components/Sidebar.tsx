@@ -33,6 +33,7 @@ import {
   Coins,
   CalendarClock,
   Gauge,
+  Megaphone,
 } from 'lucide-react';
 import { useAuth, POS_ONLY_ROLES, SALES_DESK_ROLES } from '../lib/auth';
 import styles from './Sidebar.module.css';
@@ -316,6 +317,7 @@ export const Sidebar = () => {
         {canSeeAdmin && (
           <>
             <div className={styles.navGroup}>Administration</div>
+            {renderLink({ to: '/announcements', icon: <Megaphone {...ICON_PROPS} />, label: 'Announcements' })}
             {renderLink({ to: '/users', icon: <ShieldCheck {...ICON_PROPS} />, label: 'Users' })}
             {renderLink({ to: '/system-health', icon: <Activity {...ICON_PROPS} />, label: 'System Health' })}
           </>
