@@ -73,6 +73,7 @@ import {
   type SoDropdownOption,
 } from '../lib/so-maintenance/so-dropdown-options-queries';
 import { Topbar } from '../components/Topbar';
+import { useToast } from '../components/Toast';
 import styles from './SalesOrderMaintenance.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -193,6 +194,7 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
   const removeMapping = useDeleteStateWarehouseMapping();
   const updateLoc = useUpdateLocality();
   const deleteLoc = useDeleteLocality();
+  const toast = useToast();
 
   const states = useMemo(() => distinctStates(localities.data ?? []), [localities.data]);
   // suppress unused — kept so the read pattern matches Backend in case a
@@ -326,7 +328,7 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
       country:   (lockedCountry || newCountry).trim() || 'Malaysia',
     };
     if (!payload.state || !payload.stateCode || !payload.city || !payload.postcode) {
-      window.alert('State, State Code, City and Postcode are all required.');
+      toast.error('State, State Code, City and Postcode are all required.');
       return;
     }
     createLoc.mutate(payload, {
@@ -334,7 +336,7 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
         setNewState(''); setNewStateCode(''); setNewCity(''); setNewPostcode('');
         if (!lockedCountry) setNewCountry('Malaysia');
       },
-      onError: (err) => window.alert(String((err as Error).message ?? err)),
+      onError: (err) => toast.error(String((err as Error).message ?? err)),
     });
   };
 
@@ -351,7 +353,7 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
         }),
       ));
     } catch (err) {
-      window.alert(`Save failed partway: ${String((err as Error).message ?? err)}`);
+      toast.error(`Save failed partway: ${String((err as Error).message ?? err)}`);
     }
   };
 
@@ -372,7 +374,7 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
         updateLoc.mutateAsync({ id: r.id!, country: trimmed }),
       ));
     } catch (err) {
-      window.alert(`Move failed partway: ${String((err as Error).message ?? err)}`);
+      toast.error(`Move failed partway: ${String((err as Error).message ?? err)}`);
     }
   };
 
@@ -478,16 +480,16 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
               disabled={createLoc.isPending}
               onClick={async () => {
                 const country = newCountry.trim();
-                if (!country) { window.alert('Country name is required.'); return; }
+                if (!country) { toast.error('Country name is required.'); return; }
                 try {
                   await createLoc.mutateAsync({
                     state: '—', stateCode: '—', city: '—', postcode: '—',
                     country,
                   });
                   setNewCountry('');
-                  window.alert(`Added ${country}. Drill in to add states.`);
+                  toast.success(`Added ${country}. Drill in to add states.`);
                 } catch (err) {
-                  window.alert(`Add failed: ${err instanceof Error ? err.message : String(err)}`);
+                  toast.error(`Add failed: ${err instanceof Error ? err.message : String(err)}`);
                 }
               }}
             >
@@ -572,7 +574,7 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
                                         next.delete(s.state);
                                         return next;
                                       });
-                                      window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+                                      toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
                                     },
                                   },
                                 );
@@ -599,7 +601,7 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
                                 upsert.mutate(
                                   { state: s.state, warehouseId: current?.warehouseId ?? null, notes },
                                   {
-                                    onError: (err) => window.alert(`Notes save failed: ${err instanceof Error ? err.message : String(err)}`),
+                                    onError: (err) => toast.error(`Notes save failed: ${err instanceof Error ? err.message : String(err)}`),
                                   },
                                 );
                               }}
@@ -626,7 +628,7 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
                                         return next;
                                       });
                                     },
-                                    onError: (err) => window.alert(`Clear failed: ${err instanceof Error ? err.message : String(err)}`),
+                                    onError: (err) => toast.error(`Clear failed: ${err instanceof Error ? err.message : String(err)}`),
                                   },
                                 )}
                                 aria-label={`Clear warehouse for ${s.state}`}
@@ -679,7 +681,7 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
                 const stateCode = newStateCode.trim().toUpperCase();
                 const whId = newCountry.trim(); // repurposed as the new-state warehouseId picker; '' = none
                 if (!state || !stateCode) {
-                  window.alert('State name and code are required.');
+                  toast.error('State name and code are required.');
                   return;
                 }
                 try {
@@ -701,9 +703,9 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
                     });
                   }
                   setNewState(''); setNewStateCode(''); setNewCountry('');
-                  window.alert(`Added ${state}${canEdit(mode) && whId ? ' with default warehouse' : ''}.`);
+                  toast.success(`Added ${state}${canEdit(mode) && whId ? ' with default warehouse' : ''}.`);
                 } catch (err) {
-                  window.alert(`Add failed: ${err instanceof Error ? err.message : String(err)}`);
+                  toast.error(`Add failed: ${err instanceof Error ? err.message : String(err)}`);
                 }
               }}
             >
@@ -819,7 +821,7 @@ const MaintenanceBody = ({ mode }: { mode: MaintenanceMode }) => {
                             onClick={() => {
                               if (confirm(`Delete ${selectedCity} / ${r.postcode}?`)) {
                                 deleteLoc.mutate(r.id!, {
-                                  onError: (err) => window.alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),
+                                  onError: (err) => toast.error(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),
                                 });
                               }
                             }}
@@ -956,6 +958,7 @@ const DropdownCategoryCard = ({
   const createOpt = useCreateSoDropdownOption();
   const updateOpt = useUpdateSoDropdownOption();
   const deleteOpt = useDeleteSoDropdownOption();
+  const toast = useToast();
   const [newValue, setNewValue] = useState('');
   const [newLabel, setNewLabel] = useState('');
 
@@ -979,21 +982,21 @@ const DropdownCategoryCard = ({
       onSuccess: () => {
         setEdits((e) => { const next = { ...e }; delete next[row.id]; return next; });
       },
-      onError: (err) => window.alert(`Update failed: ${(err as Error).message ?? err}`),
+      onError: (err) => toast.error(`Update failed: ${(err as Error).message ?? err}`),
     });
   };
 
   const toggleActive = (row: SoDropdownOption) => {
     updateOpt.mutate(
       { id: row.id, active: !row.active },
-      { onError: (err) => window.alert(`Update failed: ${(err as Error).message ?? err}`) },
+      { onError: (err) => toast.error(`Update failed: ${(err as Error).message ?? err}`) },
     );
   };
 
   const removeRow = (row: SoDropdownOption) => {
     if (!confirm(`Delete "${row.label}" from ${title}? Historical SOs that reference "${row.value}" stay valid; this just removes the option from new dropdowns.`)) return;
     deleteOpt.mutate(row.id, {
-      onError: (err) => window.alert(`Delete failed: ${(err as Error).message ?? err}`),
+      onError: (err) => toast.error(`Delete failed: ${(err as Error).message ?? err}`),
     });
   };
 
@@ -1001,7 +1004,7 @@ const DropdownCategoryCard = ({
     const value = newValue.trim();
     const label = newLabel.trim();
     if (!value || !label) {
-      window.alert('Both Value and Label are required.');
+      toast.error('Both Value and Label are required.');
       return;
     }
     const maxSort = rows.reduce((m, r) => Math.max(m, r.sortOrder), 0);
@@ -1010,7 +1013,7 @@ const DropdownCategoryCard = ({
       { category, value, label, sortOrder },
       {
         onSuccess: () => { setNewValue(''); setNewLabel(''); },
-        onError:   (err) => window.alert(`Add failed: ${(err as Error).message ?? err}`),
+        onError:   (err) => toast.error(`Add failed: ${(err as Error).message ?? err}`),
       },
     );
   };
@@ -1248,6 +1251,7 @@ const VenuesSection = ({ mode }: { mode: MaintenanceMode }) => {
   const create = useCreateVenue();
   const update = useUpdateVenue();
   const deactivate = useDeactivateVenue();
+  const toast = useToast();
 
   const [newName, setNewName] = useState('');
   const [newAddress, setNewAddress] = useState('');
@@ -1261,12 +1265,12 @@ const VenuesSection = ({ mode }: { mode: MaintenanceMode }) => {
 
   const saveEdit = () => {
     if (!editingId) return;
-    if (!editForm.name.trim()) { window.alert('Name required.'); return; }
+    if (!editForm.name.trim()) { toast.error('Name required.'); return; }
     update.mutate(
       { id: editingId, name: editForm.name.trim(), address: editForm.address.trim() || null, active: editForm.active },
       {
         onSuccess: () => setEditingId(null),
-        onError: (e) => window.alert(`Update failed: ${(e as Error).message}`),
+        onError: (e) => toast.error(`Update failed: ${(e as Error).message}`),
       },
     );
   };
@@ -1274,17 +1278,17 @@ const VenuesSection = ({ mode }: { mode: MaintenanceMode }) => {
   const removeVenue = (v: VenueRow) => {
     if (!confirm(`Deactivate venue "${v.name}"? Existing SOs that reference it are kept; the venue just hides from pickers.`)) return;
     deactivate.mutate(v.id, {
-      onError: (e) => window.alert(`Deactivate failed: ${(e as Error).message}`),
+      onError: (e) => toast.error(`Deactivate failed: ${(e as Error).message}`),
     });
   };
 
   const addVenue = () => {
-    if (!newName.trim()) { window.alert('Name required.'); return; }
+    if (!newName.trim()) { toast.error('Name required.'); return; }
     create.mutate(
       { name: newName.trim(), address: newAddress.trim() || null },
       {
         onSuccess: () => { setNewName(''); setNewAddress(''); },
-        onError: (e) => window.alert(`Create failed: ${(e as Error).message}`),
+        onError: (e) => toast.error(`Create failed: ${(e as Error).message}`),
       },
     );
   };

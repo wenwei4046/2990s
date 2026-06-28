@@ -25,6 +25,7 @@ import { supabase } from '../lib/supabase';
 import { useCart, cartHasSofa, cartHasMainNonSofa, type FlatConfigSnapshot } from '../state/cart';
 import { Topbar } from '../components/Topbar';
 import { CustomerOrderFab } from '../components/CustomerOrderFab';
+import { useToast } from '../components/Toast';
 import styles from './Catalog.module.css';
 
 /* TEMPORARY (goes with the Backend emergency hatch) — Backend portal origin
@@ -163,6 +164,7 @@ export const Catalog = () => {
   const { data: staff } = useStaff();
   useMfgCatalogRealtime();
   const allCategories = useCategoriesAll();
+  const toast = useToast();
 
   // Category + brand live in the URL so BOTH back paths (browser/swipe back and
   // the in-app navigate(-1)) restore them; { replace: true } keeps a category
@@ -210,7 +212,7 @@ export const Catalog = () => {
     } catch (err) {
       tab?.close();
       console.error('[backend-sso]', err);
-      window.alert('Could not open the Backend order form. Please try again.');
+      toast.error('Could not open the Backend order form. Please try again.');
     } finally {
       setSsoBusy(false);
     }
