@@ -4325,33 +4325,29 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   if (!data) return c.json({ error: 'not_found' }, 404);
 
   /* Backend SO Detail — marketing demographics (race / birthday / gender) write
-     onto the LINKED customer record (keep-first coalesce-fill via the same
-     SECURITY DEFINER RPC the POS handover uses), NEVER onto the SO row. Runs
-     AFTER the header UPDATE succeeds (and after the identity-lock 409) so a
-     rejected/failed PATCH leaves the customer registry untouched. Independent of
-     the name/phone re-resolve above; skipped when that block already wrote
-     demographics for a changed identity. We resolve by the linked customer's OWN
-     stored name+phone (deterministic self-match → never creates a stray
-     customer). Lenient + best-effort: invalid/missing → null; keep-first never
-     clears or overwrites a set value (correcting a stored value is out of scope);
-     a failure only logs. */
+     onto the LINKED customer record, NEVER onto the SO row. Runs AFTER the header
+     UPDATE succeeds (and after the identity-lock 409) so a rejected/failed PATCH
+     leaves the customer registry untouched. Independent of the name/phone
+     re-resolve above; skipped when that block already wrote demographics for a
+     changed identity.
+
+     Loo 2026-06-28 — this is the CORRECTION path: unlike the POS handover (which
+     keeps-first so a returning customer is never clobbered by a new order), the
+     Backend must be able to fix a wrong / forgotten value from an earlier SO. So
+     it calls set_customer_demographics (mig 0209) by the linked customer id with
+     OVERWRITE-IF-PROVIDED semantics — a picked value replaces the stored one, a
+     blank field leaves it untouched (never wipes good data). Lenient +
+     best-effort: invalid/missing → null (= keep); a failure only logs. */
   if (!customerIdentityChanged && oldCustomerId) {
     const demoRace   = isValidRace(body['customerRace']) ? (body['customerRace'] as string) : null;
     const demoBday   = isValidBirthday(body['customerBirthday']) ? (body['customerBirthday'] as string) : null;
     const demoGender = isValidGender(body['customerGender']) ? (body['customerGender'] as string) : null;
     if (demoRace || demoBday || demoGender) {
-      const { data: cust } = await sb.from('customers')
-        .select('name, phone, email').eq('id', oldCustomerId).maybeSingle();
-      const cn = (cust as { name?: string | null } | null)?.name ?? null;
-      const cp = (cust as { phone?: string | null } | null)?.phone ?? null;
-      if (cn && cp) {
-        const { error: demoErr } = await sb.rpc('upsert_customer_by_name_phone', {
-          p_name: cn, p_phone: cp,
-          p_email: (cust as { email?: string | null } | null)?.email ?? null,
-          p_race: demoRace, p_birthday: demoBday, p_gender: demoGender,
-        });
-        if (demoErr) console.error('[mfg-so] demographics fill failed:', demoErr.message ?? demoErr);
-      }
+      const { error: demoErr } = await sb.rpc('set_customer_demographics', {
+        p_customer_id: oldCustomerId,
+        p_race: demoRace, p_birthday: demoBday, p_gender: demoGender,
+      });
+      if (demoErr) console.error('[mfg-so] demographics correction failed:', demoErr.message ?? demoErr);
     }
   }
 

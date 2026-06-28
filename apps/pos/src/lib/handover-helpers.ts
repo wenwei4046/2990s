@@ -82,9 +82,10 @@ export interface HandoverForm {
   emergencyName: string; emergencyRelation: string; emergencyPhone: string;
 
   /** Marketing demographics (2026-06-26). Captured at handover, persisted to the
-   *  customers table (not the SO/PDF). REQUIRED when customerType==='NEW';
-   *  optional + prefilled for an existing pick. birthday is ISO YYYY-MM-DD;
-   *  gender is a GENDER_OPTIONS value; exact age is derived from birthday. */
+   *  customers table (not the SO/PDF). REQUIRED for every customer (Loo 2026-06-28) —
+   *  prefilled from an existing pick but must be present to advance. birthday is
+   *  ISO YYYY-MM-DD; gender is a GENDER_OPTIONS value; exact age is derived from
+   *  birthday. */
   race: string; birthday: string; gender: string;
 
   deliveryDate: string; deliveryDateLater: boolean;
@@ -148,10 +149,12 @@ export const validateCustomer = (f: HandoverForm): boolean =>
   f.name.trim().length > 0
   && f.phone.trim().length > 0
   && EMAIL_RE.test(f.email.trim())
-  // Race + age band are compulsory for a NEW customer (the first time we record
-  // them); an existing pick already carries them / can be left as prefilled.
-  && (f.customerType !== 'NEW'
-      || (f.race.trim().length > 0 && f.birthday.trim().length > 0 && f.gender.trim().length > 0));
+  // Race + gender + birthday are compulsory for EVERY customer (Loo 2026-06-28):
+  // an existing pick prefills them, but they must be present before the step can
+  // advance — recognised or not.
+  && f.race.trim().length > 0
+  && f.birthday.trim().length > 0
+  && f.gender.trim().length > 0;
 
 export const validateAddress = (f: HandoverForm): boolean => {
   if (f.addressLater) return true;
@@ -255,9 +258,9 @@ const customerBlockers = (f: HandoverForm): string[] => {
   if (!f.phone.trim()) b.push('Phone required');
   if (!f.email.trim()) b.push('Email required');
   else if (!EMAIL_RE.test(f.email.trim())) b.push('Email format invalid (e.g. name@example.com)');
-  if (f.customerType === 'NEW' && !f.race.trim()) b.push('Race required for a new customer');
-  if (f.customerType === 'NEW' && !f.birthday.trim()) b.push('Birthday required for a new customer');
-  if (f.customerType === 'NEW' && !f.gender.trim()) b.push('Gender required for a new customer');
+  if (!f.race.trim()) b.push('Race required');
+  if (!f.birthday.trim()) b.push('Birthday required');
+  if (!f.gender.trim()) b.push('Gender required');
   return b;
 };
 
