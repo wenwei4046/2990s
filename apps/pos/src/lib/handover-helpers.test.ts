@@ -38,17 +38,20 @@ const baseForm: HandoverForm = {
 };
 
 describe('validateCustomer', () => {
+  // Demographics are compulsory for every customer (Loo 2026-06-28), so a valid
+  // case must carry race + birthday + gender alongside the contact fields.
+  const demographics = { race: 'Malay', birthday: '2000-01-15', gender: 'Male' };
   it('requires name, phone, and valid email', () => {
     expect(validateCustomer(baseForm)).toBe(false);
-    expect(validateCustomer({ ...baseForm, name: 'Loo' })).toBe(false);
+    expect(validateCustomer({ ...baseForm, name: 'Loo', ...demographics })).toBe(false);
     // Phone is mandatory (compulsory-phone, PR #457) — name + email alone is not enough.
-    expect(validateCustomer({ ...baseForm, name: 'Loo', email: 'a@b.com' })).toBe(false);
-    expect(validateCustomer({ ...baseForm, name: 'Loo', phone: '0123456789', email: 'invalid' })).toBe(false);
-    expect(validateCustomer({ ...baseForm, name: 'Loo', phone: '0123456789', email: 'a@b.com' })).toBe(true);
+    expect(validateCustomer({ ...baseForm, name: 'Loo', email: 'a@b.com', ...demographics })).toBe(false);
+    expect(validateCustomer({ ...baseForm, name: 'Loo', phone: '0123456789', email: 'invalid', ...demographics })).toBe(false);
+    expect(validateCustomer({ ...baseForm, name: 'Loo', phone: '0123456789', email: 'a@b.com', ...demographics })).toBe(true);
   });
 });
 
-describe('validateCustomer — race/birthday/gender required for NEW customers', () => {
+describe('validateCustomer — race/birthday/gender compulsory for EVERY customer', () => {
   // A complete, valid contact; only customerType + demographics vary per case.
   const okContact = { ...baseForm, name: 'Loo', phone: '0123456789', email: 'a@b.com' };
   it('NEW customer missing all demographics is invalid', () => {
@@ -63,8 +66,11 @@ describe('validateCustomer — race/birthday/gender required for NEW customers',
   it('NEW customer missing only gender is invalid', () => {
     expect(validateCustomer({ ...okContact, customerType: 'NEW', race: 'Indian', birthday: '2000-01-15', gender: '' })).toBe(false);
   });
-  it('EXISTING customer missing demographics is still valid (not blocked)', () => {
-    expect(validateCustomer({ ...okContact, customerType: 'EXISTING', race: '', birthday: '', gender: '' })).toBe(true);
+  it('EXISTING customer missing demographics is now ALSO blocked', () => {
+    expect(validateCustomer({ ...okContact, customerType: 'EXISTING', race: '', birthday: '', gender: '' })).toBe(false);
+  });
+  it('EXISTING customer with demographics is valid', () => {
+    expect(validateCustomer({ ...okContact, customerType: 'EXISTING', race: 'Chinese', birthday: '1990-05-20', gender: 'Female' })).toBe(true);
   });
 });
 

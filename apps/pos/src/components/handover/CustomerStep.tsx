@@ -147,17 +147,17 @@ export const CustomerStep = ({
       </div>
 
       <div className="fieldRow">
-        <Field label={`Race${matched ? '' : ' *'}`}>
-          <select value={form.race} onChange={(e) => update('race', e.target.value)}>
-            <option value="">{matched ? '— optional —' : '— select —'}</option>
+        <Field label="Race *">
+          <select value={form.race} required onChange={(e) => update('race', e.target.value)}>
+            <option value="">— select —</option>
             {RACE_OPTIONS.map((r) => (
               <option key={r} value={r}>{r}</option>
             ))}
           </select>
         </Field>
-        <Field label={`Gender${matched ? '' : ' *'}`}>
-          <select value={form.gender} onChange={(e) => update('gender', e.target.value)}>
-            <option value="">{matched ? '— optional —' : '— select —'}</option>
+        <Field label="Gender *">
+          <select value={form.gender} required onChange={(e) => update('gender', e.target.value)}>
+            <option value="">— select —</option>
             {GENDER_OPTIONS.map((g) => (
               <option key={g} value={g}>{g}</option>
             ))}
@@ -166,10 +166,11 @@ export const CustomerStep = ({
       </div>
 
       <div className="fieldRow">
-        <Field label={`Birthday${matched ? '' : ' *'}`}>
+        <Field label="Birthday *">
           <input
             type="date"
             value={form.birthday}
+            required
             min="1924-01-01"
             max={todayLocalIso()}
             onChange={(e) => update('birthday', e.target.value)}

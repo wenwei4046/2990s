@@ -1995,20 +1995,20 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
               </span>
             </label>
             {/* Marketing demographics — prefilled from the linked customer,
-                saved back onto that customer (never the SO/DO). Keep-first:
-                editable ONLY for genuine first capture (a customer is linked AND
-                the value is still blank). Once stored, the field is read-only —
-                the server's keep-first RPC won't overwrite, so leaving it editable
-                would silently revert a correction (F1). Correcting a stored value
-                is out of scope. */}
+                saved back onto that customer (never the SO/DO). Loo 2026-06-28:
+                fully EDITABLE here so a wrong / forgotten value from an earlier SO
+                can be corrected — the server's set_customer_demographics RPC
+                (mig 0209) overwrites-if-provided, so a pick replaces the stored
+                value while a blank leaves it untouched. Only requirement: a
+                customer must be linked (name + phone saved) so we know which
+                profile to write. Optional — these never gate the Backend save. */}
             <label className={styles.field}
               title={!header.customer_id ? 'Save the customer (name + phone) first'
-                : header.customer_race ? 'Already recorded in the customer profile — captured once'
-                : 'Optional — saved to the customer profile, not the SO'}>
+                : 'Optional — saved to the customer profile, not the SO. Editable to correct a wrong / forgotten value'}>
               <span className={styles.fieldLabel}>Race</span>
               <span className={styles.selectWrap}>
                 <select className={styles.fieldSelect} value={form.customerRace}
-                  disabled={inputsDisabled || !header.customer_id || !!header.customer_race}
+                  disabled={inputsDisabled || !header.customer_id}
                   onChange={(e) => set('customerRace', e.target.value)}>
                   <option value="">—</option>
                   {RACE_OPTIONS.map((r) => (
@@ -2020,12 +2020,11 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             <label className={styles.field}
               title={!header.customer_id ? 'Save the customer (name + phone) first'
-                : header.customer_gender ? 'Already recorded in the customer profile — captured once'
-                : 'Optional — saved to the customer profile, not the SO'}>
+                : 'Optional — saved to the customer profile, not the SO. Editable to correct a wrong / forgotten value'}>
               <span className={styles.fieldLabel}>Gender</span>
               <span className={styles.selectWrap}>
                 <select className={styles.fieldSelect} value={form.customerGender}
-                  disabled={inputsDisabled || !header.customer_id || !!header.customer_gender}
+                  disabled={inputsDisabled || !header.customer_id}
                   onChange={(e) => set('customerGender', e.target.value)}>
                   <option value="">—</option>
                   {GENDER_OPTIONS.map((g) => (
@@ -2037,13 +2036,12 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             <label className={styles.field}
               title={!header.customer_id ? 'Save the customer (name + phone) first'
-                : header.customer_birthday ? 'Already recorded in the customer profile — captured once'
-                : 'Optional — saved to the customer profile, not the SO'}>
+                : 'Optional — saved to the customer profile, not the SO. Editable to correct a wrong / forgotten value'}>
               <span className={styles.fieldLabel}>Birthday</span>
               <input type="date" className={styles.fieldInput} value={form.customerBirthday}
                 min="1924-01-01"
                 max={new Date().toLocaleDateString('en-CA')}
-                disabled={inputsDisabled || !header.customer_id || !!header.customer_birthday}
+                disabled={inputsDisabled || !header.customer_id}
                 onChange={(e) => set('customerBirthday', e.target.value)} />
             </label>
           </div>
