@@ -34,9 +34,16 @@ interface TopbarProps {
   backTo?: string;
   /** Label for the back pill; defaults to "Back". */
   backLabel?: string;
+  /**
+   * Suppress the sales-cart chip in the default right slot. Used by the Catalog
+   * when it's opened in "Add product to a placed SO" mode (?addToOrder=SO-XXXX):
+   * the leftover sales cart is irrelevant there — items go to the order, not the
+   * cart — so showing "N items · RM…" only confuses (Loo 2026-06-21).
+   */
+  hideCart?: boolean;
 }
 
-export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: TopbarProps) {
+export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, hideCart }: TopbarProps) {
   const { user, signOut } = useAuth();
   const { data: staff } = useStaff();
   const lines = useCart((s) => s.lines);
@@ -92,7 +99,7 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: Topba
                 the topbar to keep selling-flow chrome focused on Quotes /
                 My orders / Cart. Links live in pages/Catalog.tsx's sidebar
                 under the "Maintain" heading. */}
-            {count > 0 && (
+            {!hideCart && count > 0 && (
               <Link to="/cart" className={styles.cartChip} aria-label="Cart">
                 <ShoppingBag size={13} strokeWidth={1.75} />
                 {count} item{count > 1 ? 's' : ''} · {fmtRM(subtotal)}
