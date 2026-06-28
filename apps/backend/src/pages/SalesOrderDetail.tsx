@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
-import { buildVariantSummary, canonicalizeVariants, fmtDateOrDash, fmtDateTime, missingVariantAxes } from '@2990s/shared'; // Commander 2026-05-28
+import { buildVariantSummary, canonicalizeVariants, fmtDateOrDash, fmtDateTime, missingVariantAxes, RACE_OPTIONS, GENDER_OPTIONS } from '@2990s/shared'; // Commander 2026-05-28
 import { PhoneInput } from '../components/PhoneInput';
 import { DateField } from '../components/DateField';
 import { SkeletonDetailPage } from '../components/Skeleton';
@@ -241,6 +241,12 @@ type SoHeader = {
      schema since PR #121 but the Detail page never exposed it. Commander
      2026-05-27: "还需要顾客salesorder的reference在order details". */
   customer_so_no: string | null;
+  /* Marketing demographics — live on the customers table, NEVER on the SO
+     (mig 0205/0206). GET /:docNo joins them in from the linked customer so the
+     Customer card can prefill; saved back onto the customer, not the SO. */
+  customer_race: string | null;
+  customer_birthday: string | null;
+  customer_gender: string | null;
   hub_id: string | null;
   hub_name: string | null;
   customer_delivery_date: string | null;
@@ -1567,6 +1573,11 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     customerSoNo: h.customer_so_no ?? '',
     email: h.email ?? '',
     customerType: h.customer_type ?? '',
+    /* Marketing demographics — prefilled from the LINKED customer (GET joins
+       them in); written back to that customer on Save, never onto the SO. */
+    customerRace:     h.customer_race ?? '',
+    customerGender:   h.customer_gender ?? '',
+    customerBirthday: h.customer_birthday ?? '',
     salespersonId: h.salesperson_id ?? '',
     buildingType: h.building_type ?? '',
     /* HC delivery-sheet SO-context raw-data fields (migration 0197). Dual-read
@@ -1727,6 +1738,11 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     customerSoNo: form.customerSoNo || null,
     email: form.email,
     customerType: form.customerType,
+    /* Demographics → customers table only (RPC coalesce-fill in PATCH); the API
+       never maps these onto an SO column. Empty → null (skipped server-side). */
+    customerRace:     form.customerRace || null,
+    customerBirthday: form.customerBirthday || null,
+    customerGender:   form.customerGender || null,
     salespersonId: form.salespersonId || null,
     buildingType: form.buildingType,
     /* HC delivery-sheet SO-context raw-data fields (migration 0197). */
@@ -1977,6 +1993,58 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
+            </label>
+            {/* Marketing demographics — prefilled from the linked customer,
+                saved back onto that customer (never the SO/DO). Keep-first:
+                editable ONLY for genuine first capture (a customer is linked AND
+                the value is still blank). Once stored, the field is read-only —
+                the server's keep-first RPC won't overwrite, so leaving it editable
+                would silently revert a correction (F1). Correcting a stored value
+                is out of scope. */}
+            <label className={styles.field}
+              title={!header.customer_id ? 'Save the customer (name + phone) first'
+                : header.customer_race ? 'Already recorded in the customer profile — captured once'
+                : 'Optional — saved to the customer profile, not the SO'}>
+              <span className={styles.fieldLabel}>Race</span>
+              <span className={styles.selectWrap}>
+                <select className={styles.fieldSelect} value={form.customerRace}
+                  disabled={inputsDisabled || !header.customer_id || !!header.customer_race}
+                  onChange={(e) => set('customerRace', e.target.value)}>
+                  <option value="">—</option>
+                  {RACE_OPTIONS.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
+            </label>
+            <label className={styles.field}
+              title={!header.customer_id ? 'Save the customer (name + phone) first'
+                : header.customer_gender ? 'Already recorded in the customer profile — captured once'
+                : 'Optional — saved to the customer profile, not the SO'}>
+              <span className={styles.fieldLabel}>Gender</span>
+              <span className={styles.selectWrap}>
+                <select className={styles.fieldSelect} value={form.customerGender}
+                  disabled={inputsDisabled || !header.customer_id || !!header.customer_gender}
+                  onChange={(e) => set('customerGender', e.target.value)}>
+                  <option value="">—</option>
+                  {GENDER_OPTIONS.map((g) => (
+                    <option key={g} value={g}>{g}</option>
+                  ))}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
+            </label>
+            <label className={styles.field}
+              title={!header.customer_id ? 'Save the customer (name + phone) first'
+                : header.customer_birthday ? 'Already recorded in the customer profile — captured once'
+                : 'Optional — saved to the customer profile, not the SO'}>
+              <span className={styles.fieldLabel}>Birthday</span>
+              <input type="date" className={styles.fieldInput} value={form.customerBirthday}
+                min="1924-01-01"
+                max={new Date().toLocaleDateString('en-CA')}
+                disabled={inputsDisabled || !header.customer_id || !!header.customer_birthday}
+                onChange={(e) => set('customerBirthday', e.target.value)} />
             </label>
           </div>
         </div>
