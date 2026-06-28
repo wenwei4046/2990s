@@ -22,6 +22,7 @@ import { Button } from '@2990s/design-system';
 import { buildComboLabel, type DefaultFreeGift, type TargetRefinement } from '@2990s/shared';
 import { useProductModels, type ProductModelRow } from '../../lib/products/product-models-queries';
 import { useSofaCombos, type SofaComboRule } from '../../lib/products/sofa-combos-queries';
+import { useToast } from '../Toast';
 import {
   usePwpRules,
   useCreatePwpRule,
@@ -107,6 +108,7 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
   const giftsQ   = useModelDefaultGifts();
   const upsert   = useUpsertModelDefaultGifts();
   const remove   = useDeleteModelDefaultGifts();
+  const toast    = useToast();
 
   // Per-Model edit (tweak / clear one Model's existing gift set).
   const [editModelId, setEditModelId] = useState<string | null>(null);
@@ -213,7 +215,7 @@ const FreeGiftSection = ({ canEdit, gwpOpen, onCloseGwp }: { canEdit: boolean; g
   // Delete a Model's whole free-gift config straight from the list row.
   const deleteModelGift = async (m: ProductModelRow) => {
     if (!window.confirm(`Remove the free gift for ${giftModelLabel(m)}?`)) return;
-    try { await remove.mutateAsync(m.id); } catch (e) { window.alert(`Delete failed: ${String((e as Error).message ?? e)}`); }
+    try { await remove.mutateAsync(m.id); } catch (e) { toast.error(`Delete failed: ${String((e as Error).message ?? e)}`); }
   };
 
   // ── Bulk add ──

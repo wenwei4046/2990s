@@ -38,6 +38,7 @@ import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
+import { useToast } from '../components/Toast';
 import { renderCornerSofa, cornerCompositeFromCells, type CornerGeo } from '../lib/sofa-corner';
 import styles from './CustomBuilder.module.css';
 
@@ -1842,6 +1843,7 @@ function SaveQuickPickModal({
   // the JWT and RLS-scopes the row, so the pick follows the salesperson across
   // devices. No staffId to thread through.
   const addPersonal = useAddPersonalQuickPick();
+  const toast = useToast();
   const [label, setLabel] = useState('');
 
   const submit = async () => {
@@ -1868,7 +1870,7 @@ function SaveQuickPickModal({
       }
       onSaved();
     } catch (e) {
-      alert(`Save failed: ${String(e)}`);
+      toast.error(`Save failed: ${String(e)}`);
     }
   };
 
@@ -1943,6 +1945,7 @@ function CreateComboModal({
   onSaved: () => void;
 }) {
   const create = useCreateSofaCombo();
+  const toast = useToast();
   // Active combos for this Model — used to block adding a duplicate (same
   // module-set) on this create path (Chairman 2026-06-02).
   const existingCombosQ = useSofaCombos(baseModel);
@@ -1967,7 +1970,7 @@ function CreateComboModal({
     // version (append-only table). Warn + stop, and steer to editing instead.
     const dup = findDuplicateCombo(baseModel, modules.map((m) => [m]), existingCombosQ.data ?? []);
     if (dup) {
-      alert(`This combo already exists for ${baseModel}. Edit it in Backend → Combo Pricing instead of adding a duplicate.`);
+      toast.error(`This combo already exists for ${baseModel}. Edit it in Backend → Combo Pricing instead of adding a duplicate.`);
       return;
     }
     const sellingPricesByHeight: Record<string, number | null> = {};
@@ -1976,11 +1979,11 @@ function CreateComboModal({
       const raw = (prices[h] ?? '').trim();
       if (!raw) { sellingPricesByHeight[h] = null; continue; }
       const n = Number(raw);
-      if (!Number.isFinite(n) || n < 0) { alert(`Bad price at ${h}".`); return; }
+      if (!Number.isFinite(n) || n < 0) { toast.error(`Bad price at ${h}".`); return; }
       sellingPricesByHeight[h] = Math.round(n * 100);
       any = true;
     }
-    if (!any) { alert('Enter a price for at least one seat height.'); return; }
+    if (!any) { toast.error('Enter a price for at least one seat height.'); return; }
     const today = new Date().toISOString().slice(0, 10);
     try {
       await create.mutateAsync({
@@ -1997,7 +2000,7 @@ function CreateComboModal({
       });
       onSaved();
     } catch (e) {
-      alert(`Create failed: ${String(e)}`);
+      toast.error(`Create failed: ${String(e)}`);
     }
   };
 
