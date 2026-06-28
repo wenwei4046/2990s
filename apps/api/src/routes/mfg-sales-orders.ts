@@ -1397,10 +1397,34 @@ mfgSalesOrders.get('/:docNo', async (c) => {
   const totalRevenueCenti = typeof (h.data as { total_revenue_centi?: number }).total_revenue_centi === 'number'
     ? (h.data as { total_revenue_centi: number }).total_revenue_centi : 0;
   const paidCentiTotal = (depositInLedger ? 0 : headerDepositCenti) + paidLedgerCenti;
+  /* Marketing demographics (race / birthday / gender) live on the customers
+     table, never on the SO row (mig 0205/0206). Join them in from the linked
+     customer so the Detail Customer card can prefill; they are NOT persisted on
+     the SO and the customer-facing print never renders them. customers SELECT
+     RLS = is_staff(), so any staff opening this SO can read them. */
+  let custRace: string | null = null;
+  let custBirthday: string | null = null;
+  let custGender: string | null = null;
+  {
+    const cid = (h.data as { customer_id?: string | null }).customer_id ?? null;
+    if (cid) {
+      const { data: cust } = await sb.from('customers')
+        .select('race, birthday, gender').eq('id', cid).maybeSingle();
+      if (cust) {
+        custRace     = (cust as { race?: string | null }).race ?? null;
+        custBirthday = (cust as { birthday?: string | null }).birthday ?? null;
+        custGender   = (cust as { gender?: string | null }).gender ?? null;
+      }
+    }
+  }
   const salesOrder = {
     ...(h.data as unknown as Record<string, unknown>),
     has_children: (doCount ?? 0) > 0 || (siCount ?? 0) > 0,
     customer_credit_centi: customerCreditCenti,
+    // Demographics from the linked customer (prefill only — never an SO column).
+    customer_race: custRace,
+    customer_birthday: custBirthday,
+    customer_gender: custGender,
     // Authoritative received-to-date + remaining balance for the detail page
     // and the customer-facing print (so-doc.ts reads paid_centi_total).
     paid_centi_total: paidCentiTotal,
@@ -4127,6 +4151,11 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     }
   }
 
+  /* Nothing mapped onto an SO column changed (only updated_at). NOTE: demographics
+     (customerRace/Birthday/Gender) are deliberately NOT SO columns, so a
+     demographics-ONLY payload would be swallowed here. Not a live path — the
+     Backend Detail buildPayload always co-sends mapped customer fields — but a
+     future demographics-only caller must bypass this guard. */
   if (Object.keys(updates).length === 1) return c.json({ ok: true, changed: 0 });
 
   /* PR — Commander 2026-05-28 — Server-side variant rule enforcement.
@@ -4294,6 +4323,37 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   const { data, error } = await sb.from('mfg_sales_orders').update(updates).eq('doc_no', docNo).select('doc_no').maybeSingle();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'not_found' }, 404);
+
+  /* Backend SO Detail — marketing demographics (race / birthday / gender) write
+     onto the LINKED customer record (keep-first coalesce-fill via the same
+     SECURITY DEFINER RPC the POS handover uses), NEVER onto the SO row. Runs
+     AFTER the header UPDATE succeeds (and after the identity-lock 409) so a
+     rejected/failed PATCH leaves the customer registry untouched. Independent of
+     the name/phone re-resolve above; skipped when that block already wrote
+     demographics for a changed identity. We resolve by the linked customer's OWN
+     stored name+phone (deterministic self-match → never creates a stray
+     customer). Lenient + best-effort: invalid/missing → null; keep-first never
+     clears or overwrites a set value (correcting a stored value is out of scope);
+     a failure only logs. */
+  if (!customerIdentityChanged && oldCustomerId) {
+    const demoRace   = isValidRace(body['customerRace']) ? (body['customerRace'] as string) : null;
+    const demoBday   = isValidBirthday(body['customerBirthday']) ? (body['customerBirthday'] as string) : null;
+    const demoGender = isValidGender(body['customerGender']) ? (body['customerGender'] as string) : null;
+    if (demoRace || demoBday || demoGender) {
+      const { data: cust } = await sb.from('customers')
+        .select('name, phone, email').eq('id', oldCustomerId).maybeSingle();
+      const cn = (cust as { name?: string | null } | null)?.name ?? null;
+      const cp = (cust as { phone?: string | null } | null)?.phone ?? null;
+      if (cn && cp) {
+        const { error: demoErr } = await sb.rpc('upsert_customer_by_name_phone', {
+          p_name: cn, p_phone: cp,
+          p_email: (cust as { email?: string | null } | null)?.email ?? null,
+          p_race: demoRace, p_birthday: demoBday, p_gender: demoGender,
+        });
+        if (demoErr) console.error('[mfg-so] demographics fill failed:', demoErr.message ?? demoErr);
+      }
+    }
+  }
 
   /* Customer identity changed → the minted vouchers follow the order, and the
      cross-category delivery fee re-detects against the new customer. PWP PRODUCT

@@ -54,6 +54,7 @@ import {
   PaymentsTable, labelToApi, draftMethodFields, newPaymentDraft, type PaymentDraft,
 } from '../components/PaymentsTable';
 import { formatPhone } from '@2990s/shared/phone';
+import { RACE_OPTIONS, GENDER_OPTIONS } from '@2990s/shared';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -134,6 +135,12 @@ export const SalesOrderNew = () => {
   /* PR-A on Detail exposed Customer SO Ref inside the Customer card —
      mirror that here so the two pages line up. */
   const [customerSoNo,  setCustomerSoNo]  = useState('');
+  /* Marketing demographics — captured here, written to the customers table via
+     the SO POST (RPC coalesce-fill), never onto the SO row. Optional on the
+     Backend (the required-for-NEW gate lives on the POS handover). */
+  const [customerRace,     setCustomerRace]     = useState('');
+  const [customerGender,   setCustomerGender]   = useState('');
+  const [customerBirthday, setCustomerBirthday] = useState('');
 
   /* Autofill rescue (Wei Siang 2026-06-03) — Chrome/Edge "paint" saved values
      into the Customer Name / Phone / Email inputs WITHOUT firing React's
@@ -740,6 +747,11 @@ export const SalesOrderNew = () => {
         salespersonId: salespersonId || undefined,
         customerType: customerType || undefined,
         customerSoNo: customerSoNo || undefined,
+        /* Demographics → customers table only (RPC coalesce-fill on POST); the
+           API never writes these onto the SO. */
+        customerRace:     customerRace     || undefined,
+        customerGender:   customerGender   || undefined,
+        customerBirthday: customerBirthday || undefined,
         /* Commander 2026-05-27: Venue is locked to the picked salesperson's
            home venue. Send the FK so the API persists `venue_id`; we also
            send the resolved name as the legacy free-text `venue` column
@@ -981,6 +993,51 @@ export const SalesOrderNew = () => {
                 </select>
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
+            </label>
+            {/* Marketing demographics — stored on the customer record, never on
+                the SO/DO. Optional on the Backend. */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Race</span>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={customerRace}
+                  onChange={(e) => setCustomerRace(e.target.value)}
+                >
+                  <option value="">—</option>
+                  {RACE_OPTIONS.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Gender</span>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={customerGender}
+                  onChange={(e) => setCustomerGender(e.target.value)}
+                >
+                  <option value="">—</option>
+                  {GENDER_OPTIONS.map((g) => (
+                    <option key={g} value={g}>{g}</option>
+                  ))}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Birthday</span>
+              <input
+                type="date"
+                className={styles.fieldInput}
+                value={customerBirthday}
+                min="1924-01-01"
+                max={new Date().toLocaleDateString('en-CA')}
+                onChange={(e) => setCustomerBirthday(e.target.value)}
+              />
             </label>
           </div>
         </div>
