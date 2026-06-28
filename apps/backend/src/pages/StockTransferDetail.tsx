@@ -19,7 +19,7 @@ import { useNotify } from '../components/NotifyDialog';
 import { StatusPill } from '../components/StatusPill';
 import { DateField } from '../components/DateField';
 import { sortByText } from '../lib/sort-options';
-import { buildVariantSummary, fmtCenti } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
+import { buildVariantSummary, fmtCenti, fmtDate as fmtDateShared, fmtQty } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   useWarehouses,
 } from '../lib/inventory-queries';
@@ -41,7 +41,7 @@ const fmtDateTime = (iso: string | null): string => {
   if (!iso) return '—';
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return iso;
-  const date = d.toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  const date = fmtDateShared(d);
   const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   return `${date} ${time}`;
 };
@@ -267,7 +267,7 @@ export const StockTransferDetail = () => {
                     })()}
                   </td>
                   <td className={styles.tableRight} style={{ fontFamily: 'var(--font-mono)' }}>
-                    {ln.qty.toLocaleString('en-MY')}
+                    {fmtQty(ln.qty)}
                   </td>
                   {hasFreight && (() => {
                     const a = allocByIndex[i];

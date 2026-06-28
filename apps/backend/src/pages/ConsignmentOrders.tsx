@@ -36,7 +36,7 @@ import { ListingPickerDialog, type ListingChoice } from '../components/ListingPi
 import { useConfirm } from '../components/ConfirmDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { formatPhone } from '@2990s/shared/phone';
-import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
+import { buildVariantSummary, fmtDateOrDash, fmtQty } from '@2990s/shared';
 import {
   useConsignmentOrders, useUpdateConsignmentOrderStatus,
   useConsignmentOrderDetail,
@@ -692,6 +692,9 @@ export const ConsignmentOrders = () => {
   // DataGrid filters internally now; capture its on-screen rows so the KPI
   // strip reflects the active funnel filters (was the ColumnFilterBar output).
   const [visibleRows, setVisibleRows] = useState<SoRow[]>(baseRows);
+  // Row-click multi-select (mirrors the SO / DO / GRN lists) — ticks the row;
+  // the ▸ chevron still drills down via its own stopPropagation handler.
+  const [sel, setSel] = useState<Set<string>>(new Set());
 
   const clearOutstanding = () => {
     const next = new URLSearchParams(searchParams);
@@ -921,7 +924,7 @@ export const ConsignmentOrders = () => {
         gridTemplateColumns: 'repeat(4, 1fr)',
         gap: 'var(--space-2)',
       }}>
-        {kpiTile('Total Orders', kpis.totalOrders.toLocaleString('en-MY'))}
+        {kpiTile('Total Orders', fmtQty(kpis.totalOrders))}
         {kpiTile('Revenue (RM)', fmtRm(kpis.revenue))}
         {kpiTile('Outstanding (RM)', fmtRm(kpis.outstanding), kpis.outstanding > 0 ? 'bad' : undefined)}
         {kpiTile('Paid (RM)', fmtRm(kpis.paid), kpis.paid > 0 ? 'good' : undefined)}
@@ -942,6 +945,15 @@ export const ConsignmentOrders = () => {
         storageKey={STORAGE_KEY}
         exportName="Consignment Orders"
         rowKey={(r) => r.doc_no}
+        selectable={{
+          selectedKeys: sel,
+          onToggle: (k) => setSel((p) => { const n = new Set(p); if (n.has(k)) n.delete(k); else n.add(k); return n; }),
+          onToggleAll: (keys, allSel) => setSel((p) => {
+            const n = new Set(p);
+            if (allSel) { for (const k of keys) n.delete(k); } else { for (const k of keys) n.add(k); }
+            return n;
+          }),
+        }}
         searchPlaceholder="Search SOs…"
         /* Houzs chrome — kill the "drag column header here to group by
            that column" banner; the page-level filter row replaces it. */

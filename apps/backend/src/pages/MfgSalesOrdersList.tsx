@@ -38,7 +38,7 @@ import { useConfirm } from '../components/ConfirmDialog';
 import { useChoice } from '../components/ChoiceDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { formatPhone } from '@2990s/shared/phone';
-import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
+import { buildVariantSummary, fmtDateOrDash, fmtQty } from '@2990s/shared';
 import {
   useMfgSalesOrders, useUpdateMfgSalesOrderStatus,
   useMfgSalesOrderDetail,
@@ -1013,7 +1013,7 @@ export const MfgSalesOrdersList = () => {
         gridTemplateColumns: 'repeat(4, 1fr)',
         gap: 'var(--space-2)',
       }}>
-        {kpiTile('Total Orders', kpis.totalOrders.toLocaleString('en-MY'))}
+        {kpiTile('Total Orders', fmtQty(kpis.totalOrders))}
         {kpiTile('Revenue (RM)', fmtRm(kpis.revenue))}
         {kpiTile('Outstanding (RM)', fmtRm(kpis.outstanding), kpis.outstanding > 0 ? 'bad' : undefined)}
         {kpiTile('Paid (RM)', fmtRm(kpis.paid), kpis.paid > 0 ? 'good' : undefined)}

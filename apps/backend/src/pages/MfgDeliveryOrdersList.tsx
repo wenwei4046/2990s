@@ -19,7 +19,7 @@ import { useConfirm } from '../components/ConfirmDialog';
 import { useChoice } from '../components/ChoiceDialog';
 import { useNotify } from '../components/NotifyDialog';
 import { formatPhone } from '@2990s/shared/phone';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, fmtQty } from '@2990s/shared';
 import {
   useMfgDeliveryOrders, useUpdateMfgDeliveryOrderStatus, useMfgDeliveryOrderDetail,
 } from '../lib/flow-queries';
@@ -514,7 +514,7 @@ export const MfgDeliveryOrdersList = () => {
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-2)' }}>
-        {kpiTile('Total DOs', kpis.totalOrders.toLocaleString('en-MY'))}
+        {kpiTile('Total DOs', fmtQty(kpis.totalOrders))}
         {kpiTile('Revenue (RM)', fmtRm(kpis.revenue))}
         {kpiTile('Cost (RM)', fmtRm(kpis.cost))}
         {kpiTile('Margin (RM)', fmtRm(kpis.margin), kpis.margin > 0 ? 'good' : kpis.margin < 0 ? 'bad' : undefined)}

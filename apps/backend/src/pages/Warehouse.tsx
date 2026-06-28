@@ -22,6 +22,7 @@ import {
   Pencil, Check,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { fmtDate } from '@2990s/shared';
 import { useNotify } from '../components/NotifyDialog';
 import {
   useRacks,
@@ -53,7 +54,7 @@ const TABS: { key: Tab; label: string; icon: typeof Grid3x3 }[] = [
 const fmtDateTime = (iso: string): string => {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return iso;
-  const date = d.toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  const date = fmtDate(d);
   const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   return `${date} ${time}`;
 };

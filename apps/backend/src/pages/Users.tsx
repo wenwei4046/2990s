@@ -22,6 +22,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { Plus, X, RefreshCw } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { fmtDate } from '@2990s/shared';
 import { useAuth, type StaffRole } from '../lib/auth';
 import { useToast } from '../components/Toast';
 import {
@@ -109,7 +110,7 @@ const INVITE_ROLES: StaffRole[] = [
 const formatLastSignIn = (iso: string | null): string => {
   if (!iso) return 'Never';
   const d = new Date(iso);
-  return d.toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  return fmtDate(d);
 };
 
 export const Users = () => {

@@ -19,7 +19,7 @@ import {
   ClipboardCheck, Undo2, Plus,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-29 — GRN shows the variant config like PO
+import { buildVariantSummary, fmtDate as fmtDateShared } from '@2990s/shared'; // Commander 2026-05-29 — GRN shows the variant config like PO
 import { LoadingButton } from '../components/LoadingButton';
 import { SkeletonDetailPage } from '../components/Skeleton';
 import { useNotify } from '../components/NotifyDialog';
@@ -62,7 +62,7 @@ const fmtDate = (iso: string | null | undefined): string => {
   if (!iso) return '—';
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return iso;
-  return d.toLocaleDateString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  return fmtDateShared(d);
 };
 
 const daysSince = (iso: string | null | undefined): number => {
