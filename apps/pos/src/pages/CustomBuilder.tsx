@@ -697,6 +697,33 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // plain pricing → zero change to the normal builder.
   const priceResult = useMemo(() => computeSofaPrice(cells, depth, pricing), [cells, depth, pricing]);
 
+  // Fold plan: an attached-headrest group (single HEADREST cell sitting on a
+  // sofa's back) is NOT its own cart line — it merges into that sofa's line.
+  // `skip` = group indices to drop; `foldInto` = sofaGroupIdx → [headrestGroupIdx].
+  const headrestFold = useMemo(() => {
+    const skip = new Set<number>();
+    const foldInto = new Map<number, number[]>();
+    const byId = new Map<string, Cell>();
+    for (const c of cells) { if (c.id) byId.set(c.id, c); }
+    const cellsOf = (gi: number): Cell[] =>
+      (priceResult.groups[gi]?.cellIds ?? []).map((id) => byId.get(id)).filter((c): c is Cell => c != null);
+    const bboxes = priceResult.groups.map((_, gi) => cellsBbox(cellsOf(gi), depth));
+    priceResult.groups.forEach((_, gi) => {
+      const gc = cellsOf(gi);
+      if (gc.length !== 1 || gc[0]!.moduleId !== 'HEADREST') return;
+      const back = headrestBackTarget(gc[0]!, cells, depth);
+      if (!back) return;
+      const si = bboxes.findIndex((bb, bi) =>
+        bi !== gi && bb != null
+        && Math.abs(bb.x - back.x) < 1 && Math.abs(bb.y - back.y) < 1 && Math.abs(bb.w - back.w) < 1);
+      if (si < 0) return;
+      skip.add(gi);
+      foldInto.set(si, [...(foldInto.get(si) ?? []), gi]);
+    });
+    return { skip, foldInto };
+  }, [priceResult.groups, cells, depth]);
+  const effectiveBuildCount = priceResult.groups.length - headrestFold.skip.size;
+
   // Eagerly load bbox for any matched-bundle composite PNG so the overlay
   // image scales correctly the moment it appears (avoids a fall-back-to-cells
   // flicker between drop and overlay render).
@@ -938,8 +965,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // so-variant-rule legHeight axis still blocks a Processing date / Proceed.
   // TBC sofa exchange + add-to-order: single sofa only (one line per call).
   const canAdd = cells.length > 0 && allClosed
-    && (!onSwapConfirm || priceResult.groups.length === 1)
-    && (!onAddToOrderConfirm || priceResult.groups.length === 1);
+    && (!onSwapConfirm || effectiveBuildCount === 1)
+    && (!onAddToOrderConfirm || effectiveBuildCount === 1);
 
   // Per-seat upgrade (F3) — this Model offers one named upgrade or none.
   // offersUpgrade gates the per-seat add button; footrest distinguishes
@@ -964,12 +991,24 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     // (staff added a second sofa during the edit) append as new lines.
     let usedEditKey = false;
     for (let i = 0; i < priceResult.groups.length; i++) {
+      if (headrestFold.skip.has(i)) continue; // folded into its sofa's line below
       const g = priceResult.groups[i]!;
       const groupCells = g.cellIds
         .map((id) => cellById.get(id))
         .filter((c): c is Cell => c != null)
         .map((c) => ({ ...c }));
       if (groupCells.length === 0) continue;
+      // Fold any headrest(s) attached to this sofa into the same line: their
+      // cell joins this build and their price adds to the line total.
+      let foldedPrice = g.finalPrice;
+      for (const hi of headrestFold.foldInto.get(i) ?? []) {
+        const hg = priceResult.groups[hi]!;
+        for (const id of hg.cellIds) {
+          const hc = cellById.get(id);
+          if (hc) groupCells.push({ ...hc });
+        }
+        foldedPrice += hg.finalPrice;
+      }
       // Single source of truth for sofa-line labels — see summarizeSofaCells.
       // Note this is also re-derived at cart-render time, so updating the
       // rule here propagates to existing cart items too.
@@ -1007,7 +1046,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         ...(!usedEditKey && remark.trim() ? { remark: remark.trim() } : {}),
         ...(!usedEditKey && extraAddonNote.trim() ? { extraAddonNote: extraAddonNote.trim() } : {}),
         ...(!usedEditKey && extraAmountRm > 0 ? { extraAddonAmountRM: extraAmountRm } : {}),
-        total: g.finalPrice + sofaFabricDelta + legSurchargeRm + (!usedEditKey ? extraAmountRm : 0),
+        total: foldedPrice + sofaFabricDelta + legSurchargeRm + (!usedEditKey ? extraAmountRm : 0),
         summary,
       };
       /* TBC sofa exchange — hand the (single) build to the Configurator's
