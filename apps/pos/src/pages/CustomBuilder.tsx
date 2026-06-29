@@ -32,7 +32,7 @@ import {
   type SofaModuleSpec,
   type SofaProductPricing,
 } from '@2990s/shared';
-import { buildSeamlessRun, renderSeamlessSofa, renderSeamlessGroup, isFunctionalSeat, type SeamlessRun } from '../lib/sofa-seamless';
+import { buildSeamlessRun, renderSeamlessSofa, renderSeamlessGroup, isFunctionalSeat, SOFA_BAND, SOFA_INK, type SeamlessRun } from '../lib/sofa-seamless';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
 import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useModelFabricTierOverrides, useCompartmentFabricTierOverrides, useCreateSofaCombo, useCreateSofaQuickPick, useSofaCombos, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
 import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
@@ -660,8 +660,17 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
 
   const groups = useMemo(() => groupSofas(cells, depth), [cells, depth]);
   const analyses = useMemo(
-    () => groups.map((g) => ({ group: g, ...analyzeSofa(g, depth) })),
-    [groups, depth],
+    () => groups.map((g) => {
+      const a = { group: g, ...analyzeSofa(g, depth) };
+      // An attached headrest (renders as a band on a sofa back) counts as
+      // closed — it no longer needs its own "needs a sofa" prompt.
+      if (!a.closed && g.length === 1 && g[0]!.moduleId === 'HEADREST'
+          && headrestBackTarget(g[0]!, cells, depth)) {
+        return { ...a, closed: true, reason: null };
+      }
+      return a;
+    }),
+    [groups, depth, cells],
   );
   // PWP Code Voucher (Phase 2) — the redeem control + voucher state now live in
   // the parent Configurator's shared top bar (2026-06-02). `pricing` arrives
@@ -1353,6 +1362,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
               callouts track the live drag delta and stay glued to the sofa. */}
           {groups.map((g, gi) => {
             const ids = new Set(g.map((c) => c.id).filter((id): id is string => id != null));
+            // An attached headrest renders as a band on the sofa; hide its own
+            // 50/30 callouts so they don't duplicate the sofa's.
+            if (g.length === 1 && g[0]!.moduleId === 'HEADREST'
+                && headrestBackTarget(g[0]!, displayCells, depth)) return null;
             // Suppress dim callouts while this group is in per-module edit
             // mode — they belong to the "fixed complete sofa" view that the
             // user has just stepped out of.
@@ -1404,10 +1417,13 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             const fp = moduleFootprint(m, c.rot, depth);
             const isSelected = c.id === selectedId;
             const inViolation = c.id != null && violationCellIds.has(c.id);
-            const px = (c.x ?? 0) * SCALE;
-            const py = (c.y ?? 0) * SCALE;
-            const w = fp.w * SCALE;
-            const h = fp.h * SCALE;
+            // Attached headrest → draw as a full-width band on the sofa back.
+            const headrestBack = c.moduleId === 'HEADREST'
+              ? headrestBackTarget(c, displayCells, depth) : null;
+            const px = (headrestBack ? headrestBack.x : (c.x ?? 0)) * SCALE;
+            const py = (headrestBack ? headrestBack.y : (c.y ?? 0)) * SCALE;
+            const w = (headrestBack ? headrestBack.w : fp.w) * SCALE;
+            const h = fp.h * SCALE; // band thickness = headrest depth (30cm)
             // cellArt size & position depends on rotation:
             //   rot 0 / 180: silhouette stretches to fill the cell (w × h) so
             //     adjacent cells abut without the 5px-each-side padding gap
@@ -1451,6 +1467,21 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                     // renders (keeps drag + selection working underneath the
                     // pointer-events:none composite).
                     if (c.id != null && compositeCoveredIds.has(c.id)) return null;
+                    if (headrestBack) {
+                      // Full-width backrest band — matches the sofa's band colour
+                      // so it reads as one continuous backrest.
+                      return (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            inset: 0,
+                            background: SOFA_BAND,
+                            border: `1px solid ${SOFA_INK}`,
+                            borderRadius: 8,
+                          }}
+                        />
+                      );
+                    }
                     const artSrc = resolveModuleArtSrc(c.moduleId);
                     // Crop the art to its silhouette bbox so it fills the cell
                     // footprint. Until the async measure resolves (or if it
