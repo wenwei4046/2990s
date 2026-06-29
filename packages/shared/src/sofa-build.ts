@@ -962,6 +962,45 @@ export const cellsBbox = (cells: Cell[], depth: Depth): Bbox | null => {
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 };
 
+/** Vertical tolerance (cm) for a headrest to count as "on" a sofa's back. */
+export const HEADREST_ATTACH_TOL_CM = 20;
+
+/** The sofa GROUP bbox a headrest is attached to (flush against its back/top
+ *  edge), or null when free-standing. Attached = the headrest horizontally
+ *  overlaps a non-accessory sofa group AND that group's top edge lies within
+ *  the headrest footprint expanded vertically by HEADREST_ATTACH_TOL_CM.
+ *  Pure: re-derives sofa groups from `cells`. v1 matches the group's TOP edge
+ *  only (standard orientation — sofas face the TV at the bottom). */
+export const headrestBackTarget = (
+  headrest: Cell,
+  cells: Cell[],
+  depth: Depth,
+): Bbox | null => {
+  const hm = findModule(headrest.moduleId);
+  if (!hm) return null;
+  const hfp = moduleFootprint(hm, headrest.rot, depth);
+  const hTop = headrest.y;
+  const hBottom = headrest.y + hfp.h;
+  const hLeft = headrest.x;
+  const hRight = headrest.x + hfp.w;
+  const sofaCells = cells.filter(
+    (c) => c.id !== headrest.id && !isAccessoryModule(c.moduleId),
+  );
+  let best: Bbox | null = null;
+  let bestGap = Infinity;
+  for (const g of groupSofas(sofaCells, depth)) {
+    const bb = cellsBbox(g, depth);
+    if (!bb) continue;
+    const overlap = Math.min(hRight, bb.x + bb.w) - Math.max(hLeft, bb.x);
+    if (overlap <= 0) continue;
+    const groupTop = bb.y;
+    if (groupTop < hTop - HEADREST_ATTACH_TOL_CM || groupTop > hBottom + HEADREST_ATTACH_TOL_CM) continue;
+    const gap = Math.abs(groupTop - hTop);
+    if (gap < bestGap) { bestGap = gap; best = bb; }
+  }
+  return best;
+};
+
 /* Translate a layout so its bounding box is centered within a `w`×`h` area
    (e.g. the CustomBuilder room). Pure translation — every cell shifts by the
    same delta, so relative geometry, grouping, pricing, and left-to-right order

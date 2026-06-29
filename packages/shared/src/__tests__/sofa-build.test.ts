@@ -35,6 +35,7 @@ import {
   EDGE_E,
   EDGE_S,
   orderSofaCellsLeftToRight,
+  headrestBackTarget,
   type Cell,
   type Depth,
   type SofaProductPricing,
@@ -1402,5 +1403,61 @@ describe('centerCellsWithin', () => {
 
   it('returns the cells unchanged when there is no measurable footprint', () => {
     expect(centerCellsWithin([], depth, 600, 480)).toEqual([]);
+  });
+});
+
+/* Case 9 — headrestBackTarget: headrest attaches to a sofa group's back (2026-06-30). */
+describe('headrestBackTarget', () => {
+  // depth '24' → no width offset, so footprints equal base dims.
+  const hr = (x: number, y: number): Cell => ({ id: 'h', moduleId: 'HEADREST', x, y, rot: 0 });
+
+  it('attaches above a single sofa and returns that sofa full width (95)', () => {
+    const cells: Cell[] = [
+      { id: 's', moduleId: '1A(RHF)', x: 200, y: 130, rot: 0 }, // 95×95, top=130
+      hr(200, 100), // 50×30, bottom=130 flush with sofa top
+    ];
+    const bb = headrestBackTarget(hr(200, 100), cells, '24');
+    expect(bb).not.toBeNull();
+    expect(bb!.w).toBe(95);
+    expect(bb!.x).toBe(200);
+    expect(bb!.y).toBe(130);
+  });
+
+  it('returns the FULL width of a multi-module sofa group (158+158 = 316)', () => {
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '2A(LHF)', x: 100, y: 130, rot: 0 }, // open right
+      { id: 'b', moduleId: '2A(RHF)', x: 258, y: 130, rot: 0 }, // open left — joins a
+      hr(150, 100),
+    ];
+    const bb = headrestBackTarget(hr(150, 100), cells, '24');
+    expect(bb).not.toBeNull();
+    expect(bb!.w).toBe(316);
+  });
+
+  it('returns null when far from any sofa (vertical gap beyond tolerance)', () => {
+    const cells: Cell[] = [
+      { id: 's', moduleId: '1A(RHF)', x: 200, y: 130, rot: 0 },
+      hr(200, 400),
+    ];
+    expect(headrestBackTarget(hr(200, 400), cells, '24')).toBeNull();
+  });
+
+  it('returns null when there is no horizontal overlap', () => {
+    const cells: Cell[] = [
+      { id: 's', moduleId: '1A(RHF)', x: 200, y: 130, rot: 0 }, // spans 200..295
+      hr(500, 100), // spans 500..550 — no overlap
+    ];
+    expect(headrestBackTarget(hr(500, 100), cells, '24')).toBeNull();
+  });
+
+  it('picks the nearer sofa back when two qualify', () => {
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '1A(RHF)', x: 200, y: 130, rot: 0 }, // top 130, gap |130-100|=30
+      { id: 'b', moduleId: '1A(RHF)', x: 230, y: 120, rot: 0 }, // top 120, gap |120-100|=20 (nearer)
+      hr(210, 100),
+    ];
+    const bb = headrestBackTarget(hr(210, 100), cells, '24');
+    expect(bb).not.toBeNull();
+    expect(bb!.y).toBe(120); // group b
   });
 });
