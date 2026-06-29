@@ -1258,7 +1258,7 @@ function classifyCompartmentCode(rawCode: string): ResolvedSofaCompartment['grou
   const norm = rawCode.trim();
   if (/^L[-(]/i.test(norm) || /^L$/i.test(norm)) return 'L-Shape';
   if (/^CNR$/i.test(norm) || /^CORNER/i.test(norm)) return 'Corner';
-  if (/^STOOL|^Console|^WC-/i.test(norm)) return 'Accessory';
+  if (/^STOOL|^Console|^WC-|^HEADREST/i.test(norm)) return 'Accessory';
   if (/^2/.test(norm)) return '2-seater';
   if (/^1/.test(norm)) return '1-seater';
   return 'Other';

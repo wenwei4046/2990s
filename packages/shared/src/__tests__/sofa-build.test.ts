@@ -753,10 +753,10 @@ describe('analyzeSofa closure', () => {
     expect(r.closed).toBe(false);
   });
 
-  it('reports "Console needs a sofa next to it" for a console-only group', () => {
+  it('reports the accessory message for a console-only group', () => {
     const r = analyzeSofa([{ id: 'a', moduleId: 'Console', x: 0, y: 0, rot: 0 }], '24');
     expect(r.closed).toBe(false);
-    expect(r.reason).toBe('Console needs a sofa next to it');
+    expect(r.reason).toBe('Accessory needs a sofa next to it');
   });
 
   it('a free-standing STOOL is a closed, complete piece on its own', () => {
@@ -777,7 +777,7 @@ describe('analyzeSofa closure', () => {
     expect(r.reason).toBeNull();
   });
 
-  it('a stool wedged with a console still needs a sofa (console rule wins)', () => {
+  it('a stool wedged with a console still needs a sofa (accessory rule)', () => {
     const r = analyzeSofa(
       [
         { id: 'a', moduleId: 'STOOL',   x: 0,  y: 0, rot: 0 },
@@ -786,7 +786,51 @@ describe('analyzeSofa closure', () => {
       '24',
     );
     expect(r.closed).toBe(false);
-    expect(r.reason).toBe('Console needs a sofa next to it');
+    expect(r.reason).toBe('Accessory needs a sofa next to it');
+  });
+
+  it('a HEADREST-only group is not closed and needs a sofa', () => {
+    const r = analyzeSofa([{ id: 'a', moduleId: 'HEADREST', x: 0, y: 0, rot: 0 }], '24');
+    expect(r.closed).toBe(false);
+    expect(r.reason).toBe('Accessory needs a sofa next to it');
+  });
+
+  it('HEADREST wedged with a stool still needs a sofa (accessory rule)', () => {
+    const r = analyzeSofa(
+      [
+        { id: 'a', moduleId: 'STOOL',    x: 0,  y: 0, rot: 0 },
+        { id: 'b', moduleId: 'HEADREST', x: 80, y: 0, rot: 0 },
+      ],
+      '24',
+    );
+    expect(r.closed).toBe(false);
+    expect(r.reason).toBe('Accessory needs a sofa next to it');
+  });
+});
+
+/* Case 8 — HEADREST free-standing accessory module (2026-06-29). */
+describe('HEADREST accessory module', () => {
+  it('findModule resolves HEADREST as a 50×30 accessory', () => {
+    const m = findModule('HEADREST');
+    expect(m).toBeDefined();
+    expect(m?.group).toBe('Accessory');
+    expect(m?.accessory).toBe(true);
+    expect(m?.w).toBe(50);
+    expect(m?.d).toBe(30);
+    expect(m?.cushions).toBe(0);
+  });
+
+  it('isAccessoryModule(HEADREST) is true', () => {
+    expect(isAccessoryModule('HEADREST')).toBe(true);
+  });
+
+  it('representativeArtCode(HEADREST) reuses STOOL art (temporary)', () => {
+    expect(representativeArtCode('HEADREST')).toBe('STOOL');
+  });
+
+  it('HEADREST has no arms — all edges open', () => {
+    const edges = cellEdges({ id: 'h', moduleId: 'HEADREST', x: 0, y: 0, rot: 0 });
+    expect(edges).toEqual(['open', 'open', 'open', 'open']);
   });
 });
 
