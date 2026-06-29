@@ -22,6 +22,7 @@ import {
   normalizeCompartmentCode,
   orderSofaCellsLeftToRight,
   summarizeSofaCells,
+  headrestBackTarget,
   findDuplicateCombo,
   matchComboSubset,
   type Bbox,
@@ -600,6 +601,13 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       let finalY = draftY + snap.dy;
       finalX = Math.max(0, Math.min(finalX, roomW - fp.w));
       finalY = Math.max(0, Math.min(finalY, roomH - fp.h));
+
+      // Headrest snaps flush to a sofa's back on drop (2026-06-30). Align the
+      // cell to the target group's top-left; render then draws it full-width.
+      if (cell.moduleId === 'HEADREST') {
+        const back = headrestBackTarget({ ...cell, x: finalX, y: finalY }, cells, depth);
+        if (back) { finalX = back.x; finalY = back.y; }
+      }
 
       let flippedId: string | null = null;
       const swapId = MIRROR_PAIR[cell.moduleId];
