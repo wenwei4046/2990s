@@ -538,6 +538,28 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
 
   /* ─── Drag handling ────────────────────────────────────────────── */
 
+  // A headrest attached to a sofa moves WITH it: when a dragged set includes a
+  // sofa whose back this headrest sits on, pull the headrest into the drag group
+  // so they translate together (and stay linked).
+  const attachedHeadrestExtras = (draggedIds: Set<string>): { id: string; x: number; y: number }[] => {
+    const extras: { id: string; x: number; y: number }[] = [];
+    for (const h of cells) {
+      if (h.moduleId !== 'HEADREST' || h.id == null || draggedIds.has(h.id)) continue;
+      const back = headrestBackTarget(h, cells, depth);
+      if (!back) continue;
+      const sofaInGroupDragged = cells.some((c) => {
+        if (c.id == null || !draggedIds.has(c.id) || isAccessoryModule(c.moduleId)) return false;
+        const m = findModule(c.moduleId);
+        if (!m) return false;
+        const fp = moduleFootprint(m, c.rot, depth);
+        const cx = c.x + fp.w / 2, cy = c.y + fp.h / 2;
+        return cx >= back.x && cx <= back.x + back.w && cy >= back.y && cy <= back.y + back.h;
+      });
+      if (sofaInGroupDragged) extras.push({ id: h.id, x: h.x, y: h.y });
+    }
+    return extras;
+  };
+
   const onCellPointerDown = (id: string, e: PointerEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest(`.${styles.tools}`)) return; // let buttons work
     const cell = cells.find((c) => c.id === id);
@@ -547,24 +569,19 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     // If the tapped cell is part of an active whole-group selection, drag the
     // whole group. Otherwise drag the cell solo and clear any group selection.
     const inActiveGroup = selectedGroupIds?.includes(id) ?? false;
+    let baseGroup: { id: string; x: number; y: number }[];
     if (inActiveGroup) {
       const groupSet = new Set(selectedGroupIds!);
-      const group = cells
+      baseGroup = cells
         .filter((c) => c.id != null && groupSet.has(c.id))
         .map((c) => ({ id: c.id as string, x: c.x, y: c.y }));
-      dragRef.current = { id, pid: e.pointerId, sx: e.clientX, sy: e.clientY, moved: false, group };
     } else {
       setSelectedId(id);
       setSelectedGroupIds(null);
-      dragRef.current = {
-        id,
-        pid: e.pointerId,
-        sx: e.clientX,
-        sy: e.clientY,
-        moved: false,
-        group: [{ id, x: cell.x, y: cell.y }],
-      };
+      baseGroup = [{ id, x: cell.x, y: cell.y }];
     }
+    const group = [...baseGroup, ...attachedHeadrestExtras(new Set(baseGroup.map((g) => g.id)))];
+    dragRef.current = { id, pid: e.pointerId, sx: e.clientX, sy: e.clientY, moved: false, group };
   };
 
   const onCellPointerMove = (e: PointerEvent<HTMLDivElement>) => {
@@ -606,7 +623,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // cell to the target group's top-left; render then draws it full-width.
       if (cell.moduleId === 'HEADREST') {
         const back = headrestBackTarget({ ...cell, x: finalX, y: finalY }, cells, depth);
-        if (back) { finalX = back.x; finalY = back.y; }
+        if (back) { finalX = back.x; finalY = back.y - fp.h; } // sit ABOVE the back, not overlapping
       }
 
       let flippedId: string | null = null;
@@ -1278,6 +1295,13 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
               selectedGroupIds membership check in onCellPointerDown). */}
           {analyses.map((a, gi) => {
             if (!a.closed) return null;
+            // An attached headrest renders as a band; it shouldn't get its own
+            // tappable group outline (it would float at the 50×30 footprint).
+            // Use the LIVE (display) position so it stays hidden mid-drag too.
+            if (a.group.length === 1 && a.group[0]!.moduleId === 'HEADREST') {
+              const dh = displayCells.find((c) => c.id === a.group[0]!.id);
+              if (dh && headrestBackTarget(dh, displayCells, depth)) return null;
+            }
             // Cell.id is technically optional on the type but every cell we
             // create goes through nextCellId(), so the filter is just a TS
             // narrowing aid — it never actually drops anything.
@@ -1363,9 +1387,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           {groups.map((g, gi) => {
             const ids = new Set(g.map((c) => c.id).filter((id): id is string => id != null));
             // An attached headrest renders as a band on the sofa; hide its own
-            // 50/30 callouts so they don't duplicate the sofa's.
-            if (g.length === 1 && g[0]!.moduleId === 'HEADREST'
-                && headrestBackTarget(g[0]!, displayCells, depth)) return null;
+            // 50/30 callouts so they don't duplicate the sofa's. Use the LIVE
+            // (display) position so the label stays hidden mid-drag too.
+            if (g.length === 1 && g[0]!.moduleId === 'HEADREST') {
+              const dh = displayCells.find((c) => c.id === g[0]!.id);
+              if (dh && headrestBackTarget(dh, displayCells, depth)) return null;
+            }
             // Suppress dim callouts while this group is in per-module edit
             // mode — they belong to the "fixed complete sofa" view that the
             // user has just stepped out of.
@@ -1373,13 +1400,22 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             const displayedGroup = displayCells.filter((c) => c.id != null && ids.has(c.id));
             const bb = cellsBbox(displayedGroup, depth);
             if (!bb) return null;
+            // If a headrest band sits above this sofa group, lift the length
+            // callout above the band so the "…cm" label doesn't overlap it.
+            // (Band thickness = headrest depth, 30cm.)
+            const bandAbove = displayCells.some((c) => {
+              if (c.moduleId !== 'HEADREST') return false;
+              const back = headrestBackTarget(c, displayCells, depth);
+              return !!back && Math.abs(back.x - bb.x) < 1 && Math.abs(back.y - bb.y) < 1 && Math.abs(back.w - bb.w) < 1;
+            });
+            const topCalloutY = bb.y * SCALE - 30 - (bandAbove ? 30 * SCALE : 0);
             return (
               <Fragment key={`dim-${gi}`}>
                 <div
                   className={`${styles.groupDim} ${styles.groupDimTop}`}
                   style={{
                     left: bb.x * SCALE,
-                    top: bb.y * SCALE - 30,
+                    top: topCalloutY,
                     width: bb.w * SCALE,
                   }}
                   aria-hidden
@@ -1421,7 +1457,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             const headrestBack = c.moduleId === 'HEADREST'
               ? headrestBackTarget(c, displayCells, depth) : null;
             const px = (headrestBack ? headrestBack.x : (c.x ?? 0)) * SCALE;
-            const py = (headrestBack ? headrestBack.y : (c.y ?? 0)) * SCALE;
+            const py = (headrestBack ? headrestBack.y - fp.h : (c.y ?? 0)) * SCALE;
             const w = (headrestBack ? headrestBack.w : fp.w) * SCALE;
             const h = fp.h * SCALE; // band thickness = headrest depth (30cm)
             // cellArt size & position depends on rotation:
