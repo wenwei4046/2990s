@@ -5,7 +5,6 @@ import { SetPassword } from './pages/SetPassword';
 import { Catalog } from './pages/Catalog';
 import { AuthGate } from './components/AuthGate';
 import { MaintainGate } from './components/MaintainGate';
-import { HeadrestHarness } from './pages/dev/HeadrestHarness';
 
 /* Code-splitting (perf, 2026-06-13) — the POS shipped as ONE ~1.2 MB JS chunk
    because every page was imported eagerly here, so the Configurator (sofa snap
@@ -70,8 +69,6 @@ export const router = createBrowserRouter([
      otherwise block them. After they submit, AuthGate's password_set check
      will see the flipped flag and let them through to LockScreen / app. */
   { path: '/set-password', element: <SetPassword /> },
-  /* TEMP dev-only harness (2026-06-29) — remove before merge. */
-  { path: '/dev/headrest', element: <HeadrestHarness /> },
   { path: '/catalog', element: <AuthGate><Catalog /></AuthGate> },
   { path: '/configure/:productId', element: <AuthGate><Configurator /></AuthGate> },
   { path: '/cart', element: <AuthGate><Cart /></AuthGate> },
