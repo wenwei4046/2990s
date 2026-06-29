@@ -790,6 +790,32 @@ describe('analyzeSofa closure', () => {
   });
 });
 
+/* Case 8 — HEADREST free-standing accessory module (2026-06-29). */
+describe('HEADREST accessory module', () => {
+  it('findModule resolves HEADREST as a 50×30 accessory', () => {
+    const m = findModule('HEADREST');
+    expect(m).toBeDefined();
+    expect(m?.group).toBe('Accessory');
+    expect(m?.accessory).toBe(true);
+    expect(m?.w).toBe(50);
+    expect(m?.d).toBe(30);
+    expect(m?.cushions).toBe(0);
+  });
+
+  it('isAccessoryModule(HEADREST) is true', () => {
+    expect(isAccessoryModule('HEADREST')).toBe(true);
+  });
+
+  it('representativeArtCode(HEADREST) reuses STOOL art (temporary)', () => {
+    expect(representativeArtCode('HEADREST')).toBe('STOOL');
+  });
+
+  it('HEADREST has no arms — all edges open', () => {
+    const edges = cellEdges({ id: 'h', moduleId: 'HEADREST', x: 0, y: 0, rot: 0 });
+    expect(edges).toEqual(['open', 'open', 'open', 'open']);
+  });
+});
+
 /* Case 8 — hasArmConflict: cheap pre-check used by drop-to-mirror UI. */
 describe('hasArmConflict', () => {
   it('returns true when arm meets arm', () => {

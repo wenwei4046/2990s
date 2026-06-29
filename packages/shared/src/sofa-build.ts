@@ -182,6 +182,10 @@ export const SOFA_MODULES: readonly SofaModuleSpec[] = [
   // Ottoman / stool — 75×75 free-standing accessory (F1). Doesn't count toward
   // bundles or closure. Art: STOOL.png (Loo provides).
   { id: 'STOOL',  group: 'Accessory', label: 'Ottoman / stool',        w: 75,  d: 75,  cushions: 0, accessory: true },
+  // Headrest — 50×30 free-standing accessory (2026-06-29). Like Console, must
+  // sit beside a sofa to close; doesn't count toward bundles/seats. Art: reuses
+  // STOOL.png until Loo uploads a real PNG in Maintenance.
+  { id: 'HEADREST', group: 'Accessory', label: 'Headrest', w: 50, d: 30, cushions: 0, accessory: true },
   // Pool-sourced first-class compartments (2026-06-01). Whole-unit presets carry
   // both end arms; functional 1-seater variants (P=power, R=recliner, L=power leg)
   // keep the base 1A/1NA closed footprint. Approx dims — Chairman adjusts later.
@@ -287,6 +291,10 @@ export const findModule = (id: string): SofaModuleSpec | undefined =>
  */
 export const representativeArtCode = (code: string): string => {
   const norm = normalizeCompartmentCode(code);
+  // TEMP (2026-06-29): HEADREST has no art yet — reuse STOOL.png until Loo
+  // uploads a real PNG in Maintenance (resolveModuleArtSrc's imageUrl branch
+  // then takes precedence and this alias goes dormant).
+  if (norm === 'HEADREST') return 'STOOL';
   if (MODULE_BY_ID.has(norm)) return norm;
   const s = parseCompartmentStructure(norm);
   const rep = s ? familyRepresentative(s) : undefined;
@@ -839,6 +847,7 @@ const MODULE_EDGES_BASE: Record<string, [EdgeType, EdgeType, EdgeType, EdgeType]
   'L(RHF)':  ['open', 'back', 'open', 'front'],
   'Console':['open', 'open', 'open', 'open'],
   'STOOL':  ['open', 'open', 'open', 'open'],
+  'HEADREST':['open', 'open', 'open', 'open'],
   // Whole-unit presets — both end arms so a lone unit self-closes; two placed
   // adjacent read as two separate armed units (arm-to-arm), priced individually.
   '1S': ['arm', 'back', 'arm', 'front'],
