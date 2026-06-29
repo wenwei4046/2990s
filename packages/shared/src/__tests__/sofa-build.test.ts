@@ -753,10 +753,10 @@ describe('analyzeSofa closure', () => {
     expect(r.closed).toBe(false);
   });
 
-  it('reports "Console needs a sofa next to it" for a console-only group', () => {
+  it('reports the accessory message for a console-only group', () => {
     const r = analyzeSofa([{ id: 'a', moduleId: 'Console', x: 0, y: 0, rot: 0 }], '24');
     expect(r.closed).toBe(false);
-    expect(r.reason).toBe('Console needs a sofa next to it');
+    expect(r.reason).toBe('Accessory needs a sofa next to it');
   });
 
   it('a free-standing STOOL is a closed, complete piece on its own', () => {
@@ -777,7 +777,7 @@ describe('analyzeSofa closure', () => {
     expect(r.reason).toBeNull();
   });
 
-  it('a stool wedged with a console still needs a sofa (console rule wins)', () => {
+  it('a stool wedged with a console still needs a sofa (accessory rule)', () => {
     const r = analyzeSofa(
       [
         { id: 'a', moduleId: 'STOOL',   x: 0,  y: 0, rot: 0 },
@@ -786,7 +786,25 @@ describe('analyzeSofa closure', () => {
       '24',
     );
     expect(r.closed).toBe(false);
-    expect(r.reason).toBe('Console needs a sofa next to it');
+    expect(r.reason).toBe('Accessory needs a sofa next to it');
+  });
+
+  it('a HEADREST-only group is not closed and needs a sofa', () => {
+    const r = analyzeSofa([{ id: 'a', moduleId: 'HEADREST', x: 0, y: 0, rot: 0 }], '24');
+    expect(r.closed).toBe(false);
+    expect(r.reason).toBe('Accessory needs a sofa next to it');
+  });
+
+  it('HEADREST wedged with a stool still needs a sofa (accessory rule)', () => {
+    const r = analyzeSofa(
+      [
+        { id: 'a', moduleId: 'STOOL',    x: 0,  y: 0, rot: 0 },
+        { id: 'b', moduleId: 'HEADREST', x: 80, y: 0, rot: 0 },
+      ],
+      '24',
+    );
+    expect(r.closed).toBe(false);
+    expect(r.reason).toBe('Accessory needs a sofa next to it');
   });
 });
 

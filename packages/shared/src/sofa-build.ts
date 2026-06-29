@@ -1481,7 +1481,7 @@ export type ClosureFailure =
   | 'Right end has no arm'
   | 'Top end has no arm'
   | 'Bottom end has no arm'
-  | 'Console needs a sofa next to it';
+  | 'Accessory needs a sofa next to it';
 
 export interface SofaAnalysis {
   violations: ArmViolation[];
@@ -1648,7 +1648,7 @@ export const analyzeSofa = (group: Cell[], depth: Depth): SofaAnalysis => {
     // an accessory-only group that includes one is not a closed sofa.
     const everyPieceStandsAlone = group.every((c) => c.moduleId === 'STOOL');
     closed = everyPieceStandsAlone;
-    reason = everyPieceStandsAlone ? null : 'Console needs a sofa next to it';
+    reason = everyPieceStandsAlone ? null : 'Accessory needs a sofa next to it';
   }
 
   return { violations, closed, reason, leftArm: headArm, rightArm: tailArm };
