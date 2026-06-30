@@ -1189,6 +1189,11 @@
   font-size: var(--fs-12);
   color: var(--fg-muted);
 }
+.fieldHint {
+  margin: 4px 0 0;
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+}
 .detailSaveBtn,
 .detailProceedBtn {
   display: inline-flex;

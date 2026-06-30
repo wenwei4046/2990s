@@ -417,6 +417,9 @@ const describeSoActionError = (e: unknown): string => {
   if (err === 'processing_delivery_must_pair') {
     return 'Processing and Delivery dates must be set together (or both left empty).';
   }
+  if (err === 'processing_date_unpaid') {
+    return 'A processing date can only be set once at least 50% of the order total is paid. Record the deposit first, then set the dates.';
+  }
   if (err === 'so_locked_processing') {
     return 'The processing date has passed — dates and items are locked. Customer, address and payment can still be updated.';
   }
@@ -1321,6 +1324,12 @@ const OrderDetail = ({ order, onClose }: {
   const customerInfoOk = !!(edited.customerName.trim() && edited.customerEmail?.trim());
   const addressOk = !!(edited.customerAddress?.trim() && edited.customerPostcode?.trim());
   const dateOk = !!edited.deliveryDate;
+  // Processing date present (Loo 2026-06-30) — a POS-button-only requirement on
+  // top of the shared gate. The processing date is production's "ready to build"
+  // signal, so the salesperson can't press Move-to-Proceed until it's filled in
+  // (and it only unlocks once ≥50% is paid, see the field below). This rides on
+  // the client button alone — the server's auto-proceed path is left unchanged.
+  const processingDateOk = !!edited.processingDate;
   // Gate on the live ledger (paidSoFar), the recorded source of truth. A
   // fully-free order (total 0 — Free Item Campaign giveaway) has nothing to
   // collect, so the paid tick is satisfied — matches meetsProceedGate below.
@@ -1328,10 +1337,11 @@ const OrderDetail = ({ order, onClose }: {
   // Outstanding balance — once it hits zero the order is fully collected, so the
   // "top up / record payment" form below is hidden (nothing left to collect).
   const outstanding = Math.max(0, order.total - paidSoFar);
-  // The Move-to-Proceed gate. Shared with the server's create handler (which
-  // auto-stamps proceeded_at when a handover already arrives complete) so the
-  // manual button and the auto path can never drift.
-  const allOk = meetsProceedGate({
+  // The Move-to-Proceed gate. The shared meetsProceedGate half (customer + email,
+  // address + postcode, delivery date, ≥50% paid) stays in lock-step with the
+  // server's create-time auto-proceed so those never drift; processingDateOk is an
+  // ADDITIONAL POS-button-only tick (Loo 2026-06-30) — server behaviour unchanged.
+  const allOk = processingDateOk && meetsProceedGate({
     hasCustomerName: !!edited.customerName.trim(),
     hasEmail: !!edited.customerEmail?.trim(),
     hasAddress: !!edited.customerAddress?.trim(),
@@ -1754,16 +1764,24 @@ const OrderDetail = ({ order, onClose }: {
                 </select>
               </DetailField>
               {/* Dates feed production scheduling — locked in Proceed (D4); edit
-                  them by un-proceeding back to Order placed first. */}
-              <DetailField label="Processing date" disabled={!editablePlaced}>
+                  them by un-proceeding back to Order placed first. The processing
+                  date is production's "ready to build" signal, so it stays locked
+                  until ≥50% is collected (paidOk) — mirrors the server's
+                  processing_date_unpaid guard. Loo 2026-06-30. */}
+              <DetailField label="Processing date" disabled={!editablePlaced || !paidOk}>
                 <input
                   type="date"
                   value={edited.processingDate ?? ''}
                   onChange={(e) => set('processingDate', e.target.value || null)}
-                  disabled={!editablePlaced}
+                  disabled={!editablePlaced || !paidOk}
                   min={todayMY}
                   max={edited.deliveryDate ?? undefined}
                 />
+                {editablePlaced && !paidOk && (
+                  <p className={styles.fieldHint}>
+                    Set the processing date once ≥50% of the total is paid.
+                  </p>
+                )}
               </DetailField>
               <DetailField label="Delivery date" disabled={!editablePlaced}>
                 <input
@@ -1951,6 +1969,7 @@ const OrderDetail = ({ order, onClose }: {
                   <ChecklistItem ok={addressOk} label="Delivery address" />
                   <ChecklistItem ok={dateOk} label="Delivery date" />
                   <ChecklistItem ok={paidOk} label="≥ 50% paid" />
+                  <ChecklistItem ok={processingDateOk} label="Processing date" />
                 </div>
               )}
               {saveMutation.error && (

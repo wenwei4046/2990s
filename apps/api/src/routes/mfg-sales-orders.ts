@@ -26,7 +26,7 @@ import { buildCompartmentsFromModuleLines } from '../lib/compartments-from-modul
    (customer + address + delivery date + ≥50% paid) we stamp proceeded_at at
    create so the order lands in Proceed without a manual click. Same gate the
    POS "Move to Proceed" button uses, so the two never drift. */
-import { meetsProceedGate } from '@2990s/shared/order-rules';
+import { meetsProceedGate, meetsProcessingDatePaymentGate } from '@2990s/shared/order-rules';
 /* SO-SKU spec P2 — every charge is a SKU line. Predicates from P1; the
    fee/addon → SERVICE-line decomposition builders are pure + shared. */
 import {
@@ -3085,6 +3085,24 @@ mfgSalesOrders.post('/', async (c) => {
     total: grandTotal,
   });
 
+  /* Processing-Date payment gate (Loo 2026-06-30) — a Processing Date is
+     production's "ready to build" signal: once set, the backend orders materials
+     / starts the build when the date arrives. So it must NOT be set until ≥50% of
+     the order total is collected. Money-only: customer-info / address completeness
+     is deliberately NOT required here (those resolve later in Proceed). Mirrors
+     the deposit half of the Proceed gate via the shared rule so the two can't
+     drift. depositTotalCenti = the POS deposit on this create; grandTotal = order
+     total — both already in scope from the autoProceed block above. */
+  {
+    const procDateOnCreate = (body.internalExpectedDd as string | null | undefined) || null;
+    if (procDateOnCreate && !meetsProcessingDatePaymentGate(depositTotalCenti, grandTotal)) {
+      return c.json({
+        error: 'processing_date_unpaid',
+        reason: 'A Processing Date can only be set once at least 50% of the order total is paid.',
+      }, 400);
+    }
+  }
+
   const { error: hErr } = await sb.from('mfg_sales_orders').insert({
     doc_no: docNo,
     proceeded_at: autoProceed ? new Date().toISOString() : null,
@@ -4211,6 +4229,39 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     );
     if (changedSchedule.length > 0) {
       return c.json(SO_PROCESSING_LOCKED_RESPONSE, 409);
+    }
+  }
+
+  /* Processing-Date payment gate (Loo 2026-06-30) — the same ≥50%-collected rule
+     the CREATE path enforces, applied when a header PATCH SETS or CHANGES the
+     Processing Date to a non-null value. The date is production's "ready to build"
+     signal, so it can't go in until half the money is in. Fires ONLY on a genuine
+     change (clearing it, or an unchanged re-save, passes — so an unrelated edit on
+     an already-dated, since-refunded SO isn't blocked). Money-only — customer-info
+     / address are deliberately not gated (they resolve later in Proceed). `paid` =
+     sum(mfg_sales_order_payments.amount_centi), mirroring the paid_total_centi the
+     payment view computes; `total` = the header local_total_centi. */
+  {
+    const proc = body['internalExpectedDd'];
+    if (typeof proc === 'string' && proc) {
+      const origProc = String(
+        ((before as unknown as Record<string, unknown> | null)?.['internal_expected_dd'] as string | null) ?? '',
+      ).slice(0, 10);
+      if (proc.slice(0, 10) !== origProc) {
+        const [{ data: totRow }, { data: pays }] = await Promise.all([
+          sb.from('mfg_sales_orders').select('local_total_centi').eq('doc_no', docNo).maybeSingle(),
+          sb.from('mfg_sales_order_payments').select('amount_centi').eq('so_doc_no', docNo),
+        ]);
+        const totalCenti = Number((totRow as { local_total_centi?: number } | null)?.local_total_centi ?? 0);
+        const paidCenti = ((pays ?? []) as Array<{ amount_centi?: number | null }>)
+          .reduce((s, p) => s + Number(p.amount_centi ?? 0), 0);
+        if (!meetsProcessingDatePaymentGate(paidCenti, totalCenti)) {
+          return c.json({
+            error: 'processing_date_unpaid',
+            reason: 'A Processing Date can only be set once at least 50% of the order total is paid.',
+          }, 400);
+        }
+      }
     }
   }
 
