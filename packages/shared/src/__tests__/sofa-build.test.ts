@@ -36,6 +36,7 @@ import {
   EDGE_S,
   orderSofaCellsLeftToRight,
   headrestBackTarget,
+  headrestSeatRect,
   type Cell,
   type Depth,
   type SofaProductPricing,
@@ -1459,5 +1460,65 @@ describe('headrestBackTarget', () => {
     const bb = headrestBackTarget(hr(210, 100), cells, '24');
     expect(bb).not.toBeNull();
     expect(bb!.y).toBe(120); // group b
+  });
+});
+
+/* Case 10 — headrestSeatRect: a headrest fills ONE seat (cushion), not the whole
+   sofa (Loo 2026-06-30). One headrest = one seat compartment. */
+describe('headrestSeatRect', () => {
+  const hr = (x: number, y: number): Cell => ({ id: 'h', moduleId: 'HEADREST', x, y, rot: 0 });
+
+  it('covers only the RIGHT cushion of a 2-seater (158 → seat 79), not full width', () => {
+    const cells: Cell[] = [
+      { id: 's', moduleId: '2A(LHF)', x: 100, y: 130, rot: 0 }, // 158×95, seats [100,179] [179,258]
+      hr(193, 100), // 50 wide, center 218 → over right seat
+    ];
+    const seat = headrestSeatRect(hr(193, 100), cells, '24');
+    expect(seat).not.toBeNull();
+    expect(seat!.w).toBe(79);
+    expect(seat!.x).toBe(179);
+    expect(seat!.y).toBe(130);
+  });
+
+  it('covers only the LEFT cushion of a 2-seater', () => {
+    const cells: Cell[] = [
+      { id: 's', moduleId: '2A(LHF)', x: 100, y: 130, rot: 0 },
+      hr(114, 100), // center 139 → over left seat [100,179]
+    ];
+    const seat = headrestSeatRect(hr(114, 100), cells, '24');
+    expect(seat).not.toBeNull();
+    expect(seat!.w).toBe(79);
+    expect(seat!.x).toBe(100);
+  });
+
+  it('fills the whole single-cushion 1-seater (95)', () => {
+    const cells: Cell[] = [
+      { id: 's', moduleId: '1A(RHF)', x: 200, y: 130, rot: 0 }, // 95×95, 1 cushion
+      hr(200, 100),
+    ];
+    const seat = headrestSeatRect(hr(200, 100), cells, '24');
+    expect(seat).not.toBeNull();
+    expect(seat!.w).toBe(95);
+    expect(seat!.x).toBe(200);
+  });
+
+  it('picks one cushion of a multi-module group, never the full 316 span', () => {
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '2A(LHF)', x: 100, y: 130, rot: 0 }, // seats [100,179][179,258]
+      { id: 'b', moduleId: '2A(RHF)', x: 258, y: 130, rot: 0 }, // seats [258,337][337,416]
+      hr(300, 100), // center 325 → over seat [258,337]
+    ];
+    const seat = headrestSeatRect(hr(300, 100), cells, '24');
+    expect(seat).not.toBeNull();
+    expect(seat!.w).toBe(79);
+    expect(seat!.x).toBe(258);
+  });
+
+  it('returns null when free-standing (no attached sofa)', () => {
+    const cells: Cell[] = [
+      { id: 's', moduleId: '1A(RHF)', x: 200, y: 130, rot: 0 },
+      hr(200, 400),
+    ];
+    expect(headrestSeatRect(hr(200, 400), cells, '24')).toBeNull();
   });
 });

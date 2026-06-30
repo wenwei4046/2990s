@@ -965,17 +965,19 @@ export const cellsBbox = (cells: Cell[], depth: Depth): Bbox | null => {
 /** Vertical tolerance (cm) for a headrest to count as "on" a sofa's back. */
 export const HEADREST_ATTACH_TOL_CM = 20;
 
-/** The sofa GROUP bbox a headrest is attached to (flush against its back/top
- *  edge), or null when free-standing. Attached = the headrest horizontally
- *  overlaps a non-accessory sofa group AND that group's top edge lies within
- *  the headrest footprint expanded vertically by HEADREST_ATTACH_TOL_CM.
- *  Pure: re-derives sofa groups from `cells`. v1 matches the group's TOP edge
- *  only (standard orientation — sofas face the TV at the bottom). */
-export const headrestBackTarget = (
+/** The CELLS of the sofa group a headrest is attached to (flush against its
+ *  back/top edge), or null when free-standing. Attached = the headrest
+ *  horizontally overlaps a non-accessory sofa group AND that group's top edge
+ *  lies within the headrest footprint expanded vertically by
+ *  HEADREST_ATTACH_TOL_CM. Pure: re-derives sofa groups from `cells`. v1
+ *  matches the group's TOP edge only (standard orientation — sofas face the TV
+ *  at the bottom). Shared by headrestBackTarget (group bbox) and
+ *  headrestSeatRect (single seat). */
+const attachedSofaGroup = (
   headrest: Cell,
   cells: Cell[],
   depth: Depth,
-): Bbox | null => {
+): Cell[] | null => {
   const hm = findModule(headrest.moduleId);
   if (!hm) return null;
   const hfp = moduleFootprint(hm, headrest.rot, depth);
@@ -986,7 +988,7 @@ export const headrestBackTarget = (
   const sofaCells = cells.filter(
     (c) => c.id !== headrest.id && !isAccessoryModule(c.moduleId),
   );
-  let best: Bbox | null = null;
+  let best: Cell[] | null = null;
   let bestGap = Infinity;
   for (const g of groupSofas(sofaCells, depth)) {
     const bb = cellsBbox(g, depth);
@@ -996,7 +998,54 @@ export const headrestBackTarget = (
     const groupTop = bb.y;
     if (groupTop < hTop - HEADREST_ATTACH_TOL_CM || groupTop > hBottom + HEADREST_ATTACH_TOL_CM) continue;
     const gap = Math.abs(groupTop - hTop);
-    if (gap < bestGap) { bestGap = gap; best = bb; }
+    if (gap < bestGap) { bestGap = gap; best = g; }
+  }
+  return best;
+};
+
+/** The sofa GROUP bbox a headrest is attached to, or null when free-standing.
+ *  Used for attach detection, move-together (#713) and cart/SO fold (#714) —
+ *  these reason about the whole sofa, so the band-width change leaves them
+ *  untouched. See headrestSeatRect for the rendered one-seat band. */
+export const headrestBackTarget = (
+  headrest: Cell,
+  cells: Cell[],
+  depth: Depth,
+): Bbox | null => {
+  const g = attachedSofaGroup(headrest, cells, depth);
+  return g ? cellsBbox(g, depth) : null;
+};
+
+/** The single SEAT (cushion column) of the attached sofa that a headrest sits
+ *  over — one headrest fills ONE seat, never the whole sofa back (Loo
+ *  2026-06-30). Seats are even cushion columns across each cell's width,
+ *  matching the dashed cushion seams (renderSeamlessGroup). Picks the seat
+ *  whose centre is nearest the headrest's centre. Returns null when the
+ *  headrest is free-standing. v1: standard orientation (top-edge attach). */
+export const headrestSeatRect = (
+  headrest: Cell,
+  cells: Cell[],
+  depth: Depth,
+): Bbox | null => {
+  const group = attachedSofaGroup(headrest, cells, depth);
+  if (!group) return null;
+  const hm = findModule(headrest.moduleId);
+  if (!hm) return null;
+  const hfp = moduleFootprint(hm, headrest.rot, depth);
+  const hCenter = headrest.x + hfp.w / 2;
+  let best: Bbox | null = null;
+  let bestDist = Infinity;
+  for (const c of group) {
+    const m = findModule(c.moduleId);
+    if (!m) continue;
+    const fp = moduleFootprint(m, c.rot, depth);
+    const n = Math.max(1, m.cushions);
+    for (let k = 0; k < n; k++) {
+      const sw = fp.w / n;
+      const sx = c.x + sw * k;
+      const dist = Math.abs(sx + sw / 2 - hCenter);
+      if (dist < bestDist) { bestDist = dist; best = { x: sx, y: c.y, w: sw, h: fp.h }; }
+    }
   }
   return best;
 };

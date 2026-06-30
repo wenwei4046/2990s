@@ -23,6 +23,7 @@ import {
   orderSofaCellsLeftToRight,
   summarizeSofaCells,
   headrestBackTarget,
+  headrestSeatRect,
   findDuplicateCombo,
   matchComboSubset,
   type Bbox,
@@ -619,11 +620,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       finalX = Math.max(0, Math.min(finalX, roomW - fp.w));
       finalY = Math.max(0, Math.min(finalY, roomH - fp.h));
 
-      // Headrest snaps flush to a sofa's back on drop (2026-06-30). Align the
-      // cell to the target group's top-left; render then draws it full-width.
+      // Headrest snaps flush to ONE seat of a sofa's back on drop (2026-06-30):
+      // centre it over the cushion it covers, sitting ABOVE the back. Render
+      // then draws the band across that single seat (not the whole sofa).
       if (cell.moduleId === 'HEADREST') {
-        const back = headrestBackTarget({ ...cell, x: finalX, y: finalY }, cells, depth);
-        if (back) { finalX = back.x; finalY = back.y - fp.h; } // sit ABOVE the back, not overlapping
+        const seat = headrestSeatRect({ ...cell, x: finalX, y: finalY }, cells, depth);
+        if (seat) { finalX = seat.x + (seat.w - fp.w) / 2; finalY = seat.y - fp.h; }
       }
 
       let flippedId: string | null = null;
@@ -1492,12 +1494,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             const fp = moduleFootprint(m, c.rot, depth);
             const isSelected = c.id === selectedId;
             const inViolation = c.id != null && violationCellIds.has(c.id);
-            // Attached headrest → draw as a full-width band on the sofa back.
-            const headrestBack = c.moduleId === 'HEADREST'
-              ? headrestBackTarget(c, displayCells, depth) : null;
-            const px = (headrestBack ? headrestBack.x : (c.x ?? 0)) * SCALE;
-            const py = (headrestBack ? headrestBack.y - fp.h : (c.y ?? 0)) * SCALE;
-            const w = (headrestBack ? headrestBack.w : fp.w) * SCALE;
+            // Attached headrest → draw as a band over ONE seat of the sofa back.
+            const headrestSeat = c.moduleId === 'HEADREST'
+              ? headrestSeatRect(c, displayCells, depth) : null;
+            const px = (headrestSeat ? headrestSeat.x : (c.x ?? 0)) * SCALE;
+            const py = (headrestSeat ? headrestSeat.y - fp.h : (c.y ?? 0)) * SCALE;
+            const w = (headrestSeat ? headrestSeat.w : fp.w) * SCALE;
             const h = fp.h * SCALE; // band thickness = headrest depth (30cm)
             // cellArt size & position depends on rotation:
             //   rot 0 / 180: silhouette stretches to fill the cell (w × h) so
@@ -1542,9 +1544,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                     // renders (keeps drag + selection working underneath the
                     // pointer-events:none composite).
                     if (c.id != null && compositeCoveredIds.has(c.id)) return null;
-                    if (headrestBack) {
-                      // Full-width backrest band — matches the sofa's band colour
-                      // so it reads as one continuous backrest.
+                    if (headrestSeat) {
+                      // One-seat backrest band — matches the sofa's band colour
+                      // so it reads as a backrest for that single seat.
                       return (
                         <div
                           style={{
