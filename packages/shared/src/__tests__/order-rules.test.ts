@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { meetsProceedGate, type ProceedGateInput } from '../order-rules';
+import { meetsProceedGate, meetsProcessingDatePaymentGate, type ProceedGateInput } from '../order-rules';
 
 const complete: ProceedGateInput = {
   hasCustomerName: true,
@@ -58,5 +58,32 @@ describe('meetsProceedGate', () => {
   it('still fails an incomplete RM0 order (missing info keeps it in Order Placed)', () => {
     expect(meetsProceedGate({ ...complete, paid: 0, total: 0, hasAddress: false })).toBe(false);
     expect(meetsProceedGate({ ...complete, paid: 0, total: 0, hasDeliveryDate: false })).toBe(false);
+  });
+});
+
+// The Processing Date (开工日期) is production's go-build signal, so it may only
+// be SET once ≥50% is collected — but UNLIKE Proceed it does NOT require customer
+// info / address (Loo 2026-06-30). The gate is money-only.
+describe('meetsProcessingDatePaymentGate', () => {
+  it('allows the date at exactly 50% paid', () => {
+    expect(meetsProcessingDatePaymentGate(50, 100)).toBe(true);
+  });
+
+  it('allows the date when fully paid', () => {
+    expect(meetsProcessingDatePaymentGate(100, 100)).toBe(true);
+  });
+
+  it('blocks the date below 50% paid', () => {
+    expect(meetsProcessingDatePaymentGate(49, 100)).toBe(false);
+    expect(meetsProcessingDatePaymentGate(0, 100)).toBe(false);
+  });
+
+  it('is unit-agnostic — same ratio in centi passes', () => {
+    expect(meetsProcessingDatePaymentGate(5000, 10000)).toBe(true);
+    expect(meetsProcessingDatePaymentGate(4900, 10000)).toBe(false);
+  });
+
+  it('allows the date on a fully-free order (nothing to collect, no 0/0 NaN)', () => {
+    expect(meetsProcessingDatePaymentGate(0, 0)).toBe(true);
   });
 });
