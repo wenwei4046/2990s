@@ -462,7 +462,21 @@ export const GrnNew = () => {
       ? (picks?.find((p) => p.warehouseLocationId)?.warehouseLocationId ?? null)
       : null;
     const poLoc = (po as { purchase_location_id?: string | null } | undefined)?.purchase_location_id ?? null;
-    const fallback = pickLoc ?? poLoc ?? (warehousesQ.data?.[0]?.id ?? '');
+    /* Owner 2026-07-02 — the last-resort default must NEVER be "the first
+       warehouse in the list": CHINA WAREHOUSE sorts first by code, so a GRN that
+       couldn't resolve its PO/pick warehouse (a manual GRN, or a from-PO race)
+       silently received into the China landing warehouse — goods entered stock in
+       the WRONG warehouse and MRP for the real (MY) warehouse still showed
+       shortage. Fall back to the company default warehouse instead, and never to
+       a transit/overseas warehouse (is_transit). If none qualifies, leave the
+       picker blank so the operator must choose (the server then uses its own
+       is_default fallback, not the first row). */
+    const wh = warehousesQ.data ?? [];
+    const safeDefault =
+      wh.find((w) => w.is_default && !w.is_transit)?.id
+      ?? wh.find((w) => !w.is_transit)?.id
+      ?? '';
+    const fallback = pickLoc ?? poLoc ?? safeDefault;
     if (fallback) setWarehouseId(fallback);
   }, [warehouseId, picksResolved, hasPicks, picks, po, warehousesQ.data]);
 

@@ -155,8 +155,31 @@ async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise
 
   // ── Inventory IN per item — best effort, doesn't roll back the post. ─
   const grnNo = (grnHeader as { grn_number: string } | null)?.grn_number ?? grnId;
-  const warehouseId = (grnHeader as { warehouse_id: string | null } | null)?.warehouse_id
+  let warehouseId = (grnHeader as { warehouse_id: string | null } | null)?.warehouse_id
     ?? (await defaultWarehouseId(sb));
+  /* Owner 2026-07-02 — AUTHORITATIVE receiving warehouse = the source PO line's
+     bound warehouse. The warehouse binds at the SO/PO line and must flow into the
+     GRN's stock movements (per-warehouse model, no cross-warehouse pooling). A
+     frontend default once fell back to the FIRST warehouse (CHINA landing) and
+     silently received PO-bound goods into the wrong warehouse, so MRP for the
+     real (MY) warehouse still showed shortage. Guard it at this single post
+     chokepoint: when the GRN's PO-linked lines share ONE warehouse, that is the
+     truth — override a mismatched header + persist it so the movement (and the
+     detail/list) land where the PO expected. Manual (no-PO) or mixed-warehouse
+     GRNs keep the header/default untouched. */
+  const linkedPoItemIds = (items ?? [])
+    .map((it: { purchase_order_item_id: string | null }) => it.purchase_order_item_id)
+    .filter((x: string | null): x is string => !!x);
+  if (linkedPoItemIds.length > 0) {
+    const { data: poWhRows } = await sb.from('purchase_order_items')
+      .select('warehouse_id').in('id', [...new Set(linkedPoItemIds)]);
+    const poWhs = [...new Set(((poWhRows ?? []) as Array<{ warehouse_id: string | null }>)
+      .map((r) => r.warehouse_id).filter((x): x is string => !!x))];
+    if (poWhs.length === 1 && poWhs[0] !== warehouseId) {
+      warehouseId = poWhs[0]!;
+      await sb.from('grns').update({ warehouse_id: warehouseId, updated_at: new Date().toISOString() }).eq('id', grnId);
+    }
+  }
   /* Landed-cost core (migration 0190) — the GRN line unit_price_centi is in the
      GRN's OWN currency (RMB / USD / SGD / MYR, copied from the source PO). The
      FIFO lot must carry MYR, so convert the IN cost here at the GRN's rate:
