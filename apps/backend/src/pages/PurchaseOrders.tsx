@@ -158,7 +158,7 @@ const buildPoColumns = (): DataGridColumn<PoHeaderRow>[] => [
     /* Date columns formatted to match the SO list ("31 May 2026" not the raw
        ISO string) — Commander 2026-05-31 "跟 SO 一模一样". Sort still keys on the
        raw ISO so chronological order is preserved. */
-    key: 'po_date', label: 'Date', width: 120, sortable: true,
+    key: 'po_date', label: 'PO Date', width: 120, sortable: true,
     accessor: (po) => fmtDateOrDash(po.po_date),
     searchValue: (po) => po.po_date,
     sortFn: (a, b) => (a.po_date ?? '').localeCompare(b.po_date ?? ''),
@@ -180,6 +180,39 @@ const buildPoColumns = (): DataGridColumn<PoHeaderRow>[] => [
     sortFn: (a, b) => (poEffectiveExpected(a) ?? '').localeCompare(poEffectiveExpected(b) ?? ''),
     filterType: 'date', dateValue: (po) => poEffectiveExpected(po),
   },
+  /* Owner 2026-07-02 — the individual supplier-revised delivery dates (migration
+     0180). Expected already shows the EFFECTIVE (latest) date; these expose each
+     raw revision. Off by default — toggle on via the Columns picker. */
+  {
+    key: 'supplier_delivery_date_2', label: 'Supplier DD 2', width: 120, sortable: true, defaultHidden: true,
+    accessor: (po) => fmtDateOrDash(po.supplier_delivery_date_2 ?? null),
+    searchValue: (po) => po.supplier_delivery_date_2 ?? '',
+    sortFn: (a, b) => (a.supplier_delivery_date_2 ?? '').localeCompare(b.supplier_delivery_date_2 ?? ''),
+    filterType: 'date', dateValue: (po) => po.supplier_delivery_date_2 ?? null,
+  },
+  {
+    key: 'supplier_delivery_date_3', label: 'Supplier DD 3', width: 120, sortable: true, defaultHidden: true,
+    accessor: (po) => fmtDateOrDash(po.supplier_delivery_date_3 ?? null),
+    searchValue: (po) => po.supplier_delivery_date_3 ?? '',
+    sortFn: (a, b) => (a.supplier_delivery_date_3 ?? '').localeCompare(b.supplier_delivery_date_3 ?? ''),
+    filterType: 'date', dateValue: (po) => po.supplier_delivery_date_3 ?? null,
+  },
+  {
+    key: 'supplier_delivery_date_4', label: 'Supplier DD 4', width: 120, sortable: true, defaultHidden: true,
+    accessor: (po) => fmtDateOrDash(po.supplier_delivery_date_4 ?? null),
+    searchValue: (po) => po.supplier_delivery_date_4 ?? '',
+    sortFn: (a, b) => (a.supplier_delivery_date_4 ?? '').localeCompare(b.supplier_delivery_date_4 ?? ''),
+    filterType: 'date', dateValue: (po) => po.supplier_delivery_date_4 ?? null,
+  },
+  {
+    /* Owner 2026-07-02 — the PO's ship-to warehouse (PR #77 purchase_location_id
+       → warehouses); the list endpoint embeds its name. */
+    key: 'purchase_location', label: 'Purchase Location', width: 170, sortable: true, groupable: true,
+    accessor: (po) => po.purchase_location?.name ?? po.purchase_location?.code ?? '—',
+    searchValue: (po) => `${po.purchase_location?.name ?? ''} ${po.purchase_location?.code ?? ''}`.trim(),
+    groupValue: (po) => po.purchase_location?.name ?? po.purchase_location?.code ?? '(none)',
+    sortFn: (a, b) => (a.purchase_location?.name ?? '').localeCompare(b.purchase_location?.name ?? ''),
+  },
   {
     key: 'currency', label: 'Currency', width: 90, sortable: true, groupable: true,
     accessor: (po) => po.currency,
@@ -198,6 +231,21 @@ const buildPoColumns = (): DataGridColumn<PoHeaderRow>[] => [
     // it. The Currency column carries the unit. (Wei Siang 2026-06-23)
     exportValue: (po) => (po.total_centi ?? 0) / 100,
     sortFn: (a, b) => a.total_centi - b.total_centi,
+  },
+  {
+    /* Owner 2026-07-02 — the GRN(s) this PO was received into (list endpoint
+       stamps transfer_to_grns = non-cancelled GRN doc-numbers). Mirrors the GRN
+       list's "Transfer From (PO)". Off by default — toggle on via Columns. */
+    key: 'transfer_to_grns', label: 'Transfer To (GRN)', width: 160, sortable: true, defaultHidden: true,
+    accessor: (po) => {
+      const gs = po.transfer_to_grns ?? [];
+      return gs.length === 0
+        ? <span style={{ color: 'var(--fg-muted)' }}>—</span>
+        : <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{gs.join(', ')}</span>;
+    },
+    searchValue: (po) => (po.transfer_to_grns ?? []).join(' '),
+    exportValue: (po) => (po.transfer_to_grns ?? []).join(', ') || '—',
+    sortFn: (a, b) => (a.transfer_to_grns?.[0] ?? '').localeCompare(b.transfer_to_grns?.[0] ?? ''),
   },
   {
     /* Status auto-detected (Wei Siang 2026-05-31) — relabelled into convert

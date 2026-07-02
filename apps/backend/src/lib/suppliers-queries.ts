@@ -131,6 +131,12 @@ export type PoHeaderRow = {
   cancelled_at: string | null;
   /** PR #77 — default ship-to warehouse for every line on this PO. */
   purchase_location_id: string | null;
+  /** Owner 2026-07-02 — list endpoint embeds the purchase-location warehouse's
+      NAME (the FK → warehouses) for the "Purchase Location" column. */
+  purchase_location?: { id: string; code: string; name: string } | null;
+  /** Owner 2026-07-02 — list endpoint stamps the non-cancelled GRN doc-numbers
+      this PO was received into, for the "Transfer To (GRN)" column. */
+  transfer_to_grns?: string[];
   created_at: string;
   created_by: string;
   updated_at: string;

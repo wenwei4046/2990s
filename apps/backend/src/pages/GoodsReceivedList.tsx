@@ -10,7 +10,7 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Plus, ArrowRightLeft, Printer } from 'lucide-react';
+import { Plus, ArrowRightLeft, Printer, CheckCheck, AlertTriangle } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { authedFetch } from '../lib/authed-fetch';
 import { useChoice } from '../components/ChoiceDialog';
@@ -19,6 +19,7 @@ import {
   usePurchaseReturnFromGrn,
   useCancelGrn,
   useGrnDetail,
+  usePostGrn,
 } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { StatusPill } from '../components/StatusPill';
@@ -52,6 +53,11 @@ type GrnRow = Record<string, unknown> & {
   delivery_note_ref: string | null;
   total_centi?: number;
   currency?: string;
+  /* Owner 2026-07-02 — list endpoint embeds the receiving warehouse (name) for
+     the "Purchase Location" column, and the per-GRN downstream PI/PR rollup for
+     the "Transfer To" column. */
+  warehouse?: { id: string; code: string; name: string } | null;
+  downstream?: { docNumber: string; docType: 'PI' | 'PR'; qty: number }[];
   supplier?: { id: string; code: string; name: string } | null;
   purchase_order?: { id: string; po_number: string } | null;
   /* Migration 0106 — convert-eligibility / lock flags from the list endpoint. */
@@ -86,11 +92,40 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
     exportValue: (g) => g.purchase_order?.po_number ?? '—',
   },
   {
+    /* Owner 2026-07-02 — the downstream Purchase Invoices / Returns this GRN was
+       carried into (list endpoint rolls them up per GRN). The counterpart of
+       "Transfer From (PO)"; cancelled PI/PR are already excluded server-side. */
+    key: 'transfer_to', label: 'Transfer To (PI / PR)', width: 160, sortable: true,
+    accessor: (g) => {
+      const ds = (g.downstream ?? []) as Array<{ docNumber: string; qty: number }>;
+      return ds.length === 0
+        ? <span style={{ color: 'var(--fg-muted)' }}>—</span>
+        : <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{ds.map((d) => d.docNumber).join(', ')}</span>;
+    },
+    searchValue: (g) => ((g.downstream ?? []) as Array<{ docNumber: string }>).map((d) => d.docNumber).join(' '),
+    exportValue: (g) => ((g.downstream ?? []) as Array<{ docNumber: string }>).map((d) => d.docNumber).join(', ') || '—',
+  },
+  {
     key: 'received_at', label: 'Received Date', width: 120, sortable: true,
     accessor: (g) => fmtDateOrDash(g.received_at),
     searchValue: (g) => g.received_at ?? '',
     sortFn: (a, b) => String(a.received_at ?? '').localeCompare(String(b.received_at ?? '')),
     filterType: 'date', dateValue: (g) => g.received_at,
+  },
+  {
+    /* Owner 2026-07-02 — the receiving warehouse (grns.warehouse_id → warehouses;
+       list endpoint embeds its name). Off by default — toggle on via Columns. */
+    key: 'purchase_location', label: 'Purchase Location', width: 170, sortable: true, groupable: true, defaultHidden: true,
+    accessor: (g) => g.warehouse?.name ?? g.warehouse?.code ?? '—',
+    searchValue: (g) => `${g.warehouse?.name ?? ''} ${g.warehouse?.code ?? ''}`.trim(),
+    groupValue: (g) => g.warehouse?.name ?? g.warehouse?.code ?? '(none)',
+    sortFn: (a, b) => (a.warehouse?.name ?? '').localeCompare(b.warehouse?.name ?? ''),
+  },
+  {
+    key: 'currency', label: 'Currency', width: 90, sortable: true, groupable: true, defaultHidden: true,
+    accessor: (g) => g.currency ?? 'MYR',
+    searchValue: (g) => g.currency ?? 'MYR',
+    groupValue: (g) => g.currency ?? 'MYR',
   },
   {
     key: 'delivery_note_ref', label: 'DN Ref', width: 130, sortable: true, defaultHidden: true,
@@ -277,6 +312,8 @@ export const GoodsReceived = () => {
   const { data, isLoading, error } = useGrns();
   const prFromGrn = usePurchaseReturnFromGrn();
   const cancelGrn = useCancelGrn();
+  const postGrn = usePostGrn();
+  const [confirming, setConfirming] = useState(false);
 
   const allRows = useMemo<GrnRow[]>(() => (data?.grns ?? []) as GrnRow[], [data]);
   const rows = useMemo<GrnRow[]>(
@@ -303,6 +340,33 @@ export const GoodsReceived = () => {
     cancelGrn.mutate(g.id, {
       onError: (e) => notify({ title: 'Cancel failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }),
     });
+  };
+
+  /* Owner 2026-07-02 — Confirm (post) one or many DRAFT GRNs in place. Each id
+     runs through the same PATCH /grns/:id/post the detail page uses, which commits
+     the inventory IN + the source-PO received rollup server-side. Non-draft ids
+     are skipped defensively so a mixed selection only confirms the drafts. */
+  const draftRows = useMemo(() => allRows.filter((g) => g.status === 'DRAFT'), [allRows]);
+  const confirmDrafts = async (ids: string[]) => {
+    const draftIds = ids.filter((id) => allRows.find((g) => g.id === id)?.status === 'DRAFT');
+    if (draftIds.length === 0 || confirming) return;
+    const ok = await askConfirm({
+      title: draftIds.length === 1 ? 'Confirm this goods receipt?' : `Confirm ${draftIds.length} goods receipts?`,
+      body: 'Confirming posts the receipt: stock enters the warehouse and each source PO’s received qty updates. You can still Cancel a GRN afterwards to reverse it.',
+      confirmLabel: 'Confirm',
+    });
+    if (!ok) return;
+    setConfirming(true);
+    let done = 0;
+    const failed: string[] = [];
+    for (const id of draftIds) {
+      try { await postGrn.mutateAsync(id); done += 1; }
+      catch { failed.push(allRows.find((g) => g.id === id)?.grn_number ?? id); }
+    }
+    setConfirming(false);
+    setSel(new Set());
+    if (failed.length === 0) notify({ title: `${done} confirmed`, body: 'Stock is in and the source POs are updated.' });
+    else notify({ title: `${done} confirmed, ${failed.length} failed`, body: `Could not confirm: ${failed.join(', ')}`, tone: 'error' });
   };
 
   /* Batch "Export PDF" — fetch each selected GRN's full detail (the same
@@ -381,6 +445,28 @@ export const GoodsReceived = () => {
         </div>
       )}
 
+      {/* Owner 2026-07-02 — draft-reminder banner. A DRAFT GRN moves NO stock and
+          bumps NO PO received qty, so drafts left un-confirmed silently starve
+          inventory + MRP. Surface the count + a one-click Confirm-all. */}
+      {draftRows.length > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 'var(--space-3)',
+          padding: 'var(--space-3) var(--space-4)',
+          background: 'rgba(214, 158, 46, 0.12)',
+          border: '1px solid rgba(214, 158, 46, 0.5)',
+          borderRadius: 'var(--radius-md)',
+        }}>
+          <AlertTriangle size={18} strokeWidth={1.75} style={{ color: '#8a5a00', flexShrink: 0 }} />
+          <span style={{ flex: 1, color: '#8a5a00', fontSize: 'var(--fs-13)' }}>
+            {draftRows.length} goods receipt{draftRows.length > 1 ? 's are' : ' is'} still Draft — stock has not entered the warehouse.
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => void confirmDrafts(draftRows.map((g) => g.id))} disabled={confirming}>
+            <CheckCheck size={14} strokeWidth={1.75} />
+            <span>{confirming ? 'Confirming…' : 'Confirm all drafts'}</span>
+          </Button>
+        </div>
+      )}
+
       {/* Status chips — matches the DR / SI list filter style. */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {STATUS_CHIPS.map((s) => (
@@ -410,6 +496,17 @@ export const GoodsReceived = () => {
           <span style={{ fontWeight: 600, color: 'var(--c-burnt)' }}>{sel.size} selected</span>
           <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
             <Button variant="ghost" size="sm" onClick={() => setSel(new Set())}>Clear</Button>
+            {/* Confirm appears only when the selection holds Draft GRNs; it posts
+                just those (Confirmed rows in the selection are skipped). */}
+            {(() => {
+              const selDrafts = [...sel].filter((id) => allRows.find((g) => g.id === id)?.status === 'DRAFT');
+              return selDrafts.length > 0 ? (
+                <Button variant="ghost" size="sm" onClick={() => void confirmDrafts(selDrafts)} disabled={confirming}>
+                  <CheckCheck size={14} strokeWidth={1.75} />
+                  <span>{confirming ? 'Confirming…' : `Confirm (${selDrafts.length})`}</span>
+                </Button>
+              ) : null;
+            })()}
             <Button variant="ghost" size="sm" onClick={() => void exportSelected()} disabled={exporting}>
               <Printer size={14} strokeWidth={1.75} />
               <span>{exporting ? 'Preparing…' : `Export PDF (${sel.size})`}</span>
@@ -460,6 +557,11 @@ export const GoodsReceived = () => {
           const menu: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
             { label: 'View', onClick: () => navigate(`/grns/${g.id}`) },
           ];
+          // Confirm — DRAFT only. Posts the receipt (stock IN + PO rollup) without
+          // opening the detail page (Owner 2026-07-02).
+          if (isDraft) {
+            menu.push({ label: 'Confirm', onClick: () => void confirmDrafts([g.id]) });
+          }
           // Edit — when editable (DRAFT or POSTED, no child).
           if (isEditable && !hasChildren) {
             menu.push({ label: 'Edit', onClick: () => navigate(`/grns/${g.id}?edit=1`) });
