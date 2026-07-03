@@ -175,6 +175,10 @@ const PurchaseConsignmentReturnNew = lazyRetry(() => import('./pages/PurchaseCon
 const PurchaseConsignmentReturnDetail = lazyRetry(() => import('./pages/PurchaseConsignmentReturnDetail').then(m => ({ default: m.PurchaseConsignmentReturnDetail })));
 const PurchaseConsignmentReturnFromReceive = lazyRetry(() => import('./pages/PurchaseConsignmentReturnFromReceive').then(m => ({ default: m.PurchaseConsignmentReturnFromReceive })));
 const SalesInvoiceDetail = lazyRetry(() => import('./pages/SalesInvoiceDetail').then(m => ({ default: m.SalesInvoiceDetail })));
+// SO amendment / revision inbox (Phase 6a) — a DataGrid queue of every amendment
+// across all SOs. Row-click opens the SO detail (at/before SO_APPROVED) or the
+// bound PO detail (once the PO gate is reached).
+const Amendments = lazyRetry(() => import('./pages/Amendments').then(m => ({ default: m.Amendments })));
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
@@ -268,6 +272,8 @@ export const router = createBrowserRouter([
       { path: 'sales-invoices/new', element: <SalesInvoiceNew /> },
       { path: 'sales-invoices/from-do', element: <SalesInvoiceFromDo /> },
       { path: 'sales-invoices/:id', element: <SalesInvoiceDetail /> },
+      // SO amendment / revision inbox (Phase 6a).
+      { path: 'amendments', element: <Amendments /> },
       // Consignment Order — new faithful SO-clone module supersedes the older
       // simple Consignment pages. /new is STATIC, must precede the :docNo route.
       { path: 'consignment', element: <ConsignmentOrders /> },

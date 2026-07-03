@@ -33,8 +33,10 @@ import {
   Coins,
   CalendarClock,
   Gauge,
+  FileClock,
 } from 'lucide-react';
 import { useAuth, POS_ONLY_ROLES, SALES_DESK_ROLES } from '../lib/auth';
+import { useAmendments } from '../lib/so-amendment-queries';
 import styles from './Sidebar.module.css';
 
 type NavLinkRow = {
@@ -87,6 +89,13 @@ const formatRole = (role?: string | null): string => {
 export const Sidebar = () => {
   const { staff, signOut } = useAuth();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(readCollapsed);
+
+  /* Amendments pending-count badge (Phase 6a) — open amendments = every row NOT
+     yet closed (SENT / REJECTED). Drives the "Amendments" nav badge so the SO
+     desk sees at a glance how many revisions are in flight. */
+  const { data: amendmentsData } = useAmendments();
+  const openAmendmentCount = (amendmentsData?.amendments ?? [])
+    .filter((a) => a.status !== 'SENT' && a.status !== 'REJECTED').length;
 
   const toggle = (id: string) =>
     setCollapsed((prev) => {
@@ -145,6 +154,9 @@ export const Sidebar = () => {
         { to: '/mfg-delivery-orders', icon: <PackagePlus {...ICON_PROPS} />, label: 'Delivery Orders' },
         { to: '/sales-invoices', icon: <FileText {...ICON_PROPS} />, label: 'Sales Invoices' },
         { to: '/delivery-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Delivery Returns' },
+        // SO amendment / revision inbox (Phase 6a). Badge = open amendments
+        // (everything not yet SENT / REJECTED).
+        { to: '/amendments', icon: <FileClock {...ICON_PROPS} />, label: 'Amendments', badge: openAmendmentCount },
       ],
     },
     {
