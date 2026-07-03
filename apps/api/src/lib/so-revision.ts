@@ -1,0 +1,342 @@
+// ----------------------------------------------------------------------------
+// SO amendment apply-revision helpers (Phase 3 / Task 3).
+//
+// `applySoAmendment` is the Approve-SO gate's engine: it freezes the current
+// SO as an immutable `so_revisions` snapshot, applies the amendment's line
+// diffs (SPEC / QTY / ADD / REMOVE) to `mfg_sales_order_items`, then RE-RUNS
+// the server-side honest-pricing recompute on every surviving line — the SAME
+// pricing path `POST /mfg-sales-orders` uses (CLAUDE.md red line #4: never
+// skip / never reinvent the recompute).
+//
+// Pricing reuse — how this mirrors POST /mfg-sales-orders:
+//   • Per line: `recomputeOneLine(sb, item, cachedConfig)` (mfg-pricing-recompute).
+//     That end-to-end helper loads product + fabric + MaintenanceConfig +
+//     sofa module prices + selling tiers + fabric-tier config + per-Model /
+//     per-compartment Δ overrides, then calls the pure `recomputeFromSnapshot`
+//     → `computeMfgLinePrice` / `computeMfgLineCost` from @2990s/shared. This is
+//     byte-for-byte the same call `POST /` makes at line ~2367 (there via the
+//     pre-batched loaders; here via recomputeOneLine which loads the same inputs
+//     itself). We persist the same columns the create path writes:
+//     unit_price_centi / total_centi / unit_cost_centi / line_cost_centi /
+//     line_margin_centi / divan_price_sen / leg_price_sen /
+//     special_order_price_sen / custom_specials.
+//   • Delivery fee + header totals: `rederiveDeliveryFee(sb, docNo)`
+//     (mfg-sales-orders.ts). It re-runs the authoritative `computeSoDeliveryFee`
+//     over the SO's CURRENT items (rebuilding the SVC-DELIVERY* lines) and folds
+//     `recomputeTotals` — exactly what the create + add-line paths call after a
+//     line change. No hand-rolled fee math here.
+//
+// Drift: the amendment is SERVER-derived — the operator's new selling price is
+// carried through recomputeOneLine, which returns the authoritative figure
+// (catalog sell_price / sofa module price) and only sets `drift` for a POS
+// tablet submission. Since Approve-SO is a Backend/office action (never a POS
+// tablet), the recompute is authoritative and there is no client bundle to
+// reject against here — the same trust boundary the create path applies to
+// non-POS callers (mfg-sales-orders.ts ~2388, `if (posTablet) …`).
+//
+// Consistency model: best-effort / transactional-consistent, mirroring the GRN
+// POST pattern — apply the diffs, recompute, bump the counter + write the audit
+// row; a failed audit is swallowed (non-fatal), a failed line write aborts.
+// ----------------------------------------------------------------------------
+
+import {
+  loadMaintenanceConfig,
+  recomputeOneLine,
+  type MfgItemForRecompute,
+} from './mfg-pricing-recompute';
+import { recordSoAudit } from './so-audit';
+import { rederiveDeliveryFee } from '../routes/mfg-sales-orders';
+
+/* The Supabase client threaded through the routes is loosely typed (`any` in
+   every sibling helper — see mfg-pricing-recompute.ts / so-audit callers). Keep
+   the same shape so this file composes with them without a type fight. */
+type Sb = any;
+
+type AmendmentRow = {
+  id: string;
+  so_doc_no: string;
+  status: string;
+};
+
+type AmendmentLineRow = {
+  id: string;
+  sales_order_item_id: string | null;
+  change_type: string;                 // SPEC | QTY | ADD | REMOVE
+  new_item_code: string | null;
+  new_variants: Record<string, unknown> | null;
+  new_qty: number | null;
+  new_unit_price_sen: number | null;
+  old_snapshot: Record<string, unknown> | null;
+};
+
+/* ── snapshotSo ─────────────────────────────────────────────────────────────
+   Freeze the SO's CURRENT state (header + all items) into a `so_revisions` row
+   at the SO's CURRENT `revision`, so the version being replaced stays immutable.
+   Returns the NEXT revision number (current + 1) for the caller to stamp on the
+   SO after applying the diffs.
+
+   Idempotent-safe: the `uq_so_revision (so_doc_no, revision)` unique index means
+   a re-run at the same revision no-ops on conflict (ignoreDuplicates) rather
+   than doubling the snapshot — so an Approve-SO retry after a mid-apply failure
+   can't create two snapshots at the same counter. */
+export async function snapshotSo(
+  sb: Sb,
+  docNo: string,
+  amendmentId?: string | null,
+  userId?: string | null,
+): Promise<number> {
+  const { data: header, error: hErr } = await sb
+    .from('mfg_sales_orders')
+    .select('*')
+    .eq('doc_no', docNo)
+    .maybeSingle();
+  if (hErr) throw new Error(`snapshotSo: header load failed: ${hErr.message}`);
+  if (!header) throw new Error(`snapshotSo: SO ${docNo} not found`);
+
+  const currentRevision =
+    typeof (header as { revision?: unknown }).revision === 'number'
+      ? (header as { revision: number }).revision
+      : 1;
+
+  const { data: lines, error: lErr } = await sb
+    .from('mfg_sales_order_items')
+    .select('*')
+    .eq('doc_no', docNo)
+    .order('line_no', { ascending: true, nullsFirst: true });
+  if (lErr) throw new Error(`snapshotSo: lines load failed: ${lErr.message}`);
+
+  const snapshot = {
+    header,
+    lines: lines ?? [],
+    snapshotAt: new Date().toISOString(),
+  };
+
+  const { error: insErr } = await sb
+    .from('so_revisions')
+    .upsert(
+      {
+        so_doc_no:    docNo,
+        revision:     currentRevision,
+        snapshot,
+        amendment_id: amendmentId ?? null,
+        created_by:   userId ?? null,
+      },
+      { onConflict: 'so_doc_no,revision', ignoreDuplicates: true },
+    );
+  if (insErr) throw new Error(`snapshotSo: revision insert failed: ${insErr.message}`);
+
+  return currentRevision + 1;
+}
+
+/* ── applySoAmendment ───────────────────────────────────────────────────────
+   The Approve-SO engine. Load the amendment + its line diffs + the SO; snapshot
+   the current SO; apply each diff to mfg_sales_order_items carrying ALL variant
+   columns; re-run the honest-pricing recompute on every surviving line via the
+   SAME shared path POST /mfg-sales-orders uses; re-derive the delivery fee +
+   header totals; bump the SO's revision; write an audit row.
+
+   Returns the applied revision + the affected SO doc_no. Throws on a hard
+   failure (load / write) — the caller (approve-so route) leaves the amendment
+   status unchanged so the operator can retry. */
+export async function applySoAmendment(
+  sb: Sb,
+  amendmentId: string,
+  userId: string | null,
+): Promise<{ soDocNo: string; revision: number }> {
+  // (1) Load amendment + lines + SO header.
+  const { data: amdRow, error: amdErr } = await sb
+    .from('so_amendments')
+    .select('id, so_doc_no, status')
+    .eq('id', amendmentId)
+    .maybeSingle();
+  if (amdErr) throw new Error(`applySoAmendment: amendment load failed: ${amdErr.message}`);
+  if (!amdRow) throw new Error('applySoAmendment: amendment not found');
+  const amendment = amdRow as AmendmentRow;
+  const docNo = amendment.so_doc_no;
+
+  const { data: lineRows, error: lineErr } = await sb
+    .from('so_amendment_lines')
+    .select('id, sales_order_item_id, change_type, new_item_code, new_variants, ' +
+      'new_qty, new_unit_price_sen, old_snapshot')
+    .eq('amendment_id', amendmentId);
+  if (lineErr) throw new Error(`applySoAmendment: amendment lines load failed: ${lineErr.message}`);
+  const amendmentLines = (lineRows ?? []) as AmendmentLineRow[];
+
+  // (2) Snapshot the CURRENT SO before touching a single line. Returns the next
+  //     revision to stamp once the diffs land.
+  const nextRevision = await snapshotSo(sb, docNo, amendmentId, userId);
+
+  // Config loaded ONCE and threaded into every per-line recompute (the create
+  // path's `cachedConfig` — one maintenance_config read for the whole apply).
+  const cachedConfig = await loadMaintenanceConfig(sb);
+
+  /* (3) Apply each line diff to mfg_sales_order_items, carrying ALL variant
+     columns. SPEC rewrites item_code + variants (+ optional qty/price); QTY
+     rewrites qty; ADD inserts a new line; REMOVE deletes the line. Each write
+     that changes/adds a priced line is followed by (4) the honest-pricing
+     recompute so unit/cost/margin/breakdown columns stay authoritative.
+
+     The recompute is fed the SAME MfgItemForRecompute shape POST / builds at
+     ~2353: { itemCode, itemGroup, qty, unitPriceCenti, variants }. */
+  const touched: Array<{ change: string; itemCode: string; qty: number }> = [];
+
+  for (const diff of amendmentLines) {
+    const change = String(diff.change_type ?? '').toUpperCase();
+
+    if (change === 'REMOVE') {
+      if (!diff.sales_order_item_id) continue;
+      const { error: delErr } = await sb
+        .from('mfg_sales_order_items')
+        .delete()
+        .eq('id', diff.sales_order_item_id)
+        .eq('doc_no', docNo);
+      if (delErr) throw new Error(`applySoAmendment: REMOVE failed for line ${diff.sales_order_item_id}: ${delErr.message}`);
+      touched.push({ change, itemCode: String(diff.old_snapshot?.item_code ?? ''), qty: 0 });
+      continue;
+    }
+
+    if (change === 'ADD') {
+      const itemCode = String(diff.new_item_code ?? '').trim();
+      if (!itemCode) throw new Error('applySoAmendment: ADD line has no new_item_code');
+      const variants = (diff.new_variants ?? null) as Record<string, unknown> | null;
+      const itemGroup = String((variants?.itemGroup ?? diff.old_snapshot?.item_group ?? 'others')).toLowerCase();
+      const qty = Math.max(1, Number(diff.new_qty ?? 1));
+
+      // Recompute the new line authoritatively (same path as POST /).
+      const rec = await recomputeOneLine(sb, {
+        itemCode,
+        itemGroup,
+        qty,
+        unitPriceCenti: Number(diff.new_unit_price_sen ?? 0),
+        variants: (variants as MfgItemForRecompute['variants']) ?? null,
+      }, cachedConfig);
+
+      const unit = rec.unit_price_sen;
+      const lineTotal = qty * unit;
+      const unitCost = rec.unit_cost_sen;
+      const lineCost = unitCost * qty;
+
+      const { error: insErr } = await sb.from('mfg_sales_order_items').insert({
+        doc_no:                  docNo,
+        line_date:              new Date().toISOString().slice(0, 10),
+        item_group:             itemGroup,
+        item_code:              itemCode,
+        uom:                    'UNIT',
+        qty,
+        unit_price_centi:       unit,
+        discount_centi:         0,
+        total_centi:            lineTotal,
+        total_inc_centi:        lineTotal,
+        balance_centi:          lineTotal,
+        variants,
+        unit_cost_centi:        unitCost,
+        line_cost_centi:        lineCost,
+        line_margin_centi:      lineTotal - lineCost,
+        divan_price_sen:        rec.divan_price_sen,
+        leg_price_sen:          rec.leg_price_sen,
+        special_order_price_sen: rec.special_order_sen,
+        custom_specials:        rec.custom_specials ?? null,
+        stock_status:           'PENDING',
+      });
+      if (insErr) throw new Error(`applySoAmendment: ADD insert failed: ${insErr.message}`);
+      touched.push({ change, itemCode, qty });
+      continue;
+    }
+
+    // SPEC / QTY — mutate an existing line in place, then recompute it.
+    if (!diff.sales_order_item_id) continue;
+
+    const { data: existing, error: exErr } = await sb
+      .from('mfg_sales_order_items')
+      .select('*')
+      .eq('id', diff.sales_order_item_id)
+      .eq('doc_no', docNo)
+      .maybeSingle();
+    if (exErr) throw new Error(`applySoAmendment: line load failed: ${exErr.message}`);
+    if (!existing) continue; // line already gone — nothing to amend
+
+    const row = existing as Record<string, unknown>;
+    const itemCode = change === 'SPEC' && diff.new_item_code
+      ? String(diff.new_item_code).trim()
+      : String(row.item_code ?? '');
+    const itemGroup = String(row.item_group ?? 'others').toLowerCase();
+    const qty = diff.new_qty != null ? Math.max(1, Number(diff.new_qty)) : Math.max(1, Number(row.qty ?? 1));
+    // SPEC carries new variants; QTY leaves the existing variants untouched.
+    const variants = change === 'SPEC' && diff.new_variants != null
+      ? (diff.new_variants as Record<string, unknown>)
+      : (row.variants as Record<string, unknown> | null) ?? null;
+    // The operator-authored selling price (if the diff supplies one) is fed as
+    // the client unitPriceCenti; the recompute returns the authoritative figure
+    // (catalog / sofa module price) for a priced line, else carries it through.
+    const clientUnit = diff.new_unit_price_sen != null
+      ? Number(diff.new_unit_price_sen)
+      : Number(row.unit_price_centi ?? 0);
+
+    const rec = await recomputeOneLine(sb, {
+      itemCode,
+      itemGroup,
+      qty,
+      unitPriceCenti: clientUnit,
+      variants: (variants as MfgItemForRecompute['variants']) ?? null,
+    }, cachedConfig);
+
+    const unit = rec.unit_price_sen;
+    const discount = Number(row.discount_centi ?? 0);
+    const lineTotal = (qty * unit) - discount;
+    const unitCost = rec.unit_cost_sen;
+    const lineCost = unitCost * qty;
+
+    const { error: updErr } = await sb.from('mfg_sales_order_items').update({
+      item_code:               itemCode,
+      qty,
+      variants,
+      unit_price_centi:        unit,
+      total_centi:             lineTotal,
+      total_inc_centi:         lineTotal,
+      balance_centi:           lineTotal,
+      unit_cost_centi:         unitCost,
+      line_cost_centi:         lineCost,
+      line_margin_centi:       lineTotal - lineCost,
+      divan_price_sen:         rec.divan_price_sen,
+      leg_price_sen:           rec.leg_price_sen,
+      special_order_price_sen: rec.special_order_sen,
+      custom_specials:         rec.custom_specials ?? null,
+    }).eq('id', diff.sales_order_item_id);
+    if (updErr) throw new Error(`applySoAmendment: ${change} update failed for line ${diff.sales_order_item_id}: ${updErr.message}`);
+    touched.push({ change, itemCode, qty });
+  }
+
+  /* (4-continued) Re-derive the delivery fee (rebuilds SVC-DELIVERY* lines on
+     the authoritative computeSoDeliveryFee) AND fold header totals — this is the
+     same helper the create + add-line paths call after a line change, and it
+     internally runs recomputeTotals. Best-effort like the create path (logs,
+     never throws). */
+  try {
+    await rederiveDeliveryFee(sb, docNo);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[so-amendment] rederiveDeliveryFee failed (non-fatal):', e);
+  }
+
+  // (5) Bump the SO's revision + updated_at.
+  const { error: bumpErr } = await sb
+    .from('mfg_sales_orders')
+    .update({ revision: nextRevision, updated_at: new Date().toISOString() })
+    .eq('doc_no', docNo);
+  if (bumpErr) throw new Error(`applySoAmendment: revision bump failed: ${bumpErr.message}`);
+
+  // (6) Audit — best-effort, keyed on the SO doc_no like every other SO mutation.
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'AMENDMENT_SO_APPROVED',
+    actorId: userId,
+    fieldChanges: [
+      { field: 'amendment_id', to: amendmentId },
+      { field: 'revision', from: nextRevision - 1, to: nextRevision },
+      { field: 'lines_applied', to: touched.length },
+    ],
+    note: `Amendment applied: ${touched.map((t) => `${t.change} ${t.itemCode}`).join('; ') || 'no line diffs'}`,
+  });
+
+  return { soDocNo: docNo, revision: nextRevision };
+}

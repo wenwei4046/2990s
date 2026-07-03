@@ -16,6 +16,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { canTransition, nextStatus, type AmendStatus, type AmendAction } from '@2990s/shared';
+import { applySoAmendment } from '../lib/so-revision';
 
 export const soAmendments = new Hono<{ Bindings: Env; Variables: Variables }>();
 soAmendments.use('*', supabaseAuth);
@@ -29,6 +30,19 @@ async function isSupplierConfirmCaller(sb: any, userId: string | null | undefine
   if (!userId) return false;
   const { data } = await sb.from('staff').select('role').eq('id', userId).maybeSingle();
   return !!data && SUPPLIER_CONFIRM_ROLES.has(String((data as { role?: string }).role));
+}
+
+/* Approve-SO is the first hard gate: it re-derives the SO + snapshots the old
+   version. Per the plan it is a coordinator / showroom_lead / admin+ action
+   (the showroom lead owns the order desk; coordinators run fulfilment). Same
+   inline role-set predicate style as isSupplierConfirmCaller above — this repo
+   has no requirePermission helper; every route gates on an explicit staffRole
+   set. */
+const APPROVE_SO_ROLES = new Set<string>(['coordinator', 'showroom_lead', 'admin', 'super_admin']);
+async function isApproveSoCaller(sb: any, userId: string | null | undefined): Promise<boolean> {
+  if (!userId) return false;
+  const { data } = await sb.from('staff').select('role').eq('id', userId).maybeSingle();
+  return !!data && APPROVE_SO_ROLES.has(String((data as { role?: string }).role));
 }
 
 /* ── GET / — amendment list (newest first) ─────────────────────────────────
@@ -162,4 +176,70 @@ soAmendments.patch('/:id/supplier-confirm', async (c) => {
   } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-amendment] audit failed (non-fatal):', e); }
 
   return c.json({ amendment: updated });
+});
+
+/* ── PATCH /:id/approve-so ─────────────────────────────────────────────────
+   The first hard gate. Guard the transition (SUPPLIER_PENDING / REQUESTED →
+   SO_APPROVED via the shared state machine — the light no-supplier path may
+   skip supplier-confirm), then RE-DERIVE the SO: snapshot the current version
+   to so_revisions, apply the line diffs to mfg_sales_order_items, RE-RUN the
+   honest-pricing recompute (applySoAmendment → the SAME shared pricing path as
+   POST /mfg-sales-orders), bump mfg_sales_orders.revision, and audit. On
+   success the amendment advances to SO_APPROVED and stamps so_approved_by/at.
+
+   If the SO has NO bound PO this is the TERMINAL step (there is no PO to revise
+   or send) — the amendment simply rests at SO_APPROVED. Approve-PO / Send only
+   apply when a bound PO exists (Phase 4). */
+soAmendments.patch('/:id/approve-so', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
+
+  // RBAC — approve-SO = coordinator / showroom_lead / admin+.
+  if (!(await isApproveSoCaller(sb, user.id))) {
+    return c.json({
+      error: 'approve_so_forbidden',
+      message: 'Only a coordinator, showroom lead, or admin can approve a Sales Order revision.',
+    }, 403);
+  }
+
+  // Load the amendment; guard the transition against its current status.
+  const { data: amdRow } = await sb.from('so_amendments')
+    .select('id, so_doc_no, status').eq('id', id).maybeSingle();
+  if (!amdRow) return c.json({ error: 'not_found' }, 404);
+  const amendment = amdRow as { id: string; so_doc_no: string; status: AmendStatus };
+
+  const action: AmendAction = 'approve-so';
+  if (!canTransition(amendment.status, action)) {
+    return c.json({
+      error: 'bad_transition',
+      reason: `Cannot approve the SO revision from status ${amendment.status}.`,
+    }, 409);
+  }
+  const to = nextStatus(amendment.status, action);
+  if (!to) return c.json({ error: 'bad_transition' }, 409);
+
+  /* Apply the revision: snapshot → line diffs → honest-pricing recompute →
+     revision bump → audit. A hard failure leaves the amendment status
+     unchanged (we only advance status AFTER a clean apply) so the operator can
+     retry — the snapshot upsert is idempotent on (so_doc_no, revision). */
+  let applied: { soDocNo: string; revision: number };
+  try {
+    applied = await applySoAmendment(sb, id, user.id);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[so-amendment] approve-so apply failed:', e);
+    return c.json({
+      error: 'apply_failed',
+      reason: e instanceof Error ? e.message : 'Failed to apply the SO revision.',
+    }, 500);
+  }
+
+  const { data: updated, error: updErr } = await sb.from('so_amendments').update({
+    status:          to,
+    so_approved_by:  user.id,
+    so_approved_at:  new Date().toISOString(),
+    updated_at:      new Date().toISOString(),
+  }).eq('id', id).select('id, so_doc_no, amendment_no, status').single();
+  if (updErr) return c.json({ error: 'update_failed', reason: updErr.message }, 500);
+
+  return c.json({ amendment: updated, revision: applied.revision });
 });
