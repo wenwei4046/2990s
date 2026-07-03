@@ -46,6 +46,7 @@ import {
   type MfgItemForRecompute,
 } from './mfg-pricing-recompute';
 import { recordSoAudit } from './so-audit';
+import { deriveMfgPoUnitCost } from './po-pricing';
 import { rederiveDeliveryFee } from '../routes/mfg-sales-orders';
 
 /* The Supabase client threaded through the routes is loosely typed (`any` in
@@ -408,11 +409,17 @@ export async function snapshotPo(
    (mfg-purchase-orders.ts /from-sos): each PO line is 1:1 with a SO line via
    `purchase_order_items.so_item_id`, and carries the SO line's qty / variants /
    item_group / description2 / per-line warehouse + delivery date. We re-read
-   each PO line's source SO line and rewrite exactly those carried fields — the
-   supplier COST (`unit_price_centi`) stays the PO's own negotiated figure (the
-   create path's auto-cost pre-pass is NOT re-run on a revision-in-place; only
-   the SO-derived spec/qty flow through, mirroring what Create-PO-from-SO pulls
-   from an SO line).
+   each PO line's source SO line and rewrite exactly those carried fields, AND
+   re-derive the supplier COST (`unit_price_centi`) from the revised spec —
+   Commander 2026-07-03: a fabric/spec swap usually costs differently, so the
+   revised PO's cost must re-anchor off the new spec, NOT carry over the old
+   figure. The re-derivation reuses the SAME cost-anchor "Create PO from SO"
+   runs (deriveMfgPoUnitCost in po-pricing: the supplier binding's price_matrix
+   + fabric tier + maintenance surcharges via computeMfgPoUnitCost). Scope note:
+   the create path additionally re-spreads a SOFA-COMBO total across a matched
+   module set; that group-level step needs the whole sibling set as context and
+   is NOT reproduced on a per-line revision — only the per-module matrix/
+   surcharge cost is re-derived here.
 
    Bound PO discovery: SO line ids (mfg_sales_order_items.doc_no = SO) →
    purchase_order_items.so_item_id → distinct purchase_order_id → purchase_orders
@@ -495,12 +502,12 @@ export async function reviseBoundPo(
 
   const { data: poHeaders, error: poHeadErr } = await sb
     .from('purchase_orders')
-    .select('id, po_number, status, revision')
+    .select('id, po_number, status, revision, supplier_id')
     .in('id', candidatePoIds);
   if (poHeadErr) throw new Error(`reviseBoundPo: PO headers load failed: ${poHeadErr.message}`);
   // Exclude cancelled POs — a cancelled PO is not a live obligation to revise.
   const livePos = ((poHeaders ?? []) as Array<{
-    id: string; po_number: string; status: string; revision: number | null;
+    id: string; po_number: string; status: string; revision: number | null; supplier_id: string | null;
   }>).filter((p) => String(p.status).toUpperCase() !== 'CANCELLED');
   if (livePos.length === 0) return { revisedPoIds: [], perPo: [] };
   const livePoIds = new Set(livePos.map((p) => p.id));
@@ -508,10 +515,11 @@ export async function reviseBoundPo(
   // (3) Re-read the NOW-REVISED SO lines keyed by id (the derivation source).
   const { data: revisedSoRows, error: revErr } = await sb
     .from('mfg_sales_order_items')
-    .select('id, item_group, qty, variants, warehouse_id, delivery_date')
+    .select('id, item_code, item_group, qty, variants, warehouse_id, delivery_date')
     .in('id', soItemIds);
   if (revErr) throw new Error(`reviseBoundPo: revised SO lines load failed: ${revErr.message}`);
   const revisedById = new Map<string, {
+    item_code: string | null;
     item_group: string | null;
     qty: number | null;
     variants: Record<string, unknown> | null;
@@ -520,6 +528,7 @@ export async function reviseBoundPo(
   }>();
   for (const r of (revisedSoRows ?? []) as Array<Record<string, unknown>>) {
     revisedById.set(String(r.id), {
+      item_code:     (r.item_code as string | null) ?? null,
       item_group:    (r.item_group as string | null) ?? null,
       qty:           r.qty == null ? null : Number(r.qty),
       variants:      (r.variants as Record<string, unknown> | null) ?? null,
@@ -564,22 +573,37 @@ export async function reviseBoundPo(
       const revised = revisedById.get(pi.so_item_id as string)!;
       // Re-derive EXACTLY the SO-sourced fields Create-PO-from-SO carries onto a
       // PO line: qty, item_group, variants, description2, per-line warehouse +
-      // delivery date. Read the existing PO line's unit cost to keep the PO's
-      // own negotiated supplier price and recompute the line total off it.
+      // delivery date. Read the existing PO line's discount + material_code (the
+      // SKU the supplier binding is keyed on).
       const { data: existing, error: exErr } = await sb
         .from('purchase_order_items')
-        .select('unit_price_centi, discount_centi')
+        .select('material_code, discount_centi')
         .eq('id', pi.id)
         .maybeSingle();
       if (exErr) throw new Error(`reviseBoundPo: PO line load failed: ${exErr.message}`);
-      const unitPriceCenti = Number((existing as { unit_price_centi?: number } | null)?.unit_price_centi ?? 0);
       const discountCenti = Number((existing as { discount_centi?: number } | null)?.discount_centi ?? 0);
       const qty = revised.qty != null ? Math.max(1, revised.qty) : Number(pi.qty ?? 1);
       const itemGroup = revised.item_group;
       const variants = revised.variants;
+      // Commander 2026-07-03 — the revised PO line RE-DERIVES its supplier cost
+      // from the NOW-REVISED SO line's spec (a fabric/spec swap usually costs
+      // differently), using the SAME cost-anchor "Create PO from SO" runs
+      // (deriveMfgPoUnitCost → the supplier binding's price_matrix + fabric tier
+      // + maintenance surcharges via computeMfgPoUnitCost). The SKU the cost is
+      // keyed on = the revised SO line's item_code (a SPEC change may swap it),
+      // falling back to the PO line's existing material_code.
+      const materialCode = revised.item_code
+        ?? String((existing as { material_code?: string } | null)?.material_code ?? '');
+      const unitPriceCenti = await deriveMfgPoUnitCost(sb, {
+        supplierId: po.supplier_id ?? '',
+        itemCode:   materialCode,
+        itemGroup,
+        variants:   variants ?? null,
+      });
 
       const { error: updErr } = await sb.from('purchase_order_items').update({
         qty,
+        unit_price_centi: unitPriceCenti,
         line_total_centi: qty * unitPriceCenti - discountCenti,
         item_group:       itemGroup,
         variants,
