@@ -121,6 +121,20 @@ export const useSoRevisions = (docNo: string | null) => useQuery({
   retryDelay: 800,
 });
 
+/* ── PO revisions (nested under the PO mount) ──────────────────────────────
+   GET /mfg-purchase-orders/:id/revisions — the prior PO versions for the PO
+   Detail "Revisions" tab. Read-only; no invalidation wiring needed. Keyed on
+   the po id so it refetches only when the page's PO changes. Mirrors
+   useSoRevisions; the row shape (po_revisions) matches SoRevisionRow. */
+export const usePoRevisions = (poId: string | null) => useQuery({
+  queryKey: ['po-revisions', poId],
+  queryFn: () => authedFetch<{ revisions: SoRevisionRow[] }>(`/mfg-purchase-orders/${poId}/revisions`),
+  enabled: Boolean(poId),
+  staleTime: 30_000,
+  retry: 1,
+  retryDelay: 800,
+});
+
 /* ── Create (nested under the SO mount) ────────────────────────────────────
    POST /mfg-sales-orders/:docNo/amendments — the CREATE lives on the SO router
    so it can reuse the SO processing-lock / downstream guards. */

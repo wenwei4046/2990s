@@ -162,6 +162,14 @@ export type PoHeaderRow = {
       un-cancellable (the GRN must be cancelled / deleted first). Convert-to-
       GRN (partial receiving) is NOT gated. Mirrors GRN's has_children. */
   has_children?: boolean;
+  /** SO-amendment / revision workflow (2026-07-03) — bumped in place when a
+      supplier-confirmed amendment revises this PO. The PO Detail header shows a
+      "Revised · rev N" badge when > 1. Defaults 1. */
+  revision?: number;
+  /** SO-amendment workflow — the detail endpoint stamps the open amendment for
+      this PO's source SO (status NOT IN SENT/REJECTED) so the PO Detail page can
+      render the "Revision ready" banner + gate actions. Null when none. */
+  open_amendment?: { id: string; status: string; amendment_no: string } | null;
 };
 
 export type PoItemSummary = {

@@ -29,10 +29,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Plus, Trash2, Printer, Save, Ban, ArrowRightLeft,
-  ChevronDown, RotateCcw,
+  ChevronDown, RotateCcw, Check, History, Send, Download,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary, canonicalizeVariants, effectiveDelivery } from '@2990s/shared'; // Commander 2026-05-28 — Description 2; 2026-06-19 effective delivery
+import { buildVariantSummary, canonicalizeVariants, effectiveDelivery, fmtDateTime } from '@2990s/shared'; // Commander 2026-05-28 — Description 2; 2026-06-19 effective delivery
 import {
   usePurchaseOrderDetail,
   useUpdatePurchaseOrderHeader,
@@ -66,9 +66,23 @@ import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import { StatusPill } from '../components/StatusPill';
 import { DateField } from '../components/DateField';
 import { CurrencyOptions } from '../lib/currencies-queries';
+import { useAuth } from '../lib/auth';
+import {
+  useApprovePo,
+  useSendAmendment,
+  usePoRevisions,
+  type SoRevisionRow,
+} from '../lib/so-amendment-queries';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
+
+/* SO-amendment role gate (2026-07-03) — mirror the server-side role set in
+   apps/api/src/routes/so-amendments.ts for the approve-po + send gates so the
+   banner buttons only render for a staff member the API would let through. The
+   server 403 stays the real gate (authed-fetch humanises its message); this just
+   hides the affordance from roles that can't use it. */
+const AMENDMENT_ACTION_ROLES = new Set<string>(['coordinator', 'finance', 'admin', 'super_admin']);
 
 const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   const v = centi ?? 0;
@@ -155,6 +169,17 @@ export const PurchaseOrderDetail = () => {
   const deleteItem = useDeletePurchaseOrderItem();
   const askConfirm = useConfirm();
   const notify = useNotify();
+  // SO-amendment workflow (2026-07-03) — approve-po / send gates + the revisions
+  // list. The green "Revision ready" banner hosts Approve PO (at SO_APPROVED) then
+  // Send + Download Revised PO (at PO_APPROVED); the Revisions tab lists prior PO
+  // versions. Role gate is FE-hint only (server 403 is the real gate).
+  const approvePo = useApprovePo();
+  const sendAmendment = useSendAmendment();
+  const { staff: pageStaff } = useAuth();
+  /* Phase 6b — main content tab. 'order' = the existing detail view; 'revisions'
+     = the read-only prior-versions list. Default 'order' so nothing changes for
+     never-amended POs. Mirrors SalesOrderDetail's activeTab. */
+  const [activeTab, setActiveTab] = useState<'order' | 'revisions'>('order');
   // PR #102 — PO PDF (AutoCount layout) needs the Purchase Location's
   // human-readable name; the header only carries the warehouse id. Load
   // warehouses once at the top so the print handler can resolve it.
@@ -564,7 +589,12 @@ export const PurchaseOrderDetail = () => {
     }
   };
 
-  const handlePrint = () => {
+  /* Client-side PO PDF generator (PR #102). Shared by the header "Print PDF" and
+     the amendment banner's "Download Revised PO" — the same existing generator,
+     just an optional docTitle so the revised copy prints "Revised Purchase Order".
+     The operator downloads/prints/WhatsApps it themselves (2990 has no server
+     email — "Send" only marks the amendment SENT). */
+  const generatePoPdf = (docTitle?: string) => {
     // PR #102 — pre-resolve purchase_location name (PDF can't hit the API).
     const wh = (warehousesQTop.data ?? []).find((w) => w.id === po.purchase_location_id);
     const headerForPdf = {
@@ -579,8 +609,72 @@ export const PurchaseOrderDetail = () => {
       source_so_doc_no: (po as unknown as { source_so_doc_no?: string | null }).source_so_doc_no ?? null,
     };
     import('../lib/purchase-order-pdf').then(({ generatePurchaseOrderPdf }) =>
-      generatePurchaseOrderPdf(headerForPdf, items),
+      generatePurchaseOrderPdf(headerForPdf, items, docTitle ? { docTitle } : undefined),
     ).catch((e) => notify({ title: 'PDF generation failed', body: `${e instanceof Error ? e.message : String(e)}`, tone: 'error' }));
+  };
+  const handlePrint = () => generatePoPdf();
+
+  /* ── SO-amendment banner state (2026-07-03) ────────────────────────────────
+     The bound PO detail stamps `open_amendment` when its source SO has an
+     in-flight amendment (status NOT IN SENT/REJECTED). Once the SO revision is
+     approved the amendment reaches SO_APPROVED → the coordinator/finance/admin
+     Approve PO (revises this PO in place, bumps `revision`, snapshots the prior
+     version to po_revisions) → PO_APPROVED → Send (marks SENT) + Download Revised
+     PO. Role gate is FE-hint only; the server 403 is the real gate. */
+  const openAmendment = po.open_amendment ?? null;
+  const role = pageStaff?.role ?? null;
+  const canAmendAction = role != null && AMENDMENT_ACTION_ROLES.has(role);
+
+  const handleApprovePo = () => {
+    if (!openAmendment) return;
+    askConfirm({
+      title: `Approve PO ${po.po_number}?`,
+      body: 'This applies the supplier-confirmed changes to this Purchase Order: it is re-derived in place '
+        + '(same PO number, revision bumped) and the current version is snapshotted into Revisions. This cannot be undone.',
+      confirmLabel: 'Approve PO',
+    }).then((ok) => {
+      if (!ok) return;
+      approvePo.mutate({ id: openAmendment.id }, {
+        onError: (e) => {
+          /* approve-po may 409 with { code:'received_floor', poItemId, revisedQty,
+             receivedQty } — the revised qty on a line is below what's already been
+             received, so a Purchase Return must clear the excess first. Read the
+             structured body off the thrown error (authed-fetch rides err.body /
+             err.status) and render ONE plain sentence naming the line — never the
+             raw JSON. Any other error falls back to its humanised message. */
+          const body = (e as { body?: Record<string, unknown> }).body ?? null;
+          if (body && body.code === 'received_floor') {
+            const line = String(body.poItemId ?? '').slice(0, 8);
+            const revised = Number(body.revisedQty ?? 0);
+            const received = Number(body.receivedQty ?? 0);
+            notify({
+              title: 'Cannot approve — quantity already received',
+              body: `PO line ${line} would be revised down to ${revised}, but ${received} have already been received. `
+                + 'Raise a Purchase Return for the excess first, then approve the amendment again.',
+              tone: 'error',
+            });
+            return;
+          }
+          notify({ title: 'Could not approve the PO', body: e instanceof Error ? e.message : String(e), tone: 'error' });
+        },
+        onSuccess: () => notify({ title: 'PO revision approved' }),
+      });
+    });
+  };
+
+  const handleSendAmendment = () => {
+    if (!openAmendment) return;
+    askConfirm({
+      title: `Mark amendment ${openAmendment.amendment_no} as sent?`,
+      body: 'This marks the amendment SENT. There is no automatic email — download the Revised PO below and send it to the supplier yourself (print / WhatsApp).',
+      confirmLabel: 'Mark sent',
+    }).then((ok) => {
+      if (!ok) return;
+      sendAmendment.mutate({ id: openAmendment.id }, {
+        onError: (e) => notify({ title: 'Could not mark sent', body: e instanceof Error ? e.message : String(e), tone: 'error' }),
+        onSuccess: () => notify({ title: 'Amendment marked sent' }),
+      });
+    });
   };
 
   return (
@@ -614,6 +708,19 @@ export const PurchaseOrderDetail = () => {
             <span className={styles.totalRailValue}>{fmtRm(grandTotal, po.currency)}</span>
           </div>
           <StatusPill docType="po" status={po.status} />
+          {/* SO-amendment workflow — "Revised · rev N" badge once this PO has been
+              revised in place by an approved amendment (revision > 1). */}
+          {(po.revision ?? 1) > 1 && (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              padding: '2px 8px', borderRadius: 'var(--radius-pill, 999px)',
+              background: 'rgba(47, 93, 79, 0.12)', color: 'var(--c-secondary-a, #2F5D4F)',
+              fontSize: 'var(--fs-11)', fontWeight: 700, whiteSpace: 'nowrap',
+            }}>
+              <History size={12} strokeWidth={1.75} />
+              Revised · rev {po.revision}
+            </span>
+          )}
           <RelationshipMapButton type="po" id={po.id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} />
@@ -736,6 +843,82 @@ export const PurchaseOrderDetail = () => {
           )}
         </div>
       </div>
+
+      {/* ── Revision-ready banner (SO-amendment workflow, 2026-07-03) ──────────
+          Once the source SO revision is approved the amendment reaches SO_APPROVED
+          → this green banner hosts Approve PO (revises this PO in place). After
+          Approve PO the amendment is PO_APPROVED → the banner swaps to Send (marks
+          SENT — no server email) + Download Revised PO (the operator prints /
+          WhatsApps it themselves). Role gate is FE-hint only; server 403 is the
+          real gate. Hidden for other amendment states (those are driven from the
+          SO detail). Mirrors SalesOrderDetail's amendment-pending banner. */}
+      {openAmendment && (openAmendment.status === 'SO_APPROVED' || openAmendment.status === 'PO_APPROVED') && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          flexWrap: 'wrap', gap: 'var(--space-3)',
+          marginBottom: 'var(--space-3)',
+          padding: 'var(--space-3) var(--space-4)',
+          background: 'rgba(47, 93, 79, 0.10)',
+          border: '1px solid var(--c-secondary-a, #2F5D4F)',
+          borderRadius: 'var(--radius-md)',
+          fontSize: 'var(--fs-13)',
+        }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <History {...ICON} />
+            <span>Revision ready — amendment <strong>{openAmendment.amendment_no}</strong></span>
+            <StatusPill docType="soAmendment" status={openAmendment.status} />
+            {openAmendment.status === 'SO_APPROVED'
+              ? <span className={styles.muted}>Approve this PO to apply the supplier-confirmed changes.</span>
+              : <span className={styles.muted}>Mark sent, then download the Revised PO to send to the supplier.</span>}
+          </span>
+          {canAmendAction && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              {openAmendment.status === 'SO_APPROVED' && (
+                <Button variant="primary" size="sm" onClick={handleApprovePo} disabled={approvePo.isPending}>
+                  <Check {...ICON} />
+                  <span>{approvePo.isPending ? 'Approving…' : 'Approve PO'}</span>
+                </Button>
+              )}
+              {openAmendment.status === 'PO_APPROVED' && (
+                <>
+                  <Button variant="ghost" size="sm" onClick={() => generatePoPdf('Revised Purchase Order')}>
+                    <Download {...ICON} />
+                    <span>Download Revised PO</span>
+                  </Button>
+                  <Button variant="primary" size="sm" onClick={handleSendAmendment} disabled={sendAmendment.isPending}>
+                    <Send {...ICON} />
+                    <span>{sendAmendment.isPending ? 'Sending…' : 'Send'}</span>
+                  </Button>
+                </>
+              )}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* ── Tab strip (SO-amendment workflow) — Order vs Revisions ────────────
+          The Revisions tab lists prior PO snapshots read-only. Default is the
+          Order view so nothing changes for never-revised POs. Mirrors the SO
+          detail tab strip. */}
+      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--line)' }}>
+        {(['order', 'revisions'] as const).map((t) => (
+          <button key={t} type="button" onClick={() => setActiveTab(t)}
+            style={{
+              padding: '8px 16px', border: 'none', background: 'none', cursor: 'pointer',
+              fontSize: 'var(--fs-13)', fontWeight: 600,
+              color: activeTab === t ? 'var(--c-burnt)' : 'var(--fg-muted)',
+              borderBottom: `2px solid ${activeTab === t ? 'var(--c-burnt)' : 'transparent'}`,
+              marginBottom: -1,
+            }}>
+            {t === 'order' ? 'Order' : 'Revisions'}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'revisions' ? (
+        <PoRevisionsTab poId={po.id} currency={po.currency} />
+      ) : (
+      <>
 
       {/* ── DRAFT banner + Confirm (Draft/Confirmed two-state) ──────────────
           A DRAFT PO is uncommitted: it does NOT count as MRP supply, does NOT
@@ -955,6 +1138,8 @@ export const PurchaseOrderDetail = () => {
           </div>
         </div>
       </section>
+      </>
+      )}
     </div>
   );
 };
@@ -1178,3 +1363,124 @@ function InfoCell({ label, value }: { label: string; value: string | null | unde
     </div>
   );
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Revisions tab (SO-amendment workflow, 2026-07-03) — read-only prior PO
+   versions (newest first) via usePoRevisions. Clicking a revision expands its
+   stored snapshot as read-only detail. Mirrors SalesOrderDetail's RevisionsTab;
+   no writes. po_revisions rows share SoRevisionRow's shape.
+   ════════════════════════════════════════════════════════════════════════ */
+const PoRevisionsTab = ({ poId, currency }: { poId: string; currency: string }) => {
+  const { data, isLoading, error } = usePoRevisions(poId);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const revisions = (data?.revisions ?? []) as SoRevisionRow[];
+
+  return (
+    <section className={styles.card}>
+      <header className={styles.cardHeader}>
+        <h2 className={styles.cardTitle}>Revisions ({revisions.length})</h2>
+      </header>
+      <div className={styles.cardBody}>
+        {isLoading ? (
+          <p className={styles.muted}>Loading revisions…</p>
+        ) : error ? (
+          <div className={styles.bannerWarn}>
+            <strong>Could not load revisions.</strong>{' '}
+            {error instanceof Error ? error.message : String(error)}
+          </div>
+        ) : revisions.length === 0 ? (
+          <p className={styles.muted}>
+            No prior revisions — this Purchase Order hasn't been amended yet. Approved
+            amendments snapshot the previous version here.
+          </p>
+        ) : (
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th className={styles.tableRight}>Rev.</th>
+                <th>Date</th>
+                <th>Snapshot</th>
+              </tr>
+            </thead>
+            <tbody>
+              {revisions.map((r) => {
+                const isOpen = openId === r.id;
+                return (
+                  <tr key={r.id}>
+                    <td className={styles.tableRight}><strong>{r.revision}</strong></td>
+                    <td>{r.created_at ? fmtDateTime(r.created_at) : '—'}</td>
+                    <td>
+                      <button type="button"
+                        onClick={() => setOpenId(isOpen ? null : r.id)}
+                        style={{
+                          background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                          color: 'var(--c-burnt)', fontWeight: 600, fontSize: 'var(--fs-13)',
+                          textDecoration: 'underline',
+                        }}>
+                        {isOpen ? 'Hide snapshot' : 'View snapshot'}
+                      </button>
+                      {isOpen && (
+                        <PoRevisionSnapshot snapshot={r.snapshot} currency={currency} />
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </section>
+  );
+};
+
+/* Read-only render of a PO revision snapshot (header + lines). The snapshot JSON
+   is the full PO at that revision; surface the key header fields + line list and
+   keep the raw values available. Dual-reads snake/camel + snapshot key variants
+   defensively (the approve-po snapshot shape isn't frozen). Mirrors
+   SalesOrderDetail's RevisionSnapshot. */
+const PoRevisionSnapshot = ({ snapshot, currency }: { snapshot: unknown; currency: string }) => {
+  const snap = (snapshot ?? {}) as Record<string, unknown>;
+  const header = (snap.header ?? snap.purchaseOrder ?? snap) as Record<string, unknown>;
+  const rawLines = (snap.lines ?? snap.items ?? []) as Array<Record<string, unknown>>;
+  const lines = Array.isArray(rawLines) ? rawLines : [];
+  const str = (v: unknown): string => (v == null ? '—' : String(v));
+  const centi = (v: unknown): string =>
+    typeof v === 'number' ? fmtRm(v, currency) : '—';
+
+  return (
+    <div style={{
+      marginTop: 'var(--space-2)', padding: 'var(--space-3)',
+      background: 'var(--bg-subtle, rgba(34,31,32,0.03))',
+      border: '1px solid var(--line)', borderRadius: 'var(--radius-md)',
+      fontSize: 'var(--fs-12)',
+    }}>
+      <div style={{ marginBottom: 'var(--space-2)' }}>
+        <strong>Supplier:</strong> {str((header.supplier as { name?: string } | null)?.name ?? header.supplier_name ?? header.supplierName)}
+        {' · '}<strong>Total:</strong> {centi(header.total_centi ?? header.totalCenti)}
+      </div>
+      {lines.length > 0 ? (
+        <table className={styles.table}>
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th className={styles.tableRight}>Qty</th>
+              <th className={styles.tableRight}>Unit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((l, i) => (
+              <tr key={i}>
+                <td>{str(l.material_code ?? l.materialCode ?? l.item_code ?? l.itemCode)}</td>
+                <td className={styles.tableRight}>{str(l.qty)}</td>
+                <td className={styles.tableRight}>{centi(l.unit_price_centi ?? l.unitPriceCenti)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <span className={styles.muted}>Snapshot has no line detail.</span>
+      )}
+    </div>
+  );
+};
