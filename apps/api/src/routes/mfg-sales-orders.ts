@@ -7688,3 +7688,139 @@ mfgSalesOrders.patch('/:docNo/items/:itemId/stock-status', async (c) => {
 
   return c.json({ ok: true, advancedTo });
 });
+
+/* ── SO amendment create (Phase 2 / Task 2) ─────────────────────────────────
+   POST /mfg-sales-orders/:docNo/amendments — raise an amendment request against
+   a PROCESSING-LOCKED Sales Order. Once the processing date has passed the SO is
+   what we PO'd to the supplier (soProcessingLocked), so a change can no longer be
+   a naked line edit — it must ride the supplier-confirmed, two-gate amendment
+   workflow (state machine in @2990s/shared). This handler lives on the
+   mfgSalesOrders router (not so-amendments.ts) so it can reuse this file's
+   private guards — soProcessingLocked / soHasDownstream / recordSoAudit — and so
+   the URL nests under the SO mount. The remaining amendment endpoints (list,
+   detail, supplier-confirm) live in routes/so-amendments.ts.
+
+   Guards, in order:
+     1. SO exists                         → 404 not_found
+     2. SO IS processing-locked           → else 409 not_locked_no_amendment_needed
+        (an unlocked SO is still directly editable — no amendment needed)
+     3. SO is NOT DO/SI hard-locked       → else 409 so_hard_locked
+        (soHasDownstream: a SHIPPED SO always carries a DO, so this covers SHIPPED+)
+     4. No existing OPEN amendment         → else 409 amendment_already_open
+        (status NOT IN SENT/REJECTED; the partial unique index is the backstop)
+
+   RBAC: create = sales+. SO create itself is open to every authenticated staff
+   role (see POST /), and self-scoped selling roles are held to their OWN SO via
+   selfScopedSalesBlocked — same gate the line-edit routes use. */
+mfgSalesOrders.post('/:docNo/amendments', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
+  let body: {
+    reason?: string;
+    lines?: Array<{
+      salesOrderItemId?: string | null;
+      changeType?: string;
+      newItemCode?: string | null;
+      newVariants?: unknown;
+      newQty?: number | null;
+      newUnitPriceSen?: number | null;
+      oldSnapshot?: unknown;
+    }>;
+  };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  // Guard 1 — SO exists. Pull the lock columns (processing-date) in the same read.
+  const { data: soRow } = await sb.from('mfg_sales_orders')
+    .select('doc_no, status, revision, internal_expected_dd, processing_date')
+    .eq('doc_no', docNo).maybeSingle();
+  if (!soRow) return c.json({ error: 'not_found' }, 404);
+
+  /* RBAC (create = sales+) — self-scoped selling roles may only amend their OWN
+     SO. Mirrors the line-edit routes' 404 (a foreign doc_no is indistinguishable
+     from a missing one). Backend-native roles (coordinator/finance/admin/…) pass. */
+  if (await selfScopedSalesBlocked(sb, user.id, docNo)) return c.json({ error: 'not_found' }, 404);
+
+  // Guard 2 — an amendment only makes sense once the SO is processing-locked;
+  // an unlocked SO is still directly editable, so no amendment is needed.
+  if (!soProcessingLocked(soRow as { internal_expected_dd?: string | null; processing_date?: string | null })) {
+    return c.json({
+      error: 'not_locked_no_amendment_needed',
+      reason: 'This Sales Order is not processing-locked yet — edit it directly instead of raising an amendment.',
+    }, 409);
+  }
+
+  // Guard 3 — a DO/SI (SHIPPED+ implies a DO) hard-locks the SO: it is too far
+  // downstream to amend in place.
+  const childLock = await soHasDownstream(sb, docNo);
+  if (childLock) {
+    return c.json({
+      error: 'so_hard_locked',
+      reason: 'This Sales Order already has a Delivery Order / Sales Invoice — it is too far along to amend.',
+    }, 409);
+  }
+
+  // Guard 4 — one OPEN amendment per SO (status NOT IN SENT/REJECTED). The
+  // partial unique index uq_so_amendment_open is the DB backstop; pre-check here
+  // for a clean 409. Also feeds the amendment_no counter below.
+  const { data: priorRows } = await sb.from('so_amendments')
+    .select('id, status').eq('so_doc_no', docNo);
+  const prior = (priorRows ?? []) as Array<{ id: string; status: string }>;
+  const hasOpen = prior.some((a) => a.status !== 'SENT' && a.status !== 'REJECTED');
+  if (hasOpen) {
+    return c.json({
+      error: 'amendment_already_open',
+      reason: 'An amendment is already open on this Sales Order — resolve it before raising another.',
+    }, 409);
+  }
+
+  // Mint amendment_no = `${docNo}/A${n}`, n = (prior amendments for this SO) + 1.
+  const amendmentNo = `${docNo}/A${prior.length + 1}`;
+
+  // Insert the amendment header (status REQUESTED, requested_by = current staff).
+  const { data: created, error: insErr } = await sb.from('so_amendments').insert({
+    so_doc_no:    docNo,
+    amendment_no: amendmentNo,
+    status:       'REQUESTED',
+    reason:       body.reason ?? null,
+    requested_by: user.id,
+  }).select('id, so_doc_no, amendment_no, status, reason, requested_by, created_at').single();
+  if (insErr) return c.json({ error: 'create_failed', reason: insErr.message }, 500);
+  const amendment = created as {
+    id: string; so_doc_no: string; amendment_no: string; status: string;
+    reason: string | null; requested_by: string | null; created_at: string;
+  };
+
+  // Insert the amendment lines from the submitted diff. Each line records the
+  // requested change (SPEC/QTY/ADD/REMOVE) + an old-values snapshot for display.
+  const lines = Array.isArray(body.lines) ? body.lines : [];
+  if (lines.length > 0) {
+    const lineRows = lines.map((l) => ({
+      amendment_id:       amendment.id,
+      sales_order_item_id: l.salesOrderItemId ?? null,   // null = added line
+      change_type:        String(l.changeType ?? 'SPEC'),
+      new_item_code:      l.newItemCode ?? null,
+      new_variants:       l.newVariants ?? null,
+      new_qty:            l.newQty ?? null,
+      new_unit_price_sen: l.newUnitPriceSen ?? null,
+      old_snapshot:       l.oldSnapshot ?? null,
+    }));
+    const { error: lineErr } = await sb.from('so_amendment_lines').insert(lineRows);
+    if (lineErr) {
+      // Roll back the header so a half-written amendment can't wedge the one-open
+      // gate (the FK cascade would also drop the lines, but there are none yet).
+      await sb.from('so_amendments').delete().eq('id', amendment.id);
+      return c.json({ error: 'create_failed', reason: lineErr.message }, 500);
+    }
+  }
+
+  // Audit — best-effort, mirrors every other SO mutation in this file.
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'AMENDMENT_REQUESTED',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [{ field: 'amendment', from: null, to: amendmentNo }],
+    note: body.reason ?? undefined,
+  });
+
+  return c.json({ amendment }, 201);
+});
