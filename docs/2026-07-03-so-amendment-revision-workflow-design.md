@@ -1,105 +1,106 @@
-# SO Amendment / Revision Workflow (post-PO) — Design
+# SO Amendment / Revision Workflow (post-lock) — Design
 
 Date: 2026-07-03 · Owner: Wei Siang · Status: approved design, pre-implementation
 Repo: wenwei4046/2990s · Apps: apps/backend + apps/api (+ packages/db migration). Does NOT touch apps/pos.
 
 ## Problem
 
-Today a Sales Order (SO) is editable until a **DO or SI** exists (`has_children`) or its status reaches SHIPPED+. A **Purchase Order does NOT lock the SO** — after a PO is raised the SO stays freely editable and the system only *flags drift* (PR #634, "flag not auto-sync").
+Once an SO's **Processing Date passes**, the SO is hard-locked today — `soProcessingLocked` (Owner 2026-06-12, apps/api/src/routes/mfg-sales-orders.ts) rejects every header edit, line add/edit/delete, and price override with `409 so_locked_processing`. The rationale in the code: *"locked orders are what we PO to the supplier."*
 
-The business needs the opposite for spec changes after procurement has committed: once a PO is placed and sent to the supplier, a salesperson who wants to change the SO's spec must go through a **controlled, supplier-confirmed amendment** so the SO and the supplier's PO never silently diverge, and every prior version is preserved.
+But real life needs changes after that: a salesperson wants to swap a fabric/spec on an order that's already been PO'd to the supplier. Today they're simply blocked. We want a **controlled, supplier-confirmed amendment** so the SO and the supplier's PO can change together, every prior version is preserved, and the books stay truthful in between.
 
 ## Decisions (owner-confirmed)
 
-1. **New PO-lock.** Once a non-cancelled PO exists for an SO, that SO's **spec lines lock** and can only change through the amendment flow. (SOs with no PO stay freely editable — current behaviour. This reverses PR #634's "flag not lock" *for the PO case only*; DO/SI locks and SHIPPED+ status locks are unchanged.)
-2. **Same document number + revision counter.** The SO stays `SO-2607`, the PO stays `PO-xxxx`; each gains a `revision` counter, a "Revised" marker on the doc + PDF, and a Revisions history tab. **Never mint a new PO number** (a new number risks the supplier treating it as an additional order → double shipment).
-3. **Waiting-window = old docs frozen.** During REQUESTED / SUPPLIER_PENDING the live SO and PO keep their old spec; the proposed new spec lives only in the amendment request. Books stay truthful; the old PO can't mis-ship the wrong thing.
-4. **Two approval gates.** (a) Approve the **SO revision** (the spec change), then (b) approve the **PO** — the Revised PO is generated only after its own approval, then re-sent to the supplier.
+1. **Reuse the existing processing-date lock as the trigger — no new lock.** Instead of a separate "PO-exists" lock, we change what `soProcessingLocked` *does*: rather than hard-rejecting edits, a processing-locked SO stays editable, but **Save routes into an Amendment Request instead of committing directly.** `DO/SI exists` (`so_has_downstream`) and `SHIPPED+` status remain **hard locks** (those orders are truly done — no amendment).
+2. **Unified Edit page.** The salesperson edits on the **same SO Detail Edit page** they always use. Before the lock, Save commits directly (today's behaviour). After the lock, a banner explains the order is locked (already PO'd) and the primary button becomes **"Submit amendment request"** — same edit UI, different post-submit path.
+3. **Same document number + revision counter.** SO stays `SO-2607`, PO stays `PO-xxxx`; each gains a `revision` counter, a "Revised" marker on the doc + PDF, and a Revisions history tab. **Never mint a new PO number** (a new number risks the supplier treating it as an additional order → double shipment).
+4. **Waiting-window = old docs frozen.** During REQUESTED / SUPPLIER_PENDING the live SO and PO keep their old spec; the proposed new spec lives only in the amendment request. Books stay truthful; the old PO can't mis-ship.
+5. **Two approval gates, each on its own document's page.** (a) **Approve SO revision** on the **SO Detail page**; then (b) **Approve PO** on the **PO Detail page** — the Revised PO is generated only after its own approval, then re-sent to the supplier.
+6. **Branch by PO existence.** Processing-locked **with a PO** (the normal case) → full flow (supplier confirm → approve SO → approve PO → resend). Processing-locked **without a PO yet** → light flow: internal Approve SO revision only; skip the supplier/PO steps.
 
 ## State machine
 
 ```
-SO+PO placed (SO spec LOCKED)
-   │  salesperson opens amendment
+SO Processing Date passed  →  SO Edit page still open, Save = "Submit amendment request"
+   │  salesperson edits spec + submits
    ▼
-REQUESTED ──────────► SUPPLIER_PENDING ──────► SO_APPROVED ──────► PO_APPROVED ──────► SENT
- (new spec staged,     (coordinator verifies    (gate ①: SO         (gate ②: revised    (revised PO
-  old SO/PO frozen)      w/ supplier, records     revision made       PO generated)        re-sent to
-                         confirmation ref/note)    official, old                            supplier)
-                                                   version snapshot)
-   │ any gate: reject
-   ▼
-REJECTED  (SO/PO unchanged, request archived)
+REQUESTED ─────────► SUPPLIER_PENDING ─────► SO_APPROVED ─────► PO_APPROVED ─────► SENT
+ (new spec staged,    (coordinator records    (gate ①: SO        (gate ②: revised   (revised PO
+  old SO/PO frozen)     supplier confirm:       revision applied,   PO generated       re-sent via
+                        ref/note/attachment)    old snapshot)       from approved SO)   doc-email)
+   │ any gate: reject                                    │
+   ▼                                     no PO yet ──────┘ (light: stop after SO_APPROVED,
+REJECTED (SO/PO unchanged, archived)                        no supplier/PO steps)
 ```
 
 - Exactly **one open amendment per SO** at a time.
 - Reject at any gate leaves the live SO/PO untouched; the request is archived for audit.
 
+## UI touchpoints (where each action lives)
+
+Everything hangs off the **existing detail pages** + one new inbox — no new system, no double data entry.
+
+- **Amendments queue** (new left-nav item, numeric badge) — the inbox: coordinators/purchasing see pending requests and click through to the right document.
+- **SO Detail page** — (1) the unified Edit page whose Save becomes "Submit amendment request" when processing-locked; (2) an amber "Amendment pending" banner hosting **Record supplier confirmation** and **Approve SO revision** (gate ①), with a before/after diff link; (3) a **Revisions** history tab.
+- **PO Detail page** — a green "Revision ready" banner (after gate ①) hosting **Approve PO** (gate ②) + **Send** (with a Revised-PO preview); a "Revised · rev N" badge; a **Revisions** history tab.
+
+The salesperson only enters the new spec **once** (the SO edit). Both the SO revision and the revised PO **re-derive from that approved spec** — approvers review + click, they don't re-type.
+
 ## Data model (packages/db migration)
 
-**`so_amendments`** (the 申请单 — drives the flow; the live SO/PO are untouched until APPROVED):
+**`so_amendments`** — drives the flow; the live SO/PO are untouched until approved:
 - `id`, `sales_order_id` (FK), `amendment_no` (human no., e.g. `SO-2607/A1`)
 - `status` enum: `REQUESTED | SUPPLIER_PENDING | SO_APPROVED | PO_APPROVED | SENT | REJECTED`
 - `requested_by` (staff), `reason` (text)
-- `supplier_confirmed_by`, `supplier_confirmation_ref` (text), `supplier_confirmation_note`, `supplier_confirmation_attachment_key` (R2 — email/回执 screenshot, optional)
-- `so_approved_by` / `so_approved_at`, `po_approved_by` / `po_approved_at`, `sent_at`
-- timestamps + `updated_at`
+- `supplier_confirmed_by`, `supplier_confirmation_ref` (text), `supplier_confirmation_note`, `supplier_confirmation_attachment_key` (R2, optional)
+- `so_approved_by`/`so_approved_at`, `po_approved_by`/`po_approved_at`, `sent_at`, timestamps, `updated_at`
 
 **`so_amendment_lines`** — the proposed line-level diff:
 - `id`, `amendment_id`, `sales_order_item_id` (nullable for an added line), `change_type` (`SPEC | QTY | ADD | REMOVE`)
-- proposed fields: `new_item_code`, `new_variants` (jsonb), `new_qty`, `new_unit_price_sen` (nullable → server recompute), plus a snapshot of the OLD values for display/audit.
+- proposed: `new_item_code`, `new_variants` (jsonb), `new_qty`, `new_unit_price_sen` (nullable → server recompute) + a snapshot of the OLD values.
 
-**Revision snapshots (immutable backups):**
-- `so_revisions` (`sales_order_id`, `revision`, full header+lines JSON snapshot, `created_at`, `created_by`, `amendment_id`)
-- `po_revisions` (`purchase_order_id`, `revision`, full snapshot, …)
-- Add `revision INT DEFAULT 1` to `mfg_sales_orders` and `purchase_orders` headers.
+**Revision snapshots (immutable):** `so_revisions` (`sales_order_id`, `revision`, full header+lines JSON, `created_at`, `created_by`, `amendment_id`); `po_revisions` (same for PO). Add `revision INT DEFAULT 1` to `mfg_sales_orders` and `purchase_orders` headers.
 
 ## Server flow (apps/api)
 
-New routes under `/mfg-sales-orders/:id/amendments` (+ PO approval action):
-- `POST …/amendments` — salesperson creates a request (only if SO is PO-locked + no open amendment). Validates the proposed lines.
-- `PATCH …/amendments/:aid/supplier-confirm` — coordinator records supplier confirmation → SUPPLIER_PENDING→(ready for SO approval).
-- `PATCH …/amendments/:aid/approve-so` — gate ①. Atomically: snapshot current SO → `so_revisions`; apply the new spec to `mfg_sales_orders(_items)`; bump SO `revision`; **re-run the server-side honest-pricing recompute** (`computeMfgLinePrice`/`computeMfgLineCost`, `mfgPricingDriftExceeds`) exactly as `POST /mfg-sales-orders` does; status→SO_APPROVED.
-- `PATCH …/amendments/:aid/approve-po` — gate ②. Snapshot current PO → `po_revisions`; re-derive the bound PO lines from the revised SO; bump PO `revision`; status→PO_APPROVED. Revised PO PDF now available.
-- `PATCH …/amendments/:aid/send` — mark SENT; hand the revised PO PDF to the existing doc-email path to the supplier.
-- `PATCH …/amendments/:aid/reject` — from any pre-APPROVED gate → REJECTED, no doc changes.
-
-Each transition writes an **audit-log** row. All mutations idempotent + wrapped so a partial failure doesn't half-apply (mirror the existing GRN/SO transactional patterns).
-
-## Frontend (apps/backend)
-
-- `SalesOrderDetail.tsx`: extend the lock — `isLocked` also true when a non-cancelled PO exists (new `has_open_po` flag from the API). When PO-locked, the Edit button is replaced by **"Request amendment"**. Add a **Revisions** history tab (view any prior SO snapshot).
-- New amendment drawer/page: pick line(s) → new spec (reuse the SO line editor + variant pickers) → submit; then the approval actions (supplier-confirm, approve-SO, approve-PO, send) gated by role.
-- `PurchaseOrderDetail.tsx`: Revisions tab; "Revised" badge + revision no.; the approve-PO + send actions surface here for purchasing.
-- Amendment status pill via the canonical `lib/status-pill.ts` map (add a `soAmendment` doc type).
+- **Change `soProcessingLocked` behaviour:** the SO line/header edit endpoints, when processing-locked (and not DO/SI/SHIPPED-hard-locked), no longer 409 — instead the Save payload is accepted as an **amendment request draft** (routed to the amendments create path) rather than committed to the live SO. Hard locks still 409.
+- New routes under `/mfg-sales-orders/:id/amendments`:
+  - `POST …/amendments` — create request from the edited spec (guard: processing-locked, no open amendment). Validates proposed lines.
+  - `PATCH …/amendments/:aid/supplier-confirm` — record supplier confirmation → SUPPLIER_PENDING.
+  - `PATCH …/amendments/:aid/approve-so` — gate ①: snapshot current SO → `so_revisions`; apply new spec to `mfg_sales_orders(_items)`; bump SO `revision`; **re-run server-side honest-pricing recompute** (`computeMfgLinePrice`/`computeMfgLineCost` + `mfgPricingDriftExceeds`, exactly like `POST /mfg-sales-orders`); status → SO_APPROVED. (If no PO exists → this is the terminal step.)
+  - `PATCH …/amendments/:aid/approve-po` — gate ②: snapshot current PO → `po_revisions`; re-derive bound PO lines from the revised SO; bump PO `revision`; status → PO_APPROVED.
+  - `PATCH …/amendments/:aid/send` — status → SENT; hand the revised PO PDF to the existing doc-email path.
+  - `PATCH …/amendments/:aid/reject` — any pre-approved gate → REJECTED, no doc changes.
+- Every transition writes an **audit-log** row. Mutations idempotent + transactional so a partial failure never half-applies (mirror the GRN/SO patterns).
+- Detail endpoints stamp `has_open_amendment` + the current gate so the SO/PO pages render the right banner.
 
 ## Permissions (RBAC)
 
-- **Create request:** `sales`, `sales_executive` (+ above).
+- **Create request:** `sales`, `sales_executive` (+ above) — via the unified Edit page when locked.
 - **Supplier confirm + approve-PO + send:** `coordinator` / purchasing / `admin`+.
-- **Approve-SO revision:** `coordinator` / `showroom_lead` / `admin`+ (sales lead sign-off).
+- **Approve-SO revision:** `coordinator` / `showroom_lead` / `admin`+.
 - Super-admin bypass per the existing `requirePermission` short-circuit.
 
 ## Reuse (no new wheels)
 
-drift-flag (PR #634) → repurposed as the "amendment in progress" indicator · PO snapshot model → revised PO is a new snapshot · doc-no minter → revision counter · doc-email → sends the Revised PO · audit log → every transition · role gating (`requirePermission`) · SO server-side recompute · variant-conversion carry-over write path.
+Existing processing-date lock (repurposed) · drift-flag (PR #634) → "amendment in progress" indicator · PO snapshot model → revised PO snapshot · doc-no minter → revision counter · doc-email → sends Revised PO · audit log · role gating · SO server-side recompute · variant-conversion carry-over write path · canonical `lib/status-pill.ts` (add `soAmendment` doc type).
 
 ## Edge cases
 
-- **PO already (partly) GRN-received:** the amendment cannot reduce a line below its `received_qty`; already-GRN'd lines follow the existing GRN-gated PO-line rule (need a Purchase Return to undo received qty). Surface clearly in the request UI.
-- **DO/SI already exists:** SO is already locked harder (shipped/invoiced) → amendment **not** allowed; handle via return/credit (out of scope).
-- **Multiple POs from one SO:** approve-PO step operates per bound PO; if an SO's lines fan out to >1 PO, the revised lines re-derive against their own PO(s).
-- **Reject after supplier already shipped:** out of scope for v1 (shouldn't happen — supplier ships against the *approved* revised PO only).
+- **PO already (partly) GRN-received:** the amendment cannot reduce a line below its `received_qty`; already-GRN'd lines follow the existing GRN-gated PO-line rule (a Purchase Return is needed to undo received qty). Surface in the request UI.
+- **DO/SI already exists / SHIPPED+:** hard-locked → amendment not allowed (handle via return/credit — out of scope).
+- **Processing-locked but no PO yet:** light branch — Approve SO revision only, no supplier/PO steps.
+- **Multiple POs from one SO:** approve-PO operates per bound PO; revised lines re-derive against their own PO(s).
 - **Concurrency:** one open amendment per SO (unique partial index on `sales_order_id where status not in ('SENT','REJECTED')`).
 
 ## Out of scope (v1)
 
-Automated supplier portal / EDI (supplier confirmation is a manual coordinator step with a note/attachment); amending after DO/SI (returns path); cross-SO batch amendments.
+Automated supplier portal/EDI (supplier confirmation is a manual step with note/attachment); amending after DO/SI (returns path); cross-SO batch amendments.
 
 ## Testing
 
-- Unit: state-machine transitions (each gate, reject from each state), one-open-amendment guard, GRN-received floor.
-- Integration: request→confirm→approve-SO (SO revision + recompute + snapshot)→approve-PO (PO revision + snapshot)→send; verify old SO/PO frozen until APPROVED; verify snapshots immutable; verify honest-pricing recompute on the revised SO.
+- Unit: state-machine transitions (each gate, reject from each state), one-open-amendment guard, GRN-received floor, no-PO light branch.
+- Integration: locked SO edit → Submit amendment request → supplier-confirm → approve-SO (SO revision + recompute + snapshot) → approve-PO (PO revision + snapshot) → send; verify old SO/PO frozen until approved; snapshots immutable; honest-pricing recompute on the revised SO.
 - Permissions: each action gated to the right roles.
 
 ## Open questions
