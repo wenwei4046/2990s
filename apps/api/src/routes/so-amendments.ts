@@ -16,7 +16,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { canTransition, nextStatus, type AmendStatus, type AmendAction } from '@2990s/shared';
-import { applySoAmendment } from '../lib/so-revision';
+import { applySoAmendment, reviseBoundPo, ReceivedFloorError } from '../lib/so-revision';
 
 export const soAmendments = new Hono<{ Bindings: Env; Variables: Variables }>();
 soAmendments.use('*', supabaseAuth);
@@ -43,6 +43,18 @@ async function isApproveSoCaller(sb: any, userId: string | null | undefined): Pr
   if (!userId) return false;
   const { data } = await sb.from('staff').select('role').eq('id', userId).maybeSingle();
   return !!data && APPROVE_SO_ROLES.has(String((data as { role?: string }).role));
+}
+
+/* Approve-PO / Send / Reject are coordinator/admin+ actions — the purchasing
+   gate. The staffRole enum has NO distinct `purchasing` role (schema.ts); the
+   PO desk is run by coordinator-and-above (same COORDINATOR_OR_ABOVE convention
+   as supplier-confirm), so coordinator+ covers purchasing here. Same inline
+   role-set predicate style as isApproveSoCaller / isSupplierConfirmCaller. */
+const APPROVE_PO_ROLES = new Set<string>(['coordinator', 'finance', 'admin', 'super_admin']);
+async function isApprovePoCaller(sb: any, userId: string | null | undefined): Promise<boolean> {
+  if (!userId) return false;
+  const { data } = await sb.from('staff').select('role').eq('id', userId).maybeSingle();
+  return !!data && APPROVE_PO_ROLES.has(String((data as { role?: string }).role));
 }
 
 /* ── GET / — amendment list (newest first) ─────────────────────────────────
@@ -242,4 +254,221 @@ soAmendments.patch('/:id/approve-so', async (c) => {
   if (updErr) return c.json({ error: 'update_failed', reason: updErr.message }, 500);
 
   return c.json({ amendment: updated, revision: applied.revision });
+});
+
+/* ── PATCH /:id/approve-po ─────────────────────────────────────────────────
+   The second hard gate. Guard the transition (SO_APPROVED → PO_APPROVED via the
+   shared state machine), then RE-DERIVE the bound PO(s): reviseBoundPo snapshots
+   each live bound PO to po_revisions, re-derives its lines from the NOW-REVISED
+   SO lines using the SAME derivation Create-PO-from-SO uses (so_item_id 1:1 →
+   qty / variants / warehouse / delivery), recomputes totals, bumps
+   purchase_orders.revision, and audits. If the SO has NO bound PO this is a
+   no-op (the light branch already terminated at SO_APPROVED — but the state
+   machine still allows SO_APPROVED → PO_APPROVED, so we advance harmlessly).
+
+   Received floor: reviseBoundPo throws a ReceivedFloorError BEFORE mutating if
+   any revised qty would drop below that PO line's already-received_qty → we 409
+   with the structured detail so the operator sees the offending line. */
+soAmendments.patch('/:id/approve-po', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
+
+  // RBAC — approve-PO = coordinator/admin+ (covers purchasing; no distinct role).
+  if (!(await isApprovePoCaller(sb, user.id))) {
+    return c.json({
+      error: 'approve_po_forbidden',
+      message: 'Only a coordinator or admin can approve a Purchase Order revision.',
+    }, 403);
+  }
+
+  // Load the amendment; guard the transition against its current status.
+  const { data: amdRow } = await sb.from('so_amendments')
+    .select('id, so_doc_no, status').eq('id', id).maybeSingle();
+  if (!amdRow) return c.json({ error: 'not_found' }, 404);
+  const amendment = amdRow as { id: string; so_doc_no: string; status: AmendStatus };
+
+  const action: AmendAction = 'approve-po';
+  if (!canTransition(amendment.status, action)) {
+    return c.json({
+      error: 'bad_transition',
+      reason: `Cannot approve the PO revision from status ${amendment.status}.`,
+    }, 409);
+  }
+  const to = nextStatus(amendment.status, action);
+  if (!to) return c.json({ error: 'bad_transition' }, 409);
+
+  /* Re-derive the bound PO(s). A ReceivedFloorError → 409 with the offending
+     line; any other hard failure → 500. Status only advances AFTER a clean
+     apply, so the operator can retry (snapshotPo is idempotent on (po_id,
+     revision)). */
+  let revised: Awaited<ReturnType<typeof reviseBoundPo>>;
+  try {
+    revised = await reviseBoundPo(sb, id, user.id);
+  } catch (e) {
+    if (e instanceof ReceivedFloorError) {
+      return c.json({
+        error: 'received_floor',
+        code: e.code,
+        poItemId: e.poItemId,
+        revisedQty: e.revisedQty,
+        receivedQty: e.receivedQty,
+        reason: e.message,
+      }, 409);
+    }
+    // eslint-disable-next-line no-console
+    console.error('[so-amendment] approve-po revise failed:', e);
+    return c.json({
+      error: 'revise_failed',
+      reason: e instanceof Error ? e.message : 'Failed to revise the bound PO.',
+    }, 500);
+  }
+
+  const { data: updated, error: updErr } = await sb.from('so_amendments').update({
+    status:         to,
+    po_approved_by: user.id,
+    po_approved_at: new Date().toISOString(),
+    updated_at:     new Date().toISOString(),
+  }).eq('id', id).select('id, so_doc_no, amendment_no, status').single();
+  if (updErr) return c.json({ error: 'update_failed', reason: updErr.message }, 500);
+
+  // Audit the gate itself (best-effort). reviseBoundPo already audited each PO.
+  try {
+    await sb.from('mfg_so_audit_log').insert({
+      so_doc_no:           amendment.so_doc_no,
+      action:              'AMENDMENT_PO_APPROVED',
+      actor_id:            user.id,
+      actor_name_snapshot: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+      field_changes:       [
+        { field: 'amendment_status', from: amendment.status, to },
+        { field: 'pos_revised', to: revised.perPo.map((p) => p.poNumber).join(', ') || 'none' },
+      ],
+      status_snapshot:     null,
+      source:              'web',
+      note:                revised.perPo.length
+        ? `Revised PO(s): ${revised.perPo.map((p) => `${p.poNumber} rev ${p.revision}`).join('; ')}`
+        : 'No bound PO — nothing to revise.',
+    });
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-amendment] audit failed (non-fatal):', e); }
+
+  return c.json({ amendment: updated, revisedPurchaseOrders: revised.perPo });
+});
+
+/* ── PATCH /:id/send ───────────────────────────────────────────────────────
+   The terminal happy-path step. Guard the transition (PO_APPROVED → SENT), then
+   deliver the Revised PO to the supplier and stamp sent_at.
+
+   NOTE on PDF + email reuse: this repo has NO server-side PO-PDF generator and
+   NO server-side doc-email path. The PO PDF is produced CLIENT-SIDE in the
+   Backend SPA (apps/backend/src/lib/purchase-order-pdf.ts, jsPDF — browser only,
+   not callable from a CF Worker), and there is no Resend/mailer/outbox wired in
+   apps/api at all (verified: no email-send infrastructure exists in the API).
+   So there is genuinely no existing server-side helper to reuse here. The
+   transition + sent_at stamp + audit are recorded; the actual document delivery
+   is performed by the Backend (which owns the PDF) once this gate flips to SENT.
+   TODO(send-email): when a server-side doc-email path lands (Resend binding +
+   supplier email from suppliers.email), generate the Revised PO PDF and email it
+   here instead of delegating delivery to the Backend. */
+soAmendments.patch('/:id/send', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
+
+  // RBAC — send = coordinator/admin+ (same purchasing gate as approve-PO).
+  if (!(await isApprovePoCaller(sb, user.id))) {
+    return c.json({
+      error: 'send_forbidden',
+      message: 'Only a coordinator or admin can send the revised Purchase Order.',
+    }, 403);
+  }
+
+  const { data: amdRow } = await sb.from('so_amendments')
+    .select('id, so_doc_no, status').eq('id', id).maybeSingle();
+  if (!amdRow) return c.json({ error: 'not_found' }, 404);
+  const amendment = amdRow as { id: string; so_doc_no: string; status: AmendStatus };
+
+  const action: AmendAction = 'send';
+  if (!canTransition(amendment.status, action)) {
+    return c.json({
+      error: 'bad_transition',
+      reason: `Cannot send the revised PO from status ${amendment.status}.`,
+    }, 409);
+  }
+  const to = nextStatus(amendment.status, action);
+  if (!to) return c.json({ error: 'bad_transition' }, 409);
+
+  const { data: updated, error: updErr } = await sb.from('so_amendments').update({
+    status:     to,
+    sent_at:    new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }).eq('id', id).select('id, so_doc_no, amendment_no, status').single();
+  if (updErr) return c.json({ error: 'update_failed', reason: updErr.message }, 500);
+
+  try {
+    await sb.from('mfg_so_audit_log').insert({
+      so_doc_no:           amendment.so_doc_no,
+      action:              'AMENDMENT_SENT',
+      actor_id:            user.id,
+      actor_name_snapshot: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+      field_changes:       [{ field: 'amendment_status', from: amendment.status, to }],
+      status_snapshot:     null,
+      source:              'web',
+      note:                'Revised PO marked sent to supplier.',
+    });
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-amendment] audit failed (non-fatal):', e); }
+
+  return c.json({ amendment: updated });
+});
+
+/* ── PATCH /:id/reject ─────────────────────────────────────────────────────
+   Reject an in-flight amendment from ANY pre-approved gate (REQUESTED /
+   SUPPLIER_PENDING / SO_APPROVED / PO_APPROVED — the state machine allows it).
+   NO document changes: the SO/PO are untouched, the amendment simply closes as
+   REJECTED. Audit only. (Note: a REJECTED amendment frees the one-open partial
+   unique index so a fresh amendment can be raised on the same SO.) */
+soAmendments.patch('/:id/reject', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
+
+  // RBAC — reject = coordinator/admin+.
+  if (!(await isApprovePoCaller(sb, user.id))) {
+    return c.json({
+      error: 'reject_forbidden',
+      message: 'Only a coordinator or admin can reject an amendment.',
+    }, 403);
+  }
+
+  let body: { reason?: string } = {};
+  try { body = (await c.req.json()) as typeof body; } catch { /* reason is optional */ }
+
+  const { data: amdRow } = await sb.from('so_amendments')
+    .select('id, so_doc_no, status').eq('id', id).maybeSingle();
+  if (!amdRow) return c.json({ error: 'not_found' }, 404);
+  const amendment = amdRow as { id: string; so_doc_no: string; status: AmendStatus };
+
+  const action: AmendAction = 'reject';
+  if (!canTransition(amendment.status, action)) {
+    return c.json({
+      error: 'bad_transition',
+      reason: `Cannot reject an amendment from status ${amendment.status}.`,
+    }, 409);
+  }
+  const to = nextStatus(amendment.status, action);
+  if (!to) return c.json({ error: 'bad_transition' }, 409);
+
+  const { data: updated, error: updErr } = await sb.from('so_amendments').update({
+    status:     to,
+    updated_at: new Date().toISOString(),
+  }).eq('id', id).select('id, so_doc_no, amendment_no, status').single();
+  if (updErr) return c.json({ error: 'update_failed', reason: updErr.message }, 500);
+
+  try {
+    await sb.from('mfg_so_audit_log').insert({
+      so_doc_no:           amendment.so_doc_no,
+      action:              'AMENDMENT_REJECTED',
+      actor_id:            user.id,
+      actor_name_snapshot: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+      field_changes:       [{ field: 'amendment_status', from: amendment.status, to }],
+      status_snapshot:     null,
+      source:              'web',
+      note:                typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim() : 'Amendment rejected.',
+    });
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-amendment] audit failed (non-fatal):', e); }
+
+  return c.json({ amendment: updated });
 });

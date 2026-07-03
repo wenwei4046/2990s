@@ -39,6 +39,7 @@
 // row; a failed audit is swallowed (non-fatal), a failed line write aborts.
 // ----------------------------------------------------------------------------
 
+import { buildVariantSummary, receivedFloorViolation } from '@2990s/shared';
 import {
   loadMaintenanceConfig,
   recomputeOneLine,
@@ -339,4 +340,294 @@ export async function applySoAmendment(
   });
 
   return { soDocNo: docNo, revision: nextRevision };
+}
+
+/* ── snapshotPo ─────────────────────────────────────────────────────────────
+   Mirror of snapshotSo for a Purchase Order. Freeze the PO's CURRENT state
+   (header + all items) into a `po_revisions` row at the PO's CURRENT `revision`,
+   so the version being replaced stays immutable. Returns the NEXT revision
+   number (current + 1) for the caller to stamp on the PO after re-deriving.
+
+   Idempotent-safe: the `uq_po_revision (po_id, revision)` unique index means a
+   re-run at the same revision no-ops on conflict (ignoreDuplicates) rather than
+   doubling the snapshot — so an Approve-PO retry after a mid-apply failure can't
+   create two snapshots at the same counter. */
+export async function snapshotPo(
+  sb: Sb,
+  poId: string,
+  amendmentId?: string | null,
+  userId?: string | null,
+): Promise<number> {
+  const { data: header, error: hErr } = await sb
+    .from('purchase_orders')
+    .select('*')
+    .eq('id', poId)
+    .maybeSingle();
+  if (hErr) throw new Error(`snapshotPo: header load failed: ${hErr.message}`);
+  if (!header) throw new Error(`snapshotPo: PO ${poId} not found`);
+
+  const currentRevision =
+    typeof (header as { revision?: unknown }).revision === 'number'
+      ? (header as { revision: number }).revision
+      : 1;
+
+  const { data: lines, error: lErr } = await sb
+    .from('purchase_order_items')
+    .select('*')
+    .eq('purchase_order_id', poId)
+    .order('created_at', { ascending: true, nullsFirst: true });
+  if (lErr) throw new Error(`snapshotPo: lines load failed: ${lErr.message}`);
+
+  const snapshot = {
+    header,
+    lines: lines ?? [],
+    snapshotAt: new Date().toISOString(),
+  };
+
+  const { error: insErr } = await sb
+    .from('po_revisions')
+    .upsert(
+      {
+        po_id:        poId,
+        revision:     currentRevision,
+        snapshot,
+        amendment_id: amendmentId ?? null,
+        created_by:   userId ?? null,
+      },
+      { onConflict: 'po_id,revision', ignoreDuplicates: true },
+    );
+  if (insErr) throw new Error(`snapshotPo: revision insert failed: ${insErr.message}`);
+
+  return currentRevision + 1;
+}
+
+/* ── reviseBoundPo ──────────────────────────────────────────────────────────
+   The Approve-PO engine. For an amendment whose SO has already been revised
+   (Approve-SO ran first), re-derive every bound PO's lines from the NOW-REVISED
+   SO lines using the SAME derivation "Create PO from SO" uses
+   (mfg-purchase-orders.ts /from-sos): each PO line is 1:1 with a SO line via
+   `purchase_order_items.so_item_id`, and carries the SO line's qty / variants /
+   item_group / description2 / per-line warehouse + delivery date. We re-read
+   each PO line's source SO line and rewrite exactly those carried fields — the
+   supplier COST (`unit_price_centi`) stays the PO's own negotiated figure (the
+   create path's auto-cost pre-pass is NOT re-run on a revision-in-place; only
+   the SO-derived spec/qty flow through, mirroring what Create-PO-from-SO pulls
+   from an SO line).
+
+   Bound PO discovery: SO line ids (mfg_sales_order_items.doc_no = SO) →
+   purchase_order_items.so_item_id → distinct purchase_order_id → purchase_orders
+   (NON-cancelled). If the SO has NO bound PO this is a NO-OP (the light branch —
+   the amendment is terminal at SO_APPROVED).
+
+   Received floor: BEFORE mutating anything, every PO line whose revised SO qty
+   would drop below that PO line's already-received_qty ABORTS the whole revision
+   with a structured error { code:'received_floor', poItemId, revisedQty,
+   receivedQty } (via receivedFloorViolation from @2990s/shared) — you can't
+   revise a PO down past goods already received against it.
+
+   Consistency model: best-effort / transactional-consistent like snapshot/apply
+   above — snapshot each PO, rewrite its derived lines, recompute totals +
+   header expected_at, bump revision + updated_at, write an audit row (non-fatal).
+   Throws on a hard failure (load / write) or the received-floor abort so the
+   caller (approve-po route) leaves the amendment status unchanged for retry. */
+export type ReviseBoundPoResult = {
+  revisedPoIds: string[];
+  perPo: Array<{ poId: string; poNumber: string; revision: number; linesRederived: number }>;
+};
+
+export class ReceivedFloorError extends Error {
+  code = 'received_floor' as const;
+  poItemId: string;
+  revisedQty: number;
+  receivedQty: number;
+  constructor(poItemId: string, revisedQty: number, receivedQty: number) {
+    super(
+      `Revised qty ${revisedQty} for PO line ${poItemId} drops below the ${receivedQty} already received.`,
+    );
+    this.name = 'ReceivedFloorError';
+    this.poItemId = poItemId;
+    this.revisedQty = revisedQty;
+    this.receivedQty = receivedQty;
+  }
+}
+
+export async function reviseBoundPo(
+  sb: Sb,
+  amendmentId: string,
+  userId: string | null,
+): Promise<ReviseBoundPoResult> {
+  // (1) Load amendment → SO doc_no.
+  const { data: amdRow, error: amdErr } = await sb
+    .from('so_amendments')
+    .select('id, so_doc_no, status')
+    .eq('id', amendmentId)
+    .maybeSingle();
+  if (amdErr) throw new Error(`reviseBoundPo: amendment load failed: ${amdErr.message}`);
+  if (!amdRow) throw new Error('reviseBoundPo: amendment not found');
+  const docNo = (amdRow as AmendmentRow).so_doc_no;
+
+  // (2) Resolve the bound PO(s): SO line ids → purchase_order_items.so_item_id →
+  //     distinct non-cancelled purchase_orders. Empty ⇒ light branch (no-op).
+  const { data: soItemRows, error: soItemErr } = await sb
+    .from('mfg_sales_order_items')
+    .select('id')
+    .eq('doc_no', docNo);
+  if (soItemErr) throw new Error(`reviseBoundPo: SO items load failed: ${soItemErr.message}`);
+  const soItemIds = ((soItemRows ?? []) as Array<{ id: string }>).map((r) => r.id);
+  if (soItemIds.length === 0) return { revisedPoIds: [], perPo: [] };
+
+  const { data: poItemRows, error: poItemErr } = await sb
+    .from('purchase_order_items')
+    .select('id, purchase_order_id, so_item_id, qty, received_qty')
+    .in('so_item_id', soItemIds);
+  if (poItemErr) throw new Error(`reviseBoundPo: PO items load failed: ${poItemErr.message}`);
+  const allPoItems = (poItemRows ?? []) as Array<{
+    id: string;
+    purchase_order_id: string | null;
+    so_item_id: string | null;
+    qty: number | null;
+    received_qty: number | null;
+  }>;
+  const candidatePoIds = [...new Set(
+    allPoItems.map((r) => r.purchase_order_id).filter((x): x is string => Boolean(x)),
+  )];
+  if (candidatePoIds.length === 0) return { revisedPoIds: [], perPo: [] };
+
+  const { data: poHeaders, error: poHeadErr } = await sb
+    .from('purchase_orders')
+    .select('id, po_number, status, revision')
+    .in('id', candidatePoIds);
+  if (poHeadErr) throw new Error(`reviseBoundPo: PO headers load failed: ${poHeadErr.message}`);
+  // Exclude cancelled POs — a cancelled PO is not a live obligation to revise.
+  const livePos = ((poHeaders ?? []) as Array<{
+    id: string; po_number: string; status: string; revision: number | null;
+  }>).filter((p) => String(p.status).toUpperCase() !== 'CANCELLED');
+  if (livePos.length === 0) return { revisedPoIds: [], perPo: [] };
+  const livePoIds = new Set(livePos.map((p) => p.id));
+
+  // (3) Re-read the NOW-REVISED SO lines keyed by id (the derivation source).
+  const { data: revisedSoRows, error: revErr } = await sb
+    .from('mfg_sales_order_items')
+    .select('id, item_group, qty, variants, warehouse_id, delivery_date')
+    .in('id', soItemIds);
+  if (revErr) throw new Error(`reviseBoundPo: revised SO lines load failed: ${revErr.message}`);
+  const revisedById = new Map<string, {
+    item_group: string | null;
+    qty: number | null;
+    variants: Record<string, unknown> | null;
+    warehouse_id: string | null;
+    delivery_date: string | null;
+  }>();
+  for (const r of (revisedSoRows ?? []) as Array<Record<string, unknown>>) {
+    revisedById.set(String(r.id), {
+      item_group:    (r.item_group as string | null) ?? null,
+      qty:           r.qty == null ? null : Number(r.qty),
+      variants:      (r.variants as Record<string, unknown> | null) ?? null,
+      warehouse_id:  (r.warehouse_id as string | null) ?? null,
+      delivery_date: (r.delivery_date as string | null) ?? null,
+    });
+  }
+
+  // Only the PO items belonging to a LIVE bound PO whose SO line still exists.
+  const targetPoItems = allPoItems.filter(
+    (pi) => pi.purchase_order_id && livePoIds.has(pi.purchase_order_id)
+      && pi.so_item_id && revisedById.has(pi.so_item_id),
+  );
+
+  // (4) RECEIVED-FLOOR PRE-CHECK — abort BEFORE any mutation. For each bound PO
+  //     line, the revised SO qty must not drop below what's already received.
+  for (const pi of targetPoItems) {
+    const revised = revisedById.get(pi.so_item_id as string)!;
+    const receivedQty = Number(pi.received_qty ?? 0);
+    if (receivedFloorViolation({ newQty: revised.qty }, { receivedQty })) {
+      throw new ReceivedFloorError(pi.id, Number(revised.qty), receivedQty);
+    }
+  }
+
+  // (5) Snapshot each live bound PO, then rewrite its derived lines from the
+  //     revised SO lines, recompute totals + expected_at, bump revision, audit.
+  const perPo: ReviseBoundPoResult['perPo'] = [];
+  const itemsByPo = new Map<string, typeof targetPoItems>();
+  for (const pi of targetPoItems) {
+    const key = pi.purchase_order_id as string;
+    const arr = itemsByPo.get(key) ?? [];
+    arr.push(pi);
+    itemsByPo.set(key, arr);
+  }
+
+  for (const po of livePos) {
+    const nextRevision = await snapshotPo(sb, po.id, amendmentId, userId);
+    const poItems = itemsByPo.get(po.id) ?? [];
+    let linesRederived = 0;
+
+    for (const pi of poItems) {
+      const revised = revisedById.get(pi.so_item_id as string)!;
+      // Re-derive EXACTLY the SO-sourced fields Create-PO-from-SO carries onto a
+      // PO line: qty, item_group, variants, description2, per-line warehouse +
+      // delivery date. Read the existing PO line's unit cost to keep the PO's
+      // own negotiated supplier price and recompute the line total off it.
+      const { data: existing, error: exErr } = await sb
+        .from('purchase_order_items')
+        .select('unit_price_centi, discount_centi')
+        .eq('id', pi.id)
+        .maybeSingle();
+      if (exErr) throw new Error(`reviseBoundPo: PO line load failed: ${exErr.message}`);
+      const unitPriceCenti = Number((existing as { unit_price_centi?: number } | null)?.unit_price_centi ?? 0);
+      const discountCenti = Number((existing as { discount_centi?: number } | null)?.discount_centi ?? 0);
+      const qty = revised.qty != null ? Math.max(1, revised.qty) : Number(pi.qty ?? 1);
+      const itemGroup = revised.item_group;
+      const variants = revised.variants;
+
+      const { error: updErr } = await sb.from('purchase_order_items').update({
+        qty,
+        line_total_centi: qty * unitPriceCenti - discountCenti,
+        item_group:       itemGroup,
+        variants,
+        description2:     buildVariantSummary(String(itemGroup ?? ''), variants ?? null) || null,
+        warehouse_id:     revised.warehouse_id,
+        delivery_date:    revised.delivery_date,
+      }).eq('id', pi.id);
+      if (updErr) throw new Error(`reviseBoundPo: PO line update failed for ${pi.id}: ${updErr.message}`);
+      linesRederived += 1;
+    }
+
+    // Recompute PO subtotal/total from the live lines (mirror recomputePoTotals)
+    // and the header expected_at = earliest non-null line delivery_date (mirror
+    // recomputePoExpectedAt) — both module-private in mfg-purchase-orders.ts, so
+    // inlined here to avoid exporting internals.
+    const { data: liveLines } = await sb
+      .from('purchase_order_items')
+      .select('line_total_centi, delivery_date')
+      .eq('purchase_order_id', po.id);
+    const rows = (liveLines ?? []) as Array<{ line_total_centi: number | null; delivery_date: string | null }>;
+    const subtotal = rows.reduce((s, r) => s + Number(r.line_total_centi ?? 0), 0);
+    const dates = rows.map((r) => r.delivery_date).filter((d): d is string => Boolean(d)).sort();
+
+    const { error: bumpErr } = await sb.from('purchase_orders').update({
+      subtotal_centi: subtotal,
+      total_centi:    subtotal,
+      expected_at:    dates[0] ?? null,
+      revision:       nextRevision,
+      updated_at:     new Date().toISOString(),
+    }).eq('id', po.id);
+    if (bumpErr) throw new Error(`reviseBoundPo: PO revision bump failed for ${po.id}: ${bumpErr.message}`);
+
+    // Audit — best-effort, keyed on the SO doc_no like every other amendment step.
+    await recordSoAudit(sb, {
+      docNo,
+      action: 'AMENDMENT_PO_REVISED',
+      actorId: userId,
+      fieldChanges: [
+        { field: 'amendment_id', to: amendmentId },
+        { field: 'po_number', to: po.po_number },
+        { field: 'po_revision', from: nextRevision - 1, to: nextRevision },
+        { field: 'lines_rederived', to: linesRederived },
+      ],
+      note: `PO ${po.po_number} re-derived from revised SO ${docNo} (rev ${nextRevision})`,
+    });
+
+    perPo.push({ poId: po.id, poNumber: po.po_number, revision: nextRevision, linesRederived });
+  }
+
+  return { revisedPoIds: perPo.map((p) => p.poId), perPo };
 }
