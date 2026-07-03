@@ -1417,9 +1417,48 @@ mfgSalesOrders.get('/:docNo', async (c) => {
       }
     }
   }
+  /* SO amendment gate (Phase 5, safer variant — flags only, no 409 change).
+     `amendment_eligible` tells the frontend that direct edits here must instead
+     go through the amendment request flow: the SO IS processing-locked (already
+     PO'd to the supplier) but is NOT yet hard-locked by a DO/SI and hasn't
+     reached a terminal / SHIPPED+ status. When true the FE swaps its Save button
+     to "Submit amendment request". Reuses the SAME soProcessingLocked +
+     soHasDownstream helpers the edit endpoints use — the hard 409 stays as the
+     backstop. `open_amendment` is the light summary of any in-flight amendment
+     (status NOT IN SENT/REJECTED) so the FE can render the pending banner. */
+  const processingLocked = soProcessingLocked(
+    h.data as { internal_expected_dd?: string | null; processing_date?: string | null },
+  );
+  const hardLocked = await soHasDownstream(sb, docNo);         // non-null when DO/SI exists
+  const soStatus = String((h.data as { status?: string | null }).status ?? '').toUpperCase();
+  const terminalStatus = ['SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'].includes(soStatus);
+  const amendmentEligible = processingLocked && !hardLocked && !terminalStatus;
+  let openAmendment: { id: string; status: string; amendment_no: string } | null = null;
+  {
+    const { data: amRows } = await sb
+      .from('so_amendments')
+      .select('id, status, amendment_no')
+      .eq('so_doc_no', docNo)
+      .not('status', 'in', '("SENT","REJECTED")')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    const am = ((amRows ?? []) as Array<Record<string, unknown>>)[0];
+    if (am) {
+      openAmendment = {
+        // Supabase JS may surface columns camelCased; dual-read to be safe.
+        id: String((am.id ?? (am as Record<string, unknown>).id) ?? ''),
+        status: String(am.status ?? ''),
+        amendment_no: String((am.amendment_no ?? (am as Record<string, unknown>).amendmentNo) ?? ''),
+      };
+    }
+  }
   const salesOrder = {
     ...(h.data as unknown as Record<string, unknown>),
     has_children: (doCount ?? 0) > 0 || (siCount ?? 0) > 0,
+    // Phase 5 amendment flags (read-only; the FE routes on these).
+    amendment_eligible: amendmentEligible,
+    has_open_amendment: openAmendment != null,
+    open_amendment: openAmendment,
     customer_credit_centi: customerCreditCenti,
     // Demographics from the linked customer (prefill only — never an SO column).
     customer_race: custRace,
