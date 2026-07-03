@@ -49,6 +49,17 @@ export type AmendmentDetail = {
   purchaseOrders: Array<{ id: string; po_number: string; status: string }>;
 };
 
+/* SO revision snapshot row — one per approved SO revision (so_revisions).
+   `snapshot` is the full header+lines JSON captured when the amendment's
+   approve-so gate re-derived the order; the Revisions tab renders it read-only. */
+export type SoRevisionRow = {
+  id: string;
+  revision: number;
+  snapshot: unknown;
+  created_at: string | null;
+  created_by: string | null;
+};
+
 /* Create payload — matches POST /mfg-sales-orders/:docNo/amendments. */
 export type CreateAmendmentLine = {
   salesOrderItemId?: string;
@@ -92,6 +103,19 @@ export const useAmendmentDetail = (id: string | null) => useQuery({
   queryKey: ['amendment-detail', id],
   queryFn: () => authedFetch<AmendmentDetail>(`/so-amendments/${id}`),
   enabled: Boolean(id),
+  staleTime: 30_000,
+  retry: 1,
+  retryDelay: 800,
+});
+
+/* ── SO revisions (nested under the SO mount) ──────────────────────────────
+   GET /mfg-sales-orders/:docNo/revisions — the prior SO versions for the
+   Detail "Revisions" tab. Read-only; no invalidation wiring needed. Keyed on
+   the doc_no so it refetches only when the page's docNo changes. */
+export const useSoRevisions = (docNo: string | null) => useQuery({
+  queryKey: ['so-revisions', docNo],
+  queryFn: () => authedFetch<{ revisions: SoRevisionRow[] }>(`/mfg-sales-orders/${docNo}/revisions`),
+  enabled: Boolean(docNo),
   staleTime: 30_000,
   retry: 1,
   retryDelay: 800,
