@@ -1068,6 +1068,9 @@ export const purchaseOrders = pgTable('purchase_orders', {
   subtotalCenti: integer('subtotal_centi').notNull().default(0),
   taxCenti:    integer('tax_centi').notNull().default(0),
   totalCenti:  integer('total_centi').notNull().default(0),
+  // SO amendment / revision workflow — bumped in place when a supplier-confirmed
+  // amendment revises the bound PO; prior versions snapshot to po_revisions.
+  revision:    integer('revision').notNull().default(1),
   notes:       text('notes'),
   submittedAt: timestamp('submitted_at', { withTimezone: true }),
   receivedAt:  timestamp('received_at', { withTimezone: true }),
@@ -1451,6 +1454,10 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   totalMarginCenti:  integer('total_margin_centi').notNull().default(0),
   marginPctBasis:    integer('margin_pct_basis').notNull().default(0), // × 100 (e.g. 23.50% = 2350)
   lineCount:         integer('line_count').notNull().default(0),
+  // SO amendment / revision workflow — bumped in place on Approve-SO when a
+  // supplier-confirmed amendment revises this SO; prior versions snapshot to
+  // so_revisions (same doc_no + revision counter).
+  revision:          integer('revision').notNull().default(1),
   // Fabric-tier SELLING add-on total for the order (migration 0124). Reporting
   // snapshot; the Δ also folds into each sofa/bedframe line's total_centi.
   fabricTierAddonCenti: integer('fabric_tier_addon_centi').notNull().default(0),
@@ -1731,6 +1738,72 @@ export const mfgSoAuditLog = pgTable('mfg_so_audit_log', {
   idxDocAt: index('idx_msoaudit_doc_at').on(t.soDocNo, t.createdAt),
   idxActor: index('idx_msoaudit_actor').on(t.actorId),
 }));
+
+/* ─── SO amendment / revision workflow (2026-07-03) ──────────────────────────
+   A supplier-confirmed, two-gate amendment revises a processing-locked SO and
+   its bound PO in place (same number + revision counter), snapshotting every
+   prior version. Keyed on so_doc_no (text → mfg_sales_orders.doc_no) like every
+   other SO child. See docs/2026-07-03-so-amendment-workflow-plan.md. */
+export const soAmendmentStatus = pgEnum('so_amendment_status', [
+  'REQUESTED', 'SUPPLIER_PENDING', 'SO_APPROVED', 'PO_APPROVED', 'SENT', 'REJECTED',
+]);
+
+export const soAmendments = pgTable('so_amendments', {
+  id:            uuid('id').primaryKey().defaultRandom(),
+  soDocNo:       text('so_doc_no').notNull().references(() => mfgSalesOrders.docNo, { onDelete: 'cascade' }),
+  amendmentNo:   text('amendment_no').notNull(),                 // e.g. SO-2607/A1
+  status:        soAmendmentStatus('status').notNull().default('REQUESTED'),
+  reason:        text('reason'),
+  requestedBy:   uuid('requested_by').references(() => staff.id),
+  supplierConfirmedBy:  uuid('supplier_confirmed_by').references(() => staff.id),
+  supplierConfirmationRef:  text('supplier_confirmation_ref'),
+  supplierConfirmationNote: text('supplier_confirmation_note'),
+  supplierConfirmationAttachmentKey: text('supplier_confirmation_attachment_key'),
+  soApprovedBy:  uuid('so_approved_by').references(() => staff.id),
+  soApprovedAt:  timestamp('so_approved_at', { withTimezone: true }),
+  poApprovedBy:  uuid('po_approved_by').references(() => staff.id),
+  poApprovedAt:  timestamp('po_approved_at', { withTimezone: true }),
+  sentAt:        timestamp('sent_at', { withTimezone: true }),
+  createdAt:     timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:     timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  // one OPEN amendment per SO (not SENT/REJECTED)
+  oneOpen: uniqueIndex('uq_so_amendment_open').on(t.soDocNo)
+             .where(sql`status NOT IN ('SENT','REJECTED')`),
+  bySo: index('idx_so_amendment_so').on(t.soDocNo),
+}));
+
+export const soAmendmentLines = pgTable('so_amendment_lines', {
+  id:            uuid('id').primaryKey().defaultRandom(),
+  amendmentId:   uuid('amendment_id').notNull().references(() => soAmendments.id, { onDelete: 'cascade' }),
+  salesOrderItemId: uuid('sales_order_item_id'),                 // null = added line
+  changeType:    text('change_type').notNull(),                 // SPEC | QTY | ADD | REMOVE
+  newItemCode:   text('new_item_code'),
+  newVariants:   jsonb('new_variants'),
+  newQty:        integer('new_qty'),
+  newUnitPriceSen: integer('new_unit_price_sen'),
+  oldSnapshot:   jsonb('old_snapshot'),                         // old values for display/audit
+});
+
+export const soRevisions = pgTable('so_revisions', {
+  id:          uuid('id').primaryKey().defaultRandom(),
+  soDocNo:     text('so_doc_no').notNull(),
+  revision:    integer('revision').notNull(),
+  snapshot:    jsonb('snapshot').notNull(),                     // full header+lines
+  amendmentId: uuid('amendment_id'),
+  createdBy:   uuid('created_by'),
+  createdAt:   timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ uq: uniqueIndex('uq_so_revision').on(t.soDocNo, t.revision) }));
+
+export const poRevisions = pgTable('po_revisions', {
+  id:          uuid('id').primaryKey().defaultRandom(),
+  poId:        uuid('po_id').notNull(),
+  revision:    integer('revision').notNull(),
+  snapshot:    jsonb('snapshot').notNull(),
+  amendmentId: uuid('amendment_id'),
+  createdBy:   uuid('created_by'),
+  createdAt:   timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ uq: uniqueIndex('uq_po_revision').on(t.poId, t.revision) }));
 
 /* PR #163 — Payments as transactions. Commander 2026-05-27:
    "save了之后不会变成一个transaction出来的吗". Each receipt becomes one
