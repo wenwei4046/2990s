@@ -4265,6 +4265,31 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   const beforeCols = map.map(([, snake]) => snake).concat(['status', 'processing_date']).join(', ');
   const { data: before } = await sb.from('mfg_sales_orders').select(beforeCols).eq('doc_no', docNo).maybeSingle();
 
+  /* Remove-Processing-Date gate (Owner 2026-07-09) — clearing an already-set
+     Processing Date pulls the SO back out of the Proceed lane (and, once the
+     day has elapsed, undoes the very lock that says "this is what we PO to the
+     supplier"), so the REMOVE action is SUPER ADMIN ONLY. Setting it the first
+     time, or moving it to another date, stays governed by the existing gates
+     (payment ≥50%, variants complete, not-in-the-past, processing lock). */
+  let superAdminClearsProc = false;
+  {
+    const proc = body['internalExpectedDd'];
+    const origProc =
+      ((before as unknown as Record<string, unknown> | null)?.['internal_expected_dd'] as string | null)
+      ?? ((before as unknown as Record<string, unknown> | null)?.['processing_date'] as string | null)
+      ?? null;
+    if (proc !== undefined && norm(proc) === '' && origProc) {
+      const { data: caller } = await sb.from('staff').select('role').eq('id', user.id).maybeSingle();
+      if (String((caller as { role?: string } | null)?.role ?? '') !== 'super_admin') {
+        return c.json({
+          error: 'processing_date_remove_forbidden',
+          reason: 'Only a Super Admin can remove the Processing Date.',
+        }, 403);
+      }
+      superAdminClearsProc = true;
+    }
+  }
+
   /* Owner 2026-06-12 — processing-date lock: once the processing day has
      passed (midnight MYT after), the SO is what we PO to the supplier — every
      header edit is rejected wholesale. Status transitions (/status route),
@@ -4276,11 +4301,23 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     /* Field-scoped (Loo 2026-06-13) — only a genuine change to a production-
        schedule date column is rejected; customer / address / payment header
        fields stay editable in the Proceed lane. `before` carries every patched
-       column via the map snapshot above. */
+       column via the map snapshot above.
+
+       Remove-Processing-Date (Owner 2026-07-09) — a Super Admin CLEARING the
+       Processing Date is the one sanctioned way to pull a locked SO back, so
+       that clear (and the paired Delivery Date clear the set-together rule
+       forces with it) passes the lock. Any other schedule change — including
+       the same super admin moving the date instead of clearing it — still
+       409s; to reschedule a locked SO, remove the date first (unlocks), then
+       set the new pair. */
     const beforeRowProc = before as unknown as Record<string, unknown>;
     const changedSchedule = [...SO_PROCESSING_LOCK_COLS].filter(
       (col) => col in updates && norm(updates[col]) !== norm(beforeRowProc[col]),
-    );
+    ).filter((col) => !(
+      superAdminClearsProc
+      && (col === 'internal_expected_dd' || col === 'customer_delivery_date')
+      && norm(updates[col]) === ''
+    ));
     if (changedSchedule.length > 0) {
       return c.json(SO_PROCESSING_LOCKED_RESPONSE, 409);
     }

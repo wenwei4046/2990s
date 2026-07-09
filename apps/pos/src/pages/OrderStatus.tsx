@@ -423,6 +423,9 @@ const describeSoActionError = (e: unknown): string => {
   if (err === 'so_locked_processing') {
     return 'The processing date has passed — dates and items are locked. Customer, address and payment can still be updated.';
   }
+  if (err === 'processing_date_remove_forbidden') {
+    return 'Only a Super Admin can remove the processing date. Ask a Super Admin to clear it.';
+  }
   if (err === 'so_identity_locked') {
     return 'This order already has a delivery order / invoice — customer and address are locked. Payment can still be updated.';
   }

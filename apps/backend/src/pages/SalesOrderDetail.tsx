@@ -1914,6 +1914,10 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     currentStaff?.role === 'admin' ||
     currentStaff?.role === 'sales_director' ||
     currentStaff?.role === 'super_admin';
+  /* Remove-Processing-Date gate (Owner 2026-07-09) — clearing a set Processing
+     Date pulls the SO back out of the Proceed lane, so only super_admin may do
+     it (server enforces the same in the header PATCH). */
+  const isSuperAdmin = currentStaff?.role === 'super_admin';
 
   /* Task #118 — DB-backed dropdowns (was hardcoded). Falls back to the
      migration 0081 seed list when loading or when the DB has zero rows
@@ -2178,12 +2182,19 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
      rejected. */
   const originalProcessing = header.internal_expected_dd ?? '';
   const originalDelivery = header.customer_delivery_date ?? '';
-  const processingLocked = originalProcessing !== '' && originalProcessing < today;
+  /* Remove-Processing-Date (Owner 2026-07-09) — a super_admin may clear an
+     elapsed Processing Date (the sanctioned way to pull a locked SO back), so
+     the past-date read-only lock doesn't apply to them. */
+  const processingLocked = originalProcessing !== '' && originalProcessing < today && !isSuperAdmin;
 
   /* Returns the first blocking date error, or null when the dates are valid.
      Shared by the imperative validate() (page-level Save runs this BEFORE
      committing any line) and trySave (defence-in-depth on the header write). */
   const validateDates = (): string | null => {
+    if (originalProcessing && !form.processingDate.trim() && !isSuperAdmin) {
+      return 'Only a Super Admin can remove the Processing Date.\n\n' +
+        'Removing it pulls the order back out of Proceed — ask a Super Admin to do it.';
+    }
     if (datesXor) {
       return 'Processing Date and Delivery Date must be set together.\n\n' +
         'Either fill in BOTH dates, or leave BOTH empty.';
@@ -2474,6 +2485,13 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                 min={processingLocked ? undefined : today}
                 onChange={(iso) => set('processingDate', iso)}
                 invalid={datesXor && !form.processingDate} />
+              {/* Remove-Processing-Date gate (Owner 2026-07-09) — the server 403s
+                  a non-super-admin clear; surface the rule up front. */}
+              {originalProcessing !== '' && !inputsDisabled && !processingLocked && !isSuperAdmin && (
+                <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginTop: 2 }}>
+                  Only a Super Admin can remove this date.
+                </span>
+              )}
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Delivery Date</span>
