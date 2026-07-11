@@ -223,6 +223,10 @@ type DoItem = {
      line shipped, resolved server-side from the OUT movements' batch_no (GRN
      stamps batch_no = source PO number). Empty for plain-FIFO/un-batched stock. */
   source_pos?: string[];
+  /* Rack(s) — the physical warehouse rack(s) this line's goods are stored on,
+     resolved server-side (warehouse + item_code + variant_key → rack placement).
+     For storekeeper picking. Empty when no placement matches (dash). */
+  racks?: string[];
 };
 
 /* One not-yet-saved add-line. soItemId/maxQty are set when picked from the
@@ -785,6 +789,10 @@ export const DeliveryOrderDetail = () => {
                     shipped (traceability). Recovered from the OUT movements'
                     batch_no (= source PO number). */}
                 <th>Source PO</th>
+                {/* Rack — the physical warehouse rack(s) the goods sit on, so
+                    the storekeeper knows where to pick/load. Resolved from rack
+                    placements (warehouse + item + variant). */}
+                <th>Rack</th>
                 <th>Transfer To</th>
               </tr>
             </thead>
@@ -819,6 +827,15 @@ export const DeliveryOrderDetail = () => {
                       ? <span className={styles.muted}>—</span>
                       : (it.source_pos ?? []).map((po, pi) => (
                           <div key={pi} style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{po}</div>
+                        ))}
+                  </td>
+                  {/* Rack — physical location(s) for storekeeper picking. Dash
+                      when no rack placement matches this line. */}
+                  <td>
+                    {(it.racks ?? []).length === 0
+                      ? <span className={styles.muted}>—</span>
+                      : (it.racks ?? []).map((rk, ri) => (
+                          <div key={ri} style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{rk}</div>
                         ))}
                   </td>
                   <td>
