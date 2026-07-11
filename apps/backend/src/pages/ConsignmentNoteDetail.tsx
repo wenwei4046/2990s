@@ -313,7 +313,7 @@ export const ConsignmentNoteDetail = () => {
   const handlePrint = () => {
     import('../lib/delivery-order-pdf')
       .then(({ generateDeliveryOrderPdf }) =>
-        generateDeliveryOrderPdf(header as never, items as never, { docTitle: 'CONSIGNMENT NOTE', docNoLabel: 'CN No' }))
+        generateDeliveryOrderPdf(header as never, items as never, { docTitle: 'CONSIGNMENT NOTE', docNoLabel: 'CN No', showPicking: false }))
       .catch((e) => notify({ title: 'PDF generation failed', body: e instanceof Error ? e.message : String(e), tone: 'error' }));
   };
 
