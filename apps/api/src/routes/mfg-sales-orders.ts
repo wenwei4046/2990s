@@ -326,7 +326,7 @@ async function soMainMixIntroduced(sb: any, docNo: string, excludeItemId: string
 export async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
   const { data } = await sb
     .from('sofa_combo_pricing')
-    .select('id, base_model, modules, tier, customer_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, effective_from, deleted_at, default_free_gifts')
+    .select('id, base_model, modules, tier, customer_id, prices_by_height, selling_prices_by_height, pwp_prices_by_height, label, effective_from, created_at, deleted_at, default_free_gifts')
     .is('deleted_at', null)
     .is('customer_id', null)   // 2990 B2C — default-scope rows only
     .is('supplier_id', null);  // sales-side only — never auto-price a SO from a supplier's purchasing combos
@@ -335,7 +335,7 @@ export async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
     customer_id: string | null; prices_by_height: Record<string, number | null>;
     selling_prices_by_height: Record<string, number | null>;
     pwp_prices_by_height: Record<string, number | null> | null;
-    label: string | null; effective_from: string; deleted_at: string | null;
+    label: string | null; effective_from: string; created_at: string; deleted_at: string | null;
     default_free_gifts: unknown;
   }>).map((r) => ({
     id: r.id, baseModel: r.base_model, modules: r.modules ?? [],
@@ -345,7 +345,9 @@ export async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
     // PWP (换购) selling price per height (Phase 2) — used INSTEAD of the above
     // only when a sofa-reward line redeems a valid PWP code (see recompute).
     pwpPricesByHeight: r.pwp_prices_by_height ?? {},
-    label: r.label, effectiveFrom: r.effective_from, deletedAt: r.deleted_at,
+    // created_at feeds the picker's duplicate tie-break (equal effective_from
+    // → newest row wins, matching the GET /sofa-combos admin list).
+    label: r.label, effectiveFrom: r.effective_from, createdAt: r.created_at, deletedAt: r.deleted_at,
     // Default Free Gift (migration 0170, D9) — passthrough jsonb; the SO-create
     // handler parses it to build the per-combo free-gift trigger.
     defaultFreeGifts: r.default_free_gifts ?? [],
