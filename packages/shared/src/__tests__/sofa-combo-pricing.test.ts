@@ -273,6 +273,41 @@ describe('pickComboMatch / pickComboPrice', () => {
     )).toBe(269000);
   });
 
+  it('equal effective_from: newest created_at wins, regardless of row order', () => {
+    // The 2026-07-12 Trrbu drift: duplicate live rows sharing effective_from
+    // made the winner depend on fetch order (POS cache vs server query).
+    const dup1 = row({ id: 'dup1', effectiveFrom: '2026-05-01', createdAt: '2026-05-01T19:25:58Z', pricesByHeight: { '28': 249000 } });
+    const dup2 = row({ id: 'dup2', effectiveFrom: '2026-05-01', createdAt: '2026-05-18T03:28:39Z', pricesByHeight: { '28': 199000 } });
+    for (const rows of [[dup1, dup2], [dup2, dup1]]) {
+      expect(pickComboPrice(
+        { baseModel: '5530', modules: ['2A(LHF)', 'L(RHF)'], customerId: null, tier: 'PRICE_2', height: '28', asOf },
+        rows,
+      )).toBe(199000);
+    }
+  });
+
+  it('equal effective_from + created_at: id breaks the tie deterministically', () => {
+    const twinA = row({ id: 'aaa', effectiveFrom: '2026-05-01', createdAt: '2026-05-01T19:25:58Z', pricesByHeight: { '28': 111000 } });
+    const twinB = row({ id: 'bbb', effectiveFrom: '2026-05-01', createdAt: '2026-05-01T19:25:58Z', pricesByHeight: { '28': 222000 } });
+    for (const rows of [[twinA, twinB], [twinB, twinA]]) {
+      expect(pickComboMatch(
+        { baseModel: '5530', modules: ['2A(LHF)', 'L(RHF)'], customerId: null, tier: 'PRICE_2', height: '28', asOf },
+        rows,
+      )!.row.id).toBe('bbb'); // descending id — same winner both orders
+    }
+  });
+
+  it('a row missing created_at loses the tie to one that carries it', () => {
+    const legacy = row({ id: 'legacy', effectiveFrom: '2026-05-01', pricesByHeight: { '28': 111000 } });
+    const stamped = row({ id: 'stamped', effectiveFrom: '2026-05-01', createdAt: '2026-01-01T00:00:00Z', pricesByHeight: { '28': 222000 } });
+    for (const rows of [[legacy, stamped], [stamped, legacy]]) {
+      expect(pickComboMatch(
+        { baseModel: '5530', modules: ['2A(LHF)', 'L(RHF)'], customerId: null, tier: 'PRICE_2', height: '28', asOf },
+        rows,
+      )!.row.id).toBe('stamped');
+    }
+  });
+
   it('soft-deleted rows never match', () => {
     expect(pickComboPrice(
       { baseModel: '5530', modules: ['2A(LHF)', 'L(RHF)'], customerId: null, tier: 'PRICE_2', height: '28', asOf },
