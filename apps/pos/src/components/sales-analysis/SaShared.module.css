@@ -1,0 +1,238 @@
+/* SaShared — shared foundation for the Sales Analysis redesign.
+   OWNERSHIP (hard rule): primitives style ONLY from this file; each tab styles
+   ONLY from its own module. Tab implementers never edit this file.
+
+   Palette: single-hue warm ramp derived from the page's existing
+   var(--c-accent, #b06a3b) fallback convention. Data-viz segments only —
+   approved deviation, see UI_REFERENCE.md. */
+
+.saRoot {
+  --sa-c1: #b06a3b;      /* base accent — matches the page's existing var(--c-accent, #b06a3b) convention */
+  --sa-c2: #8a5230;      /* deep burnt */
+  --sa-c3: #d29a6c;      /* mid tan */
+  --sa-c4: #e8c9aa;      /* light tan */
+  --sa-c5: #5f5a54;      /* warm charcoal — fallback for unexpected keys only */
+  --sa-unknown: #ddd6cb; /* neutral — ALWAYS and ONLY 'Unknown' */
+  --sa-track: #f0ebe4;   /* bar/meter track (same hex the page already uses) */
+  --sa-emph: var(--c-burnt, #A6471E);  /* selected-month column emphasis */
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ── Panel (§0.7) ─────────────────────────────────────────────────────────── */
+
+.panel {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+.panelHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.panelTitle {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: #6b6b6b;
+  margin: 0;
+}
+.panelRight { display: flex; align-items: center; gap: var(--space-2); }
+
+/* ── StatTile (§0.6) ──────────────────────────────────────────────────────── */
+
+.statTile {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.statLabelRow {
+  display: flex;
+  flex-wrap: wrap; /* thin-sample chip drops to its own line in narrow tiles */
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.statLabel {
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.statValue {
+  font-size: var(--fs-20);
+  font-weight: 600;
+  color: var(--c-ink);
+  /* Proportional figures on tile values — tabular-nums is for tables only. */
+}
+.statSub {
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── SegmentBar (§0.3) ────────────────────────────────────────────────────── */
+
+.segBar {
+  display: flex;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--sa-track);
+}
+.segSeg {
+  min-width: 2px;
+  flex-basis: 0;
+}
+.segSeg + .segSeg {
+  box-shadow: -1px 0 0 #fff;
+}
+.legendRows {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px var(--space-3);
+  margin-top: var(--space-2);
+}
+.legendRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+  min-width: 0;
+}
+.legendKey {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.legendVal {
+  margin-left: auto;
+  color: #6b6b6b;
+  white-space: nowrap;
+}
+.legendInline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px var(--space-3);
+  margin-top: var(--space-2);
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+}
+.legendInlineItem { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* ── MiniColumns (§0.4) ───────────────────────────────────────────────────── */
+
+.miniScroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.miniSvg { display: block; }
+.miniHit { cursor: pointer; }
+
+/* ── Meter (§0.5) ─────────────────────────────────────────────────────────── */
+
+.meterTrack {
+  display: inline-block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--sa-track);
+  overflow: hidden;
+  vertical-align: middle;
+}
+.meterFill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--sa-c1);
+}
+
+/* ── Disclosure (§0.8) ────────────────────────────────────────────────────── */
+
+.discBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  font: inherit;
+  font-size: var(--fs-13);
+  color: #6b6b6b;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* ── ThinSampleChip (§0.9) ────────────────────────────────────────────────── */
+
+.thinChip {
+  display: inline-block;
+  font-size: var(--fs-12);
+  color: #9a6a2a;
+  background: #f7efe2;
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
+  white-space: nowrap;
+}
+
+/* ── Shared table classes (§0.10) ─────────────────────────────────────────
+   Grid-row pattern; grid-template-columns are defined per-table in each TAB's
+   own module so tab implementers never edit this file. */
+
+.tHead {
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-top: none;
+  align-items: center;
+}
+.tRow {
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+  border-top: 1px solid #f0ebe4;
+  align-items: center;
+  padding: 6px 0;
+}
+.tRowTap {
+  min-height: 44px;
+  cursor: pointer;
+  background: none;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
+.tNum {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.tTotals {
+  font-weight: 600;
+  border-top: 1px solid var(--line-strong);
+}
+.tRowSelected {
+  background: #faf5ec;
+  box-shadow: inset 2px 0 0 var(--c-accent, #b06a3b);
+}

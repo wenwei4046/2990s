@@ -257,6 +257,10 @@ These are intentional changes from the prototype's current state. Anything not o
 
 **Not changed:** snap math, the 22 plan-view PNGs, drag handling, geometry, canvas rendering, or any other part of `CustomBuilder.tsx`.
 
+### §7 · Sales analysis chart ramp
+
+- Sales analysis chart ramp (`--sa-c1..c5`, `--sa-unknown`) — scoped tints of the page accent for data-viz segments only; not for use outside `/sales-analysis`. (2026-07-14, pending Loo sign-off in the redesign PR — flagged in the PR description.)
+
 ---
 
 ## What NOT to do
