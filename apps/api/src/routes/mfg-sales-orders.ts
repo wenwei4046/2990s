@@ -31,7 +31,7 @@ import { meetsProceedGate, meetsProcessingDatePaymentGate } from '@2990s/shared/
    fee/addon → SERVICE-line decomposition builders are pure + shared. */
 import {
   isServiceLine, isDeliveryFeeServiceCode,
-  SVC_DELIVERY, SVC_DELIVERY_CROSS, SVC_DELIVERY_ADD,
+  SVC_DELIVERY_ADD,
 } from '@2990s/shared/service-sku';
 import {
   buildDeliveryFeeServiceLines,
@@ -3997,53 +3997,54 @@ export async function recomputeDeliveryFeeCore(
   if (hdrErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] header load failed:', hdrErr.message); }
   const h = (hdr ?? {}) as { debtor_name?: string | null; venue?: string | null; customer_delivery_date?: string | null };
 
-  // Replace the SVC-DELIVERY* lines: delete the old, insert the recomputed.
-  const { error: delErr } = await sb.from('mfg_sales_order_items').delete()
-    .eq('doc_no', docNo).in('item_code', [SVC_DELIVERY, SVC_DELIVERY_CROSS, SVC_DELIVERY_ADD]);
-  if (delErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] delivery line delete failed:', delErr.message); }
-  if (specs.length > 0) {
-    const lineDateToday = new Date().toISOString().slice(0, 10);
-    const rows = specs.map((spec, i) => ({
-      doc_no: docNo,                                    // ⚠️ NOT NULL — omitting it silently dropped the line (the bug)
-      line_no: keptMaxLineNo >= 0 ? keptMaxLineNo + 1 + i : null,
-      line_date: lineDateToday,
-      debtor_name: h.debtor_name ?? null,
-      item_group: 'service',
-      item_code: spec.itemCode,
-      description: spec.description,
-      description2: null,
-      remark: spec.remark ?? null,
-      uom: 'UNIT',
-      qty: spec.qty,
-      unit_price_centi: spec.unitPriceSen,
-      discount_centi: 0,
-      total_centi: spec.totalSen,
-      total_inc_centi: spec.totalSen,
-      balance_centi: spec.totalSen,
-      variants: null,
-      unit_cost_centi: 0,
-      line_cost_centi: 0,
-      line_margin_centi: spec.totalSen,
-      divan_price_sen: 0,
-      leg_price_sen: 0,
-      special_order_price_sen: 0,
-      custom_specials: null,
-      line_delivery_date: h.customer_delivery_date ?? null,
-      line_delivery_date_overridden: false,
-      warehouse_id: null,
-      branding: null,
-      venue: h.venue ?? null,
-      stock_status: 'READY',
-    }));
-    const { error: insErr } = await sb.from('mfg_sales_order_items').insert(rows);
-    if (insErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] delivery line insert failed:', insErr.message); }
-  }
-
-  await sb.from('mfg_sales_orders').update({
-    cross_category_source_doc_no: sourceDocNo,
-    delivery_fee_centi: fee.total,
-    updated_at: new Date().toISOString(),
-  }).eq('doc_no', docNo);
+  /* Replace the SVC-DELIVERY* lines: delete the old, insert the recomputed,
+     stamp the header — as ONE atomic RPC (migration 0211). The Backend SO
+     Detail Save fires one line PATCH per changed line IN PARALLEL, and each
+     PATCH ends here; when this was two PostgREST statements (delete, then
+     insert) two rebuilds could interleave as delete/delete/insert/insert and
+     double the delivery fee on the bill (SO-2606-043 2026-06-28, SO-2607-010
+     2026-07-12). The RPC takes a per-doc_no advisory xact lock, so concurrent
+     rebuilds serialize and the last writer leaves exactly one consistent set. */
+  const lineDateToday = new Date().toISOString().slice(0, 10);
+  const rows = specs.map((spec, i) => ({
+    doc_no: docNo,                                    // ⚠️ NOT NULL — omitting it silently dropped the line (the bug)
+    line_no: keptMaxLineNo >= 0 ? keptMaxLineNo + 1 + i : null,
+    line_date: lineDateToday,
+    debtor_name: h.debtor_name ?? null,
+    item_group: 'service',
+    item_code: spec.itemCode,
+    description: spec.description,
+    description2: null,
+    remark: spec.remark ?? null,
+    uom: 'UNIT',
+    qty: spec.qty,
+    unit_price_centi: spec.unitPriceSen,
+    discount_centi: 0,
+    total_centi: spec.totalSen,
+    total_inc_centi: spec.totalSen,
+    balance_centi: spec.totalSen,
+    variants: null,
+    unit_cost_centi: 0,
+    line_cost_centi: 0,
+    line_margin_centi: spec.totalSen,
+    divan_price_sen: 0,
+    leg_price_sen: 0,
+    special_order_price_sen: 0,
+    custom_specials: null,
+    line_delivery_date: h.customer_delivery_date ?? null,
+    line_delivery_date_overridden: false,
+    warehouse_id: null,
+    branding: null,
+    venue: h.venue ?? null,
+    stock_status: 'READY',
+  }));
+  const { error: rebuildErr } = await sb.rpc('rebuild_mfg_so_delivery_lines', {
+    p_doc_no: docNo,
+    p_source_doc_no: sourceDocNo,
+    p_delivery_fee_centi: fee.total,
+    p_rows: rows,
+  });
+  if (rebuildErr) { /* eslint-disable-next-line no-console */ console.error('[so-redetect] delivery line rebuild failed:', rebuildErr.message); }
   await recomputeTotals(sb, docNo);
   return { isFollowup, sourceDocNo, total: fee.total };
 }
