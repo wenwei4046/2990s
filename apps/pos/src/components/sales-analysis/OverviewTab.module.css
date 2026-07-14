@@ -1,0 +1,139 @@
+/* OverviewTab — layout + tab-specific chrome for the Overview tab (spec §1).
+   OWNERSHIP: this tab styles ONLY from this file; primitives style from
+   SaShared.module.css (shared table classes reused, grid columns owned here). */
+
+/* ── InsightStrip ─────────────────────────────────────────────────────────── */
+
+.insight {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px var(--space-2);
+  font-size: var(--fs-14);
+  color: var(--c-ink);
+}
+.insightLead {
+  font-weight: 600;
+}
+.insightSep {
+  color: #6b6b6b;
+}
+
+/* ── KPI strip ────────────────────────────────────────────────────────────── */
+
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: var(--space-3);
+}
+
+/* ── Two-column panel grid ────────────────────────────────────────────────── */
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+.rightCol {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* ── Monthly revenue panel ────────────────────────────────────────────────── */
+
+.chartLegend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+}
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.legendDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.inspectCaption {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+}
+.monthlyCols {
+  display: grid;
+  grid-template-columns: 1fr 0.7fr 1fr 1fr 0.8fr;
+  column-gap: var(--space-2);
+}
+.footNote {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+}
+
+/* ── Product mix / Customers panels ───────────────────────────────────────── */
+
+.subNote {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+}
+.footLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0;
+  font: inherit;
+  font-size: var(--fs-13);
+  color: var(--c-accent, #b06a3b);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.custLine {
+  margin: 0;
+  font-size: var(--fs-14);
+  color: var(--c-ink);
+}
+.barLabel {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+}
+.mutedLine {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-13);
+  color: #6b6b6b;
+}
+
+/* ── Empty states ─────────────────────────────────────────────────────────── */
+
+.muted {
+  margin: 0;
+  font-size: var(--fs-13);
+  color: #6b6b6b;
+}
+
+/* ── Responsive collapse ──────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .kpis {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

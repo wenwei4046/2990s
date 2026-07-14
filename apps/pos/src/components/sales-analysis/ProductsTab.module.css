@@ -1,0 +1,172 @@
+/* ProductsTab — layout + chrome for the Products tab (spec §3).
+   OWNERSHIP: this tab styles ONLY from here (plus the shared table classes in
+   SaShared.module.css, which it imports but never edits). Per-table
+   grid-template-columns live here by design. */
+
+.muted { color: #9a9a9a; font-size: var(--fs-13); margin: 0; }
+
+/* ── Category header row ──────────────────────────────────────────────────── */
+
+.catHead {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.chip {
+  min-height: 44px;
+  padding: 10px 16px;
+  font: inherit;
+  font-size: var(--fs-13);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: #fff;
+  color: var(--c-ink);
+  cursor: pointer;
+}
+.chipOn {
+  background: var(--c-accent, #b06a3b);
+  border-color: var(--c-accent, #b06a3b);
+  color: #fff;
+}
+.catSummary {
+  font-size: var(--fs-13);
+  color: #6b6b6b;
+  margin: 0;
+}
+
+/* ── Master-detail grid ───────────────────────────────────────────────────── */
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 440px) minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+.detailCol {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Sub-900px: single column; the rank table is replaced by a model select. */
+.modelSelect { display: none; }
+@media (max-width: 900px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .rankPanel { display: none; }
+  .modelSelect {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 12px;
+    font: inherit;
+    font-size: var(--fs-14);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: #fff;
+    color: var(--c-ink);
+  }
+}
+
+/* ── Model rank table ─────────────────────────────────────────────────────── */
+
+.rankGrid {
+  display: grid;
+  grid-template-columns: 28px minmax(100px, 1.2fr) 0.9fr 72px 1fr 0.7fr;
+  column-gap: var(--space-2);
+}
+.rank { font-size: var(--fs-12); color: #6b6b6b; }
+.cellClip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Model detail panel ───────────────────────────────────────────────────── */
+
+.detailHead {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.detailName {
+  font-size: var(--fs-16);
+  font-weight: 600;
+  color: var(--c-ink);
+}
+.detailStats {
+  font-size: var(--fs-13);
+  color: #6b6b6b;
+}
+
+.classChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.classChip {
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+  background: var(--sa-track);
+  border-radius: var(--radius-pill);
+  padding: 4px 12px;
+  white-space: nowrap;
+}
+
+.fabricLine {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+  margin-bottom: var(--space-3);
+}
+.fabricVal { color: #6b6b6b; }
+
+/* ── Variants block ───────────────────────────────────────────────────────── */
+
+.variantCaption {
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+  margin: 0 0 var(--space-1);
+}
+.variantGrid {
+  display: grid;
+  grid-template-columns: 1.2fr 0.7fr 72px 1fr;
+  column-gap: var(--space-2);
+}
+
+/* ── Buyers block ─────────────────────────────────────────────────────────── */
+
+.buyersHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: #6b6b6b;
+  margin: var(--space-4) 0 var(--space-2);
+}
+.buyersGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+@media (max-width: 1100px) {
+  .buyersGrid { grid-template-columns: minmax(0, 1fr); }
+}
+.buyerBlockLabel {
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+  margin: 0 0 var(--space-1);
+}

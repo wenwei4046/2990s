@@ -1,0 +1,438 @@
+/* CustomerDataTab — tab-owned styles (spec §2). Also hosts the
+   TargetEditorSheet styles (§2.1) — the customer-tab implementer owns both.
+   Primitives style ONLY from SaShared.module.css; this file never redefines
+   them, only tab layout + per-table grid-template-columns. */
+
+/* ── Target match strip ───────────────────────────────────────────────────── */
+
+.matchStrip {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--space-5);
+  align-items: center;
+}
+.matchLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.matchLabel {
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.matchOverall {
+  font-size: var(--fs-24);
+  font-weight: 600;
+  color: var(--c-ink);
+}
+.matchSub {
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+}
+.matchMid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.dims {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+}
+.dimCell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.dimLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+}
+.gapDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sa-c2);
+  flex: none;
+}
+.dimPct {
+  font-size: var(--fs-14);
+  font-weight: 600;
+  color: var(--c-ink);
+}
+.dimDetail {
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+}
+.gapNote {
+  font-size: var(--fs-13);
+  color: #9a6a2a;
+  margin: 0;
+}
+.editBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: var(--fs-14);
+  color: var(--c-ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* ── Snapshot + filter strip ──────────────────────────────────────────────── */
+
+.snapshot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.snapLeft {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.snapStats {
+  font-size: var(--fs-14);
+  color: var(--c-ink);
+}
+.snapBar {
+  width: 120px;
+  flex: none;
+}
+.snapTypical {
+  font-size: var(--fs-13);
+  color: #6b6b6b;
+}
+.snapRight {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.ageLabel {
+  font-size: var(--fs-14);
+  color: var(--c-ink);
+}
+.filterChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 4px 14px;
+  font: inherit;
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+  background: var(--sa-track);
+  border: none;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+
+/* ── Demographics grid ────────────────────────────────────────────────────── */
+
+.demoGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.demoGrid > * {
+  min-width: 0;
+}
+
+/* Location panel */
+.locRow {
+  display: grid;
+  grid-template-columns: 1fr 72px 90px;
+  gap: var(--space-3);
+}
+.locLists {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+  max-height: 240px;
+  overflow-y: auto;
+}
+.locListRow {
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+  padding: 2px 0;
+}
+
+/* ── Spend by segment ─────────────────────────────────────────────────────── */
+
+.spendGrid {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr 1fr 72px 1fr 0.8fr;
+  gap: var(--space-3);
+}
+.headPad {
+  padding: 6px 0;
+}
+.segCtl {
+  display: flex;
+  gap: var(--space-2);
+}
+.segBtn {
+  font: inherit;
+  font-size: var(--fs-13);
+  min-height: 44px;
+  padding: 4px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: #fff;
+  color: var(--c-ink);
+  cursor: pointer;
+}
+.segBtnOn {
+  background: var(--sa-c1);
+  border-color: var(--sa-c1);
+  color: #fff;
+}
+
+/* ── Customer roster ──────────────────────────────────────────────────────── */
+
+.rosterGrid {
+  display: grid;
+  grid-template-columns: 1.6fr 0.8fr 0.7fr 0.7fr 1.3fr 0.5fr 0.9fr 1fr;
+  gap: var(--space-3);
+}
+.rosterBody {
+  max-height: 480px;
+  overflow-y: auto;
+}
+.bandSuffix {
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+}
+.returningPill {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+  background: var(--sa-track);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+  vertical-align: middle;
+}
+.footNote {
+  font-size: var(--fs-13);
+  color: #6b6b6b;
+  margin: var(--space-2) 0 0;
+}
+.muted {
+  color: #9a9a9a;
+  margin: 0;
+}
+
+/* ── Target editor sheet (§2.1) ───────────────────────────────────────────── */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(34, 31, 32, 0.32);
+  z-index: 1000;
+  animation: scrimFade var(--duration-base) var(--ease-out);
+}
+.sheet {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 92vw);
+  background: #fff;
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow-3);
+  z-index: 1001;
+  display: flex;
+  flex-direction: column;
+  animation: sheetSlide var(--duration-base) var(--ease-out);
+}
+@keyframes sheetSlide {
+  from { transform: translateX(100%); }
+  to { transform: none; }
+}
+@keyframes scrimFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Fade only — no transform. */
+  .sheet { animation-name: scrimFade; }
+}
+.sheetHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+.sheetTitle {
+  font-size: var(--fs-16);
+  font-weight: 600;
+  color: var(--c-ink);
+  margin: 0;
+}
+.sheetClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  background: none;
+  border: none;
+  color: var(--c-ink);
+  cursor: pointer;
+}
+.sheetBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+.formCaption {
+  font-size: var(--fs-13);
+  color: #6b6b6b;
+  margin: var(--space-4) 0 var(--space-2);
+}
+.formCaption:first-child {
+  margin-top: 0;
+}
+.targetGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+.optCell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.optLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-14);
+  color: var(--c-ink);
+}
+.optHint {
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+}
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chip {
+  font: inherit;
+  font-size: var(--fs-13);
+  min-height: 44px;
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: #fff;
+  color: var(--c-ink);
+  cursor: pointer;
+}
+.chipOn {
+  background: var(--sa-c1);
+  border-color: var(--sa-c1);
+  color: #fff;
+}
+.preview {
+  border-top: 1px solid var(--line);
+  padding: var(--space-3) var(--space-4);
+  background: #faf5ec;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.previewRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.previewOverall {
+  font-size: var(--fs-16);
+  font-weight: 600;
+  color: var(--c-ink);
+}
+.previewDim {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-12);
+  color: #6b6b6b;
+}
+.previewPct {
+  color: var(--c-ink);
+}
+.previewNote {
+  font-size: var(--fs-12);
+  color: #9a6a2a;
+  margin: 0;
+}
+.sheetFoot {
+  border-top: 1px solid var(--line);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.saveBtn {
+  font: inherit;
+  font-size: var(--fs-14);
+  min-height: 44px;
+  padding: 8px 18px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--c-accent, #b06a3b);
+  color: #fff;
+  cursor: pointer;
+}
+.saveBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.cancelBtn {
+  font: inherit;
+  font-size: var(--fs-14);
+  min-height: 44px;
+  padding: 8px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--c-ink);
+  cursor: pointer;
+}
+.saveErr {
+  font-size: var(--fs-13);
+  color: #9a6a2a;
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .demoGrid { grid-template-columns: 1fr; }
+  .matchStrip { grid-template-columns: 1fr; }
+  .dims { grid-template-columns: repeat(2, 1fr); }
+}

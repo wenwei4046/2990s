@@ -1,16 +1,17 @@
+// SalesAnalysis — shell only (spec §0.0): Topbar, header row, period select,
+// include-test toggle, tabs, loading/error states. All content lives in the
+// three tab components under components/sales-analysis/.
+
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
-import { fmtCenti, fmtQty } from '@2990s/shared';
 import { Topbar } from '../components/Topbar';
 import { useSalesAnalysis } from '../lib/sales-analysis-queries';
+import { OverviewTab } from '../components/sales-analysis/OverviewTab';
 import { CustomerDataTab } from '../components/sales-analysis/CustomerDataTab';
 import { ProductsTab } from '../components/sales-analysis/ProductsTab';
+import saShared from '../components/sales-analysis/SaShared.module.css';
 import styles from './SalesAnalysis.module.css';
-
-const MIN_SAMPLE = 10; // below this, rates are noise — flag them.
-
-const pct = (v: number | null): string => (v == null ? '—' : `${v.toFixed(1)}%`);
 
 export const SalesAnalysis = () => {
   const [period, setPeriod] = useState('all');
@@ -20,13 +21,6 @@ export const SalesAnalysis = () => {
 
   // Period options derive from the (always-full) monthly trend.
   const monthOptions = useMemo(() => (data?.monthly ?? []).map((m) => m.month).reverse(), [data]);
-  const maxRevenue = useMemo(
-    () => Math.max(1, ...(data?.monthly ?? []).map((m) => m.revenueCenti)),
-    [data],
-  );
-
-  const ov = data?.overview;
-  const thin = !!ov && ov.n < MIN_SAMPLE;
 
   return (
     <>
@@ -74,63 +68,22 @@ export const SalesAnalysis = () => {
         {isLoading && <p className={styles.muted}>Loading…</p>}
         {error && <p className={styles.note}>Could not load analytics: {(error as Error).message}</p>}
 
-        {tab === 'overview' && ov && (
-          <>
-            {thin && (
-              <p className={styles.note}>
-                Only {ov.n} order{ov.n === 1 ? '' : 's'} in this view — figures are directional, not a stable trend.
-              </p>
+        {data && (
+          <div className={saShared.saRoot}>
+            {tab === 'overview' && (
+              <OverviewTab
+                overview={data.overview}
+                monthly={data.monthly}
+                customers={data.customers}
+                products={data.products}
+                period={period}
+                onNavigate={setTab}
+              />
             )}
-
-            <div className={styles.cards}>
-              <div className={styles.card}>
-                <span className={styles.cardLabel}>Orders</span>
-                <span className={styles.cardValue}>{fmtQty(ov.orderCount.bySo)}</span>
-                <span className={styles.cardSub}>{fmtQty(ov.orderCount.byPurchase)} physical purchases (cross-category merged)</span>
-              </div>
-              <div className={styles.card}>
-                <span className={styles.cardLabel}>AOV (per order)</span>
-                <span className={styles.cardValue}>{fmtCenti(ov.aovCenti.perSo.full)}</span>
-                <span className={styles.cardSub}>
-                  {fmtCenti(ov.aovCenti.perSo.product)} goods only · {fmtCenti(ov.aovCenti.perPurchase.full)}/purchase
-                </span>
-              </div>
-              <div className={styles.card}>
-                <span className={styles.cardLabel}>Avg delivery fee</span>
-                <span className={styles.cardValue}>{fmtCenti(ov.deliveryCenti.avgAll)}</span>
-                <span className={styles.cardSub}>
-                  {fmtCenti(ov.deliveryCenti.avgCharged)} when charged ({fmtQty(ov.deliveryCenti.chargedCount)} orders)
-                </span>
-              </div>
-              <div className={styles.card}>
-                <span className={styles.cardLabel}>Gross margin</span>
-                <span className={styles.cardValue}>{pct(ov.grossMarginPct)}</span>
-                <span className={styles.cardSub}>n = {fmtQty(ov.n)} orders</span>
-              </div>
-            </div>
-
-            <div className={styles.section}>
-              <h2 className={styles.sectionTitle}>Monthly trend (revenue)</h2>
-              {(data?.monthly ?? []).length === 0 && <p className={styles.muted}>No orders yet.</p>}
-              {(data?.monthly ?? []).map((m) => (
-                <div key={m.month} className={styles.trendRow}>
-                  <span className={styles.cardSub}>{m.month}</span>
-                  <span className={styles.barTrack}>
-                    <span
-                      className={styles.bar}
-                      style={{ width: `${Math.round((m.revenueCenti / maxRevenue) * 100)}%` }}
-                    />
-                  </span>
-                  <span className={styles.cardSub}>{fmtCenti(m.revenueCenti)} · {fmtQty(m.orders)} ord</span>
-                </div>
-              ))}
-            </div>
-          </>
+            {tab === 'customers' && <CustomerDataTab customers={data.customers} targets={data.targets} />}
+            {tab === 'products' && <ProductsTab products={data.products} />}
+          </div>
         )}
-
-        {tab === 'customers' && data && <CustomerDataTab customers={data.customers} targets={data.targets} />}
-
-        {tab === 'products' && data && <ProductsTab products={data.products} />}
       </div>
     </>
   );
