@@ -13,12 +13,16 @@
 //     re-run the customer auto-match (pickCrossCategoryMatch), so a benign item
 //     edit can never drop or flip an operator-pinned cross-category source link.
 //
-// These focus on the two load-bearing guarantees that don't need the full
+// These focus on the load-bearing guarantees that don't need the full
 // recomputeTotals machinery stubbed:
 //   1. item-edit passes the STORED source through to the header unchanged, and
 //      never issues the auto-match candidate query (a .eq('phone', …) filter);
 //   2. a SO with no delivery-fee lines early-bails (null) and still gets a
-//      recomputeTotals so the header totals refresh after the edit.
+//      recomputeTotals so the header totals refresh after the edit;
+//   3. the SVC-DELIVERY* rebuild goes through ONE atomic RPC (migration 0211,
+//      rebuild_mfg_so_delivery_lines) — never a separate delete+insert, whose
+//      interleaving under the Backend save's parallel line PATCHes doubled the
+//      delivery fee (SO-2606-043 2026-06-28, SO-2607-010 2026-07-12).
 //
 // The stub dispatches canned rows by TABLE NAME (not call order), so it is
 // resilient to internal query reordering. It records every header UPDATE payload
@@ -47,6 +51,8 @@ interface StubState {
   headerUpdates: Row[];
   /** rows passed to INSERT into mfg_sales_order_items. */
   inserted: Row[];
+  /** RPC calls (migration 0211 — the atomic delivery-line rebuild). */
+  rpcCalls: Array<{ fn: string; args: Row }>;
   /** true if ANY query ever filtered on `phone` (the auto-match candidate load). */
   phoneFiltered: boolean;
 }
@@ -97,13 +103,19 @@ function makeStub(state: StubState) {
     return builder;
   };
 
-  return { from } as any;
+  const rpc = (fn: string, args: Row) => {
+    state.rpcCalls.push({ fn, args });
+    return Promise.resolve({ data: null, error: null });
+  };
+
+  return { from, rpc } as any;
 }
 
 const baseState = (over: Partial<StubState> = {}): StubState => ({
   tables: {},
   headerUpdates: [],
   inserted: [],
+  rpcCalls: [],
   phoneFiltered: false,
   ...over,
 });
@@ -120,8 +132,9 @@ describe('recomputeDeliveryFeeCore — caller-supplied source, no auto-match', (
     });
     const res = await recomputeDeliveryFeeCore(makeStub(state), DOC, 'SO-9000');
     expect(res).toBeNull();
-    // bailed BEFORE any header write or auto-match
+    // bailed BEFORE any header write, rebuild RPC or auto-match
     expect(state.headerUpdates).toHaveLength(0);
+    expect(state.rpcCalls).toHaveLength(0);
     expect(state.phoneFiltered).toBe(false);
   });
 
@@ -129,6 +142,8 @@ describe('recomputeDeliveryFeeCore — caller-supplied source, no auto-match', (
     const state = baseState({
       tables: {
         mfg_sales_order_items: [
+          // a goods line so the recomputed fee is non-zero (followup → cross rate)
+          { item_code: 'MAT-AKKA-Q', item_group: 'mattress', total_centi: 100000, line_no: 0, variants: null },
           // a delivery-fee line exists → core proceeds past the early bail
           { item_code: 'SVC-DELIVERY', item_group: 'service', total_centi: 15000, line_no: 1, variants: null },
         ],
@@ -141,10 +156,18 @@ describe('recomputeDeliveryFeeCore — caller-supplied source, no auto-match', (
     expect(res).not.toBeNull();
     expect(res!.sourceDocNo).toBe('SO-9000');
     expect(res!.isFollowup).toBe(true);
-    // header was written with the SUPPLIED source — passthrough, not re-matched
-    const srcWrite = state.headerUpdates.find((u) => 'cross_category_source_doc_no' in u);
-    expect(srcWrite).toBeTruthy();
-    expect(srcWrite!['cross_category_source_doc_no']).toBe('SO-9000');
+    // the rebuild went through ONE atomic RPC (migration 0211) carrying the
+    // SUPPLIED source — passthrough, not re-matched — and the recomputed rows.
+    // NO separate delete+insert (the delete/delete/insert/insert interleave
+    // that doubled the delivery fee on SO-2606-043 / SO-2607-010).
+    expect(state.inserted).toHaveLength(0);
+    const rebuilds = state.rpcCalls.filter((r) => r.fn === 'rebuild_mfg_so_delivery_lines');
+    expect(rebuilds).toHaveLength(1);
+    expect(rebuilds[0]!.args['p_doc_no']).toBe(DOC);
+    expect(rebuilds[0]!.args['p_source_doc_no']).toBe('SO-9000');
+    const rows = rebuilds[0]!.args['p_rows'] as Array<Record<string, unknown>>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => String(r['item_code']).startsWith('SVC-DELIVERY'))).toBe(true);
     // the auto-match candidate query (filter on phone) was NEVER issued
     expect(state.phoneFiltered).toBe(false);
   });
@@ -162,8 +185,9 @@ describe('recomputeDeliveryFeeCore — caller-supplied source, no auto-match', (
     const res = await recomputeDeliveryFeeCore(makeStub(state), DOC, null);
     expect(res!.isFollowup).toBe(false);
     expect(res!.sourceDocNo).toBeNull();
-    const srcWrite = state.headerUpdates.find((u) => 'cross_category_source_doc_no' in u);
-    expect(srcWrite!['cross_category_source_doc_no']).toBeNull();
+    const rebuild = state.rpcCalls.find((r) => r.fn === 'rebuild_mfg_so_delivery_lines');
+    expect(rebuild).toBeTruthy();
+    expect(rebuild!.args['p_source_doc_no']).toBeNull();
     expect(state.phoneFiltered).toBe(false);
   });
 });
@@ -186,9 +210,9 @@ describe('rederiveDeliveryFee — item-edit path keeps the stored source', () =>
     });
     await rederiveDeliveryFee(makeStub(state), DOC);
     // the pinned source was written straight back — never re-matched
-    const srcWrite = state.headerUpdates.find((u) => 'cross_category_source_doc_no' in u);
-    expect(srcWrite).toBeTruthy();
-    expect(srcWrite!['cross_category_source_doc_no']).toBe('SO-PINNED-123');
+    const rebuild = state.rpcCalls.find((r) => r.fn === 'rebuild_mfg_so_delivery_lines');
+    expect(rebuild).toBeTruthy();
+    expect(rebuild!.args['p_source_doc_no']).toBe('SO-PINNED-123');
     expect(state.phoneFiltered).toBe(false);
   });
 
