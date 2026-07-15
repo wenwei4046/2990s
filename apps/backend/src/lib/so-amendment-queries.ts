@@ -26,6 +26,8 @@ export type AmendmentRow = {
   status: string;
   reason: string | null;
   requested_by: string | null;
+  /** Staff display name resolved server-side from the requested_by UUID. */
+  requested_by_name: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
