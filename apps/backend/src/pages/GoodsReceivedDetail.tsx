@@ -224,6 +224,21 @@ export const GoodsReceivedDetail = () => {
     return m;
   }, [racksQ.data?.racks]);
 
+  /* Owner 2026-07-15 — Supplier Code display fallback. GRNs created before the
+     supplier-SKU carry-through landed have grn_items.supplier_sku = NULL, so
+     resolve the SUPPLIER's live bindings (material_code → supplier_sku, main
+     binding wins) and use them when the line snapshot is empty. Same
+     snapshot-first-binding-fallback rule the GRN PDF already applies. */
+  const lineSupplierDetail = useSupplierDetail(grn?.supplier_id ?? null);
+  const supplierSkuByCode = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const b of lineSupplierDetail.data?.bindings ?? []) {
+      if (b.material_kind !== 'mfg_product' || !b.supplier_sku?.trim()) continue;
+      if (b.is_main_supplier || !m.has(b.material_code)) m.set(b.material_code, b.supplier_sku);
+    }
+    return m;
+  }, [lineSupplierDetail.data?.bindings]);
+
   /* T12 — maintenance config + special-orders pools drive the per-category
      variant editor on EXISTING bedframe/sofa lines in Edit mode (same dropdown
      pools as New GRN). */
@@ -661,8 +676,11 @@ export const GoodsReceivedDetail = () => {
                     </label>
                     <label className={styles.field}>
                       <span className={styles.fieldLabel}>Supplier Code</span>
+                      {/* Snapshot first, live binding fallback (pre-carry-through
+                          GRNs have a NULL snapshot) — mirrors the GRN PDF rule. */}
                       <input
-                        type="text" readOnly value={it.supplier_sku?.trim() || '—'}
+                        type="text" readOnly
+                        value={it.supplier_sku?.trim() || supplierSkuByCode.get(it.material_code) || '—'}
                         className={styles.fieldInput}
                         style={{ fontFamily: 'var(--font-mono)', background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
                       />
