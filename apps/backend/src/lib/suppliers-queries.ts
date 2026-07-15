@@ -574,6 +574,8 @@ export type OutstandingPoItem = {
   poId:           string;
   poDocNo:        string;
   itemCode:       string;
+  /** PO-line supplier SKU snapshot — rides into the converted GRN line. */
+  supplierSku:    string | null;
   description:    string | null;
   itemGroup:      string;
   qty:            number;

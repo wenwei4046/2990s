@@ -90,6 +90,10 @@ type DraftLine = {
   materialKind:      string;
   materialCode:      string;
   materialName:      string;
+  /** Supplier's own SKU for this line — PO-line snapshot (From-PO paths) or
+      the binding's supplier_sku (manual bound pick). Persists to
+      grn_items.supplier_sku so the GRN shows BOTH codes (Owner 2026-07-15). */
+  supplierSku:       string | null;
   /* Commander 2026-05-29 — GRN must show WHAT is being received (carry the
      PO line's category + variant selections, exactly like the PO shows). */
   itemGroup:         string | null;
@@ -262,6 +266,7 @@ export const GrnNew = () => {
         materialKind:        'mfg_product',
         materialCode:        p.itemCode,
         materialName:        p.description ?? p.itemCode,
+        supplierSku:         p.supplierSku ?? null,
         itemGroup:           p.itemGroup || null,
         /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
            the converted PO line's variants when seeding the GRN draft. */
@@ -303,6 +308,7 @@ export const GrnNew = () => {
         materialKind:        'mfg_product',
         materialCode:        '',
         materialName:        '',
+        supplierSku:         null,
         itemGroup:           null,
         variants:            null,
         outstanding:         null,
@@ -325,6 +331,7 @@ export const GrnNew = () => {
           materialKind:      it.material_kind,
           materialCode:      it.material_code,
           materialName:      it.material_name,
+          supplierSku:       it.supplier_sku ?? null,
           itemGroup:         it.item_group ?? null,
           /* Variants-vocabulary unification (Commander 2026-06-26) — canonicalize
              the single-PO load's variants when seeding the GRN draft. */
@@ -510,6 +517,7 @@ export const GrnNew = () => {
       materialKind:        'mfg_product',
       materialCode:        '',
       materialName:        '',
+      supplierSku:         null,
       itemGroup:           null,
       variants:            null,
       outstanding:         null,
@@ -529,19 +537,22 @@ export const GrnNew = () => {
     setLine(rid, {
       materialCode: code,
       materialName: sku?.name ?? code,
+      // Catalogue pick has no binding → clear any stale supplier SKU.
+      supplierSku:  null,
       itemGroup:    sku?.category ? sku.category.toLowerCase() : null,
     });
   };
 
   // Commander 2026-05-29 — supplier-bound pick (New PO parity): when a supplier
   // is chosen and the typed/picked code matches one of THAT supplier's
-  // bindings, fill name + UNIT PRICE (from the binding) + itemGroup. GRN's
-  // DraftLine has no supplierSku field, so we skip it. Category is resolved
-  // from the full catalogue (categoryForCode) since bindings carry no category.
+  // bindings, fill name + UNIT PRICE + supplier SKU (from the binding) +
+  // itemGroup. Category is resolved from the full catalogue (categoryForCode)
+  // since bindings carry no category.
   const pickBindingForLine = (rid: string, b: typeof bindings[number]) => {
     setLine(rid, {
       materialCode:   b.material_code,
       materialName:   b.material_name,
+      supplierSku:    b.supplier_sku || null,
       unitPriceCenti: b.unit_price_centi,
       itemGroup:      categoryForCode(b.material_code) ?? null,
     });
@@ -598,6 +609,9 @@ export const GrnNew = () => {
           materialKind:        l.materialKind,
           materialCode:        l.materialCode,
           materialName:        l.materialName,
+          // Owner 2026-07-15 — persist the supplier's own SKU so the GRN shows
+          // BOTH codes (grns.ts writes grn_items.supplier_sku).
+          supplierSku:         l.supplierSku || undefined,
           qtyReceived:         l.qtyReceived,
           // Commander 2026-05-29 — GRN only captures received qty; accepted
           // follows received (rejected 0) so the existing API + inventory
@@ -1050,6 +1064,23 @@ export const GrnNew = () => {
                           style={{ fontFamily: 'var(--font-mono)', background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
                         />
                       )}
+                    </label>
+                    {/* Owner 2026-07-15 — show the SUPPLIER's own SKU alongside our
+                        internal code while receiving. Line value first (PO snapshot /
+                        bound pick), live binding as display fallback. */}
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Supplier SKU</span>
+                      <input
+                        type="text"
+                        readOnly
+                        value={
+                          l.supplierSku?.trim()
+                          || bindings.find((b) => b.material_code === l.materialCode)?.supplier_sku?.trim()
+                          || '—'
+                        }
+                        className={styles.fieldInput}
+                        style={{ fontFamily: 'var(--font-mono)', background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+                      />
                     </label>
                     <label className={styles.field}>
                       <span className={styles.fieldLabel}>Description</span>

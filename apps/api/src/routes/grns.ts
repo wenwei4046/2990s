@@ -654,7 +654,7 @@ grns.get('/outstanding-po-items', async (c) => {
   const { data: items, error } = await sb
     .from('purchase_order_items')
     .select(`
-      id, purchase_order_id, material_kind, material_code, material_name, item_group,
+      id, purchase_order_id, material_kind, material_code, material_name, item_group, supplier_sku,
       description, qty, received_qty, unit_price_centi, warehouse_id, variants, delivery_date,
       supplier_delivery_date_2, supplier_delivery_date_3, supplier_delivery_date_4,
       po:purchase_orders!inner ( id, po_number, supplier_id, status, po_date, expected_at,
@@ -667,7 +667,8 @@ grns.get('/outstanding-po-items', async (c) => {
 
   type Row = {
     id: string; purchase_order_id: string; material_kind: string; material_code: string;
-    material_name: string; item_group: string | null; description: string | null;
+    material_name: string; item_group: string | null; supplier_sku: string | null;
+    description: string | null;
     qty: number; received_qty: number; unit_price_centi: number;
     warehouse_id: string | null; variants: unknown; delivery_date: string | null;
     // Migration 0180 — per-line supplier-revised delivery dates.
@@ -719,6 +720,10 @@ grns.get('/outstanding-po-items', async (c) => {
       poId:            r.po.id,
       poDocNo:         r.po.po_number,
       itemCode:        r.material_code,
+      /* Owner 2026-07-15 — carry the PO line's supplier SKU snapshot so the
+         converted GRN line lands with BOTH codes (grn_items.supplier_sku was
+         always null before; the detail page's Supplier Code showed "—"). */
+      supplierSku:     r.supplier_sku ?? null,
       description:     r.description ?? r.material_name,
       itemGroup:       r.item_group ?? '',
       qty:             r.qty,
