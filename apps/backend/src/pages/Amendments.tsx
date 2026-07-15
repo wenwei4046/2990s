@@ -53,11 +53,13 @@ const buildAmendmentColumns = (): DataGridColumn<AmendmentRow>[] => [
     sortFn: (a, b) => Number(a.amendment_no ?? 0) - Number(b.amendment_no ?? 0),
   },
   {
+    /* requested_by is a staff UUID; the API resolves requested_by_name. Fall
+       back to the raw id only when the staff row is gone (deleted account). */
     key: 'requested_by', label: 'Requested by', width: 200, sortable: true, groupable: true,
-    accessor: (a) => a.requested_by ?? '—',
-    searchValue: (a) => a.requested_by ?? '',
-    groupValue: (a) => a.requested_by ?? '(none)',
-    sortFn: (a, b) => (a.requested_by ?? '').localeCompare(b.requested_by ?? ''),
+    accessor: (a) => a.requested_by_name ?? a.requested_by ?? '—',
+    searchValue: (a) => a.requested_by_name ?? a.requested_by ?? '',
+    groupValue: (a) => a.requested_by_name ?? a.requested_by ?? '(none)',
+    sortFn: (a, b) => (a.requested_by_name ?? a.requested_by ?? '').localeCompare(b.requested_by_name ?? b.requested_by ?? ''),
   },
   {
     key: 'reason', label: 'Reason', width: 240, minWidth: 160, sortable: true, defaultHidden: true,

@@ -69,7 +69,23 @@ soAmendments.get('/', async (c) => {
     .order('created_at', { ascending: false })
     .limit(500);
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-  return c.json({ amendments: data ?? [] });
+  /* requested_by is a staff UUID — resolve it to the display name here so the
+     Amendments list shows WHO, not a UUID (Owner 2026-07-13). One batched
+     staff read; an unresolvable id (deleted staff) stays null and the UI
+     falls back to the raw id. */
+  const rows = (data ?? []) as Array<{ requested_by: string | null } & Record<string, unknown>>;
+  const ids = [...new Set(rows.map((r) => r.requested_by).filter(Boolean))] as string[];
+  const nameById = new Map<string, string>();
+  if (ids.length > 0) {
+    const { data: staff } = await sb.from('staff').select('id, name').in('id', ids);
+    for (const s of (staff ?? []) as Array<{ id: string; name: string }>) nameById.set(s.id, s.name);
+  }
+  return c.json({
+    amendments: rows.map((r) => ({
+      ...r,
+      requested_by_name: r.requested_by ? nameById.get(r.requested_by) ?? null : null,
+    })),
+  });
 });
 
 /* ── GET /:id — amendment detail ───────────────────────────────────────────
