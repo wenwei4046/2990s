@@ -58,6 +58,25 @@ const queryClient = new QueryClient({
 // A3 — listen for other tabs' writes and invalidate our active queries.
 installCrossTabSync(queryClient);
 
+/* Deploy-window self-heal (Owner 2026-07-16) — right after a Pages deploy, a
+   stale tab navigating to a lazy route can hit a hashed chunk that no longer
+   exists; CF Pages answers with the SPA HTML (HTTP 200, not 404), the import
+   fails, and the tab wedges blank with no console error. Vite surfaces that
+   failure as 'vite:preloadError' — reload once to pick up the new index.html
+   + chunk graph. Guarded to once per minute per tab so a genuinely broken
+   build can't reload-loop. Complements NewVersionBanner (the proactive
+   "reload when ready" nudge); this is the reactive rescue once a stale tab
+   has already tripped. */
+window.addEventListener('vite:preloadError', (event) => {
+  const KEY = '__chunkRetryAt';
+  const last = Number(sessionStorage.getItem(KEY) ?? 0);
+  if (Date.now() - last > 60_000) {
+    event.preventDefault(); // handled — don't rethrow into the app
+    sessionStorage.setItem(KEY, String(Date.now()));
+    window.location.reload();
+  }
+});
+
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root not found in index.html');
 

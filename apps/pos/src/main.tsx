@@ -35,6 +35,23 @@ const queryClient = new QueryClient({
   },
 });
 
+/* Deploy-window self-heal (Owner 2026-07-16) — mirrors the Backend: right
+   after a deploy, a stale tab navigating to a lazy route can hit a hashed
+   chunk that no longer exists (CF Pages answers HTML 200, not 404) and the
+   tab wedges blank with no console error. 'vite:preloadError' is Vite's
+   signal for that — reload once (per-minute guard) to pick up the new build.
+   Complements UpdatePrompt (proactive PWA refresh toast); this is the
+   reactive rescue once a stale tab has already tripped. */
+window.addEventListener('vite:preloadError', (event) => {
+  const KEY = '__chunkRetryAt';
+  const last = Number(sessionStorage.getItem(KEY) ?? 0);
+  if (Date.now() - last > 60_000) {
+    event.preventDefault(); // handled — don't rethrow into the app
+    sessionStorage.setItem(KEY, String(Date.now()));
+    window.location.reload();
+  }
+});
+
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root not found in index.html');
 
