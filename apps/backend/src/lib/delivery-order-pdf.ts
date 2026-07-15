@@ -173,10 +173,13 @@ export async function renderDeliveryOrderInto(
         : ['#', 'Item Code', 'Description', 'Qty', 'm³'],
     ],
     body: rows,
-    theme: 'striped',
+    /* Owner 2026-07-16 — "不要黑底和灰底": plain white table, no black header
+       band, no zebra rows. Bold header between thin rules — mirrors the PO
+       PDF's plain theme so the two docs read the same. */
+    theme: 'plain',
     rowPageBreak: 'avoid',
     styles: { fontSize: 8.5, cellPadding: 2, valign: 'top' },
-    headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
+    headStyles: { fontStyle: 'bold', halign: 'left', valign: 'middle', lineColor: [120, 120, 120], lineWidth: { top: 0.4, bottom: 0.4 } as never },
     columnStyles: showPicking
       ? {
           0: { cellWidth: 8, halign: 'right', fontSize: 7.5 },
