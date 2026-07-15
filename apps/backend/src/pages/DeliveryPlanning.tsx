@@ -645,6 +645,21 @@ export const DeliveryPlanning = () => {
       accessor: (o) => o.crew?.lorry_plate || <span style={{ color: 'var(--fg-muted)' }}>—</span>,
       searchValue: (o) => o.crew?.lorry_plate ?? '',
     },
+    /* Owner 2026-07-16 — "需要加上 total amount of sales order": the SO's grand
+       total (header local_total_centi), placed just before Balance so planners
+       read order value and what's still owed side by side. */
+    {
+      key: 'local_total_centi', label: 'Total (SO)', width: 130, align: 'right', sortable: true,
+      accessor: (o) => (
+        <span style={{ fontFamily: 'var(--font-mark)', fontWeight: 700 }}>
+          {fmtCenti(o.local_total_centi)}
+        </span>
+      ),
+      searchValue: (o) => String(o.local_total_centi),
+      exportValue: (o) => o.local_total_centi / 100,
+      sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
+      numberValue: (o) => o.local_total_centi / 100,
+    },
     {
       key: 'balance_centi', label: 'Balance', width: 130, align: 'right', sortable: true,
       accessor: (o) => (
