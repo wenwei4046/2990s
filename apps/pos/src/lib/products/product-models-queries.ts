@@ -4,45 +4,9 @@
 // ----------------------------------------------------------------------------
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '../supabase';
 import type { MfgCategory } from './mfg-products-queries';
 
-const API_URL = import.meta.env.VITE_API_URL;
-if (!API_URL) {
-  // eslint-disable-next-line no-console
-  console.warn('[product-models] VITE_API_URL is not set');
-}
-
-async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) throw new Error('not_authenticated');
-  // Only stamp content-type: application/json for string bodies (JSON
-  // payloads). For FormData (multipart upload) the browser sets the
-  // boundary-aware content-type itself — overriding it here would break
-  // the multipart parse on the Worker side.
-  const isStringBody = typeof init?.body === 'string';
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      authorization: `Bearer ${token}`,
-      ...(isStringBody ? { 'content-type': 'application/json' } : {}),
-    },
-  });
-  if (!res.ok) {
-    let detail = '';
-    try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
-    throw new Error(`${res.status} ${res.statusText}: ${detail}`);
-  }
-  // PR #98 — Handle 204 No Content / empty bodies so DELETE callers don't
-  // crash on res.json() of an empty payload. Sister to the fix in
-  // mfg-products-queries.ts.
-  if (res.status === 204) return undefined as T;
-  const text = await res.text();
-  if (!text) return undefined as T;
-  return JSON.parse(text) as T;
-}
+import { authedFetch } from '../apiClient';
 
 export type ProductModelRow = {
   id: string;

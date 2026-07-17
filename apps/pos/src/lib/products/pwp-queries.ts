@@ -4,38 +4,9 @@
 // ----------------------------------------------------------------------------
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '../supabase';
 import type { MfgCategory } from './mfg-products-queries';
 
-const API_URL = import.meta.env.VITE_API_URL;
-if (!API_URL) {
-  // eslint-disable-next-line no-console
-  console.warn('[pwp-rules] VITE_API_URL is not set');
-}
-
-async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) throw new Error('not_authenticated');
-  const isStringBody = typeof init?.body === 'string';
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      authorization: `Bearer ${token}`,
-      ...(isStringBody ? { 'content-type': 'application/json' } : {}),
-    },
-  });
-  if (!res.ok) {
-    let detail = '';
-    try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
-    throw new Error(`${res.status} ${res.statusText}: ${detail}`);
-  }
-  if (res.status === 204) return undefined as T;
-  const text = await res.text();
-  if (!text) return undefined as T;
-  return JSON.parse(text) as T;
-}
+import { authedFetch } from '../apiClient';
 
 export type PwpRuleRow = {
   id: string;
