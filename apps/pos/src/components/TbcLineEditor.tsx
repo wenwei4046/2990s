@@ -16,6 +16,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
 import { fmtRM, fabricTierAddon, resolveFabricTierOverride, type FabricTier } from '@2990s/shared';
 import { supabase } from '../lib/supabase';
+import { authedFetch } from '../lib/apiClient';
 import {
   useFabricLibrary,
   useFabricColours,
@@ -66,13 +67,14 @@ const useMfgProductByCode = (code: string) =>
     queryKey: ['mfg-product-by-code', code],
     staleTime: 60_000,
     queryFn: async (): Promise<{ id: string; model_id: string | null; category: string; base_model: string | null } | null> => {
-      const { data, error } = await supabase
-        .from('mfg_products')
-        .select('id, model_id, category, base_model')
-        .eq('code', code)
-        .maybeSingle();
-      if (error) throw error;
-      return (data as { id: string; model_id: string | null; category: string; base_model: string | null } | null) ?? null;
+      // Houzs GET /mfg-products?search= narrows the list; match the exact code.
+      const { products } = await authedFetch<{
+        products: Array<{ id: string; code: string; model_id: string | null; category: string; base_model: string | null }>;
+      }>(`/mfg-products?search=${encodeURIComponent(code)}`);
+      const row = (products ?? []).find((p) => p.code === code);
+      return row
+        ? { id: row.id, model_id: row.model_id, category: row.category, base_model: row.base_model }
+        : null;
     },
   });
 
@@ -101,6 +103,13 @@ const useSwapContext = (docNo: string, target: TbcEditTarget) =>
       if (target.isPwp) {
         const code = String(target.variants.pwpCode ?? '').trim();
         if (!code) return { kind: 'locked', reason: 'This PWP reward carries no voucher code — the coordinator handles the exchange.' };
+        // TODO(P4.3): NOT ported to Houzs. This resolves the voucher's reward
+        // RANGE (reward_category + eligible_reward_model_ids) to pre-filter swap
+        // candidates. The map's GET /pwp-codes/:code is validatePwpCode, whose
+        // response (PwpCodeValidation) carries rewardCategory but NOT
+        // eligible_reward_model_ids, so SwapCtx.modelIds can't be reconstructed.
+        // Left on direct Supabase pending a raw pwp-code endpoint. The server
+        // re-enforces the range on tbc-swap regardless.
         const { data } = await supabase.from('pwp_codes')
           .select('reward_category, eligible_reward_model_ids, type')
           .eq('code', code).maybeSingle();
@@ -122,22 +131,31 @@ const useSwapCandidates = (q: string, ctx: SwapCtx | undefined) =>
     queryKey: ['tbc-swap-candidates', q, ctx],
     staleTime: 30_000,
     queryFn: async (): Promise<Array<{ code: string; name: string; category: string; sell_price_sen: number | null; pwp_price_sen: number | null }>> => {
-      const term = q.trim().replace(/[%_,()]/g, ' ');
-      let query = supabase
-        .from('mfg_products')
-        .select('code, name, category, sell_price_sen, pwp_price_sen, model_id')
-        .eq('status', 'ACTIVE')
-        .eq('pos_active', true)
-        .neq('category', 'SOFA')
-        .or(`code.ilike.%${term}%,name.ilike.%${term}%`);
+      // Houzs GET /mfg-products?search= returns status=ACTIVE matches; the rest
+      // of the original filters (pos_active, non-sofa, reward range) run
+      // client-side to preserve the exact candidate set.
+      const { products } = await authedFetch<{
+        products: Array<{
+          code: string; name: string; category: string;
+          sell_price_sen: number | null; pwp_price_sen: number | null;
+          model_id: string | null; pos_active: boolean | null; status: string;
+        }>;
+      }>(`/mfg-products?search=${encodeURIComponent(q.trim())}`);
+      let rows = (products ?? []).filter(
+        (p) => p.status === 'ACTIVE' && p.pos_active === true && p.category !== 'SOFA',
+      );
       if (ctx?.kind === 'reward') {
-        query = query.eq('category', ctx.category);
-        if (ctx.modelIds.length > 0) query = query.in('model_id', ctx.modelIds);
-        if (ctx.promoType !== 'promo') query = query.gt('pwp_price_sen', 0);
+        rows = rows.filter((p) => p.category === ctx.category);
+        if (ctx.modelIds.length > 0) rows = rows.filter((p) => p.model_id != null && ctx.modelIds.includes(p.model_id));
+        if (ctx.promoType !== 'promo') rows = rows.filter((p) => (p.pwp_price_sen ?? 0) > 0);
       }
-      const { data, error } = await query.order('code').limit(8);
-      if (error) throw error;
-      return (data ?? []) as Array<{ code: string; name: string; category: string; sell_price_sen: number | null; pwp_price_sen: number | null }>;
+      return rows
+        .sort((a, b) => a.code.localeCompare(b.code))
+        .slice(0, 8)
+        .map((p) => ({
+          code: p.code, name: p.name, category: p.category,
+          sell_price_sen: p.sell_price_sen, pwp_price_sen: p.pwp_price_sen,
+        }));
     },
   });
 
@@ -151,19 +169,23 @@ const useSofaSwapModels = (enabled: boolean) =>
     queryKey: ['tbc-sofa-swap-models'],
     staleTime: 60_000,
     queryFn: async (): Promise<Array<{ baseModel: string; configureId: string; name: string }>> => {
-      const { data, error } = await supabase
-        .from('mfg_products')
-        .select('id, base_model, product_models:model_id ( name, active )')
-        .eq('category', 'SOFA')
-        .eq('pos_active', true)
-        .eq('status', 'ACTIVE')
-        .order('code');
-      if (error) throw error;
+      // Houzs: GET /mfg-products (status=ACTIVE) → SOFA + pos_active SKUs;
+      // GET /product-models → the Model name/active for each SKU's model_id.
+      const [{ products }, { models }] = await Promise.all([
+        authedFetch<{
+          products: Array<{ id: string; code: string; base_model: string | null; category: string; pos_active: boolean | null; status: string; model_id: string | null }>;
+        }>('/mfg-products'),
+        authedFetch<{ models: Array<{ id: string; name: string; active: boolean }> }>('/product-models'),
+      ]);
+      const modelById = new Map((models ?? []).map((m) => [m.id, m]));
+      const sofa = (products ?? [])
+        .filter((p) => p.category === 'SOFA' && p.pos_active === true && p.status === 'ACTIVE')
+        .sort((a, b) => (a.code ?? '').localeCompare(b.code ?? ''));
       const out = new Map<string, { baseModel: string; configureId: string; name: string }>();
-      for (const r of (data ?? []) as unknown as Array<{ id: string; base_model: string | null; product_models: { name: string; active: boolean } | Array<{ name: string; active: boolean }> | null }>) {
+      for (const r of sofa) {
         const base = (r.base_model ?? '').trim();
         if (!base || out.has(base)) continue;
-        const m = Array.isArray(r.product_models) ? r.product_models[0] : r.product_models;
+        const m = r.model_id ? modelById.get(r.model_id) : undefined;
         if (m && m.active === false) continue;
         out.set(base, { baseModel: base, configureId: r.id, name: m?.name ?? base });
       }

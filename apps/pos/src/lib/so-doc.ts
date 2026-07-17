@@ -8,6 +8,7 @@ import {
   type SoPwpNote,
 } from '@2990s/shared/so-line-display';
 import { supabase } from './supabase';
+import { authedFetch } from './apiClient';
 import { COMPANY_LEGAL } from './legal';
 
 // Customer-facing Sales Order, sourced from the LIVE order model
@@ -172,9 +173,14 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
         const venueId = typeof so.venue_id === 'string' && so.venue_id ? so.venue_id : null;
         const venueName = typeof so.venue === 'string' && so.venue.trim() ? so.venue.trim() : null;
         if (venueId || venueName) {
-          const q = supabase.from('venues').select('name, address').limit(1);
-          const { data: vRows } = venueId ? await q.eq('id', venueId) : await q.eq('name', venueName!);
-          const v = (vRows ?? [])[0] as { name?: string | null; address?: string | null } | undefined;
+          // Houzs GET /venues → { venues:[{id,name,address,...}] }; resolve the
+          // order's stamped venue client-side (by id first, else by name).
+          const { venues } = await authedFetch<{
+            venues: Array<{ id: string; name: string; address: string | null }>;
+          }>('/venues');
+          const v = venueId
+            ? (venues ?? []).find((x) => x.id === venueId)
+            : (venues ?? []).find((x) => x.name === venueName);
           if (v?.name) soldByName = v.name;
           else if (venueName) soldByName = venueName;
           if (v?.address?.trim()) soldByAddress = v.address.trim();

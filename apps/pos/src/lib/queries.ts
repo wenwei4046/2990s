@@ -1,11 +1,42 @@
-import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sofaModulePricesFromSkus, normalizeCompartmentCode, representativeArtCode } from '@2990s/shared/sofa-build';
 import { comboChargedPrices, maintActiveValues, type MfgSeatHeightPrice, type DefaultFreeGift, type FreeItemEligibility, type FreeItemCampaign, type RuleTarget } from '@2990s/shared';
 import { supabase } from './supabase';
-import { useMaintenanceConfig } from './products/mfg-products-queries';
+import { authedFetch } from './apiClient';
+import { useMaintenanceConfig, type MaintenanceResolved } from './products/mfg-products-queries';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
+
+/* ─── Houzs seam helpers (P4.3) ───────────────────────────────────────────
+ * The configurator resolves a SKU (mfg_products.id) → its Model's
+ * allowed_options (the Modular ON/OFF gate). On Houzs there is no embedded
+ * PostgREST join; instead we compose the two documented list endpoints:
+ *   GET /mfg-products   → { products:[{ id, model_id }] }   (SKU → model_id)
+ *   GET /product-models → { models:[{ id, allowed_options }] } (model → gate)
+ * allowed_options is a pure GATE (which options may be offered), never a
+ * price, so this resolution touches no pricing math. */
+type MfgAllowedOptions = {
+  fabrics?:       string[];
+  specials?:      string[];
+  sizes?:         string[];
+  gaps?:          string[];
+  leg_heights?:   string[];
+  divan_heights?: string[];
+  total_heights?: string[];
+  compartments?:  string[];
+};
+
+async function fetchModelAllowedOptions(productId: string): Promise<MfgAllowedOptions | null> {
+  const { products } = await authedFetch<{ products: Array<{ id: string; model_id: string | null }> }>(
+    '/mfg-products',
+  );
+  const modelId = (products ?? []).find((p) => p.id === productId)?.model_id ?? null;
+  if (!modelId) return null;
+  const { models } = await authedFetch<{ models: Array<{ id: string; allowed_options: MfgAllowedOptions | null }> }>(
+    '/product-models',
+  );
+  return (models ?? []).find((m) => m.id === modelId)?.allowed_options ?? null;
+}
 
 export interface CatalogProduct {
   id: string;
@@ -48,28 +79,17 @@ export const useCatalog = () =>
       return body.products;
     },
     staleTime: 30_000,
+    // Houzs has NO realtime — poll every 30s in place of the old
+    // `catalog-products` postgres_changes channel (P4.3 seam port).
+    refetchInterval: 30_000,
   });
 
-// Realtime subscription on `products`. Any INSERT/UPDATE/DELETE invalidates the
-// catalog query so the table refetches within ~300ms — replaces the prototype's
-// localStorage push from Backend → POS.
+// (P4.3) Was a Supabase Realtime subscription on `products` that invalidated
+// the catalog query on any change. Houzs has no realtime, so the invalidation
+// is replaced by `refetchInterval: 30_000` on useCatalog above. Kept as an
+// exported no-op so existing call sites (OrderBoard etc.) stay unchanged.
 export const useCatalogRealtime = () => {
-  const qc = useQueryClient();
-  useEffect(() => {
-    const channel = supabase
-      .channel('catalog-products')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'products' },
-        () => {
-          void qc.invalidateQueries({ queryKey: ['catalog'] });
-        },
-      )
-      .subscribe();
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [qc]);
+  /* no-op — polling replaces realtime (see useCatalog refetchInterval) */
 };
 
 /* ─── Per-product pricing (configurator screens) ───────────────────── */
@@ -82,8 +102,16 @@ export const useProduct = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['product', productId],
+    // Houzs has NO realtime — poll in place of the `product-pricing` channel.
+    refetchInterval: 30_000,
     queryFn: async () => {
       if (!productId) throw new Error('no productId');
+      // TODO(P4.3): NOT ported to Houzs. Two blockers: (1) the legacy retail
+      // `products` table has no Houzs endpoint in the map; (2) the mfg fallback
+      // needs a single SKU by id with cost/sell price fields, but the map only
+      // exposes GET /mfg-products (list, status=ACTIVE) — a status/pos_active
+      // filter mismatch that could hide a catalog-visible SKU. Pricing-display
+      // read; left on direct Supabase pending a dedicated Houzs endpoint.
       /* Legacy path: `products` is the prototype's retail catalogue table.
          Production starts EMPTY (PORT_DESIGN.md §10 Decision 10) — only
          the per-Model `mfg_products` is seeded by commander via the
@@ -233,30 +261,50 @@ export interface AddonRow {
   showAtHandover: boolean;
 }
 
+/** Houzs GET /addons row (camelCase). Superset used by both useAddons
+ *  (enabled-only handover slice) and useAllAddons (admin editor). */
+interface HouzsAddonRow {
+  id: string;
+  label: string;
+  description: string | null;
+  icon: string;
+  kind: 'qty' | 'floors_items' | 'flat';
+  category: string | null;
+  price: number;
+  perFloorItem: number | null;
+  unit: string | null;
+  defaultQty: number;
+  stock: number | null;
+  enabled: boolean;
+  showAtHandover: boolean | null;
+  serviceSku: string | null;
+  sortOrder: number;
+}
+
 export const useAddons = () =>
   useQuery({
     queryKey: ['addons'],
     staleTime: 5 * 60_000,
     queryFn: async (): Promise<AddonRow[]> => {
-      const { data, error } = await supabase
-        .from('addons')
-        .select('id, label, description, icon, kind, category, price, per_floor_item, unit, enabled, show_at_handover')
-        .eq('enabled', true)
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        id: r.id,
-        label: r.label,
-        description: r.description,
-        icon: r.icon,
-        kind: r.kind,
-        category: r.category,
-        price: r.price,
-        perFloorItem: r.per_floor_item,
-        unit: r.unit,
-        enabled: r.enabled,
-        showAtHandover: r.show_at_handover ?? false,
-      }));
+      // GET /addons returns ALL rows; the handover screen wants enabled-only,
+      // sorted by sortOrder — filter/sort client-side to preserve the old shape.
+      const { addons } = await authedFetch<{ addons: HouzsAddonRow[] }>('/addons');
+      return (addons ?? [])
+        .filter((r) => r.enabled)
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((r) => ({
+          id: r.id,
+          label: r.label,
+          description: r.description,
+          icon: r.icon,
+          kind: r.kind,
+          category: r.category,
+          price: r.price,
+          perFloorItem: r.perFloorItem,
+          unit: r.unit,
+          enabled: r.enabled,
+          showAtHandover: r.showAtHandover ?? false,
+        }));
     },
   });
 
@@ -293,18 +341,17 @@ export const useAllAddons = () =>
     queryKey: ['addons-all'],
     staleTime: 60_000,
     queryFn: async (): Promise<AdminAddonRow[]> => {
-      const { data, error } = await supabase
-        .from('addons')
-        .select('id, label, description, icon, kind, category, price, per_floor_item, unit, default_qty, stock, enabled, show_at_handover, service_sku, sort_order')
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r: any) => ({
-        id: r.id, label: r.label, description: r.description, icon: r.icon, kind: r.kind,
-        category: r.category, price: r.price, perFloorItem: r.per_floor_item, unit: r.unit,
-        defaultQty: r.default_qty, stock: r.stock, enabled: r.enabled,
-        showAtHandover: r.show_at_handover ?? false, serviceSku: r.service_sku ?? null,
-        sortOrder: r.sort_order,
-      }));
+      const { addons } = await authedFetch<{ addons: HouzsAddonRow[] }>('/addons');
+      return (addons ?? [])
+        .slice()
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((r) => ({
+          id: r.id, label: r.label, description: r.description, icon: r.icon, kind: r.kind,
+          category: r.category, price: r.price, perFloorItem: r.perFloorItem, unit: r.unit,
+          defaultQty: r.defaultQty, stock: r.stock, enabled: r.enabled,
+          showAtHandover: r.showAtHandover ?? false, serviceSku: r.serviceSku ?? null,
+          sortOrder: r.sortOrder,
+        }));
     },
   });
 
@@ -317,14 +364,18 @@ export const useUpdateAddon = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, patch }: { id: string; patch: { price?: number; perFloorItem?: number | null; enabled?: boolean; showAtHandover?: boolean; serviceSku?: string | null } }) => {
-      const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
-      if (patch.price !== undefined)          update.price = patch.price;
-      if (patch.perFloorItem !== undefined)   update.per_floor_item = patch.perFloorItem;
-      if (patch.enabled !== undefined)        update.enabled = patch.enabled;
-      if (patch.showAtHandover !== undefined) update.show_at_handover = patch.showAtHandover;
-      if (patch.serviceSku !== undefined)     update.service_sku = patch.serviceSku;
-      const { error } = await supabase.from('addons').update(update).eq('id', id);
-      if (error) throw error;
+      // Houzs PATCH /addons/:id takes a camelCase partial (only the provided
+      // keys). Forward the patch as-is; the server stamps updated_at.
+      const body: Record<string, unknown> = {};
+      if (patch.price !== undefined)          body.price = patch.price;
+      if (patch.perFloorItem !== undefined)   body.perFloorItem = patch.perFloorItem;
+      if (patch.enabled !== undefined)        body.enabled = patch.enabled;
+      if (patch.showAtHandover !== undefined) body.showAtHandover = patch.showAtHandover;
+      if (patch.serviceSku !== undefined)     body.serviceSku = patch.serviceSku;
+      await authedFetch<void>(`/addons/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      });
     },
     onSuccess: () => invalidateAddons(qc),
   });
@@ -340,14 +391,11 @@ export const useCreateAddon = () => {
       stock: number | null; enabled: boolean; showAtHandover: boolean;
       serviceSku: string | null; sortOrder: number;
     }) => {
-      const { error } = await supabase.from('addons').insert({
-        id: row.id, label: row.label, description: row.description, icon: row.icon,
-        kind: row.kind, category: row.category, price: row.price,
-        per_floor_item: row.perFloorItem, unit: row.unit, stock: row.stock,
-        enabled: row.enabled, show_at_handover: row.showAtHandover,
-        service_sku: row.serviceSku, sort_order: row.sortOrder,
+      // Houzs POST /addons — camelCase body mirrors the CreateAddon input.
+      await authedFetch<void>('/addons', {
+        method: 'POST',
+        body: JSON.stringify(row),
       });
-      if (error) throw error;
     },
     onSuccess: () => invalidateAddons(qc),
   });
@@ -360,8 +408,7 @@ export const useDeleteAddon = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from('addons').delete().eq('id', id);
-      if (error) throw error;
+      await authedFetch<void>(`/addons/${encodeURIComponent(id)}`, { method: 'DELETE' });
     },
     onSuccess: () => invalidateAddons(qc),
   });
@@ -371,21 +418,18 @@ export const useProductBundles = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['product', productId, 'bundles'],
+    refetchInterval: 30_000,   // Houzs poll (replaces product-pricing channel)
     queryFn: async (): Promise<ProductBundleRow[]> => {
       if (!productId) throw new Error('no productId');
       // mfg-{12hex} products have no rows in product_bundles (UUID FK).
       // Their bundles are sourced from sofa_combos via useSofaCombos().
       if (productId.startsWith('mfg-')) return [];
-      const { data, error } = await supabase
-        .from('product_bundles')
-        .select('bundle_id, active, price')
-        .eq('product_id', productId);
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        bundleId: r.bundle_id,
-        active: r.active,
-        price: r.price,
-      }));
+      // Houzs GET /pos-pools/product-bundles → { rows: ProductBundleRow[] }
+      // (already {bundleId,active,price}) — return as-is.
+      const { rows } = await authedFetch<{ rows: ProductBundleRow[] }>(
+        `/pos-pools/product-bundles?productId=${encodeURIComponent(productId)}`,
+      );
+      return rows ?? [];
     },
   });
 
@@ -393,21 +437,18 @@ export const useProductCompartments = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['product', productId, 'compartments'],
+    refetchInterval: 30_000,   // Houzs poll (replaces product-pricing channel)
     queryFn: async (): Promise<ProductCompartmentRow[]> => {
       if (!productId) throw new Error('no productId');
       // mfg-{12hex} products have no rows in product_compartments (UUID FK).
       // Their compartments are sourced from useSofaCustomizerData() → allowed_options.
       if (productId.startsWith('mfg-')) return [];
-      const { data, error } = await supabase
-        .from('product_compartments')
-        .select('compartment_id, active, price')
-        .eq('product_id', productId);
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        compartmentId: r.compartment_id,
-        active: r.active,
-        price: r.price,
-      }));
+      // Houzs GET /pos-pools/product-compartments → { rows: ProductCompartmentRow[] }
+      // (already {compartmentId,active,price}) — return as-is.
+      const { rows } = await authedFetch<{ rows: ProductCompartmentRow[] }>(
+        `/pos-pools/product-compartments?productId=${encodeURIComponent(productId)}`,
+      );
+      return rows ?? [];
     },
   });
 
@@ -444,17 +485,17 @@ export const useFabricLibrary = () =>
   useQuery({
     queryKey: ['fabric-library'],
     queryFn: async (): Promise<FabricLibraryRow[]> => {
-      const { data, error } = await supabase
-        .from('fabric_library')
-        .select('id, label, tier, default_surcharge, active, sort_order, sofa_tier, bedframe_tier')
-        .eq('active', true)
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        id: r.id, label: r.label, tier: r.tier, defaultSurcharge: r.default_surcharge,
-        active: r.active, sortOrder: r.sort_order,
-        sofaTier: r.sofa_tier ?? null, bedframeTier: r.bedframe_tier ?? null,
-      }));
+      // Houzs GET /fabric-library → { fabrics: FabricLibraryRow[] } (camelCase).
+      // Endpoint returns the full library; keep the active-only + sorted slice.
+      const { fabrics } = await authedFetch<{ fabrics: FabricLibraryRow[] }>('/fabric-library');
+      return (fabrics ?? [])
+        .filter((r) => r.active)
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((r) => ({
+          id: r.id, label: r.label, tier: r.tier, defaultSurcharge: r.defaultSurcharge,
+          active: r.active, sortOrder: r.sortOrder,
+          sofaTier: r.sofaTier ?? null, bedframeTier: r.bedframeTier ?? null,
+        }));
     },
   });
 
@@ -463,16 +504,16 @@ export const useFabricColours = () =>
   useQuery({
     queryKey: ['fabric-colours'],
     queryFn: async (): Promise<FabricColourRow[]> => {
-      const { data, error } = await supabase
-        .from('fabric_colours')
-        .select('fabric_id, colour_id, label, swatch_hex, active, sort_order')
-        .eq('active', true)
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        fabricId: r.fabric_id, colourId: r.colour_id, label: r.label,
-        swatchHex: r.swatch_hex, active: r.active, sortOrder: r.sort_order,
-      }));
+      // Houzs GET /fabric-colours → { colours: FabricColourRow[] } (camelCase).
+      // Keep the active-only + sorted slice the picker expects.
+      const { colours } = await authedFetch<{ colours: FabricColourRow[] }>('/fabric-colours');
+      return (colours ?? [])
+        .filter((r) => r.active)
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((r) => ({
+          fabricId: r.fabricId, colourId: r.colourId, label: r.label,
+          swatchHex: r.swatchHex, active: r.active, sortOrder: r.sortOrder,
+        }));
     },
   });
 
@@ -486,15 +527,8 @@ export const useModelAllowedFabricCodes = (productId: string | undefined) =>
     queryKey: ['model-allowed-fabrics', productId],
     queryFn: async (): Promise<string[]> => {
       if (!productId || !productId.startsWith('mfg-')) return [];
-      const { data, error } = await supabase
-        .from('mfg_products')
-        .select('product_models:model_id ( allowed_options )')
-        .eq('id', productId)
-        .maybeSingle();
-      if (error) throw error;
-      const modelRel = (data as { product_models?: { allowed_options?: { fabrics?: string[] } } | null } | null)
-        ?.product_models;
-      return modelRel?.allowed_options?.fabrics ?? [];
+      const allowed = await fetchModelAllowedOptions(productId);
+      return allowed?.fabrics ?? [];
     },
   });
 
@@ -509,15 +543,8 @@ export const useModelAllowedSpecials = (productId: string | undefined) =>
     staleTime: 60_000,
     queryFn: async (): Promise<string[]> => {
       if (!productId || !productId.startsWith('mfg-')) return [];
-      const { data, error } = await supabase
-        .from('mfg_products')
-        .select('product_models:model_id ( allowed_options )')
-        .eq('id', productId)
-        .maybeSingle();
-      if (error) throw error;
-      const modelRel = (data as { product_models?: { allowed_options?: { specials?: string[] } } | null } | null)
-        ?.product_models;
-      return modelRel?.allowed_options?.specials ?? [];
+      const allowed = await fetchModelAllowedOptions(productId);
+      return allowed?.specials ?? [];
     },
   });
 
@@ -530,17 +557,16 @@ export const useProductFabrics = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['product', productId, 'fabrics'],
+    refetchInterval: 30_000,   // Houzs poll (replaces product-pricing channel)
     queryFn: async (): Promise<ProductFabricRow[]> => {
       if (!productId) throw new Error('no productId');
       if (productId.startsWith('mfg-')) return [];   // mfg path uses sofaCustomizer
-      const { data, error } = await supabase
-        .from('product_fabrics')
-        .select('fabric_id, active, surcharge')
-        .eq('product_id', productId);
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        fabricId: r.fabric_id, active: r.active, surcharge: r.surcharge,
-      }));
+      // Houzs GET /pos-pools/product-fabrics → { rows: ProductFabricRow[] }
+      // (already {fabricId,active,surcharge}) — return as-is.
+      const { rows } = await authedFetch<{ rows: ProductFabricRow[] }>(
+        `/pos-pools/product-fabrics?productId=${encodeURIComponent(productId)}`,
+      );
+      return rows ?? [];
     },
   });
 
@@ -572,42 +598,28 @@ export const useBedframeColours = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['bedframe-colours', productId],
+    refetchInterval: 30_000,   // Houzs poll (replaces product-pricing channel)
     queryFn: async (): Promise<BedframeColourRow[]> => {
       if (!productId) throw new Error('no productId');
+      // Houzs GET /pos-pools/bedframe-colours → { rows: BedframeColourRow[] }
+      // (active-only global library, already {id,label,swatchHex,surcharge,sortOrder}).
+      // Per-model ticks: GET /pos-pools/product-bedframe-colours?productId= →
+      // { rows:[{colourId,active}] }. mfg-{12hex} ids have no tick rows → accept
+      // all active global colours (no per-model colour gating at pilot).
       const [globalRes, tickRes] = await Promise.all([
-        supabase
-          .from('bedframe_colours')
-          .select('id, label, swatch_hex, surcharge, active, sort_order')
-          .eq('active', true)
-          .order('sort_order'),
-        // product_bedframe_colours.product_id is a UUID FK. mfg-{12hex} ids
-        // have no tick rows → we skip and accept all active global colours
-        // for mfg bedframe products (no per-model colour gating at pilot).
+        authedFetch<{ rows: BedframeColourRow[] }>('/pos-pools/bedframe-colours'),
         productId.startsWith('mfg-')
-          ? Promise.resolve({ data: null as null, error: null })
-          : supabase
-              .from('product_bedframe_colours')
-              .select('colour_id, active')
-              .eq('product_id', productId)
-              .eq('active', true),
+          ? Promise.resolve<{ rows: Array<{ colourId: string; active: boolean }> } | null>(null)
+          : authedFetch<{ rows: Array<{ colourId: string; active: boolean }> }>(
+              `/pos-pools/product-bedframe-colours?productId=${encodeURIComponent(productId)}`,
+            ),
       ]);
-      if (globalRes.error) throw globalRes.error;
-      if (tickRes.error) throw tickRes.error;
-      // mfg products: all active global colours available (tickRes.data = null)
+      const global = (globalRes.rows ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
+      // mfg products: all active global colours available (tickRes === null)
       // legacy UUID products: intersect with the per-model ticked colours
-      if (tickRes.data === null) {
-        return (globalRes.data ?? []).map((r) => ({
-          id: r.id, label: r.label, swatchHex: r.swatch_hex,
-          surcharge: r.surcharge, sortOrder: r.sort_order,
-        }));
-      }
-      const ticked = new Set((tickRes.data ?? []).map((r) => r.colour_id));
-      return (globalRes.data ?? [])
-        .filter((r) => ticked.has(r.id))
-        .map((r) => ({
-          id: r.id, label: r.label, swatchHex: r.swatch_hex,
-          surcharge: r.surcharge, sortOrder: r.sort_order,
-        }));
+      if (tickRes === null) return global;
+      const ticked = new Set((tickRes.rows ?? []).filter((r) => r.active).map((r) => r.colourId));
+      return global.filter((r) => ticked.has(r.id));
     },
   });
 
@@ -618,16 +630,10 @@ export const useBedframeOptions = () =>
     queryKey: ['bedframe-options'],
     staleTime: 5 * 60_000,
     queryFn: async (): Promise<BedframeOptionRow[]> => {
-      const { data, error } = await supabase
-        .from('bedframe_options')
-        .select('id, kind, value, surcharge, active, sort_order')
-        .eq('active', true)
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        id: r.id, kind: r.kind, value: r.value,
-        surcharge: r.surcharge, sortOrder: r.sort_order,
-      }));
+      // Houzs GET /pos-pools/bedframe-options → { rows: BedframeOptionRow[] }
+      // (active-only, already {id,kind,value,surcharge,sortOrder}).
+      const { rows } = await authedFetch<{ rows: BedframeOptionRow[] }>('/pos-pools/bedframe-options');
+      return (rows ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
     },
   });
 
@@ -660,29 +666,16 @@ export const useBedframeCustomizerData = (productId: string | undefined) =>
       // no Model link → empty = no restriction, same as the old global pool).
       let allowed: { gaps?: string[]; leg_heights?: string[]; divan_heights?: string[] } = {};
       if (productId.startsWith('mfg-')) {
-        const { data, error } = await supabase
-          .from('mfg_products')
-          .select('product_models:model_id ( allowed_options )')
-          .eq('id', productId)
-          .maybeSingle();
-        if (error) throw error;
-        const modelRel = (data as { product_models?: { allowed_options?: typeof allowed } | null } | null)
-          ?.product_models;
-        allowed = modelRel?.allowed_options ?? {};
+        allowed = (await fetchModelAllowedOptions(productId)) ?? {};
       }
 
       // Master maintenance config = the POS Master-Admin Special Add-ons pool.
-      const { data: cfgRow, error: cfgErr } = await supabase
-        .from('maintenance_config_history')
-        .select('config')
-        .eq('scope', 'master')
-        .lte('effective_from', new Date().toISOString().slice(0, 10))
-        .order('effective_from', { ascending: false })
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (cfgErr) throw cfgErr;
-      const cfg = (cfgRow?.config ?? {}) as {
+      // Houzs GET /maintenance-config/resolved?scope=master → { data, ... };
+      // `data` IS the resolved config blob (same as the old history `config`).
+      const resolved = await authedFetch<MaintenanceResolved>(
+        '/maintenance-config/resolved?scope=master',
+      );
+      const cfg = (resolved?.data ?? {}) as unknown as {
         gaps?: Array<string | CfgPricedOption>;
         legHeights?: CfgPricedOption[];
         divanHeights?: CfgPricedOption[];
@@ -751,36 +744,23 @@ export const useSofaLegHeights = (productId: string | undefined) =>
       // allowedLegs === [...]   → offer exactly those legs
       let allowedLegs: string[] | null = null;
       if (productId.startsWith('mfg-')) {
-        const { data, error } = await supabase
-          .from('mfg_products')
-          .select('product_models:model_id ( allowed_options )')
-          .eq('id', productId)
-          .maybeSingle();
-        if (error) throw error;
-        const ao = (data as { product_models?: { allowed_options?: Record<string, unknown> } | null } | null)
-          ?.product_models?.allowed_options ?? null;
+        const ao = await fetchModelAllowedOptions(productId);
         // Empty-semantics (owner 2026-06-16): the leg_heights KEY being ABSENT
         // means "unconfigured → offer ALL legs" (sensible default for a brand-new
         // Model). The key being PRESENT — even as [] — means it was explicitly
         // configured, so it offers EXACTLY that set; an empty [] = offer NO legs.
         // This lets staff turn every leg off in the Allowed Options drawer and
         // actually hide them all (previously [] wrongly meant "show all").
-        if (ao && 'leg_heights' in ao && Array.isArray((ao as { leg_heights?: unknown }).leg_heights)) {
-          allowedLegs = (ao as { leg_heights: string[] }).leg_heights;
+        if (ao && 'leg_heights' in ao && Array.isArray(ao.leg_heights)) {
+          allowedLegs = ao.leg_heights;
         }
       }
 
-      const { data: cfgRow, error: cfgErr } = await supabase
-        .from('maintenance_config_history')
-        .select('config')
-        .eq('scope', 'master')
-        .lte('effective_from', new Date().toISOString().slice(0, 10))
-        .order('effective_from', { ascending: false })
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (cfgErr) throw cfgErr;
-      const list = ((cfgRow?.config ?? {}) as { sofaLegHeights?: CfgPricedOption[] }).sofaLegHeights ?? [];
+      // Houzs GET /maintenance-config/resolved?scope=master → { data, ... }.
+      const resolved = await authedFetch<MaintenanceResolved>(
+        '/maintenance-config/resolved?scope=master',
+      );
+      const list = ((resolved?.data ?? {}) as unknown as { sofaLegHeights?: CfgPricedOption[] }).sofaLegHeights ?? [];
       // null → no gate (all); [] → empty gate (none); [...] → that subset.
       const gate = allowedLegs === null ? null : new Set(allowedLegs);
       return list
@@ -817,6 +797,7 @@ export const useProductSizes = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['product', productId, 'sizes'],
+    refetchInterval: 30_000,   // Houzs poll (replaces product-pricing channel)
     queryFn: async (): Promise<ProductSizeRow[]> => {
       if (!productId) throw new Error('no productId');
 
@@ -838,6 +819,12 @@ export const useProductSizes = (productId: string | undefined) =>
                is never populated — prices come directly from mfg data.
            2c. Truly orphan SKU (no model, no retail link) → single size entry
                from its own `size_code`/`base_price_sen`. */
+      // TODO(P4.3): mfg-* branch NOT ported to Houzs. It reads `retail_product_id`
+      // (a bridge column NOT exposed by GET /mfg-products) and derives per-size
+      // SELLING/PWP prices from sibling mfg rows. GET /mfg-products filters
+      // status=ACTIVE, which would drop cost-discontinued (INACTIVE) siblings the
+      // sibling-derivation must keep-but-grey — a pricing/catalog-visibility risk.
+      // Left on direct Supabase pending a dedicated Houzs size-resolution endpoint.
       if (productId.startsWith('mfg-')) {
         const { data: mfgRow, error: mfgErr } = await supabase
           .from('mfg_products')
@@ -943,17 +930,13 @@ export const useProductSizes = (productId: string | undefined) =>
       }
 
       // ── Legacy UUID path (retail `products` table) ──────────────────────────
-      const { data, error } = await supabase
-        .from('product_size_variants')
-        .select('size_id, active, price')
-        .eq('product_id', productId);
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        sizeId: r.size_id,
-        active: r.active,
-        price: r.price,
-        pwpPrice: null, // legacy retail variants carry no PWP price
-      }));
+      // Houzs GET /pos-pools/product-size-variants → { rows: ProductSizeRow[] }
+      // (already {sizeId,active,price,pwpPrice}; legacy retail variants carry a
+      // null pwpPrice from the endpoint) — return as-is.
+      const { rows } = await authedFetch<{ rows: ProductSizeRow[] }>(
+        `/pos-pools/product-size-variants?productId=${encodeURIComponent(productId)}`,
+      );
+      return rows ?? [];
     },
   });
 
@@ -971,18 +954,10 @@ export const useSizeLibrary = () =>
     queryKey: ['size_library'],
     staleTime: 5 * 60 * 1000,
     queryFn: async (): Promise<SizeLibraryRow[]> => {
-      const { data, error } = await supabase
-        .from('size_library')
-        .select('id, label, width_cm, length_cm, sort_order')
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        id: r.id,
-        label: r.label,
-        widthCm: r.width_cm,
-        lengthCm: r.length_cm,
-        sortOrder: r.sort_order,
-      }));
+      // Houzs GET /pos-pools/size-library → { rows: SizeLibraryRow[] }
+      // (already {id,label,widthCm,lengthCm,sortOrder}).
+      const { rows } = await authedFetch<{ rows: SizeLibraryRow[] }>('/pos-pools/size-library');
+      return (rows ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
     },
   });
 
@@ -1002,18 +977,10 @@ export const useCategoriesAll = () =>
     queryKey: ['categories_all'],
     staleTime: 5 * 60_000,
     queryFn: async (): Promise<CategoryRow[]> => {
-      const { data, error } = await supabase
-        .from('categories')
-        .select('id, label, icon, tbc, sort_order')
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        id: r.id,
-        label: r.label,
-        icon: r.icon,
-        tbc: r.tbc,
-        sortOrder: r.sort_order,
-      }));
+      // Houzs GET /categories → { categories: CategoryRow[] } (camelCase,
+      // already {id,label,icon,tbc,sortOrder}).
+      const { categories } = await authedFetch<{ categories: CategoryRow[] }>('/categories');
+      return (categories ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
     },
   });
 
@@ -1089,7 +1056,15 @@ export const useMfgCatalog = () =>
   useQuery({
     queryKey: ['mfg-catalog'],
     staleTime: 30_000,
+    // Houzs has NO realtime — poll in place of the `mfg-catalog` channel.
+    refetchInterval: 30_000,
     queryFn: async (): Promise<MfgCatalogRow[]> => {
+      // TODO(P4.3): NOT ported to Houzs. This read selects by `pos_active=true`
+      // with NO status filter (a pos_active + status=INACTIVE SKU still shows in
+      // the catalog), but GET /mfg-products filters status=ACTIVE — porting would
+      // silently drop such SKUs from the customer catalog. It also relies on the
+      // embedded product_models(photo_url,active) join. Catalog-visibility read;
+      // left on direct Supabase pending a POS-catalog Houzs endpoint.
       // Two-step fetch: (1) ACTIVE SKUs, (2) active Models referenced by them.
       // Supabase JS supports embedded select via the FK (mfg_products.model_id
       // → product_models.id) — the cheap path. If the embed fails (no FK
@@ -1277,6 +1252,12 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
     queryFn: async (): Promise<SofaCustomizerData | null> => {
       if (!leadSkuId) return null;
 
+      // TODO(P4.3): NOT ported to Houzs. Step 2 builds the per-Model sofa MODULE
+      // SELLING-price map from every sofa SKU sharing base_model (`skuPriceRows`),
+      // read WITHOUT a status filter. GET /mfg-products filters status=ACTIVE, so
+      // an INACTIVE module SKU would silently vanish from the price map → wrong
+      // sofa module prices. This is exactly the pricing data HARD RULE 5 protects.
+      // Left on direct Supabase pending a module-price Houzs endpoint.
       // Step 1: resolve the SKU → Model. mfg_products carries the model_id FK.
       const { data: sku, error: skuErr } = await supabase
         .from('mfg_products')
@@ -1387,29 +1368,16 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
       };
     },
     staleTime: 30_000,
+    // Houzs has NO realtime — poll in place of the `sofa-customizer-${leadSkuId}` channel.
+    refetchInterval: 30_000,
   });
 
 /** Realtime invalidate on mfg_products + product_models edits so commander's
  *  Backend changes land on the POS catalog within ~300ms. Mirrors the
  *  prototype's localStorage push but via Supabase Realtime. */
 export const useMfgCatalogRealtime = () => {
-  const qc = useQueryClient();
-  useEffect(() => {
-    const channel = supabase
-      .channel('mfg-catalog')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'mfg_products' },
-        () => { void qc.invalidateQueries({ queryKey: ['mfg-catalog'] }); },
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'product_models' },
-        () => { void qc.invalidateQueries({ queryKey: ['mfg-catalog'] }); },
-      )
-      .subscribe();
-    return () => { void supabase.removeChannel(channel); };
-  }, [qc]);
+  /* (P4.3) no-op — polling replaces the `mfg-catalog` realtime channel
+     (see useMfgCatalog refetchInterval). Kept exported so callers are unchanged. */
 };
 
 // my_localities is a static Malaysia postcode dataset (~3000 rows). Fetched
@@ -1426,30 +1394,19 @@ export interface LocalityRow {
   state: string;
   stateCode: string;
 }
-const LOCALITY_PAGE = 1000;
 export const useLocalities = () =>
   useQuery({
     queryKey: ['my_localities'],
     staleTime: Infinity,
     gcTime: Infinity,
     queryFn: async (): Promise<LocalityRow[]> => {
-      const all: LocalityRow[] = [];
-      for (let from = 0; ; from += LOCALITY_PAGE) {
-        const { data, error } = await supabase
-          .from('my_localities')
-          .select('postcode, city, state, state_code')
-          .order('state')
-          .order('city')
-          .order('postcode')
-          .range(from, from + LOCALITY_PAGE - 1);
-        if (error) throw error;
-        const page = data ?? [];
-        for (const r of page) {
-          all.push({ postcode: r.postcode, city: r.city, state: r.state, stateCode: r.state_code });
-        }
-        if (page.length < LOCALITY_PAGE) break;
-      }
-      return all;
+      // Houzs GET /localities → { localities:[{postcode,city,state,stateCode}] }.
+      // The server returns the full postcode dataset in one response (no
+      // PostgREST 1000-row cap to page around).
+      const { localities } = await authedFetch<{ localities: LocalityRow[] }>('/localities');
+      return (localities ?? []).map((r) => ({
+        postcode: r.postcode, city: r.city, state: r.state, stateCode: r.stateCode,
+      }));
     },
   });
 
@@ -1458,79 +1415,21 @@ export const useLocalities = () =>
  *  master maintenance_config_history row (compartment meta). Mirrors the
  *  catalog realtime hook; mount inside the Configurator so a price/photo
  *  tweak in the Backend lands within ~300ms. */
-export const useSofaCustomizerRealtime = (leadSkuId: string | undefined) => {
-  const qc = useQueryClient();
-  useEffect(() => {
-    if (!leadSkuId) return;
-    const channel = supabase
-      .channel(`sofa-customizer-${leadSkuId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'product_models' },
-        () => { void qc.invalidateQueries({ queryKey: ['sofa-customizer-data', leadSkuId] }); },
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'maintenance_config_history' },
-        () => { void qc.invalidateQueries({ queryKey: ['sofa-customizer-data', leadSkuId] }); },
-      )
-      // SOFA-SELLING-PLAN — the customizer now reads per-Model module SKU
-      // sell_price_sen, so a Master-Admin price edit (mfg_products) must
-      // re-fetch the configurator's module prices within ~300ms.
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'mfg_products' },
-        () => { void qc.invalidateQueries({ queryKey: ['sofa-customizer-data', leadSkuId] }); },
-      )
-      .subscribe();
-    return () => { void supabase.removeChannel(channel); };
-  }, [qc, leadSkuId]);
+export const useSofaCustomizerRealtime = (_leadSkuId: string | undefined) => {
+  /* (P4.3) no-op — polling replaces the `sofa-customizer-${leadSkuId}` realtime
+     channel (see useSofaCustomizerData refetchInterval). Kept exported so callers
+     are unchanged. */
 };
 
 // Realtime invalidate any product_bundles / product_compartments / product_size_variants
 // row matching this productId. Used inside Configurator so Backend price tweaks
 // land within ~300ms.
-export const useProductPricingRealtime = (productId: string | undefined) => {
-  const qc = useQueryClient();
-  useEffect(() => {
-    if (!productId) return;
-    const channel = supabase
-      .channel(`product-pricing-${productId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'product_bundles', filter: `product_id=eq.${productId}` },
-        () => void qc.invalidateQueries({ queryKey: ['product', productId, 'bundles'] }),
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'product_compartments', filter: `product_id=eq.${productId}` },
-        () => void qc.invalidateQueries({ queryKey: ['product', productId, 'compartments'] }),
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'product_fabrics', filter: `product_id=eq.${productId}` },
-        () => void qc.invalidateQueries({ queryKey: ['product', productId, 'fabrics'] }),
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'product_bedframe_colours', filter: `product_id=eq.${productId}` },
-        () => void qc.invalidateQueries({ queryKey: ['bedframe-colours', productId] }),
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'product_size_variants', filter: `product_id=eq.${productId}` },
-        () => void qc.invalidateQueries({ queryKey: ['product', productId, 'sizes'] }),
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'products', filter: `id=eq.${productId}` },
-        () => void qc.invalidateQueries({ queryKey: ['product', productId] }),
-      )
-      .subscribe();
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [qc, productId]);
+export const useProductPricingRealtime = (_productId: string | undefined) => {
+  /* (P4.3) no-op — polling replaces the `product-pricing-${productId}` realtime
+     channel. The per-product pricing queries (bundles / compartments / fabrics /
+     bedframe-colours / sizes / product) each carry refetchInterval: 30_000 so a
+     Backend price tweak lands within one poll. Kept exported so callers are
+     unchanged. */
 };
 
 /* ─── Delivery fee config ─── */
@@ -2483,22 +2382,15 @@ export const useSofaQuickPicks = (baseModel?: string | null) =>
       return body.picks ?? [];
     },
     staleTime: 30_000,
+    // Houzs has NO realtime — poll in place of the `sofa-quick-picks` channel.
+    refetchInterval: 30_000,
   });
 
-/** Realtime: invalidate the global Quick Picks when Master Admin curates. */
+/** (P4.3) no-op — polling replaces the `sofa-quick-picks` realtime channel
+ *  (see useSofaQuickPicks refetchInterval). Kept exported so callers are
+ *  unchanged. */
 export const useSofaQuickPicksRealtime = () => {
-  const qc = useQueryClient();
-  useEffect(() => {
-    const channel = supabase
-      .channel('sofa-quick-picks')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'sofa_quick_picks' },
-        () => { void qc.invalidateQueries({ queryKey: ['sofa-quick-picks'] }); },
-      )
-      .subscribe();
-    return () => { void supabase.removeChannel(channel); };
-  }, [qc]);
+  /* no-op */
 };
 
 /** Create a GLOBAL Quick Pick (Master Admin curates; server role-gates). */
@@ -2799,30 +2691,37 @@ export const useRedeemablePwpCodesForOrder = (docNo: string | undefined) =>
     staleTime: 15_000,
     queryFn: async (): Promise<RedeemablePwpCode[]> => {
       if (!docNo) return [];
-      // NOTE: do NOT select pwp_price_sen here — that column lives on
-      // mfg_products (the reward SKU's per-size PWP price), NOT on pwp_codes.
-      // Selecting it made PostgREST 400 ("column does not exist"), so the query
-      // threw and no order code was ever auto-filled in addToOrder mode. The
-      // reward price is derived from the configured product's size, not the code.
-      const { data, error } = await supabase
-        .from('pwp_codes')
-        .select(
-          'code, rule_id, reward_category, eligible_reward_model_ids, reward_combo_ids, type, status, source_doc_no, customer_id',
-        )
-        .eq('source_doc_no', docNo)
-        .in('status', ['AVAILABLE', 'RESERVED']);
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        code: r.code as string,
-        ruleId: (r.rule_id as string | null) ?? null,
-        rewardCategory: r.reward_category as string,
-        eligibleRewardModelIds: (r.eligible_reward_model_ids as string[] | null) ?? [],
-        rewardComboIds: (r.reward_combo_ids as string[] | null) ?? [],
-        type: r.type as 'pwp' | 'promo',
-        status: r.status as 'AVAILABLE' | 'RESERVED',
-        sourceDocNo: (r.source_doc_no as string | null) ?? null,
-        customerId: (r.customer_id as string | null) ?? null,
-      }));
+      // Houzs GET /pwp-codes/by-so/:doc → { codes: [...] } — the codes this SO
+      // earned (source_doc_no = docNo), in the same camelCase shape as
+      // usePwpCodesForSo. Keep the AVAILABLE/RESERVED slice (drops USED). The
+      // per-SKU pwp price lives on mfg_products, not the code — so it isn't read
+      // here (the reward price derives from the configured product's size).
+      const { codes } = await authedFetch<{
+        codes: Array<{
+          code: string;
+          ruleId: string | null;
+          rewardCategory: string;
+          eligibleRewardModelIds: string[] | null;
+          rewardComboIds: string[] | null;
+          type: 'pwp' | 'promo';
+          status: string;
+          sourceDocNo: string | null;
+          customerId: string | null;
+        }>;
+      }>(`/pwp-codes/by-so/${encodeURIComponent(docNo)}`);
+      return (codes ?? [])
+        .filter((r) => r.status === 'AVAILABLE' || r.status === 'RESERVED')
+        .map((r) => ({
+          code: r.code,
+          ruleId: r.ruleId ?? null,
+          rewardCategory: r.rewardCategory,
+          eligibleRewardModelIds: r.eligibleRewardModelIds ?? [],
+          rewardComboIds: r.rewardComboIds ?? [],
+          type: r.type,
+          status: r.status as 'AVAILABLE' | 'RESERVED',
+          sourceDocNo: r.sourceDocNo ?? null,
+          customerId: r.customerId ?? null,
+        }));
     },
   });
 

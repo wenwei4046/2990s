@@ -357,25 +357,12 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
     refetchInterval: 30_000,
   });
 
-// Realtime invalidate on mfg_sales_orders edits so the board refetches within
-// ~300ms (mirrors useCatalogRealtime in lib/queries.ts). Mounted in OrderBoard.
+// (P4.3) no-op — polling replaces the `my-orders-so` realtime channel. The
+// useMyOrders query already carries refetchInterval: 30_000 (Houzs has no
+// realtime), so the board refetches on that cadence. Kept exported so OrderBoard
+// stays unchanged.
 const useMyOrdersRealtime = () => {
-  const qc = useQueryClient();
-  useEffect(() => {
-    const channel = supabase
-      .channel('my-orders-so')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'mfg_sales_orders' },
-        () => {
-          void qc.invalidateQueries({ queryKey: ['my-orders'] });
-        },
-      )
-      .subscribe();
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [qc]);
+  /* no-op */
 };
 
 /* ─── Drawer-action error legibility (Loo 2026-06-11) ────────────────────
