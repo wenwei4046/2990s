@@ -29,9 +29,25 @@ const ENV = import.meta.env as Record<string, string | undefined>;
 /** 'houzs' once the cutover flips; '2990' (the original backend) until then. */
 const TARGET: '2990' | 'houzs' = ENV.VITE_BACKEND_TARGET === 'houzs' ? 'houzs' : '2990';
 
+/** True on the Houzs target. Exported for the few pre-auth callers that must
+ *  branch on it (e.g. the pin-login staff picker, which hits /api/pos, not the
+ *  authed /api/scm seam). */
+export const IS_HOUZS = TARGET === 'houzs';
+
 /** The 2990-mirrored company on Houzs. `companies.id` = 2; the code '2990' also
  *  resolves, but the numeric id is what companyContext validates first. */
-const HOUZS_COMPANY_ID = ENV.VITE_HOUZS_COMPANY_ID ?? '2';
+export const HOUZS_COMPANY_ID = ENV.VITE_HOUZS_COMPANY_ID ?? '2';
+
+/** The Houzs /api ROOT — for the PRE-AUTH /api/pos + /api/auth routes that sit
+ *  OUTSIDE the /api/scm sub-app VITE_HOUZS_API_URL points at. Strips a trailing
+ *  /scm; VITE_HOUZS_POS_URL overrides. Mirrors auth.tsx's private houzsApiRoot;
+ *  only meaningful on the houzs target. */
+export function houzsApiRoot(): string | undefined {
+  const explicit = ENV.VITE_HOUZS_POS_URL;
+  if (explicit) return explicit;
+  const scm = ENV.VITE_HOUZS_API_URL;
+  return scm ? scm.replace(/\/scm$/, '') : undefined;
+}
 
 /** API base for the active target. On '2990' this is the same VITE_API_URL every
  *  query module used before; on 'houzs' it is the Houzs SCM sub-app base. */

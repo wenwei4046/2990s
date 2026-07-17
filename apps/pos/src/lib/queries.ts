@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sofaModulePricesFromSkus, normalizeCompartmentCode, representativeArtCode } from '@2990s/shared/sofa-build';
 import { comboChargedPrices, maintActiveValues, type MfgSeatHeightPrice, type DefaultFreeGift, type FreeItemEligibility, type FreeItemCampaign, type RuleTarget } from '@2990s/shared';
-import { authedFetch, authedFetchRaw, API_URL } from './apiClient';
+import { authedFetch, authedFetchRaw, API_URL, IS_HOUZS, HOUZS_COMPANY_ID, houzsApiRoot } from './apiClient';
 import { useMaintenanceConfig, type MaintenanceResolved } from './products/mfg-products-queries';
 
 /* ─── Houzs seam helpers (P4.3) ───────────────────────────────────────────
@@ -2248,15 +2248,55 @@ export const useNewOrderMutation = () => {
   });
 };
 
+// Houzs /api/pos/sales-staff returns only {id, staff_code, name, has_pin}; 2990's
+// endpoint carried server-computed initials + color. Derive them client-side on
+// the houzs path so the lock-screen picker still renders (see STAGING TODO below).
+const STAFF_COLORS = ['#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#3B82F6', '#EF4444', '#14B8A6', '#6366F1'];
+const deriveInitials = (name: string): string => {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return (parts[0]![0]! + parts[parts.length - 1]![0]!).toUpperCase();
+};
+const deriveStaffColor = (id: string): string => {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return STAFF_COLORS[h % STAFF_COLORS.length]!;
+};
+
 export const useShowroomSalesStaff = () =>
   useQuery({
     queryKey: ['pos', 'sales-staff', SHOWROOM_ID ?? 'all'],
     queryFn: async (): Promise<SalesStaffRow[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
       const qs = SHOWROOM_ID ? `?showroomId=${encodeURIComponent(SHOWROOM_ID)}` : '';
-      const res = await fetch(`${API_URL}/pos/sales-staff${qs}`);
-      if (!res.ok) throw new Error(`GET /pos/sales-staff failed (${res.status})`);
-      const rows = (await res.json()) as SalesStaffRow[];
+      let rows: SalesStaffRow[];
+      if (IS_HOUZS) {
+        // The pin-login staff picker lives at /api/pos (PRE-AUTH, outside the
+        // /api/scm seam) and returns { staff:[{id,staff_code,name,has_pin}] }.
+        // STAGING TODO: (1) confirm /api/pos/sales-staff honours X-Company-Id
+        // pre-auth so only company-2 staff list; (2) initials/color are derived
+        // here (2990 computed them server-side) so colours may differ; (3)
+        // has_pin is NOT filtered, matching 2990's "list all showroom staff".
+        const root = houzsApiRoot();
+        if (!root) throw new Error('VITE_HOUZS_API_URL is not set');
+        const res = await fetch(`${root}/pos/sales-staff${qs}`, { headers: { 'X-Company-Id': HOUZS_COMPANY_ID } });
+        if (!res.ok) throw new Error(`GET /pos/sales-staff failed (${res.status})`);
+        const { staff } = (await res.json()) as {
+          staff: Array<{ id: string; staff_code: string; name: string; has_pin: boolean }>;
+        };
+        rows = (staff ?? []).map((s) => ({
+          id: s.id,
+          staffCode: s.staff_code,
+          name: s.name,
+          initials: deriveInitials(s.name),
+          color: deriveStaffColor(s.id),
+        }));
+      } else {
+        if (!API_URL) throw new Error('VITE_API_URL is not set');
+        const res = await fetch(`${API_URL}/pos/sales-staff${qs}`);
+        if (!res.ok) throw new Error(`GET /pos/sales-staff failed (${res.status})`);
+        rows = (await res.json()) as SalesStaffRow[];
+      }
       try { localStorage.setItem(SALES_STAFF_CACHE_KEY, JSON.stringify(rows)); } catch { /* quota */ }
       return rows;
     },
