@@ -8,12 +8,10 @@
 import { useState, type FormEvent } from 'react';
 import { Navigate, useNavigate } from 'react-router';
 import { Button } from '@2990s/design-system';
-import { supabase } from '../lib/supabase';
+import { API_URL, authedFetchRaw } from '../lib/apiClient';
 import { useAuth } from '../lib/auth';
 import { useStaff, isPasscodeLoginRole } from '../lib/staff';
 import styles from './SetPassword.module.css';
-
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
 export const ChangePin = () => {
   const { user, loading } = useAuth();
@@ -39,12 +37,8 @@ export const ChangePin = () => {
 
     setSubmitting(true);
     try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/pos/my-pin`, {
+      const res = await authedFetchRaw('/pos/my-pin', {
         method: 'PATCH',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ pin }),
       });
       if (!res.ok) {

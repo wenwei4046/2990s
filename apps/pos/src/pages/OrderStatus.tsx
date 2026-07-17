@@ -36,7 +36,7 @@ import { meetsProceedGate } from '@2990s/shared/order-rules';
 import { getSoEditScope } from '../lib/so-edit-scope';
 import { paymentProofRequired } from '../lib/handover-helpers';
 import { useAuth } from '../lib/auth';
-import { supabase } from '../lib/supabase';
+import { authedFetch as apiAuthedFetch, authedFetchRaw } from '../lib/apiClient';
 import { Topbar } from '../components/Topbar';
 import { CountryPhoneInput } from '../components/CountryPhoneInput';
 import { SlipUploadStep } from '../components/SlipUploadStep';
@@ -59,7 +59,6 @@ const PIN_LEN = 6;
 // Scoped by user.id so a fresh login on the same tablet re-prompts for PIN
 // instead of inheriting the previous user's unlocked state.
 const SESSION_KEY_PREFIX = 'pos-orders-unlocked-v2:';
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
 // mfg_so_status enum. The 3-column board buckets these (see LANES).
 // ON_HOLD / CANCELLED are excluded server-side, so the board never sees them.
@@ -207,10 +206,6 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
     // longer used here). salesperson_id filtering + CANCELLED/ON_HOLD exclusion
     // happen server-side in GET /mfg-sales-orders/mine.
     queryFn: async (): Promise<MyOrderRow[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
       const params = new URLSearchParams();
       const q = search.trim();
       if (q) {
@@ -222,11 +217,9 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
       }
       if (salesperson) params.set('salesperson', salesperson);
       const qs = params.toString();
-      const res = await fetch(`${API_URL}/mfg-sales-orders/mine${qs ? `?${qs}` : ''}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /mfg-sales-orders/mine failed (${res.status})`);
-      const body = (await res.json()) as { salesOrders: MineSoRow[] };
+      const body = await apiAuthedFetch<{ salesOrders: MineSoRow[] }>(
+        `/mfg-sales-orders/mine${qs ? `?${qs}` : ''}`,
+      );
       return (body.salesOrders ?? []).map((r): MyOrderRow => {
         /* Loo 2026-06-05 — fold per-module sofa SKU lines (variants.buildKey
            groups from the P3 split) into ONE Model row with the combined
@@ -491,20 +484,22 @@ const PinGate = ({ onUnlock }: { onUnlock: () => void }) => {
     const submit = async () => {
       setBusy(true);
       try {
-        const session = await supabase.auth.getSession();
-        const token = session.data.session?.access_token;
-        if (!token || !API_URL) {
+        // authedFetchRaw throws `not_authenticated` (no token) or when the API
+        // base is unset — same "session lost" outcome as the old !token/!API_URL
+        // guard, now sourced through the single seam.
+        let res: Response;
+        try {
+          res = await authedFetchRaw('/pos/verify-pin', {
+            method: 'POST',
+            body: JSON.stringify({ pin }),
+          });
+        } catch {
           setPin('');
           setShowErr(true);
           setErrorMsg('Session lost — sign in again');
           window.setTimeout(() => setShowErr(false), 700);
           return;
         }
-        const res = await fetch(`${API_URL}/pos/verify-pin`, {
-          method: 'POST',
-          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-          body: JSON.stringify({ pin }),
-        });
         const body = (await res.json().catch(() => ({}))) as {
           valid?: boolean;
           remainingAttempts?: number;
@@ -1382,13 +1377,11 @@ const OrderDetail = ({ order, onClose }: {
   };
 
   const authedFetch = async (path: string, init: RequestInit) => {
-    if (!API_URL) throw new Error('VITE_API_URL is not set');
-    const session = await supabase.auth.getSession();
-    const token = session.data.session?.access_token;
-    if (!token) throw new Error('not_authenticated');
-    const res = await fetch(`${API_URL}${path}`, {
+    // Auth + base + X-Company-Id come from the single seam (authedFetchRaw);
+    // this wrapper only adds the SO-action error shape the foot strip needs.
+    const res = await authedFetchRaw(path, {
       ...init,
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...(init.headers ?? {}) },
+      headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
     });
     if (!res.ok) {
       /* Keep the parsed body on the error so the foot strip can render a

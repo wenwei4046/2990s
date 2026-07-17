@@ -1,18 +1,9 @@
-import { supabase } from './supabase';
+import { API_URL, authedFetchRaw } from './apiClient';
 import type {
   SlipInitRequest,
   SlipInitResponse,
   SlipConfirmResponse,
 } from '@2990s/shared/schemas';
-
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
-
-async function getToken(): Promise<string> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) throw new Error('not_authenticated');
-  return token;
-}
 
 export async function sha256Hex(file: File | Blob): Promise<string> {
   const buf = await file.arrayBuffer();
@@ -24,19 +15,14 @@ export async function sha256Hex(file: File | Blob): Promise<string> {
 
 async function initSlipUpload(file: File): Promise<SlipInitResponse> {
   if (!API_URL) throw new Error('VITE_API_URL is not set');
-  const token = await getToken();
   const hash = await sha256Hex(file);
   const body: SlipInitRequest = {
     fileSize: file.size,
     contentType: file.type as SlipInitRequest['contentType'],
     contentHash: hash,
   };
-  const res = await fetch(`${API_URL}/slips/init`, {
+  const res = await authedFetchRaw('/slips/init', {
     method: 'POST',
-    headers: {
-      authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
-    },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -59,10 +45,8 @@ async function putToR2(putUrl: string, file: File): Promise<void> {
 
 async function confirmUpload(sessionId: string): Promise<SlipConfirmResponse> {
   if (!API_URL) throw new Error('VITE_API_URL is not set');
-  const token = await getToken();
-  const res = await fetch(`${API_URL}/slips/${sessionId}/confirm`, {
+  const res = await authedFetchRaw(`/slips/${sessionId}/confirm`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '<no body>');

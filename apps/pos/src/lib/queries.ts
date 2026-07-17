@@ -157,58 +157,21 @@ export const useProduct = (productId: string | undefined) =>
     refetchInterval: 30_000,
     queryFn: async () => {
       if (!productId) throw new Error('no productId');
-      // (P4.3) The mfg fallback below is ported to GET /pos-pools/mfg-catalog?id=
-      // (any status/pos_active, SELLING-only). The legacy retail `products`
-      // branch stays on direct Supabase — it has NO Houzs endpoint in the map and
-      // is dead on production (the retail `products` table starts EMPTY,
-      // PORT_DESIGN §10 Decision 10; every catalog card links to an mfg- id).
-      /* Legacy path: `products` is the prototype's retail catalogue table.
-         Production starts EMPTY (PORT_DESIGN.md §10 Decision 10) — only
-         the per-Model `mfg_products` is seeded by commander via the
-         Backend SKU Master. POS Catalog cards link to `/configure/{mfg.id}`
-         (the mfg SKU id), so the lookup below misses every time.
+      // (P4.3 / auth cutover) The legacy retail `products` branch was the POS's
+      // LAST direct `supabase.from(...)` data read. It is removed here: the
+      // retail `products` table starts EMPTY in production (PORT_DESIGN §10
+      // Decision 10) and every Catalog card links to an mfg- id, so the lookup
+      // missed every time and fell through to the mfg fallback anyway. Dropping
+      // it makes ALL ids resolve via GET /pos-pools/mfg-catalog?id= below — the
+      // Houzs-served path — and lets the POS shed @supabase/supabase-js for data.
+      //
+      // Behaviour choice (FLAGGED in the PR): rather than gate on the backend
+      // target, the branch is deleted for BOTH targets — faithful because the
+      // 2990 retail table is likewise empty in production, so a legacy UUID id
+      // already fell through to the mfg fallback. A non-empty retail `products`
+      // table (never the case in prod) would no longer be served.
 
-         PR — Commander 2026-05-28 (CATALOG ROUTING FIX): when products
-         doesn't have the row, fall back to mfg_products + product_models
-         and synthesise a CatalogProduct-shaped object the Configurator
-         can render. The Configurator only touches a small subset of the
-         columns (recliner_upgrade_price / seat_upgrade_label /
-         seat_upgrade_footrest / depth_options / included_addons / etc.),
-         so defaults are safe for now — sofa pricing data flows in from
-         `useSofaCustomizerData` + `useProductCompartments` regardless.
-
-         BUGFIX 2026-05-28 (commander caught "Loading product…" hang):
-         mfg_products.id is a TEXT key shaped `mfg-<12hex>` (e.g.
-         mfg-9f684f4b9336). products.id is a UUID column. Querying
-         products by a non-UUID text id makes Postgres throw "invalid
-         input syntax for type uuid", which the old `if (error) throw`
-         propagated → the Configurator (which renders "Loading product…"
-         whenever `!data`) was stuck forever. Skip the products query
-         entirely for mfg- ids; only legacy UUID ids hit the retail table. */
-      const isMfgId = productId.startsWith('mfg-');
-      if (!isMfgId) {
-        const { data, error } = await supabase
-          .from('products')
-          .select(
-            'id, sku, name, detail, size_display, img_key, thumb_key, pricing_kind, flat_price, recliner_upgrade_price, seat_upgrade_label, seat_upgrade_footrest, depth_options, stock, low_at, visible, category_id, series_id, included_addons, updated_at',
-          )
-          .eq('id', productId)
-          .maybeSingle();
-        if (error) throw error;
-        if (data) {
-          return data as typeof data & {
-            included_addons: { addonId: string; qty: number }[];
-            seat_upgrade_label: string | null;
-            seat_upgrade_footrest: boolean;
-            depth_options: string | null;
-            // legacy products table has no base_model column — typed optional
-            // so downstream code that checks product.data?.base_model compiles.
-            base_model?: string | null;
-          };
-        }
-      }
-
-      /* Fallback: look up by mfg_products.id (what the Catalog cards link
+      /* Look up by mfg_products.id (what the Catalog cards link
          to). mfg category enum → legacy pricing_kind. SOFA → 'sofa_build',
          BEDFRAME → 'bedframe_build', MATTRESS → 'size_variants', everything
          else → 'flat'. Keeps the Configurator's existing branch logic
@@ -239,7 +202,10 @@ export const useProduct = (productId: string | undefined) =>
         size_display: mfg.size_label,
         img_key: null,
         thumb_key: null,
-        pricing_kind: pricingKind,
+        // Widen to the full CatalogProduct union (this map never yields 'tbc',
+        // but before the legacy retail branch was removed the return type carried
+        // 'tbc' from the `products` row, and Configurator still switches on it).
+        pricing_kind: pricingKind as CatalogProduct['pricing_kind'],
         // ACCESSORY is flat + has no variants; Loo wants even an unpriced (null)
         // or RM 0 accessory to be sellable in POS. Treat null as 0 so the
         // Configurator's FlatAddToCart renders (its gate is flat_price != null)

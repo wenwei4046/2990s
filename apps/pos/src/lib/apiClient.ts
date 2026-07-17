@@ -58,6 +58,38 @@ function targetHeaders(): Record<string, string> {
 }
 
 /**
+ * Low-level authed fetch: attaches the active target's bearer + mandatory
+ * headers (X-Company-Id on Houzs) and returns the raw Response WITHOUT throwing
+ * on a non-2xx status. Use this when the caller needs the response body on an
+ * error (e.g. PIN-verify's remainingAttempts, the SO action foot-strip's
+ * SoApiError) or the raw Response — i.e. the cases `authedFetch<T>` can't serve
+ * because it collapses errors into a thrown string. This is the ONE place the
+ * token + company header are sourced, so ported callers keep a single seam.
+ *
+ * - Throws `not_authenticated` when there is no token (same posture as before),
+ *   and throws when the API base is unset. Everything else (status handling) is
+ *   the caller's job.
+ * - content-type: application/json is stamped ONLY for string bodies. FormData
+ *   (multipart photo upload) must keep the browser's boundary-aware header —
+ *   overriding it breaks the multipart parse on the Worker (PR #98).
+ */
+export async function authedFetchRaw(path: string, init?: RequestInit): Promise<Response> {
+  if (!API_URL) throw new Error(`API base is not set for target '${TARGET}'`);
+  const token = await bearerToken();
+  if (!token) throw new Error('not_authenticated');
+  const isStringBody = typeof init?.body === 'string';
+  return fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: {
+      ...(init?.headers ?? {}),
+      ...targetHeaders(),
+      authorization: `Bearer ${token}`,
+      ...(isStringBody ? { 'content-type': 'application/json' } : {}),
+    },
+  });
+}
+
+/**
  * Fetch an API path against the active backend with the caller's bearer attached.
  *
  * - content-type: application/json is stamped ONLY for string bodies. FormData
@@ -67,19 +99,7 @@ function targetHeaders(): Record<string, string> {
  *   (DELETE etc.) succeed instead of throwing on `JSON.parse('')` (PR #98).
  */
 export async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  if (!API_URL) throw new Error(`API base is not set for target '${TARGET}'`);
-  const token = await bearerToken();
-  if (!token) throw new Error('not_authenticated');
-  const isStringBody = typeof init?.body === 'string';
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      ...targetHeaders(),
-      authorization: `Bearer ${token}`,
-      ...(isStringBody ? { 'content-type': 'application/json' } : {}),
-    },
-  });
+  const res = await authedFetchRaw(path, init);
   if (!res.ok) {
     let detail = '';
     try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }

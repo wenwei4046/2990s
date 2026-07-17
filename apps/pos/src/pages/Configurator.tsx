@@ -59,7 +59,7 @@ import {
   type AddSoItemBody,
   type RedeemablePwpCode,
 } from '../lib/queries';
-import { supabase } from '../lib/supabase';
+import { authedFetchRaw } from '../lib/apiClient';
 import { CustomBuilder, centerCellsInRoom } from './CustomBuilder';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import {
@@ -629,16 +629,11 @@ export const Configurator = () => {
     }
     setSwapPending(true);
     try {
-      const apiUrl = import.meta.env.VITE_API_URL as string | undefined;
-      if (!apiUrl) throw new Error('VITE_API_URL is not set');
       const line: CartLine = { key: `swap-${swapItemId}`, qty: 1, config: snapshot };
       const resolution = await fetchItemCodeMap([line]);
       const [soItem] = cartLinesToSoItems([line], undefined, resolution);
-      const token = (await supabase.auth.getSession()).data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${apiUrl}/mfg-sales-orders/${swapDoc}/items/${swapItemId}/tbc-swap-sofa`, {
+      const res = await authedFetchRaw(`/mfg-sales-orders/${swapDoc}/items/${swapItemId}/tbc-swap-sofa`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ item: soItem }),
       });
       if (!res.ok) {

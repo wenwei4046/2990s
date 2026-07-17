@@ -14,6 +14,11 @@
 // ----------------------------------------------------------------------------
 
 const KEY = 'houzs-pos-token';
+// The signed-in identity that owns the token above. On the Houzs path there is
+// no Supabase session to re-derive `user.id` from on reload, so the auth layer
+// persists the staffId (= scm.staff.id, the same id space the POS's `staff.id`
+// used on 2990) beside the token and rehydrates `user` from it at bootstrap.
+const STAFF_KEY = 'houzs-pos-staff-id';
 
 /** The Houzs session bearer token, or null when not signed in on the Houzs path. */
 export function getHouzsToken(): string | null {
@@ -34,10 +39,30 @@ export function setHouzsToken(token: string): void {
   }
 }
 
-/** Clear on sign-out / staff switch. */
+/** The staffId (= scm.staff.id) that owns the current token, or null. Used only
+ *  to rehydrate the in-memory user on reload — never sent as a credential. */
+export function getHouzsStaffId(): string | null {
+  try {
+    return localStorage.getItem(STAFF_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Persist the signed-in staffId beside the token (see STAFF_KEY note). */
+export function setHouzsStaffId(staffId: string): void {
+  try {
+    localStorage.setItem(STAFF_KEY, staffId);
+  } catch {
+    /* non-fatal — a reload just won't rehydrate the user and re-prompts login */
+  }
+}
+
+/** Clear BOTH the token and the staffId on sign-out / staff switch. */
 export function clearHouzsToken(): void {
   try {
     localStorage.removeItem(KEY);
+    localStorage.removeItem(STAFF_KEY);
   } catch {
     /* no-op */
   }

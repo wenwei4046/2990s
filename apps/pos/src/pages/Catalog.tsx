@@ -21,7 +21,7 @@ import {
 import { fmtRM } from '@2990s/shared';
 import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow, type MfgCatalogCategory } from '../lib/queries';
 import { useStaff, isGlobalCurator, isPosSalesRole } from '../lib/staff';
-import { supabase } from '../lib/supabase';
+import { authedFetchRaw } from '../lib/apiClient';
 import { useCart, cartHasSofa, cartHasMainNonSofa, type FlatConfigSnapshot } from '../state/cart';
 import { Topbar } from '../components/Topbar';
 import { CustomerOrderFab } from '../components/CustomerOrderFab';
@@ -34,7 +34,6 @@ import styles from './Catalog.module.css';
 const BACKEND_PORTAL_URL =
   (import.meta.env.VITE_BACKEND_PORTAL_URL as string | undefined) ??
   'https://erp.2990shome.com';
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
 // PR — Commander 2026-05-27: Catalog now reads `mfg_products` (Backend SKU
 // Master output) JOINed with `product_models` (photo + Model-level metadata).
@@ -193,13 +192,12 @@ export const Catalog = () => {
     setSsoBusy(true);
     const tab = window.open('', '_blank');
     try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const res = await fetch(`${API_URL}/pos/backend-sso`, {
+      // NOTE: the Backend-SSO emergency hatch is a 2990-only flow — /pos/backend-sso
+      // mints a Supabase token_hash for the 2990 Backend portal. On the Houzs target
+      // this endpoint does not exist; the call 404s and the catch below alerts. See
+      // the port FLAG. Auth still flows through the single seam (authedFetchRaw).
+      const res = await authedFetchRaw('/pos/backend-sso', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error(`backend-sso failed (${res.status})`);
       const body = (await res.json()) as { tokenHash?: string };
