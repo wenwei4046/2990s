@@ -648,9 +648,27 @@ export function computeMfgPoUnitCost(
   );
 }
 
-/** True when the client-submitted unit price drifts more than 0.5% from
- *  the server-computed unit price. Mirrors `pricingDriftExceeds` in
- *  pricing.ts but operates on `*_sen` integers directly. */
+/** @deprecated NOT THE LIVE DRIFT GATE. Zero production call sites — verified
+ *  2026-07-17; every reference is this definition, its own tests, or a comment
+ *  naming it. The gate that actually runs is the private `driftThresholdExceeded`
+ *  in `apps/api/src/lib/mfg-pricing-recompute.ts:211`.
+ *
+ *  They have DIVERGED, so this is not a harmless duplicate: on
+ *  `client 0, server > 0` this returns `true` (mfg-pricing.test.ts:432 asserts
+ *  it as `// tampered`) while the live gate returns `false` on purpose — a
+ *  client unitPriceCenti of 0 means "not provided", so the server trusts its own
+ *  recompute (Commander 2026-05-29). Anyone porting `packages/shared` to another
+ *  system and wiring THIS up gets the wrong behaviour with a green test suite.
+ *  CLAUDE.md named this function as the NON-NEGOTIABLE gate until 2026-07-17.
+ *
+ *  Kept, not deleted: the tests below pin the 0.5% arithmetic that both
+ *  implementations share, and deleting a public export of a workspace package
+ *  is a wider blast radius than the problem. If you need a drift check, call the
+ *  live one or move it here WITH its semantics — don't import this.
+ *
+ *  True when the client-submitted unit price drifts more than 0.5% from the
+ *  server-computed unit price. Mirrors `pricingDriftExceeds` in pricing.ts but
+ *  operates on `*_sen` integers directly. */
 export const mfgPricingDriftExceeds = (
   clientUnitPriceSen: number,
   serverUnitPriceSen: number,
