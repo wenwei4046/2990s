@@ -15,9 +15,7 @@
 
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from './supabase';
-
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
+import { authedFetch } from './apiClient';
 
 /** One dedup'd customer identity, carrying the NEWEST order's snapshot. */
 export interface CustomerSearchHit {
@@ -86,16 +84,9 @@ export const useCustomerNameSearch = (name: string, enabled: boolean) => {
     enabled: enabled && debounced.length >= 2,
     staleTime: 30_000,
     queryFn: async (): Promise<CustomerSearchHit[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(
-        `${API_URL}/mfg-sales-orders/customer-search?name=${encodeURIComponent(debounced)}`,
-        { headers: { authorization: `Bearer ${token}` } },
+      const body = await authedFetch<{ customers: CustomerSearchHit[] }>(
+        `/mfg-sales-orders/customer-search?name=${encodeURIComponent(debounced)}`,
       );
-      if (!res.ok) throw new Error(`GET /mfg-sales-orders/customer-search failed (${res.status})`);
-      const body = (await res.json()) as { customers: CustomerSearchHit[] };
       return body.customers ?? [];
     },
   });

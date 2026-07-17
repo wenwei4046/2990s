@@ -1,14 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { supabase } from './supabase';
-
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
-
-async function getToken(): Promise<string> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) throw new Error('not_authenticated');
-  return token;
-}
+import { authedFetch } from './apiClient';
 
 /**
  * Personal Quick Picks — a salesperson's OWN saved sofa layouts, now DB-backed
@@ -47,15 +38,9 @@ export const useMyQuickPicks = (userId?: string | null, baseModel?: string | nul
     queryKey: keyFor(userId, baseModel),
     enabled: !!baseModel && !!userId,
     queryFn: async (): Promise<PersonalQuickPickRow[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const token = await getToken();
       const params = new URLSearchParams();
       if (baseModel) params.set('baseModel', baseModel);
-      const res = await fetch(`${API_URL}/personal-quick-picks?${params.toString()}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /personal-quick-picks failed (${res.status})`);
-      const body = (await res.json()) as PicksResponse;
+      const body = await authedFetch<PicksResponse>(`/personal-quick-picks?${params.toString()}`);
       return body.picks;
     },
     staleTime: 10_000,
@@ -72,20 +57,8 @@ interface AddQuickPickInput {
 export const useAddPersonalQuickPick = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: AddQuickPickInput) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const token = await getToken();
-      const res = await fetch(`${API_URL}/personal-quick-picks`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify(input),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '<no body>');
-        throw new Error(`POST /personal-quick-picks failed (${res.status}): ${text}`);
-      }
-      return res.json();
-    },
+    mutationFn: async (input: AddQuickPickInput) =>
+      authedFetch('/personal-quick-picks', { method: 'POST', body: JSON.stringify(input) }),
     onSuccess: () => {
       // Prefix match refreshes the caller's bucket regardless of userId/baseModel.
       void qc.invalidateQueries({ queryKey: ['personal-quick-picks'] });
@@ -97,13 +70,7 @@ export const useDeletePersonalQuickPick = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const token = await getToken();
-      const res = await fetch(`${API_URL}/personal-quick-picks/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`DELETE /personal-quick-picks failed (${res.status})`);
+      await authedFetch(`/personal-quick-picks/${encodeURIComponent(id)}`, { method: 'DELETE' });
     },
     onSuccess: () => {
       // Prefix match invalidates every base-model bucket.
