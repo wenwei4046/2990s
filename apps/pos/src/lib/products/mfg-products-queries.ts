@@ -10,9 +10,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { MaintPoolEntry } from '@2990s/shared';
-import { supabase } from '../supabase';
-
-import { authedFetch, API_URL } from '../apiClient';
+import { authedFetch } from '../apiClient';
 
 /* ────────────────────────── Types ────────────────────────────────────── */
 
@@ -562,15 +560,7 @@ export function useDeleteMaintenanceConfigRow() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      const res = await fetch(`${API_URL}/maintenance-config/changes/${id}`, {
-        method: 'DELETE',
-        headers: {
-          authorization: `Bearer ${(await supabase.auth.getSession()).data.session?.access_token ?? ''}`,
-        },
-      });
-      if (!res.ok && res.status !== 204) {
-        throw new Error(`${res.status} ${res.statusText}`);
-      }
+      await authedFetch(`/maintenance-config/changes/${encodeURIComponent(id)}`, { method: 'DELETE' });
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['maintenance-config'] }),
   });
