@@ -9,6 +9,7 @@ import { CartSync } from './lib/cart-sync';
 import { PwpCodeSync } from './lib/pwp-code-sync';
 import { FreeGiftSync } from './lib/free-gift-sync';
 import { UpdatePrompt } from './components/UpdatePrompt';
+import { ToastProvider } from './components/Toast';
 import { isSessionExpiredError, handleSessionExpired } from './lib/session-recovery';
 import { router } from './router';
 
@@ -41,21 +42,23 @@ if (!rootEl) throw new Error('#root not found in index.html');
 createRoot(rootEl).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        {/* DB-backed cart sync (WS1): hydrate on login + write-through on change.
-            Mounted here so it survives navigation (no per-route remount). */}
-        <CartSync />
-        {/* PWP voucher reconciler: reserve codes for trigger lines, free on
-            trigger-remove. Beside CartSync so it survives navigation. */}
-        <PwpCodeSync />
-        {/* Default Free Gift reconciler (0170): auto-add RM 0 accessory gifts
-            for trigger lines. Local only — no server codes. */}
-        <FreeGiftSync />
-        {/* "A new version is ready · Refresh" toast on deploy (PWA prompt
-            mode). Beside the syncs so it survives navigation. */}
-        <UpdatePrompt />
-        <RouterProvider router={router} />
-      </AuthProvider>
+      <ToastProvider>
+        <AuthProvider>
+          {/* DB-backed cart sync (WS1): hydrate on login + write-through on change.
+              Mounted here so it survives navigation (no per-route remount). */}
+          <CartSync />
+          {/* PWP voucher reconciler: reserve codes for trigger lines, free on
+              trigger-remove. Beside CartSync so it survives navigation. */}
+          <PwpCodeSync />
+          {/* Default Free Gift reconciler (0170): auto-add RM 0 accessory gifts
+              for trigger lines. Local only — no server codes. */}
+          <FreeGiftSync />
+          {/* "A new version is ready · Refresh" toast on deploy (PWA prompt
+              mode). Beside the syncs so it survives navigation. */}
+          <UpdatePrompt />
+          <RouterProvider router={router} />
+        </AuthProvider>
+      </ToastProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

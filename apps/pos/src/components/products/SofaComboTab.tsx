@@ -35,6 +35,7 @@ import {
   type SofaComboRule,
 } from '../../lib/products/sofa-combos-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../../lib/products/mfg-products-queries';
+import { useToast } from '../Toast';
 
 // Seat-height columns mirror the live Maintenance pool (Products → Maintenance
 // → Sofa → Sizes; config key `sofaSizes`). This fallback only shows if that
@@ -363,6 +364,7 @@ function ComposerModal({
 }) {
   const create = useCreateSofaCombo();
   const update = useUpdateSofaCombo();
+  const toast = useToast();
   // All active combos (every Model) — used to block adding a duplicate (same
   // base model + same module-set) on the create path.
   const existingCombosQ = useSofaCombos({ customerId: null });
@@ -423,11 +425,11 @@ function ComposerModal({
   const removeSlot = (idx: number) => setModules((cur) => cur.filter((_, i) => i !== idx));
 
   const submit = async () => {
-    if (!baseModel) return alert('Base model is required.');
+    if (!baseModel) { toast.error('Base model is required.'); return; }
     const orderedModules = modules
       .map((slot) => [...new Set(slot.map((c) => c.trim()).filter(Boolean))])
       .filter((slot) => slot.length > 0);
-    if (orderedModules.length === 0) return alert('Add at least one module slot.');
+    if (orderedModules.length === 0) { toast.error('Add at least one module slot.'); return; }
 
     // The base grid IS the SELLING price (Chairman 2026-06-02). Cost is never
     // entered here — the server auto-detects it (Σ module SKU costs) on create,
@@ -438,7 +440,7 @@ function ComposerModal({
       if (!raw) sellingPricesByHeight[h] = null;
       else {
         const n = Number(raw);
-        if (!Number.isFinite(n) || n < 0) return alert(`Bad price at ${h}".`);
+        if (!Number.isFinite(n) || n < 0) { toast.error(`Bad price at ${h}".`); return; }
         sellingPricesByHeight[h] = Math.round(n * 100);
       }
     }
@@ -450,7 +452,7 @@ function ComposerModal({
       if (!raw) pwpPricesByHeight[h] = null;
       else {
         const n = Number(raw);
-        if (!Number.isFinite(n) || n < 0) return alert(`Bad PWP price at ${h}".`);
+        if (!Number.isFinite(n) || n < 0) { toast.error(`Bad PWP price at ${h}".`); return; }
         pwpPricesByHeight[h] = Math.round(n * 100);
       }
     }
@@ -474,7 +476,8 @@ function ComposerModal({
         // stop, and point the user to edit the existing combo instead.
         const dup = findDuplicateCombo(baseModel, orderedModules, existingCombosQ.data ?? []);
         if (dup) {
-          return alert(`A combo for these modules already exists on ${baseModel}. Edit that combo instead of adding a duplicate.`);
+          toast.error(`A combo for these modules already exists on ${baseModel}. Edit that combo instead of adding a duplicate.`);
+          return;
         }
         await create.mutateAsync({
           baseModel,
@@ -492,7 +495,7 @@ function ComposerModal({
       }
       onClose();
     } catch (e) {
-      alert(`Save failed: ${String(e)}`);
+      toast.error(`Save failed: ${String(e)}`);
     }
   };
 

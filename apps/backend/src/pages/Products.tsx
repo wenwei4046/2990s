@@ -5007,100 +5007,102 @@ const ImportSkusDialog = ({ sofaSizes, onClose }: { sofaSizes: string[]; onClose
   };
 
   return (
-    <div className={styles.drawerBackdrop} onClick={onClose}>
+    <div className={styles.modalBackdrop} onClick={onClose}>
       <div
+        className={styles.modal}
+        style={{ width: 'min(560px, 95vw)' }}
         onClick={(e) => e.stopPropagation()}
-        style={{
-          background: 'var(--c-cream)',
-          border: '1px solid var(--line-strong)',
-          borderRadius: 'var(--radius-xl)',
-          boxShadow: 'var(--shadow-3)',
-          width: 'min(560px, 95vw)',
-          padding: 'var(--space-5)',
-        }}
       >
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
-          <h2 className={styles.drawerTitle}>Import SKUs</h2>
-          <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON_PROPS} /></button>
+        <header className={styles.modalHeader}>
+          <h3 className={styles.modalTitle}>Import SKUs (CSV / Excel)</h3>
+          <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close">
+            <X {...ICON_PROPS} />
+          </button>
         </header>
-        <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
-          Pick a CSV or Excel file exported from this page. Edit the prices in Excel,
-          save, and import it back. A blank cell is left as it was — it never clears a price.
-          Up to 500 SKUs per file.
-        </p>
-        <input
-          type="file"
-          accept=".csv,.xlsx,.xls"
-          disabled={busy || staged !== null}
-          style={{ marginTop: 'var(--space-3)' }}
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void handleFile(f);
-          }}
-        />
-
-        {busy && (
-          <p style={{ marginTop: 'var(--space-3)', fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
-            Working…
+        <div className={styles.modalBody}>
+          <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
+            Pick a CSV or Excel file exported from this page. Edit the prices in Excel,
+            save, and import it back. A blank cell is left as it was — it never clears a price.
+            Up to 500 SKUs per file.
           </p>
-        )}
+          <input
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            disabled={busy || staged !== null}
+            style={{ marginBottom: 'var(--space-3)' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handleFile(f);
+            }}
+          />
 
-        {/* Preview + explicit Confirm (Commander 2026-06-15 — no 裸奔). Nothing
-            is written until the operator confirms this staged batch. */}
-        {staged && !result && (
-          <div style={{ marginTop: 'var(--space-4)' }}>
-            <p style={{ fontSize: 'var(--fs-13)' }}>
-              <strong>{staged.rows.length}</strong> SKU{staged.rows.length === 1 ? '' : 's'} ready to import
-              {staged.tierErrors.length > 0 && (
-                <> · <span style={{ color: 'var(--c-burnt)' }}>{staged.tierErrors.length} will be skipped</span></>
-              )}. Blank cells keep the current value. <strong>Nothing is saved until you confirm.</strong>
+          {busy && (
+            <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+              Working…
             </p>
-            {staged.tierErrors.length > 0 && (
-              <ul style={{ margin: 'var(--space-2) 0 0', paddingLeft: 'var(--space-4)', fontSize: 'var(--fs-12)', color: 'var(--c-burnt)' }}>
-                {staged.tierErrors.slice(0, 8).map((e) => <li key={e.code}>{e.code}: {e.reason}</li>)}
-                {staged.tierErrors.length > 8 && <li>…and {staged.tierErrors.length - 8} more</li>}
-              </ul>
-            )}
-            <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 'var(--space-4)' }}>
+          )}
+
+          {/* Preview before commit (Commander 2026-06-15 — no 裸奔). Nothing is
+              written until the operator confirms via the footer Confirm button. */}
+          {staged && !result && (
+            <>
+              <p style={{ fontSize: 'var(--fs-13)' }}>
+                <strong>{staged.rows.length}</strong> SKU{staged.rows.length === 1 ? '' : 's'} ready to import
+                {staged.tierErrors.length > 0 && (
+                  <> · <span style={{ color: 'var(--c-burnt)' }}>{staged.tierErrors.length} will be skipped</span></>
+                )}. Blank cells keep the current value. <strong>Nothing is saved until you confirm.</strong>
+              </p>
+              {staged.tierErrors.length > 0 && (
+                <ul style={{ margin: 'var(--space-2) 0 0', paddingLeft: 'var(--space-4)', fontSize: 'var(--fs-12)', color: 'var(--c-burnt)' }}>
+                  {staged.tierErrors.slice(0, 8).map((e) => <li key={e.code}>{e.code}: {e.reason}</li>)}
+                  {staged.tierErrors.length > 8 && <li>…and {staged.tierErrors.length - 8} more</li>}
+                </ul>
+              )}
+            </>
+          )}
+
+          {errorMsg && (
+            <p style={{ fontSize: 'var(--fs-13)', color: 'var(--c-danger, #b3261e)' }}>
+              {errorMsg}
+            </p>
+          )}
+
+          {result && (
+            <div style={{ fontSize: 'var(--fs-13)' }}>
+              <div style={{
+                fontWeight: 700,
+                color: result.failed > 0 ? 'var(--c-burnt)' : 'var(--c-secondary-a, #2F5D4F)',
+              }}>
+                {result.upserted > 0
+                  ? `Saved — ${result.upserted} SKU${result.upserted === 1 ? '' : 's'} updated${result.failed > 0 ? ` · ${result.failed} failed` : ''}`
+                  : result.failed > 0
+                    ? `Nothing saved — ${result.failed} row${result.failed === 1 ? '' : 's'} failed`
+                    : 'Nothing to update — every value already matched what was saved'}
+              </div>
+              {result.failures.length > 0 && (
+                <ul style={{ marginTop: 'var(--space-2)', paddingLeft: '1.2em', color: 'var(--fg-muted)' }}>
+                  {result.failures.slice(0, 5).map((f, i) => (
+                    <li key={i}>{f.code || '(no code)'}: {f.reason}</li>
+                  ))}
+                  {result.failures.length > 5 && <li>…and {result.failures.length - 5} more.</li>}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+        <footer className={styles.modalFooter}>
+          {/* While a batch is staged (not yet committed), the footer holds the
+              explicit Confirm gate. Otherwise it's a plain Close. */}
+          {staged && !result ? (
+            <>
               <Button variant="ghost" size="md" onClick={() => setStaged(null)} disabled={busy}>Cancel</Button>
               <Button variant="primary" size="md" onClick={() => void confirmImport()} disabled={busy}>
                 {busy ? 'Importing…' : `Confirm import (${staged.rows.length})`}
               </Button>
-            </div>
-          </div>
-        )}
-
-        {errorMsg && (
-          <p style={{ marginTop: 'var(--space-3)', fontSize: 'var(--fs-13)', color: 'var(--c-danger, #b3261e)' }}>
-            {errorMsg}
-          </p>
-        )}
-
-        {result && (
-          <div style={{ marginTop: 'var(--space-3)', fontSize: 'var(--fs-13)' }}>
-            <div style={{
-              fontWeight: 700,
-              color: result.failed > 0 ? 'var(--c-burnt)' : 'var(--c-secondary-a, #2F5D4F)',
-            }}>
-              {result.upserted > 0
-                ? `Saved — ${result.upserted} SKU${result.upserted === 1 ? '' : 's'} updated${result.failed > 0 ? ` · ${result.failed} failed` : ''}`
-                : result.failed > 0
-                  ? `Nothing saved — ${result.failed} row${result.failed === 1 ? '' : 's'} failed`
-                  : 'Nothing to update — every value already matched what was saved'}
-            </div>
-            {result.failures.length > 0 && (
-              <ul style={{ marginTop: 'var(--space-2)', paddingLeft: '1.2em', color: 'var(--fg-muted)' }}>
-                {result.failures.slice(0, 5).map((f, i) => (
-                  <li key={i}>{f.code || '(no code)'}: {f.reason}</li>
-                ))}
-                {result.failures.length > 5 && <li>…and {result.failures.length - 5} more.</li>}
-              </ul>
-            )}
-          </div>
-        )}
-
-        <footer style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-4)' }}>
-          <Button variant="ghost" size="md" onClick={onClose}>Close</Button>
+            </>
+          ) : (
+            <Button variant="ghost" size="md" onClick={onClose}>Close</Button>
+          )}
         </footer>
       </div>
     </div>

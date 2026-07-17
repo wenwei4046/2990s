@@ -9,6 +9,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../supabase';
+import { useToast } from '../../components/Toast';
 
 const API_URL = import.meta.env.VITE_API_URL;
 
@@ -91,6 +92,7 @@ export function useFabricTrackings(opts?: {
 
 export function useUpdateFabricTier() {
   const qc = useQueryClient();
+  const toast = useToast();
   return useMutation({
     mutationFn: async (args: { id: string; field: FabricTierField; tier: FabricTier }) => {
       return authedFetch<{ ok: true; affectedProducts: number; fabricCode: string | null }>(
@@ -107,9 +109,7 @@ export function useUpdateFabricTier() {
       if (res.affectedProducts > 0) {
         const tierLabel = vars.tier.replace('PRICE_', 'P');
         const fieldLabel = vars.field === 'bedframePriceTier' ? 'bedframe' : 'sofa';
-        // Light-touch toast — for now use alert since 2990s has no toast system.
-        // eslint-disable-next-line no-alert
-        alert(
+        toast.success(
           `Tier updated → ${tierLabel}. ${res.affectedProducts} ${fieldLabel} product${res.affectedProducts === 1 ? '' : 's'} ` +
           `tagged with fabric ${res.fabricCode ?? ''} now reflect the new tier when read.`,
         );

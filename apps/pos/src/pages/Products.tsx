@@ -111,6 +111,7 @@ import { FabricsTable } from '../components/products/FabricsTable';
 import { SofaComboTab } from '../components/products/SofaComboTab';
 import { PwpRulesTab } from '../components/products/PwpRulesTab';
 import { RuleTargetPicker, finalizeRuleTargets } from '../components/products/RuleTargetPicker';
+import { useToast } from '../components/Toast';
 import { useSofaCombos } from '../lib/products/sofa-combos-queries';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/products/size-info';
 import { useStaff } from '../lib/staff';
@@ -1660,6 +1661,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const deleteMut = useDeleteMfgProduct();
+  const toast = useToast();
   const visibleIds = useMemo(() => rows.map((r) => r.id), [rows]);
   const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
   const someSelected = !allSelected && visibleIds.some((id) => selectedIds.has(id));
@@ -1719,8 +1721,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
       + `Force delete will wipe those side-table rows first then drop the SKU. Continue?`,
     );
     if (!wantForce) {
-      // eslint-disable-next-line no-alert
-      alert(`Deleted ${results.length - failed.length} / ${results.length}. ${failed.length} failed.\n${sample}${overflow}`);
+      toast.warning(`Deleted ${results.length - failed.length} / ${results.length}. ${failed.length} failed.\n${sample}${overflow}`);
       return;
     }
     setDeleting(true);
@@ -1730,12 +1731,10 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
     setDeleting(false);
     const stillFailed = retry.filter((r) => !r.ok);
     if (stillFailed.length === 0) {
-      // eslint-disable-next-line no-alert
-      alert(`Force delete cleaned up the remaining ${retry.length} SKU${retry.length === 1 ? '' : 's'}.`);
+      toast.success(`Force delete cleaned up the remaining ${retry.length} SKU${retry.length === 1 ? '' : 's'}.`);
     } else {
       const stillSample = stillFailed.slice(0, 3).map((r) => `· ${r.ok ? '' : r.err.slice(0, 160)}`).join('\n');
-      // eslint-disable-next-line no-alert
-      alert(`Force delete: ${retry.length - stillFailed.length} / ${retry.length} succeeded. ${stillFailed.length} still failed:\n${stillSample}`);
+      toast.error(`Force delete: ${retry.length - stillFailed.length} / ${retry.length} succeeded. ${stillFailed.length} still failed:\n${stillSample}`);
     }
   };
 
@@ -2688,6 +2687,7 @@ export const MaintenanceTab = ({
   const history = useMaintenanceConfigHistory(scope);
   const save = useSaveMaintenanceConfig();
   const renameCompartment = useRenameSofaCompartment();
+  const toast = useToast();
 
   // Brandings empty-state suggestions — mirror of the Backend useBrandingPool
   // `distinct`: DISTINCT non-null branding across mfg_products + product_models
@@ -2827,8 +2827,7 @@ export const MaintenanceTab = ({
           try {
             await renameCompartment.mutateAsync(r);
           } catch (e) {
-            // eslint-disable-next-line no-alert
-            alert(`Rename ${r.from} → ${r.to} failed: ${e instanceof Error ? e.message : String(e)}\nNothing was partially renamed for this pair; fix and retry.`);
+            toast.error(`Rename ${r.from} → ${r.to} failed: ${e instanceof Error ? e.message : String(e)}\nNothing was partially renamed for this pair; fix and retry.`);
             return;
           }
         }
@@ -3255,6 +3254,7 @@ const SofaCompartmentsList = ({
    * show a "saving…" hint on the right thumbnail. */
   const uploadPhoto = useUploadSofaCompartmentPhoto();
   const deletePhoto = useDeleteSofaCompartmentPhoto();
+  const toast = useToast();
   const [uploadingCode, setUploadingCode] = useState<string | null>(null);
 
   const writeMeta = (code: string, patch: Partial<CompartmentMeta>) => {
@@ -3409,8 +3409,7 @@ const SofaCompartmentsList = ({
                         uploadPhoto.mutate({ code, file }, {
                           onSettled: () => setUploadingCode(null),
                           onError: (err) => {
-                            // eslint-disable-next-line no-alert
-                            alert(`Upload failed: ${err instanceof Error ? err.message : String(err)}`);
+                            toast.error(`Upload failed: ${err instanceof Error ? err.message : String(err)}`);
                           },
                         });
                       }}
@@ -5685,6 +5684,7 @@ const FabricsMaintenancePanel = () => {
 
 const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
   const create = useCreateMfgProduct();
+  const toast = useToast();
   type Cat = 'BEDFRAME' | 'SOFA' | 'ACCESSORY' | 'MATTRESS' | 'SERVICE';
   /* 2990 is a trading company — no in-house manufacturing. Production-time
      tracking dropped (was HOOKKA legacy). DB column production_time_minutes
@@ -5710,8 +5710,8 @@ const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
   const isService = form.category === 'SERVICE';
 
   const submit = () => {
-    if (!form.code.trim()) { alert('Code is required.'); return; }
-    if (!form.name.trim()) { alert('Name is required.'); return; }
+    if (!form.code.trim()) { toast.error('Code is required.'); return; }
+    if (!form.name.trim()) { toast.error('Name is required.'); return; }
     const toSen = (s: string): number | null => {
       const t = s.trim();
       if (!t) return null;
@@ -6068,40 +6068,43 @@ function exportSkusCsv(rows: MfgProductRow[]): void {
   URL.revokeObjectURL(url);
 }
 
-const ImportSkusDialog = ({ onClose }: { onClose: () => void }) => (
-  <div className={styles.drawerBackdrop} onClick={onClose}>
-    <div
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        background: 'var(--c-cream)',
-        border: '1px solid var(--line-strong)',
-        borderRadius: 'var(--radius-xl)',
-        boxShadow: 'var(--shadow-3)',
-        width: 'min(560px, 95vw)',
-        padding: 'var(--space-5)',
-      }}
-    >
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
-        <h2 className={styles.drawerTitle}>Import SKUs</h2>
-        <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON_PROPS} /></button>
-      </header>
-      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
-        CSV import wires through the new POST /mfg-products endpoint one row at a time.
-        For bulk seeding (200+ rows at once) keep using the SQL seed file —
-        the row-by-row path here is meant for &lt;50 edits.
-      </p>
-      <input type="file" accept=".csv" style={{ marginTop: 'var(--space-3)' }}
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (!f) return;
-          alert(`CSV upload received: ${f.name} (${f.size} bytes). Server-side batch import endpoint TODO — for now use seed SQL.`);
-        }} />
-      <footer style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-4)' }}>
-        <Button variant="ghost" size="md" onClick={onClose}>Close</Button>
-      </footer>
+const ImportSkusDialog = ({ onClose }: { onClose: () => void }) => {
+  const toast = useToast();
+  return (
+    <div className={styles.drawerBackdrop} onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: 'var(--c-cream)',
+          border: '1px solid var(--line-strong)',
+          borderRadius: 'var(--radius-xl)',
+          boxShadow: 'var(--shadow-3)',
+          width: 'min(560px, 95vw)',
+          padding: 'var(--space-5)',
+        }}
+      >
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
+          <h2 className={styles.drawerTitle}>Import SKUs</h2>
+          <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON_PROPS} /></button>
+        </header>
+        <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
+          CSV import wires through the new POST /mfg-products endpoint one row at a time.
+          For bulk seeding (200+ rows at once) keep using the SQL seed file —
+          the row-by-row path here is meant for &lt;50 edits.
+        </p>
+        <input type="file" accept=".csv" style={{ marginTop: 'var(--space-3)' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (!f) return;
+            toast.info(`CSV upload received: ${f.name} (${f.size} bytes). Server-side batch import endpoint TODO — for now use seed SQL.`);
+          }} />
+        <footer style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-4)' }}>
+          <Button variant="ghost" size="md" onClick={onClose}>Close</Button>
+        </footer>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 /* ════════════════════════════════════════════════════════════════════════
    PR #89 — Click-to-edit cell for SKU Master code + name columns.
