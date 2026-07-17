@@ -24,13 +24,11 @@
 import { useMutation } from '@tanstack/react-query';
 import { orderSofaCellsLeftToRight } from '@2990s/shared/sofa-build';
 import { deliveryTargetMatchesAnyLine, parseRuleTargets, type RuleLineInput } from '@2990s/shared';
-import { supabase } from './supabase';
+import { authedFetch, authedFetchRaw } from './apiClient';
 import { sizeIdToMfgCode } from './queries';
 import type { CartLine, CartConfig } from '../state/cart';
 import type { CatalogProduct, SpecialDeliveryFeeRow } from './queries';
 import type { SpecialModelDeliveryFee } from '@2990s/shared/pricing';
-
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
 /* ─── Types ─────────────────────────────────────────────────────────── */
 
@@ -584,16 +582,25 @@ export const fetchItemCodeMap = async (lines: CartLine[]): Promise<SoLineResolut
   const productIds = [...new Set(lines.map((l) => l.config.productId).filter(Boolean))];
   if (productIds.length === 0) return result;
 
-  const { data: baseData } = await supabase
-    .from('mfg_products')
-    .select('id, code, model_id, category, size_code, product_models:model_id ( name )')
-    .in('id', productIds);
+  // (P4.3) Houzs seam: the two direct `supabase.from('mfg_products')` reads this
+  // used are replaced by GET /pos-pools/mfg-catalog — the SAME endpoint queries.ts
+  // uses to replace every direct mfg_products read. It has no bulk-`id` param, so
+  // fan out over the cart's distinct ids (by-id returns one SKU, any status /
+  // pos_active, with its Model embed); siblings come from the ?modelId scope
+  // (no status/pos_active filter, exactly like the old unfiltered read).
   type BaseRow = MfgCodeRow & {
     // FK embed comes back object or array depending on the cached schema
     // cardinality (same defensive coercion as useMfgCatalog).
     product_models: { name: string } | Array<{ name: string }> | null;
   };
-  const baseRows = ((baseData ?? []) as unknown as BaseRow[]);
+  const fetchById = async (id: string): Promise<BaseRow | null> => {
+    const { products } = await authedFetch<{ products: BaseRow[] }>(
+      `/pos-pools/mfg-catalog?id=${encodeURIComponent(id)}`,
+    );
+    return (products ?? [])[0] ?? null;
+  };
+  const baseRows = (await Promise.all(productIds.map(fetchById)))
+    .filter((r): r is BaseRow => r !== null);
   const byId = new Map<string, BaseRow>(baseRows.map((r) => [r.id, r]));
 
   // Siblings only matter for size-variant lines (mattress / bedframe).
@@ -605,15 +612,13 @@ export const fetchItemCodeMap = async (lines: CartLine[]): Promise<SoLineResolut
   )];
   const sibsByModel = new Map<string, Array<{ code: string; size_code: string | null }>>();
   if (modelIds.length > 0) {
-    const { data: sibData } = await supabase
-      .from('mfg_products')
-      .select('code, model_id, size_code')
-      .in('model_id', modelIds);
-    for (const s of (sibData ?? []) as Array<{ code: string; model_id: string; size_code: string | null }>) {
-      const arr = sibsByModel.get(s.model_id) ?? [];
-      arr.push({ code: s.code, size_code: s.size_code });
-      sibsByModel.set(s.model_id, arr);
-    }
+    const perModel = await Promise.all(modelIds.map(async (modelId) => {
+      const { products } = await authedFetch<{
+        products: Array<{ code: string; size_code: string | null }>;
+      }>(`/pos-pools/mfg-catalog?modelId=${encodeURIComponent(modelId)}`);
+      return [modelId, (products ?? []).map((s) => ({ code: s.code, size_code: s.size_code }))] as const;
+    }));
+    for (const [modelId, sibs] of perModel) sibsByModel.set(modelId, sibs);
   }
 
   for (const l of lines) {
@@ -718,17 +723,8 @@ export const cartLinesToSoItems = (
 /* ─── Mutation ───────────────────────────────────────────────────────── */
 
 const submitHandoff = async (payload: PosHandoffPayload): Promise<SoCreatedResponse> => {
-  if (!API_URL) throw new Error('VITE_API_URL is not set');
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) throw new Error('not_authenticated');
-
-  const res = await fetch(`${API_URL}/mfg-sales-orders`, {
+  const res = await authedFetchRaw('/mfg-sales-orders', {
     method: 'POST',
-    headers: {
-      authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
-    },
     body: JSON.stringify(payload),
   });
 

@@ -1,11 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sofaModulePricesFromSkus, normalizeCompartmentCode, representativeArtCode } from '@2990s/shared/sofa-build';
 import { comboChargedPrices, maintActiveValues, type MfgSeatHeightPrice, type DefaultFreeGift, type FreeItemEligibility, type FreeItemCampaign, type RuleTarget } from '@2990s/shared';
-import { supabase } from './supabase';
-import { authedFetch } from './apiClient';
+import { authedFetch, authedFetchRaw, API_URL } from './apiClient';
 import { useMaintenanceConfig, type MaintenanceResolved } from './products/mfg-products-queries';
-
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
 /* ─── Houzs seam helpers (P4.3) ───────────────────────────────────────────
  * The configurator resolves a SKU (mfg_products.id) → its Model's
@@ -118,15 +115,7 @@ export const useCatalog = () =>
   useQuery({
     queryKey: ['catalog'],
     queryFn: async (): Promise<CatalogProduct[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/products`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /products failed (${res.status})`);
-      const body = (await res.json()) as ProductsResponse;
+      const body = await authedFetch<ProductsResponse>('/products');
       return body.products;
     },
     staleTime: 30_000,
@@ -1370,20 +1359,12 @@ export const useDeliveryFeeConfig = () =>
   useQuery({
     queryKey: ['delivery-fee-config'],
     queryFn: async (): Promise<DeliveryFeeConfigRow> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/delivery-fees`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /delivery-fees failed (${res.status})`);
-      const body = (await res.json()) as {
+      const body = await authedFetch<{
         baseFee:                  number;
         crossCategoryFee:         number;
         mattressBedframeLeadDays: number;
         sofaLeadDays:             number;
-      };
+      }>('/delivery-fees');
       return {
         baseFee:                  body.baseFee,
         crossCategoryFee:         body.crossCategoryFee,
@@ -1407,15 +1388,7 @@ export const useFabricTierAddonConfig = () =>
   useQuery({
     queryKey: ['fabric-tier-addon-config'],
     queryFn: async (): Promise<FabricTierAddonConfigRow> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /fabric-tier-addon failed (${res.status})`);
-      const body = (await res.json()) as FabricTierAddonConfigRow;
+      const body = await authedFetch<FabricTierAddonConfigRow>('/fabric-tier-addon');
       return {
         sofaTier2Delta:     body.sofaTier2Delta,
         sofaTier3Delta:     body.sofaTier3Delta,
@@ -1440,13 +1413,8 @@ export const useUpdateDeliveryFeeConfig = () => {
       mattressBedframeLeadDays?: number;
       sofaLeadDays?:             number;
     }) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/delivery-fees`, {
+      const res = await authedFetchRaw('/delivery-fees', {
         method: 'PATCH',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(patch),
       });
       if (!res.ok) {
@@ -1482,15 +1450,7 @@ export const useSpecialDeliveryFees = () =>
   useQuery({
     queryKey: ['special-delivery-fees'],
     queryFn: async (): Promise<SpecialDeliveryFeeRow[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/delivery-fees/special`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /delivery-fees/special failed (${res.status})`);
-      return (await res.json()) as SpecialDeliveryFeeRow[];
+      return await authedFetch<SpecialDeliveryFeeRow[]>('/delivery-fees/special');
     },
     staleTime: 60_000,
   });
@@ -1508,13 +1468,8 @@ export const useUpsertSpecialDeliveryFee = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (row: UpsertSpecialDeliveryFeeInput) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/delivery-fees/special`, {
+      const res = await authedFetchRaw('/delivery-fees/special', {
         method: 'PUT',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(row),
       });
       if (!res.ok) {
@@ -1530,13 +1485,8 @@ export const useDeleteSpecialDeliveryFee = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/delivery-fees/special/${encodeURIComponent(id)}`, {
+      const res = await authedFetchRaw(`/delivery-fees/special/${encodeURIComponent(id)}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
@@ -1576,16 +1526,10 @@ export const useCrossCategoryEligibility = (docNo: string, phone: string) =>
     retry: 0,
     staleTime: 10_000,
     queryFn: async (): Promise<CrossCategoryEligibility> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
       const qs = new URLSearchParams({ docNo: docNo.trim(), phone: phone.trim() });
-      const res = await fetch(`${API_URL}/mfg-sales-orders/cross-category-eligibility?${qs.toString()}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`eligibility check failed (${res.status})`);
-      return (await res.json()) as CrossCategoryEligibility;
+      return await authedFetch<CrossCategoryEligibility>(
+        `/mfg-sales-orders/cross-category-eligibility?${qs.toString()}`,
+      );
     },
   });
 
@@ -1603,16 +1547,10 @@ export interface CrossCategoryMatchResult {
 export const useCrossCategoryAutoMatch = () =>
   useMutation({
     mutationFn: async ({ name, phone }: { name: string; phone: string }): Promise<CrossCategoryMatchResult> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
       const qs = new URLSearchParams({ name: name.trim(), phone: phone.trim() });
-      const res = await fetch(`${API_URL}/mfg-sales-orders/cross-category-match?${qs.toString()}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`auto-match failed (${res.status})`);
-      return (await res.json()) as CrossCategoryMatchResult;
+      return await authedFetch<CrossCategoryMatchResult>(
+        `/mfg-sales-orders/cross-category-match?${qs.toString()}`,
+      );
     },
   });
 
@@ -1622,13 +1560,8 @@ export const useUpdateFabricTierAddonConfig = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (patch: Partial<FabricTierAddonConfigRow>) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon`, {
+      const res = await authedFetchRaw('/fabric-tier-addon', {
         method: 'PATCH',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(patch),
       });
       if (!res.ok) {
@@ -1646,13 +1579,8 @@ export const useUpdateFabricLibraryTier = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, field, tier }: { id: string; field: 'sofaTier' | 'bedframeTier'; tier: 'PRICE_1' | 'PRICE_2' | 'PRICE_3' }) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-library/${encodeURIComponent(id)}/tier`, {
+      const res = await authedFetchRaw(`/fabric-library/${encodeURIComponent(id)}/tier`, {
         method: 'PATCH',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ field, tier }),
       });
       if (!res.ok) {
@@ -1682,15 +1610,7 @@ export const useModelFabricTierOverrides = () =>
   useQuery({
     queryKey: ['model-fabric-tier-overrides'],
     queryFn: async (): Promise<ModelFabricTierOverrideRow[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon/special`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /fabric-tier-addon/special failed (${res.status})`);
-      return (await res.json()) as ModelFabricTierOverrideRow[];
+      return await authedFetch<ModelFabricTierOverrideRow[]>('/fabric-tier-addon/special');
     },
     staleTime: 60_000,
   });
@@ -1699,13 +1619,8 @@ export const useUpsertModelFabricTierOverride = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (row: { modelId: string; tier2Delta: number | null; tier3Delta: number | null }) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon/special`, {
+      const res = await authedFetchRaw('/fabric-tier-addon/special', {
         method: 'PUT',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(row),
       });
       if (!res.ok) {
@@ -1721,13 +1636,8 @@ export const useDeleteModelFabricTierOverride = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (modelId: string) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon/special/${encodeURIComponent(modelId)}`, {
+      const res = await authedFetchRaw(`/fabric-tier-addon/special/${encodeURIComponent(modelId)}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
@@ -1753,15 +1663,7 @@ export const useCompartmentFabricTierOverrides = () =>
   useQuery({
     queryKey: ['compartment-fabric-tier-overrides'],
     queryFn: async (): Promise<CompartmentFabricTierOverrideRow[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon/compartment-special`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /fabric-tier-addon/compartment-special failed (${res.status})`);
-      return (await res.json()) as CompartmentFabricTierOverrideRow[];
+      return await authedFetch<CompartmentFabricTierOverrideRow[]>('/fabric-tier-addon/compartment-special');
     },
     staleTime: 60_000,
   });
@@ -1770,13 +1672,8 @@ export const useUpsertCompartmentFabricTierOverride = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (row: { compartmentId: string; tier2Delta: number | null; tier3Delta: number | null }) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon/compartment-special`, {
+      const res = await authedFetchRaw('/fabric-tier-addon/compartment-special', {
         method: 'PUT',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(row),
       });
       if (!res.ok) {
@@ -1792,13 +1689,8 @@ export const useDeleteCompartmentFabricTierOverride = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (compartmentId: string) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon/compartment-special/${encodeURIComponent(compartmentId)}`, {
+      const res = await authedFetchRaw(`/fabric-tier-addon/compartment-special/${encodeURIComponent(compartmentId)}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
@@ -1830,13 +1722,7 @@ export const useModelDefaultGifts = () =>
   useQuery({
     queryKey: ['model-default-gifts'],
     queryFn: async (): Promise<ModelDefaultGiftRow[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/model-free-gifts`, { headers: { authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error(`GET /model-free-gifts failed (${res.status})`);
-      return (await res.json()) as ModelDefaultGiftRow[];
+      return await authedFetch<ModelDefaultGiftRow[]>('/model-free-gifts');
     },
     staleTime: 60_000,
   });
@@ -1845,13 +1731,8 @@ export const useUpsertModelDefaultGifts = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (row: { modelId: string; gifts: DefaultFreeGift[] }) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/model-free-gifts`, {
+      const res = await authedFetchRaw('/model-free-gifts', {
         method: 'PUT',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(row),
       });
       if (!res.ok) {
@@ -1867,12 +1748,8 @@ export const useDeleteModelDefaultGifts = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (modelId: string) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/model-free-gifts/${encodeURIComponent(modelId)}`, {
-        method: 'DELETE', headers: { authorization: `Bearer ${token}` },
+      const res = await authedFetchRaw(`/model-free-gifts/${encodeURIComponent(modelId)}`, {
+        method: 'DELETE',
       });
       if (!res.ok) {
         const b = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
@@ -1890,14 +1767,7 @@ export const useDeleteModelDefaultGifts = () => {
 export type FreeItemCampaignRow = FreeItemCampaign;
 
 const fic = async (path: string, init?: RequestInit) => {
-  if (!API_URL) throw new Error('VITE_API_URL is not set');
-  const session = await supabase.auth.getSession();
-  const token = session.data.session?.access_token;
-  if (!token) throw new Error('not_authenticated');
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: { authorization: `Bearer ${token}`, ...(init?.body ? { 'content-type': 'application/json' } : {}) },
-  });
+  const res = await authedFetchRaw(path, init);
   if (!res.ok) {
     const b = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
     throw new Error(b.reason ?? b.error ?? `${init?.method ?? 'GET'} ${path} failed (${res.status})`);
@@ -1980,24 +1850,12 @@ export interface SpecialAddonInput {
   sortOrder: number;
 }
 
-async function authToken(): Promise<string> {
-  const session = await supabase.auth.getSession();
-  const token = session.data.session?.access_token;
-  if (!token) throw new Error('not_authenticated');
-  return token;
-}
-
 export const useSpecialAddons = () =>
   useQuery({
     queryKey: ['special-addons'],
     staleTime: 60_000,
     queryFn: async (): Promise<SpecialAddonRow[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const res = await fetch(`${API_URL}/special-addons`, {
-        headers: { authorization: `Bearer ${await authToken()}` },
-      });
-      if (!res.ok) throw new Error(`GET /special-addons failed (${res.status})`);
-      const body = (await res.json()) as { addons: SpecialAddonRow[] };
+      const body = await authedFetch<{ addons: SpecialAddonRow[] }>('/special-addons');
       return body.addons ?? [];
     },
   });
@@ -2006,10 +1864,8 @@ export const useCreateSpecialAddon = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: SpecialAddonInput) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const res = await fetch(`${API_URL}/special-addons`, {
+      const res = await authedFetchRaw('/special-addons', {
         method: 'POST',
-        headers: { authorization: `Bearer ${await authToken()}`, 'content-type': 'application/json' },
         body: JSON.stringify(input),
       });
       if (!res.ok) {
@@ -2025,10 +1881,8 @@ export const useUpdateSpecialAddon = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, patch }: { id: string; patch: Partial<SpecialAddonInput> }) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const res = await fetch(`${API_URL}/special-addons/${encodeURIComponent(id)}`, {
+      const res = await authedFetchRaw(`/special-addons/${encodeURIComponent(id)}`, {
         method: 'PATCH',
-        headers: { authorization: `Bearer ${await authToken()}`, 'content-type': 'application/json' },
         body: JSON.stringify(patch),
       });
       if (!res.ok) {
@@ -2044,10 +1898,8 @@ export const useDeleteSpecialAddon = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const res = await fetch(`${API_URL}/special-addons/${encodeURIComponent(id)}`, {
+      const res = await authedFetchRaw(`/special-addons/${encodeURIComponent(id)}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${await authToken()}` },
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
@@ -2119,21 +1971,13 @@ export const useSalesStats = (
     queryKey: ['pos', 'sales-stats', window?.from ?? null, window?.to ?? null, salesperson ?? null],
     staleTime: 60_000,
     queryFn: async (): Promise<SalesStatsRow> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
       const params = new URLSearchParams();
       if (window?.from) params.set('from', window.from);
       if (window?.to)   params.set('to', window.to);
       // Owner-tier only: scope the Personal card to a chosen salesperson.
       if (salesperson && salesperson !== 'all') params.set('salesperson', salesperson);
       const qs = params.toString();
-      const res = await fetch(`${API_URL}/pos/sales-stats${qs ? `?${qs}` : ''}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /pos/sales-stats failed (${res.status})`);
-      return await res.json() as SalesStatsRow;
+      return await authedFetch<SalesStatsRow>(`/pos/sales-stats${qs ? `?${qs}` : ''}`);
     },
   });
 
@@ -2183,17 +2027,18 @@ export const useSofaCombos = (baseModel?: string | null) =>
   useQuery({
     queryKey: ['sofa-combos', baseModel ?? 'all'],
     queryFn: async (): Promise<SofaComboRow[]> => {
-      if (!API_URL) return [];
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) return [];  // POS may render anonymously; quietly skip
       const params = new URLSearchParams();
       if (baseModel) params.set('baseModel', baseModel);
       params.set('customerId', '__all__');  // 2990 is B2C — only default-scope rows
-      const res = await fetch(
-        `${API_URL}/sofa-combos?${params.toString()}`,
-        { headers: { authorization: `Bearer ${token}` } },
-      );
+      // POS may render anonymously (no token) or with the API base unset —
+      // authedFetchRaw throws in both cases; combos are optional so quietly
+      // return []. A non-ok status also degrades to [] (Quick Pick still works).
+      let res: Response;
+      try {
+        res = await authedFetchRaw(`/sofa-combos?${params.toString()}`);
+      } catch {
+        return [];
+      }
       if (!res.ok) return [];
       const body = (await res.json()) as { rules: SofaComboRow[] };
       // The engine's pricesByHeight is the CHARGED (selling) price: selling wins
@@ -2231,16 +2076,8 @@ export const useCreateSofaCombo = () => {
       effectiveFrom: string;   // 'YYYY-MM-DD'
       notes?: string | null;
     }): Promise<SofaComboRow> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/sofa-combos`, {
+      const res = await authedFetchRaw('/sofa-combos', {
         method: 'POST',
-        headers: {
-          authorization: `Bearer ${token}`,
-          'content-type': 'application/json',
-        },
         body: JSON.stringify({
           baseModel: body.baseModel,
           modules: body.modules,
@@ -2292,16 +2129,17 @@ export const useSofaQuickPicks = (baseModel?: string | null) =>
   useQuery({
     queryKey: ['sofa-quick-picks', baseModel ?? 'all'],
     queryFn: async (): Promise<SofaQuickPickRow[]> => {
-      if (!API_URL) return [];
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) return [];  // POS may render anonymously; quietly skip
       const params = new URLSearchParams();
       if (baseModel) params.set('baseModel', baseModel);
-      const res = await fetch(
-        `${API_URL}/sofa-quick-picks${params.toString() ? `?${params.toString()}` : ''}`,
-        { headers: { authorization: `Bearer ${token}` } },
-      );
+      // POS may render anonymously (no token) or with the API base unset —
+      // authedFetchRaw throws in both cases; Quick Picks are optional so quietly
+      // return []. A non-ok status also degrades to [].
+      let res: Response;
+      try {
+        res = await authedFetchRaw(`/sofa-quick-picks${params.toString() ? `?${params.toString()}` : ''}`);
+      } catch {
+        return [];
+      }
       if (!res.ok) return [];
       const body = (await res.json()) as { picks: SofaQuickPickRow[] };
       return body.picks ?? [];
@@ -2328,13 +2166,8 @@ export const useCreateSofaQuickPick = () => {
       depth: string;
       label?: string | null;
     }): Promise<SofaQuickPickRow> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/sofa-quick-picks`, {
+      const res = await authedFetchRaw('/sofa-quick-picks', {
         method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({
           baseModel: body.baseModel,
           modules: body.modules,
@@ -2360,13 +2193,8 @@ export const useDeleteSofaQuickPick = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string): Promise<void> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/sofa-quick-picks/${id}`, {
+      const res = await authedFetchRaw(`/sofa-quick-picks/${id}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
         let detail = '';
@@ -2400,16 +2228,8 @@ export const useNewOrderMutation = () => {
       customerType?: string;
       note?: string;
     }): Promise<{ docNo: string }> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/mfg-sales-orders`, {
+      const res = await authedFetchRaw('/mfg-sales-orders', {
         method: 'POST',
-        headers: {
-          authorization: `Bearer ${token}`,
-          'content-type': 'application/json',
-        },
         body: JSON.stringify({ ...body, items: [] }),
       });
       if (!res.ok) {
@@ -2514,16 +2334,8 @@ export const useSoHeaderForAdd = (docNo: string | undefined) =>
     queryKey: ['so-header-for-add', docNo],
     staleTime: 10_000,
     queryFn: async (): Promise<SoHeaderForAdd> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
       if (!docNo) throw new Error('no docNo');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/mfg-sales-orders/${encodeURIComponent(docNo)}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /mfg-sales-orders/${docNo} failed (${res.status})`);
-      const body = (await res.json()) as {
+      const body = await authedFetch<{
         salesOrder: {
           doc_no: string;
           status: string;
@@ -2538,7 +2350,7 @@ export const useSoHeaderForAdd = (docNo: string | undefined) =>
         /** Present when the API has computed downstream relationships.
          *  If absent (older build) we conservatively treat as no downstream. */
         hasDownstream?: boolean;
-      };
+      }>(`/mfg-sales-orders/${encodeURIComponent(docNo)}`);
       const so = body.salesOrder;
 
       /* Mirror soProcessingLocked from the server: the lock triggers once
@@ -2709,18 +2521,10 @@ export const useAddProductToPlacedSo = () => {
       docNo: string;
       item: AddSoItemBody;
     }): Promise<{ ok: boolean }> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(
-        `${API_URL}/mfg-sales-orders/${encodeURIComponent(docNo)}/items`,
+      const res = await authedFetchRaw(
+        `/mfg-sales-orders/${encodeURIComponent(docNo)}/items`,
         {
           method: 'POST',
-          headers: {
-            authorization: `Bearer ${token}`,
-            'content-type': 'application/json',
-          },
           body: JSON.stringify(item),
         },
       );

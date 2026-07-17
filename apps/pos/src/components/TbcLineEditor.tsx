@@ -15,8 +15,7 @@ import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
 import { fmtRM, fabricTierAddon, resolveFabricTierOverride, type FabricTier } from '@2990s/shared';
-import { supabase } from '../lib/supabase';
-import { authedFetch } from '../lib/apiClient';
+import { authedFetch, authedFetchRaw } from '../lib/apiClient';
 import {
   useFabricLibrary,
   useFabricColours,
@@ -36,8 +35,6 @@ import { OptionSelect } from './BedframeOptions';
 import { SpecialAddonsPicker, specialSelSurchargeRM, specialSelsSurcharge, type SpecialSel } from './SpecialAddonsPicker';
 import { Button } from '@2990s/design-system';
 import styles from './TbcLineEditor.module.css';
-
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
 export interface TbcEditTarget {
   itemId: string;
@@ -359,12 +356,8 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
   /* ── Save (variants delta) ────────────────────────────────────────── */
   const [error, setError] = useState<string | null>(null);
   const authedPost = async (path: string, body: unknown) => {
-    if (!API_URL) throw new Error('VITE_API_URL is not set');
-    const token = (await supabase.auth.getSession()).data.session?.access_token;
-    if (!token) throw new Error('not_authenticated');
-    const res = await fetch(`${API_URL}${path}`, {
+    const res = await authedFetchRaw(path, {
       method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
     if (!res.ok) {
