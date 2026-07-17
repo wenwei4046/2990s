@@ -291,6 +291,56 @@ function invalidQtyResponse(rawQty: unknown, itemCode: unknown, lineIdx = 0): Re
   };
 }
 
+/* Special add-on with a charge but no reason (Owner 2026-07-17, on finding one
+   on a live order — 舊的就算了, 新的要擋).
+
+   The POS free-text add-on is two INDEPENDENT fields on the way out
+   (pos-handover-so.ts): the note is written only `if (config.extraAddonNote?
+   .trim())`, the amount only `if ((config.extraAddonAmountRM ?? 0) > 0)`. So a
+   charge with a blank note is not a hypothetical — it is a normal submit, and
+   it is what produced the order that prompted this.
+
+   Downstream, the amount never prints as its own figure: it folds into the
+   line's selling price, and Loo 2026-06-15 deliberately dropped the "(+RM…)"
+   from the SPECIAL segment because it double-showed money already inside the
+   product amount. The note is therefore the ONLY place the charge is ever
+   explained — and when it is blank, the summary builders fall back to the
+   literal string "Extra add-on", which reads like a description and is not
+   one. Net effect on the order above: the customer paid RM 125 more, the
+   document says "SPECIAL: Extra add-on", and nothing says why. The invented
+   label is worse than a blank, because a blank gets questioned.
+
+   No display can fix that (any label either invents a reason or double-counts
+   the money), so it is refused at the source. `offenders` is populated in the
+   variants_incomplete shape on purpose: the POS error strip renders it
+   unconditionally as "<itemCode>: missing description", so sales sees WHICH
+   line to fix — without a single change to apps/pos.
+
+   A blank note with no charge stays legal (an untouched line). Returns the 422
+   payload, or null when valid. Shared by POST /, POST /:docNo/items and
+   PATCH /:docNo/items/:itemId; a PATCH that omits `variants` reads undefined
+   -> amount 0 -> null, so a partial patch never trips this. */
+function unexplainedExtraAddonResponse(
+  variants: unknown, itemCode: unknown, itemGroup: unknown = '', lineIdx = 0,
+): Record<string, unknown> | null {
+  const v = variants as { extraAddonNote?: unknown; extraAddonAmountRM?: unknown } | null | undefined;
+  const raw = Number(v?.extraAddonAmountRM ?? 0);
+  const amountRM = Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0;
+  if (amountRM <= 0) return null;
+  const note = typeof v?.extraAddonNote === 'string' ? v.extraAddonNote.trim() : '';
+  if (note) return null;
+  const code = String(itemCode ?? '');
+  return {
+    error:  'extra_addon_needs_description',
+    reason: `This line has an RM ${amountRM} add-on charge with no description. `
+          + 'Fill in Description ("What\'s the add-on for…") next to the extra charge, or clear the charge.',
+    lineIdx,
+    itemCode: code,
+    extraAddonAmountRM: amountRM,
+    offenders: [{ itemCode: code, group: String(itemGroup ?? ''), missing: ['description'] }],
+  };
+}
+
 /* MAIN-mix composition (the PR #519 create rule, extended to line add / swap,
    Loo 2026-06-11): SOFA is exclusive among the MAIN categories. Returns true
    when replacing `excludeItemId`'s line (null = a pure add) with `newCode`
@@ -1718,6 +1768,11 @@ mfgSalesOrders.post('/', async (c) => {
   for (let i = 0; i < items.length; i++) {
     const badQty = invalidQtyResponse(items[i]?.qty, items[i]?.itemCode, i);
     if (badQty) return c.json(badQty, 422);
+    /* Owner 2026-07-17 — see unexplainedExtraAddonResponse. Same loop, same
+       "before any PWP claim" position: a reject here must burn nothing. */
+    const badExtra = unexplainedExtraAddonResponse(
+      items[i]?.variants, items[i]?.itemCode, items[i]?.itemGroup, i);
+    if (badExtra) return c.json(badExtra, 422);
   }
 
   /* PR — Commander 2026-05-28 — SO composition rules, enforced on the CREATE
@@ -4799,6 +4854,11 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
      found the create-only gate left qty 0 free-line inserts open here). */
   const badQty = invalidQtyResponse(it.qty, it.itemCode);
   if (badQty) return c.json(badQty, 422);
+  /* Owner 2026-07-17 — see unexplainedExtraAddonResponse. Gating create only
+     would leave the same unexplained charge reachable one click later via
+     "add line", which is exactly how the qty gate above was found short. */
+  const badExtra = unexplainedExtraAddonResponse(it.variants, it.itemCode, it.itemGroup);
+  if (badExtra) return c.json(badExtra, 422);
   const qty = Number(it.qty ?? 1);
   const discount = Number(it.discountCenti ?? 0);
   // MFG-PRICING-ENGINE — Recompute unit price server-side. Same path as
@@ -5290,6 +5350,11 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   /* POS line quantity (Loo 2026-06-12) — same 422 gate as POST /. */
   const badQty = invalidQtyResponse(it.qty, prev.item_code);
   if (badQty) return c.json(badQty, 422);
+  /* Owner 2026-07-17 — see unexplainedExtraAddonResponse. Validates the
+     INCOMING variants, not prev: this PATCH replaces the object wholesale, so
+     clearing a note while keeping the charge has to be refused too. */
+  const badExtra = unexplainedExtraAddonResponse(it.variants, prev.item_code, prev.item_group);
+  if (badExtra) return c.json(badExtra, 422);
   const qty = it.qty !== undefined ? Number(it.qty) : prev.qty;
   /* One code = one redemption = ONE unit (Loo 2026-06-12) — mirror of the
      create-path claim-loop gate. A qty-only PATCH skips the recompute, so a
