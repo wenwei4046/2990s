@@ -1,31 +1,64 @@
 // ----------------------------------------------------------------------------
-// The ONE place the POS talks to the Hono API.
+// The ONE place the POS talks to its backend API.
 //
 // Every query module used to declare its own `authedFetch` + `API_URL`. Those
 // copies drifted into 8 different implementations (some missed the FormData /
 // multipart guard, some threw on an empty 204 body, some had no API_URL check).
-// This module is the single, correct superset — it is the seam a future
-// backend swap (POS -> Houzs) flips in ONE place instead of across ~14 files.
+// This module is the single, correct superset — and the SEAM that the P4/P5
+// backend swap (POS -> Houzs) flips in ONE place instead of across ~30 files.
 //
-// The behavior here is the strictest of the old copies (the one from
-// mfg-products-queries.ts, PR #98) plus venues' loud API_URL guard, so adopting
-// it is a pure upgrade: identical on the happy path, and it only ever turns a
-// former edge-case throw into a clean result.
+// TWO TARGETS, selected at build time by `VITE_BACKEND_TARGET`:
+//   · '2990' (DEFAULT, unset === '2990') — the original path. base = VITE_API_URL,
+//     bearer = the Supabase session access_token. Byte-identical to before.
+//   · 'houzs' — base = VITE_HOUZS_API_URL (…/api/scm), bearer = the Houzs POS
+//     session token from houzsSession.ts, and EVERY request carries
+//     `X-Company-Id` (default '2', the 2990-mirrored company). The header is
+//     MANDATORY on Houzs: without it companyContext falls back to the login
+//     hostname and a POS request on the Houzs host resolves to company 1 (HOUZS)
+//     — i.e. the WRONG catalogue, silently (verified 2026-07-18).
+//
+// Nothing changes for anyone until VITE_BACKEND_TARGET is set to 'houzs' (staging
+// first, then the timed prod cutover). The 'houzs' branch is dark until then.
 // ----------------------------------------------------------------------------
 
 import { supabase } from './supabase';
+import { getHouzsToken } from './houzsSession';
 
-/** Hono API base. Read once here so a backend swap changes this line only. */
-export const API_URL = import.meta.env.VITE_API_URL as string | undefined;
+const ENV = import.meta.env as Record<string, string | undefined>;
+
+/** 'houzs' once the cutover flips; '2990' (the original backend) until then. */
+const TARGET: '2990' | 'houzs' = ENV.VITE_BACKEND_TARGET === 'houzs' ? 'houzs' : '2990';
+
+/** The 2990-mirrored company on Houzs. `companies.id` = 2; the code '2990' also
+ *  resolves, but the numeric id is what companyContext validates first. */
+const HOUZS_COMPANY_ID = ENV.VITE_HOUZS_COMPANY_ID ?? '2';
+
+/** API base for the active target. On '2990' this is the same VITE_API_URL every
+ *  query module used before; on 'houzs' it is the Houzs SCM sub-app base. */
+export const API_URL: string | undefined = TARGET === 'houzs' ? ENV.VITE_HOUZS_API_URL : ENV.VITE_API_URL;
 
 if (!API_URL) {
   // Fail loud at import time — same posture as the old per-file copies.
   // eslint-disable-next-line no-console
-  console.warn('[apiClient] VITE_API_URL is not set');
+  console.warn(`[apiClient] API base is not set for target '${TARGET}'`);
+}
+
+/** The bearer token for the active target: Houzs POS session token on 'houzs',
+ *  the Supabase session access_token on '2990'. Returns null when not signed in. */
+async function bearerToken(): Promise<string | null> {
+  if (TARGET === 'houzs') return getHouzsToken();
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token ?? null;
+}
+
+/** Headers every Houzs request must carry beyond auth + content-type. Empty on
+ *  the 2990 path. */
+function targetHeaders(): Record<string, string> {
+  return TARGET === 'houzs' ? { 'X-Company-Id': HOUZS_COMPANY_ID } : {};
 }
 
 /**
- * Fetch an API path with the caller's Supabase session bearer attached.
+ * Fetch an API path against the active backend with the caller's bearer attached.
  *
  * - content-type: application/json is stamped ONLY for string bodies. FormData
  *   (multipart photo upload) must keep the browser's boundary-aware header —
@@ -34,15 +67,15 @@ if (!API_URL) {
  *   (DELETE etc.) succeed instead of throwing on `JSON.parse('')` (PR #98).
  */
 export async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  if (!API_URL) throw new Error('VITE_API_URL is not set');
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  if (!API_URL) throw new Error(`API base is not set for target '${TARGET}'`);
+  const token = await bearerToken();
   if (!token) throw new Error('not_authenticated');
   const isStringBody = typeof init?.body === 'string';
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
     headers: {
       ...(init?.headers ?? {}),
+      ...targetHeaders(),
       authorization: `Bearer ${token}`,
       ...(isStringBody ? { 'content-type': 'application/json' } : {}),
     },
