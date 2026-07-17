@@ -38,6 +38,57 @@ async function fetchModelAllowedOptions(productId: string): Promise<MfgAllowedOp
   return (models ?? []).find((m) => m.id === modelId)?.allowed_options ?? null;
 }
 
+/* ─── POS-catalog SKU read (P4.3) ─────────────────────────────────────────
+ * GET /pos-pools/mfg-catalog is the Houzs seam that replaces the five direct
+ * `supabase.from('mfg_products')` reads the map couldn't serve: GET /mfg-products
+ * filters status=ACTIVE, but the POS keeps pos_active=true SKUs even when
+ * status=INACTIVE, and derives sofa-module + per-size prices from SIBLING SKUs
+ * whose original query carried NO status/pos_active filter at all.
+ *
+ * Params (mutually exclusive, precedence id > modelId > baseModel):
+ *   {}                                → pos_active=true, any status (the catalog)
+ *   { id }                            → that ONE SKU, any status/pos_active
+ *   { modelId }                       → all SKUs of a model_id, no status/pos filter
+ *   { baseModel, category? }          → all SKUs of a base_model (+category), no filter
+ *
+ * COST STRIP (#625): the endpoint emits SELLING fields only (sell_price_sen /
+ * pwp_price_sen). It never sends base_price_sen / cost_price_sen, and
+ * seat_height_prices arrives with its per-height cost (priceSen) already
+ * removed — so nothing here can fall back to, or leak, a cost. */
+interface MfgCatalogApiRow {
+  id:                 string;
+  code:               string;
+  name:               string;
+  category:           MfgCatalogCategory;
+  description:        string | null;
+  branding:           string | null;
+  size_label:         string | null;
+  size_code:          string | null;
+  sell_price_sen:     number | null;
+  pwp_price_sen:      number | null;
+  seat_height_prices: MfgSeatHeightPrice[] | null;
+  included_addons:    { addonId: string; qty: number }[] | null;
+  base_model:         string | null;
+  model_id:           string | null;
+  retail_product_id:  string | null;
+  status:             string;
+  pos_active:         boolean | null;
+  product_models:     {
+    id:              string;
+    name:            string;
+    model_code:      string;
+    photo_url:       string | null;
+    active:          boolean;
+    allowed_options: MfgAllowedOptions | null;
+  } | null;
+}
+
+async function fetchMfgCatalog(params?: Record<string, string>): Promise<MfgCatalogApiRow[]> {
+  const qs = params && Object.keys(params).length > 0 ? `?${new URLSearchParams(params).toString()}` : '';
+  const { products } = await authedFetch<{ products: MfgCatalogApiRow[] }>(`/pos-pools/mfg-catalog${qs}`);
+  return products ?? [];
+}
+
 export interface CatalogProduct {
   id: string;
   sku: string;
@@ -106,12 +157,11 @@ export const useProduct = (productId: string | undefined) =>
     refetchInterval: 30_000,
     queryFn: async () => {
       if (!productId) throw new Error('no productId');
-      // TODO(P4.3): NOT ported to Houzs. Two blockers: (1) the legacy retail
-      // `products` table has no Houzs endpoint in the map; (2) the mfg fallback
-      // needs a single SKU by id with cost/sell price fields, but the map only
-      // exposes GET /mfg-products (list, status=ACTIVE) — a status/pos_active
-      // filter mismatch that could hide a catalog-visible SKU. Pricing-display
-      // read; left on direct Supabase pending a dedicated Houzs endpoint.
+      // (P4.3) The mfg fallback below is ported to GET /pos-pools/mfg-catalog?id=
+      // (any status/pos_active, SELLING-only). The legacy retail `products`
+      // branch stays on direct Supabase — it has NO Houzs endpoint in the map and
+      // is dead on production (the retail `products` table starts EMPTY,
+      // PORT_DESIGN §10 Decision 10; every catalog card links to an mfg- id).
       /* Legacy path: `products` is the prototype's retail catalogue table.
          Production starts EMPTY (PORT_DESIGN.md §10 Decision 10) — only
          the per-Model `mfg_products` is seeded by commander via the
@@ -162,31 +212,14 @@ export const useProduct = (productId: string | undefined) =>
          to). mfg category enum → legacy pricing_kind. SOFA → 'sofa_build',
          BEDFRAME → 'bedframe_build', MATTRESS → 'size_variants', everything
          else → 'flat'. Keeps the Configurator's existing branch logic
-         working without porting it to talk to mfg_products directly. */
-      const { data: mfgData, error: mfgErr } = await supabase
-        .from('mfg_products')
-        .select(
-          'id, code, name, category, description, branding, size_label, base_price_sen, sell_price_sen, included_addons, base_model, model_id',
-        )
-        .eq('id', productId)
-        .maybeSingle();
-      if (mfgErr) throw mfgErr;
-      if (!mfgData) throw new Error('not_found');
+         working without porting it to talk to mfg_products directly.
 
-      const mfg = mfgData as {
-        id: string;
-        code: string;
-        name: string;
-        category: 'SOFA' | 'BEDFRAME' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE';
-        description: string | null;
-        branding: string | null;
-        size_label: string | null;
-        base_price_sen: number | null;
-        sell_price_sen: number | null;
-        included_addons: { addonId: string; qty: number }[] | null;
-        base_model: string | null;
-        model_id: string | null;
-      };
+         (P4.3) Houzs seam: the single SKU by id comes from
+         GET /pos-pools/mfg-catalog?id= (any status/pos_active). SELLING only —
+         the endpoint never emits a cost, so flat_price derives from
+         sell_price_sen alone (no base_price_sen fallback, #625 cost strip). */
+      const mfg = (await fetchMfgCatalog({ id: productId }))[0] ?? null;
+      if (!mfg) throw new Error('not_found');
 
       const pricingKind: 'sofa_build' | 'bedframe_build' | 'size_variants' | 'flat' =
         mfg.category === 'SOFA'     ? 'sofa_build'     :
@@ -214,8 +247,8 @@ export const useProduct = (productId: string | undefined) =>
         // for a 0-base accessory → trusts the submitted 0 (no drift). Other flat
         // categories (legacy / SERVICE) keep null = "no price yet".
         flat_price:
-          (mfg.sell_price_sen ?? mfg.base_price_sen) != null
-            ? Math.round((mfg.sell_price_sen ?? mfg.base_price_sen)! / 100)
+          mfg.sell_price_sen != null
+            ? Math.round(mfg.sell_price_sen / 100)
             : mfg.category === 'ACCESSORY' ? 0 : null,
         recliner_upgrade_price: 0,
         seat_upgrade_label: null,
@@ -819,19 +852,14 @@ export const useProductSizes = (productId: string | undefined) =>
                is never populated — prices come directly from mfg data.
            2c. Truly orphan SKU (no model, no retail link) → single size entry
                from its own `size_code`/`base_price_sen`. */
-      // TODO(P4.3): mfg-* branch NOT ported to Houzs. It reads `retail_product_id`
-      // (a bridge column NOT exposed by GET /mfg-products) and derives per-size
-      // SELLING/PWP prices from sibling mfg rows. GET /mfg-products filters
-      // status=ACTIVE, which would drop cost-discontinued (INACTIVE) siblings the
-      // sibling-derivation must keep-but-grey — a pricing/catalog-visibility risk.
-      // Left on direct Supabase pending a dedicated Houzs size-resolution endpoint.
+      // (P4.3) mfg-* branch ported to GET /pos-pools/mfg-catalog. The lead SKU
+      // comes back by id (any status/pos_active), and the sibling derivations use
+      // the ?modelId / ?baseModel scopes — which carry NO status/pos_active filter
+      // server-side, exactly like the original queries — so a cost-discontinued
+      // (INACTIVE) but pos_active sibling is KEPT and greyed here, never dropped.
+      // SELLING-only (no base_price_sen leaves the endpoint, #625 cost strip).
       if (productId.startsWith('mfg-')) {
-        const { data: mfgRow, error: mfgErr } = await supabase
-          .from('mfg_products')
-          .select('retail_product_id, model_id, size_code, base_price_sen, sell_price_sen, pwp_price_sen, base_model, category, product_models:model_id ( allowed_options )')
-          .eq('id', productId)
-          .maybeSingle();
-        if (mfgErr) throw mfgErr;
+        const mfgRow = (await fetchMfgCatalog({ id: productId }))[0] ?? null;
         if (!mfgRow) return [];
 
         // Master-Admin's Modular ON/OFF is the single source of truth: a size is
@@ -849,16 +877,13 @@ export const useProductSizes = (productId: string | undefined) =>
           : null;
 
         // 2a — retail bridge exists: use admin-configured product_size_variants
+        // via the existing pos-pools passthrough (already {sizeId,active,price,
+        // pwpPrice:null}; legacy retail variants carry no PWP price).
         if (mfgRow.retail_product_id) {
-          const { data, error } = await supabase
-            .from('product_size_variants')
-            .select('size_id, active, price')
-            .eq('product_id', mfgRow.retail_product_id);
-          if (error) throw error;
-          if (data && data.length > 0) {
-            // Legacy retail variants carry no PWP price (it lives on mfg_products).
-            return data.map((r) => ({ sizeId: r.size_id, active: r.active, price: r.price, pwpPrice: null }));
-          }
+          const { rows } = await authedFetch<{ rows: ProductSizeRow[] }>(
+            `/pos-pools/product-size-variants?productId=${encodeURIComponent(mfgRow.retail_product_id)}`,
+          );
+          if (rows && rows.length > 0) return rows;
           // Fall through to mfg siblings if the retail link exists but has no variants yet.
         }
 
@@ -868,7 +893,7 @@ export const useProductSizes = (productId: string | undefined) =>
         // pos_active (the "Visible" flag the catalog also honors). A kept size's
         // `active` still follows `status` so a cost-discontinued one greys out.
         // Case-insensitive size_code lookup guards older lowercase imports.
-        const sibsToRows = (sibs: Array<{ size_code: string | null; base_price_sen: number | null; sell_price_sen: number | null; pwp_price_sen: number | null; status: string; pos_active: boolean | null }>) =>
+        const sibsToRows = (sibs: Array<{ size_code: string | null; sell_price_sen: number | null; pwp_price_sen: number | null; status: string; pos_active: boolean | null }>) =>
           sibs
             .filter((s) => {
               const sc = (s.size_code ?? '').toUpperCase();
@@ -881,8 +906,8 @@ export const useProductSizes = (productId: string | undefined) =>
               sizeId: MFG_SIZE_CODE_TO_LIB[(s.size_code!).toUpperCase()] as string,
               // Surviving size: greys out only if cost-discontinued (status).
               active: (s.status as string) === 'ACTIVE',
-              // SELLING price (0109 cost/sell split): sell_price_sen ?? base_price_sen.
-              price: (s.sell_price_sen ?? s.base_price_sen) != null ? Math.round((s.sell_price_sen ?? s.base_price_sen)! / 100) : 0,
+              // SELLING price only (#625 cost strip — no base_price_sen fallback).
+              price: s.sell_price_sen != null ? Math.round(s.sell_price_sen / 100) : 0,
               // PWP (换购, 0128) base price per size, whole MYR. 0 / null = not set.
               pwpPrice: s.pwp_price_sen ? Math.round(s.pwp_price_sen / 100) : null,
             }));
@@ -891,12 +916,8 @@ export const useProductSizes = (productId: string | undefined) =>
         // generate-skus). sibsToRows drops sizes turned OFF in Modular /
         // pos_active so they vanish from the picker (Chairman 2026-06-01).
         if (mfgRow.model_id) {
-          const { data: siblings, error: sibErr } = await supabase
-            .from('mfg_products')
-            .select('size_code, base_price_sen, sell_price_sen, pwp_price_sen, status, pos_active')
-            .eq('model_id', mfgRow.model_id);
-          if (sibErr) throw sibErr;
-          const rows = sibsToRows(siblings ?? []);
+          const siblings = await fetchMfgCatalog({ modelId: mfgRow.model_id });
+          const rows = sibsToRows(siblings);
           if (rows.length > 0) return rows;
         }
 
@@ -904,13 +925,8 @@ export const useProductSizes = (productId: string | undefined) =>
         // (model_id is NULL). Group by base_model + category instead — same
         // denormalised text that generate-skus stamps on every sibling.
         if (mfgRow.base_model && mfgRow.category) {
-          const { data: siblings, error: sibErr } = await supabase
-            .from('mfg_products')
-            .select('size_code, base_price_sen, sell_price_sen, pwp_price_sen, status, pos_active')
-            .eq('base_model', mfgRow.base_model)
-            .eq('category', mfgRow.category);
-          if (sibErr) throw sibErr;
-          const rows = sibsToRows(siblings ?? []);
+          const siblings = await fetchMfgCatalog({ baseModel: mfgRow.base_model, category: mfgRow.category });
+          const rows = sibsToRows(siblings);
           if (rows.length > 0) return rows;
         }
 
@@ -921,7 +937,8 @@ export const useProductSizes = (productId: string | undefined) =>
           return [{
             sizeId: MFG_SIZE_CODE_TO_LIB[ownCode] as string,
             active: true,
-            price: (mfgRow.sell_price_sen ?? mfgRow.base_price_sen) != null ? Math.round((mfgRow.sell_price_sen ?? mfgRow.base_price_sen)! / 100) : 0,
+            // SELLING price only (#625 cost strip — no base_price_sen fallback).
+            price: mfgRow.sell_price_sen != null ? Math.round(mfgRow.sell_price_sen / 100) : 0,
             pwpPrice: mfgRow.pwp_price_sen ? Math.round(mfgRow.pwp_price_sen / 100) : null,
           }];
         }
@@ -1059,53 +1076,13 @@ export const useMfgCatalog = () =>
     // Houzs has NO realtime — poll in place of the `mfg-catalog` channel.
     refetchInterval: 30_000,
     queryFn: async (): Promise<MfgCatalogRow[]> => {
-      // TODO(P4.3): NOT ported to Houzs. This read selects by `pos_active=true`
-      // with NO status filter (a pos_active + status=INACTIVE SKU still shows in
-      // the catalog), but GET /mfg-products filters status=ACTIVE — porting would
-      // silently drop such SKUs from the customer catalog. It also relies on the
-      // embedded product_models(photo_url,active) join. Catalog-visibility read;
-      // left on direct Supabase pending a POS-catalog Houzs endpoint.
-      // Two-step fetch: (1) ACTIVE SKUs, (2) active Models referenced by them.
-      // Supabase JS supports embedded select via the FK (mfg_products.model_id
-      // → product_models.id) — the cheap path. If the embed fails (no FK
-      // metadata cached) the rows still come back with a NULL model field
-      // and the card falls back to the monogram placeholder.
-      const { data, error } = await supabase
-        .from('mfg_products')
-        .select(
-          'id, code, name, category, description, branding, size_label, base_price_sen, sell_price_sen, model_id, ' +
-          'product_models:model_id ( id, name, photo_url, active )',
-        )
-        // D5 (cost/sell split Phase 2): customer catalog visibility = the
-        // selling-only pos_active flag, NOT cost-side status. The Master
-        // Account "Visible" toggle writes pos_active; status stays for cost/PO.
-        .eq('pos_active', true)
-        .order('code', { ascending: true });
-      if (error) throw error;
-
-      // PR — Use `as unknown as` two-step cast because the supabase-js return
-      // type for `select(...)` with an embedded FK is sometimes inferred as
-      // `GenericStringError[]` when the schema cache hasn't materialised the
-      // relationship yet (same fix pattern as task #94 hotfix).
-      const rows = (data ?? []) as unknown as Array<{
-        id:              string;
-        code:            string;
-        name:            string;
-        category:        MfgCatalogCategory;
-        description:     string | null;
-        branding:        string | null;
-        size_label:      string | null;
-        base_price_sen:  number | null;
-        sell_price_sen:  number | null;
-        model_id:        string | null;
-        // Supabase embeds come back as an object OR an array depending on the
-        // join cardinality the schema cache infers. mfg_products → product_models
-        // is a single-record FK so we expect an object, but the type defaults
-        // to an array in PostgREST. Coerce defensively.
-        product_models:  { id: string; name: string; photo_url: string | null; active: boolean } |
-                         Array<{ id: string; name: string; photo_url: string | null; active: boolean }> |
-                         null;
-      }>;
+      // (P4.3) Ported to GET /pos-pools/mfg-catalog (no params) — the endpoint's
+      // default view is pos_active=true regardless of status, matching this read's
+      // original `.eq('pos_active', true)` with NO status filter, so a pos_active +
+      // status=INACTIVE SKU still shows (greyed downstream). The product_models
+      // join (id, name, photo_url, active) rides the same payload; SELLING-only
+      // (basePriceSen = sell_price_sen, no base_price_sen fallback, #625 cost strip).
+      const rows = await fetchMfgCatalog();
 
       return rows
         .map((r) => {
@@ -1124,7 +1101,7 @@ export const useMfgCatalog = () =>
             description:  r.description,
             branding:     r.branding,
             sizeLabel:    r.size_label,
-            basePriceSen: r.sell_price_sen ?? r.base_price_sen, // SELLING (0109 cost/sell split)
+            basePriceSen: r.sell_price_sen, // SELLING only (#625 cost strip)
             modelId:      r.model_id,
             modelName:    m?.name ?? null,
             // photo_url is stored as a relative proxy path from the API
@@ -1252,19 +1229,15 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
     queryFn: async (): Promise<SofaCustomizerData | null> => {
       if (!leadSkuId) return null;
 
-      // TODO(P4.3): NOT ported to Houzs. Step 2 builds the per-Model sofa MODULE
-      // SELLING-price map from every sofa SKU sharing base_model (`skuPriceRows`),
-      // read WITHOUT a status filter. GET /mfg-products filters status=ACTIVE, so
-      // an INACTIVE module SKU would silently vanish from the price map → wrong
-      // sofa module prices. This is exactly the pricing data HARD RULE 5 protects.
-      // Left on direct Supabase pending a module-price Houzs endpoint.
+      // (P4.3) Ported to GET /pos-pools/mfg-catalog. Step 2 builds the per-Model
+      // sofa MODULE SELLING-price map from every sofa SKU sharing base_model, via
+      // the ?baseModel scope which carries NO status/pos_active filter server-side
+      // — so an INACTIVE-but-pos_active module SKU stays in the price map exactly
+      // as the original unfiltered query intended (HARD RULE 5). SELLING-only:
+      // sell_price_sen + seat_height_prices[].sellingPriceSen; the endpoint strips
+      // the per-height cost (priceSen) so nothing here can leak or misprice on cost.
       // Step 1: resolve the SKU → Model. mfg_products carries the model_id FK.
-      const { data: sku, error: skuErr } = await supabase
-        .from('mfg_products')
-        .select('id, model_id, category, product_models:model_id ( id, name, model_code, allowed_options, active )')
-        .eq('id', leadSkuId)
-        .maybeSingle();
-      if (skuErr) throw skuErr;
+      const sku = (await fetchMfgCatalog({ id: leadSkuId }))[0] ?? null;
       if (!sku) return null;
 
       const model = Array.isArray(sku.product_models)
@@ -1284,22 +1257,13 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
       // (loadModelSofaModulePrices) and the same key combo scoping uses, so the
       // POS and server SKU sets are identical by construction (not just for
       // today's data). model_code === base_model on every sofa SKU.
-      const { data: skuPriceRows, error: skuPriceErr } = await supabase
-        .from('mfg_products')
-        .select('code, sell_price_sen, seat_height_prices')
-        .eq('base_model', model.model_code)
-        .eq('category', 'SOFA');
-      if (skuPriceErr) throw skuPriceErr;
+      const skuPriceRows = await fetchMfgCatalog({ baseModel: model.model_code, category: 'SOFA' });
       // Raw per-module SELLING rows. The flat `modulePrices` (depth/tier-agnostic
       // sell_price_sen) is the fallback; the Configurator rebuilds a depth-aware
       // P1 selling map from `sellingRows` so the per-seat-size grid price reaches
       // the live total + palette (SOFA-SELLING Phase B; Chairman 2026-06-01: run
       // at P1, no fabric-tier variation yet).
-      const sellingRows = ((skuPriceRows ?? []) as Array<{
-        code: string;
-        sell_price_sen: number | null;
-        seat_height_prices: MfgSeatHeightPrice[] | null;
-      }>).map((r) => ({
+      const sellingRows = skuPriceRows.map((r) => ({
         code: r.code,
         sellPriceSen: r.sell_price_sen,
         seatHeightPrices: r.seat_height_prices,
@@ -1313,19 +1277,14 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
         specials?:     string[];
       };
 
-      // Step 2: pull the current effective master maintenance config so we
-      // can resolve compartment images + descriptions + default prices.
-      const { data: cfgRow, error: cfgErr } = await supabase
-        .from('maintenance_config_history')
-        .select('config')
-        .eq('scope', 'master')
-        .lte('effective_from', new Date().toISOString().slice(0, 10))
-        .order('effective_from', { ascending: false })
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (cfgErr) throw cfgErr;
-      const cfg = (cfgRow?.config ?? {}) as {
+      // Step 2: pull the current effective master maintenance config so we can
+      // resolve compartment images + descriptions. (P4.3) Ported to
+      // GET /maintenance-config/resolved?scope=master, which returns the same
+      // effective-dated master config blob (respecting effective_from) this read
+      // used to select from maintenance_config_history — image/label meta only,
+      // no pricing (module price comes from modulePrices above).
+      const resolved = await authedFetch<MaintenanceResolved>('/maintenance-config/resolved?scope=master');
+      const cfg = (resolved.data ?? {}) as {
         sofaCompartmentMeta?: Record<string, MaintenanceCompartmentMeta>;
         sofaCompartments?:    string[];
       };

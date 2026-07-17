@@ -103,19 +103,19 @@ const useSwapContext = (docNo: string, target: TbcEditTarget) =>
       if (target.isPwp) {
         const code = String(target.variants.pwpCode ?? '').trim();
         if (!code) return { kind: 'locked', reason: 'This PWP reward carries no voucher code — the coordinator handles the exchange.' };
-        // TODO(P4.3): NOT ported to Houzs. This resolves the voucher's reward
-        // RANGE (reward_category + eligible_reward_model_ids) to pre-filter swap
-        // candidates. The map's GET /pwp-codes/:code is validatePwpCode, whose
-        // response (PwpCodeValidation) carries rewardCategory but NOT
-        // eligible_reward_model_ids, so SwapCtx.modelIds can't be reconstructed.
-        // Left on direct Supabase pending a raw pwp-code endpoint. The server
+        // (P4.3) Ported to GET /pwp-codes/:code (validate). It now returns the
+        // reward RANGE — rewardCategory + eligibleRewardModelIds + type — on EVERY
+        // found-code response, including an already-USED code (this reward line's
+        // voucher was consumed on the order being edited), so the range survives
+        // even though validity is false. No query params → no eligibility filter.
+        // A missing rewardCategory means the code wasn't found. The server
         // re-enforces the range on tbc-swap regardless.
-        const { data } = await supabase.from('pwp_codes')
-          .select('reward_category, eligible_reward_model_ids, type')
-          .eq('code', code).maybeSingle();
-        const d = data as { reward_category: string; eligible_reward_model_ids: string[] | null; type: string } | null;
-        if (!d) return { kind: 'locked', reason: 'This PWP voucher could not be found — the coordinator handles the exchange.' };
-        return { kind: 'reward', category: d.reward_category, modelIds: d.eligible_reward_model_ids ?? [], promoType: d.type };
+        const res = await authedFetch<{
+          valid: boolean; reason?: string;
+          rewardCategory?: string; eligibleRewardModelIds?: string[]; type?: string;
+        }>(`/pwp-codes/${encodeURIComponent(code)}`);
+        if (!res || res.rewardCategory == null) return { kind: 'locked', reason: 'This PWP voucher could not be found — the coordinator handles the exchange.' };
+        return { kind: 'reward', category: res.rewardCategory, modelIds: res.eligibleRewardModelIds ?? [], promoType: res.type ?? 'pwp' };
       }
       // Non-reward lines (including PWP triggers) swap freely — the server
       // re-evaluates the promotion after the swap (Loo 2026-06-12).
