@@ -2035,7 +2035,13 @@ export const useSofaCombos = (baseModel?: string | null) =>
       // return []. A non-ok status also degrades to [] (Quick Pick still works).
       let res: Response;
       try {
-        res = await authedFetchRaw(`/sofa-combos?${params.toString()}`);
+        // Houzs: the admin /sofa-combos is cost-gated (returns supplier cost +
+        // supplierId, no openRead). The POS reads the cost-stripped seam variant
+        // /pos-pools/sofa-combos — sellingPricesByHeight already = charged
+        // (selling ?? cost), pricesByHeight = {}, so the merge below is a no-op
+        // that matches the server recompute. 2990 keeps the flat /sofa-combos.
+        const combosPath = IS_HOUZS ? '/pos-pools/sofa-combos' : '/sofa-combos';
+        res = await authedFetchRaw(`${combosPath}?${params.toString()}`);
       } catch {
         return [];
       }
