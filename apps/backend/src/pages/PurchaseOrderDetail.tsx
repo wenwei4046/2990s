@@ -1105,7 +1105,30 @@ export const PurchaseOrderDetail = () => {
                   <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, po.currency)}</td>
                   <td className={styles.tableRight}>{(it.discount_centi ?? 0) > 0 ? fmtRm(it.discount_centi, po.currency) : '—'}</td>
                   <td className={styles.priceCell}>{fmtRm(it.line_total_centi, po.currency)}</td>
-                  <td className={styles.tableRight}>{it.delivery_date ?? '—'}</td>
+                  {/* Owner 2026-07-16 — "加上 Supplier delivery date 2 看不见":
+                      the View table only showed the ORIGINAL line date, hiding
+                      any supplier-revised date 2/3/4 saved in Edit. Show the
+                      EFFECTIVE (latest) date, with the original as a hint —
+                      same rule as the header card + the PO PDF. */}
+                  <td className={styles.tableRight}>
+                    {(() => {
+                      const eff = effectiveDelivery(
+                        it.delivery_date,
+                        it.supplier_delivery_date_2,
+                        it.supplier_delivery_date_3,
+                        it.supplier_delivery_date_4,
+                      );
+                      if (!eff) return '—';
+                      const revised = it.delivery_date && eff !== it.delivery_date;
+                      if (!revised) return eff;
+                      return (
+                        <>
+                          <div style={{ fontWeight: 700 }}>{eff}</div>
+                          <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>was {it.delivery_date}</div>
+                        </>
+                      );
+                    })()}
+                  </td>
                 </tr>
               ))}
             </tbody>
