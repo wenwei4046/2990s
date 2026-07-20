@@ -124,8 +124,8 @@ export async function authedFetchRaw(path: string, init?: RequestInit, baseOverr
  * - 204 and empty bodies resolve to `undefined` so `authedFetch<void>` callers
  *   (DELETE etc.) succeed instead of throwing on `JSON.parse('')` (PR #98).
  */
-export async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await authedFetchRaw(path, init);
+export async function authedFetch<T>(path: string, init?: RequestInit, baseOverride?: string): Promise<T> {
+  const res = await authedFetchRaw(path, init, baseOverride);
   if (!res.ok) {
     let detail = '';
     try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }

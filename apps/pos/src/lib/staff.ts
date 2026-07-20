@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from './auth';
-import { authedFetch } from './apiClient';
+import { authedFetch, IS_HOUZS, houzsApiRoot, HOUZS_COMPANY_ID } from './apiClient';
 
 export interface StaffRecord {
   id: string;
@@ -86,6 +86,19 @@ export function useSalesStaff(enabled = true) {
     enabled,
     staleTime: 5 * 60_000,
     queryFn: async () => {
+      // Houzs: /pos/sales-staff is at /api/pos (outside the /api/scm seam) and is
+      // company-scoped by X-Company-Id, returning { staff: [...] }. On 2990 it's
+      // the flat VITE_API_URL base returning a bare array. (Mirrors the login
+      // picker useShowroomSalesStaff — this My-Orders filter hook was left on the
+      // 2990 base by the seam port; cutover audit 2026-07-21.)
+      if (IS_HOUZS) {
+        const root = houzsApiRoot();
+        if (!root) throw new Error('VITE_HOUZS_API_URL is not set');
+        const res = await fetch(`${root}/pos/sales-staff`, { headers: { 'X-Company-Id': HOUZS_COMPANY_ID } });
+        if (!res.ok) throw new Error(`GET /pos/sales-staff failed (${res.status})`);
+        const body = (await res.json()) as { staff: Array<{ id: string; name: string }> };
+        return (body.staff ?? []).map((r) => ({ id: r.id, name: r.name }));
+      }
       if (!API_URL) throw new Error('VITE_API_URL is not set');
       const res = await fetch(`${API_URL}/pos/sales-staff`);
       if (!res.ok) throw new Error(`GET /pos/sales-staff failed (${res.status})`);

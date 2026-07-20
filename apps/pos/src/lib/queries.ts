@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sofaModulePricesFromSkus, normalizeCompartmentCode, representativeArtCode } from '@2990s/shared/sofa-build';
 import { comboChargedPrices, maintActiveValues, type MfgSeatHeightPrice, type DefaultFreeGift, type FreeItemEligibility, type FreeItemCampaign, type RuleTarget } from '@2990s/shared';
-import { authedFetch, authedFetchRaw, API_URL, IS_HOUZS, HOUZS_COMPANY_ID, houzsApiRoot } from './apiClient';
+import { authedFetch, authedFetchRaw, API_URL, IS_HOUZS, HOUZS_COMPANY_ID, houzsApiRoot, posApiBase } from './apiClient';
 import { useMaintenanceConfig, type MaintenanceResolved } from './products/mfg-products-queries';
 
 /* ─── Houzs seam helpers (P4.3) ───────────────────────────────────────────
@@ -1977,7 +1977,10 @@ export const useSalesStats = (
       // Owner-tier only: scope the Personal card to a chosen salesperson.
       if (salesperson && salesperson !== 'all') params.set('salesperson', salesperson);
       const qs = params.toString();
-      return await authedFetch<SalesStatsRow>(`/pos/sales-stats${qs ? `?${qs}` : ''}`);
+      // /pos/sales-stats lives at /api/pos (NOT under /api/scm), so route it via
+      // posApiBase() — same as verify-pin/set-pin. Without the override authedFetch
+      // used the /api/scm base and 404'd on Houzs (My-Orders KPI tiles blank).
+      return await authedFetch<SalesStatsRow>(`/pos/sales-stats${qs ? `?${qs}` : ''}`, undefined, posApiBase());
     },
   });
 
