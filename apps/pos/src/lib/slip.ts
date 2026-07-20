@@ -1,4 +1,4 @@
-import { API_URL, authedFetchRaw } from './apiClient';
+import { API_URL, authedFetchRaw, IS_HOUZS } from './apiClient';
 import type {
   SlipInitRequest,
   SlipInitResponse,
@@ -43,6 +43,23 @@ async function putToR2(putUrl: string, file: File): Promise<void> {
   }
 }
 
+// Houzs Worker-proxy upload leg. Houzs converted /slips OFF presigned-PUT (its
+// R2 S3-API creds were never created, so /slips/init returns NO putUrl); the
+// bytes are POSTed to /slips/:session/upload as a raw binary body — the same
+// sequence the Houzs frontend uses. authedFetchRaw keeps the caller's
+// content-type for a non-string (Blob) body, so the browser sends file.type.
+async function uploadBytesProxy(sessionId: string, file: File): Promise<void> {
+  const res = await authedFetchRaw(`/slips/${sessionId}/upload`, {
+    method: 'POST',
+    headers: { 'content-type': file.type },
+    body: file,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '<no body>');
+    throw new Error(`slip upload failed (${res.status}): ${text}`);
+  }
+}
+
 async function confirmUpload(sessionId: string): Promise<SlipConfirmResponse> {
   if (!API_URL) throw new Error('VITE_API_URL is not set');
   const res = await authedFetchRaw(`/slips/${sessionId}/confirm`, {
@@ -68,9 +85,10 @@ export interface UploadSlipResult {
 }
 
 /**
- * Full upload sequence with one retry on transient PUT errors.
- * - Step 1: init → get presigned URL
- * - Step 2: PUT directly to R2 (with 1 retry, 2s backoff)
+ * Full upload sequence with one retry on transient upload errors.
+ * - Step 1: init → upload session (+ a presigned URL on the 2990 target)
+ * - Step 2: send the bytes (1 retry, 2s backoff) — Worker-proxy POST on Houzs,
+ *   presigned PUT direct to R2 on 2990
  * - Step 3: confirm → server HEADs R2 and validates size
  */
 export async function uploadSlipFull(opts: UploadSlipOptions): Promise<UploadSlipResult> {
@@ -78,10 +96,14 @@ export async function uploadSlipFull(opts: UploadSlipOptions): Promise<UploadSli
   const init = await initSlipUpload(opts.file);
 
   opts.onProgress?.('put');
+  // Houzs has no presigned-PUT (init returns no putUrl) → proxy the bytes through
+  // the Worker; 2990 keeps the direct presigned PUT. Branch on the active target
+  // so both backends work through the parallel run (2990 is still live).
   let putErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      await putToR2(init.putUrl, opts.file);
+      if (IS_HOUZS) await uploadBytesProxy(init.uploadSessionId, opts.file);
+      else await putToR2(init.putUrl, opts.file);
       putErr = undefined;
       break;
     } catch (err) {

@@ -36,7 +36,7 @@ import { meetsProceedGate } from '@2990s/shared/order-rules';
 import { getSoEditScope } from '../lib/so-edit-scope';
 import { paymentProofRequired } from '../lib/handover-helpers';
 import { useAuth } from '../lib/auth';
-import { authedFetch as apiAuthedFetch, authedFetchRaw } from '../lib/apiClient';
+import { authedFetch as apiAuthedFetch, authedFetchRaw, posApiBase } from '../lib/apiClient';
 import { Topbar } from '../components/Topbar';
 import { CountryPhoneInput } from '../components/CountryPhoneInput';
 import { SlipUploadStep } from '../components/SlipUploadStep';
@@ -489,10 +489,13 @@ const PinGate = ({ onUnlock }: { onUnlock: () => void }) => {
         // guard, now sourced through the single seam.
         let res: Response;
         try {
+          // /pos/verify-pin is an AUTHED route on the /api/pos base (OUTSIDE the
+          // /api/scm base on Houzs) — posApiBase() routes it correctly on both
+          // targets. Houzs returns { valid } (parity shim), same as 2990.
           res = await authedFetchRaw('/pos/verify-pin', {
             method: 'POST',
             body: JSON.stringify({ pin }),
-          });
+          }, posApiBase());
         } catch {
           setPin('');
           setShowErr(true);

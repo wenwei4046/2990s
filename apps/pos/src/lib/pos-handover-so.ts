@@ -21,6 +21,7 @@
 // Mirrors the pattern in apps/backend/src/lib/flow-queries.ts:
 // `useCreateMfgSalesOrder` (camelCase POST + 201 → { docNo }).
 
+import { useRef } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { orderSofaCellsLeftToRight } from '@2990s/shared/sofa-build';
 import { deliveryTargetMatchesAnyLine, parseRuleTargets, type RuleLineInput } from '@2990s/shared';
@@ -722,9 +723,10 @@ export const cartLinesToSoItems = (
 
 /* ─── Mutation ───────────────────────────────────────────────────────── */
 
-const submitHandoff = async (payload: PosHandoffPayload): Promise<SoCreatedResponse> => {
+const submitHandoff = async (payload: PosHandoffPayload, idempotencyKey?: string): Promise<SoCreatedResponse> => {
   const res = await authedFetchRaw('/mfg-sales-orders', {
     method: 'POST',
+    headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
     body: JSON.stringify(payload),
   });
 
@@ -745,7 +747,21 @@ const submitHandoff = async (payload: PosHandoffPayload): Promise<SoCreatedRespo
  *  return the new SO docNo on success. The caller (Handover.tsx) handles
  *  navigation to the thank-you screen; this hook just owns the network call
  *  + auth. */
-export const usePosHandoffToSo = () =>
-  useMutation<SoCreatedResponse, Error, PosHandoffPayload>({
-    mutationFn: submitHandoff,
+export const usePosHandoffToSo = () => {
+  // Stable idempotency key per order INTENT — reused across a double-click or a
+  // retry of the SAME submit so Houzs's /api/* idempotency middleware replays
+  // the first response instead of minting a duplicate SO (the motivating case:
+  // a cold-Hyperdrive 503 then a re-submit). Reset on success so the next order
+  // gets a fresh key. The 2990 target has no such middleware and ignores the
+  // header harmlessly.
+  const keyRef = useRef<string | null>(null);
+  return useMutation<SoCreatedResponse, Error, PosHandoffPayload>({
+    mutationFn: (payload) => {
+      keyRef.current ??= crypto.randomUUID();
+      return submitHandoff(payload, keyRef.current);
+    },
+    onSuccess: () => {
+      keyRef.current = null;
+    },
   });
+};

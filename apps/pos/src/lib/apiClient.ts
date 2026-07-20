@@ -59,6 +59,15 @@ if (!API_URL) {
   console.warn(`[apiClient] API base is not set for target '${TARGET}'`);
 }
 
+/** Base for the AUTHED /pos routes (verify-pin, set-pin). On Houzs those live at
+ *  /api/pos — OUTSIDE the /api/scm base `API_URL` points at — so use the /api
+ *  root (houzsApiRoot); on 2990 everything is under the one flat `API_URL`. Pass
+ *  this as authedFetchRaw's `baseOverride`. (pin-login/sales-staff are pre-auth
+ *  and already handled via houzsApiRoot in auth.tsx.) */
+export function posApiBase(): string | undefined {
+  return IS_HOUZS ? houzsApiRoot() : API_URL;
+}
+
 /** The bearer token for the active target: Houzs POS session token on 'houzs',
  *  the Supabase session access_token on '2990'. Returns null when not signed in. */
 async function bearerToken(): Promise<string | null> {
@@ -89,12 +98,13 @@ function targetHeaders(): Record<string, string> {
  *   (multipart photo upload) must keep the browser's boundary-aware header —
  *   overriding it breaks the multipart parse on the Worker (PR #98).
  */
-export async function authedFetchRaw(path: string, init?: RequestInit): Promise<Response> {
-  if (!API_URL) throw new Error(`API base is not set for target '${TARGET}'`);
+export async function authedFetchRaw(path: string, init?: RequestInit, baseOverride?: string): Promise<Response> {
+  const base = baseOverride ?? API_URL;
+  if (!base) throw new Error(`API base is not set for target '${TARGET}'`);
   const token = await bearerToken();
   if (!token) throw new Error('not_authenticated');
   const isStringBody = typeof init?.body === 'string';
-  return fetch(`${API_URL}${path}`, {
+  return fetch(`${base}${path}`, {
     ...init,
     headers: {
       ...(init?.headers ?? {}),
