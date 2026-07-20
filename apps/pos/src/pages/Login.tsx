@@ -3,6 +3,7 @@ import { Navigate, useLocation } from 'react-router';
 import { Button } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
+import { IS_HOUZS, houzsApiRoot } from '../lib/apiClient';
 import styles from './Login.module.css';
 
 export const Login = () => {
@@ -45,6 +46,27 @@ export const Login = () => {
     }
     setError(null);
     setResetState('sending');
+    // Houzs target: member password resets are owned by the Houzs ERP. POST to
+    // the Houzs self-service endpoint (/api/auth/forgot-password) — it emails a
+    // reset link that completes on erp.houzscentury.com, NOT the POS, and always
+    // answers {ok} (anti-enumeration), so we surface 'sent' regardless. 2990's
+    // Supabase auth is being retired — never call it on this target.
+    if (IS_HOUZS) {
+      const root = houzsApiRoot();
+      try {
+        if (root) {
+          await fetch(`${root}/auth/forgot-password`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: target }),
+          });
+        }
+      } catch {
+        /* swallow — anti-enumeration keeps the UX identical on success/failure */
+      }
+      setResetState('sent');
+      return;
+    }
     const { error: resetErr } = await supabase.auth.resetPasswordForEmail(target, {
       redirectTo: `${window.location.origin}/set-password`,
     });

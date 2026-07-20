@@ -24,6 +24,7 @@ import { Navigate, useNavigate } from 'react-router';
 import { Button } from '@2990s/design-system';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
+import { IS_HOUZS } from '../lib/apiClient';
 import styles from './SetPassword.module.css';
 
 const MIN_LEN = 8;
@@ -48,6 +49,12 @@ export const SetPassword = () => {
   }, [done, navigate]);
 
   if (loading) return <div className={styles.shell}>Loading…</div>;
+
+  // Houzs target: invites + password resets complete on the Houzs ERP
+  // (erp.houzscentury.com), never in the POS. The 2990 Supabase recovery/invite
+  // session this page consumes (and the updateUser below) does not exist on
+  // Houzs, so bounce to /login instead of touching the retiring 2990 Supabase.
+  if (IS_HOUZS) return <Navigate to="/login" replace />;
 
   // Must be signed in (magic link or recovery session) — bounce to /login
   // otherwise so they don't waste time typing into a dead form.
