@@ -138,10 +138,19 @@ export async function uploadSlipFull(opts: UploadSlipOptions): Promise<UploadSli
   const init = await initSlipUpload(opts.file);
 
   opts.onProgress?.('put');
+  // 2026-07-22 — shared SlipInitResponseSchema loosened putUrl to optional
+  // (Houzs proxy-upload path). 2990's own /slips/init still returns a real
+  // putUrl (unchanged), so the backend admin app continues to presigned-PUT.
+  // Guard anyway so a schema drift on either side surfaces as a loud throw
+  // instead of a fetch(undefined) NetworkError.
+  if (!init.putUrl) {
+    throw new Error('slip init returned no putUrl — 2990 backend expects the presigned-PUT flow');
+  }
+  const putUrl = init.putUrl;
   let putErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      await putToR2(init.putUrl, opts.file);
+      await putToR2(putUrl, opts.file);
       putErr = undefined;
       break;
     } catch (err) {

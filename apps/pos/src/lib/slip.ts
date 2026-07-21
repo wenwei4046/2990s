@@ -102,8 +102,13 @@ export async function uploadSlipFull(opts: UploadSlipOptions): Promise<UploadSli
   let putErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      if (IS_HOUZS) await uploadBytesProxy(init.uploadSessionId, opts.file);
-      else await putToR2(init.putUrl, opts.file);
+      if (IS_HOUZS) {
+        await uploadBytesProxy(init.uploadSessionId, opts.file);
+      } else if (init.putUrl) {
+        await putToR2(init.putUrl, opts.file);
+      } else {
+        throw new Error('slip upload has no transport (no putUrl and not on Houzs target)');
+      }
       putErr = undefined;
       break;
     } catch (err) {

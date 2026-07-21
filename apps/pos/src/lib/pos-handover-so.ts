@@ -205,6 +205,16 @@ export interface PosHandoffError {
   field?: string;
   value?: string;
   allowed?: string[];
+  /** validation_failed detail (Houzs so-save-problems.ts) — server aggregates
+   *  every failing check into one array so the caller can render them all at
+   *  once instead of fix-one-then-hit-the-next. */
+  problems?: Array<{
+    code: string;
+    message?: string;
+    line?: string;
+    field?: string;
+    facts?: Record<string, unknown>;
+  }>;
 }
 
 /** Human-friendly labels for the allowed-options axes the API gates on. Keep in
@@ -236,6 +246,39 @@ export class PosHandoffApiError extends Error {
  *  can fix the line (Edit in cart) instead of staring at a bare error code —
  *  the 2026-06-04 handover failure showed only "variants_incomplete". */
 export const describePosHandoffError = (payload: PosHandoffError): string => {
+  /* validation_failed (Houzs aggregated 422) — unpack the problems array so the
+     salesperson sees each per-line/per-field issue at once rather than "N things
+     need fixing". */
+  if (payload.error === 'validation_failed' && Array.isArray(payload.problems) && payload.problems.length > 0) {
+    const lines = payload.problems.map((p) => {
+      const where = p.line ? `${p.line}: ` : '';
+      const label = p.field ? ` (${p.field})` : '';
+      return `${where}${p.message ?? p.code}${label}`;
+    });
+    return `Order placement failed: ${payload.message ?? 'validation_failed'} — ${lines.join('; ')}`;
+  }
+
+  /* Owner-rule 409s that reach the handover surface — matched to Houzs's server
+     error codes so the salesperson sees the same copy the drawer shows. */
+  if (payload.error === 'so_locked_processing') {
+    return 'The processing date has passed — items and dates are locked. Customer, address and payment can still be updated.';
+  }
+  if (payload.error === 'processing_date_remove_forbidden') {
+    return 'Only an admin can clear a Processing Date once it is set. Ask a coordinator or owner.';
+  }
+  if (payload.error === 'so_identity_locked') {
+    return 'This order already has a delivery or invoice — the customer identity can no longer be changed.';
+  }
+  if (payload.error === 'free_and_pwp_exclusive') {
+    return 'A Free Item and a PWP reward can\'t be applied to the same line. Remove one before saving.';
+  }
+  if (payload.error === 'free_item_not_eligible') {
+    return 'This free item isn\'t eligible for the campaign selected. Pick a different item or campaign.';
+  }
+  if (payload.error === 'state_change_conflicts_line_warehouse') {
+    return 'The new State would move a line to a different warehouse, but a PO / DO is already cut against the old one. Cancel the affected downstream doc (or move each line explicitly) before changing the State.';
+  }
+
   /* variant_not_allowed names the offending axis + value + the Model's allowed
      pool, so sales can Edit the line to a valid option (the 2026-06-08 failure
      showed only "variant_not_allowed" — nobody could tell WHICH variant). The
