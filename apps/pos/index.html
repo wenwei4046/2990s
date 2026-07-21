@@ -13,6 +13,27 @@
   </head>
   <body data-theme="cream" data-density="calm">
     <div id="root"></div>
+    <!-- Deploy-window boot watchdog (Owner 2026-07-16) — mirrors the Backend.
+         If the ENTRY module graph fails right after a deploy (CF Pages serves
+         the SPA HTML for a missing hashed chunk), no app JS runs and the tab
+         stays blank with no error. If #root is still empty ~8s after load,
+         reload (at most once a minute per tab) until the new build comes up. -->
+    <script>
+      (function () {
+        var KEY = '__bootRetryAt';
+        window.addEventListener('load', function () {
+          setTimeout(function () {
+            var root = document.getElementById('root');
+            if (!root || root.childElementCount > 0 || navigator.onLine === false) return;
+            var last = Number(sessionStorage.getItem(KEY) || 0);
+            if (Date.now() - last > 60000) {
+              sessionStorage.setItem(KEY, String(Date.now()));
+              location.reload();
+            }
+          }, 8000);
+        });
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
