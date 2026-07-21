@@ -1,24 +1,18 @@
 import { useEffect, useRef } from 'react';
 import { useAuth } from './auth';
 import { useCart, type CartLine } from '../state/cart';
-import { supabase } from './supabase';
+import { API_URL, authedFetchRaw } from './apiClient';
 
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 const DEBOUNCE_MS = 800;
-
-async function getToken(): Promise<string | null> {
-  const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
-}
 
 async function flushCart(lines: CartLine[], sourceQuoteId: string | null): Promise<void> {
   if (!API_URL) return;
-  const token = await getToken();
-  if (!token) return;
   try {
-    await fetch(`${API_URL}/pos-cart`, {
+    // authedFetchRaw sources the active target's token + X-Company-Id and throws
+    // `not_authenticated` when signed out — the catch below swallows that so a
+    // logged-out flush is a silent no-op, exactly as the old `!token → return`.
+    await authedFetchRaw('/pos-cart', {
       method: 'PUT',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ lines, sourceQuoteId }),
     });
   } catch {
@@ -54,10 +48,12 @@ export function useCartSync(userId: string | null): void {
 
     let cancelled = false;
     void (async () => {
-      const token = await getToken();
-      if (cancelled || !token) return;
       try {
-        const res = await fetch(`${API_URL}/pos-cart`, { headers: { authorization: `Bearer ${token}` } });
+        // authedFetchRaw throws `not_authenticated` when signed out — that lands
+        // in the catch below, leaving hydratedUserRef null (write-back stays
+        // blocked), exactly as the old `!token → return` did.
+        const res = await authedFetchRaw('/pos-cart');
+        if (cancelled) return;
         if (!res.ok) throw new Error(`GET /pos-cart ${res.status}`);
         const body = (await res.json()) as { lines: CartLine[]; sourceQuoteId: string | null };
         if (cancelled) return;

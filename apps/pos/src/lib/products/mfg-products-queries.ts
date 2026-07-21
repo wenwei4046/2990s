@@ -10,48 +10,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { MaintPoolEntry } from '@2990s/shared';
-import { supabase } from '../supabase';
-
-const API_URL = import.meta.env.VITE_API_URL;
-if (!API_URL) {
-  // Fail loud at import time — same posture as lib/queries.ts.
-  // eslint-disable-next-line no-console
-  console.warn('[mfg-products] VITE_API_URL is not set');
-}
-
-async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) throw new Error('not_authenticated');
-  // Only stamp content-type: application/json for string bodies (JSON
-  // payloads). For FormData (multipart photo upload) the browser must set the
-  // boundary-aware content-type itself — overriding it here breaks the
-  // multipart parse on the Worker (compartment photo uploads failed for this).
-  const isStringBody = typeof init?.body === 'string';
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      authorization: `Bearer ${token}`,
-      ...(isStringBody ? { 'content-type': 'application/json' } : {}),
-    },
-  });
-  if (!res.ok) {
-    let detail = '';
-    try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
-    throw new Error(`${res.status} ${res.statusText}: ${detail}`);
-  }
-  // PR #98 — Commander 2026-05-26: bulk SKU delete reported "Deleted 0/22.
-  // 22 failed" with "Unexpected end of JSON input" even though the server
-  // actually deleted every row. Cause: DELETE returns 204 No Content (empty
-  // body, REST convention); this helper unconditionally called res.json()
-  // which throws on an empty body. Handle 204 / empty bodies cleanly so
-  // callers typed authedFetch<void> resolve instead of rejecting.
-  if (res.status === 204) return undefined as T;
-  const text = await res.text();
-  if (!text) return undefined as T;
-  return JSON.parse(text) as T;
-}
+import { authedFetch } from '../apiClient';
 
 /* ────────────────────────── Types ────────────────────────────────────── */
 
@@ -601,15 +560,7 @@ export function useDeleteMaintenanceConfigRow() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      const res = await fetch(`${API_URL}/maintenance-config/changes/${id}`, {
-        method: 'DELETE',
-        headers: {
-          authorization: `Bearer ${(await supabase.auth.getSession()).data.session?.access_token ?? ''}`,
-        },
-      });
-      if (!res.ok && res.status !== 204) {
-        throw new Error(`${res.status} ${res.statusText}`);
-      }
+      await authedFetch(`/maintenance-config/changes/${encodeURIComponent(id)}`, { method: 'DELETE' });
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['maintenance-config'] }),
   });

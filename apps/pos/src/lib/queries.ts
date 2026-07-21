@@ -1,11 +1,90 @@
-import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sofaModulePricesFromSkus, normalizeCompartmentCode, representativeArtCode } from '@2990s/shared/sofa-build';
 import { comboChargedPrices, maintActiveValues, type MfgSeatHeightPrice, type DefaultFreeGift, type FreeItemEligibility, type FreeItemCampaign, type RuleTarget } from '@2990s/shared';
-import { supabase } from './supabase';
-import { useMaintenanceConfig } from './products/mfg-products-queries';
+import { authedFetch, authedFetchRaw, API_URL, IS_HOUZS, HOUZS_COMPANY_ID, houzsApiRoot, posApiBase } from './apiClient';
+import { useMaintenanceConfig, type MaintenanceResolved } from './products/mfg-products-queries';
 
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
+/* ─── Houzs seam helpers (P4.3) ───────────────────────────────────────────
+ * The configurator resolves a SKU (mfg_products.id) → its Model's
+ * allowed_options (the Modular ON/OFF gate). On Houzs there is no embedded
+ * PostgREST join; instead we compose the two documented list endpoints:
+ *   GET /mfg-products   → { products:[{ id, model_id }] }   (SKU → model_id)
+ *   GET /product-models → { models:[{ id, allowed_options }] } (model → gate)
+ * allowed_options is a pure GATE (which options may be offered), never a
+ * price, so this resolution touches no pricing math. */
+type MfgAllowedOptions = {
+  fabrics?:       string[];
+  specials?:      string[];
+  sizes?:         string[];
+  gaps?:          string[];
+  leg_heights?:   string[];
+  divan_heights?: string[];
+  total_heights?: string[];
+  compartments?:  string[];
+};
+
+async function fetchModelAllowedOptions(productId: string): Promise<MfgAllowedOptions | null> {
+  const { products } = await authedFetch<{ products: Array<{ id: string; model_id: string | null }> }>(
+    '/mfg-products',
+  );
+  const modelId = (products ?? []).find((p) => p.id === productId)?.model_id ?? null;
+  if (!modelId) return null;
+  const { models } = await authedFetch<{ models: Array<{ id: string; allowed_options: MfgAllowedOptions | null }> }>(
+    '/product-models',
+  );
+  return (models ?? []).find((m) => m.id === modelId)?.allowed_options ?? null;
+}
+
+/* ─── POS-catalog SKU read (P4.3) ─────────────────────────────────────────
+ * GET /pos-pools/mfg-catalog is the Houzs seam that replaces the five direct
+ * `supabase.from('mfg_products')` reads the map couldn't serve: GET /mfg-products
+ * filters status=ACTIVE, but the POS keeps pos_active=true SKUs even when
+ * status=INACTIVE, and derives sofa-module + per-size prices from SIBLING SKUs
+ * whose original query carried NO status/pos_active filter at all.
+ *
+ * Params (mutually exclusive, precedence id > modelId > baseModel):
+ *   {}                                → pos_active=true, any status (the catalog)
+ *   { id }                            → that ONE SKU, any status/pos_active
+ *   { modelId }                       → all SKUs of a model_id, no status/pos filter
+ *   { baseModel, category? }          → all SKUs of a base_model (+category), no filter
+ *
+ * COST STRIP (#625): the endpoint emits SELLING fields only (sell_price_sen /
+ * pwp_price_sen). It never sends base_price_sen / cost_price_sen, and
+ * seat_height_prices arrives with its per-height cost (priceSen) already
+ * removed — so nothing here can fall back to, or leak, a cost. */
+interface MfgCatalogApiRow {
+  id:                 string;
+  code:               string;
+  name:               string;
+  category:           MfgCatalogCategory;
+  description:        string | null;
+  branding:           string | null;
+  size_label:         string | null;
+  size_code:          string | null;
+  sell_price_sen:     number | null;
+  pwp_price_sen:      number | null;
+  seat_height_prices: MfgSeatHeightPrice[] | null;
+  included_addons:    { addonId: string; qty: number }[] | null;
+  base_model:         string | null;
+  model_id:           string | null;
+  retail_product_id:  string | null;
+  status:             string;
+  pos_active:         boolean | null;
+  product_models:     {
+    id:              string;
+    name:            string;
+    model_code:      string;
+    photo_url:       string | null;
+    active:          boolean;
+    allowed_options: MfgAllowedOptions | null;
+  } | null;
+}
+
+async function fetchMfgCatalog(params?: Record<string, string>): Promise<MfgCatalogApiRow[]> {
+  const qs = params && Object.keys(params).length > 0 ? `?${new URLSearchParams(params).toString()}` : '';
+  const { products } = await authedFetch<{ products: MfgCatalogApiRow[] }>(`/pos-pools/mfg-catalog${qs}`);
+  return products ?? [];
+}
 
 export interface CatalogProduct {
   id: string;
@@ -36,40 +115,21 @@ export const useCatalog = () =>
   useQuery({
     queryKey: ['catalog'],
     queryFn: async (): Promise<CatalogProduct[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/products`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /products failed (${res.status})`);
-      const body = (await res.json()) as ProductsResponse;
+      const body = await authedFetch<ProductsResponse>('/products');
       return body.products;
     },
     staleTime: 30_000,
+    // Houzs has NO realtime — poll every 30s in place of the old
+    // `catalog-products` postgres_changes channel (P4.3 seam port).
+    refetchInterval: 30_000,
   });
 
-// Realtime subscription on `products`. Any INSERT/UPDATE/DELETE invalidates the
-// catalog query so the table refetches within ~300ms — replaces the prototype's
-// localStorage push from Backend → POS.
+// (P4.3) Was a Supabase Realtime subscription on `products` that invalidated
+// the catalog query on any change. Houzs has no realtime, so the invalidation
+// is replaced by `refetchInterval: 30_000` on useCatalog above. Kept as an
+// exported no-op so existing call sites (OrderBoard etc.) stay unchanged.
 export const useCatalogRealtime = () => {
-  const qc = useQueryClient();
-  useEffect(() => {
-    const channel = supabase
-      .channel('catalog-products')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'products' },
-        () => {
-          void qc.invalidateQueries({ queryKey: ['catalog'] });
-        },
-      )
-      .subscribe();
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [qc]);
+  /* no-op — polling replaces realtime (see useCatalog refetchInterval) */
 };
 
 /* ─── Per-product pricing (configurator screens) ───────────────────── */
@@ -82,83 +142,36 @@ export const useProduct = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['product', productId],
+    // Houzs has NO realtime — poll in place of the `product-pricing` channel.
+    refetchInterval: 30_000,
     queryFn: async () => {
       if (!productId) throw new Error('no productId');
-      /* Legacy path: `products` is the prototype's retail catalogue table.
-         Production starts EMPTY (PORT_DESIGN.md §10 Decision 10) — only
-         the per-Model `mfg_products` is seeded by commander via the
-         Backend SKU Master. POS Catalog cards link to `/configure/{mfg.id}`
-         (the mfg SKU id), so the lookup below misses every time.
+      // (P4.3 / auth cutover) The legacy retail `products` branch was the POS's
+      // LAST direct `supabase.from(...)` data read. It is removed here: the
+      // retail `products` table starts EMPTY in production (PORT_DESIGN §10
+      // Decision 10) and every Catalog card links to an mfg- id, so the lookup
+      // missed every time and fell through to the mfg fallback anyway. Dropping
+      // it makes ALL ids resolve via GET /pos-pools/mfg-catalog?id= below — the
+      // Houzs-served path — and lets the POS shed @supabase/supabase-js for data.
+      //
+      // Behaviour choice (FLAGGED in the PR): rather than gate on the backend
+      // target, the branch is deleted for BOTH targets — faithful because the
+      // 2990 retail table is likewise empty in production, so a legacy UUID id
+      // already fell through to the mfg fallback. A non-empty retail `products`
+      // table (never the case in prod) would no longer be served.
 
-         PR — Commander 2026-05-28 (CATALOG ROUTING FIX): when products
-         doesn't have the row, fall back to mfg_products + product_models
-         and synthesise a CatalogProduct-shaped object the Configurator
-         can render. The Configurator only touches a small subset of the
-         columns (recliner_upgrade_price / seat_upgrade_label /
-         seat_upgrade_footrest / depth_options / included_addons / etc.),
-         so defaults are safe for now — sofa pricing data flows in from
-         `useSofaCustomizerData` + `useProductCompartments` regardless.
-
-         BUGFIX 2026-05-28 (commander caught "Loading product…" hang):
-         mfg_products.id is a TEXT key shaped `mfg-<12hex>` (e.g.
-         mfg-9f684f4b9336). products.id is a UUID column. Querying
-         products by a non-UUID text id makes Postgres throw "invalid
-         input syntax for type uuid", which the old `if (error) throw`
-         propagated → the Configurator (which renders "Loading product…"
-         whenever `!data`) was stuck forever. Skip the products query
-         entirely for mfg- ids; only legacy UUID ids hit the retail table. */
-      const isMfgId = productId.startsWith('mfg-');
-      if (!isMfgId) {
-        const { data, error } = await supabase
-          .from('products')
-          .select(
-            'id, sku, name, detail, size_display, img_key, thumb_key, pricing_kind, flat_price, recliner_upgrade_price, seat_upgrade_label, seat_upgrade_footrest, depth_options, stock, low_at, visible, category_id, series_id, included_addons, updated_at',
-          )
-          .eq('id', productId)
-          .maybeSingle();
-        if (error) throw error;
-        if (data) {
-          return data as typeof data & {
-            included_addons: { addonId: string; qty: number }[];
-            seat_upgrade_label: string | null;
-            seat_upgrade_footrest: boolean;
-            depth_options: string | null;
-            // legacy products table has no base_model column — typed optional
-            // so downstream code that checks product.data?.base_model compiles.
-            base_model?: string | null;
-          };
-        }
-      }
-
-      /* Fallback: look up by mfg_products.id (what the Catalog cards link
+      /* Look up by mfg_products.id (what the Catalog cards link
          to). mfg category enum → legacy pricing_kind. SOFA → 'sofa_build',
          BEDFRAME → 'bedframe_build', MATTRESS → 'size_variants', everything
          else → 'flat'. Keeps the Configurator's existing branch logic
-         working without porting it to talk to mfg_products directly. */
-      const { data: mfgData, error: mfgErr } = await supabase
-        .from('mfg_products')
-        .select(
-          'id, code, name, category, description, branding, size_label, base_price_sen, sell_price_sen, included_addons, base_model, model_id',
-        )
-        .eq('id', productId)
-        .maybeSingle();
-      if (mfgErr) throw mfgErr;
-      if (!mfgData) throw new Error('not_found');
+         working without porting it to talk to mfg_products directly.
 
-      const mfg = mfgData as {
-        id: string;
-        code: string;
-        name: string;
-        category: 'SOFA' | 'BEDFRAME' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE';
-        description: string | null;
-        branding: string | null;
-        size_label: string | null;
-        base_price_sen: number | null;
-        sell_price_sen: number | null;
-        included_addons: { addonId: string; qty: number }[] | null;
-        base_model: string | null;
-        model_id: string | null;
-      };
+         (P4.3) Houzs seam: the single SKU by id comes from
+         GET /pos-pools/mfg-catalog?id= (any status/pos_active). SELLING only —
+         the endpoint never emits a cost, so flat_price derives from
+         sell_price_sen alone (no base_price_sen fallback, #625 cost strip). */
+      const mfg = (await fetchMfgCatalog({ id: productId }))[0] ?? null;
+      if (!mfg) throw new Error('not_found');
 
       const pricingKind: 'sofa_build' | 'bedframe_build' | 'size_variants' | 'flat' =
         mfg.category === 'SOFA'     ? 'sofa_build'     :
@@ -178,7 +191,10 @@ export const useProduct = (productId: string | undefined) =>
         size_display: mfg.size_label,
         img_key: null,
         thumb_key: null,
-        pricing_kind: pricingKind,
+        // Widen to the full CatalogProduct union (this map never yields 'tbc',
+        // but before the legacy retail branch was removed the return type carried
+        // 'tbc' from the `products` row, and Configurator still switches on it).
+        pricing_kind: pricingKind as CatalogProduct['pricing_kind'],
         // ACCESSORY is flat + has no variants; Loo wants even an unpriced (null)
         // or RM 0 accessory to be sellable in POS. Treat null as 0 so the
         // Configurator's FlatAddToCart renders (its gate is flat_price != null)
@@ -186,8 +202,8 @@ export const useProduct = (productId: string | undefined) =>
         // for a 0-base accessory → trusts the submitted 0 (no drift). Other flat
         // categories (legacy / SERVICE) keep null = "no price yet".
         flat_price:
-          (mfg.sell_price_sen ?? mfg.base_price_sen) != null
-            ? Math.round((mfg.sell_price_sen ?? mfg.base_price_sen)! / 100)
+          mfg.sell_price_sen != null
+            ? Math.round(mfg.sell_price_sen / 100)
             : mfg.category === 'ACCESSORY' ? 0 : null,
         recliner_upgrade_price: 0,
         seat_upgrade_label: null,
@@ -233,30 +249,50 @@ export interface AddonRow {
   showAtHandover: boolean;
 }
 
+/** Houzs GET /addons row (camelCase). Superset used by both useAddons
+ *  (enabled-only handover slice) and useAllAddons (admin editor). */
+interface HouzsAddonRow {
+  id: string;
+  label: string;
+  description: string | null;
+  icon: string;
+  kind: 'qty' | 'floors_items' | 'flat';
+  category: string | null;
+  price: number;
+  perFloorItem: number | null;
+  unit: string | null;
+  defaultQty: number;
+  stock: number | null;
+  enabled: boolean;
+  showAtHandover: boolean | null;
+  serviceSku: string | null;
+  sortOrder: number;
+}
+
 export const useAddons = () =>
   useQuery({
     queryKey: ['addons'],
     staleTime: 5 * 60_000,
     queryFn: async (): Promise<AddonRow[]> => {
-      const { data, error } = await supabase
-        .from('addons')
-        .select('id, label, description, icon, kind, category, price, per_floor_item, unit, enabled, show_at_handover')
-        .eq('enabled', true)
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        id: r.id,
-        label: r.label,
-        description: r.description,
-        icon: r.icon,
-        kind: r.kind,
-        category: r.category,
-        price: r.price,
-        perFloorItem: r.per_floor_item,
-        unit: r.unit,
-        enabled: r.enabled,
-        showAtHandover: r.show_at_handover ?? false,
-      }));
+      // GET /addons returns ALL rows; the handover screen wants enabled-only,
+      // sorted by sortOrder — filter/sort client-side to preserve the old shape.
+      const { addons } = await authedFetch<{ addons: HouzsAddonRow[] }>('/addons');
+      return (addons ?? [])
+        .filter((r) => r.enabled)
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((r) => ({
+          id: r.id,
+          label: r.label,
+          description: r.description,
+          icon: r.icon,
+          kind: r.kind,
+          category: r.category,
+          price: r.price,
+          perFloorItem: r.perFloorItem,
+          unit: r.unit,
+          enabled: r.enabled,
+          showAtHandover: r.showAtHandover ?? false,
+        }));
     },
   });
 
@@ -293,18 +329,17 @@ export const useAllAddons = () =>
     queryKey: ['addons-all'],
     staleTime: 60_000,
     queryFn: async (): Promise<AdminAddonRow[]> => {
-      const { data, error } = await supabase
-        .from('addons')
-        .select('id, label, description, icon, kind, category, price, per_floor_item, unit, default_qty, stock, enabled, show_at_handover, service_sku, sort_order')
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r: any) => ({
-        id: r.id, label: r.label, description: r.description, icon: r.icon, kind: r.kind,
-        category: r.category, price: r.price, perFloorItem: r.per_floor_item, unit: r.unit,
-        defaultQty: r.default_qty, stock: r.stock, enabled: r.enabled,
-        showAtHandover: r.show_at_handover ?? false, serviceSku: r.service_sku ?? null,
-        sortOrder: r.sort_order,
-      }));
+      const { addons } = await authedFetch<{ addons: HouzsAddonRow[] }>('/addons');
+      return (addons ?? [])
+        .slice()
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((r) => ({
+          id: r.id, label: r.label, description: r.description, icon: r.icon, kind: r.kind,
+          category: r.category, price: r.price, perFloorItem: r.perFloorItem, unit: r.unit,
+          defaultQty: r.defaultQty, stock: r.stock, enabled: r.enabled,
+          showAtHandover: r.showAtHandover ?? false, serviceSku: r.serviceSku ?? null,
+          sortOrder: r.sortOrder,
+        }));
     },
   });
 
@@ -317,14 +352,18 @@ export const useUpdateAddon = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, patch }: { id: string; patch: { price?: number; perFloorItem?: number | null; enabled?: boolean; showAtHandover?: boolean; serviceSku?: string | null } }) => {
-      const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
-      if (patch.price !== undefined)          update.price = patch.price;
-      if (patch.perFloorItem !== undefined)   update.per_floor_item = patch.perFloorItem;
-      if (patch.enabled !== undefined)        update.enabled = patch.enabled;
-      if (patch.showAtHandover !== undefined) update.show_at_handover = patch.showAtHandover;
-      if (patch.serviceSku !== undefined)     update.service_sku = patch.serviceSku;
-      const { error } = await supabase.from('addons').update(update).eq('id', id);
-      if (error) throw error;
+      // Houzs PATCH /addons/:id takes a camelCase partial (only the provided
+      // keys). Forward the patch as-is; the server stamps updated_at.
+      const body: Record<string, unknown> = {};
+      if (patch.price !== undefined)          body.price = patch.price;
+      if (patch.perFloorItem !== undefined)   body.perFloorItem = patch.perFloorItem;
+      if (patch.enabled !== undefined)        body.enabled = patch.enabled;
+      if (patch.showAtHandover !== undefined) body.showAtHandover = patch.showAtHandover;
+      if (patch.serviceSku !== undefined)     body.serviceSku = patch.serviceSku;
+      await authedFetch<void>(`/addons/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      });
     },
     onSuccess: () => invalidateAddons(qc),
   });
@@ -340,14 +379,11 @@ export const useCreateAddon = () => {
       stock: number | null; enabled: boolean; showAtHandover: boolean;
       serviceSku: string | null; sortOrder: number;
     }) => {
-      const { error } = await supabase.from('addons').insert({
-        id: row.id, label: row.label, description: row.description, icon: row.icon,
-        kind: row.kind, category: row.category, price: row.price,
-        per_floor_item: row.perFloorItem, unit: row.unit, stock: row.stock,
-        enabled: row.enabled, show_at_handover: row.showAtHandover,
-        service_sku: row.serviceSku, sort_order: row.sortOrder,
+      // Houzs POST /addons — camelCase body mirrors the CreateAddon input.
+      await authedFetch<void>('/addons', {
+        method: 'POST',
+        body: JSON.stringify(row),
       });
-      if (error) throw error;
     },
     onSuccess: () => invalidateAddons(qc),
   });
@@ -360,8 +396,7 @@ export const useDeleteAddon = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from('addons').delete().eq('id', id);
-      if (error) throw error;
+      await authedFetch<void>(`/addons/${encodeURIComponent(id)}`, { method: 'DELETE' });
     },
     onSuccess: () => invalidateAddons(qc),
   });
@@ -371,21 +406,18 @@ export const useProductBundles = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['product', productId, 'bundles'],
+    refetchInterval: 30_000,   // Houzs poll (replaces product-pricing channel)
     queryFn: async (): Promise<ProductBundleRow[]> => {
       if (!productId) throw new Error('no productId');
       // mfg-{12hex} products have no rows in product_bundles (UUID FK).
       // Their bundles are sourced from sofa_combos via useSofaCombos().
       if (productId.startsWith('mfg-')) return [];
-      const { data, error } = await supabase
-        .from('product_bundles')
-        .select('bundle_id, active, price')
-        .eq('product_id', productId);
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        bundleId: r.bundle_id,
-        active: r.active,
-        price: r.price,
-      }));
+      // Houzs GET /pos-pools/product-bundles → { rows: ProductBundleRow[] }
+      // (already {bundleId,active,price}) — return as-is.
+      const { rows } = await authedFetch<{ rows: ProductBundleRow[] }>(
+        `/pos-pools/product-bundles?productId=${encodeURIComponent(productId)}`,
+      );
+      return rows ?? [];
     },
   });
 
@@ -393,21 +425,18 @@ export const useProductCompartments = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['product', productId, 'compartments'],
+    refetchInterval: 30_000,   // Houzs poll (replaces product-pricing channel)
     queryFn: async (): Promise<ProductCompartmentRow[]> => {
       if (!productId) throw new Error('no productId');
       // mfg-{12hex} products have no rows in product_compartments (UUID FK).
       // Their compartments are sourced from useSofaCustomizerData() → allowed_options.
       if (productId.startsWith('mfg-')) return [];
-      const { data, error } = await supabase
-        .from('product_compartments')
-        .select('compartment_id, active, price')
-        .eq('product_id', productId);
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        compartmentId: r.compartment_id,
-        active: r.active,
-        price: r.price,
-      }));
+      // Houzs GET /pos-pools/product-compartments → { rows: ProductCompartmentRow[] }
+      // (already {compartmentId,active,price}) — return as-is.
+      const { rows } = await authedFetch<{ rows: ProductCompartmentRow[] }>(
+        `/pos-pools/product-compartments?productId=${encodeURIComponent(productId)}`,
+      );
+      return rows ?? [];
     },
   });
 
@@ -444,17 +473,17 @@ export const useFabricLibrary = () =>
   useQuery({
     queryKey: ['fabric-library'],
     queryFn: async (): Promise<FabricLibraryRow[]> => {
-      const { data, error } = await supabase
-        .from('fabric_library')
-        .select('id, label, tier, default_surcharge, active, sort_order, sofa_tier, bedframe_tier')
-        .eq('active', true)
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        id: r.id, label: r.label, tier: r.tier, defaultSurcharge: r.default_surcharge,
-        active: r.active, sortOrder: r.sort_order,
-        sofaTier: r.sofa_tier ?? null, bedframeTier: r.bedframe_tier ?? null,
-      }));
+      // Houzs GET /fabric-library → { fabrics: FabricLibraryRow[] } (camelCase).
+      // Endpoint returns the full library; keep the active-only + sorted slice.
+      const { fabrics } = await authedFetch<{ fabrics: FabricLibraryRow[] }>('/fabric-library');
+      return (fabrics ?? [])
+        .filter((r) => r.active)
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((r) => ({
+          id: r.id, label: r.label, tier: r.tier, defaultSurcharge: r.defaultSurcharge,
+          active: r.active, sortOrder: r.sortOrder,
+          sofaTier: r.sofaTier ?? null, bedframeTier: r.bedframeTier ?? null,
+        }));
     },
   });
 
@@ -463,16 +492,16 @@ export const useFabricColours = () =>
   useQuery({
     queryKey: ['fabric-colours'],
     queryFn: async (): Promise<FabricColourRow[]> => {
-      const { data, error } = await supabase
-        .from('fabric_colours')
-        .select('fabric_id, colour_id, label, swatch_hex, active, sort_order')
-        .eq('active', true)
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        fabricId: r.fabric_id, colourId: r.colour_id, label: r.label,
-        swatchHex: r.swatch_hex, active: r.active, sortOrder: r.sort_order,
-      }));
+      // Houzs GET /fabric-colours → { colours: FabricColourRow[] } (camelCase).
+      // Keep the active-only + sorted slice the picker expects.
+      const { colours } = await authedFetch<{ colours: FabricColourRow[] }>('/fabric-colours');
+      return (colours ?? [])
+        .filter((r) => r.active)
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((r) => ({
+          fabricId: r.fabricId, colourId: r.colourId, label: r.label,
+          swatchHex: r.swatchHex, active: r.active, sortOrder: r.sortOrder,
+        }));
     },
   });
 
@@ -486,15 +515,8 @@ export const useModelAllowedFabricCodes = (productId: string | undefined) =>
     queryKey: ['model-allowed-fabrics', productId],
     queryFn: async (): Promise<string[]> => {
       if (!productId || !productId.startsWith('mfg-')) return [];
-      const { data, error } = await supabase
-        .from('mfg_products')
-        .select('product_models:model_id ( allowed_options )')
-        .eq('id', productId)
-        .maybeSingle();
-      if (error) throw error;
-      const modelRel = (data as { product_models?: { allowed_options?: { fabrics?: string[] } } | null } | null)
-        ?.product_models;
-      return modelRel?.allowed_options?.fabrics ?? [];
+      const allowed = await fetchModelAllowedOptions(productId);
+      return allowed?.fabrics ?? [];
     },
   });
 
@@ -509,15 +531,8 @@ export const useModelAllowedSpecials = (productId: string | undefined) =>
     staleTime: 60_000,
     queryFn: async (): Promise<string[]> => {
       if (!productId || !productId.startsWith('mfg-')) return [];
-      const { data, error } = await supabase
-        .from('mfg_products')
-        .select('product_models:model_id ( allowed_options )')
-        .eq('id', productId)
-        .maybeSingle();
-      if (error) throw error;
-      const modelRel = (data as { product_models?: { allowed_options?: { specials?: string[] } } | null } | null)
-        ?.product_models;
-      return modelRel?.allowed_options?.specials ?? [];
+      const allowed = await fetchModelAllowedOptions(productId);
+      return allowed?.specials ?? [];
     },
   });
 
@@ -530,17 +545,16 @@ export const useProductFabrics = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['product', productId, 'fabrics'],
+    refetchInterval: 30_000,   // Houzs poll (replaces product-pricing channel)
     queryFn: async (): Promise<ProductFabricRow[]> => {
       if (!productId) throw new Error('no productId');
       if (productId.startsWith('mfg-')) return [];   // mfg path uses sofaCustomizer
-      const { data, error } = await supabase
-        .from('product_fabrics')
-        .select('fabric_id, active, surcharge')
-        .eq('product_id', productId);
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        fabricId: r.fabric_id, active: r.active, surcharge: r.surcharge,
-      }));
+      // Houzs GET /pos-pools/product-fabrics → { rows: ProductFabricRow[] }
+      // (already {fabricId,active,surcharge}) — return as-is.
+      const { rows } = await authedFetch<{ rows: ProductFabricRow[] }>(
+        `/pos-pools/product-fabrics?productId=${encodeURIComponent(productId)}`,
+      );
+      return rows ?? [];
     },
   });
 
@@ -572,42 +586,28 @@ export const useBedframeColours = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['bedframe-colours', productId],
+    refetchInterval: 30_000,   // Houzs poll (replaces product-pricing channel)
     queryFn: async (): Promise<BedframeColourRow[]> => {
       if (!productId) throw new Error('no productId');
+      // Houzs GET /pos-pools/bedframe-colours → { rows: BedframeColourRow[] }
+      // (active-only global library, already {id,label,swatchHex,surcharge,sortOrder}).
+      // Per-model ticks: GET /pos-pools/product-bedframe-colours?productId= →
+      // { rows:[{colourId,active}] }. mfg-{12hex} ids have no tick rows → accept
+      // all active global colours (no per-model colour gating at pilot).
       const [globalRes, tickRes] = await Promise.all([
-        supabase
-          .from('bedframe_colours')
-          .select('id, label, swatch_hex, surcharge, active, sort_order')
-          .eq('active', true)
-          .order('sort_order'),
-        // product_bedframe_colours.product_id is a UUID FK. mfg-{12hex} ids
-        // have no tick rows → we skip and accept all active global colours
-        // for mfg bedframe products (no per-model colour gating at pilot).
+        authedFetch<{ rows: BedframeColourRow[] }>('/pos-pools/bedframe-colours'),
         productId.startsWith('mfg-')
-          ? Promise.resolve({ data: null as null, error: null })
-          : supabase
-              .from('product_bedframe_colours')
-              .select('colour_id, active')
-              .eq('product_id', productId)
-              .eq('active', true),
+          ? Promise.resolve<{ rows: Array<{ colourId: string; active: boolean }> } | null>(null)
+          : authedFetch<{ rows: Array<{ colourId: string; active: boolean }> }>(
+              `/pos-pools/product-bedframe-colours?productId=${encodeURIComponent(productId)}`,
+            ),
       ]);
-      if (globalRes.error) throw globalRes.error;
-      if (tickRes.error) throw tickRes.error;
-      // mfg products: all active global colours available (tickRes.data = null)
+      const global = (globalRes.rows ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
+      // mfg products: all active global colours available (tickRes === null)
       // legacy UUID products: intersect with the per-model ticked colours
-      if (tickRes.data === null) {
-        return (globalRes.data ?? []).map((r) => ({
-          id: r.id, label: r.label, swatchHex: r.swatch_hex,
-          surcharge: r.surcharge, sortOrder: r.sort_order,
-        }));
-      }
-      const ticked = new Set((tickRes.data ?? []).map((r) => r.colour_id));
-      return (globalRes.data ?? [])
-        .filter((r) => ticked.has(r.id))
-        .map((r) => ({
-          id: r.id, label: r.label, swatchHex: r.swatch_hex,
-          surcharge: r.surcharge, sortOrder: r.sort_order,
-        }));
+      if (tickRes === null) return global;
+      const ticked = new Set((tickRes.rows ?? []).filter((r) => r.active).map((r) => r.colourId));
+      return global.filter((r) => ticked.has(r.id));
     },
   });
 
@@ -618,16 +618,10 @@ export const useBedframeOptions = () =>
     queryKey: ['bedframe-options'],
     staleTime: 5 * 60_000,
     queryFn: async (): Promise<BedframeOptionRow[]> => {
-      const { data, error } = await supabase
-        .from('bedframe_options')
-        .select('id, kind, value, surcharge, active, sort_order')
-        .eq('active', true)
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        id: r.id, kind: r.kind, value: r.value,
-        surcharge: r.surcharge, sortOrder: r.sort_order,
-      }));
+      // Houzs GET /pos-pools/bedframe-options → { rows: BedframeOptionRow[] }
+      // (active-only, already {id,kind,value,surcharge,sortOrder}).
+      const { rows } = await authedFetch<{ rows: BedframeOptionRow[] }>('/pos-pools/bedframe-options');
+      return (rows ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
     },
   });
 
@@ -660,29 +654,16 @@ export const useBedframeCustomizerData = (productId: string | undefined) =>
       // no Model link → empty = no restriction, same as the old global pool).
       let allowed: { gaps?: string[]; leg_heights?: string[]; divan_heights?: string[] } = {};
       if (productId.startsWith('mfg-')) {
-        const { data, error } = await supabase
-          .from('mfg_products')
-          .select('product_models:model_id ( allowed_options )')
-          .eq('id', productId)
-          .maybeSingle();
-        if (error) throw error;
-        const modelRel = (data as { product_models?: { allowed_options?: typeof allowed } | null } | null)
-          ?.product_models;
-        allowed = modelRel?.allowed_options ?? {};
+        allowed = (await fetchModelAllowedOptions(productId)) ?? {};
       }
 
       // Master maintenance config = the POS Master-Admin Special Add-ons pool.
-      const { data: cfgRow, error: cfgErr } = await supabase
-        .from('maintenance_config_history')
-        .select('config')
-        .eq('scope', 'master')
-        .lte('effective_from', new Date().toISOString().slice(0, 10))
-        .order('effective_from', { ascending: false })
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (cfgErr) throw cfgErr;
-      const cfg = (cfgRow?.config ?? {}) as {
+      // Houzs GET /maintenance-config/resolved?scope=master → { data, ... };
+      // `data` IS the resolved config blob (same as the old history `config`).
+      const resolved = await authedFetch<MaintenanceResolved>(
+        '/maintenance-config/resolved?scope=master',
+      );
+      const cfg = (resolved?.data ?? {}) as unknown as {
         gaps?: Array<string | CfgPricedOption>;
         legHeights?: CfgPricedOption[];
         divanHeights?: CfgPricedOption[];
@@ -751,36 +732,23 @@ export const useSofaLegHeights = (productId: string | undefined) =>
       // allowedLegs === [...]   → offer exactly those legs
       let allowedLegs: string[] | null = null;
       if (productId.startsWith('mfg-')) {
-        const { data, error } = await supabase
-          .from('mfg_products')
-          .select('product_models:model_id ( allowed_options )')
-          .eq('id', productId)
-          .maybeSingle();
-        if (error) throw error;
-        const ao = (data as { product_models?: { allowed_options?: Record<string, unknown> } | null } | null)
-          ?.product_models?.allowed_options ?? null;
+        const ao = await fetchModelAllowedOptions(productId);
         // Empty-semantics (owner 2026-06-16): the leg_heights KEY being ABSENT
         // means "unconfigured → offer ALL legs" (sensible default for a brand-new
         // Model). The key being PRESENT — even as [] — means it was explicitly
         // configured, so it offers EXACTLY that set; an empty [] = offer NO legs.
         // This lets staff turn every leg off in the Allowed Options drawer and
         // actually hide them all (previously [] wrongly meant "show all").
-        if (ao && 'leg_heights' in ao && Array.isArray((ao as { leg_heights?: unknown }).leg_heights)) {
-          allowedLegs = (ao as { leg_heights: string[] }).leg_heights;
+        if (ao && 'leg_heights' in ao && Array.isArray(ao.leg_heights)) {
+          allowedLegs = ao.leg_heights;
         }
       }
 
-      const { data: cfgRow, error: cfgErr } = await supabase
-        .from('maintenance_config_history')
-        .select('config')
-        .eq('scope', 'master')
-        .lte('effective_from', new Date().toISOString().slice(0, 10))
-        .order('effective_from', { ascending: false })
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (cfgErr) throw cfgErr;
-      const list = ((cfgRow?.config ?? {}) as { sofaLegHeights?: CfgPricedOption[] }).sofaLegHeights ?? [];
+      // Houzs GET /maintenance-config/resolved?scope=master → { data, ... }.
+      const resolved = await authedFetch<MaintenanceResolved>(
+        '/maintenance-config/resolved?scope=master',
+      );
+      const list = ((resolved?.data ?? {}) as unknown as { sofaLegHeights?: CfgPricedOption[] }).sofaLegHeights ?? [];
       // null → no gate (all); [] → empty gate (none); [...] → that subset.
       const gate = allowedLegs === null ? null : new Set(allowedLegs);
       return list
@@ -817,6 +785,7 @@ export const useProductSizes = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['product', productId, 'sizes'],
+    refetchInterval: 30_000,   // Houzs poll (replaces product-pricing channel)
     queryFn: async (): Promise<ProductSizeRow[]> => {
       if (!productId) throw new Error('no productId');
 
@@ -838,13 +807,14 @@ export const useProductSizes = (productId: string | undefined) =>
                is never populated — prices come directly from mfg data.
            2c. Truly orphan SKU (no model, no retail link) → single size entry
                from its own `size_code`/`base_price_sen`. */
+      // (P4.3) mfg-* branch ported to GET /pos-pools/mfg-catalog. The lead SKU
+      // comes back by id (any status/pos_active), and the sibling derivations use
+      // the ?modelId / ?baseModel scopes — which carry NO status/pos_active filter
+      // server-side, exactly like the original queries — so a cost-discontinued
+      // (INACTIVE) but pos_active sibling is KEPT and greyed here, never dropped.
+      // SELLING-only (no base_price_sen leaves the endpoint, #625 cost strip).
       if (productId.startsWith('mfg-')) {
-        const { data: mfgRow, error: mfgErr } = await supabase
-          .from('mfg_products')
-          .select('retail_product_id, model_id, size_code, base_price_sen, sell_price_sen, pwp_price_sen, base_model, category, product_models:model_id ( allowed_options )')
-          .eq('id', productId)
-          .maybeSingle();
-        if (mfgErr) throw mfgErr;
+        const mfgRow = (await fetchMfgCatalog({ id: productId }))[0] ?? null;
         if (!mfgRow) return [];
 
         // Master-Admin's Modular ON/OFF is the single source of truth: a size is
@@ -862,16 +832,13 @@ export const useProductSizes = (productId: string | undefined) =>
           : null;
 
         // 2a — retail bridge exists: use admin-configured product_size_variants
+        // via the existing pos-pools passthrough (already {sizeId,active,price,
+        // pwpPrice:null}; legacy retail variants carry no PWP price).
         if (mfgRow.retail_product_id) {
-          const { data, error } = await supabase
-            .from('product_size_variants')
-            .select('size_id, active, price')
-            .eq('product_id', mfgRow.retail_product_id);
-          if (error) throw error;
-          if (data && data.length > 0) {
-            // Legacy retail variants carry no PWP price (it lives on mfg_products).
-            return data.map((r) => ({ sizeId: r.size_id, active: r.active, price: r.price, pwpPrice: null }));
-          }
+          const { rows } = await authedFetch<{ rows: ProductSizeRow[] }>(
+            `/pos-pools/product-size-variants?productId=${encodeURIComponent(mfgRow.retail_product_id)}`,
+          );
+          if (rows && rows.length > 0) return rows;
           // Fall through to mfg siblings if the retail link exists but has no variants yet.
         }
 
@@ -881,7 +848,7 @@ export const useProductSizes = (productId: string | undefined) =>
         // pos_active (the "Visible" flag the catalog also honors). A kept size's
         // `active` still follows `status` so a cost-discontinued one greys out.
         // Case-insensitive size_code lookup guards older lowercase imports.
-        const sibsToRows = (sibs: Array<{ size_code: string | null; base_price_sen: number | null; sell_price_sen: number | null; pwp_price_sen: number | null; status: string; pos_active: boolean | null }>) =>
+        const sibsToRows = (sibs: Array<{ size_code: string | null; sell_price_sen: number | null; pwp_price_sen: number | null; status: string; pos_active: boolean | null }>) =>
           sibs
             .filter((s) => {
               const sc = (s.size_code ?? '').toUpperCase();
@@ -894,8 +861,8 @@ export const useProductSizes = (productId: string | undefined) =>
               sizeId: MFG_SIZE_CODE_TO_LIB[(s.size_code!).toUpperCase()] as string,
               // Surviving size: greys out only if cost-discontinued (status).
               active: (s.status as string) === 'ACTIVE',
-              // SELLING price (0109 cost/sell split): sell_price_sen ?? base_price_sen.
-              price: (s.sell_price_sen ?? s.base_price_sen) != null ? Math.round((s.sell_price_sen ?? s.base_price_sen)! / 100) : 0,
+              // SELLING price only (#625 cost strip — no base_price_sen fallback).
+              price: s.sell_price_sen != null ? Math.round(s.sell_price_sen / 100) : 0,
               // PWP (换购, 0128) base price per size, whole MYR. 0 / null = not set.
               pwpPrice: s.pwp_price_sen ? Math.round(s.pwp_price_sen / 100) : null,
             }));
@@ -904,12 +871,8 @@ export const useProductSizes = (productId: string | undefined) =>
         // generate-skus). sibsToRows drops sizes turned OFF in Modular /
         // pos_active so they vanish from the picker (Chairman 2026-06-01).
         if (mfgRow.model_id) {
-          const { data: siblings, error: sibErr } = await supabase
-            .from('mfg_products')
-            .select('size_code, base_price_sen, sell_price_sen, pwp_price_sen, status, pos_active')
-            .eq('model_id', mfgRow.model_id);
-          if (sibErr) throw sibErr;
-          const rows = sibsToRows(siblings ?? []);
+          const siblings = await fetchMfgCatalog({ modelId: mfgRow.model_id });
+          const rows = sibsToRows(siblings);
           if (rows.length > 0) return rows;
         }
 
@@ -917,13 +880,8 @@ export const useProductSizes = (productId: string | undefined) =>
         // (model_id is NULL). Group by base_model + category instead — same
         // denormalised text that generate-skus stamps on every sibling.
         if (mfgRow.base_model && mfgRow.category) {
-          const { data: siblings, error: sibErr } = await supabase
-            .from('mfg_products')
-            .select('size_code, base_price_sen, sell_price_sen, pwp_price_sen, status, pos_active')
-            .eq('base_model', mfgRow.base_model)
-            .eq('category', mfgRow.category);
-          if (sibErr) throw sibErr;
-          const rows = sibsToRows(siblings ?? []);
+          const siblings = await fetchMfgCatalog({ baseModel: mfgRow.base_model, category: mfgRow.category });
+          const rows = sibsToRows(siblings);
           if (rows.length > 0) return rows;
         }
 
@@ -934,7 +892,8 @@ export const useProductSizes = (productId: string | undefined) =>
           return [{
             sizeId: MFG_SIZE_CODE_TO_LIB[ownCode] as string,
             active: true,
-            price: (mfgRow.sell_price_sen ?? mfgRow.base_price_sen) != null ? Math.round((mfgRow.sell_price_sen ?? mfgRow.base_price_sen)! / 100) : 0,
+            // SELLING price only (#625 cost strip — no base_price_sen fallback).
+            price: mfgRow.sell_price_sen != null ? Math.round(mfgRow.sell_price_sen / 100) : 0,
             pwpPrice: mfgRow.pwp_price_sen ? Math.round(mfgRow.pwp_price_sen / 100) : null,
           }];
         }
@@ -943,17 +902,13 @@ export const useProductSizes = (productId: string | undefined) =>
       }
 
       // ── Legacy UUID path (retail `products` table) ──────────────────────────
-      const { data, error } = await supabase
-        .from('product_size_variants')
-        .select('size_id, active, price')
-        .eq('product_id', productId);
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        sizeId: r.size_id,
-        active: r.active,
-        price: r.price,
-        pwpPrice: null, // legacy retail variants carry no PWP price
-      }));
+      // Houzs GET /pos-pools/product-size-variants → { rows: ProductSizeRow[] }
+      // (already {sizeId,active,price,pwpPrice}; legacy retail variants carry a
+      // null pwpPrice from the endpoint) — return as-is.
+      const { rows } = await authedFetch<{ rows: ProductSizeRow[] }>(
+        `/pos-pools/product-size-variants?productId=${encodeURIComponent(productId)}`,
+      );
+      return rows ?? [];
     },
   });
 
@@ -971,18 +926,10 @@ export const useSizeLibrary = () =>
     queryKey: ['size_library'],
     staleTime: 5 * 60 * 1000,
     queryFn: async (): Promise<SizeLibraryRow[]> => {
-      const { data, error } = await supabase
-        .from('size_library')
-        .select('id, label, width_cm, length_cm, sort_order')
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        id: r.id,
-        label: r.label,
-        widthCm: r.width_cm,
-        lengthCm: r.length_cm,
-        sortOrder: r.sort_order,
-      }));
+      // Houzs GET /pos-pools/size-library → { rows: SizeLibraryRow[] }
+      // (already {id,label,widthCm,lengthCm,sortOrder}).
+      const { rows } = await authedFetch<{ rows: SizeLibraryRow[] }>('/pos-pools/size-library');
+      return (rows ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
     },
   });
 
@@ -1002,18 +949,10 @@ export const useCategoriesAll = () =>
     queryKey: ['categories_all'],
     staleTime: 5 * 60_000,
     queryFn: async (): Promise<CategoryRow[]> => {
-      const { data, error } = await supabase
-        .from('categories')
-        .select('id, label, icon, tbc, sort_order')
-        .order('sort_order');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        id: r.id,
-        label: r.label,
-        icon: r.icon,
-        tbc: r.tbc,
-        sortOrder: r.sort_order,
-      }));
+      // Houzs GET /categories → { categories: CategoryRow[] } (camelCase,
+      // already {id,label,icon,tbc,sortOrder}).
+      const { categories } = await authedFetch<{ categories: CategoryRow[] }>('/categories');
+      return (categories ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
     },
   });
 
@@ -1089,48 +1028,16 @@ export const useMfgCatalog = () =>
   useQuery({
     queryKey: ['mfg-catalog'],
     staleTime: 30_000,
+    // Houzs has NO realtime — poll in place of the `mfg-catalog` channel.
+    refetchInterval: 30_000,
     queryFn: async (): Promise<MfgCatalogRow[]> => {
-      // Two-step fetch: (1) ACTIVE SKUs, (2) active Models referenced by them.
-      // Supabase JS supports embedded select via the FK (mfg_products.model_id
-      // → product_models.id) — the cheap path. If the embed fails (no FK
-      // metadata cached) the rows still come back with a NULL model field
-      // and the card falls back to the monogram placeholder.
-      const { data, error } = await supabase
-        .from('mfg_products')
-        .select(
-          'id, code, name, category, description, branding, size_label, base_price_sen, sell_price_sen, model_id, ' +
-          'product_models:model_id ( id, name, photo_url, active )',
-        )
-        // D5 (cost/sell split Phase 2): customer catalog visibility = the
-        // selling-only pos_active flag, NOT cost-side status. The Master
-        // Account "Visible" toggle writes pos_active; status stays for cost/PO.
-        .eq('pos_active', true)
-        .order('code', { ascending: true });
-      if (error) throw error;
-
-      // PR — Use `as unknown as` two-step cast because the supabase-js return
-      // type for `select(...)` with an embedded FK is sometimes inferred as
-      // `GenericStringError[]` when the schema cache hasn't materialised the
-      // relationship yet (same fix pattern as task #94 hotfix).
-      const rows = (data ?? []) as unknown as Array<{
-        id:              string;
-        code:            string;
-        name:            string;
-        category:        MfgCatalogCategory;
-        description:     string | null;
-        branding:        string | null;
-        size_label:      string | null;
-        base_price_sen:  number | null;
-        sell_price_sen:  number | null;
-        model_id:        string | null;
-        // Supabase embeds come back as an object OR an array depending on the
-        // join cardinality the schema cache infers. mfg_products → product_models
-        // is a single-record FK so we expect an object, but the type defaults
-        // to an array in PostgREST. Coerce defensively.
-        product_models:  { id: string; name: string; photo_url: string | null; active: boolean } |
-                         Array<{ id: string; name: string; photo_url: string | null; active: boolean }> |
-                         null;
-      }>;
+      // (P4.3) Ported to GET /pos-pools/mfg-catalog (no params) — the endpoint's
+      // default view is pos_active=true regardless of status, matching this read's
+      // original `.eq('pos_active', true)` with NO status filter, so a pos_active +
+      // status=INACTIVE SKU still shows (greyed downstream). The product_models
+      // join (id, name, photo_url, active) rides the same payload; SELLING-only
+      // (basePriceSen = sell_price_sen, no base_price_sen fallback, #625 cost strip).
+      const rows = await fetchMfgCatalog();
 
       return rows
         .map((r) => {
@@ -1149,7 +1056,7 @@ export const useMfgCatalog = () =>
             description:  r.description,
             branding:     r.branding,
             sizeLabel:    r.size_label,
-            basePriceSen: r.sell_price_sen ?? r.base_price_sen, // SELLING (0109 cost/sell split)
+            basePriceSen: r.sell_price_sen, // SELLING only (#625 cost strip)
             modelId:      r.model_id,
             modelName:    m?.name ?? null,
             // photo_url is stored as a relative proxy path from the API
@@ -1277,13 +1184,15 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
     queryFn: async (): Promise<SofaCustomizerData | null> => {
       if (!leadSkuId) return null;
 
+      // (P4.3) Ported to GET /pos-pools/mfg-catalog. Step 2 builds the per-Model
+      // sofa MODULE SELLING-price map from every sofa SKU sharing base_model, via
+      // the ?baseModel scope which carries NO status/pos_active filter server-side
+      // — so an INACTIVE-but-pos_active module SKU stays in the price map exactly
+      // as the original unfiltered query intended (HARD RULE 5). SELLING-only:
+      // sell_price_sen + seat_height_prices[].sellingPriceSen; the endpoint strips
+      // the per-height cost (priceSen) so nothing here can leak or misprice on cost.
       // Step 1: resolve the SKU → Model. mfg_products carries the model_id FK.
-      const { data: sku, error: skuErr } = await supabase
-        .from('mfg_products')
-        .select('id, model_id, category, product_models:model_id ( id, name, model_code, allowed_options, active )')
-        .eq('id', leadSkuId)
-        .maybeSingle();
-      if (skuErr) throw skuErr;
+      const sku = (await fetchMfgCatalog({ id: leadSkuId }))[0] ?? null;
       if (!sku) return null;
 
       const model = Array.isArray(sku.product_models)
@@ -1303,22 +1212,13 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
       // (loadModelSofaModulePrices) and the same key combo scoping uses, so the
       // POS and server SKU sets are identical by construction (not just for
       // today's data). model_code === base_model on every sofa SKU.
-      const { data: skuPriceRows, error: skuPriceErr } = await supabase
-        .from('mfg_products')
-        .select('code, sell_price_sen, seat_height_prices')
-        .eq('base_model', model.model_code)
-        .eq('category', 'SOFA');
-      if (skuPriceErr) throw skuPriceErr;
+      const skuPriceRows = await fetchMfgCatalog({ baseModel: model.model_code, category: 'SOFA' });
       // Raw per-module SELLING rows. The flat `modulePrices` (depth/tier-agnostic
       // sell_price_sen) is the fallback; the Configurator rebuilds a depth-aware
       // P1 selling map from `sellingRows` so the per-seat-size grid price reaches
       // the live total + palette (SOFA-SELLING Phase B; Chairman 2026-06-01: run
       // at P1, no fabric-tier variation yet).
-      const sellingRows = ((skuPriceRows ?? []) as Array<{
-        code: string;
-        sell_price_sen: number | null;
-        seat_height_prices: MfgSeatHeightPrice[] | null;
-      }>).map((r) => ({
+      const sellingRows = skuPriceRows.map((r) => ({
         code: r.code,
         sellPriceSen: r.sell_price_sen,
         seatHeightPrices: r.seat_height_prices,
@@ -1332,19 +1232,14 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
         specials?:     string[];
       };
 
-      // Step 2: pull the current effective master maintenance config so we
-      // can resolve compartment images + descriptions + default prices.
-      const { data: cfgRow, error: cfgErr } = await supabase
-        .from('maintenance_config_history')
-        .select('config')
-        .eq('scope', 'master')
-        .lte('effective_from', new Date().toISOString().slice(0, 10))
-        .order('effective_from', { ascending: false })
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (cfgErr) throw cfgErr;
-      const cfg = (cfgRow?.config ?? {}) as {
+      // Step 2: pull the current effective master maintenance config so we can
+      // resolve compartment images + descriptions. (P4.3) Ported to
+      // GET /maintenance-config/resolved?scope=master, which returns the same
+      // effective-dated master config blob (respecting effective_from) this read
+      // used to select from maintenance_config_history — image/label meta only,
+      // no pricing (module price comes from modulePrices above).
+      const resolved = await authedFetch<MaintenanceResolved>('/maintenance-config/resolved?scope=master');
+      const cfg = (resolved.data ?? {}) as {
         sofaCompartmentMeta?: Record<string, MaintenanceCompartmentMeta>;
         sofaCompartments?:    string[];
       };
@@ -1387,29 +1282,16 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
       };
     },
     staleTime: 30_000,
+    // Houzs has NO realtime — poll in place of the `sofa-customizer-${leadSkuId}` channel.
+    refetchInterval: 30_000,
   });
 
 /** Realtime invalidate on mfg_products + product_models edits so commander's
  *  Backend changes land on the POS catalog within ~300ms. Mirrors the
  *  prototype's localStorage push but via Supabase Realtime. */
 export const useMfgCatalogRealtime = () => {
-  const qc = useQueryClient();
-  useEffect(() => {
-    const channel = supabase
-      .channel('mfg-catalog')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'mfg_products' },
-        () => { void qc.invalidateQueries({ queryKey: ['mfg-catalog'] }); },
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'product_models' },
-        () => { void qc.invalidateQueries({ queryKey: ['mfg-catalog'] }); },
-      )
-      .subscribe();
-    return () => { void supabase.removeChannel(channel); };
-  }, [qc]);
+  /* (P4.3) no-op — polling replaces the `mfg-catalog` realtime channel
+     (see useMfgCatalog refetchInterval). Kept exported so callers are unchanged. */
 };
 
 // my_localities is a static Malaysia postcode dataset (~3000 rows). Fetched
@@ -1426,30 +1308,19 @@ export interface LocalityRow {
   state: string;
   stateCode: string;
 }
-const LOCALITY_PAGE = 1000;
 export const useLocalities = () =>
   useQuery({
     queryKey: ['my_localities'],
     staleTime: Infinity,
     gcTime: Infinity,
     queryFn: async (): Promise<LocalityRow[]> => {
-      const all: LocalityRow[] = [];
-      for (let from = 0; ; from += LOCALITY_PAGE) {
-        const { data, error } = await supabase
-          .from('my_localities')
-          .select('postcode, city, state, state_code')
-          .order('state')
-          .order('city')
-          .order('postcode')
-          .range(from, from + LOCALITY_PAGE - 1);
-        if (error) throw error;
-        const page = data ?? [];
-        for (const r of page) {
-          all.push({ postcode: r.postcode, city: r.city, state: r.state, stateCode: r.state_code });
-        }
-        if (page.length < LOCALITY_PAGE) break;
-      }
-      return all;
+      // Houzs GET /localities → { localities:[{postcode,city,state,stateCode}] }.
+      // The server returns the full postcode dataset in one response (no
+      // PostgREST 1000-row cap to page around).
+      const { localities } = await authedFetch<{ localities: LocalityRow[] }>('/localities');
+      return (localities ?? []).map((r) => ({
+        postcode: r.postcode, city: r.city, state: r.state, stateCode: r.stateCode,
+      }));
     },
   });
 
@@ -1458,79 +1329,21 @@ export const useLocalities = () =>
  *  master maintenance_config_history row (compartment meta). Mirrors the
  *  catalog realtime hook; mount inside the Configurator so a price/photo
  *  tweak in the Backend lands within ~300ms. */
-export const useSofaCustomizerRealtime = (leadSkuId: string | undefined) => {
-  const qc = useQueryClient();
-  useEffect(() => {
-    if (!leadSkuId) return;
-    const channel = supabase
-      .channel(`sofa-customizer-${leadSkuId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'product_models' },
-        () => { void qc.invalidateQueries({ queryKey: ['sofa-customizer-data', leadSkuId] }); },
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'maintenance_config_history' },
-        () => { void qc.invalidateQueries({ queryKey: ['sofa-customizer-data', leadSkuId] }); },
-      )
-      // SOFA-SELLING-PLAN — the customizer now reads per-Model module SKU
-      // sell_price_sen, so a Master-Admin price edit (mfg_products) must
-      // re-fetch the configurator's module prices within ~300ms.
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'mfg_products' },
-        () => { void qc.invalidateQueries({ queryKey: ['sofa-customizer-data', leadSkuId] }); },
-      )
-      .subscribe();
-    return () => { void supabase.removeChannel(channel); };
-  }, [qc, leadSkuId]);
+export const useSofaCustomizerRealtime = (_leadSkuId: string | undefined) => {
+  /* (P4.3) no-op — polling replaces the `sofa-customizer-${leadSkuId}` realtime
+     channel (see useSofaCustomizerData refetchInterval). Kept exported so callers
+     are unchanged. */
 };
 
 // Realtime invalidate any product_bundles / product_compartments / product_size_variants
 // row matching this productId. Used inside Configurator so Backend price tweaks
 // land within ~300ms.
-export const useProductPricingRealtime = (productId: string | undefined) => {
-  const qc = useQueryClient();
-  useEffect(() => {
-    if (!productId) return;
-    const channel = supabase
-      .channel(`product-pricing-${productId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'product_bundles', filter: `product_id=eq.${productId}` },
-        () => void qc.invalidateQueries({ queryKey: ['product', productId, 'bundles'] }),
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'product_compartments', filter: `product_id=eq.${productId}` },
-        () => void qc.invalidateQueries({ queryKey: ['product', productId, 'compartments'] }),
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'product_fabrics', filter: `product_id=eq.${productId}` },
-        () => void qc.invalidateQueries({ queryKey: ['product', productId, 'fabrics'] }),
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'product_bedframe_colours', filter: `product_id=eq.${productId}` },
-        () => void qc.invalidateQueries({ queryKey: ['bedframe-colours', productId] }),
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'product_size_variants', filter: `product_id=eq.${productId}` },
-        () => void qc.invalidateQueries({ queryKey: ['product', productId, 'sizes'] }),
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'products', filter: `id=eq.${productId}` },
-        () => void qc.invalidateQueries({ queryKey: ['product', productId] }),
-      )
-      .subscribe();
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [qc, productId]);
+export const useProductPricingRealtime = (_productId: string | undefined) => {
+  /* (P4.3) no-op — polling replaces the `product-pricing-${productId}` realtime
+     channel. The per-product pricing queries (bundles / compartments / fabrics /
+     bedframe-colours / sizes / product) each carry refetchInterval: 30_000 so a
+     Backend price tweak lands within one poll. Kept exported so callers are
+     unchanged. */
 };
 
 /* ─── Delivery fee config ─── */
@@ -1546,20 +1359,12 @@ export const useDeliveryFeeConfig = () =>
   useQuery({
     queryKey: ['delivery-fee-config'],
     queryFn: async (): Promise<DeliveryFeeConfigRow> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/delivery-fees`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /delivery-fees failed (${res.status})`);
-      const body = (await res.json()) as {
+      const body = await authedFetch<{
         baseFee:                  number;
         crossCategoryFee:         number;
         mattressBedframeLeadDays: number;
         sofaLeadDays:             number;
-      };
+      }>('/delivery-fees');
       return {
         baseFee:                  body.baseFee,
         crossCategoryFee:         body.crossCategoryFee,
@@ -1583,15 +1388,7 @@ export const useFabricTierAddonConfig = () =>
   useQuery({
     queryKey: ['fabric-tier-addon-config'],
     queryFn: async (): Promise<FabricTierAddonConfigRow> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /fabric-tier-addon failed (${res.status})`);
-      const body = (await res.json()) as FabricTierAddonConfigRow;
+      const body = await authedFetch<FabricTierAddonConfigRow>('/fabric-tier-addon');
       return {
         sofaTier2Delta:     body.sofaTier2Delta,
         sofaTier3Delta:     body.sofaTier3Delta,
@@ -1616,13 +1413,8 @@ export const useUpdateDeliveryFeeConfig = () => {
       mattressBedframeLeadDays?: number;
       sofaLeadDays?:             number;
     }) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/delivery-fees`, {
+      const res = await authedFetchRaw('/delivery-fees', {
         method: 'PATCH',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(patch),
       });
       if (!res.ok) {
@@ -1658,15 +1450,7 @@ export const useSpecialDeliveryFees = () =>
   useQuery({
     queryKey: ['special-delivery-fees'],
     queryFn: async (): Promise<SpecialDeliveryFeeRow[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/delivery-fees/special`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /delivery-fees/special failed (${res.status})`);
-      return (await res.json()) as SpecialDeliveryFeeRow[];
+      return await authedFetch<SpecialDeliveryFeeRow[]>('/delivery-fees/special');
     },
     staleTime: 60_000,
   });
@@ -1684,13 +1468,8 @@ export const useUpsertSpecialDeliveryFee = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (row: UpsertSpecialDeliveryFeeInput) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/delivery-fees/special`, {
+      const res = await authedFetchRaw('/delivery-fees/special', {
         method: 'PUT',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(row),
       });
       if (!res.ok) {
@@ -1706,13 +1485,8 @@ export const useDeleteSpecialDeliveryFee = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/delivery-fees/special/${encodeURIComponent(id)}`, {
+      const res = await authedFetchRaw(`/delivery-fees/special/${encodeURIComponent(id)}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
@@ -1752,16 +1526,10 @@ export const useCrossCategoryEligibility = (docNo: string, phone: string) =>
     retry: 0,
     staleTime: 10_000,
     queryFn: async (): Promise<CrossCategoryEligibility> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
       const qs = new URLSearchParams({ docNo: docNo.trim(), phone: phone.trim() });
-      const res = await fetch(`${API_URL}/mfg-sales-orders/cross-category-eligibility?${qs.toString()}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`eligibility check failed (${res.status})`);
-      return (await res.json()) as CrossCategoryEligibility;
+      return await authedFetch<CrossCategoryEligibility>(
+        `/mfg-sales-orders/cross-category-eligibility?${qs.toString()}`,
+      );
     },
   });
 
@@ -1779,16 +1547,10 @@ export interface CrossCategoryMatchResult {
 export const useCrossCategoryAutoMatch = () =>
   useMutation({
     mutationFn: async ({ name, phone }: { name: string; phone: string }): Promise<CrossCategoryMatchResult> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
       const qs = new URLSearchParams({ name: name.trim(), phone: phone.trim() });
-      const res = await fetch(`${API_URL}/mfg-sales-orders/cross-category-match?${qs.toString()}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`auto-match failed (${res.status})`);
-      return (await res.json()) as CrossCategoryMatchResult;
+      return await authedFetch<CrossCategoryMatchResult>(
+        `/mfg-sales-orders/cross-category-match?${qs.toString()}`,
+      );
     },
   });
 
@@ -1798,13 +1560,8 @@ export const useUpdateFabricTierAddonConfig = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (patch: Partial<FabricTierAddonConfigRow>) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon`, {
+      const res = await authedFetchRaw('/fabric-tier-addon', {
         method: 'PATCH',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(patch),
       });
       if (!res.ok) {
@@ -1822,13 +1579,8 @@ export const useUpdateFabricLibraryTier = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, field, tier }: { id: string; field: 'sofaTier' | 'bedframeTier'; tier: 'PRICE_1' | 'PRICE_2' | 'PRICE_3' }) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-library/${encodeURIComponent(id)}/tier`, {
+      const res = await authedFetchRaw(`/fabric-library/${encodeURIComponent(id)}/tier`, {
         method: 'PATCH',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ field, tier }),
       });
       if (!res.ok) {
@@ -1858,15 +1610,7 @@ export const useModelFabricTierOverrides = () =>
   useQuery({
     queryKey: ['model-fabric-tier-overrides'],
     queryFn: async (): Promise<ModelFabricTierOverrideRow[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon/special`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /fabric-tier-addon/special failed (${res.status})`);
-      return (await res.json()) as ModelFabricTierOverrideRow[];
+      return await authedFetch<ModelFabricTierOverrideRow[]>('/fabric-tier-addon/special');
     },
     staleTime: 60_000,
   });
@@ -1875,13 +1619,8 @@ export const useUpsertModelFabricTierOverride = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (row: { modelId: string; tier2Delta: number | null; tier3Delta: number | null }) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon/special`, {
+      const res = await authedFetchRaw('/fabric-tier-addon/special', {
         method: 'PUT',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(row),
       });
       if (!res.ok) {
@@ -1897,13 +1636,8 @@ export const useDeleteModelFabricTierOverride = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (modelId: string) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon/special/${encodeURIComponent(modelId)}`, {
+      const res = await authedFetchRaw(`/fabric-tier-addon/special/${encodeURIComponent(modelId)}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
@@ -1929,15 +1663,7 @@ export const useCompartmentFabricTierOverrides = () =>
   useQuery({
     queryKey: ['compartment-fabric-tier-overrides'],
     queryFn: async (): Promise<CompartmentFabricTierOverrideRow[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon/compartment-special`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /fabric-tier-addon/compartment-special failed (${res.status})`);
-      return (await res.json()) as CompartmentFabricTierOverrideRow[];
+      return await authedFetch<CompartmentFabricTierOverrideRow[]>('/fabric-tier-addon/compartment-special');
     },
     staleTime: 60_000,
   });
@@ -1946,13 +1672,8 @@ export const useUpsertCompartmentFabricTierOverride = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (row: { compartmentId: string; tier2Delta: number | null; tier3Delta: number | null }) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon/compartment-special`, {
+      const res = await authedFetchRaw('/fabric-tier-addon/compartment-special', {
         method: 'PUT',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(row),
       });
       if (!res.ok) {
@@ -1968,13 +1689,8 @@ export const useDeleteCompartmentFabricTierOverride = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (compartmentId: string) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/fabric-tier-addon/compartment-special/${encodeURIComponent(compartmentId)}`, {
+      const res = await authedFetchRaw(`/fabric-tier-addon/compartment-special/${encodeURIComponent(compartmentId)}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
@@ -2006,13 +1722,7 @@ export const useModelDefaultGifts = () =>
   useQuery({
     queryKey: ['model-default-gifts'],
     queryFn: async (): Promise<ModelDefaultGiftRow[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/model-free-gifts`, { headers: { authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error(`GET /model-free-gifts failed (${res.status})`);
-      return (await res.json()) as ModelDefaultGiftRow[];
+      return await authedFetch<ModelDefaultGiftRow[]>('/model-free-gifts');
     },
     staleTime: 60_000,
   });
@@ -2021,13 +1731,8 @@ export const useUpsertModelDefaultGifts = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (row: { modelId: string; gifts: DefaultFreeGift[] }) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/model-free-gifts`, {
+      const res = await authedFetchRaw('/model-free-gifts', {
         method: 'PUT',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(row),
       });
       if (!res.ok) {
@@ -2043,12 +1748,8 @@ export const useDeleteModelDefaultGifts = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (modelId: string) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/model-free-gifts/${encodeURIComponent(modelId)}`, {
-        method: 'DELETE', headers: { authorization: `Bearer ${token}` },
+      const res = await authedFetchRaw(`/model-free-gifts/${encodeURIComponent(modelId)}`, {
+        method: 'DELETE',
       });
       if (!res.ok) {
         const b = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
@@ -2066,14 +1767,7 @@ export const useDeleteModelDefaultGifts = () => {
 export type FreeItemCampaignRow = FreeItemCampaign;
 
 const fic = async (path: string, init?: RequestInit) => {
-  if (!API_URL) throw new Error('VITE_API_URL is not set');
-  const session = await supabase.auth.getSession();
-  const token = session.data.session?.access_token;
-  if (!token) throw new Error('not_authenticated');
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: { authorization: `Bearer ${token}`, ...(init?.body ? { 'content-type': 'application/json' } : {}) },
-  });
+  const res = await authedFetchRaw(path, init);
   if (!res.ok) {
     const b = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
     throw new Error(b.reason ?? b.error ?? `${init?.method ?? 'GET'} ${path} failed (${res.status})`);
@@ -2156,24 +1850,12 @@ export interface SpecialAddonInput {
   sortOrder: number;
 }
 
-async function authToken(): Promise<string> {
-  const session = await supabase.auth.getSession();
-  const token = session.data.session?.access_token;
-  if (!token) throw new Error('not_authenticated');
-  return token;
-}
-
 export const useSpecialAddons = () =>
   useQuery({
     queryKey: ['special-addons'],
     staleTime: 60_000,
     queryFn: async (): Promise<SpecialAddonRow[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const res = await fetch(`${API_URL}/special-addons`, {
-        headers: { authorization: `Bearer ${await authToken()}` },
-      });
-      if (!res.ok) throw new Error(`GET /special-addons failed (${res.status})`);
-      const body = (await res.json()) as { addons: SpecialAddonRow[] };
+      const body = await authedFetch<{ addons: SpecialAddonRow[] }>('/special-addons');
       return body.addons ?? [];
     },
   });
@@ -2182,10 +1864,8 @@ export const useCreateSpecialAddon = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: SpecialAddonInput) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const res = await fetch(`${API_URL}/special-addons`, {
+      const res = await authedFetchRaw('/special-addons', {
         method: 'POST',
-        headers: { authorization: `Bearer ${await authToken()}`, 'content-type': 'application/json' },
         body: JSON.stringify(input),
       });
       if (!res.ok) {
@@ -2201,10 +1881,8 @@ export const useUpdateSpecialAddon = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, patch }: { id: string; patch: Partial<SpecialAddonInput> }) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const res = await fetch(`${API_URL}/special-addons/${encodeURIComponent(id)}`, {
+      const res = await authedFetchRaw(`/special-addons/${encodeURIComponent(id)}`, {
         method: 'PATCH',
-        headers: { authorization: `Bearer ${await authToken()}`, 'content-type': 'application/json' },
         body: JSON.stringify(patch),
       });
       if (!res.ok) {
@@ -2220,10 +1898,8 @@ export const useDeleteSpecialAddon = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const res = await fetch(`${API_URL}/special-addons/${encodeURIComponent(id)}`, {
+      const res = await authedFetchRaw(`/special-addons/${encodeURIComponent(id)}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${await authToken()}` },
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
@@ -2295,21 +1971,16 @@ export const useSalesStats = (
     queryKey: ['pos', 'sales-stats', window?.from ?? null, window?.to ?? null, salesperson ?? null],
     staleTime: 60_000,
     queryFn: async (): Promise<SalesStatsRow> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token   = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
       const params = new URLSearchParams();
       if (window?.from) params.set('from', window.from);
       if (window?.to)   params.set('to', window.to);
       // Owner-tier only: scope the Personal card to a chosen salesperson.
       if (salesperson && salesperson !== 'all') params.set('salesperson', salesperson);
       const qs = params.toString();
-      const res = await fetch(`${API_URL}/pos/sales-stats${qs ? `?${qs}` : ''}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /pos/sales-stats failed (${res.status})`);
-      return await res.json() as SalesStatsRow;
+      // /pos/sales-stats lives at /api/pos (NOT under /api/scm), so route it via
+      // posApiBase() — same as verify-pin/set-pin. Without the override authedFetch
+      // used the /api/scm base and 404'd on Houzs (My-Orders KPI tiles blank).
+      return await authedFetch<SalesStatsRow>(`/pos/sales-stats${qs ? `?${qs}` : ''}`, undefined, posApiBase());
     },
   });
 
@@ -2359,17 +2030,24 @@ export const useSofaCombos = (baseModel?: string | null) =>
   useQuery({
     queryKey: ['sofa-combos', baseModel ?? 'all'],
     queryFn: async (): Promise<SofaComboRow[]> => {
-      if (!API_URL) return [];
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) return [];  // POS may render anonymously; quietly skip
       const params = new URLSearchParams();
       if (baseModel) params.set('baseModel', baseModel);
       params.set('customerId', '__all__');  // 2990 is B2C — only default-scope rows
-      const res = await fetch(
-        `${API_URL}/sofa-combos?${params.toString()}`,
-        { headers: { authorization: `Bearer ${token}` } },
-      );
+      // POS may render anonymously (no token) or with the API base unset —
+      // authedFetchRaw throws in both cases; combos are optional so quietly
+      // return []. A non-ok status also degrades to [] (Quick Pick still works).
+      let res: Response;
+      try {
+        // Houzs: the admin /sofa-combos is cost-gated (returns supplier cost +
+        // supplierId, no openRead). The POS reads the cost-stripped seam variant
+        // /pos-pools/sofa-combos — sellingPricesByHeight already = charged
+        // (selling ?? cost), pricesByHeight = {}, so the merge below is a no-op
+        // that matches the server recompute. 2990 keeps the flat /sofa-combos.
+        const combosPath = IS_HOUZS ? '/pos-pools/sofa-combos' : '/sofa-combos';
+        res = await authedFetchRaw(`${combosPath}?${params.toString()}`);
+      } catch {
+        return [];
+      }
       if (!res.ok) return [];
       const body = (await res.json()) as { rules: SofaComboRow[] };
       // The engine's pricesByHeight is the CHARGED (selling) price: selling wins
@@ -2407,16 +2085,8 @@ export const useCreateSofaCombo = () => {
       effectiveFrom: string;   // 'YYYY-MM-DD'
       notes?: string | null;
     }): Promise<SofaComboRow> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/sofa-combos`, {
+      const res = await authedFetchRaw('/sofa-combos', {
         method: 'POST',
-        headers: {
-          authorization: `Bearer ${token}`,
-          'content-type': 'application/json',
-        },
         body: JSON.stringify({
           baseModel: body.baseModel,
           modules: body.modules,
@@ -2468,37 +2138,31 @@ export const useSofaQuickPicks = (baseModel?: string | null) =>
   useQuery({
     queryKey: ['sofa-quick-picks', baseModel ?? 'all'],
     queryFn: async (): Promise<SofaQuickPickRow[]> => {
-      if (!API_URL) return [];
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) return [];  // POS may render anonymously; quietly skip
       const params = new URLSearchParams();
       if (baseModel) params.set('baseModel', baseModel);
-      const res = await fetch(
-        `${API_URL}/sofa-quick-picks${params.toString() ? `?${params.toString()}` : ''}`,
-        { headers: { authorization: `Bearer ${token}` } },
-      );
+      // POS may render anonymously (no token) or with the API base unset —
+      // authedFetchRaw throws in both cases; Quick Picks are optional so quietly
+      // return []. A non-ok status also degrades to [].
+      let res: Response;
+      try {
+        res = await authedFetchRaw(`/sofa-quick-picks${params.toString() ? `?${params.toString()}` : ''}`);
+      } catch {
+        return [];
+      }
       if (!res.ok) return [];
       const body = (await res.json()) as { picks: SofaQuickPickRow[] };
       return body.picks ?? [];
     },
     staleTime: 30_000,
+    // Houzs has NO realtime — poll in place of the `sofa-quick-picks` channel.
+    refetchInterval: 30_000,
   });
 
-/** Realtime: invalidate the global Quick Picks when Master Admin curates. */
+/** (P4.3) no-op — polling replaces the `sofa-quick-picks` realtime channel
+ *  (see useSofaQuickPicks refetchInterval). Kept exported so callers are
+ *  unchanged. */
 export const useSofaQuickPicksRealtime = () => {
-  const qc = useQueryClient();
-  useEffect(() => {
-    const channel = supabase
-      .channel('sofa-quick-picks')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'sofa_quick_picks' },
-        () => { void qc.invalidateQueries({ queryKey: ['sofa-quick-picks'] }); },
-      )
-      .subscribe();
-    return () => { void supabase.removeChannel(channel); };
-  }, [qc]);
+  /* no-op */
 };
 
 /** Create a GLOBAL Quick Pick (Master Admin curates; server role-gates). */
@@ -2511,13 +2175,8 @@ export const useCreateSofaQuickPick = () => {
       depth: string;
       label?: string | null;
     }): Promise<SofaQuickPickRow> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/sofa-quick-picks`, {
+      const res = await authedFetchRaw('/sofa-quick-picks', {
         method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({
           baseModel: body.baseModel,
           modules: body.modules,
@@ -2543,13 +2202,8 @@ export const useDeleteSofaQuickPick = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string): Promise<void> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/sofa-quick-picks/${id}`, {
+      const res = await authedFetchRaw(`/sofa-quick-picks/${id}`, {
         method: 'DELETE',
-        headers: { authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
         let detail = '';
@@ -2583,16 +2237,8 @@ export const useNewOrderMutation = () => {
       customerType?: string;
       note?: string;
     }): Promise<{ docNo: string }> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/mfg-sales-orders`, {
+      const res = await authedFetchRaw('/mfg-sales-orders', {
         method: 'POST',
-        headers: {
-          authorization: `Bearer ${token}`,
-          'content-type': 'application/json',
-        },
         body: JSON.stringify({ ...body, items: [] }),
       });
       if (!res.ok) {
@@ -2611,15 +2257,55 @@ export const useNewOrderMutation = () => {
   });
 };
 
+// Houzs /api/pos/sales-staff returns only {id, staff_code, name, has_pin}; 2990's
+// endpoint carried server-computed initials + color. Derive them client-side on
+// the houzs path so the lock-screen picker still renders (see STAGING TODO below).
+const STAFF_COLORS = ['#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#3B82F6', '#EF4444', '#14B8A6', '#6366F1'];
+const deriveInitials = (name: string): string => {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return (parts[0]![0]! + parts[parts.length - 1]![0]!).toUpperCase();
+};
+const deriveStaffColor = (id: string): string => {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return STAFF_COLORS[h % STAFF_COLORS.length]!;
+};
+
 export const useShowroomSalesStaff = () =>
   useQuery({
     queryKey: ['pos', 'sales-staff', SHOWROOM_ID ?? 'all'],
     queryFn: async (): Promise<SalesStaffRow[]> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
       const qs = SHOWROOM_ID ? `?showroomId=${encodeURIComponent(SHOWROOM_ID)}` : '';
-      const res = await fetch(`${API_URL}/pos/sales-staff${qs}`);
-      if (!res.ok) throw new Error(`GET /pos/sales-staff failed (${res.status})`);
-      const rows = (await res.json()) as SalesStaffRow[];
+      let rows: SalesStaffRow[];
+      if (IS_HOUZS) {
+        // The pin-login staff picker lives at /api/pos (PRE-AUTH, outside the
+        // /api/scm seam) and returns { staff:[{id,staff_code,name,has_pin}] }.
+        // STAGING TODO: (1) confirm /api/pos/sales-staff honours X-Company-Id
+        // pre-auth so only company-2 staff list; (2) initials/color are derived
+        // here (2990 computed them server-side) so colours may differ; (3)
+        // has_pin is NOT filtered, matching 2990's "list all showroom staff".
+        const root = houzsApiRoot();
+        if (!root) throw new Error('VITE_HOUZS_API_URL is not set');
+        const res = await fetch(`${root}/pos/sales-staff${qs}`, { headers: { 'X-Company-Id': HOUZS_COMPANY_ID } });
+        if (!res.ok) throw new Error(`GET /pos/sales-staff failed (${res.status})`);
+        const { staff } = (await res.json()) as {
+          staff: Array<{ id: string; staff_code: string; name: string; has_pin: boolean }>;
+        };
+        rows = (staff ?? []).map((s) => ({
+          id: s.id,
+          staffCode: s.staff_code,
+          name: s.name,
+          initials: deriveInitials(s.name),
+          color: deriveStaffColor(s.id),
+        }));
+      } else {
+        if (!API_URL) throw new Error('VITE_API_URL is not set');
+        const res = await fetch(`${API_URL}/pos/sales-staff${qs}`);
+        if (!res.ok) throw new Error(`GET /pos/sales-staff failed (${res.status})`);
+        rows = (await res.json()) as SalesStaffRow[];
+      }
       try { localStorage.setItem(SALES_STAFF_CACHE_KEY, JSON.stringify(rows)); } catch { /* quota */ }
       return rows;
     },
@@ -2697,16 +2383,8 @@ export const useSoHeaderForAdd = (docNo: string | undefined) =>
     queryKey: ['so-header-for-add', docNo],
     staleTime: 10_000,
     queryFn: async (): Promise<SoHeaderForAdd> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
       if (!docNo) throw new Error('no docNo');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/mfg-sales-orders/${encodeURIComponent(docNo)}`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`GET /mfg-sales-orders/${docNo} failed (${res.status})`);
-      const body = (await res.json()) as {
+      const body = await authedFetch<{
         salesOrder: {
           doc_no: string;
           status: string;
@@ -2721,7 +2399,7 @@ export const useSoHeaderForAdd = (docNo: string | undefined) =>
         /** Present when the API has computed downstream relationships.
          *  If absent (older build) we conservatively treat as no downstream. */
         hasDownstream?: boolean;
-      };
+      }>(`/mfg-sales-orders/${encodeURIComponent(docNo)}`);
       const so = body.salesOrder;
 
       /* Mirror soProcessingLocked from the server: the lock triggers once
@@ -2799,30 +2477,37 @@ export const useRedeemablePwpCodesForOrder = (docNo: string | undefined) =>
     staleTime: 15_000,
     queryFn: async (): Promise<RedeemablePwpCode[]> => {
       if (!docNo) return [];
-      // NOTE: do NOT select pwp_price_sen here — that column lives on
-      // mfg_products (the reward SKU's per-size PWP price), NOT on pwp_codes.
-      // Selecting it made PostgREST 400 ("column does not exist"), so the query
-      // threw and no order code was ever auto-filled in addToOrder mode. The
-      // reward price is derived from the configured product's size, not the code.
-      const { data, error } = await supabase
-        .from('pwp_codes')
-        .select(
-          'code, rule_id, reward_category, eligible_reward_model_ids, reward_combo_ids, type, status, source_doc_no, customer_id',
-        )
-        .eq('source_doc_no', docNo)
-        .in('status', ['AVAILABLE', 'RESERVED']);
-      if (error) throw error;
-      return (data ?? []).map((r) => ({
-        code: r.code as string,
-        ruleId: (r.rule_id as string | null) ?? null,
-        rewardCategory: r.reward_category as string,
-        eligibleRewardModelIds: (r.eligible_reward_model_ids as string[] | null) ?? [],
-        rewardComboIds: (r.reward_combo_ids as string[] | null) ?? [],
-        type: r.type as 'pwp' | 'promo',
-        status: r.status as 'AVAILABLE' | 'RESERVED',
-        sourceDocNo: (r.source_doc_no as string | null) ?? null,
-        customerId: (r.customer_id as string | null) ?? null,
-      }));
+      // Houzs GET /pwp-codes/by-so/:doc → { codes: [...] } — the codes this SO
+      // earned (source_doc_no = docNo), in the same camelCase shape as
+      // usePwpCodesForSo. Keep the AVAILABLE/RESERVED slice (drops USED). The
+      // per-SKU pwp price lives on mfg_products, not the code — so it isn't read
+      // here (the reward price derives from the configured product's size).
+      const { codes } = await authedFetch<{
+        codes: Array<{
+          code: string;
+          ruleId: string | null;
+          rewardCategory: string;
+          eligibleRewardModelIds: string[] | null;
+          rewardComboIds: string[] | null;
+          type: 'pwp' | 'promo';
+          status: string;
+          sourceDocNo: string | null;
+          customerId: string | null;
+        }>;
+      }>(`/pwp-codes/by-so/${encodeURIComponent(docNo)}`);
+      return (codes ?? [])
+        .filter((r) => r.status === 'AVAILABLE' || r.status === 'RESERVED')
+        .map((r) => ({
+          code: r.code,
+          ruleId: r.ruleId ?? null,
+          rewardCategory: r.rewardCategory,
+          eligibleRewardModelIds: r.eligibleRewardModelIds ?? [],
+          rewardComboIds: r.rewardComboIds ?? [],
+          type: r.type,
+          status: r.status as 'AVAILABLE' | 'RESERVED',
+          sourceDocNo: r.sourceDocNo ?? null,
+          customerId: r.customerId ?? null,
+        }));
     },
   });
 
@@ -2885,18 +2570,10 @@ export const useAddProductToPlacedSo = () => {
       docNo: string;
       item: AddSoItemBody;
     }): Promise<{ ok: boolean }> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(
-        `${API_URL}/mfg-sales-orders/${encodeURIComponent(docNo)}/items`,
+      const res = await authedFetchRaw(
+        `/mfg-sales-orders/${encodeURIComponent(docNo)}/items`,
         {
           method: 'POST',
-          headers: {
-            authorization: `Bearer ${token}`,
-            'content-type': 'application/json',
-          },
           body: JSON.stringify(item),
         },
       );

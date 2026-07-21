@@ -2,18 +2,17 @@
 // ChangePin — a passcode-login staff member changes their OWN 6-digit POS PIN
 // (self-service, WS2 2026-05-31). Passcode roles (sales / sales_executive /
 // outlet_manager) have a PIN; anyone else is bounced to the catalog. Calls
-// PATCH /pos/my-pin (server scopes the update to the caller).
+// POST /pos/set-pin on Houzs, PATCH /pos/my-pin on 2990 (server scopes to the
+// caller).
 // Reuses the SetPassword card styling.
 // ----------------------------------------------------------------------------
 import { useState, type FormEvent } from 'react';
 import { Navigate, useNavigate } from 'react-router';
 import { Button } from '@2990s/design-system';
-import { supabase } from '../lib/supabase';
+import { API_URL, authedFetchRaw, IS_HOUZS, posApiBase } from '../lib/apiClient';
 import { useAuth } from '../lib/auth';
 import { useStaff, isPasscodeLoginRole } from '../lib/staff';
 import styles from './SetPassword.module.css';
-
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
 export const ChangePin = () => {
   const { user, loading } = useAuth();
@@ -39,14 +38,12 @@ export const ChangePin = () => {
 
     setSubmitting(true);
     try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
-      const res = await fetch(`${API_URL}/pos/my-pin`, {
-        method: 'PATCH',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ pin }),
-      });
+      // Houzs exposes POST /api/pos/set-pin (no PATCH /pos/my-pin); 2990 keeps
+      // PATCH /pos/my-pin. Both take { pin } and scope the update to the caller.
+      // posApiBase() targets /api/pos (outside /api/scm on Houzs).
+      const res = IS_HOUZS
+        ? await authedFetchRaw('/pos/set-pin', { method: 'POST', body: JSON.stringify({ pin }) }, posApiBase())
+        : await authedFetchRaw('/pos/my-pin', { method: 'PATCH', body: JSON.stringify({ pin }) }, posApiBase());
       if (!res.ok) {
         const t = await res.text().catch(() => '');
         throw new Error(`Could not update PIN (${res.status})${t ? `: ${t}` : ''}`);

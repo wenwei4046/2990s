@@ -7,14 +7,13 @@ import {
   type SoPwpCodeRow,
   type SoPwpNote,
 } from '@2990s/shared/so-line-display';
-import { supabase } from './supabase';
+import { authedFetch, authedFetchRaw } from './apiClient';
 import { COMPANY_LEGAL } from './legal';
 
 // Customer-facing Sales Order, sourced from the LIVE order model
 // (`mfg_sales_orders` via GET /mfg-sales-orders/:docNo). The legacy retail
 // `orders` table is dead for POS, so the old orders-by-id reader can't render
 // a real SO — this hook replaces it for the printable view.
-const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
 export interface PrintableLine {
   sku: string;
@@ -106,26 +105,21 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
     enabled: !!docNo,
     queryKey: ['so-doc-print', docNo],
     queryFn: async (): Promise<PrintableSO> => {
-      if (!API_URL) throw new Error('VITE_API_URL is not set');
       if (!docNo) throw new Error('no doc');
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-      if (!token) throw new Error('not_authenticated');
 
       // Fetch the SO and its payment ledger together — the per-tender
       // breakdown is a separate endpoint (GET /:docNo/payments), the same one
-      // the staff order drawer consumes.
-      const auth = { authorization: `Bearer ${token}` };
-      const [res, payRes] = await Promise.all([
-        fetch(`${API_URL}/mfg-sales-orders/${encodeURIComponent(docNo)}`, { headers: auth }),
-        fetch(`${API_URL}/mfg-sales-orders/${encodeURIComponent(docNo)}/payments`, { headers: auth }),
+      // the staff order drawer consumes. The SO read throws on a non-ok status
+      // (authedFetch); payments uses authedFetchRaw so a failure/non-ok degrades
+      // to an empty ledger below without failing the whole doc.
+      const [body, payRes] = await Promise.all([
+        authedFetch<{
+          salesOrder: Record<string, any>;
+          items: Record<string, any>[];
+          pwpCodes?: SoPwpCodeRow[];
+        }>(`/mfg-sales-orders/${encodeURIComponent(docNo)}`),
+        authedFetchRaw(`/mfg-sales-orders/${encodeURIComponent(docNo)}/payments`),
       ]);
-      if (!res.ok) throw new Error(`GET /mfg-sales-orders/${docNo} failed (${res.status})`);
-      const body = (await res.json()) as {
-        salesOrder: Record<string, any>;
-        items: Record<string, any>[];
-        pwpCodes?: SoPwpCodeRow[];
-      };
       const so = body.salesOrder ?? {};
       const items = body.items ?? [];
       const pwpCodes = body.pwpCodes ?? [];
@@ -172,9 +166,14 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
         const venueId = typeof so.venue_id === 'string' && so.venue_id ? so.venue_id : null;
         const venueName = typeof so.venue === 'string' && so.venue.trim() ? so.venue.trim() : null;
         if (venueId || venueName) {
-          const q = supabase.from('venues').select('name, address').limit(1);
-          const { data: vRows } = venueId ? await q.eq('id', venueId) : await q.eq('name', venueName!);
-          const v = (vRows ?? [])[0] as { name?: string | null; address?: string | null } | undefined;
+          // Houzs GET /venues → { venues:[{id,name,address,...}] }; resolve the
+          // order's stamped venue client-side (by id first, else by name).
+          const { venues } = await authedFetch<{
+            venues: Array<{ id: string; name: string; address: string | null }>;
+          }>('/venues');
+          const v = venueId
+            ? (venues ?? []).find((x) => x.id === venueId)
+            : (venues ?? []).find((x) => x.name === venueName);
           if (v?.name) soldByName = v.name;
           else if (venueName) soldByName = venueName;
           if (v?.address?.trim()) soldByAddress = v.address.trim();

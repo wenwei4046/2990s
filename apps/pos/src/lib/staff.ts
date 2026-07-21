@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from './auth';
-import { supabase } from './supabase';
+import { authedFetch, IS_HOUZS, houzsApiRoot, HOUZS_COMPANY_ID } from './apiClient';
 
 export interface StaffRecord {
   id: string;
@@ -19,21 +19,24 @@ export function useStaff() {
     enabled: !!user?.id,
     staleTime: 5 * 60_000,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('staff')
-        .select('id, staff_code, name, role, initials, color, showroom_id')
-        .eq('id', user!.id)
-        .maybeSingle();
-      if (error) throw error;
-      if (!data) return null;
+      // Houzs GET /staff → { staff:[...] } (camelCase). Resolve the current
+      // user's own row client-side (no per-id endpoint in the map).
+      const { staff } = await authedFetch<{
+        staff: Array<{
+          id: string; staffCode: string; name: string; role: string;
+          initials: string; color: string; showroomId: string | null;
+        }>;
+      }>('/staff');
+      const row = (staff ?? []).find((s) => s.id === user!.id);
+      if (!row) return null;
       return {
-        id: data.id,
-        staffCode: data.staff_code,
-        name: data.name,
-        role: data.role,
-        initials: data.initials,
-        color: data.color,
-        showroomId: data.showroom_id ?? null,
+        id: row.id,
+        staffCode: row.staffCode,
+        name: row.name,
+        role: row.role,
+        initials: row.initials,
+        color: row.color,
+        showroomId: row.showroomId ?? null,
       };
     },
   });
@@ -83,6 +86,19 @@ export function useSalesStaff(enabled = true) {
     enabled,
     staleTime: 5 * 60_000,
     queryFn: async () => {
+      // Houzs: /pos/sales-staff is at /api/pos (outside the /api/scm seam) and is
+      // company-scoped by X-Company-Id, returning { staff: [...] }. On 2990 it's
+      // the flat VITE_API_URL base returning a bare array. (Mirrors the login
+      // picker useShowroomSalesStaff — this My-Orders filter hook was left on the
+      // 2990 base by the seam port; cutover audit 2026-07-21.)
+      if (IS_HOUZS) {
+        const root = houzsApiRoot();
+        if (!root) throw new Error('VITE_HOUZS_API_URL is not set');
+        const res = await fetch(`${root}/pos/sales-staff`, { headers: { 'X-Company-Id': HOUZS_COMPANY_ID } });
+        if (!res.ok) throw new Error(`GET /pos/sales-staff failed (${res.status})`);
+        const body = (await res.json()) as { staff: Array<{ id: string; name: string }> };
+        return (body.staff ?? []).map((r) => ({ id: r.id, name: r.name }));
+      }
       if (!API_URL) throw new Error('VITE_API_URL is not set');
       const res = await fetch(`${API_URL}/pos/sales-staff`);
       if (!res.ok) throw new Error(`GET /pos/sales-staff failed (${res.status})`);
@@ -97,13 +113,15 @@ export function useAllStaff() {
     queryKey: ['staff', 'all'],
     staleTime: 5 * 60_000,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('staff')
-        .select('id, name')
-        .eq('active', true)
-        .order('name');
-      if (error) throw error;
-      return (data ?? []).map((r) => ({ id: r.id, name: r.name }));
+      // Houzs GET /staff → { staff:[...] } (camelCase). Keep the active-only,
+      // name-sorted slice the salesperson filter expects.
+      const { staff } = await authedFetch<{
+        staff: Array<{ id: string; name: string; active?: boolean }>;
+      }>('/staff');
+      return (staff ?? [])
+        .filter((s) => s.active !== false)
+        .map((s) => ({ id: s.id, name: s.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
     },
   });
 }

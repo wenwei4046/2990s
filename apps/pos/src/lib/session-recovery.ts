@@ -20,6 +20,13 @@
 // ----------------------------------------------------------------------------
 
 import { supabase } from './supabase';
+import { clearHouzsToken } from './houzsSession';
+
+/** Which backend the POS authenticates against — the same check the seam
+ *  (apiClient.ts) uses. On 'houzs' there is NO Supabase session to sign out of;
+ *  the live credential is the Houzs POS token in houzsSession.ts. */
+const TARGET: '2990' | 'houzs' =
+  (import.meta.env.VITE_BACKEND_TARGET as string | undefined) === 'houzs' ? 'houzs' : '2990';
 
 /** True when an error thrown by the POS data layer means our session is no
  *  longer valid server-side. The copy-pasted authedFetch helpers throw
@@ -38,9 +45,16 @@ let sessionExpiryHandled = false;
 export async function handleSessionExpired(): Promise<void> {
   if (sessionExpiryHandled) return;
   sessionExpiryHandled = true;
-  // scope:'local' — the server session is already gone, so skip the GoTrue
-  // revoke round-trip (it would just error / hang) and clear localStorage only.
-  try { await supabase.auth.signOut({ scope: 'local' }); } catch { /* best-effort local clear */ }
+  if (TARGET === 'houzs') {
+    // No Supabase session on the Houzs path — signOut() would clear NOTHING and
+    // leave the dead Houzs token in place. Drop the Houzs POS token store so the
+    // reload lands on a clean re-auth.
+    clearHouzsToken();
+  } else {
+    // scope:'local' — the server session is already gone, so skip the GoTrue
+    // revoke round-trip (it would just error / hang) and clear localStorage only.
+    try { await supabase.auth.signOut({ scope: 'local' }); } catch { /* best-effort local clear */ }
+  }
   if (window.location.pathname !== '/login') {
     // Hard navigation guarantees a clean reload with no stale in-memory state.
     window.location.assign('/login?expired=1');

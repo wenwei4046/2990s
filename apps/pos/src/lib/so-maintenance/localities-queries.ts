@@ -9,30 +9,8 @@
 // ----------------------------------------------------------------------------
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '../supabase';
 
-const API_URL = import.meta.env.VITE_API_URL;
-
-async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) throw new Error('not_authenticated');
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      authorization: `Bearer ${token}`,
-      ...(init?.body ? { 'content-type': 'application/json' } : {}),
-    },
-  });
-  if (!res.ok) {
-    let detail = '';
-    try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
-    throw new Error(`${res.status} ${res.statusText}: ${detail}`);
-  }
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
-}
+import { authedFetch } from '../apiClient';
 
 export interface LocalityRow {
   id?: string;
@@ -44,7 +22,6 @@ export interface LocalityRow {
   warehouseId?: string | null;
 }
 
-const LOCALITY_PAGE = 1000;
 
 export const useLocalities = () =>
   useQuery({
@@ -54,34 +31,24 @@ export const useLocalities = () =>
     refetchOnWindowFocus: false,
     refetchOnReconnect:   false,
     queryFn: async (): Promise<LocalityRow[]> => {
-      const all: LocalityRow[] = [];
-      for (let from = 0; ; from += LOCALITY_PAGE) {
-        const { data, error } = await supabase
-          .from('my_localities')
-          .select('id, postcode, city, state, state_code, country, warehouse_id')
-          .order('state')
-          .order('city')
-          .order('postcode')
-          .range(from, from + LOCALITY_PAGE - 1);
-        if (error) throw error;
-        const page = (data ?? []) as Array<{
-          id: string; postcode: string; city: string; state: string; state_code: string;
-          country: string | null; warehouse_id: string | null;
+      // Ported off the direct supabase.from('my_localities') read (P4.3): on the
+      // houzs target there is no Supabase session, and GET /localities already
+      // returns the full list (shared MY postcode reference, not company-scoped).
+      const { localities } = await authedFetch<{
+        localities: Array<{
+          id: string; postcode: string; city: string; state: string;
+          stateCode: string; country?: string | null; warehouseId?: string | null;
         }>;
-        for (const r of page) {
-          all.push({
-            id: r.id,
-            postcode: r.postcode,
-            city: r.city,
-            state: r.state,
-            stateCode: r.state_code,
-            country: r.country ?? 'Malaysia',
-            warehouseId: r.warehouse_id,
-          });
-        }
-        if (page.length < LOCALITY_PAGE) break;
-      }
-      return all;
+      }>('/localities');
+      return (localities ?? []).map((r) => ({
+        id: r.id,
+        postcode: r.postcode,
+        city: r.city,
+        state: r.state,
+        stateCode: r.stateCode,
+        country: r.country ?? 'Malaysia',
+        warehouseId: r.warehouseId ?? null,
+      }));
     },
   });
 
