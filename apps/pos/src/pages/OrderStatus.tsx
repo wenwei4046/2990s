@@ -1200,7 +1200,11 @@ const OrderDetail = ({ order, onClose }: {
   /* Edit scope by lane (Loo 2026-06-13). editablePlaced = Order placed
      (items + dates + everything); canEditDetails = customer/address/payment,
      editable across the whole Proceed lane (incl. production statuses). */
-  const { editablePlaced, canEditDetails } = getSoEditScope(order);
+  const { editablePlaced, canEditDetails, canEditControlledAddress } = getSoEditScope({
+    status: order.status,
+    proceededAt: order.proceededAt ?? null,
+    processingDate: order.processingDate ?? null,  // parity with Houzs address-lock: state/city/postcode lock once processing_date < today
+  });
   /* TBC fill-in (Loo 2026-06-11) — which item row's editor is expanded. Reset
      when switching orders (the index would point at another order's line). */
   const [editLineIdx, setEditLineIdx] = useState<number | null>(null);
@@ -1702,7 +1706,11 @@ const OrderDetail = ({ order, onClose }: {
                   placeholder="Apt, floor, building (optional)"
                 />
               </DetailField>
-              <DetailField label="State *" disabled={!canEditDetails}>
+              {/* State/City/Postcode are CONTROLLED fields on the Houzs server —
+                  locked once processing_date passes (state → warehouse binding
+                  is why). Address line 1/2 above stay on the looser
+                  `canEditDetails` because Houzs treats them as FREE. */}
+              <DetailField label="State *" disabled={!canEditControlledAddress}>
                 <select
                   value={edited.customerState ?? ''}
                   onChange={(e) => {
@@ -1713,13 +1721,13 @@ const OrderDetail = ({ order, onClose }: {
                       customerPostcode: null,
                     }));
                   }}
-                  disabled={!canEditDetails}
+                  disabled={!canEditControlledAddress}
                 >
                   <option value="">Select state…</option>
                   {states.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
               </DetailField>
-              <DetailField label="City *" disabled={!canEditDetails || !edited.customerState}>
+              <DetailField label="City *" disabled={!canEditControlledAddress || !edited.customerState}>
                 <select
                   value={edited.customerCity ?? ''}
                   onChange={(e) => {
@@ -1729,17 +1737,17 @@ const OrderDetail = ({ order, onClose }: {
                       customerPostcode: null,
                     }));
                   }}
-                  disabled={!canEditDetails || !edited.customerState}
+                  disabled={!canEditControlledAddress || !edited.customerState}
                 >
                   <option value="">{edited.customerState ? 'Select city…' : 'Pick state first'}</option>
                   {cities.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </DetailField>
-              <DetailField label="Postcode *" disabled={!canEditDetails || !edited.customerCity}>
+              <DetailField label="Postcode *" disabled={!canEditControlledAddress || !edited.customerCity}>
                 <select
                   value={edited.customerPostcode ?? ''}
                   onChange={(e) => set('customerPostcode', e.target.value || null)}
-                  disabled={!canEditDetails || !edited.customerCity}
+                  disabled={!canEditControlledAddress || !edited.customerCity}
                 >
                   <option value="">
                     {!edited.customerState ? 'Pick state first'
