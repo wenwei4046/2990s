@@ -40,12 +40,16 @@ export function getSoEditScope(input: {
   todayMY?: string;
 }): SoEditScope {
   const isDeliveredLane = ['DELIVERED', 'INVOICED', 'CLOSED'].includes(input.status);
-  const editablePlaced = input.status === 'CONFIRMED' && !input.proceededAt;
-  const editableProceed = !isDeliveredLane && !editablePlaced;
-  const canEditDetails = editablePlaced || editableProceed;
   const today = input.todayMY ?? new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
   const procYmd = input.processingDate ? input.processingDate.slice(0, 10) : null;
   const processingPassed = procYmd != null && procYmd < today;
+  // editablePlaced (items + dates unlocked) requires BOTH the CONFIRMED+!proceeded
+  // lane AND the processing_date not-yet-passed check — mirrors Houzs
+  // soProcessingLocked (mfg-sales-orders.ts:264-290, owner 2026-07-16) which
+  // locks regardless of proceededAt.
+  const editablePlaced = input.status === 'CONFIRMED' && !input.proceededAt && !processingPassed;
+  const editableProceed = !isDeliveredLane && !editablePlaced;
+  const canEditDetails = editablePlaced || editableProceed;
   const canEditControlledAddress = canEditDetails && !processingPassed;
   return {
     isDeliveredLane,

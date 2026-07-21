@@ -398,7 +398,7 @@ const describeSoActionError = (e: unknown): string => {
     return 'Processing and Delivery dates must be set together (or both left empty).';
   }
   if (err === 'processing_date_unpaid') {
-    return 'A processing date can only be set once at least 50% of the order total is paid. Record the deposit first, then set the dates.';
+    return 'A processing date can only be set once at least 30% of the order total is paid. Record the deposit first, then set the dates.';
   }
   if (err === 'so_locked_processing') {
     return 'The processing date has passed — dates and items are locked. Customer, address and payment can still be updated.';
@@ -1326,6 +1326,9 @@ const OrderDetail = ({ order, onClose }: {
   // fully-free order (total 0 — Free Item Campaign giveaway) has nothing to
   // collect, so the paid tick is satisfied — matches meetsProceedGate below.
   const paidOk = order.total <= 0 || paidSoFar / order.total >= 0.5;
+  // Processing Date gate uses a DIFFERENT threshold (30%, owner 2026-07-14 —
+  // aligned to Houzs). Keep the 50% one above for Move-to-Proceed.
+  const paidForProcDateOk = order.total <= 0 || paidSoFar / order.total >= 0.3;
   // Outstanding balance — once it hits zero the order is fully collected, so the
   // "top up / record payment" form below is hidden (nothing left to collect).
   const outstanding = Math.max(0, order.total - paidSoFar);
@@ -1760,20 +1763,21 @@ const OrderDetail = ({ order, onClose }: {
               {/* Dates feed production scheduling — locked in Proceed (D4); edit
                   them by un-proceeding back to Order placed first. The processing
                   date is production's "ready to build" signal, so it stays locked
-                  until ≥50% is collected (paidOk) — mirrors the server's
-                  processing_date_unpaid guard. Loo 2026-06-30. */}
-              <DetailField label="Processing date" disabled={!editablePlaced || !paidOk}>
+                  until ≥30% is collected (paidForProcDateOk) — mirrors the
+                  server's processing_date_unpaid guard (Houzs owner 2026-07-14
+                  relaxed from 50% to 30%; POS aligned 2026-07-22). Loo 2026-06-30. */}
+              <DetailField label="Processing date" disabled={!editablePlaced || !paidForProcDateOk}>
                 <input
                   type="date"
                   value={edited.processingDate ?? ''}
                   onChange={(e) => set('processingDate', e.target.value || null)}
-                  disabled={!editablePlaced || !paidOk}
+                  disabled={!editablePlaced || !paidForProcDateOk}
                   min={todayMY}
                   max={edited.deliveryDate ?? undefined}
                 />
-                {editablePlaced && !paidOk && (
+                {editablePlaced && !paidForProcDateOk && (
                   <p className={styles.fieldHint}>
-                    Set the processing date once ≥50% of the total is paid.
+                    Set the processing date once ≥30% of the total is paid.
                   </p>
                 )}
               </DetailField>

@@ -17,6 +17,15 @@ export const paidPct = (paid: number, total: number): number => {
 /** Minimum paid fraction (of the order total) to advance an order to Proceed. */
 export const PROCEED_PAID_THRESHOLD = 0.5;
 
+/** Minimum paid fraction to SET the Processing Date. Houzs owner relaxed this
+ *  from the historical 50% (still used for Proceed) to 30% on 2026-07-14 —
+ *  Processing Date is the production "ready to build" signal, and the owner
+ *  wants factory to start earlier while the 50% Proceed gate keeps the deeper
+ *  sales-side handover unchanged. Kept as a separate constant from
+ *  PROCEED_PAID_THRESHOLD so the two gates evolve independently. Aligned to
+ *  Houzs backend `so-shared/order-rules.ts` (2026-07-22). */
+export const PROCESSING_DATE_PAID_THRESHOLD = 0.3;
+
 /** Inputs to the "ready to Proceed" gate. `paid` / `total` must share a unit
  *  (whole-MYR on the POS, centi on the server) — only their ratio is used, so
  *  either side may pass its own representation. */
@@ -68,7 +77,7 @@ export const meetsProceedGate = (i: ProceedGateInput): boolean =>
  *  giveaway): nothing to collect, so the gate is vacuously met (mirrors
  *  meetsProceedGate, and avoids the 0/0 = NaN a `total > 0` guard would need). */
 export const meetsProcessingDatePaymentGate = (paid: number, total: number): boolean =>
-  total <= 0 || paid / total >= PROCEED_PAID_THRESHOLD;
+  total <= 0 || paid / total >= PROCESSING_DATE_PAID_THRESHOLD;
 
 /** Total physical pieces in an order (for delivery slot allocation). */
 export const pieceCount = (_orderItems: unknown[]): number => {
