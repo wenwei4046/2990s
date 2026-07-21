@@ -951,8 +951,18 @@ export const useCategoriesAll = () =>
     queryFn: async (): Promise<CategoryRow[]> => {
       // Houzs GET /categories → { categories: CategoryRow[] } (camelCase,
       // already {id,label,icon,tbc,sortOrder}).
+      // Post-cutover normalize: Houzs's scm.categories.id is company-prefixed
+      // (e.g. '2990-mattress') because the TEXT PK is globally unique across
+      // companies (mig 0089). The POS was designed for a single-company world
+      // and its product bucketing (`MFG_CATEGORY_ID['MATTRESS'] = 'mattress'`)
+      // + Catalog.tsx cross-category rules (`p.categoryId === 'sofa'`, etc.)
+      // compare against unprefixed lowercase ids. Strip the '2990-' prefix
+      // here so sidebar ids match product buckets. POS is 2990-only
+      // (VITE_HOUZS_COMPANY_ID=2 baked at build); safe to hardcode the prefix.
       const { categories } = await authedFetch<{ categories: CategoryRow[] }>('/categories');
-      return (categories ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
+      return (categories ?? [])
+        .map((c) => ({ ...c, id: c.id.replace(/^2990-/, '') }))
+        .sort((a, b) => a.sortOrder - b.sortOrder);
     },
   });
 
