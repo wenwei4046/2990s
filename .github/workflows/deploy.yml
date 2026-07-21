@@ -34,6 +34,14 @@ jobs:
       - name: Build POS + Backend
         run: pnpm exec turbo run build --filter=@2990s/pos --filter=@2990s/backend
         env:
+          # POS-side cutover flip (2026-07-21): the POS now builds pointing at
+          # Houzs ERP for company_2. apiClient.ts reads VITE_BACKEND_TARGET and
+          # switches to houzsApiRoot() when set to 'houzs'. Absent = 2990.
+          # These are inlined into the client bundle at build time (Vite).
+          # Rollback: remove these three lines and redeploy — POS reverts to 2990.
+          VITE_BACKEND_TARGET: houzs
+          VITE_HOUZS_API_URL: https://erp.houzscentury.com/api/scm
+          VITE_HOUZS_COMPANY_ID: '2'
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
