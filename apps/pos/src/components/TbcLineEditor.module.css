@@ -98,3 +98,49 @@
   color: var(--fg-muted);
   padding: 6px 2px;
 }
+
+/* Custom / other free-text special-order block (Q6 audit fix). Sits under the
+   SpecialAddonsPicker so a POS salesperson can add or edit anything a Houzs
+   coordinator authored on desktop, in the same drawer. */
+.specialsBlock {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.subheading {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.field > span {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.field textarea,
+.field input {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--c-ink);
+  padding: 8px 10px;
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  outline: none;
+  resize: vertical;
+}
+.field textarea:focus,
+.field input:focus {
+  border-color: var(--line-strong);
+}

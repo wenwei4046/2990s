@@ -348,9 +348,26 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
     ? specialSelsSurcharge(specialSel) - specialSelsSurcharge(seededSpecials)
     : 0;
 
+  /* ── Custom / other (free-text special-order line) ────────────────────
+     Mirrors the Houzs SpecialOrders component's Custom-order fields:
+     variants.extraAddonNote (description) + variants.extraAddonAmountRM
+     (surcharge RM). Configurator captures these at initial cart build;
+     coordinators author them via Houzs desktop SpecialOrders. Before this,
+     the drawer editor didn't render them, so a Houzs-authored Custom/other
+     was invisible to the POS salesperson and couldn't be edited in place. */
+  const seededExtraNote = (v.extraAddonNote as string | undefined) ?? '';
+  const seededExtraAmountRM = Number(v.extraAddonAmountRM ?? 0) || 0;
+  const [extraNote, setExtraNote] = useState<string | undefined>(undefined);
+  const [extraAmountRM, setExtraAmountRM] = useState<number | undefined>(undefined);
+  const shownExtraNote = extraNote !== undefined ? extraNote : seededExtraNote;
+  const shownExtraAmountRM = extraAmountRM !== undefined ? extraAmountRM : seededExtraAmountRM;
+  const extraTouched = extraNote !== undefined || extraAmountRM !== undefined;
+  const extraDeltaRM = extraTouched ? shownExtraAmountRM - seededExtraAmountRM : 0;
+
   const touched = fabricTouched || sofaLeg !== undefined || bfGap !== undefined
-    || bfLeg !== undefined || bfDivan !== undefined || specialSel !== undefined;
-  const deltaRM = fabricDeltaRM + sofaLegDeltaRM + bfDeltaRM + specialsDeltaRM;
+    || bfLeg !== undefined || bfDivan !== undefined || specialSel !== undefined
+    || extraTouched;
+  const deltaRM = fabricDeltaRM + sofaLegDeltaRM + bfDeltaRM + specialsDeltaRM + extraDeltaRM;
   const belowFloor = deltaRM < 0;
 
   /* ── Save (variants delta) ────────────────────────────────────────── */
@@ -396,6 +413,18 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
         patch.specialIds = codes;
         patch.specialLabels = specialSel.map((s) => s.label);
         patch.specialChoices = Object.fromEntries(specialSel.map((s) => [s.id, s.choices ?? []]));
+      }
+      if (extraTouched) {
+        // Empty description clears both — matches Configurator's semantics + the
+        // Houzs SpecialOrders "remove custom line" flow.
+        const cleanNote = shownExtraNote.trim();
+        if (cleanNote) {
+          patch.extraAddonNote = cleanNote;
+          patch.extraAddonAmountRM = Number.isFinite(shownExtraAmountRM) ? shownExtraAmountRM : 0;
+        } else {
+          patch.extraAddonNote = null;
+          patch.extraAddonAmountRM = null;
+        }
       }
       return authedPost(`/mfg-sales-orders/${docNo}/items/${target.itemId}/tbc-update`, { variants: patch });
     },
@@ -499,6 +528,32 @@ export const TbcLineEditor = ({ docNo, target, onSaved, onClose }: {
       {specialAddons.length > 0 && (
         <SpecialAddonsPicker addons={specialAddons} value={shownSpecials} onChange={setSpecialSel} />
       )}
+
+      {/* Custom / other — mirrors the Houzs SpecialOrders Custom-order fields.
+          Shown always so a POS salesperson can (a) see anything a coordinator
+          authored via Houzs desktop, (b) add or edit their own post-hoc. */}
+      <div className={styles.specialsBlock}>
+        <div className={styles.subheading}>Custom / other</div>
+        <label className={styles.field}>
+          <span>Description</span>
+          <textarea
+            rows={2}
+            value={shownExtraNote}
+            placeholder="Free-text (e.g. Extra arm padding)"
+            onChange={(e) => setExtraNote(e.target.value)}
+          />
+        </label>
+        <label className={styles.field}>
+          <span>Extra charge (RM)</span>
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            value={shownExtraAmountRM}
+            onChange={(e) => setExtraAmountRM(Number(e.target.value) || 0)}
+          />
+        </label>
+      </div>
 
       {/* Price impact preview — the server recomputes the same delta and is
           authoritative; a negative delta can't be saved (floor rule). */}
