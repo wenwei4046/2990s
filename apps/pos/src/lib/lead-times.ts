@@ -19,6 +19,13 @@ export interface CartLeadDays {
   hasMattressOrBedframe: boolean;
 }
 
+// Category-id normalise before matching (mirrors useCategoriesAll's strip):
+// Houzs company_2 categories carry a '2990-' prefix that useCatalog does not
+// currently strip, so a bare `Set.has('sofa')` on a raw '2990-sofa' fails
+// silently and cart lead-time falls to 0 days on EVERY line. Normalise here
+// (defensive, cheap) so the check is prefix-agnostic AND category-id agnostic.
+const normalizeCatId = (id: string | null | undefined): string =>
+  (id ?? '').replace(/^2990-/, '');
 const SOFA_CATS  = new Set(['sofa']);
 const MATBF_CATS = new Set(['mattress', 'bedframe']);
 
@@ -46,7 +53,7 @@ export function useCartLeadDays(): CartLeadDays {
     let hasMatBf = false;
     for (const line of lines) {
       const product = productMap.get(line.config.productId);
-      const catId   = product?.category?.id;
+      const catId   = normalizeCatId(product?.category?.id);
       if (!catId) continue;
       if (SOFA_CATS.has(catId))  hasSofa  = true;
       if (MATBF_CATS.has(catId)) hasMatBf = true;

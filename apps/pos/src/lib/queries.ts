@@ -276,12 +276,17 @@ export const useAddons = () =>
     queryFn: async (): Promise<AddonRow[]> => {
       // GET /addons returns ALL rows; the handover screen wants enabled-only,
       // sorted by sortOrder — filter/sort client-side to preserve the old shape.
+      // POST-CUTOVER NORMALIZE: Houzs's scm.addons.id is company-prefixed for
+      // company_2 ('2990-dispose-mattress', '2990-lift', …) to avoid TEXT-PK
+      // collision with HOUZS's company_1 seed. Live-verified 11/11 co_2 rows
+      // carry '2990-'. Strip so any downstream compare (Configurator.tsx pillow
+      // filter, cart addon lookup, snapshot rehydration) works.
       const { addons } = await authedFetch<{ addons: HouzsAddonRow[] }>('/addons');
       return (addons ?? [])
         .filter((r) => r.enabled)
         .sort((a, b) => a.sortOrder - b.sortOrder)
         .map((r) => ({
-          id: r.id,
+          id: r.id.replace(/^2990-/, ''),
           label: r.label,
           description: r.description,
           icon: r.icon,
@@ -926,10 +931,18 @@ export const useSizeLibrary = () =>
     queryKey: ['size_library'],
     staleTime: 5 * 60 * 1000,
     queryFn: async (): Promise<SizeLibraryRow[]> => {
-      // Houzs GET /pos-pools/size-library → { rows: SizeLibraryRow[] }
-      // (already {id,label,widthCm,lengthCm,sortOrder}).
+      // Houzs GET /pos-pools/size-library → { rows: SizeLibraryRow[] }.
+      // POST-CUTOVER NORMALIZE (same rationale as useCategoriesAll): Houzs's
+      // scm.size_library.id is company-prefixed for company_2 ('2990-king',
+      // '2990-queen', …) to avoid a global TEXT PK collision with HOUZS's
+      // company_1 seed (mig 0089). POS-side lookup keys are unprefixed
+      // ('king', 'queen') via MFG_SIZE_CODE_TO_LIB below and in size-info.ts.
+      // Strip the prefix here so downstream lookups + the mattress SIZE picker
+      // resolve. Prod live-verified: 7/7 co_2 rows carry the '2990-' prefix.
       const { rows } = await authedFetch<{ rows: SizeLibraryRow[] }>('/pos-pools/size-library');
-      return (rows ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder);
+      return (rows ?? [])
+        .map((r) => ({ ...r, id: r.id.replace(/^2990-/, '') }))
+        .sort((a, b) => a.sortOrder - b.sortOrder);
     },
   });
 
