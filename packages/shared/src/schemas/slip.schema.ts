@@ -12,11 +12,17 @@ export const SlipInitRequestSchema = z.object({
   orderDraftId: z.string().min(1).max(64).optional(),
 });
 
+// 2026-07-22 aligned to Houzs: Worker-proxy upload (routes/slips.ts on Houzs),
+// so init returns NO presigned putUrl — bytes go via POST /slips/:session/upload
+// as raw binary. `putUrl` + `expiresAt` are OPTIONAL so a Houzs response
+// (uploadSessionId + r2Key only) still type-checks; the legacy 2990 branch in
+// apps/pos/src/lib/slip.ts + apps/backend/src/lib/slip.ts guards on
+// `.putUrl` being present.
 export const SlipInitResponseSchema = z.object({
   uploadSessionId: z.string().uuid(),
-  putUrl: z.string().url(),
   r2Key: z.string(),
-  expiresAt: z.string(),
+  putUrl: z.string().url().optional(),
+  expiresAt: z.string().optional(),
 });
 
 export const SlipConfirmRequestSchema = z.object({}).strict();
@@ -26,10 +32,12 @@ export const SlipConfirmResponseSchema = z.object({
   r2Key: z.string(),
 });
 
+// Houzs streams the slip bytes through the Worker; the "url" is an
+// object-URL wrapper the client makes locally (not a real HTTP URL).
 export const SlipUrlResponseSchema = z.object({
-  url: z.string().url(),
+  url: z.string(),
   contentType: z.string(),
-  expiresAt: z.string(),
+  expiresAt: z.string().optional(),
 });
 
 export type SlipInitRequest = z.infer<typeof SlipInitRequestSchema>;
