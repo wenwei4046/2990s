@@ -21,7 +21,7 @@ import {
 import { fmtRM } from '@2990s/shared';
 import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow, type MfgCatalogCategory } from '../lib/queries';
 import { useStaff, isGlobalCurator, isPosSalesRole } from '../lib/staff';
-import { authedFetchRaw } from '../lib/apiClient';
+import { authedFetchRaw, IS_HOUZS } from '../lib/apiClient';
 import { useCart, cartHasSofa, cartHasMainNonSofa, type FlatConfigSnapshot } from '../state/cart';
 import { Topbar } from '../components/Topbar';
 import { CustomerOrderFab } from '../components/CustomerOrderFab';
@@ -390,7 +390,9 @@ export const Catalog = () => {
                 Delete this block + openBackendSo + isPosSalesRole + the
                 Backend carve-out together once everyone creates orders from
                 POS again. */}
-            {isPosSalesRole(staff?.role) && (
+            {/* 2990-only emergency hatch: on the Houzs target the POS IS the order
+                flow and /pos/backend-sso does not exist (404), so hide it. */}
+            {!IS_HOUZS && isPosSalesRole(staff?.role) && (
               <>
                 <div className={styles.sideHeading}>Backend</div>
                 <button
