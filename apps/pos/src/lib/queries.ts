@@ -276,17 +276,20 @@ export const useAddons = () =>
     queryFn: async (): Promise<AddonRow[]> => {
       // GET /addons returns ALL rows; the handover screen wants enabled-only,
       // sorted by sortOrder — filter/sort client-side to preserve the old shape.
-      // POST-CUTOVER NORMALIZE: Houzs's scm.addons.id is company-prefixed for
-      // company_2 ('2990-dispose-mattress', '2990-lift', …) to avoid TEXT-PK
-      // collision with HOUZS's company_1 seed. Live-verified 11/11 co_2 rows
-      // carry '2990-'. Strip so any downstream compare (Configurator.tsx pillow
-      // filter, cart addon lookup, snapshot rehydration) works.
+      // REVERTED (2026-07-22): a prior strip of the '2990-' prefix from the id
+      // broke Dispose/Lift booking silently. The strip made local compares
+      // convenient, but addon.id flows STRAIGHT through the handover payload
+      // into Houzs's `.in('id', […])` addon lookup — where company_2 rows are
+      // stored as '2990-dispose-mattress'. A stripped id never matched, so the
+      // service line was quietly dropped and the customer wasn't charged.
+      // Keep the prefixed id verbatim; any local compare that needs the
+      // canonical form must normalise at the call site, not here.
       const { addons } = await authedFetch<{ addons: HouzsAddonRow[] }>('/addons');
       return (addons ?? [])
         .filter((r) => r.enabled)
         .sort((a, b) => a.sortOrder - b.sortOrder)
         .map((r) => ({
-          id: r.id.replace(/^2990-/, ''),
+          id: r.id,
           label: r.label,
           description: r.description,
           icon: r.icon,
