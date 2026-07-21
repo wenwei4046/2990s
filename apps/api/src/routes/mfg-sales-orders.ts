@@ -941,8 +941,12 @@ mfgSalesOrders.get('/mine', async (c) => {
      at runtime. The base table has every column incl. proceeded_at +
      deposit_centi. Paid is summed from the payments ledger separately below. */
   /* Board filters (POS My-orders toolbar):
-       ?q=   free-text → searches doc_no / debtor_name / phone across ALL dates
-             (the period is intentionally ignored — search is a global lookup).
+       ?q=   free-text → searches doc_no / debtor_name / phone / note across ALL
+             dates (the period is intentionally ignored — search is a global
+             lookup). note is included so the six 12-Jun renumbered SOs
+             (2606-002..007, note = "Customer copy printed as SO-2606-00X")
+             surface when staff search the number on the customer's paper copy;
+             the Backend grid already searches note client-side (DataGrid blob).
        ?from=&to=  YYYY-MM-DD (MY-local, `to` inclusive) → filter created_at
              (order-placed date) to that period. Only applied when there's no q.
      The default (no params) returns everything; the POS always passes the
@@ -988,7 +992,7 @@ mfgSalesOrders.get('/mine', async (c) => {
     const safe = escapeForOr(q);
     if (safe) {
       query = query.or(
-        `doc_no.ilike.%${safe}%,debtor_name.ilike.%${safe}%,phone.ilike.%${safe}%`,
+        `doc_no.ilike.%${safe}%,debtor_name.ilike.%${safe}%,phone.ilike.%${safe}%,note.ilike.%${safe}%`,
       );
     }
   } else {
