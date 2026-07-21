@@ -5,6 +5,7 @@ import { fmtRM } from '@2990s/shared';
 import { useAuth } from '../lib/auth';
 import { useStaff, isPasscodeLoginRole } from '../lib/staff';
 import { useCart, cartItemCount, cartSubtotal } from '../state/cart';
+import { HouzsSsoMenu } from './HouzsSsoMenu';
 import styles from './Topbar.module.css';
 
 export type StepId = 'cart' | 'customer' | 'confirm';
@@ -87,6 +88,9 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: Topba
               <ListOrdered size={13} strokeWidth={1.75} />
               <span>My orders</span>
             </Link>
+            {/* Houzs SSO menu — Manual SO / Service Case / My Service Cases.
+                Hidden on the 2990-target build; only shows when IS_HOUZS. */}
+            <HouzsSsoMenu />
             {/* Products + SO Maintenance moved to the Catalog left sidebar
                 (Commander 2026-05-28 "搬过去左边左下角那一边"). Removed from
                 the topbar to keep selling-flow chrome focused on Quotes /
