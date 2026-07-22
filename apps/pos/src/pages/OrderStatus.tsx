@@ -26,6 +26,7 @@ import {
   Users,
   Pencil,
   Plus,
+  ExternalLink,
 } from 'lucide-react';
 import { IconButton } from '@2990s/design-system';
 import { groupSoLinesForDisplay, sortSoLinesByGroupRank } from '@2990s/shared/so-line-display';
@@ -53,6 +54,7 @@ import {
   useSoDropdownValues,
 } from '../lib/so-maintenance/so-dropdown-options-queries';
 import { useStaff, canViewAllSales, useSalesStaff } from '../lib/staff';
+import { launchHouzsSso, canLaunchHouzs } from '../lib/houzs-sso';
 import styles from './OrderStatus.module.css';
 
 const PIN_LEN = 6;
@@ -1551,6 +1553,29 @@ const OrderDetail = ({ order, onClose }: {
     };
   }, [onClose]);
 
+  /* Open in Houzs — deep-link to the full SO detail page on Houzs ERP so the
+     salesperson can hit Submit SO Amendment (or view History, Print PDF etc.)
+     for anything the compact POS drawer doesn't cover. Owner 2026-07-22 —
+     specifically the "processing_date passed, items locked, need to change
+     something" case: POS can't submit amendments (POS != coordinator), Houzs
+     desktop can. SSO handoff (no email+password re-prompt) via the same
+     exchange endpoint the topbar Houzs menu uses. Hidden on the 2990-target
+     build. */
+  const [openingHouzs, setOpeningHouzs] = useState(false);
+  const [openHouzsError, setOpenHouzsError] = useState<string | null>(null);
+  const canOpenInHouzs = canLaunchHouzs();
+  const handleOpenInHouzs = useCallback(async () => {
+    setOpeningHouzs(true);
+    setOpenHouzsError(null);
+    try {
+      await launchHouzsSso(`/scm/sales-orders/${encodeURIComponent(order.id)}`);
+    } catch (e) {
+      setOpenHouzsError((e as Error)?.message ?? 'sso_failed');
+    } finally {
+      setOpeningHouzs(false);
+    }
+  }, [order.id]);
+
   return (
     <div className={styles.detailOverlay} onClick={onClose}>
       <aside className={styles.detail} onClick={(e) => e.stopPropagation()}>
@@ -1562,11 +1587,25 @@ const OrderDetail = ({ order, onClose }: {
               {order.customerName} · placed {fmtTimeAgo(order.placedAt)} by {order.staffName ?? '—'}
             </div>
           </div>
-          <IconButton
-            icon={<X size={18} strokeWidth={1.75} />}
-            aria-label="Close"
-            onClick={onClose}
-          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {canOpenInHouzs && (
+              <button
+                type="button"
+                onClick={handleOpenInHouzs}
+                disabled={openingHouzs}
+                title={openHouzsError ?? 'Open this SO on Houzs (Submit Amendment, History, Print)'}
+                className={styles.detailPrintBtn}
+              >
+                <ExternalLink size={14} strokeWidth={1.75} />
+                {openingHouzs ? 'Opening…' : 'Open in Houzs'}
+              </button>
+            )}
+            <IconButton
+              icon={<X size={18} strokeWidth={1.75} />}
+              aria-label="Close"
+              onClick={onClose}
+            />
+          </div>
         </header>
 
         <div className={styles.detailBody}>
