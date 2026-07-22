@@ -37,7 +37,14 @@ import {
   matchCustomerIdentity,
   type CustomerSearchHit,
 } from '../lib/customer-search';
-import { useLocalities, useNewOrderMutation } from '../lib/queries';
+import {
+  useLocalities,
+  useNewOrderMutation,
+  allCities,
+  allPostcodes,
+  resolvePostcode,
+  resolveCityState,
+} from '../lib/queries';
 import { useSoDropdownValues } from '../lib/so-maintenance/so-dropdown-options-queries';
 
 /* Dropdown values come from the maintained so_dropdown_options lists (the SO
@@ -88,28 +95,36 @@ export const NewOrder = () => {
   const customerTypes = useSoDropdownValues('customer_type', CUSTOMER_TYPE_FALLBACK);
   const buildingTypes = useSoDropdownValues('building_type', BUILDING_TYPE_FALLBACK);
 
-  // State → city → postcode cascade from the maintained my_localities dataset —
-  // same source AddressStep uses in the cart handover flow.
+  // State ↔ city ↔ postcode bidirectional cascade from the maintained
+  // my_localities dataset. Owner 2026-07-22: the operator can start with ANY
+  // of the three (State, City, or Postcode) and have the others resolve back
+  // — same UX the Maintenance module already has. When no state is picked
+  // the city + postcode selects show the CROSS-STATE pools; picking either
+  // resolves the state via resolvePostcode / resolveCityState (never a wrong
+  // guess — ambiguous inputs leave State empty for the operator).
   const localities = useLocalities();
+  const localityRows = localities.data ?? [];
   const states = useMemo(() => {
     const set = new Set<string>();
-    for (const l of localities.data ?? []) set.add(l.state);
+    for (const l of localityRows) set.add(l.state);
     return Array.from(set).sort();
-  }, [localities.data]);
+  }, [localityRows]);
   const cities = useMemo(() => {
-    if (!form.customerState) return [] as string[];
+    if (!form.customerState) return allCities(localityRows);
     const set = new Set<string>();
-    for (const l of localities.data ?? []) if (l.state === form.customerState) set.add(l.city);
+    for (const l of localityRows) if (l.state === form.customerState) set.add(l.city);
     return Array.from(set).sort();
-  }, [localities.data, form.customerState]);
+  }, [localityRows, form.customerState]);
   const postcodes = useMemo(() => {
-    if (!form.customerState || !form.city) return [] as string[];
+    if (!form.customerState && !form.city) return allPostcodes(localityRows);
     const set = new Set<string>();
-    for (const l of localities.data ?? []) {
-      if (l.state === form.customerState && l.city === form.city) set.add(l.postcode);
+    for (const l of localityRows) {
+      if (form.customerState && l.state !== form.customerState) continue;
+      if (form.city && l.city !== form.city) continue;
+      set.add(l.postcode);
     }
     return Array.from(set).sort();
-  }, [localities.data, form.customerState, form.city]);
+  }, [localityRows, form.customerState, form.city]);
 
   const setField = (k: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     setForm((cur) => ({ ...cur, [k]: e.target.value }));
@@ -275,26 +290,44 @@ export const NewOrder = () => {
               <Field label="City">
                 <select
                   value={form.city}
-                  onChange={(e) => setForm((cur) => ({
-                    ...cur, city: e.target.value, postcode: '',
-                  }))}
-                  disabled={!form.customerState}
+                  onChange={(e) => setForm((cur) => {
+                    const city = e.target.value;
+                    // If the operator picks a City before a State, try to
+                    // reverse-resolve the State — never a wrong guess, so a
+                    // cross-state city name leaves State empty for them to
+                    // pick. Postcode clears (its option pool re-narrows).
+                    const raw = { ...cur, city, postcode: '' };
+                    if (!raw.customerState) {
+                      const s = resolveCityState(localityRows, city);
+                      if (s) raw.customerState = s;
+                    }
+                    return raw;
+                  })}
                   style={inputStyle}
                 >
-                  <option value="">{form.customerState ? 'Select city…' : 'Pick state first'}</option>
+                  <option value="">Select city…</option>
                   {cities.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </Field>
               <Field label="Postcode">
                 <select
                   value={form.postcode}
-                  onChange={setField('postcode')}
-                  disabled={!form.customerState || !form.city}
+                  onChange={(e) => setForm((cur) => {
+                    const postcode = e.target.value;
+                    // A 5-digit MY postcode uniquely identifies a locality,
+                    // so this fills BOTH State + City in one pick when they
+                    // weren't set (owner Loo — Maintenance already does this).
+                    const raw = { ...cur, postcode };
+                    const hit = resolvePostcode(localityRows, postcode);
+                    if (hit) {
+                      if (!raw.customerState) raw.customerState = hit.state;
+                      if (!raw.city && hit.city) raw.city = hit.city;
+                    }
+                    return raw;
+                  })}
                   style={inputStyle}
                 >
-                  <option value="">
-                    {!form.customerState ? 'Pick state first' : !form.city ? 'Pick city first' : 'Select postcode…'}
-                  </option>
+                  <option value="">Select postcode…</option>
                   {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
               </Field>
