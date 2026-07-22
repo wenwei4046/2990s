@@ -1652,17 +1652,19 @@ export const Configurator = () => {
     </RailSection>
   ) : null;
 
-  // Special add-on (note + extra charge) — Loo 2026-06-13. The description + amount
-  // feed variants.extraAddonNote + extraAddonAmountRM → custom_specials (a charged
-  // special add-on on the SO). Rendered directly below the SPECIAL ADD-ON chips.
+  // Special order (note + extra charge) — Loo 2026-06-13, rename 2026-07-22
+  // to match Houzs SO backend terminology (SPECIAL ORDERS > Custom / other >
+  // Description). The description + amount feed variants.extraAddonNote +
+  // extraAddonAmountRM → custom_specials (a Special Order line on the SO).
+  // Rendered directly below the SPECIAL ADD-ON chips.
   const specialAddonRailSection = (
-    <RailSection title="Special add-on" sub="Optional — adds a charged item to the sales order">
+    <RailSection title="Special order" sub="Optional — adds a Special Order line (with a charge) to the sales order">
       <label className={styles.sizeOtherField}>
         <span className={styles.sizeOtherLabel}>Description</span>
         <textarea
           className={styles.sizeOtherInput}
           rows={2}
-          placeholder="What's the add-on for…"
+          placeholder="Describe the special order…"
           value={lineExtraNote}
           maxLength={300}
           onChange={(e) => setLineExtraNote(e.target.value)}
