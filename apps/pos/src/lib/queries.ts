@@ -1350,6 +1350,61 @@ export const useLocalities = () =>
     },
   });
 
+/* ── REVERSE address resolution (postcode / city → state) ───────────────────
+   Ported from Houzs frontend/src/vendor/scm/lib/localities-queries.ts to close
+   the "must pick State first" gap the owner flagged 2026-07-22 (Maintenance
+   module already had it; POS didn't). The forward cascade the memos above use
+   stays unchanged; these helpers just let the operator ALSO pick a Postcode or
+   a City first and have the State (and, transitively, warehouse binding) fill
+   itself in — never a wrong guess. */
+
+/* A Malaysian 5-digit postcode maps to a single locality, so resolvePostcode
+   returns both {state, city}. Returns null when the postcode is unknown, or
+   when rows for it disagree on the state (conflicting seed → refuse to guess).
+   city is '' when a postcode spans more than one city (still lets the caller
+   set the state). */
+export const resolvePostcode = (
+  rows: LocalityRow[],
+  postcode: string,
+): { state: string; city: string } | null => {
+  const want = (postcode ?? '').trim();
+  if (!want) return null;
+  const hits = rows.filter((r) => r.postcode === want);
+  const first = hits[0];
+  if (!first) return null;
+  const state = first.state;
+  if (!hits.every((r) => r.state === state)) return null;
+  const cities = Array.from(new Set(hits.map((r) => r.city)));
+  const onlyCity = cities.length === 1 ? cities[0] : undefined;
+  return { state, city: onlyCity ?? '' };
+};
+
+/* A city shared by >1 state returns null so the caller leaves State for the
+   operator to pick (never a wrong guess). Case-insensitive match. */
+export const resolveCityState = (rows: LocalityRow[], city: string): string | null => {
+  const want = (city ?? '').trim().toLowerCase();
+  if (!want) return null;
+  const states = new Set<string>();
+  for (const r of rows) if (r.city.trim().toLowerCase() === want) states.add(r.state);
+  if (states.size !== 1) return null;
+  const [only] = Array.from(states);
+  return only ?? null;
+};
+
+/* Cross-state option pools — shown when NO state is picked yet so the operator
+   can choose a City or Postcode first. With a state picked, the forward
+   cascade's citiesInState/postcodesInCity is still what renders. */
+export const allCities = (rows: LocalityRow[]): string[] => {
+  const s = new Set<string>();
+  for (const r of rows) s.add(r.city);
+  return Array.from(s).sort();
+};
+export const allPostcodes = (rows: LocalityRow[]): string[] => {
+  const s = new Set<string>();
+  for (const r of rows) s.add(r.postcode);
+  return Array.from(s).sort();
+};
+
 /** PR — Commander 2026-05-28: realtime invalidate the sofa customizer
  *  cache whenever commander edits the Model row (allowed_options) OR the
  *  master maintenance_config_history row (compartment meta). Mirrors the

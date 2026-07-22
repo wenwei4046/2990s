@@ -1,6 +1,12 @@
 import { useMemo } from 'react';
 import type { HandoverForm } from '../../lib/handover-helpers';
-import type { LocalityRow } from '../../lib/queries';
+import {
+  allCities,
+  allPostcodes,
+  resolveCityState,
+  resolvePostcode,
+  type LocalityRow,
+} from '../../lib/queries';
 import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
 import { Field } from './Field';
 import styles from '../../pages/Handover.module.css';
@@ -24,19 +30,46 @@ export const AddressStep = ({
     return Array.from(set).sort();
   }, [localities]);
 
+  /* Owner 2026-07-22 — bidirectional cascade. When the operator hasn't picked
+     a state yet, the city + postcode selects show the CROSS-STATE pools so
+     they can start from whichever they know first; picking either then
+     reverse-resolves the state via resolveCityState / resolvePostcode. Both
+     resolvers refuse ambiguous inputs, so a wrong guess never lands. */
   const cities = useMemo(() => {
-    if (!form.state) return [] as string[];
+    if (!form.state) return allCities(localities);
     const set = new Set<string>();
     for (const l of localities) if (l.state === form.state) set.add(l.city);
     return Array.from(set).sort();
   }, [localities, form.state]);
 
   const postcodes = useMemo(() => {
-    if (!form.state || !form.city) return [] as string[];
+    if (!form.state && !form.city) return allPostcodes(localities);
     const set = new Set<string>();
-    for (const l of localities) if (l.state === form.state && l.city === form.city) set.add(l.postcode);
+    for (const l of localities) {
+      if (form.state && l.state !== form.state) continue;
+      if (form.city && l.city !== form.city) continue;
+      set.add(l.postcode);
+    }
     return Array.from(set).sort();
   }, [localities, form.state, form.city]);
+
+  const billingCities = useMemo(() => {
+    if (!form.billingState) return allCities(localities);
+    const set = new Set<string>();
+    for (const l of localities) if (l.state === form.billingState) set.add(l.city);
+    return Array.from(set).sort();
+  }, [localities, form.billingState]);
+
+  const billingPostcodes = useMemo(() => {
+    if (!form.billingState && !form.billingCity) return allPostcodes(localities);
+    const set = new Set<string>();
+    for (const l of localities) {
+      if (form.billingState && l.state !== form.billingState) continue;
+      if (form.billingCity && l.city !== form.billingCity) continue;
+      set.add(l.postcode);
+    }
+    return Array.from(set).sort();
+  }, [localities, form.billingState, form.billingCity]);
 
   return (
     <section className={styles.stepBody}>
@@ -94,12 +127,16 @@ export const AddressStep = ({
               <select
                 value={form.city}
                 onChange={(e) => {
-                  update('city', e.target.value);
+                  const city = e.target.value;
+                  update('city', city);
                   update('postcode', '');
+                  if (!form.state) {
+                    const s = resolveCityState(localities, city);
+                    if (s) update('state', s);
+                  }
                 }}
-                disabled={!form.state}
               >
-                <option value="">{form.state ? 'Select city…' : 'Pick state first'}</option>
+                <option value="">Select city…</option>
                 {cities.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </Field>
@@ -109,12 +146,17 @@ export const AddressStep = ({
             <Field label="Postcode">
               <select
                 value={form.postcode}
-                onChange={(e) => update('postcode', e.target.value)}
-                disabled={!form.state || !form.city}
+                onChange={(e) => {
+                  const postcode = e.target.value;
+                  update('postcode', postcode);
+                  const hit = resolvePostcode(localities, postcode);
+                  if (hit) {
+                    if (!form.state) update('state', hit.state);
+                    if (!form.city && hit.city) update('city', hit.city);
+                  }
+                }}
               >
-                <option value="">
-                  {!form.state ? 'Pick state first' : !form.city ? 'Pick city first' : 'Select postcode…'}
-                </option>
+                <option value="">Select postcode…</option>
                 {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </Field>
@@ -181,18 +223,17 @@ export const AddressStep = ({
                   <select
                     value={form.billingCity}
                     onChange={(e) => {
-                      update('billingCity', e.target.value);
+                      const city = e.target.value;
+                      update('billingCity', city);
                       update('billingPostcode', '');
+                      if (!form.billingState) {
+                        const s = resolveCityState(localities, city);
+                        if (s) update('billingState', s);
+                      }
                     }}
-                    disabled={!form.billingState}
                   >
-                    <option value="">{form.billingState ? 'Select city…' : 'Pick state first'}</option>
-                    {(() => {
-                      if (!form.billingState) return [];
-                      const set = new Set<string>();
-                      for (const l of localities) if (l.state === form.billingState) set.add(l.city);
-                      return Array.from(set).sort();
-                    })().map((c) => <option key={c} value={c}>{c}</option>)}
+                    <option value="">Select city…</option>
+                    {billingCities.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </Field>
               </div>
@@ -201,20 +242,18 @@ export const AddressStep = ({
                 <Field label="Postcode">
                   <select
                     value={form.billingPostcode}
-                    onChange={(e) => update('billingPostcode', e.target.value)}
-                    disabled={!form.billingState || !form.billingCity}
-                  >
-                    <option value="">
-                      {!form.billingState ? 'Pick state first' : !form.billingCity ? 'Pick city first' : 'Select postcode…'}
-                    </option>
-                    {(() => {
-                      if (!form.billingState || !form.billingCity) return [];
-                      const set = new Set<string>();
-                      for (const l of localities) {
-                        if (l.state === form.billingState && l.city === form.billingCity) set.add(l.postcode);
+                    onChange={(e) => {
+                      const postcode = e.target.value;
+                      update('billingPostcode', postcode);
+                      const hit = resolvePostcode(localities, postcode);
+                      if (hit) {
+                        if (!form.billingState) update('billingState', hit.state);
+                        if (!form.billingCity && hit.city) update('billingCity', hit.city);
                       }
-                      return Array.from(set).sort();
-                    })().map((p) => <option key={p} value={p}>{p}</option>)}
+                    }}
+                  >
+                    <option value="">Select postcode…</option>
+                    {billingPostcodes.map((p) => <option key={p} value={p}>{p}</option>)}
                   </select>
                 </Field>
               </div>
