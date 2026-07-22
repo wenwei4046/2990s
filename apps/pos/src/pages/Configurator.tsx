@@ -1704,12 +1704,15 @@ export const Configurator = () => {
       </label>
     </RailSection>
   );
-  // Combined pair (special add-on, then item remark) — rendered right after the
-  // SPECIAL ADD-ON chips on each product rail.
+  // Combined pair — rendered right after the SPECIAL ADD-ON chips on each
+  // product rail. Owner 2026-07-22: dropped the per-line Remark card from
+  // the rail (Special Order card was doing double duty). `remarkRailSection`
+  // + `lineRemark` state kept in place because 4 payload sites read
+  // lineRemark.trim() into variants.remark — the UI is dead, the data path
+  // is not. A follow-up can strip them together.
   const remarkExtraRailSection = (
     <>
       {specialAddonRailSection}
-      {remarkRailSection}
     </>
   );
 
