@@ -43,13 +43,26 @@ export function useFreeGiftSync(): void {
       const cfg = l.config as {
         kind?: string; productId?: string; isFreeGift?: boolean; modelId?: string | null;
         sizeId?: string; cells?: Array<{ moduleId?: unknown }>;
+        category?: string;  // UPPERCASE mfg category ('SOFA'/'BEDFRAME'/'MATTRESS'/'ACCESSORY'/'SERVICE')
       };
       const modelId = cfg.modelId ?? null;
       const isSofa = cfg.kind === 'sofa';
+      // Prefer the line's stamped mfg category (owner rule: cart stamps the real
+      // category so the trigger matcher sees SOFA/MATTRESS/BEDFRAME/ACCESSORY/
+      // SERVICE, not the generic 'OTHER' bucket 2990-era code passed).
+      // Fallbacks: sofa (from kind), bedframe (from kind), size→MATTRESS,
+      // then ACCESSORY as a last resort so an unknown non-sofa still routes.
+      const stamped = (cfg.category ?? '').toUpperCase();
+      const derivedCategory =
+        stamped ||
+        (isSofa ? 'SOFA'
+          : cfg.kind === 'bedframe' ? 'BEDFRAME'
+          : cfg.kind === 'size' ? 'MATTRESS'
+          : 'ACCESSORY');
       triggerLines.push({
         triggerKey: l.key,
         itemCode:   cfg.productId ?? l.key,
-        category:   isSofa ? 'SOFA' : 'OTHER',
+        category:   derivedCategory,
         qty:        l.qty,
         modelId,
         buildKey:   l.key,                         // one cart line = one build

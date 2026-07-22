@@ -340,7 +340,12 @@ export function matchComboSubset(
   return subset;
 }
 
-const todayIso = (): string => new Date().toISOString().slice(0, 10);
+// MYT (UTC+8) — a combo's effective-date bracket must be evaluated in the
+// business timezone, not UTC. Aligned to Houzs `lib/my-time.ts::todayMyt`
+// (2026-07-22). Without the +8h shift, for ~8 hours per day the two sides
+// disagreed on which combos were live.
+const todayIso = (): string =>
+  new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
 
 /** Result of a successful subset combo match. */
 export interface ComboMatch {

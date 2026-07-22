@@ -53,7 +53,11 @@ export interface SofaModuleLineSpec {
  *  All-zero weights → equal split. Negative totals distribute symmetrically. */
 export function distributeProportionally(totalSen: number, weights: number[]): number[] {
   if (weights.length === 0) return [];
-  if (weights.length === 1) return [totalSen];
+  // Guard NaN / Infinity — an unpriced sofa build (undefined cost) would
+  // otherwise poison every per-line share + header roll-up. Aligned to Houzs
+  // (2026-07-22).
+  const total = Number.isFinite(totalSen) ? totalSen : 0;
+  if (weights.length === 1) return [total];
   const positive = weights.map((w) => (Number.isFinite(w) && w > 0 ? w : 0));
   const sum = positive.reduce((s, w) => s + w, 0);
   const effective = sum > 0 ? positive : weights.map(() => 1);
@@ -61,11 +65,11 @@ export function distributeProportionally(totalSen: number, weights: number[]): n
   const out: number[] = [];
   let allocated = 0;
   for (let i = 0; i < effective.length - 1; i++) {
-    const share = Math.floor((totalSen * effective[i]!) / effSum);
+    const share = Math.floor((total * effective[i]!) / effSum);
     out.push(share);
     allocated += share;
   }
-  out.push(totalSen - allocated); // residue lands on the last line (D3)
+  out.push(total - allocated); // residue lands on the last line (D3)
   return out;
 }
 

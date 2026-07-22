@@ -73,14 +73,16 @@ describe('meetsProcessingDatePaymentGate', () => {
     expect(meetsProcessingDatePaymentGate(100, 100)).toBe(true);
   });
 
-  it('blocks the date below 50% paid', () => {
-    expect(meetsProcessingDatePaymentGate(49, 100)).toBe(false);
+  it('blocks the date below 30% paid (Houzs owner 2026-07-14; POS aligned 2026-07-22)', () => {
+    expect(meetsProcessingDatePaymentGate(29, 100)).toBe(false);
     expect(meetsProcessingDatePaymentGate(0, 100)).toBe(false);
   });
 
   it('is unit-agnostic — same ratio in centi passes', () => {
     expect(meetsProcessingDatePaymentGate(5000, 10000)).toBe(true);
-    expect(meetsProcessingDatePaymentGate(4900, 10000)).toBe(false);
+    // 4900/10000 = 49% now PASSES under the 30% threshold. 2900/10000 = 29% still blocks.
+    expect(meetsProcessingDatePaymentGate(4900, 10000)).toBe(true);
+    expect(meetsProcessingDatePaymentGate(2900, 10000)).toBe(false);
   });
 
   it('allows the date on a fully-free order (nothing to collect, no 0/0 NaN)', () => {

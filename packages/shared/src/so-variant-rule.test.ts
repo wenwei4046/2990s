@@ -39,13 +39,13 @@ describe('missingVariantAxes — sofa', () => {
   });
 
   it('reports canonical keys when an axis has NO alias filled', () => {
-    // Pre-#473 cart: no leg pick under either name → legHeight is genuinely
-    // missing. Seat axis satisfied via depth.
+    // sofa legHeight is `required: false` (aligned to Houzs 2026-07-22 —
+    // always defaults to "Default RM 0", so it must never gate Confirm).
+    // Only seatHeight + fabricCode remain required for sofa.
     expect(missingKeys('sofa', { depth: '24', fabricCode: 'CG-002' }))
-      .toEqual(['legHeight']);
-    // Nothing at all → every axis reported under its Backend canonical key.
-    expect(missingKeys('sofa', {})).toEqual(['seatHeight', 'legHeight', 'fabricCode']);
-    expect(missingKeys('sofa', null)).toEqual(['seatHeight', 'legHeight', 'fabricCode']);
+      .toEqual([]);
+    expect(missingKeys('sofa', {})).toEqual(['seatHeight', 'fabricCode']);
+    expect(missingKeys('sofa', null)).toEqual(['seatHeight', 'fabricCode']);
   });
 
   it('empty-string / whitespace alias values do NOT satisfy an axis', () => {
