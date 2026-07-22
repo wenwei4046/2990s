@@ -90,12 +90,14 @@ export const Sidebar = () => {
   const { staff, signOut } = useAuth();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(readCollapsed);
 
-  /* Amendments pending-count badge (Phase 6a) — open amendments = every row NOT
-     yet closed (SENT / REJECTED). Drives the "Amendments" nav badge so the SO
-     desk sees at a glance how many revisions are in flight. */
+  /* Amendments pending-count badge (Phase 6a) — Owner 2026-07-20: the badge is
+     an APPROVAL inbox, so it counts only rows still awaiting a decision
+     (REQUESTED / SUPPLIER_PENDING). Once approved (SO_APPROVED / PO_APPROVED)
+     the revision is in execution, not pending — it must drop off the badge
+     ("当 approved 之后不要出现号码"), as do the closed SENT / REJECTED rows. */
   const { data: amendmentsData } = useAmendments();
   const openAmendmentCount = (amendmentsData?.amendments ?? [])
-    .filter((a) => a.status !== 'SENT' && a.status !== 'REJECTED').length;
+    .filter((a) => a.status === 'REQUESTED' || a.status === 'SUPPLIER_PENDING').length;
 
   const toggle = (id: string) =>
     setCollapsed((prev) => {
