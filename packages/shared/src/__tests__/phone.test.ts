@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizePhone, formatPhone, isValidMalaysianPhone } from '../phone';
+import { normalizePhone, formatPhone, isValidMalaysianPhone, splitE164, combineE164, canonicalizeSinglePhone } from '../phone';
 
 describe('normalizePhone', () => {
   it('keeps an already-E.164 +60 mobile (10-digit local) as-is', () => {
@@ -99,5 +99,71 @@ describe('isValidMalaysianPhone', () => {
 
   it('rejects non-MY country codes', () => {
     expect(isValidMalaysianPhone('+6512345678')).toBe(false);
+  });
+});
+
+// splitE164 had NO tests, which is why the bug below survived a month. It backs
+// both country pickers — apps/pos CountryPhoneInput and apps/backend PhoneInput
+// — so whatever it returns is what a salesperson sees and re-saves.
+describe('splitE164 — the country picker's view of a stored number', () => {
+  it('does NOT claim a bare Malaysian number for the United States', () => {
+    // "197770309" is a +60 number written without the trunk 0. The old greedy
+    // dial-code scan matched "1" first and showed the picker as "us +1" on a
+    // Malaysian customer.
+    expect(splitE164('197770309')).toEqual({ dial: '60', national: '197770309' });
+  });
+
+  it('strips the local trunk 0 instead of leaving it in the national box', () => {
+    // Left in, the field displays "0123456789" under a +60 — and combineE164
+    // then rebuilds it as "+600123456789", corrupting the number on save.
+    expect(splitE164('0123456789')).toEqual({ dial: '60', national: '123456789' });
+    expect(combineE164('60', splitE164('0123456789').national)).toBe('+60123456789');
+  });
+
+  it('only reads a country code off a value that carries an explicit +', () => {
+    expect(splitE164('+6591234567')).toEqual({ dial: '65', national: '91234567' });
+    // Same digits without the plus are a Malaysian national number, not Singapore.
+    expect(splitE164('6591234567')).toEqual({ dial: '60', national: '6591234567' });
+  });
+
+  it('reads a plus-less but explicitly 60-prefixed value as Malaysian', () => {
+    expect(splitE164('60197770309')).toEqual({ dial: '60', national: '197770309' });
+  });
+
+  it('empty input defaults to Malaysia with nothing typed', () => {
+    expect(splitE164('')).toEqual({ dial: '60', national: '' });
+    expect(splitE164(null)).toEqual({ dial: '60', national: '' });
+  });
+
+  it('a longer dial code wins over its own prefix (673 before 6)', () => {
+    expect(splitE164('+6738123456')).toEqual({ dial: '673', national: '8123456' });
+  });
+});
+
+// canonicalizeSinglePhone exists for free-text fields that have held MORE than
+// one number. normalizePhone strips every non-digit, so running it over
+// "03-1234 5678 / 019-876 5432" would concatenate the two into one nonsense
+// string — and that string gets printed on documents.
+describe('canonicalizeSinglePhone', () => {
+  it('canonicalises a value that is unambiguously one number', () => {
+    expect(canonicalizeSinglePhone('03-1234 5678')).toBe('+60312345678');
+    expect(canonicalizeSinglePhone('+65 6123 4567')).toBe('+6561234567');
+  });
+
+  it('REFUSES a list or an extension, returning it exactly as typed', () => {
+    const two = '03-1234 5678 / 019-876 5432';
+    expect(canonicalizeSinglePhone(two)).toBe(two);
+    expect(canonicalizeSinglePhone('03-1234 5678, 03-1234 5679')).toBe('03-1234 5678, 03-1234 5679');
+    expect(canonicalizeSinglePhone('03-1234 5678 ext 12')).toBe('03-1234 5678 ext 12');
+  });
+
+  it('refuses anything outside a plausible single-number length', () => {
+    expect(canonicalizeSinglePhone('1234')).toBe('1234');
+    expect(canonicalizeSinglePhone('0312345678031234567')).toBe('0312345678031234567');
+  });
+
+  it('empty stays empty', () => {
+    expect(canonicalizeSinglePhone('')).toBe('');
+    expect(canonicalizeSinglePhone(null)).toBe('');
   });
 });
