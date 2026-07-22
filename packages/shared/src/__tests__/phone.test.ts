@@ -105,7 +105,7 @@ describe('isValidMalaysianPhone', () => {
 // splitE164 had NO tests, which is why the bug below survived a month. It backs
 // both country pickers — apps/pos CountryPhoneInput and apps/backend PhoneInput
 // — so whatever it returns is what a salesperson sees and re-saves.
-describe('splitE164 — the country picker's view of a stored number', () => {
+describe('splitE164 — what the country picker shows for a stored number', () => {
   it('does NOT claim a bare Malaysian number for the United States', () => {
     // "197770309" is a +60 number written without the trunk 0. The old greedy
     // dial-code scan matched "1" first and showed the picker as "us +1" on a
