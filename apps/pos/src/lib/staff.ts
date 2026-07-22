@@ -110,14 +110,18 @@ export function useSalesStaff(enabled = true) {
 
 export function useAllStaff() {
   return useQuery<StaffOption[]>({
-    queryKey: ['staff', 'all'],
+    queryKey: ['staff', 'all', 'pickable'],
     staleTime: 5 * 60_000,
     queryFn: async () => {
-      // Houzs GET /staff → { staff:[...] } (camelCase). Keep the active-only,
-      // name-sorted slice the salesperson filter expects.
+      // Houzs GET /staff/pickable → { staff:[...] } — the company-SCOPED
+      // salesperson list (Team grants + PMS, per staffCompanyScope). Bare
+      // /staff is the cross-company DISPLAY roster (historical doc names
+      // must never blank out) and MUST NOT drive the POS picker: a 2990-only
+      // sales_executive would otherwise see the entire Houzs staff list
+      // (Scarlett 2026-07-22 leak).
       const { staff } = await authedFetch<{
         staff: Array<{ id: string; name: string; active?: boolean }>;
-      }>('/staff');
+      }>('/staff/pickable');
       return (staff ?? [])
         .filter((s) => s.active !== false)
         .map((s) => ({ id: s.id, name: s.name }))
