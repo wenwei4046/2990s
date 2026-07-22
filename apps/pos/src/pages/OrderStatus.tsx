@@ -1568,7 +1568,13 @@ const OrderDetail = ({ order, onClose }: {
     setOpeningHouzs(true);
     setOpenHouzsError(null);
     try {
-      await launchHouzsSso(`/scm/sales-orders/${encodeURIComponent(order.id)}`);
+      // ?edit=1 lands the sales user directly in the editor. For a
+      // processing-locked SO (the reason this button exists) that is the
+      // amendment form — "Submit amendment request" is the primary button.
+      // For a still-editable SO it's just the normal edit mode, so a
+      // salesperson who wanted to only view can hit Cancel. Owner 2026-07-22:
+      // one click, not two.
+      await launchHouzsSso(`/scm/sales-orders/${encodeURIComponent(order.id)}?edit=1`);
     } catch (e) {
       setOpenHouzsError((e as Error)?.message ?? 'sso_failed');
     } finally {
