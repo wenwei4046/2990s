@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { todayLocalIso, type HandoverForm } from '../../lib/handover-helpers';
 import { useAllStaff, useStaff } from '../../lib/staff';
 import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
@@ -59,17 +59,20 @@ export const CustomerStep = ({
     if (h.gender) update('gender', h.gender);
   };
 
-  /* Customer type is DERIVED, not picked (Loo 2026-06-06: "if there is the
-     existing customer, then will be auto select; if that's not, it can't
-     select"). The live (name, phone) pair is checked against the customer
-     list — both matching (the 0144 identity rule) → EXISTING, anything else
-     → NEW. The select below is read-only; editing the name or phone after a
-     pick re-evaluates automatically. React Query dedupes this with the name
-     dropdown's own search (same key), so no extra network. */
+  /* Customer type is AUTO-SEEDED but user-overridable (Loo 2026-07-22 —
+     previously read-only). Live (name, phone) pair is checked against the
+     customer list — both matching → EXISTING, anything else → NEW. The
+     derived value seeds the select on entry AND continues to auto-follow
+     name/phone edits until the operator makes a manual pick, at which point
+     `userTouched` locks the manual value in place. React Query dedupes the
+     lookup with the name dropdown's own search (same key), so no extra
+     network. */
   const identitySearch = useCustomerNameSearch(form.name, true);
   const matched = matchCustomerIdentity(identitySearch.data, form.name, form.phone);
   const derivedType = matched ? 'EXISTING' : 'NEW';
+  const userTouched = useRef(false);
   useEffect(() => {
+    if (userTouched.current) return;
     if (form.customerType !== derivedType) update('customerType', derivedType);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [derivedType]);
@@ -129,7 +132,10 @@ export const CustomerStep = ({
         <Field label="Customer type (auto)">
           <select
             value={form.customerType}
-            disabled
+            onChange={(e) => {
+              userTouched.current = true;
+              update('customerType', e.target.value);
+            }}
             title={matched
               ? `Matched ${matched.debtorName} (${matched.phone ?? 'no phone'}) — last order ${matched.lastDocNo}`
               : 'No matching customer for this name + phone — recorded as a new customer'}
@@ -139,9 +145,11 @@ export const CustomerStep = ({
             ))}
           </select>
           <p className={styles.signCaption} style={{ marginTop: 4 }}>
-            {matched
-              ? `Recognised — last order ${matched.lastDocNo}`
-              : 'Auto-detected from past orders (name + phone)'}
+            {userTouched.current
+              ? 'Manual override — auto-detect paused for this order'
+              : matched
+                ? `Recognised — last order ${matched.lastDocNo}`
+                : 'Auto-detected from past orders (name + phone) — override anytime'}
           </p>
         </Field>
       </div>

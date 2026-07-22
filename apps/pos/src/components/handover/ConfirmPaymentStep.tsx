@@ -270,12 +270,18 @@ export const ConfirmPaymentStep = ({
         <Plus size={14} strokeWidth={2} />
         Add payment
       </button>
-      {extras.length > 0 && (
+      {/* Only summarise splits that carry a real amount (Loo 2026-07-22 —
+          previously a freshly-added split row that still had amount=0 rendered
+          as "Cash RM 0" in the breakdown, making the totals string look
+          contradictory. The row itself keeps showing above so the operator can
+          finish typing the amount; validateConfirmPayment already blocks
+          submit while any row has amount<=0). */}
+      {extras.some((p) => (p.amount ?? 0) > 0) && (
         <p className={styles.stepLead} style={{ marginTop: 8 }}>
           Total collected: <strong>{fmtRM(collected)}</strong> of {fmtRM(total)}
           {' '}({methodLabel} {fmtRM(form.amountPaid)}
-          {extras.map((p) => (
-            <span key={p.uid}> + {methodLabels[p.method] ?? p.method} {fmtRM(p.amount || 0)}</span>
+          {extras.filter((p) => (p.amount ?? 0) > 0).map((p) => (
+            <span key={p.uid}> + {methodLabels[p.method] ?? p.method} {fmtRM(p.amount)}</span>
           ))})
         </p>
       )}
