@@ -136,14 +136,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         return { error: 'network_error' };
       }
       const body = (await res.json().catch(() => ({}))) as {
-        error?: string; token?: string; staffId?: string; userId?: string; id?: string;
+        error?: string; token?: string; staffId?: string;
       };
       if (!res.ok) return { error: body.error ?? `login_failed_${res.status}` };
       if (!body.token) return { error: 'login_failed' };
       // Identity: the POS keys everything (staff lookup, cart-sync) on user.id =
-      // scm.staff.id. Prefer staffId; fall back to userId/id if the email-login
-      // response omits it. See FLAG in the PR notes — this field is unverified.
-      const id = body.staffId ?? body.userId ?? body.id ?? '';
+      // scm.staff.id. The Houzs login returns it as staffId (Houzs-ERP#1001) —
+      // the old FLAGged fallback chain (userId/id) could only ever inject the
+      // WRONG key (an integer user id) into the staff-keyed stores, and the ''
+      // default was a silent half-login: token minted, app unusable, next
+      // reload dead-ends on the sales-only PIN LockScreen (the post-flip
+      // owner/ops lockout of 2026-07-22). Fail LOUD instead.
+      const id = body.staffId ?? '';
+      if (!id) return { error: 'no_staff_identity' };
       setHouzsToken(body.token);
       setHouzsStaffId(id);
       setUser({ id, email });
