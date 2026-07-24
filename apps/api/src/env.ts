@@ -7,6 +7,13 @@ export interface Env {
   // Public
   SUPABASE_URL: string;
   ALLOWED_ORIGINS: string;
+  // Reversible read-only freeze (see middleware/read-only.ts). When the string
+  // is exactly "true", the API rejects every mutating request (POST/PUT/PATCH/
+  // DELETE) with 403 read_only — except the login/session endpoints — so staff
+  // can still sign in + view but are redirected to HouzsERP for operations.
+  // Committed default is "false" in wrangler.toml [vars]; the owner flips it to
+  // "true" to freeze the old 2990's system without taking it offline.
+  READ_ONLY_MODE: string;
   R2_BUCKET_NAME: string;
   R2_ENDPOINT: string;
   // Task #92 — bucket name used when presigning SO item photo URLs.

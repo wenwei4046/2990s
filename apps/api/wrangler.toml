@@ -27,6 +27,21 @@ custom_domain = true
 [vars]
 SUPABASE_URL = "https://dolvxrchzbnqvahocwsu.supabase.co"
 
+# Reversible read-only freeze (see src/middleware/read-only.ts).
+#   "false" = normal — all writes allowed (COMMITTED DEFAULT: merging the code
+#             changes nothing).
+#   "true"  = frozen — every mutating request (POST/PUT/PATCH/DELETE) is
+#             rejected with 403 read_only. GET/HEAD/OPTIONS and the login/
+#             session endpoints (/pos/pin-login, /pos/backend-sso,
+#             /pos/verify-pin) stay open, so staff can still sign in + view but
+#             are redirected to HouzsERP for operations.
+# Flip ON:  set this to "true", then `wrangler deploy` (from apps/api).
+# Flip OFF: set back to "false", then `wrangler deploy`.
+# Quick toggle without editing the file: `wrangler deploy --var READ_ONLY_MODE:true`
+# (note: a later plain `wrangler deploy` resets it to this committed value).
+# Verify live state via GET https://api.2990shome.com/health → { "readOnly": … }.
+READ_ONLY_MODE = "false"
+
 # PR #48 — invite + recovery magic links anchor here. Must match the
 # production Backend portal URL and be on the Supabase Redirect URLs
 # allow-list (Authentication → URL Configuration).
