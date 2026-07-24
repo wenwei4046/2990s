@@ -73,6 +73,7 @@ import { mrpLeadTimes } from './routes/mrp-lead-times';
 import { hr } from './routes/hr';
 import { salesAnalysis } from './routes/sales-analysis';
 import { supabaseAuth } from './middleware/auth';
+import { readOnlyGuard } from './middleware/read-only';
 import { reapOnce } from './lib/reaper';
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -93,6 +94,14 @@ app.use('*', async (c, next) => {
   });
   return handler(c, next);
 });
+
+// Reversible read-only freeze (env-gated). When READ_ONLY_MODE === 'true' every
+// mutating request is rejected 403 read_only, except the login/session
+// endpoints — so staff can still sign in + view, but all writes are redirected
+// to HouzsERP. Mounted AFTER cors (preflight still answers) and BEFORE the
+// routes (so it covers every one). Inert unless the flag is flipped in
+// wrangler.toml [vars] (committed default "false").
+app.use('*', readOnlyGuard);
 
 app.route('/health', health);
 app.route('/products', products);

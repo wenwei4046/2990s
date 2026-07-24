@@ -10,6 +10,9 @@ health.get('/', (c) =>
     status: 'ok',
     service: '2990s-api',
     ts: new Date().toISOString(),
+    // Reflects the reversible read-only freeze (middleware/read-only.ts) so the
+    // SPAs / monitoring can see the frozen state without attempting a write.
+    readOnly: c.env.READ_ONLY_MODE === 'true',
   }),
 );
 
