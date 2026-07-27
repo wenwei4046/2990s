@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Pencil, X, Save, MessageCircle, Mail, CheckCircle2, Circle } from 'lucide-react';
-import { Button } from '@2990s/design-system';
+import { Plus, Pencil, Save, MessageCircle, Mail, CheckCircle2, Circle } from 'lucide-react';
+import { Button, Drawer } from '@2990s/design-system';
 import { useAuth, isAdminLevel } from '../lib/auth';
 import { useDrivers, useSuppliers, type DriverRow, type Supplier } from '../lib/queries';
 import {
@@ -233,80 +233,70 @@ const SupplierDrawer = ({
   };
 
   return (
-    <div className={styles.scrim} onClick={onClose}>
-      <div className={styles.drawer} onClick={(e) => e.stopPropagation()}>
-        <header className={styles.drawerHead}>
-          <div>
-            <div className="t-eyebrow">{mode === 'create' ? 'New supplier' : 'Edit supplier'}</div>
-            <h3 className={styles.drawerTitle}>{mode === 'create' ? 'Add a supplier' : supplier?.name}</h3>
-            <div className={styles.drawerSub}>
-              WhatsApp + email unlock PO share buttons in the order drawer.
-            </div>
-          </div>
-          <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close">
-            <X size={18} strokeWidth={1.75} />
-          </button>
-        </header>
-
-        <div className={styles.drawerBody}>
-          {error && <div className={styles.errorBanner}>{error}</div>}
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Code</span>
-            <input
-              className={styles.input}
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="e.g. KFA"
-              maxLength={8}
-            />
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Name</span>
-            <input
-              className={styles.input}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Kraf Furnitur Asia"
-            />
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>WhatsApp number</span>
-            <input
-              className={styles.input}
-              value={whatsapp}
-              onChange={(e) => setWhatsapp(e.target.value)}
-              placeholder="+60 12 345 6789"
-            />
-            <span className={styles.fieldHint}>
-              International format. Leave blank if you don't want to share POs via WhatsApp.
-            </span>
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Email</span>
-            <input
-              className={styles.input}
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="orders@supplier.com"
-            />
-          </label>
-        </div>
-
-        <footer className={styles.drawerFoot}>
-          <div className={styles.grow} />
+    <Drawer
+      eyebrow={mode === 'create' ? 'New supplier' : 'Edit supplier'}
+      title={mode === 'create' ? 'Add a supplier' : supplier?.name}
+      subtitle="WhatsApp + email unlock PO share buttons in the order drawer."
+      onClose={onClose}
+      width="md"
+      dismissible={!saving}
+      footer={(
+        <>
           <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
           <Button variant="primary" onClick={() => void onSave()} disabled={saving}>
             <Save size={16} strokeWidth={1.75} />
             {saving ? 'Saving…' : 'Save'}
           </Button>
-        </footer>
-      </div>
-    </div>
+        </>
+      )}
+    >
+      {error && <div className={styles.errorBanner}>{error}</div>}
+
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Code</span>
+        <input
+          className={styles.input}
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          placeholder="e.g. KFA"
+          maxLength={8}
+        />
+      </label>
+
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Name</span>
+        <input
+          className={styles.input}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. Kraf Furnitur Asia"
+        />
+      </label>
+
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>WhatsApp number</span>
+        <input
+          className={styles.input}
+          value={whatsapp}
+          onChange={(e) => setWhatsapp(e.target.value)}
+          placeholder="+60 12 345 6789"
+        />
+        <span className={styles.fieldHint}>
+          International format. Leave blank if you don't want to share POs via WhatsApp.
+        </span>
+      </label>
+
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Email</span>
+        <input
+          className={styles.input}
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="orders@supplier.com"
+        />
+      </label>
+    </Drawer>
   );
 };
 
@@ -466,103 +456,93 @@ const DriverDrawer = ({
   };
 
   return (
-    <div className={styles.scrim} onClick={onClose}>
-      <div className={styles.drawer} onClick={(e) => e.stopPropagation()}>
-        <header className={styles.drawerHead}>
-          <div>
-            <div className="t-eyebrow">{mode === 'create' ? 'New driver' : 'Edit driver'}</div>
-            <h3 className={styles.drawerTitle}>{mode === 'create' ? 'Add a driver' : driver?.name}</h3>
-            <div className={styles.drawerSub}>
-              Drivers appear in the dispatch picker once active. Inactive drivers stay in history but can't be assigned.
-            </div>
-          </div>
-          <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close">
-            <X size={18} strokeWidth={1.75} />
-          </button>
-        </header>
-
-        <div className={styles.drawerBody}>
-          {error && <div className={styles.errorBanner}>{error}</div>}
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Driver code</span>
-            <input
-              className={styles.input}
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="e.g. DRV-04"
-            />
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Name</span>
-            <input
-              className={styles.input}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Full name"
-            />
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Phone</span>
-            {/* Task #91 — driver phones stored as E.164 via PhoneInput. */}
-            <PhoneInput
-              className={styles.input}
-              value={phone}
-              onChange={setPhone}
-            />
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>IC number (optional)</span>
-            <input
-              className={styles.input}
-              value={icNumber}
-              onChange={(e) => setIcNumber(e.target.value)}
-              placeholder="e.g. 880101-14-1234"
-            />
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Vehicle (optional)</span>
-            <input
-              className={styles.input}
-              value={vehicle}
-              onChange={(e) => setVehicle(e.target.value)}
-              placeholder="e.g. Lorry 1-tonne · WMK 1234"
-            />
-          </label>
-
-          <div className={styles.toggleRow}>
-            <div className={styles.toggleMain}>
-              <span className={styles.toggleTitle}>Active</span>
-              <span className={styles.toggleSub}>
-                Inactive drivers won't appear in the dispatch picker.
-              </span>
-            </div>
-            <button
-              type="button"
-              className={active ? `${styles.bigToggle} ${styles.bigToggleOn}` : styles.bigToggle}
-              onClick={() => setActive((v) => !v)}
-              aria-pressed={active}
-              aria-label="Active"
-            >
-              <span className={styles.bigToggleKnob} />
-            </button>
-          </div>
-        </div>
-
-        <footer className={styles.drawerFoot}>
-          <div className={styles.grow} />
+    <Drawer
+      eyebrow={mode === 'create' ? 'New driver' : 'Edit driver'}
+      title={mode === 'create' ? 'Add a driver' : driver?.name}
+      subtitle="Drivers appear in the dispatch picker once active. Inactive drivers stay in history but can't be assigned."
+      onClose={onClose}
+      width="md"
+      dismissible={!saving}
+      footer={(
+        <>
           <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
           <Button variant="primary" onClick={() => void onSave()} disabled={saving}>
             <Save size={16} strokeWidth={1.75} />
             {saving ? 'Saving…' : 'Save'}
           </Button>
-        </footer>
+        </>
+      )}
+    >
+      {error && <div className={styles.errorBanner}>{error}</div>}
+
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Driver code</span>
+        <input
+          className={styles.input}
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          placeholder="e.g. DRV-04"
+        />
+      </label>
+
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Name</span>
+        <input
+          className={styles.input}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Full name"
+        />
+      </label>
+
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Phone</span>
+        {/* Task #91 — driver phones stored as E.164 via PhoneInput. */}
+        <PhoneInput
+          className={styles.input}
+          value={phone}
+          onChange={setPhone}
+        />
+      </label>
+
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>IC number (optional)</span>
+        <input
+          className={styles.input}
+          value={icNumber}
+          onChange={(e) => setIcNumber(e.target.value)}
+          placeholder="e.g. 880101-14-1234"
+        />
+      </label>
+
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Vehicle (optional)</span>
+        <input
+          className={styles.input}
+          value={vehicle}
+          onChange={(e) => setVehicle(e.target.value)}
+          placeholder="e.g. Lorry 1-tonne · WMK 1234"
+        />
+      </label>
+
+      <div className={styles.toggleRow}>
+        <div className={styles.toggleMain}>
+          <span className={styles.toggleTitle}>Active</span>
+          <span className={styles.toggleSub}>
+            Inactive drivers won't appear in the dispatch picker.
+          </span>
+        </div>
+        <button
+          type="button"
+          className={active ? `${styles.bigToggle} ${styles.bigToggleOn}` : styles.bigToggle}
+          onClick={() => setActive((v) => !v)}
+          aria-pressed={active}
+          aria-label="Active"
+        >
+          <span className={styles.bigToggleKnob} />
+        </button>
       </div>
-    </div>
+    </Drawer>
   );
 };
 

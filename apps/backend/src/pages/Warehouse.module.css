@@ -425,21 +425,6 @@
 }
 
 /* ── Slot detail drawer ───────────────────────────────────────────────── */
-.drawerScrim {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.32);
-  z-index: 50;
-  display: flex;
-  justify-content: flex-end;
-}
-.drawer {
-  width: 480px;
-  max-width: 95vw;
-  background: var(--c-cream);
-  padding: var(--space-5);
-  overflow: auto;
-}
 .itemCard {
   background: var(--c-paper);
   border: 1px solid var(--line);

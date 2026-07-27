@@ -215,73 +215,9 @@
   color: var(--c-burnt, #A6471E);
 }
 
-/* Drawer (shared with both edit forms) */
-.scrim {
-  position: fixed;
-  inset: 0;
-  background: rgba(34, 31, 32, 0.45);
-  display: flex;
-  justify-content: flex-end;
-  z-index: 50;
-  animation: fadeIn 150ms ease-out;
-}
-@keyframes fadeIn {
-  from { background: rgba(34, 31, 32, 0); }
-  to   { background: rgba(34, 31, 32, 0.45); }
-}
-
-.drawer {
-  background: var(--bg);
-  width: min(560px, 92vw);
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  box-shadow: var(--shadow-3);
-  animation: slideIn 200ms ease-out;
-}
-@keyframes slideIn {
-  from { transform: translateX(40px); opacity: 0.6; }
-  to   { transform: translateX(0); opacity: 1; }
-}
-
-.drawerHead {
-  padding: var(--space-5) var(--space-5) var(--space-3);
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-}
-.drawerTitle {
-  font-family: var(--font-title);
-  font-weight: var(--w-bold);
-  font-size: var(--fs-24);
-  margin: 4px 0 2px;
-}
-.drawerSub {
-  font-size: var(--fs-13);
-  color: var(--fg-muted);
-}
-.iconBtn {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  padding: 8px;
-  border-radius: var(--radius-sm);
-  color: var(--fg-muted);
-  transition: background 120ms;
-  margin-left: auto;
-}
-.iconBtn:hover { background: var(--c-paper); color: var(--fg); }
-
-.drawerBody {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-4) var(--space-5);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
+/* Fields for the supplier / driver drawers. The drawer chrome itself (scrim,
+   panel, header, scroll area, footer) now comes from the shared <Drawer>
+   (UI-KIT §1.5) — only the form's own styles live here. */
 .field {
   display: flex;
   flex-direction: column;
@@ -361,15 +297,6 @@
   box-shadow: var(--shadow-1);
 }
 .bigToggleOn .bigToggleKnob { transform: translateX(22px); }
-
-.drawerFoot {
-  border-top: 1px solid var(--line);
-  padding: var(--space-3) var(--space-5);
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.drawerFoot .grow { flex: 1; }
 
 .appConfigCard {
   background: var(--c-cream);

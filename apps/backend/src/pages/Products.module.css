@@ -539,19 +539,6 @@
   justify-content: flex-end;
 }
 
-.drawer {
-  width: min(640px, 92vw);
-  background: var(--c-cream);
-  border-left: 1px solid var(--line-strong);
-  box-shadow: var(--shadow-3);
-  border-top-left-radius: var(--radius-xl);
-  border-bottom-left-radius: var(--radius-xl);
-  display: flex;
-  flex-direction: column;
-  z-index: 51;
-  overflow: hidden;
-}
-
 .drawerHeader {
   display: flex;
   align-items: center;
@@ -567,15 +554,6 @@
   font-weight: 700;
   color: var(--c-ink);
   margin: 0;
-}
-
-.drawerBody {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
 }
 
 .drawerFooter {

@@ -1,0 +1,208 @@
+/* ---------------------------------------------------------------------------
+   Drawer — UI-KIT §1.5 skeleton.
+
+   The sticky behaviour is structural, not `position: sticky`: the panel is a
+   flex column, the four chrome regions are `flex: 0 0 auto`, and only the
+   content region grows and scrolls. That makes "header / identity / current
+   action / footer never scroll" a property of the layout rather than something
+   each module has to remember to opt into.
+   --------------------------------------------------------------------------- */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(34, 31, 32, 0.38);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 50;
+  animation: drawerFadeIn 150ms ease-out;
+}
+@keyframes drawerFadeIn {
+  from { background: rgba(34, 31, 32, 0); }
+  to   { background: rgba(34, 31, 32, 0.38); }
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  /* The panel itself NEVER scrolls — see .content. */
+  overflow: hidden;
+  height: 100%;
+  background: var(--c-cream);
+  border-left: 1px solid var(--line-strong);
+  border-top-left-radius: var(--radius-xl);
+  border-bottom-left-radius: var(--radius-xl);
+  box-shadow: var(--shadow-3);
+  outline: none;
+  animation: drawerSlideIn 200ms ease-out;
+}
+@keyframes drawerSlideIn {
+  from { transform: translateX(40px); opacity: 0.6; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrim,
+  .panel { animation: none; }
+}
+
+/* Widths. Tablet deliberately has no breakpoint of its own — it takes the
+   desktop value, so the hierarchy and the panel proportions match. */
+.width-sm   { width: min(420px, 92vw); }
+.width-md   { width: min(560px, 92vw); }
+.width-lg   { width: min(720px, 92vw); }
+.width-xl   { width: min(960px, 94vw); }
+.width-page { width: min(1100px, 92vw); }
+
+/* ---- Region 1 · Header ---------------------------------------------------- */
+.header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--line);
+  background: var(--c-paper);
+  border-top-left-radius: inherit;
+}
+
+.headerText {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.eyebrow {
+  font-family: var(--font-button);
+  font-size: var(--fs-11, 11px);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+/* Order number — the drawer's primary identifier. Long codes wrap rather than
+   blow out the panel width. */
+.title {
+  margin: 0;
+  font-family: var(--font-title);
+  font-size: var(--fs-18);
+  font-weight: var(--w-bold);
+  line-height: var(--lh-18);
+  color: var(--c-ink);
+  overflow-wrap: anywhere;
+}
+
+/* Customer name. */
+.subtitle {
+  font-size: var(--fs-13);
+  line-height: var(--lh-13);
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.headerAside {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.close {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+/* When headerAside is present it already consumed the auto margin. */
+.headerAside + .close { margin-left: 0; }
+.close:hover { background: var(--c-cream); color: var(--c-ink); }
+.close:focus-visible { outline: 2px solid var(--c-orange); outline-offset: 2px; }
+
+/* ---- Region 2 · Identity -------------------------------------------------- */
+.identity {
+  flex: 0 0 auto;
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--line);
+  background: var(--c-paper);
+}
+
+/* ---- Region 3 · Current Action -------------------------------------------- */
+/* Always visible. Never collapses, never scrolls away, never degrades to a bare
+   icon on a narrow panel. */
+.currentAction {
+  flex: 0 0 auto;
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--line);
+  background: var(--c-paper);
+}
+
+/* ---- Region 4 · Content (the only scroller) ------------------------------- */
+.content {
+  flex: 1 1 auto;
+  /* min-height:0 is what actually lets a flex child scroll instead of pushing
+     the footer off the panel. */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* ---- Region 5 · Footer ---------------------------------------------------- */
+.footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--line);
+  background: var(--c-paper);
+  border-bottom-left-radius: inherit;
+}
+
+/* ---- Mobile ---------------------------------------------------------------
+   Size and corners change; the region order does NOT. Every region keeps its
+   sticky behaviour, including Current Action.
+   --------------------------------------------------------------------------- */
+@media (max-width: 640px) {
+  .panel,
+  .width-sm,
+  .width-md,
+  .width-lg,
+  .width-xl,
+  .width-page {
+    width: 100vw;
+    border-left: none;
+    border-radius: 0;
+  }
+
+  .header,
+  .identity,
+  .currentAction,
+  .content,
+  .footer {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+  }
+
+  /* Keep the action bar clear of the home indicator / gesture bar. */
+  .footer {
+    padding-bottom: max(var(--space-3), env(safe-area-inset-bottom));
+  }
+}

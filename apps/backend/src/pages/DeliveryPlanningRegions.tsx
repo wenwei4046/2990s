@@ -16,8 +16,8 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
-import { Plus, X, Trash2, Save } from 'lucide-react';
-import { Button } from '@2990s/design-system';
+import { Plus, Trash2, Save } from 'lucide-react';
+import { Button, Drawer } from '@2990s/design-system';
 import {
   useDeliveryPlanningRegions,
   useCreateDeliveryPlanningRegion,
@@ -254,32 +254,30 @@ const CreateRegionDrawer = ({ onClose, nextSort }: { onClose: () => void; nextSo
   };
 
   return (
-    <>
-      <div className={styles.backdrop} onClick={onClose} />
-      <aside className={styles.drawer}>
-        <header className={styles.drawerHeader}>
-          <h2 className={styles.drawerTitle}>New Region</h2>
-          <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON} /></button>
-        </header>
-        <div className={styles.drawerBody}>
-          <div className={styles.formGrid}>
-            <Field label="Code *" value={form.code} onChange={(v) => set('code', v)} placeholder="e.g. JB" />
-            <Field label="Name *" value={form.name} onChange={(v) => set('name', v)} placeholder="e.g. Johor Bahru" />
-            <Field label="Sort order" value={form.sortOrder} onChange={(v) => set('sortOrder', v)} type="number" />
-          </div>
-          <p style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', margin: 0 }}>
-            Code is normalised to upper-case and must be unique. A region with code <strong>SG</strong> gets the
-            distinct dashed styling on the board.
-          </p>
-        </div>
-        <footer className={styles.drawerFooter}>
+    <Drawer
+      title="New Region"
+      onClose={onClose}
+      width="lg"
+      dismissible={!create.isPending}
+      footer={(
+        <>
           <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
           <Button variant="primary" size="md" onClick={submit} disabled={create.isPending}>
             {create.isPending ? 'Creating…' : 'Create Region'}
           </Button>
-        </footer>
-      </aside>
-    </>
+        </>
+      )}
+    >
+      <div className={styles.formGrid}>
+        <Field label="Code *" value={form.code} onChange={(v) => set('code', v)} placeholder="e.g. JB" />
+        <Field label="Name *" value={form.name} onChange={(v) => set('name', v)} placeholder="e.g. Johor Bahru" />
+        <Field label="Sort order" value={form.sortOrder} onChange={(v) => set('sortOrder', v)} type="number" />
+      </div>
+      <p style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', margin: 0 }}>
+        Code is normalised to upper-case and must be unique. A region with code <strong>SG</strong> gets the
+        distinct dashed styling on the board.
+      </p>
+    </Drawer>
   );
 };
 

@@ -15,8 +15,8 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
-import { Plus, X } from 'lucide-react';
-import { Button } from '@2990s/design-system';
+import { Plus } from 'lucide-react';
+import { Button, Drawer } from '@2990s/design-system';
 import {
   useDrivers,
   useCreateDriver,
@@ -228,34 +228,32 @@ const CreateDriverDrawer = ({ onClose }: { onClose: () => void }) => {
   };
 
   return (
-    <>
-      <div className={styles.backdrop} onClick={onClose} />
-      <aside className={styles.drawer}>
-        <header className={styles.drawerHeader}>
-          <h2 className={styles.drawerTitle}>New Driver</h2>
-          <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON} /></button>
-        </header>
-        <div className={styles.drawerBody}>
-          <div className={styles.formGrid}>
-            <Field label="Code *" value={form.driverCode} onChange={(v) => set('driverCode', v)} placeholder="DRV-01" />
-            <Field label="Name *" value={form.name} onChange={(v) => set('name', v)} />
-            <Field label="Phone *" value={form.phone} onChange={(v) => set('phone', v)} placeholder="+60 12-345-6789" />
-            <Field label="IC Number" value={form.icNumber} onChange={(v) => set('icNumber', v)} />
-            <Field label="Vehicle" value={form.vehicle} onChange={(v) => set('vehicle', v)} placeholder="e.g. Hilux WMN1234" />
-            <label className={styles.field} style={{ flexDirection: 'row', alignItems: 'center', gap: 'var(--space-2)' }}>
-              <input type="checkbox" checked={inHouse} onChange={(e) => setInHouse(e.target.checked)} />
-              <span className={styles.fieldLabel}>In-house (uncheck for outsourced)</span>
-            </label>
-          </div>
-        </div>
-        <footer className={styles.drawerFooter}>
+    <Drawer
+      title="New Driver"
+      onClose={onClose}
+      width="lg"
+      dismissible={!create.isPending}
+      footer={(
+        <>
           <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
           <Button variant="primary" size="md" onClick={submit} disabled={create.isPending}>
             {create.isPending ? 'Creating…' : 'Create Driver'}
           </Button>
-        </footer>
-      </aside>
-    </>
+        </>
+      )}
+    >
+      <div className={styles.formGrid}>
+        <Field label="Code *" value={form.driverCode} onChange={(v) => set('driverCode', v)} placeholder="DRV-01" />
+        <Field label="Name *" value={form.name} onChange={(v) => set('name', v)} />
+        <Field label="Phone *" value={form.phone} onChange={(v) => set('phone', v)} placeholder="+60 12-345-6789" />
+        <Field label="IC Number" value={form.icNumber} onChange={(v) => set('icNumber', v)} />
+        <Field label="Vehicle" value={form.vehicle} onChange={(v) => set('vehicle', v)} placeholder="e.g. Hilux WMN1234" />
+        <label className={styles.field} style={{ flexDirection: 'row', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <input type="checkbox" checked={inHouse} onChange={(e) => setInHouse(e.target.checked)} />
+          <span className={styles.fieldLabel}>In-house (uncheck for outsourced)</span>
+        </label>
+      </div>
+    </Drawer>
   );
 };
 
@@ -396,33 +394,31 @@ const CreateHelperDrawer = ({ onClose }: { onClose: () => void }) => {
   };
 
   return (
-    <>
-      <div className={styles.backdrop} onClick={onClose} />
-      <aside className={styles.drawer}>
-        <header className={styles.drawerHeader}>
-          <h2 className={styles.drawerTitle}>New Helper</h2>
-          <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON} /></button>
-        </header>
-        <div className={styles.drawerBody}>
-          <div className={styles.formGrid}>
-            <Field label="Code *" value={form.helperCode} onChange={(v) => set('helperCode', v)} placeholder="HLP-01" />
-            <Field label="Name *" value={form.name} onChange={(v) => set('name', v)} />
-            <Field label="Contact" value={form.contact} onChange={(v) => set('contact', v)} placeholder="+60 12-345-6789" />
-            <Field label="IC Number" value={form.icNumber} onChange={(v) => set('icNumber', v)} />
-            <label className={styles.field} style={{ flexDirection: 'row', alignItems: 'center', gap: 'var(--space-2)' }}>
-              <input type="checkbox" checked={inHouse} onChange={(e) => setInHouse(e.target.checked)} />
-              <span className={styles.fieldLabel}>In-house (uncheck for outsourced)</span>
-            </label>
-          </div>
-        </div>
-        <footer className={styles.drawerFooter}>
+    <Drawer
+      title="New Helper"
+      onClose={onClose}
+      width="lg"
+      dismissible={!create.isPending}
+      footer={(
+        <>
           <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
           <Button variant="primary" size="md" onClick={submit} disabled={create.isPending}>
             {create.isPending ? 'Creating…' : 'Create Helper'}
           </Button>
-        </footer>
-      </aside>
-    </>
+        </>
+      )}
+    >
+      <div className={styles.formGrid}>
+        <Field label="Code *" value={form.helperCode} onChange={(v) => set('helperCode', v)} placeholder="HLP-01" />
+        <Field label="Name *" value={form.name} onChange={(v) => set('name', v)} />
+        <Field label="Contact" value={form.contact} onChange={(v) => set('contact', v)} placeholder="+60 12-345-6789" />
+        <Field label="IC Number" value={form.icNumber} onChange={(v) => set('icNumber', v)} />
+        <label className={styles.field} style={{ flexDirection: 'row', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <input type="checkbox" checked={inHouse} onChange={(e) => setInHouse(e.target.checked)} />
+          <span className={styles.fieldLabel}>In-house (uncheck for outsourced)</span>
+        </label>
+      </div>
+    </Drawer>
   );
 };
 
@@ -600,50 +596,48 @@ const CreateLorryDrawer = ({ onClose }: { onClose: () => void }) => {
   };
 
   return (
-    <>
-      <div className={styles.backdrop} onClick={onClose} />
-      <aside className={styles.drawer}>
-        <header className={styles.drawerHeader}>
-          <h2 className={styles.drawerTitle}>New Lorry</h2>
-          <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON} /></button>
-        </header>
-        <div className={styles.drawerBody}>
-          <div className={styles.formGrid}>
-            <Field label="Plate *" value={form.plate} onChange={(v) => set('plate', v)} placeholder="e.g. WMN1234" />
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Type</span>
-              <select className={styles.fieldInput} value={type} onChange={(e) => setType(e.target.value as LorryType)}>
-                {LORRY_TYPES.map((t) => (
-                  <option key={t} value={t}>{LORRY_TYPE_LABEL[t]}</option>
-                ))}
-              </select>
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Home Warehouse</span>
-              <select className={styles.fieldInput} value={form.warehouseId} onChange={(e) => set('warehouseId', e.target.value)}>
-                <option value="">— None —</option>
-                {(warehouses.data ?? []).map((w) => (
-                  <option key={w.id} value={w.id}>{w.code || w.name}</option>
-                ))}
-              </select>
-            </label>
-            <Field label="Capacity (m³)" value={form.capacityM3} onChange={(v) => set('capacityM3', v)} placeholder="e.g. 14.5" />
-            <Field label="Capacity (kg)" value={form.capacityKg} onChange={(v) => set('capacityKg', v)} placeholder="e.g. 3000" />
-            <Field label="Notes" value={form.notes} onChange={(v) => set('notes', v)} />
-            <label className={styles.field} style={{ flexDirection: 'row', alignItems: 'center', gap: 'var(--space-2)' }}>
-              <input type="checkbox" checked={isInternal} onChange={(e) => setIsInternal(e.target.checked)} />
-              <span className={styles.fieldLabel}>In-house (uncheck for outsourced)</span>
-            </label>
-          </div>
-        </div>
-        <footer className={styles.drawerFooter}>
+    <Drawer
+      title="New Lorry"
+      onClose={onClose}
+      width="lg"
+      dismissible={!create.isPending}
+      footer={(
+        <>
           <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
           <Button variant="primary" size="md" onClick={submit} disabled={create.isPending}>
             {create.isPending ? 'Creating…' : 'Create Lorry'}
           </Button>
-        </footer>
-      </aside>
-    </>
+        </>
+      )}
+    >
+      <div className={styles.formGrid}>
+        <Field label="Plate *" value={form.plate} onChange={(v) => set('plate', v)} placeholder="e.g. WMN1234" />
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Type</span>
+          <select className={styles.fieldInput} value={type} onChange={(e) => setType(e.target.value as LorryType)}>
+            {LORRY_TYPES.map((t) => (
+              <option key={t} value={t}>{LORRY_TYPE_LABEL[t]}</option>
+            ))}
+          </select>
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Home Warehouse</span>
+          <select className={styles.fieldInput} value={form.warehouseId} onChange={(e) => set('warehouseId', e.target.value)}>
+            <option value="">— None —</option>
+            {(warehouses.data ?? []).map((w) => (
+              <option key={w.id} value={w.id}>{w.code || w.name}</option>
+            ))}
+          </select>
+        </label>
+        <Field label="Capacity (m³)" value={form.capacityM3} onChange={(v) => set('capacityM3', v)} placeholder="e.g. 14.5" />
+        <Field label="Capacity (kg)" value={form.capacityKg} onChange={(v) => set('capacityKg', v)} placeholder="e.g. 3000" />
+        <Field label="Notes" value={form.notes} onChange={(v) => set('notes', v)} />
+        <label className={styles.field} style={{ flexDirection: 'row', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <input type="checkbox" checked={isInternal} onChange={(e) => setIsInternal(e.target.checked)} />
+          <span className={styles.fieldLabel}>In-house (uncheck for outsourced)</span>
+        </label>
+      </div>
+    </Drawer>
   );
 };
 

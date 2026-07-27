@@ -14,8 +14,8 @@
 
 import { todayMyt } from '../lib/dates';
 import { useMemo, useState } from 'react';
-import { X, Plus, Trash2 } from 'lucide-react';
-import { Button } from '@2990s/design-system';
+import { Plus, Trash2 } from 'lucide-react';
+import { Button, Drawer } from '@2990s/design-system';
 import {
   useCreateGrn, useCreatePurchaseInvoice, useCreateMfgSalesOrder,
   useCreateSalesInvoice,
@@ -71,28 +71,30 @@ const Field = ({
   </label>
 );
 
+/* Thin wrapper over the shared <Drawer> (UI-KIT §1.5) that fixes the create-flow
+   footer (Cancel + one primary). The region order comes from <Drawer>. */
 const DrawerShell = ({
   title, onClose, onSubmit, submitLabel, submitting, children, canSubmit = true,
 }: {
   title: string; onClose: () => void; onSubmit: () => void;
   submitLabel: string; submitting: boolean; children: React.ReactNode; canSubmit?: boolean;
 }) => (
-  <>
-    <div className={sup.backdrop} onClick={onClose} />
-    <aside className={sup.drawer}>
-      <header className={sup.drawerHeader}>
-        <h2 className={sup.drawerTitle}>{title}</h2>
-        <button type="button" className={sup.iconBtn} onClick={onClose}><X {...ICON} /></button>
-      </header>
-      <div className={sup.drawerBody}>{children}</div>
-      <footer className={sup.drawerFooter}>
+  <Drawer
+    title={title}
+    onClose={onClose}
+    width="lg"
+    dismissible={!submitting}
+    footer={(
+      <>
         <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
         <Button variant="primary" size="md" onClick={onSubmit} disabled={!canSubmit || submitting}>
           {submitting ? 'Creating…' : submitLabel}
         </Button>
-      </footer>
-    </aside>
-  </>
+      </>
+    )}
+  >
+    {children}
+  </Drawer>
 );
 
 /* ══════════════════════════════════════════════════════════════════════

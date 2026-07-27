@@ -20,8 +20,8 @@
 // ----------------------------------------------------------------------------
 
 import { useCallback, useMemo, useState } from 'react';
-import { Plus, X, RefreshCw } from 'lucide-react';
-import { Button } from '@2990s/design-system';
+import { Plus, RefreshCw } from 'lucide-react';
+import { Button, Drawer } from '@2990s/design-system';
 import { fmtDate } from '@2990s/shared';
 import { useAuth, type StaffRole } from '../lib/auth';
 import { useToast } from '../components/Toast';
@@ -426,16 +426,20 @@ const InviteUserDrawer = ({
   };
 
   return (
-    <>
-      <div className={styles.backdrop} onClick={onClose} />
-      <aside className={styles.drawer}>
-        <header className={styles.drawerHeader}>
-          <h2 className={styles.drawerTitle}>Invite user</h2>
-          <button type="button" className={styles.iconBtn} onClick={onClose}>
-            <X {...ICON} />
-          </button>
-        </header>
-        <div className={styles.drawerBody}>
+    <Drawer
+      title="Invite user"
+      onClose={onClose}
+      width="lg"
+      dismissible={!invite.isPending}
+      footer={(
+        <>
+          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" size="md" onClick={submit} disabled={invite.isPending}>
+            {invite.isPending ? 'Creating…' : 'Create user'}
+          </Button>
+        </>
+      )}
+    >
           <div className={styles.formGrid}>
             <Field label="Full name *" value={form.name}
               onChange={(v) => set('name', v)} placeholder="e.g. Lim Wei Siang" />
@@ -509,15 +513,7 @@ const InviteUserDrawer = ({
               ? 'This person logs in with their 6-digit passcode on the POS. Set their starting passcode above — they can change it themselves later. Staff code and initials are generated automatically.'
               : 'This person logs in with their email + the password above on the Backend. The 6-digit My orders passcode lets them open My orders on a shared tablet (it does not change their sign-in). Staff code and initials are generated automatically.'}
           </p>
-        </div>
-        <footer className={styles.drawerFooter}>
-          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="md" onClick={submit} disabled={invite.isPending}>
-            {invite.isPending ? 'Creating…' : 'Create user'}
-          </Button>
-        </footer>
-      </aside>
-    </>
+    </Drawer>
   );
 };
 
@@ -559,15 +555,22 @@ const EditUserDrawer = ({
 
   return (
     <>
-      <div className={styles.backdrop} onClick={onClose} />
-      <aside className={styles.drawer}>
-        <header className={styles.drawerHeader}>
-          <h2 className={styles.drawerTitle}>Edit user · {row.staff_code}</h2>
-          <button type="button" className={styles.iconBtn} onClick={onClose}>
-            <X {...ICON} />
-          </button>
-        </header>
-        <div className={styles.drawerBody}>
+      <Drawer
+        eyebrow="Edit user"
+        title={row.staff_code}
+        subtitle={row.name}
+        onClose={onClose}
+        width="lg"
+        dismissible={!update.isPending}
+        footer={(
+          <>
+            <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+            <Button variant="primary" size="md" onClick={submit} disabled={update.isPending}>
+              {update.isPending ? 'Saving…' : 'Save changes'}
+            </Button>
+          </>
+        )}
+      >
           <div className={styles.formGrid}>
             <Field label="Full name" value={form.name} onChange={(v) => set('name', v)} />
             <label className={styles.field}>
@@ -611,14 +614,7 @@ const EditUserDrawer = ({
               </Button>
             </div>
           )}
-        </div>
-        <footer className={styles.drawerFooter}>
-          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="md" onClick={submit} disabled={update.isPending}>
-            {update.isPending ? 'Saving…' : 'Save changes'}
-          </Button>
-        </footer>
-      </aside>
+      </Drawer>
       {pinOpen && (
         <PinDrawer
           staff={{ id: row.id, name: row.name, staffCode: row.staff_code }}

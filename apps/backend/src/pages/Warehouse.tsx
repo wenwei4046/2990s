@@ -18,10 +18,10 @@
 import { useMemo, useState } from 'react';
 import {
   Grid3x3, Package, MapPin, LayoutGrid, Warehouse as WarehouseIcon,
-  ArrowRightLeft, History, ArrowDownToLine, ArrowUpFromLine, X, RefreshCw, Plus,
+  ArrowRightLeft, History, ArrowDownToLine, ArrowUpFromLine, RefreshCw, Plus,
   Pencil, Check,
 } from 'lucide-react';
-import { Button } from '@2990s/design-system';
+import { Button, Drawer } from '@2990s/design-system';
 import { fmtDate } from '@2990s/shared';
 import { useNotify } from '../components/NotifyDialog';
 import {
@@ -727,33 +727,30 @@ const RackDetailDrawer = ({
   const rename = useRackRename(rack);
 
   return (
-    <div className={styles.drawerScrim} onClick={onClose}>
-      <div className={styles.drawer} onClick={(e) => e.stopPropagation()}>
-        <div className={styles.headerRow}>
-          {rename.editing ? (
-            <RackRenameEditor
-              rename={rename}
-              inputStyle={{ fontSize: 'var(--fs-22)', fontWeight: 600 }}
-            />
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flex: 1 }}>
-              <h2 className={styles.title} style={{ fontSize: 'var(--fs-22)' }}>{rack.rack}</h2>
-              <Button variant="ghost" size="sm" onClick={rename.startEdit}>
-                <Pencil {...ICON} />
-                <span>Rename</span>
-              </Button>
-            </div>
-          )}
-          <button type="button" className={styles.chip} onClick={onClose}>
-            <X {...ICON} />
-          </button>
-        </div>
-
-        <div className={styles.detailBox} style={{ marginTop: 'var(--space-3)' }}>
+    <Drawer
+      eyebrow="Rack"
+      title={rename.editing ? (
+        <RackRenameEditor
+          rename={rename}
+          inputStyle={{ fontSize: 'var(--fs-18)', fontWeight: 600 }}
+        />
+      ) : rack.rack}
+      headerAside={rename.editing ? undefined : (
+        <Button variant="ghost" size="sm" onClick={rename.startEdit}>
+          <Pencil {...ICON} />
+          <span>Rename</span>
+        </Button>
+      )}
+      onClose={onClose}
+      width="md"
+      /* Identity — what this rack IS. Pinned so it survives a long item list. */
+      identity={(
+        <div className={styles.detailBox}>
           <span>Status: <StatusBadge status={rack.status} /></span>
           <span>Items on this rack: {items.length}</span>
         </div>
-
+      )}
+    >
         {items.map((it) => (
           <div key={it.id} className={styles.itemCard}>
             <div className={styles.itemCardHead}>
@@ -774,8 +771,7 @@ const RackDetailDrawer = ({
             </div>
           </div>
         ))}
-      </div>
-    </div>
+    </Drawer>
   );
 };
 

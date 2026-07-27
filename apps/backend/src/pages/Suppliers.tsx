@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Search, Plus, X } from 'lucide-react';
-import { Button } from '@2990s/design-system';
+import { Button, Drawer } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
 import { PhoneInput } from '../components/PhoneInput';
 import {
@@ -481,22 +481,7 @@ const BatchEditModal = ({
    Create drawer (edit lives on the full /suppliers/:id page now)
    ════════════════════════════════════════════════════════════════════════ */
 
-const SupplierCreateDrawer = ({ onClose }: { onClose: () => void }) => (
-  <>
-    <div className={styles.backdrop} onClick={onClose} />
-    <aside className={styles.drawer}>
-      <header className={styles.drawerHeader}>
-        <h2 className={styles.drawerTitle}>New Supplier</h2>
-        <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close">
-          <X {...ICON} />
-        </button>
-      </header>
-      <CreateForm onClose={onClose} />
-    </aside>
-  </>
-);
-
-const CreateForm = ({ onClose }: { onClose: () => void }) => {
+const SupplierCreateDrawer = ({ onClose }: { onClose: () => void }) => {
   const create = useCreateSupplier();
   const notify = useNotify();
   const [form, setForm] = useState<Record<string, string | number>>({
@@ -548,17 +533,22 @@ const CreateForm = ({ onClose }: { onClose: () => void }) => {
   };
 
   return (
-    <>
-      <div className={styles.drawerBody}>
-        <SupplierFields form={form} onChange={onChange} />
-      </div>
-      <footer className={styles.drawerFooter}>
-        <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
-        <Button variant="primary" size="md" onClick={submit} disabled={create.isPending}>
-          {create.isPending ? 'Creating…' : 'Create'}
-        </Button>
-      </footer>
-    </>
+    <Drawer
+      title="New Supplier"
+      onClose={onClose}
+      width="lg"
+      dismissible={!create.isPending}
+      footer={(
+        <>
+          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" size="md" onClick={submit} disabled={create.isPending}>
+            {create.isPending ? 'Creating…' : 'Create'}
+          </Button>
+        </>
+      )}
+    >
+      <SupplierFields form={form} onChange={onChange} />
+    </Drawer>
   );
 };
 

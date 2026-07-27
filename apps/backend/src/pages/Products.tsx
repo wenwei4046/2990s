@@ -36,7 +36,7 @@ import {
   Star,
   ChevronDown,
 } from 'lucide-react';
-import { Button } from '@2990s/design-system';
+import { Button, Drawer } from '@2990s/design-system';
 import {
   SOFA_MODULES,
   resolveSofaQuickPresets,
@@ -3927,61 +3927,59 @@ const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
   };
 
   return (
-    <div className={styles.drawerBackdrop} onClick={onClose}>
-      <aside className={styles.drawer} onClick={(e) => e.stopPropagation()}>
-        <header className={styles.drawerHeader}>
-          <h2 className={styles.drawerTitle}>New SKU</h2>
-          <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON_PROPS} /></button>
-        </header>
-        <div className={styles.drawerBody}>
-          <div className={styles.formGrid}>
-            <Field label="Code *" value={form.code} onChange={(v) => set('code', v)} />
-            <Field label="Name *" value={form.name} onChange={(v) => set('name', v)} />
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Category *</span>
-              <select className={styles.fieldSelect} value={form.category}
-                onChange={(e) => set('category', e.target.value as Cat)}>
-                <option value="BEDFRAME">Bedframe</option>
-                <option value="SOFA">Sofa</option>
-                <option value="MATTRESS">Mattress</option>
-                <option value="ACCESSORY">Accessory</option>
-                <option value="SERVICE">Service</option>
-              </select>
-            </label>
-            <Field label="Size Label" value={form.sizeLabel} onChange={(v) => set('sizeLabel', v)} />
-            {isSofa && <Field label="Base Model" value={form.baseModel} onChange={(v) => set('baseModel', v)} />}
-            {isMattress && (
-              <>
-                <Field label="Branding" value={form.branding} onChange={(v) => set('branding', v)} placeholder="e.g. Sealy" list="branding-pool-new-sku" />
-                <datalist id="branding-pool-new-sku">
-                  {brandingPool.pool.map((b) => <option key={b} value={b} />)}
-                </datalist>
-              </>
-            )}
-            {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics". Key fabricColor unchanged. */}
-            {isSofa && <Field label="Fabrics" value={form.fabricColor} onChange={(v) => set('fabricColor', v)} />}
-            {/* 0166 — optional SKU barcode (free text; scanner-friendly). */}
-            <Field label="Barcode" value={form.barcode} onChange={(v) => set('barcode', v)} placeholder="optional" />
-            <Field label="Description" value={form.description} onChange={(v) => set('description', v)} fullWidth />
-
-            <Field label={isMattress ? 'Price (RM)' : 'Base Price / Price 2 (RM)'}
-              value={form.basePrice} onChange={(v) => set('basePrice', v)} type="number" />
-            {!isMattress && !isService && (
-              <Field label="Price 1 (RM)" value={form.price1} onChange={(v) => set('price1', v)} type="number" />
-            )}
-            <Field label="Cost Price (RM)" value={form.costPrice} onChange={(v) => set('costPrice', v)} type="number" />
-            <Field label="Unit (m³)" value={form.unitM3} onChange={(v) => set('unitM3', v)} type="number" step="0.001" />
-            {/* Production Time field removed — 2990 is a trading company (PR-strip-production). */}
-          </div>
-        </div>
-        <footer className={styles.drawerFooter}>
+    <Drawer
+      title="New SKU"
+      onClose={onClose}
+      width="lg"
+      footer={(
+        <>
           <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
           <Button variant="primary" size="md" onClick={submit} disabled={create.isPending}>
             {create.isPending ? 'Creating…' : 'Create SKU'}
           </Button>
-        </footer>
-      </aside>
-    </div>
+        </>
+      )}
+    >
+      <div className={styles.formGrid}>
+        <Field label="Code *" value={form.code} onChange={(v) => set('code', v)} />
+        <Field label="Name *" value={form.name} onChange={(v) => set('name', v)} />
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Category *</span>
+          <select className={styles.fieldSelect} value={form.category}
+            onChange={(e) => set('category', e.target.value as Cat)}>
+            <option value="BEDFRAME">Bedframe</option>
+            <option value="SOFA">Sofa</option>
+            <option value="MATTRESS">Mattress</option>
+            <option value="ACCESSORY">Accessory</option>
+            <option value="SERVICE">Service</option>
+          </select>
+        </label>
+        <Field label="Size Label" value={form.sizeLabel} onChange={(v) => set('sizeLabel', v)} />
+        {isSofa && <Field label="Base Model" value={form.baseModel} onChange={(v) => set('baseModel', v)} />}
+        {isMattress && (
+          <>
+            <Field label="Branding" value={form.branding} onChange={(v) => set('branding', v)} placeholder="e.g. Sealy" list="branding-pool-new-sku" />
+            <datalist id="branding-pool-new-sku">
+              {brandingPool.pool.map((b) => <option key={b} value={b} />)}
+            </datalist>
+          </>
+        )}
+        {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics". Key fabricColor unchanged. */}
+        {isSofa && <Field label="Fabrics" value={form.fabricColor} onChange={(v) => set('fabricColor', v)} />}
+        {/* 0166 — optional SKU barcode (free text; scanner-friendly). */}
+        <Field label="Barcode" value={form.barcode} onChange={(v) => set('barcode', v)} placeholder="optional" />
+        <Field label="Description" value={form.description} onChange={(v) => set('description', v)} fullWidth />
+
+        <Field label={isMattress ? 'Price (RM)' : 'Base Price / Price 2 (RM)'}
+          value={form.basePrice} onChange={(v) => set('basePrice', v)} type="number" />
+        {!isMattress && !isService && (
+          <Field label="Price 1 (RM)" value={form.price1} onChange={(v) => set('price1', v)} type="number" />
+        )}
+        <Field label="Cost Price (RM)" value={form.costPrice} onChange={(v) => set('costPrice', v)} type="number" />
+        <Field label="Unit (m³)" value={form.unitM3} onChange={(v) => set('unitM3', v)} type="number" step="0.001" />
+        {/* Production Time field removed — 2990 is a trading company (PR-strip-production). */}
+      </div>
+    </Drawer>
   );
 };
 
@@ -4042,65 +4040,58 @@ const ProductSuppliersDrawer = ({
   };
 
   return (
-    <div className={styles.drawerBackdrop} onClick={onClose}>
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: 'var(--c-cream)',
-          border: '1px solid var(--line-strong)',
-          borderRadius: 'var(--radius-xl)',
-          boxShadow: 'var(--shadow-3)',
-          width: 'min(820px, 95vw)',
-          maxHeight: '85vh',
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-      >
-        <header className={styles.drawerHeader}>
-          <div>
-            <h2 className={styles.drawerTitle}>
-              <Truck {...ICON_PROPS} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-              Suppliers · <span className={styles.codeChip}>{row.code}</span>
-            </h2>
-            <p style={{ marginTop: 4, fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
-              {row.name}{row.description ? ` — ${row.description}` : ''}
-            </p>
-            {/* 0166 — barcode lives on the SKU detail drawer (the SKU Master
-                grid column is read-only + default-hidden). Saves on Enter. */}
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
-              <span style={{
-                fontSize: 'var(--fs-11)', fontWeight: 700, textTransform: 'uppercase',
-                letterSpacing: '0.04em', color: 'var(--fg-muted)',
-              }}>
-                Barcode
-              </span>
-              <input
-                type="text"
-                value={barcodeDraft}
-                onChange={(e) => setBarcodeDraft(e.target.value)}
-                /* Commander 2026-06-15 — Enter saves; no blur-auto-save (裸奔). */
-                onKeyDown={(e) => { if (e.key === 'Enter') commitBarcode(); }}
-                placeholder="scan or type, then Enter"
-                disabled={update.isPending}
-                style={{
-                  width: 220,
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 'var(--fs-13)',
-                  background: 'var(--c-paper)',
-                  border: '1px solid var(--line-strong)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '3px 8px',
-                  outline: 'none',
-                }}
-              />
-            </label>
-          </div>
-          <button type="button" className={styles.iconBtn} onClick={onClose}>
-            <X {...ICON_PROPS} />
-          </button>
-        </header>
-
-        <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)' }}>
+    <Drawer
+      title={(
+        <>
+          <Truck {...ICON_PROPS} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+          Suppliers · <span className={styles.codeChip}>{row.code}</span>
+        </>
+      )}
+      subtitle={`${row.name}${row.description ? ` — ${row.description}` : ''}`}
+      onClose={onClose}
+      width="xl"
+      /* Identity region — the SKU's own barcode field. 0166: barcode lives on
+         the SKU detail drawer (the SKU Master grid column is read-only +
+         default-hidden). Saves on Enter. */
+      identity={(
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{
+            fontSize: 'var(--fs-11)', fontWeight: 700, textTransform: 'uppercase',
+            letterSpacing: '0.04em', color: 'var(--fg-muted)',
+          }}>
+            Barcode
+          </span>
+          <input
+            type="text"
+            value={barcodeDraft}
+            onChange={(e) => setBarcodeDraft(e.target.value)}
+            /* Commander 2026-06-15 — Enter saves; no blur-auto-save (裸奔). */
+            onKeyDown={(e) => { if (e.key === 'Enter') commitBarcode(); }}
+            placeholder="scan or type, then Enter"
+            disabled={update.isPending}
+            style={{
+              width: 220,
+              fontFamily: 'var(--font-mono)',
+              fontSize: 'var(--fs-13)',
+              background: 'var(--c-cream)',
+              border: '1px solid var(--line-strong)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '3px 8px',
+              outline: 'none',
+            }}
+          />
+        </label>
+      )}
+      footer={(
+        <>
+          <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginRight: 'auto' }}>
+            <Star size={11} strokeWidth={2} style={{ verticalAlign: 'middle', color: 'var(--c-orange)', fill: 'var(--c-orange)' }} />
+            {' '}Main supplier — used by default when generating POs.
+          </p>
+          <Button variant="ghost" size="md" onClick={onClose}>Close</Button>
+        </>
+      )}
+    >
           {/* Commander 2026-05-29 — "双击点进去要看到 supplier 和 available 什么
               variant". This drill-in now shows BOTH: the model's allowed variant
               options first, then the suppliers carrying the SKU. */}
@@ -4203,17 +4194,7 @@ const ProductSuppliersDrawer = ({
               </tbody>
             </table>
           )}
-        </div>
-
-        <footer className={styles.drawerFooter}>
-          <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginRight: 'auto' }}>
-            <Star size={11} strokeWidth={2} style={{ verticalAlign: 'middle', color: 'var(--c-orange)', fill: 'var(--c-orange)' }} />
-            {' '}Main supplier — used by default when generating POs.
-          </p>
-          <Button variant="ghost" size="md" onClick={onClose}>Close</Button>
-        </footer>
-      </div>
-    </div>
+    </Drawer>
   );
 };
 

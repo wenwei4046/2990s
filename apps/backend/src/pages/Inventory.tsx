@@ -18,10 +18,10 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import {
-  Search, ArrowUpRight, ArrowDownLeft, DollarSign, Star, X, Plus,
+  Search, ArrowUpRight, ArrowDownLeft, DollarSign, Star, Plus,
   Warehouse as WarehouseIcon, ChevronRight, ChevronDown,
 } from 'lucide-react';
-import { Button } from '@2990s/design-system';
+import { Button, Drawer } from '@2990s/design-system';
 import { formatVariantKey, fmtCenti, fmtDate, fmtQty } from '@2990s/shared';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { useNotify } from '../components/NotifyDialog';
@@ -874,31 +874,16 @@ const ProductBreakdownDrawer = ({
   const totalVal = balances.reduce((s, b) => s + (b.value_sen ?? 0), 0);
 
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.32)', zIndex: 50,
-        display: 'flex', justifyContent: 'flex-end',
-      }}>
-      <div onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 720, maxWidth: '95vw', background: 'var(--c-cream)',
-          padding: 'var(--space-5)', overflow: 'auto',
-        }}>
-        <div className={styles.headerRow}>
-          <div>
-            <h2 className={styles.title} style={{ fontSize: 'var(--fs-22)' }}>Stock Breakdown</h2>
-            <p className={styles.subtitle}>
-              <span className={styles.codeChip}>{code}</span> {name}
-            </p>
-          </div>
-          <button type="button" className={styles.chip} onClick={onClose}>
-            <X {...ICON} />
-            <span>Close</span>
-          </button>
-        </div>
-
-        <div className={styles.statGrid} style={{ marginTop: 'var(--space-4)' }}>
+    <Drawer
+      eyebrow="Stock Breakdown"
+      title={code}
+      subtitle={name}
+      onClose={onClose}
+      width="lg"
+      /* Identity — the SKU's headline totals. Pinned so they stay readable
+         while the operator scrolls the lot / movement tables. */
+      identity={(
+        <div className={styles.statGrid}>
           <div className={styles.statCard}>
             <span className={styles.statLabel}>Total Qty</span>
             <span className={styles.statValue}>{fmtQty(totalQty)}</span>
@@ -908,7 +893,8 @@ const ProductBreakdownDrawer = ({
             <span className={styles.statValue}>{fmtRm(totalVal)}</span>
           </div>
         </div>
-
+      )}
+    >
         {/* Per-warehouse × attribute-composition breakdown. One row per
             (warehouse, variant); identical attributes are already pooled, so
             this is the SKU split into its real stock buckets (migration 0095). */}
@@ -1097,8 +1083,7 @@ const ProductBreakdownDrawer = ({
             </table>
           </div>
         )}
-      </div>
-    </div>
+    </Drawer>
   );
 };
 
@@ -1413,28 +1398,24 @@ const WarehouseDrawer = ({
     }
   };
 
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.32)', zIndex: 50,
-        display: 'flex', justifyContent: 'flex-end',
-      }}>
-      <div onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 480, maxWidth: '95vw', background: 'var(--c-cream)',
-          padding: 'var(--space-5)', overflow: 'auto',
-        }}>
-        <div className={styles.headerRow}>
-          <h2 className={styles.title} style={{ fontSize: 'var(--fs-22)' }}>
-            {editing ? 'Edit Warehouse' : 'New Warehouse'}
-          </h2>
-          <button type="button" className={styles.chip} onClick={onClose}>
-            <X {...ICON} />
-          </button>
-        </div>
+  const saving = create.isPending || update.isPending;
 
-        <label style={{ display: 'block', marginTop: 'var(--space-4)' }}>
+  return (
+    <Drawer
+      title={editing ? 'Edit Warehouse' : 'New Warehouse'}
+      onClose={onClose}
+      width="sm"
+      dismissible={!saving}
+      footer={(
+        <>
+          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" size="md" onClick={submit} disabled={saving}>
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </>
+      )}
+    >
+        <label style={{ display: 'block' }}>
           <div className={styles.eyebrow}>Code *</div>
           <input className={styles.searchInput} style={{ width: '100%' }}
             value={form.code} placeholder="KL / PJ / JB"
@@ -1466,15 +1447,7 @@ const WarehouseDrawer = ({
             </label>
           )}
         </div>
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-3)', marginTop: 'var(--space-5)' }}>
-          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="md" onClick={submit} disabled={create.isPending || update.isPending}>
-            {(create.isPending || update.isPending) ? 'Saving…' : 'Save'}
-          </Button>
-        </div>
-      </div>
-    </div>
+    </Drawer>
   );
 };
 

@@ -10,8 +10,7 @@
 // ----------------------------------------------------------------------------
 
 import { useState } from 'react';
-import { X } from 'lucide-react';
-import { Button } from '@2990s/design-system';
+import { Button, Drawer } from '@2990s/design-system';
 import {
   useCreateWarehouse,
   useUpdateWarehouse,
@@ -19,8 +18,6 @@ import {
 } from '../lib/inventory-queries';
 import { useNotify } from './NotifyDialog';
 import styles from '../pages/Suppliers.module.css';
-
-const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
 export const WarehouseFormDrawer = ({
   editing, onClose, onSaved,
@@ -70,16 +67,23 @@ export const WarehouseFormDrawer = ({
     }
   };
 
+  const saving = create.isPending || update.isPending;
+
   return (
-    <div className={styles.backdrop} onClick={onClose}>
-      <div className={styles.drawer} onClick={(e) => e.stopPropagation()}>
-        <div className={styles.drawerHeader}>
-          <h2 className={styles.drawerTitle}>{editing ? 'Edit Warehouse' : 'New Warehouse'}</h2>
-          <button type="button" onClick={onClose} className={styles.codeChip}>
-            <X {...ICON} />
-          </button>
-        </div>
-        <div className={styles.drawerBody}>
+    <Drawer
+      title={editing ? 'Edit Warehouse' : 'New Warehouse'}
+      onClose={onClose}
+      width="lg"
+      dismissible={!saving}
+      footer={(
+        <>
+          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" size="md" onClick={submit} disabled={saving}>
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </>
+      )}
+    >
           <label style={{ display: 'block', marginBottom: 'var(--space-3)' }}>
             <div className={styles.eyebrow}>Code *</div>
             <input className={styles.searchInput} style={{ width: '100%' }}
@@ -118,14 +122,6 @@ export const WarehouseFormDrawer = ({
               Active
             </label>
           )}
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-3)', padding: 'var(--space-4)' }}>
-          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="md" onClick={submit} disabled={create.isPending || update.isPending}>
-            {(create.isPending || update.isPending) ? 'Saving…' : 'Save'}
-          </Button>
-        </div>
-      </div>
-    </div>
+    </Drawer>
   );
 };

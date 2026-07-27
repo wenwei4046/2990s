@@ -11,8 +11,8 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
-import { Plus, X } from 'lucide-react';
-import { Button } from '@2990s/design-system';
+import { Plus } from 'lucide-react';
+import { Button, Drawer } from '@2990s/design-system';
 import {
   useCurrencies,
   useCreateCurrency,
@@ -191,16 +191,23 @@ const CurrencyDrawer = ({
     }
   };
 
+  const saving = create.isPending || update.isPending;
+
   return (
-    <div className={styles.backdrop} onClick={onClose}>
-      <div className={styles.drawer} onClick={(e) => e.stopPropagation()}>
-        <div className={styles.drawerHeader}>
-          <h2 className={styles.drawerTitle}>{editing ? `Edit ${editing.code}` : 'Add Currency'}</h2>
-          <button type="button" onClick={onClose} className={styles.codeChip}>
-            <X {...ICON} />
-          </button>
-        </div>
-        <div className={styles.drawerBody}>
+    <Drawer
+      title={editing ? `Edit ${editing.code}` : 'Add Currency'}
+      onClose={onClose}
+      width="lg"
+      dismissible={!saving}
+      footer={(
+        <>
+          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" size="md" onClick={submit} disabled={saving}>
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </>
+      )}
+    >
           <label style={{ display: 'block', marginBottom: 'var(--space-3)' }}>
             <div className={styles.eyebrow}>Code *</div>
             <input className={styles.searchInput} style={{ width: '100%' }}
@@ -234,14 +241,6 @@ const CurrencyDrawer = ({
               Active
             </label>
           )}
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-3)', padding: 'var(--space-4)' }}>
-          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="md" onClick={submit} disabled={create.isPending || update.isPending}>
-            {(create.isPending || update.isPending) ? 'Saving…' : 'Save'}
-          </Button>
-        </div>
-      </div>
-    </div>
+    </Drawer>
   );
 };

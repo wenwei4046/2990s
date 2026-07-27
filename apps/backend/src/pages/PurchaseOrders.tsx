@@ -13,8 +13,8 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { Plus, X, FileText, Printer, ArrowRightLeft, ChevronsDownUp } from 'lucide-react';
-import { Button } from '@2990s/design-system';
+import { Plus, FileText, Printer, ArrowRightLeft, ChevronsDownUp } from 'lucide-react';
+import { Button, Drawer } from '@2990s/design-system';
 import { buildVariantSummary, fmtDateOrDash, effectiveDelivery } from '@2990s/shared';
 import {
   usePurchaseOrders,
@@ -823,27 +823,46 @@ const DetailPoDrawer = ({ poId, onClose }: { poId: string; onClose: () => void }
   const items = detail.data?.items ?? [];
 
   return (
-    <>
-      <div className={styles.backdrop} onClick={onClose} />
-      <aside className={styles.drawer}>
-        <header className={styles.drawerHeader}>
-          <h2 className={styles.drawerTitle}>
-            {po?.po_number ?? 'Purchase Order'}
-          </h2>
-          <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON} /></button>
-        </header>
-
-        <div className={styles.drawerBody}>
+    <Drawer
+      eyebrow="Purchase Order"
+      title={po?.po_number ?? 'Purchase Order'}
+      onClose={onClose}
+      width="lg"
+      /* Identity region — WHO this document is with. Stays pinned above the
+         scrolling item list. */
+      identity={po ? (
+        <>
+          <p className={styles.eyebrow}>Supplier</p>
+          <p style={{ fontFamily: 'var(--font-title)', fontSize: 'var(--fs-20)', fontWeight: 700, margin: 0 }}>
+            {po.supplier?.name ?? po.supplier?.code}
+          </p>
+        </>
+      ) : undefined}
+      footer={po ? (
+        <>
+          <Button
+            variant="ghost"
+            size="md"
+            onClick={() => {
+              // Dynamic import — PDF chunk is shared with SO/DO so it's cached
+              // after first use on any flow.
+              import('../lib/purchase-order-pdf').then(({ generatePurchaseOrderPdf }) =>
+                generatePurchaseOrderPdf(po, items),
+              ).catch((e) => notify({ title: 'PDF generation failed', body: `${e instanceof Error ? e.message : String(e)}`, tone: 'error' }));
+            }}
+          >
+            <Printer {...ICON} />
+            <span>Print PDF</span>
+          </Button>
+          {/* PR-DRAFT-removal — Submit/Cancel-from-Draft removed. POs are
+              SUBMITTED on create, and cancellation lives on the detail page. */}
+          <Button variant="ghost" size="md" onClick={onClose}>Close</Button>
+        </>
+      ) : undefined}
+    >
           {detail.isLoading && <p className={styles.eyebrow}>Loading…</p>}
           {po && (
             <>
-              <div className={styles.section}>
-                <p className={styles.eyebrow}>Supplier</p>
-                <p style={{ fontFamily: 'var(--font-title)', fontSize: 'var(--fs-20)', fontWeight: 700 }}>
-                  {po.supplier?.name ?? po.supplier?.code}
-                </p>
-              </div>
-
               <div className={styles.formGrid}>
                 <SmallStat label="PO Date" value={fmtDateOrDash(po.po_date)} />
                 <SmallStat label="Expected" value={fmtDateOrDash(poEffectiveExpected(po))} />
@@ -881,31 +900,7 @@ const DetailPoDrawer = ({ poId, onClose }: { poId: string; onClose: () => void }
               </div>
             </>
           )}
-        </div>
-
-        {po && (
-          <footer className={styles.drawerFooter}>
-            <Button
-              variant="ghost"
-              size="md"
-              onClick={() => {
-                // Dynamic import — PDF chunk is shared with SO/DO so it's cached
-                // after first use on any flow.
-                import('../lib/purchase-order-pdf').then(({ generatePurchaseOrderPdf }) =>
-                  generatePurchaseOrderPdf(po, items),
-                ).catch((e) => notify({ title: 'PDF generation failed', body: `${e instanceof Error ? e.message : String(e)}`, tone: 'error' }));
-              }}
-            >
-              <Printer {...ICON} />
-              <span>Print PDF</span>
-            </Button>
-            {/* PR-DRAFT-removal — Submit/Cancel-from-Draft removed. POs are
-                SUBMITTED on create, and cancellation lives on the detail page. */}
-            <Button variant="ghost" size="md" onClick={onClose}>Close</Button>
-          </footer>
-        )}
-      </aside>
-    </>
+    </Drawer>
   );
 };
 

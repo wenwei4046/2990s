@@ -18,8 +18,7 @@
 // ----------------------------------------------------------------------------
 
 import { useState } from 'react';
-import { X } from 'lucide-react';
-import { Button } from '@2990s/design-system';
+import { Button, Drawer } from '@2990s/design-system';
 import {
   useUpdateDeliveryFields,
   HC_SUBSTATUS_VALUES,
@@ -28,7 +27,6 @@ import {
 import { useNotify } from './NotifyDialog';
 import styles from '../pages/Suppliers.module.css';
 
-const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const HOUSE_TYPES = ['New House', 'Replacement'] as const;
 
 /* A TIMESTAMPTZ ISO string → the value a <input type="datetime-local"> wants
@@ -107,16 +105,22 @@ export const DeliveryFieldsDrawer = ({
   const inputStyle: React.CSSProperties = { width: '100%' };
 
   return (
-    <div className={styles.backdrop} onClick={onClose}>
-      <div className={styles.drawer} onClick={(e) => e.stopPropagation()}>
-        <div className={styles.drawerHeader}>
-          <h2 className={styles.drawerTitle}>Edit HC Fields · {order.so_doc_no}</h2>
-          <button type="button" onClick={onClose} className={styles.codeChip}>
-            <X {...ICON} />
-          </button>
-        </div>
-
-        <div className={styles.drawerBody}>
+    <Drawer
+      eyebrow="Edit HC fields"
+      title={order.so_doc_no}
+      subtitle={order.debtor_name ?? undefined}
+      onClose={onClose}
+      width="lg"
+      dismissible={!update.isPending}
+      footer={(
+        <>
+          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" size="md" onClick={submit} disabled={update.isPending}>
+            {update.isPending ? 'Saving…' : 'Save'}
+          </Button>
+        </>
+      )}
+    >
           {/* ── SO-context group (always editable) ─────────────────────────── */}
           <div className={styles.eyebrow} style={{ marginBottom: 'var(--space-2)', color: 'var(--c-burnt)' }}>
             Order context
@@ -227,15 +231,6 @@ export const DeliveryFieldsDrawer = ({
               </select>
             </label>
           </fieldset>
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-3)', padding: 'var(--space-4)' }}>
-          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="md" onClick={submit} disabled={update.isPending}>
-            {update.isPending ? 'Saving…' : 'Save'}
-          </Button>
-        </div>
-      </div>
-    </div>
+    </Drawer>
   );
 };
