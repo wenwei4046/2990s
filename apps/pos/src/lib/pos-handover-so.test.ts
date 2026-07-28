@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 // exercise only the pure cart→SO-item transforms.
 vi.mock('./supabase', () => ({ supabase: { auth: { getSession: vi.fn() } } }));
 
-import { cartLineToSoItem, cartLinesToSoItems, pickSoItemCode, describePosHandoffError, buildDeliveryFeeCartInputs } from './pos-handover-so';
+import { cartLineToSoItem, cartLinesToSoItems, pickSoItemCode, describePosHandoffError, buildDeliveryFeeCartInputs, posHandoffIdempotencyKey } from './pos-handover-so';
 import type { CartLine, CartConfig } from '../state/cart';
 import type { CatalogProduct, SpecialDeliveryFeeRow } from './queries';
 
@@ -692,6 +692,65 @@ describe('describePosHandoffError — variant_not_allowed legibility', () => {
   it('leaves non-variant errors untouched', () => {
     expect(describePosHandoffError({ error: 'customer_name_required' }))
       .toBe('Order placement failed: customer_name_required');
+  });
+});
+
+/* Houzs idempotency middleware — a salesperson mid-handover needs an action, not
+   a machine code. The three codes differ in exactly one way that matters on the
+   floor: whether pressing Confirm again is safe. */
+describe('describePosHandoffError — idempotency codes', () => {
+  it('tells the operator to retry on key_reused (the hook rotated the nonce)', () => {
+    const msg = describePosHandoffError({
+      error: 'idempotency_key_reused',
+      message: 'This request key was already used for different data. Please submit again.',
+    });
+    expect(msg).not.toContain('idempotency_key_reused');
+    expect(msg.toLowerCase()).toContain('confirm once more');
+  });
+
+  it('tells the operator NOT to re-send while a submit is in flight', () => {
+    const msg = describePosHandoffError({ error: 'idempotency_in_flight' });
+    expect(msg).not.toContain('idempotency_in_flight');
+    expect(msg.toLowerCase()).toContain("don't re-send");
+  });
+
+  it('tells the operator NOT to re-submit when the outcome is unknown', () => {
+    const msg = describePosHandoffError({ error: 'idempotency_outcome_unknown' });
+    expect(msg).not.toContain('idempotency_outcome_unknown');
+    expect(msg).toContain('Do NOT submit again');
+  });
+});
+
+/* The 2026-07-28 wedge: the key used to be stable per order INTENT, but Houzs
+   binds a key to the request body AND keeps the claim after a rejected submit
+   (POST /mfg-sales-orders never marks no-write). So a corrected re-submit hit
+   idempotency_key_reused forever. The key must move with the payload. */
+describe('posHandoffIdempotencyKey', () => {
+  const intent = '11111111-2222-3333-4444-555555555555';
+
+  it('is stable for the same intent + same body (a double-tap replays, never duplicates)', async () => {
+    const body = JSON.stringify({ debtorName: 'Ali', depositCenti: 200000 });
+    expect(await posHandoffIdempotencyKey(intent, body))
+      .toBe(await posHandoffIdempotencyKey(intent, body));
+  });
+
+  it('changes when the payload is corrected, so the retry gets its own claim', async () => {
+    const before = await posHandoffIdempotencyKey(intent, JSON.stringify({ depositCenti: 0 }));
+    const after = await posHandoffIdempotencyKey(intent, JSON.stringify({ depositCenti: 200000 }));
+    expect(after).not.toBe(before);
+  });
+
+  it('separates two intents that marshal byte-identically', async () => {
+    const body = JSON.stringify({ debtorName: 'Ali' });
+    const other = '99999999-8888-7777-6666-555555555555';
+    expect(await posHandoffIdempotencyKey(other, body))
+      .not.toBe(await posHandoffIdempotencyKey(intent, body));
+  });
+
+  it('stays inside the middleware\'s 200-char printable-ASCII limit', async () => {
+    const key = await posHandoffIdempotencyKey(intent, JSON.stringify({ items: Array(200).fill('x') }));
+    expect(key.length).toBeLessThanOrEqual(200);
+    expect(key).toMatch(/^[\x21-\x7e]+$/);
   });
 });
 

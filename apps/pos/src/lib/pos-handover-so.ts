@@ -275,6 +275,20 @@ export const describePosHandoffError = (payload: PosHandoffError): string => {
   if (payload.error === 'free_item_not_eligible') {
     return 'This free item isn\'t eligible for the campaign selected. Pick a different item or campaign.';
   }
+  /* Houzs idempotency middleware — the bare codes read like a system fault to a
+     salesperson mid-handover. Say what to DO instead: key_reused is now
+     self-healing (the hook rotates the intent nonce), while in_flight and
+     outcome_unknown must never be answered with another submit. */
+  if (payload.error === 'idempotency_key_reused') {
+    return 'That submit was already recorded under different details. Press Confirm once more — this attempt will go through.';
+  }
+  if (payload.error === 'idempotency_in_flight') {
+    return 'This order is still being processed. Wait a moment, then check the order list before submitting again — don\'t re-send it.';
+  }
+  if (payload.error === 'idempotency_outcome_unknown') {
+    return 'We couldn\'t confirm whether this order was created. Do NOT submit again — check the order list first, and ask a coordinator if it isn\'t there.';
+  }
+
   if (payload.error === 'state_change_conflicts_line_warehouse') {
     return 'The new State would move a line to a different warehouse, but a PO / DO is already cut against the old one. Cancel the affected downstream doc (or move each line explicitly) before changing the State.';
   }
@@ -766,11 +780,38 @@ export const cartLinesToSoItems = (
 
 /* ─── Mutation ───────────────────────────────────────────────────────── */
 
-const submitHandoff = async (payload: PosHandoffPayload, idempotencyKey?: string): Promise<SoCreatedResponse> => {
+/** Idempotency key for ONE submit attempt: the order intent's nonce bound to the
+ *  exact bytes we are about to POST.
+ *
+ *  Houzs's middleware stores a claim keyed by (principal, company, key, route)
+ *  together with a hash of the request body, and POST /mfg-sales-orders never
+ *  calls markIdempotencyNoWrite — so the claim survives a REJECTED submit too.
+ *  A key that is stable per intent therefore wedges the moment the salesperson
+ *  corrects anything: same key + different body = idempotency_key_reused 409,
+ *  on that submit and every one after it, until the tablet reloads (the
+ *  2026-07-28 "Payment recorded · RM 2,000" failure).
+ *
+ *  Folding the body into the key keeps the property the key exists for — a
+ *  double-tap or a retry of the SAME payload replays the first response instead
+ *  of minting a duplicate SO — while a corrected payload gets a fresh claim,
+ *  which is exactly what it is: a different write. 69 printable ASCII chars,
+ *  inside the middleware's 200-char limit. */
+export const posHandoffIdempotencyKey = async (intentId: string, body: string): Promise<string> => {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
+  const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${intentId}.${hex.slice(0, 32)}`;
+};
+
+const submitHandoff = async (payload: PosHandoffPayload, intentId?: string): Promise<SoCreatedResponse> => {
+  // Hash the SAME string we send — the server hashes the received bytes, so the
+  // key must be derived from the body, never from a re-serialisation of it.
+  const body = JSON.stringify(payload);
   const res = await authedFetchRaw('/mfg-sales-orders', {
     method: 'POST',
-    headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
-    body: JSON.stringify(payload),
+    headers: intentId
+      ? { 'Idempotency-Key': await posHandoffIdempotencyKey(intentId, body) }
+      : undefined,
+    body,
   });
 
   if (!res.ok) {
@@ -791,20 +832,31 @@ const submitHandoff = async (payload: PosHandoffPayload, idempotencyKey?: string
  *  navigation to the thank-you screen; this hook just owns the network call
  *  + auth. */
 export const usePosHandoffToSo = () => {
-  // Stable idempotency key per order INTENT — reused across a double-click or a
-  // retry of the SAME submit so Houzs's /api/* idempotency middleware replays
-  // the first response instead of minting a duplicate SO (the motivating case:
-  // a cold-Hyperdrive 503 then a re-submit). Reset on success so the next order
-  // gets a fresh key. The 2990 target has no such middleware and ignores the
-  // header harmlessly.
-  const keyRef = useRef<string | null>(null);
+  // Nonce for this order INTENT. posHandoffIdempotencyKey folds it together with
+  // the payload bytes, so a double-tap or a retry of the SAME submit replays the
+  // first response instead of minting a duplicate SO (the motivating case: a
+  // cold-Hyperdrive 503 then a re-submit), while a corrected payload submits
+  // under its own key instead of dying on idempotency_key_reused. The nonce (not
+  // just the hash) keeps two genuinely separate orders that happen to marshal
+  // byte-identical from replaying each other's docNo. Reset on success so the
+  // next order starts clean. The 2990 target has no such middleware and ignores
+  // the header harmlessly.
+  const intentRef = useRef<string | null>(null);
   return useMutation<SoCreatedResponse, Error, PosHandoffPayload>({
     mutationFn: (payload) => {
-      keyRef.current ??= crypto.randomUUID();
-      return submitHandoff(payload, keyRef.current);
+      intentRef.current ??= crypto.randomUUID();
+      return submitHandoff(payload, intentRef.current);
     },
     onSuccess: () => {
-      keyRef.current = null;
+      intentRef.current = null;
+    },
+    onError: (err) => {
+      // Belt-and-braces: a key_reused 409 means this intent's key is already
+      // held by different data, so it can never succeed again. Rotate the nonce
+      // so the next Confirm isn't wedged until the tablet reloads.
+      if (err instanceof PosHandoffApiError && err.payload.error === 'idempotency_key_reused') {
+        intentRef.current = crypto.randomUUID();
+      }
     },
   });
 };
