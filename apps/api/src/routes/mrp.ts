@@ -192,6 +192,11 @@ type SofaSet = {
   warehouseName: string | null;
   soItemId: string;
   soDocNo: string;
+  /* Bucket variant key (warehouse+code+variant identity the pooled stock/PO
+     supply is keyed by). Carried so read-side consumers (the PO detail's live
+     SO↔PO binding) can bucket-match a sofa set to a PO line the same way the
+     SKU path does — SofaSet used to expose only itemCode + a display label. */
+  variantKey: string;
   /* CANONICAL stored listing order within the SO (migration 0165). The MRP
      Sofa tab groups sets back into per-SO rows (groupBySo) and orders the
      module sub-rows by this so they read LHF → NA → RHF exactly as the SO
@@ -715,6 +720,7 @@ export async function computeMrp(
         warehouseName: wh?.name ?? null,
         soItemId: d.id,
         soDocNo: d.doc_no,
+        variantKey: variantKeyOf(d.item_group, v),
         lineNo: d.line_no ?? null,
         createdAt: d.created_at ?? null,
         debtorName: d.so?.debtor_name ?? null,
@@ -786,6 +792,56 @@ export function mrpLineCoverage(result: MrpResult): Map<string, SoLineCoverage> 
       : s.poNumber ? 'po'
       : 'stock';
     map.set(s.soItemId, { source, po: s.poNumber, eta: s.poEta });
+  }
+  return map;
+}
+
+/* One SO line that a PO is currently soft-bound to (covers), carrying the
+   bucket identity (warehouse, item_code, variant_key) so a read-side consumer
+   can attribute it to the matching PO LINE. Derived at query time from the MRP
+   allocation — never persisted (the SO↔PO binding is soft; see mrp header). */
+export type PoLineAssignment = {
+  soDocNo: string;
+  qty: number;
+  deliveryDate: string | null;
+  warehouseId: string | null;
+  itemCode: string;
+  variantKey: string;
+};
+
+/* Invert the MRP allocation into a per-PO view: for a given PO number, the SO
+   line(s) whose demand the greedy allocator covered with that PO. The PO detail
+   uses this to show the LIVE soft-bound SO(s) each line is feeding (bucketed by
+   warehouse+code+variant), replacing the stored From-SO snapshot on screen.
+   A line records only the FIRST PO that covered it (mrpLineCoverage semantics),
+   so a line split across two POs surfaces under the earliest-ETA one — the same
+   single-PO view the SO detail's coverage_po shows. */
+export function mrpAssignmentsByPo(result: MrpResult): Map<string, PoLineAssignment[]> {
+  const map = new Map<string, PoLineAssignment[]>();
+  const push = (po: string | null, a: PoLineAssignment): void => {
+    if (!po) return;
+    const arr = map.get(po) ?? [];
+    arr.push(a);
+    map.set(po, arr);
+  };
+  for (const sku of result.skus) {
+    for (const l of sku.lines) {
+      if (l.source === 'po' && l.poNumber) {
+        push(l.poNumber, {
+          soDocNo: l.soDocNo, qty: l.qty, deliveryDate: l.deliveryDate,
+          warehouseId: sku.warehouseId, itemCode: sku.itemCode, variantKey: sku.variantKey,
+        });
+      }
+    }
+  }
+  // Sofa sets carry their covering PO directly (poNumber set → covered by it).
+  for (const s of result.sofaSets) {
+    if (s.poNumber) {
+      push(s.poNumber, {
+        soDocNo: s.soDocNo, qty: s.qty, deliveryDate: s.deliveryDate,
+        warehouseId: s.warehouseId, itemCode: s.itemCode, variantKey: s.variantKey,
+      });
+    }
   }
   return map;
 }

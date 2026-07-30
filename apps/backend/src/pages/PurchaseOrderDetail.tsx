@@ -32,7 +32,7 @@ import {
   ChevronDown, RotateCcw, Check, History, Send, Download,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary, canonicalizeVariants, effectiveDelivery, fmtDateTime } from '@2990s/shared'; // Commander 2026-05-28 — Description 2; 2026-06-19 effective delivery
+import { buildVariantSummary, canonicalizeVariants, effectiveDelivery, fmtDateTime, fmtDateOrDash } from '@2990s/shared'; // Commander 2026-05-28 — Description 2; 2026-06-19 effective delivery
 import {
   usePurchaseOrderDetail,
   useUpdatePurchaseOrderHeader,
@@ -1057,6 +1057,12 @@ export const PurchaseOrderDetail = () => {
                 <th>Group</th>
                 <th className={styles.tableRight}>Qty</th>
                 <th>Transfer To (GRN)</th>
+                {/* Live MRP soft-binding — the SO(s) this line's goods are
+                    currently allocated to feed (derived, not the stored From-SO;
+                    the PDF keeps the stored one). SO delivery date shown beneath. */}
+                <th>Assigned SO</th>
+                {/* Which DO carried this PO's goods to which SO, per DO. */}
+                <th>Delivered</th>
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
                 <th className={styles.tableRight}>Total</th>
@@ -1102,6 +1108,39 @@ export const PurchaseOrderDetail = () => {
                   <td className={styles.muted}>{it.item_group ?? it.material_kind}</td>
                   <td className={styles.tableRight}>{it.qty}</td>
                   <td>{renderReceived(it)}</td>
+                  {/* Assigned SO — the LIVE MRP soft-binding for this line, with
+                      each bound SO's delivery date beneath. Burnt to read like
+                      the other doc references; "—" when nothing is bound now. */}
+                  <td>
+                    {(it.mrp_assigned_sos ?? []).length === 0
+                      ? <span className={styles.muted}>—</span>
+                      : (it.mrp_assigned_sos ?? []).map((a, ai) => (
+                          <div key={ai} style={{ whiteSpace: 'nowrap' }}>
+                            <span style={{ fontWeight: 600, color: 'var(--c-burnt)' }}>{a.so_doc_no}</span>
+                            {' '}<span className={styles.muted} style={{ fontWeight: 400 }}>×{a.qty}</span>
+                            {a.delivery_date && (
+                              <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>
+                                {fmtDateOrDash(a.delivery_date)}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                  </td>
+                  {/* Delivered — one row per DO that shipped this PO's goods,
+                      showing the DO number → its SO and the qty. */}
+                  <td>
+                    {(it.delivered ?? []).length === 0
+                      ? <span className={styles.muted}>—</span>
+                      : (it.delivered ?? []).map((d, di) => (
+                          <div key={di} style={{ whiteSpace: 'nowrap' }}>
+                            <span style={{ fontWeight: 600, color: 'var(--c-burnt)' }}>{d.do_no}</span>
+                            {d.so_doc_no && (
+                              <span className={styles.muted} style={{ fontWeight: 400 }}> · {d.so_doc_no}</span>
+                            )}
+                            {' '}<span className={styles.muted} style={{ fontWeight: 400 }}>×{d.qty}</span>
+                          </div>
+                        ))}
+                  </td>
                   <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, po.currency)}</td>
                   <td className={styles.tableRight}>{(it.discount_centi ?? 0) > 0 ? fmtRm(it.discount_centi, po.currency) : '—'}</td>
                   <td className={styles.priceCell}>{fmtRm(it.line_total_centi, po.currency)}</td>
