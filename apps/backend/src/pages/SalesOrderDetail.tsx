@@ -372,11 +372,6 @@ type SoItem = {
      batch_no). Populated once shipped; kept visible even after full delivery so
      the operator can trace which supplier PO supplied the shipped goods. */
   shipped_source_pos?: string[];
-  /* Source PO of a READY-from-stock line — where the on-hand stock feeding this
-     line came from. Set only when the line is ready from stock (so it carries
-     no incoming coverage_po). Sofa = its locked dye-lot batch; non-sofa = the
-     single covering FIFO batch, else null when the batch is ambiguous. */
-  source_po?: string | null;
 };
 
 /* Whole-order inline edit — build a SoLineDraft from a persisted SoItem.
@@ -1670,17 +1665,12 @@ export const SalesOrderDetail = () => {
                             Shown even after full delivery so the supplier→shipment
                             trace is never lost (Owner 2026-07-11).
                           · Still on the way: the incoming/raised PO the MRP
-                            allocation covers the line with, plus its ETA.
-                          · Ready from stock: the source PO the on-hand stock
-                            came from, tagged "in stock" so it reads differently
-                            from an incoming PO (which shows an ETA instead). */
+                            allocation covers the line with, plus its ETA. */
                       const coverageLabel = shippedPos.length > 0
                         ? shippedPos.join(', ')
                         : (it.coverage_po
                             ? `${it.coverage_po}${it.coverage_eta ? ` · ETA ${fmtDateOrDash(it.coverage_eta)}` : ''}`
-                            : (it.source_po
-                                ? `${it.source_po} · in stock`
-                                : null));
+                            : null);
                       const coverage = coverageLabel
                         ? (
                           <div style={{

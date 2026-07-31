@@ -19,8 +19,8 @@
 import { Hono } from 'hono';
 import {
   buildVariantSummary, pickComboMatch, spreadComboTotal,
-  splitSofaCode, sofaHeightKey, computeVariantKey,
-  type SofaComboRow, type SofaPriceTier, type VariantAttrs,
+  splitSofaCode, sofaHeightKey,
+  type SofaComboRow, type SofaPriceTier,
 } from '@2990s/shared';
 import {
   computeMfgPoUnitCost,
@@ -36,7 +36,7 @@ import { resolveMaintenanceConfigForSupplier } from '../lib/po-pricing';
 import { nextMonthlyDocNo } from '../lib/doc-no';
 import { normalizeCurrency } from '../lib/fx';
 import { supabaseAuth } from '../middleware/auth';
-import { computeMrp, mrpAssignmentsByPo, type PoLineAssignment } from './mrp';
+import { computeMrp } from './mrp';
 import type { Env, Variables } from '../env';
 
 /* ── Supplier sofa-combo auto-pricing (Commander 2026-05-29) ─────────────────
@@ -485,88 +485,9 @@ mfgPurchaseOrders.get('/:id', async (c) => {
     }
   } catch { /* leave open_amendment null */ }
 
-  /* ── Live SO ↔ PO soft binding + per-DO delivered (read-side derivation) ──
-     Owner: the PO detail shows the CURRENT MRP soft-binding — which SO line(s)
-     this PO's goods are allocated to RIGHT NOW (the binding is never persisted;
-     it's re-derived at query time by the same MRP engine the SO detail uses) —
-     and, once shipped, which DO carried the goods to which SO. Both are
-     best-effort: any failure leaves the arrays empty and the detail still loads,
-     mirroring the SO detail's coverage engine. */
-  const poNumber = String((purchaseOrder as { po_number?: string | null }).po_number ?? '');
-  const headerWh = (purchaseOrder as { purchase_location_id?: string | null }).purchase_location_id ?? null;
-
-  // 1. MRP-covered SO lines soft-bound to THIS PO (bucketed by wh+code+variant).
-  let mrpAssignsForPo: PoLineAssignment[] = [];
-  try {
-    const mrpResult = await computeMrp(supabase, { catFilter: null, whFilter: null, includeUndated: true });
-    mrpAssignsForPo = mrpAssignmentsByPo(mrpResult).get(poNumber) ?? [];
-  } catch { mrpAssignsForPo = []; }
-
-  // 2. Delivered-per-DO — OUT movements stamped with this PO as batch_no (= the
-  //    goods that physically shipped from this PO), summed per (DO, code, variant)
-  //    so each DO becomes ONE row (owner chose per-DO granularity), then resolved
-  //    to the DO's number + its source SO.
-  type DeliveredRow = { do_no: string; so_doc_no: string | null; qty: number; productCode: string; variantKey: string };
-  let deliveredRows: DeliveredRow[] = [];
-  if (poNumber) {
-    try {
-      const { data: movs } = await supabase.from('inventory_movements')
-        .select('product_code, variant_key, qty, source_doc_id')
-        .eq('source_doc_type', 'DO')
-        .eq('movement_type', 'OUT')
-        .eq('batch_no', poNumber);
-      const agg = new Map<string, { doId: string; productCode: string; variantKey: string; qty: number }>();
-      for (const m of (movs ?? []) as Array<{ product_code: string; variant_key: string | null; qty: number; source_doc_id: string | null }>) {
-        if (!m.source_doc_id) continue;
-        const vk = m.variant_key ?? '';
-        const key = `${m.source_doc_id}::${m.product_code}::${vk}`;
-        const cur = agg.get(key) ?? { doId: m.source_doc_id, productCode: m.product_code, variantKey: vk, qty: 0 };
-        cur.qty += Number(m.qty ?? 0);
-        agg.set(key, cur);
-      }
-      const doIds = [...new Set([...agg.values()].map((a) => a.doId))];
-      const doMeta = new Map<string, { do_no: string; so_doc_no: string | null }>();
-      if (doIds.length > 0) {
-        const { data: dos } = await supabase.from('delivery_orders')
-          .select('id, do_number, so_doc_no').in('id', doIds);
-        for (const d of (dos ?? []) as Array<{ id: string; do_number: string | null; so_doc_no: string | null }>) {
-          doMeta.set(d.id, { do_no: d.do_number ?? '—', so_doc_no: d.so_doc_no ?? null });
-        }
-      }
-      deliveredRows = [...agg.values()].map((a) => ({
-        do_no: doMeta.get(a.doId)?.do_no ?? '—',
-        so_doc_no: doMeta.get(a.doId)?.so_doc_no ?? null,
-        qty: a.qty,
-        productCode: a.productCode,
-        variantKey: a.variantKey,
-      }));
-    } catch { deliveredRows = []; }
-  }
-
   const items = itemRows.map((it) => {
     const soId = it.so_item_id as string | null;
     const so = soId ? soLineById.get(soId) ?? null : null;
-    /* Bucket identity for THIS PO line — its effective ship-to warehouse
-       (line's own, else the PO header default) + code + variant, matching the
-       MRP supply key `poWh = line.warehouse_id ?? po.purchase_location_id`. */
-    const lineWh = ((it.warehouse_id as string | null) ?? headerWh) ?? null;
-    const lineCode = String(it.material_code ?? '');
-    const lineVk = computeVariantKey(
-      (it.item_group as string | null) ?? null,
-      (it.variants as VariantAttrs | null) ?? null,
-    );
-    /* Match with the same empty-variant fold the MRP engine uses: a legacy PO
-       line with no variant ('') pools against any variant of the same
-       warehouse+code, so it matches every assignment for that bucket. */
-    const mrp_assigned_sos = mrpAssignsForPo
-      .filter((a) =>
-        (a.warehouseId ?? '') === (lineWh ?? '')
-        && a.itemCode === lineCode
-        && (lineVk === '' || a.variantKey === lineVk))
-      .map((a) => ({ so_doc_no: a.soDocNo, qty: a.qty, delivery_date: a.deliveryDate }));
-    const delivered = deliveredRows
-      .filter((d) => d.productCode === lineCode && (lineVk === '' || d.variantKey === lineVk))
-      .map((d) => ({ do_no: d.do_no, so_doc_no: d.so_doc_no, qty: d.qty }));
     /* Drift = the live SO line no longer matches this PO line's snapshot. Item
        code change = a product swap on the SO (a different SKU → maybe a
        different supplier), flagged separately so the purchaser redoes the PO
@@ -596,13 +517,6 @@ mfgPurchaseOrders.get('/:id', async (c) => {
       receipts: receiptsMap.get(it.id) ?? [],
       so_doc_no: soId ? soDocByItem.get(soId) ?? null : null,
       so_drift,
-      /* LIVE MRP soft-binding — SO line(s) this PO line is currently allocated
-         to (derived, not the stored From-SO snapshot). Empty when nothing is
-         bound right now. */
-      mrp_assigned_sos,
-      /* Per-DO delivered rows: which DO carried this PO's goods to which SO,
-         and how much. Empty until the goods ship. */
-      delivered,
     };
   });
 
