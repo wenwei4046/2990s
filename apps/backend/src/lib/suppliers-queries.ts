@@ -222,6 +222,15 @@ export type PoItemRow = {
   receipts?: PoLineReceipt[];
   /** Migration 0098 — source SO line this PO line was converted from. */
   so_item_id?: string | null;
+  /** LIVE MRP soft-binding (read-side, never persisted) — the SO line(s) this
+      PO line's goods are currently allocated to feed, derived at query time by
+      the MRP engine. Replaces the stored From-SO on screen (the PDF keeps the
+      stored one). delivery_date = that SO line's delivery date. */
+  mrp_assigned_sos?: { so_doc_no: string; qty: number; delivery_date: string | null }[];
+  /** Per-DO delivered breakdown — which DO carried this PO's goods to which SO,
+      and how much (one row per DO). Empty until the goods ship. Set by GET /:id
+      from the OUT movements stamped with this PO number as batch_no. */
+  delivered?: { do_no: string; so_doc_no: string | null; qty: number }[];
   /** 2026-06-12 — stamped by GET /:id (so_item_id → SO doc_no) for the PO
       PDF's "Transferred SO" column. Null for manual / MRP lines. */
   so_doc_no?: string | null;

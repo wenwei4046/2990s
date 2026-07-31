@@ -166,6 +166,11 @@ type DoItem = {
   line_margin_centi: number | null;
   line_total_centi: number | null;
   downstream?: { docNumber: string; docType: 'SI' | 'DR'; qty: number; status: string }[];
+  /* Source PO(s) the shipped goods came from — set by GET /:id from the OUT
+     movements' batch_no (= source PO number), same as the DO detail page.
+     Empty when the shipped stock was un-batched (plain FIFO / no procurement
+     trail). */
+  source_pos?: string[] | null;
 };
 
 const CategoryPill = ({ group }: { group: string | null | undefined }) => {
@@ -240,6 +245,23 @@ const buildDoDrilldownColumns = (): DataGridColumn<DoItem>[] => [
     accessor: (it) => it.qty ?? 0,
     searchValue: (it) => String(it.qty ?? 0),
     sortFn: (a, b) => Number(a.qty ?? 0) - Number(b.qty ?? 0),
+  },
+  {
+    /* Source PO — which supplier PO(s) supplied the shipped goods, mirroring
+       the DO detail page. "—" when the stock carried no batch (plain FIFO). */
+    key: 'source_po', label: 'Source PO', width: 120,
+    accessor: (it) => {
+      const pos = it.source_pos ?? [];
+      if (pos.length === 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      return (
+        <div>
+          {pos.map((po, pi) => (
+            <div key={pi} style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{po}</div>
+          ))}
+        </div>
+      );
+    },
+    searchValue: (it) => (it.source_pos ?? []).join(' '),
   },
   {
     key: 'transfer_to', label: 'Transfer To', width: 130,

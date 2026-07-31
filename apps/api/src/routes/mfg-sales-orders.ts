@@ -19,6 +19,7 @@ import {
   passesRefinementColumns,
   isValidRace, isValidBirthday, isValidGender,
   canonicalizeVariants,
+  computeVariantKey, type VariantAttrs,
 } from '@2990s/shared';
 import { computeSoDeliveryFee, type SoDeliveryFeeResult } from '@2990s/shared/pricing';
 import { buildCompartmentsFromModuleLines } from '../lib/compartments-from-module-lines';
@@ -1373,6 +1374,78 @@ mfgSalesOrders.get('/customer-search', async (c) => {
   return c.json({ customers: hits.slice(0, 8) });
 });
 
+/* Ready-from-stock source PO (SO detail). A line served READY from on-hand
+   stock carries NO incoming coverage_po (source==='stock'), yet the goods still
+   came from SOME supplier PO. Recover it so the detail can show the source even
+   before any DO ships:
+     · SOFA lines lock their whole colour-matched set to ONE dye-lot batch =
+       allocated_batch_no, which the GRN stamped = the source PO number. Direct.
+     · Non-sofa (plain-FIFO) lines aren't batch-locked; infer from the on-hand
+       FIFO lots for the line's (warehouse, code, variant) bucket. Only when
+       EVERY remaining lot in that bucket carries the SAME single non-null
+       batch_no is the source unambiguous — mixed or un-batched lots → null
+       (never guess), per owner instruction.
+   Best-effort: any failure yields an empty map; the caller falls back to "—". */
+async function soReadyLineSourcePos(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same loose sb typing the other loaders use
+  sb: any,
+  readyLines: Array<{ id: string; itemCode: string; itemGroup: string | null; variants: unknown; isSofa: boolean }>,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (readyLines.length === 0) return out;
+  // Per-line ship-from warehouse + locked batch (sofa). allocated_batch_no may
+  // be absent pre-0121 — read best-effort so the non-sofa path still works.
+  const metaById = new Map<string, { warehouseId: string | null; allocatedBatchNo: string | null }>();
+  try {
+    const { data } = await sb.from('mfg_sales_order_items')
+      .select('id, warehouse_id, allocated_batch_no')
+      .in('id', readyLines.map((l) => l.id));
+    for (const r of (data ?? []) as Array<{ id: string; warehouse_id: string | null; allocated_batch_no: string | null }>) {
+      metaById.set(r.id, { warehouseId: r.warehouse_id ?? null, allocatedBatchNo: r.allocated_batch_no ?? null });
+    }
+  } catch { /* allocated_batch_no column absent — non-sofa path below still runs */ }
+
+  const nonSofa: typeof readyLines = [];
+  for (const l of readyLines) {
+    if (l.isSofa) {
+      const b = metaById.get(l.id)?.allocatedBatchNo ?? null;
+      if (b) out.set(l.id, b);
+    } else {
+      nonSofa.push(l);
+    }
+  }
+
+  if (nonSofa.length > 0) {
+    const codes = [...new Set(nonSofa.map((l) => l.itemCode).filter(Boolean))];
+    try {
+      const { data: lots } = await sb.from('inventory_lots')
+        .select('warehouse_id, product_code, variant_key, batch_no')
+        .in('product_code', codes)
+        .gt('qty_remaining', 0);
+      // Distinct batches per (warehouse, code, variant) bucket.
+      const batchesByBucket = new Map<string, Set<string | null>>();
+      for (const lot of (lots ?? []) as Array<{ warehouse_id: string; product_code: string; variant_key: string | null; batch_no: string | null }>) {
+        const k = `${lot.warehouse_id}::${lot.product_code}::${lot.variant_key ?? ''}`;
+        const set = batchesByBucket.get(k) ?? new Set<string | null>();
+        set.add(lot.batch_no ?? null);
+        batchesByBucket.set(k, set);
+      }
+      for (const l of nonSofa) {
+        const wh = metaById.get(l.id)?.warehouseId ?? null;
+        if (!wh) continue; // a NULL-warehouse line sees no stock — never READY
+        const vk = computeVariantKey(l.itemGroup, (l.variants ?? null) as VariantAttrs | null);
+        const set = batchesByBucket.get(`${wh}::${l.itemCode}::${vk}`);
+        if (!set) continue;
+        const batches = [...set];
+        // Unambiguous only when exactly ONE batch covers the bucket and it's
+        // a real (non-null) batch. Otherwise leave null rather than guess.
+        if (batches.length === 1 && batches[0]) out.set(l.id, batches[0]);
+      }
+    } catch { /* inventory_lots absent — leave non-sofa source_po null */ }
+  }
+  return out;
+}
+
 mfgSalesOrders.get('/:docNo', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo');
   const user = c.get('user');
@@ -1560,13 +1633,10 @@ mfgSalesOrders.get('/:docNo', async (c) => {
        coverage drops off once the demand is satisfied). */
     soLineShippedSourcePos(sb, itemRows.map((it) => it.id)),
   ]);
-  const items = itemRows.map((it) => {
-    const rem = remainingMap.get(it.id);
-    const deliveries = deliveriesMap.get(it.id) ?? [];
-    const deliveredQty = deliveries.reduce((s, d) => s + d.qty, 0);
+  /* Derive per-line coverage first (cov + isSofa + stockState), so a ready-
+     from-stock line can be handed to soReadyLineSourcePos for its source PO. */
+  const derived = itemRows.map((it) => {
     const cov = coverageMap.get(it.id);
-    const covered = cov?.source === 'po';
-    const shippedPos = shippedPosMap.get(it.id) ?? [];
     /* SOFA stock-coverage is decided by the batch-aware allocator (stock_status),
        NOT the MRP SKU-pool: MRP doesn't know about dye-lot batches, so it would
        wrongly report a sofa set as "stock" whenever same-SKU units exist in ANY
@@ -1577,6 +1647,28 @@ mfgSalesOrders.get('/:docNo', async (c) => {
     const stockState = isSofaLine
       ? (it.stock_status === 'READY' ? 'stock' : (cov?.source === 'po' ? 'po' : 'shortage'))
       : (cov?.source ?? null);
+    return { it, cov, isSofaLine, stockState };
+  });
+  /* Ready-from-stock source PO: only lines the allocator serves from on-hand
+     stock (stockState==='stock', so coverage_po is null) need it. */
+  const readySourcePos = await soReadyLineSourcePos(
+    sb,
+    derived
+      .filter((d) => d.stockState === 'stock')
+      .map((d) => ({
+        id: d.it.id,
+        itemCode: String((d.it as { item_code?: string }).item_code ?? ''),
+        itemGroup: (d.it as { item_group?: string | null }).item_group ?? null,
+        variants: (d.it as { variants?: unknown }).variants ?? null,
+        isSofa: d.isSofaLine,
+      })),
+  );
+  const items = derived.map(({ it, cov, stockState }) => {
+    const rem = remainingMap.get(it.id);
+    const deliveries = deliveriesMap.get(it.id) ?? [];
+    const deliveredQty = deliveries.reduce((s, d) => s + d.qty, 0);
+    const covered = cov?.source === 'po';
+    const shippedPos = shippedPosMap.get(it.id) ?? [];
     return {
       ...it,
       deliveries,
@@ -1593,6 +1685,11 @@ mfgSalesOrders.get('/:docNo', async (c) => {
          (plain-FIFO) stock. The detail shows these even after full delivery so
          supplier→shipment traceability survives (falls back to coverage_po). */
       shipped_source_pos: shippedPos,
+      /* Source PO of a READY-from-stock line (owner request): where the on-hand
+         stock this line is served from came from. Sofa = its locked dye-lot
+         batch; non-sofa = the single covering FIFO batch, else null (ambiguous
+         / un-batched). Null unless the line is ready from stock. */
+      source_po: readySourcePos.get(it.id) ?? null,
     };
   });
   const totalDelivered = items.reduce((s, it) => s + Number(it.delivered_qty ?? 0), 0);
