@@ -108,21 +108,32 @@
   max-width: 38ch;
 }
 
-.staffList {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+/* The staff picker occupies the slot the flat 2-up card grid used to. Fixed
+   min-height so opening the dropdown never reflows the PIN pad underneath it —
+   the pad is muscle memory and must not move. */
+.staffSlot {
   margin-bottom: 28px;
+  max-width: 420px;
 }
 
 .empty {
-  grid-column: 1 / -1;
   padding: 18px;
   border: 1.5px dashed var(--line);
   border-radius: 14px;
   font-size: 13px;
   color: var(--fg-muted);
   text-align: center;
+}
+
+/* Stale-list notice: sits above a working picker, so it must read as a note,
+   not as the failure state that replaced it. */
+.emptyBanner {
+  margin-bottom: 10px;
+  padding: 10px 14px;
+  border-style: solid;
+  border-color: var(--line);
+  background: rgba(232, 107, 58, 0.06);
+  font-size: 12px;
 }
 
 .empty button {
@@ -138,11 +149,18 @@
   cursor: pointer;
 }
 
-.staff {
+/* ── Staff picker (combobox) ───────────────────────────────────────────── */
+
+.picker {
+  position: relative;
+}
+
+.pickerTrigger {
   display: grid;
-  grid-template-columns: 44px 1fr;
+  grid-template-columns: 44px 1fr auto;
   gap: 12px;
   align-items: center;
+  width: 100%;
   padding: 14px 16px;
   background: #fff;
   border: 1px solid var(--line-strong);
@@ -153,19 +171,134 @@
   transition: 150ms ease;
 }
 
-.staff:hover {
+.pickerTrigger:hover:not(:disabled) {
   box-shadow: var(--shadow-2);
-  transform: translateY(-1px);
 }
 
-.staffSelected {
+.pickerTrigger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* Open OR carrying a selection both read as "this is set" — same orange ring
+   the flat cards used for the selected state, so the signal is unchanged. */
+.pickerTriggerOpen,
+.pickerTrigger:focus-visible {
+  outline: none;
   border-color: var(--c-orange);
   box-shadow: 0 0 0 3px rgba(232, 107, 58, 0.22), var(--shadow-1);
 }
 
-.staffSelected:hover {
-  transform: none;
-  box-shadow: 0 0 0 3px rgba(232, 107, 58, 0.22), var(--shadow-2);
+.pickerAvatarBlank {
+  width: 44px;
+  height: 44px;
+  border-radius: 99px;
+  border: 1.5px dashed var(--line-strong);
+}
+
+.pickerPlaceholder {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--fg-muted);
+}
+
+.pickerChevron {
+  color: var(--fg-muted);
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.pickerChevronOpen {
+  transform: rotate(180deg);
+}
+
+.pickerPanel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  box-shadow: var(--shadow-3);
+  overflow: hidden;
+  animation: pickerIn 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes pickerIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.pickerSearch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-muted);
+}
+
+.pickerSearchInput {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--c-ink);
+}
+
+.pickerSearchInput::placeholder {
+  color: var(--fg-muted);
+}
+
+.pickerList {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  /* Exactly 5 rows fit un-scrolled (today’s roster); a 6th peeks half-height,
+     which is the affordance that says "there is more below". */
+  max-height: 336px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.pickerOption {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.pickerOption:hover,
+.pickerOptionActive,
+.pickerOption:focus-visible {
+  outline: none;
+  background: rgba(232, 107, 58, 0.1);
+}
+
+.pickerNoMatch {
+  padding: 18px 12px;
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pickerPanel { animation: none; }
+  .pickerChevron { transition: none; }
 }
 
 .staffAvatar {

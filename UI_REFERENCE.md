@@ -261,6 +261,20 @@ These are intentional changes from the prototype's current state. Anything not o
 
 - Sales analysis chart ramp (`--sa-c1..c5`, `--sa-unknown`) — scoped tints of the page accent for data-viz segments only; not for use outside `/sales-analysis`. (2026-07-14, pending Loo sign-off in the redesign PR — flagged in the PR description.)
 
+### §8 · POS login — staff dropdown instead of the flat card grid
+
+**Approved on:** 2026-08-01 (Loo).
+**Supersedes:** §3 "Functional fidelity" → POS flow step 1, which reads *"Login — staff list → tap → 4-digit PIN pad."* The **staff list** half is replaced; the PIN pad half is unchanged.
+**Why:** staff turn over — people leave, people join — so a flat grid of every account grows without bound, and it publishes the whole roster to anyone standing at the showroom counter.
+**What changed** (`apps/pos/src/pages/LockScreen.tsx`):
+- The 2-up `.staffList` card grid becomes a single closed control reading "Select your name". Tapping it opens a panel with a filter field and the same staff cards as rows (avatar + name + staff code, unchanged visually).
+- The filter matches **name or staff code** — the code is the only thing that separates two staff sharing a first name.
+- Selected state keeps the prototype's orange-ring treatment, now on the trigger.
+**What deliberately did NOT change:**
+- The PIN pad — 3×4 grid, `Clear` / `0` / delete row, shake-red on error — is untouched, and still **auto-submits on the 6th digit** (Loo chose this over an explicit "Log in" button: sales sign in many times a day and the extra tap is a tax).
+- The pad does not move when the dropdown opens; the panel is absolutely positioned over the page, because the pad is muscle memory.
+- Empty-roster and load-failure copy is unchanged.
+
 ---
 
 ## What NOT to do
