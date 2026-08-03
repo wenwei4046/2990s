@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 // exercise only the pure cart→SO-item transforms.
 vi.mock('./supabase', () => ({ supabase: { auth: { getSession: vi.fn() } } }));
 
-import { cartLineToSoItem, cartLinesToSoItems, pickSoItemCode, describePosHandoffError, buildDeliveryFeeCartInputs, posHandoffIdempotencyKey } from './pos-handover-so';
+import { cartLineToSoItem, cartLinesToSoItems, pickSoItemCode, pickSoSkuName, describePosHandoffError, buildDeliveryFeeCartInputs, posHandoffIdempotencyKey } from './pos-handover-so';
 import type { CartLine, CartConfig } from '../state/cart';
 import type { CatalogProduct, SpecialDeliveryFeeRow } from './queries';
 
@@ -472,10 +472,37 @@ describe('cartLinesToSoItems', () => {
     ];
     const resolution = {
       codeByKey: new Map([['k1', '2990 AKKA-FIRM MATT (K)']]),
+      skuNameByKey: new Map<string, string>(),
       modelNameByKey: new Map<string, string>(),
     };
     const items = cartLinesToSoItems(lines, [], resolution);
     expect(items[0]!.itemCode).toBe('2990 AKKA-FIRM MATT (K)');
+  });
+
+  it('a size line describes the SKU it books, not the lead SKU the cart snapshotted', () => {
+    // The 2026-08-03 bug (2990-PO-2608-005): the catalog card is the K row, so
+    // the cart snapshots the King name while sizeId says Queen. itemCode was
+    // re-resolved per size, description was not — every non-King line printed
+    // King dimensions all the way to the supplier's PO copy.
+    const lines: CartLine[] = [
+      {
+        key: 'k1',
+        qty: 1,
+        config: {
+          kind: 'size', productId: 'mfg-arrusfirm',
+          productName: '2990 ARRUS-FIRM MATTRESS (183X190X30CM)',
+          sizeId: 'queen', total: 784, summary: 'Queen',
+        },
+      },
+    ];
+    const resolution = {
+      codeByKey: new Map([['k1', '2990 ARRUS-FIRM MATT (Q)']]),
+      skuNameByKey: new Map([['k1', '2990 ARRUS-FIRM MATTRESS (152X190X30CM)']]),
+      modelNameByKey: new Map<string, string>(),
+    };
+    const items = cartLinesToSoItems(lines, [], resolution);
+    expect(items[0]!.itemCode).toBe('2990 ARRUS-FIRM MATT (Q)');
+    expect(items[0]!.description).toBe('2990 ARRUS-FIRM MATTRESS (152X190X30CM)');
   });
 
   it('sofa description uses the resolved clean Model name over the lead-SKU snapshot', () => {
@@ -502,6 +529,7 @@ describe('cartLinesToSoItems', () => {
     ];
     const resolution = {
       codeByKey: new Map([['k1', 'ANNSA-1A(LHF)']]),
+      skuNameByKey: new Map<string, string>(),
       modelNameByKey: new Map([['k1', 'Annsa']]),
     };
     const items = cartLinesToSoItems(lines, [], resolution);
@@ -657,6 +685,39 @@ describe('pickSoItemCode', () => {
     const config: CartConfig = { kind: 'size', productId: 'mfg-rep', productName: 'Akka', sizeId: 'super-single', total: 1, summary: '' };
     const sibs = [{ code: '2990 AKKA-FIRM MATT (K)', size_code: 'K' }];
     expect(pickSoItemCode(config, base(), sibs)).toBe('REP-CODE');
+  });
+});
+
+describe('pickSoSkuName', () => {
+  const base = (over: Partial<Parameters<typeof pickSoSkuName>[1]> = {}) => ({
+    id: 'mfg-rep', code: 'REP-CODE', model_id: 'model-1', category: 'MATTRESS', size_code: 'K', ...over,
+  });
+  // The lead SKU the catalog card points at is the K row — its name is what the
+  // cart snapshots, and what every non-King line used to print (2026-08-03).
+  const sibs = [
+    { code: '2990 ARRUS-FIRM MATT (Q)', name: '2990 ARRUS-FIRM MATTRESS (152X190X30CM)', size_code: 'Q' },
+    { code: '2990 ARRUS-FIRM MATT (K)', name: '2990 ARRUS-FIRM MATTRESS (183X190X30CM)', size_code: 'K' },
+  ];
+
+  it('returns the size-resolved sibling name, in lockstep with the booked code', () => {
+    const config: CartConfig = { kind: 'size', productId: 'mfg-rep', productName: 'ARRUS King', sizeId: 'queen', total: 784, summary: 'Queen' };
+    expect(pickSoItemCode(config, base(), sibs)).toBe('2990 ARRUS-FIRM MATT (Q)');
+    expect(pickSoSkuName(config, base(), sibs)).toBe('2990 ARRUS-FIRM MATTRESS (152X190X30CM)');
+  });
+
+  it('stays undefined for sofa / flat lines so their descriptions keep their own source', () => {
+    const sofa: CartConfig = { kind: 'sofa', productId: 'mfg-rep', productName: 'Tanah', total: 5980, summary: '' };
+    expect(pickSoSkuName(sofa, base({ category: 'SOFA' }), sibs)).toBeUndefined();
+  });
+
+  it('stays undefined when the chosen size has no sibling (caller keeps its fallback)', () => {
+    const config: CartConfig = { kind: 'size', productId: 'mfg-rep', productName: 'ARRUS King', sizeId: 'super-single', total: 1, summary: '' };
+    expect(pickSoSkuName(config, base(), sibs)).toBeUndefined();
+  });
+
+  it('stays undefined when the sibling carries no name', () => {
+    const config: CartConfig = { kind: 'size', productId: 'mfg-rep', productName: 'ARRUS King', sizeId: 'queen', total: 1, summary: '' };
+    expect(pickSoSkuName(config, base(), [{ code: 'X-(Q)', name: null, size_code: 'Q' }])).toBeUndefined();
   });
 });
 

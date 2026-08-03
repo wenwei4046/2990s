@@ -591,38 +591,77 @@ interface MfgCodeRow {
   size_code: string | null;
 }
 
-/** What fetchItemCodeMap resolves per cart line: the bookable mfg code +
- *  the clean Model name (product_models.name) for the SO line description. */
+/** A sibling SKU as the size resolver needs it: its code, its own name (the
+ *  size-specific one — "…MATTRESS (152X190X30CM)") and the size it covers. */
+type SiblingSku = { code: string; name?: string | null; size_code: string | null };
+
+/** What fetchItemCodeMap resolves per cart line: the bookable mfg code, the
+ *  size-resolved SKU's OWN name, and the clean Model name (product_models.name)
+ *  for the sofa SO line description. */
 export interface SoLineResolution {
   codeByKey: Map<string, string>;
+  /** Only set when a size-variant line actually resolved to a sibling SKU —
+   *  that sibling's name is the description the SO line must carry. */
+  skuNameByKey: Map<string, string>;
   modelNameByKey: Map<string, string>;
 }
 
-/** Resolve the real mfg_products.code an SO line should book, given the line's
- *  config, its mfg row (looked up by productId), and that Model's sibling SKUs.
+/** The SKU a size-variant line really books: the sibling whose size_code matches
+ *  the picked size, else the cart's own row. Returns the sibling ONLY when the
+ *  size actually resolved, so callers can tell "re-resolved by size" apart from
+ *  "booked the row it already had".
  *
  *  Why this exists: the POS cart stores `productId` = an mfg_products.id
  *  (`mfg-xxxx`), but the Sales Order API validates + reprices against
  *  mfg_products.CODE (e.g. "2990 AKKA-FIRM MATT (K)"). For mattress / bedframe
  *  each size is its OWN SKU/code, so we resolve the size-specific sibling by
  *  matching the chosen sizeId → size_code. Sofas / flat lines book the row's
- *  own code (sofas reprice from module SKUs server-side; flat is single-SKU).
+ *  own code (sofas reprice from module SKUs server-side; flat is single-SKU). */
+const resolveSizeSibling = (
+  config: CartConfig,
+  baseRow: MfgCodeRow,
+  siblings: SiblingSku[],
+): SiblingSku | undefined => {
+  const sizeId = config.kind === 'size' || config.kind === 'bedframe' ? config.sizeId : null;
+  if (!sizeId || !baseRow.model_id) return undefined;
+  const want = SIZE_LIB_TO_MFG[sizeId];
+  if (!want) return undefined;
+  return siblings.find((s) => (s.size_code ?? '').toUpperCase() === want);
+};
+
+/** Resolve the real mfg_products.code an SO line should book, given the line's
+ *  config, its mfg row (looked up by productId), and that Model's sibling SKUs.
  *  Returns undefined when the id isn't a known mfg row — caller falls back. */
 export const pickSoItemCode = (
   config: CartConfig,
   baseRow: MfgCodeRow | undefined,
-  siblings: Array<{ code: string; size_code: string | null }>,
+  siblings: SiblingSku[],
 ): string | undefined => {
   if (!baseRow) return undefined;
-  const sizeId = config.kind === 'size' || config.kind === 'bedframe' ? config.sizeId : null;
-  if (sizeId && baseRow.model_id) {
-    const want = SIZE_LIB_TO_MFG[sizeId];
-    if (want) {
-      const sib = siblings.find((s) => (s.size_code ?? '').toUpperCase() === want);
-      if (sib) return sib.code;
-    }
-  }
-  return baseRow.code;
+  return resolveSizeSibling(config, baseRow, siblings)?.code ?? baseRow.code;
+};
+
+/** The name of the SKU `pickSoItemCode` books, but ONLY when the size resolver
+ *  moved the line off its cart row — i.e. exactly the case the description used
+ *  to get wrong.
+ *
+ *  The bug (2026-08-03, owner spotted it on 2990-PO-2608-005): the POS catalog
+ *  card is ONE lead SKU per Model (a K row for the mattress models), so the cart
+ *  snapshots the LEAD SKU's name in `config.productName` while `sizeId` carries
+ *  the size the customer actually bought. itemCode was re-resolved per size,
+ *  description was not — so a Queen/Single/Super-single line printed the KING
+ *  name ("…MATTRESS (183X190X30CM)") all the way through SO → PO → the supplier's
+ *  copy. Only a King line came out right. The size-resolved sibling's own name
+ *  is the fix, and it's deliberately NOT applied to flat/sofa lines so no other
+ *  description changes shape. */
+export const pickSoSkuName = (
+  config: CartConfig,
+  baseRow: MfgCodeRow | undefined,
+  siblings: SiblingSku[],
+): string | undefined => {
+  if (!baseRow) return undefined;
+  const name = (resolveSizeSibling(config, baseRow, siblings)?.name ?? '').trim();
+  return name || undefined;
 };
 
 /** Resolve each cart line's bookable mfg code + clean Model name. Two reads:
@@ -635,8 +674,9 @@ export const pickSoItemCode = (
  *  description fell back to the lead per-module SKU name. */
 export const fetchItemCodeMap = async (lines: CartLine[]): Promise<SoLineResolution> => {
   const codeByKey = new Map<string, string>();
+  const skuNameByKey = new Map<string, string>();
   const modelNameByKey = new Map<string, string>();
-  const result: SoLineResolution = { codeByKey, modelNameByKey };
+  const result: SoLineResolution = { codeByKey, skuNameByKey, modelNameByKey };
   const productIds = [...new Set(lines.map((l) => l.config.productId).filter(Boolean))];
   if (productIds.length === 0) return result;
 
@@ -668,13 +708,18 @@ export const fetchItemCodeMap = async (lines: CartLine[]): Promise<SoLineResolut
       .map((l) => byId.get(l.config.productId)?.model_id)
       .filter((m): m is string => Boolean(m)),
   )];
-  const sibsByModel = new Map<string, Array<{ code: string; size_code: string | null }>>();
+  const sibsByModel = new Map<string, SiblingSku[]>();
   if (modelIds.length > 0) {
     const perModel = await Promise.all(modelIds.map(async (modelId) => {
+      // `name` is the size-specific SKU name the resolved line must describe —
+      // already in the endpoint's column list, no server change needed.
       const { products } = await authedFetch<{
-        products: Array<{ code: string; size_code: string | null }>;
+        products: Array<{ code: string; name: string | null; size_code: string | null }>;
       }>(`/pos-pools/mfg-catalog?modelId=${encodeURIComponent(modelId)}`);
-      return [modelId, (products ?? []).map((s) => ({ code: s.code, size_code: s.size_code }))] as const;
+      return [
+        modelId,
+        (products ?? []).map((s) => ({ code: s.code, name: s.name, size_code: s.size_code })),
+      ] as const;
     }));
     for (const [modelId, sibs] of perModel) sibsByModel.set(modelId, sibs);
   }
@@ -684,6 +729,8 @@ export const fetchItemCodeMap = async (lines: CartLine[]): Promise<SoLineResolut
     const sibs = base?.model_id ? sibsByModel.get(base.model_id) ?? [] : [];
     const code = pickSoItemCode(l.config, base, sibs);
     if (code) codeByKey.set(l.key, code);
+    const skuName = pickSoSkuName(l.config, base, sibs);
+    if (skuName) skuNameByKey.set(l.key, skuName);
     const m = Array.isArray(base?.product_models) ? base?.product_models[0] : base?.product_models;
     if (m?.name) modelNameByKey.set(l.key, m.name);
   }
@@ -701,6 +748,7 @@ export const cartLineToSoItem = (
   productById: Map<string, CatalogProduct>,
   resolvedItemCode?: string,
   resolvedModelName?: string,
+  resolvedSkuName?: string,
 ): PosHandoffItem => {
   const product = productById.get(line.config.productId);
   // Fallback to the line's productId if neither the resolver nor the catalog
@@ -732,8 +780,13 @@ export const cartLineToSoItem = (
   // `resolvedModelName` (product_models.name via fetchItemCodeMap) is the
   // clean Model name; without it a sofa line fell back to its snapshot
   // productName — the lead per-module SKU name ("SOFA ANNSA 1A(LHF)").
+  // A size-variant line (mattress / bedframe) describes the SKU it actually
+  // books — `resolvedSkuName`, the sibling picked by the chosen size. Both
+  // snapshots below name the LEAD SKU of the Model (the K row for the mattress
+  // models), which is how every non-King line used to print King dimensions
+  // (see pickSoSkuName). Sofa / flat lines keep their existing sources.
   const fallbackName = product?.name ?? line.config.productName ?? itemCode;
-  let description = fallbackName;
+  let description = resolvedSkuName ?? fallbackName;
   if (line.config.kind === 'sofa') {
     const modelName = resolvedModelName ?? fallbackName;
     description = modelName;
@@ -762,9 +815,10 @@ export const cartLineToSoItem = (
 };
 
 /** Marshal the full cart into the items array. Empty cart returns []. Pass
- *  `resolution` (from fetchItemCodeMap) so each line books its real mfg code
- *  + the clean Model name for the sofa description; omit it only in tests
- *  that exercise the legacy catalog-sku fallback. */
+ *  `resolution` (from fetchItemCodeMap) so each line books its real mfg code,
+ *  the size-resolved SKU name for its description, and the clean Model name for
+ *  the sofa description; omit it only in tests that exercise the legacy
+ *  catalog-sku fallback. */
 export const cartLinesToSoItems = (
   lines: CartLine[],
   products: CatalogProduct[] | undefined,
@@ -774,7 +828,13 @@ export const cartLinesToSoItems = (
     (products ?? []).map((p) => [p.id, p]),
   );
   return lines.map((l) =>
-    cartLineToSoItem(l, productById, resolution?.codeByKey.get(l.key), resolution?.modelNameByKey.get(l.key)),
+    cartLineToSoItem(
+      l,
+      productById,
+      resolution?.codeByKey.get(l.key),
+      resolution?.modelNameByKey.get(l.key),
+      resolution?.skuNameByKey.get(l.key),
+    ),
   );
 };
 
