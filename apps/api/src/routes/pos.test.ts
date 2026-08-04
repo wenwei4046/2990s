@@ -53,6 +53,13 @@ function chainable(rows: any[], error: any = null) {
   return obj;
 }
 
+/* The staff picker is pre-auth by necessity but gated to browsers on an
+   allow-listed Origin (2026-08-04) — see the comment above the handler in
+   pos.ts. These env/headers model a real POS request. */
+const POS_ORIGIN = 'https://pos.2990shome.com';
+const originEnv = { ...baseEnv, ALLOWED_ORIGINS: `${POS_ORIGIN},https://erp.2990shome.com` } as unknown as Env;
+const fromPos = { headers: { origin: POS_ORIGIN } };
+
 describe('GET /pos/sales-staff', () => {
   it('returns active sales staff, no PII fields', async () => {
     adminFromMock.mockImplementation(() => chainable([
@@ -60,7 +67,7 @@ describe('GET /pos/sales-staff', () => {
       { id: 'u2', staff_code: 'JM', name: 'Jaime',  initials: 'JM', color: '#A6471E' },
     ]));
     const app = buildApp();
-    const res = await app.request('/pos/sales-staff?showroomId=kl', {}, baseEnv);
+    const res = await app.request('/pos/sales-staff?showroomId=kl', fromPos, originEnv);
     expect(res.status).toBe(200);
     const body = await res.json() as any[];
     expect(body).toHaveLength(2);
@@ -73,9 +80,51 @@ describe('GET /pos/sales-staff', () => {
   it('returns 200 [] when no staff', async () => {
     adminFromMock.mockImplementation(() => chainable([]));
     const app = buildApp();
-    const res = await app.request('/pos/sales-staff', {}, baseEnv);
+    const res = await app.request('/pos/sales-staff', fromPos, originEnv);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([]);
+  });
+
+  /* ── Origin gate ────────────────────────────────────────────────────────
+     Regression cover for the exposure verified live on 2026-08-03: an
+     unauthenticated request from an arbitrary host returned the full active
+     staff roster, including the ids that are the first half of pin-login. */
+
+  it('rejects a request with NO Origin header (curl / script)', async () => {
+    adminFromMock.mockImplementation(() => chainable([{ id: 'u1', staff_code: 'AW', name: 'Aisha' }]));
+    const app = buildApp();
+    const res = await app.request('/pos/sales-staff', {}, originEnv);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'forbidden', reason: 'origin_not_allowed' });
+  });
+
+  it('rejects a request from an origin not on the allow-list', async () => {
+    adminFromMock.mockImplementation(() => chainable([{ id: 'u1', staff_code: 'AW', name: 'Aisha' }]));
+    const app = buildApp();
+    const res = await app.request('/pos/sales-staff', { headers: { origin: 'https://evil.example' } }, originEnv);
+    expect(res.status).toBe(403);
+  });
+
+  it('leaks no staff data in the rejection body', async () => {
+    adminFromMock.mockImplementation(() => chainable([
+      { id: 'u1', staff_code: 'AW', name: 'Aisha', initials: 'AW', color: '#E86B3A' },
+    ]));
+    const app = buildApp();
+    const res = await app.request('/pos/sales-staff', {}, originEnv);
+    const text = await res.text();
+    expect(text).not.toContain('Aisha');
+    expect(text).not.toContain('u1');
+  });
+
+  it('still allows the Backend origin (shared allow-list)', async () => {
+    adminFromMock.mockImplementation(() => chainable([]));
+    const app = buildApp();
+    const res = await app.request(
+      '/pos/sales-staff',
+      { headers: { origin: 'https://erp.2990shome.com' } },
+      originEnv,
+    );
+    expect(res.status).toBe(200);
   });
 });
 

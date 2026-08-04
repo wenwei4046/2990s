@@ -16,6 +16,15 @@ import styles from '../../pages/Handover.module.css';
 const BUILDING_TYPE_FALLBACK = ['Condo', 'Landed', 'Apartment', 'Office', 'Shop', 'Other']
   .map((v) => ({ value: v, label: v }));
 
+/* The Houzs /localities response is a shared reference dataset, not
+   guaranteed Malaysia-only — filter to the 13 states + 3 federal
+   territories so non-MY rows can't leak into the address dropdowns. */
+const MY_STATES = new Set([
+  'Johor', 'Kedah', 'Kelantan', 'Melaka', 'Negeri Sembilan', 'Pahang',
+  'Perak', 'Perlis', 'Pulau Pinang', 'Sabah', 'Sarawak', 'Selangor',
+  'Terengganu', 'Kuala Lumpur', 'Labuan', 'Putrajaya',
+]);
+
 export const AddressStep = ({
   form, update, localities,
 }: {
@@ -24,11 +33,20 @@ export const AddressStep = ({
   localities: LocalityRow[];
 }) => {
   const buildingTypes = useSoDropdownValues('building_type', BUILDING_TYPE_FALLBACK);
+
+  /* Filtered once here so every downstream memo/resolver call below sees only
+     Malaysia rows — filtering ad hoc per-branch left the "no state picked yet"
+     cross-state pools (allCities/allPostcodes) and the billing side unfiltered. */
+  const myLocalities = useMemo(
+    () => localities.filter((l) => MY_STATES.has(l.state)),
+    [localities],
+  );
+
   const states = useMemo(() => {
     const set = new Set<string>();
-    for (const l of localities) set.add(l.state);
+    for (const l of myLocalities) set.add(l.state);
     return Array.from(set).sort();
-  }, [localities]);
+  }, [myLocalities]);
 
   /* Owner 2026-07-22 — bidirectional cascade. When the operator hasn't picked
      a state yet, the city + postcode selects show the CROSS-STATE pools so
@@ -36,40 +54,40 @@ export const AddressStep = ({
      reverse-resolves the state via resolveCityState / resolvePostcode. Both
      resolvers refuse ambiguous inputs, so a wrong guess never lands. */
   const cities = useMemo(() => {
-    if (!form.state) return allCities(localities);
+    if (!form.state) return allCities(myLocalities);
     const set = new Set<string>();
-    for (const l of localities) if (l.state === form.state) set.add(l.city);
+    for (const l of myLocalities) if (l.state === form.state) set.add(l.city);
     return Array.from(set).sort();
-  }, [localities, form.state]);
+  }, [myLocalities, form.state]);
 
   const postcodes = useMemo(() => {
-    if (!form.state && !form.city) return allPostcodes(localities);
+    if (!form.state && !form.city) return allPostcodes(myLocalities);
     const set = new Set<string>();
-    for (const l of localities) {
+    for (const l of myLocalities) {
       if (form.state && l.state !== form.state) continue;
       if (form.city && l.city !== form.city) continue;
       set.add(l.postcode);
     }
     return Array.from(set).sort();
-  }, [localities, form.state, form.city]);
+  }, [myLocalities, form.state, form.city]);
 
   const billingCities = useMemo(() => {
-    if (!form.billingState) return allCities(localities);
+    if (!form.billingState) return allCities(myLocalities);
     const set = new Set<string>();
-    for (const l of localities) if (l.state === form.billingState) set.add(l.city);
+    for (const l of myLocalities) if (l.state === form.billingState) set.add(l.city);
     return Array.from(set).sort();
-  }, [localities, form.billingState]);
+  }, [myLocalities, form.billingState]);
 
   const billingPostcodes = useMemo(() => {
-    if (!form.billingState && !form.billingCity) return allPostcodes(localities);
+    if (!form.billingState && !form.billingCity) return allPostcodes(myLocalities);
     const set = new Set<string>();
-    for (const l of localities) {
+    for (const l of myLocalities) {
       if (form.billingState && l.state !== form.billingState) continue;
       if (form.billingCity && l.city !== form.billingCity) continue;
       set.add(l.postcode);
     }
     return Array.from(set).sort();
-  }, [localities, form.billingState, form.billingCity]);
+  }, [myLocalities, form.billingState, form.billingCity]);
 
   return (
     <section className={styles.stepBody}>
@@ -131,7 +149,7 @@ export const AddressStep = ({
                   update('city', city);
                   update('postcode', '');
                   if (!form.state) {
-                    const s = resolveCityState(localities, city);
+                    const s = resolveCityState(myLocalities, city);
                     if (s) update('state', s);
                   }
                 }}
@@ -149,7 +167,7 @@ export const AddressStep = ({
                 onChange={(e) => {
                   const postcode = e.target.value;
                   update('postcode', postcode);
-                  const hit = resolvePostcode(localities, postcode);
+                  const hit = resolvePostcode(myLocalities, postcode);
                   if (hit) {
                     if (!form.state) update('state', hit.state);
                     if (!form.city && hit.city) update('city', hit.city);
@@ -227,7 +245,7 @@ export const AddressStep = ({
                       update('billingCity', city);
                       update('billingPostcode', '');
                       if (!form.billingState) {
-                        const s = resolveCityState(localities, city);
+                        const s = resolveCityState(myLocalities, city);
                         if (s) update('billingState', s);
                       }
                     }}
@@ -245,7 +263,7 @@ export const AddressStep = ({
                     onChange={(e) => {
                       const postcode = e.target.value;
                       update('billingPostcode', postcode);
-                      const hit = resolvePostcode(localities, postcode);
+                      const hit = resolvePostcode(myLocalities, postcode);
                       if (hit) {
                         if (!form.billingState) update('billingState', hit.state);
                         if (!form.billingCity && hit.city) update('billingCity', hit.city);

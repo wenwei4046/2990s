@@ -8,6 +8,12 @@
       "port": 6273
     },
     {
+      "name": "POS (Houzs target, no secrets needed)",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@2990s/pos", "dev", "--mode", "houzs"],
+      "port": 6275
+    },
+    {
       "name": "Backend (Vite, desktop)",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@2990s/backend", "dev"],

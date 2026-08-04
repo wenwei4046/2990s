@@ -1,9 +1,26 @@
 # Houzs → 2990 Sync — Progress Tracker
 
-**Worktree:** `C:/Users/User/Desktop/2990s-houzs-sync`  ·  **Branch:** `sync/houzs-to-2990` (off main `7cddec65`)
-_All NEW ports land here, batched + reviewable, then merge to main. DB migrations applied to prod BEFORE merging schema-dependent code._
+> ## 🛑 LIKELY OBSOLETE — read before acting on anything below
+>
+> **Reviewed 2026-08-03.** This document was last updated **2026-06-24** and plans
+> a port of Houzs features *into* 2990's. **The 2026-07-21 POS cutover inverted
+> that direction** — the POS now builds against HouzsERP, and 2990's is the system
+> being retired (see the box at the top of `CLAUDE.md`, and PR #754 / `4c45f434`).
+>
+> Porting features into a system that is being frozen is probably wasted work.
+> **Confirm with the owner before resuming any batch below.**
+>
+> Two items still need a decision either way, because they describe work already
+> committed on a branch that never merged:
+> - The `sync/houzs-to-2990` branch holds Batches 1–3 (typecheck green, unmerged).
+>   Decide: merge, or abandon and delete the branch.
+> - Migrations `0185` / `0186` / `0187` are **written but NOT applied to prod**.
+>   If the branch is abandoned they must never be applied; if it merges they must
+>   be applied FIRST or Specials Save and the supplier list both 500.
+>
+> Everything under "✅ DONE — already shipped" is historical fact and stays true.
 
-Last updated: 2026-06-24
+Last updated: 2026-06-24 · Obsolescence review: 2026-08-03
 
 ---
 

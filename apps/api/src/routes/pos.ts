@@ -19,7 +19,36 @@ export const __resetRateLimiter = (): void => {
   activeLimiter = createPinRateLimiter();
 };
 
+/* Same-origin gate for the PRE-AUTH staff picker (2026-08-04).
+ *
+ * GET /pos/sales-staff cannot require a session: the POS LockScreen has to
+ * render the picker BEFORE anyone has signed in. But leaving it open to the
+ * whole internet published the full active staff roster — including the `id`
+ * that is the first half of POST /pos/pin-login, whose only other secret is a
+ * 6-digit PIN (see lib/pin-rate-limit.ts, which documents this exact chain).
+ * Verified 2026-08-03: the endpoint answered an unauthenticated request from
+ * an arbitrary host with 5 real staff records.
+ *
+ * The only legitimate caller is a browser on one of ALLOWED_ORIGINS, and a
+ * browser always sends `Origin` on a cross-origin request — so requiring it
+ * costs the real client nothing while blocking casual `curl`/scripted
+ * enumeration.
+ *
+ * LIMITS — be honest about these: `Origin` is a client-supplied header and a
+ * determined attacker can forge it. This raises the bar; it is NOT a substitute
+ * for rate-limiting POST /pos/pin-login at the edge, which remains the real
+ * control (see AUDIT.md §1).
+ */
+const originAllowed = (c: { req: { header: (k: string) => string | undefined }; env: { ALLOWED_ORIGINS: string } }): boolean => {
+  const origin = c.req.header('origin');
+  if (!origin) return false;
+  return c.env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()).includes(origin);
+};
+
 pos.get('/sales-staff', async (c) => {
+  if (!originAllowed(c)) {
+    return c.json({ error: 'forbidden', reason: 'origin_not_allowed' }, 403);
+  }
   const showroomId = c.req.query('showroomId') ?? null;
 
   const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {

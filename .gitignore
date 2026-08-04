@@ -8,9 +8,14 @@ build/
 .turbo/
 
 # Local env
+# Catch-all: any .env / .env.<mode> / .env.<mode>.local, at the repo root or in
+# any app. The old list only covered `.env`, `.env.local` and `.env.*.local`, so
+# a mode file like `.env.houzs` was NOT ignored and would commit on `git add .`.
+# `*.example` files are the templates and stay tracked.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+!.env.*.example
 
 # Cloudflare
 .wrangler/
@@ -43,6 +48,9 @@ prototype/_test/
 
 # claude-mem auto-generated context file (per-session, regenerates)
 AGENTS.md
+
+# understand-anything: local analysis cache, not repo state.
+.ua/
 
 # Brainstorming visual companion (mockups, server state)
 .superpowers/

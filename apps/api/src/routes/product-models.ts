@@ -19,7 +19,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { createClient } from '@supabase/supabase-js';
 import { supabaseAuth } from '../middleware/auth';
-import { findModelUsage } from '../lib/sku-usage';
+import { findModelUsage, SkuUsageUndetermined } from '../lib/sku-usage';
 import type { Env, Variables } from '../env';
 
 export const productModels = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -709,7 +709,22 @@ productModels.delete('/:id', async (c) => {
   // (C) Wei Siang 2026-06-08 — lock USED models. If any SKU under this model has
   // been sold / ordered / moved in stock, block the delete: removing it would
   // orphan live order lines. Unused models (setup-phase typos) stay deletable.
-  const used = await findModelUsage(supabase, id);
+  // 2026-08-04 — findModelUsage now THROWS SkuUsageUndetermined rather than
+  // reporting "unused" when a check fails. Refuse the delete: an unverifiable
+  // model must be treated as possibly-in-use (see lib/sku-usage.ts).
+  let used: Awaited<ReturnType<typeof findModelUsage>>;
+  try {
+    used = await findModelUsage(supabase, id);
+  } catch (err) {
+    if (err instanceof SkuUsageUndetermined) {
+      return c.json({
+        error: 'usage_check_failed',
+        reason: 'Couldn’t verify whether this model is already in use, so it was not deleted. Please try again.',
+        table: err.table,
+      }, 503);
+    }
+    throw err;
+  }
   if (used) {
     return c.json({
       error: 'model_in_use',
