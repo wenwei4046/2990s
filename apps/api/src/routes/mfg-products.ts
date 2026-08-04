@@ -19,7 +19,7 @@ import { Hono, type Context } from 'hono';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { supabaseAuth } from '../middleware/auth';
 import { escapeForOr } from '../lib/postgrest-search';
-import { findSkuUsage } from '../lib/sku-usage';
+import { findSkuUsage, SkuUsageUndetermined } from '../lib/sku-usage';
 import { productToBindingPatch } from '../lib/cost-anchor-sync';
 import { moduleCodeFromSku, normalizeSofaTier, parseDefaultFreeGifts } from '@2990s/shared';
 import type { Env, Variables } from '../env';
@@ -339,7 +339,23 @@ mfgProducts.delete('/:id', async (c) => {
   // SO, ordered on a PO, or moved in stock, block the delete — NOT EVEN by
   // force. Deleting it would orphan live order lines / wipe stock history.
   // Unused SKUs (setup-phase typos) stay deletable.
-  const used = await findSkuUsage(supabase, code);
+  // 2026-08-04 — findSkuUsage now THROWS SkuUsageUndetermined instead of
+  // silently reporting "unused" when a check fails. Refuse the delete: an
+  // unverifiable SKU must be treated as possibly-in-use, because allowing it
+  // orphans live order lines and destroys stock history irreversibly.
+  let used: Awaited<ReturnType<typeof findSkuUsage>>;
+  try {
+    used = await findSkuUsage(supabase, code);
+  } catch (err) {
+    if (err instanceof SkuUsageUndetermined) {
+      return c.json({
+        error: 'usage_check_failed',
+        reason: `Couldn’t verify whether “${code}” is already in use, so it was not deleted. Please try again.`,
+        table: err.table,
+      }, 503);
+    }
+    throw err;
+  }
   if (used) {
     return c.json({
       error: 'sku_in_use',

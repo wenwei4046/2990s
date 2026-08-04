@@ -31,6 +31,16 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # Added 2026-08-03. The repo carries ~733 vitest cases (api 415, pos 229,
+      # backend 89) that nothing gated on — typecheck was the only quality bar
+      # between a push and production. A red suite now blocks the deploy.
+      # `pnpm lint` is deliberately NOT here yet: it currently exits 1 on two
+      # pre-existing style errors (apps/backend/src/lib/authed-fetch.ts
+      # preserve-caught-error, and a no-extra-boolean-cast). Fix those, then add
+      # a lint step here too.
+      - name: Test
+        run: pnpm test
+
       - name: Build POS + Backend
         run: pnpm exec turbo run build --filter=@2990s/pos --filter=@2990s/backend
         env:

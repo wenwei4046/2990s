@@ -5,6 +5,50 @@
 
 ---
 
+## ⚠️ READ FIRST — this system has been superseded by HouzsERP
+
+**As of the 2026-07-21 POS cutover, this repo is the OLD system.** Nothing below
+this box is wrong, but all of it describes a system that new sales work no longer
+flows through. Verified 2026-08-03:
+
+- **`.github/workflows/deploy.yml` builds the POS pointing at Houzs**, not at this
+  repo's API: `VITE_BACKEND_TARGET: houzs`, `VITE_HOUZS_API_URL:
+  https://erp.houzscentury.com/api/scm`, `VITE_HOUZS_COMPANY_ID: '2'`.
+  `apps/pos/src/lib/apiClient.ts` reads that flag and swaps the whole data layer.
+  **Rollback:** delete those three lines from the workflow and redeploy.
+- **So `pos.2990shome.com` and `erp.2990shome.com` no longer share a database.**
+  The POS writes Sales Orders into Houzs (company 2). The Backend still reads and
+  writes this repo's Supabase. A POS order does not appear in the Backend.
+- **PR #754 (`4c45f434`, 2026-07-24) built a reversible read-only freeze** for
+  exactly this situation — `apps/api/src/middleware/read-only.ts`, gated on
+  `READ_ONLY_MODE` in `wrangler.toml [vars]`. When `"true"`, GET/HEAD/OPTIONS and
+  the three login endpoints still work; every other write returns 403 `read_only`
+  with a "use HouzsERP" message.
+- **The freeze is OFF, and that is a DELIBERATE STANDING DECISION — do not
+  "fix" it.** `GET https://api.2990shome.com/health` returned `{"readOnly":false}`
+  on 2026-08-03, ten days after PR #754 landed. Reviewed and decided on
+  2026-08-03: **leave it off** while the system's future scope is still open,
+  since freezing forecloses options that may still be wanted. Re-raise only if
+  the owner asks, or if the scope question is settled.
+
+  Consequences to keep in mind while it stays off (these are accepted, not
+  outstanding bugs):
+  - The two databases keep diverging. Whoever eventually reconciles them will
+    need a rule for which side is authoritative per record.
+  - Flipping the freeze would affect **only `erp.2990shome.com` (office staff)**.
+    It cannot affect the POS: the deployed POS bundle does not contain the string
+    `api.2990shome.com` at all (verified 2026-08-03 by reading the live JS on
+    `pos.2990shome.com` — only `erp.houzscentury.com` is present). So sales staff
+    are unaffected either way.
+  - There is **no sync in either direction**. `apps/api` contains zero code that
+    contacts Houzs (every "Houzs" mention there is a comment about a ported
+    pattern), and nothing writes Houzs data back into this Supabase.
+
+All three surfaces are still deployed and serving (`api.2990shome.com`,
+`pos.2990shome.com`, `erp.2990shome.com`).
+
+---
+
 ## What this repo is
 
 Started life as a 2990's Home **POS + Backend** for a Malaysian furniture retailer with an "honest pricing" brand (every Model has its own per-Model pricing, no upsells / sales / strikethroughs). It has since grown into a **full ERP** — and is **LIVE in production**. Three apps share one Hono API and one Supabase Postgres:
@@ -160,7 +204,7 @@ The ERP is SAP-Business-One-style: documents reference upstream documents, and `
 - `computeSoDeliveryFee` (`pricing.ts`) — delivery fee: base + special-model overrides + cross-category (sofa × mattress/bedframe only; mattress + bedframe = one category) + cross-order follow-up link.
 - **the drift gate** — if the client price differs from the server's recompute by **> 0.5%**, **REJECT** with the diff. Don't trust the POS bundle. The "honest pricing" promise breaks the moment a tampered POS submits `total: 0`. **Read the two paragraphs below before touching this** — the obvious function is not the one that runs.
 
-⚠️ **The drift gate is NOT in `packages/shared`.** This section used to name `mfgPricingDriftExceeds` (`packages/shared/src/mfg-pricing.ts:654`). That function has **zero production call sites** — only its own tests and comments that mention it by name. The gate that actually runs is **`driftThresholdExceeded`**, a *private* function in **`apps/api/src/lib/mfg-pricing-recompute.ts:211`**, called at `:557` and `:572`; the rejects live in `apps/api/src/routes/mfg-sales-orders.ts` (create `:2441`, add-line `:4966`, sofa swap `:6645`).
+⚠️ **The drift gate is NOT in `packages/shared`.** This section used to name `mfgPricingDriftExceeds` (`packages/shared/src/mfg-pricing.ts:654`). That function has **zero production call sites** — only its own tests and comments that mention it by name. The gate that actually runs is **`driftThresholdExceeded`**, a *private* function in **`apps/api/src/lib/mfg-pricing-recompute.ts:211`**, called at `:556` and `:571`; the rejects live in `apps/api/src/routes/mfg-sales-orders.ts` (create `:2496`, add-line `:5027`, sofa swap `:6711`). ⚠️ Line numbers drift as the file grows — re-verify with `grep -n driftThresholdExceeded` / `grep -n posTablet` rather than trusting these. (Last re-verified 2026-08-03; the previously documented `:2441 / :4966 / :6645` were already stale.)
 
 The two have also **diverged**: on `client 0, server > 0` the shared one returns `true` (its test at `mfg-pricing.test.ts:432` literally says `// tampered`) while the live one returns **`false`** on purpose — a client `unitPriceCenti` of 0 means "not provided", so the server trusts its own recompute (Commander 2026-05-29, `mfg-pricing-recompute.ts:213-217`). So porting `packages/shared` to another system hands you the **wrong** function, with **green tests** that hide it. Whoever retires this API owns porting `mfg-pricing-recompute.ts` and its 55-case test file, not just the shared math.
 
@@ -232,7 +276,19 @@ The original Phase 0–6 plan is effectively **complete and shipped** — the ap
 
 ## Quick command reference
 
+⚠️ **Env files live at the MONOREPO ROOT, not in the app folder.** Both SPAs set
+`envDir: '../../'` in their `vite.config.ts`, so Vite reads `.env` / `.env.<mode>`
+from the repo root and never from `apps/pos/` or `apps/backend/`. Put the file in
+the wrong place and the app boots with no env — `lib/supabase.ts` throws during
+module evaluation, so you get a **blank white page with nothing in the console**,
+which is very hard to diagnose. (`apps/pos/.env.houzs` is committed in the wrong
+folder for this reason — copy it up before using it.) Ports: POS 6273,
+Backend 6274, API 8787.
+
 ```bash
+# First run on a fresh clone — node_modules is not committed
+pnpm install
+
 # Dev (all apps, via turbo)
 pnpm dev
 
@@ -240,6 +296,11 @@ pnpm dev
 pnpm --filter @2990s/pos dev
 pnpm --filter @2990s/backend dev
 pnpm --filter @2990s/api dev
+
+# POS against the Houzs target (needs no 2990 secrets; .env.houzs has dummies).
+# NOTE: no `--` separator — pnpm 10 forwards it to vite as a literal argument.
+cp apps/pos/.env.houzs .env.houzs
+pnpm --filter @2990s/pos dev --mode houzs
 
 # Quality gates
 pnpm typecheck
