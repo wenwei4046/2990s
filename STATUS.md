@@ -1,26 +1,37 @@
 # Houzs → 2990 Sync — Progress Tracker
 
-> ## 🛑 LIKELY OBSOLETE — read before acting on anything below
+> ## ✅ RESOLVED — the "merge gate" below is already DONE. Do not re-do it.
 >
-> **Reviewed 2026-08-03.** This document was last updated **2026-06-24** and plans
-> a port of Houzs features *into* 2990's. **The 2026-07-21 POS cutover inverted
-> that direction** — the POS now builds against HouzsERP, and 2990's is the system
-> being retired (see the box at the top of `CLAUDE.md`, and PR #754 / `4c45f434`).
+> **Verified 2026-08-05, against git and the production database.** Everything
+> under "MERGE GATE" further down describes work as pending. It is not pending —
+> it shipped. Acting on it would mean re-applying migrations that already ran.
 >
-> Porting features into a system that is being frozen is probably wasted work.
-> **Confirm with the owner before resuming any batch below.**
+> | This document says | Verified reality |
+> |---|---|
+> | Batch 2 "committed on branch, NOT yet on main" | **In `main`.** `git merge-base --is-ancestor 76b6b444 origin/main` → true. `main` is what deploys, so the code is live. |
+> | Migrations `0185`/`0186`/`0187` "written, NOT applied" | **All applied.** `suppliers` has all 4 AutoCount columns; `special_addons_history` exists. Checked via `information_schema` on prod. |
+> | Branch `sync/houzs-to-2990` still open | **Not on `origin`** — it was a local worktree branch. Its commits reached `main` anyway. |
 >
-> Two items still need a decision either way, because they describe work already
-> committed on a branch that never merged:
-> - The `sync/houzs-to-2990` branch holds Batches 1–3 (typecheck green, unmerged).
->   Decide: merge, or abandon and delete the branch.
-> - Migrations `0185` / `0186` / `0187` are **written but NOT applied to prod**.
->   If the branch is abandoned they must never be applied; if it merges they must
->   be applied FIRST or Specials Save and the supplier list both 500.
+> So code and schema are consistent, and nothing is silently 500-ing. **There is
+> no outstanding migrate-before-deploy risk from this document.**
+>
+> ### Still true, and still worth knowing
+>
+> - The **2026-07-21 POS cutover inverted this document's direction.** It plans a
+>   port of Houzs features *into* 2990's; the POS now builds against HouzsERP.
+>   Before resuming any unfinished batch, confirm it is still wanted — see the
+>   "READ FIRST" box at the top of `CLAUDE.md`.
+> - Migration numbering here is **not** a reliable order. `0185` and `0186` are each
+>   used by two unrelated migrations (`0185_so_customer_demographics` vs
+>   `0185_special_addons_history`). Never reason about "migration 0185" by number
+>   alone — 25 numbers are duplicated repo-wide.
+> - To check whether any migration actually ran, don't trust a file list or this
+>   document. Generate a read-only probe and run it against the database:
+>   `node scripts/check-migrations-applied.mjs > migration-check.sql`
 >
 > Everything under "✅ DONE — already shipped" is historical fact and stays true.
 
-Last updated: 2026-06-24 · Obsolescence review: 2026-08-03
+Last updated: 2026-06-24 · Reviewed 2026-08-03 · **Verified against prod + git 2026-08-05**
 
 ---
 
@@ -53,7 +64,7 @@ Last updated: 2026-06-24 · Obsolescence review: 2026-08-03
 | **Purchase PO/GRN/PI list `.limit(500)`** (same 1000-row truncation class) | MED | mfg-purchase-orders.ts ~152, grns.ts ~386, purchase-invoices.ts ~168 | ⏳ |
 | **Inventory stock-transfers/takes/warehouse `.limit(5000)`** | LOW | stock-transfers.ts, stock-takes.ts, warehouse.ts | ⏳ |
 
-### Batch 2 — ✅ CODE DONE (committed on branch, typecheck green) — migrations WRITTEN + verified, NOT yet applied to prod
+### Batch 2 — ✅✅ SHIPPED. Code is in `main`; migrations 0185/0186/0187 ARE applied to prod (verified 2026-08-05). The "NOT yet applied" wording below is stale — ignore it.
 | item | value | migration | status |
 |---|---|---|---|
 | **Specials Edit→Save+History (effective-dated)** — closes 2990's "Specials true-history" open item | HIGH | `0185_special_addons_history` (table+RLS+idempotent baseline seed) — ✅ written | ✅ code |
@@ -68,10 +79,16 @@ Last updated: 2026-06-24 · Obsolescence review: 2026-08-03
 
 ---
 
-## 🚦 MERGE GATE — all 3 batches done in worktree; remaining before main:
-1. ❓ **SP label** `220X220CM → CUSTOM` (owner decision — 1-line, do with the merge if yes).
-2. **Apply migrations `0185`/`0186`/`0187` to prod** via Chrome (migrate-before-deploy) + verify.
-3. **Merge `sync/houzs-to-2990` → main** (rebase on latest main first; Loo's tree is live).
+## 🚦 MERGE GATE — ⚠️ CLOSED. Steps 2 and 3 are DONE; do not repeat them.
+1. ❓ **SP label** `220X220CM → CUSTOM` (owner decision — 1-line). **Still open** — the
+   only genuinely outstanding item in this section. `product-models.ts` still has
+   `SP: 220X220CM`; Houzs uses `CUSTOM`.
+2. ~~Apply migrations `0185`/`0186`/`0187` to prod~~ — **✅ ALREADY APPLIED**
+   (verified against `information_schema` on 2026-08-05). **Re-running these would
+   be a destructive mistake**, not a no-op: `0185_special_addons_history` seeds a
+   baseline, and `0187` recreates the `suppliers_with_derived_category` view.
+3. ~~Merge `sync/houzs-to-2990` → main~~ — **✅ ALREADY IN MAIN** (`76b6b444`).
+   The branch is not on `origin`; nothing to merge.
 
 ### Decisions needed (owner)
 - **SP custom-size label** — 2990 `product-models.ts` still has `SP: 220X220CM` (fake fixed size on generated SP SKU names); Houzs = `CUSTOM`. One-line. Owner confirm it's wanted (memory doesn't say the old value is deliberate). ⏳
