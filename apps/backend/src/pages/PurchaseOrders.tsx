@@ -127,16 +127,6 @@ const buildPoColumns = (): DataGridColumn<PoHeaderRow>[] => [
       (a.supplier?.name ?? a.supplier?.code ?? '').localeCompare(b.supplier?.name ?? b.supplier?.code ?? ''),
   },
   {
-    /* Owner 2026-08-03 — supplier CODE as its own column (the outstanding-PO
-       Excel the desk keeps has Supplier + Code side by side). */
-    key: 'supplier_code', label: 'Code', width: 110, sortable: true, groupable: true,
-    accessor: (po) => <span style={{ fontFamily: 'var(--font-mono)' }}>{po.supplier?.code ?? '—'}</span>,
-    searchValue: (po) => po.supplier?.code ?? '',
-    groupValue: (po) => po.supplier?.code ?? '(none)',
-    exportValue: (po) => po.supplier?.code ?? '—',
-    sortFn: (a, b) => (a.supplier?.code ?? '').localeCompare(b.supplier?.code ?? ''),
-  },
-  {
     /* Items preview between Supplier and Date so the buyer reads each PO
        without drilling in (Commander 2026-05-27). Hover title shows the full
        list. */
