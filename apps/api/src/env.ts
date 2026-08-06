@@ -50,11 +50,18 @@ export interface Env {
   SLIPS: R2Bucket;
 
   // R2 binding for public assets (Task 18 — category hero photos).
-  // TODO(Task 18): the 2990s-public bucket must be provisioned in the
-  // Cloudflare dashboard with public access enabled, then bound in
-  // wrangler.toml. Until then this is typed for compile-time but the
-  // endpoint will error at runtime with "env.PUBLIC_ASSETS is undefined".
-  PUBLIC_ASSETS: R2Bucket;
+  // OPTIONAL — the 2990s-public bucket is not provisioned, so the binding is
+  // commented out in wrangler.toml and this is `undefined` at runtime. The
+  // two /admin/categories/:id/hero-image routes answer 503
+  // public_assets_unbound instead of throwing. To enable: create the bucket
+  // in the Cloudflare dashboard with public access, uncomment the
+  // [[r2_buckets]] block in wrangler.toml, and set VITE_R2_PUBLIC_URL in the
+  // repo-root .env — the guards then become unreachable on their own.
+  //
+  // Typed optional on purpose: declaring it non-optional made the compiler
+  // vouch for a binding that does not exist, so `wrangler deploy` succeeded
+  // and the endpoint 500'd in production instead of failing at build time.
+  PUBLIC_ASSETS?: R2Bucket;
 
   // R2 binding for per-line SO item photos (Task #79 — PR-F).
   // Bucket stays private; the SO photo routes proxy reads through the
