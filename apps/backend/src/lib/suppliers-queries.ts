@@ -137,6 +137,12 @@ export type PoHeaderRow = {
   /** Owner 2026-07-02 — list endpoint stamps the non-cancelled GRN doc-numbers
       this PO was received into, for the "Transfer To (GRN)" column. */
   transfer_to_grns?: string[];
+  /** Owner 2026-08-03 — list endpoint aggregates the deduped source Sales
+      Order doc_nos this PO was converted from ("Assigned SO" column/export). */
+  source_so_doc_nos?: string[];
+  /** Owner 2026-08-03 — latest received_at across this PO's POSTED/CLOSED
+      GRNs ("Delivered" column/export); null until something is received. */
+  last_received_at?: string | null;
   created_at: string;
   created_by: string;
   updated_at: string;

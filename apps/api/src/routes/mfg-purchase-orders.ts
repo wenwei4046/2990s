@@ -156,7 +156,9 @@ mfgPurchaseOrders.get('/', async (c) => {
       // purchase_location embeds the warehouse the PO ships to (PR #77 — the
       // column is an FK → warehouses.id); the list needs its NAME, not just the
       // id, for the "Purchase Location" column (Owner 2026-07-02).
-      `${HEADER_COLS}, supplier:suppliers(id, code, name), items:purchase_order_items(material_code, material_name, qty), purchase_location:warehouses!purchase_location_id(id, code, name)`,
+      // so_item_id rides along (Owner 2026-08-03) so the list can aggregate each
+      // PO's source SALES ORDERS ("Assigned SO" column / Excel export) below.
+      `${HEADER_COLS}, supplier:suppliers(id, code, name), items:purchase_order_items(material_code, material_name, qty, so_item_id), purchase_location:warehouses!purchase_location_id(id, code, name)`,
     )
     .order('po_date', { ascending: false })
     .order('created_at', { ascending: false })
@@ -179,29 +181,69 @@ mfgPurchaseOrders.get('/', async (c) => {
   // Owner 2026-07-02 — "Transfer To (GRN)" list column: collect the non-cancelled
   // GRN doc-numbers each PO was received into, deduped + stable-ordered. Same one
   // extra query that already powers has_children — just carry grn_number too.
+  // Owner 2026-08-03 — the outstanding-PO Excel export also needs WHEN goods
+  // arrived: carry received_at for POSTED/CLOSED GRNs and stamp the latest per
+  // PO as last_received_at ("Delivered" column).
   const grnNumbersByPo = new Map<string, string[]>();
+  const lastReceivedByPo = new Map<string, string>();
   if (rows.length > 0) {
     const ids = rows.map((r) => r.id);
     const { data: grnRows } = await supabase
       .from('grns')
-      .select('purchase_order_id, grn_number')
+      .select('purchase_order_id, grn_number, received_at, status')
       .in('purchase_order_id', ids)
       .neq('status', 'CANCELLED')
       .order('grn_number', { ascending: true });
-    for (const g of (grnRows ?? []) as Array<{ purchase_order_id: string | null; grn_number: string | null }>) {
+    for (const g of (grnRows ?? []) as Array<{ purchase_order_id: string | null; grn_number: string | null; received_at: string | null; status: string | null }>) {
       if (!g.purchase_order_id) continue;
       childIds.add(g.purchase_order_id);
       if (!g.grn_number) continue;
       const arr = grnNumbersByPo.get(g.purchase_order_id) ?? [];
       if (!arr.includes(g.grn_number)) arr.push(g.grn_number);
       grnNumbersByPo.set(g.purchase_order_id, arr);
+      // DRAFT commits nothing — only a posted/closed GRN counts as delivered.
+      if (g.received_at && g.status !== 'DRAFT') {
+        const cur = lastReceivedByPo.get(g.purchase_order_id);
+        if (!cur || g.received_at > cur) lastReceivedByPo.set(g.purchase_order_id, g.received_at);
+      }
     }
   }
-  const purchaseOrders = rows.map((r) => ({
-    ...r,
-    has_children: childIds.has(r.id),
-    transfer_to_grns: grnNumbersByPo.get(r.id) ?? [],
-  }));
+  /* Owner 2026-08-03 — "Assigned SO": resolve each PO's source Sales Orders.
+     PO lines snapshot so_item_id (the SO line they were converted from);
+     batch-resolve the distinct ids → SO doc_no in ONE query and aggregate the
+     deduped doc_nos per PO. Manual (non-From-SO) lines have no so_item_id and
+     simply contribute nothing. Best-effort: a lookup failure leaves the column
+     empty rather than sinking the list. */
+  const soDocByItemId = new Map<string, string>();
+  {
+    const soItemIds = [...new Set(
+      rows.flatMap((r) => ((r.items ?? []) as Array<{ so_item_id?: string | null }>)
+        .map((it) => it.so_item_id).filter(Boolean) as string[]),
+    )];
+    if (soItemIds.length > 0) {
+      const { data: soItems } = await supabase
+        .from('mfg_sales_order_items')
+        .select('id, doc_no')
+        .in('id', soItemIds);
+      for (const s of (soItems ?? []) as Array<{ id: string; doc_no: string }>) {
+        soDocByItemId.set(s.id, s.doc_no);
+      }
+    }
+  }
+  const purchaseOrders = rows.map((r) => {
+    const sourceSos = [...new Set(
+      ((r.items ?? []) as Array<{ so_item_id?: string | null }>)
+        .map((it) => (it.so_item_id ? soDocByItemId.get(it.so_item_id) : null))
+        .filter(Boolean) as string[],
+    )].sort();
+    return {
+      ...r,
+      has_children: childIds.has(r.id),
+      transfer_to_grns: grnNumbersByPo.get(r.id) ?? [],
+      source_so_doc_nos: sourceSos,
+      last_received_at: lastReceivedByPo.get(r.id) ?? null,
+    };
+  });
   return c.json({ purchaseOrders });
 });
 

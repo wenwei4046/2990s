@@ -127,6 +127,16 @@ const buildPoColumns = (): DataGridColumn<PoHeaderRow>[] => [
       (a.supplier?.name ?? a.supplier?.code ?? '').localeCompare(b.supplier?.name ?? b.supplier?.code ?? ''),
   },
   {
+    /* Owner 2026-08-03 — supplier CODE as its own column (the outstanding-PO
+       Excel the desk keeps has Supplier + Code side by side). */
+    key: 'supplier_code', label: 'Code', width: 110, sortable: true, groupable: true,
+    accessor: (po) => <span style={{ fontFamily: 'var(--font-mono)' }}>{po.supplier?.code ?? '—'}</span>,
+    searchValue: (po) => po.supplier?.code ?? '',
+    groupValue: (po) => po.supplier?.code ?? '(none)',
+    exportValue: (po) => po.supplier?.code ?? '—',
+    sortFn: (a, b) => (a.supplier?.code ?? '').localeCompare(b.supplier?.code ?? ''),
+  },
+  {
     /* Items preview between Supplier and Date so the buyer reads each PO
        without drilling in (Commander 2026-05-27). Hover title shows the full
        list. */
@@ -153,6 +163,21 @@ const buildPoColumns = (): DataGridColumn<PoHeaderRow>[] => [
     searchValue: (po) => (po.items ?? []).map((it) => `${it.material_code} ${it.qty}`).join(' '),
     // accessor is JSX → export the human items preview ("CODE×qty · …"), or '—'.
     exportValue: (po) => summarizeItems(po.items) ?? '—',
+  },
+  {
+    /* Owner 2026-08-03 — the source Sales Orders this PO was converted from
+       (list endpoint aggregates the deduped SO doc_nos off the lines'
+       so_item_id). "Assigned SO" in the desk's outstanding-PO Excel. */
+    key: 'assigned_so', label: 'Assigned SO', width: 220, sortable: true, groupable: false,
+    accessor: (po) => {
+      const sos = po.source_so_doc_nos ?? [];
+      return sos.length === 0
+        ? <span style={{ color: 'var(--fg-muted)' }}>—</span>
+        : <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{sos.join(', ')}</span>;
+    },
+    searchValue: (po) => (po.source_so_doc_nos ?? []).join(' '),
+    exportValue: (po) => (po.source_so_doc_nos ?? []).join(', ') || '—',
+    sortFn: (a, b) => (a.source_so_doc_nos?.[0] ?? '').localeCompare(b.source_so_doc_nos?.[0] ?? ''),
   },
   {
     /* Date columns formatted to match the SO list ("31 May 2026" not the raw
@@ -236,7 +261,9 @@ const buildPoColumns = (): DataGridColumn<PoHeaderRow>[] => [
     /* Owner 2026-07-02 — the GRN(s) this PO was received into (list endpoint
        stamps transfer_to_grns = non-cancelled GRN doc-numbers). Mirrors the GRN
        list's "Transfer From (PO)". Off by default — toggle on via Columns. */
-    key: 'transfer_to_grns', label: 'Transfer To (GRN)', width: 160, sortable: true, defaultHidden: true,
+    /* Owner 2026-08-03 — default-VISIBLE + relabelled "GRN No" (matches the
+       desk's outstanding-PO Excel; was hidden "Transfer To (GRN)"). */
+    key: 'transfer_to_grns', label: 'GRN No', width: 160, sortable: true,
     accessor: (po) => {
       const gs = po.transfer_to_grns ?? [];
       return gs.length === 0
@@ -246,6 +273,17 @@ const buildPoColumns = (): DataGridColumn<PoHeaderRow>[] => [
     searchValue: (po) => (po.transfer_to_grns ?? []).join(' '),
     exportValue: (po) => (po.transfer_to_grns ?? []).join(', ') || '—',
     sortFn: (a, b) => (a.transfer_to_grns?.[0] ?? '').localeCompare(b.transfer_to_grns?.[0] ?? ''),
+  },
+  {
+    /* Owner 2026-08-03 — "Delivered": when the goods actually arrived. The
+       list endpoint stamps last_received_at = the latest received_at across
+       this PO's POSTED/CLOSED GRNs; blank until something is received. */
+    key: 'delivered', label: 'Delivered', width: 120, sortable: true,
+    accessor: (po) => fmtDateOrDash(po.last_received_at ?? null),
+    searchValue: (po) => po.last_received_at ?? '',
+    exportValue: (po) => po.last_received_at ?? '—',
+    sortFn: (a, b) => (a.last_received_at ?? '').localeCompare(b.last_received_at ?? ''),
+    filterType: 'date', dateValue: (po) => po.last_received_at ?? null,
   },
   {
     /* Status auto-detected (Wei Siang 2026-05-31) — relabelled into convert
