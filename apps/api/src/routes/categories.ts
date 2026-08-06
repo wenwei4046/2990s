@@ -2,13 +2,22 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
-// TODO(Task 18): add categories.test.ts when R2 mocking is set up.
-
 export const categoriesApi = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 categoriesApi.use('*', supabaseAuth);
 
 const ADMIN_ROLES = new Set(['admin', 'coordinator']);
+
+// The 2990s-public bucket is not provisioned, so the PUBLIC_ASSETS binding is
+// commented out in wrangler.toml and is `undefined` at runtime. Answer 503
+// rather than throwing — CategoryHeroUploader.tsx renders `error` straight
+// into its message div, so the admin sees why instead of a blank 500.
+// Mirrors the ANTHROPIC_API_KEY guard in routes/scan-so.ts.
+const PUBLIC_ASSETS_UNBOUND = {
+  error: 'public_assets_unbound',
+  reason:
+    'Category hero images need the 2990s-public R2 bucket. Create it in the Cloudflare dashboard, then uncomment the PUBLIC_ASSETS [[r2_buckets]] block in apps/api/wrangler.toml.',
+} as const;
 
 categoriesApi.post('/:id/hero-image', async (c) => {
   const userId = c.get('user').id;
@@ -18,6 +27,11 @@ categoriesApi.post('/:id/hero-image', async (c) => {
   if (!staffRes.data || !ADMIN_ROLES.has(staffRes.data.role)) {
     return c.json({ error: 'forbidden' }, 403);
   }
+
+  // Checked before buffering up to 4MB we cannot store anywhere. Bound to a
+  // local so the narrowing survives the awaits below.
+  const bucket = c.env.PUBLIC_ASSETS;
+  if (!bucket) return c.json(PUBLIC_ASSETS_UNBOUND, 503);
 
   const id = c.req.param('id');
   const contentType = c.req.header('content-type') ?? '';
@@ -33,11 +47,7 @@ categoriesApi.post('/:id/hero-image', async (c) => {
   const ext = contentType.endsWith('jpeg') ? 'jpg' : 'png';
   const key = `category-heroes/${id}.${ext}`;
 
-  // TODO(Task 18): PUBLIC_ASSETS R2 binding requires the 2990s-public bucket
-  // to be provisioned in Cloudflare dashboard + bound in wrangler.toml +
-  // VITE_R2_PUBLIC_URL set in .env. Until then this endpoint will error at
-  // runtime with "env.PUBLIC_ASSETS is undefined" — that's expected.
-  await c.env.PUBLIC_ASSETS.put(key, blob, { httpMetadata: { contentType } });
+  await bucket.put(key, blob, { httpMetadata: { contentType } });
   await supabase.from('categories').update({ hero_image_key: key }).eq('id', id);
 
   return c.json({ ok: true, key });
@@ -52,10 +62,16 @@ categoriesApi.delete('/:id/hero-image', async (c) => {
     return c.json({ error: 'forbidden' }, 403);
   }
 
+  // Guarded even though the R2 delete is conditional: clearing the column
+  // while storage is unreachable would report success having done half the
+  // job, and orphan the object if the bucket is later provisioned.
+  const bucket = c.env.PUBLIC_ASSETS;
+  if (!bucket) return c.json(PUBLIC_ASSETS_UNBOUND, 503);
+
   const id = c.req.param('id');
   const row = await supabase.from('categories').select('hero_image_key').eq('id', id).maybeSingle();
   if (row.data?.hero_image_key) {
-    await c.env.PUBLIC_ASSETS.delete(row.data.hero_image_key);
+    await bucket.delete(row.data.hero_image_key);
   }
   await supabase.from('categories').update({ hero_image_key: null }).eq('id', id);
 

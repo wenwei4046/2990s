@@ -80,7 +80,9 @@ Single Supabase Postgres (project in **Singapore** — **NOT** Venture's `gixppt
 - **ORM**: Drizzle (`drizzle-orm` 0.36 / `drizzle-kit` 0.30). **`packages/db/src/schema.ts` is the source of truth.**
 - **Storage**: Cloudflare R2 (slips, product photos).
 - **Auth**: Supabase Auth (email + magic link for staff; bcrypt **PIN** layer on top for POS counter switching).
-- **Realtime**: Supabase Realtime — **POS only** (6 `postgres_changes` channels that invalidate TanStack queries: `catalog-products`, `mfg-catalog`, `sofa-customizer-${leadSkuId}`, `product-pricing-${productId}`, `sofa-quick-picks`, `my-orders-so`). **The Backend subscribes to ZERO Supabase channels** — this line used to claim "POS ↔ Backend sync" and that half was never true. The Backend's only channel is a browser `BroadcastChannel` (`apps/backend/src/lib/cross-tab-sync.ts`) that syncs *tabs of the same browser*. A POS write does NOT live-refresh a Backend screen.
+- **Realtime**: ⚠️ **there is none, in either app.** Verified 2026-08-06: `grep -rn '\.channel(' apps/pos/src apps/backend/src` returns **zero** subscriptions. Don't reintroduce one without checking this first.
+  - The POS **used to** run 6 `postgres_changes` channels (`catalog-products`, `mfg-catalog`, `sofa-customizer-${leadSkuId}`, `product-pricing-${productId}`, `sofa-quick-picks`, `my-orders-so`) that invalidated TanStack queries. The 2026-07-21 cutover pointed the POS at HouzsERP, **which has no realtime**, so every channel was replaced by `refetchInterval: 30_000` — see `apps/pos/src/lib/queries.ts:122`, `:145`, `:417`, `:436`, `:556`, `:597` and the no-op invalidator kept as a seam at `:128-132`. So catalog and pricing edits land in the POS within ~30s, not instantly.
+  - The **Backend** has never subscribed to a Supabase channel. Its only channel is a browser `BroadcastChannel` (`apps/backend/src/lib/cross-tab-sync.ts`) syncing *tabs of the same browser*. A POS write does NOT live-refresh a Backend screen — and since the cutover it doesn't even reach the same database.
 - **Styling**: CSS Modules + brand tokens from `packages/design-system` (originating in `prototype/assets/colors_and_type.css`).
 - **Icons**: Lucide React (rounded, stroke 1.75).
 - **State**: Zustand 5 (app) + TanStack Query 5 (server).
@@ -97,7 +99,7 @@ Single Supabase Postgres (project in **Singapore** — **NOT** Venture's `gixppt
 1. **`UI_REFERENCE.md`** — the UI/motion/function contract. Prototype is canonical for look + feel. Read the "What NOT to do" section twice.
 2. **`PORT_DESIGN.md`** — the master technical port/design reference (decisions, schema rationale, eng review folds). Read first for Phase 0+ work.
 3. **`2990S-PORTAL-PLAN.md`** — original architecture + phased rollout + locked decisions (historical, but still the source for the locked-decisions list).
-4. **`packages/db/src/schema.ts`** — Drizzle schema, **~87 tables / ~27 enums**. Generate migrations from this, never the other way around.
+4. **`packages/db/src/schema.ts`** — Drizzle schema, **107 tables / 32 enums** (counted 2026-08-06). Generate migrations from this, never the other way around.
 5. **`prototype/index.html`** + **`prototype/backend.html`** — the original UI spec. The production apps are built; the prototype remains the design reference, not legacy code to refactor.
 
 You don't need to read them top-to-bottom every session, but `UI_REFERENCE.md` MUST be in context before any UI work.
@@ -123,7 +125,7 @@ You don't need to read them top-to-bottom every session, but `UI_REFERENCE.md` M
 │   └── api/                        ← Hono on CF Workers → api.{domain} — @2990s/api
 │       └── src/
 │           ├── index.ts            ← route mounting
-│           ├── routes/             ← ~55 route modules (mfg-sales-orders,
+│           ├── routes/             ← 68 route modules (mfg-sales-orders,
 │           │                          delivery-orders-mfg, sales-invoices, grns,
 │           │                          purchase-invoices, inventory, accounting,
 │           │                          suppliers, mrp, outstanding, document-flow, …)
@@ -136,14 +138,16 @@ You don't need to read them top-to-bottom every session, but `UI_REFERENCE.md` M
 │   ├── design-system/              ← @2990s/design-system — tokens.css, primitives, Lucide wrappers
 │   └── db/                         ← @2990s/db
 │       ├── src/schema.ts           ← Drizzle schema (source of truth)
-│       ├── migrations/             ← ~161 SQL files, 0000–0147 (see "Migrations" below)
+│       ├── migrations/             ← 231 SQL files, 0000–0211 (see "Migrations" below)
 │       └── seeds/                  ← seed-libraries.sql + catalog/library seeds (12 files)
 ├── pnpm-workspace.yaml
 ├── turbo.json
 └── tsconfig.base.json
 ```
 
-`apps/backend` has ~71 page components; `apps/api` has ~56 route modules. Both are real, production code — no placeholders.
+`apps/backend` has 105 page components; `apps/api` has 68 route modules (counted 2026-08-06). Both are real, production code — no placeholders.
+
+> Every count in this file is a snapshot with a date attached. They drift fast — this repo grew from "~87 tables / ~55 routes" to "107 / 68" in about ten weeks. Re-count before relying on one; don't quote it forward.
 
 ---
 
@@ -218,7 +222,15 @@ The pure MATH lives in `packages/shared/src/` (`mfg-pricing.ts`, `pricing.ts`, `
 
 - **Drizzle schema is the source of truth** (`packages/db/src/schema.ts`). Generate migrations from it; never hand-edit the schema to match a stray migration.
 - **Migrations are append-only after deploy.** Don't squash without explicit OK.
-- ⚠️ **The migration ledger ≠ the files on disk.** There are ~161 files on disk (0000–0147) but fewer rows in the Supabase migration ledger, and **~17 duplicate-numbered migrations** (e.g. 0040–0046, 0060, 0069, 0072/0073, 0109–0118, 0122; 0110/0111 are triples) plus a few gaps — the result of parallel branches landing on `main`. **Don't trust `list_migrations`**; verify the actual DB objects (columns/tables/views) before assuming a migration ran.
+- ⚠️ **The migration ledger ≠ the files on disk.** Counted 2026-08-06: **231 `.sql` files on disk, numbered 0000–0211**, but fewer rows in the Supabase migration ledger, and **25 duplicate numbers** (e.g. 0040–0046, 0060, 0069, 0072/0073, 0109–0118, 0122, 0185, 0186; 0110/0111 are triples) plus a few gaps — the result of parallel branches landing on `main`. So **a filename tells you neither the apply order nor whether it ran**, and "migration 0185" is ambiguous on its own. **Don't trust `list_migrations`**; verify the actual DB objects (columns/tables/views) before assuming a migration ran.
+- ⚠️ **`drizzle-kit` cannot tell you what is applied.** `packages/db/migrations/meta/_journal.json` has **1 entry for those 231 files** (`0000_long_starbolt.sql`) — the rest were written by hand and never journalled. Re-baselining it is an open task; until then, treat drizzle-kit's applied/pending view as meaningless.
+- To check whether a specific migration actually ran, generate a read-only probe instead of guessing:
+  ```bash
+  node scripts/check-migrations-applied.mjs > migration-check.sql   # duplicates only
+  node scripts/check-migrations-applied.mjs --all                   # every migration
+  node scripts/check-migrations-applied.mjs 0185 0186               # specific numbers
+  ```
+  It emits SELECT-only SQL to paste into the Supabase SQL Editor; `present = false` means that migration did not run.
 - **Apply migrations via the Supabase MCP** (`apply_migration` / `execute_sql`). The "Apply DB migration" GitHub workflow fails because the `DATABASE_URL` repo secret is unset — that's known and harmless; don't try to "fix" it without being asked.
 - Seeds live in `packages/db/seeds/`. Library tables seed; the live catalog (sofas / mattresses / bedframes) has since been seeded in prod via the Backend SKU Master.
 
