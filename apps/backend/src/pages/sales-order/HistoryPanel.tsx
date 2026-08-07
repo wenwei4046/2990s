@@ -79,6 +79,22 @@ const FIELD_LABEL: Record<string, string> = {
   merchantProvider: 'Merchant provider', installmentMonths: 'Installment term',
   onlineType: 'Online type', approvalCode: 'Approval code',
   accountSheet: 'Account', collectedBy: 'Collected by',
+  /* Same fix as the payment block above, for the 15 remaining fields the API
+     emits that had no entry here (audited 2026-08-06 by diffing every
+     `field: '…'` in the API's recordSoAudit calls against this map). Without
+     them the drawer printed raw camelCase — "tbcVariants sizeId" — which is
+     the exact ambiguity flagged on 2026-05-28. Keys are the emitted strings,
+     so the two amendment ones stay snake_case on purpose. */
+  tbcVariants: 'Variants filled in', sofaBuild: 'Sofa build',
+  stockStatus: 'Stock status',
+  photoAdded: 'Photo added', photoRemoved: 'Photo removed',
+  photosCleaned: 'Photos cleaned up',
+  amendment: 'Amendment', amendment_status: 'Amendment status',
+  pos_revised: 'POs revised',
+  // PWP (换购) voucher lifecycle on a reward swap.
+  pwpCode: 'PWP code', pwpCodesMinted: 'PWP codes issued',
+  pwpCodesDeleted: 'PWP codes voided', pwpRewardsReverted: 'PWP rewards reverted',
+  pwpRewardKept: 'PWP reward kept', pwpVoucherReleased: 'PWP voucher released',
 };
 
 const MONEY_FIELDS = new Set(['unitPriceCenti', 'discountCenti', 'totalCenti', 'depositCenti', 'localTotalCenti', 'unitCostCenti', 'amountCenti']);
