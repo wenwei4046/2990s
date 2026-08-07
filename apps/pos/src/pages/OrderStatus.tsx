@@ -871,7 +871,21 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
   const list = orders.data ?? [];
   const [active, setActive] = useState<MyOrderRow | null>(null);
 
-  const staffName = staff.data?.name ?? stats.data?.staffName ?? 'Sales';
+  // Who is VIEWING the board. Always the logged-in user.
+  const viewerName = staff.data?.name ?? 'Sales';
+  /* Whose numbers the Personal KPI card is showing — NOT necessarily the
+     viewer. When a view-all role filters to another salesperson the server
+     scopes that card to them and returns their name as stats.staffName
+     (pos.ts:335-345, :441). This used to render the *viewer's* name over
+     someone else's figures, so a director filtered to another salesperson
+     read "KRIS · 0 orders" and concluded Kris had none — when it meant the
+     filtered salesperson had none. Resolve from the picker list first so the
+     label is correct on the first paint rather than after the stats round-trip. */
+  const selectedStaffName =
+    salesperson !== 'all'
+      ? salesStaff.data?.find((s) => s.id === salesperson)?.name
+      : undefined;
+  const personalName = selectedStaffName ?? stats.data?.staffName ?? viewerName;
   const periodLabel =
     period.mode === 'month'
       ? monthName(period.year, period.month0)
@@ -908,7 +922,7 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
           />
         </Link>
         <div>
-          <span className="t-eyebrow">Sales view · {staffName}</span>
+          <span className="t-eyebrow">Sales view · {viewerName}</span>
           <h1 className={styles.heading}>My orders</h1>
         </div>
         <div className={styles.headerRight}>
@@ -925,7 +939,7 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
         </div>
       </header>
 
-      <SalesKpis stats={stats} staffName={staffName} />
+      <SalesKpis stats={stats} personalName={personalName} />
 
       <OrderToolbar
         period={period}
@@ -949,11 +963,27 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
       ) : orders.error ? (
         <p className={styles.empty}>Failed to load: {String(orders.error)}</p>
       ) : list.length === 0 ? (
+        /* Name the active filter. The search branch already did; the
+           salesperson branch did not, so an empty board read as missing data
+           rather than a filter result — and the Showroom card above stays
+           showroom-wide either way, which makes the two look contradictory.
+           When NO salesperson is picked the absence of the suffix is itself
+           the signal: the board really is empty, so go look elsewhere. */
         <div className={styles.empty}>
           {searching ? (
             <p>No orders match “{debouncedQuery.trim()}”.</p>
           ) : (
-            <p>No orders in {periodLabel}.</p>
+            <>
+              <p>
+                No orders in {periodLabel}
+                {selectedStaffName ? ` for ${selectedStaffName}` : ''}.
+              </p>
+              {selectedStaffName && (
+                <p className={styles.searchHint}>
+                  The Showroom card above counts every salesperson.
+                </p>
+              )}
+            </>
           )}
         </div>
       ) : (
@@ -1000,10 +1030,12 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
 
 const SalesKpis = ({
   stats,
-  staffName,
+  /** Whose figures the Personal card holds — the filtered salesperson when one
+   *  is picked, otherwise the viewer. Not always the logged-in user. */
+  personalName,
 }: {
   stats: ReturnType<typeof useSalesStats>;
-  staffName: string;
+  personalName: string;
 }) => {
   const monthLabel = stats.data?.monthLabel ?? '';
   return (
@@ -1040,7 +1072,7 @@ const SalesKpis = ({
       <div className={styles.kpiCard}>
         <div className={styles.kpiHead}>
           <ShieldCheck size={13} strokeWidth={1.75} />
-          {staffName} · {monthLabel || '—'}
+          {personalName} · {monthLabel || '—'}
         </div>
         {stats.isLoading && !stats.data ? (
           <KpiPlaceholder />
