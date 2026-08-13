@@ -230,6 +230,40 @@ describe('validateConfirmPayment', () => {
     expect(validateConfirmPayment({ ...base, amountPaid: 1535 }, 2990, 80, 500)).toBe(false);
   });
 
+  /* Campaign voucher (migration 0212) — found on the first live test order,
+     2026-08-13: SO of sofa 2990 + chair 990 + delivery 250 = 4230, less an
+     RM 500 voucher = 3730. The step showed "must be at least RM 2,115", which
+     is half of 4230 — the floor was computed on the PRE-voucher total, so the
+     salesperson was asked for a deposit on money the customer isn't paying.
+     ConfirmPaymentStep already subtracted the voucher; the validator did not. */
+  describe('campaign voucher is deducted before the deposit floor', () => {
+    const base = { ...baseForm, paymentMethod: 'cash' as const, approvalCode: '123', paymentRecorded: true, slipUploadSessionId: 'sess' };
+
+    it('the 50% floor is half the POST-voucher total (1865), not half of 4230', () => {
+      expect(validateConfirmPayment({ ...base, amountPaid: 1865 }, 3980, 0, 250, 500)).toBe(true);
+      // 2115 = half of the pre-voucher total. Still allowed (it is above the
+      // floor and below the ceiling) — but it must no longer be DEMANDED.
+      expect(validateConfirmPayment({ ...base, amountPaid: 1864 }, 3980, 0, 250, 500)).toBe(false);
+    });
+
+    it('full payment clears at the discounted total, and over-collection is rejected', () => {
+      expect(validateConfirmPayment({ ...base, amountPaid: 3730 }, 3980, 0, 250, 500)).toBe(true);
+      // 4230 is the pre-voucher total — collecting it would overcharge by the
+      // voucher's whole face value.
+      expect(validateConfirmPayment({ ...base, amountPaid: 4230 }, 3980, 0, 250, 500)).toBe(false);
+    });
+
+    it('a voucher worth more than the order floors the total at 0, never negative', () => {
+      const free = { ...base, amountPaid: 0, approvalCode: '', slipUploadSessionId: null };
+      expect(validateConfirmPayment(free, 100, 0, 0, 500)).toBe(true);
+    });
+
+    it('omitting voucherTotal keeps the old behaviour for every pre-voucher caller', () => {
+      expect(validateConfirmPayment({ ...base, amountPaid: 2115 }, 3980, 0, 250)).toBe(true);
+      expect(validateConfirmPayment({ ...base, amountPaid: 2114 }, 3980, 0, 250)).toBe(false);
+    });
+  });
+
   /* Split payment (Loo 2026-06-06) — extras count toward the floor/ceiling
      and every extra row must be complete. */
   describe('split payment', () => {

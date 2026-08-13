@@ -201,6 +201,87 @@ The ERP is SAP-Business-One-style: documents reference upstream documents, and `
 
 ---
 
+## Campaign Promos — the one POS feature that talks to 2990, not Houzs
+
+⚠️ **Read this before touching anything under `campaign-promos`.** Added 2026-08-12 (migration `0212`). It breaks the rule that "the POS talks to Houzs", deliberately, and the reasons are not obvious.
+
+**What it is:** fixed-value vouchers — "RM 500 Home Voucher". Admin surface is tab 9 of `pos.2990shome.com/products` (`components/products/CampaignPromosTab.tsx`).
+
+**Why it is not part of `PWP & Promo`:** every other promo mechanism in this schema is a **swap** (reprice a line to `pwp_price_sen`) or a **freebie** (reprice to 0) — `pwp_rules`, `free_item_campaigns`, `model_default_free_gifts`. **None of them carries a money value**; there was no `value_centi` anywhere in the promo stack before 0212. A flat deduction shares no data model and no rules with PWP.
+
+**Where the pieces live, and why they're split:**
+
+| Piece | Home | Why |
+|---|---|---|
+| Campaign definitions, stock, T&C, redemption ledger | **2990's Supabase** (`campaign_promos`, `campaign_promo_redemptions`) | we can't write to Houzs |
+| Admin UI | this repo — ships in the POS bundle | ✅ |
+| The money | Houzs, as per-line `discount_centi` | the order lives there |
+
+**The trick that makes it work with zero Houzs changes:** Houzs's drift gate compares **unit price only** (`mfg-pricing-recompute.ts:211`), so a client-authored `discountCenti` passes it, bounded server-side at `0 <= discount <= qty * unit` per line. So a voucher arrives **already apportioned** across the lines — `@2990s/shared/voucher-split` does the proportional split, and `apps/pos/src/lib/voucher-apply.ts` decides whether it may be applied at all.
+
+**Four things that will bite you:**
+- 🔑 **A cancelled order does NOT return its voucher to the pool, and no code on
+  this side can make it.** The SO cancel runs in Houzs (that's where
+  `pwpVoucherReleased` lives, `mfg-sales-orders.ts:7001`), and Houzs cannot reach
+  `campaign_promo_redemptions` — no sync, either direction. So the row stays
+  `APPLIED` and the stock stays spent until a human clicks **Release** in the
+  admin ledger. This is structural; don't "fix" it with a POS-side hook that only
+  fires when the POS happens to be doing the cancelling.
+- 🔑 **`apps/api/src/routes/campaign-promos.ts` is Origin-gated, NOT authenticated.** In houzs mode the POS holds only a Houzs token, and 2990's `supabaseAuth` validates against 2990's own GoTrue — a Houzs bearer gets a flat 401. The route runs on the **service-role client**, so `toWire()` is the only thing between that table and the internet. Read the file header before extending it.
+- 🔑 **`campaign-promo-queries.ts` must NOT use `authedFetch`.** It resolves to the Houzs base, and it stamps `X-Company-Id`, which is not in 2990's CORS `allowHeaders` — the **preflight** fails and the browser reports a generic network error. It uses a bare `fetch` at `VITE_API_URL` on purpose.
+- 🔑 **`VITE_API_URL` is no longer unused on the houzs path.** It was a placeholder (`https://unused-on-houzs.invalid`) until this landed. Local dev points it at `http://localhost:8787`; production needs the real base or the tab ships broken.
+
+**Cross-database consequences, all deliberate:** `so_doc_no` has **no FK** (that row is in Houzs), `redeemed_by` is **text not a uuid FK** (Houzs `scm.staff` ids don't exist in 2990's `auth.users`), and customer/staff names are **snapshotted** because there is nothing to join to. `claim_campaign_promo()` is atomic *within Postgres* — two salespeople can't both take the last voucher — but that atomicity cannot span the Houzs order insert, which is why claims go `RESERVED → APPLIED → RELEASED`. **A row stuck at `RESERVED` is a claim whose order never landed; sweep those, don't assume they were spent.**
+
+---
+
+## Sofa module price fixes — the second POS feature that talks to 2990
+
+Added 2026-08-13 (migration `0213`). Same shape as Campaign Promos above —
+2990's Supabase, Origin-gated route, service-role client — and the same warnings
+apply. Admin surface is the **Sofa price fixes** tab of `pos.2990shome.com/products`.
+
+**The problem.** Verified 2026-08-13: **62 sofa module SKUs** come back from
+`GET /pos-pools/mfg-catalog` (Houzs) with `sell_price_sen: null` AND
+`seat_height_prices: null`. The POS prices a build as Σ its modules, so an
+unpriced module contributes RM 0, the tablet quotes low, and Houzs's drift gate
+rejects the order — `UBORR L(LHF)+STOOL+L(RHF)` → tablet RM 990, server
+RM 1,980, 400. Those Models are simply **unsellable from the POS**, voucher or
+not. "Refresh and try again" never helps: the tablet recomputes the same figure
+every time. Three Models (Pllao, Telluc, MAKOTO) have **zero** priced modules.
+
+**Why it can't be fixed at source:** the Houzs price editor wouldn't persist a
+value (tried 2026-08-13 — the schedule row saved, the catalogue kept serving
+null), and there is no Houzs repo access.
+
+**Two mechanisms, both landed:**
+- `sofa_module_price_overrides` — a per-SKU selling price that fills a **null**
+  catalogue price only (a real one always wins). Merged in **two** places:
+  `apps/pos/src/lib/queries.ts` (the configurator, so the price is honest from
+  the catalogue card onward) and `apps/pos/src/lib/sofa-module-prices.ts` (the
+  voucher cap). Admin tab + `/sofa-module-price-overrides` route.
+- **Drift-fix offer** — on a `pricing_drift` 400 the handover now offers to
+  adopt the server's own figure (`cart.adoptServerPrice`), voids the signature
+  and returns to Confirm payment. Narrow on purpose: only when the server's
+  price is HIGHER (a lower one would be an unauthorised discount).
+
+🔑 **An override is a RECONCILIATION value, not a pricing decision.** The figure
+comes from the drift rejection itself (server total − visible modules). Nobody
+should invent one — the tab says so. It is **self-correcting**: a wrong figure
+just gets the order rejected again with the right one. The drift gate is the
+oracle; the table only remembers the answer.
+
+⚠️ **We still don't know WHY Houzs values those builds higher.** 2990's own
+`loadModelSofaModulePrices` (`mfg-pricing-recompute.ts:651`) reads the *same*
+fields the catalogue serves at the *same* `PRICE_1` tier, so on this code the
+server would also total RM 990. Houzs's port differs, or a sofa combo is
+repricing the build. Don't assume the override "is" the module's true price.
+
+**Delete a row to revert a Model to catalogue-only pricing.** When Houzs serves
+complete prices, delete them all and this whole section goes with it.
+
+---
+
 ## Server-side pricing recompute — NON-NEGOTIABLE
 
 `POST /mfg-sales-orders` (`apps/api/src/routes/mfg-sales-orders.ts`) MUST re-derive every line price from current pricing tables before persisting, using the **shared** pricing code:

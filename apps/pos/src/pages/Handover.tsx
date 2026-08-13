@@ -36,6 +36,13 @@ import { EmergencyStep } from '../components/handover/EmergencyStep';
 import { TargetDateStep } from '../components/handover/TargetDateStep';
 import { AddonsPaymentStep } from '../components/handover/AddonsPaymentStep';
 import { ConfirmPaymentStep } from '../components/handover/ConfirmPaymentStep';
+import { Button } from '@2990s/design-system';
+import { VoucherPicker, type AppliedVoucher } from '../components/handover/VoucherPicker';
+import { planVoucher, type VoucherCartLine } from '../lib/voucher-apply';
+import { leadModuleValueCenti } from '@2990s/shared/voucher-sofa-cap';
+import { useSofaModulePrices } from '../lib/sofa-module-prices';
+import { submitWithVoucher } from '../lib/voucher-submit';
+import { useStaff } from '../lib/staff';
 import { SignConfirmStep } from '../components/handover/SignConfirmStep';
 import type { SignaturePadHandle } from '../components/handover/SignaturePad';
 import styles from './Handover.module.css';
@@ -82,8 +89,11 @@ const empty: HandoverForm = {
 export const Handover = () => {
   const navigate = useNavigate();
   const auth = useAuth();
+  // Name for the voucher redemption ledger — AuthUser carries only an id.
+  const staff = useStaff();
   const lines = useCart((s) => s.lines);
   const clear = useCart((s) => s.clear);
+  const adoptServerPrice = useCart((s) => s.adoptServerPrice);
   const sourceQuoteId = useCart((s) => s.sourceQuoteId);
   const subtotal = cartSubtotal(lines);
 
@@ -131,6 +141,13 @@ export const Handover = () => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   }, [idx]);
   const [serverError, setServerError] = useState<string | null>(null);
+  /* pricing_drift offer — see the catch in submitHandoffToSo. Holds the ONE
+     line the server re-priced, so the salesperson can adopt Houzs's figure
+     instead of being stuck behind a rejection they cannot fix from the POS
+     (the tablet catalog serves no selling price for 62 sofa module SKUs). */
+  const [driftFix, setDriftFix] = useState<
+    { lineKey: string; itemCode: string; serverRM: number; tabletRM: number } | null
+  >(null);
 
   /* Task #70 — Manufacturing SO handoff. The Sales Order is the single order
      system of record (Commander 2026-05-30: unify POS orders onto
@@ -190,6 +207,62 @@ export const Handover = () => {
 
   const update = <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
+
+  /* Campaign voucher (migration 0212). MUST stay above the early return below —
+     hooks have to run in the same order every render.
+     `voucher` holds the plan planVoucher() produced at pick time, re-derived
+     whenever the cart changes, so editing the cart after applying can never
+     leave a stale discount attached to the payload. */
+  /* Module prices for every sofa Model in the catalog, fetched once. Must sit
+     above the empty-cart return below — rules of hooks. */
+  const sofaPrices = useSofaModulePrices();
+  const voucherLines: VoucherCartLine[] = useMemo(
+    () => lines.map((l) => {
+      const isSofaBuild = l.config.kind === 'sofa';
+      // config.total is per-unit WHOLE MYR; the SO ledger is sen.
+      const lineTotalCenti = Math.round(l.qty * l.config.total * 100);
+      /* A sofa may only carry what module row 0 can hold, because that is the
+         single row the server puts the line's whole discount on. Null here (an
+         unpriced module, a bundle with no cells, catalog still loading) means
+         the sofa carries nothing — never that it carries everything. */
+      const cfg = l.config;
+      const lead = cfg.kind === 'sofa'
+        ? leadModuleValueCenti({
+            cells: cfg.cells,
+            depth: cfg.depth ?? null,
+            buildUnitPriceCenti: Math.round(cfg.total * 100),
+            qty: l.qty,
+            modulePrices: sofaPrices.pricesFor(cfg.productId, cfg.depth ?? null),
+          })
+        : null;
+      return {
+        key: l.key,
+        qty: l.qty,
+        lineTotalCenti,
+        isSofaBuild,
+        ...(lead != null ? { sofaLeadModuleCenti: lead } : {}),
+      };
+    }),
+    [lines, sofaPrices],
+  );
+  const [voucher, setVoucher] = useState<AppliedVoucher | null>(null);
+  useEffect(() => {
+    if (!voucher) return;
+    const fresh = planVoucher(
+      {
+        id: voucher.campaign.id, name: voucher.campaign.name,
+        valueCenti: voucher.campaign.valueCenti, remaining: voucher.campaign.remaining,
+        minPurchaseQty: voucher.campaign.minPurchaseQty, active: voucher.campaign.active,
+      },
+      voucherLines,
+    );
+    // Cart changed and the voucher no longer qualifies (or the split moved) —
+    // drop or re-shape it rather than submitting yesterday's numbers.
+    if (!fresh.ok) { setVoucher(null); return; }
+    if (fresh.appliedCenti !== voucher.appliedCenti) {
+      setVoucher({ ...voucher, discountByLineKey: fresh.discountByLineKey, appliedCenti: fresh.appliedCenti });
+    }
+  }, [voucherLines, voucher]);
 
   if (lines.length === 0) {
     return (
@@ -261,7 +334,10 @@ export const Handover = () => {
     },
     { baseFee: deliveryCfg.baseFee, crossCategoryFee: deliveryCfg.crossCategoryFee },
   );
-  const total = subtotal + addonTotal + deliveryFee.total;
+  /* Plain computes (no hooks) — these sit below the early return, same as
+     tbcItemNames. The voucher HOOKS live above it. */
+  const voucherTotal = voucher ? Math.round(voucher.appliedCenti / 100) : 0;
+  const total = Math.max(0, subtotal + addonTotal + deliveryFee.total - voucherTotal);
 
   const validity: Record<StepKey, boolean> = {
     customer:  validateCustomer(form),
@@ -271,7 +347,7 @@ export const Handover = () => {
     // Block this step when a linked SO number was typed but is invalid — the
     // server would reject the order, so catch it here with a clear message.
     addons:    validateAddonsPayment(form) && !linkInvalid,
-    confirm:   validateConfirmPayment(form, subtotal, addonTotal, deliveryFee.total),
+    confirm:   validateConfirmPayment(form, subtotal, addonTotal, deliveryFee.total, voucherTotal),
     sign:      validateSign(form),
   };
 
@@ -308,6 +384,7 @@ export const Handover = () => {
        - paid (whole-MYR) becomes depositCenti (sen) on the SO header. */
   const submitHandoffToSo = async () => {
     setServerError(null);
+    setDriftFix(null);
     try {
       // Resolve each cart line to its real size-specific mfg_products.code —
       // the cart stores the mfg id (`mfg-xxxx`), but the SO API validates +
@@ -315,7 +392,10 @@ export const Handover = () => {
       // server's itemCode guard (unknown_item_code). Also resolves the clean
       // Model name per line for the sofa SO description ("Annsa · 1A(LHF) + …").
       const resolution = await fetchItemCodeMap(lines);
-      const items = cartLinesToSoItems(lines, catalog.data, resolution);
+      // The voucher's per-line shares ride in as discountCenti. Only THIS call
+      // gets them — the TBC probe above must stay discount-free, it only reads
+      // `variants`.
+      const items = cartLinesToSoItems(lines, catalog.data, resolution, voucher?.discountByLineKey);
       // PaymentMethod / merchant / installments — narrow the HandoverForm's
       // permissive string union to the API's value set. Empty string never
       // reaches here because validity['addons'] gates it.
@@ -434,7 +514,25 @@ export const Handover = () => {
         items,
       };
 
-      const result = await handoffToSo.mutateAsync(payload);
+      /* Voucher bracket (migration 0212): claim the stock BEFORE submitting —
+         the payload already carries the discount, so a sold-out voucher must
+         stop the order. A failed order releases; a failed confirm does NOT fail
+         the order, because by then the SO exists in Houzs and retrying would
+         duplicate it. All three rules live in submitWithVoucher(). */
+      const result = await submitWithVoucher(
+        voucher
+          ? {
+              campaignId: voucher.campaign.id,
+              appliedCenti: voucher.appliedCenti,
+              ...(auth.user?.id ? { redeemedBy: auth.user.id } : {}),
+              ...(staff.data?.name ? { redeemedByName: staff.data.name } : {}),
+              ...(form.name.trim() ? { customerName: form.name.trim() } : {}),
+              ...(form.phone.trim() ? { customerPhone: form.phone.trim() } : {}),
+            }
+          : null,
+        () => handoffToSo.mutateAsync(payload),
+        { onWarn: (m) => console.warn('[voucher]', m) },
+      );
       // Consume the originating quote (if any) — mirrors submitOrder().
       if (sourceQuoteId) deleteQuote.mutate(sourceQuoteId);
       clear();
@@ -446,10 +544,51 @@ export const Handover = () => {
         // variants_incomplete offenders ("LOTTI-1A(LHF): missing legHeight")
         // so the salesperson knows WHICH line to Edit, not just an error code.
         setServerError(describePosHandoffError(err.payload));
+        /* pricing_drift is the one rejection the salesperson CANNOT act on:
+           "refresh and try again" never helps, because the tablet's catalog is
+           missing the module prices and every retry recomputes the same wrong
+           figure. The rejection does, however, carry the server's own price —
+           the number Houzs would have persisted. Offer to adopt it.
+
+           Deliberately narrow: only a pricing_drift, only when lineIdx maps to
+           a real cart line, and only when the server's figure is HIGHER than
+           the tablet's. A server price BELOW ours would mean adopting a
+           discount nobody authorised, which is the "honest pricing" promise
+           running the wrong way — leave those to a coordinator. */
+        const p = err.payload;
+        if (p.error === 'pricing_drift' && typeof p.lineIdx === 'number') {
+          const line = lines[p.lineIdx];
+          const serverRM = Math.round((p.server ?? 0) / 100);
+          const tabletRM = Math.round((p.client ?? 0) / 100);
+          if (line && serverRM > tabletRM && serverRM > 0) {
+            setDriftFix({ lineKey: line.key, itemCode: String(p.itemCode ?? ''), serverRM, tabletRM });
+          }
+        }
         return;
       }
       setServerError(err instanceof Error ? err.message : 'Order submission failed');
     }
+  };
+
+  /* Adopt Houzs's price for the drifted line and send the salesperson back to
+     Confirm payment. Three things must follow, in this order:
+       · the cart line takes the server's per-unit price;
+       · the signature is voided — the customer signed a total that no longer
+         exists, and re-signing is the whole point of going back;
+       · the step returns to Confirm, where the deposit floor recomputes off the
+         new total (validateConfirmPayment already nets the voucher out).
+     The voucher plan re-derives itself from `voucherLines` via the effect
+     above, so its share moves with the price without anything here. */
+  const applyDriftFix = () => {
+    if (!driftFix) return;
+    adoptServerPrice(driftFix.lineKey, driftFix.serverRM);
+    update('signed', false);
+    update('acknowledgedTerms', false);
+    setServerError(null);
+    setDriftFix(null);
+    setAttempted(false);
+    const confirmIdx = STEPS.findIndex((s) => s.key === 'confirm');
+    if (confirmIdx >= 0) setIdx(confirmIdx);
   };
 
   const onSubmit = (e: FormEvent) => {
@@ -504,10 +643,39 @@ export const Handover = () => {
                 }}
               />
             )}
-            {current.key === 'confirm'   && <ConfirmPaymentStep form={form} update={update} subtotal={subtotal} addonTotal={addonTotal} deliveryFeeTotal={deliveryFee.total} />}
+            {current.key === 'confirm'   && (
+              <ConfirmPaymentStep
+                form={form} update={update}
+                subtotal={subtotal} addonTotal={addonTotal} deliveryFeeTotal={deliveryFee.total}
+                voucherTotal={voucherTotal}
+                voucherSlot={<VoucherPicker lines={voucherLines} applied={voucher} onChange={setVoucher} />}
+              />
+            )}
             {current.key === 'sign'      && <SignConfirmStep   form={form} update={update} signatureRef={signatureRef} />}
 
             {serverError && <p className={styles.error}>{serverError}</p>}
+            {driftFix && (
+              <div className={styles.driftFix}>
+                <div className={styles.driftFixBody}>
+                  <strong>HouzsERP prices {driftFix.itemCode} at RM {driftFix.serverRM.toLocaleString('en-MY')}</strong>
+                  {' '}— the tablet has RM {driftFix.tabletRM.toLocaleString('en-MY')}.
+                  <span className={styles.driftFixNote}>
+                    This happens when the catalog is missing a module&rsquo;s price. Retrying won&rsquo;t
+                    help &mdash; the tablet recomputes the same figure every time. Updating uses
+                    HouzsERP&rsquo;s price, which is what the order would have been booked at anyway.
+                    The customer will need to sign again.
+                  </span>
+                  <span className={styles.driftFixNote}>
+                    Worth telling an admin to record RM{' '}
+                    {(driftFix.serverRM - driftFix.tabletRM).toLocaleString('en-MY')} against the
+                    missing module, so this stops happening on every sale of this Model.
+                  </span>
+                </div>
+                <Button variant="secondary" onClick={applyDriftFix}>
+                  Update price &amp; review payment
+                </Button>
+              </div>
+            )}
 
             <StepFooter
               isFirst={idx === 0}
@@ -515,7 +683,7 @@ export const Handover = () => {
               valid={validity[current.key]}
               submitting={handoffToSo.isPending}
               paymentRecorded={form.paymentRecorded}
-              blockers={getStepBlockers(current.key, form, subtotal, addonTotal, deliveryFee.total, hasTbcLines)}
+              blockers={getStepBlockers(current.key, form, subtotal, addonTotal, deliveryFee.total, hasTbcLines, voucherTotal)}
               attempted={attempted}
               onPrev={goPrev}
               onNext={goNext}
@@ -530,6 +698,8 @@ export const Handover = () => {
             subtotal={subtotal}
             addonTotal={addonTotal}
             deliveryFee={deliveryFee}
+            voucherTotal={voucherTotal}
+            {...(voucher ? { voucherLabel: voucher.campaign.name } : {})}
             total={total}
           />
         </form>

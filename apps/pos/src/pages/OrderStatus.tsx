@@ -49,6 +49,7 @@ import {
 } from '../components/handover/AddonsPaymentStep';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocalities, useSalesStats } from '../lib/queries';
+import { hiddenOrderCount } from '../lib/order-board-counts';
 import {
   usePaymentMethodLabels,
   useSoDropdownValues,
@@ -891,6 +892,18 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
       ? monthName(period.year, period.month0)
       : stats.data?.monthLabel ?? 'the selected dates';
 
+  /* Count reconciliation (2026-08-11) — see lib/order-board-counts.ts for why
+     the KPI cards and this board can disagree, and why the check is one-way. */
+  const hiddenCount = hiddenOrderCount({
+    canSeeAll,
+    salesperson,
+    showroomCount: stats.data?.showroomCount,
+    personalCount: stats.data?.personalCount,
+    shown: list.length,
+    searching,
+    loading: orders.isLoading || stats.isLoading,
+  });
+
   // Keep the active drawer order in sync with refetches.
   useEffect(() => {
     if (!active) return;
@@ -955,6 +968,14 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
       {searching && (
         <p className={styles.searchHint}>
           Showing search results across all dates.
+        </p>
+      )}
+
+      {hiddenCount > 0 && (
+        <p className={styles.searchHint}>
+          {hiddenCount} {hiddenCount === 1 ? 'order counts' : 'orders count'} toward the
+          totals above but {hiddenCount === 1 ? 'is' : 'are'} not shown here — unconfirmed
+          (draft) orders are excluded from the board.
         </p>
       )}
 

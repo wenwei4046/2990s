@@ -266,6 +266,16 @@ interface CartState {
    *  PWP reconciler when the server re-minted a trigger's codes (e.g. after a
    *  failed order burned + replaced them) and the line's snapshot went stale. */
   setPwpCode: (key: string, code: string) => void;
+  /** Adopt the SERVER's per-unit price for a line after a `pricing_drift`
+   *  reject — the 400 payload carries the server's own recompute
+   *  (`server`, sen), which is the figure Houzs would persist anyway. Used by
+   *  the handover's drift-fix flow when the tablet's catalog is missing module
+   *  prices (62 sofa module SKUs carry none, so whole Models misprice
+   *  client-side). No-op on PWP-reward / free-item lines: those are carved out
+   *  of the drift gate server-side, so a drift error can never name them — a
+   *  key that reaches here pointing at one is a bug, and silently repricing a
+   *  granted line would corrupt the grant. */
+  adoptServerPrice: (key: string, totalRM: number) => void;
   clear: () => void;
   restore: (lines: CartLine[], sourceQuoteId?: string | null) => void;
 }
@@ -372,6 +382,18 @@ export const useCart = create<CartState>()((set, get) => ({
 
   remove(key) {
     set({ lines: get().lines.filter((l) => l.key !== key) });
+  },
+
+  adoptServerPrice(key, totalRM) {
+    if (!Number.isFinite(totalRM) || totalRM <= 0) return;
+    set({
+      lines: get().lines.map((l) => {
+        if (l.key !== key) return l;
+        // Guarded lines never drift (server carve-outs), so never reprice them.
+        if (isPwpReward(l.config) || isFreeItemLine(l.config)) return l;
+        return { ...l, config: { ...l.config, total: totalRM } };
+      }),
+    });
   },
 
   revertPwp(key) {

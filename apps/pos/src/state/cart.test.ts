@@ -297,3 +297,50 @@ describe('makeFree / revertFreeItem', () => {
     expect(useCart.getState().lines.find((x) => x.key === key)!.qty).toBe(1);
   });
 });
+
+/* adoptServerPrice — the drift-fix escape hatch (Handover.tsx). When Houzs
+   rejects an order because the tablet's catalogue is missing a module price,
+   the 400 carries the SERVER's figure and the salesperson can adopt it. */
+describe('adoptServerPrice', () => {
+  beforeEach(() => { useCart.getState().clear(); });
+
+  it('replaces the line total with the server figure', () => {
+    const key = useCart.getState().addConfigured(size(990), { qty: 1 });
+    useCart.getState().adoptServerPrice(key, 1980);
+    expect(useCart.getState().lines.find((x) => x.key === key)!.config.total).toBe(1980);
+  });
+
+  it('touches only the named line', () => {
+    const a = useCart.getState().addConfigured(size(990), { qty: 1 });
+    const b = useCart.getState().addConfigured(size(500), { qty: 1 });
+    useCart.getState().adoptServerPrice(a, 1980);
+    expect(useCart.getState().lines.find((x) => x.key === b)!.config.total).toBe(500);
+  });
+
+  it('ignores a zero or negative figure rather than zeroing the line', () => {
+    /* A malformed payload must never turn into a free sofa. `server` is read
+       out of an error body, so it gets treated as untrusted. */
+    const key = useCart.getState().addConfigured(size(990), { qty: 1 });
+    useCart.getState().adoptServerPrice(key, 0);
+    useCart.getState().adoptServerPrice(key, -100);
+    useCart.getState().adoptServerPrice(key, Number.NaN);
+    expect(useCart.getState().lines.find((x) => x.key === key)!.config.total).toBe(990);
+  });
+
+  it('never reprices a made-free line', () => {
+    /* Free-item and PWP-reward lines are carved OUT of the server's drift gate,
+       so a pricing_drift can never name one. A key that reaches here pointing
+       at a granted line means something upstream mismapped the index, and
+       repricing it would silently revoke the grant. */
+    const key = useCart.getState().addConfigured(size(1000), { qty: 1 });
+    useCart.getState().makeFree(key, { id: 'c1', name: 'June', maxFreeQty: 1 });
+    useCart.getState().adoptServerPrice(key, 1980);
+    expect(useCart.getState().lines.find((x) => x.key === key)!.config.total).toBe(0);
+  });
+
+  it('is a no-op for an unknown key', () => {
+    const key = useCart.getState().addConfigured(size(990), { qty: 1 });
+    useCart.getState().adoptServerPrice('does-not-exist', 1980);
+    expect(useCart.getState().lines.find((x) => x.key === key)!.config.total).toBe(990);
+  });
+});

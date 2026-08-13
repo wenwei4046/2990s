@@ -200,6 +200,65 @@ export const freeItemCampaigns = pgTable('free_item_campaigns', {
   updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/* ──────────────── Marketing Campaign Promos (fixed-value voucher) ──────── */
+// Migration 0212. "RM 500 Home Voucher" — a flat money deduction usable across
+// the whole catalogue. NOT an extension of pwp_rules: every other promo in this
+// schema is a swap (reprice to pwp_price_sen) or a freebie (reprice to 0). None
+// carries a money value, so this is the first `value_centi` in the promo stack.
+//
+// ⚠️ Cross-database. Since the 2026-07-21 cutover the POS writes Sales Orders
+// into HouzsERP, so soDocNo is TEXT with NO foreign key and redeemedBy is TEXT
+// (a Houzs scm.staff id, which does not exist in 2990's auth.users). Customer
+// and staff names are snapshotted because there is nothing here to join to.
+// The money is applied as per-line discount_centi on the Houzs order,
+// apportioned by @2990s/shared/voucher-split.
+export const campaignPromos = pgTable('campaign_promos', {
+  id:              uuid('id').primaryKey().defaultRandom(),
+  name:            text('name').notNull(),               // 'RM 500 Home Voucher'
+  valueCenti:      integer('value_centi').notNull(),     // 50000 = RM 500
+  stockTotal:      integer('stock_total').notNull().default(0),
+  stockUsed:       integer('stock_used').notNull().default(0),
+  minPurchaseQty:  integer('min_purchase_qty').notNull().default(0),
+  maxPerOrder:     integer('max_per_order').notNull().default(1),
+  terms:           text('terms').notNull().default(''),  // snapshotted on redemption
+  active:          boolean('active').notNull().default(false),
+  createdBy:       uuid('created_by'),                   // references staff(id)
+  createdAt:       timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:       timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  // Partial — only active campaigns are ever looked up this way, and the POS
+  // cart hits it on every render. Matches the `WHERE active` in migration 0212;
+  // modelled the same way as idx_products_visible so the two can't drift.
+  idxActive: index('idx_campaign_promos_active').on(t.active).where(sql`${t.active} = TRUE`),
+}));
+
+// Append-only claim ledger. RESERVED → APPLIED once Houzs accepts the order,
+// → RELEASED if it doesn't (or on cancellation). Claiming goes through the
+// claim_campaign_promo() SECURITY DEFINER function so the stock re-check and
+// the increment happen in ONE statement — two salespeople cannot both take the
+// last voucher. That atomicity stops at the database boundary: it cannot span
+// the Houzs order insert, which is exactly why the confirm/release phase exists.
+export const campaignPromoRedemptions = pgTable('campaign_promo_redemptions', {
+  id:              uuid('id').primaryKey().defaultRandom(),
+  campaignId:      uuid('campaign_id').notNull().references(() => campaignPromos.id, { onDelete: 'restrict' }),
+  status:          text('status').notNull().default('RESERVED'), // RESERVED | APPLIED | RELEASED
+  appliedCenti:    integer('applied_centi').notNull(),
+  soDocNo:         text('so_doc_no'),                    // Houzs doc no — no FK, other DB
+  customerName:    text('customer_name'),
+  customerPhone:   text('customer_phone'),
+  redeemedBy:      text('redeemed_by'),                  // Houzs staff id
+  redeemedByName:  text('redeemed_by_name'),
+  termsSnapshot:   text('terms_snapshot').notNull().default(''),
+  releasedAt:      timestamp('released_at', { withTimezone: true }),
+  releaseReason:   text('release_reason'),
+  createdAt:       timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:       timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxCampaign: index('idx_cpr_campaign').on(t.campaignId),
+  idxDoc:      index('idx_cpr_doc').on(t.soDocNo),
+  idxStatus:   index('idx_cpr_status_created').on(t.status, t.createdAt),
+}));
+
 /* ──────────────── Special Delivery Fee Rules (RuleTarget jsonb) ───────── */
 // Migration 0182. Generalises model_special_delivery_fees (0140) onto the
 // #691 RuleTarget abstraction: a rule's target jsonb is RuleTarget[] (scopes

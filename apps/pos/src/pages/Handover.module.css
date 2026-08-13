@@ -440,3 +440,70 @@
   border-color: var(--c-burnt);
   color: var(--c-cream);
 }
+
+/* ── Campaign voucher picker (migration 0212) ──────────────────────────────
+   Sits above the amount card in Confirm payment, so the deposit presets are
+   computed after the deduction. Tokens only — no new colours, per
+   UI_REFERENCE.md. */
+.voucherBox {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+.voucherName {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-14);
+}
+.voucherNote {
+  display: block;
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+}
+.voucherRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+/* Why a voucher can't be used — shown rather than hiding the row, because
+   "needs 2 items" is actionable and a missing row is not. */
+.voucherWhy {
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+  max-width: 42ch;
+}
+
+/* pricing_drift recovery offer. Sits directly under the error strip: the
+   rejection tells the salesperson the price is "out of date", but refreshing
+   never fixes it — the tablet catalog serves no price for the module, so every
+   retry recomputes the same wrong figure. This is the way out. */
+.driftFix {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  margin-top: var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface, #fff);
+}
+.driftFixBody {
+  font-size: var(--fs-13);
+}
+.driftFixNote {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+  max-width: 52ch;
+}

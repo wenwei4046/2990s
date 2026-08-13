@@ -1,0 +1,38 @@
+# apps/api/.dev.vars.example
+#
+# Copy to `apps/api/.dev.vars` and fill in. That file is gitignored — never
+# commit it, and never paste these values into anything starting with VITE_
+# (those are inlined into the browser bundle).
+#
+# WHY THIS FILE EXISTS: `wrangler.toml [vars]` holds the non-secret config
+# (SUPABASE_URL, ALLOWED_ORIGINS, portal URLs). The four values below are
+# SECRETS — in production they are set with `wrangler secret put NAME`, and
+# locally `wrangler dev` reads them from .dev.vars. Without it the worker boots
+# fine and then every route touching the database dies with
+# "Error: supabaseKey is required" on the first request, which reads like a code
+# bug and isn't one.
+#
+# Where to get them: Supabase Dashboard -> Project Settings -> API.
+
+# The public key. Used by middleware/auth.ts to verify a caller's JWT against
+# GoTrue, and as the RLS-scoped client for normal routes. Safe-ish to expose —
+# it is the same key the browser apps ship with.
+SUPABASE_ANON_KEY=
+
+# The service-role key. BYPASSES ROW LEVEL SECURITY ENTIRELY. Anything
+# holding this can read and write every row in every table regardless of policy.
+# Treat it like a database password: never in a browser bundle, never in a
+# screenshot, never in a commit. Routes that need it create their own client
+# (e.g. routes/campaign-promos.ts, routes/pos.ts) precisely because RLS cannot
+# scope them.
+SUPABASE_SERVICE_ROLE_KEY=
+
+# R2 (Cloudflare) — only the slip-upload and SO-photo routes need these. Any
+# placeholder is fine if you are not exercising those locally; the routes will
+# fail when called, and nothing else will.
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+
+# OPTIONAL — handwritten-slip OCR (routes/scan-so.ts). Leave unset and
+# /scan-so/extract answers 503 anthropic_key_missing instead of breaking.
+# ANTHROPIC_API_KEY=

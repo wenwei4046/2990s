@@ -7,3 +7,10 @@
 # To bypass in an emergency: git push --no-verify
 echo "[pre-push] typecheck…"
 pnpm run typecheck
+
+# Audit-label drift — the History drawer renders `FIELD_LABEL[field] ?? field`,
+# so a field the API emits without a label silently prints raw camelCase at
+# office staff instead of erroring. That fallback is why the gap survived twice
+# (payment fields 2026-05-28, 15 more 2026-08-06). Sub-second, no network.
+echo "[pre-push] audit-label coverage…"
+node scripts/check-audit-labels.mjs

@@ -197,6 +197,12 @@ export interface PosHandoffError {
   itemCode?: string;
   client?: number;
   server?: number;
+  /** pricing_drift: index into the payload's `items[]`. The server has always
+   *  sent it; the type omitted it, so the handover could name the offending
+   *  SKU but not point at the cart line. The drift-fix flow needs the line.
+   *  Payload items are built from the cart in order and service rows are
+   *  appended AFTER, so an index < lines.length maps 1:1 onto a cart line. */
+  lineIdx?: number;
   /** variant_not_allowed detail (apps/api/src/lib/allowed-options-check.ts):
    *  WHICH variant axis the line carried that the Model's allowed_options pool
    *  rejects, the offending value, and the pool it had to be in. Surfaced so
@@ -749,6 +755,12 @@ export const cartLineToSoItem = (
   resolvedItemCode?: string,
   resolvedModelName?: string,
   resolvedSkuName?: string,
+  /* Campaign voucher share for THIS line, in sen (migration 0212). Comes from
+     planVoucher() → splitVoucherAcrossLines(), already apportioned and already
+     bounded by the line's own value — the server rejects 422 invalid_discount
+     on anything above `qty × unit`. 0 for every line when no voucher is
+     applied, which is the state this was hardcoded to before. */
+  discountCenti = 0,
 ): PosHandoffItem => {
   const product = productById.get(line.config.productId);
   // Fallback to the line's productId if neither the resolver nor the catalog
@@ -806,7 +818,7 @@ export const cartLineToSoItem = (
     description,
     qty: line.qty,
     unitPriceCenti,
-    discountCenti: 0,
+    discountCenti,
     variants: (freeGift || freeItem)
       ? { ...(buildVariants(line.config) ?? {}), ...freeGift, ...freeItem }
       : buildVariants(line.config),
@@ -823,6 +835,11 @@ export const cartLinesToSoItems = (
   lines: CartLine[],
   products: CatalogProduct[] | undefined,
   resolution?: SoLineResolution,
+  /* Campaign voucher shares keyed by CART LINE KEY (migration 0212). Omit and
+     every line gets 0, which is what the TBC-probe caller wants — it only reads
+     `variants`, and handing it a discount would be meaningless there. Only the
+     real submit payload passes this. */
+  discountByLineKey?: Record<string, number>,
 ): PosHandoffItem[] => {
   const productById = new Map<string, CatalogProduct>(
     (products ?? []).map((p) => [p.id, p]),
@@ -834,6 +851,7 @@ export const cartLinesToSoItems = (
       resolution?.codeByKey.get(l.key),
       resolution?.modelNameByKey.get(l.key),
       resolution?.skuNameByKey.get(l.key),
+      discountByLineKey?.[l.key] ?? 0,
     ),
   );
 };

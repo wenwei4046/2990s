@@ -66,6 +66,36 @@ describe('cartLineToSoItem', () => {
     });
   });
 
+  /* Campaign voucher shares (migration 0212) ride in on discountCenti, keyed by
+     cart line key. Omitting the map must leave every line at 0 — the TBC-probe
+     caller in Handover.tsx relies on that, and it was the hardcoded behaviour
+     before vouchers existed. */
+  it('applies a voucher share to the matching cart line only', () => {
+    const line: CartLine = {
+      key: 'cfg-a',
+      qty: 1,
+      config: {
+        kind: 'flat', productId: 'p1', productName: 'Accessory', total: 500, summary: 'Accessory',
+      } as CartLine['config'],
+    };
+    const other: CartLine = { ...line, key: 'cfg-b' };
+
+    const items = cartLinesToSoItems([line, other], [product()], undefined, { 'cfg-a': 12_345 });
+    expect(items[0]!.discountCenti).toBe(12_345);
+    expect(items[1]!.discountCenti).toBe(0);
+  });
+
+  it('leaves every line at 0 when no voucher map is passed', () => {
+    const line: CartLine = {
+      key: 'cfg-a',
+      qty: 1,
+      config: {
+        kind: 'flat', productId: 'p1', productName: 'Accessory', total: 500, summary: 'Accessory',
+      } as CartLine['config'],
+    };
+    expect(cartLinesToSoItems([line], [product()])[0]!.discountCenti).toBe(0);
+  });
+
   // Fabric optional at Add-to-Cart (Loo 2026-06-11) — a sofa line whose
   // customer hasn't confirmed the fabric serializes WITHOUT fabricId /
   // fabricCode / colourId, so the SO lands with the fabric axis open and the

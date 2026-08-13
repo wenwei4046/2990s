@@ -215,13 +215,14 @@ export const validateAddonsPayment = (f: HandoverForm): boolean => {
   return true;
 };
 
-export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonTotal: number, deliveryFeeTotal = 0): boolean => {
+export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonTotal: number, deliveryFeeTotal = 0, voucherTotal = 0): boolean => {
   if (f.paymentMethod === '') return false;  // method must be chosen (defense-in-depth — orchestrator step 5 already gates this)
-  // The payable total is the WHOLE order — goods + add-ons + delivery — so the
-  // 50%-deposit floor and full-payment ceiling match the Order summary total.
+  // The payable total is the WHOLE order — goods + add-ons + delivery, LESS any
+  // campaign voucher (migration 0212) — so the 50%-deposit floor and
+  // full-payment ceiling match the Order summary total.
   // Split payment (Loo 2026-06-06): the floor/ceiling apply to EVERYTHING
   // collected (primary + extras), and every extra row must be complete.
-  const total = subtotal + addonTotal + deliveryFeeTotal;
+  const total = Math.max(0, subtotal + addonTotal + deliveryFeeTotal - voucherTotal);
   const halfTotal = Math.round(total / 2);
   const collected = collectedTotal(f);
   // amountPaid may be exactly 0 — a fully-free RM0 order, or nothing collected
@@ -323,16 +324,17 @@ const addonsPaymentBlockers = (f: HandoverForm): string[] => {
   return [];
 };
 
-const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: number, deliveryFeeTotal = 0): string[] => {
+const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: number, deliveryFeeTotal = 0, voucherTotal = 0): string[] => {
   const b: string[] = [];
   if (!f.paymentMethod) b.push('Payment method missing');
-  // Whole-order basis — goods + add-ons + delivery (matches the Order summary).
-  // Split payment: the 50% floor / full ceiling apply to the COLLECTED total.
+  // Whole-order basis — goods + add-ons + delivery, LESS any campaign voucher
+  // (matches the Order summary). Split payment: the 50% floor / full ceiling
+  // apply to the COLLECTED total.
   // Free Item Campaign giveaway (total 0): halfTotal is 0 so the deposit floor
   // never fires, and any collected > 0 trips the "exceeds the order total"
   // message. Approval/slip follow paymentProofRequired (cash + free need none) —
   // kept in lockstep with validateConfirmPayment.
-  const total = subtotal + addonTotal + deliveryFeeTotal;
+  const total = Math.max(0, subtotal + addonTotal + deliveryFeeTotal - voucherTotal);
   const halfTotal = Math.round(total / 2);
   const extras = f.extraPayments ?? [];
   const collected = collectedTotal(f);
@@ -373,6 +375,9 @@ export const getStepBlockers = (
   addonTotal: number,
   deliveryFeeTotal = 0,
   hasTbcLines = false,
+  /* Appended rather than slotted next to deliveryFeeTotal on purpose — these
+     are positional, and every existing caller predates campaign vouchers. */
+  voucherTotal = 0,
 ): string[] => {
   switch (key) {
     case 'customer': return customerBlockers(f);
@@ -380,7 +385,7 @@ export const getStepBlockers = (
     case 'emergency': return emergencyBlockers(f);
     case 'target':   return targetDateBlockers(f, todayLocalIso(), hasTbcLines);
     case 'addons':   return addonsPaymentBlockers(f);
-    case 'confirm':  return confirmPaymentBlockers(f, subtotal, addonTotal, deliveryFeeTotal);
+    case 'confirm':  return confirmPaymentBlockers(f, subtotal, addonTotal, deliveryFeeTotal, voucherTotal);
     case 'sign':     return signBlockers(f);
   }
 };

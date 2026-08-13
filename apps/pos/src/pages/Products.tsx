@@ -63,8 +63,10 @@ import {
   ImageOff,
   Eye,
   EyeOff,
+  ArrowLeft,
 } from 'lucide-react';
-import { Button } from '@2990s/design-system';
+import { Link } from 'react-router';
+import { Button, IconButton } from '@2990s/design-system';
 import {
   maintValues,
   maintActiveValues,
@@ -110,6 +112,8 @@ import {
 import { FabricsTable } from '../components/products/FabricsTable';
 import { SofaComboTab } from '../components/products/SofaComboTab';
 import { PwpRulesTab } from '../components/products/PwpRulesTab';
+import { CampaignPromosTab } from '../components/products/CampaignPromosTab';
+import { SofaPriceOverridesTab } from '../components/products/SofaPriceOverridesTab';
 import { RuleTargetPicker, finalizeRuleTargets } from '../components/products/RuleTargetPicker';
 import { useSofaCombos } from '../lib/products/sofa-combos-queries';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/products/size-info';
@@ -232,7 +236,7 @@ const resolveModelPhotoUrl = (raw: string | null | undefined): string | null => 
   return raw.startsWith('/') ? `${API_URL}${raw}` : `${API_URL}/${raw}`;
 };
 
-type TopTab = 'sku' | 'modular' | 'specialAddons' | 'fabrics' | 'maintenance' | 'combos' | 'delivery' | 'pwp';
+type TopTab = 'sku' | 'modular' | 'specialAddons' | 'fabrics' | 'maintenance' | 'combos' | 'delivery' | 'pwp' | 'campaignPromos' | 'sofaPriceFixes';
 
 
 export const Products = () => {
@@ -254,6 +258,17 @@ export const Products = () => {
     <div className={styles.page}>
       <header className={styles.headerRow}>
         <div className={styles.titleBlock}>
+          {/* This page had no way back (2026-08-12) — no back control and no
+              <Topbar/>, so browser-back was the only exit. Same Link +
+              IconButton + ArrowLeft pattern the other POS pages use
+              (OrderStatus.tsx). .titleBlock is already a flex row, so it sits
+              inline before the title with no CSS change. */}
+          <Link to="/catalog">
+            <IconButton
+              icon={<ArrowLeft size={20} strokeWidth={1.75} />}
+              aria-label="Back to catalog"
+            />
+          </Link>
           <h1 className={styles.title}>
             Products
             {modeChip && (
@@ -376,6 +391,35 @@ export const Products = () => {
             >
               PWP &amp; Promo
             </button>
+            {/* Campaign Promos (migration 0212) — fixed-value vouchers, e.g.
+                "RM 500 Home Voucher". Deliberately NOT folded into PWP & Promo:
+                everything in that tab is a swap or a freebie, this is a flat
+                money deduction spread across the order's lines. No shared data
+                model, no shared rules. */}
+            <button
+              type="button"
+              role="tab"
+              data-active={topTab === 'campaignPromos'}
+              className={styles.tabSwitchBtn}
+              onClick={() => setTopTab('campaignPromos')}
+            >
+              Campaign Promos
+            </button>
+            {/* Migration 0213 — repair surface for sofa modules the Houzs
+                catalogue serves with no price, which makes the tablet quote low
+                and the order get refused at handover. Its own tab rather than a
+                corner of SKU Master: these rows are 2990-side stop-gaps, not
+                catalogue data, and they should be easy to find AND easy to
+                delete once Houzs serves complete prices. */}
+            <button
+              type="button"
+              role="tab"
+              data-active={topTab === 'sofaPriceFixes'}
+              className={styles.tabSwitchBtn}
+              onClick={() => setTopTab('sofaPriceFixes')}
+            >
+              Sofa price fixes
+            </button>
           </div>
         </div>
       </header>
@@ -388,6 +432,8 @@ export const Products = () => {
       {topTab === 'combos' && <SofaComboTab mode={mode} />}
       {topTab === 'delivery' && <DeliveryFeeTab mode={mode} />}
       {topTab === 'pwp' && <PwpRulesTab mode={mode} />}
+      {topTab === 'campaignPromos' && <CampaignPromosTab canEdit={mode === 'full'} />}
+      {topTab === 'sofaPriceFixes' && <SofaPriceOverridesTab canEdit={mode === 'full'} />}
     </div>
   );
 };

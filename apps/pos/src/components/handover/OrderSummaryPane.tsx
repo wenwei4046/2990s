@@ -27,6 +27,11 @@ export interface FormPaneProps {
     additional:    number;
     total:         number;
   };
+  /** Campaign voucher deduction in whole MYR (migration 0212). Shown as its own
+   *  row so the Total still reconciles on screen — a silently reduced subtotal
+   *  reads as a pricing error to the customer sitting opposite. */
+  voucherTotal?: number;
+  voucherLabel?: string;
   total: number;
 }
 
@@ -46,7 +51,7 @@ export const OrderSummaryPane = (props: FormPaneProps | ReceiptPaneProps) => {
   return <FormPane {...props} />;
 };
 
-const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: FormPaneProps) => {
+const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, voucherTotal = 0, voucherLabel, total }: FormPaneProps) => {
   const placeholderId = 'SO-XXXX';
   const today = new Date().toLocaleDateString('en-GB');
   const mfgById = useMfgCatalogIndex();
@@ -153,6 +158,12 @@ const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: For
         )}
         {deliveryFee.additional > 0 && (
           <Row label="Additional delivery fee" value={fmtRM(deliveryFee.additional)} />
+        )}
+        {voucherTotal > 0 && (
+          <Row
+            label={voucherLabel ?? 'Voucher'}
+            value={`− ${fmtRM(voucherTotal)}`}
+          />
         )}
       </Section>
 

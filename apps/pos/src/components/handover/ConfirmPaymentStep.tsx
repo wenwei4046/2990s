@@ -10,17 +10,24 @@ import { usePaymentMethodLabels, useSoDropdownValues } from '../../lib/so-mainte
 import styles from '../../pages/Handover.module.css';
 
 export const ConfirmPaymentStep = ({
-  form, update, subtotal, addonTotal, deliveryFeeTotal,
+  form, update, subtotal, addonTotal, deliveryFeeTotal, voucherTotal = 0, voucherSlot,
 }: {
   form: HandoverForm;
   update: <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) => void;
   subtotal: number;
   addonTotal: number;
   deliveryFeeTotal: number;
+  /** Campaign voucher deduction in whole MYR (migration 0212). Subtracted
+   *  BEFORE the presets below, or the salesperson collects a 50% deposit on a
+   *  total the customer is not paying. */
+  voucherTotal?: number;
+  /** The picker itself, injected so this step stays free of campaign imports. */
+  voucherSlot?: React.ReactNode;
 }) => {
-  // Payable total = the WHOLE order (goods + add-ons + delivery), so the
-  // deposit floor + full-payment ceiling match the Order summary on the right.
-  const total = subtotal + addonTotal + deliveryFeeTotal;
+  // Payable total = the WHOLE order (goods + add-ons + delivery), less any
+  // voucher, so the deposit floor + full-payment ceiling match the Order
+  // summary on the right.
+  const total = Math.max(0, subtotal + addonTotal + deliveryFeeTotal - voucherTotal);
   const halfTotal = Math.round(total / 2);
   const seventyTotal = Math.round(total * 0.7);
   // Fully-free order (Free Item Campaign giveaway): nothing to collect, so the
@@ -96,6 +103,8 @@ export const ConfirmPaymentStep = ({
           <strong>50% deposit</strong> ({fmtRM(halfTotal)}) and the full total ({fmtRM(total)}).</>
         )}
       </p>
+
+      {voucherSlot}
 
       <div className={styles.amountCard}>
         <span className={styles.amountLabel}>Amount paid</span>
