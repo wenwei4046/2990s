@@ -52,11 +52,32 @@ describe('planVoucher — refusals', () => {
     });
   });
 
-  it('ignores RM0 lines when deciding whether the cart is empty', () => {
+  it('ignores RM0 lines when deciding whether anything can carry the discount', () => {
     const r = planVoucher(campaign({ minPurchaseQty: 0 }), [
       { key: 'gift', qty: 1, lineTotalCenti: 0 },
     ]);
+    expect(r.ok).toBe(false);
+  });
+
+  it('says the items are UNPRICED, not that the cart is empty', () => {
+    /* Telluc / Pllao custom builds price at RM 0 because the Houzs catalogue
+       serves no price for their modules. The old copy told a salesperson
+       looking at four sofas to "add an item", which is the opposite of useful.
+       An empty cart and a cart of priceless items need different advice. */
+    const r = planVoucher(campaign({ minPurchaseQty: 0 }), [
+      { key: 'telluc-a', qty: 1, lineTotalCenti: 0, isSofaBuild: true },
+      { key: 'telluc-b', qty: 1, lineTotalCenti: 0, isSofaBuild: true },
+    ]);
+    expect(r).toMatchObject({ ok: false, reason: 'unpriced_cart' });
+    const msg = (r as { message: string }).message;
+    expect(msg).not.toContain('Add an item');
+    expect(msg).toContain('no price');
+  });
+
+  it('still says "add an item" for a genuinely empty cart', () => {
+    const r = planVoucher(campaign({ minPurchaseQty: 0 }), []);
     expect(r).toMatchObject({ ok: false, reason: 'empty_cart' });
+    expect((r as { message: string }).message).toContain('Add an item');
   });
 
   it('refuses rather than part-applying when the voucher exceeds the order', () => {

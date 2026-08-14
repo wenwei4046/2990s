@@ -226,6 +226,11 @@ export const Handover = () => {
          unpriced module, a bundle with no cells, catalog still loading) means
          the sofa carries nothing — never that it carries everything. */
       const cfg = l.config;
+      /* A line declaring an extra add-on charge is split EVENLY across its
+         modules server-side (`evenSplitPrice: extraRM > 0`,
+         mfg-sales-orders.ts) instead of by catalogue weight. That makes row 0
+         worth build/N — knowable, so pass the flag rather than refusing. */
+      const hasExtraCharge = Number((cfg as { extraAddonAmountRM?: unknown }).extraAddonAmountRM ?? 0) > 0;
       const lead = cfg.kind === 'sofa'
         ? leadModuleValueCenti({
             cells: cfg.cells,
@@ -233,6 +238,7 @@ export const Handover = () => {
             buildUnitPriceCenti: Math.round(cfg.total * 100),
             qty: l.qty,
             modulePrices: sofaPrices.pricesFor(cfg.productId, cfg.depth ?? null),
+            evenSplitPrice: hasExtraCharge,
           })
         : null;
       return {

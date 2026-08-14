@@ -97,6 +97,12 @@ export type VoucherRefusal =
   | 'sold_out'
   | 'below_min_items'
   | 'empty_cart'
+  /** The cart HAS items, but every one of them prices at RM 0 — so there is no
+   *  money to deduct from. Distinct from `empty_cart` because the two need
+   *  opposite advice: "add an item" is wrong and confusing when the screen is
+   *  showing four sofas. Happens on Models whose modules the Houzs catalogue
+   *  serves with no selling price (Telluc / Pllao / MAKOTO custom builds). */
+  | 'unpriced_cart'
   | 'exceeds_order_total'
   /** Every payable line is a sofa build, so there is nothing that may carry the
    *  discount. See the note on `isSofaBuild`. */
@@ -127,7 +133,17 @@ export const planVoucher = (
   if (campaign.remaining <= 0) return no('sold_out', `${campaign.name} is fully redeemed.`);
 
   const payable = lines.filter((l) => l.lineTotalCenti > 0);
-  if (payable.length === 0) return no('empty_cart', 'Add an item before applying a voucher.');
+  if (payable.length === 0) {
+    /* An empty cart and a cart of RM 0 items need OPPOSITE advice, and the old
+       copy gave the wrong one: a salesperson looking at four Telluc sofas was
+       told to "add an item". Say which case it is. */
+    return lines.length === 0
+      ? no('empty_cart', 'Add an item before applying a voucher.')
+      : no(
+          'unpriced_cart',
+          `These items have no price yet, so there is nothing for ${campaign.name} to come off. This build can't be sold at its real price either — pass it to the office.`,
+        );
+  }
 
   const totalQty = payable.reduce((s, l) => s + Math.max(0, l.qty), 0);
   if (totalQty < campaign.minPurchaseQty) {

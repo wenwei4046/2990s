@@ -1,0 +1,37 @@
+-- 0214_drop_sofa_module_price_overrides.sql
+-- Removes the table added by 0213. The whole sofa module price-fix feature was
+-- withdrawn on 2026-08-14, one day after it landed.
+--
+-- ⚠️ NOT APPLIED YET. Migrations in this repo are applied by hand through the
+-- Supabase MCP, and this one DROPS A TABLE — read the paragraph below before
+-- running it.
+--
+-- WHY IT WAS WITHDRAWN. 0213 let an admin record a selling price for a sofa
+-- module that the Houzs catalogue serves as null, so the tablet's build total
+-- would match what Houzs charges. It worked (Uborr became sellable again), but
+-- it created a second, hand-maintained price source that nobody would remember
+-- to clear once Houzs's catalogue is fixed — a stale row here would then
+-- disagree with real catalogue data. The drift-adopt step at handover already
+-- covers the same failure with no stored state: on a `pricing_drift` reject the
+-- salesperson can adopt the server's own figure and continue. One mechanism
+-- beats two, so the stored one goes.
+--
+-- WHAT CHANGES FOR SALES. A build whose modules the catalogue does not price
+-- again quotes LOW in the configurator and is refused at handover, where the
+-- salesperson accepts Houzs's price and carries on. The customer therefore sees
+-- the corrected figure at handover rather than on the catalogue card. That is
+-- the accepted cost of not keeping a parallel price table.
+--
+-- The real fix remains the Houzs catalogue: 62 sofa module SKUs serve no
+-- selling price (measured 2026-08-13). See the report sent to the owner.
+--
+-- BEFORE YOU RUN THIS, check what is in the table — the rows are the only
+-- record of which modules were reconciled and what figure was used:
+--
+--   SELECT item_code, sell_price_centi, note FROM sofa_module_price_overrides;
+--
+-- Keep that output somewhere. If the feature is ever revived, or if someone
+-- fills in the Houzs prices, those figures are the ones the drift gate already
+-- agreed with. Known content as of 2026-08-14: one row, UBORR-L(RHF).
+
+DROP TABLE IF EXISTS sofa_module_price_overrides;

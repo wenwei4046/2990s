@@ -102,6 +102,54 @@ describe('leadModuleValueCenti — refuses rather than guesses', () => {
     expect(leadModuleValueCenti({ ...base, modulePrices: null })).toBeNull();
   });
 
+  /* THE TELLUC / PLLAO CASE. A combo gives the build a real price while not one
+     module carries a catalogue price. distributeProportionally then falls back
+     to EQUAL weights, so row 0 is build/N exactly — not an estimate, the same
+     arithmetic the server runs. Verified against a live order: a 2-module
+     Telluc at RM 2,990 booked RM 1,495 per module per unit. Before this, these
+     builds were refused with "no sofa can carry a discount". */
+  it('uses an equal split when NO module is priced', () => {
+    expect(leadModuleValueCenti({ ...base, buildUnitPriceCenti: 299_000, modulePrices: {} }))
+      .toBe(149_500);
+  });
+
+  it('uses an equal split even with no price map, when the split is even', () => {
+    expect(leadModuleValueCenti({
+      ...base, buildUnitPriceCenti: 299_000, modulePrices: null, evenSplitPrice: true,
+    })).toBe(149_500);
+  });
+
+  it('floors the equal share the way the server floors it', () => {
+    // distributeProportionally floors every share but the last, so row 0 is
+    // never the one that collects the rounding residue.
+    expect(leadModuleValueCenti({
+      ...base,
+      cells: [cell('1A(LHF)', 0), cell('CONSOLE', 100), cell('1A(RHF)', 200)],
+      buildUnitPriceCenti: 100, modulePrices: {},
+    })).toBe(33);
+  });
+
+  it('an extra charge forces the equal split, overriding real weights', () => {
+    /* evenSplitPrice: extraRM > 0 — the server ignores catalogue weights on
+       these lines, so w0 would over-estimate row 0. 120k over 2 modules = 60k,
+       not the leftmost module's 30k catalogue price. */
+    expect(leadModuleValueCenti({ ...base, evenSplitPrice: true })).toBe(60_000);
+  });
+
+  it('still multiplies the equal share by qty', () => {
+    expect(leadModuleValueCenti({
+      ...base, buildUnitPriceCenti: 299_000, qty: 2, modulePrices: {},
+    })).toBe(299_000);
+  });
+
+  it('an unpriced build stays null even on the equal split', () => {
+    // Telluc CUSTOM shapes have no combo, so the build itself is RM 0. There is
+    // no money to discount, and the cart-level check refuses first anyway.
+    expect(leadModuleValueCenti({
+      ...base, buildUnitPriceCenti: 0, modulePrices: {},
+    })).toBeNull();
+  });
+
   it('returns null for a bundle-only sofa (no cells)', () => {
     expect(leadModuleValueCenti({ ...base, cells: [] })).toBeNull();
     expect(leadModuleValueCenti({ ...base, cells: undefined })).toBeNull();

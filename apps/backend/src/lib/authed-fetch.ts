@@ -33,7 +33,10 @@ async function fetchWithTimeout(url: string, init: RequestInit, path: string): P
     return await fetch(url, { ...init, signal: callerSignal ?? timeoutSignal(path) });
   } catch (e) {
     if (!callerSignal && e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
-      throw new Error('The request took too long — please check your connection and try again.');
+      // Keep the original DOMException as `cause`: the friendly text is for the
+      // user, but a timeout and an abort are different faults and the console
+      // needs to be able to tell them apart.
+      throw new Error('The request took too long — please check your connection and try again.', { cause: e });
     }
     throw e;
   }

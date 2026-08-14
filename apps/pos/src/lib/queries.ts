@@ -3,7 +3,6 @@ import { sofaModulePricesFromSkus, normalizeCompartmentCode, representativeArtCo
 import { comboChargedPrices, maintActiveValues, type MfgSeatHeightPrice, type DefaultFreeGift, type FreeItemEligibility, type FreeItemCampaign, type RuleTarget } from '@2990s/shared';
 import { authedFetch, authedFetchRaw, API_URL, IS_HOUZS, HOUZS_COMPANY_ID, houzsApiRoot, posApiBase } from './apiClient';
 import { useMaintenanceConfig, type MaintenanceResolved } from './products/mfg-products-queries';
-import { fetchSofaPriceOverrides } from './products/sofa-price-override-queries';
 
 /* ─── Houzs seam helpers (P4.3) ───────────────────────────────────────────
  * The configurator resolves a SKU (mfg_products.id) → its Model's
@@ -1239,26 +1238,23 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
       // (loadModelSofaModulePrices) and the same key combo scoping uses, so the
       // POS and server SKU sets are identical by construction (not just for
       // today's data). model_code === base_model on every sofa SKU.
-      const [skuPriceRows, priceOverrides] = await Promise.all([
-        fetchMfgCatalog({ baseModel: model.model_code, category: 'SOFA' }),
-        /* Migration 0213 — 62 sofa module SKUs come back from the Houzs
-           catalogue with NO selling price, so a build containing one prices
-           low here and is then rejected by Houzs's drift gate at handover
-           ("tablet RM 990 vs server RM 1,980"). Merging the overrides HERE, in
-           the configurator's own map, is what makes the price honest from the
-           catalogue card onward — the customer never sees a figure that jumps
-           after they've signed. */
-        fetchSofaPriceOverrides(),
-      ]);
+      const skuPriceRows = await fetchMfgCatalog({ baseModel: model.model_code, category: 'SOFA' });
       // Raw per-module SELLING rows. The flat `modulePrices` (depth/tier-agnostic
       // sell_price_sen) is the fallback; the Configurator rebuilds a depth-aware
       // P1 selling map from `sellingRows` so the per-seat-size grid price reaches
       // the live total + palette (SOFA-SELLING Phase B; Chairman 2026-06-01: run
       // at P1, no fabric-tier variation yet).
+      //
+      // ⚠️ A module the catalogue prices as null contributes RM 0 to the build,
+      // so Models with unpriced modules quote LOW here and are then refused by
+      // Houzs's drift gate at handover ("tablet RM 990 vs server RM 1,980").
+      // A 2990-side override table (migration 0213) briefly filled those nulls;
+      // it was removed 2026-08-14 in favour of the single drift-adopt step at
+      // handover, so the catalogue is once again the only price source. The
+      // real fix is complete prices in the Houzs catalogue.
       const sellingRows = skuPriceRows.map((r) => ({
         code: r.code,
-        // Override fills a NULL catalogue price only — a real one always wins.
-        sellPriceSen: r.sell_price_sen ?? priceOverrides[r.code.trim().toUpperCase()] ?? null,
+        sellPriceSen: r.sell_price_sen,
         seatHeightPrices: r.seat_height_prices,
       }));
       const modulePrices = sofaModulePricesFromSkus(sellingRows, model.model_code);

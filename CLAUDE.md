@@ -235,50 +235,65 @@ The ERP is SAP-Business-One-style: documents reference upstream documents, and `
 
 ---
 
-## Sofa module price fixes — the second POS feature that talks to 2990
-
-Added 2026-08-13 (migration `0213`). Same shape as Campaign Promos above —
-2990's Supabase, Origin-gated route, service-role client — and the same warnings
-apply. Admin surface is the **Sofa price fixes** tab of `pos.2990shome.com/products`.
+## Unpriced sofa modules — why some Models quote low or quote RM 0
 
 **The problem.** Verified 2026-08-13: **62 sofa module SKUs** come back from
 `GET /pos-pools/mfg-catalog` (Houzs) with `sell_price_sen: null` AND
 `seat_height_prices: null`. The POS prices a build as Σ its modules, so an
-unpriced module contributes RM 0, the tablet quotes low, and Houzs's drift gate
-rejects the order — `UBORR L(LHF)+STOOL+L(RHF)` → tablet RM 990, server
-RM 1,980, 400. Those Models are simply **unsellable from the POS**, voucher or
-not. "Refresh and try again" never helps: the tablet recomputes the same figure
-every time. Three Models (Pllao, Telluc, MAKOTO) have **zero** priced modules.
+unpriced module contributes RM 0 and the tablet quotes low. Two outcomes,
+depending on whether Houzs can price what we can't:
 
-**Why it can't be fixed at source:** the Houzs price editor wouldn't persist a
-value (tried 2026-08-13 — the schedule row saved, the catalogue kept serving
-null), and there is no Houzs repo access.
+- **Houzs prices it and we don't → the order is REFUSED.** `UBORR
+  L(LHF)+STOOL+L(RHF)` → tablet RM 990, server RM 1,980, `pricing_drift` 400.
+  "Refresh and try again" never helps — the tablet recomputes the same figure
+  every time.
+- **Neither side prices it → the order is ACCEPTED at RM 0.** A client price of
+  0 means "not provided", so the drift gate is carved out and the server keeps
+  its own (also zero) recompute. A custom-shape Telluc has really booked two
+  sofas at RM 0 + delivery. Pllao / Telluc / MAKOTO have **zero** priced modules;
+  Pllao's SKUs are also deactivated in the catalogue.
 
-**Two mechanisms, both landed:**
-- `sofa_module_price_overrides` — a per-SKU selling price that fills a **null**
-  catalogue price only (a real one always wins). Merged in **two** places:
-  `apps/pos/src/lib/queries.ts` (the configurator, so the price is honest from
-  the catalogue card onward) and `apps/pos/src/lib/sofa-module-prices.ts` (the
-  voucher cap). Admin tab + `/sofa-module-price-overrides` route.
-- **Drift-fix offer** — on a `pricing_drift` 400 the handover now offers to
-  adopt the server's own figure (`cart.adoptServerPrice`), voids the signature
-  and returns to Confirm payment. Narrow on purpose: only when the server's
-  price is HIGHER (a lower one would be an unauthorised discount).
+Only **Blatt** has every module priced. Most other Models are missing just their
+`3S` and `STOOL` — which look deliberate, as though those price as combos rather
+than as modules. Escalated to the owner 2026-08-14; the fix is Houzs-side.
 
-🔑 **An override is a RECONCILIATION value, not a pricing decision.** The figure
-comes from the drift rejection itself (server total − visible modules). Nobody
-should invent one — the tab says so. It is **self-correcting**: a wrong figure
-just gets the order rejected again with the right one. The drift gate is the
-oracle; the table only remembers the answer.
+**Why it can't be fixed at source by us:** the Houzs price editor wouldn't
+persist a value (tried 2026-08-13 — the schedule row saved, the catalogue kept
+serving null), and there is no Houzs repo access.
+
+**What handles it now:** the **drift-fix offer** at handover. On a
+`pricing_drift` 400 the POS offers to adopt the server's own figure
+(`cart.adoptServerPrice`), voids the signature and returns to Confirm payment.
+Narrow on purpose: only when the server's price is HIGHER — a lower one would be
+an unauthorised discount. The customer therefore sees the corrected figure at
+handover, not on the catalogue card.
+
+⚠️ **A 2990-side override table (`sofa_module_price_overrides`, migration `0213`)
+briefly filled those nulls and was removed on 2026-08-14** — one day later,
+before it could accumulate rows. It worked, but it was a second hand-maintained
+price source that nobody would remember to clear once Houzs's catalogue is
+fixed, and a stale row would then contradict live data. `0214` dropped the
+table (**applied 2026-08-14**). Its only row was `UBORR-L(RHF)` = 99000 sen,
+derived from a drift rejection (server 1,980 − L(LHF) 990 − STOOL 0) — kept
+here because the derivation is the only thing that makes the figure
+trustworthy. Don't rebuild the table without deciding who owns retiring it.
+
+⚠️ **ACCEPTED DEFECT (2026-08-14): a custom-shape build on a Model with no
+module prices books at RM 0.** A client price of 0 means "not provided", so the
+drift gate is carved out and the server keeps its own (also zero) recompute —
+nothing refuses the order. A custom Telluc has really booked two sofas at RM 0
+plus delivery. The accepted control is that Telluc and Pllao offer no
+custom-build entry point in the POS, so a salesperson does not reach it in
+normal use. That control is **behavioural, not enforced** — the code path is
+still live. If sofas ever start selling at RM 0, this is why.
 
 ⚠️ **We still don't know WHY Houzs values those builds higher.** 2990's own
 `loadModelSofaModulePrices` (`mfg-pricing-recompute.ts:651`) reads the *same*
 fields the catalogue serves at the *same* `PRICE_1` tier, so on this code the
 server would also total RM 990. Houzs's port differs, or a sofa combo is
-repricing the build. Don't assume the override "is" the module's true price.
-
-**Delete a row to revert a Model to catalogue-only pricing.** When Houzs serves
-complete prices, delete them all and this whole section goes with it.
+repricing the build. Read-back of a real order shows Houzs holding
+`UBORR-L(LHF)` at RM 1,980 and `L(RHF)` at 0 — a doubled module, not a mirrored
+price.
 
 ---
 

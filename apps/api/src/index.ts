@@ -16,7 +16,6 @@ import { fabricTierAddonConfig } from './routes/fabric-tier-addon';
 import { modelFreeGifts } from './routes/model-free-gifts';
 import { freeItemCampaigns } from './routes/free-item-campaigns';
 import { campaignPromos } from './routes/campaign-promos';
-import { sofaModulePriceOverrides } from './routes/sofa-module-price-overrides';
 import { pwpRules } from './routes/pwp-rules';
 import { pwpCodes } from './routes/pwp-codes';
 import { specialAddons } from './routes/special-addons';
@@ -117,9 +116,8 @@ app.route('/model-free-gifts', modelFreeGifts);
 app.route('/free-item-campaigns', freeItemCampaigns);
 /* Origin-gated, NOT supabaseAuth — the POS holds only a Houzs token since the
    cutover and cannot authenticate here. See the header of routes/campaign-promos.ts
-   for what that gate does and does not buy. Both routes below share that posture. */
+   for what that gate does and does not buy. */
 app.route('/campaign-promos', campaignPromos);
-app.route('/sofa-module-price-overrides', sofaModulePriceOverrides);
 app.route('/pwp-rules', pwpRules);
 app.route('/pwp-codes', pwpCodes);
 app.route('/special-addons', specialAddons);

@@ -178,7 +178,7 @@ export function CampaignPromosTab({ canEdit }: { canEdit: boolean }) {
             <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
               RM {centiToRm(c.valueCenti)} · {c.remaining} of {c.stockTotal} left
               {c.minPurchaseQty > 0 && ` · min ${c.minPurchaseQty} item(s)`}
-              {c.maxPerOrder === 1 ? ' · one per order' : ` · up to ${c.maxPerOrder} per order`}
+              {' · one per order'}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
@@ -220,10 +220,17 @@ export function CampaignPromosTab({ canEdit }: { canEdit: boolean }) {
                 <input style={input} inputMode="numeric" value={draft.minPurchaseQty}
                   onChange={(e) => setDraft({ ...draft, minPurchaseQty: Number(e.target.value || 0) })} />
               </div>
+              {/* Not an input. The cart holds ONE applied voucher (a single
+                  AppliedVoucher, not a list), so a value above 1 was accepted
+                  here, displayed in the list as "up to N per order", and then
+                  silently ignored at handover. Showing the limit as fixed is
+                  honest; the column stays in the schema for when multi-voucher
+                  is actually built. */}
               <div>
                 <label style={label}>Max vouchers per order</label>
-                <input style={input} inputMode="numeric" value={draft.maxPerOrder}
-                  onChange={(e) => setDraft({ ...draft, maxPerOrder: Number(e.target.value || 1) })} />
+                <div style={{ ...input, color: 'var(--fg-muted)', background: 'var(--bg-sunken, transparent)' }}>
+                  1 — one voucher per order
+                </div>
               </div>
             </div>
             <div>

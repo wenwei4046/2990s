@@ -19,7 +19,6 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { sofaModuleSellingPricesFromSkus } from '@2990s/shared/sofa-build';
 import { authedFetch } from './apiClient';
-import { fetchSofaPriceOverrides } from './products/sofa-price-override-queries';
 
 interface SofaCatalogRow {
   id: string;
@@ -59,10 +58,7 @@ export const useSofaModulePrices = () => {
          a column that stores mixed case ('Uborr', 'PANTTI'), so filtering
          server-side silently returns nothing for half the Models. Indexing 300
          rows on the client is cheaper than that class of bug. */
-      const [{ products }, overrides] = await Promise.all([
-        authedFetch<{ products: SofaCatalogRow[] }>('/pos-pools/mfg-catalog'),
-        fetchSofaPriceOverrides(),
-      ]);
+      const { products } = await authedFetch<{ products: SofaCatalogRow[] }>('/pos-pools/mfg-catalog');
       const index: SofaPriceIndex = { baseModelByProductId: new Map(), rowsByBaseModel: new Map() };
       for (const p of products ?? []) {
         if (p.category !== 'SOFA') continue;
@@ -72,12 +68,7 @@ export const useSofaModulePrices = () => {
         const rows = index.rowsByBaseModel.get(base) ?? [];
         rows.push({
           code: p.code,
-          /* Override fills a NULL catalogue price only — a real one always
-             wins, so a stale override can never mask live data. It lands on
-             `sellPriceSen` (rather than being merged into the finished map) so
-             the shared builder still resolves it in the right order:
-             seat-height price → flat price → nothing. Migration 0213. */
-          sellPriceSen: p.sell_price_sen ?? overrides[p.code.trim().toUpperCase()] ?? null,
+          sellPriceSen: p.sell_price_sen,
           seatHeightPrices: p.seat_height_prices as never,
         });
         index.rowsByBaseModel.set(base, rows);
@@ -108,7 +99,14 @@ export const useSofaModulePrices = () => {
          itself prices the build (queries.ts — "run at P1"), so the cap stays
          consistent with the build total we are measuring against. */
       const map = sofaModuleSellingPricesFromSkus(rows, base, depth ?? '24', 'PRICE_1');
-      return Object.keys(map).length > 0 ? map : null;
+      /* Return the map even when it is EMPTY. Null means "this Model is
+         unknown to us"; an empty map means "this Model is known and not one of
+         its modules carries a price" — which is a real, common state (Telluc,
+         Pllao, MAKOTO) and the exact input the equal-split branch of
+         leadModuleValueCenti needs. Collapsing the two into null is what made
+         a Telluc quick-pick refuse its voucher: the cap bailed on the null
+         before it could work out that build/N was knowable. */
+      return map;
     },
   }), [index]);
 };

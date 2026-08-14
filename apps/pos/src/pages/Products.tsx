@@ -113,7 +113,6 @@ import { FabricsTable } from '../components/products/FabricsTable';
 import { SofaComboTab } from '../components/products/SofaComboTab';
 import { PwpRulesTab } from '../components/products/PwpRulesTab';
 import { CampaignPromosTab } from '../components/products/CampaignPromosTab';
-import { SofaPriceOverridesTab } from '../components/products/SofaPriceOverridesTab';
 import { RuleTargetPicker, finalizeRuleTargets } from '../components/products/RuleTargetPicker';
 import { useSofaCombos } from '../lib/products/sofa-combos-queries';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/products/size-info';
@@ -236,7 +235,7 @@ const resolveModelPhotoUrl = (raw: string | null | undefined): string | null => 
   return raw.startsWith('/') ? `${API_URL}${raw}` : `${API_URL}/${raw}`;
 };
 
-type TopTab = 'sku' | 'modular' | 'specialAddons' | 'fabrics' | 'maintenance' | 'combos' | 'delivery' | 'pwp' | 'campaignPromos' | 'sofaPriceFixes';
+type TopTab = 'sku' | 'modular' | 'specialAddons' | 'fabrics' | 'maintenance' | 'combos' | 'delivery' | 'pwp' | 'campaignPromos';
 
 
 export const Products = () => {
@@ -405,21 +404,6 @@ export const Products = () => {
             >
               Campaign Promos
             </button>
-            {/* Migration 0213 — repair surface for sofa modules the Houzs
-                catalogue serves with no price, which makes the tablet quote low
-                and the order get refused at handover. Its own tab rather than a
-                corner of SKU Master: these rows are 2990-side stop-gaps, not
-                catalogue data, and they should be easy to find AND easy to
-                delete once Houzs serves complete prices. */}
-            <button
-              type="button"
-              role="tab"
-              data-active={topTab === 'sofaPriceFixes'}
-              className={styles.tabSwitchBtn}
-              onClick={() => setTopTab('sofaPriceFixes')}
-            >
-              Sofa price fixes
-            </button>
           </div>
         </div>
       </header>
@@ -433,7 +417,6 @@ export const Products = () => {
       {topTab === 'delivery' && <DeliveryFeeTab mode={mode} />}
       {topTab === 'pwp' && <PwpRulesTab mode={mode} />}
       {topTab === 'campaignPromos' && <CampaignPromosTab canEdit={mode === 'full'} />}
-      {topTab === 'sofaPriceFixes' && <SofaPriceOverridesTab canEdit={mode === 'full'} />}
     </div>
   );
 };

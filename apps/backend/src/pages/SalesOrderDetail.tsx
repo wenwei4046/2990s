@@ -886,7 +886,7 @@ export const SalesOrderDetail = () => {
        diff then reads as "gone"). A second-open guard (has_open_amendment)
        falls back to the direct delete. */
     const removeViaAmendment =
-      Boolean(header?.amendment_eligible) && !Boolean(header?.has_open_amendment);
+      Boolean(header?.amendment_eligible) && !header?.has_open_amendment;
     for (const it of items) {
       map.set(it.id, {
         onChange: (patch) => patchEditingDraft(it.id, patch),

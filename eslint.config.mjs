@@ -25,6 +25,14 @@ export default tseslint.config(
       '**/*.config.{js,cjs,mjs,ts}',
       '**/migrations*/**',
       '**/*.snap',
+      /* Tooling scratch space, not source. `.claude/worktrees/` holds agent git
+         worktrees — each is a FULL second copy of this repo, so without this
+         every file gets linted twice and the error/warning counts read roughly
+         double. (Measured 2026-08-14: all 8 "errors" in the repo came from a
+         worktree left behind on 2026-08-03 plus `.ua` trash — none from source.)
+         `.ua/` is the understand-anything plugin's cache and trash. */
+      '**/.claude/**',
+      '**/.ua/**',
     ],
   },
   {

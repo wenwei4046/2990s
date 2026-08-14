@@ -49,26 +49,44 @@ export interface SofaCapInput {
   qty: number;
   /** Normalized module code → sen, built the same way the server builds it. */
   modulePrices: Record<string, number> | null | undefined;
+  /**
+   * True when this line declares an extra add-on charge. The server then splits
+   * the selling price EVENLY across modules regardless of catalogue weights
+   * (`evenSplitPrice: extraRM > 0`, mfg-sales-orders.ts), so row 0 is
+   * build/N — which is knowable, and better than refusing.
+   */
+  evenSplitPrice?: boolean;
 }
 
 /**
  * A safe floor (sen) for module row 0's value on this build — the ceiling a
  * discount on this cart line must stay under.
  *
- * Returns **null** when it cannot be established:
+ * THREE CASES, because the server splits a build's price three ways:
  *
- *  · no cells / malformed cells / no module price map — nothing to reason from
- *  · **the leftmost module is unpriced** — it gets weight 0 and therefore a
- *    RM 0 share server-side, so any discount at all would go negative there
- *  · no positive build price / qty
+ *  1. **Equal split** — either the line declares an extra charge, or NO module
+ *     has a catalogue price. `distributeProportionally` falls back to equal
+ *     weights when every weight is 0 (so-sofa-split.ts), so row 0 is exactly
+ *     `build / N`. This is not an estimate: the server does the same arithmetic
+ *     on the same build price. Confirmed against a live order — a 2-module
+ *     Telluc at RM 2,990 booked RM 1,495 per module per unit.
+ *     This case is what makes Telluc / Pllao quick-picks work: their combo
+ *     gives the build a real price even though no module carries one.
+ *  2. **Weighted split, leftmost priced** — row 0 is `build × w0/Σw`, which is
+ *     ≥ w0 whenever build ≥ Σw. So w0 is a floor, and the one figure both sides
+ *     read from the same store. Used clamped to the build price.
+ *  3. **Weighted split, leftmost UNPRICED** — row 0's share is 0, so any
+ *     discount at all goes negative. Returns null.
  *
- * Unpriced modules in OTHER positions are fine — they can only make the
- * server's row-0 share LARGER than w0 (they shrink Σw), so w0 stays a floor.
+ * Also returns null with no cells, malformed cells, no price map, or no
+ * positive build price / qty.
  */
 export const leadModuleValueCenti = (args: SofaCapInput): number | null => {
-  const { cells, depth, buildUnitPriceCenti, qty, modulePrices } = args;
+  const { cells, depth, buildUnitPriceCenti, qty, modulePrices, evenSplitPrice } = args;
 
-  if (!modulePrices) return null;
+  /* An absent price map is only fatal for the WEIGHTED cases. On the equal
+     split the weights are irrelevant — the server ignores them too. */
+  if (!modulePrices && !evenSplitPrice) return null;
   if (!Array.isArray(cells) || cells.length === 0) return null;
   const build = Math.trunc(buildUnitPriceCenti);
   if (!Number.isFinite(build) || build <= 0) return null;
@@ -91,18 +109,40 @@ export const leadModuleValueCenti = (args: SofaCapInput): number | null => {
     });
   }
 
+  /* CASE 1 — equal split. Either the line declares an extra charge, or not one
+     module carries a catalogue price (so every weight is 0 and
+     distributeProportionally falls back to equal weights). Row 0 is then
+     build/N exactly, floored the same way the server floors it. Checked before
+     the walk because the walk's ORDER cannot matter when every share is equal.
+
+     `Math.floor` matches distributeProportionally, which floors every share
+     except the last and puts the residue there — so row 0 is never the
+     rounded-up one. */
+  const anyPriced = modulePrices
+    ? parsed.some((c) => {
+        const w = modulePrices[normalizeCompartmentCode(c.moduleId)];
+        return typeof w === 'number' && Number.isFinite(w) && w > 0;
+      })
+    : false;
+
+  if (evenSplitPrice || !anyPriced) {
+    return Math.floor(build / parsed.length) * units;
+  }
+
   /* The walk decides which module IS row 0 — same function, same depth default
      as splitSofaBuildIntoModuleLines, or we would be measuring a different
      module than the one the discount lands on. */
   const ordered = orderSofaCellsLeftToRight(parsed, depth ?? '24');
   const leadCode = normalizeCompartmentCode((ordered[0] as { moduleId: string }).moduleId);
 
-  const w0 = modulePrices[leadCode];
+  // CASE 3 — weighted split with an unpriced leftmost module: its share is 0.
+  const w0 = modulePrices?.[leadCode];
   if (typeof w0 !== 'number' || !Number.isFinite(w0) || w0 <= 0) return null;
 
-  /* Clamp to the build price: a whole-build price swap (PWP reward combo) can
-     price the build below its catalog-weight sum, and no share exceeds the
-     whole. The row's real headroom is qty × its unit share — moduleLineTotal
-     is `(qty * s.unitPriceSen) - discount`. */
+  /* CASE 2 — weighted split, leftmost priced. Clamp to the build price: a
+     whole-build price swap (PWP reward combo) can price the build below its
+     catalog-weight sum, and no share exceeds the whole. The row's real headroom
+     is qty × its unit share — moduleLineTotal is
+     `(qty * s.unitPriceSen) - discount`. */
   return Math.min(w0, build) * units;
 };
