@@ -47,6 +47,24 @@ flows through. Verified 2026-08-03:
 All three surfaces are still deployed and serving (`api.2990shome.com`,
 `pos.2990shome.com`, `erp.2990shome.com`).
 
+⚠️ **The POS's API contract now belongs to a repo we don't watch.** Houzs can
+rename a request key and its CI stays green — nothing in that repo compiles
+against this one, and an absent property is `undefined`, not an error. It has
+happened: Houzs migration `0286` (their `d33ac743`, 2026-08-13) renamed
+`internal_expected_dd` → `processing_date` **and the payload key
+`internalExpectedDd` → `processingDate`**, on the stated belief that no client
+sent the old one. This POS did, on the handover create and the SO-detail PATCH.
+Two days later every handover carrying dates was refused
+`processing_delivery_must_pair` — the delivery date arrived and its pair did
+not — while the SO-detail Processing Date read blank and saved nothing.
+Fixed by sending **both spellings** (`soProcessingDatePayload`,
+`apps/pos/src/lib/pos-handover-so.ts`) and reading both on the way back.
+Before debugging any POS write failure, **diff the keys the POS sends against
+what Houzs `origin/main` actually reads** — the local clone at
+`C:\Users\wenwe\Houzs ERP` runs weeks behind, so read blobs
+(`git show origin/main:backend/src/scm/routes/mfg-sales-orders.ts`), not the
+working tree.
+
 ---
 
 ## What this repo is

@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 // exercise only the pure cart→SO-item transforms.
 vi.mock('./supabase', () => ({ supabase: { auth: { getSession: vi.fn() } } }));
 
-import { cartLineToSoItem, cartLinesToSoItems, pickSoItemCode, pickSoSkuName, describePosHandoffError, buildDeliveryFeeCartInputs, posHandoffIdempotencyKey } from './pos-handover-so';
+import { cartLineToSoItem, cartLinesToSoItems, pickSoItemCode, pickSoSkuName, describePosHandoffError, buildDeliveryFeeCartInputs, posHandoffIdempotencyKey, soProcessingDatePayload } from './pos-handover-so';
 import type { CartLine, CartConfig } from '../state/cart';
 import type { CatalogProduct, SpecialDeliveryFeeRow } from './queries';
 
@@ -950,5 +950,34 @@ describe('buildDeliveryFeeCartInputs', () => {
       NO_COMBOS,
     );
     expect(out.categoryIds).toEqual(['sofa']);
+  });
+});
+
+describe('soProcessingDatePayload', () => {
+  /* Houzs migration 0286 renamed the Processing Date payload key
+     internalExpectedDd → processingDate. Houzs's create reads only the new
+     spelling; 2990's API reads only the old one. A body carrying one of them
+     is refused by whichever backend it isn't speaking to — on 2026-08-15 that
+     was every dated POS handover, rejected as processing_delivery_must_pair
+     because the delivery date arrived and its pair did not. */
+  it('sends the date under BOTH keys — the legacy one and Houzs current one', () => {
+    expect(soProcessingDatePayload('2026-09-01')).toEqual({
+      internalExpectedDd: '2026-09-01',
+      processingDate: '2026-09-01',
+    });
+  });
+
+  it('carries a null through both keys — clearing the date is a real write', () => {
+    expect(soProcessingDatePayload(null)).toEqual({
+      internalExpectedDd: null,
+      processingDate: null,
+    });
+  });
+
+  it('never emits one key without the other', () => {
+    for (const v of ['2026-09-01', null] as const) {
+      const keys = Object.keys(soProcessingDatePayload(v)).sort();
+      expect(keys).toEqual(['internalExpectedDd', 'processingDate']);
+    }
   });
 });
