@@ -36,6 +36,7 @@ import { PAYMENT_METHOD_CODES } from '@2990s/shared/payment-methods';
 import { meetsProceedGate } from '@2990s/shared/order-rules';
 import { getSoEditScope } from '../lib/so-edit-scope';
 import { paymentProofRequired } from '../lib/handover-helpers';
+import { soProcessingDatePayload } from '../lib/pos-handover-so';
 import { useAuth } from '../lib/auth';
 import { authedFetch as apiAuthedFetch, authedFetchRaw, posApiBase } from '../lib/apiClient';
 import { Topbar } from '../components/Topbar';
@@ -130,7 +131,13 @@ interface MineSoRow {
   postcode: string | null;
   customer_state: string | null;
   customer_delivery_date: string | null;
+  /** The Processing Date, under BOTH column spellings — Houzs migration 0286
+   *  renamed internal_expected_dd → processing_date, so a live row answers on
+   *  the second and only the second. Reading the old one alone left every SO
+   *  in this list with a blank Processing Date, which unlocked the fields the
+   *  passed-date lock exists to lock. */
   internal_expected_dd: string | null;
+  processing_date: string | null;
   status: SoStatus;
   payment_method: string | null;
   approval_code: string | null;
@@ -334,7 +341,7 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
           status: r.status,
           proceededAt: r.proceeded_at ?? null,
           deliveryDate: r.customer_delivery_date ?? null,
-          processingDate: r.internal_expected_dd ?? null,
+          processingDate: r.processing_date ?? r.internal_expected_dd ?? null,
           deliverySlot: null,
           paymentMethod: r.payment_method ?? null,
           approvalCode: r.approval_code ?? null,
@@ -1436,7 +1443,11 @@ const OrderDetail = ({ order, onClose }: {
       patch.customerDeliveryDate = edited.deliveryDate || null;
     }
     if (edited.processingDate !== order.processingDate) {
-      patch.internalExpectedDd = edited.processingDate || null;
+      // Both payload spellings — see soProcessingDatePayload. Houzs's header
+      // PATCH map lost `internalExpectedDd` in the 0286 rename, so the legacy
+      // key alone was accepted and then silently dropped: the date never
+      // reached the column and the save reported success.
+      Object.assign(patch, soProcessingDatePayload(edited.processingDate || null));
     }
     return patch;
   };

@@ -9,6 +9,7 @@ import {
   buildDeliveryFeeCartInputs,
   PosHandoffApiError,
   describePosHandoffError,
+  soProcessingDatePayload,
   type PosHandoffPayload,
 } from '../lib/pos-handover-so';
 import { useDeleteQuote } from '../lib/quotes';
@@ -454,7 +455,12 @@ export const Handover = () => {
         // dates from before the cart turned TBC — strip them so the server's
         // variants_incomplete 409 can't fire after the customer signed.
         ...(targetDate && processDate && !hasTbcLines
-          ? { targetDate, customerDeliveryDate: targetDate, internalExpectedDd: processDate }
+          ? {
+              targetDate,
+              customerDeliveryDate: targetDate,
+              // Both spellings of the Processing Date — see soProcessingDatePayload.
+              ...soProcessingDatePayload(processDate),
+            }
           : {}),
         ...(signatureData ? { signatureB64: signatureData } : {}),
         ...(form.slipUploadSessionId ? { uploadSessionId: form.slipUploadSessionId } : {}),

@@ -85,10 +85,15 @@ export interface PosHandoffPayload {
    *  edit customer_delivery_date downstream as the operational date. */
   customerDeliveryDate?: string;
   /** Factory start ("Process Date") — when production should begin, so a far-out
-   *  delivery doesn't pull stock too early. ISO YYYY-MM-DD. Maps to the SO's
-   *  internal_expected_dd column. The API requires this and customerDeliveryDate
-   *  to be sent together (or both omitted) and Process ≤ Delivery. */
+   *  delivery doesn't pull stock too early. ISO YYYY-MM-DD. The API requires
+   *  this and customerDeliveryDate to be sent together (or both omitted) and
+   *  Process ≤ Delivery. LEGACY SPELLING — see soProcessingDatePayload. */
   internalExpectedDd?: string;
+  /** The SAME Processing Date under Houzs's current key. Houzs migration 0286
+   *  renamed the column internal_expected_dd → processing_date and the payload
+   *  key with it; 2990's own API still reads only the legacy spelling. Both are
+   *  sent — never one. Build this pair with soProcessingDatePayload. */
+  processingDate?: string;
 
   /** Free-text special instructions captured at handover (lift available, leave
    *  at concierge, etc.). Maps to the SO's existing `note` column — the
@@ -161,6 +166,33 @@ export interface PosHandoffPayload {
   /* Items. */
   items: PosHandoffItem[];
 }
+
+/** The Processing Date, under BOTH payload keys the two backends read.
+ *
+ *  Houzs migration 0286 renamed `internal_expected_dd` → `processing_date`, and
+ *  the request key `internalExpectedDd` → `processingDate` with it (Houzs
+ *  `d33ac743`, 2026-08-13). The rename was made on the belief that no client
+ *  sends the legacy key — but this POS sends exactly that, on the handover
+ *  create AND the SO-detail header PATCH. Houzs's create then read
+ *  `body.processingDate` (absent → null) beside a `customerDeliveryDate` that
+ *  WAS present, and refused the whole order as half a date pair:
+ *  `processing_delivery_must_pair`, 400, every handover carrying dates
+ *  (2026-08-15). Only "For further notice" orders, which send neither date,
+ *  still went through.
+ *
+ *  Both keys, never one. Houzs prefers the canonical key when a body carries
+ *  both (readSoProcessingDateFromBody), and 2990's own API — still the target
+ *  in local dev — reads only the legacy one. Sending a key a backend does not
+ *  know is free; sending only the key it stopped knowing is an outage.
+ *
+ *  `null` is a real value here: the SO header PATCH clears a Processing Date by
+ *  sending it. `undefined` is not — the caller omits the whole pair instead. */
+export const soProcessingDatePayload = <T extends string | null>(
+  processDate: T,
+): { internalExpectedDd: T; processingDate: T } => ({
+  internalExpectedDd: processDate,
+  processingDate: processDate,
+});
 
 export interface PosHandoffItem {
   itemCode: string;
