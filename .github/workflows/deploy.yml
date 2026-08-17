@@ -31,13 +31,22 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # Added 2026-08-17, closing the TODO the Test step left on 2026-08-03.
+      # Lint was held out then because it exited 1 on two pre-existing errors
+      # (apps/backend/src/lib/authed-fetch.ts preserve-caught-error, and a
+      # no-extra-boolean-cast in SalesOrderDetail.tsx). Both were fixed in the
+      # 2026-08-14 tech-debt pass, so `pnpm lint` now exits 0 — verified on this
+      # commit: 130 problems, 0 errors.
+      # Warnings do NOT fail the build; only errors do. That is deliberate — the
+      # 130 remaining warnings are unused vars and dead assignments, and gating
+      # on them today would block every deploy. Don't add --max-warnings=0 until
+      # that count is 0.
+      - name: Lint
+        run: pnpm lint
+
       # Added 2026-08-03. The repo carries ~733 vitest cases (api 415, pos 229,
       # backend 89) that nothing gated on — typecheck was the only quality bar
       # between a push and production. A red suite now blocks the deploy.
-      # `pnpm lint` is deliberately NOT here yet: it currently exits 1 on two
-      # pre-existing style errors (apps/backend/src/lib/authed-fetch.ts
-      # preserve-caught-error, and a no-extra-boolean-cast). Fix those, then add
-      # a lint step here too.
       - name: Test
         run: pnpm test
 
@@ -77,6 +86,27 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # `wrangler deploy` exiting 0 only proves the upload succeeded. The Worker
+      # can still throw on its very first request — a bad import, or a secret
+      # that was never set with `wrangler secret put`. This probe is the thing
+      # that actually proves the API serves.
+      # It sits BEFORE the two Pages deploys on purpose: if the API is dead, the
+      # SPAs do not ship against it, and the previously deployed front ends stay
+      # up instead. Retries because the custom domain takes a few seconds to pick
+      # up a new version — 5 attempts over ~40s before calling it a failure.
+      - name: Verify API responds
+        run: |
+          for i in 1 2 3 4 5; do
+            body=$(curl -fsS --max-time 10 https://api.2990shome.com/health || true)
+            echo "attempt $i: ${body:-<no response>}"
+            case "$body" in
+              *'"status":"ok"'*) echo "API is serving."; exit 0 ;;
+            esac
+            sleep 10
+          done
+          echo "::error::api.2990shome.com/health never returned status ok. The Worker uploaded but is not serving - check the Cloudflare Workers logs before retrying."
+          exit 1
 
       - name: Deploy POS to Pages
         working-directory: apps/api
