@@ -67,6 +67,14 @@ const SESSION_KEY_PREFIX = 'pos-orders-unlocked-v2:';
 // mfg_so_status enum. The 3-column board buckets these (see LANES).
 // ON_HOLD / CANCELLED are excluded server-side, so the board never sees them.
 type SoStatus =
+  /* Houzs treats DRAFT as "not a real order" everywhere that counts — it is
+     excluded from their MTD figures and earns no commission
+     (scm/shared/hr-commission.ts COMMISSION_EXCLUDED_STATUSES). GET /mine
+     excludes it too, so one should not normally reach this board. It is listed
+     anyway because the status arrives as untyped JSON: if that filter is ever
+     relaxed, an unlisted status silently fell through laneIdFor into 'Proceed'
+     and rendered as locked-and-with-the-coordinator. */
+  | 'DRAFT'
   | 'CONFIRMED'
   | 'IN_PRODUCTION'
   | 'READY_TO_SHIP'
@@ -681,8 +689,15 @@ const LANES: ReadonlyArray<LaneDef> = [
    CONFIRMED (the coordinator drives the real production status from the SO
    detail). Any production status the backend itself sets still buckets under
    Proceed; terminal statuses bucket under Delivered. */
+/* The final `return 'proceed'` is a fallback for a status this file does not
+   name, and 'Proceed' reads as "locked · coordinator handling" — the most
+   progressed lane before delivery. So an UNKNOWN order is shown as further
+   along than it is, which is the wrong way to be wrong. DRAFT is called out
+   explicitly for that reason: it is the least progressed state there is, and
+   belongs in 'Order placed'. Add any new pre-CONFIRMED status here too. */
 const laneIdFor = (o: MyOrderRow): LaneDef['id'] => {
   if (LANES[2]?.matches.includes(o.status)) return 'delivered';
+  if (o.status === 'DRAFT') return 'place';
   if (o.status === 'CONFIRMED') return o.proceededAt ? 'proceed' : 'place';
   return 'proceed';
 };
@@ -1237,6 +1252,9 @@ const OrderTile = ({ order, onOpen }: {
 /* ─── Order Detail Drawer ─── */
 
 const LANE_LABEL: Record<SoStatus, string> = {
+  // "Draft" and not "Order placed" — an order the salesperson started and never
+  // confirmed. It is not a sale: Houzs pays no commission on it.
+  DRAFT: 'Draft · not confirmed',
   CONFIRMED: 'Order placed',
   IN_PRODUCTION: 'In production',
   READY_TO_SHIP: 'Ready to ship',
