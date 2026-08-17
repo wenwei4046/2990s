@@ -273,11 +273,35 @@ depending on whether Houzs can price what we can't:
 
 Only **Blatt** has every module priced. Most other Models are missing just their
 `3S` and `STOOL` — which look deliberate, as though those price as combos rather
-than as modules. Escalated to the owner 2026-08-14; the fix is Houzs-side.
+than as modules. Escalated to the owner 2026-08-14.
 
-**Why it can't be fixed at source by us:** the Houzs price editor wouldn't
-persist a value (tried 2026-08-13 — the schedule row saved, the catalogue kept
-serving null), and there is no Houzs repo access.
+✅ **SOLVED 2026-08-17 — we CAN fix these ourselves, from our own POS, with no
+code change and no Houzs involvement.** The two statements that used to sit here
+("the Houzs price editor wouldn't persist a value" and "there is no Houzs repo
+access") were both wrong. Corrected:
+
+`seat_height_prices` carries **two independent dimensions per slot**, and there
+are two grids, each writing a different one:
+
+| Grid | Writes | Reached by the catalogue? |
+|---|---|---|
+| **Houzs Backend** → SKU "Edit Prices" (`frontend/src/pages/scm-v2/Products.tsx`, `upsertHeightTier`) | `priceSen` = **COST** | ❌ no — `stripSeatHeightCost` deletes it before responding |
+| **our POS** → `/products` SKU pricing (`apps/pos/src/pages/Products.tsx`, `upsertHeightTierSelling`) | `sellingPriceSen` at `PRICE_1` = **SELLING** | ✅ yes |
+
+The 2026-08-13 attempt used the Houzs grid. It saved correctly — into COST. Every
+selling read then ignored it, because `resolveSeatHeightSelling`
+(`scm/shared/mfg-pricing.ts`) requires `sellingPriceSen != null` and skips
+cost-only entries. Hence "the schedule row saved, the catalogue kept serving
+null": both halves were true and there was no contradiction to explain.
+
+**So: to price an unpriced module, use OUR POS `/products` grid, not the Houzs
+one.** `SOFA_SELL_TIER` is `PRICE_1`, the same tier every reader queries
+(`sofaModuleSellingPricesFromSkus(..., 'PRICE_1')`), so a value written there is
+live to the catalogue within the 30s refetch. Untested end-to-end at the time of
+writing — price one module and read it back before doing all 62.
+
+(We also DO have Houzs repo access now; the clone is at `Desktop/HouzsERP/Houzs-ERP`.
+See the `sofa-build.ts` section for the diff hazard that comes with it.)
 
 **What handles it now:** the **drift-fix offer** at handover. On a
 `pricing_drift` 400 the POS offers to adopt the server's own figure
