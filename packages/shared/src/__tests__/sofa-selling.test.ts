@@ -154,10 +154,17 @@ describe('sofaModulePricesFromSkus', () => {
 });
 
 describe('sofaCompartmentsFromModulePrices', () => {
-  it('maps each module-price entry to a normalized compartmentId + whole-MYR price', () => {
+  it('maps each module-price entry to a normalized compartmentId, price unchanged in SEN', () => {
     const rows = sofaCompartmentsFromModulePrices({ '1A(LHF)': 150000, '2A(RHF)': 200000 });
-    expect(rows).toContainEqual({ compartmentId: '1A(LHF)', active: true, price: 1500 });
-    expect(rows).toContainEqual({ compartmentId: '2A(RHF)', active: true, price: 2000 });
+    expect(rows).toContainEqual({ compartmentId: '1A(LHF)', active: true, priceSen: 150000 });
+    expect(rows).toContainEqual({ compartmentId: '2A(RHF)', active: true, priceSen: 200000 });
+  });
+  /* The whole point of the 2026-08-17 unit change: a part-ringgit module price
+     used to be rounded away here. 99050 sen is RM 990.50, which the old
+     `Math.round(sen / 100)` turned into RM 991. */
+  it('keeps a part-ringgit module price exactly', () => {
+    const rows = sofaCompartmentsFromModulePrices({ '1A(LHF)': 99050 });
+    expect(rows).toContainEqual({ compartmentId: '1A(LHF)', active: true, priceSen: 99050 });
   });
   it('null / undefined / empty map → []', () => {
     expect(sofaCompartmentsFromModulePrices(null)).toEqual([]);

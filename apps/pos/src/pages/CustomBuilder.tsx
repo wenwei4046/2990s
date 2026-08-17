@@ -697,7 +697,32 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // the builder just prices off it; `pwpCode`/`pwpComboIds` (props) drive the
   // per-group stamp in handleAdd. With no code applied the parent passes the
   // plain pricing → zero change to the normal builder.
-  const priceResult = useMemo(() => computeSofaPrice(cells, depth, pricing), [cells, depth, pricing]);
+  /* UNIT BOUNDARY (2026-08-17). computeSofaPrice works in SEN now — ported from
+     Houzs's 2026-08-14 change so both copies of sofa-build.ts agree. This
+     builder is whole-ringgit throughout (cart lines, PriceTag, the combo-savings
+     cue), so the money fields are converted ONCE here and every consumer below
+     is unchanged. Rounding still happens, but now AFTER the engine has summed
+     exactly rather than on each module before summing — which is the part-
+     ringgit defect this port fixes.
+     Keep `priceResultSen` for anything that genuinely wants sen/centi. */
+  const priceResultSen = useMemo(() => computeSofaPrice(cells, depth, pricing), [cells, depth, pricing]);
+  const priceResult = useMemo(() => {
+    const rm = (v: number | null | undefined): number | null | undefined =>
+      v == null ? v : Math.round(v / 100);
+    return {
+      total: Math.round(priceResultSen.total / 100),
+      groups: priceResultSen.groups.map((g) => ({
+        ...g,
+        bundlePrice:          rm(g.bundlePrice) ?? null,
+        aLaCarteTotal:        Math.round(g.aLaCarteTotal / 100),
+        reclinerExtra:        Math.round(g.reclinerExtra / 100),
+        finalPrice:           Math.round(g.finalPrice / 100),
+        comboPrice:           rm(g.comboPrice),
+        comboSubsetALaCarte:  rm(g.comboSubsetALaCarte),
+        comboExtrasALaCarte:  rm(g.comboExtrasALaCarte),
+      })),
+    };
+  }, [priceResultSen]);
 
   // Fold plan: an attached-headrest group (single HEADREST cell sitting on a
   // sofa's back) is NOT its own cart line — it merges into that sofa's line.
@@ -972,11 +997,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
 
   // Per-seat upgrade (F3) — this Model offers one named upgrade or none.
   // offersUpgrade gates the per-seat add button; footrest distinguishes
-  // power (opens a footrest) from headrest (no footrest). Price stays
-  // pricing.reclinerUpgradePrice.
+  // power (opens a footrest) from headrest (no footrest). Price comes from
+  // pricing.reclinerUpgradeSen, which is SEN as of 2026-08-17 — divided here
+  // because this value is only ever rendered, never summed into a total.
   const upgradeLabel = pricing.seatUpgradeLabel ?? null;
   const upgradeHasFootrest = pricing.seatUpgradeFootrest ?? true;
-  const upgradePrice = pricing.reclinerUpgradePrice;
+  const upgradePrice = pricing.reclinerUpgradeSen / 100;
   const offersUpgrade = !!upgradeLabel;
 
   const handleAdd = () => {
@@ -1215,10 +1241,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                     const legacyRow = pricing.compartments.find((cc) => cc.compartmentId === m.id);
                     const customRow = customizerByNormId.get(m.id);
                     // Prefer the customizer's defaultPriceCenti (cents → RM).
-                    // Legacy row.price is whole RM. Fall back through both.
+                    // Both sources are SEN now (2026-08-17), so both divide.
                     const priceRm = customRow?.priceSen != null && customRow.priceSen > 0
                       ? Math.round(customRow.priceSen / 100)
-                      : legacyRow?.price ?? null;
+                      : legacyRow != null ? legacyRow.priceSen / 100 : null;
                     return (
                       <button
                         key={m.id}
@@ -1922,7 +1948,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           <CreateComboModal
             modules={orderSofaCellsLeftToRight(cells, depth).map((c) => c.moduleId)}
             depth={depth}
-            currentPriceCenti={priceResult.total}
+            /* SEN, not the ringgit view — the dialog divides by 100 to seed its
+               price field. It was fed the whole-ringgit total before this port,
+               so a build showing RM 3,800 seeded the new combo at RM 38. */
+            currentPriceCenti={priceResultSen.total}
             baseModel={baseModel ?? ''}
             onClose={() => setCreateComboOpen(false)}
             onSaved={() => setCreateComboOpen(false)}
