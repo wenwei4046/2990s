@@ -1090,15 +1090,31 @@ export const Configurator = () => {
        compartmentId = normalizedCode so it matches a laid-out cell.moduleId. The
        server selling recompute builds the SAME map from the same SKUs at the same
        (depth, P1), so its drift-reject can't diverge. */
+    /* UNITS (2026-08-17): SofaProductPricing is SEN throughout, ported from
+       Houzs's 2026-08-14 change so both copies of sofa-build.ts agree and the
+       drift gate cannot diverge. The two SOURCES here are in different units:
+         · legacy retail pools (product_compartments / product_bundles /
+           recliner_upgrade_price) are whole-MYR int columns → ×100 here.
+         · the mfg module map is ALREADY sen → carried through untouched. It
+           used to be `Math.round(cc.priceSen / 100)`, which silently discarded
+           the sen on any part-ringgit module price. */
     compartments: (compartments.data && compartments.data.length > 0)
-      ? compartments.data
+      ? compartments.data.map((c) => ({
+          compartmentId: c.compartmentId,
+          active: c.active,
+          priceSen: Math.round(c.price * 100),
+        }))
       : (modelCustomizerForDepth?.compartments ?? []).map((cc) => ({
           compartmentId: cc.normalizedCode,
           active: true,
-          price: Math.round(cc.priceSen / 100),
+          priceSen: cc.priceSen,
         })),
-    bundles: bundles.data ?? [],
-    reclinerUpgradePrice: product.data?.recliner_upgrade_price ?? 0,
+    bundles: (bundles.data ?? []).map((b) => ({
+      bundleId: b.bundleId,
+      active: b.active,
+      priceSen: Math.round(b.price * 100),
+    })),
+    reclinerUpgradeSen: Math.round((product.data?.recliner_upgrade_price ?? 0) * 100),
     seatUpgradeLabel: product.data?.seat_upgrade_label ?? null,
     seatUpgradeFootrest: product.data?.seat_upgrade_footrest ?? true,
     combos: sofaCombosQ.data ?? [],
@@ -1149,8 +1165,13 @@ export const Configurator = () => {
   const priceForLayout = useCallback((modules: string[][]): number | null => {
     const cells = cellsFromComboModules(modules, activeDepth);
     if (cells.length === 0) return null;
-    const total = computeSofaPrice(cells, activeDepth, effectiveSofaPricing).total;
-    return total > 0 ? Math.round(total) : null;
+    /* computeSofaPrice returns SEN as of 2026-08-17 (ported from Houzs). This
+       function's contract is whole MYR — it feeds the Quick Pick card price AND
+       the cart line total, both of which are ringgit — so convert here. The
+       engine now sums every module exactly and rounds ONCE at the end, instead
+       of rounding each module before summing. */
+    const totalSen = computeSofaPrice(cells, activeDepth, effectiveSofaPricing).total;
+    return totalSen > 0 ? Math.round(totalSen / 100) : null;
   }, [activeDepth, effectiveSofaPricing]);
 
   // ── Sofa PWP voucher (2026-06-02) — redeem control lifted to the shared top

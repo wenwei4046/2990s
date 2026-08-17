@@ -47,26 +47,34 @@ import {
  * analyzeSofa + findSnap tests live alongside their implementation in step B.
  */
 
+/* Every money field on SofaProductPricing is SEN as of 2026-08-17 (ported from
+   Houzs, who moved on 2026-08-14). The fixtures below are still written in
+   ringgit for readability and converted here, so a reader can compare them
+   against the assertions without doing arithmetic. Combo `pricesByHeight` is
+   NOT wrapped — it was always authored in centi, which IS sen, and is now
+   carried through unconverted. */
+const RM = (ringgit: number): number => ringgit * 100;
+
 const pricing = (overrides: Partial<SofaProductPricing> = {}): SofaProductPricing => ({
-  reclinerUpgradePrice: 200,
+  reclinerUpgradeSen: RM(200),
   compartments: [
-    { compartmentId: '1A(LHF)',  active: true, price: 1500 },
-    { compartmentId: '1A(RHF)',  active: true, price: 1500 },
-    { compartmentId: '1NA',   active: true, price: 1200 },
-    { compartmentId: '2A(LHF)',  active: true, price: 2400 },
-    { compartmentId: '2A(RHF)',  active: true, price: 2400 },
-    { compartmentId: '2NA',   active: true, price: 2200 },
-    { compartmentId: 'CNR',   active: true, price: 1800 },
-    { compartmentId: 'L(RHF)',   active: true, price: 1900 },
-    { compartmentId: 'L(LHF)',   active: true, price: 1900 },
-    { compartmentId: 'Console', active: true, price: 800  },
+    { compartmentId: '1A(LHF)',  active: true, priceSen: RM(1500) },
+    { compartmentId: '1A(RHF)',  active: true, priceSen: RM(1500) },
+    { compartmentId: '1NA',   active: true, priceSen: RM(1200) },
+    { compartmentId: '2A(LHF)',  active: true, priceSen: RM(2400) },
+    { compartmentId: '2A(RHF)',  active: true, priceSen: RM(2400) },
+    { compartmentId: '2NA',   active: true, priceSen: RM(2200) },
+    { compartmentId: 'CNR',   active: true, priceSen: RM(1800) },
+    { compartmentId: 'L(RHF)',   active: true, priceSen: RM(1900) },
+    { compartmentId: 'L(LHF)',   active: true, priceSen: RM(1900) },
+    { compartmentId: 'Console', active: true, priceSen: RM(800)  },
   ],
   bundles: [
-    { bundleId: '1S',  active: true, price: 1400 },
-    { bundleId: '2S',  active: true, price: 2300 },
-    { bundleId: '3S',  active: true, price: 3500 },
-    { bundleId: '2+L', active: true, price: 4000 },
-    { bundleId: '3+L', active: true, price: 4500 },
+    { bundleId: '1S',  active: true, priceSen: RM(1400) },
+    { bundleId: '2S',  active: true, priceSen: RM(2300) },
+    { bundleId: '3S',  active: true, priceSen: RM(3500) },
+    { bundleId: '2+L', active: true, priceSen: RM(4000) },
+    { bundleId: '3+L', active: true, priceSen: RM(4500) },
   ],
   ...overrides,
 });
@@ -363,10 +371,10 @@ describe('computeSofaPrice basis selection', () => {
     const g = result.groups[0]!;
     expect(g.basis).toBe('bundle');
     expect(g.bundle?.id).toBe('3+L');
-    expect(g.bundlePrice).toBe(4500);
-    expect(g.aLaCarteTotal).toBe(5600);
-    expect(g.finalPrice).toBe(4500);
-    expect(result.total).toBe(4500);
+    expect(g.bundlePrice).toBe(RM(4500));
+    expect(g.aLaCarteTotal).toBe(RM(5600));
+    expect(g.finalPrice).toBe(RM(4500));
+    expect(result.total).toBe(RM(4500));
   });
 
   it('still uses bundle price when à la carte happens to sum to less', () => {
@@ -376,11 +384,11 @@ describe('computeSofaPrice basis selection', () => {
     // posted bundle price, not the lower sum.
     const p = pricing({
       bundles: [
-        { bundleId: '1S',  active: true, price: 1400 },
-        { bundleId: '2S',  active: true, price: 2300 },
-        { bundleId: '3S',  active: true, price: 3500 },
-        { bundleId: '2+L', active: true, price: 4000 },
-        { bundleId: '3+L', active: true, price: 9999 },
+        { bundleId: '1S',  active: true, priceSen: RM(1400) },
+        { bundleId: '2S',  active: true, priceSen: RM(2300) },
+        { bundleId: '3S',  active: true, priceSen: RM(3500) },
+        { bundleId: '2+L', active: true, priceSen: RM(4000) },
+        { bundleId: '3+L', active: true, priceSen: RM(9999) },
       ],
     });
     const cells: Cell[] = [
@@ -390,19 +398,19 @@ describe('computeSofaPrice basis selection', () => {
     ];
     const g = computeSofaPrice(cells, '24', p).groups[0]!;
     expect(g.basis).toBe('bundle');
-    expect(g.bundlePrice).toBe(9999);
-    expect(g.aLaCarteTotal).toBe(5600);
-    expect(g.finalPrice).toBe(9999);
+    expect(g.bundlePrice).toBe(RM(9999));
+    expect(g.aLaCarteTotal).toBe(RM(5600));
+    expect(g.finalPrice).toBe(RM(9999));
   });
 
   it('falls back to à la carte when bundle is inactive', () => {
     const p = pricing({
       bundles: [
-        { bundleId: '1S',  active: true,  price: 1400 },
-        { bundleId: '2S',  active: true,  price: 2300 },
-        { bundleId: '3S',  active: true,  price: 3500 },
-        { bundleId: '2+L', active: true,  price: 4000 },
-        { bundleId: '3+L', active: false, price: 4500 }, // disabled
+        { bundleId: '1S',  active: true,  priceSen: RM(1400) },
+        { bundleId: '2S',  active: true,  priceSen: RM(2300) },
+        { bundleId: '3S',  active: true,  priceSen: RM(3500) },
+        { bundleId: '2+L', active: true,  priceSen: RM(4000) },
+        { bundleId: '3+L', active: false, priceSen: RM(4500) }, // disabled
       ],
     });
     const cells: Cell[] = [
@@ -419,15 +427,14 @@ describe('computeSofaPrice basis selection', () => {
    and only when the combo is strictly cheaper than the matched subset's own
    à-la-carte sum (HOOKKA `comboMatches` 1:1).
 
-   UNIT NOTE (Commander 2026-05-28 unit fix): the combo dialog stores prices
-   in CENTI (`Math.round(rm * 100)`), so `pricesByHeight` here is in CENTI —
-   matching production. The compartment / bundle fixtures are whole-MYR (the
-   POS pricing object divides base_price_sen by 100). groupPrice converts the
-   combo centi → whole-MYR before the cheaper-only guard and before adding
-   extras, so every `comboPrice` / `finalPrice` assertion below is whole-MYR.
+   UNIT NOTE (rewritten 2026-08-17): the combo dialog stores prices in CENTI
+   (`Math.round(rm * 100)`), so `pricesByHeight` here is in CENTI — matching
+   production. CENTI *is* SEN, and groupPrice now works in sen throughout, so
+   the combo price is carried through UNCONVERTED. It used to be divided by 100
+   here, which is what rounded part-ringgit combo prices away.
    Combo "2+L" = [{2A(LHF),2A(RHF)},{L(LHF),L(RHF)}]. Subset à-la-carte for a
-   2A + L pair = 2400 + 1900 = 4300 MYR; combo 380000 centi = RM 3800
-   (< 4300 → applies). */
+   2A + L pair = RM 2400 + RM 1900 = RM 4300; combo 380000 centi = RM 3800
+   (< 4300 → applies). Assertions use RM() so they stay readable in ringgit. */
 describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
   const comboPricing = (over: Partial<SofaProductPricing> = {}) =>
     pricing({
@@ -463,32 +470,71 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
     const result = computeSofaPrice(cells, '24', comboPricing());
     const comboGroup = result.groups.find((g) => g.basis === 'combo')!;
     expect(comboGroup).toBeTruthy();
-    // Whole-MYR — NOT the raw 380000 centi and NOT 38 (would be a double-÷100).
-    expect(comboGroup.comboPrice).toBe(3800);
-    expect(comboGroup.comboSubsetALaCarte).toBe(4300);
-    expect(comboGroup.comboExtrasALaCarte).toBe(0); // both cells in the combo group are matched
-    expect(comboGroup.finalPrice).toBe(3800);
+    // SEN — RM(3800) is 380000, the raw centi carried straight through. NOT
+    // 3800 (a stray ÷100) and NOT 38 (a double-÷100).
+    expect(comboGroup.comboPrice).toBe(RM(3800));
+    expect(comboGroup.comboSubsetALaCarte).toBe(RM(4300));
+    expect(comboGroup.comboExtrasALaCarte).toBe(RM(0)); // both cells in the combo group are matched
+    expect(comboGroup.finalPrice).toBe(RM(3800));
     // standalone 1NA priced à-la-carte (1200), never folded into the combo.
     const extraGroup = result.groups.find((g) => g.basis === 'a_la_carte')!;
-    expect(extraGroup.finalPrice).toBe(1200);
+    expect(extraGroup.finalPrice).toBe(RM(1200));
+  });
+
+  /* REGRESSION — the defect this port fixes (found 2026-08-17 by diffing this
+     file against Houzs's copy, which fixed it on 2026-08-14).
+
+     A combo priced at RM 3152.63 is stored as 315263 centi. The old code ran
+     `Math.round(comboPriceCenti / 100)` to reach whole MYR, turning that into
+     RM 3153.00 — the customer was overcharged 37 sen, and margin was computed
+     against a rounded revenue while cost stayed exact. Houzs reports 23 of 163
+     production combo prices carry part-ringgit values, so this was live money.
+
+     The sen must now survive end to end. */
+  it('keeps a part-ringgit combo price exactly (no rounding to whole ringgit)', () => {
+    const p = comboPricing({
+      combos: [
+        {
+          id: 'cmb-part-ringgit',
+          baseModel: '',
+          modules: [['2A(LHF)', '2A(RHF)'], ['L(LHF)', 'L(RHF)']],
+          tier: 'PRICE_2',
+          customerId: null,
+          pricesByHeight: { '24': 315263 }, // CENTI — RM 3152.63
+          label: null,
+          effectiveFrom: '2026-01-01',
+          deletedAt: null,
+        },
+      ],
+    });
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '2A(LHF)', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: 'L(RHF)',  x: 158, y: 0, rot: 0 },
+    ];
+    const g = computeSofaPrice(cells, '24', p).groups[0]!;
+    expect(g.basis).toBe('combo');
+    // 315263 sen exactly. The old behaviour produced 315300 (RM 3153.00).
+    expect(g.comboPrice).toBe(315263);
+    expect(g.finalPrice).toBe(315263);
+    expect(g.finalPrice).not.toBe(315300);
   });
 
   /* Standalone unit-consistency proof (Commander 2026-05-28). Compartments at
-     RM 990 + RM 990 (whole-MYR); combo pricesByHeight['24'] = 180000 centi
-     (= RM 1800). subsetSum = 1980 MYR; 1980 − 1800 = 180 > 0 → combo applies.
-     basePrice must be RM 1800 — never 180000 (raw centi) or 18 (double-÷100).
+     RM 990 + RM 990; combo pricesByHeight['24'] = 180000 centi (= RM 1800).
+     subsetSum = RM 1980; 1980 − 1800 = 180 > 0 → combo applies. basePrice must
+     be 180000 sen — never 1800 (a stray ÷100) or 18 (a double-÷100).
      Uses the same 2A(LHF) + L(RHF) geometry at height '24' the other combo cases
      prove forms one connected group. */
-  it('converts combo centi → whole-MYR (RM 990 + RM 990 vs RM 1800 combo)', () => {
+  it('carries combo centi straight through (RM 990 + RM 990 vs RM 1800 combo)', () => {
     const p = pricing({
       baseModel: '',
       fabricTier: 'PRICE_2',
       comboHeight: '24',
       compartments: [
-        { compartmentId: '2A(LHF)', active: true, price: 990 },
-        { compartmentId: '2A(RHF)', active: true, price: 990 },
-        { compartmentId: 'L(LHF)',  active: true, price: 990 },
-        { compartmentId: 'L(RHF)',  active: true, price: 990 },
+        { compartmentId: '2A(LHF)', active: true, priceSen: RM(990) },
+        { compartmentId: '2A(RHF)', active: true, priceSen: RM(990) },
+        { compartmentId: 'L(LHF)',  active: true, priceSen: RM(990) },
+        { compartmentId: 'L(RHF)',  active: true, priceSen: RM(990) },
       ],
       // Drop bundles so the test isolates the combo vs à-la-carte unit path
       // (a 2+L bundle would otherwise compete for basis selection).
@@ -516,9 +562,9 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
       p,
     ).groups[0]!;
     expect(g.basis).toBe('combo');
-    expect(g.comboSubsetALaCarte).toBe(1980); // 990 + 990, whole-MYR
-    expect(g.comboPrice).toBe(1800);          // 180000 centi ÷ 100 = RM 1800
-    expect(g.finalPrice).toBe(1800);          // NOT 180000, NOT 18
+    expect(g.comboSubsetALaCarte).toBe(RM(1980)); // 990 + 990, whole-MYR
+    expect(g.comboPrice).toBe(RM(1800));          // 180000 centi ÷ 100 = RM 1800
+    expect(g.finalPrice).toBe(RM(1800));          // NOT 180000, NOT 18
   });
 
   /* Audit 2026-06-11 C1 — combo match on a MIRRORED build whose modules are
@@ -530,8 +576,8 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
     // Only the LHF hands carry a master price; RHF rows are absent.
     const oneHand = comboPricing({
       compartments: [
-        { compartmentId: '2A(LHF)', active: true, price: 2400 },
-        { compartmentId: 'L(LHF)',  active: true, price: 1900 },
+        { compartmentId: '2A(LHF)', active: true, priceSen: RM(2400) },
+        { compartmentId: 'L(LHF)',  active: true, priceSen: RM(1900) },
       ],
       bundles: [],
     });
@@ -548,12 +594,12 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
     for (const build of [cells, mirrored]) {
       const g = computeSofaPrice(build, '24', oneHand).groups[0]!;
       expect(g.basis).toBe('combo');
-      expect(g.comboPrice).toBe(3800);
+      expect(g.comboPrice).toBe(RM(3800));
       // Subset à-la-carte resolves BOTH cells via the mirror fallback…
-      expect(g.comboSubsetALaCarte).toBe(4300); // 2400 + 1900
+      expect(g.comboSubsetALaCarte).toBe(RM(4300)); // 2400 + 1900
       // …so no matched cell leaks into "extras" (the double-charge bug).
-      expect(g.comboExtrasALaCarte).toBe(0);
-      expect(g.finalPrice).toBe(3800); // combo ONLY — was 5700 / 6200 pre-fix
+      expect(g.comboExtrasALaCarte).toBe(RM(0));
+      expect(g.finalPrice).toBe(RM(3800)); // combo ONLY — was 5700 / 6200 pre-fix
     }
   });
 
@@ -567,10 +613,10 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
     ];
     const g = computeSofaPrice(cells, '24', comboPricing()).groups[0]!;
     expect(g.basis).toBe('combo');
-    expect(g.comboPrice).toBe(3800);          // RM 3800, whole-MYR
-    expect(g.comboSubsetALaCarte).toBe(4300); // 2A 2400 + L 1900
-    expect(g.comboExtrasALaCarte).toBe(1200); // the 1NA extra at full price
-    expect(g.finalPrice).toBe(3800 + 1200);
+    expect(g.comboPrice).toBe(RM(3800));          // RM 3800, whole-MYR
+    expect(g.comboSubsetALaCarte).toBe(RM(4300)); // 2A 2400 + L 1900
+    expect(g.comboExtrasALaCarte).toBe(RM(1200)); // the 1NA extra at full price
+    expect(g.finalPrice).toBe(RM(3800 + 1200));
   });
 
   it('always-combo: combo applied even when dearer than the subset (Chairman 2026-05-30, Q2)', () => {
@@ -596,8 +642,8 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
       }),
     ).groups[0]!;
     expect(g.basis).toBe('combo');
-    expect(g.comboPrice).toBe(9999);          // RM 9999, whole-MYR — applied despite being dearer
-    expect(g.comboSubsetALaCarte).toBe(4300); // the cheaper à-la-carte sum is recorded but not preferred
+    expect(g.comboPrice).toBe(RM(9999));          // RM 9999, whole-MYR — applied despite being dearer
+    expect(g.comboSubsetALaCarte).toBe(RM(4300)); // the cheaper à-la-carte sum is recorded but not preferred
   });
 
   it('OR-alternative within a slot — RHF variant covers the slot too', () => {
@@ -610,7 +656,7 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
       comboPricing(),
     ).groups[0]!;
     expect(g.basis).toBe('combo');
-    expect(g.comboPrice).toBe(3800); // RM 3800, whole-MYR
+    expect(g.comboPrice).toBe(RM(3800)); // RM 3800, whole-MYR
   });
 });
 
@@ -627,8 +673,8 @@ describe('computeSofaPrice recliner extras', () => {
     const g = computeSofaPrice(cells, '24', pricing()).groups[0]!;
     expect(g.basis).toBe('bundle');
     expect(g.reclinerCount).toBe(3); // 1 + 2, L ineligible
-    expect(g.reclinerExtra).toBe(600); // 3 × 200
-    expect(g.finalPrice).toBe(4500 + 600);
+    expect(g.reclinerExtra).toBe(RM(600)); // 3 × 200
+    expect(g.finalPrice).toBe(RM(4500 + 600));
   });
 
   it('adds recliner extras on top of à la carte base too', () => {
@@ -641,9 +687,9 @@ describe('computeSofaPrice recliner extras', () => {
     ];
     const g = computeSofaPrice(cells, '24', pricing()).groups[0]!;
     expect(g.basis).toBe('a_la_carte');
-    expect(g.aLaCarteTotal).toBe(2400); // 1200 × 2
+    expect(g.aLaCarteTotal).toBe(RM(2400)); // 1200 × 2
     expect(g.reclinerCount).toBe(1);
-    expect(g.finalPrice).toBe(2400 + 200);
+    expect(g.finalPrice).toBe(RM(2400 + 200));
   });
 });
 
@@ -661,7 +707,7 @@ describe('computeSofaPrice multi-group + accessory', () => {
     // 1A(LHF) alone signature "1A" → 1S bundle (1400 < 1500) wins.
     // Non-touching, so groupSofas yields 2 groups summed into total.
     expect(result.groups).toHaveLength(2);
-    expect(result.total).toBe(2300 + 1400);
+    expect(result.total).toBe(RM(2300 + 1400));
   });
 
   it('preserves prototype quirk: bundle replaces base, accessory contribution drops', () => {
@@ -676,7 +722,7 @@ describe('computeSofaPrice multi-group + accessory', () => {
     ];
     const g = computeSofaPrice(cells, '24', pricing()).groups[0]!;
     expect(g.basis).toBe('bundle');
-    expect(g.finalPrice).toBe(4500); // 800 console contribution dropped, intentional
+    expect(g.finalPrice).toBe(RM(4500)); // 800 console contribution dropped, intentional
   });
 });
 
@@ -966,8 +1012,8 @@ describe('mirror price-invariance (à-la-carte fallback)', () => {
     // Only the LHF hands carry a price; the RHF rows are absent.
     const oneHand = pricing({
       compartments: [
-        { compartmentId: '2A(LHF)', active: true, price: 2400 },
-        { compartmentId: 'L(LHF)',  active: true, price: 1900 },
+        { compartmentId: '2A(LHF)', active: true, priceSen: RM(2400) },
+        { compartmentId: 'L(LHF)',  active: true, priceSen: RM(1900) },
       ],
       bundles: [],
       combos: [],
@@ -1148,17 +1194,17 @@ describe('pool-sourced modules (12 new) + Console rename', () => {
 describe('whole-unit preset cells — placement, combo match, labelling', () => {
   it('prices a placed 1S cell from its compartment price (a-la-carte, no bundle)', () => {
     const p = pricing({
-      compartments: [{ compartmentId: '1S', active: true, price: 1111 }],
+      compartments: [{ compartmentId: '1S', active: true, priceSen: RM(1111) }],
       bundles: [],
     });
     const g = computeSofaPrice([{ id: 'a', moduleId: '1S', x: 0, y: 0, rot: 0 }], '24', p).groups[0]!;
     expect(g.basis).toBe('a_la_carte');
-    expect(g.finalPrice).toBe(1111);
+    expect(g.finalPrice).toBe(RM(1111));
   });
 
   it('a combo defined with the whole-unit code 1S applies to a built 1S cell', () => {
     const p = pricing({
-      compartments: [{ compartmentId: '1S', active: true, price: 1111 }],
+      compartments: [{ compartmentId: '1S', active: true, priceSen: RM(1111) }],
       bundles: [],
       baseModel: '',
       fabricTier: 'PRICE_2',
@@ -1170,7 +1216,7 @@ describe('whole-unit preset cells — placement, combo match, labelling', () => 
     });
     const g = computeSofaPrice([{ id: 'a', moduleId: '1S', x: 0, y: 0, rot: 0 }], '24', p).groups[0]!;
     expect(g.basis).toBe('combo');
-    expect(g.comboPrice).toBe(900); // 90000 centi / 100
+    expect(g.comboPrice).toBe(RM(900)); // 90000 centi / 100
   });
 
   it('describeSofaLine lists a placed 1S cell by its own code, not a bundle name', () => {

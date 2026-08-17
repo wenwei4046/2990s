@@ -315,6 +315,55 @@ price.
 
 ---
 
+## `sofa-build.ts` exists in BOTH repos and they drift
+
+⚠️ **This file is duplicated across the Houzs boundary and nothing enforces that
+the copies agree.** Ours is `packages/shared/src/sofa-build.ts`; theirs is
+`backend/src/scm/shared/sofa-build.ts` (plus a second copy at
+`frontend/src/vendor/shared/sofa-build.ts`). The POS prices a sofa with our
+copy; the Houzs server re-prices it with theirs; **the drift gate then compares
+the two.** If the copies disagree the gate is measuring the difference between
+two implementations, not catching a tampered client.
+
+They HAVE disagreed, in both directions, and it went unnoticed for weeks —
+neither repo compiles against the other, so both CIs stayed green. Diff them
+before trusting any sofa pricing investigation:
+
+```bash
+diff -u "<houzs>/backend/src/scm/shared/sofa-build.ts" packages/shared/src/sofa-build.ts
+```
+
+**Resolved 2026-08-17 — the unit split.** Houzs moved the whole
+`SofaProductPricing` object from whole-MYR to SEN on 2026-08-14 (`price` →
+`priceSen`, `reclinerUpgradePrice` → `reclinerUpgradeSen`). We were still
+dividing by 100 and rounding per module. That rounding is a **real money
+defect**, not a cosmetic one: a combo priced RM 3152.63 billed as RM 3153.00,
+and Houzs reports **23 of 163 production combo prices carry part-ringgit
+values**. Ported to match, with a regression test
+(`sofa-build.test.ts` → "keeps a part-ringgit combo price exactly").
+The rename is the safety mechanism — a missed call site fails to compile
+instead of being silently 100× off. **Keep the `*Sen` names.**
+
+Two consequences of that port worth knowing:
+- `computeSofaPrice(...).total` is **SEN** now. It is a bare `number`, so the
+  compiler will NOT catch a consumer that treats it as ringgit. The POS converts
+  at exactly two boundaries — `priceForLayout` (`Configurator.tsx`) and the
+  `priceResult` wrapper (`CustomBuilder.tsx`). Add a third only deliberately.
+- It fixed a pre-existing 100× bug on the way past: the "save as combo" dialog
+  seeds its price from `currentPriceCenti / 100` but was being handed the
+  whole-ringgit total, so a build showing RM 3,800 seeded the new combo at
+  **RM 38**. It now receives `priceResultSen.total`.
+
+🔴 **STILL OPEN — HEADREST.** We added the `HEADREST` module on 2026-06-29
+(module def, edge map, ~100 lines of attach geometry, cart fold). **Houzs's copy
+has no `HEADREST` at all.** Their `findModule('HEADREST')` returns undefined, so
+their recompute cannot price a build containing one. The POS lets a salesperson
+place one. This cannot be fixed from this repo — it needs the module porting
+into Houzs, or the palette entry gating off. Do not assume a headrest build
+prices correctly server-side.
+
+---
+
 ## Server-side pricing recompute — NON-NEGOTIABLE
 
 `POST /mfg-sales-orders` (`apps/api/src/routes/mfg-sales-orders.ts`) MUST re-derive every line price from current pricing tables before persisting, using the **shared** pricing code:
