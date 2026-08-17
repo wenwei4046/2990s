@@ -1098,7 +1098,25 @@ export const Configurator = () => {
          · the mfg module map is ALREADY sen → carried through untouched. It
            used to be `Math.round(cc.priceSen / 100)`, which silently discarded
            the sen on any part-ringgit module price. */
-    compartments: (compartments.data && compartments.data.length > 0)
+    /* UNPRICED MODULES MUST BE ABSENT, NOT ZERO (2026-08-17).
+       groupPrice resolves a module it cannot find to its mirror:
+         compRow(id) ?? compRow(mirrorCode(id))
+       so a Model that prices only one hand still prices the other. `??` falls
+       through on undefined ONLY — a row that EXISTS with priceSen 0 satisfies
+       it and the mirror never fires.
+       The server's map drops unpriced modules (`if (sen <= 0) continue` in
+       sofaModuleSellingPricesFromSkus), but the POS palette lists every ALLOWED
+       module and stamps `modulePrices[norm] ?? 0` (queries.ts), so unpriced ones
+       arrived here as present-and-zero. Same shared function, different input
+       shape, different answer:
+         UBORR L(LHF)+STOOL+L(RHF), only L(LHF) priced at RM 990
+           POS     990 + 0 + 0   = RM   990   ← mirror blocked by the 0 row
+           server  990 + 0 + 990 = RM 1,980   ← mirror fires
+       That is the `pricing_drift` refusal on this build, and no amount of
+       refreshing fixed it because the tablet recomputed the same 990 every
+       time. Filtering to priced rows makes the POS feed the engine exactly what
+       the server feeds it. */
+    compartments: ((compartments.data && compartments.data.length > 0)
       ? compartments.data.map((c) => ({
           compartmentId: c.compartmentId,
           active: c.active,
@@ -1108,7 +1126,8 @@ export const Configurator = () => {
           compartmentId: cc.normalizedCode,
           active: true,
           priceSen: cc.priceSen,
-        })),
+        }))
+    ).filter((c) => c.priceSen > 0),
     bundles: (bundles.data ?? []).map((b) => ({
       bundleId: b.bundleId,
       active: b.active,

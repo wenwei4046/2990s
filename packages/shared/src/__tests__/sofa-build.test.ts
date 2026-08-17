@@ -660,6 +660,47 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
   });
 });
 
+/* The mirror fallback is keyed on ABSENCE, and that is load-bearing.
+
+   `compRow(id) ?? compRow(mirrorCode(id))` falls through on undefined only. A
+   compartment row that EXISTS with priceSen 0 is a truthy object, so it
+   satisfies `??` and the mirror never fires.
+
+   This is not a hypothetical. The POS palette lists every ALLOWED module and
+   stamped `modulePrices[norm] ?? 0`, so unpriced modules reached the engine as
+   present-and-zero, while the server's map drops them (`if (sen <= 0) continue`).
+   Same shared function, different input shape, RM 990 vs RM 1,980 on the same
+   build — the `pricing_drift` refusal on UBORR. Fixed 2026-08-17 by filtering
+   the POS array to priced rows; these two cases pin WHY that filter must stay. */
+describe('computeSofaPrice — mirror fallback depends on the row being absent', () => {
+  // UBORR: L(LHF) priced at RM 990, L(RHF) and STOOL unpriced.
+  // L is w:95, so x:95 puts the second chaise flush against the first — one
+  // connected group. A gap here would split them and the test would pass for
+  // the wrong reason.
+  const cells: Cell[] = [
+    { id: 'a', moduleId: 'L(LHF)', x: 0,  y: 0, rot: 0 },
+    { id: 'b', moduleId: 'L(RHF)', x: 95, y: 0, rot: 0 },
+  ];
+  const base = (compartments: SofaProductPricing['compartments']) =>
+    pricing({ compartments, bundles: [], combos: [], baseModel: '', comboHeight: '24' });
+
+  it('ABSENT unpriced module mirrors to its priced hand (what the server does)', () => {
+    const g = computeSofaPrice(cells, '24', base([
+      { compartmentId: 'L(LHF)', active: true, priceSen: RM(990) },
+      // L(RHF) deliberately not listed
+    ])).groups[0]!;
+    expect(g.aLaCarteTotal).toBe(RM(1980));
+  });
+
+  it('PRESENT-but-zero unpriced module blocks the mirror (the POS bug)', () => {
+    const g = computeSofaPrice(cells, '24', base([
+      { compartmentId: 'L(LHF)', active: true, priceSen: RM(990) },
+      { compartmentId: 'L(RHF)', active: true, priceSen: 0 },
+    ])).groups[0]!;
+    expect(g.aLaCarteTotal).toBe(RM(990));
+  });
+});
+
 /* Case 5 — recliner extras add on top regardless of basis. */
 describe('computeSofaPrice recliner extras', () => {
   it('adds reclinerUpgradePrice × seatCount on top of bundle base', () => {
