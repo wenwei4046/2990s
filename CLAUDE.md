@@ -237,7 +237,20 @@ The ERP is SAP-Business-One-style: documents reference upstream documents, and `
 
 **The trick that makes it work with zero Houzs changes:** Houzs's drift gate compares **unit price only** (`mfg-pricing-recompute.ts:211`), so a client-authored `discountCenti` passes it, bounded server-side at `0 <= discount <= qty * unit` per line. So a voucher arrives **already apportioned** across the lines — `@2990s/shared/voucher-split` does the proportional split, and `apps/pos/src/lib/voucher-apply.ts` decides whether it may be applied at all.
 
-**Four things that will bite you:**
+**There is deliberately NO delete, anywhere in this feature** (decided 2026-08-18).
+The route exposes `GET /`, `POST /`, `PATCH /:id`, `POST /:id/claim`,
+`POST /redemptions/:id/confirm`, `POST /redemptions/:id/release`,
+`GET /redemptions` — and no `DELETE`, by design, not by omission. Two reasons:
+the ledger is the only record of who redeemed what, so a delete destroys
+evidence; and the admin tab is a dense table where a misclick would be
+unrecoverable. **Release** already returns stock to the pool without erasing
+history, and `active: false` retires a campaign. If a row genuinely must go, it
+goes through the Supabase SQL editor by a human who has thought about it.
+Consequence, accepted: the **`__smoketest__`** campaign (RM 500, inactive, 2/2
+spent) stays visible in the admin list forever. That is the deliberate trade,
+not litter — don't "tidy" it, and don't add a delete button to make it possible.
+
+**Five things that will bite you:**
 - 🔑 **A cancelled order does NOT return its voucher to the pool, and no code on
   this side can make it.** The SO cancel runs in Houzs (that's where
   `pwpVoucherReleased` lives, `mfg-sales-orders.ts:7001`), and Houzs cannot reach
