@@ -89,7 +89,7 @@ external caller so the next sweep has evidence:**
   hundredths of a ringgit. A rename, never a conversion; do not scale either
   side. The fallback is not just politeness: 2990's own API still serves
   `_centi` and is the target in local dev.
-- Routes: restored in Houzs `#2451`, each carrying an `EXTERNAL CLIENT` header
+- Routes: restored in Houzs `#2459`, each carrying an `EXTERNAL CLIENT` header
   naming this repo and its call sites.
 
 **Before touching any POS↔Houzs surface, check BOTH:**
