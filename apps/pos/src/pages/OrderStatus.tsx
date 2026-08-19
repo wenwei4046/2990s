@@ -685,22 +685,52 @@ const LANES: ReadonlyArray<LaneDef> = [
   },
 ];
 
-/* Lane bucketing — "Proceed" is a SALES marker driven by proceeded_at, NOT a
-   production status (Owner 2026-06-03). A CONFIRMED order moves Place→Proceed
-   the moment the salesperson marks it proceeded; the backend status stays
-   CONFIRMED (the coordinator drives the real production status from the SO
-   detail). Any production status the backend itself sets still buckets under
-   Proceed; terminal statuses bucket under Delivered. */
+/* Lane bucketing — "Proceed" is a SALES marker, NOT a production status (Owner
+   2026-06-03). A CONFIRMED order moves Place→Proceed the moment it is proceeded;
+   the backend status stays CONFIRMED (the coordinator drives the real production
+   status from the SO detail). Any production status the backend itself sets
+   still buckets under Proceed; terminal statuses bucket under Delivered.
+
+   ⚠️ THE MARKER MOVED (2026-08-18, Houzs). This read `proceededAt`, i.e. the
+   `proceeded_at` column, until Houzs retired it — and "retired" is the operative
+   word: it was a SECOND storage for the Processing Date, and their owner ruled
+   three times (2026-07-31, 2026-08-13, 2026-08-18) that there is exactly ONE.
+   `backend/tests/soProcessingDateOneStorage.test.ts` over there now fails any
+   executable line that names it, so it is not coming back and must not be asked
+   for. Their probe recorded the effect on us: of company 2's live orders, 16
+   carried a proceed stamp with NO Processing Date, and under the one-storage
+   rule those are simply not proceeded.
+
+   Houzs stopped sending the field, our read became `undefined`, and every
+   CONFIRMED order — proceeded or not — fell back to "Order placed". The board
+   stopped showing what the coordinator had already done, silently.
+
+   So the marker is now the PROCESSING DATE, which is the same fact under the
+   surviving name and is already on this row (`processing_date`, with the legacy
+   `internal_expected_dd` as a fallback — see the read above). An order with no
+   Processing Date is not proceeded; the repair for one that should be is a human
+   entering the date, never code inventing it. */
 /* The final `return 'proceed'` is a fallback for a status this file does not
    name, and 'Proceed' reads as "locked · coordinator handling" — the most
    progressed lane before delivery. So an UNKNOWN order is shown as further
    along than it is, which is the wrong way to be wrong. DRAFT is called out
    explicitly for that reason: it is the least progressed state there is, and
    belongs in 'Order placed'. Add any new pre-CONFIRMED status here too. */
+/** Is this order proceeded? The ONE storage is the Processing Date.
+ *
+ *  Kept separate from `laneIdFor` so the rule has a name and one home — the
+ *  whole defect this replaces came from the same fact living in two columns.
+ *  `proceededAt` is still accepted as a fallback and is deliberately LAST: a
+ *  2990-side API (local dev, and any surface Houzs has not migrated) may still
+ *  serve it, but where both are present the Processing Date wins, so the two can
+ *  never disagree in Houzs's favour. Drop the fallback once nothing serves it. */
+export const soIsProceeded = (o: Pick<MyOrderRow, 'processingDate' | 'proceededAt'>): boolean =>
+  Boolean(o.processingDate ?? o.proceededAt);
+
 const laneIdFor = (o: MyOrderRow): LaneDef['id'] => {
   if (LANES[2]?.matches.includes(o.status)) return 'delivered';
   if (o.status === 'DRAFT') return 'place';
-  if (o.status === 'CONFIRMED') return o.proceededAt ? 'proceed' : 'place';
+  if (o.status === 'CONFIRMED') return soIsProceeded(o) ? 'proceed' : 'place';
   return 'proceed';
 };
 
