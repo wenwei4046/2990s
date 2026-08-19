@@ -10,6 +10,7 @@ import {
   PosHandoffApiError,
   describePosHandoffError,
   soProcessingDatePayload,
+  soMoneyPayload,
   type PosHandoffPayload,
 } from '../lib/pos-handover-so';
 import { useDeleteQuote } from '../lib/quotes';
@@ -468,17 +469,19 @@ export const Handover = () => {
         ...(form.installmentMonths ? { installmentMonths: form.installmentMonths } : {}),
         ...(form.merchantProvider ? { merchantProvider: form.merchantProvider } : {}),
         ...(form.approvalCode.trim() ? { approvalCode: form.approvalCode.trim() } : {}),
-        // Whole-MYR → sen.
-        depositCenti: Math.round(form.amountPaid * 100),
+        // Whole-MYR → sen, under both payload keys (see soMoneyPayload).
+        ...soMoneyPayload('deposit', Math.round(form.amountPaid * 100)),
         // Split payment (Loo 2026-06-06) — only when extra transactions exist.
         // Row 1 = the primary payment fields above (also kept on the header);
-        // the server then books EVERY row and sums them into deposit_centi.
+        // the server then books EVERY row and sums them into the deposit.
+        // Houzs reads p.amountSen and its schema REQUIRES it, so a row carrying
+        // only amountCenti is rejected outright — send the pair.
         ...(form.extraPayments.length > 0 && paymentMethod
           ? {
               payments: [
                 {
                   method: paymentMethod,
-                  amountCenti: Math.round(form.amountPaid * 100),
+                  ...soMoneyPayload('amount', Math.round(form.amountPaid * 100)),
                   // Spec D4 — each row's own slip; cash legs carry none (Loo
                   // 2026-06-18), so include it only when present. The primary row
                   // reuses the order-level slip (form.slipUploadSessionId).
@@ -489,7 +492,7 @@ export const Handover = () => {
                 },
                 ...form.extraPayments.map((p) => ({
                   method: p.method,
-                  amountCenti: Math.round(p.amount * 100),
+                  ...soMoneyPayload('amount', Math.round(p.amount * 100)),
                   // Spec D4 — each extra's own slip; cash legs carry none (Loo
                   // 2026-06-18), so include it only when present.
                   ...(p.slipUploadSessionId ? { uploadSessionId: p.slipUploadSessionId } : {}),

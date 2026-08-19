@@ -8,6 +8,7 @@ import {
   type SoPwpNote,
 } from '@2990s/shared/so-line-display';
 import { authedFetch, authedFetchRaw } from './apiClient';
+import { readMoney, readMoneyOrNull, readPaidTotal } from './houzs-money-keys';
 import { COMPANY_LEGAL } from './legal';
 
 // Customer-facing Sales Order, sourced from the LIVE order model
@@ -140,7 +141,7 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
                 typeof p.approval_code === 'string' && p.approval_code.trim()
                   ? p.approval_code.trim()
                   : null,
-              amount: centiToMyr(p.amount_centi),
+              amount: centiToMyr(readMoney(p, 'amount')),
             }))
             .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
         }
@@ -180,14 +181,16 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
         }
       } catch { /* keep legal.ts fallback */ }
 
-      const total = centiToMyr(so.total_revenue_centi);
+      const total = centiToMyr(readMoney(so, 'total_revenue'));
       /* Received-to-date = the live payments-ledger rollup the API now returns
-         (paid_centi_total: deposit + every drawer payment). Fall back to the
+         (paid_sen_total: deposit + every drawer payment). Fall back to the
          legacy header columns only if an older API build omits it. This is why
-         the print showed "Deposit paid 0.00" before — paid_centi is deprecated
-         and a balance payment lands in the ledger, not the header. */
-      const paid = centiToMyr(so.paid_centi_total ?? so.paid_centi ?? so.deposit_centi);
-      const balance = so.balance_centi != null ? centiToMyr(so.balance_centi) : Math.max(0, total - paid);
+         the print showed "Deposit paid 0.00" before — paid is deprecated
+         and a balance payment lands in the ledger, not the header.
+         readPaidTotal walks those three sources under BOTH key spellings. */
+      const paid = centiToMyr(readPaidTotal(so));
+      const balanceRaw = readMoneyOrNull(so, 'balance');
+      const balance = balanceRaw != null ? centiToMyr(balanceRaw) : Math.max(0, total - paid);
 
       const rawSig = typeof so.signature_b64 === 'string' ? so.signature_b64 : '';
       const signature = rawSig
@@ -251,9 +254,10 @@ export const useSalesOrderDoc = (docNo: string | undefined) =>
           };
         }
         const qty = Number(lead.qty ?? 0);
-        const lineTotal = centiToMyr(lead.total_centi as number | null);
-        const unitPrice = lead.unit_price_centi != null
-          ? centiToMyr(lead.unit_price_centi)
+        const lineTotal = centiToMyr(readMoney(lead, 'total'));
+        const leadUnitPrice = readMoneyOrNull(lead, 'unit_price');
+        const unitPrice = leadUnitPrice != null
+          ? centiToMyr(leadUnitPrice)
           : qty > 0 ? lineTotal / qty : lineTotal;
         const desc = [lead.description, lead.description2].filter(Boolean).join(' · ');
         return {

@@ -39,6 +39,8 @@ import { paymentProofRequired } from '../lib/handover-helpers';
 import { soProcessingDatePayload } from '../lib/pos-handover-so';
 import { useAuth } from '../lib/auth';
 import { authedFetch as apiAuthedFetch, authedFetchRaw, posApiBase } from '../lib/apiClient';
+import { readMoney, readMoneyMyr, readPaidTotal, senToMyr } from '../lib/houzs-money-keys';
+import { soMoneyPayload } from '../lib/pos-handover-so';
 import { Topbar } from '../components/Topbar';
 import { CountryPhoneInput } from '../components/CountryPhoneInput';
 import { SlipUploadStep } from '../components/SlipUploadStep';
@@ -279,7 +281,7 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
              on "Change to Same Model". */
           const buildTotalCenti = g.kind === 'sofa-build' && g.display
             ? g.display.totalCenti
-            : (lead.total_centi ?? 0);
+            : readMoney(lead, 'total');
           const buildCells = g.kind === 'sofa-build'
             ? g.lines
                 .map((l) => {
@@ -301,8 +303,8 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
                 itemCode: target.item_code,
                 itemGroup: String(target.item_group ?? 'others'),
                 qty: target.qty ?? 1,
-                unitPriceCenti: target.unit_price_centi ?? 0,
-                discountCenti: target.discount_centi ?? 0,
+                unitPriceCenti: readMoney(target, 'unit_price'),
+                discountCenti: readMoney(target, 'discount'),
                 variants: targetVariants,
                 isSofaBuild: g.kind === 'sofa-build',
                 isPwp: Boolean(targetVariants.pwp),
@@ -321,14 +323,14 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
               }
             : {
                 qty: lead.qty ?? 0,
-                lineTotal: Math.round((lead.total_centi ?? 0) / 100),
+                lineTotal: readMoneyMyr(lead, 'total'),
                 productName: lead.description ?? lead.item_code,
                 productImage: null,
                 remark: lead.remark ?? null,
                 edit,
               };
         });
-        const total = Math.round((r.total_revenue_centi ?? 0) / 100);
+        const total = readMoneyMyr(r, 'total_revenue');
         return {
           id: r.doc_no,
           placedAt: r.created_at,
@@ -345,7 +347,7 @@ const useMyOrders = (period: Period, search: string, salesperson: string | null)
           subtotal: total,
           addonTotal: 0,
           total,
-          paid: Math.round((r.paid_centi_total ?? 0) / 100),
+          paid: senToMyr(readPaidTotal(r)),
           status: r.status,
           proceededAt: r.proceeded_at ?? null,
           deliveryDate: r.customer_delivery_date ?? null,
@@ -1552,7 +1554,9 @@ const OrderDetail = ({ order, onClose }: {
         body: JSON.stringify({
           paidAt: today,
           method: payMethod,
-          amountCenti: Math.round(amount * 100),
+          // Houzs's paymentCreateSchema REQUIRES amountSen (Zod), so a body
+          // carrying only amountCenti is rejected 400 — send the pair.
+          ...soMoneyPayload('amount', Math.round(amount * 100)),
           ...(payMethod === 'merchant' ? { merchantProvider: payMerchant || null } : {}),
           ...(payMethod === 'merchant' || payMethod === 'installment'
             ? { installmentMonths: payInstallmentMonths } : {}),
@@ -1952,7 +1956,7 @@ const OrderDetail = ({ order, onClose }: {
                     <span>{p.paid_at} · {methodLabels[p.method] ?? p.method}</span>
                     <span>
                       <span className={styles.detailItemPriceUnit}>RM</span>
-                      {fmtMoney(Math.round(p.amount_centi / 100))}
+                      {fmtMoney(readMoneyMyr(p, 'amount'))}
                       {p.approval_code ? <em> · {p.approval_code}</em> : null}
                     </span>
                   </div>

@@ -314,7 +314,11 @@ export function useUpdateMfgProductGifts() {
 
 export type MasterPriceHistoryRow = {
   id: string;
-  product_code: string;
+  /** LEGACY SPELLING — Houzs migration 0307 (their #2447) renamed this column
+   *  to item_code. Nothing renders this row today; both are typed so a future
+   *  reader picks the canonical one. */
+  product_code?: string;
+  item_code?: string;
   field: string;
   old_value_sen: number | null;
   new_value_sen: number | null;
@@ -337,7 +341,10 @@ export type ProductSupplierRow = {
   id: string;
   supplier_id: string;
   supplier_sku: string;
-  unit_price_centi: number;
+  /** LEGACY SPELLING — Houzs migration 0305 renamed this column to
+   *  unit_price_sen. Read the pair with readMoney(row, 'unit_price'). */
+  unit_price_centi?: number;
+  unit_price_sen?: number;
   currency: string;
   lead_time_days: number;
   moq: number;

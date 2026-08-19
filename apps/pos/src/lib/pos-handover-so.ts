@@ -118,6 +118,9 @@ export interface PosHandoffPayload {
   approvalCode?: string;
   /** Deposit / amount collected at handover in centi-MYR (sen). */
   depositCenti?: number;
+  /** The SAME deposit under Houzs's current key. Both are sent, never one —
+   *  see soMoneyPayload. */
+  depositSen?: number;
   /** Split payment (Loo 2026-06-06) — when the handover collected SEVERAL
    *  transactions (e.g. half cash + half card), every transaction rides the
    *  create payload and the server books each as an is_deposit ledger row
@@ -126,8 +129,10 @@ export interface PosHandoffPayload {
    *  payment — the legacy depositCenti path then runs unchanged. */
   payments?: Array<{
     method: 'merchant' | 'transfer' | 'installment' | 'cash';
-    /** Centi-MYR. */
+    /** Centi-MYR, under both spellings — Houzs's payment schema REQUIRES
+     *  amountSen, so a row carrying only amountCenti is rejected 400. */
     amountCenti: number;
+    amountSen: number;
     /** Spec D4 — each split payment's own slip upload session. Omitted for cash
      *  legs, which carry no slip (Loo 2026-06-18); the server requires it for
      *  every non-cash row. */
@@ -194,15 +199,62 @@ export const soProcessingDatePayload = <T extends string | null>(
   processingDate: processDate,
 });
 
+/** The SAME money amount under BOTH spellings — the `soProcessingDatePayload`
+ *  pattern applied to money, and for the same reason.
+ *
+ *  Houzs migration 0305 (their #2438, 2026-08-18) renamed 291 `_centi` columns
+ *  across 70 tables to `_sen`, and the payload keys with them. Their SO create
+ *  now reads ONLY `unitPriceSen` / `discountSen` / `depositSen`, via
+ *  `Number(it.discountSen ?? 0)` and `typeof body.depositSen === 'number'`. An
+ *  absent key is `undefined`, not an error, so the old spelling fails SILENTLY:
+ *    · a voucher's `discountCenti` becomes NO discount — the customer pays full
+ *      price while 2990's ledger has already marked the redemption APPLIED;
+ *    · `depositCenti` becomes a deposit of 0 on every handover;
+ *    · `unitPriceCenti` becomes a client price of 0, which the drift gate reads
+ *      as "not provided" and quietly replaces with the server's own recompute.
+ *  Nothing 400s. That is what makes it worse than the outage the date pair
+ *  caused.
+ *
+ *  The unit is IDENTICAL — centi-MYR and sen are both hundredths of a ringgit.
+ *  This is a rename, never a conversion: do not scale either side.
+ *
+ *  Sending a key a backend does not know is free; sending only the key it
+ *  stopped knowing is a silent money defect. Both keys, never one. */
+export const soMoneyPayload = <K extends string, T extends number>(
+  key: K,
+  amount: T,
+): Record<`${K}Centi` | `${K}Sen`, T> =>
+  ({ [`${key}Centi`]: amount, [`${key}Sen`]: amount }) as Record<
+    `${K}Centi` | `${K}Sen`,
+    T
+  >;
+
+/** Read a money amount that may arrive under either spelling. Canonical
+ *  (`*Sen`) wins; `*Centi` is the fallback for anything still serving the old
+ *  key (2990's own API, and any Houzs surface not yet migrated). */
+export const readSoMoney = (
+  row: Record<string, unknown> | null | undefined,
+  key: string,
+): number => {
+  const sen = row?.[`${key}Sen`];
+  if (typeof sen === 'number') return sen;
+  const centi = row?.[`${key}Centi`];
+  return typeof centi === 'number' ? centi : 0;
+};
+
 export interface PosHandoffItem {
   itemCode: string;
   itemGroup: 'sofa' | 'bedframe' | 'mattress' | 'accessory' | 'others';
   description: string;
   qty: number;
-  /** Centi-MYR. */
+  /** Centi-MYR. LEGACY SPELLING — see soMoneyPayload. */
   unitPriceCenti: number;
-  /** Centi-MYR. */
+  /** The SAME amount under Houzs's current key. Both are sent, never one. */
+  unitPriceSen: number;
+  /** Centi-MYR. LEGACY SPELLING — see soMoneyPayload. */
   discountCenti: number;
+  /** The SAME amount under Houzs's current key. Both are sent, never one. */
+  discountSen: number;
   /** Freeform per-line variant snapshot — sofa cells/fabric/colour, bedframe
    *  size/colour/leg-height/gap/etc. Coordinator-side SoLineCard renders this
    *  into the bedframe / sofa variants grid (see apps/backend SoLineCard). */
@@ -849,8 +901,8 @@ export const cartLineToSoItem = (
     itemGroup,
     description,
     qty: line.qty,
-    unitPriceCenti,
-    discountCenti,
+    ...soMoneyPayload('unitPrice', unitPriceCenti),
+    ...soMoneyPayload('discount', discountCenti),
     variants: (freeGift || freeItem)
       ? { ...(buildVariants(line.config) ?? {}), ...freeGift, ...freeItem }
       : buildVariants(line.config),
