@@ -33,16 +33,57 @@ flows through. Verified 2026-08-03:
 
   Consequences to keep in mind while it stays off (these are accepted, not
   outstanding bugs):
-  - The two databases keep diverging. Whoever eventually reconciles them will
-    need a rule for which side is authoritative per record.
+  - The two databases keep diverging — but **asymmetrically**, see the corrected
+    sync bullet below. Sales Orders, SO amendments and customers written HERE are
+    mirrored into Houzs; everything else, and everything born in Houzs, is not.
+    Whoever eventually reconciles them will need a rule for which side is
+    authoritative per record, and that rule differs by table.
   - Flipping the freeze would affect **only `erp.2990shome.com` (office staff)**.
     It cannot affect the POS: the deployed POS bundle does not contain the string
     `api.2990shome.com` at all (verified 2026-08-03 by reading the live JS on
     `pos.2990shome.com` — only `erp.houzscentury.com` is present). So sales staff
     are unaffected either way.
-  - There is **no sync in either direction**. `apps/api` contains zero code that
-    contacts Houzs (every "Houzs" mention there is a comment about a ported
-    pattern), and nothing writes Houzs data back into this Supabase.
+  - ⚠️ **CORRECTED 2026-08-19 — there IS a live sync, 2990 → Houzs.** This bullet
+    used to say "no sync in either direction". Half of that is still true and half
+    was never true; the wrong half survived because the evidence cited for it
+    ("`apps/api` contains zero code that contacts Houzs") only ever covered
+    **application** code, and the sync is not in the application.
+    - **What runs:** a trigger on this database captures every Sales Order
+      (header / items / payments), **SO amendment** and **customer** into
+      `public.sync_outbox` in the same transaction, and `pg_cron` + `pg_net`
+      workers (`so_outbox_drain` / `_confirm` / `_reconcile`) POST each one to a
+      Houzs receiver, which idempotently upserts it as `scm.mfg_sales_orders`
+      under `company_id = 2`. Retries forever until Houzs acks, so a Houzs outage
+      delays but never drops.
+    - **Why no grep here finds it.** None of it is in this repo. The SQL lives in
+      **Houzs's** repo at `docs/2990-live-sync/` (`01_outbox_2990.sql`,
+      `04_amendment_outbox_2990.sql`, `05_customer_outbox_2990.sql`) and was
+      applied by pasting into *this* project's Supabase SQL editor. So it is
+      absent from `packages/db/migrations`, absent from `apps/api`, and invisible
+      to every search anyone would think to run from this side. Deliberate: the
+      owner's first non-negotiable was "the POS ↔ 2990 link must not break —
+      capture at the DB, touch neither app."
+    - **Still true:** nothing writes Houzs data back into this Supabase. The
+      mirror is strictly one-way.
+    - 🔑 **So `erp.2990shome.com` is NOT an isolated dead-end.** An office user
+      creating or amending an SO in the 2990 Backend is writing, within seconds,
+      into Houzs production under `company_id = 2`. Two earlier bullets read as
+      though this repo were a museum piece whose writes go nowhere; for SOs,
+      amendments and customers they go straight into the live merged system. This
+      is a statement of fact, not an argument to revisit the freeze decision above
+      — that decision stands until the owner says otherwise.
+    - **Verified live 2026-08-19**, not merely present: Houzs runs
+      `.github/workflows/mirror-sentinel.yml` hourly against both databases and
+      it alarms when the last successful delivery is over **1 hour** old
+      (`STALE_DELIVERY_HOURS`) or an outbox row sits un-drained for **15 minutes**
+      (`STUCK_MINUTES`). It has been green all day, so the drain is pumping now.
+    - 🔑 **What is NOT mirrored, and why it matters:** Sales Orders, amendments
+      and customers — nothing else. `campaign_promo_redemptions` is not on that
+      list, so the voucher-release problem documented under Campaign Promos is
+      unaffected by any of this. Do not reach for the mirror to solve it.
+    - ⚠️ The sentinel has itself failed silent once (2026-07-17: source=63,
+      mirrored=62 — one SO wedged for days while the alarm built to catch exactly
+      that reported healthy throughout). Green is evidence, not proof.
 
 All three surfaces are still deployed and serving (`api.2990shome.com`,
 `pos.2990shome.com`, `erp.2990shome.com`).
