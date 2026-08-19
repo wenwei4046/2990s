@@ -65,6 +65,49 @@ what Houzs `origin/main` actually reads** — the local clone at
 (`git show origin/main:backend/src/scm/routes/mfg-sales-orders.ts`), not the
 working tree.
 
+⚠️ **It has now happened three times, and the third time the ROUTE went, not a
+key.** Check existence before spelling — a 404 and a silently-dropped field look
+nothing alike from the tablet, and only one of them shows up in a key diff.
+
+| Date | Houzs change | What broke here |
+|---|---|---|
+| 2026-08-13 (`0286`) | `internalExpectedDd` → `processingDate` | handovers refused `processing_delivery_must_pair` |
+| 2026-08-18 (`0305`, their #2438) | **291 `_centi` columns → `_sen`** across 70 tables, payload keys with them | voucher discount silently dropped, deposit booked 0, payment POST 400, My Orders / printed SO / supplier prices all read RM 0 |
+| 2026-08-18 (their #2422) | **ten route files deleted as "dead code"** | POS lost its whole catalogue seam (`GET /pos-pools/mfg-catalog`) + 7 more endpoints |
+
+The deletion is the instructive one: the finding ("no screen in this repo mounts
+these") was **true**, and the conclusion was wrong, because the screen is in
+*this* repo. Neither side compiles against the other, so a repo-wide "find
+usages" over there returns nothing while the route serves live tablet traffic.
+The area guards (`scm.use(...)`) were left behind when the mounts went, so the
+requests passed the guard and fell through to **404, not 403**.
+
+**Both are fixed by the same shape — send/accept both spellings, and label the
+external caller so the next sweep has evidence:**
+- Money: `soMoneyPayload` (write) + `apps/pos/src/lib/houzs-money-keys.ts`
+  (read, `*Sen` first then `*Centi`). **Sen and centi are the same unit** — both
+  hundredths of a ringgit. A rename, never a conversion; do not scale either
+  side. The fallback is not just politeness: 2990's own API still serves
+  `_centi` and is the target in local dev.
+- Routes: restored in Houzs `#2459`, each carrying an `EXTERNAL CLIENT` header
+  naming this repo and its call sites.
+
+**Before touching any POS↔Houzs surface, check BOTH:**
+```bash
+# 1. does the route still exist over there?
+git -C "<houzs>" show origin/main:backend/src/scm/index.ts | grep 'scm.route("/pos-pools"'
+# 2. does it still read the key we send?
+git -C "<houzs>" show origin/main:backend/src/scm/routes/mfg-sales-orders.ts | grep -n 'unitPriceSen\|unitPriceCenti'
+```
+
+**Durable prevention is still an OWNER DECISION, not done.** Three options were
+put to Loo in Houzs's `BUG-HISTORY.md`: a contract test in Houzs pinning the
+POS-facing path list (cheapest, lives where the deletion happens); a smoke probe
+against `pos.2990shome.com` in their deploy (catches renames too, but couples
+their deploy to our uptime); or publishing the POS's API contract into their
+repo (strongest, would have caught all three, but needs an owner for
+regeneration). Until one lands, this section is the only defence.
+
 ---
 
 ## What this repo is

@@ -2611,8 +2611,12 @@ export interface AddSoItemBody {
   itemGroup: 'sofa' | 'bedframe' | 'mattress' | 'accessory' | 'others';
   qty: number;
   variants: Record<string, unknown> | null;
+  /** LEGACY SPELLING. Send the pair via soMoneyPayload — Houzs's add-line reads
+   *  only `unitPriceSen` / `discountSen` since their migration 0305. */
   unitPriceCenti: number;
+  unitPriceSen: number;
   discountCenti?: number;
+  discountSen?: number;
   lineDeliveryDate?: string;
   /** free-item-campaign (migration 0176) — server validates eligibility + cap.
    *  Mutually exclusive with a pwpCode in variants. */

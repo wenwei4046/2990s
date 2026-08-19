@@ -116,6 +116,7 @@ import { CampaignPromosTab } from '../components/products/CampaignPromosTab';
 import { RuleTargetPicker, finalizeRuleTargets } from '../components/products/RuleTargetPicker';
 import { useSofaCombos } from '../lib/products/sofa-combos-queries';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/products/size-info';
+import { readMoney } from '../lib/houzs-money-keys';
 import { useStaff } from '../lib/staff';
 import { useQueryClient } from '@tanstack/react-query';
 import styles from './Products.module.css';
@@ -5943,7 +5944,7 @@ const ProductSuppliersDrawer = ({
                         : <span style={{ color: 'var(--fg-muted)' }}>(same as our code)</span>}
                     </td>
                     <td className={styles.numCell}>
-                      {fmtRmCenti(s.unit_price_centi)}{s.currency !== 'MYR' ? ` ${s.currency}` : ''}
+                      {fmtRmCenti(readMoney(s, 'unit_price'))}{s.currency !== 'MYR' ? ` ${s.currency}` : ''}
                     </td>
                     <td className={styles.numCell}>{s.lead_time_days || '—'}</td>
                     <td className={styles.numCell}>{s.moq || '—'}</td>
