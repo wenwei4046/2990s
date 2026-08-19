@@ -2034,6 +2034,13 @@ export interface SalesStatsRow {
   monthStart:     string | null;
   monthEnd:       string | null;
   staffName:      string;
+  /** WHICH scope the Showroom card counted. Staff WITH a showroom get their
+   *  showroom mates; staff WITHOUT one (director / owner / coordinator) get the
+   *  whole company. Both used to render under the word "Showroom", so a director
+   *  read company-wide figures under a showroom heading and no two people's
+   *  tiles agreed. Absent on an older API build — treat that as 'showroom',
+   *  which is what the label said before. */
+  showroomScope?: 'showroom' | 'company';
   showroomTotal:  number;
   showroomCount:  number;
   personalTotal:  number;

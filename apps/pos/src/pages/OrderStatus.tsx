@@ -1118,7 +1118,7 @@ const SalesKpis = ({
       <div className={styles.kpiCard}>
         <div className={styles.kpiHead}>
           <Store size={13} strokeWidth={1.75} />
-          Showroom · {monthLabel || '—'}
+          {stats.data?.showroomScope === 'company' ? 'Company' : 'Showroom'} · {monthLabel || '—'}
         </div>
         {stats.isLoading && !stats.data ? (
           <KpiPlaceholder />
