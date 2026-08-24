@@ -105,6 +105,25 @@ export async function authedFetchRaw(path: string, init?: RequestInit, baseOverr
   if (!token) throw new Error('not_authenticated');
   const isStringBody = typeof init?.body === 'string';
   return fetch(`${base}${path}`, {
+    /* HTTP cache OFF by default (2026-08-24). Houzs stamps
+       `cache-control: private, max-age=60` on the LIST endpoints the POS both
+       reads and edits — `GET /mfg-products` (their mfg-products.ts:210, added
+       2026-07-24) and `GET /product-models` (:213). TanStack invalidates after
+       a write and refetches, but a fetch with the default cache mode is served
+       straight from that still-fresh browser copy WITHOUT hitting the network,
+       and neither does an F5 — so an edit that DID persist reads back as if it
+       never happened. Reported as "填了价钱刷新就不见了": sofa selling prices
+       written from the SKU Master grid vanished on reload for a minute.
+
+       Safe to disable wholesale: TanStack Query is already the POS's cache
+       layer (staleTime / refetchInterval decide WHEN a request goes out), so
+       no-store changes only WHICH copy answers it, not how many are made. It
+       also inoculates us against the next route Houzs decides to cache —
+       nothing in this repo compiles against theirs, so that lands silently.
+
+       `...init` follows, so a caller that genuinely wants the browser cache can
+       still pass its own `cache`. */
+    cache: 'no-store',
     ...init,
     headers: {
       ...(init?.headers ?? {}),
