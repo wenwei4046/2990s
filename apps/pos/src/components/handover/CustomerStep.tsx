@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { todayLocalIso, type HandoverForm } from '../../lib/handover-helpers';
 import { useAllStaff, useStaff } from '../../lib/staff';
 import { useSoDropdownValues } from '../../lib/so-maintenance/so-dropdown-options-queries';
+import { useVenues, useActiveVenue } from '../../lib/so-maintenance/venues-queries';
 import { Field } from './Field';
 import { CountryPhoneInput } from '../CountryPhoneInput';
 import { CustomerNameSearch } from '../CustomerNameSearch';
@@ -77,6 +78,50 @@ export const CustomerStep = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [derivedType]);
 
+  /* VENUE (2026-08-25) — where this order was sold. Houzs will not CONFIRM an
+     order without one, and this screen used to have nowhere to supply it, so
+     the order died at "Complete order" with a demand the salesperson could not
+     meet from any screen they had.
+
+     Two sources, in this order:
+       1. What Houzs already resolved for this person today (the running
+          exhibition, else their parked Showroom). Pre-selected, still editable —
+          a rep sent to a different hall must be able to say so.
+       2. The venue master, picked by hand. This is the NORMAL path between
+          fairs: on 2026-08-25, zero exhibitions were running and 83 of 90 staff
+          resolved nothing automatically.
+
+     A resolved venue that is NOT in the master (Houzs tolerates that — its
+     projects reference more venues than the master holds) still seeds the field
+     as free TEXT, and is kept as an extra option so selecting nothing else
+     cannot silently drop it. */
+  const venues = useVenues();
+  const activeVenue = useActiveVenue();
+  const venueSeeded = useRef(false);
+  useEffect(() => {
+    if (venueSeeded.current) return;
+    if (form.venueName.trim() || form.venueId) { venueSeeded.current = true; return; }
+    const a = activeVenue.data;
+    if (!a?.venueName) return;
+    venueSeeded.current = true;
+    update('venueName', a.venueName);
+    if (a.venueId) update('venueId', a.venueId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeVenue.data]);
+
+  /* The seeded venue is unmastered when it has a name but no master id. Kept as
+     its own option so the select can SHOW it; picking anything else replaces it. */
+  const unmasteredVenue =
+    form.venueName.trim() && !form.venueId
+    && !(venues.data ?? []).some((v) => v.name === form.venueName)
+      ? form.venueName
+      : null;
+
+  /** Is the venue on screen still the one Houzs resolved? */
+  const stillAutoVenue =
+    !!activeVenue.data?.venueName
+    && activeVenue.data.venueName === form.venueName;
+
   return (
     <section className={styles.stepBody}>
       <h2 className={styles.stepTitle}>Customer additional info</h2>
@@ -129,6 +174,42 @@ export const CustomerStep = ({
               ))}
           </select>
         </Field>
+        <Field label="Venue *">
+          <select
+            value={form.venueId || (unmasteredVenue ? `text:${unmasteredVenue}` : '')}
+            disabled={venues.isLoading}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) { update('venueId', ''); update('venueName', ''); return; }
+              if (v.startsWith('text:')) { update('venueId', ''); update('venueName', v.slice(5)); return; }
+              update('venueId', v);
+              update('venueName', (venues.data ?? []).find((r) => r.id === v)?.name ?? '');
+            }}
+          >
+            <option value="">{venues.isLoading ? 'Loading…' : '— select venue —'}</option>
+            {unmasteredVenue && (
+              <option value={`text:${unmasteredVenue}`}>{unmasteredVenue}</option>
+            )}
+            {(venues.data ?? []).map((v) => (
+              <option key={v.id} value={v.id}>{v.name}</option>
+            ))}
+          </select>
+          <p className={styles.signCaption} style={{ marginTop: 4 }}>
+            {/* The provenance line is true only while the pick IS the resolved
+                venue — once the operator changes it, saying where it "came
+                from" would describe a value no longer on screen. */}
+            {!stillAutoVenue
+              ? 'Where this order was sold. Required before the order can be placed.'
+              : activeVenue.data?.source === 'PMS' && activeVenue.data.projectName
+                ? `Filled in from ${activeVenue.data.projectName} — change it if you are somewhere else`
+                : activeVenue.data?.source === 'SHOWROOM'
+                  ? 'Filled in from your showroom — change it if you are somewhere else'
+                  : 'Where this order was sold. Required before the order can be placed.'}
+          </p>
+        </Field>
+      </div>
+
+      <div className="fieldRow">
         <Field label="Customer type (auto)">
           <select
             value={form.customerType}

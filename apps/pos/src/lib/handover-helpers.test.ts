@@ -18,6 +18,10 @@ import {
 
 const baseForm: HandoverForm = {
   name: '', phone: '', email: '', salespersonId: '', customerType: 'new',
+  // A venue is picked by the time the step can advance, so the fixture carries
+  // one and the cases BELOW vary it. Every pre-2026-08-25 expectation in this
+  // file predates the field and is unchanged by it.
+  venueId: '38', venueName: 'MID VALLEY',
   addressLater: false, fullAddress: '', addressLine2: '',
   postcode: '', city: '', state: '',
   buildingType: '', billingSame: true,
@@ -71,6 +75,38 @@ describe('validateCustomer — race/birthday/gender compulsory for EVERY custome
   });
   it('EXISTING customer with demographics is valid', () => {
     expect(validateCustomer({ ...okContact, customerType: 'EXISTING', race: 'Chinese', birthday: '1990-05-20', gender: 'Female' })).toBe(true);
+  });
+});
+
+describe('validateCustomer — venue is required, and the NAME is what counts', () => {
+  /* Houzs refuses to CONFIRM an order with no venue, and this handover sent
+     neither field until 2026-08-25 — every order died at "Complete order" on a
+     screen with nowhere to supply one. Gated HERE so it is caught before the
+     customer signs, not by the server afterwards. */
+  const okContact = {
+    ...baseForm, name: 'Loo', phone: '0123456789', email: 'a@b.com',
+    race: 'Chinese', birthday: '1990-05-20', gender: 'Female',
+  };
+  it('blocks the step when no venue is picked', () => {
+    expect(validateCustomer({ ...okContact, venueId: '', venueName: '' })).toBe(false);
+  });
+  it('blocks a whitespace-only venue', () => {
+    expect(validateCustomer({ ...okContact, venueId: '', venueName: '   ' })).toBe(false);
+  });
+  it('accepts a venue picked from the master', () => {
+    expect(validateCustomer({ ...okContact, venueId: '38', venueName: 'MID VALLEY' })).toBe(true);
+  });
+  /* Houzs tolerates a venue that is not in the master — its projects reference
+     more venues than project_venues holds — and stamps the TEXT. So must we. */
+  it('accepts an unmastered venue carrying only the name', () => {
+    expect(validateCustomer({ ...okContact, venueId: '', venueName: '2990s PJ' })).toBe(true);
+  });
+  /* THE TRAP. Houzs's venue_id column is a uuid and project_venues ids are
+     INTEGERS, so venueIdUuidOrNull() nulls any id we send. An order carrying
+     only the id PASSES their confirm gate and is saved with a BLANK venue —
+     refused would have been better, because nothing reports this. */
+  it('REJECTS an id with no name — that combination saves a venue-less order', () => {
+    expect(validateCustomer({ ...okContact, venueId: '38', venueName: '' })).toBe(false);
   });
 });
 

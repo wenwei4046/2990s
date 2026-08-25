@@ -69,6 +69,22 @@ export interface HandoverForm {
   name: string; phone: string; email: string;
   salespersonId: string; customerType: CustomerType;
 
+  /** WHERE this order was sold — the exhibition or showroom it is attributed to.
+   *  Houzs refuses to CONFIRM an order with no venue (their
+   *  scm/lib/so-confirm-gate.ts rule 3, owner ruling "venue is compulsory的"),
+   *  and until 2026-08-25 this handover sent neither field, so the whole order
+   *  died at "Complete order" with "A venue is required before this order can
+   *  be confirmed." — on a screen that had nowhere to supply one.
+   *
+   *  BOTH are kept, and `venueName` is the one that counts. Houzs stores the
+   *  venue as TEXT; its `venue_id` column is a uuid and project_venues ids are
+   *  INTEGERS, so their venueIdUuidOrNull() nulls every id we could send. An
+   *  order carrying only `venueId` therefore PASSES their gate and lands with a
+   *  blank venue — worse than being refused, because nothing says so. Hence
+   *  validateCustomer gates on the NAME. */
+  venueId: string;
+  venueName: string;
+
   addressLater: boolean;
   fullAddress: string; addressLine2: string;
   postcode: string; city: string; state: string;
@@ -149,6 +165,10 @@ export const validateCustomer = (f: HandoverForm): boolean =>
   f.name.trim().length > 0
   && f.phone.trim().length > 0
   && EMAIL_RE.test(f.email.trim())
+  // The venue NAME, not the id — see the HandoverForm comment. Gated on THIS
+  // step so a missing venue is caught before the customer signs, rather than
+  // by the server after they have.
+  && f.venueName.trim().length > 0
   // Race + gender + birthday are compulsory for EVERY customer (Loo 2026-06-28):
   // an existing pick prefills them, but they must be present before the step can
   // advance — recognised or not.

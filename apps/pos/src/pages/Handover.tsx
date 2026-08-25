@@ -65,6 +65,7 @@ const empty: HandoverForm = {
   name: '', phone: '', email: '',
   salespersonId: '',
   customerType: 'NEW',
+  venueId: '', venueName: '',
   addressLater: false,
   fullAddress: '', addressLine2: '',
   postcode: '', city: '', state: '', buildingType: '',
@@ -431,6 +432,12 @@ export const Handover = () => {
         ...(form.email.trim() ? { email: form.email.trim() } : {}),
         customerType: form.customerType,
         ...(form.salespersonId ? { salespersonId: form.salespersonId } : {}),
+        /* Venue — the TEXT is what Houzs stores and what its confirm gate is
+           really asking for; the id rides along for parity with their desktop
+           New-SO form and is dropped server-side unless it is a uuid. Sending
+           the id ALONE would satisfy the gate and save a blank venue. */
+        ...(form.venueName.trim() ? { venue: form.venueName.trim() } : {}),
+        ...(form.venueId ? { venueId: form.venueId } : {}),
         ...(form.phone.trim() ? { phone: form.phone.trim() } : {}),
         ...(form.fullAddress.trim() ? { address1: form.fullAddress.trim() } : {}),
         ...(form.addressLine2.trim() ? { address2: form.addressLine2.trim() } : {}),
