@@ -7,7 +7,7 @@
 // ----------------------------------------------------------------------------
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { authedFetch } from '../apiClient';
+import { authedFetch, IS_HOUZS } from '../apiClient';
 
 export type VenueRow = {
   id: string;
@@ -64,5 +64,42 @@ export function useDeactivateVenue() {
     mutationFn: (id: string) =>
       authedFetch<{ venue: VenueRow }>(`/venues/${id}`, { method: 'DELETE' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['venues'] }),
+  });
+}
+
+/* ---------------------------------------------------------------------------
+ * The venue this salesperson is BOUND to today — the handover's default.
+ *
+ * Houzs resolves it from the running exhibition first, then the Showroom the
+ * rep is parked under, then NOTHING (their scm/lib/venue-binding.ts: "an
+ * unresolvable venue is EMPTY", never a guess). All three legs are frequently
+ * empty — measured on production 2026-08-25, 83 of 90 active staff resolved
+ * nothing, because no fair was running and only ONE warehouse in the whole
+ * system carries a venue_name. That is not an error and must not read as one:
+ * an empty answer means the salesperson picks from the master themselves,
+ * which is exactly why the handover now has a Venue field at all.
+ *
+ * Houzs-only. The 2990 API never had this route, so on that target the query
+ * stays disabled rather than 404-ing on every handover.
+ * ------------------------------------------------------------------------ */
+export type ActiveVenue = {
+  /** project_venues id, or null when the resolved TEXT is not in the master. */
+  venueId: string | null;
+  venueName: string | null;
+  projectName: string | null;
+  source: 'PMS' | 'SHOWROOM' | 'MANUAL' | null;
+};
+
+export function useActiveVenue() {
+  return useQuery<ActiveVenue>({
+    queryKey: ['active-venue'],
+    enabled: IS_HOUZS,
+    staleTime: 5 * 60_000,
+    retry: false,
+    queryFn: () => authedFetch<ActiveVenue>('/mfg-sales-orders/active-venue')
+      /* Non-fatal by construction: the default is a convenience, and a failed
+         lookup must never be the reason a salesperson cannot open an order.
+         They still get the full picker. */
+      .catch(() => ({ venueId: null, venueName: null, projectName: null, source: null })),
   });
 }
