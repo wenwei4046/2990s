@@ -122,6 +122,13 @@ export const CustomerStep = ({
     !!activeVenue.data?.venueName
     && activeVenue.data.venueName === form.venueName;
 
+  /* Same question validateCustomer is asked in Handover.tsx: can this screen
+     actually offer a venue? Recomputed rather than passed so the LABEL cannot
+     drift from the gate — an asterisk on a field the operator has no way to
+     fill is a lie the step would then refuse to explain. */
+  const venueOfferable =
+    (venues.data ?? []).length > 0 || Boolean(activeVenue.data?.venueName);
+
   return (
     <section className={styles.stepBody}>
       <h2 className={styles.stepTitle}>Customer additional info</h2>
@@ -174,7 +181,7 @@ export const CustomerStep = ({
               ))}
           </select>
         </Field>
-        <Field label="Venue *">
+        <Field label={venueOfferable ? 'Venue *' : 'Venue'}>
           <select
             value={form.venueId || (unmasteredVenue ? `text:${unmasteredVenue}` : '')}
             disabled={venues.isLoading}

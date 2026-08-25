@@ -152,6 +152,20 @@ describe('CustomerStep — Venue', () => {
     expect(screen.getByText(/Filled in from your showroom/)).toBeInTheDocument();
   });
 
+  /* Company 2 has ZERO rows in the venue master. With nothing resolved either,
+     this screen has nothing to offer — so it must not mark the field required,
+     and Handover.tsx's gate must not demand it. Blocking here would newly stop
+     the only people who were never blocked. */
+  it('drops the required marker when there is no venue to offer', () => {
+    state.venues = []; state.venuesLoading = false;
+    state.active = { venueId: null, venueName: null, projectName: null, source: null };
+    render(<Harness />);
+    // The label SPAN, not getByLabelText: Field renders the caption <p> inside
+    // the same <label>, so the accessible name carries the caption text too.
+    expect(screen.getByText('Venue')).toBeInTheDocument();
+    expect(screen.queryByText('Venue *')).not.toBeInTheDocument();
+  });
+
   /* An empty resolution is the NORMAL state between exhibitions — on 2026-08-25
      it was 83 of 90 staff. It must present as "pick one", never as an error. */
   it('offers a plain picker when nothing resolved', () => {
