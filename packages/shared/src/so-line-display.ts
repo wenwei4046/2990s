@@ -20,9 +20,11 @@
 // guess.
 //
 // Money: the P3 split floors every share and puts the rounding residue on the
-// last line, so summing unit_price_centi / total_centi across a buildKey group
+// last line, so summing the per-line unit price / total across a buildKey group
 // reconstructs the build total EXACTLY (discount is netted on the lead line's
-// total already).
+// total already). Read every money field through `money()` below — the column
+// is spelled `_sen` on Houzs rows and `_centi` on 2990's own, and this module
+// serves both.
 //
 // PWP notes (same ask): pwp_codes always intended the unused voucher to print
 // on the SO (schema.ts: "printed on the SO, redeemable cross-order") — this is
@@ -31,6 +33,35 @@
 // ----------------------------------------------------------------------------
 
 import { orderSofaCellsLeftToRight, type Rot } from './sofa-build';
+
+/** One money field off a raw SO line, whichever way the column is spelled.
+ *
+ *  Houzs migration 0305 (their #2438, 2026-08-18) renamed 291 money columns
+ *  from `_centi` to `_sen`. The unit did NOT change — centi-MYR and sen are
+ *  both hundredths of a ringgit — so this is a rename, never a conversion.
+ *  Do not scale either side.
+ *
+ *  It cannot simply be renamed here: the POS reads Houzs rows (`_sen`), while
+ *  `apps/api` and `apps/backend` read 2990's own rows, which still carry
+ *  `_centi`. Both spellings are live at once, so both are accepted.
+ *
+ *  An absent key is `undefined`, and the old `Number(l.unit_price_centi ?? 0)`
+ *  turned that into a silent 0 — which is how a folded sofa build came to
+ *  print MYR 0.00 on a customer's Sales Order while the order's own subtotal
+ *  stayed correct (2990-SO-2608-006, reported 26 Aug 2026). The single-line
+ *  path never showed it: `so-doc.ts` reads those through
+ *  `apps/pos/src/lib/houzs-money-keys.ts`, which already knew this rule. That
+ *  sweep simply never reached this file. */
+const money = (
+  line: RawSoDisplayLine,
+  base: 'unit_price' | 'discount' | 'total',
+): number => {
+  const row = line as unknown as Record<string, unknown>;
+  const sen = row[`${base}_sen`];
+  if (typeof sen === 'number' && Number.isFinite(sen)) return sen;
+  const centi = row[`${base}_centi`];
+  return typeof centi === 'number' && Number.isFinite(centi) ? centi : 0;
+};
 
 /** Minimal raw SO line shape (snake_case = the API row verbatim). Callers pass
  *  their richer row type; the fold preserves it via the generic. */
@@ -42,6 +73,12 @@ export interface RawSoDisplayLine {
   unit_price_centi?: number | null;
   discount_centi?: number | null;
   total_centi?: number | null;
+  /* Houzs migration 0305 renamed these three (and 288 more) from `_centi` to
+     `_sen`. Both are declared because this module reads rows from BOTH
+     backends — see `money()`. */
+  unit_price_sen?: number | null;
+  discount_sen?: number | null;
+  total_sen?: number | null;
   variants?: unknown;
   /** Per-line operator remark (mfg_sales_order_items.remark). Optional —
    *  legacy callers that don't select it simply fold without remarks. */
@@ -198,12 +235,14 @@ export function groupSoLinesForDisplay<T extends RawSoDisplayLine>(
         composition: compositionOf(ordered),
         description2: lead.description2 ?? null,
         qty: 1,
-        unitPriceCenti: ordered.reduce((s, l) => s + Number(l.unit_price_centi ?? 0), 0),
+        /* Named `*Centi` for its consumers' sake; the VALUE may have been read
+           from either spelling. Same unit either way — see `money()`. */
+        unitPriceCenti: ordered.reduce((s, l) => s + money(l, 'unit_price'), 0),
         /* Summed, not lead-read: the discount is persisted on the CREATE
            path's first line, which the left-to-right walk may no longer put
            first. Only one line ever carries it, so Σ === the build figure. */
-        discountCenti: ordered.reduce((s, l) => s + Number(l.discount_centi ?? 0), 0),
-        totalCenti: ordered.reduce((s, l) => s + Number(l.total_centi ?? 0), 0),
+        discountCenti: ordered.reduce((s, l) => s + money(l, 'discount'), 0),
+        totalCenti: ordered.reduce((s, l) => s + money(l, 'total'), 0),
         remark: ordered.find((l) => typeof l.remark === 'string' && l.remark.trim() !== '')?.remark ?? null,
       },
     });

@@ -337,3 +337,70 @@ describe('allocatePwpTriggerNotes — each voucher prints once (SO-2606-013)', (
     expect(allocatePwpTriggerNotes([['A'], ['B']], null)).toEqual([[], []]);
   });
 });
+
+/* ── Houzs money-key spelling (migration 0305) ───────────────────────────────
+   Reported 26 Aug 2026: 2990-SO-2608-006 printed its SOFA XAMMAR line as
+   MYR 0.00 / MYR 0.00 for a customer, while the same document's subtotal read
+   MYR 3,365.00 and the SVC-DELIVERY line read MYR 250.00 correctly.
+
+   The fold summed `unit_price_centi` / `total_centi` only. Houzs renamed those
+   columns to `_sen` on 2026-08-18, so on every Houzs row the key was absent,
+   `?? 0` made the miss silent, and the whole build totalled zero. The delivery
+   line escaped because `so-doc.ts` reads single lines through
+   houzs-money-keys.ts, which already handled both spellings.
+
+   The suite could not have caught it: every fixture above is `_centi`-only,
+   which is the 2990-API shape. These add the Houzs shape. */
+const so2608006Sen = [
+  {
+    item_code: 'XAMMAR-L(LHF)', description: 'SOFA XAMMAR L(LHF)',
+    description2: 'EZ-001 Pearl / SEAT 28 / LEG 6"', qty: 1,
+    unit_price_sen: 155750, discount_sen: 0, total_sen: 155750,
+    variants: { buildKey: 'b-6', cellIndex: 0, x: 0, y: 0, rot: 0 },
+  },
+  {
+    item_code: 'XAMMAR-2A(RHF)', description: 'SOFA XAMMAR 2A(RHF)',
+    description2: 'EZ-001 Pearl / SEAT 28 / LEG 6"', qty: 1,
+    unit_price_sen: 155750, discount_sen: 0, total_sen: 155750,
+    variants: { buildKey: 'b-6', cellIndex: 1, x: 105, y: 0, rot: 0 },
+  },
+];
+
+describe('groupSoLinesForDisplay — money key spelling', () => {
+  it('folds a Houzs row (_sen) at its real price, not zero', () => {
+    const [g] = groupSoLinesForDisplay(so2608006Sen);
+    expect(g!.kind).toBe('sofa-build');
+    expect(g!.display!.totalCenti).toBe(311500);      // RM 3,115.00
+    expect(g!.display!.unitPriceCenti).toBe(311500);
+  });
+
+  it('still folds a 2990 row (_centi) — apps/api and apps/backend read those', () => {
+    const [g] = groupSoLinesForDisplay(so2606020);
+    expect(g!.display!.totalCenti).toBe(311500);      // 103833 + 103833 + 103834
+  });
+
+  it('prefers _sen when a row somehow carries both, and never adds them', () => {
+    const [g] = groupSoLinesForDisplay([
+      { ...so2608006Sen[0]!, unit_price_centi: 999, total_centi: 999 },
+      so2608006Sen[1]!,
+    ]);
+    expect(g!.display!.totalCenti).toBe(311500);
+  });
+
+  it('a line carrying neither spelling contributes 0 rather than NaN', () => {
+    const [g] = groupSoLinesForDisplay([
+      so2608006Sen[0]!,
+      { ...so2608006Sen[1]!, unit_price_sen: undefined, total_sen: undefined },
+    ]);
+    expect(g!.display!.totalCenti).toBe(155750);
+    expect(Number.isNaN(g!.display!.totalCenti)).toBe(false);
+  });
+
+  it('reads the discount through the same rule', () => {
+    const [g] = groupSoLinesForDisplay([
+      { ...so2608006Sen[0]!, discount_sen: 12500 },
+      so2608006Sen[1]!,
+    ]);
+    expect(g!.display!.discountCenti).toBe(12500);
+  });
+});
