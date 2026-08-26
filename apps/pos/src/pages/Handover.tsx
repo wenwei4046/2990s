@@ -45,6 +45,7 @@ import { leadModuleValueCenti } from '@2990s/shared/voucher-sofa-cap';
 import { useSofaModulePrices } from '../lib/sofa-module-prices';
 import { submitWithVoucher } from '../lib/voucher-submit';
 import { useStaff } from '../lib/staff';
+import { useVenues, useActiveVenue } from '../lib/so-maintenance/venues-queries';
 import { SignConfirmStep } from '../components/handover/SignConfirmStep';
 import type { SignaturePadHandle } from '../components/handover/SignaturePad';
 import styles from './Handover.module.css';
@@ -65,6 +66,7 @@ const empty: HandoverForm = {
   name: '', phone: '', email: '',
   salespersonId: '',
   customerType: 'NEW',
+  venueId: '', venueName: '',
   addressLater: false,
   fullAddress: '', addressLine2: '',
   postcode: '', city: '', state: '', buildingType: '',
@@ -102,6 +104,9 @@ export const Handover = () => {
   // Captures the canvas signature at submit time so we persist the exact ink
   // the customer drew — the Sales Order PDF re-embeds it 1:1.
   const signatureRef = useRef<SignaturePadHandle>(null);
+
+  const venuesForGate = useVenues();
+  const activeVenueForGate = useActiveVenue();
 
   const [idx, setIdx] = useState(0);
   // Only show blockers banner AFTER user clicks Continue and validation fails.
@@ -347,8 +352,16 @@ export const Handover = () => {
   const voucherTotal = voucher ? Math.round(voucher.appliedCenti / 100) : 0;
   const total = Math.max(0, subtotal + addonTotal + deliveryFee.total - voucherTotal);
 
+  /* Can this screen offer a venue at all? React Query dedupes both of these
+     with CustomerStep's own calls (same keys), so this costs no extra request.
+     See validateCustomer — when the answer is NO, the venue is not demanded
+     here, because demanding a field the screen cannot supply would newly block
+     the only people who are not blocked today. */
+  const venueOfferable =
+    (venuesForGate.data ?? []).length > 0 || Boolean(activeVenueForGate.data?.venueName);
+
   const validity: Record<StepKey, boolean> = {
-    customer:  validateCustomer(form),
+    customer:  validateCustomer(form, venueOfferable),
     address:   validateAddress(form),
     emergency: validateEmergency(form),
     target:    validateTargetDate(form, todayLocalIso(), hasTbcLines),
@@ -431,6 +444,12 @@ export const Handover = () => {
         ...(form.email.trim() ? { email: form.email.trim() } : {}),
         customerType: form.customerType,
         ...(form.salespersonId ? { salespersonId: form.salespersonId } : {}),
+        /* Venue — the TEXT is what Houzs stores and what its confirm gate is
+           really asking for; the id rides along for parity with their desktop
+           New-SO form and is dropped server-side unless it is a uuid. Sending
+           the id ALONE would satisfy the gate and save a blank venue. */
+        ...(form.venueName.trim() ? { venue: form.venueName.trim() } : {}),
+        ...(form.venueId ? { venueId: form.venueId } : {}),
         ...(form.phone.trim() ? { phone: form.phone.trim() } : {}),
         ...(form.fullAddress.trim() ? { address1: form.fullAddress.trim() } : {}),
         ...(form.addressLine2.trim() ? { address2: form.addressLine2.trim() } : {}),
