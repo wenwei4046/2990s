@@ -1055,10 +1055,11 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
       </div>
 
       {/* PR — Commander 2026-05-28: Allowed Options drawer for sales_director.
-          Minimal-viable: read current allowed_options from the row, render 4
-          chip-pickers (Compartments / Sizes / Leg Heights / Specials), Save
-          PATCHes /product-models/:id. Per-category visibility (mattress
-          doesn't need compartments etc.) is handled inside the drawer. */}
+          Minimal-viable: read current allowed_options from the row, render the
+          chip-pickers (Sizes / Compartments / Gaps / Leg Heights / Divan
+          Heights / Specials / Fabrics), Save PATCHes /product-models/:id.
+          Per-category visibility (mattress doesn't need compartments etc.) is
+          handled inside the drawer. */}
       {editingModelId && (
         <ModelAllowedOptionsDrawer
           modelId={editingModelId}
@@ -1073,9 +1074,10 @@ const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
    ModelAllowedOptionsDrawer (PR — Commander 2026-05-28)
 
    POS-side editor for product_models.allowed_options. Sales_director ticks
-   which compartments / sizes / leg heights / specials should surface on the
-   POS Configurator for this Model. Reads master pools from MaintenanceConfig
-   (so commander's "+ Add Code" wizard pool is the universe), intersects with
+   which compartments / sizes / gaps / leg heights / divan heights / specials
+   should surface on the POS Configurator for this Model. Reads master pools
+   from MaintenanceConfig (so commander's "+ Add Code" wizard pool is the
+   universe), intersects with
    the Model's current allowed_options, lets the user tick/untick, then
    PATCHes /product-models/:id.
 
@@ -1136,9 +1138,25 @@ const ModelAllowedOptionsDrawer = ({
       mdl.category === 'SOFA' ? mcfg.sofaLegHeights
       : mdl.category === 'BEDFRAME' ? mcfg.legHeights
       : undefined;
-    const seeded = (legPool && !('leg_heights' in saved))
+    let seeded = (legPool && !('leg_heights' in saved))
       ? fillEmptyAllowedOptions(saved, { leg_heights: legPool.map((o) => o.value) })
       : saved;
+    // Bedframe gaps + divan heights (Loo 2026-08-28). Same ON/OFF ticks as leg
+    // heights, so an option ADDED to Maintenance later can be switched on per
+    // Model instead of staying invisible in the POS configurator forever.
+    //
+    // Seeded on absent OR empty — deliberately laxer than the leg_heights guard
+    // above. leg_heights distinguishes the two (useSofaLegHeights: absent = all,
+    // present-empty = none); these two pools do NOT. useBedframeCustomizerData's
+    // gate() and the server's hasRestriction() both read a present-but-EMPTY list
+    // as "no restriction = offer everything", so rendering that state as
+    // all-chips-OFF would lie about what the configurator actually does.
+    if (mdl.category === 'BEDFRAME') {
+      seeded = fillEmptyAllowedOptions(seeded, {
+        gaps: maintActiveValues(mcfg.gaps),
+        divan_heights: (mcfg.divanHeights ?? []).map((o) => o.value),
+      });
+    }
     setDraft(seeded);
     setActiveDraft(mdl.active);
   }, [model.data, masterCfg.data, draft]);
@@ -1185,6 +1203,11 @@ const ModelAllowedOptionsDrawer = ({
       ? maintActiveValues(cfg.mattressSizes)
       : maintActiveValues(cfg.bedframeSizes);
   const compartmentPool: string[] = isSofa ? maintActiveValues(cfg.sofaCompartments) : [];
+  // Gaps + divan heights are BEDFRAME-only: the POS configurator renders them
+  // from useBedframeCustomizerData, which is the master Maintenance pool ∩ these
+  // ticks. Divan heights are a PRICED pool (surcharge); gaps a plain string pool.
+  const gapPool: string[]         = isBedframe ? maintActiveValues(cfg.gaps) : [];
+  const divanHeightPool: string[] = isBedframe ? pricedValues(cfg.divanHeights) : [];
   const legHeightPool: string[]   = isSofa
     ? pricedValues(cfg.sofaLegHeights)
     : isBedframe
@@ -1311,12 +1334,28 @@ const ModelAllowedOptionsDrawer = ({
               onToggle={(v) => toggle('compartments', v)}
             />
           )}
+          {gapPool.length > 0 && (
+            <AllowedOptionsSection
+              label="Mattress gaps"
+              pool={gapPool}
+              isTicked={(v) => isTicked('gaps', v)}
+              onToggle={(v) => toggle('gaps', v)}
+            />
+          )}
           {legHeightPool.length > 0 && (
             <AllowedOptionsSection
               label="Leg heights"
               pool={legHeightPool}
               isTicked={(v) => isTicked('leg_heights', v)}
               onToggle={(v) => toggle('leg_heights', v)}
+            />
+          )}
+          {divanHeightPool.length > 0 && (
+            <AllowedOptionsSection
+              label="Divan heights"
+              pool={divanHeightPool}
+              isTicked={(v) => isTicked('divan_heights', v)}
+              onToggle={(v) => toggle('divan_heights', v)}
             />
           )}
           {specialAddonPool.length > 0 && (
