@@ -35,9 +35,9 @@ import { fmtCenti } from '@2990s/shared';
 /** One stored commission config, in the wire vocabulary (integer sen / bps). */
 export interface CommissionConfigWire {
   baseBps: number;
-  personalKpiThresholdSen: number;
+  personalKpiThresholdCenti: number;
   personalKpiBonusBps: number;
-  showroomKpiThresholdSen: number;
+  showroomKpiThresholdCenti: number;
   showroomKpiBonusBps: number;
   overrideBaseBps: number;
   overrideKpiBonusBps: number;
@@ -48,11 +48,11 @@ export interface CommissionTiers {
   /** Rate earned below the Tier 2 threshold. */
   tier1Bps: number;
   /** Personal goods at or above which Tier 2 applies. */
-  tier2ThresholdSen: number;
+  tier2ThresholdCenti: number;
   /** Rate earned at or above the threshold (NOT an increment). */
   tier2Bps: number;
   /** Showroom goods at or above which everyone in the room gets the bump. */
-  showroomThresholdSen: number;
+  showroomThresholdCenti: number;
   /** The bump, added on top of whichever personal tier applies. */
   showroomBonusBps: number;
   /** Manager override on the whole showroom, before the showroom bump. */
@@ -85,7 +85,7 @@ export const pctToBps = (pct: number): number => Math.round(pct * 100);
  *  ringgit), so no conversion is involved. Named for the spelling this page
  *  speaks. Null renders as "—", which on a payroll screen is the honest answer:
  *  "no figure", not "earned nothing". */
-export const fmtSen = (sen: number | null | undefined): string => fmtCenti(sen);
+export const fmtSen = (centi: number | null | undefined): string => fmtCenti(centi);
 
 /** A rate as a percentage string. Trailing zeros kept to 2dp so a column of
  *  rates lines up and 1% never reads as coarser than 1.25%. */
@@ -96,11 +96,11 @@ export const fmtBps = (bps: number): string => `${bpsToPct(bps).toFixed(2)}%`;
 /** Stored config → the effective rates the page edits. */
 export const configToTiers = (c: CommissionConfigWire): CommissionTiers => ({
   tier1Bps: c.baseBps,
-  tier2ThresholdSen: c.personalKpiThresholdSen,
+  tier2ThresholdCenti: c.personalKpiThresholdCenti,
   // The effective Tier 2 rate is the base PLUS the increment — that sum is the
   // number on screen, and the only reason this file exists.
   tier2Bps: c.baseBps + c.personalKpiBonusBps,
-  showroomThresholdSen: c.showroomKpiThresholdSen,
+  showroomThresholdCenti: c.showroomKpiThresholdCenti,
   showroomBonusBps: c.showroomKpiBonusBps,
   overrideBaseBps: c.overrideBaseBps,
   overrideBonusBps: c.overrideKpiBonusBps,
@@ -128,7 +128,7 @@ export const tiersError = (t: CommissionTiers): string | null => {
   ) {
     return 'A rate cannot be negative.';
   }
-  if ([t.tier2ThresholdSen, t.showroomThresholdSen].some((v) => v < 0)) {
+  if ([t.tier2ThresholdCenti, t.showroomThresholdCenti].some((v) => v < 0)) {
     return 'A threshold cannot be negative.';
   }
   return null;
@@ -140,11 +140,11 @@ export const tiersError = (t: CommissionTiers): string | null => {
  *  otherwise emit the negative increment the server refuses. */
 export const tiersToConfigPatch = (t: CommissionTiers): CommissionConfigWire => ({
   baseBps: t.tier1Bps,
-  personalKpiThresholdSen: t.tier2ThresholdSen,
+  personalKpiThresholdCenti: t.tier2ThresholdCenti,
   // Back to an increment — the inverse of configToTiers, and the reason both
   // directions live in one file where they can be tested against each other.
   personalKpiBonusBps: t.tier2Bps - t.tier1Bps,
-  showroomKpiThresholdSen: t.showroomThresholdSen,
+  showroomKpiThresholdCenti: t.showroomThresholdCenti,
   showroomKpiBonusBps: t.showroomBonusBps,
   overrideBaseBps: t.overrideBaseBps,
   overrideKpiBonusBps: t.overrideBonusBps,

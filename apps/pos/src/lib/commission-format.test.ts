@@ -21,9 +21,9 @@ import {
    test rather than as a wrong number on a payslip. */
 const SEEDED: CommissionConfigWire = {
   baseBps: 100,
-  personalKpiThresholdSen: 10_000_000,
+  personalKpiThresholdCenti: 10_000_000,
   personalKpiBonusBps: 50,
-  showroomKpiThresholdSen: 40_000_000,
+  showroomKpiThresholdCenti: 40_000_000,
   showroomKpiBonusBps: 50,
   overrideBaseBps: 50,
   overrideKpiBonusBps: 50,
@@ -66,15 +66,15 @@ describe('config <-> tiers', () => {
     const t = configToTiers(SEEDED);
     expect(t.tier1Bps).toBe(100); // 1.00% below the threshold
     expect(t.tier2Bps).toBe(150); // 1.50% at or above it — base + increment
-    expect(t.tier2ThresholdSen).toBe(10_000_000);
+    expect(t.tier2ThresholdCenti).toBe(10_000_000);
   });
 
   it('expresses Loo 2026-08-31 stated ladder (0.5% -> 1% at RM 100k)', () => {
     const t: CommissionTiers = {
       tier1Bps: 50,
-      tier2ThresholdSen: 10_000_000,
+      tier2ThresholdCenti: 10_000_000,
       tier2Bps: 100,
-      showroomThresholdSen: 40_000_000,
+      showroomThresholdCenti: 40_000_000,
       showroomBonusBps: 50,
       overrideBaseBps: 50,
       overrideBonusBps: 50,
@@ -123,7 +123,7 @@ describe('tiersError', () => {
 
   it('refuses negative rates and thresholds', () => {
     expect(tiersError({ ...ok, showroomBonusBps: -1 })).toMatch(/negative/);
-    expect(tiersError({ ...ok, tier2ThresholdSen: -1 })).toMatch(/negative/);
+    expect(tiersError({ ...ok, tier2ThresholdCenti: -1 })).toMatch(/negative/);
   });
 });
 

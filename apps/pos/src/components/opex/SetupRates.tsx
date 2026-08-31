@@ -18,9 +18,10 @@
 import { useEffect, useState } from 'react';
 import { Percent, Plus, Save, Trash2, Users } from 'lucide-react';
 import {
-  useCreateHrOverrideLevel, useDeleteHrOverrideLevel, useHrConfig, useHrOverrideLevels,
-  useUpdateHrConfig, type HrConfig, type HrOverrideMode,
-} from '../../lib/hr-commission-queries';
+  useCommissionConfig, useCommissionOverrideLevels, useCreateCommissionOverrideLevel,
+  useDeleteCommissionOverrideLevel, useUpdateCommissionConfig,
+  type CommissionConfigWire, type HrOverrideMode,
+} from '../../lib/commission-api';
 import { hrErrorMessage } from '../../lib/hr-wire';
 import {
   bpsToPct, configToTiers, effectiveRateBps, fmtBps, fmtSen, pctToBps, rmToSen, senToRm,
@@ -42,13 +43,13 @@ type Draft = {
   overrideMode: HrOverrideMode;
 };
 
-const toDraft = (c: HrConfig): Draft => {
+const toDraft = (c: CommissionConfigWire): Draft => {
   const t = configToTiers(c);
   return {
     tier1Pct: String(bpsToPct(t.tier1Bps)),
-    tier2ThresholdRm: String(senToRm(t.tier2ThresholdSen)),
+    tier2ThresholdRm: String(senToRm(t.tier2ThresholdCenti)),
     tier2Pct: String(bpsToPct(t.tier2Bps)),
-    showroomThresholdRm: String(senToRm(t.showroomThresholdSen)),
+    showroomThresholdRm: String(senToRm(t.showroomThresholdCenti)),
     showroomBonusPct: String(bpsToPct(t.showroomBonusBps)),
     overrideBasePct: String(bpsToPct(t.overrideBaseBps)),
     overrideBonusPct: String(bpsToPct(t.overrideBonusBps)),
@@ -66,17 +67,17 @@ const num = (s: string): number => {
 
 const toTiers = (d: Draft): CommissionTiers => ({
   tier1Bps: pctToBps(num(d.tier1Pct)),
-  tier2ThresholdSen: rmToSen(num(d.tier2ThresholdRm)),
+  tier2ThresholdCenti: rmToSen(num(d.tier2ThresholdRm)),
   tier2Bps: pctToBps(num(d.tier2Pct)),
-  showroomThresholdSen: rmToSen(num(d.showroomThresholdRm)),
+  showroomThresholdCenti: rmToSen(num(d.showroomThresholdRm)),
   showroomBonusBps: pctToBps(num(d.showroomBonusPct)),
   overrideBaseBps: pctToBps(num(d.overrideBasePct)),
   overrideBonusBps: pctToBps(num(d.overrideBonusPct)),
 });
 
 export const SetupRates = ({ canManage }: { canManage: boolean }) => {
-  const { data: config, isLoading, error } = useHrConfig();
-  const update = useUpdateHrConfig();
+  const { data: config, isLoading, error } = useCommissionConfig();
+  const update = useUpdateCommissionConfig();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -158,13 +159,13 @@ export const SetupRates = ({ canManage }: { canManage: boolean }) => {
             cannot go stale the way a hand-written sentence would. */}
         <p className={styles.notice}>
           <span className={styles.noticeTitle}>What this pays</span><br />
-          Below {fmtSen(tiers.tier2ThresholdSen)} own sales:{' '}
+          Below {fmtSen(tiers.tier2ThresholdCenti)} own sales:{' '}
           <strong>{fmtBps(effectiveRateBps(tiers, { personalHit: false, showroomHit: false }))}</strong>
           {' '}· at or above it:{' '}
           <strong>{fmtBps(effectiveRateBps(tiers, { personalHit: true, showroomHit: false }))}</strong>.
           {tiers.showroomBonusBps > 0 && (
             <>
-              {' '}When the showroom passes {fmtSen(tiers.showroomThresholdSen)}, everyone in it gets
+              {' '}When the showroom passes {fmtSen(tiers.showroomThresholdCenti)}, everyone in it gets
               {' '}{fmtBps(tiers.showroomBonusBps)} more — so{' '}
               <strong>{fmtBps(effectiveRateBps(tiers, { personalHit: false, showroomHit: true }))}</strong>
               {' '}and{' '}
@@ -284,9 +285,9 @@ const RmField = ({
    silently repoints an existing rate at a different set of people. */
 
 const OverrideLevels = ({ canManage }: { canManage: boolean }) => {
-  const { data: levels, isLoading, error } = useHrOverrideLevels();
-  const create = useCreateHrOverrideLevel();
-  const remove = useDeleteHrOverrideLevel();
+  const { data: levels, isLoading, error } = useCommissionOverrideLevels();
+  const create = useCreateCommissionOverrideLevel();
+  const remove = useDeleteCommissionOverrideLevel();
   const [level, setLevel] = useState('1');
   const [ratePct, setRatePct] = useState('0.5');
   const [addError, setAddError] = useState<string | null>(null);

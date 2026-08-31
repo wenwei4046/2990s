@@ -176,3 +176,13 @@
   font-size: var(--fs-12);
   letter-spacing: 0.06em;
 }
+
+/* Inline checkbox + its state word, used in a table cell. The word carries the
+   meaning ("Earns both" / "Instead of %"), because a bare tick in a payroll
+   table says nothing about which way it points. */
+.toggleCell {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: var(--fs-13); color: var(--c-ink);
+  min-height: 44px; cursor: pointer;
+}
+.toggleCell input { width: 18px; height: 18px; accent-color: var(--c-orange); }

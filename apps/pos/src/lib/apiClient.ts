@@ -69,8 +69,15 @@ export function posApiBase(): string | undefined {
 }
 
 /** The bearer token for the active target: Houzs POS session token on 'houzs',
- *  the Supabase session access_token on '2990'. Returns null when not signed in. */
-async function bearerToken(): Promise<string | null> {
+ *  the Supabase session access_token on '2990'. Returns null when not signed in.
+ *
+ *  EXPORTED for the one caller that must talk to 2990's API while holding a
+ *  HOUZS session — the OPEX Commission scheme (lib/commission-api.ts). It cannot
+ *  use authedFetchRaw's baseOverride: that stamps X-Company-Id on the Houzs
+ *  target, and 2990's CORS allowHeaders is ['authorization', 'content-type',
+ *  'x-client-info'] — the PREFLIGHT fails and the browser reports a generic
+ *  network error. Same trap campaign-promo-queries.ts documents. */
+export async function bearerToken(): Promise<string | null> {
   if (TARGET === 'houzs') return getHouzsToken();
   const { data } = await supabase.auth.getSession();
   return data.session?.access_token ?? null;

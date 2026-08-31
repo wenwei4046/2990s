@@ -172,6 +172,28 @@ commission.patch('/config', async (c) => {
   return c.json({ config: configToWire(data as unknown as Record<string, unknown>) });
 });
 
+/* ── pickers ──────────────────────────────────────────────────────────────── */
+/* Showrooms only, and from 2990's OWN table.
+   Houzs's `scm.showrooms` is the vendored 2990 table and is EMPTY over there —
+   their own staff route says so ("the legacy showroomId, which points at the
+   vendored 2990 scm.showrooms table (empty in Houzs)"). So a showroom picker fed
+   from Houzs would offer nothing, which is why the HR module there was never
+   usable. The commission scheme lives here now, and so does its showroom list.
+   Every OTHER picker the Setup screen needs — staff, products, fabrics, special
+   add-ons — is live catalogue data the POS already loads from Houzs, so it is
+   read there rather than duplicated into this response. */
+commission.get('/pickers', async (c) => {
+  const g = await gate(c, HR_READ);
+  if (!g.ok) return g.res;
+  const { data, error } = await admin(c)
+    .from('showrooms').select('id, name').eq('active', true).order('name');
+  if (error) return c.json({ error: 'fetch_failed', reason: error.message }, 500);
+  return c.json({
+    showrooms: ((data ?? []) as unknown as Record<string, unknown>[])
+      .map((r) => ({ id: String(r.id), name: String(r.name ?? '') })),
+  });
+});
+
 /* ── salespeople on the scheme ────────────────────────────────────────────── */
 /* staff_id and showroom_id hold HOUZS ids and carry NO foreign key — those rows
    live in another database (migration 0215). The names are snapshotted on write

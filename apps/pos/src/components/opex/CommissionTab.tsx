@@ -11,7 +11,7 @@
 // on 2026-08-31 — is folded in the POS from the SO headers for the same range
 // (lib/commission-revenue.ts), because the engine does not report it and he
 // asked for this to stay POS-side. It is built AROUND the engine's own figure,
-// never over it: `Products` IS `personalGoodsSen`, so the number under the
+// never over it: `Products` IS `personalGoodsCenti`, so the number under the
 // percentage is always the number the percentage ran on. The other two are
 // derived from it and are dropped, loudly, if they fail to reconcile.
 //
@@ -29,10 +29,10 @@ import {
   AlertTriangle, ChevronDown, ChevronRight, Lock, LockOpen, RefreshCw,
 } from 'lucide-react';
 import { fmtDate } from '@2990s/shared';
+import { useClosePayout, useReopenPayout } from '../../lib/commission-api';
 import {
-  useCloseHrPayout, useHrCommission, useReopenHrPayout,
-  type HrCommissionReport, type HrCommissionRow,
-} from '../../lib/hr-commission-queries';
+  useCommissionReport, type CommissionReport, type CommissionReportRow,
+} from '../../lib/commission-engine';
 import { useCommissionRevenue } from '../../lib/commission-revenue-queries';
 import { splitForRow, type RevenueSplit, type SalespersonRevenue } from '../../lib/commission-revenue';
 import { hrErrorMessage } from '../../lib/hr-wire';
@@ -56,10 +56,10 @@ const currentMonthRange = (): { from: string; to: string } => {
 
 interface Totals {
   /* revenue — what was sold */
-  productsSen: number;
-  serviceSen: number;
-  kpiRevenueSen: number;
-  totalRevenueSen: number;
+  productsCenti: number;
+  serviceCenti: number;
+  kpiRevenueCenti: number;
+  totalRevenueCenti: number;
   /* False as soon as ONE person's figure is missing: a column that is the sum of
      some-but-not-all rows is worse than no column. Split in two because the two
      halves fail INDEPENDENTLY — a caller who may not see the per-category
@@ -68,40 +68,40 @@ interface Totals {
   splitComplete: boolean;
   totalComplete: boolean;
   /* payout — what is paid */
-  commissionSen: number;
-  overrideSen: number;
-  kpiEarnedSen: number;
-  payoutSen: number;
+  commissionCenti: number;
+  overrideCenti: number;
+  kpiEarnedCenti: number;
+  payoutCenti: number;
   people: number;
   mismatches: number;
 }
 
 const sumReport = (
-  report: HrCommissionReport,
+  report: CommissionReport,
   splits: Map<string, RevenueSplit>,
 ): Totals => {
   const t: Totals = {
-    productsSen: 0, serviceSen: 0, kpiRevenueSen: 0, totalRevenueSen: 0,
+    productsCenti: 0, serviceCenti: 0, kpiRevenueCenti: 0, totalRevenueCenti: 0,
     splitComplete: true, totalComplete: true,
-    commissionSen: 0, overrideSen: 0, kpiEarnedSen: 0, payoutSen: 0, people: 0, mismatches: 0,
+    commissionCenti: 0, overrideCenti: 0, kpiEarnedCenti: 0, payoutCenti: 0, people: 0, mismatches: 0,
   };
   for (const s of report.showrooms) {
     for (const r of s.rows) {
-      t.productsSen += r.personalGoodsSen;
-      t.commissionSen += r.personalCommissionSen;
-      t.overrideSen += r.overrideCommissionSen;
-      t.kpiEarnedSen += r.itemKpiSen;
-      t.payoutSen += r.totalSen;
+      t.productsCenti += r.personalGoodsCenti;
+      t.commissionCenti += r.personalCommissionCenti;
+      t.overrideCenti += r.overrideCommissionCenti;
+      t.kpiEarnedCenti += r.itemKpiCenti;
+      t.payoutCenti += r.totalCenti;
       t.people += 1;
 
       const sp = splits.get(r.staffId);
-      if (sp && sp.serviceSen !== null && sp.kpiSen !== null) {
-        t.serviceSen += sp.serviceSen;
-        t.kpiRevenueSen += sp.kpiSen;
+      if (sp && sp.serviceCenti !== null && sp.kpiCenti !== null) {
+        t.serviceCenti += sp.serviceCenti;
+        t.kpiRevenueCenti += sp.kpiCenti;
       } else {
         t.splitComplete = false;
       }
-      if (sp && sp.totalSen !== null) t.totalRevenueSen += sp.totalSen;
+      if (sp && sp.totalCenti !== null) t.totalRevenueCenti += sp.totalCenti;
       else t.totalComplete = false;
       if (sp?.mismatch) t.mismatches += 1;
     }
@@ -117,12 +117,12 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const { data, isLoading, isFetching, error } = useHrCommission(applied.from, applied.to);
+  const { report: data, closed, isLoading, error } = useCommissionReport(applied.from, applied.to);
   /* The revenue fold runs beside the report over the SAME range. It is
      supplementary: if it fails, the payout half still renders in full. */
   const revenue = useCommissionRevenue(applied.from, applied.to);
-  const closePayout = useCloseHrPayout();
-  const reopenPayout = useReopenHrPayout();
+  const closePayout = useClosePayout();
+  const reopenPayout = useReopenPayout();
 
   /* One split per person, built once. `byStaff` may be absent (still loading, or
      the fold failed) — splitForRow then reports what it can. */
@@ -132,7 +132,7 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
     const by: Map<string, SalespersonRevenue> | undefined = revenue.data?.byStaff;
     for (const s of data.showrooms) {
       for (const r of s.rows) {
-        m.set(r.staffId, splitForRow(r.personalGoodsSen, by?.get(r.staffId)));
+        m.set(r.staffId, splitForRow(r.personalGoodsCenti, by?.get(r.staffId)));
       }
     }
     return m;
@@ -145,7 +145,17 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
   const runClose = async () => {
     setActionError(null);
     try {
-      await closePayout.mutateAsync({ from: applied.from, to: applied.to });
+      if (!data) return;
+      /* The rows are sent WITH the close: commission is computed here, so what
+         is frozen is a record of what the approver was looking at. Sending a
+         bare range would leave the server to recompute from inputs it cannot
+         read. */
+      await closePayout.mutateAsync({
+        from: applied.from, to: applied.to,
+        totalCenti: data.totalCenti,
+        rows: data.showrooms.flatMap((sr) =>
+          sr.rows.map((r) => ({ ...r, showroomId: sr.showroomId, showroomName: sr.showroomName }))),
+      });
     } catch (e) {
       setActionError(hrErrorMessage(e));
     }
@@ -193,11 +203,11 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
               <button
                 type="button"
                 className={`${styles.btn} ${styles.btnPrimary}`}
-                disabled={rangeInvalid || isFetching}
+                disabled={rangeInvalid || isLoading}
                 onClick={() => { setActionError(null); setApplied(draft); }}
               >
                 <RefreshCw size={16} strokeWidth={1.75} />
-                {isFetching ? 'Calculating…' : 'Calculate'}
+                {isLoading ? 'Calculating…' : 'Calculate'}
               </button>
             </div>
           </div>
@@ -222,19 +232,19 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
           <div className={styles.card}>
             <div className={styles.cardHead}>
               <h2 className={styles.cardTitle}>
-                {data.closed ? <Lock size={16} strokeWidth={1.75} /> : <LockOpen size={16} strokeWidth={1.75} />}
+                {closed ? <Lock size={16} strokeWidth={1.75} /> : <LockOpen size={16} strokeWidth={1.75} />}
                 {fmtDate(data.from)} – {fmtDate(data.to)}
               </h2>
-              <span className={`${styles.chip} ${data.closed ? styles.chipLocked : ''}`}>
-                {data.closed ? `Closed · revision ${data.closed.revision}` : 'Open · recalculates live'}
+              <span className={`${styles.chip} ${closed ? styles.chipLocked : ''}`}>
+                {closed ? `Closed · revision ${closed.revision}` : 'Open · recalculates live'}
               </span>
             </div>
             <p className={styles.cardHint}>
-              {data.closed ? (
+              {closed ? (
                 <>
                   These figures are frozen as they stood when the period was closed
-                  {data.closed.closedByName ? ` by ${data.closed.closedByName}` : ''}
-                  {data.closed.closedAt ? ` on ${fmtDate(data.closed.closedAt)}` : ''}. Changing a rate
+                  {closed.closedByName ? ` by ${closed.closedByName}` : ''}
+                  {closed.closedAt ? ` on ${fmtDate(closed.closedAt)}` : ''}. Changing a rate
                   now will not move them.
                 </>
               ) : (
@@ -247,7 +257,7 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
             </p>
             {canManage && (
               <div className={styles.actions}>
-                {data.closed ? (
+                {closed ? (
                   <button
                     type="button"
                     className={styles.btn}
@@ -270,32 +280,40 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
             )}
           </div>
 
+          {/* Everything the engine could not read, said out loud. It reports a
+              reason rather than shading a figure, so each of these is a
+              sentence a person can act on — an unresolved fabric add-on, a
+              range too wide to read, a chain mode with no ladder. */}
+          {data.warnings.map((w) => (
+            <p key={w} className={styles.error}>{w}</p>
+          ))}
+
           {/* ── what was sold ───────────────────────────────────────────── */}
           <div className={styles.stripHead}>Revenue — what was sold</div>
           <div className={styles.tiles}>
             <div className={styles.tile}>
               <span className={styles.tileLabel}>Products sales revenue</span>
-              <span className={styles.tileValue}>{fmtSen(totals.productsSen)}</span>
+              <span className={styles.tileValue}>{fmtSen(totals.productsCenti)}</span>
               <span className={styles.tileHint}>the base commission is paid on</span>
             </div>
             <div className={styles.tile}>
               <span className={styles.tileLabel}>Service sales revenue</span>
               <span className={styles.tileValue}>
-                {revenueLoading ? '…' : totals.splitComplete ? fmtSen(totals.serviceSen) : '—'}
+                {revenueLoading ? '…' : totals.splitComplete ? fmtSen(totals.serviceCenti) : '—'}
               </span>
               <span className={styles.tileHint}>delivery + service lines · earns no commission</span>
             </div>
             <div className={styles.tile}>
               <span className={styles.tileLabel}>KPI item sales revenue</span>
               <span className={styles.tileValue}>
-                {revenueLoading ? '…' : totals.splitComplete ? fmtSen(totals.kpiRevenueSen) : '—'}
+                {revenueLoading ? '…' : totals.splitComplete ? fmtSen(totals.kpiRevenueCenti) : '—'}
               </span>
               <span className={styles.tileHint}>paid as a fixed amount, not a %</span>
             </div>
             <div className={styles.tile}>
               <span className={styles.tileLabel}>Total revenue</span>
               <span className={styles.tileValue}>
-                {revenueLoading ? '…' : totals.totalComplete ? fmtSen(totals.totalRevenueSen) : '—'}
+                {revenueLoading ? '…' : totals.totalComplete ? fmtSen(totals.totalRevenueCenti) : '—'}
               </span>
               <span className={styles.tileHint}>the three above, added up</span>
             </div>
@@ -306,24 +324,24 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
           <div className={styles.tiles}>
             <div className={styles.tile}>
               <span className={styles.tileLabel}>Revenue commission</span>
-              <span className={styles.tileValue}>{fmtSen(totals.commissionSen)}</span>
+              <span className={styles.tileValue}>{fmtSen(totals.commissionCenti)}</span>
               <span className={styles.tileHint}>tiered % of product sales</span>
             </div>
             <div className={styles.tile}>
               <span className={styles.tileLabel}>Manager override</span>
-              <span className={styles.tileValue}>{fmtSen(totals.overrideSen)}</span>
+              <span className={styles.tileValue}>{fmtSen(totals.overrideCenti)}</span>
               <span className={styles.tileHint}>
-                {data.overrideMode === 'chain' ? 'reporting chain' : 'whole showroom'}
+                {data.config.overrideMode === 'chain' ? 'reporting chain' : 'whole showroom'}
               </span>
             </div>
             <div className={styles.tile}>
               <span className={styles.tileLabel}>KPI items earned</span>
-              <span className={styles.tileValue}>{fmtSen(totals.kpiEarnedSen)}</span>
+              <span className={styles.tileValue}>{fmtSen(totals.kpiEarnedCenti)}</span>
               <span className={styles.tileHint}>fixed amounts</span>
             </div>
             <div className={`${styles.tile} ${styles.tileStrong}`}>
               <span className={styles.tileLabel}>Total payout</span>
-              <span className={styles.tileValue}>{fmtSen(totals.payoutSen)}</span>
+              <span className={styles.tileValue}>{fmtSen(totals.payoutCenti)}</span>
               <span className={styles.tileHint}>
                 {totals.people} {totals.people === 1 ? 'salesperson' : 'salespeople'}
               </span>
@@ -374,7 +392,7 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
               <div className={styles.showroomHead}>
                 <h2 className={styles.showroomName}>{sr.showroomName}</h2>
                 <span className={styles.showroomMeta}>
-                  Showroom product sales <strong>{fmtSen(sr.showroomGoodsSen)}</strong>
+                  Showroom product sales <strong>{fmtSen(sr.showroomGoodsCenti)}</strong>
                   <span className={`${styles.chip} ${sr.showroomKpiHit ? styles.chipHit : styles.chipOff}`}>
                     {sr.showroomKpiHit ? 'Showroom target reached' : 'Showroom target not reached'}
                   </span>
@@ -460,7 +478,7 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
 const PersonRows = ({
   row, split, revenueLoading, expanded, onToggle,
 }: {
-  row: HrCommissionRow;
+  row: CommissionReportRow;
   split: RevenueSplit | undefined;
   revenueLoading: boolean;
   expanded: boolean;
@@ -492,17 +510,17 @@ const PersonRows = ({
         </td>
         <td>{row.tier === 'manager' ? 'Manager' : 'Sales'}</td>
 
-        <td className={styles.num}>{fmtSen(row.personalGoodsSen)}</td>
-        <td className={styles.num}>{money(split?.serviceSen)}</td>
-        <td className={styles.num}>{money(split?.kpiSen)}</td>
-        <td className={styles.num}>{money(split?.totalSen)}</td>
+        <td className={styles.num}>{fmtSen(row.personalGoodsCenti)}</td>
+        <td className={styles.num}>{money(split?.serviceCenti)}</td>
+        <td className={styles.num}>{money(split?.kpiCenti)}</td>
+        <td className={styles.num}>{money(split?.totalCenti)}</td>
 
         <td className={styles.num}>{fmtBps(row.personalRateBps)}</td>
-        <td className={styles.num}>{fmtSen(row.personalCommissionSen)}</td>
+        <td className={styles.num}>{fmtSen(row.personalCommissionCenti)}</td>
         <td className={styles.num}>
-          {row.overrideCommissionSen === 0 && row.tier !== 'manager'
+          {row.overrideCommissionCenti === 0 && row.tier !== 'manager'
             ? '—'
-            : fmtSen(row.overrideCommissionSen)}
+            : fmtSen(row.overrideCommissionCenti)}
           {/* A single override rate exists only in showroom mode; in chain mode
               the override is a sum over levels of different rates on different
               bases, so printing a blended one would be a figure nobody can
@@ -511,8 +529,8 @@ const PersonRows = ({
             <span className={styles.tileHint}> · {fmtBps(row.overrideRateBps)}</span>
           )}
         </td>
-        <td className={styles.num}>{row.itemKpiSen === 0 ? '—' : fmtSen(row.itemKpiSen)}</td>
-        <td className={styles.num}><strong>{fmtSen(row.totalSen)}</strong></td>
+        <td className={styles.num}>{row.itemKpiCenti === 0 ? '—' : fmtSen(row.itemKpiCenti)}</td>
+        <td className={styles.num}><strong>{fmtSen(row.totalCenti)}</strong></td>
       </tr>
 
       {expanded && hasDetail && (
@@ -523,8 +541,8 @@ const PersonRows = ({
                 {row.kpiDetail.map((d) => (
                   <li key={d.label} className={styles.detailItem}>
                     <strong>{d.label}</strong>
-                    <span>{d.qty} × {fmtSen(d.bonusSen)}</span>
-                    <span className={styles.detailAmount}>{fmtSen(d.lineSen)}</span>
+                    <span>{d.qty} × {fmtSen(d.bonusCenti)}</span>
+                    <span className={styles.detailAmount}>{fmtSen(d.lineCenti)}</span>
                   </li>
                 ))}
               </ul>
@@ -534,8 +552,8 @@ const PersonRows = ({
                 {row.overrideDetail!.map((d) => (
                   <li key={d.level} className={styles.detailItem}>
                     <strong>Level {d.level}</strong>
-                    <span>{fmtSen(d.goodsSen)} × {fmtBps(d.rateBps)}</span>
-                    <span className={styles.detailAmount}>{fmtSen(d.commissionSen)}</span>
+                    <span>{fmtSen(d.goodsCenti)} × {fmtBps(d.rateBps)}</span>
+                    <span className={styles.detailAmount}>{fmtSen(d.commissionCenti)}</span>
                   </li>
                 ))}
               </ul>

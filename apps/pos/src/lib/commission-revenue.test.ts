@@ -50,8 +50,8 @@ describe('foldSoRevenue', () => {
   it('sums goods and total per salesperson', () => {
     const m = foldSoRevenue([so(), so({ doc_no: 'b', total_revenue_sen: 100_000, mattress_sofa_sen: 90_000 })]);
     const r = m.get('s1')!;
-    expect(r.goodsSen).toBe(390_000);
-    expect(r.totalSen).toBe(420_000);
+    expect(r.goodsCenti).toBe(390_000);
+    expect(r.totalCenti).toBe(420_000);
     expect(r.orders).toBe(2);
     expect(r.goodsKnown).toBe(true);
   });
@@ -59,7 +59,7 @@ describe('foldSoRevenue', () => {
   it('excludes the non-earning orders from BOTH sums', () => {
     const m = foldSoRevenue([so(), so({ doc_no: 'd', status: 'DRAFT' }), so({ doc_no: 'h', on_hold: true })]);
     expect(m.get('s1')!.orders).toBe(1);
-    expect(m.get('s1')!.totalSen).toBe(320_000);
+    expect(m.get('s1')!.totalCenti).toBe(320_000);
   });
 
   it('keeps salespeople apart', () => {
@@ -80,8 +80,8 @@ describe('foldSoRevenue', () => {
       mattress_sofa_centi: 300_000, bedframe_centi: 0, accessories_centi: 0, others_centi: 0,
       total_revenue_centi: 320_000,
     }]);
-    expect(m.get('s1')!.goodsSen).toBe(300_000);
-    expect(m.get('s1')!.totalSen).toBe(320_000);
+    expect(m.get('s1')!.goodsCenti).toBe(300_000);
+    expect(m.get('s1')!.totalCenti).toBe(320_000);
   });
 
   it('flags goods as UNKNOWN when the finance-gated columns were stripped', () => {
@@ -92,7 +92,7 @@ describe('foldSoRevenue', () => {
       status: 'CONFIRMED', on_hold: false, salesperson_id: 's1', total_revenue_sen: 320_000,
     }]);
     expect(m.get('s1')!.goodsKnown).toBe(false);
-    expect(m.get('s1')!.totalSen).toBe(320_000);
+    expect(m.get('s1')!.totalCenti).toBe(320_000);
   });
 
   it('latches goodsKnown false — one gated row poisons the person', () => {
@@ -106,31 +106,31 @@ describe('foldSoRevenue', () => {
   it('treats a real zero bucket as known', () => {
     const m = foldSoRevenue([so({ mattress_sofa_sen: 0 })]);
     expect(m.get('s1')!.goodsKnown).toBe(true);
-    expect(m.get('s1')!.goodsSen).toBe(0);
+    expect(m.get('s1')!.goodsCenti).toBe(0);
   });
 });
 
 describe('splitForRow', () => {
-  const fold = { totalSen: 320_000, goodsSen: 300_000, goodsKnown: true, orders: 1 };
+  const fold = { totalCenti: 320_000, goodsCenti: 300_000, goodsKnown: true, orders: 1 };
 
   it('derives KPI and service around the engine\'s own base', () => {
     // Engine paid on 287,500 → the flags removed 12,500 of the 300,000 goods,
     // and 20,000 of the order was service/delivery.
     const s = splitForRow(287_500, fold);
-    expect(s.productsSen).toBe(287_500);
-    expect(s.kpiSen).toBe(12_500);
-    expect(s.serviceSen).toBe(20_000);
-    expect(s.totalSen).toBe(320_000);
+    expect(s.productsCenti).toBe(287_500);
+    expect(s.kpiCenti).toBe(12_500);
+    expect(s.serviceCenti).toBe(20_000);
+    expect(s.totalCenti).toBe(320_000);
     expect(s.mismatch).toBe(false);
   });
 
   it('adds back to the total', () => {
     const s = splitForRow(287_500, fold);
-    expect(s.productsSen + s.kpiSen! + s.serviceSen!).toBe(s.totalSen);
+    expect(s.productsCenti + s.kpiCenti! + s.serviceCenti!).toBe(s.totalCenti);
   });
 
   it('reports no KPI revenue when nothing is flagged', () => {
-    expect(splitForRow(300_000, fold).kpiSen).toBe(0);
+    expect(splitForRow(300_000, fold).kpiCenti).toBe(0);
   });
 
   it('refuses to derive when goods are below the engine\'s base', () => {
@@ -140,22 +140,22 @@ describe('splitForRow', () => {
        clamped number that reads as correct. */
     const s = splitForRow(400_000, fold);
     expect(s.mismatch).toBe(true);
-    expect(s.kpiSen).toBeNull();
-    expect(s.serviceSen).toBeNull();
-    expect(s.productsSen).toBe(400_000); // the payout figure still stands
+    expect(s.kpiCenti).toBeNull();
+    expect(s.serviceCenti).toBeNull();
+    expect(s.productsCenti).toBe(400_000); // the payout figure still stands
   });
 
   it('refuses to derive a negative service remainder', () => {
-    const s = splitForRow(100_000, { ...fold, totalSen: 200_000, goodsSen: 300_000 });
+    const s = splitForRow(100_000, { ...fold, totalCenti: 200_000, goodsCenti: 300_000 });
     expect(s.mismatch).toBe(true);
-    expect(s.serviceSen).toBeNull();
+    expect(s.serviceCenti).toBeNull();
   });
 
   it('shows the total but not the split when the columns were gated', () => {
     const s = splitForRow(287_500, { ...fold, goodsKnown: false });
-    expect(s.totalSen).toBe(320_000);
-    expect(s.kpiSen).toBeNull();
-    expect(s.serviceSen).toBeNull();
+    expect(s.totalCenti).toBe(320_000);
+    expect(s.kpiCenti).toBeNull();
+    expect(s.serviceCenti).toBeNull();
     // Not being allowed to see a breakdown is not a reconciliation failure.
     expect(s.mismatch).toBe(false);
   });
@@ -163,7 +163,7 @@ describe('splitForRow', () => {
   it('flags a paid salesperson with no orders in the fetched set', () => {
     const s = splitForRow(287_500, undefined);
     expect(s.mismatch).toBe(true);
-    expect(s.totalSen).toBeNull();
+    expect(s.totalCenti).toBeNull();
   });
 
   it('does not flag an unpaid salesperson with no orders', () => {

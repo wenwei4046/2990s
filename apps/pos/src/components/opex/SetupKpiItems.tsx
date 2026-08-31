@@ -2,33 +2,41 @@
 // OPEX ▸ Setup ▸ KPI items.
 //
 // A KPI item is a FIXED amount earned per unit sold — "sell this fabric series,
-// earn RM 50" — as opposed to the percentage the rest of the scheme pays. The
-// things it can target all come from the POS library, so the picker below is the
-// live catalogue, not a typed-in code:
-//   Product   → one SKU                     (mfg_products.code)
-//   Category  → every item in a category    (SOFA / BEDFRAME / MATTRESS / …)
-//   Fabric    → a fabric SERIES, not a colour (fabric_library)
-//   Special   → a special-order add-on code  (special_addons)
+// earn RM 50" — as opposed to the percentage the rest of the scheme pays. What
+// it can target all comes from the live POS library, so the picker is the
+// catalogue, not a typed-in code:
+//   Product   → one SKU
+//   Category  → every item in a category (SOFA / BEDFRAME / MATTRESS / …)
+//   Fabric    → a fabric SERIES, not a colour
+//   Special   → a special-order add-on code
 //
-// TWO RULES THAT DECIDE MONEY, both enforced server-side and both stated on
-// screen because neither is guessable from the form:
+// ── THE OPTION THIS SCREEN EXISTS FOR (Loo 2026-08-31) ──────────────────────
+// "有一些 KPI item 它有一个 option，就是它可以同时算 product revenue …
+//  product revenue 也会拿到 commission，但同样的，它 KPI item 那边也会拿到
+//  special 的 KPI amount".
 //
-//  1. NO DOUBLE COMMISSION. The flagged amount earns the fixed KPI amount
-//     INSTEAD of the percentage on that amount, never both. A fabric or special
-//     rule drops only its own add-on (the item's base price still earns
-//     commission); a product or category rule drops the whole item.
+// OFF (the default, and every rule written before today): the fixed amount is
+// earned INSTEAD of the percentage on the flagged portion, and that portion
+// leaves the goods the percentage runs on.
+// ON: earn BOTH — the fixed amount, and the portion stays in goods.
 //
-//  2. PRODUCT BEATS CATEGORY. If a SKU is named by a product rule AND covered by
-//     a category rule, only the product rule pays. Naming one SKU is a
-//     deliberate override of the blanket rate.
+// ⚠️ Turning it on does not only change one line. The kept amount also counts
+// toward the RM 100k personal and RM 400k showroom targets, so it can lift a
+// salesperson into the higher tier — and lift the WHOLE showroom, which raises
+// everyone in that room. The screen says so, because the form cannot show it.
+//
+// One more rule, enforced server-side and stated here because it is not
+// guessable: PRODUCT BEATS CATEGORY. A SKU named by a product rule ignores any
+// category rule covering it, so one purchase never collects two bonuses.
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
-import { Plus, Tag, Trash2 } from 'lucide-react';
+import { AlertTriangle, Plus, Tag, Trash2 } from 'lucide-react';
 import {
-  useCreateHrItemKpi, useDeleteHrItemKpi, useHrItemKpi, useHrPickers, useUpdateHrItemKpi,
-  type HrFlagType, type HrPickerRef,
-} from '../../lib/hr-commission-queries';
+  useCommissionKpiItems, useCreateCommissionKpiItem, useDeleteCommissionKpiItem,
+  useUpdateCommissionKpiItem, type HrFlagType,
+} from '../../lib/commission-api';
+import { useFabricLibrary, useMfgCatalog, useSpecialAddons } from '../../lib/queries';
 import { hrErrorMessage } from '../../lib/hr-wire';
 import { fmtSen, rmToSen } from '../../lib/commission-format';
 import styles from './Opex.module.css';
@@ -39,61 +47,75 @@ const FLAG_LABEL: Record<HrFlagType, string> = {
   fabric: 'Fabric series',
   special: 'Special add-on',
 };
-
 const FLAG_ORDER: HrFlagType[] = ['product', 'category', 'fabric', 'special'];
 
+interface PickerRef { ref: string; label: string }
+
 export const SetupKpiItems = ({ canManage }: { canManage: boolean }) => {
-  const { data: items, isLoading, error } = useHrItemKpi();
-  /* Fetched for EVERY viewer, not just writers: /hr/pickers needs only
-     scm.hr.read (which everyone on this page holds), and without it a read-only
-     viewer sees raw UUIDs and SKU codes where the names should be. Cached five
-     minutes, shared with the Salespeople card below. */
-  const { data: pickers, isLoading: pickersLoading } = useHrPickers();
-  const create = useCreateHrItemKpi();
-  const update = useUpdateHrItemKpi();
-  const remove = useDeleteHrItemKpi();
+  const { data: items, isLoading, error } = useCommissionKpiItems();
+  const create = useCreateCommissionKpiItem();
+  const update = useUpdateCommissionKpiItem();
+  const remove = useDeleteCommissionKpiItem();
+
+  /* The four pickers come from the POS's OWN catalogue queries, already cached
+     for the rest of the app — not from a bespoke endpoint. That also means this
+     screen survives the Houzs HR module being retired. */
+  const catalogQ = useMfgCatalog();
+  const fabricsQ = useFabricLibrary();
+  const specialsQ = useSpecialAddons();
 
   const [flagType, setFlagType] = useState<HrFlagType>('fabric');
   const [ref, setRef] = useState('');
   const [bonusRm, setBonusRm] = useState('50');
+  const [countsAsRevenue, setCountsAsRevenue] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
 
-  const options: HrPickerRef[] = useMemo(() => {
-    if (!pickers) return [];
-    if (flagType === 'product') return pickers.products;
-    if (flagType === 'category') return pickers.categories;
-    if (flagType === 'fabric') return pickers.fabrics;
-    return pickers.specials;
-  }, [pickers, flagType]);
+  const pickers = useMemo(() => {
+    const catalog = catalogQ.data ?? [];
+    const products: PickerRef[] = catalog
+      .map((p) => ({ ref: p.code, label: `${p.code} — ${p.name}` }))
+      .sort((a, b) => a.ref.localeCompare(b.ref));
+    /* Categories are an enum on the product, not a table — derived from what the
+       catalogue actually contains so the picker can never offer a value no item
+       could carry. SERVICE is excluded: service lines are not goods and never
+       become KPI units. */
+    const categories: PickerRef[] = [...new Set(catalog.map((p) => p.category))]
+      .filter((cat) => cat !== 'SERVICE')
+      .sort()
+      .map((cat) => ({ ref: cat, label: cat }));
+    const fabrics: PickerRef[] = (fabricsQ.data ?? [])
+      .map((f) => ({ ref: f.id, label: f.label }));
+    const specials: PickerRef[] = (specialsQ.data ?? [])
+      .filter((s) => s.active)
+      .map((s) => ({ ref: s.code, label: s.label }));
+    return { product: products, category: categories, fabric: fabrics, special: specials };
+  }, [catalogQ.data, fabricsQ.data, specialsQ.data]);
 
-  /* A flagged thing that is no longer in the catalogue still has a rule, and
-     that rule still pays. Showing the raw ref rather than a blank is the honest
-     rendering — it is what the engine matches on. */
-  const labelFor = (type: HrFlagType, r: string): string | null => {
-    if (!pickers) return null;
-    const list = type === 'product' ? pickers.products
-      : type === 'category' ? pickers.categories
-      : type === 'fabric' ? pickers.fabrics
-      : pickers.specials;
-    return list.find((o) => o.ref === r)?.label ?? null;
-  };
+  const pickersLoading = catalogQ.isLoading || fabricsQ.isLoading || specialsQ.isLoading;
+  const options = pickers[flagType];
+
+  /* A flagged thing that has left the catalogue still has a rule, and that rule
+     still pays. Showing the stored label (and flagging it) is the honest
+     rendering — the raw ref is what the engine matches on. */
+  const labelFor = (type: HrFlagType, r: string): string | null =>
+    pickers[type].find((o) => o.ref === r)?.label ?? null;
 
   const add = async () => {
     setAddError(null);
     if (!ref) { setAddError('Pick what this KPI item applies to.'); return; }
-    const bonusSen = rmToSen(Number(bonusRm));
-    if (!Number.isFinite(bonusSen) || bonusSen <= 0) {
+    const bonusCenti = rmToSen(Number(bonusRm));
+    if (!Number.isFinite(bonusCenti) || bonusCenti <= 0) {
       setAddError('Enter the amount earned per unit sold — a KPI item paying RM 0 earns nothing.');
       return;
     }
     try {
       await create.mutateAsync({
-        flagType,
-        ref,
+        flagType, ref,
         label: options.find((o) => o.ref === ref)?.label ?? ref,
-        bonusSen,
+        bonusCenti, countsAsRevenue,
       });
       setRef('');
+      setCountsAsRevenue(false);
     } catch (e) {
       setAddError(hrErrorMessage(e));
     }
@@ -103,6 +125,7 @@ export const SetupKpiItems = ({ canManage }: { canManage: boolean }) => {
   if (error) return <p className={styles.error}>{hrErrorMessage(error)}</p>;
 
   const rows = items ?? [];
+  const bothCount = rows.filter((r) => r.active && r.countsAsRevenue).length;
 
   return (
     <div className={styles.card}>
@@ -124,6 +147,7 @@ export const SetupKpiItems = ({ canManage }: { canManage: boolean }) => {
               <th>Type</th>
               <th>Applies to</th>
               <th className={styles.num}>Amount each</th>
+              <th>Also counts as product revenue</th>
               <th>Status</th>
               {canManage && <th />}
             </tr>
@@ -136,13 +160,30 @@ export const SetupKpiItems = ({ canManage }: { canManage: boolean }) => {
                   <td>{FLAG_LABEL[it.flagType]}</td>
                   <td>
                     {live ?? it.label ?? <span className={styles.code}>{it.ref}</span>}
-                    {!live && pickers && (
-                      <>
-                        {' '}<span className={styles.chip}>not in catalogue</span>
-                      </>
+                    {!live && !pickersLoading && (
+                      <> <span className={styles.chip}>not in catalogue</span></>
                     )}
                   </td>
-                  <td className={styles.num}>{fmtSen(it.bonusSen)}</td>
+                  <td className={styles.num}>{fmtSen(it.bonusCenti)}</td>
+                  <td>
+                    {canManage ? (
+                      <label className={styles.toggleCell}>
+                        <input
+                          type="checkbox"
+                          checked={it.countsAsRevenue}
+                          disabled={update.isPending}
+                          onChange={(e) => void update.mutateAsync({
+                            id: it.id, countsAsRevenue: e.target.checked,
+                          })}
+                        />
+                        <span>{it.countsAsRevenue ? 'Earns both' : 'Instead of %'}</span>
+                      </label>
+                    ) : (
+                      <span className={`${styles.chip} ${it.countsAsRevenue ? styles.chipHit : styles.chipOff}`}>
+                        {it.countsAsRevenue ? 'Earns both' : 'Instead of %'}
+                      </span>
+                    )}
+                  </td>
                   <td>
                     <span className={`${styles.chip} ${it.active ? styles.chipHit : styles.chipOff}`}>
                       {it.active ? 'Active' : 'Off'}
@@ -163,9 +204,8 @@ export const SetupKpiItems = ({ canManage }: { canManage: boolean }) => {
                           aria-label={`Delete ${it.label || it.ref}`}
                           disabled={remove.isPending}
                           onClick={() => {
-                            /* Deleting a rule removes it from FUTURE open periods
-                               too, which is why this asks. Closed periods keep
-                               their frozen figures either way. */
+                            /* Deleting stops it paying in every OPEN period too.
+                               Closed periods keep their frozen figures. */
                             if (window.confirm(
                               `Delete the KPI item for "${it.label || it.ref}"?\n\nOpen periods will stop paying it. Turning it off instead keeps the record.`,
                             )) void remove.mutateAsync(it.id);
@@ -181,7 +221,7 @@ export const SetupKpiItems = ({ canManage }: { canManage: boolean }) => {
             })}
             {rows.length === 0 && (
               <tr className={styles.rowMuted}>
-                <td colSpan={canManage ? 5 : 4}>— No KPI items. Only the percentage scheme pays.</td>
+                <td colSpan={canManage ? 6 : 5}>— No KPI items. Only the percentage scheme pays.</td>
               </tr>
             )}
           </tbody>
@@ -222,6 +262,17 @@ export const SetupKpiItems = ({ canManage }: { canManage: boolean }) => {
                 />
               </span>
             </label>
+            <label className={styles.field}>
+              <span className={styles.label}>Also counts as product revenue</span>
+              <label className={styles.toggleCell}>
+                <input
+                  type="checkbox"
+                  checked={countsAsRevenue}
+                  onChange={(e) => setCountsAsRevenue(e.target.checked)}
+                />
+                <span>{countsAsRevenue ? 'Earns both' : 'Instead of %'}</span>
+              </label>
+            </label>
             <div className={styles.field}>
               <span className={styles.label}>&nbsp;</span>
               <div className={styles.actions}>
@@ -238,14 +289,36 @@ export const SetupKpiItems = ({ canManage }: { canManage: boolean }) => {
       )}
 
       <p className={styles.notice}>
-        <span className={styles.noticeTitle}>How a KPI item affects the percentage</span><br />
-        A KPI item pays its fixed amount <em>instead of</em> the percentage on the amount it covers —
-        never both. A <strong>fabric</strong> or <strong>special add-on</strong> rule removes only its
-        own surcharge, so the item&rsquo;s base price still earns commission: a RM 3,000 sofa with a
-        RM 125 fabric upgrade flagged at RM 50 keeps RM 3,000 of product sales, earns the RM 50, and
-        the RM 125 drops out. A <strong>product</strong> or <strong>category</strong> rule removes the
-        whole item instead. Where a product rule and a category rule cover the same item, only the
-        product rule pays.
+        <span className={styles.noticeTitle}>What &ldquo;also counts as product revenue&rdquo; does</span>
+        <br />
+        <strong>Off</strong> — the default, and how every rule behaved before this option existed.
+        The fixed amount is earned <em>instead of</em> the percentage on the portion it covers, and
+        that portion leaves product sales. A RM 3,000 sofa with a RM 125 fabric upgrade flagged at
+        RM 50: product sales keeps RM 3,000, the salesperson earns the RM 50, the RM 125 drops out.
+        <br />
+        <strong>On</strong> — earns <em>both</em>. Same RM 50, and the RM 125 stays in product sales,
+        so it also earns the percentage.
+      </p>
+
+      {bothCount > 0 && (
+        <p className={styles.notice}>
+          <span className={styles.noticeTitle}>
+            <AlertTriangle size={14} strokeWidth={1.75} /> {bothCount} rule
+            {bothCount === 1 ? '' : 's'} currently earns both
+          </span>
+          <br />
+          The amount those keep in product sales also counts toward the RM 100k personal target and
+          the showroom target — so it can move someone into the higher tier, and can lift the whole
+          showroom, which raises the rate for everyone in that room. Worth a look at the Commission
+          tab before a payout.
+        </p>
+      )}
+
+      <p className={styles.notice}>
+        <span className={styles.noticeTitle}>Where two rules cover the same item</span><br />
+        A <strong>product</strong> rule beats a <strong>category</strong> rule — naming one SKU is
+        treated as a deliberate override of the blanket rate, so one purchase never collects both.
+        Fabric and special add-on rules target a different part of the same purchase and do stack.
       </p>
     </div>
   );
