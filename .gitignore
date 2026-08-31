@@ -65,3 +65,7 @@ supabase/
 verify-*.html
 .gstack/
 .claude/worktrees/
+
+# Prod data backups taken before destructive DB ops (deleted SOs, staff snapshots).
+# Local evidence only — keep on disk, never commit.
+.claude/backups/
