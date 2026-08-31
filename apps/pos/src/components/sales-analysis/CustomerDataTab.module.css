@@ -1,13 +1,16 @@
-/* CustomerDataTab — tab-owned styles (spec §2). Also hosts the
-   TargetEditorSheet styles (§2.1) — the customer-tab implementer owns both.
-   Primitives style ONLY from SaShared.module.css; this file never redefines
-   them, only tab layout + per-table grid-template-columns. */
+/* CustomerDataTab — tab-owned styles. Also hosts the TargetEditorSheet styles
+   — the customer-tab implementer owns both. Primitives style ONLY from
+   SaShared.module.css; this file never redefines them, only tab layout and
+   per-table grid-template-columns.
+   Colours come from tokens only — see the SaShared header for why. */
+
+.clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── Target match strip ───────────────────────────────────────────────────── */
 
 .matchStrip {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: minmax(180px, auto) 1fr auto;
   gap: var(--space-5);
   align-items: center;
 }
@@ -18,20 +21,26 @@
   min-width: 0;
 }
 .matchLabel {
+  font-family: var(--font-button);
   font-size: var(--fs-12);
-  color: #6b6b6b;
+  color: var(--fg-muted);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: var(--tk-loud);
+  font-weight: var(--w-semibold);
 }
 .matchOverall {
-  font-size: var(--fs-24);
-  font-weight: 600;
+  font-family: var(--font-title);
+  font-size: var(--fs-32);
+  font-weight: var(--w-bold);
   color: var(--c-ink);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
 }
-.matchSub {
-  font-size: var(--fs-12);
-  color: #6b6b6b;
-}
+/* The not-scored placeholder. Ink-weight at fs-32 an em-dash reads as a stray
+   rule rather than as "no value"; muted, it reads as the placeholder it is. */
+.matchOverallEmpty { color: var(--fg-soft); }
+.matchSub { font-size: var(--fs-12); color: var(--fg-muted); }
+
 .matchMid {
   display: flex;
   flex-direction: column;
@@ -54,83 +63,111 @@
   align-items: center;
   gap: 6px;
   font-size: var(--fs-12);
-  color: #6b6b6b;
+  color: var(--fg-muted);
 }
 .gapDot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--sa-c2);
+  background: var(--c-orange);
   flex: none;
 }
 .dimPct {
   font-size: var(--fs-14);
-  font-weight: 600;
+  font-weight: var(--w-semibold);
   color: var(--c-ink);
+  font-variant-numeric: tabular-nums;
 }
-.dimDetail {
-  font-size: var(--fs-12);
-  color: #6b6b6b;
-}
-.gapNote {
-  font-size: var(--fs-13);
-  color: #9a6a2a;
-  margin: 0;
-}
+.dimDetail { font-size: var(--fs-12); color: var(--fg-muted); }
+.gapNote { font-size: var(--fs-13); color: var(--c-burnt); margin: 0; }
+
 .editBtn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-height: 44px;
-  padding: 8px 14px;
+  padding: 10px 16px;
   font: inherit;
-  font-size: var(--fs-14);
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
   color: var(--c-ink);
   background: #fff;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   cursor: pointer;
   white-space: nowrap;
 }
 
-/* ── Snapshot + filter strip ──────────────────────────────────────────────── */
+/* ── Snapshot + filter strip ──────────────────────────────────────────────
+   Was one dense sentence with two unlabelled number boxes floating at its
+   right edge. Now: aligned figures on top, the bar / typical-buyer line and
+   the age CONTROL below, so a statistic and an input are no longer mixed into
+   the same visual row. */
 
-.snapshot {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-3);
+.snapshot { gap: var(--space-4); }
+
+.snapFacts {
+  display: grid;
+  /* Cap each column as well as the track: with 1fr, the two facts that survive
+     a no-demographics report stretched to ~380px each and the pair read as two
+     unrelated statistics rather than one row. */
+  grid-template-columns: repeat(auto-fit, minmax(130px, 190px));
+  gap: var(--space-3) var(--space-5);
+  margin: 0;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--line);
 }
-.snapLeft {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  min-width: 0;
+.snapFact { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.snapFact dt {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  text-transform: uppercase;
+  letter-spacing: var(--tk-wide);
+  color: var(--fg-muted);
 }
-.snapStats {
-  font-size: var(--fs-14);
+.snapFact dd {
+  margin: 0;
+  font-family: var(--font-title);
+  font-size: var(--fs-18);
+  font-weight: var(--w-bold);
   color: var(--c-ink);
+  font-variant-numeric: tabular-nums;
 }
-.snapBar {
-  width: 120px;
-  flex: none;
+
+.snapBottom {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
 }
-.snapTypical {
-  font-size: var(--fs-13);
-  color: #6b6b6b;
-}
-.snapRight {
+.snapBar { width: 200px; flex: none; }
+.snapTypical { font-size: var(--fs-13); color: var(--fg-muted); }
+
+.ageCtl {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  flex-wrap: wrap;
+  margin-left: auto;
 }
 .ageLabel {
-  font-size: var(--fs-14);
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  text-transform: uppercase;
+  letter-spacing: var(--tk-wide);
+  color: var(--fg-muted);
+}
+.ageInput {
+  font: inherit;
+  font-size: var(--fs-13);
+  width: 72px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
   color: var(--c-ink);
 }
+.ageDash { color: var(--fg-muted); }
 .filterChip {
   display: inline-flex;
   align-items: center;
@@ -138,12 +175,14 @@
   min-height: 44px;
   padding: 4px 14px;
   font: inherit;
+  font-family: var(--font-button);
   font-size: var(--fs-13);
-  color: var(--c-ink);
+  color: var(--c-burnt);
   background: var(--sa-track);
   border: none;
   border-radius: var(--radius-pill);
   cursor: pointer;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Demographics grid ────────────────────────────────────────────────────── */
@@ -151,17 +190,24 @@
 .demoGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
+  gap: var(--space-4);
 }
-.demoGrid > * {
-  min-width: 0;
-}
+.demoGrid > * { min-width: 0; }
+/* Without demographics only Location remains — full width rather than a
+   half-width card with dead space beside it. */
+.demoGridLite { display: grid; grid-template-columns: minmax(0, 1fr); }
 
-/* Location panel */
+.locList { display: flex; flex-direction: column; }
+/* Fixed name column rather than 1fr: with 1fr the name ate every spare pixel
+   and stranded the meter and its figure against the far right edge of a
+   full-width panel, so the eye had to travel the whole card to pair a city
+   with its count. */
 .locRow {
   display: grid;
-  grid-template-columns: 1fr 72px 90px;
+  grid-template-columns: minmax(0, 260px) 72px 110px;
   gap: var(--space-3);
+  padding-left: 0;
+  padding-right: 0;
 }
 .locLists {
   display: grid;
@@ -169,6 +215,7 @@
   gap: var(--space-3);
   max-height: 240px;
   overflow-y: auto;
+  margin-top: var(--space-2);
 }
 .locListRow {
   font-size: var(--fs-13);
@@ -176,25 +223,30 @@
   padding: 2px 0;
 }
 
-/* ── Spend by segment ─────────────────────────────────────────────────────── */
+/* ── Tables ───────────────────────────────────────────────────────────────
+   A box around head + rows so the tan header band has something to be the top
+   of. Matches the Products tab, so both read as the same product. */
+.tableBox {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #fff;
+}
 
 .spendGrid {
   display: grid;
-  grid-template-columns: 1.4fr 0.8fr 1fr 72px 1fr 0.8fr;
-  gap: var(--space-3);
+  grid-template-columns: minmax(0, 1.6fr) 0.8fr 1fr 72px 1fr 0.8fr;
+  gap: var(--space-4);
+  align-items: center;
 }
-.headPad {
-  padding: 6px 0;
-}
-.segCtl {
-  display: flex;
-  gap: var(--space-2);
-}
+
+.segCtl { display: flex; gap: var(--space-2); }
 .segBtn {
   font: inherit;
+  font-family: var(--font-button);
   font-size: var(--fs-13);
   min-height: 44px;
-  padding: 4px 14px;
+  padding: 4px 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius-pill);
   background: #fff;
@@ -202,10 +254,12 @@
   cursor: pointer;
 }
 .segBtnOn {
-  background: var(--sa-c1);
-  border-color: var(--sa-c1);
-  color: #fff;
+  background: var(--c-orange);
+  border-color: var(--c-orange);
+  color: var(--fg-on-orange);
+  font-weight: var(--w-semibold);
 }
+.segStatic { font-size: var(--fs-13); color: var(--fg-muted); }
 
 /* ── Customer roster ──────────────────────────────────────────────────────── */
 
@@ -214,35 +268,28 @@
   grid-template-columns: 1.6fr 0.8fr 0.7fr 0.7fr 1.3fr 0.5fr 0.9fr 1fr;
   gap: var(--space-3);
 }
-.rosterBody {
-  max-height: 480px;
-  overflow-y: auto;
+/* Same table minus Race / Age / Gender — the remaining columns take the space
+   back rather than leaving three '—' gutters. */
+.rosterGridLite {
+  display: grid;
+  grid-template-columns: 2fr 2fr 0.7fr 1.2fr 1.2fr;
+  gap: var(--space-5);
 }
-.bandSuffix {
-  font-size: var(--fs-12);
-  color: #6b6b6b;
-}
+.rosterBody { max-height: 480px; overflow-y: auto; }
+.bandSuffix { font-size: var(--fs-12); color: var(--fg-muted); }
 .returningPill {
   display: inline-block;
   margin-left: 6px;
   font-size: var(--fs-12);
-  color: var(--fg-muted);
+  color: var(--c-burnt);
   background: var(--sa-track);
   border-radius: var(--radius-pill);
   padding: 1px 8px;
   vertical-align: middle;
 }
-.footNote {
-  font-size: var(--fs-13);
-  color: #6b6b6b;
-  margin: var(--space-2) 0 0;
-}
-.muted {
-  color: #9a9a9a;
-  margin: 0;
-}
+.footNote { font-size: var(--fs-12); color: var(--fg-muted); margin: 0; }
 
-/* ── Target editor sheet (§2.1) ───────────────────────────────────────────── */
+/* ── Target editor sheet ──────────────────────────────────────────────────── */
 
 .scrim {
   position: fixed;
@@ -257,7 +304,7 @@
   right: 0;
   bottom: 0;
   width: min(440px, 92vw);
-  background: #fff;
+  background: var(--c-paper);
   border-left: 1px solid var(--line);
   box-shadow: var(--shadow-3);
   z-index: 1001;
@@ -285,8 +332,9 @@
   border-bottom: 1px solid var(--line);
 }
 .sheetTitle {
+  font-family: var(--font-title);
   font-size: var(--fs-16);
-  font-weight: 600;
+  font-weight: var(--w-bold);
   color: var(--c-ink);
   margin: 0;
 }
@@ -307,13 +355,14 @@
   padding: var(--space-4);
 }
 .formCaption {
-  font-size: var(--fs-13);
-  color: #6b6b6b;
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  text-transform: uppercase;
+  letter-spacing: var(--tk-wide);
+  color: var(--fg-muted);
   margin: var(--space-4) 0 var(--space-2);
 }
-.formCaption:first-child {
-  margin-top: 0;
-}
+.formCaption:first-child { margin-top: 0; }
 .targetGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -332,20 +381,14 @@
   font-size: var(--fs-14);
   color: var(--c-ink);
 }
-.optHint {
-  font-size: var(--fs-12);
-  color: #6b6b6b;
-}
-.chipRow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
+.optHint { font-size: var(--fs-12); color: var(--fg-muted); }
+.chipRow { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
   font: inherit;
+  font-family: var(--font-button);
   font-size: var(--fs-13);
   min-height: 44px;
-  padding: 4px 12px;
+  padding: 4px 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-pill);
   background: #fff;
@@ -353,14 +396,15 @@
   cursor: pointer;
 }
 .chipOn {
-  background: var(--sa-c1);
-  border-color: var(--sa-c1);
-  color: #fff;
+  background: var(--c-orange);
+  border-color: var(--c-orange);
+  color: var(--fg-on-orange);
+  font-weight: var(--w-semibold);
 }
 .preview {
   border-top: 1px solid var(--line);
   padding: var(--space-3) var(--space-4);
-  background: #faf5ec;
+  background: var(--c-cream);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -372,25 +416,22 @@
   gap: var(--space-3);
 }
 .previewOverall {
+  font-family: var(--font-title);
   font-size: var(--fs-16);
-  font-weight: 600;
+  font-weight: var(--w-bold);
   color: var(--c-ink);
+  font-variant-numeric: tabular-nums;
 }
 .previewDim {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: var(--fs-12);
-  color: #6b6b6b;
+  color: var(--fg-muted);
 }
-.previewPct {
-  color: var(--c-ink);
-}
-.previewNote {
-  font-size: var(--fs-12);
-  color: #9a6a2a;
-  margin: 0;
-}
+.previewPct { color: var(--c-ink); font-variant-numeric: tabular-nums; }
+.previewNote { font-size: var(--fs-12); color: var(--c-burnt); margin: 0; }
+
 .sheetFoot {
   border-top: 1px solid var(--line);
   padding: var(--space-3) var(--space-4);
@@ -400,39 +441,38 @@
 }
 .saveBtn {
   font: inherit;
-  font-size: var(--fs-14);
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
   min-height: 44px;
-  padding: 8px 18px;
-  border: none;
+  padding: 10px 18px;
+  border: 1px solid var(--c-orange);
   border-radius: var(--radius-sm);
-  background: var(--c-accent, #b06a3b);
-  color: #fff;
+  background: var(--c-orange);
+  color: var(--fg-on-orange);
   cursor: pointer;
 }
-.saveBtn:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
+.saveBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 .cancelBtn {
   font: inherit;
-  font-size: var(--fs-14);
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
   min-height: 44px;
-  padding: 8px 18px;
-  border: 1px solid var(--line);
+  padding: 10px 18px;
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   background: #fff;
   color: var(--c-ink);
   cursor: pointer;
 }
-.saveErr {
-  font-size: var(--fs-13);
-  color: #9a6a2a;
-}
+.saveErr { font-size: var(--fs-13); color: var(--c-error); }
 
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 
+@media (max-width: 1100px) {
+  .matchStrip { grid-template-columns: 1fr; }
+  .ageCtl { margin-left: 0; }
+}
 @media (max-width: 900px) {
   .demoGrid { grid-template-columns: 1fr; }
-  .matchStrip { grid-template-columns: 1fr; }
   .dims { grid-template-columns: repeat(2, 1fr); }
 }

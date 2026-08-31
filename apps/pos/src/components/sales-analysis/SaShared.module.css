@@ -1,59 +1,112 @@
-/* SaShared — shared foundation for the Sales Analysis redesign.
+/* SaShared — shared foundation for the Sales Analysis page.
    OWNERSHIP (hard rule): primitives style ONLY from this file; each tab styles
-   ONLY from its own module. Tab implementers never edit this file.
+   ONLY from its own module.
 
-   Palette: single-hue warm ramp derived from the page's existing
-   var(--c-accent, #b06a3b) fallback convention. Data-viz segments only —
-   approved deviation, see UI_REFERENCE.md. */
+   ── 2026-08-31 REBASE ONTO THE BRAND PALETTE ──────────────────────────────
+   Loo: "looks like no same colour all". It was true, and there was a concrete
+   cause, not just taste:
+
+   Every accent on this page read `var(--c-accent, #b06a3b)` — and `--c-accent`
+   IS NOT DEFINED ANYWHERE in the product (grep: tokens.css has --c-orange /
+   --c-burnt / --c-beige and no --c-accent). So the fallback always won and the
+   whole page rendered in a muddy brown #b06a3b that appears in no other screen
+   of the POS. Beside OPEX & Commission — whose active tab, primary button and
+   hit-chip are brand orange #E86B3A — Sales Analysis looked like a different
+   product. On top of that, 69 raw hexes (#6b6b6b, #9a9a9a, #fff, #faf5ec…)
+   stood in for tokens that already existed.
+
+   Fixed here at the root: the --sa-* ramp is now derived from the brand
+   palette, and every grey/paper/line below comes from a token. Do not
+   reintroduce --c-accent; use --c-orange / --c-burnt.
+
+   ── THE DATA-VIZ RAMP ─────────────────────────────────────────────────────
+   Four DISTINCT hues, all from tokens.css, not four shades of one. The old
+   ramp was orange-on-orange-on-tan, so a four-segment race bar read as one
+   smear — which is the other half of "no same colour": segments that should be
+   telling entities apart were not. Orange still LEADS (it is the accent and it
+   lands on the first entity of each dimension); the forest secondary carries
+   the fourth slot so the bar is actually readable.
+
+   Mirrors primitives/entity-colors.ts — the two must be edited together.
+   Data-viz segments only; approved deviation, see UI_REFERENCE.md. */
 
 .saRoot {
-  --sa-c1: #b06a3b;      /* base accent — matches the page's existing var(--c-accent, #b06a3b) convention */
-  --sa-c2: #8a5230;      /* deep burnt */
-  --sa-c3: #d29a6c;      /* mid tan */
-  --sa-c4: #e8c9aa;      /* light tan */
-  --sa-c5: #5f5a54;      /* warm charcoal — fallback for unexpected keys only */
-  --sa-unknown: #ddd6cb; /* neutral — ALWAYS and ONLY 'Unknown' */
-  --sa-track: #f0ebe4;   /* bar/meter track (same hex the page already uses) */
-  --sa-emph: var(--c-burnt, #A6471E);  /* selected-month column emphasis */
+  --sa-c1: var(--c-orange);        /* #E86B3A brand orange — accent, leads each dim */
+  --sa-c2: var(--c-burnt);         /* #A6471E deep burnt */
+  --sa-c3: var(--c-beige);         /* #E3D0A6 tan */
+  --sa-c4: var(--c-secondary-a);   /* #2F5D4F forest — the cool anchor */
+  --sa-c5: var(--fg-soft);         /* #8B7E6A quiet — unexpected keys must not shout */
+  --sa-unknown: #D9D2C6;           /* warm neutral — ALWAYS and ONLY 'Unknown' */
+
+  /* Track behind every bar / meter. A tint of the brand tan, so the empty part
+     of a bar belongs to the same family as the filled part. */
+  --sa-track: color-mix(in oklab, var(--c-beige) 34%, var(--c-cream));
+  --sa-emph: var(--c-burnt);       /* selected-month column emphasis */
+  /* Selected row wash — the same tan, much weaker. */
+  --sa-selected: color-mix(in oklab, var(--c-beige) 20%, var(--c-paper));
 
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-4);
 }
 
-/* ── Panel (§0.7) ─────────────────────────────────────────────────────────── */
+/* ── Section eyebrow ──────────────────────────────────────────────────────
+   The page's main structural device, borrowed from Opex (.stripHead). Loo:
+   "no structure wise" — five panels in a row with equal-weight titles gave the
+   eye nothing to group by. An eyebrow names what the block below ANSWERS. */
+
+.eyebrow {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  text-transform: uppercase;
+  letter-spacing: var(--tk-wide);
+  color: var(--fg-muted);
+  font-weight: var(--w-semibold);
+  margin: var(--space-2) 0 calc(-1 * var(--space-2));
+}
+.eyebrow:first-child { margin-top: 0; }
+
+/* ── Panel ────────────────────────────────────────────────────────────────
+   Same recipe as the Opex card: paper (not #fff — paper is the surface the
+   rest of the ERP uses on cream), token radius, generous padding. */
 
 .panel {
-  background: #fff;
+  background: var(--c-paper);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  padding: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
 }
 .panelHead {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: var(--space-3);
-  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
 }
+/* Was fs-13 in muted grey — too quiet to structure a page. A panel title is a
+   heading; it takes ink and semibold, like .cardTitle in Opex. */
 .panelTitle {
-  font-size: var(--fs-13);
-  font-weight: 600;
-  color: #6b6b6b;
+  font-size: var(--fs-14);
+  font-weight: var(--w-semibold);
+  color: var(--c-ink);
   margin: 0;
 }
-.panelRight { display: flex; align-items: center; gap: var(--space-2); }
+.panelRight { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 
-/* ── StatTile (§0.6) ──────────────────────────────────────────────────────── */
+/* ── StatTile ─────────────────────────────────────────────────────────────── */
 
 .statTile {
-  background: #fff;
+  background: var(--c-paper);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: var(--space-3) var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
 }
 .statLabelRow {
@@ -64,31 +117,33 @@
   min-width: 0;
 }
 .statLabel {
+  font-family: var(--font-button);
   font-size: var(--fs-12);
-  color: #6b6b6b;
+  color: var(--fg-muted);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: var(--tk-wide);
 }
 .statValue {
-  font-size: var(--fs-20);
-  font-weight: 600;
+  font-family: var(--font-title);
+  font-size: var(--fs-18);
+  font-weight: var(--w-bold);
   color: var(--c-ink);
-  /* Proportional figures on tile values — tabular-nums is for tables only. */
+  font-variant-numeric: tabular-nums;
 }
 .statSub {
   font-size: var(--fs-12);
-  color: #6b6b6b;
+  color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* ── SegmentBar (§0.3) ────────────────────────────────────────────────────── */
+/* ── SegmentBar ───────────────────────────────────────────────────────────── */
 
 .segBar {
   display: flex;
   height: 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-pill);
   overflow: hidden;
   background: var(--sa-track);
 }
@@ -96,14 +151,13 @@
   min-width: 2px;
   flex-basis: 0;
 }
-.segSeg + .segSeg {
-  box-shadow: -1px 0 0 #fff;
-}
+/* Hairline in the surface colour, so touching segments stay separable. */
+.segSeg + .segSeg { box-shadow: -1px 0 0 var(--c-paper); }
+
 .legendRows {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 2px var(--space-3);
-  margin-top: var(--space-2);
+  gap: 2px var(--space-4);
 }
 .legendRow {
   display: flex;
@@ -113,48 +167,36 @@
   color: var(--c-ink);
   min-width: 0;
 }
-.legendKey {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.legendKey { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .legendVal {
   margin-left: auto;
-  color: #6b6b6b;
+  color: var(--fg-muted);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .legendInline {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px var(--space-3);
-  margin-top: var(--space-2);
+  gap: 4px var(--space-4);
   font-size: var(--fs-13);
   color: var(--c-ink);
 }
 .legendInlineItem { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex: none;
-}
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 
-/* ── MiniColumns (§0.4) ───────────────────────────────────────────────────── */
+/* ── MiniColumns ──────────────────────────────────────────────────────────── */
 
-.miniScroll {
-  overflow-x: auto;
-  max-width: 100%;
-}
+.miniScroll { overflow-x: auto; max-width: 100%; }
 .miniSvg { display: block; }
 .miniHit { cursor: pointer; }
 
-/* ── Meter (§0.5) ─────────────────────────────────────────────────────────── */
+/* ── Meter ────────────────────────────────────────────────────────────────── */
 
 .meterTrack {
   display: inline-block;
   height: 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-pill);
   background: var(--sa-track);
   overflow: hidden;
   vertical-align: middle;
@@ -162,11 +204,11 @@
 .meterFill {
   display: block;
   height: 100%;
-  border-radius: 3px;
+  border-radius: var(--radius-pill);
   background: var(--sa-c1);
 }
 
-/* ── Disclosure (§0.8) ────────────────────────────────────────────────────── */
+/* ── Disclosure ───────────────────────────────────────────────────────────── */
 
 .discBtn {
   display: inline-flex;
@@ -174,65 +216,232 @@
   gap: 6px;
   min-height: 44px;
   font: inherit;
+  font-family: var(--font-button);
   font-size: var(--fs-13);
-  color: #6b6b6b;
+  color: var(--fg-muted);
   background: none;
   border: none;
   padding: 0;
   cursor: pointer;
 }
 
-/* ── ThinSampleChip (§0.9) ────────────────────────────────────────────────── */
+/* ── ThinSampleChip / notice ──────────────────────────────────────────────── */
 
 .thinChip {
   display: inline-block;
   font-size: var(--fs-12);
-  color: #9a6a2a;
-  background: #f7efe2;
+  color: var(--c-warn);
+  background: var(--c-warn-bg);
   border-radius: var(--radius-pill);
   padding: 2px 10px;
   white-space: nowrap;
 }
 
-/* ── Shared table classes (§0.10) ─────────────────────────────────────────
+/* A calm, full-width explanation — used when a block cannot be shown at all
+   (e.g. demographics that this backend does not return). Same recipe as the
+   Opex .notice: it explains, it does not alarm. */
+.notice {
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+  line-height: 1.55;
+  margin: 0;
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+.noticeTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--c-ink);
+  font-weight: var(--w-semibold);
+}
+
+.muted { margin: 0; font-size: var(--fs-13); color: var(--fg-muted); }
+
+/* ── Shared table classes ─────────────────────────────────────────────────
    Grid-row pattern; grid-template-columns are defined per-table in each TAB's
-   own module so tab implementers never edit this file. */
+   own module so tab implementers never edit this file.
+
+   The header band is the same device Loo asked for on the Opex tables
+   ("再穿插多一个颜色，这样它才看起来比较像 table 一点… 比较立体"): a tan band
+   off --c-beige, derived with color-mix rather than a new hex, with a stronger
+   rule under it so the head reads as a layer above the rows. These tables are
+   CSS grid, not <table>, so the band and its padding live on .tHead itself. */
 
 .tHead {
+  font-family: var(--font-button);
   font-size: var(--fs-12);
-  color: #6b6b6b;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
-  border-top: none;
+  letter-spacing: var(--tk-wide);
+  font-weight: var(--w-semibold);
+  color: var(--c-ink);
+  background: color-mix(in oklab, var(--c-beige) 45%, transparent);
+  border-bottom: 1px solid var(--line-strong);
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
   align-items: center;
+  padding: 8px 10px;
 }
 .tRow {
   font-size: var(--fs-13);
   color: var(--c-ink);
-  border-top: 1px solid #f0ebe4;
+  border-bottom: 1px solid var(--line);
   align-items: center;
-  padding: 6px 0;
+  padding: 8px 10px;
 }
+.tRow:last-child { border-bottom: none; }
 .tRowTap {
   min-height: 44px;
   cursor: pointer;
   background: none;
   border-left: none;
   border-right: none;
-  border-bottom: none;
+  border-top: none;
   font: inherit;
+  font-size: var(--fs-13);
+  color: var(--c-ink);
   text-align: left;
   width: 100%;
 }
-.tNum {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
+.tNum { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tTotals {
-  font-weight: 600;
-  border-top: 1px solid var(--line-strong);
+  font-weight: var(--w-semibold);
+  border-top: 2px solid var(--line-strong);
+  border-bottom: none;
 }
 .tRowSelected {
-  background: #faf5ec;
-  box-shadow: inset 2px 0 0 var(--c-accent, #b06a3b);
+  background: var(--sa-selected);
+  box-shadow: inset 3px 0 0 var(--c-orange);
+}
+
+/* Row hover — pointer only, so it never sticks on a tablet after a tap. */
+@media (hover: hover) and (pointer: fine) {
+  .tRowTap:hover { background: var(--c-cream); }
+  .tRowTap.tRowSelected:hover { background: var(--sa-selected); }
+}
+
+/* Wide tables scroll in their own box — the page body never scrolls sideways. */
+.tableWrap { overflow-x: auto; }
+
+/* ── SummaryCard ──────────────────────────────────────────────────────────
+   One headline figure and the parts it is made of — the same device Loo
+   approved on OPEX & Commission ("太千篇一律，没有层次感了" about a flat grid of
+   equal tiles). Sales Analysis had the same flaw: six identically-sized KPI
+   tiles said every number carried the same weight, and hid the two
+   relationships that actually make the page readable:
+
+       Gross margin + Cost            =  Revenue
+       Sofa + Mattress + Bedframe + … =  Product revenue
+
+   Both are PART-TO-WHOLE, so each becomes one card: the total as the headline,
+   a proportion bar, the parts underneath with their share. The relationship is
+   the layout rather than arithmetic the reader has to do.
+
+   The bar is a thin rule, never a filled block — the brand is flat and
+   paper-like (UI_REFERENCE "What NOT to do") and orange stays an accent. */
+
+/* align-items: start — the two cards carry different numbers of parts (two vs
+   one per category), and stretching the shorter one to match left a block of
+   dead paper under its last row. */
+.summaryRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+.summary {
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+/* A left rule rather than a fill — see above. Marks the card carrying the
+   figure the whole page is really about. */
+.summaryLead { border-left: 3px solid var(--c-orange); }
+
+.summaryEyebrow {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  text-transform: uppercase;
+  letter-spacing: var(--tk-loud);
+  color: var(--fg-muted);
+  font-weight: var(--w-semibold);
+}
+.summaryHead { display: flex; flex-direction: column; gap: 1px; }
+.summaryHeadLabel { font-size: var(--fs-13); color: var(--fg-muted); }
+.summaryHeadValue {
+  font-family: var(--font-title);
+  font-size: var(--fs-32);
+  font-weight: var(--w-bold);
+  color: var(--c-ink);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.summaryHeadHint { font-size: var(--fs-12); color: var(--fg-muted); }
+
+.summaryBar {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.summaryBarSeg { display: block; min-width: 2px; border-radius: var(--radius-pill); }
+
+.partList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.part {
+  display: grid;
+  grid-template-columns: 10px 1fr auto auto;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.part:last-child { border-bottom: none; }
+.partDot { width: 8px; height: 8px; border-radius: 50%; align-self: center; }
+.partLabel {
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.partHint { font-size: var(--fs-12); color: var(--fg-muted); }
+.partShare {
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.partValue {
+  font-size: var(--fs-14);
+  color: var(--c-ink);
+  font-weight: var(--w-medium);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 7rem;
+  text-align: right;
+}
+
+/* Footer link out of a card into the tab that owns the detail. */
+.cardLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0;
+  font: inherit;
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  color: var(--c-burnt);
+  background: none;
+  border: none;
+  cursor: pointer;
+  align-self: flex-start;
 }

@@ -1,43 +1,68 @@
-// OverviewTab — spec §1: one screen, zero scroll at 1180×820.
-// InsightStrip + 6 KPI tiles + Monthly revenue (tap-to-inspect + table
-// disclosure) + Product mix + Customers panels, with footer links into the
-// deeper tabs. Layout styles live in OverviewTab.module.css; primitives style
-// from SaShared.module.css (shared table classes reused per §0.10).
+// OverviewTab — the answer to "how did we do", in four labelled bands.
+//
+// ── 2026-08-31 RESTRUCTURE ───────────────────────────────────────────────────
+// Loo: "feel so confuse and no structure wise". The tab was an insight
+// sentence, then SIX identically-sized KPI tiles, then three panels — with no
+// label on any band, so nothing told the eye where one question ended and the
+// next began, and the flat tile grid asserted that revenue, AOV-per-purchase
+// and average delivery fee all mattered equally.
+//
+// It now reads top-to-bottom as four named bands, each answering one question:
+//
+//   THIS PERIOD   two part-to-whole cards — Revenue (= margin + cost) and
+//                 Product revenue (= the categories). Both relationships were
+//                 previously left for the reader to work out with a calculator.
+//   ORDER SHAPE   the genuinely secondary figures, as small tiles, where their
+//                 size now matches their weight.
+//   TREND         the monthly chart, full width — it is the one thing on this
+//                 page worth looking at for more than a second.
+//   CUSTOMERS     who bought, with the link into the deeper tab.
+//
+// Two cuts to be careful of (see sales-analysis-queries.ts): margin can be
+// WITHHELD (non-finance caller) and demographics are ALWAYS absent on the Houzs
+// backend. Neither is rendered as zero.
 
 import { Fragment, useMemo, useState } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, Info } from 'lucide-react';
 import { fmtCenti, fmtQty, summarizeCustomerDemographics } from '@2990s/shared';
-import type { MonthlyRow, OverviewResult, ProductsSection, SaCustomerRow } from '@2990s/shared';
+import type {
+  WireCustomerRow, WireMonthlyRow, WireOverview, WireProductsSection,
+} from '../../lib/sales-analysis-queries';
 import {
   MIN_SAMPLE,
   catLabel,
   categoryMix,
+  demographicsCaptured,
   marginPct,
   overviewInsights,
   periodTotals,
   returningRevenueShare,
+  toSaRows,
 } from '../../lib/sales-analysis-derive';
 import type { CategoryMixEntry } from '../../lib/sales-analysis-derive';
-import { entityColor, orderBuckets } from './primitives/entity-colors';
+import { SA_HEX, entityColor, orderBuckets } from './primitives/entity-colors';
 import { Panel } from './primitives/Panel';
 import { StatTile } from './primitives/StatTile';
+import { SummaryCard } from './primitives/SummaryCard';
+import type { SummaryPart } from './primitives/SummaryCard';
 import { SegmentBar } from './primitives/SegmentBar';
 import { MiniColumns } from './primitives/MiniColumns';
 import { Disclosure } from './primitives/Disclosure';
 import { ThinSampleChip } from './primitives/ThinSampleChip';
-import saShared from './SaShared.module.css';
+import sa from './SaShared.module.css';
 import styles from './OverviewTab.module.css';
 
 export interface OverviewTabProps {
-  overview: OverviewResult;
-  monthly: MonthlyRow[];
-  customers: SaCustomerRow[];
-  products: ProductsSection;
+  overview: WireOverview;
+  monthly: WireMonthlyRow[];
+  customers: WireCustomerRow[];
+  products: WireProductsSection;
   period: string;
   onNavigate: (tab: 'customers' | 'products') => void;
 }
 
-const pct = (v: number | null): string => (v == null ? '—' : `${v.toFixed(1)}%`);
+const pct = (v: number | null | undefined): string =>
+  v == null ? '—' : `${v.toFixed(1)}%`;
 
 /** Split an insight sentence so its leading number/name renders weight 600.
  *  Sentences from overviewInsights() lead either with an amount ("RM … across
@@ -54,17 +79,20 @@ const roundAge = (v: number | null): string => (v == null ? '—' : String(Math.
 
 /** Monthly revenue panel. Keyed by `period` at the call site so the default
  *  inspection (the selected month) resets when the period filter changes. */
-const MonthlyRevenuePanel = ({ monthly, period }: { monthly: MonthlyRow[]; period: string }) => {
+const MonthlyRevenuePanel = ({ monthly, period }: { monthly: WireMonthlyRow[]; period: string }) => {
   const [inspected, setInspected] = useState<string | null>(period !== 'all' ? period : null);
   const inspectedRow =
     inspected != null ? (monthly.find((m) => m.month === inspected) ?? null) : null;
   const totals = useMemo(() => periodTotals(monthly, 'all'), [monthly]);
   const newestFirst = useMemo(() => [...monthly].reverse(), [monthly]);
+  // The margin series only exists for a finance caller; drawing it as a flat
+  // zero line would read as "we made nothing".
+  const hasMargin = monthly.every((m) => m.marginCenti !== undefined);
 
   return (
     <Panel title="Monthly revenue">
       {monthly.length === 0 ? (
-        <p className={styles.muted}>No orders yet.</p>
+        <p className={sa.muted}>No orders yet.</p>
       ) : (
         <>
           <MiniColumns
@@ -73,7 +101,7 @@ const MonthlyRevenuePanel = ({ monthly, period }: { monthly: MonthlyRow[]; perio
               value: m.revenueCenti,
               sub: `${fmtQty(m.orders)} ord`,
             }))}
-            secondary={monthly.map((m) => m.marginCenti)}
+            secondary={hasMargin ? monthly.map((m) => m.marginCenti!) : undefined}
             height={200}
             slotWidth={48}
             emphasizeLabel={period !== 'all' ? period : null}
@@ -85,9 +113,15 @@ const MonthlyRevenuePanel = ({ monthly, period }: { monthly: MonthlyRow[]; perio
               <span className={styles.legendDot} style={{ background: 'var(--sa-c1)' }} />
               revenue
             </span>
-            <span className={styles.legendItem}>
-              <span className={styles.legendDot} style={{ background: 'var(--sa-c3)' }} />
-              margin
+            {hasMargin && (
+              <span className={styles.legendItem}>
+                <span className={styles.legendDot} style={{ background: 'var(--sa-c2)' }} />
+                margin
+              </span>
+            )}
+            <span className={styles.legendSpacer} />
+            <span className={styles.legendNote}>
+              Trend shows all months; the bands above follow the period filter.
             </span>
           </div>
           {inspectedRow != null ? (
@@ -100,76 +134,42 @@ const MonthlyRevenuePanel = ({ monthly, period }: { monthly: MonthlyRow[]; perio
             <p className={styles.inspectCaption}>Showing full history; {period} selected.</p>
           ) : null}
           <Disclosure label="Show monthly table" openLabel="Hide monthly table">
-            <div>
-              <div className={`${saShared.tHead} ${styles.monthlyCols}`}>
+            <div className={styles.tableBox}>
+              <div className={`${sa.tHead} ${styles.monthlyCols}`}>
                 <span>Month</span>
-                <span className={saShared.tNum}>Orders</span>
-                <span className={saShared.tNum}>Revenue</span>
-                <span className={saShared.tNum}>Margin</span>
-                <span className={saShared.tNum}>Margin %</span>
+                <span className={sa.tNum}>Orders</span>
+                <span className={sa.tNum}>Revenue</span>
+                <span className={sa.tNum}>Margin</span>
+                <span className={sa.tNum}>Margin %</span>
               </div>
               {newestFirst.map((m) => (
-                <div key={m.month} className={`${saShared.tRow} ${styles.monthlyCols}`}>
+                <div key={m.month} className={`${sa.tRow} ${styles.monthlyCols}`}>
                   <span>{m.month}</span>
-                  <span className={saShared.tNum}>{fmtQty(m.orders)}</span>
-                  <span className={saShared.tNum}>{fmtCenti(m.revenueCenti)}</span>
-                  <span className={saShared.tNum}>{fmtCenti(m.marginCenti)}</span>
-                  <span className={saShared.tNum}>
+                  <span className={sa.tNum}>{fmtQty(m.orders)}</span>
+                  <span className={sa.tNum}>{fmtCenti(m.revenueCenti)}</span>
+                  <span className={sa.tNum}>
+                    {m.marginCenti === undefined ? '—' : fmtCenti(m.marginCenti)}
+                  </span>
+                  <span className={sa.tNum}>
                     {pct(marginPct(m.marginCenti, m.revenueCenti))}
                   </span>
                 </div>
               ))}
-              <div className={`${saShared.tRow} ${saShared.tTotals} ${styles.monthlyCols}`}>
+              <div className={`${sa.tRow} ${sa.tTotals} ${styles.monthlyCols}`}>
                 <span>All months</span>
-                <span className={saShared.tNum}>{fmtQty(totals.orders)}</span>
-                <span className={saShared.tNum}>{fmtCenti(totals.revenueCenti)}</span>
-                <span className={saShared.tNum}>{fmtCenti(totals.marginCenti)}</span>
-                <span className={saShared.tNum}>
+                <span className={sa.tNum}>{fmtQty(totals.orders)}</span>
+                <span className={sa.tNum}>{fmtCenti(totals.revenueCenti)}</span>
+                <span className={sa.tNum}>
+                  {totals.marginCenti === undefined ? '—' : fmtCenti(totals.marginCenti)}
+                </span>
+                <span className={sa.tNum}>
                   {pct(marginPct(totals.marginCenti, totals.revenueCenti))}
                 </span>
               </div>
             </div>
           </Disclosure>
-          <p className={styles.footNote}>Trend shows all months; tiles follow the period filter.</p>
         </>
       )}
-    </Panel>
-  );
-};
-
-const ProductMixPanel = ({
-  mix,
-  onNavigate,
-}: {
-  mix: CategoryMixEntry[];
-  onNavigate: OverviewTabProps['onNavigate'];
-}) => {
-  const totalRevenue = mix.reduce((s, x) => s + x.revenueCenti, 0);
-  // Keys pass through catLabel for the legend; colorOf maps back to the
-  // canonical enum so entity colors stay fixed (SOFA ↔ 'Sofa').
-  const buckets = mix.map((x) => ({ key: catLabel(x.category), count: x.revenueCenti }));
-
-  return (
-    <Panel title="Product mix">
-      {mix.length === 0 ? (
-        <p className={styles.muted}>No product sales in this view.</p>
-      ) : (
-        <>
-          <SegmentBar
-            buckets={buckets}
-            colorOf={(k) => entityColor('category', k.toUpperCase())}
-            legend="rows"
-            formatValue={(b) =>
-              `${fmtCenti(b.count)} (${totalRevenue > 0 ? Math.round((b.count / totalRevenue) * 100) : 0}%)`
-            }
-            ariaLabel="Product mix"
-          />
-          <p className={styles.subNote}>Product revenue only (excludes delivery and service).</p>
-        </>
-      )}
-      <button type="button" className={styles.footLink} onClick={() => onNavigate('products')}>
-        Open Products tab <ChevronRight size={16} strokeWidth={1.75} />
-      </button>
     </Panel>
   );
 };
@@ -178,11 +178,13 @@ const CustomersPanel = ({
   customers,
   onNavigate,
 }: {
-  customers: SaCustomerRow[];
+  customers: WireCustomerRow[];
   onNavigate: OverviewTabProps['onNavigate'];
 }) => {
-  const summary = useMemo(() => summarizeCustomerDemographics(customers, {}), [customers]);
+  const rows = useMemo(() => toSaRows(customers), [customers]);
+  const summary = useMemo(() => summarizeCustomerDemographics(rows, {}), [rows]);
   const share = useMemo(() => returningRevenueShare(customers), [customers]);
+  const captured = useMemo(() => demographicsCaptured(customers), [customers]);
   const newVsReturning = orderBuckets('newReturning', [
     { key: 'New', count: summary.newVsReturning.newCount },
     { key: 'Returning', count: summary.newVsReturning.returningCount },
@@ -191,40 +193,70 @@ const CustomersPanel = ({
   return (
     <Panel title="Customers">
       {summary.total === 0 ? (
-        <p className={styles.muted}>No customers in this view.</p>
+        <p className={sa.muted}>No customers in this view.</p>
       ) : (
         <>
-          <p className={styles.custLine}>
-            {fmtQty(summary.total)} customers · avg age {roundAge(summary.avgAge)} · median{' '}
-            {roundAge(summary.medianAge)}
-          </p>
-          <p className={styles.barLabel}>New vs returning</p>
-          <SegmentBar
-            buckets={newVsReturning}
-            colorOf={(k) => entityColor('newReturning', k)}
-            legend="inline"
-            ariaLabel="New vs returning"
-          />
-          {share != null && (
-            <p className={styles.mutedLine}>
-              Returning customers: {Math.round(share.pct)}% of revenue.
+          <dl className={styles.custFacts}>
+            <div className={styles.custFact}>
+              <dt>Customers</dt>
+              <dd>{fmtQty(summary.total)}</dd>
+            </div>
+            <div className={styles.custFact}>
+              <dt>Returning</dt>
+              <dd>{fmtQty(summary.newVsReturning.returningCount)}</dd>
+            </div>
+            <div className={styles.custFact}>
+              <dt>Of revenue</dt>
+              <dd>{share == null ? '—' : `${Math.round(share.pct)}%`}</dd>
+            </div>
+          </dl>
+          <div className={styles.barBlock}>
+            <p className={styles.barLabel}>New vs returning</p>
+            <SegmentBar
+              buckets={newVsReturning}
+              colorOf={(k) => entityColor('newReturning', k)}
+              legend="inline"
+              ariaLabel="New vs returning"
+            />
+          </div>
+          {captured ? (
+            <div className={styles.barBlock}>
+              <p className={styles.barLabel}>
+                Gender · avg age {roundAge(summary.avgAge)}
+              </p>
+              <SegmentBar
+                buckets={orderBuckets('gender', summary.gender)}
+                colorOf={(k) => entityColor('gender', k)}
+                legend="inline"
+                ariaLabel="Gender"
+              />
+            </div>
+          ) : (
+            <p className={sa.notice}>
+              <span className={sa.noticeTitle}>
+                <Info size={14} strokeWidth={1.75} /> No demographics in this report
+              </span>{' '}
+              Age, gender and race are captured at handover but are not returned
+              here, so those panels are hidden rather than shown as 100% Unknown.
             </p>
           )}
-          <p className={styles.barLabel}>Gender</p>
-          <SegmentBar
-            buckets={orderBuckets('gender', summary.gender)}
-            colorOf={(k) => entityColor('gender', k)}
-            legend="inline"
-            ariaLabel="Gender"
-          />
         </>
       )}
-      <button type="button" className={styles.footLink} onClick={() => onNavigate('customers')}>
+      <button type="button" className={sa.cardLink} onClick={() => onNavigate('customers')}>
         Open Customer Data <ChevronRight size={16} strokeWidth={1.75} />
       </button>
     </Panel>
   );
 };
+
+/** Category slices for the product-revenue card, in the tab's entity colours. */
+const categoryParts = (mix: CategoryMixEntry[]): SummaryPart[] =>
+  mix.map((x) => ({
+    label: catLabel(x.category),
+    centi: x.revenueCenti,
+    hint: `${fmtQty(x.units)} units · ${pct(marginPct(x.marginCenti, x.revenueCenti))} margin`,
+    color: entityColor('category', x.category),
+  }));
 
 export const OverviewTab = ({
   overview: ov,
@@ -240,6 +272,27 @@ export const OverviewTab = ({
     [ov, monthly, products, customers, period],
   );
   const mix = useMemo(() => categoryMix(products), [products]);
+
+  const scope = period === 'all' ? 'all time' : period;
+  const productRevenue = mix.reduce((s, x) => s + x.revenueCenti, 0);
+
+  /* Revenue = gross margin + cost. Both parts are null together — the server
+     either sends margin or withholds it — so the bar simply does not draw for a
+     non-finance caller rather than showing revenue as 100% cost. */
+  const revenueParts: SummaryPart[] = [
+    {
+      label: 'Gross margin',
+      centi: totals.marginCenti ?? null,
+      hint: pct(marginPct(totals.marginCenti, totals.revenueCenti)) + ' of revenue',
+      color: SA_HEX.c1,
+    },
+    {
+      label: 'Cost',
+      centi: totals.marginCenti === undefined ? null : totals.revenueCenti - totals.marginCenti,
+      hint: 'goods and fulfilment',
+      color: SA_HEX.c3,
+    },
+  ];
 
   return (
     <>
@@ -264,22 +317,45 @@ export const OverviewTab = ({
         </div>
       )}
 
+      <div className={sa.summaryRow}>
+        <SummaryCard
+          eyebrow="This period"
+          headlineLabel={`Revenue · ${scope}`}
+          headlineCenti={totals.revenueCenti}
+          headlineHint={`${fmtQty(ov.orderCount.bySo)} orders · ${fmtQty(ov.orderCount.byPurchase)} physical purchases`}
+          parts={revenueParts}
+          emphasis
+        />
+        <SummaryCard
+          eyebrow="What sold"
+          headlineLabel="Product revenue"
+          headlineCenti={productRevenue}
+          headlineHint="goods only — excludes delivery and service"
+          parts={categoryParts(mix)}
+          footer={
+            <button type="button" className={sa.cardLink} onClick={() => onNavigate('products')}>
+              Open Products tab <ChevronRight size={16} strokeWidth={1.75} />
+            </button>
+          }
+        />
+      </div>
+
+      <p className={sa.eyebrow}>Order shape</p>
       <div className={styles.kpis}>
         <StatTile
-          label="Revenue"
-          value={fmtCenti(totals.revenueCenti)}
-          sub={`${fmtQty(ov.orderCount.bySo)} orders`}
+          label="Orders"
+          value={fmtQty(ov.orderCount.bySo)}
+          sub={`${fmtQty(ov.orderCount.byPurchase)} physical purchases`}
           chip={ov.n < MIN_SAMPLE ? <ThinSampleChip n={ov.n} /> : undefined}
         />
         <StatTile
           label="Gross margin"
           value={pct(ov.grossMarginPct)}
-          sub={`${fmtCenti(totals.marginCenti)} margin`}
-        />
-        <StatTile
-          label="Orders"
-          value={fmtQty(ov.orderCount.bySo)}
-          sub={`${fmtQty(ov.orderCount.byPurchase)} physical purchases`}
+          sub={
+            totals.marginCenti === undefined
+              ? 'not available to this account'
+              : `${fmtCenti(totals.marginCenti)} margin`
+          }
         />
         <StatTile
           label="AOV per order"
@@ -298,12 +374,10 @@ export const OverviewTab = ({
         />
       </div>
 
+      <p className={sa.eyebrow}>Trend and customers</p>
       <div className={styles.grid}>
         <MonthlyRevenuePanel key={period} monthly={monthly} period={period} />
-        <div className={styles.rightCol}>
-          <ProductMixPanel mix={mix} onNavigate={onNavigate} />
-          <CustomersPanel customers={customers} onNavigate={onNavigate} />
-        </div>
+        <CustomersPanel customers={customers} onNavigate={onNavigate} />
       </div>
     </>
   );

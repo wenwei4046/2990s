@@ -15,7 +15,7 @@ import {
 import { useSaveTargets } from '../../lib/sales-analysis-queries';
 import { Meter } from './primitives/Meter';
 import sa from './SaShared.module.css';
-import shell from '../../pages/SalesAnalysis.module.css';
+
 import styles from './CustomerDataTab.module.css';
 
 const pctStr = (v: number): string => `${Math.round(v)}%`;
@@ -96,12 +96,12 @@ export const TargetEditorSheet = ({ customers, targets, onClose }: TargetEditorS
           <p className={styles.formCaption}>Age range (customers whose age falls between, inclusive)</p>
           <div className={styles.targetGrid}>
             <label className={styles.optLabel}>Min age
-              <input className={shell.ageInput} type="number" min={0} max={120}
+              <input className={styles.ageInput} type="number" min={0} max={120}
                 value={draft.ageRangeMin ?? ''}
                 onChange={(e) => setDraft((d) => ({ ...d, ageRangeMin: e.target.value === '' ? null : Number(e.target.value) }))} />
             </label>
             <label className={styles.optLabel}>Max age
-              <input className={shell.ageInput} type="number" min={0} max={120}
+              <input className={styles.ageInput} type="number" min={0} max={120}
                 value={draft.ageRangeMax ?? ''}
                 onChange={(e) => setDraft((d) => ({ ...d, ageRangeMax: e.target.value === '' ? null : Number(e.target.value) }))} />
             </label>
@@ -114,7 +114,7 @@ export const TargetEditorSheet = ({ customers, targets, onClose }: TargetEditorS
               return (
                 <div key={k} className={styles.optCell}>
                   <label className={styles.optLabel}>{k}
-                    <input className={shell.ageInput} type="number" min={0} max={100}
+                    <input className={styles.ageInput} type="number" min={0} max={100}
                       value={draft.raceTargets?.[k] ?? 0} onChange={(e) => setRace(k, e.target.value)} />
                   </label>
                   {row && (
@@ -134,7 +134,7 @@ export const TargetEditorSheet = ({ customers, targets, onClose }: TargetEditorS
               return (
                 <div key={k} className={styles.optCell}>
                   <label className={styles.optLabel}>{k}
-                    <input className={shell.ageInput} type="number" min={0} max={100}
+                    <input className={styles.ageInput} type="number" min={0} max={100}
                       value={draft.genderTargets?.[k] ?? 0} onChange={(e) => setGender(k, e.target.value)} />
                   </label>
                   {row && (
