@@ -1,11 +1,19 @@
 // ----------------------------------------------------------------------------
-// OPEX ▸ Commission — what each salesperson earned over a date range.
+// OPEX ▸ Commission — what each salesperson sold, and what it pays them.
 //
-// Every figure on this screen is computed SERVER-SIDE by the one commission
-// engine (Houzs scm/shared/hr-commission.ts) over the Sales Orders the POS
-// itself wrote. Nothing here re-derives a payout: this component formats and
-// arranges. That is deliberate — a second implementation of the arithmetic is
-// how a payslip and a report stop agreeing.
+// Every PAYOUT figure is computed SERVER-SIDE by the one commission engine
+// (Houzs scm/shared/hr-commission.ts) over the Sales Orders the POS itself
+// wrote. Nothing here re-derives a payout: this component formats and arranges.
+// A second implementation of that arithmetic is how a report and a payslip stop
+// agreeing.
+//
+// The REVENUE half — Products / Service / KPI item / Total, the four Loo named
+// on 2026-08-31 — is folded in the POS from the SO headers for the same range
+// (lib/commission-revenue.ts), because the engine does not report it and he
+// asked for this to stay POS-side. It is built AROUND the engine's own figure,
+// never over it: `Products` IS `personalGoodsSen`, so the number under the
+// percentage is always the number the percentage ran on. The other two are
+// derived from it and are dropped, loudly, if they fail to reconcile.
 //
 // TWO STATES A RANGE CAN BE IN, and the difference matters:
 //   · OPEN   — recomputed live from TODAY's rates on every load. Edit a rate and
@@ -25,6 +33,8 @@ import {
   useCloseHrPayout, useHrCommission, useReopenHrPayout,
   type HrCommissionReport, type HrCommissionRow,
 } from '../../lib/hr-commission-queries';
+import { useCommissionRevenue } from '../../lib/commission-revenue-queries';
+import { splitForRow, type RevenueSplit, type SalespersonRevenue } from '../../lib/commission-revenue';
 import { hrErrorMessage } from '../../lib/hr-wire';
 import { fmtBps, fmtSen } from '../../lib/commission-format';
 import styles from './Opex.module.css';
@@ -45,29 +55,59 @@ const currentMonthRange = (): { from: string; to: string } => {
 };
 
 interface Totals {
-  goodsSen: number;
-  personalSen: number;
+  /* revenue — what was sold */
+  productsSen: number;
+  serviceSen: number;
+  kpiRevenueSen: number;
+  totalRevenueSen: number;
+  /* False as soon as ONE person's figure is missing: a column that is the sum of
+     some-but-not-all rows is worse than no column. Split in two because the two
+     halves fail INDEPENDENTLY — a caller who may not see the per-category
+     columns still gets every order's total, so Total revenue survives while
+     Service and KPI item do not. */
+  splitComplete: boolean;
+  totalComplete: boolean;
+  /* payout — what is paid */
+  commissionSen: number;
   overrideSen: number;
-  kpiSen: number;
-  totalSen: number;
+  kpiEarnedSen: number;
+  payoutSen: number;
   people: number;
+  mismatches: number;
 }
 
-const sumReport = (report: HrCommissionReport): Totals =>
-  report.showrooms.reduce<Totals>(
-    (acc, s) => {
-      for (const r of s.rows) {
-        acc.goodsSen += r.personalGoodsSen;
-        acc.personalSen += r.personalCommissionSen;
-        acc.overrideSen += r.overrideCommissionSen;
-        acc.kpiSen += r.itemKpiSen;
-        acc.totalSen += r.totalSen;
-        acc.people += 1;
+const sumReport = (
+  report: HrCommissionReport,
+  splits: Map<string, RevenueSplit>,
+): Totals => {
+  const t: Totals = {
+    productsSen: 0, serviceSen: 0, kpiRevenueSen: 0, totalRevenueSen: 0,
+    splitComplete: true, totalComplete: true,
+    commissionSen: 0, overrideSen: 0, kpiEarnedSen: 0, payoutSen: 0, people: 0, mismatches: 0,
+  };
+  for (const s of report.showrooms) {
+    for (const r of s.rows) {
+      t.productsSen += r.personalGoodsSen;
+      t.commissionSen += r.personalCommissionSen;
+      t.overrideSen += r.overrideCommissionSen;
+      t.kpiEarnedSen += r.itemKpiSen;
+      t.payoutSen += r.totalSen;
+      t.people += 1;
+
+      const sp = splits.get(r.staffId);
+      if (sp && sp.serviceSen !== null && sp.kpiSen !== null) {
+        t.serviceSen += sp.serviceSen;
+        t.kpiRevenueSen += sp.kpiSen;
+      } else {
+        t.splitComplete = false;
       }
-      return acc;
-    },
-    { goodsSen: 0, personalSen: 0, overrideSen: 0, kpiSen: 0, totalSen: 0, people: 0 },
-  );
+      if (sp && sp.totalSen !== null) t.totalRevenueSen += sp.totalSen;
+      else t.totalComplete = false;
+      if (sp?.mismatch) t.mismatches += 1;
+    }
+  }
+  return t;
+};
 
 export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
   const [draft, setDraft] = useState(currentMonthRange);
@@ -78,11 +118,29 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
   const [actionError, setActionError] = useState<string | null>(null);
 
   const { data, isLoading, isFetching, error } = useHrCommission(applied.from, applied.to);
+  /* The revenue fold runs beside the report over the SAME range. It is
+     supplementary: if it fails, the payout half still renders in full. */
+  const revenue = useCommissionRevenue(applied.from, applied.to);
   const closePayout = useCloseHrPayout();
   const reopenPayout = useReopenHrPayout();
 
-  const totals = useMemo(() => (data ? sumReport(data) : null), [data]);
+  /* One split per person, built once. `byStaff` may be absent (still loading, or
+     the fold failed) — splitForRow then reports what it can. */
+  const splits = useMemo(() => {
+    const m = new Map<string, RevenueSplit>();
+    if (!data) return m;
+    const by: Map<string, SalespersonRevenue> | undefined = revenue.data?.byStaff;
+    for (const s of data.showrooms) {
+      for (const r of s.rows) {
+        m.set(r.staffId, splitForRow(r.personalGoodsSen, by?.get(r.staffId)));
+      }
+    }
+    return m;
+  }, [data, revenue.data]);
+
+  const totals = useMemo(() => (data ? sumReport(data, splits) : null), [data, splits]);
   const rangeInvalid = draft.from > draft.to;
+  const revenueLoading = revenue.isLoading || revenue.isFetching;
 
   const runClose = async () => {
     setActionError(null);
@@ -149,7 +207,8 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
         )}
         <p className={styles.cardHint}>
           Orders are counted by <strong>SO date</strong>. Cancelled, on-hold and draft orders earn
-          nothing. Delivery and service lines are never part of commission.
+          nothing and are left out of every figure below — which is why these totals do not match
+          the My orders cards, where a draft counts as pipeline.
         </p>
       </div>
 
@@ -211,16 +270,43 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
             )}
           </div>
 
-          {/* ── company totals ──────────────────────────────────────────── */}
+          {/* ── what was sold ───────────────────────────────────────────── */}
+          <div className={styles.stripHead}>Revenue — what was sold</div>
           <div className={styles.tiles}>
             <div className={styles.tile}>
-              <span className={styles.tileLabel}>Product sales</span>
-              <span className={styles.tileValue}>{fmtSen(totals.goodsSen)}</span>
+              <span className={styles.tileLabel}>Products sales revenue</span>
+              <span className={styles.tileValue}>{fmtSen(totals.productsSen)}</span>
               <span className={styles.tileHint}>the base commission is paid on</span>
             </div>
             <div className={styles.tile}>
+              <span className={styles.tileLabel}>Service sales revenue</span>
+              <span className={styles.tileValue}>
+                {revenueLoading ? '…' : totals.splitComplete ? fmtSen(totals.serviceSen) : '—'}
+              </span>
+              <span className={styles.tileHint}>delivery + service lines · earns no commission</span>
+            </div>
+            <div className={styles.tile}>
+              <span className={styles.tileLabel}>KPI item sales revenue</span>
+              <span className={styles.tileValue}>
+                {revenueLoading ? '…' : totals.splitComplete ? fmtSen(totals.kpiRevenueSen) : '—'}
+              </span>
+              <span className={styles.tileHint}>paid as a fixed amount, not a %</span>
+            </div>
+            <div className={styles.tile}>
+              <span className={styles.tileLabel}>Total revenue</span>
+              <span className={styles.tileValue}>
+                {revenueLoading ? '…' : totals.totalComplete ? fmtSen(totals.totalRevenueSen) : '—'}
+              </span>
+              <span className={styles.tileHint}>the three above, added up</span>
+            </div>
+          </div>
+
+          {/* ── what it pays ────────────────────────────────────────────── */}
+          <div className={styles.stripHead}>Commission — what it pays</div>
+          <div className={styles.tiles}>
+            <div className={styles.tile}>
               <span className={styles.tileLabel}>Revenue commission</span>
-              <span className={styles.tileValue}>{fmtSen(totals.personalSen)}</span>
+              <span className={styles.tileValue}>{fmtSen(totals.commissionSen)}</span>
               <span className={styles.tileHint}>tiered % of product sales</span>
             </div>
             <div className={styles.tile}>
@@ -231,18 +317,43 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
               </span>
             </div>
             <div className={styles.tile}>
-              <span className={styles.tileLabel}>KPI items</span>
-              <span className={styles.tileValue}>{fmtSen(totals.kpiSen)}</span>
-              <span className={styles.tileHint}>fixed amounts, not a %</span>
+              <span className={styles.tileLabel}>KPI items earned</span>
+              <span className={styles.tileValue}>{fmtSen(totals.kpiEarnedSen)}</span>
+              <span className={styles.tileHint}>fixed amounts</span>
             </div>
             <div className={`${styles.tile} ${styles.tileStrong}`}>
               <span className={styles.tileLabel}>Total payout</span>
-              <span className={styles.tileValue}>{fmtSen(totals.totalSen)}</span>
+              <span className={styles.tileValue}>{fmtSen(totals.payoutSen)}</span>
               <span className={styles.tileHint}>
                 {totals.people} {totals.people === 1 ? 'salesperson' : 'salespeople'}
               </span>
             </div>
           </div>
+
+          {/* The revenue half is folded in the POS from a SECOND query, so it can
+              disagree with the engine's own order set. It is never allowed to do
+              so quietly — see lib/commission-revenue.ts. */}
+          {revenue.error && (
+            <p className={styles.error}>
+              The revenue split could not be loaded ({hrErrorMessage(revenue.error)}). Every
+              commission figure below is unaffected — those come from the server.
+            </p>
+          )}
+          {!revenueLoading && totals.mismatches > 0 && (
+            <p className={styles.error}>
+              <strong>Revenue split unavailable for {totals.mismatches} of {totals.people}.</strong>{' '}
+              Their sales orders do not reconcile with what the commission engine counted — usually
+              because this account can only see part of the sales book. Commission, override and KPI
+              amounts are unaffected: those are the server&rsquo;s own figures. Ask an account with
+              full sales visibility to read the revenue split.
+            </p>
+          )}
+          {revenue.data?.truncated && (
+            <p className={styles.error}>
+              This range holds more orders than the revenue split can read in one go, so the revenue
+              figures are incomplete. Narrow the range — a payout period is normally one month.
+            </p>
+          )}
 
           {/* ── per showroom ────────────────────────────────────────────── */}
           {data.showrooms.length === 0 && (
@@ -273,15 +384,27 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
               <div className={styles.tableWrap}>
                 <table className={styles.table}>
                   <thead>
+                    {/* Grouped header: the four revenue columns and the four
+                        payout columns answer different questions, and "KPI item"
+                        appears in both — as revenue on one side, as the fixed
+                        amount earned on the other. */}
+                    <tr>
+                      <th colSpan={2} />
+                      <th className={styles.groupHead} colSpan={4}>Revenue — sold</th>
+                      <th className={styles.groupHead} colSpan={5}>Commission — paid</th>
+                    </tr>
                     <tr>
                       <th>Salesperson</th>
                       <th>Level</th>
-                      <th className={styles.num}>Product sales</th>
-                      <th className={styles.num}>Rate</th>
-                      <th className={styles.num}>Revenue commission</th>
-                      <th className={styles.num}>Override</th>
-                      <th className={styles.num}>KPI items</th>
+                      <th className={styles.num}>Products</th>
+                      <th className={styles.num}>Service</th>
+                      <th className={styles.num}>KPI item</th>
                       <th className={styles.num}>Total</th>
+                      <th className={styles.num}>Rate</th>
+                      <th className={styles.num}>Revenue comm.</th>
+                      <th className={styles.num}>Override</th>
+                      <th className={styles.num}>KPI earned</th>
+                      <th className={styles.num}>Total pay</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -289,13 +412,15 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
                       <PersonRows
                         key={r.staffId}
                         row={r}
+                        split={splits.get(r.staffId)}
+                        revenueLoading={revenueLoading}
                         expanded={!!open[r.staffId]}
                         onToggle={() => setOpen((o) => ({ ...o, [r.staffId]: !o[r.staffId] }))}
                       />
                     ))}
                     {sr.rows.length === 0 && (
                       <tr className={styles.rowMuted}>
-                        <td colSpan={8}>— Nobody on the scheme is assigned to this showroom.</td>
+                        <td colSpan={11}>— Nobody on the scheme is assigned to this showroom.</td>
                       </tr>
                     )}
                   </tbody>
@@ -304,22 +429,26 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
             </div>
           ))}
 
-          {/* What the numbers above do and do not include. Stated on the screen
-              rather than in a handover note, because the single most expensive
-              question about a commission report is "does this figure include the
-              fabric upgrade?" */}
+          {/* What the numbers mean. Stated on the screen rather than in a
+              handover note, because the single most expensive question about a
+              commission report is "does this figure include the fabric
+              upgrade?" */}
           <p className={styles.notice}>
             <span className={styles.noticeTitle}>
               <AlertTriangle size={14} strokeWidth={1.75} /> How the revenue is split
             </span>
             <br />
-            <strong>Product sales</strong> is what the percentage is paid on. It already excludes
-            delivery and every service line, and it excludes the add-on amount of anything that
-            earned a KPI item — a flagged fabric upgrade pays its fixed KPI amount
-            <em> instead of </em>a percentage, never both. <strong>KPI items</strong> is the sum of
-            those fixed amounts. Total revenue and service revenue are not shown here: the
-            commission engine does not report them, and deriving them separately in this screen
-            would create a second set of figures that could disagree with the payout.
+            <strong>Products</strong> is what the percentage is paid on. It excludes delivery and
+            every service line, and it excludes the add-on amount of anything that earned a KPI item
+            — a flagged fabric upgrade pays its fixed amount <em>instead of</em> a percentage, never
+            both. <strong>Service</strong> is delivery plus every service line, and earns no
+            commission. <strong>KPI item</strong> is the revenue those flags removed; the fixed
+            amounts it earns are in the <strong>KPI earned</strong> column. The three add up to
+            <strong> Total revenue</strong>.
+            <br />
+            Products, rate, commission, override and KPI earned come from the commission engine.
+            Service, KPI item and Total are folded here in the POS from the same orders, and are
+            hidden rather than shown if they fail to reconcile with it.
           </p>
         </>
       )}
@@ -327,11 +456,22 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
   );
 };
 
-/** One salesperson: the figures row, plus the KPI breakdown when expanded. */
+/** One salesperson: the figures row, plus the breakdown when expanded. */
 const PersonRows = ({
-  row, expanded, onToggle,
-}: { row: HrCommissionRow; expanded: boolean; onToggle: () => void }) => {
+  row, split, revenueLoading, expanded, onToggle,
+}: {
+  row: HrCommissionRow;
+  split: RevenueSplit | undefined;
+  revenueLoading: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+}) => {
   const hasDetail = row.kpiDetail.length > 0 || (row.overrideDetail?.length ?? 0) > 0;
+  /* "…" while the fold is in flight, "—" when it genuinely cannot be derived.
+     A payroll screen must not show the two as the same thing. */
+  const money = (v: number | null | undefined) =>
+    revenueLoading ? '…' : v === null || v === undefined ? '—' : fmtSen(v);
+
   return (
     <>
       <tr>
@@ -344,9 +484,19 @@ const PersonRows = ({
             </button>
           ) : null}
           {row.staffName || <span className={styles.code}>{row.staffId}</span>}
+          {split?.mismatch && !revenueLoading && (
+            <> <span className={styles.chip} title="Sales orders do not reconcile with the engine">
+              revenue n/a
+            </span></>
+          )}
         </td>
         <td>{row.tier === 'manager' ? 'Manager' : 'Sales'}</td>
+
         <td className={styles.num}>{fmtSen(row.personalGoodsSen)}</td>
+        <td className={styles.num}>{money(split?.serviceSen)}</td>
+        <td className={styles.num}>{money(split?.kpiSen)}</td>
+        <td className={styles.num}>{money(split?.totalSen)}</td>
+
         <td className={styles.num}>{fmtBps(row.personalRateBps)}</td>
         <td className={styles.num}>{fmtSen(row.personalCommissionSen)}</td>
         <td className={styles.num}>
@@ -367,7 +517,7 @@ const PersonRows = ({
 
       {expanded && hasDetail && (
         <tr>
-          <td className={styles.detailCell} colSpan={8}>
+          <td className={styles.detailCell} colSpan={11}>
             {row.kpiDetail.length > 0 && (
               <ul className={styles.detailList}>
                 {row.kpiDetail.map((d) => (

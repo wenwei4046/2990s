@@ -158,3 +158,21 @@
 .detailItem { display: flex; gap: var(--space-3); font-size: var(--fs-12); color: var(--fg-muted); }
 .detailItem strong { color: var(--c-ink); font-weight: var(--w-medium); }
 .detailAmount { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+/* Strip label above a row of tiles — separates "what was sold" from "what it
+   pays", which are different questions about the same period. */
+.stripHead {
+  font-size: var(--fs-12); text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--fg-muted); font-weight: var(--w-semibold);
+  margin: var(--space-2) 0 calc(-1 * var(--space-1));
+}
+
+/* Grouped table header. Quiet rule + centred label so the two column families
+   read as families, not as eleven equal columns. */
+.groupHead {
+  text-align: center;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-muted);
+  font-size: var(--fs-12);
+  letter-spacing: 0.06em;
+}

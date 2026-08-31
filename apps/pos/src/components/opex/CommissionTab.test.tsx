@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
 // Re-import for tsc: the runtime setup (test/setup.ts) loads the matchers, but
 // its type augmentation isn't in this tsconfig's program.
@@ -22,6 +22,14 @@ vi.mock('../../lib/hr-commission-queries', () => ({
   useReopenHrPayout: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
+/* The revenue fold's FETCH is mocked; its RULES (lib/commission-revenue.ts) run
+   for real, so these tests exercise the same splitForRow the page ships. */
+const useCommissionRevenue = vi.fn();
+vi.mock('../../lib/commission-revenue-queries', () => ({
+  useCommissionRevenue: (...a: unknown[]) => useCommissionRevenue(...a),
+}));
+
+import type { SalespersonRevenue } from '../../lib/commission-revenue';
 import { CommissionTab } from './CommissionTab';
 
 const report = (over: Partial<HrCommissionReport> = {}): HrCommissionReport => ({
@@ -86,6 +94,25 @@ const mockReport = (data: HrCommissionReport | undefined, extra: Record<string, 
     data, isLoading: false, isFetching: false, error: null, ...extra,
   });
 };
+
+/* Scarlett: RM 200,000 of goods, of which the engine paid on 200,000 — so no
+   KPI exclusion — plus RM 500 of service. Aiman: RM 100,000 goods, RM 100 service. */
+const REVENUE: Record<string, SalespersonRevenue> = {
+  s1: { totalSen: 20_050_000, goodsSen: 20_000_000, goodsKnown: true, orders: 4 },
+  s2: { totalSen: 10_010_000, goodsSen: 10_000_000, goodsKnown: true, orders: 2 },
+};
+
+const mockRevenue = (
+  byStaff: Record<string, SalespersonRevenue> | null = REVENUE,
+  extra: Record<string, unknown> = {},
+) => {
+  useCommissionRevenue.mockReturnValue({
+    data: byStaff ? { byStaff: new Map(Object.entries(byStaff)), truncated: false } : undefined,
+    isLoading: false, isFetching: false, error: null, ...extra,
+  });
+};
+
+beforeEach(() => { mockRevenue(); });
 
 describe('CommissionTab', () => {
   it('totals every row across the company, not just the first showroom', () => {
@@ -185,5 +212,103 @@ describe('CommissionTab', () => {
     render(<CommissionTab canManage />);
     // The single most expensive question about a commission report.
     expect(screen.getByText(/excludes the add-on amount of anything that/i)).toBeInTheDocument();
+  });
+});
+
+describe('CommissionTab — the revenue split', () => {
+  it('shows the four revenue lines Loo named', () => {
+    mockReport(report());
+    render(<CommissionTab canManage />);
+    expect(screen.getByText('Products sales revenue')).toBeInTheDocument();
+    expect(screen.getByText('Service sales revenue')).toBeInTheDocument();
+    expect(screen.getByText('KPI item sales revenue')).toBeInTheDocument();
+    /* "Total revenue" also appears in the explanatory note below the tables, so
+       this asserts presence rather than uniqueness. */
+    expect(screen.getAllByText('Total revenue').length).toBeGreaterThan(0);
+  });
+
+  it('derives service and KPI revenue around the engine base', () => {
+    mockReport(report());
+    render(<CommissionTab canManage />);
+    // Service = total − goods = (20,050,000 − 20,000,000) + (10,010,000 − 10,000,000)
+    //         = RM 500 + RM 100 = RM 600.
+    expect(screen.getByText('RM 600.00')).toBeInTheDocument();
+    // Total revenue = 20,050,000 + 10,010,000 sen = RM 300,600.
+    expect(screen.getByText('RM 300,600.00')).toBeInTheDocument();
+  });
+
+  it('reports KPI item REVENUE separately from the KPI amount EARNED', () => {
+    /* Scarlett sold RM 200,150 of goods but the engine paid on RM 200,000 — the
+       RM 150 add-on was excluded because it earned a fixed KPI amount instead.
+       That RM 150 is the KPI item REVENUE; the RM 150 she was paid for it is a
+       different column that happens to be a different number in general. */
+    /* RM 175 of excluded add-on, deliberately NOT equal to the RM 150 she was
+       paid for it — the two columns answer different questions and a fixture
+       where they matched would not prove they are read from different places. */
+    mockRevenue({
+      s1: { totalSen: 20_067_500, goodsSen: 20_017_500, goodsKnown: true, orders: 4 },
+      s2: { totalSen: 10_012_500, goodsSen: 10_002_500, goodsKnown: true, orders: 2 },
+    });
+    mockReport(report());
+    render(<CommissionTab canManage />);
+    // Scarlett's row: 20,017,500 − 20,000,000 = RM 175 of excluded add-on.
+    expect(screen.getByText('RM 175.00')).toBeInTheDocument();
+    // Company tile: hers plus Aiman's RM 25 = RM 200 — a DIFFERENT number from
+    // any row, so this cannot pass by accidentally matching the row cell.
+    expect(screen.getByText('RM 200.00')).toBeInTheDocument();
+    // …while the amount EARNED for the flag is still RM 150 (itemKpiSen).
+    expect(screen.getAllByText('RM 150.00').length).toBeGreaterThan(0);
+  });
+
+  it('hides the split rather than showing a wrong number when it cannot reconcile', () => {
+    /* Goods BELOW the engine's base is impossible if both queries describe the
+       same orders — the KPI exclusion can only remove. Most likely cause: this
+       account can only see part of the sales book. */
+    mockRevenue({
+      ...REVENUE,
+      s1: { totalSen: 100, goodsSen: 100, goodsKnown: true, orders: 1 },
+    });
+    mockReport(report());
+    render(<CommissionTab canManage />);
+
+    expect(screen.getByText(/Revenue split unavailable for 1 of 2/)).toBeInTheDocument();
+    expect(screen.getByText('revenue n/a')).toBeInTheDocument();
+    // The PAYOUT half is untouched — those are the server's figures.
+    expect(screen.getByText('RM 3,000.00')).toBeInTheDocument();
+    expect(screen.getByText('RM 5,650.00')).toBeInTheDocument(); // total payout
+  });
+
+  it('keeps Total revenue when only the finance-gated columns are missing', () => {
+    // A non-finance viewer loses the per-category buckets but still gets every
+    // order's total, so the two halves must fail independently.
+    mockRevenue({
+      s1: { totalSen: 20_050_000, goodsSen: 0, goodsKnown: false, orders: 4 },
+      s2: { totalSen: 10_010_000, goodsSen: 0, goodsKnown: false, orders: 2 },
+    });
+    mockReport(report());
+    render(<CommissionTab canManage />);
+
+    expect(screen.getByText('RM 300,600.00')).toBeInTheDocument(); // total revenue survives
+    // …and this is NOT reported as a reconciliation failure.
+    expect(screen.queryByText(/Revenue split unavailable/)).not.toBeInTheDocument();
+  });
+
+  it('renders the payout in full when the revenue fold fails outright', () => {
+    mockRevenue(null, { error: new Error('500 : {"error":"load_failed"}') });
+    mockReport(report());
+    render(<CommissionTab canManage />);
+
+    expect(screen.getByText(/The revenue split could not be loaded/)).toBeInTheDocument();
+    expect(screen.getByText('RM 5,650.00')).toBeInTheDocument(); // total payout intact
+  });
+
+  it('warns when the range holds more orders than it can read', () => {
+    useCommissionRevenue.mockReturnValue({
+      data: { byStaff: new Map(Object.entries(REVENUE)), truncated: true },
+      isLoading: false, isFetching: false, error: null,
+    });
+    mockReport(report());
+    render(<CommissionTab canManage />);
+    expect(screen.getByText(/more orders than the revenue split can read/)).toBeInTheDocument();
   });
 });
