@@ -5,6 +5,7 @@ import { SetPassword } from './pages/SetPassword';
 import { Catalog } from './pages/Catalog';
 import { AuthGate } from './components/AuthGate';
 import { MaintainGate } from './components/MaintainGate';
+import { HrGate } from './components/HrGate';
 
 /* Code-splitting (perf, 2026-06-13) — the POS shipped as ONE ~1.2 MB JS chunk
    because every page was imported eagerly here, so the Configurator (sofa snap
@@ -26,6 +27,7 @@ const Products = lazy(() => import('./pages/Products').then((m) => ({ default: m
 const SalesOrderMaintenance = lazy(() => import('./pages/SalesOrderMaintenance').then((m) => ({ default: m.SalesOrderMaintenance })));
 const NewOrder = lazy(() => import('./pages/NewOrder').then((m) => ({ default: m.NewOrder })));
 const SalesAnalysis = lazy(() => import('./pages/SalesAnalysis').then((m) => ({ default: m.SalesAnalysis })));
+const OpexCommission = lazy(() => import('./pages/OpexCommission').then((m) => ({ default: m.OpexCommission })));
 
 /* Root layout — hosts <ScrollRestoration> for the whole app. It restores window
    scroll on history POP (the browser/swipe Back AND the configurator's in-app
@@ -104,6 +106,12 @@ export const router = createBrowserRouter([
      /handover-confirmed thank-you screen. */
   { path: '/new-order', element: <AuthGate><MaintainGate><NewOrder /></MaintainGate></AuthGate> },
   { path: '/sales-analysis', element: <AuthGate><MaintainGate><SalesAnalysis /></MaintainGate></AuthGate> },
+  /* OPEX ▸ Commission (Loo 2026-08-31). Guarded by HrGate, NOT MaintainGate:
+     the page's API is Houzs /hr/*, which gates on the flat permission key
+     `scm.hr.read` and ignores the POS role. Gating on the role instead would
+     show the page to someone the server refuses, or hide it from someone who
+     legitimately holds the key. */
+  { path: '/opex/commission', element: <AuthGate><HrGate><OpexCommission /></HrGate></AuthGate> },
   { path: '/', element: <Navigate to="/catalog" replace /> },
   { path: '*', element: <Navigate to="/catalog" replace /> },
     ],

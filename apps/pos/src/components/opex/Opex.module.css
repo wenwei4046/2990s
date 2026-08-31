@@ -1,0 +1,160 @@
+/* OPEX Commission — shared styles for the shell and both tabs.
+   Tokens only (packages/design-system/src/tokens.css). Orange is ACCENT ONLY:
+   active tab, primary button, threshold-hit chip. Never a large fill. */
+
+/* ── page frame ─────────────────────────────────────────────────────────── */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6) var(--space-7);
+  background: var(--c-cream);
+  min-height: 100%;
+}
+.headerRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.titleBlock { display: flex; align-items: center; gap: var(--space-3); }
+.backBtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--c-ink); text-decoration: none; font-size: var(--fs-14);
+  min-height: 44px;
+}
+.title { font-family: var(--font-title); font-size: var(--fs-20); font-weight: var(--w-bold); margin: 0; color: var(--c-ink); }
+.subtitle { font-size: var(--fs-12); color: var(--fg-muted); margin: 2px 0 0; }
+
+.tabs { display: flex; gap: var(--space-2); border-bottom: 1px solid var(--line); }
+.tab {
+  font: inherit; font-family: var(--font-button); font-size: var(--fs-14); color: var(--fg-muted);
+  background: none; border: none; min-height: 44px; padding: 10px 14px; cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tabActive { color: var(--c-ink); border-bottom-color: var(--c-orange); font-weight: var(--w-semibold); }
+
+/* ── cards ──────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.cardHead { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.cardTitle {
+  font-size: var(--fs-14); font-weight: var(--w-semibold); color: var(--c-ink); margin: 0;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.cardHint { font-size: var(--fs-12); color: var(--fg-muted); margin: 0; max-width: 68ch; line-height: 1.5; }
+.stack { display: flex; flex-direction: column; gap: var(--space-4); }
+
+/* ── forms ──────────────────────────────────────────────────────────────── */
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--space-3) var(--space-4);
+}
+.field { display: flex; flex-direction: column; gap: 4px; }
+.label { font-size: var(--fs-12); color: var(--fg-muted); }
+.field input, .field select {
+  font: inherit; font-size: var(--fs-13); min-height: 44px;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #fff; color: var(--c-ink);
+}
+.field input:disabled, .field select:disabled { background: var(--c-cream); color: var(--fg-muted); }
+.suffixField { display: flex; align-items: center; gap: 6px; }
+.suffixField input { flex: 1; min-width: 0; }
+.suffix { font-size: var(--fs-12); color: var(--fg-muted); }
+
+.actions { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.btn {
+  font: inherit; font-family: var(--font-button); font-size: var(--fs-13);
+  min-height: 44px; padding: 10px 16px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong); background: #fff; color: var(--c-ink);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btnPrimary { background: var(--c-orange); border-color: var(--c-orange); color: #fff; }
+.btnDanger { color: var(--c-error); border-color: var(--c-error); }
+.iconBtn {
+  font: inherit; background: none; border: none; cursor: pointer; color: var(--fg-muted);
+  min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center;
+}
+.iconBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── messages ───────────────────────────────────────────────────────────── */
+.muted { color: var(--fg-muted); font-size: var(--fs-13); margin: 0; }
+.error {
+  font-size: var(--fs-13); color: var(--c-error); margin: 0;
+  background: var(--c-error-bg); border: 1px solid var(--c-error); border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+.ok { font-size: var(--fs-13); color: var(--c-success); margin: 0; }
+.notice {
+  font-size: var(--fs-12); color: var(--fg-muted); line-height: 1.55; margin: 0;
+  background: var(--c-cream); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+.noticeTitle { display: inline-flex; align-items: center; gap: 6px; color: var(--c-ink); font-weight: var(--w-semibold); }
+
+/* ── tables ─────────────────────────────────────────────────────────────── */
+/* Wide tables scroll in their own box — the page body never scrolls sideways. */
+.tableWrap { overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: var(--fs-13); }
+.table th {
+  font-size: var(--fs-12); text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--fg-muted); font-weight: var(--w-semibold);
+  text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.table td { padding: 10px; border-bottom: 1px solid var(--line); color: var(--c-ink); vertical-align: middle; }
+.table tbody tr:last-child td { border-bottom: none; }
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.code { font-family: var(--font-mono); font-size: var(--fs-12); }
+.rowMuted td { color: var(--fg-muted); }
+.totalRow td { border-top: 2px solid var(--line-strong); font-weight: var(--w-semibold); }
+
+/* ── chips ──────────────────────────────────────────────────────────────── */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: var(--fs-12); padding: 3px 8px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--fg-muted); background: #fff; white-space: nowrap;
+}
+.chipHit { border-color: var(--c-orange); color: var(--c-burnt); }
+.chipLocked { border-color: var(--line-strong); color: var(--fg-soft); background: var(--bg-alt); }
+.chipOff { color: var(--fg-muted); background: var(--c-cream); }
+
+/* ── KPI totals strip ───────────────────────────────────────────────────── */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+}
+.tile {
+  background: var(--c-paper); border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: 2px;
+}
+.tileLabel { font-size: var(--fs-12); text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-muted); }
+.tileValue { font-family: var(--font-title); font-size: var(--fs-18); font-weight: var(--w-bold); color: var(--c-ink); font-variant-numeric: tabular-nums; }
+.tileHint { font-size: var(--fs-12); color: var(--fg-muted); }
+.tileStrong { border-color: var(--c-orange); }
+
+/* ── showroom block ─────────────────────────────────────────────────────── */
+.showroomHead {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: var(--space-3); flex-wrap: wrap;
+}
+.showroomName { font-size: var(--fs-14); font-weight: var(--w-semibold); color: var(--c-ink); margin: 0; }
+.showroomMeta { font-size: var(--fs-12); color: var(--fg-muted); display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* KPI detail, revealed under a row. Indented and quiet — it explains the number
+   above it, it is not a second table of record. */
+.detailCell { background: var(--c-cream); padding: 0 10px 10px 28px; }
+.detailList { list-style: none; margin: 0; padding: 8px 0 0; display: flex; flex-direction: column; gap: 4px; }
+.detailItem { display: flex; gap: var(--space-3); font-size: var(--fs-12); color: var(--fg-muted); }
+.detailItem strong { color: var(--c-ink); font-weight: var(--w-medium); }
+.detailAmount { margin-left: auto; font-variant-numeric: tabular-nums; }

@@ -15,12 +15,14 @@ import {
   Settings,
   Plus,
   BarChart3,
+  Coins,
   ExternalLink,
   type LucideIcon,
 } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow, type MfgCatalogCategory } from '../lib/queries';
 import { useStaff, isGlobalCurator, isPosSalesRole } from '../lib/staff';
+import { useHrAccess } from '../lib/houzs-perms';
 import { authedFetchRaw, IS_HOUZS } from '../lib/apiClient';
 import { useCart, cartHasSofa, cartHasMainNonSofa, type FlatConfigSnapshot } from '../state/cart';
 import { Topbar } from '../components/Topbar';
@@ -160,6 +162,10 @@ function buildCards(rows: MfgCatalogRow[]): CatalogCard[] {
 export const Catalog = () => {
   const catalog = useMfgCatalog();
   const { data: staff } = useStaff();
+  /* The OPEX section's own gate — the Houzs `scm.hr.read` key, not the POS role.
+     Cached for 5 minutes and shared with the route guard, so this costs one
+     /auth/me per session rather than one per catalogue paint. */
+  const { canRead: canReadHr } = useHrAccess();
   useMfgCatalogRealtime();
   const allCategories = useCategoriesAll();
 
@@ -431,6 +437,22 @@ export const Catalog = () => {
                 <Link to="/sales-analysis" className={styles.sideItem}>
                   <BarChart3 size={16} strokeWidth={1.75} />
                   <span className={styles.sideLabel}>Sales analysis</span>
+                </Link>
+              </>
+            )}
+
+            {/* OPEX — operating-expense tooling (Loo 2026-08-31). Its own
+                heading, NOT under Maintain, because it is gated differently:
+                Maintain keys off the POS role, this keys off the Houzs
+                permission `scm.hr.read`, which is what the /hr API actually
+                enforces. A super_admin without that key does not see it, and
+                someone who holds it does — which is the point. */}
+            {canReadHr && (
+              <>
+                <div className={styles.sideHeading}>OPEX</div>
+                <Link to="/opex/commission" className={styles.sideItem}>
+                  <Coins size={16} strokeWidth={1.75} />
+                  <span className={styles.sideLabel}>Commission</span>
                 </Link>
               </>
             )}

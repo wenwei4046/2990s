@@ -1,0 +1,398 @@
+// ----------------------------------------------------------------------------
+// OPEX ▸ Commission — what each salesperson earned over a date range.
+//
+// Every figure on this screen is computed SERVER-SIDE by the one commission
+// engine (Houzs scm/shared/hr-commission.ts) over the Sales Orders the POS
+// itself wrote. Nothing here re-derives a payout: this component formats and
+// arranges. That is deliberate — a second implementation of the arithmetic is
+// how a payslip and a report stop agreeing.
+//
+// TWO STATES A RANGE CAN BE IN, and the difference matters:
+//   · OPEN   — recomputed live from TODAY's rates on every load. Edit a rate and
+//              this range's figures move.
+//   · CLOSED — frozen. The rows are served from the snapshot taken at close, so
+//              a later rate edit cannot rewrite a payout somebody has approved.
+// The banner says which, because "why did last month change?" is otherwise
+// unanswerable.
+// ----------------------------------------------------------------------------
+
+import { useMemo, useState } from 'react';
+import {
+  AlertTriangle, ChevronDown, ChevronRight, Lock, LockOpen, RefreshCw,
+} from 'lucide-react';
+import { fmtDate } from '@2990s/shared';
+import {
+  useCloseHrPayout, useHrCommission, useReopenHrPayout,
+  type HrCommissionReport, type HrCommissionRow,
+} from '../../lib/hr-commission-queries';
+import { hrErrorMessage } from '../../lib/hr-wire';
+import { fmtBps, fmtSen } from '../../lib/commission-format';
+import styles from './Opex.module.css';
+
+/** First and last day of the CURRENT Malaysian month, as ISO dates.
+ *  Derived from the MY-shifted clock so a report opened at 1 a.m. on the 1st in
+ *  UTC+8 does not default to last month. */
+const currentMonthRange = (): { from: string; to: string } => {
+  const my = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  const y = my.getUTCFullYear();
+  const m = my.getUTCMonth();
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  return {
+    from: iso(new Date(Date.UTC(y, m, 1))),
+    // Day 0 of the next month is the last day of this one.
+    to: iso(new Date(Date.UTC(y, m + 1, 0))),
+  };
+};
+
+interface Totals {
+  goodsSen: number;
+  personalSen: number;
+  overrideSen: number;
+  kpiSen: number;
+  totalSen: number;
+  people: number;
+}
+
+const sumReport = (report: HrCommissionReport): Totals =>
+  report.showrooms.reduce<Totals>(
+    (acc, s) => {
+      for (const r of s.rows) {
+        acc.goodsSen += r.personalGoodsSen;
+        acc.personalSen += r.personalCommissionSen;
+        acc.overrideSen += r.overrideCommissionSen;
+        acc.kpiSen += r.itemKpiSen;
+        acc.totalSen += r.totalSen;
+        acc.people += 1;
+      }
+      return acc;
+    },
+    { goodsSen: 0, personalSen: 0, overrideSen: 0, kpiSen: 0, totalSen: 0, people: 0 },
+  );
+
+export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
+  const [draft, setDraft] = useState(currentMonthRange);
+  /* The APPLIED range, not the live fields: the query key is the gate, and a
+     multi-table payroll read must not re-run on every keystroke. */
+  const [applied, setApplied] = useState(currentMonthRange);
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const { data, isLoading, isFetching, error } = useHrCommission(applied.from, applied.to);
+  const closePayout = useCloseHrPayout();
+  const reopenPayout = useReopenHrPayout();
+
+  const totals = useMemo(() => (data ? sumReport(data) : null), [data]);
+  const rangeInvalid = draft.from > draft.to;
+
+  const runClose = async () => {
+    setActionError(null);
+    try {
+      await closePayout.mutateAsync({ from: applied.from, to: applied.to });
+    } catch (e) {
+      setActionError(hrErrorMessage(e));
+    }
+  };
+
+  const runReopen = async () => {
+    setActionError(null);
+    /* A reopen needs a stated reason — the server requires one, and it is what
+       later explains why an approved figure was allowed to move. */
+    const reason = window.prompt(
+      'Reopening a closed period lets its figures change again. Why is it being reopened?',
+    );
+    if (!reason || !reason.trim()) return;
+    try {
+      await reopenPayout.mutateAsync({ from: applied.from, to: applied.to, reason: reason.trim() });
+    } catch (e) {
+      setActionError(hrErrorMessage(e));
+    }
+  };
+
+  return (
+    <div className={styles.stack}>
+      {/* ── range picker ───────────────────────────────────────────────── */}
+      <div className={styles.card}>
+        <div className={styles.fieldGrid}>
+          <label className={styles.field}>
+            <span className={styles.label}>From (SO date)</span>
+            <input
+              type="date"
+              value={draft.from}
+              onChange={(e) => setDraft((d) => ({ ...d, from: e.target.value }))}
+            />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.label}>To (SO date, inclusive)</span>
+            <input
+              type="date"
+              value={draft.to}
+              onChange={(e) => setDraft((d) => ({ ...d, to: e.target.value }))}
+            />
+          </label>
+          <div className={styles.field}>
+            <span className={styles.label}>&nbsp;</span>
+            <div className={styles.actions}>
+              <button
+                type="button"
+                className={`${styles.btn} ${styles.btnPrimary}`}
+                disabled={rangeInvalid || isFetching}
+                onClick={() => { setActionError(null); setApplied(draft); }}
+              >
+                <RefreshCw size={16} strokeWidth={1.75} />
+                {isFetching ? 'Calculating…' : 'Calculate'}
+              </button>
+            </div>
+          </div>
+        </div>
+        {rangeInvalid && (
+          <p className={styles.error}>The From date is after the To date, so the range is empty.</p>
+        )}
+        <p className={styles.cardHint}>
+          Orders are counted by <strong>SO date</strong>. Cancelled, on-hold and draft orders earn
+          nothing. Delivery and service lines are never part of commission.
+        </p>
+      </div>
+
+      {isLoading && <p className={styles.muted}>Loading…</p>}
+      {error && <p className={styles.error}>{hrErrorMessage(error)}</p>}
+      {actionError && <p className={styles.error}>{actionError}</p>}
+
+      {data && totals && (
+        <>
+          {/* ── period lock ─────────────────────────────────────────────── */}
+          <div className={styles.card}>
+            <div className={styles.cardHead}>
+              <h2 className={styles.cardTitle}>
+                {data.closed ? <Lock size={16} strokeWidth={1.75} /> : <LockOpen size={16} strokeWidth={1.75} />}
+                {fmtDate(data.from)} – {fmtDate(data.to)}
+              </h2>
+              <span className={`${styles.chip} ${data.closed ? styles.chipLocked : ''}`}>
+                {data.closed ? `Closed · revision ${data.closed.revision}` : 'Open · recalculates live'}
+              </span>
+            </div>
+            <p className={styles.cardHint}>
+              {data.closed ? (
+                <>
+                  These figures are frozen as they stood when the period was closed
+                  {data.closed.closedByName ? ` by ${data.closed.closedByName}` : ''}
+                  {data.closed.closedAt ? ` on ${fmtDate(data.closed.closedAt)}` : ''}. Changing a rate
+                  now will not move them.
+                </>
+              ) : (
+                <>
+                  This period is open, so it is recalculated from the current rates every time it is
+                  loaded — editing a rate in Setup will change these figures. Close the period once
+                  the payout is approved.
+                </>
+              )}
+            </p>
+            {canManage && (
+              <div className={styles.actions}>
+                {data.closed ? (
+                  <button
+                    type="button"
+                    className={styles.btn}
+                    disabled={reopenPayout.isPending}
+                    onClick={() => void runReopen()}
+                  >
+                    <LockOpen size={16} strokeWidth={1.75} /> Reopen period
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className={styles.btn}
+                    disabled={closePayout.isPending || totals.people === 0}
+                    onClick={() => void runClose()}
+                  >
+                    <Lock size={16} strokeWidth={1.75} /> Close period
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ── company totals ──────────────────────────────────────────── */}
+          <div className={styles.tiles}>
+            <div className={styles.tile}>
+              <span className={styles.tileLabel}>Product sales</span>
+              <span className={styles.tileValue}>{fmtSen(totals.goodsSen)}</span>
+              <span className={styles.tileHint}>the base commission is paid on</span>
+            </div>
+            <div className={styles.tile}>
+              <span className={styles.tileLabel}>Revenue commission</span>
+              <span className={styles.tileValue}>{fmtSen(totals.personalSen)}</span>
+              <span className={styles.tileHint}>tiered % of product sales</span>
+            </div>
+            <div className={styles.tile}>
+              <span className={styles.tileLabel}>Manager override</span>
+              <span className={styles.tileValue}>{fmtSen(totals.overrideSen)}</span>
+              <span className={styles.tileHint}>
+                {data.overrideMode === 'chain' ? 'reporting chain' : 'whole showroom'}
+              </span>
+            </div>
+            <div className={styles.tile}>
+              <span className={styles.tileLabel}>KPI items</span>
+              <span className={styles.tileValue}>{fmtSen(totals.kpiSen)}</span>
+              <span className={styles.tileHint}>fixed amounts, not a %</span>
+            </div>
+            <div className={`${styles.tile} ${styles.tileStrong}`}>
+              <span className={styles.tileLabel}>Total payout</span>
+              <span className={styles.tileValue}>{fmtSen(totals.totalSen)}</span>
+              <span className={styles.tileHint}>
+                {totals.people} {totals.people === 1 ? 'salesperson' : 'salespeople'}
+              </span>
+            </div>
+          </div>
+
+          {/* ── per showroom ────────────────────────────────────────────── */}
+          {data.showrooms.length === 0 && (
+            <div className={styles.card}>
+              <p className={styles.muted}>
+                — No salesperson is on the commission scheme yet.
+              </p>
+              <p className={styles.cardHint}>
+                A person earns nothing here until they are added under
+                <strong> Setup ▸ Salespeople</strong>. Their orders are also left out of their
+                showroom&rsquo;s total, so register everyone who should earn before reading a period.
+              </p>
+            </div>
+          )}
+
+          {data.showrooms.map((sr) => (
+            <div key={sr.showroomId} className={styles.card}>
+              <div className={styles.showroomHead}>
+                <h2 className={styles.showroomName}>{sr.showroomName}</h2>
+                <span className={styles.showroomMeta}>
+                  Showroom product sales <strong>{fmtSen(sr.showroomGoodsSen)}</strong>
+                  <span className={`${styles.chip} ${sr.showroomKpiHit ? styles.chipHit : styles.chipOff}`}>
+                    {sr.showroomKpiHit ? 'Showroom target reached' : 'Showroom target not reached'}
+                  </span>
+                </span>
+              </div>
+
+              <div className={styles.tableWrap}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>Salesperson</th>
+                      <th>Level</th>
+                      <th className={styles.num}>Product sales</th>
+                      <th className={styles.num}>Rate</th>
+                      <th className={styles.num}>Revenue commission</th>
+                      <th className={styles.num}>Override</th>
+                      <th className={styles.num}>KPI items</th>
+                      <th className={styles.num}>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sr.rows.map((r) => (
+                      <PersonRows
+                        key={r.staffId}
+                        row={r}
+                        expanded={!!open[r.staffId]}
+                        onToggle={() => setOpen((o) => ({ ...o, [r.staffId]: !o[r.staffId] }))}
+                      />
+                    ))}
+                    {sr.rows.length === 0 && (
+                      <tr className={styles.rowMuted}>
+                        <td colSpan={8}>— Nobody on the scheme is assigned to this showroom.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+
+          {/* What the numbers above do and do not include. Stated on the screen
+              rather than in a handover note, because the single most expensive
+              question about a commission report is "does this figure include the
+              fabric upgrade?" */}
+          <p className={styles.notice}>
+            <span className={styles.noticeTitle}>
+              <AlertTriangle size={14} strokeWidth={1.75} /> How the revenue is split
+            </span>
+            <br />
+            <strong>Product sales</strong> is what the percentage is paid on. It already excludes
+            delivery and every service line, and it excludes the add-on amount of anything that
+            earned a KPI item — a flagged fabric upgrade pays its fixed KPI amount
+            <em> instead of </em>a percentage, never both. <strong>KPI items</strong> is the sum of
+            those fixed amounts. Total revenue and service revenue are not shown here: the
+            commission engine does not report them, and deriving them separately in this screen
+            would create a second set of figures that could disagree with the payout.
+          </p>
+        </>
+      )}
+    </div>
+  );
+};
+
+/** One salesperson: the figures row, plus the KPI breakdown when expanded. */
+const PersonRows = ({
+  row, expanded, onToggle,
+}: { row: HrCommissionRow; expanded: boolean; onToggle: () => void }) => {
+  const hasDetail = row.kpiDetail.length > 0 || (row.overrideDetail?.length ?? 0) > 0;
+  return (
+    <>
+      <tr>
+        <td>
+          {hasDetail ? (
+            <button type="button" className={styles.iconBtn} onClick={onToggle} aria-expanded={expanded}>
+              {expanded
+                ? <ChevronDown size={16} strokeWidth={1.75} />
+                : <ChevronRight size={16} strokeWidth={1.75} />}
+            </button>
+          ) : null}
+          {row.staffName || <span className={styles.code}>{row.staffId}</span>}
+        </td>
+        <td>{row.tier === 'manager' ? 'Manager' : 'Sales'}</td>
+        <td className={styles.num}>{fmtSen(row.personalGoodsSen)}</td>
+        <td className={styles.num}>{fmtBps(row.personalRateBps)}</td>
+        <td className={styles.num}>{fmtSen(row.personalCommissionSen)}</td>
+        <td className={styles.num}>
+          {row.overrideCommissionSen === 0 && row.tier !== 'manager'
+            ? '—'
+            : fmtSen(row.overrideCommissionSen)}
+          {/* A single override rate exists only in showroom mode; in chain mode
+              the override is a sum over levels of different rates on different
+              bases, so printing a blended one would be a figure nobody can
+              reconcile against a payslip. */}
+          {row.overrideRateBps !== null && row.overrideRateBps > 0 && (
+            <span className={styles.tileHint}> · {fmtBps(row.overrideRateBps)}</span>
+          )}
+        </td>
+        <td className={styles.num}>{row.itemKpiSen === 0 ? '—' : fmtSen(row.itemKpiSen)}</td>
+        <td className={styles.num}><strong>{fmtSen(row.totalSen)}</strong></td>
+      </tr>
+
+      {expanded && hasDetail && (
+        <tr>
+          <td className={styles.detailCell} colSpan={8}>
+            {row.kpiDetail.length > 0 && (
+              <ul className={styles.detailList}>
+                {row.kpiDetail.map((d) => (
+                  <li key={d.label} className={styles.detailItem}>
+                    <strong>{d.label}</strong>
+                    <span>{d.qty} × {fmtSen(d.bonusSen)}</span>
+                    <span className={styles.detailAmount}>{fmtSen(d.lineSen)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {(row.overrideDetail?.length ?? 0) > 0 && (
+              <ul className={styles.detailList}>
+                {row.overrideDetail!.map((d) => (
+                  <li key={d.level} className={styles.detailItem}>
+                    <strong>Level {d.level}</strong>
+                    <span>{fmtSen(d.goodsSen)} × {fmtBps(d.rateBps)}</span>
+                    <span className={styles.detailAmount}>{fmtSen(d.commissionSen)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+};

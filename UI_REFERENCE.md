@@ -275,6 +275,26 @@ These are intentional changes from the prototype's current state. Anything not o
 - The pad does not move when the dropdown opens; the panel is absolutely positioned over the page, because the pad is muscle memory.
 - Empty-roster and load-failure copy is unchanged.
 
+### §9 · POS Catalog sidebar — an OPEX section below Maintain
+
+**Status:** 2026-08-31, **pending Loo sign-off in the OPEX Commission PR** — flagged in the PR description.
+**Why it is not simply another Maintain row:** the two sections are gated by
+different systems, and merging them would make one of the two gates a lie.
+`Maintain` keys off the POS role (`isGlobalCurator`). `OPEX ▸ Commission` keys off
+the **Houzs permission key `scm.hr.read`**, which is what its API (`/api/scm/hr/*`)
+actually enforces — Loo, asked directly: "跟 Houzs 权限键一致". Putting the link
+under `Maintain` would show it to a super_admin who does not hold the key (the
+page then 403s), and hide it from someone who does.
+**What changed** (`apps/pos/src/pages/Catalog.tsx`):
+- A new `.sideHeading` reading **OPEX**, below `Maintain` and above the Honest
+  Pricing footer, holding one row: **Commission** (Lucide `Coins`, stroke 1.75).
+- The section renders only when the signed-in user holds `scm.hr.read`; the route
+  (`/opex/commission`) is guarded by `HrGate` on the same key, so a hand-typed URL
+  cannot bypass the hide.
+**What deliberately did NOT change:** the `Maintain` section, its four rows, its
+role gate, the rail's order above it, or the footer.
+
+
 ---
 
 ## What NOT to do
