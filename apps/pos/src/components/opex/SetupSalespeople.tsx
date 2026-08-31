@@ -20,20 +20,36 @@
 import { useMemo, useState } from 'react';
 import { Plus, Trash2, UserRound } from 'lucide-react';
 import {
-  useCommissionProfiles, useCommissionShowrooms, useCreateCommissionProfile,
+  useCommissionProfiles, useCreateCommissionProfile,
   useDeleteCommissionProfile, useUpdateCommissionProfile, type HrTier,
 } from '../../lib/commission-api';
 import { useAllStaff } from '../../lib/staff';
+import { useVenues } from '../../lib/so-maintenance/venues-queries';
 import { hrErrorMessage } from '../../lib/hr-wire';
 import styles from './Opex.module.css';
 
 export const SetupSalespeople = ({ canManage }: { canManage: boolean }) => {
   const { data: profiles, isLoading, error } = useCommissionProfiles();
-  /* Showrooms come from 2990's own table (Houzs's copy is empty); the staff
-     roster comes from Houzs, because a salesperson id on an order IS a Houzs
-     scm.staff.id. Both are fetched for every viewer — a read-only reader still
-     needs names rather than UUIDs. */
-  const { data: showrooms, isLoading: showroomsLoading } = useCommissionShowrooms();
+  /* ── ONE branch list, not two (Loo 2026-08-31) ─────────────────────────────
+     The branch a salesperson earns under is the SAME list the order form's
+     VENUE dropdown reads — `/venues`, maintained in SO Maintenance. It used to
+     be 2990's separate `showrooms` table, and the two had already drifted into
+     three names for one address: the commission screen said "Showroom KL", the
+     order form said "2990s PJ", and 2990's own venue list said "PJ Showroom",
+     all at 51 Jln Utara, PJS 12, Petaling Jaya.
+
+     Keeping two lists means a new branch has to be added twice and will drift
+     again, which is exactly what Loo asked to end ("确保和 venue 是一样的，
+     因为以后会有其他分行"). Adding a branch in SO Maintenance now makes it
+     assignable here, with no second step.
+
+     ⚠️ WHAT THIS DOES NOT CHANGE: commission still groups by the branch a
+     salesperson is ASSIGNED to, not by the venue stamped on each order. For
+     someone who works one branch those are the same thing; for a floater they
+     are not. Making the totals follow the order's venue is a different change
+     to the engine. */
+  const { data: venues, isLoading: showroomsLoading } = useVenues();
+  const showrooms = venues;
   const { data: allStaff, isLoading: staffLoading } = useAllStaff();
   const pickersLoading = showroomsLoading || staffLoading;
   const create = useCreateCommissionProfile();
@@ -51,6 +67,12 @@ export const SetupSalespeople = ({ canManage }: { canManage: boolean }) => {
     return m;
   }, [showrooms]);
 
+  /* A profile written before the branch list moved holds an id from the old
+     `showrooms` table, which no venue can match. Shown with its stored name and
+     flagged rather than silently blanked — the person still earns, and the row
+     is one re-pick away from being right. */
+  const unmatched = (id: string) => !showroomsLoading && !showroomName.has(id);
+
   /* Somebody already on the scheme must not appear in the picker: the server
      answers a duplicate with a 409, and offering the choice at all is how you
      get there. */
@@ -63,7 +85,7 @@ export const SetupSalespeople = ({ canManage }: { canManage: boolean }) => {
   const add = async () => {
     setAddError(null);
     if (!staffId) { setAddError('Pick the salesperson to add.'); return; }
-    if (!showroomId) { setAddError('Pick the showroom they earn under.'); return; }
+    if (!showroomId) { setAddError('Pick the branch they earn under.'); return; }
     try {
       /* The names are SNAPSHOTTED on write. There is nothing to join to — the
          staff row is in Houzs and the profile is here — and a payroll record
@@ -98,7 +120,9 @@ export const SetupSalespeople = ({ canManage }: { canManage: boolean }) => {
       </div>
       <p className={styles.cardHint}>
         Only the people listed here earn commission, and only their sales count toward a
-        showroom&rsquo;s target. Add everyone who should earn before reading a period.
+        branch&rsquo;s target. Add everyone who should earn before reading a period. The branch
+        list is the same one the order form&rsquo;s <strong>Venue</strong> dropdown reads — add a
+        new branch in SO Maintenance and it appears here.
       </p>
 
       <div className={styles.tableWrap}>
@@ -107,7 +131,7 @@ export const SetupSalespeople = ({ canManage }: { canManage: boolean }) => {
             <tr>
               <th>Salesperson</th>
               <th>Level</th>
-              <th>Showroom</th>
+              <th>Branch (venue)</th>
               <th>Status</th>
               {canManage && <th />}
             </tr>
@@ -134,9 +158,30 @@ export const SetupSalespeople = ({ canManage }: { canManage: boolean }) => {
                   )}
                 </td>
                 <td>
-                  {showroomName.get(p.showroomId)
-                    ?? p.showroomName
-                    ?? <span className={styles.code}>{p.showroomId}</span>}
+                  {canManage ? (
+                    <select
+                      value={showroomName.has(p.showroomId) ? p.showroomId : ''}
+                      disabled={update.isPending || showroomsLoading}
+                      onChange={(e) => void update.mutateAsync({
+                        id: p.id,
+                        showroomId: e.target.value,
+                        showroomName: showroomName.get(e.target.value) ?? '',
+                      })}
+                    >
+                      {unmatched(p.showroomId) && (
+                        <option value="">{p.showroomName || 'Not in the venue list'} — re-pick</option>
+                      )}
+                      {(showrooms ?? []).map((v) => (
+                        <option key={v.id} value={v.id}>{v.name}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    showroomName.get(p.showroomId) || p.showroomName
+                      || <span className={styles.code}>{p.showroomId}</span>
+                  )}
+                  {unmatched(p.showroomId) && (
+                    <> <span className={styles.chip}>not in the venue list</span></>
+                  )}
                 </td>
                 <td>
                   <span className={`${styles.chip} ${p.active ? styles.chipHit : styles.chipOff}`}>
@@ -205,7 +250,7 @@ export const SetupSalespeople = ({ canManage }: { canManage: boolean }) => {
               </select>
             </label>
             <label className={styles.field}>
-              <span className={styles.label}>Showroom</span>
+              <span className={styles.label}>Branch (venue)</span>
               <select
                 value={showroomId} disabled={pickersLoading}
                 onChange={(e) => setShowroomId(e.target.value)}
