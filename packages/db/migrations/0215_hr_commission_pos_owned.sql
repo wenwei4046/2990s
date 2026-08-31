@@ -22,6 +22,16 @@
 -- to join to. A snapshot also survives a rename, which for a payroll record is
 -- a feature — the payslip should say what it said when it was approved.
 --
+-- ⚠️ AMENDED SAME DAY: `showroom_id` now holds a VENUE id, not a showrooms id.
+-- Loo, on finding the commission screen saying "Showroom KL" while the order
+-- form said "2990s PJ" for one address: "确保和 venue 是一样的，因为以后会有其他
+-- 分行". The branch a salesperson earns under is now picked from the SAME
+-- `/venues` list the order form reads, so a new branch is added once instead of
+-- twice. The column keeps its name (renaming it would rewrite a live payroll
+-- table for a label); the FK is already gone, which is what made this possible.
+-- Rows written before the switch hold an old `showrooms` id and are shown
+-- flagged in the UI until they are re-picked.
+--
 -- ── WHY flag_type STOPS BEING AN ENUM ───────────────────────────────────────
 -- It needs a fourth value ('category' — one rule covering every item in a
 -- product category). `ALTER TYPE ... ADD VALUE` cannot be used in the same

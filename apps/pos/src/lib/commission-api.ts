@@ -153,21 +153,6 @@ export function useUpdateCommissionConfig() {
   });
 }
 
-/* ── pickers ──────────────────────────────────────────────────────────────── */
-
-/** Showrooms, from 2990's own table — Houzs's scm.showrooms is the vendored
- *  copy and is EMPTY there, which is why its HR module never had a usable
- *  showroom list. Every other picker (staff, products, fabrics, special add-ons)
- *  is live catalogue data the POS already loads from Houzs. */
-export function useCommissionShowrooms() {
-  return useQuery({
-    queryKey: ['commission', 'showrooms'],
-    staleTime: 5 * 60_000,
-    queryFn: () => call<{ showrooms: Array<{ id: string; name: string }> }>('/pickers')
-      .then((r) => r.showrooms),
-  });
-}
-
 /* ── salespeople ──────────────────────────────────────────────────────────── */
 
 export function useCommissionProfiles() {
