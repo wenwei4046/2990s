@@ -298,6 +298,13 @@
   border-bottom: 1px solid var(--line-strong);
 }
 /* The group row sits ABOVE the column names, so it takes a lighter tint —
-   otherwise the two bands read as one thick slab. */
-.table thead tr:first-child th { background: color-mix(in oklab, var(--c-beige) 20%, transparent); }
-.table thead tr:first-child th:empty { background: transparent; }
+   otherwise the two bands read as one thick slab.
+   `:not(:last-child)` is load-bearing: in a table with ONE header row that row
+   is BOTH first and last, so without it this lighter rule won the cascade and
+   every single-header table (Salespeople, KPI items, override levels) got the
+   washed-out 20% tint instead of the band. Reported by Loo as "i want like
+   this", pointing at the Salespeople table. */
+.table thead tr:first-child:not(:last-child) th {
+  background: color-mix(in oklab, var(--c-beige) 20%, transparent);
+}
+.table thead tr:first-child:not(:last-child) th:empty { background: transparent; }
