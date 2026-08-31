@@ -65,7 +65,13 @@ const report = (over: Partial<CommissionReport> = {}): CommissionReport => ({
           personalCommissionCenti: 300_000,     // RM 3,000
           overrideRateBps: 0, overrideCommissionCenti: 0,
           itemKpiCenti: 15_000,                 // RM 150
-          kpiDetail: [{ label: 'BF — Bloom fabric', qty: 3, bonusCenti: 5_000, lineCenti: 15_000 }],
+          kpiDetail: [{
+            label: 'BF — Bloom fabric', qty: 3, bonusCenti: 5_000, lineCenti: 15_000,
+            orders: [
+              { docNo: '2990-SO-2608-070', qty: 2, lineCenti: 10_000 },
+              { docNo: '2990-SO-2608-068', qty: 1, lineCenti: 5_000 },
+            ],
+          }],
           totalCenti: 315_000,
         },
         {
@@ -206,6 +212,29 @@ describe('CommissionTab', () => {
 
     expect(screen.getByText('BF — Bloom fabric')).toBeInTheDocument();
     expect(screen.getByText('3 × RM 50.00')).toBeInTheDocument();
+  });
+
+  it('names the sales orders a KPI bonus came from', () => {
+    /* Loo 2026-08-31: a line reading "12 × RM 50" is not checkable until you can
+       see WHICH twelve. One order can contribute several units, so these are
+       per-order subtotals. */
+    mockReport(report());
+    render(<CommissionTab canManage />);
+    const row = screen.getByText('Scarlett').closest('tr')!;
+    fireEvent.click(within(row).getByRole('button'));
+
+    /* Scoped to each order's own line: RM 100 and RM 50 both appear elsewhere on
+       a busy report, and an unscoped match would pass on the wrong cell. */
+    const first = screen.getByText('2990-SO-2608-070').closest('li')!;
+    expect(within(first).getByText('2 × RM 50.00')).toBeInTheDocument();
+    expect(within(first).getByText('RM 100.00')).toBeInTheDocument();
+
+    const second = screen.getByText('2990-SO-2608-068').closest('li')!;
+    expect(within(second).getByText('1 × RM 50.00')).toBeInTheDocument();
+    expect(within(second).getByText('RM 50.00')).toBeInTheDocument();
+
+    // The per-order amounts add back to the flag's own line (RM 150).
+    expect(screen.getAllByText('RM 150.00').length).toBeGreaterThan(0);
   });
 
   it('refuses to calculate an inverted date range', () => {

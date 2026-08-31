@@ -115,9 +115,22 @@ export const compartmentOf = (itemCode: string): string | null => {
 
 /* ── the report ────────────────────────────────────────────────────────────── */
 
+/** One KPI rule's contribution to a person's pay, and the orders it came from.
+ *  Loo 2026-08-31: "我要它的 dropdown 这一边可以看到 Sales Order Number，这样我
+ *  知道它是哪一个 Sales Order" — a bonus of "12 × RM 50" is not checkable until
+ *  you can see WHICH twelve. */
+export interface CommissionKpiDetail {
+  label: string;
+  qty: number;
+  bonusCenti: number;
+  lineCenti: number;
+  /** The orders that earned it, newest doc_no first. */
+  orders: Array<{ docNo: string; qty: number; lineCenti: number }>;
+}
+
 export interface CommissionReportRow extends CommissionRow {
   staffName: string;
-  kpiDetail: Array<{ label: string; qty: number; bonusCenti: number; lineCenti: number }>;
+  kpiDetail: CommissionKpiDetail[];
 }
 
 export interface CommissionReportShowroom {
@@ -209,7 +222,12 @@ export function useCommissionReport(from: string, to: string) {
 
     const bonusByStaff = new Map<string, number>();
     const excludedByStaff = new Map<string, number>();
-    const detailByStaff = new Map<string, Map<string, CommissionReportRow['kpiDetail'][number]>>();
+    /* staff -> flag key -> the running total, plus a per-ORDER breakdown so the
+       screen can name the sales orders a bonus came from. */
+    type DetailAcc = Omit<CommissionKpiDetail, 'orders'> & {
+      orders: Map<string, { qty: number; lineCenti: number }>;
+    };
+    const detailByStaff = new Map<string, Map<string, DetailAcc>>();
     const unresolved = new Set<string>();
 
     if (activeFlags.length > 0) {
@@ -235,10 +253,21 @@ export function useCommissionReport(from: string, to: string) {
              that has to sum back to `bonus`. */
           for (const f of firingFlags(u, activeFlags)) {
             const key = `${f.flagType}:${f.ref}`;
-            const m = detailByStaff.get(sp) ?? new Map();
-            const prev = m.get(key) ?? { label: labelOf.get(key) ?? f.ref, qty: 0, bonusCenti: f.bonusCenti, lineCenti: 0 };
+            const m = detailByStaff.get(sp) ?? new Map<string, DetailAcc>();
+            const prev: DetailAcc = m.get(key) ?? {
+              label: labelOf.get(key) ?? f.ref,
+              qty: 0, bonusCenti: f.bonusCenti, lineCenti: 0,
+              orders: new Map(),
+            };
+            const earned = u.qty * f.bonusCenti;
             prev.qty += u.qty;
-            prev.lineCenti += u.qty * f.bonusCenti;
+            prev.lineCenti += earned;
+            /* Per order, so a "12 × RM 50" line can be traced to the twelve.
+               One order can contribute several units, hence the accumulate. */
+            const o = prev.orders.get(payload.docNo) ?? { qty: 0, lineCenti: 0 };
+            o.qty += u.qty;
+            o.lineCenti += earned;
+            prev.orders.set(payload.docNo, o);
             m.set(key, prev);
             detailByStaff.set(sp, m);
           }
@@ -316,7 +345,14 @@ export function useCommissionReport(from: string, to: string) {
       const rows: CommissionReportRow[] = computed.map((r) => ({
         ...r,
         staffName: nameOf.get(r.staffId) ?? '',
-        kpiDetail: [...(detailByStaff.get(r.staffId)?.values() ?? [])],
+        kpiDetail: [...(detailByStaff.get(r.staffId)?.values() ?? [])].map((d) => ({
+          label: d.label, qty: d.qty, bonusCenti: d.bonusCenti, lineCenti: d.lineCenti,
+          /* Newest first — doc numbers are date-ordered by construction
+             (2990-SO-YYMM-NNN), so a plain reverse sort is chronological. */
+          orders: [...d.orders.entries()]
+            .map(([docNo, v]) => ({ docNo, ...v }))
+            .sort((a, b) => b.docNo.localeCompare(a.docNo)),
+        })),
       }));
       // managers first, then sales; stable within tier.
       rows.sort((a, b) => (a.tier === 'manager' ? 0 : 1) - (b.tier === 'manager' ? 0 : 1));

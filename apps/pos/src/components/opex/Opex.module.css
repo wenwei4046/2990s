@@ -273,3 +273,31 @@
 @media (hover: hover) and (pointer: fine) {
   .table tbody tr:hover td { background: var(--c-cream); }
 }
+
+/* The orders behind one KPI line. Indented and quieter than the rule above
+   them — they explain that figure, they are not a second set of figures. */
+.detailOrders {
+  list-style: none;
+  margin: 2px 0 6px;
+  padding: 0 0 0 var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 1px solid var(--line);
+}
+.detailOrders .detailItem { font-size: var(--fs-12); }
+
+/* ── table header band ───────────────────────────────────────────────────── */
+/* Loo 2026-08-31: "再穿插多一个颜色，这样它才看起来比较像 table 一点… 比较
+   立体". A tan band off --c-beige (the brand's "packaging, blocks" colour — a
+   header IS a block), derived with color-mix rather than a new hex, and a
+   stronger rule under it so the head reads as a layer above the rows. */
+.table thead tr:last-child th {
+  background: color-mix(in oklab, var(--c-beige) 45%, transparent);
+  color: var(--c-ink);
+  border-bottom: 1px solid var(--line-strong);
+}
+/* The group row sits ABOVE the column names, so it takes a lighter tint —
+   otherwise the two bands read as one thick slab. */
+.table thead tr:first-child th { background: color-mix(in oklab, var(--c-beige) 20%, transparent); }
+.table thead tr:first-child th:empty { background: transparent; }
