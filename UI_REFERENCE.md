@@ -294,6 +294,25 @@ page then 403s), and hide it from someone who does.
 **What deliberately did NOT change:** the `Maintain` section, its four rows, its
 role gate, the rail's order above it, or the footer.
 
+**Amended 2026-08-31 — the period summary.** It shipped as eight
+identically-sized tiles in two rows of four; Loo: *"太千篇一律，没有层次感了"*.
+They are not eight independent numbers — both rows are part-to-whole
+(`Products + Service + KPI item = Total revenue`;
+`Commission + Override + KPI earned = Total payout`) — and the flat grid hid
+exactly that. Now two cards, each with its total as the headline, a 6px
+proportion bar, and the parts underneath with their share
+(`components/opex/SummaryCard.tsx`).
+- Tones are the EXISTING brand tokens — `--c-burnt` / `--c-beige` / `--c-orange`
+  — not a new ramp (contrast §7, which needed `--sa-c1..c5`). Orange sits on the
+  SMALLEST slice, so the accent still marks attention rather than filling area,
+  and the bar is a thin rule, never a block.
+- The payout card carries a 3px left rule in `--c-orange`: it holds the number
+  that actually gets paid.
+- A part that is not known renders "—" and is left OUT of the bar rather than
+  drawn as zero — a zero-width segment reads as "sold none of this", which is a
+  different statement. "…" while loading, so "not yet" and "cannot be derived"
+  never look the same on a payroll screen.
+
 
 ---
 

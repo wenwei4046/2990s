@@ -186,3 +186,90 @@
   min-height: 44px; cursor: pointer;
 }
 .toggleCell input { width: 18px; height: 18px; accent-color: var(--c-orange); }
+
+/* ── period summary ──────────────────────────────────────────────────────── */
+/* Replaces eight equally-weighted tiles (Loo 2026-08-31: "太千篇一律，没有层次
+   感了"). Each card is one headline + the parts it is made of, so the
+   part-to-whole relationship is the layout rather than arithmetic the reader
+   has to do. */
+.summaryRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: var(--space-4);
+}
+.summary {
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+/* The card carrying the number that actually gets paid. A left rule rather than
+   a fill — the brand is flat, and orange stays an accent. */
+.summaryLead { border-left: 3px solid var(--c-orange); }
+
+.summaryEyebrow {
+  font-size: var(--fs-12); text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--fg-muted); font-weight: var(--w-semibold);
+}
+.summaryHead { display: flex; flex-direction: column; gap: 1px; }
+.summaryHeadLabel { font-size: var(--fs-13); color: var(--fg-muted); }
+.summaryHeadValue {
+  font-family: var(--font-title); font-size: var(--fs-32); font-weight: var(--w-bold);
+  color: var(--c-ink); font-variant-numeric: tabular-nums; line-height: 1.1;
+}
+.summaryHeadHint { font-size: var(--fs-12); color: var(--fg-muted); }
+
+/* Proportion bar. A thin rule, never a block — see the card header. */
+.bar {
+  display: flex; gap: 2px; height: 6px;
+  border-radius: var(--radius-pill); overflow: hidden;
+}
+.barSeg { display: block; min-width: 2px; border-radius: var(--radius-pill); }
+
+/* Three tones, warm and in-brand. `c` is the accent and is deliberately on the
+   SMALLEST slice — the KPI amounts, the ones most often worth a second look. */
+.toneA { background: var(--c-burnt); }
+.toneB { background: var(--c-beige); }
+.toneC { background: var(--c-orange); }
+
+.partList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.part {
+  display: grid;
+  grid-template-columns: 10px 1fr auto auto;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.part:last-child { border-bottom: none; }
+.partDot { width: 8px; height: 8px; border-radius: 50%; align-self: center; }
+.partLabel {
+  font-size: var(--fs-13); color: var(--c-ink);
+  display: flex; flex-direction: column; gap: 1px; min-width: 0;
+}
+.partHint { font-size: var(--fs-12); color: var(--fg-muted); }
+.partShare {
+  font-size: var(--fs-12); color: var(--fg-muted);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.partValue {
+  font-size: var(--fs-14); color: var(--c-ink); font-weight: var(--w-medium);
+  font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 7.5rem; text-align: right;
+}
+
+/* The two column families answer different questions and "KPI" appears in both,
+   so a quiet rule separates them. On the header it also anchors the group
+   label over its own columns. */
+.groupStart { border-left: 1px solid var(--line); }
+
+/* The one figure that actually gets paid. */
+.payCell { font-weight: var(--w-semibold); color: var(--c-ink); }
+
+/* Row hover — 11 columns is a long way for an eye to travel. Pointer-only, so
+   it never sticks on a tablet after a tap. */
+@media (hover: hover) and (pointer: fine) {
+  .table tbody tr:hover td { background: var(--c-cream); }
+}
