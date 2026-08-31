@@ -427,7 +427,11 @@ hr.get('/commission', async (c) => {
         if (excluded > 0) kpiExcludedGoods.set(sp, (kpiExcludedGoods.get(sp) ?? 0) + excluded);
         if (bonus <= 0) continue;
         for (const f of flags) {
-          if (!kpiFlagFiresOnUnit(f, u)) continue;
+          /* The WHOLE flag list is load-bearing since engine v3: a category
+             rule suppressed by a product rule on the same unit paid nothing, so
+             it must not appear in the breakdown either — these detail lines have
+             to sum back to `bonus`. */
+          if (!kpiFlagFiresOnUnit(f, u, flags)) continue;
           const key = `${f.flagType}:${f.ref}`;
           if (!kpiDetail.has(sp)) kpiDetail.set(sp, new Map());
           const m = kpiDetail.get(sp)!;
