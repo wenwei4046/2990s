@@ -147,18 +147,45 @@ hr.get('/profiles', async (c) => {
   const gate = await requireHrView(c);
   if (!gate.ok) return gate.res;
   const supabase = c.get('supabase');
+  /* ⚠️ This used to embed `staff:staff(name, staff_code)`. A PostgREST embed
+     needs a FOREIGN KEY, and migration 0215 dropped the one on staff_id —
+     deliberately: the column now holds an id minted by HOUZS, whose rows are in
+     another database. The embed answered PGRST200 from that moment, which took
+     the whole profile list on the Backend HR page down. Replaced with a keyed
+     lookup, which is what the Houzs port already does and what any
+     cross-database reference forces. */
   const { data, error } = await supabase
     .from('hr_salesperson_profiles')
-    .select(`${PROFILE_SELECT}, staff:staff(name, staff_code)`)
+    .select(PROFILE_SELECT)
     .order('created_at', { ascending: true });
   if (error) return c.json({ error: 'fetch_failed', reason: error.message }, 500);
-  return c.json({ profiles: (data as ProfileRow[] ?? []).map(toProfileApi) });
+  const rows = (data as ProfileRow[]) ?? [];
+
+  /* Names for whatever ids happen to resolve LOCALLY. A profile pointing at a
+     Houzs staff row simply has no local match and renders without a name — this
+     route is the legacy Backend view, and the POS (which owns the scheme now)
+     reads the snapshotted name instead. */
+  const ids = [...new Set(rows.map((r) => r.staff_id).filter(Boolean))];
+  const named = new Map<string, { name: string; staff_code: string }>();
+  if (ids.length > 0) {
+    const lookup = await supabase.from('staff').select('id, name, staff_code').in('id', ids);
+    if (lookup.error) return c.json({ error: 'fetch_failed', reason: lookup.error.message }, 500);
+    for (const s of (lookup.data ?? []) as Array<{ id: string; name: string; staff_code: string }>) {
+      named.set(s.id, { name: s.name, staff_code: s.staff_code });
+    }
+  }
+  return c.json({
+    profiles: rows.map((r) => toProfileApi({ ...r, staff: named.get(r.staff_id) ?? null })),
+  });
 });
 
+/* Not `.uuid()` any more: since 0215/0216 both ids are opaque references to
+   rows in ANOTHER database, and Houzs mints venue ids as integers. A uuid
+   assertion here would refuse a legitimate branch. */
 const profileCreateSchema = z.object({
-  staffId: z.string().uuid(),
+  staffId: z.string().min(1),
   tier: z.enum(['sales', 'manager']),
-  showroomId: z.string().uuid(),
+  showroomId: z.string().min(1),
   active: z.boolean().default(true),
 });
 
@@ -184,7 +211,7 @@ hr.post('/profiles', async (c) => {
 
 const profilePatchSchema = z.object({
   tier: z.enum(['sales', 'manager']).optional(),
-  showroomId: z.string().uuid().optional(),
+  showroomId: z.string().min(1).optional(),
   active: z.boolean().optional(),
 });
 
