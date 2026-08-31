@@ -4,14 +4,14 @@
 // presentation derivations (sentences, panel-level rollups), not business math.
 
 import { AGE_BANDS, fmtCenti, fmtQty } from '@2990s/shared';
+import type { CustomerDemographicsSummary, SaCustomerRow } from '@2990s/shared';
 import type {
-  CustomerDemographicsSummary,
-  ModelRank,
-  MonthlyRow,
-  OverviewResult,
-  ProductsSection,
-  SaCustomerRow,
-} from '@2990s/shared';
+  WireCustomerRow,
+  WireModelRank,
+  WireMonthlyRow,
+  WireOverview,
+  WireProductsSection,
+} from './sales-analysis-queries';
 
 /** Below this, rates are noise — flag them. Single source (was duplicated in three files). */
 export const MIN_SAMPLE = 10;
@@ -19,30 +19,88 @@ export const MIN_SAMPLE = 10;
 /** Category enum (SOFA/MATTRESS/…) → sentence-case label for chips/titles. */
 export const catLabel = (c: string): string => (c ? c.charAt(0) + c.slice(1).toLowerCase() : c);
 
-/** margin / revenue × 100; null when revenue is not positive (render as '—'). */
-export const marginPct = (marginCenti: number, revenueCenti: number): number | null =>
-  revenueCenti > 0 ? (marginCenti / revenueCenti) * 100 : null;
+/** margin / revenue × 100.
+ *
+ *  Null (renders '—') when revenue is not positive OR when the server withheld
+ *  the margin. Houzs's gateSaFinance DELETES marginCenti for a caller without
+ *  the finance permission, so `undefined` here means "you may not see this",
+ *  which must never be shown as 0.0% — that reads as "sold at cost". */
+export const marginPct = (
+  marginCenti: number | undefined,
+  revenueCenti: number,
+): number | null =>
+  marginCenti === undefined || revenueCenti <= 0 ? null : (marginCenti / revenueCenti) * 100;
+
+/* ── Demographic capture ─────────────────────────────────────────────────────
+ *
+ * Houzs strips race / birthday / gender from every customer row it returns for
+ * this page. Rendering the panels anyway produced the screen Loo reported: a
+ * "Gender — Unknown 105 (100%)" card, a matching Race card, an age chart whose
+ * only bar is 'Unknown', and a Target match of 23% in which three of the four
+ * dimensions score 0% for want of data rather than for want of matching
+ * customers. That last one is not merely ugly — it is a wrong number to plan a
+ * campaign on.
+ *
+ * So the tabs ask this first and, when the answer is no, say so once, plainly,
+ * instead of drawing four charts of nothing.
+ *
+ * ⚠️ THE DATA IS NOT LOST, AND THIS IS FIXABLE FROM THE HOUZS SIDE.
+ * Their route header says "Houzs scm.customers has no race/birthday/gender
+ * columns", which is true and is also beside the point: the POS never wrote
+ * them there. It sends customerRace / customerBirthday / customerGender on the
+ * handover, and Houzs PERSISTS all three onto the SO header —
+ * mfg_sales_orders.customer_race / customer_birthday / customer_gender
+ * (mfg-sales-orders.ts, the create insert; it reads them straight back for the
+ * returning-customer prefill). The analytics route simply does not select them:
+ * its order read asks for `doc_no, …, customer_id, city, customer_state` and
+ * stops there. Adding the three columns to that one select, and folding them
+ * into the customer rows it builds, lights this whole tab up. Raised with Loo
+ * 2026-08-31. */
+export function demographicsCaptured(customers: ReadonlyArray<WireCustomerRow>): boolean {
+  return customers.some(
+    (c) => (c.race ?? null) !== null || (c.gender ?? null) !== null || (c.birthday ?? null) !== null,
+  );
+}
+
+/** Widen wire rows (optional demographics) to the shape `@2990s/shared` takes.
+ *  Total and lossless: an absent field becomes the null the pure functions
+ *  already treat as 'Unknown'. Keeps the shared math untouched. */
+export const toSaRows = (rows: ReadonlyArray<WireCustomerRow>): SaCustomerRow[] =>
+  rows.map((c) => ({
+    ...c,
+    race: c.race ?? null,
+    birthday: c.birthday ?? null,
+    gender: c.gender ?? null,
+    marginCenti: c.marginCenti ?? 0,
+  }));
 
 export interface PeriodTotals {
   revenueCenti: number;
-  marginCenti: number;
+  /** undefined when the server withheld margin — see marginPct. A partial sum
+   *  would silently understate the period, so one missing month poisons it. */
+  marginCenti: number | undefined;
   orders: number;
 }
 
 /** Totals for the selected period. `monthly` is always the full range (the API
  *  never filters the trend), so 'all' = Σ all rows; a single month = that row;
  *  a month with no row = all zeros. */
-export function periodTotals(monthly: ReadonlyArray<MonthlyRow>, period: string): PeriodTotals {
+export function periodTotals(
+  monthly: ReadonlyArray<WireMonthlyRow>,
+  period: string,
+): PeriodTotals {
   if (period === 'all') {
     let revenueCenti = 0;
     let marginCenti = 0;
+    let marginKnown = true;
     let orders = 0;
     for (const m of monthly) {
       revenueCenti += m.revenueCenti;
-      marginCenti += m.marginCenti;
+      if (m.marginCenti === undefined) marginKnown = false;
+      else marginCenti += m.marginCenti;
       orders += m.orders;
     }
-    return { revenueCenti, marginCenti, orders };
+    return { revenueCenti, marginCenti: marginKnown ? marginCenti : undefined, orders };
   }
   const row = monthly.find((m) => m.month === period);
   return row
@@ -54,23 +112,27 @@ export interface CategoryMixEntry {
   category: string;
   units: number;
   revenueCenti: number;
-  marginCenti: number;
+  /** undefined when the server withheld margin for ANY model in the category —
+   *  a partial sum would silently understate it. */
+  marginCenti: number | undefined;
 }
 
 /** Per-category rollup of the products section, sorted revenue desc. Product
  *  revenue only — delivery/service never enter ModelRank by construction. */
-export function categoryMix(products: ProductsSection): CategoryMixEntry[] {
+export function categoryMix(products: WireProductsSection): CategoryMixEntry[] {
   const out: CategoryMixEntry[] = [];
   for (const [category, models] of Object.entries(products.byCategory)) {
     let units = 0;
     let revenueCenti = 0;
     let marginCenti = 0;
+    let marginKnown = true;
     for (const m of models) {
       units += m.units;
       revenueCenti += m.revenueCenti;
-      marginCenti += m.marginCenti;
+      if (m.marginCenti === undefined) marginKnown = false;
+      else marginCenti += m.marginCenti;
     }
-    out.push({ category, units, revenueCenti, marginCenti });
+    out.push({ category, units, revenueCenti, marginCenti: marginKnown ? marginCenti : undefined });
   }
   return out.sort((a, b) => b.revenueCenti - a.revenueCenti || a.category.localeCompare(b.category));
 }
@@ -93,8 +155,8 @@ export function bandedAges(
 
 /** The single best-selling model across all categories: max units, tie revenue
  *  desc, tie modelName asc. Null when there are no models at all. */
-export function topModel(products: ProductsSection): ModelRank | null {
-  let best: ModelRank | null = null;
+export function topModel(products: WireProductsSection): WireModelRank | null {
+  let best: WireModelRank | null = null;
   for (const models of Object.values(products.byCategory)) {
     for (const m of models) {
       if (
@@ -114,7 +176,7 @@ export function topModel(products: ProductsSection): ModelRank | null {
 /** Revenue share of returning customers: Σ ltv where isReturning over Σ ltv.
  *  Null when total ltv is 0 (nothing to take a share of). */
 export function returningRevenueShare(
-  customers: ReadonlyArray<SaCustomerRow>,
+  customers: ReadonlyArray<{ ltvCenti: number; isReturning: boolean }>,
 ): { pct: number; revenueCenti: number } | null {
   let total = 0;
   let returning = 0;
@@ -163,10 +225,10 @@ export function typicalBuyer(summary: CustomerDemographicsSummary): string | nul
 }
 
 export interface OverviewInsightArgs {
-  ov: OverviewResult;
-  monthly: ReadonlyArray<MonthlyRow>;
-  products: ProductsSection;
-  customers: ReadonlyArray<SaCustomerRow>;
+  ov: WireOverview;
+  monthly: ReadonlyArray<WireMonthlyRow>;
+  products: WireProductsSection;
+  customers: ReadonlyArray<WireCustomerRow>;
   period: string;
 }
 

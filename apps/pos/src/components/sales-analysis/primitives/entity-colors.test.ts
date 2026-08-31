@@ -15,13 +15,13 @@ describe('entityColor', () => {
     expect(entityColor('race', 'Others')).toBe(SA_HEX.c3);
     expect(entityColor('gender', 'Male')).toBe(SA_HEX.c4);
     expect(entityColor('gender', 'Female')).toBe(SA_HEX.c1);
-    expect(entityColor('newReturning', 'New')).toBe(SA_HEX.c4);
+    expect(entityColor('newReturning', 'New')).toBe(SA_HEX.c3);
     expect(entityColor('newReturning', 'Returning')).toBe(SA_HEX.c1);
     expect(entityColor('category', 'SOFA')).toBe(SA_HEX.c1);
     expect(entityColor('category', 'ACCESSORY')).toBe(SA_HEX.c4);
   });
 
-  it('unexpected keys fall back to the warm charcoal', () => {
+  it('unexpected keys fall back to the quiet soft grey', () => {
     expect(entityColor('race', 'Eurasian')).toBe(SA_HEX.c5);
     expect(entityColor('category', 'SERVICE')).toBe(SA_HEX.c5);
   });

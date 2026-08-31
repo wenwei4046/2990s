@@ -9,7 +9,9 @@ interface MiniColumnsProps {
   slotWidth?: number;
   /** Printed above the column only when set AND slotWidth >= 40. */
   valueFormatter?: (v: number) => string;
-  /** Optional overlay series, same length/scale as data values. */
+  /** Optional overlay series, same length/scale as data values. Pass undefined
+   *  (not an array of zeros) when the series is unavailable — a flat zero line
+   *  reads as "there was none", which is a different claim. */
   secondary?: number[];
   /** That column fills var(--sa-emph); others var(--sa-c1). */
   emphasizeLabel?: string | null;
@@ -112,13 +114,13 @@ export const MiniColumns = ({
                   width={secondaryW}
                   height={secH}
                   rx={2}
-                  fill="var(--sa-c3)"
+                  fill="var(--sa-c2)"
                 />
               )}
               {sec != null && sec < 0 && (
                 // Below-baseline tick so a negative month reads differently
                 // from a zero one; the exact value lives in caption/table.
-                <rect x={secX} y={height + 1.5} width={secondaryW} height={3} rx={1.5} fill="var(--sa-c3)" />
+                <rect x={secX} y={height + 1.5} width={secondaryW} height={3} rx={1.5} fill="var(--sa-c2)" />
               )}
               {showValues && valueFormatter != null && (
                 <text
@@ -126,7 +128,7 @@ export const MiniColumns = ({
                   y={y - 4}
                   textAnchor="middle"
                   fontSize={12}
-                  fill="#6b6b6b"
+                  fill="var(--fg-muted)"
                 >
                   {valueFormatter(d.value)}
                 </text>
@@ -146,7 +148,7 @@ export const MiniColumns = ({
                   y={height + 28}
                   textAnchor="middle"
                   fontSize={12}
-                  fill="#6b6b6b"
+                  fill="var(--fg-muted)"
                 >
                   {d.sub}
                 </text>

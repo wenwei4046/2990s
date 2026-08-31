@@ -1,13 +1,19 @@
-/* OverviewTab — layout + tab-specific chrome for the Overview tab (spec §1).
+/* OverviewTab — layout + tab-specific chrome.
    OWNERSHIP: this tab styles ONLY from this file; primitives style from
-   SaShared.module.css (shared table classes reused, grid columns owned here). */
+   SaShared.module.css (shared table + summary-card classes reused, grid
+   columns owned here). Colours come from tokens only — see the SaShared
+   header for why. */
 
-/* ── InsightStrip ─────────────────────────────────────────────────────────── */
+/* ── InsightStrip ─────────────────────────────────────────────────────────
+   The page's one sentence. On cream with a burnt left rule rather than in yet
+   another white box — it is a caption for everything below it, not a fifth
+   card competing with them. */
 
 .insight {
-  background: #fff;
+  background: var(--c-cream);
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+  border-left: 3px solid var(--c-burnt);
+  border-radius: var(--radius-sm);
   padding: var(--space-3) var(--space-4);
   display: flex;
   flex-wrap: wrap;
@@ -16,34 +22,27 @@
   font-size: var(--fs-14);
   color: var(--c-ink);
 }
-.insightLead {
-  font-weight: 600;
-}
-.insightSep {
-  color: #6b6b6b;
-}
+.insightLead { font-weight: var(--w-semibold); }
+.insightSep { color: var(--fg-soft); }
 
-/* ── KPI strip ────────────────────────────────────────────────────────────── */
+/* ── KPI strip ────────────────────────────────────────────────────────────
+   Five tiles, not six, and demoted below the two summary cards: these answer
+   "what shape were the orders", which is a smaller question than "what did we
+   make". auto-fit rather than a fixed count so nothing is crushed on a tablet. */
 
 .kpis {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: var(--space-3);
 }
 
-/* ── Two-column panel grid ────────────────────────────────────────────────── */
+/* ── Trend + customers ────────────────────────────────────────────────────── */
 
 .grid {
   display: grid;
-  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
-  gap: var(--space-3);
+  grid-template-columns: minmax(0, 7fr) minmax(0, 4fr);
+  gap: var(--space-4);
   align-items: start;
-}
-.rightCol {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
 }
 
 /* ── Monthly revenue panel ────────────────────────────────────────────────── */
@@ -51,89 +50,78 @@
 .chartLegend {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  margin-top: var(--space-2);
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
   font-size: var(--fs-12);
-  color: #6b6b6b;
+  color: var(--fg-muted);
 }
-.legendItem {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.legendDot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex: none;
-}
+.legendItem { display: inline-flex; align-items: center; gap: 6px; }
+.legendDot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.legendSpacer { flex: 1 1 auto; }
+.legendNote { color: var(--fg-soft); }
+
 .inspectCaption {
-  margin: var(--space-2) 0 0;
+  margin: 0;
   font-size: var(--fs-13);
   color: var(--c-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.tableBox {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #fff;
+  margin-top: var(--space-2);
 }
 .monthlyCols {
   display: grid;
   grid-template-columns: 1fr 0.7fr 1fr 1fr 0.8fr;
   column-gap: var(--space-2);
 }
-.footNote {
-  margin: var(--space-2) 0 0;
-  font-size: var(--fs-12);
-  color: #6b6b6b;
-}
 
-/* ── Product mix / Customers panels ───────────────────────────────────────── */
+/* ── Customers panel ──────────────────────────────────────────────────────
+   Three aligned figures instead of one run-on sentence — the same device the
+   Products tab uses for its category facts, so the two tabs read alike. */
 
-.subNote {
-  margin: var(--space-2) 0 0;
-  font-size: var(--fs-12);
-  color: #6b6b6b;
-}
-.footLink {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 44px;
-  padding: 0;
-  font: inherit;
-  font-size: var(--fs-13);
-  color: var(--c-accent, #b06a3b);
-  background: none;
-  border: none;
-  cursor: pointer;
-}
-.custLine {
+.custFacts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
   margin: 0;
-  font-size: var(--fs-14);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+.custFact { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.custFact dt {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  text-transform: uppercase;
+  letter-spacing: var(--tk-wide);
+  color: var(--fg-muted);
+}
+.custFact dd {
+  margin: 0;
+  font-family: var(--font-title);
+  font-size: var(--fs-18);
+  font-weight: var(--w-bold);
   color: var(--c-ink);
+  font-variant-numeric: tabular-nums;
 }
+
+.barBlock { display: flex; flex-direction: column; gap: var(--space-2); }
 .barLabel {
-  margin: var(--space-3) 0 var(--space-1);
-  font-size: var(--fs-12);
-  color: #6b6b6b;
-}
-.mutedLine {
-  margin: var(--space-2) 0 0;
-  font-size: var(--fs-13);
-  color: #6b6b6b;
-}
-
-/* ── Empty states ─────────────────────────────────────────────────────────── */
-
-.muted {
   margin: 0;
-  font-size: var(--fs-13);
-  color: #6b6b6b;
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  text-transform: uppercase;
+  letter-spacing: var(--tk-wide);
+  color: var(--fg-muted);
 }
 
 /* ── Responsive collapse ──────────────────────────────────────────────────── */
 
 @media (max-width: 900px) {
-  .kpis {
-    grid-template-columns: repeat(3, 1fr);
-  }
-  .grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .custFacts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }

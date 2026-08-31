@@ -12,13 +12,16 @@ import {
   bandedAges,
   catLabel,
   categoryMix,
+  demographicsCaptured,
   marginPct,
   overviewInsights,
   periodTotals,
   returningRevenueShare,
+  toSaRows,
   topModel,
   typicalBuyer,
 } from './sales-analysis-derive';
+import type { WireCustomerRow } from './sales-analysis-queries';
 
 const AS_OF = '2026-07-14';
 
@@ -90,6 +93,44 @@ describe('marginPct', () => {
     expect(marginPct(2500, 0)).toBeNull();
     expect(marginPct(0, 0)).toBeNull();
   });
+  /* Houzs's gateSaFinance DELETES marginCenti for a non-finance caller. That is
+     "you may not see this", not "this sold at cost" — 0.0% would be a lie. */
+  it('returns null when the server withheld the margin', () => {
+    expect(marginPct(undefined, 10000)).toBeNull();
+  });
+});
+
+describe('demographicsCaptured', () => {
+  const wire = (over: Partial<WireCustomerRow> = {}): WireCustomerRow => ({
+    ...cust(),
+    ...over,
+  });
+
+  /* The exact shape Houzs ships: the three keys are ABSENT, not null. */
+  it('is false when the backend omits race / birthday / gender entirely', () => {
+    const { race: _r, birthday: _b, gender: _g, ...noDemo } = cust();
+    expect(demographicsCaptured([noDemo, noDemo])).toBe(false);
+  });
+  it('is false when every row has them as explicit nulls', () => {
+    expect(demographicsCaptured([wire(), wire()])).toBe(false);
+  });
+  it('is true as soon as ONE row carries any one of the three', () => {
+    expect(demographicsCaptured([wire(), wire({ gender: 'Female' })])).toBe(true);
+    expect(demographicsCaptured([wire({ race: 'Chinese' })])).toBe(true);
+    expect(demographicsCaptured([wire({ birthday: '1990-01-01' })])).toBe(true);
+  });
+  it('is false for no customers at all', () => {
+    expect(demographicsCaptured([])).toBe(false);
+  });
+});
+
+describe('toSaRows', () => {
+  it('widens absent demographic keys to the nulls the shared math expects', () => {
+    const { race: _r, birthday: _b, gender: _g, marginCenti: _m, ...noDemo } = cust();
+    expect(toSaRows([noDemo])[0]).toMatchObject({
+      race: null, birthday: null, gender: null, marginCenti: 0,
+    });
+  });
 });
 
 describe('periodTotals', () => {
@@ -108,6 +149,14 @@ describe('periodTotals', () => {
   });
   it('handles an empty monthly array', () => {
     expect(periodTotals([], 'all')).toEqual({ revenueCenti: 0, marginCenti: 0, orders: 0 });
+  });
+  /* ONE withheld month poisons the sum: a partial total would understate the
+     period while looking like a complete figure. */
+  it('reports margin as undefined when any month withheld it', () => {
+    const { marginCenti: _drop, ...gated } = month({ month: '2026-07', orders: 1, revenueCenti: 90_00 });
+    expect(periodTotals([...monthly, gated], 'all')).toEqual({
+      revenueCenti: 390_00, marginCenti: undefined, orders: 6,
+    });
   });
 });
 
@@ -129,6 +178,12 @@ describe('categoryMix', () => {
   });
   it('returns [] for an empty products section', () => {
     expect(categoryMix({ byCategory: {} })).toEqual([]);
+  });
+  it('reports margin as undefined when any model in the category withheld it', () => {
+    const { marginCenti: _drop, ...gated } = model({ units: 1, revenueCenti: 40_00 });
+    expect(categoryMix({ byCategory: { SOFA: [model({ units: 2, revenueCenti: 50_00, marginCenti: 10_00 }), gated] } })).toEqual([
+      { category: 'SOFA', units: 3, revenueCenti: 90_00, marginCenti: undefined },
+    ]);
   });
 });
 
