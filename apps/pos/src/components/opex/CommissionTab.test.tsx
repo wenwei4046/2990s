@@ -7,81 +7,75 @@ import '@testing-library/jest-dom/vitest';
 // vitest runs with globals:false, so RTL's automatic cleanup never registers.
 afterEach(cleanup);
 
-import type { HrCommissionReport } from '../../lib/hr-commission-queries';
+import type { CommissionReport } from '../../lib/commission-engine';
+import type { PayoutPeriod } from '../../lib/commission-api';
+import type { SalespersonRevenue } from '../../lib/commission-revenue';
 
-/* The whole data layer is mocked. This file is about what the SCREEN says given
-   a report — the arithmetic that produced the report is the server's, and is
-   tested where it lives (Houzs scm/shared/hr-commission.test.ts). What is worth
-   pinning here is the part a component can get wrong on its own: totalling the
-   rows, telling an open period from a closed one, and explaining an empty
-   scheme instead of printing a confident RM 0. */
-const useHrCommission = vi.fn();
-vi.mock('../../lib/hr-commission-queries', () => ({
-  useHrCommission: (...a: unknown[]) => useHrCommission(...a),
-  useCloseHrPayout: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useReopenHrPayout: () => ({ mutateAsync: vi.fn(), isPending: false }),
+/* The data layer is mocked; the RULES it feeds (splitForRow) run for real. This
+   file is about what the SCREEN says given a report — the arithmetic that
+   produced it is @2990s/shared/hr-commission, tested where it lives. What is
+   worth pinning here is what a component can get wrong on its own: totalling
+   the rows, telling an open period from a closed one, surfacing a warning
+   instead of a confident number, and never showing a payout it cannot stand
+   behind. */
+const useCommissionReport = vi.fn();
+vi.mock('../../lib/commission-engine', () => ({
+  useCommissionReport: (...a: unknown[]) => useCommissionReport(...a),
 }));
 
-/* The revenue fold's FETCH is mocked; its RULES (lib/commission-revenue.ts) run
-   for real, so these tests exercise the same splitForRow the page ships. */
+const closeMutate = vi.fn();
+vi.mock('../../lib/commission-api', () => ({
+  useClosePayout: () => ({ mutateAsync: closeMutate, isPending: false }),
+  useReopenPayout: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}));
+
 const useCommissionRevenue = vi.fn();
 vi.mock('../../lib/commission-revenue-queries', () => ({
   useCommissionRevenue: (...a: unknown[]) => useCommissionRevenue(...a),
 }));
 
-import type { SalespersonRevenue } from '../../lib/commission-revenue';
 import { CommissionTab } from './CommissionTab';
 
-const report = (over: Partial<HrCommissionReport> = {}): HrCommissionReport => ({
+const report = (over: Partial<CommissionReport> = {}): CommissionReport => ({
   from: '2026-08-01',
   to: '2026-08-31',
   config: {
     baseBps: 100,
-    personalKpiThresholdSen: 10_000_000,
+    personalKpiThresholdCenti: 10_000_000,
     personalKpiBonusBps: 50,
-    showroomKpiThresholdSen: 40_000_000,
+    showroomKpiThresholdCenti: 40_000_000,
     showroomKpiBonusBps: 50,
     overrideBaseBps: 50,
     overrideKpiBonusBps: 50,
     overrideMode: 'showroom',
   },
-  overrideMode: 'showroom',
-  closed: null,
-  overrideLevels: [],
+  warnings: [],
+  totalCenti: 565_000,
   showrooms: [
     {
       showroomId: 'kl',
       showroomName: 'Showroom KL',
-      showroomGoodsSen: 30_000_000,
+      showroomGoodsCenti: 30_000_000,
       showroomKpiHit: false,
       rows: [
         {
-          staffId: 's1',
-          staffName: 'Scarlett',
-          tier: 'sales',
-          personalGoodsSen: 20_000_000, // RM 200,000
+          staffId: 's1', staffName: 'Scarlett', tier: 'sales',
+          personalGoodsCenti: 20_000_000,       // RM 200,000
           personalRateBps: 150,
-          personalCommissionSen: 300_000, // RM 3,000
-          overrideRateBps: 0,
-          overrideCommissionSen: 0,
-          itemKpiSen: 15_000, // RM 150
-          kpiDetail: [
-            { label: 'BF — Bloom fabric', qty: 3, bonusSen: 5_000, lineSen: 15_000 },
-          ],
-          totalSen: 315_000,
+          personalCommissionCenti: 300_000,     // RM 3,000
+          overrideRateBps: 0, overrideCommissionCenti: 0,
+          itemKpiCenti: 15_000,                 // RM 150
+          kpiDetail: [{ label: 'BF — Bloom fabric', qty: 3, bonusCenti: 5_000, lineCenti: 15_000 }],
+          totalCenti: 315_000,
         },
         {
-          staffId: 's2',
-          staffName: 'Aiman',
-          tier: 'manager',
-          personalGoodsSen: 10_000_000,
+          staffId: 's2', staffName: 'Aiman', tier: 'manager',
+          personalGoodsCenti: 10_000_000,
           personalRateBps: 100,
-          personalCommissionSen: 100_000,
-          overrideRateBps: 50,
-          overrideCommissionSen: 150_000,
-          itemKpiSen: 0,
-          kpiDetail: [],
-          totalSen: 250_000,
+          personalCommissionCenti: 100_000,
+          overrideRateBps: 50, overrideCommissionCenti: 150_000,
+          itemKpiCenti: 0, kpiDetail: [],
+          totalCenti: 250_000,
         },
       ],
     },
@@ -89,17 +83,20 @@ const report = (over: Partial<HrCommissionReport> = {}): HrCommissionReport => (
   ...over,
 });
 
-const mockReport = (data: HrCommissionReport | undefined, extra: Record<string, unknown> = {}) => {
-  useHrCommission.mockReturnValue({
-    data, isLoading: false, isFetching: false, error: null, ...extra,
+const mockReport = (
+  data: CommissionReport | null,
+  extra: { closed?: PayoutPeriod | null; isLoading?: boolean; error?: unknown } = {},
+) => {
+  useCommissionReport.mockReturnValue({
+    report: data, closed: null, isLoading: false, error: null, ...extra,
   });
 };
 
-/* Scarlett: RM 200,000 of goods, of which the engine paid on 200,000 — so no
-   KPI exclusion — plus RM 500 of service. Aiman: RM 100,000 goods, RM 100 service. */
+/* Scarlett: RM 200,000 goods (nothing excluded) + RM 500 service.
+   Aiman: RM 100,000 goods + RM 100 service. */
 const REVENUE: Record<string, SalespersonRevenue> = {
-  s1: { totalSen: 20_050_000, goodsSen: 20_000_000, goodsKnown: true, orders: 4 },
-  s2: { totalSen: 10_010_000, goodsSen: 10_000_000, goodsKnown: true, orders: 2 },
+  s1: { totalCenti: 20_050_000, goodsCenti: 20_000_000, goodsKnown: true, orders: 4 },
+  s2: { totalCenti: 10_010_000, goodsCenti: 10_000_000, goodsKnown: true, orders: 2 },
 };
 
 const mockRevenue = (
@@ -107,28 +104,29 @@ const mockRevenue = (
   extra: Record<string, unknown> = {},
 ) => {
   useCommissionRevenue.mockReturnValue({
-    data: byStaff ? { byStaff: new Map(Object.entries(byStaff)), truncated: false } : undefined,
+    data: byStaff
+      ? { byStaff: new Map(Object.entries(byStaff)), orders: [], truncated: false }
+      : undefined,
     isLoading: false, isFetching: false, error: null, ...extra,
   });
 };
 
-beforeEach(() => { mockRevenue(); });
+beforeEach(() => { mockRevenue(); closeMutate.mockReset(); });
 
 describe('CommissionTab', () => {
   it('totals every row across the company, not just the first showroom', () => {
     const two = report({
+      totalCenti: 620_000,
       showrooms: [
         ...report().showrooms,
         {
-          showroomId: 'pj',
-          showroomName: 'Showroom PJ',
-          showroomGoodsSen: 5_000_000,
-          showroomKpiHit: false,
+          showroomId: 'pj', showroomName: 'Showroom PJ',
+          showroomGoodsCenti: 5_000_000, showroomKpiHit: false,
           rows: [{
             staffId: 's3', staffName: 'Wei', tier: 'sales',
-            personalGoodsSen: 5_000_000, personalRateBps: 100,
-            personalCommissionSen: 50_000, overrideRateBps: 0, overrideCommissionSen: 0,
-            itemKpiSen: 5_000, kpiDetail: [], totalSen: 55_000,
+            personalGoodsCenti: 5_000_000, personalRateBps: 100,
+            personalCommissionCenti: 50_000, overrideRateBps: 0, overrideCommissionCenti: 0,
+            itemKpiCenti: 5_000, kpiDetail: [], totalCenti: 55_000,
           }],
         },
       ],
@@ -136,12 +134,9 @@ describe('CommissionTab', () => {
     mockReport(two);
     render(<CommissionTab canManage />);
 
-    // 200,000 + 100,000 + 50,000 = RM 350,000 of product sales.
-    expect(screen.getByText('RM 350,000.00')).toBeInTheDocument();
-    // 3,000 + 1,000 + 500 = RM 4,500 revenue commission.
-    expect(screen.getByText('RM 4,500.00')).toBeInTheDocument();
-    // 315,000 + 250,000 + 55,000 sen = RM 6,200 total payout.
-    expect(screen.getByText('RM 6,200.00')).toBeInTheDocument();
+    expect(screen.getByText('RM 350,000.00')).toBeInTheDocument(); // product sales
+    expect(screen.getByText('RM 4,500.00')).toBeInTheDocument();   // revenue commission
+    expect(screen.getByText('RM 6,200.00')).toBeInTheDocument();   // total payout
     expect(screen.getByText(/3 salespeople/)).toBeInTheDocument();
   });
 
@@ -149,22 +144,33 @@ describe('CommissionTab', () => {
     mockReport(report());
     render(<CommissionTab canManage />);
     expect(screen.getByText(/Open · recalculates live/)).toBeInTheDocument();
-    expect(screen.getByText(/editing a rate in Setup will change these figures/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Close period/ })).toBeInTheDocument();
   });
 
+  it('freezes the computed rows when a period is closed', () => {
+    /* Commission is computed in the POS, so a bare range would leave the server
+       to recompute from inputs it cannot read. What is stored is a record of
+       what the approver was looking at. */
+    mockReport(report());
+    render(<CommissionTab canManage />);
+    fireEvent.click(screen.getByRole('button', { name: /Close period/ }));
+    expect(closeMutate).toHaveBeenCalledWith(expect.objectContaining({
+      from: '2026-08-01', to: '2026-08-31', totalCenti: 565_000,
+    }));
+    expect((closeMutate.mock.calls[0]![0] as { rows: unknown[] }).rows).toHaveLength(2);
+  });
+
   it('shows a closed period as frozen, and offers to reopen it', () => {
-    mockReport(report({
+    mockReport(report(), {
       closed: {
         id: 'p1', from: '2026-08-01', to: '2026-08-31', revision: 2, status: 'CLOSED',
-        engineVersion: 'v2', totalSen: 565_000, rowCount: 2,
+        engineVersion: 'v3', totalCenti: 565_000, rowCount: 2, rows: [],
         closedByName: 'Loo', closedAt: '2026-09-01T02:00:00Z',
         reopenedByName: null, reopenedAt: null, reopenReason: null,
       },
-    }));
+    });
     render(<CommissionTab canManage />);
     expect(screen.getByText(/Closed · revision 2/)).toBeInTheDocument();
-    expect(screen.getByText(/Changing a rate\s+now will not move them/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Reopen period/ })).toBeInTheDocument();
   });
 
@@ -177,41 +183,37 @@ describe('CommissionTab', () => {
   });
 
   it('explains an empty scheme instead of printing a confident zero', () => {
-    mockReport(report({ showrooms: [] }));
+    mockReport(report({ showrooms: [], totalCenti: 0 }));
     render(<CommissionTab canManage />);
     expect(screen.getByText(/No salesperson is on the commission scheme yet/)).toBeInTheDocument();
-    expect(screen.getByText(/their orders are also left out of their/i)).toBeInTheDocument();
+  });
+
+  it('surfaces every warning the engine reported', () => {
+    /* The engine says WHY a figure may be off rather than shading it — an
+       unresolved fabric add-on, a truncated range, a chain mode with no ladder. */
+    mockReport(report({ warnings: ['The fabric add-on could not be resolved for 2 item(s)'] }));
+    render(<CommissionTab canManage />);
+    expect(screen.getByText(/could not be resolved for 2 item/)).toBeInTheDocument();
   });
 
   it('expands a KPI breakdown whose lines sum to the row figure', () => {
     mockReport(report());
     render(<CommissionTab canManage />);
-    // Collapsed to begin with.
     expect(screen.queryByText('BF — Bloom fabric')).not.toBeInTheDocument();
 
     const row = screen.getByText('Scarlett').closest('tr')!;
     fireEvent.click(within(row).getByRole('button'));
 
     expect(screen.getByText('BF — Bloom fabric')).toBeInTheDocument();
-    // 3 × RM 50 = RM 150, which is the row's KPI column.
     expect(screen.getByText('3 × RM 50.00')).toBeInTheDocument();
   });
 
   it('refuses to calculate an inverted date range', () => {
     mockReport(report());
     render(<CommissionTab canManage />);
-    const from = screen.getByLabelText(/From \(SO date\)/);
-    fireEvent.change(from, { target: { value: '2026-12-31' } });
-
+    fireEvent.change(screen.getByLabelText(/From \(SO date\)/), { target: { value: '2026-12-31' } });
     expect(screen.getByText(/the range is empty/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Calculate/ })).toBeDisabled();
-  });
-
-  it('states which revenue the percentage is paid on', () => {
-    mockReport(report());
-    render(<CommissionTab canManage />);
-    // The single most expensive question about a commission report.
-    expect(screen.getByText(/excludes the add-on amount of anything that/i)).toBeInTheDocument();
   });
 });
 
@@ -230,66 +232,54 @@ describe('CommissionTab — the revenue split', () => {
   it('derives service and KPI revenue around the engine base', () => {
     mockReport(report());
     render(<CommissionTab canManage />);
-    // Service = total − goods = (20,050,000 − 20,000,000) + (10,010,000 − 10,000,000)
-    //         = RM 500 + RM 100 = RM 600.
+    // Service = (20,050,000 − 20,000,000) + (10,010,000 − 10,000,000) = RM 600.
     expect(screen.getByText('RM 600.00')).toBeInTheDocument();
-    // Total revenue = 20,050,000 + 10,010,000 sen = RM 300,600.
+    // Total revenue = 20,050,000 + 10,010,000 centi = RM 300,600.
     expect(screen.getByText('RM 300,600.00')).toBeInTheDocument();
   });
 
   it('reports KPI item REVENUE separately from the KPI amount EARNED', () => {
-    /* Scarlett sold RM 200,150 of goods but the engine paid on RM 200,000 — the
-       RM 150 add-on was excluded because it earned a fixed KPI amount instead.
-       That RM 150 is the KPI item REVENUE; the RM 150 she was paid for it is a
-       different column that happens to be a different number in general. */
-    /* RM 175 of excluded add-on, deliberately NOT equal to the RM 150 she was
-       paid for it — the two columns answer different questions and a fixture
-       where they matched would not prove they are read from different places. */
+    /* Scarlett sold RM 200,175 of goods but the engine paid on RM 200,000 — the
+       RM 175 add-on was excluded because it earned a fixed amount instead. That
+       RM 175 is the KPI item REVENUE; the RM 150 she was paid for it is a
+       different column, and deliberately a different number here. */
     mockRevenue({
-      s1: { totalSen: 20_067_500, goodsSen: 20_017_500, goodsKnown: true, orders: 4 },
-      s2: { totalSen: 10_012_500, goodsSen: 10_002_500, goodsKnown: true, orders: 2 },
+      s1: { totalCenti: 20_067_500, goodsCenti: 20_017_500, goodsKnown: true, orders: 4 },
+      s2: { totalCenti: 10_012_500, goodsCenti: 10_002_500, goodsKnown: true, orders: 2 },
     });
     mockReport(report());
     render(<CommissionTab canManage />);
-    // Scarlett's row: 20,017,500 − 20,000,000 = RM 175 of excluded add-on.
-    expect(screen.getByText('RM 175.00')).toBeInTheDocument();
-    // Company tile: hers plus Aiman's RM 25 = RM 200 — a DIFFERENT number from
-    // any row, so this cannot pass by accidentally matching the row cell.
-    expect(screen.getByText('RM 200.00')).toBeInTheDocument();
-    // …while the amount EARNED for the flag is still RM 150 (itemKpiSen).
-    expect(screen.getAllByText('RM 150.00').length).toBeGreaterThan(0);
+    expect(screen.getByText('RM 175.00')).toBeInTheDocument(); // her row
+    expect(screen.getByText('RM 200.00')).toBeInTheDocument(); // company tile (hers + RM 25)
+    expect(screen.getAllByText('RM 150.00').length).toBeGreaterThan(0); // earned
   });
 
   it('hides the split rather than showing a wrong number when it cannot reconcile', () => {
-    /* Goods BELOW the engine's base is impossible if both queries describe the
-       same orders — the KPI exclusion can only remove. Most likely cause: this
-       account can only see part of the sales book. */
     mockRevenue({
       ...REVENUE,
-      s1: { totalSen: 100, goodsSen: 100, goodsKnown: true, orders: 1 },
+      s1: { totalCenti: 100, goodsCenti: 100, goodsKnown: true, orders: 1 },
     });
     mockReport(report());
     render(<CommissionTab canManage />);
 
     expect(screen.getByText(/Revenue split unavailable for 1 of 2/)).toBeInTheDocument();
     expect(screen.getByText('revenue n/a')).toBeInTheDocument();
-    // The PAYOUT half is untouched — those are the server's figures.
+    // The PAYOUT half is untouched — those are the engine's figures.
     expect(screen.getByText('RM 3,000.00')).toBeInTheDocument();
-    expect(screen.getByText('RM 5,650.00')).toBeInTheDocument(); // total payout
+    expect(screen.getByText('RM 5,650.00')).toBeInTheDocument();
   });
 
   it('keeps Total revenue when only the finance-gated columns are missing', () => {
     // A non-finance viewer loses the per-category buckets but still gets every
     // order's total, so the two halves must fail independently.
     mockRevenue({
-      s1: { totalSen: 20_050_000, goodsSen: 0, goodsKnown: false, orders: 4 },
-      s2: { totalSen: 10_010_000, goodsSen: 0, goodsKnown: false, orders: 2 },
+      s1: { totalCenti: 20_050_000, goodsCenti: 0, goodsKnown: false, orders: 4 },
+      s2: { totalCenti: 10_010_000, goodsCenti: 0, goodsKnown: false, orders: 2 },
     });
     mockReport(report());
     render(<CommissionTab canManage />);
 
-    expect(screen.getByText('RM 300,600.00')).toBeInTheDocument(); // total revenue survives
-    // …and this is NOT reported as a reconciliation failure.
+    expect(screen.getByText('RM 300,600.00')).toBeInTheDocument();
     expect(screen.queryByText(/Revenue split unavailable/)).not.toBeInTheDocument();
   });
 
@@ -299,16 +289,6 @@ describe('CommissionTab — the revenue split', () => {
     render(<CommissionTab canManage />);
 
     expect(screen.getByText(/The revenue split could not be loaded/)).toBeInTheDocument();
-    expect(screen.getByText('RM 5,650.00')).toBeInTheDocument(); // total payout intact
-  });
-
-  it('warns when the range holds more orders than it can read', () => {
-    useCommissionRevenue.mockReturnValue({
-      data: { byStaff: new Map(Object.entries(REVENUE)), truncated: true },
-      isLoading: false, isFetching: false, error: null,
-    });
-    mockReport(report());
-    render(<CommissionTab canManage />);
-    expect(screen.getByText(/more orders than the revenue split can read/)).toBeInTheDocument();
+    expect(screen.getByText('RM 5,650.00')).toBeInTheDocument();
   });
 });

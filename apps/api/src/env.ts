@@ -34,6 +34,18 @@ export interface Env {
   // → URL Configuration → Redirect URLs allow-list.
   BACKEND_PORTAL_URL: string;
   POS_PORTAL_URL: string;
+  // The HouzsERP /api ROOT (e.g. https://erp.houzscentury.com/api) — the root,
+  // not the /scm sub-app, because /auth/me sits outside it.
+  //
+  // Read by lib/houzs-identity.ts, which is how /commission authenticates: its
+  // callers are POS tablets holding a HOUZS session, and 2990 cannot validate
+  // one. The bearer is replayed here and Houzs answers with the real user and
+  // their permission keys. Absent => /commission answers 503 rather than
+  // falling open (see that file's header).
+  HOUZS_API_ROOT: string;
+  // The 2990-mirrored company on Houzs. Sent as X-Company-Id for consistency
+  // with every other call the POS makes; /auth/me itself is company-agnostic.
+  HOUZS_COMPANY_ID: string;
 
   // Secrets — run `wrangler secret put SUPABASE_ANON_KEY` etc.
   SUPABASE_ANON_KEY: string;

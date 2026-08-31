@@ -16,6 +16,7 @@ import { fabricTierAddonConfig } from './routes/fabric-tier-addon';
 import { modelFreeGifts } from './routes/model-free-gifts';
 import { freeItemCampaigns } from './routes/free-item-campaigns';
 import { campaignPromos } from './routes/campaign-promos';
+import { commission } from './routes/commission';
 import { pwpRules } from './routes/pwp-rules';
 import { pwpCodes } from './routes/pwp-codes';
 import { specialAddons } from './routes/special-addons';
@@ -179,6 +180,13 @@ app.route('/reports', reports);
 app.route('/mrp', mrp);
 app.route('/mrp-lead-times', mrpLeadTimes);
 app.route('/hr', hr);
+/* /commission — the POS-owned commission scheme (Loo 2026-08-31: "所有的
+   commission 机制只会在 POS 这边去算"). Mounted beside the legacy /hr, which
+   still serves the Backend portal and is gated on a 2990 Supabase session.
+   This one authenticates by replaying the caller's HOUZS bearer to Houzs
+   /auth/me — see lib/houzs-identity.ts for why it is NOT the Origin gate
+   campaign-promos uses. */
+app.route('/commission', commission);
 app.route('/sales-analysis', salesAnalysis);
 
 // Slip routes need auth; applied at mount because slipRoutes itself has no

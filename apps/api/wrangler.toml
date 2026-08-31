@@ -27,6 +27,16 @@ custom_domain = true
 [vars]
 SUPABASE_URL = "https://dolvxrchzbnqvahocwsu.supabase.co"
 
+# HouzsERP /api ROOT — the root, NOT the /scm sub-app, because /auth/me lives
+# outside it. This is how /commission authenticates: its callers are POS tablets
+# holding a Houzs session, which 2990 cannot validate on its own, so the bearer
+# is replayed here and Houzs answers with the real user and their permission
+# keys (lib/houzs-identity.ts). Not a secret — it is a public hostname, and the
+# caller must still present a session Houzs recognises.
+HOUZS_API_ROOT = "https://erp.houzscentury.com/api"
+# The 2990-mirrored company on Houzs (companies.id = 2).
+HOUZS_COMPANY_ID = "2"
+
 # Reversible read-only freeze (see src/middleware/read-only.ts).
 #   "false" = normal — all writes allowed (COMMITTED DEFAULT: merging the code
 #             changes nothing).

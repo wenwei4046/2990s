@@ -67,12 +67,12 @@ export const earnsCommission = (
 /** What one salesperson's in-range orders add up to. */
 export interface SalespersonRevenue {
   /** Σ total_revenue — goods + service + delivery. */
-  totalSen: number;
+  totalCenti: number;
   /** Σ of the four goods buckets, BEFORE the item-KPI exclusion. */
-  goodsSen: number;
+  goodsCenti: number;
   /** False when the caller may not see the per-category columns (they are
    *  finance-gated: SO_FINANCE_KEYS strips mattress_sofa_sen and its three
-   *  siblings for a non-finance viewer). `goodsSen` is then meaningless and the
+   *  siblings for a non-finance viewer). `goodsCenti` is then meaningless and the
    *  screen shows "—" rather than a zero that reads as "sold no goods". */
   goodsKnown: boolean;
   orders: number;
@@ -99,9 +99,9 @@ export const foldSoRevenue = (rows: SoHeader[]): Map<string, SalespersonRevenue>
       .map((base) => readMoneyOrNull(r, base));
     const known = parts.some((p) => p !== null);
 
-    const prev = out.get(sp) ?? { totalSen: 0, goodsSen: 0, goodsKnown: true, orders: 0 };
-    prev.totalSen += readMoney(r, 'total_revenue');
-    prev.goodsSen += parts.reduce<number>((s, p) => s + (p ?? 0), 0);
+    const prev = out.get(sp) ?? { totalCenti: 0, goodsCenti: 0, goodsKnown: true, orders: 0 };
+    prev.totalCenti += readMoney(r, 'total_revenue');
+    prev.goodsCenti += parts.reduce<number>((s, p) => s + (p ?? 0), 0);
     // One gated row poisons the whole person's goods figure, so this latches.
     prev.goodsKnown = prev.goodsKnown && known;
     prev.orders += 1;
@@ -113,11 +113,11 @@ export const foldSoRevenue = (rows: SoHeader[]): Map<string, SalespersonRevenue>
 /** The four lines shown for one person, plus whether they can be trusted. */
 export interface RevenueSplit {
   /** The commission base, straight from the engine. Never derived here. */
-  productsSen: number;
+  productsCenti: number;
   /** null when it cannot be derived — gated columns, or a failed check. */
-  serviceSen: number | null;
-  kpiSen: number | null;
-  totalSen: number | null;
+  serviceCenti: number | null;
+  kpiCenti: number | null;
+  totalCenti: number | null;
   /** True when this person's orders could not be reconciled with the engine. */
   mismatch: boolean;
 }
@@ -125,7 +125,7 @@ export interface RevenueSplit {
 /**
  * Combine the engine's commission base with the folded SO totals.
  *
- * `productsSen` is passed in and passed straight out. Everything else is derived
+ * `productsCenti` is passed in and passed straight out. Everything else is derived
  * around it, and only survives the two checks below:
  *
  *  · goods >= products. The item-KPI exclusion can only ever REMOVE from goods,
@@ -138,24 +138,24 @@ export interface RevenueSplit {
  * clamped payroll figure is indistinguishable from a correct one.
  */
 export const splitForRow = (
-  productsSen: number,
+  productsCenti: number,
   fold: SalespersonRevenue | undefined,
 ): RevenueSplit => {
   if (!fold || !fold.goodsKnown) {
     return {
-      productsSen,
-      serviceSen: null,
-      kpiSen: null,
-      totalSen: fold ? fold.totalSen : null,
+      productsCenti,
+      serviceCenti: null,
+      kpiCenti: null,
+      totalCenti: fold ? fold.totalCenti : null,
       // No orders found for someone the engine paid IS a mismatch; merely being
       // unable to see the category columns is not.
-      mismatch: !fold && productsSen > 0,
+      mismatch: !fold && productsCenti > 0,
     };
   }
-  const kpiSen = fold.goodsSen - productsSen;
-  const serviceSen = fold.totalSen - fold.goodsSen;
-  if (kpiSen < 0 || serviceSen < 0) {
-    return { productsSen, serviceSen: null, kpiSen: null, totalSen: fold.totalSen, mismatch: true };
+  const kpiCenti = fold.goodsCenti - productsCenti;
+  const serviceCenti = fold.totalCenti - fold.goodsCenti;
+  if (kpiCenti < 0 || serviceCenti < 0) {
+    return { productsCenti, serviceCenti: null, kpiCenti: null, totalCenti: fold.totalCenti, mismatch: true };
   }
-  return { productsSen, serviceSen, kpiSen, totalSen: fold.totalSen, mismatch: false };
+  return { productsCenti, serviceCenti, kpiCenti, totalCenti: fold.totalCenti, mismatch: false };
 };

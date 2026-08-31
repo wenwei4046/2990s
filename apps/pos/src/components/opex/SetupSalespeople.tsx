@@ -20,19 +20,25 @@
 import { useMemo, useState } from 'react';
 import { Plus, Trash2, UserRound } from 'lucide-react';
 import {
-  useCreateHrProfile, useDeleteHrProfile, useHrPickers, useHrProfiles, useUpdateHrProfile,
-  type HrTier,
-} from '../../lib/hr-commission-queries';
+  useCommissionProfiles, useCommissionShowrooms, useCreateCommissionProfile,
+  useDeleteCommissionProfile, useUpdateCommissionProfile, type HrTier,
+} from '../../lib/commission-api';
+import { useAllStaff } from '../../lib/staff';
 import { hrErrorMessage } from '../../lib/hr-wire';
 import styles from './Opex.module.css';
 
 export const SetupSalespeople = ({ canManage }: { canManage: boolean }) => {
-  const { data: profiles, isLoading, error } = useHrProfiles();
-  // Always fetched — the showroom NAME column needs it even for a read-only viewer.
-  const { data: pickers, isLoading: pickersLoading } = useHrPickers();
-  const create = useCreateHrProfile();
-  const update = useUpdateHrProfile();
-  const remove = useDeleteHrProfile();
+  const { data: profiles, isLoading, error } = useCommissionProfiles();
+  /* Showrooms come from 2990's own table (Houzs's copy is empty); the staff
+     roster comes from Houzs, because a salesperson id on an order IS a Houzs
+     scm.staff.id. Both are fetched for every viewer — a read-only reader still
+     needs names rather than UUIDs. */
+  const { data: showrooms, isLoading: showroomsLoading } = useCommissionShowrooms();
+  const { data: allStaff, isLoading: staffLoading } = useAllStaff();
+  const pickersLoading = showroomsLoading || staffLoading;
+  const create = useCreateCommissionProfile();
+  const update = useUpdateCommissionProfile();
+  const remove = useDeleteCommissionProfile();
 
   const [staffId, setStaffId] = useState('');
   const [tier, setTier] = useState<HrTier>('sales');
@@ -41,9 +47,9 @@ export const SetupSalespeople = ({ canManage }: { canManage: boolean }) => {
 
   const showroomName = useMemo(() => {
     const m = new Map<string, string>();
-    for (const s of pickers?.showrooms ?? []) m.set(s.id, s.name);
+    for (const s of showrooms ?? []) m.set(s.id, s.name);
     return m;
-  }, [pickers]);
+  }, [showrooms]);
 
   /* Somebody already on the scheme must not appear in the picker: the server
      answers a duplicate with a 409, and offering the choice at all is how you
@@ -52,14 +58,24 @@ export const SetupSalespeople = ({ canManage }: { canManage: boolean }) => {
     () => new Set((profiles ?? []).map((p) => p.staffId)),
     [profiles],
   );
-  const assignable = (pickers?.staff ?? []).filter((s) => !registered.has(s.id));
+  const assignable = (allStaff ?? []).filter((s) => !registered.has(s.id));
 
   const add = async () => {
     setAddError(null);
     if (!staffId) { setAddError('Pick the salesperson to add.'); return; }
     if (!showroomId) { setAddError('Pick the showroom they earn under.'); return; }
     try {
-      await create.mutateAsync({ staffId, tier, showroomId });
+      /* The names are SNAPSHOTTED on write. There is nothing to join to — the
+         staff row is in Houzs and the profile is here — and a payroll record
+         should keep saying what it said when it was approved. */
+      await create.mutateAsync({
+        staffId,
+        staffName: assignable.find((s) => s.id === staffId)?.name ?? '',
+        staffCode: '',
+        tier,
+        showroomId,
+        showroomName: showroomName.get(showroomId) ?? '',
+      });
       setStaffId('');
     } catch (e) {
       setAddError(hrErrorMessage(e));
@@ -117,7 +133,11 @@ export const SetupSalespeople = ({ canManage }: { canManage: boolean }) => {
                     p.tier === 'manager' ? 'Manager' : 'Sales'
                   )}
                 </td>
-                <td>{showroomName.get(p.showroomId) ?? <span className={styles.code}>{p.showroomId}</span>}</td>
+                <td>
+                  {showroomName.get(p.showroomId)
+                    ?? p.showroomName
+                    ?? <span className={styles.code}>{p.showroomId}</span>}
+                </td>
                 <td>
                   <span className={`${styles.chip} ${p.active ? styles.chipHit : styles.chipOff}`}>
                     {p.active ? 'Active' : 'Off'}
@@ -173,9 +193,7 @@ export const SetupSalespeople = ({ canManage }: { canManage: boolean }) => {
               >
                 <option value="">{pickersLoading ? 'Loading…' : '— select —'}</option>
                 {assignable.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}{s.staffCode ? ` · ${s.staffCode}` : ''}
-                  </option>
+                  <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
             </label>
@@ -193,7 +211,7 @@ export const SetupSalespeople = ({ canManage }: { canManage: boolean }) => {
                 onChange={(e) => setShowroomId(e.target.value)}
               >
                 <option value="">{pickersLoading ? 'Loading…' : '— select —'}</option>
-                {(pickers?.showrooms ?? []).map((s) => (
+                {(showrooms ?? []).map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
