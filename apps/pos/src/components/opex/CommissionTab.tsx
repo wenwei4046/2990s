@@ -37,6 +37,7 @@ import { useCommissionRevenue } from '../../lib/commission-revenue-queries';
 import { splitForRow, type RevenueSplit, type SalespersonRevenue } from '../../lib/commission-revenue';
 import { hrErrorMessage } from '../../lib/hr-wire';
 import { fmtBps, fmtSen } from '../../lib/commission-format';
+import { SummaryCard } from './SummaryCard';
 import styles from './Opex.module.css';
 
 /** First and last day of the CURRENT Malaysian month, as ISO dates.
@@ -288,64 +289,60 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
             <p key={w} className={styles.error}>{w}</p>
           ))}
 
-          {/* ── what was sold ───────────────────────────────────────────── */}
-          <div className={styles.stripHead}>Revenue — what was sold</div>
-          <div className={styles.tiles}>
-            <div className={styles.tile}>
-              <span className={styles.tileLabel}>Products sales revenue</span>
-              <span className={styles.tileValue}>{fmtSen(totals.productsCenti)}</span>
-              <span className={styles.tileHint}>the base commission is paid on</span>
-            </div>
-            <div className={styles.tile}>
-              <span className={styles.tileLabel}>Service sales revenue</span>
-              <span className={styles.tileValue}>
-                {revenueLoading ? '…' : totals.splitComplete ? fmtSen(totals.serviceCenti) : '—'}
-              </span>
-              <span className={styles.tileHint}>delivery + service lines · earns no commission</span>
-            </div>
-            <div className={styles.tile}>
-              <span className={styles.tileLabel}>KPI item sales revenue</span>
-              <span className={styles.tileValue}>
-                {revenueLoading ? '…' : totals.splitComplete ? fmtSen(totals.kpiRevenueCenti) : '—'}
-              </span>
-              <span className={styles.tileHint}>paid as a fixed amount, not a %</span>
-            </div>
-            <div className={styles.tile}>
-              <span className={styles.tileLabel}>Total revenue</span>
-              <span className={styles.tileValue}>
-                {revenueLoading ? '…' : totals.totalComplete ? fmtSen(totals.totalRevenueCenti) : '—'}
-              </span>
-              <span className={styles.tileHint}>the three above, added up</span>
-            </div>
-          </div>
+          {/* Two part-to-whole cards, not eight equal tiles (Loo 2026-08-31:
+              "太千篇一律，没有层次感了"). Each carries its total as the
+              headline and the parts underneath, so the arithmetic that relates
+              them is visible instead of implied. */}
+          <div className={styles.summaryRow}>
+            <SummaryCard
+              eyebrow="Revenue — what was sold"
+              headlineLabel="Total revenue"
+              headlineCenti={totals.totalComplete ? totals.totalRevenueCenti : null}
+              headlineHint="products + service + KPI items"
+              loading={revenueLoading}
+              parts={[
+                {
+                  label: 'Products sales revenue', tone: 'a',
+                  centi: totals.productsCenti,
+                  hint: 'the base commission is paid on',
+                },
+                {
+                  label: 'Service sales revenue', tone: 'b',
+                  centi: totals.splitComplete ? totals.serviceCenti : null,
+                  hint: 'delivery + service lines · earns no commission',
+                },
+                {
+                  label: 'KPI item sales revenue', tone: 'c',
+                  centi: totals.splitComplete ? totals.kpiRevenueCenti : null,
+                  hint: 'paid as a fixed amount, not a %',
+                },
+              ]}
+            />
 
-          {/* ── what it pays ────────────────────────────────────────────── */}
-          <div className={styles.stripHead}>Commission — what it pays</div>
-          <div className={styles.tiles}>
-            <div className={styles.tile}>
-              <span className={styles.tileLabel}>Revenue commission</span>
-              <span className={styles.tileValue}>{fmtSen(totals.commissionCenti)}</span>
-              <span className={styles.tileHint}>tiered % of product sales</span>
-            </div>
-            <div className={styles.tile}>
-              <span className={styles.tileLabel}>Manager override</span>
-              <span className={styles.tileValue}>{fmtSen(totals.overrideCenti)}</span>
-              <span className={styles.tileHint}>
-                {data.config.overrideMode === 'chain' ? 'reporting chain' : 'whole showroom'}
-              </span>
-            </div>
-            <div className={styles.tile}>
-              <span className={styles.tileLabel}>KPI items earned</span>
-              <span className={styles.tileValue}>{fmtSen(totals.kpiEarnedCenti)}</span>
-              <span className={styles.tileHint}>fixed amounts</span>
-            </div>
-            <div className={`${styles.tile} ${styles.tileStrong}`}>
-              <span className={styles.tileLabel}>Total payout</span>
-              <span className={styles.tileValue}>{fmtSen(totals.payoutCenti)}</span>
-              <span className={styles.tileHint}>
-                {totals.people} {totals.people === 1 ? 'salesperson' : 'salespeople'}
-              </span>
-            </div>
+            <SummaryCard
+              eyebrow="Commission — what it pays"
+              headlineLabel="Total payout"
+              headlineCenti={totals.payoutCenti}
+              headlineHint={`${totals.people} ${totals.people === 1 ? 'salesperson' : 'salespeople'}`}
+              emphasis
+              parts={[
+                {
+                  label: 'Revenue commission', tone: 'a',
+                  centi: totals.commissionCenti,
+                  hint: 'tiered % of product sales',
+                },
+                {
+                  label: 'Manager override', tone: 'b',
+                  centi: totals.overrideCenti,
+                  hint: data.config.overrideMode === 'chain' ? 'reporting chain' : 'whole showroom',
+                },
+                {
+                  label: 'KPI items earned', tone: 'c',
+                  centi: totals.kpiEarnedCenti,
+                  hint: 'fixed amounts, not a %',
+                },
+              ]}
+            />
           </div>
 
           {/* The revenue half is folded in the POS from a SECOND query, so it can
@@ -409,7 +406,9 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
                     <tr>
                       <th colSpan={2} />
                       <th className={styles.groupHead} colSpan={4}>Revenue — sold</th>
-                      <th className={styles.groupHead} colSpan={5}>Commission — paid</th>
+                      <th className={`${styles.groupHead} ${styles.groupStart}`} colSpan={5}>
+                        Commission — paid
+                      </th>
                     </tr>
                     <tr>
                       <th>Salesperson</th>
@@ -418,7 +417,7 @@ export const CommissionTab = ({ canManage }: { canManage: boolean }) => {
                       <th className={styles.num}>Service</th>
                       <th className={styles.num}>KPI item</th>
                       <th className={styles.num}>Total</th>
-                      <th className={styles.num}>Rate</th>
+                      <th className={`${styles.num} ${styles.groupStart}`}>Rate</th>
                       <th className={styles.num}>Revenue comm.</th>
                       <th className={styles.num}>Override</th>
                       <th className={styles.num}>KPI earned</th>
@@ -515,7 +514,7 @@ const PersonRows = ({
         <td className={styles.num}>{money(split?.kpiCenti)}</td>
         <td className={styles.num}>{money(split?.totalCenti)}</td>
 
-        <td className={styles.num}>{fmtBps(row.personalRateBps)}</td>
+        <td className={`${styles.num} ${styles.groupStart}`}>{fmtBps(row.personalRateBps)}</td>
         <td className={styles.num}>{fmtSen(row.personalCommissionCenti)}</td>
         <td className={styles.num}>
           {row.overrideCommissionCenti === 0 && row.tier !== 'manager'
@@ -530,7 +529,7 @@ const PersonRows = ({
           )}
         </td>
         <td className={styles.num}>{row.itemKpiCenti === 0 ? '—' : fmtSen(row.itemKpiCenti)}</td>
-        <td className={styles.num}><strong>{fmtSen(row.totalCenti)}</strong></td>
+        <td className={`${styles.num} ${styles.payCell}`}>{fmtSen(row.totalCenti)}</td>
       </tr>
 
       {expanded && hasDetail && (
