@@ -308,3 +308,12 @@
   background: color-mix(in oklab, var(--c-beige) 20%, transparent);
 }
 .table thead tr:first-child:not(:last-child) th:empty { background: transparent; }
+
+/* ── header alignment ────────────────────────────────────────────────────── */
+/* `.table th` sets `text-align: left` and OUTRANKS a bare `.num` / `.groupHead`
+   (0,1,1 against 0,1,0), so a numeric header sat at the left of a column whose
+   figures hug the right — "PRODUCTS" and the RM under it never lined up (Loo
+   2026-08-31: "我要它对齐准准的"). The group labels lost their centring the
+   same way. Same specificity, so these win on source order. */
+.table th.num { text-align: right; }
+.table th.groupHead { text-align: center; }
