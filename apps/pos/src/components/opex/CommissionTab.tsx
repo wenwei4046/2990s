@@ -538,10 +538,25 @@ const PersonRows = ({
             {row.kpiDetail.length > 0 && (
               <ul className={styles.detailList}>
                 {row.kpiDetail.map((d) => (
-                  <li key={d.label} className={styles.detailItem}>
-                    <strong>{d.label}</strong>
-                    <span>{d.qty} × {fmtSen(d.bonusCenti)}</span>
-                    <span className={styles.detailAmount}>{fmtSen(d.lineCenti)}</span>
+                  <li key={d.label}>
+                    <div className={styles.detailItem}>
+                      <strong>{d.label}</strong>
+                      <span>{d.qty} × {fmtSen(d.bonusCenti)}</span>
+                      <span className={styles.detailAmount}>{fmtSen(d.lineCenti)}</span>
+                    </div>
+                    {/* WHICH orders earned it. A line reading "12 × RM 50" is
+                        not checkable until you can see the twelve (Loo
+                        2026-08-31). One order can contribute several units, so
+                        these are per-order subtotals, not one row per unit. */}
+                    <ul className={styles.detailOrders}>
+                      {d.orders.map((o) => (
+                        <li key={o.docNo} className={styles.detailItem}>
+                          <span className={styles.code}>{o.docNo}</span>
+                          <span>{o.qty} × {fmtSen(d.bonusCenti)}</span>
+                          <span className={styles.detailAmount}>{fmtSen(o.lineCenti)}</span>
+                        </li>
+                      ))}
+                    </ul>
                   </li>
                 ))}
               </ul>
