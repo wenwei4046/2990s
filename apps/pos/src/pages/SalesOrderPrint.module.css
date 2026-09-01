@@ -106,6 +106,15 @@
   line-height: 1.5;
 }
 
+/* Contact number — same type as the address, set apart by a small gap so it
+   reads as its own field rather than a fourth address line. */
+.companyContact {
+  margin-top: 4px;
+  font-size: 9.5pt;
+  color: #404040;
+  line-height: 1.5;
+}
+
 .headerRight {
   display: flex;
   flex-direction: column;

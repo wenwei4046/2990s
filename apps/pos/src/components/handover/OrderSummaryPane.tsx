@@ -249,6 +249,17 @@ const ReceiptPane = ({ orderId, placedAt, lines, customer, delivery, payment, pa
             <div className={styles.legalAddrTag}>Showroom</div>
             <div>{COMPANY_LEGAL.showroomLine}</div>
           </div>
+          {/* Contact number (Loo 2026-09-01) — mirrors the printed SO
+              letterhead so the handover summary shows the same thing the
+              customer walks away with. The tag column is 64px and this is the
+              same 8 characters as the SHOWROOM tag above it, so it needs no
+              layout change. Hidden while unset. */}
+          {COMPANY_LEGAL.whatsapp && (
+            <div className={styles.legalAddrBlock}>
+              <div className={styles.legalAddrTag}>WhatsApp</div>
+              <div>{COMPANY_LEGAL.whatsapp}</div>
+            </div>
+          )}
         </div>
 
         <div className={styles.legalTermsHead}>Terms &amp; Conditions</div>
