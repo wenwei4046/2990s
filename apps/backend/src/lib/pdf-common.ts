@@ -16,6 +16,11 @@ export const COMPANY = {
     'No. 2, Jalan Kerinchi, Gerbang Kerinchi Lestari,',
     '59200 Kuala Lumpur, Wilayah Persekutuan KL',
   ],
+  /* Company contact number — the mirror of legal.ts COMPANY_LEGAL.whatsapp.
+     A WhatsApp line, labelled as such (not "Tel") so nobody rings it.
+     Empty string => drawHeader omits the line entirely, so an unset number
+     never prints a bare label. Set BOTH files together. */
+  whatsapp: '+60 11-2166 2990',
   portalLabel: "2990's Portal",
 } as const;
 
@@ -119,6 +124,13 @@ export function drawHeader(
   for (const line of COMPANY.addressLines) {
     y += 4;
     doc.text(line, margin, y);
+  }
+  /* Contact number (Loo 2026-09-01) — one company-wide WhatsApp number below
+     the letterhead address. Shared by every document drawn through drawHeader
+     (SO / SI / DO / DR / GRN / PI / PR). Skipped while unset. */
+  if (COMPANY.whatsapp) {
+    y += 4;
+    doc.text(`WhatsApp: ${COMPANY.whatsapp}`, margin, y);
   }
 
   let rightY = margin;

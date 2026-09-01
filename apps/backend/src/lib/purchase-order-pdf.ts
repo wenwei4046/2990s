@@ -235,6 +235,14 @@ async function renderPurchaseOrderInto(
     doc.text(line, pageW / 2, y, { align: 'center' });
     y += 4;
   }
+  /* Contact number (Loo 2026-09-01) — the PO draws its own centered
+     letterhead instead of pdf-common's drawHeader, so the WhatsApp line is
+     repeated here to keep one consistent letterhead across all documents.
+     Skipped while COMPANY.whatsapp is unset. */
+  if (COMPANY.whatsapp) {
+    doc.text(`WhatsApp: ${COMPANY.whatsapp}`, pageW / 2, y, { align: 'center' });
+    y += 4;
+  }
   y += 2;
 
   doc.setDrawColor(0); doc.setLineWidth(0.4);

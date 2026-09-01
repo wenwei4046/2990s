@@ -71,6 +71,12 @@ const Header = ({ order }: { order: PrintableSO }) => (
           <div key={line}>{line}</div>
         ))}
       </div>
+      {/* Contact number (Loo 2026-09-01) — one company-wide WhatsApp number
+          under the letterhead address. Skipped entirely when unset, so the
+          block never prints a bare label. */}
+      {COMPANY_LEGAL.whatsapp && (
+        <div className={styles.companyContact}>WhatsApp: {COMPANY_LEGAL.whatsapp}</div>
+      )}
     </div>
     <div className={styles.headerRight}>
       <div className={styles.docTitle}>SALES ORDER</div>
