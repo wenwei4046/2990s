@@ -117,7 +117,20 @@ const mockRevenue = (
   });
 };
 
-beforeEach(() => { mockRevenue(); closeMutate.mockReset(); });
+/* The tab defaults its period to the CURRENT Malaysian month (currentMonthRange
+   → Date.now()), while every fixture in this file is AUGUST 2026 data. Left on
+   the real clock, "freezes the computed rows when a period is closed" passed
+   only while it really was August 2026 and failed from 1 September onward — it
+   blocked the deploy on 2026-09-01 (Actions run 33483816568) with
+   `from: '2026-09-01'` where the fixture says '2026-08-01'. Pin the clock to the
+   month the fixtures describe. Date only — RTL needs the real timers. */
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-08-15T00:00:00Z'));
+  mockRevenue();
+  closeMutate.mockReset();
+});
+afterEach(() => { vi.useRealTimers(); });
 
 describe('CommissionTab', () => {
   it('totals every row across the company, not just the first showroom', () => {
