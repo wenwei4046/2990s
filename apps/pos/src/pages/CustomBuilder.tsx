@@ -34,6 +34,7 @@ import {
   type SofaProductPricing,
 } from '@2990s/shared';
 import { buildSeamlessRun, renderSeamlessSofa, renderSeamlessGroup, isFunctionalSeat, SOFA_BAND, SOFA_INK, type SeamlessRun } from '../lib/sofa-seamless';
+import { canonicalConversion, canonicalMatchesCells } from '../lib/sofa-canonical';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
 import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useModelFabricTierOverrides, useCompartmentFabricTierOverrides, useCreateSofaCombo, useCreateSofaQuickPick, useSofaCombos, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
 import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
@@ -763,6 +764,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // group isn't priced as a bundle — same source the render path uses.
       const bundle = g.bundle ?? detectBundle(groupCells.map((c) => c.moduleId));
       if (!bundle) return;
+      // Same gate the render path uses — don't measure art for a group whose
+      // compartments aren't the bundle's canonical breakdown, because that
+      // group will be code-drawn, not painted with this PNG.
+      if (!canonicalMatchesCells(groupCells, bundle)) return;
       const flip = groupCells.find((c) => c.moduleId === 'L(LHF)') ? 'L' : 'R';
       const id = bundle.id;
       const isLShape = id === '2+L' || id === '3+L';
@@ -780,11 +785,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // are explicit user-control moments where rewriting cells would feel like
   // the system is fighting the user.
   //
-  // Module-ID resolution: for L-shape bundles, the arm faces opposite the
-  // chaise side (L on right → arm on left → (LHF) variants). For non-L
-  // bundles with multiple armed compartments, the first armed family in
-  // canonicalModules gets LHF, the last gets RHF. Single-armed bundles
-  // default LHF. NA families pass through unchanged.
+  // What it may and may not rewrite (module-id resolution included) lives in
+  // ../lib/sofa-canonical — headline rule: it may re-express a build with the
+  // SAME number of compartments, never merge two of them into one.
   useEffect(() => {
     if (draftDelta) return; // don't rewrite mid-drag
     type ConvertOp = { removeIds: Set<string>; addCells: Cell[] };
@@ -797,100 +800,23 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // Auto-convert applies to any recognised bundle SHAPE, priced or not. mfg
       // sofas have no product_bundles rows, so groupPrice never sets g.bundle for
       // them; fall back to detectBundle (the same source the seamless-overlay
-      // effect uses) so a hand-built 1A+1A+L still normalises to the canonical
-      // 2A+L. Without this, a Combo defined on 2A could never match a custom
-      // build assembled from single seaters — it priced à-la-carte while the
-      // identical Quick Pick layout (which emits canonical cells) got the Combo.
+      // effect uses) so a hand-built 1A(LHF) + 2NA + L(RHF) still normalises to
+      // the canonical 2A(LHF) + 1NA + L(RHF) and a Combo defined on that
+      // breakdown matches. A build with MORE compartments than the canonical
+      // (1A + 1NA + 1A) is left alone and prices à-la-carte — it is a different
+      // sofa from the Quick Pick, not the same one drawn differently.
       const bundle = g.bundle ?? detectBundle(groupCells.map((c) => c.moduleId));
       if (!bundle) return;
-      // Never rewrite a group that includes an accessory (console / stool) to
-      // its canonical seat-only SKUs — that would delete the accessory cell
-      // entirely (e.g. 1A + WC-45 + 2A matches the 3S signature, whose canonical
-      // [1A,2A] is closed and would replace the console). The PO layer
-      // (cellsToPoSkus) already splits accessories onto their own lines, so the
-      // canvas safely keeps the user's modules exactly as laid out.
-      if (groupCells.some((c) => isAccessoryModule(c.moduleId))) return;
-      // Likewise never rewrite a group containing a FUNCTIONAL seat (power /
-      // recliner / leg — 1A(P), 1NA(P), 1S(P)/(R)/(L), …). The canonical breakdown
-      // collapses the mechanism suffix (1NA(P) → 1NA), so 1A(LHF) + 1NA(P) + 1A(RHF)
-      // signs as 1A+1A+1NA → the plain 3S [1A,2A], and the rewrite would
-      // silently DELETE the power seat the user deliberately placed — the
-      // layout "jumps" to a standard sofa. Keep the user's exact modules; PO
-      // SKU translation happens in the order layer (cellsToPoSkus).
-      if (groupCells.some((c) => isFunctionalSeat(c.moduleId))) return;
-      // Likewise never rewrite a group containing a B-variant (wide-arm) seat —
-      // 1B / 2B. detectBundle COLLAPSES 1B→1A / 2B→2A so the build still matches
-      // a bundle (good: it prices/combos as the bundle), but the canonical SKU
-      // breakdown (resolveSku below) only emits A/NA/L families and can't express
-      // a B. Converting would silently swap the customer's deliberate 1B/2B for a
-      // 1A/2A — showing a different compartment than they picked (Loo 2026-06-03).
-      // Keep the user's exact modules; cellsToPoSkus handles SKU translation.
-      if (groupCells.some((c) => isWideArmSeat(c.moduleId))) return;
       const groupIds = new Set(
         groupCells.map((c) => c.id).filter((x): x is string => x != null),
       );
       // Skip groups currently in per-module edit mode.
       if (editingGroupIds && Array.from(groupIds).every((id) => editingGroupIds.has(id))) return;
-
-      const flip: 'L' | 'R' = groupCells.find((c) => c.moduleId === 'L(LHF)') ? 'L' : 'R';
-      const hasL = bundle.canonicalModules.includes('L');
-      const armedIdxs = bundle.canonicalModules
-        .map((f, idx) => (f === '1A' || f === '2A' ? idx : -1))
-        .filter((x) => x >= 0);
-      const resolveSku = (fam: string, idx: number): string => {
-        if (fam === '1NA' || fam === '2NA') return fam;
-        if (fam === 'L') return `L(${flip}HF)`;
-        if (fam === '1A' || fam === '2A') {
-          let armSide: 'L' | 'R';
-          if (hasL) {
-            armSide = flip === 'R' ? 'L' : 'R';
-          } else if (armedIdxs.length > 1) {
-            armSide = idx === armedIdxs[0] ? 'L' : 'R';
-          } else {
-            armSide = 'L';
-          }
-          return `${fam}(${armSide}HF)`;
-        }
-        return fam;
-      };
-      const orderedFams =
-        hasL && flip === 'L'
-          ? [...bundle.canonicalModules].reverse()
-          : bundle.canonicalModules;
-      const canonicalSkus = orderedFams.map((f, idx) => resolveSku(f, idx));
-
-      // Already canonical? Compare sorted multisets — order on canvas might
-      // differ but the SKU set is what matters for "is this the standard".
-      const userSorted = groupCells.map((c) => c.moduleId).sort();
-      const canonSorted = [...canonicalSkus].sort();
-      if (
-        userSorted.length === canonSorted.length &&
-        userSorted.every((id, j) => id === canonSorted[j])
-      ) {
-        return;
-      }
-
-      const bb = cellsBbox(groupCells, depth);
-      if (!bb) return;
-      let x = bb.x;
-      const y = bb.y;
-      const addCells: Cell[] = [];
-      for (const sku of canonicalSkus) {
-        const m = findModule(sku);
-        if (!m) continue;
-        const fp = moduleFootprint(m, 0, depth);
-        addCells.push({ id: nextCellId(), moduleId: sku, x, y, rot: 0 });
-        x += fp.w;
-      }
-      // Guard: never auto-convert when the canonical SKU layout is itself NOT
-      // closed (e.g. 2S.canonicalModules = ['2A'] resolves to a single 2A(LHF)
-      // with right end open). Otherwise we'd silently strip the user's
-      // closed sofa down to a half-open one — visually broken and triggering
-      // the "Right end has no arm" warning on a layout the user just built
-      // properly. This skip preserves the user's modules; the canonical SKU
-      // translation for PO purposes happens in the order layer instead.
-      const canonicalClosed = analyzeSofa(addCells, depth).closed;
-      if (!canonicalClosed) return;
+      // Every "leave the user's cells alone" rule (accessory / functional /
+      // wide-arm / never-merge / canonical-not-closed) lives in
+      // canonicalConversion so it is unit-testable without mounting this page.
+      const addCells = canonicalConversion(groupCells, bundle, depth, nextCellId);
+      if (!addCells) return;
       ops.push({ removeIds: groupIds, addCells });
     });
 
@@ -1146,12 +1072,18 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       //    → rasterised PNG (Loo's tuned art). Skipped for functional (power/
       //    recliner) and wide-arm 1B/2B seats — the bundle PNG would paint generic
       //    art and drop the badge / wide bench; those fall through to code-drawn.
+      //    ALSO skipped when the group's compartments aren't the bundle's
+      //    canonical breakdown (canonicalMatchesCells): detectBundle matches a
+      //    multiset of families, so a hand-built 1A(LHF) + 1NA + 1A(RHF) signs as
+      //    3S — and the 3S art draws the canonical TWO compartments, i.e. a sofa
+      //    the customer is not buying (Loo 2026-09-01). Those fall through to the
+      //    code-drawn seamless run below, which draws every real module boundary.
       const runHasFunctional = sofaCells.some((c) => isFunctionalSeat(c.moduleId));
       const runHasWideArm = sofaCells.some((c) => isWideArmSeat(c.moduleId));
       if (sofaCells.length >= 2 && !runHasFunctional && !runHasWideArm && analyzeSofa(sofaCells, depth).closed) {
         const bundle = g.bundle ?? detectBundle(sofaCells.map((c) => c.moduleId));
         const bbSofa = cellsBbox(displayCells.filter((c) => c.id != null && sofaIds.has(c.id)), depth);
-        if (bundle && bbSofa) {
+        if (bundle && bbSofa && canonicalMatchesCells(sofaCells, bundle)) {
           const flip: 'L' | 'R' = sofaCells.find((c) => c.moduleId === 'L(LHF)') ? 'L' : 'R';
           const isLShape = bundle.id === '2+L' || bundle.id === '3+L';
           const src = `${ASSET_BASE}/${bundle.id}${isLShape ? `-${flip}` : ''}.png`;
