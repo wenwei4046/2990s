@@ -169,7 +169,40 @@ What the ERP now covers, on top of the original retail POS:
 - **Accounting / GL**: chart of accounts, journal entries, balances, AR/AP aging, outstanding rollups.
 - **Sofa / bedframe / mattress configurators**, fabric-tier surcharges, Sofa Combos, PWP (换购) vouchers.
 
-Single Supabase Postgres (project in **Singapore** — **NOT** Venture's `gixpptmfuryskbwkmiwz`).
+Single Supabase Postgres, project ref **`dolvxrchzbnqvahocwsu`** (Singapore).
+Sources: `apps/api/wrangler.toml` `SUPABASE_URL` (what the live API connects to)
+and `.mcp.json`. The ref is publishable, not a secret.
+
+⚠️ **Confirm the ref before running any SQL — two other projects are easy to hit
+by mistake.** Not Venture's `gixpptmfuryskbwkmiwz`, and **not Houzs's
+`anogrigyjbduyzclzjgn`**. The Houzs one is the dangerous one: it carries tables
+with the SAME NAMES — `hr_commission_config`, `hr_item_kpi`,
+`hr_salesperson_profiles`, `hr_override_levels`, `hr_payout_periods` — because
+`scm.hr_*` is a port of this repo's originals. Theirs live in schema **`scm`**,
+are company-scoped (`*_company_*_unique`) and add `hr_payout_rows`; ours live in
+**`public`** and are single-company.
+
+On 2026-09-02 a session probed, then tried to apply 0215/0216, against Houzs's
+project. It rolled back only because `search_path` is `"$user", public,
+extensions` — no `scm` — so `ALTER TABLE hr_commission_config` missed. With
+`scm` on the path it would have altered Houzs's live commission tables.
+
+**Identity check** — these exist in `public` here and NOT in Houzs. (Do not use
+`mfg_sales_orders` or `mfg_products`: both databases have them, so they
+discriminate nothing.)
+
+```sql
+SELECT current_database(), current_setting('search_path');
+SELECT tbl, to_regclass('public.'||tbl) IS NOT NULL AS here
+  FROM (VALUES ('campaign_promos'),('showrooms'),('staff')) v(tbl);
+```
+
+**And schema-qualify every probe.** A check reading `pg_type` / `pg_class`
+without an `nspname` filter answers about ANY schema. Mixed with
+`information_schema` checks filtered to `table_schema='public'`, that yields a
+self-contradictory result which reads like a real finding — that is exactly how
+the wrong project went unnoticed above. When a diagnostic contradicts itself,
+suspect the diagnostic first.
 
 ---
 
@@ -178,7 +211,7 @@ Single Supabase Postgres (project in **Singapore** — **NOT** Venture's `gixppt
 - **Monorepo**: pnpm workspace (`pnpm@10.33`) + Turborepo (`turbo@2.3`). Node `>=24`. TypeScript `5.7` strict, everywhere.
 - **Frontend**: Vite 6 + React 19 + React Router 7 + TypeScript strict. POS is a PWA (`vite-plugin-pwa` + Workbox).
 - **API**: Hono 4 on Cloudflare Workers (Wrangler 4). `bcryptjs` for PIN hashing.
-- **DB**: Supabase Postgres (Singapore).
+- **DB**: Supabase Postgres (Singapore), project ref `dolvxrchzbnqvahocwsu` — verify before any SQL, see above.
 - **ORM**: Drizzle (`drizzle-orm` 0.36 / `drizzle-kit` 0.30). **`packages/db/src/schema.ts` is the source of truth.**
 - **Storage**: Cloudflare R2 (slips, product photos).
 - **Auth**: Supabase Auth (email + magic link for staff; bcrypt **PIN** layer on top for POS counter switching).
