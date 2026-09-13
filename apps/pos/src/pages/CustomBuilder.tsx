@@ -275,6 +275,10 @@ interface CustomBuilderProps {
    *  picker shows in Quick Pick + Customize. `legBlock` is rendered in this
    *  rail; `legHeight`/`legSurchargeRm` feed each split group's snapshot + total. */
   legBlock?: ReactNode;
+  /** PWP voucher section, rendered at the top of the module palette. Moved
+   *  out of the topbar 2026-09-13 (it was the widest thing in a bar that
+   *  overflows an 11" iPad); Quick Pick renders the same block in its rail. */
+  pwpBlock?: ReactNode;
   legHeight?: string | null;
   legSurchargeRm?: number;
   /** Product-page item remark + special add-on (note + extra charge) — parent-
@@ -324,7 +328,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -1124,6 +1128,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   return (
     <div className={styles.shell}>
       <aside className={styles.palette}>
+        {pwpBlock && <div className={styles.palettePwp}>{pwpBlock}</div>}
         <div className={styles.paletteHead}>
           <span className="t-eyebrow">Modules</span>
           <span className={styles.hint}>Tap to add</span>

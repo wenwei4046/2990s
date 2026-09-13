@@ -102,6 +102,13 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  /* Degrade gracefully instead of overflowing. Without this the grid's `auto`
+     track is floored at max-content, so anything that makes the right side
+     wider than the viewport (a long staff name, "Add to this order" instead
+     of "+ Add to Cart") pushes the sign-out button off-screen with no visible
+     symptom. With it the Configurator's product chip ellipsises first and
+     every control stays reachable. */
+  min-width: 0;
 }
 
 .pill {
@@ -221,8 +228,8 @@
    costs no width, and the desktop shows it. ─── */
 @media (max-width: 1279px) {
   .topbar {
-    gap: 14px;
-    padding: 10px 16px;
+    gap: 10px;
+    padding: 10px 12px;
     padding-top: calc(10px + env(safe-area-inset-top, 0px));
   }
   .crumb {
@@ -243,35 +250,13 @@
     padding: 6px 10px;
     font-size: 11px;
   }
-  /* A long staff name must never push sign-out off-screen. */
+  /* A long staff name must never push sign-out off-screen. Measured at 1180px
+     (11" iPad): the sofa Quick-Pick bar has only ~20px of slack, and an
+     uncapped "NG PENG CHOON" eats ~38px of it. The avatar's initials still
+     identify the counter, and the full name is one tap away on every other
+     screen. */
   .staffMeta {
-    max-width: 120px;
-  }
-
-  /* Two-row layout (stackOnTablet): wordmark + right slot on the top row,
-     centerSlot on its own row underneath, left-aligned under the wordmark.
-     Same DOM order as the single row, so nothing changes for keyboard /
-     screen-reader users. */
-  .topbarStack {
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-areas:
-      'left right'
-      'center center';
-    row-gap: 6px;
-  }
-  .topbarStack .left {
-    grid-area: left;
-  }
-  .topbarStack .right {
-    grid-area: right;
-    justify-content: flex-end;
-  }
-  .topbarStack .center {
-    grid-area: center;
-    /* Same row height whether the PWP field (44px Apply button) or the
-       "PWP XXX ✓ · remove" line is showing, so the bar is a stable 116px and
-       Configurator.module.css can size .sofaShell against it. */
-    min-height: 44px;
+    max-width: 84px;
   }
 }
 

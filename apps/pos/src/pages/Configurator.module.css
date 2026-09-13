@@ -377,6 +377,7 @@
   align-items: center;
   gap: var(--space-3);
   flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .topbarChip {
@@ -385,6 +386,12 @@
   line-height: 1.2;
   text-align: right;
   max-width: 220px;
+  /* The one part of the bar allowed to give: under width pressure the chip
+     narrows (its three lines already ellipsise) so LIVE TOTAL, Cancel, Add to
+     Cart and the staff chip never leave the screen. See .right in
+     Topbar.module.css. */
+  min-width: 0;
+  flex: 0 1 auto;
 }
 .topbarChipEyebrow {
   font-family: var(--font-button);
@@ -497,34 +504,63 @@
   cursor: not-allowed;
 }
 
-/* ─── PWP 换购 code control (sofa topbar centerSlot) ────────────────────
-   Desktop keeps the original wrapping container: the single-row topbar needs
-   ~1,750px with Auto Fill showing, so on a tighter desktop the buttons still
-   drop under the input rather than pushing sign-out off-screen. At tablet
-   width the row is forced to one line (see the media block below) — the
-   topbar stacks there, so the row has the room. The validation message hangs
-   below the field (absolute) so a long one never widens the row. */
-.pwpInline {
-  position: relative;
-  display: inline-flex;
+/* ─── PWP 换购 code control — sofa LEFT RAIL ───────────────────────────
+   Lives in the rail (both modes), not the topbar. Measured 2026-09-13: the
+   Quick-Pick topbar needs ~1,441px for one row at 11" iPad width (1,554px
+   once "Auto Fill" appears) against the 1,180px it has, and this control is
+   the single widest thing in it. In the rail it has a full 280px column, and
+   it sits beside Fabric / Special add-ons / Leg height the same way the bed
+   frame + mattress PWP section already does (pwpRailSection). */
+.pwpRailBlock {
+  /* Mirrors FabricColourPicker's .block so the rail reads as one stack of
+     sections (PWP · Fabric · Colour · Special add-ons · Leg height) rather
+     than a card dropped among plain headings. */
+  padding: 16px 0 4px;
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+}
+.pwpRailHead {
+  margin-bottom: 10px;
+}
+.pwpRailEyebrow {
+  font-family: var(--font-button);
+  font-size: 11px;
+  font-weight: var(--w-bold);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--c-burnt);
+}
+.pwpRailHint {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-left: 10px;
+}
+.pwpRail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.pwpRailRow {
+  display: flex;
   align-items: center;
   gap: var(--space-2);
-  flex-wrap: wrap;
 }
 .pwpInput {
-  width: 132px;
+  flex: 1;
+  min-width: 0;
   text-transform: uppercase;
   font-size: var(--fs-12);
-  padding: 5px 8px;
+  padding: 7px 8px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
 }
 .pwpApplied {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: var(--space-2);
   font-size: var(--fs-12);
-  white-space: nowrap;
 }
 .pwpAppliedCode {
   font-weight: 600;
@@ -536,28 +572,18 @@
   cursor: pointer;
   color: var(--fg-muted);
   font-size: var(--fs-12);
+  padding: 0;
 }
 .pwpErr {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 2px;
+  margin: 0;
   font-size: var(--fs-12);
   color: var(--c-danger, #B4321A);
-  white-space: nowrap;
 }
 
 /* Floating notices (swap / add-to-order errors + the "Loading order…" card):
-   position: fixed, hanging just under the topbar. The sofa variant drops
-   lower at tablet width, where its topbar stacks into two rows — keep the
-   offset in step with .sofaShell's tablet height above. */
+   position: fixed, hanging just under the single-row topbar. */
 .notice {
   top: 72px;
-}
-@media (max-width: 1279px) {
-  .noticeStack {
-    top: 124px;
-  }
 }
 
 /* Tablet density (≤1279px): shave gaps + paddings so the chip + total +
@@ -568,7 +594,7 @@
    inside the chip instead. */
 @media (max-width: 1279px) {
   .topbarActions {
-    gap: var(--space-2);
+    gap: 6px;
   }
   .topbarChip {
     max-width: 180px;
@@ -576,14 +602,11 @@
   .topbarChipEyebrow {
     letter-spacing: 0.12em;
   }
-  /* Sofa chip: its topbar stacks into two rows here (Topbar stackOnTablet),
-     so the top row has room for the desktop chip width + tracking and the
-     layout name ("1B(LHF) + CNR + 2A(RHF) · 28"") shows in full. */
+  /* Sofa chip: with the PWP control moved to the rail the bar has room for a
+     wider chip than the 180px default, so the layout name
+     ("1B(LHF) + CNR + 2A(RHF) · 28"") reads in full instead of ellipsising. */
   .topbarChipWide {
-    max-width: 220px;
-  }
-  .topbarChipWide .topbarChipEyebrow {
-    letter-spacing: 0.18em;
+    max-width: 200px;
   }
   .topbarTotal {
     padding: 2px var(--space-2);
@@ -592,11 +615,6 @@
   .topbarBtnPrimary {
     padding: 6px 12px;
     font-size: var(--fs-12);
-  }
-  /* Input + Apply on one line — the stacked topbar row has ~1,150px here, so
-     nothing needs to wrap (it used to at 1180px: report 2026-09-13). */
-  .pwpInline {
-    flex-wrap: nowrap;
   }
 }
 
@@ -739,21 +757,27 @@
 .sofaShell {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
-  /* Topbar is ~56px tall; this fills the rest. */
-  height: calc(100vh - 56px);
+  /* Fill what the topbar leaves. Measured with the Quick-Pick right slot in
+     place (the only mode this class is used for): 74.5px at desktop, 66.5px
+     at tablet — see the media query below. Round up past the fraction, or
+     the page stays scrollable by a pixel and the scrollbar takes 15px off
+     the width the bar is already short of. */
+  height: calc(100vh - 76px);
   background: var(--bg);
 }
 @media (max-width: 820px) {
   .sofaShell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: auto; min-height: calc(100vh - 56px); }
 }
-/* Tablet: the sofa topbar stacks into two rows (Topbar stackOnTablet), so the
-   bar is 116px tall here, plus the iOS status-bar inset the PWA draws behind
-   (Topbar.module.css pads for it; subtract it here too or the page scrolls by
-   exactly that strip). Keep in step with .noticeStack below. */
+/* Tablet: narrower rail, and the Quick-Pick bar really measures 66px here
+   (10px padding either side + the 3-line product chip) — not the 52px this
+   used to subtract, which left the page scrollable by 14px and cost a
+   scrollbar's 15px of the width the bar needs. 68 rounds past the bar's
+   fractional height so nothing scrolls. The PWA draws behind the iOS status
+   bar (Topbar pads for it), so take that inset off as well. */
 @media (max-width: 1279px) {
   .sofaShell {
     grid-template-columns: 280px minmax(0, 1fr);
-    height: calc(100vh - 116px - env(safe-area-inset-top, 0px));
+    height: calc(100vh - 68px - env(safe-area-inset-top, 0px));
   }
 }
 
