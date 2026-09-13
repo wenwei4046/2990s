@@ -28,6 +28,22 @@
     0 8px 24px rgba(60, 40, 20, 0.06);
 }
 
+/* PWP voucher section, pinned above the module list. The palette is a
+   640px-max column that scrolls internally, so a section rendered after the
+   list sits past every module group + the fabric picker — for a code entered
+   at the START of a build that is effectively hidden. It is the first thing
+   in the panel, so strip the section's own top rule and close it with a
+   divider instead. */
+.palettePwp {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+.palettePwp section {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+
 .paletteHead {
   display: flex;
   justify-content: space-between;

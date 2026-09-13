@@ -2232,19 +2232,75 @@ export const Configurator = () => {
     </span>
   ) : undefined;
 
-  // Sofa center slot — back arrow + 24"/28" depth toggle + Quick/Customize
-  // tabs. Renders for both Quick-Pick and Custom build modes. Step pills
-  // (CART/CUSTOMER/CONFIRMED) hide when this slot is present.
+  /* PWP 换购 voucher — shared across Quick Pick + Customize (Chairman
+     2026-06-02: BOTH modes must be able to redeem). It lived in the topbar
+     centerSlot until 2026-09-13, when measuring the 11" iPad showed that bar
+     needing ~1,441px of the 1,180px it has (~1,554px once "Auto Fill"
+     appears) — this control was the widest thing in it. Both modes have a
+     280px left rail, so it moved there, passed down as `pwpBlock` and shaped
+     like the bed frame / mattress pwpRailSection above. */
+  const sofaPwpRailSection = (
+    <section className={styles.pwpRailBlock}>
+      <header className={styles.pwpRailHead}>
+        <span className={styles.pwpRailEyebrow}>PWP &amp; Promo Voucher</span>
+        {!sofaPwpApplied && <span className={styles.pwpRailHint}>Optional</span>}
+      </header>
+      {sofaPwpApplied ? (
+        <div className={styles.pwpApplied}>
+          <span className={styles.pwpAppliedCode}>PWP {sofaPwpCode} ✓</span>
+          <button
+            type="button"
+            className={styles.pwpRemove}
+            onClick={() => { setSofaPwpCode(null); setSofaPwpComboIds([]); setSofaPwpInput(''); setSofaPwpErr(null); }}
+          >
+            Remove
+          </button>
+        </div>
+      ) : (
+        <div className={styles.pwpRail}>
+          <div className={styles.pwpRailRow}>
+            <input
+              type="text"
+              value={sofaPwpInput}
+              onChange={(e) => { setSofaPwpInput(e.target.value); setSofaPwpErr(null); }}
+              placeholder="Insert PWP Code"
+              className={styles.pwpInput}
+            />
+            {sameCartSofa && (
+              <Button variant="primary" size="sm" onClick={() => void applySofaPwp(sameCartSofa.code)} disabled={sofaPwpChecking}>
+                Auto Fill
+              </Button>
+            )}
+            <Button variant="secondary" size="sm" onClick={() => void applySofaPwp()} disabled={sofaPwpChecking || !sofaPwpInput.trim()}>
+              {sofaPwpChecking ? 'Checking…' : 'Apply'}
+            </Button>
+          </div>
+          {sofaPwpErr && <p className={styles.pwpErr}>{sofaPwpErr}</p>}
+        </div>
+      )}
+    </section>
+  );
+
+  // Sofa center slot — back arrow (Customize only) + 24"/28" depth toggle +
+  // Quick/Customize tabs. Renders for both Quick-Pick and Custom build modes.
+  // Step pills (CART/CUSTOMER/CONFIRMED) hide when this slot is present.
   const sofaCenterSlot = isSofa ? (
     <>
-      <button
-        type="button"
-        className={styles.topbarBack}
-        onClick={backToCatalog}
-        aria-label="Back to catalog"
-      >
-        <ArrowLeft size={20} strokeWidth={1.75} />
-      </button>
+      {/* Quick Pick's right slot carries a Cancel button wired to this very
+          same backToCatalog, so the arrow would be a second control for one
+          action — and the bar has no width to spare at 11" iPad (1180px).
+          Customize gets no Cancel (its right slot is the default pills), so
+          there the arrow IS the only way out and always renders. */}
+      {mode === 'custom' && (
+        <button
+          type="button"
+          className={styles.topbarBack}
+          onClick={backToCatalog}
+          aria-label="Back to catalog"
+        >
+          <ArrowLeft size={20} strokeWidth={1.75} />
+        </button>
+      )}
       <span className={styles.depthTabs} role="tablist" aria-label="Seat depth">
         {depthOptions.map((d) => (
           <button
@@ -2279,59 +2335,16 @@ export const Configurator = () => {
           Customize
         </button>
       </span>
-      {/* PWP 换购 voucher — shared across Quick Pick + Customize (Chairman
-          2026-06-02: moved here from the Customize footer so BOTH modes can
-          redeem). Compact single-line control; mirrors the bed frame
-          pwpRailSection (Insert PWP Code + Auto Fill same-cart + Apply). */}
-      {/* Styles live in Configurator.module.css (.pwpInline et al) so the
-          tablet media query can reach them — inline styles can't be
-          overridden by a breakpoint, and this control used to wrap "Apply"
-          under the input at 1180px (tablet report 2026-09-13). */}
-      <span className={styles.pwpInline}>
-        {sofaPwpApplied ? (
-          <span className={styles.pwpApplied}>
-            <span className={styles.pwpAppliedCode}>PWP {sofaPwpCode} ✓</span>
-            <button
-              type="button"
-              className={styles.pwpRemove}
-              onClick={() => { setSofaPwpCode(null); setSofaPwpComboIds([]); setSofaPwpInput(''); setSofaPwpErr(null); }}
-            >
-              remove
-            </button>
-          </span>
-        ) : (
-          <>
-            <input
-              type="text"
-              value={sofaPwpInput}
-              onChange={(e) => { setSofaPwpInput(e.target.value); setSofaPwpErr(null); }}
-              placeholder="Insert PWP Code"
-              className={styles.pwpInput}
-            />
-            {sameCartSofa && (
-              <Button variant="primary" onClick={() => void applySofaPwp(sameCartSofa.code)} disabled={sofaPwpChecking}>
-                Auto Fill
-              </Button>
-            )}
-            <Button variant="ghost" onClick={() => void applySofaPwp()} disabled={sofaPwpChecking || !sofaPwpInput.trim()}>
-              {sofaPwpChecking ? 'Checking…' : 'Apply'}
-            </Button>
-            {sofaPwpErr && <span className={styles.pwpErr}>{sofaPwpErr}</span>}
-          </>
-        )}
-      </span>
     </>
   ) : undefined;
 
-  // Floating notices hang just below the topbar. On the tablet the sofa topbar
-  // stacks into two rows (Topbar stackOnTablet), so they drop lower there.
-  const noticeClass = isSofa ? `${styles.notice} ${styles.noticeStack}` : styles.notice;
+  // Floating notices hang just below the single-row topbar.
+  const noticeClass = styles.notice;
 
   return (
     <>
     <Topbar
       step={isSofa ? undefined : 'cart'}
-      stackOnTablet={isSofa}
       centerSlot={sofaCenterSlot}
       rightSlot={sofaTopbarSlot ?? sizeTopbarSlot ?? bedframeTopbarSlot}
     />
@@ -2499,6 +2512,7 @@ export const Configurator = () => {
                 onClear={() => setFabricSel(null)}
               />
             }
+            pwpBlock={sofaPwpRailSection}
             specialAddonsBlock={
               <SpecialAddonsPicker addons={sofaSpecialAddons} value={sofaSpecialSel} onChange={setSofaSpecialSel} />
             }
@@ -2526,6 +2540,7 @@ export const Configurator = () => {
             modelCustomizer={modelCustomizerForDepth}
             baseModel={p.base_model ?? undefined}
             modelId={(p as { model_id?: string | null }).model_id ?? null}
+            pwpBlock={sofaPwpRailSection}
             legBlock={sofaLegBlock}
             legHeight={sofaLegValue}
             legSurchargeRm={sofaLegSurcharge}
@@ -3062,6 +3077,9 @@ interface SofaQuickPickProps {
   maxDepth: Depth;
   /** Fabric + Colour picker, rendered in the rail below the layout grid. */
   fabricBlock?: React.ReactNode;
+  /** PWP voucher section (2026-09-13: moved out of the topbar), first section
+   *  in the rail under the layout grid. */
+  pwpBlock?: React.ReactNode;
   /** Special Add-ons picker (migration 0134), rendered in the rail below fabric. */
   specialAddonsBlock?: React.ReactNode;
   /** Sofa leg-height picker (Loo 2026-06-03), rendered in the rail under fabric. */
@@ -3202,7 +3220,7 @@ const heroAnchorStyle = (
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
-const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, specialAddonsBlock, legBlock, remarkBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
+const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, pwpBlock, specialAddonsBlock, legBlock, remarkBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
   // Hide bundles not activated for this Model. The productSchema refine
   // guarantees ≥1 active+priced bundle exists for every sofa SKU.
   const activeRows = useMemo(
@@ -3410,6 +3428,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
             </div>
           </Fragment>
         ))}
+        {pwpBlock}
         {fabricBlock}
         {specialAddonsBlock}
         {legBlock}
