@@ -2180,7 +2180,9 @@ export const Configurator = () => {
   // and mode tabs moved to centerSlot per prototype topbar layout.
   const sofaTopbarSlot = isSofa && mode === 'quick' ? (
     <span className={styles.topbarActions}>
-      <span className={styles.topbarChip}>
+      {/* topbarChipWide: the sofa topbar stacks at tablet width, so this chip
+          keeps its desktop width there and the layout name shows in full. */}
+      <span className={`${styles.topbarChip} ${styles.topbarChipWide}`}>
         <span className={styles.topbarChipEyebrow}>
           {(p.name ?? '').toUpperCase()} · {(p.category_id ?? '').toUpperCase()}
         </span>
@@ -2281,14 +2283,18 @@ export const Configurator = () => {
           2026-06-02: moved here from the Customize footer so BOTH modes can
           redeem). Compact single-line control; mirrors the bed frame
           pwpRailSection (Insert PWP Code + Auto Fill same-cart + Apply). */}
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+      {/* Styles live in Configurator.module.css (.pwpInline et al) so the
+          tablet media query can reach them — inline styles can't be
+          overridden by a breakpoint, and this control used to wrap "Apply"
+          under the input at 1180px (tablet report 2026-09-13). */}
+      <span className={styles.pwpInline}>
         {sofaPwpApplied ? (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-12)' }}>
-            <span style={{ fontWeight: 600 }}>PWP {sofaPwpCode} ✓</span>
+          <span className={styles.pwpApplied}>
+            <span className={styles.pwpAppliedCode}>PWP {sofaPwpCode} ✓</span>
             <button
               type="button"
+              className={styles.pwpRemove}
               onClick={() => { setSofaPwpCode(null); setSofaPwpComboIds([]); setSofaPwpInput(''); setSofaPwpErr(null); }}
-              style={{ background: 'transparent', border: 'none', textDecoration: 'underline', cursor: 'pointer', color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}
             >
               remove
             </button>
@@ -2300,7 +2306,7 @@ export const Configurator = () => {
               value={sofaPwpInput}
               onChange={(e) => { setSofaPwpInput(e.target.value); setSofaPwpErr(null); }}
               placeholder="Insert PWP Code"
-              style={{ width: 132, textTransform: 'uppercase', fontSize: 'var(--fs-12)', padding: '5px 8px', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-sm)' }}
+              className={styles.pwpInput}
             />
             {sameCartSofa && (
               <Button variant="primary" onClick={() => void applySofaPwp(sameCartSofa.code)} disabled={sofaPwpChecking}>
@@ -2310,17 +2316,22 @@ export const Configurator = () => {
             <Button variant="ghost" onClick={() => void applySofaPwp()} disabled={sofaPwpChecking || !sofaPwpInput.trim()}>
               {sofaPwpChecking ? 'Checking…' : 'Apply'}
             </Button>
-            {sofaPwpErr && <span style={{ fontSize: 'var(--fs-12)', color: 'var(--c-danger, #B4321A)' }}>{sofaPwpErr}</span>}
+            {sofaPwpErr && <span className={styles.pwpErr}>{sofaPwpErr}</span>}
           </>
         )}
       </span>
     </>
   ) : undefined;
 
+  // Floating notices hang just below the topbar. On the tablet the sofa topbar
+  // stacks into two rows (Topbar stackOnTablet), so they drop lower there.
+  const noticeClass = isSofa ? `${styles.notice} ${styles.noticeStack}` : styles.notice;
+
   return (
     <>
     <Topbar
       step={isSofa ? undefined : 'cart'}
+      stackOnTablet={isSofa}
       centerSlot={sofaCenterSlot}
       rightSlot={sofaTopbarSlot ?? sizeTopbarSlot ?? bedframeTopbarSlot}
     />
@@ -2329,8 +2340,9 @@ export const Configurator = () => {
     {isSwapMode && swapError && (
       <div
         role="alert"
+        className={noticeClass}
         style={{
-          position: 'fixed', top: 72, left: '50%', transform: 'translateX(-50%)',
+          position: 'fixed', left: '50%', transform: 'translateX(-50%)',
           zIndex: 60, maxWidth: 620, padding: '10px 16px', borderRadius: 12,
           background: '#fff', border: '1px solid #b3261e', color: '#b3261e',
           fontFamily: 'var(--font-sans)', fontSize: 13, boxShadow: '0 4px 14px rgba(34,31,32,0.12)',
@@ -2342,8 +2354,9 @@ export const Configurator = () => {
     {/* Add-to-placed-SO — eligibility notice (not eligible) + error surface. */}
     {isAddToOrderMode && soHeaderQ.isLoading && (
       <div
+        className={noticeClass}
         style={{
-          position: 'fixed', top: 72, left: '50%', transform: 'translateX(-50%)',
+          position: 'fixed', left: '50%', transform: 'translateX(-50%)',
           zIndex: 60, maxWidth: 620, padding: '10px 16px', borderRadius: 12,
           background: '#fff', border: '1px solid var(--line-strong)',
           fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--c-ink)',
@@ -2356,8 +2369,9 @@ export const Configurator = () => {
     {isAddToOrderMode && soHeader && !soHeader.addEligible && (
       <div
         role="alert"
+        className={noticeClass}
         style={{
-          position: 'fixed', top: 72, left: '50%', transform: 'translateX(-50%)',
+          position: 'fixed', left: '50%', transform: 'translateX(-50%)',
           zIndex: 60, maxWidth: 620, padding: '10px 16px', borderRadius: 12,
           background: '#fff', border: '1px solid #b3261e', color: '#b3261e',
           fontFamily: 'var(--font-sans)', fontSize: 13, boxShadow: '0 4px 14px rgba(34,31,32,0.12)',
@@ -2376,8 +2390,9 @@ export const Configurator = () => {
     {isAddToOrderMode && addToOrderError && (
       <div
         role="alert"
+        className={noticeClass}
         style={{
-          position: 'fixed', top: 72, left: '50%', transform: 'translateX(-50%)',
+          position: 'fixed', left: '50%', transform: 'translateX(-50%)',
           zIndex: 60, maxWidth: 620, padding: '10px 16px', borderRadius: 12,
           background: '#fff', border: '1px solid #b3261e', color: '#b3261e',
           fontFamily: 'var(--font-sans)', fontSize: 13, boxShadow: '0 4px 14px rgba(34,31,32,0.12)',

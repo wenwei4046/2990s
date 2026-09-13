@@ -170,11 +170,18 @@
   white-space: nowrap;
 }
 
+.staffName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .staffRole {
   font-size: 11px;
   color: var(--fg-muted);
   font-weight: 500;
   text-transform: capitalize;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .avatar {
@@ -206,10 +213,12 @@
 }
 .iconBtn:hover { background: rgba(34, 31, 32, 0.06); }
 
-/* ─── Tablet density (≤1279px) — drop low-value items so pills stop wrapping.
-   The "POS · SHOWROOM KL" crumb is redundant when the 2990 wordmark already
-   shows the brand, and the staff role line eats vertical room with no real
-   payoff at sales-tablet density. ─── */
+/* ─── Tablet density (≤1279px) — tighter chrome so pills stop wrapping.
+   The "POS · SHOWROOM KL" crumb stays hidden here: the 2990 wordmark already
+   carries the brand, and the Catalog row has no room for it once the cart
+   chip + staff chip + sign-out join the right side. The staff role line is
+   back (2026-09-13): it sits under the name inside the avatar's 36px, so it
+   costs no width, and the desktop shows it. ─── */
 @media (max-width: 1279px) {
   .topbar {
     gap: 14px;
@@ -234,8 +243,35 @@
     padding: 6px 10px;
     font-size: 11px;
   }
-  .staffRole {
-    display: none;
+  /* A long staff name must never push sign-out off-screen. */
+  .staffMeta {
+    max-width: 120px;
+  }
+
+  /* Two-row layout (stackOnTablet): wordmark + right slot on the top row,
+     centerSlot on its own row underneath, left-aligned under the wordmark.
+     Same DOM order as the single row, so nothing changes for keyboard /
+     screen-reader users. */
+  .topbarStack {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      'left right'
+      'center center';
+    row-gap: 6px;
+  }
+  .topbarStack .left {
+    grid-area: left;
+  }
+  .topbarStack .right {
+    grid-area: right;
+    justify-content: flex-end;
+  }
+  .topbarStack .center {
+    grid-area: center;
+    /* Same row height whether the PWP field (44px Apply button) or the
+       "PWP XXX ✓ · remove" line is showing, so the bar is a stable 116px and
+       Configurator.module.css can size .sofaShell against it. */
+    min-height: 44px;
   }
 }
 

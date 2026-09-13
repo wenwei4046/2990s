@@ -35,9 +35,20 @@ interface TopbarProps {
   backTo?: string;
   /** Label for the back pill; defaults to "Back". */
   backLabel?: string;
+  /**
+   * At tablet width (≤1279px) lay the bar out in two rows — wordmark + right
+   * slot on top, centerSlot underneath — instead of squeezing all three into
+   * one. The sofa Configurator needs ~1,450px for its single row (back arrow,
+   * depth + mode tabs, PWP code, product chip, LIVE TOTAL, Cancel, Add to
+   * Cart, staff chip, sign-out); on an 11" iPad (1180px) that pushed the
+   * staff chip + sign-out off-screen and the "tablet density" rules hid the
+   * Model name to compensate (report 2026-09-13). Stacking shows everything
+   * the desktop shows. No-op at desktop width.
+   */
+  stackOnTablet?: boolean;
 }
 
-export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: TopbarProps) {
+export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, stackOnTablet }: TopbarProps) {
   const { user, signOut } = useAuth();
   const { data: staff } = useStaff();
   const lines = useCart((s) => s.lines);
@@ -51,7 +62,7 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: Topba
   const avatarColor = staff?.color ?? '#A6471E';
 
   return (
-    <header className={styles.topbar}>
+    <header className={stackOnTablet ? `${styles.topbar} ${styles.topbarStack}` : styles.topbar}>
       <div className={styles.left}>
         {backTo && (
           <Link to={backTo} className={styles.iconBtn} aria-label={backLabel ?? 'Back'}>
@@ -110,7 +121,7 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: Topba
               {initials}
             </span>
             <span className={styles.staffMeta}>
-              <span>{name}</span>
+              <span className={styles.staffName}>{name}</span>
               <span className={styles.staffRole}>{role.replace(/_/g, ' ')}</span>
             </span>
           </span>
