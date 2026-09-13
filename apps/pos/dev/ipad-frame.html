@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>2990 POS · iPad frame (dev)</title>
+    <!--
+      Dev-only tablet preview. Loads the POS inside an iframe sized like an
+      11-inch iPad in landscape (1180×820 CSS px — iPad Air 11" / iPad 11"),
+      scaled down to fit the window, so the app sees a real tablet viewport
+      (media queries, 100vh, PWA safe-area rules) no matter how wide the
+      browser pane is. Same origin as the app, so the PIN session is shared.
+
+      Open while `pnpm --filter @2990s/pos dev` runs:
+        http://localhost:6273/dev/ipad-frame.html
+        ?w=1194&h=834   → iPad Pro 11"
+        ?w=1366&h=1024  → iPad Pro 12.9" / 13"
+        ?path=/configure/<productId>   → open a specific route
+
+      Served by `vite dev` only. Not part of the production build — the POS
+      build has a single entry (index.html), so this file never deploys.
+    -->
+    <style>
+      :root { color-scheme: light; }
+      html, body { margin: 0; height: 100%; background: #221f20; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+      body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; overflow: hidden; }
+      .label { color: #bdb4a6; font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; display: flex; gap: 14px; align-items: center; }
+      .label a { color: #e86b3a; text-decoration: none; }
+      .label a:hover { text-decoration: underline; }
+      .device { position: relative; background: #0f0d0e; border-radius: 22px; padding: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); transform-origin: top center; }
+      .device::after { content: ''; position: absolute; left: 50%; top: 5px; width: 6px; height: 6px; margin-left: -3px; border-radius: 999px; background: #2c2829; }
+      iframe { display: block; border: 0; background: #fff9eb; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="label">
+      <span id="size">iPad 11" · 1180×820 · landscape</span>
+      <a href="?w=1180&h=820">11"</a>
+      <a href="?w=1194&h=834">Pro 11"</a>
+      <a href="?w=1366&h=1024">13"</a>
+    </div>
+    <div class="device" id="device">
+      <iframe id="frame" title="2990 POS (tablet viewport)"></iframe>
+    </div>
+    <script>
+      (function () {
+        var q = new URLSearchParams(location.search);
+        var w = Math.max(320, parseInt(q.get('w') || '1180', 10) || 1180);
+        var h = Math.max(320, parseInt(q.get('h') || '820', 10) || 820);
+        var path = q.get('path') || '/';
+        if (path.charAt(0) !== '/') path = '/' + path;
+        var frame = document.getElementById('frame');
+        var device = document.getElementById('device');
+        var label = document.getElementById('size');
+        frame.width = String(w);
+        frame.height = String(h);
+        frame.src = path;
+        label.textContent = (w === 1180 && h === 820 ? 'iPad 11" · ' : w === 1194 && h === 834 ? 'iPad Pro 11" · ' : w === 1366 && h === 1024 ? 'iPad 13" · ' : '') + w + '×' + h + ' · ' + (w >= h ? 'landscape' : 'portrait');
+        function fit() {
+          var pad = 28; /* device bezel */
+          var availW = window.innerWidth - 24;
+          var availH = window.innerHeight - 24 - 30; /* label row */
+          var s = Math.min(1, availW / (w + pad), availH / (h + pad));
+          device.style.transform = 'scale(' + s + ')';
+          /* keep the scaled box centred: reserve its scaled height in flow */
+          device.style.marginBottom = -((h + pad) * (1 - s)) + 'px';
+        }
+        fit();
+        window.addEventListener('resize', fit);
+      })();
+    </script>
+  </body>
+</html>

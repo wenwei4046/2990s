@@ -497,9 +497,75 @@
   cursor: not-allowed;
 }
 
-/* Tablet density (≤1279px): hide the "Delivery & assembly included" line and
-   shave gaps so the chip + total + buttons fit on one row without anything
-   word-wrapping. ChipName + ChipSub stay; ChipEyebrow + TotalNote drop. */
+/* ─── PWP 换购 code control (sofa topbar centerSlot) ────────────────────
+   Desktop keeps the original wrapping container: the single-row topbar needs
+   ~1,750px with Auto Fill showing, so on a tighter desktop the buttons still
+   drop under the input rather than pushing sign-out off-screen. At tablet
+   width the row is forced to one line (see the media block below) — the
+   topbar stacks there, so the row has the room. The validation message hangs
+   below the field (absolute) so a long one never widens the row. */
+.pwpInline {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.pwpInput {
+  width: 132px;
+  text-transform: uppercase;
+  font-size: var(--fs-12);
+  padding: 5px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+}
+.pwpApplied {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-12);
+  white-space: nowrap;
+}
+.pwpAppliedCode {
+  font-weight: 600;
+}
+.pwpRemove {
+  background: transparent;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: var(--fs-12);
+}
+.pwpErr {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 2px;
+  font-size: var(--fs-12);
+  color: var(--c-danger, #B4321A);
+  white-space: nowrap;
+}
+
+/* Floating notices (swap / add-to-order errors + the "Loading order…" card):
+   position: fixed, hanging just under the topbar. The sofa variant drops
+   lower at tablet width, where its topbar stacks into two rows — keep the
+   offset in step with .sofaShell's tablet height above. */
+.notice {
+  top: 72px;
+}
+@media (max-width: 1279px) {
+  .noticeStack {
+    top: 124px;
+  }
+}
+
+/* Tablet density (≤1279px): shave gaps + paddings so the chip + total +
+   buttons fit without anything word-wrapping. Everything the desktop shows
+   stays visible — this block used to `display: none` the Model eyebrow and
+   the "Delivery & assembly included" note, which is how the sales tablet lost
+   the Model name (report 2026-09-13). Tighter eyebrow tracking keeps the name
+   inside the chip instead. */
 @media (max-width: 1279px) {
   .topbarActions {
     gap: var(--space-2);
@@ -507,9 +573,17 @@
   .topbarChip {
     max-width: 180px;
   }
-  .topbarChipEyebrow,
-  .topbarTotalNote {
-    display: none;
+  .topbarChipEyebrow {
+    letter-spacing: 0.12em;
+  }
+  /* Sofa chip: its topbar stacks into two rows here (Topbar stackOnTablet),
+     so the top row has room for the desktop chip width + tracking and the
+     layout name ("1B(LHF) + CNR + 2A(RHF) · 28"") shows in full. */
+  .topbarChipWide {
+    max-width: 220px;
+  }
+  .topbarChipWide .topbarChipEyebrow {
+    letter-spacing: 0.18em;
   }
   .topbarTotal {
     padding: 2px var(--space-2);
@@ -518,6 +592,11 @@
   .topbarBtnPrimary {
     padding: 6px 12px;
     font-size: var(--fs-12);
+  }
+  /* Input + Apply on one line — the stacked topbar row has ~1,150px here, so
+     nothing needs to wrap (it used to at 1180px: report 2026-09-13). */
+  .pwpInline {
+    flex-wrap: nowrap;
   }
 }
 
@@ -667,8 +746,15 @@
 @media (max-width: 820px) {
   .sofaShell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: auto; min-height: calc(100vh - 56px); }
 }
+/* Tablet: the sofa topbar stacks into two rows (Topbar stackOnTablet), so the
+   bar is 116px tall here, plus the iOS status-bar inset the PWA draws behind
+   (Topbar.module.css pads for it; subtract it here too or the page scrolls by
+   exactly that strip). Keep in step with .noticeStack below. */
 @media (max-width: 1279px) {
-  .sofaShell { grid-template-columns: 280px minmax(0, 1fr); height: calc(100vh - 52px); }
+  .sofaShell {
+    grid-template-columns: 280px minmax(0, 1fr);
+    height: calc(100vh - 116px - env(safe-area-inset-top, 0px));
+  }
 }
 
 /* Left rail */
