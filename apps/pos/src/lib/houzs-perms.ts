@@ -25,12 +25,16 @@ import { useQuery } from '@tanstack/react-query';
 import { HOUZS_COMPANY_ID, IS_HOUZS, houzsApiRoot } from './apiClient';
 import { getHouzsToken } from './houzsSession';
 import { useAuth } from './auth';
-import { useStaff } from './staff';
+import { useStaff, isGlobalCurator } from './staff';
 
 /** GET config / profiles / item-KPI / pickers / commission. */
 export const HR_READ = 'scm.hr.read';
 /** Every write: rates, thresholds, profiles, item-KPI rules, override levels. */
 export const HR_MANAGE = 'scm.hr.manage';
+/** Write SCM master data — products, prices, sofa combos, maintenance config.
+ *  The flat half of the Houzs gate; the resolved answer is `scmConfigWriter`
+ *  below, which also covers the position half. */
+export const SCM_CONFIG_WRITE = 'scm.config.write';
 
 /** Does this permission list satisfy `required`?
  *
@@ -59,19 +63,33 @@ const KEYS_FROM_2990_ROLE = (role: string | undefined): string[] => {
   return [];
 };
 
+/** What /auth/me tells us about the signed-in Houzs caller.
+ *
+ *  `permissions` is the raw key list. `scmConfigWriter` is Houzs's own RESOLVED
+ *  answer to "may this person write SCM master data" — flat key OR position
+ *  policy, computed once server-side (backend/src/routes/auth.ts) precisely so a
+ *  screen never re-derives it. We read the resolved flag rather than testing
+ *  `scm.config.write` ourselves: Houzs's own note on that field says asking the
+ *  flat half only is how SO Maintenance came to show read-only to people whose
+ *  edits the API would have accepted. */
+export interface HouzsMe {
+  permissions: string[];
+  scmConfigWriter: boolean;
+}
+
 /**
  * The Houzs caller's granted permission keys. HOUZS TARGET ONLY — see
  * `useHrAccess`, which is what components call.
  *
- * A failed /auth/me resolves to `[]` rather than throwing: the consequence is a
- * hidden link, which is the safe direction. The page behind it still calls the
- * API, so a caller who really does hold the key and hits a transient blip sees
- * the page's own error rather than a silent empty screen.
+ * A failed /auth/me resolves to empty/false rather than throwing: the
+ * consequence is a hidden link, which is the safe direction. The page behind it
+ * still calls the API, so a caller who really does hold the key and hits a
+ * transient blip sees the page's own error rather than a silent empty screen.
  */
 export function useHouzsPerms() {
   const { user } = useAuth();
 
-  return useQuery<string[]>({
+  return useQuery<HouzsMe>({
     queryKey: ['houzs-perms', user?.id],
     // Never runs on the 2990 target: there is no /auth/me to ask, and the answer
     // there comes from the role instead (KEYS_FROM_2990_ROLE, applied in
@@ -85,9 +103,10 @@ export function useHouzsPerms() {
     staleTime: 5 * 60_000,
     retry: false,
     queryFn: async () => {
+      const EMPTY: HouzsMe = { permissions: [], scmConfigWriter: false };
       const root = houzsApiRoot();
       const token = getHouzsToken();
-      if (!root || !token) return [];
+      if (!root || !token) return EMPTY;
 
       /* /auth/me sits at the /api ROOT, outside the /api/scm base authedFetch
          targets — hence the bare fetch with the headers spelled out. X-Company-Id
@@ -102,14 +121,20 @@ export function useHouzsPerms() {
           },
         });
       } catch {
-        return [];
+        return EMPTY;
       }
-      if (!res.ok) return [];
+      if (!res.ok) return EMPTY;
       const body = (await res.json().catch(() => ({}))) as {
-        user?: { permissions?: unknown };
+        user?: { permissions?: unknown; scm_config_writer?: unknown };
       };
       const raw = body.user?.permissions;
-      return Array.isArray(raw) ? raw.filter((p): p is string => typeof p === 'string') : [];
+      return {
+        permissions: Array.isArray(raw) ? raw.filter((p): p is string => typeof p === 'string') : [],
+        /* Strictly `=== true`: an older Houzs build that predates the flag
+           answers `undefined`, and that must read as "don't know", not as a
+           grant. The role half of useMaintainAccess still covers those callers. */
+        scmConfigWriter: body.user?.scm_config_writer === true,
+      };
     },
   });
 }
@@ -130,7 +155,7 @@ export function useHrAccess(): { canRead: boolean; canManage: boolean; isLoading
   const houzs = useHouzsPerms();
   const staff = useStaff();
 
-  const granted = IS_HOUZS ? houzs.data : KEYS_FROM_2990_ROLE(staff.data?.role);
+  const granted = IS_HOUZS ? houzs.data?.permissions : KEYS_FROM_2990_ROLE(staff.data?.role);
   const isLoading = IS_HOUZS ? houzs.isLoading : staff.isLoading;
 
   return {
@@ -138,4 +163,51 @@ export function useHrAccess(): { canRead: boolean; canManage: boolean; isLoading
     canManage: hasPerm(granted, HR_MANAGE),
     isLoading,
   };
+}
+
+/**
+ * May this person use the MAINTAIN tooling — the Catalog sidebar section and
+ * the /products, /sales-order-maintenance, /new-order, /sales-analysis routes
+ * behind it — and edit rather than just read Products / SO Maintenance?
+ *
+ * ── WHY THIS EXISTS (2026-09-15) ────────────────────────────────────────────
+ * It used to be `isGlobalCurator(staff.role)` alone, and that stopped working
+ * for the owner without a line of this repo changing.
+ *
+ * `staff.role` is not a role any more. Houzs's migration 0066 stamps
+ * scm.staff.role = 'sales' on EVERY member, so the value the POS sees is
+ * DERIVED at read time from the member's Houzs Title:
+ * POSITION_SLUG_TO_POS_ROLE in backend/src/scm/lib/pos-staff-role.ts maps six
+ * slugs (super_admin, sales_director, sales_manager, sales_executive,
+ * sales_person, sales_trainee) and falls back to the stamped 'sales' for
+ * anything else. On 2026-09-07 Loo's Title moved from "Super Admin" to a newly
+ * created "Managing Director" (slug `managing_director`, Houzs audit_events
+ * #839 / #841). That slug is not in the map, so his POS role silently became
+ * 'sales' and the whole Maintain section vanished — for him and for Wei Siang,
+ * whose Title changed in the same write.
+ *
+ * A Title the owner renames must not be able to do that again. So the question
+ * is asked of the thing Houzs actually enforces: `scm_config_writer` off
+ * /auth/me, the same predicate its routes gate on (canWriteScmConfig).
+ *
+ * OR, never AND — the role half stays, so everyone who can reach these pages
+ * today still can, and a 2990-target dev build (no /auth/me) is unchanged.
+ *
+ * ── NOT A SECURITY BOUNDARY ─────────────────────────────────────────────────
+ * Same standing as useHrAccess: a HIDE. Every write behind these pages is gated
+ * server-side against the real caller. A bug here is cosmetic, never a leak.
+ */
+export function useMaintainAccess(): { canMaintain: boolean; isLoading: boolean } {
+  const houzs = useHouzsPerms();
+  const staff = useStaff();
+
+  const byRole = isGlobalCurator(staff.data?.role);
+  const byPerm = IS_HOUZS && houzs.data?.scmConfigWriter === true;
+
+  /* Both reads must settle before a "no" is trustworthy — MaintainGate
+     redirects on !canMaintain, and bouncing on "not answered yet" would kick a
+     legitimate holder back to the catalogue on every hard load of the URL. */
+  const isLoading = staff.isLoading || (IS_HOUZS && houzs.isLoading);
+
+  return { canMaintain: byRole || byPerm, isLoading };
 }

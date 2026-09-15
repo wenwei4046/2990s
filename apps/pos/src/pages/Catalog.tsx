@@ -21,8 +21,8 @@ import {
 } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow, type MfgCatalogCategory } from '../lib/queries';
-import { useStaff, isGlobalCurator, isPosSalesRole } from '../lib/staff';
-import { useHrAccess } from '../lib/houzs-perms';
+import { useStaff, isPosSalesRole } from '../lib/staff';
+import { useHrAccess, useMaintainAccess } from '../lib/houzs-perms';
 import { authedFetchRaw, IS_HOUZS } from '../lib/apiClient';
 import { useCart, cartHasSofa, cartHasMainNonSofa, type FlatConfigSnapshot } from '../state/cart';
 import { Topbar } from '../components/Topbar';
@@ -166,6 +166,10 @@ export const Catalog = () => {
      Cached for 5 minutes and shared with the route guard, so this costs one
      /auth/me per session rather than one per catalogue paint. */
   const { canRead: canReadHr } = useHrAccess();
+  /* Maintain section visibility. NOT isGlobalCurator(staff.role) any more —
+     a Houzs Title rename turned that off for the owner on 2026-09-07; see
+     useMaintainAccess's header. */
+  const { canMaintain } = useMaintainAccess();
   useMfgCatalogRealtime();
   const allCategories = useCategoriesAll();
 
@@ -380,11 +384,11 @@ export const Catalog = () => {
                 Pricing footer so they're the last thing in the rail —
                 away from the per-session category browsing flow above. */}
             {/* MAINTAIN is master-admin tooling (New Order / Products / SO
-                Maintenance). Only admin / super_admin / master_account see it —
-                isGlobalCurator, the same POS curator predicate used for global
-                Quick Picks + Combos. Sales etc. don't see the section, and the
-                three routes are guarded in router.tsx (MaintainGate) so a
-                hand-typed URL can't bypass the hide. */}
+                Maintenance / Sales analysis). Shown to the POS curator roles OR
+                to anyone Houzs itself calls an SCM config writer —
+                useMaintainAccess. Sales etc. don't see the section, and the four
+                routes are guarded in router.tsx (MaintainGate) with the SAME
+                predicate so a hand-typed URL can't bypass the hide. */}
             {/* TEMPORARY (Loo 2026-06-10) — emergency hatch while the new POS
                 order flow stabilises: sales-side roles get a button that opens
                 the Backend's raw SO create form ALREADY SIGNED IN (salespeople
@@ -415,7 +419,7 @@ export const Catalog = () => {
               </>
             )}
 
-            {isGlobalCurator(staff?.role) && (
+            {canMaintain && (
               <>
                 <div className={styles.sideHeading}>Maintain</div>
                 {/* Commander 2026-05-28 ("就直接添加一个 New Order 的 button…

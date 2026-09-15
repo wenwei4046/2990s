@@ -49,6 +49,7 @@ import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronRight, MapPin, Lock } from
 import { isCorePaymentMethodRow } from '@2990s/shared/payment-methods';
 import { Button } from '@2990s/design-system';
 import { useStaff } from '../lib/staff';
+import { useMaintainAccess } from '../lib/houzs-perms';
 import {
   useVenues, useCreateVenue, useUpdateVenue, useDeactivateVenue,
   type VenueRow,
@@ -101,9 +102,27 @@ const canAdd  = (m: MaintenanceMode) => m !== 'view';
    删除, 只能添加). */
 const canEdit = (m: MaintenanceMode) => m === 'full';
 
-export const SalesOrderMaintenance = () => {
+/* The tier this page runs at.
+ *
+ * Two independent ways to reach 'full', because the role half alone is not
+ * trustworthy: scm.staff.role is stamped 'sales' on every Houzs member and the
+ * value we see is derived from the member's TITLE, so renaming a Title to
+ * something outside Houzs's six-slug map silently demotes the person here. That
+ * is what happened to the owner on 2026-09-07 — see useMaintainAccess.
+ *
+ * The second way is Houzs's own resolved `scm_config_writer`, the SAME
+ * predicate its routes gate the writes on (canWriteScmConfig). Houzs's note on
+ * that flag says asking the flat key alone is exactly how THIS page came to show
+ * read-only to people whose edits the API would have accepted. OR, never AND. */
+function useMaintenanceMode(): MaintenanceMode {
   const { data: staff } = useStaff();
-  const mode = maintenanceMode(staff?.role);
+  const { canMaintain, isLoading } = useMaintainAccess();
+  if (isLoading) return 'view'; // safest tier until both reads resolve
+  return maintenanceMode(staff?.role) === 'full' || canMaintain ? 'full' : 'view';
+}
+
+export const SalesOrderMaintenance = () => {
+  const mode = useMaintenanceMode();
 
   /* Chip label next to the page title — makes the gate visible. */
   const chip =
