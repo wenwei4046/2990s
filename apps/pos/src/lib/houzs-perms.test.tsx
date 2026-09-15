@@ -37,9 +37,10 @@ vi.mock('./apiClient', () => ({
   houzsApiRoot: () => 'https://erp.houzscentury.test/api',
 }));
 
-import { useMaintainAccess } from './houzs-perms';
+import { useMaintainAccess, useCanViewAllSales, useCanChangePin } from './houzs-perms';
 
-/** Stub /auth/me with the body Houzs would return for this caller. */
+/** Stub /auth/me with the body Houzs would return for this caller — pass
+ *  `permissions`, `scm_config_writer` and/or `capabilities` as Houzs would. */
 const stubMe = (user: Record<string, unknown>) => {
   vi.stubGlobal(
     'fetch',
@@ -104,5 +105,72 @@ describe('useMaintainAccess — a Houzs Title rename must not switch Maintain of
     const { result } = render();
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.canMaintain).toBe(false);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Same root cause, two more symptoms (2026-09-15).
+
+   With the owner's POS role fallen back to 'sales', My Orders self-scoped even
+   though Houzs was still returning every order to him, and the Topbar offered
+   him "Change PIN" — a PIN he cannot have, because /pos/pin-login refuses any
+   member whose position slug does not start with "sales".
+
+   Both now read Houzs's own resolved capability set. Note the two directions:
+   view-all WIDENS (OR the role rule), Change PIN NARROWS — and only on a
+   definite `false`, never on "not answered".
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const renderViewAll = () => renderHook(() => useCanViewAllSales(), { wrapper });
+const renderChangePin = () => renderHook(() => useCanChangePin(), { wrapper });
+
+describe('useCanViewAllSales — the board follows the rows Houzs actually returns', () => {
+  it('shows every salesperson to the owner, whose derived role says "sales"', async () => {
+    stubMe({ permissions: ['*'], capabilities: { 'scm.sales.viewAll': true } });
+    const { result } = renderViewAll();
+    await waitFor(() => expect(result.current).toBe(true));
+  });
+
+  it('never narrows: a POS view-all role keeps the filter when Houzs says no', async () => {
+    staffResult.data = { role: 'sales_director' };
+    stubMe({ permissions: [], capabilities: { 'scm.sales.viewAll': false } });
+    const { result } = renderViewAll();
+    await waitFor(() => expect(result.current).toBe(true));
+  });
+
+  it('keeps a plain salesperson self-scoped', async () => {
+    stubMe({ permissions: ['scm.access'], capabilities: { 'scm.sales.viewAll': false } });
+    const { result } = renderViewAll();
+    await waitFor(() => expect(result.current).toBe(false));
+  });
+});
+
+describe('useCanChangePin — no PIN to change, no key icon', () => {
+  it('hides it from the owner: org.sales.staff false, so Houzs would refuse his PIN login', async () => {
+    // Loo: position "Managing Director", department "Management" → isSalesUser false.
+    stubMe({ permissions: ['*'], capabilities: { 'org.sales.staff': false } });
+    const { result } = renderChangePin();
+    await waitFor(() => expect(result.current).toBe(false));
+  });
+
+  it('keeps it for a real salesperson', async () => {
+    stubMe({ permissions: ['scm.access'], capabilities: { 'org.sales.staff': true } });
+    const { result } = renderChangePin();
+    await waitFor(() => expect(result.current).toBe(true));
+  });
+
+  it('does NOT hide on "not answered" — that would strand a salesperson', async () => {
+    stubMe({ permissions: ['scm.access'] }); // no capabilities at all
+    const { result } = renderChangePin();
+    await waitFor(() => expect(result.current).toBe(true));
+  });
+
+  it('org.sales.staff true does not by itself hand out the link', async () => {
+    // admin is org-Sales in this fixture but is not a passcode-login role, and
+    // the role rule still decides once Houzs has not vetoed.
+    staffResult.data = { role: 'admin' };
+    stubMe({ permissions: ['*'], capabilities: { 'org.sales.staff': true } });
+    const { result } = renderChangePin();
+    await waitFor(() => expect(result.current).toBe(false));
   });
 });

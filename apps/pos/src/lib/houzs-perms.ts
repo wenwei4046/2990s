@@ -25,7 +25,7 @@ import { useQuery } from '@tanstack/react-query';
 import { HOUZS_COMPANY_ID, IS_HOUZS, houzsApiRoot } from './apiClient';
 import { getHouzsToken } from './houzsSession';
 import { useAuth } from './auth';
-import { useStaff, isGlobalCurator } from './staff';
+import { useStaff, isGlobalCurator, canViewAllSales, isPasscodeLoginRole } from './staff';
 
 /** GET config / profiles / item-KPI / pickers / commission. */
 export const HR_READ = 'scm.hr.read';
@@ -75,7 +75,34 @@ const KEYS_FROM_2990_ROLE = (role: string | undefined): string[] => {
 export interface HouzsMe {
   permissions: string[];
   scmConfigWriter: boolean;
+  /** Houzs's RESOLVED answer set (`user.capabilities`, services/capabilities.ts).
+   *
+   *  Owner's ruling 2026-07-19: 「我们的权限全部要用 backend 来做…frontend
+   *  那边就不会那么忙」. Each key is computed ONCE per request by the SAME
+   *  predicate the matching route gate calls, so a client renders a control or
+   *  does not and never re-derives WHY. Read keys from here rather than testing
+   *  raw permission strings — a key can be satisfied by a position as well as by
+   *  a grant, and asking only the flat half is how this POS has drifted from the
+   *  wire three times.
+   *
+   *  An empty map means "not answered" (old build, blip, 2990 target), never
+   *  "denied" — every consumer below falls back to its role rule in that case. */
+  capabilities: Readonly<Record<string, boolean>>;
 }
+
+/** One capability, as a tri-state: true / false / undefined = not answered. */
+const cap = (me: HouzsMe | undefined, key: string): boolean | undefined =>
+  me?.capabilities[key];
+
+/** May the caller see EVERY salesperson's board?
+ *  Houzs gate: `scm.so.view_all` grant OR a director position
+ *  (scm/lib/houzs-perms.canViewAllSales). */
+export const CAP_SALES_VIEW_ALL = 'scm.sales.viewAll';
+/** Is the caller Sales staff by STABLE ORG FIELD — position "Sales…" or a
+ *  department named "…sales…" (pmsAccess.isSalesUser)? The read-side twin of the
+ *  PIN-login gate, which refuses any member whose position slug does not start
+ *  with "sales" (backend/src/routes/pos.ts). */
+export const CAP_ORG_SALES_STAFF = 'org.sales.staff';
 
 /**
  * The Houzs caller's granted permission keys. HOUZS TARGET ONLY — see
@@ -103,7 +130,7 @@ export function useHouzsPerms() {
     staleTime: 5 * 60_000,
     retry: false,
     queryFn: async () => {
-      const EMPTY: HouzsMe = { permissions: [], scmConfigWriter: false };
+      const EMPTY: HouzsMe = { permissions: [], scmConfigWriter: false, capabilities: {} };
       const root = houzsApiRoot();
       const token = getHouzsToken();
       if (!root || !token) return EMPTY;
@@ -125,15 +152,26 @@ export function useHouzsPerms() {
       }
       if (!res.ok) return EMPTY;
       const body = (await res.json().catch(() => ({}))) as {
-        user?: { permissions?: unknown; scm_config_writer?: unknown };
+        user?: { permissions?: unknown; scm_config_writer?: unknown; capabilities?: unknown };
       };
       const raw = body.user?.permissions;
+      const rawCaps = body.user?.capabilities;
+      /* Keep only real booleans. A key that arrives as anything else is dropped
+         rather than coerced, so it reads as "not answered" and the consumer
+         falls back to its role rule — the same direction as a missing key. */
+      const capabilities: Record<string, boolean> = {};
+      if (rawCaps && typeof rawCaps === 'object') {
+        for (const [k, v] of Object.entries(rawCaps as Record<string, unknown>)) {
+          if (typeof v === 'boolean') capabilities[k] = v;
+        }
+      }
       return {
         permissions: Array.isArray(raw) ? raw.filter((p): p is string => typeof p === 'string') : [],
         /* Strictly `=== true`: an older Houzs build that predates the flag
            answers `undefined`, and that must read as "don't know", not as a
            grant. The role half of useMaintainAccess still covers those callers. */
         scmConfigWriter: body.user?.scm_config_writer === true,
+        capabilities,
       };
     },
   });
@@ -210,4 +248,59 @@ export function useMaintainAccess(): { canMaintain: boolean; isLoading: boolean 
   const isLoading = staff.isLoading || (IS_HOUZS && houzs.isLoading);
 
   return { canMaintain: byRole || byPerm, isLoading };
+}
+
+/**
+ * May this person see EVERY salesperson's My-Orders board (and use the
+ * salesperson filter), or only their own?
+ *
+ * WIDENS the role rule, never narrows it. `canViewAllSales(staff.role)` stays
+ * as-is — it is still the answer on the 2990 target, and every role that passes
+ * it today keeps passing. What it adds is Houzs's own `scm.sales.viewAll`,
+ * resolved by the same predicate its sales routes scope the rows with
+ * (scm/lib/houzs-perms.canViewAllSales = `scm.so.view_all` grant OR a director
+ * position).
+ *
+ * Why it needed widening: the POS role is derived from the member's Houzs Title
+ * and falls back to the stamped 'sales' for any Title outside Houzs's six-slug
+ * map — so on 2026-09-07 the owner's board silently self-scoped while the server
+ * was still returning every order to him. See useMaintainAccess for the whole
+ * mechanism.
+ */
+export function useCanViewAllSales(): boolean {
+  const houzs = useHouzsPerms();
+  const staff = useStaff();
+  return canViewAllSales(staff.data?.role) || cap(houzs.data, CAP_SALES_VIEW_ALL) === true;
+}
+
+/**
+ * Should this person be offered "Change PIN" — the Topbar key icon and the
+ * /change-pin page?
+ *
+ * The only one of these predicates that NARROWS, and it has to: the bug here is
+ * a false POSITIVE. `isPasscodeLoginRole` asks whether the POS role is one of
+ * the frontline tiers, and a Title outside Houzs's map lands on 'sales' — the
+ * most frontline tier there is. So the owner, who cannot PIN-login at all, was
+ * being offered a PIN to change. Houzs refuses him at the door: POST
+ * /pos/pin-login rejects any member whose position slug does not start with
+ * "sales" (backend/src/routes/pos.ts), "defense-in-depth over PIN seeding".
+ *
+ * `org.sales.staff` is that same question asked of the org fields
+ * (pmsAccess.isSalesUser). Narrowing is gated on a DEFINITE `false`:
+ *
+ *   · answered false  → hide. Houzs would refuse this person a PIN login.
+ *   · answered true   → the existing role rule decides, unchanged. A Sales
+ *                       Director is org-Sales and could PIN-login, but has never
+ *                       been offered the link here; aligning that is a separate
+ *                       decision, not a side effect of this fix.
+ *   · not answered    → the existing role rule decides (2990 target, an older
+ *                       Houzs build, a blip). Never hide on "don't know" — that
+ *                       would strand a real salesperson with no way to change a
+ *                       PIN they use every day.
+ */
+export function useCanChangePin(): boolean {
+  const houzs = useHouzsPerms();
+  const staff = useStaff();
+  if (cap(houzs.data, CAP_ORG_SALES_STAFF) === false) return false;
+  return isPasscodeLoginRole(staff.data?.role);
 }

@@ -57,7 +57,8 @@ import {
   usePaymentMethodLabels,
   useSoDropdownValues,
 } from '../lib/so-maintenance/so-dropdown-options-queries';
-import { useStaff, canViewAllSales, useSalesStaff } from '../lib/staff';
+import { useStaff, useSalesStaff } from '../lib/staff';
+import { useCanViewAllSales } from '../lib/houzs-perms';
 import { launchHouzsSso, canLaunchHouzs } from '../lib/houzs-sso';
 import styles from './OrderStatus.module.css';
 
@@ -914,8 +915,10 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
 
   // View-all roles (super_admin / sales_director / outlet_manager) may view
   // every salesperson's board via a filter; everyone else stays self-scoped.
+  // On the Houzs target this ALSO admits whoever Houzs itself scopes the rows
+  // for (`scm.sales.viewAll`) — the derived POS role alone missed the owner.
   const staff = useStaff();
-  const canSeeAll = canViewAllSales(staff.data?.role);
+  const canSeeAll = useCanViewAllSales();
   const [salesperson, setSalesperson] = useState<string>('all'); // 'all' | staffId
   const effectiveSalesperson = canSeeAll ? salesperson : null;
   const salesStaff = useSalesStaff(canSeeAll);

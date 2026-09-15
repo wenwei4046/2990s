@@ -11,12 +11,15 @@ import { Navigate, useNavigate } from 'react-router';
 import { Button } from '@2990s/design-system';
 import { API_URL, authedFetchRaw, IS_HOUZS, posApiBase } from '../lib/apiClient';
 import { useAuth } from '../lib/auth';
-import { useStaff, isPasscodeLoginRole } from '../lib/staff';
+import { useStaff } from '../lib/staff';
+import { useCanChangePin } from '../lib/houzs-perms';
 import styles from './SetPassword.module.css';
 
 export const ChangePin = () => {
   const { user, loading } = useAuth();
   const { data: staff, isLoading: staffLoading } = useStaff();
+  // Before the early returns below — hooks must not sit behind a branch.
+  const canChangePin = useCanChangePin();
   const navigate = useNavigate();
   const [pin, setPin] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -26,8 +29,9 @@ export const ChangePin = () => {
 
   if (loading || staffLoading) return <div className={styles.shell}>Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
-  // Only passcode-login roles have a PIN to change.
-  if (staff && !isPasscodeLoginRole(staff.role)) return <Navigate to="/catalog" replace />;
+  // Only people who can actually PIN-login have a PIN to change — Houzs's
+  // /pos/pin-login refuses anyone whose position slug isn't "sales…".
+  if (staff && !canChangePin) return <Navigate to="/catalog" replace />;
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
