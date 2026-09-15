@@ -3,7 +3,8 @@ import { Link } from 'react-router';
 import { ArrowLeft, Bookmark, KeyRound, ListOrdered, LogOut, ShoppingBag } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { useAuth } from '../lib/auth';
-import { useStaff, isPasscodeLoginRole } from '../lib/staff';
+import { useStaff } from '../lib/staff';
+import { useCanChangePin } from '../lib/houzs-perms';
 import { useCart, cartItemCount, cartSubtotal } from '../state/cart';
 import { HouzsSsoMenu } from './HouzsSsoMenu';
 import styles from './Topbar.module.css';
@@ -40,6 +41,7 @@ interface TopbarProps {
 export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: TopbarProps) {
   const { user, signOut } = useAuth();
   const { data: staff } = useStaff();
+  const canChangePin = useCanChangePin();
   const lines = useCart((s) => s.lines);
   const count = cartItemCount(lines);
   const subtotal = cartSubtotal(lines);
@@ -115,7 +117,7 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: Topba
             </span>
           </span>
         )}
-        {isPasscodeLoginRole(staff?.role) && (
+        {canChangePin && (
           <Link to="/change-pin" className={styles.iconBtn} aria-label="Change PIN" title="Change PIN">
             <KeyRound size={18} strokeWidth={1.75} />
           </Link>
