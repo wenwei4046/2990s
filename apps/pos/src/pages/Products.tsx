@@ -118,6 +118,7 @@ import { useSofaCombos } from '../lib/products/sofa-combos-queries';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/products/size-info';
 import { readMoney } from '../lib/houzs-money-keys';
 import { useStaff } from '../lib/staff';
+import { useMaintainAccess } from '../lib/houzs-perms';
 import { useQueryClient } from '@tanstack/react-query';
 import styles from './Products.module.css';
 
@@ -147,10 +148,23 @@ function productsMode(role: string | undefined): ProductsMode {
   return 'view'; // sales / sales_executive / outlet_manager / coordinator / finance / anything else
 }
 
+/* The tier this page runs at.
+ *
+ * Two independent ways to reach 'full', because the role half alone is not
+ * trustworthy: scm.staff.role is stamped 'sales' on every Houzs member and the
+ * value we see is derived from the member's TITLE, so renaming a Title to
+ * something outside Houzs's six-slug map silently demotes the person here. That
+ * is exactly what happened to the owner on 2026-09-07 — see useMaintainAccess.
+ *
+ * The second way is Houzs's own resolved `scm_config_writer`, the SAME
+ * predicate its routes gate the writes on (canWriteScmConfig). So the page's
+ * tier and the API's answer agree by construction: no more read-only chrome
+ * over edits the server would have accepted. OR, never AND. */
 function useProductsMode(): ProductsMode {
   const { data: staff } = useStaff();
-  if (!staff) return 'view'; // default to safest tier until staff row resolves
-  return productsMode(staff.role);
+  const { canMaintain, isLoading } = useMaintainAccess();
+  if (isLoading || !staff) return 'view'; // safest tier until both reads resolve
+  return productsMode(staff.role) === 'full' || canMaintain ? 'full' : 'view';
 }
 
 /* Modal shell shown when a POS user clicks into a flow the POS port
