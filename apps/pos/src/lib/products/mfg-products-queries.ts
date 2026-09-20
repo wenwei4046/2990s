@@ -29,8 +29,14 @@ export type SeatHeightPrice = {
   tier?: SofaPriceTier;
   /** Buyer SELLING price (sen) the POS Edit-Price grid authors (Chairman
       2026-06-01). `priceSen` stays COST (Backend-owned). Unset on cost-only rows
-      → the selling read falls through to the flat module sell_price_sen. */
-  sellingPriceSen?: number;
+      → the selling read falls through to the flat module sell_price_sen.
+
+      `null` is DIFFERENT from absent, and the difference is load-bearing: the
+      company-2 retail write lock on scm.mfg_products reads key presence as
+      intent, so an explicit null is "the operator cleared this" while an absent
+      key is "this writer wasn't touching retail — carry the old price forward".
+      See upsertHeightTierSelling in pages/Products.tsx. */
+  sellingPriceSen?: number | null;
 };
 
 export type MfgProductRow = {
