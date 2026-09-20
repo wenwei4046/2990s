@@ -101,6 +101,14 @@ import {
   type SofaPriceTier,
   type ProductSupplierRow,
 } from '../lib/products/mfg-products-queries';
+// Retail (sellingPriceSen) read/write pair for the sofa grid. Lives in its own
+// module because a DB trigger enforces its clear-writes-explicit-null contract
+// — see the header there before changing either function.
+import {
+  SOFA_SELL_TIER,
+  sellingForHeightTier,
+  upsertHeightTierSelling,
+} from '../lib/products/seat-height-selling';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
 import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useSpecialDeliveryFees, useUpsertSpecialDeliveryFee, useDeleteSpecialDeliveryFee, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useModelFabricTierOverrides, useUpsertModelFabricTierOverride, useDeleteModelFabricTierOverride, useCompartmentPool, useCompartmentFabricTierOverrides, useUpsertCompartmentFabricTierOverride, useDeleteCompartmentFabricTierOverride, useAddons, type AddonRow, type FabricLibraryRow, useSpecialAddons, useCreateSpecialAddon, useUpdateSpecialAddon, useDeleteSpecialAddon, type SpecialAddonRow, type SpecialAddonGroup, type SpecialAddonInput, useAllAddons, useUpdateAddon, useCreateAddon, useDeleteAddon, type AdminAddonRow } from '../lib/queries';
 import {
@@ -1619,55 +1627,6 @@ const fmtRm = (sen: number | null): string => {
 const fmtUnit = (milli: number): string =>
   (milli / 1000).toFixed(3);
 
-// The POS sofa Edit-Price grid authors the buyer SELLING price at the default
-// (P1) tier (Chairman 2026-06-01: run at P1; the per-fabric P2/P3 upcharge is a
-// later GLOBAL change, like delivery fee, so it is NOT a per-size grid cell).
-// Cost (priceSen) stays Backend-owned — these helpers only touch sellingPriceSen
-// and PRESERVE any cost already on the entry.
-const SOFA_SELL_TIER: SofaPriceTier = 'PRICE_1';
-
-// Read the SELLING price (sellingPriceSen) for a (height, tier) slot.
-const sellingForHeightTier = (
-  arr: SeatHeightPrice[] | null | undefined,
-  height: string,
-  tier: SofaPriceTier,
-): number | null => {
-  if (!Array.isArray(arr)) return null;
-  const hit = arr.find((p) => p.height === height && (p.tier ?? 'PRICE_2') === tier);
-  return hit?.sellingPriceSen ?? null;
-};
-
-// Set the SELLING price for one (height × tier) slot, MERGING onto any existing
-// entry so the Backend-owned cost priceSen survives. Clearing the selling price
-// keeps a slot that still carries a cost; only a slot with neither cost nor
-// selling is dropped. A brand-new slot is created selling-only (no priceSen) so
-// the cost path falls back to base_price_sen (resolveSeatHeightSen skips it).
-const upsertHeightTierSelling = (
-  arr: SeatHeightPrice[] | null | undefined,
-  height: string,
-  tier: SofaPriceTier,
-  sellingPriceSen: number | null,
-): SeatHeightPrice[] => {
-  const next = Array.isArray(arr) ? [...arr] : [];
-  const idx = next.findIndex((p) => p.height === height && (p.tier ?? 'PRICE_2') === tier);
-  const cleared = sellingPriceSen == null || sellingPriceSen === 0;
-  if (idx >= 0) {
-    const existing = next[idx]!;
-    if (cleared) {
-      if (existing.priceSen != null && existing.priceSen !== 0) {
-        next[idx] = { height: existing.height, priceSen: existing.priceSen, tier: existing.tier };
-      } else {
-        next.splice(idx, 1);
-      }
-    } else {
-      next[idx] = { ...existing, sellingPriceSen };
-    }
-    return next;
-  }
-  if (cleared) return next;
-  next.push({ height, tier, sellingPriceSen });
-  return next;
-};
 
 const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   const [category, setCategory] = useState<MfgCategory | 'all'>('all');
