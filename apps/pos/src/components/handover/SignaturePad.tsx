@@ -3,7 +3,6 @@ import { Eraser } from 'lucide-react';
 import styles from './SignaturePad.module.css';
 
 const SIGN_W = 800;
-const SIGN_H = 200;
 
 export interface SignaturePadHandle {
   // Returns the canvas as a base64 PNG data URL, or null if nothing was drawn.
@@ -16,6 +15,9 @@ export const SignaturePad = forwardRef<
   { onChange: (signed: boolean) => void }
 >(({ onChange }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Match the backing bitmap to the phone's taller signing surface. Keep its
+  // aspect ratio for this mount so rotating the phone never clears the ink.
+  const [signHeight] = useState(() => window.matchMedia('(max-width: 640px)').matches ? 400 : 200);
   const [hasInk, setHasInk] = useState(false);
   const inked = useRef(false);
   const drawing = useRef(false);
@@ -27,7 +29,7 @@ export const SignaturePad = forwardRef<
     const rect = c.getBoundingClientRect();
     return {
       x: ((e.clientX - rect.left) / rect.width) * SIGN_W,
-      y: ((e.clientY - rect.top) / rect.height) * SIGN_H,
+      y: ((e.clientY - rect.top) / rect.height) * signHeight,
     };
   };
 
@@ -41,7 +43,7 @@ export const SignaturePad = forwardRef<
   };
 
   const strokeStyle = (ctx: CanvasRenderingContext2D) => {
-    ctx.lineWidth = 2;
+    ctx.lineWidth = Math.max(2, SIGN_W / (canvasRef.current?.getBoundingClientRect().width || SIGN_W) * 1.5);
     ctx.strokeStyle = '#221F20';
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -106,7 +108,7 @@ export const SignaturePad = forwardRef<
     const c = canvasRef.current;
     const ctx = c?.getContext('2d');
     if (!c || !ctx) return;
-    ctx.clearRect(0, 0, SIGN_W, SIGN_H);
+    ctx.clearRect(0, 0, SIGN_W, signHeight);
     inked.current = false;
     setHasInk(false);
     onChange(false);
@@ -114,8 +116,8 @@ export const SignaturePad = forwardRef<
 
   useEffect(() => {
     const ctx = canvasRef.current?.getContext('2d');
-    if (ctx) ctx.clearRect(0, 0, SIGN_W, SIGN_H);
-  }, []);
+    if (ctx) ctx.clearRect(0, 0, SIGN_W, signHeight);
+  }, [signHeight]);
 
   useImperativeHandle(ref, () => ({
     getDataUrl: () => {
@@ -130,7 +132,8 @@ export const SignaturePad = forwardRef<
         ref={canvasRef}
         className={styles.canvas}
         width={SIGN_W}
-        height={SIGN_H}
+        height={signHeight}
+        aria-label="Customer signature pad"
         onPointerDown={start}
         onPointerMove={move}
         onPointerUp={end}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import {
   X,
@@ -35,6 +35,7 @@ const fmtMYR = (n: number): string =>
   n.toLocaleString('en-MY', { maximumFractionDigits: 0 });
 
 export const CustomerOrderSheet = ({ open, onClose }: Props) => {
+  const sheetRef = useRef<HTMLElement>(null);
   const navigate = useNavigate();
   const lines = useCart((s) => s.lines);
   const remove = useCart((s) => s.remove);
@@ -83,8 +84,18 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
   // behind doesn't scroll when the user swipes inside the sheet.
   useEffect(() => {
     if (!open) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusable = () => Array.from(sheetRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled)') ?? []).filter((element) => element.getClientRects().length > 0);
+    focusable()[0]?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
+      if (e.key === 'Tab') {
+        const controls = focusable();
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+      }
     };
     document.addEventListener('keydown', onKey);
     const prev = document.body.style.overflow;
@@ -92,6 +103,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
     return () => {
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
+      previousFocus?.focus();
     };
   }, [open, onClose]);
 
@@ -152,7 +164,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
       aria-modal="true"
       aria-label="Customer order"
     >
-      <aside className={styles.sheet} onClick={(e) => e.stopPropagation()}>
+      <aside ref={sheetRef} className={styles.sheet} onClick={(e) => e.stopPropagation()}>
         <header className={styles.head}>
           <div className={styles.titleRow}>
             <span className={styles.title}>Customer order</span>
@@ -214,8 +226,6 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
               />
             ))
           )}
-        </div>
-
         {savingQuote && (
           <section className={styles.quotePanel}>
             <h3 className={styles.quotePanelTitle}>
@@ -261,6 +271,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
             </div>
           </section>
         )}
+        </div>
 
         {lines.length > 0 && (
           <div className={styles.foot}>

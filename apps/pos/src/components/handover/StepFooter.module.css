@@ -55,3 +55,18 @@
 .muted:hover {
   opacity: 0.45;
 }
+
+@media (max-width: 640px) {
+  .wrap {
+    position: fixed; z-index: 35; inset: auto 0 0;
+    padding: var(--space-3) var(--space-4) calc(var(--space-3) + env(safe-area-inset-bottom));
+    background: var(--c-paper); box-shadow: var(--shadow-2); gap: var(--space-2);
+    max-height: 45dvh; overflow-y: auto;
+  }
+  .bar { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.4fr); gap: var(--space-2); }
+  .bar button { min-height: 48px; padding: 10px; font-size: var(--fs-13); white-space: normal; }
+  .bar svg { flex-shrink: 0; }
+  /* Keep the action in one position while an input loses focus. Moving it
+     between pointerdown and pointerup swallows the first Continue tap. The
+     page reserves space below its fields for this footer and the safe area. */
+}

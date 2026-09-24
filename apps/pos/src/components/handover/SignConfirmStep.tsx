@@ -15,7 +15,7 @@ export const SignConfirmStep = ({
   <section className={styles.stepBody}>
     <h2 className={styles.stepTitle}>Sign &amp; confirm</h2>
     <p className={styles.stepLead}>
-      Final step — customer reviews the order on the right, acknowledges the terms, and signs below to confirm.
+        Final step — customer reviews the order summary, acknowledges the terms, and signs below to confirm.
     </p>
 
     {/* Terms acknowledgement — the same terms that print on the Sales Order.

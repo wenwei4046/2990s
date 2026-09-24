@@ -254,3 +254,22 @@
   align-items: stretch;
   gap: var(--space-2);
 }
+
+@media (max-width: 767px) {
+  .line { grid-template-columns: 48px minmax(0, 1fr) auto; gap: 12px; padding: 14px 12px; }
+  .linePhoto { width: 48px; height: 48px; }
+  .lineMain { grid-column: 2 / 4; }
+  .lineName { font-size: var(--fs-16); overflow-wrap: anywhere; }
+  .lineSummary { font-size: var(--fs-12); overflow-wrap: anywhere; }
+  .qtyBox { grid-column: 1 / 3; width: fit-content; gap: 6px; }
+  .qtyBtn { width: 44px; height: 44px; }
+  .lineTotal { min-width: 0; grid-column: 3; }
+  .lineActions { grid-column: 1 / -1; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .lineActions button { width: 44px; height: 44px; }
+  .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .actions > button:last-child { grid-column: 1 / -1; min-height: 48px; }
+  .backWrap { margin: 0; grid-column: 1 / -1; }
+  .actions button { min-height: 44px; width: 100%; }
+  .empty { padding: 32px 12px; }
+  .savedBanner { border-radius: var(--radius-sm); flex-wrap: wrap; }
+}

@@ -133,7 +133,7 @@ export const CustomerStep = ({
     <section className={styles.stepBody}>
       <h2 className={styles.stepTitle}>Customer additional info</h2>
       <p className={styles.stepLead}>
-        Hand the tablet to the customer to fill in their details. Quote items have been carried over — no re-entry needed.
+        Ask the customer to check their details. The items in your cart are ready for this order.
       </p>
 
       <div className="fieldRow">

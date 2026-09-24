@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { summarizeSofaCells, type Cell, type Depth, type DesiredFreeGift } from '@2990s/shared';
+import { buildVariantSummary, summarizeSofaCells, type Cell, type Depth, type DesiredFreeGift } from '@2990s/shared';
 import { clearHandoverFormSnapshot } from '../lib/handover-helpers';
 
 /**
@@ -547,18 +547,43 @@ export const cartItemCount = (lines: CartLine[]): number =>
  * Display summary for a cart line. For Custom Build sofas (cells present) we
  * re-derive the label at render time so naming changes — e.g., dropping the
  * "(1A+1A)" composition jargon from bundle-matched lines — apply to items
- * already in the cart, not just newly added ones. Quick-Pick sofas, size-
- * configured items, and flat items keep their stored summary (it carries
- * extra context like L-facing direction or chosen size).
+ * already in the cart, not just newly added ones. The selected sofa variants
+ * come from their typed snapshot fields so re-deriving the build label never
+ * drops the fabric, seat depth, legs or special options. Legacy bundle labels
+ * retain their facing direction; other product kinds keep their summary.
  */
 export const cartSummary = (config: CartConfig): string => {
-  if (
-    config.kind === 'sofa' &&
-    config.cells &&
-    config.cells.length > 0 &&
-    config.depth
-  ) {
-    return summarizeSofaCells(config.cells, config.depth, config.seatUpgradeLabel);
-  }
-  return config.summary;
+  if (config.kind !== 'sofa') return config.summary;
+
+  const fabric = config.fabricLabel?.trim() ?? '';
+  const colour = config.colourLabel?.trim() || config.colourId?.trim() || '';
+  // Old bundle summaries already include these exact fragments. Replace only
+  // the known variant fragments, keeping the bundle name and facing direction.
+  const storedFabric = fabric ? `${fabric}/${config.colourLabel ?? 'Colour KIV'}` : '';
+  const build = config.cells?.length && config.depth
+    ? summarizeSofaCells(config.cells, config.depth, config.seatUpgradeLabel)
+    : config.summary.split(' · ').filter((part) =>
+      part !== (config.depth ? `${config.depth}"` : '') && part !== storedFabric,
+    ).join(' · ');
+  const specialIds = config.specialIds ?? [];
+  const specials = specialIds.length
+    ? specialIds.map((id, index) => config.specialLabels?.[index]?.trim() || id)
+    : config.specialLabels ?? [];
+  const specialChoices = Object.fromEntries(specials.map((label, index) => [
+    label, config.specialChoices?.[specialIds[index] ?? label] ?? [],
+  ]));
+  const variants = buildVariantSummary('sofa', {
+    // A selected colour must never become COLOUR KIV just because an older
+    // snapshot lacks its display label. No selection stays unspecified.
+    fabricCode: colour ? [fabric, colour].filter(Boolean).join(' / ') : undefined,
+    fabricLabel: fabric || undefined,
+    seatHeight: config.depth ? `${config.depth}"` : undefined,
+    sofaLegHeight: config.sofaLegHeight,
+    specials,
+    specialChoices,
+    extraAddonNote: config.extraAddonNote,
+    extraAddonAmountRM: config.extraAddonAmountRM,
+  });
+  const remark = config.remark?.trim();
+  return [build, variants, remark ? `Remark: ${remark}` : ''].filter(Boolean).join(' · ');
 };

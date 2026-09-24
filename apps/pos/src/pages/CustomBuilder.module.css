@@ -8,6 +8,12 @@
 /* ── Palette ──────────────────────────────────────────────────── */
 
 .palette {
+  position: static;
+  inset: auto;
+  margin: 0;
+  width: auto;
+  max-width: none;
+  color: inherit;
   /* Elevated white panel floating on the warm cream page bg — same
      white-on-cream hierarchy as Quick Pick's qpRail, expressed as a
      contained card with soft warm shadow instead of a page-edge color
@@ -27,6 +33,15 @@
     0 1px 2px rgba(60, 40, 20, 0.04),
     0 8px 24px rgba(60, 40, 20, 0.06);
 }
+.palette:not([open]) { display: none; }
+
+.priceActions { display: flex; gap: 8px; align-items: center; }
+.mobilePaletteHead,
+.mobileCanvasActions,
+.mobileModuleTools,
+.mobilePreviewPrice { display: none; }
+
+
 
 /* PWP voucher section, pinned above the module list. The palette is a
    640px-max column that scrolls internally, so a section rendered after the
@@ -693,4 +708,99 @@
   font-size: 0.75rem;
   color: var(--c-accent, #8a6d3b);
   letter-spacing: 0.01em;
+}
+
+@media (max-width: 767px) {
+  .shell { display: block; margin-top: 12px; min-width: 0; }
+  .palette {
+    position: fixed;
+    inset: auto 0 0;
+    width: 100%;
+    max-width: none;
+    max-height: 88dvh;
+    margin: 0;
+    padding: 0 16px calc(24px + env(safe-area-inset-bottom));
+    border-radius: 24px 24px 0 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    animation: phoneSheetEnter 280ms cubic-bezier(.22, 1, .36, 1) both;
+  }
+  .palette::backdrop { background: rgba(34, 31, 32, .38); }
+  .mobilePaletteHead {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 0;
+    background: #fff;
+    border-bottom: 1px solid var(--line);
+  }
+  .mobilePaletteHead h2 { margin: 0; font-size: 18px; }
+  .mobilePaletteHead button {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    background: var(--c-paper);
+    color: var(--fg);
+    flex: 0 0 auto;
+  }
+  .paletteItem { min-height: 76px; }
+  .paletteSub { white-space: normal; }
+  .palette input, .palette select, .palette textarea { font-size: 16px; min-height: 44px; }
+  .mobileCanvasActions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .mobilePreviewPrice { display: block; color: var(--c-burnt); font-size: 18px; font-weight: 700; }
+  .mobileCanvasActions > button { flex: 1 1 auto; min-height: 44px; padding: 10px; }
+  .canvasCol { gap: 12px; }
+  .canvasCol > :not(.priceBar):not(.dialogBackdrop) { animation: phoneCanvasEnter 320ms cubic-bezier(.22, 1, .36, 1) both; }
+  .canvasHead { align-items: flex-start; gap: 8px; }
+  .canvasTitle { font-size: 18px; overflow-wrap: anywhere; }
+  .headTools { width: 100%; justify-content: space-between; gap: 6px; }
+  .clearBtn { min-height: 44px; }
+  .stageViewport { min-width: 0; }
+  .tools, .groupTools, .seatCtl { display: none; }
+  .mobileModuleTools { display: flex; flex-direction: column; gap: 10px; }
+  .mobileModuleTools:empty { display: none; }
+  .mobileModuleTools label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+  .mobileModuleTools select {
+    width: 100%; min-width: 0; min-height: 44px; padding: 10px;
+    font: inherit; font-size: 16px; color: var(--fg);
+    background: #fff; border: 1px solid var(--line); border-radius: 12px;
+  }
+  .mobileModuleTools p { margin: 0; font-size: 12px; color: var(--fg-muted); }
+  .mobileToolRow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .mobileToolRow > button { min-height: 44px; white-space: normal; }
+  .mobileToolRow > span { flex-basis: 100%; font-size: 13px; }
+  .priceBar {
+    position: fixed; inset: auto 0 0; z-index: 35;
+    padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+    gap: 8px; border-radius: 0; border-width: 1px 0 0;
+    background: var(--c-paper); box-shadow: 0 -6px 22px rgba(34, 31, 32, .08);
+  }
+  .priceBar > div:first-child { flex: 1; min-width: 0; }
+  .priceBar > div:first-child > span { display: block; }
+  .footerPrice > span:last-child { font-size: 24px; }
+  .priceActions { max-width: 58%; }
+  .priceActions > button { min-height: 48px; white-space: normal; padding: 10px 14px; }
+  .priceActions .desktopSaveAction { display: none; }
+  .comboCue { font-size: 10px; }
+  .dialogBackdrop { padding: 12px !important; align-items: center !important; }
+  .dialogPanel {
+    max-height: calc(100dvh - 24px); overflow-y: auto; overscroll-behavior: contain;
+    padding: 18px !important; animation: phoneSheetEnter 280ms cubic-bezier(.22, 1, .36, 1) both;
+  }
+  .dialogPanel input { font-size: 16px !important; min-height: 44px; min-width: 0; }
+  .dialogPanel button { min-height: 44px; }
+  .comboPrices { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
+
+@keyframes phoneSheetEnter { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes phoneCanvasEnter { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .palette, .dialogPanel, .canvasCol > :not(.priceBar):not(.dialogBackdrop) { animation: none; }
 }

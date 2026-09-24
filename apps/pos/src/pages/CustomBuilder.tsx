@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type CSSProperties, type Dispatch, type PointerEvent, type ReactNode, type SetStateAction } from 'react';
-import { Trash2, RotateCw, Eraser, Maximize2, Minimize2 } from 'lucide-react';
+import { Trash2, RotateCw, Eraser, Maximize2, Minimize2, Plus, X, SlidersHorizontal } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, fabricTierAddon, maintActiveValues, resolveFabricTierOverride, type FabricTier } from '@2990s/shared';
 import {
@@ -42,6 +42,7 @@ import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import { renderCornerSofa, cornerCompositeFromCells, type CornerGeo } from '../lib/sofa-corner';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 import styles from './CustomBuilder.module.css';
 
 const ROOM_W_CM = 600;   // 6 m wide
@@ -246,6 +247,8 @@ interface CustomBuilderProps {
   cells: Cell[];
   setCells: Dispatch<SetStateAction<Cell[]>>;
   onAdded: () => void;
+  /** Keeps fabric/colour in the parent when switching Quick Pick/Customize. */
+  onFabricChange?: (selection: FabricSelection | null) => void;
   /** PWP voucher state — owned by the parent Configurator (2026-06-02) so the
    *  redeem control lives in the shared top bar. `pricing` already arrives
    *  PWP-effective; these only drive the per-group pwp/pwpCode stamp in handleAdd. */
@@ -254,7 +257,7 @@ interface CustomBuilderProps {
   /** Cart line key when editing an existing custom-sofa line. The first split
    *  group replaces this line in place; any extra groups append as new lines. */
   editingKey?: string;
-  /** Fabric to pre-select when editing (re-derived from the line snapshot). */
+  /** Fabric to restore on entry or when editing a line snapshot. */
   initialFabric?: FabricSelection | null;
   /** PR — Commander 2026-05-28: when present, the palette filters to ONLY the
    *  compartments commander ticked on this Model (Backend → Products →
@@ -328,7 +331,23 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, onFabricChange, editingKey, initialFabric, modelCustomizer, baseModel, modelId = null, pwpBlock, legBlock, legHeight = null, legSurchargeRm = 0, remarkBlock, remark = '', extraAddonNote = '', extraAmountRm = 0, pwpCode = null, pwpComboIds = [], onSwapConfirm, swapPending = false, onAddToOrderConfirm, addToOrderPending = false, addEligible = true }: CustomBuilderProps) => {
+  const isPhone = useMediaQuery('(max-width: 767px)');
+  const [mobilePaletteOpen, setMobilePaletteOpen] = useState(false);
+  const paletteRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = paletteRef.current;
+    if (!dialog) return;
+    if (!isPhone) {
+      // A native modal cannot remain in the top layer after rotating to tablet.
+      if (dialog.open) dialog.close();
+      dialog.setAttribute('open', '');
+      return;
+    }
+    if (mobilePaletteOpen) {
+      if (!dialog.open) dialog.showModal();
+    } else if (dialog.open) dialog.close();
+  }, [isPhone, mobilePaletteOpen]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -898,9 +917,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   const [createComboOpen, setCreateComboOpen] = useState(false);
   const { data: staff } = useStaff();
   const canCurate = isGlobalCurator(staff?.role);
-  // When editing an existing custom-sofa line, seed the fabric picker once from
-  // the line snapshot (resolved + passed by the parent). Guarded so the staff's
-  // manual changes after hydration aren't clobbered on re-render.
+  // Restore the parent's selection after a mode switch or cart-line hydration.
+  // Guarded so manual changes aren't clobbered while the builder is mounted.
   const fabricHydratedRef = useRef(false);
   useEffect(() => {
     if (initialFabric && !fabricHydratedRef.current) {
@@ -1127,7 +1145,27 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
 
   return (
     <div className={styles.shell}>
-      <aside className={styles.palette}>
+      <dialog
+        ref={paletteRef}
+        open={isPhone ? undefined : true}
+        className={styles.palette}
+        aria-label="Modules and sofa options"
+        onCancel={() => setMobilePaletteOpen(false)}
+        onClose={() => setMobilePaletteOpen(false)}
+        onClick={(event) => {
+          if (!isPhone || event.target !== event.currentTarget) return;
+          const bounds = event.currentTarget.getBoundingClientRect();
+          if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+            setMobilePaletteOpen(false);
+          }
+        }}
+      >
+        <div className={styles.mobilePaletteHead}>
+          <h2>Modules &amp; options</h2>
+          <button type="button" onClick={() => setMobilePaletteOpen(false)} aria-label="Close modules and options">
+            <X size={20} strokeWidth={1.75} />
+          </button>
+        </div>
         {pwpBlock && <div className={styles.palettePwp}>{pwpBlock}</div>}
         <div className={styles.paletteHead}>
           <span className="t-eyebrow">Modules</span>
@@ -1187,7 +1225,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                         key={m.id}
                         type="button"
                         className={styles.paletteItem}
-                        onClick={() => addCell(m.id)}
+                        onClick={() => {
+                          addCell(m.id);
+                          if (isPhone) setMobilePaletteOpen(false);
+                        }}
                         title={m.label}
                       >
                         <div className={styles.paletteArt}>
@@ -1219,19 +1260,34 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           productFabrics={fabricSeriesRows}
           fabricId={fabricSel?.fabricId ?? null}
           colourId={fabricSel?.colourId ?? null}
-          onChange={setFabricSel}
+          onChange={(next) => {
+            setFabricSel(next);
+            onFabricChange?.(next);
+          }}
           category="SOFA"
           addonConfig={addonCfgQ.data ?? null}
           modelOverride={modelFabricOverride}
           enabledColourIds={productId?.startsWith('mfg-') ? fabricCodes : null}
           optional
-          onClear={() => setFabricSel(null)}
+          onClear={() => { setFabricSel(null); onFabricChange?.(null); }}
         />
         {legBlock}
         {remarkBlock}
-      </aside>
+      </dialog>
 
       <section className={styles.canvasCol}>
+        <div className={styles.mobileCanvasActions}>
+          <Button variant="secondary" onClick={() => setMobilePaletteOpen(true)}>
+            <Plus size={18} strokeWidth={1.75} /> Add module
+          </Button>
+          <Button variant="ghost" onClick={() => setMobilePaletteOpen(true)}>
+            <SlidersHorizontal size={18} strokeWidth={1.75} /> Options &amp; promo
+          </Button>
+        </div>
+        <div className={styles.mobilePreviewPrice}>
+          {allClosed && cells.length > 0 ? 'Total ' : 'Provisional '}
+          {fmtRM(priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length + extraAmountRm)}
+        </div>
         <header className={styles.canvasHead}>
           <div>
             <span className="t-eyebrow">Custom build · drag to lay out</span>
@@ -1762,7 +1818,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           {cells.length === 0 && (
             <div className={styles.emptyOverlay}>
               <div className={styles.emptyTitle}>Empty room</div>
-              <div className={styles.emptyBody}>Pick modules from the left to start building.</div>
+              <div className={styles.emptyBody}>{isPhone ? 'Tap Add module to start building.' : 'Pick modules from the left to start building.'}</div>
             </div>
           )}
 
@@ -1794,12 +1850,84 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         </div>
         </div>
 
+        <div className={styles.mobileModuleTools}>
+          {cells.length > 0 && (
+            <>
+              <label>
+                Select a module
+                <select
+                  aria-label="Select a sofa module"
+                  value={selectedId ?? ''}
+                  onChange={(event) => {
+                    setSelectedId(event.target.value || null);
+                    setSelectedGroupIds(null);
+                    setEditingGroupIds(new Set(cells.flatMap((cell) => cell.id ? [cell.id] : [])));
+                  }}
+                >
+                  <option value="">Tap a module or select here</option>
+                  {cells.map((cell, index) => <option key={cell.id} value={cell.id}>{index + 1}. {cell.moduleId}</option>)}
+                </select>
+              </label>
+              <p>Drag the selected module in the room to position it.</p>
+            </>
+          )}
+          {selectedId && (
+            <div className={styles.mobileToolRow}>
+              <Button variant="secondary" onClick={() => rotateCell(selectedId)}>
+                <RotateCw size={16} strokeWidth={1.75} /> Rotate module
+              </Button>
+              <Button variant="secondary" onClick={() => removeCell(selectedId)}>
+                <Trash2 size={16} strokeWidth={1.75} /> Remove module
+              </Button>
+            </div>
+          )}
+          {selectedGroupIds && (
+            <div className={styles.mobileToolRow}>
+              <Button variant="secondary" onClick={() => rotateGroup(selectedGroupIds)}>Rotate whole sofa</Button>
+              <Button variant="secondary" onClick={() => removeGroup(selectedGroupIds)}>Remove whole sofa</Button>
+              <Button variant="ghost" onClick={() => {
+                setEditingGroupIds(new Set(selectedGroupIds));
+                setSelectedGroupIds(null);
+              }}>Edit modules</Button>
+            </div>
+          )}
+          {selectedId && offersUpgrade && (() => {
+            const cell = cells.find((item) => item.id === selectedId);
+            const spec = cell ? findModule(cell.moduleId) : null;
+            if (!cell || !spec) return null;
+            return seatRectsCm(spec, depth).map((_, seatIndex) => {
+              const upgrade = cell.recliners?.find((item) => item.seatIdx === seatIndex);
+              return (
+                <div key={seatIndex} className={styles.mobileToolRow}>
+                  <span>Seat {seatIndex + 1}</span>
+                  <Button variant="secondary" onClick={() => toggleSeatRecliner(selectedId, seatIndex)}>
+                    {upgrade ? 'Remove ' + upgradeLabel : 'Add ' + upgradeLabel + ' · ' + fmtRM(upgradePrice)}
+                  </Button>
+                  {upgrade && upgradeHasFootrest && (
+                    <Button variant="ghost" onClick={() => toggleSeatReclinerOpen(selectedId, seatIndex)}>
+                      {upgrade.open ? 'Close footrest' : 'Open footrest'}
+                    </Button>
+                  )}
+                </div>
+              );
+            });
+          })()}
+          {cells.length > 0 && allClosed && (
+            <div className={styles.mobileToolRow}>
+              <Button variant="ghost" onClick={() => setSaveComboOpen(true)}>Save as Quick Pick</Button>
+              {canCurate && (baseModel ?? '').trim() !== '' && (
+                <Button variant="ghost" onClick={() => setCreateComboOpen(true)}>Create Combo</Button>
+              )}
+            </div>
+          )}
+        </div>
+
         <footer className={styles.priceBar}>
           <div>
             <span className="t-eyebrow">{allClosed && cells.length > 0 ? 'Total' : 'Provisional'}</span>
             {/* extraAmountRm is per-unit on the LEAD group only (see handleAdd),
                 so it's added ONCE here — not × groups.length like fabric/leg. */}
-            <PriceTag amount={priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length + extraAmountRm} size="lg" />
+            <PriceTag className={styles.footerPrice} amount={priceResult.total + (sofaFabricDelta + legSurchargeRm) * priceResult.groups.length + extraAmountRm} size="lg" />
             {/* Combo cue (HOOKKA parity) — when any group priced via a combo,
                 show the savings the combo gave over the matched subset's own
                 à-la-carte sum. Extra modules outside the combo subset stay at
@@ -1828,13 +1956,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 apply a code. The line still carries pwp/pwpCode via handleAdd's
                 per-group stamp (props from the parent). */}
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div className={styles.priceActions}>
             {/* Commander 2026-05-28: save the current layout as a Quick Pick
                 Combo so it auto-renders for future sales. Only visible when
                 the sofa is closed (no point persisting an unfinishable
                 layout) and has at least one cell. */}
             {cells.length > 0 && allClosed && (
               <Button
+                className={styles.desktopSaveAction}
                 variant="ghost"
                 onClick={() => setSaveComboOpen(true)}
               >
@@ -1848,6 +1977,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 rejects an empty one), so hide it on legacy/orphan SKUs. */}
             {cells.length > 0 && allClosed && canCurate && (baseModel ?? '').trim() !== '' && (
               <Button
+                className={styles.desktopSaveAction}
                 variant="ghost"
                 onClick={() => setCreateComboOpen(true)}
               >
@@ -1956,12 +2086,12 @@ function SaveQuickPickModal({
 
   const pending = createGlobal.isPending || addPersonal.isPending;
   return (
-    <div style={{
+    <div className={styles.dialogBackdrop} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
       display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
       padding: '8vh 16px', zIndex: 1000,
     }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{
+      <div className={styles.dialogPanel} role="dialog" aria-modal="true" aria-label="Save as Quick Pick" onClick={(e) => e.stopPropagation()} style={{
         background: 'var(--c-paper)', borderRadius: 'var(--radius-md)',
         padding: 24, width: '100%', maxWidth: 480,
         display: 'flex', flexDirection: 'column', gap: 16,
@@ -2084,12 +2214,12 @@ function CreateComboModal({
   };
 
   return (
-    <div style={{
+    <div className={styles.dialogBackdrop} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
       display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
       padding: '8vh 16px', zIndex: 1000,
     }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{
+      <div className={styles.dialogPanel} role="dialog" aria-modal="true" aria-label="Create Combo" onClick={(e) => e.stopPropagation()} style={{
         background: 'var(--c-paper)', borderRadius: 'var(--radius-md)',
         padding: 24, width: '100%', maxWidth: 600,
         display: 'flex', flexDirection: 'column', gap: 16,
@@ -2107,7 +2237,7 @@ function CreateComboModal({
           <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
             Prices by seat height (RM)
           </span>
-          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
+          <div className={styles.comboPrices} style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
             {heights.map((h) => (
               <div key={h}>
                 <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textAlign: 'center' }}>

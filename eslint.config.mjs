@@ -17,6 +17,8 @@ export default tseslint.config(
   {
     ignores: [
       '**/dist/**',
+      '**/dist-simulation/**',
+      '**/.dist/**',
       '**/node_modules/**',
       '**/.wrangler/**',
       '**/.turbo/**',

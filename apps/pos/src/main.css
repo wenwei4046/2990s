@@ -19,21 +19,29 @@ body {
   flex-direction: column;
 }
 
-/* POS landscape-only fallback — Codex P2.8 placeholder. The PWA manifest sets
-   orientation: 'landscape' but iOS Safari may not respect it. Show rotate
-   prompt if portrait detected. Real impl pending. */
-@media (orientation: portrait) and (max-width: 900px) {
-  #root::after {
-    content: 'Please rotate to landscape';
-    position: fixed;
-    inset: 0;
-    background: var(--bg);
-    color: var(--fg);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: var(--font-button);
-    font-weight: var(--w-semibold);
-    z-index: 9999;
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 88px; }
+body, #root { min-height: 100dvh; }
+button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+button, a { touch-action: manipulation; }
+/* Sofa art deliberately exceeds its clipping box; image containment belongs
+   to each preview component rather than a global max-width rule. */
+canvas { max-width: 100%; }
+:focus-visible { outline: 2px solid var(--c-burnt); outline-offset: 3px; }
+@keyframes posPageEnter {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (max-width: 767px) {
+  main { min-width: 0; animation: posPageEnter 320ms cubic-bezier(.22, 1, .36, 1); }
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea { font-size: 16px !important; }
+  input, select, textarea { scroll-margin-block: 100px; }
+  button:active:not(:disabled), a:active { transform: scale(.98); transition: transform 100ms ease-out; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
   }
 }

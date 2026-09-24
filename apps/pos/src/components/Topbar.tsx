@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
-import { ArrowLeft, Bookmark, KeyRound, ListOrdered, LogOut, ShoppingBag } from 'lucide-react';
+import { ArrowLeft, Bookmark, KeyRound, ListOrdered, LogOut, ShoppingBag, Menu } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { useAuth } from '../lib/auth';
 import { useStaff } from '../lib/staff';
 import { useCanChangePin } from '../lib/houzs-perms';
 import { useCart, cartItemCount, cartSubtotal } from '../state/cart';
 import { HouzsSsoMenu } from './HouzsSsoMenu';
+import { IS_SIMULATION } from '../lib/simulation-mode';
 import styles from './Topbar.module.css';
 
 export type StepId = 'cart' | 'customer' | 'confirm';
@@ -18,6 +19,12 @@ const STEPS: { id: StepId; label: string }[] = [
 ];
 
 interface TopbarProps {
+  mobileActionsInPage?: boolean;
+  mobileCenterInPage?: boolean;
+  /** Give the center content its own full-width row below the phone navigation. */
+  centerBelowOnMobile?: boolean;
+  /** Page-specific actions/filters shown inside the phone Sales menu. */
+  mobileMenuSlot?: ReactNode;
   step?: StepId;
   /**
    * When provided, replaces the default Quotes / My orders / Cart pills
@@ -38,7 +45,7 @@ interface TopbarProps {
   backLabel?: string;
 }
 
-export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: TopbarProps) {
+export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileActionsInPage, mobileCenterInPage, mobileMenuSlot, centerBelowOnMobile }: TopbarProps) {
   const { user, signOut } = useAuth();
   const { data: staff } = useStaff();
   const canChangePin = useCanChangePin();
@@ -53,7 +60,9 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: Topba
   const avatarColor = staff?.color ?? '#A6471E';
 
   return (
-    <header className={styles.topbar}>
+    <>
+    {IS_SIMULATION && <div className={styles.simulationBanner}>Local simulation · No live orders or payments</div>}
+    <header className={`${styles.topbar} ${centerBelowOnMobile ? styles.centerBelowOnMobile : ''}`}>
       <div className={styles.left}>
         {backTo && (
           <Link to={backTo} className={styles.iconBtn} aria-label={backLabel ?? 'Back'}>
@@ -67,7 +76,7 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: Topba
         <span className={styles.crumb}>POS · Showroom KL</span>
       </div>
 
-      <div className={styles.center}>
+      <div className={`${styles.center} ${mobileCenterInPage ? styles.mobileHidden : ''}`}>
         {centerSlot ?? STEPS.map((s, i) => (
           <span
             key={s.id}
@@ -79,7 +88,7 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: Topba
         ))}
       </div>
 
-      <div className={styles.right}>
+      <div className={`${styles.right} ${mobileActionsInPage ? styles.mobileHidden : ''}`}>
         {rightSlot ?? (
           <>
             <Link to="/quotes" className={styles.pill} aria-label="Saved quotes">
@@ -132,6 +141,38 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: Topba
           <LogOut size={18} strokeWidth={1.75} />
         </button>
       </div>
+      <div className={styles.mobileNav}>
+        <Link to="/cart" className={styles.mobileCart} aria-label={`Cart, ${count} items`}>
+          <ShoppingBag size={20} strokeWidth={1.75} />
+          <span>{count}</span>
+        </Link>
+        <details className={styles.mobileMenu} onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.currentTarget.open = false;
+            event.currentTarget.querySelector('summary')?.focus();
+          }
+        }}>
+          <summary aria-label="Sales menu"><Menu size={22} strokeWidth={1.75} /></summary>
+          <nav aria-label="Sales navigation" onClick={(event) => {
+            const action = (event.target as Element).closest('a, button');
+            // Nested menus own their expansion. Closing on the Houzs trigger
+            // would hide its actions before the salesperson could select one.
+            if (action?.parentElement === event.currentTarget || action?.closest('.' + styles.mobileMenuExtras)) {
+              event.currentTarget.closest('details')?.removeAttribute('open');
+            }
+          }}>
+            <div className={styles.mobileStaff}>{name}<small>{role.replace(/_/g, ' ')}</small></div>
+            <Link to="/catalog">Products</Link>
+            <Link to="/quotes"><Bookmark size={18} />Saved quotes</Link>
+            <Link to="/my-orders"><ListOrdered size={18} />My orders</Link>
+            {mobileMenuSlot && <div className={styles.mobileMenuExtras}>{mobileMenuSlot}</div>}
+            {!IS_SIMULATION && <div className={styles.mobileServiceMenu}><HouzsSsoMenu /></div>}
+            {canChangePin && <Link to="/change-pin"><KeyRound size={18} />Change PIN</Link>}
+            <button type="button" onClick={() => void signOut()}><LogOut size={18} />Switch user</button>
+          </nav>
+        </details>
+      </div>
     </header>
+    </>
   );
 }

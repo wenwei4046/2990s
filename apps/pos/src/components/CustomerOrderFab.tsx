@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { ShoppingBag } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { useCart, cartItemCount, cartSubtotal } from '../state/cart';
@@ -11,6 +11,7 @@ import styles from './CustomerOrderFab.module.css';
 // navigation to /cart so the catalog stays in context.
 export function CustomerOrderFab() {
   const [open, setOpen] = useState(false);
+  const closeSheet = useCallback(() => setOpen(false), []);
   const lines = useCart((s) => s.lines);
   const count = cartItemCount(lines);
   const subtotal = cartSubtotal(lines);
@@ -34,7 +35,7 @@ export function CustomerOrderFab() {
         </span>
         {count > 0 && <span className={styles.badge}>{count}</span>}
       </button>
-      <CustomerOrderSheet open={open} onClose={() => setOpen(false)} />
+      <CustomerOrderSheet open={open} onClose={closeSheet} />
     </>
   );
 }

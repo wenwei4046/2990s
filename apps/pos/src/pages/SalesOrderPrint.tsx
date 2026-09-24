@@ -3,6 +3,7 @@ import { ArrowLeft, Printer } from 'lucide-react';
 import { useSalesOrderDoc, type PrintableSO } from '../lib/so-doc';
 import { COMPANY_LEGAL, RECEIPT_TERMS } from '../lib/legal';
 import { usePaymentMethodLabels } from '../lib/so-maintenance/so-dropdown-options-queries';
+import { IS_SIMULATION } from '../lib/simulation-mode';
 import styles from './SalesOrderPrint.module.css';
 
 const fmtMoney = (n: number) =>
@@ -46,10 +47,15 @@ export const SalesOrderPrint = () => {
         </button>
       </div>
       <article className={`${styles.page} sales-order-page`}>
+        {IS_SIMULATION && (
+          <div className={styles.simulationBadge}>SIMULATION — NOT A SALES ORDER</div>
+        )}
         <Header order={data} />
         <MetaRow order={data} />
         <PartiesRow order={data} />
-        <ItemsTable order={data} />
+        <div className={styles.itemsViewport} tabIndex={0} role="region" aria-label="Order items">
+          <ItemsTable order={data} />
+        </div>
         <div className={styles.afterItems}>
           <SignatureBlock order={data} />
           <TotalsBlock order={data} />

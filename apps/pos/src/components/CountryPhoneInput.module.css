@@ -1,0 +1,12 @@
+.root {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+}
+@media (max-width: 640px) {
+  .root { grid-template-columns: 96px minmax(0, 1fr); }
+  .root input, .root select { min-height: 48px; font-size: var(--fs-16) !important; }
+}

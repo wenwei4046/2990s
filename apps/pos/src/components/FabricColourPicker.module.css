@@ -93,3 +93,10 @@
 .swatchOn {
   box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--c-orange);
 }
+
+@media (max-width: 767px) {
+  .fabricChip { min-height: 44px; max-width: 100%; }
+  .swatch { width: 44px; height: 44px; }
+  .colourRow { gap: 12px; }
+  .fabricName, .fabricMeta { overflow-wrap: anywhere; }
+}

@@ -205,3 +205,18 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+@media (max-width: 767px) {
+  .shell { padding: 20px 16px calc(32px + env(safe-area-inset-bottom, 0px)); }
+  .header { flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+  .heading { font-size: var(--fs-24); }
+  .grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .card { padding: 16px; }
+  .cardHead { flex-wrap: wrap; }
+  .customer { overflow-wrap: anywhere; }
+  .lines li { flex-wrap: wrap; }
+  .lineName { flex-shrink: 1; }
+  .lineSummary { white-space: normal; text-overflow: clip; overflow: visible; flex-basis: 100%; }
+  .actionBtn { min-height: 48px; }
+  .empty { padding: 32px 16px; }
+}

@@ -81,3 +81,10 @@
   border-radius: 50%;
   background: var(--c-orange);
 }
+
+@media (max-width: 640px) {
+  .cal { padding: var(--space-2); min-width: 0; }
+  .nav { width: 44px; height: 44px; }
+  .grid { gap: 0; }
+  .day, .empty { min-width: 0; min-height: 44px; aspect-ratio: auto; }
+}

@@ -14,6 +14,7 @@ import { FileText, ShoppingBag, Ticket } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { Topbar } from '../components/Topbar';
 import { usePwpCodesForSo } from '../lib/products/pwp-queries';
+import { IS_SIMULATION } from '../lib/simulation-mode';
 import styles from './Confirmed.module.css';
 
 export const HandoverConfirmed = () => {
@@ -33,13 +34,14 @@ export const HandoverConfirmed = () => {
     <>
       <Topbar step="confirm" />
       <main className={styles.shell}>
-        <h1>Order placed</h1>
+        <h1>{IS_SIMULATION ? 'Simulation saved' : 'Order placed'}</h1>
         <p>
           Reference: <strong>{docNo}</strong>
         </p>
         <p>
-          The order coordinator has been notified and will pick this up shortly.
-          The customer will hear from us with delivery details soon.
+          {IS_SIMULATION
+            ? 'Saved in this browser. No live order or notification was sent.'
+            : 'The order coordinator has been notified and will pick this up shortly. The customer will hear from us with delivery details soon.'}
         </p>
 
         {/* PWP vouchers earned on this order — the customer reads the code off

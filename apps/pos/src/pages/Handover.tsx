@@ -32,6 +32,7 @@ import { Topbar } from '../components/Topbar';
 import { PhaseNav } from '../components/handover/PhaseNav';
 import { StepFooter } from '../components/handover/StepFooter';
 import { OrderSummaryPane } from '../components/handover/OrderSummaryPane';
+import { OrderSummaryDisclosure } from '../components/handover/OrderSummaryDisclosure';
 import { CustomerStep } from '../components/handover/CustomerStep';
 import { AddressStep } from '../components/handover/AddressStep';
 import { EmergencyStep } from '../components/handover/EmergencyStep';
@@ -638,7 +639,8 @@ export const Handover = () => {
           <div className={styles.main}>
             <div className={styles.eyebrowRow}>
               <div className={styles.phaseEyebrow}>
-                PHASE {phase} OF 2 · {phase === 1 ? 'ADDITIONAL INFO' : 'CONFIRM & PAY'}
+                <span className={styles.phonePhaseLabel}>STEP {idx + 1} OF {STEPS.length} · {phase === 1 ? 'ADDITIONAL INFO' : 'CONFIRM & PAY'}</span>
+                <span className={styles.tabletPhaseLabel}>PHASE {phase} OF 2 · {phase === 1 ? 'ADDITIONAL INFO' : 'CONFIRM & PAY'}</span>
               </div>
               <Link to="/cart" className={styles.backPill} aria-label="Back to cart">
                 <ArrowLeft size={14} strokeWidth={1.75} />
@@ -652,6 +654,7 @@ export const Handover = () => {
               currentIdx={idx}
               onJump={(targetIdx) => { if (targetIdx <= idx) setIdx(targetIdx); }}
             />
+            <div key={current.key} className={styles.stepTransition}>
             {current.key === 'customer'  && <CustomerStep  form={form} update={update} />}
             {current.key === 'address'   && <AddressStep   form={form} update={update} localities={localities.data ?? []} />}
             {current.key === 'emergency' && <EmergencyStep form={form} update={update} />}
@@ -686,6 +689,7 @@ export const Handover = () => {
               />
             )}
             {current.key === 'sign'      && <SignConfirmStep   form={form} update={update} signatureRef={signatureRef} />}
+            </div>
 
             {serverError && <p className={styles.error}>{serverError}</p>}
             {driftFix && (
@@ -725,6 +729,7 @@ export const Handover = () => {
             />
           </div>
 
+          <OrderSummaryDisclosure total={total}>
           <OrderSummaryPane
             mode="form"
             lines={lines}
@@ -736,6 +741,7 @@ export const Handover = () => {
             {...(voucher ? { voucherLabel: voucher.campaign.name } : {})}
             total={total}
           />
+          </OrderSummaryDisclosure>
         </form>
       </main>
     </>

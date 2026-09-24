@@ -29,3 +29,11 @@
   .layout { grid-template-columns: 1fr; }
   .actions { padding: var(--space-3); }
 }
+
+@media (max-width: 640px) {
+  .shell { padding: var(--space-5) var(--space-4) calc(var(--space-5) + env(safe-area-inset-bottom)); overflow-wrap: anywhere; }
+  .shell h1 { font-size: var(--fs-28); }
+  .shell p { line-height: 1.6; }
+  .actions { flex-direction: column; padding: var(--space-4) 0; }
+  .actions a, .actions button { width: 100%; min-height: 48px; }
+}

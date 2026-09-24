@@ -30,6 +30,8 @@ export function SlipUploadStep({ onConfirmed, onCleared }: Props) {
     setPreviewUrl(null);
     setPhase('idle');
     setErrorMsg(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (cameraInputRef.current) cameraInputRef.current.value = '';
     onCleared();
   };
 
@@ -79,6 +81,7 @@ export function SlipUploadStep({ onConfirmed, onCleared }: Props) {
       <input
         ref={fileInputRef}
         type="file"
+        aria-label="Attach payment proof"
         className={styles.hiddenInput}
         accept={ALLOWED_SLIP_MIMES.join(',')}
         onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
@@ -86,6 +89,7 @@ export function SlipUploadStep({ onConfirmed, onCleared }: Props) {
       <input
         ref={cameraInputRef}
         type="file"
+        aria-label="Take photo of payment proof"
         className={styles.hiddenInput}
         accept="image/*"
         capture="environment"
@@ -122,14 +126,14 @@ export function SlipUploadStep({ onConfirmed, onCleared }: Props) {
       {phase === 'confirm' && <div className={styles.status}>Verifying...</div>}
 
       {phase === 'done' && (
-        <div className={styles.statusDone}>
+        <div className={styles.statusDone} role="status">
           <span aria-hidden>✓</span> Slip uploaded · {file?.name}
           <button type="button" className={styles.replace} onClick={reset}>Replace</button>
         </div>
       )}
 
       {phase === 'error' && (
-        <div className={styles.statusError}>
+        <div className={styles.statusError} role="alert">
           <div>{errorMsg}</div>
           <button type="button" className={styles.replace} onClick={reset}>Try again</button>
         </div>

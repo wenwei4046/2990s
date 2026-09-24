@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { COUNTRY_DIAL_CODES, splitE164, combineE164 } from '@2990s/shared/phone';
+import styles from './CountryPhoneInput.module.css';
 
 type Props = {
   value: string;
@@ -71,7 +72,7 @@ export function CountryPhoneInput({
     /* Grid (not flex): the country select takes its content width, the number
        input takes the rest and may shrink to 0. Deterministic on iOS, where the
        native select's intrinsic flex width was unreliable and overlapped. */
-    <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: 6, alignItems: 'stretch', width: '100%', minWidth: 0 }}>
+    <div className={styles.root}>
       <select
         aria-label="Country dial code"
         disabled={disabled}
