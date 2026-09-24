@@ -19,3 +19,9 @@
   font-size: var(--fs-32);
   margin: 0;
 }
+
+@media (max-width: 767px) {
+  .shell { padding: 20px 16px calc(24px + env(safe-area-inset-bottom, 0px)); min-height: auto; }
+  .header { gap: 8px; margin-bottom: 20px; }
+  .heading { font-size: var(--fs-24); }
+}

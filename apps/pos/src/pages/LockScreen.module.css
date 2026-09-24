@@ -500,3 +500,14 @@
     right: 24px;
   }
 }
+
+@media (max-width: 767px) {
+  .shell { height: auto; min-height: 100dvh; overflow: visible; }
+  .panel { padding: calc(24px + env(safe-area-inset-top, 0px)) 20px calc(32px + env(safe-area-inset-bottom, 0px)); overflow: visible; }
+  .title { font-size: var(--fs-32); }
+  .sub { margin-bottom: 20px; }
+  .staffSlot { margin-bottom: 20px; }
+  .pad { max-width: 360px; width: 100%; }
+  .padKey { height: 54px; }
+  .footer { position: static; padding: 16px 20px; flex-wrap: wrap; }
+}

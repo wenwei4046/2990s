@@ -318,6 +318,12 @@ proportion bar, and the parts underneath with their share
 
 ## What NOT to do
 
+### Phone adaptation approved · 24 September 2026
+
+Loo explicitly requested the complete selling workflow on iPhone and Android, with mobile browser click testing and simulated order creation. Below 768px, the POS may replace tablet rails with category controls or sheets, use full-page long forms, compact product previews, and fixed safe-area configuration/checkout actions. The landscape-only guard and PWA orientation lock are removed. Tablet/desktop presentation, existing business rules, price calculations, module geometry/art, category restrictions, permissions and order transitions remain authoritative. Motion follows the existing timing with reduced-motion support. The dedicated `simulation` build uses fictional local fixtures and blocks external requests; no live order creation or production deployment is authorized by this work. This approval supersedes the older tablet-only layout constraints for phone widths only.
+
+**Release approval · 25 September 2026:** Loo explicitly requested merging and deploying this mobile adaptation to the live POS, with tablets retaining their previous layout. This supersedes the earlier deployment restriction only; live test orders and payments remain prohibited. The phone Catalog uses five category icons and a full-width search below the logo. My Orders uses the approved B compact sales disclosures and A status tabs (Order placed / Proceed / Delivered). At widths of 768px and above, retain the original in-page search, step navigation, full KPI cards, three-lane order board and configurator layout. Simulation remains a separate build and must not enter the production bundle.
+
 Things that look like improvements but aren't:
 
 - ❌ Don't substitute `shadcn/ui` or `Radix UI` components for the prototype's hand-built ones. The prototype's components match the brand spec; library defaults don't.

@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:simulation": "vite --mode simulation",
+    "build:simulation": "tsc -b --noEmit && vite build --mode simulation",
     "build": "tsc -b --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",

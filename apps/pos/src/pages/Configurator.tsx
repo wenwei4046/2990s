@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, useBeforeUnload, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Package, Trash2, FlipHorizontal2, Gift } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, resolveFabricTierOverride, matchComboSubset, comboChargedPrices, orderSofaCellsLeftToRight, campaignsCoveringLine, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
@@ -61,6 +61,7 @@ import {
 } from '../lib/queries';
 import { authedFetchRaw } from '../lib/apiClient';
 import { CustomBuilder, centerCellsInRoom } from './CustomBuilder';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import {
   BedframeOptions,
@@ -296,6 +297,14 @@ interface QuickPickItem {
 export const Configurator = () => {
   const { productId } = useParams<{ productId: string }>();
   const navigate = useNavigate();
+  const isPhone = useMediaQuery('(max-width: 767px)');
+  const savedNavigation = useRef(false);
+  const [draftBaseline, setDraftBaseline] = useState<string | null>(null);
+  const [nestedDraftDirty, setNestedDraftDirty] = useState(false);
+  const navigateAfterSave = (path: string) => {
+    savedNavigation.current = true;
+    navigate(path);
+  };
   // Back / Cancel = go back one history entry, identical to the browser/swipe
   // Back the user also uses — so it pops to the EXACT catalogue entry they came
   // from (category lives in the URL, scroll is restored by <ScrollRestoration>),
@@ -586,7 +595,7 @@ export const Configurator = () => {
         ...(freeItemCampaignId ? { freeItemCampaignId } : {}),
       };
       await addToOrderMutation.mutateAsync({ docNo: addToOrderDoc, item: itemBody });
-      navigate(`/my-orders`);
+      navigateAfterSave('/my-orders');
     } catch (err) {
       if (err instanceof AddSoItemApiError) {
         const { payload } = err;
@@ -648,7 +657,7 @@ export const Configurator = () => {
               : String(payload.reason ?? payload.message ?? err ?? 'Exchange failed.'),
         );
       }
-      navigate('/my-orders');
+      navigateAfterSave('/my-orders');
     } catch (e) {
       setSwapError(e instanceof Error ? e.message : 'Exchange failed.');
     } finally {
@@ -744,6 +753,28 @@ export const Configurator = () => {
   // Selected free-item campaign state — reset on product change (see effect below).
   const [freeItemCampaignId, setFreeItemCampaignId] = useState<string | null>(null);
   const [freeItemCampaignName, setFreeItemCampaignName] = useState<string | null>(null);
+
+  // Record the hydrated configuration immediately before the first interaction.
+  // Comparing values avoids warning just for opening an options sheet or tapping
+  // a selected choice. The snapshot stays in memory and is never persisted.
+  const draftSnapshot = JSON.stringify({
+    picked, pickedQP, pickedSizeId, pillowExtras, sofaCells, quickFlip, activeDepth,
+    qpMirror, fabricSel, bfSel, sofaSpecialSel, mattressSpecialSel, sofaLegValue,
+    lineRemark, lineExtraNote, lineExtraRm, lineQty, usePwp, insertCodeInput,
+    insertedCode, insertedCodeType, sofaPwpInput, sofaPwpCode, freeItemCampaignId,
+  });
+  const captureDraftBaseline = () => {
+    if (isPhone && draftBaseline === null) setDraftBaseline(draftSnapshot);
+  };
+  const markNestedDraftDirty = () => {
+    if (isPhone) setNestedDraftDirty(true);
+  };
+  const hasUnsavedDraft = isPhone && (nestedDraftDirty || (draftBaseline !== null && draftBaseline !== draftSnapshot));
+  useEffect(() => {
+    savedNavigation.current = false;
+    setDraftBaseline(null);
+    setNestedDraftDirty(false);
+  }, [productId, editKey, swapDoc, swapItemId, addToOrderDoc]);
 
   useEffect(() => { // never leak the toggle / code across products
     setUsePwp(false);
@@ -1580,7 +1611,7 @@ export const Configurator = () => {
   const pwpRailSection = (
     <RailSection title="PWP & Promo Voucher">
       {insertedCode ? (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)', padding: 'var(--space-2) 0' }}>
+        <div className={styles.pwpApplied} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)', padding: 'var(--space-2) 0' }}>
           <span style={{ fontSize: 'var(--fs-12)' }}>
             <span style={{ fontWeight: 600 }}>PWP code {insertedCode}</span>
             <span style={{ display: 'block', color: 'var(--fg-muted)' }}>
@@ -1601,9 +1632,11 @@ export const Configurator = () => {
               A PWP code from this cart is ready{pwpEval.triggerLabel ? ` (from ${pwpEval.triggerLabel})` : ''} — tap Auto Fill.
             </p>
           )}
-          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <div className={styles.pwpRailRow}>
             <input
+              className={styles.pwpInput}
               type="text"
+              aria-label="Insert PWP Code"
               value={insertCodeInput}
               onChange={(e) => { setInsertCodeInput(e.target.value); setInsertErr(null); }}
               placeholder="PWP-1234ABCD"
@@ -1864,7 +1897,7 @@ export const Configurator = () => {
     };
     if (isAddToOrderMode) { void confirmAddToOrder(snapshot, qtyEffective); return; }
     addConfigured(snapshot, { ...(isEditing && editKey ? { editingKey: editKey } : {}), qty: qtyEffective });
-    navigate(isEditing ? '/cart' : '/catalog');
+    navigateAfterSave(isEditing ? '/cart' : '/catalog');
   };
 
   const handleAddSize = () => {
@@ -1907,7 +1940,7 @@ export const Configurator = () => {
     };
     if (isAddToOrderMode) { void confirmAddToOrder(snapshot, qtyEffective); return; }
     addConfigured(snapshot, { ...(isEditing && editKey ? { editingKey: editKey } : {}), qty: qtyEffective });
-    navigate(isEditing ? '/cart' : '/catalog');
+    navigateAfterSave(isEditing ? '/cart' : '/catalog');
   };
 
   const bumpExtra = (addonId: string, delta: number) => {
@@ -2026,7 +2059,7 @@ export const Configurator = () => {
     if (isSwapMode) { void confirmSwap(snapshot); return; }
     if (isAddToOrderMode) { void confirmAddToOrder(snapshot); return; }
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
-    navigate(isEditing ? '/cart' : '/catalog');
+    navigateAfterSave(isEditing ? '/cart' : '/catalog');
   };
 
   // Quick Pick → Add to Cart. Builds cells from the pick's modules so the order
@@ -2076,7 +2109,7 @@ export const Configurator = () => {
     if (isSwapMode) { void confirmSwap(snapshot); return; }
     if (isAddToOrderMode) { void confirmAddToOrder(snapshot); return; }
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
-    navigate(isEditing ? '/cart' : '/catalog');
+    navigateAfterSave(isEditing ? '/cart' : '/catalog');
   };
 
   // Topbar action slot for size_variants: product chip + LIVE TOTAL +
@@ -2347,7 +2380,21 @@ export const Configurator = () => {
       step={isSofa ? undefined : 'cart'}
       centerSlot={sofaCenterSlot}
       rightSlot={sofaTopbarSlot ?? sizeTopbarSlot ?? bedframeTopbarSlot}
+      mobileActionsInPage
+      mobileCenterInPage
     />
+    <div className={styles.mobileProductHeader} onPointerDownCapture={captureDraftBaseline} onKeyDownCapture={captureDraftBaseline} onClickCapture={captureDraftBaseline}>
+      <button type="button" className={styles.mobileBack} onClick={backToCatalog}>
+        <ArrowLeft size={18} strokeWidth={1.75} /> Back
+      </button>
+      {isSofa && <h1>{p.name}</h1>}
+      {isSofa && mode === 'quick' && (
+        <span className={styles.mobilePreviewPrice}>
+          {sofaTotal > 0 ? fmtRM(sofaTotal) : 'Select a layout'}
+        </span>
+      )}
+      {isSofa && <div className={styles.mobileControls}>{sofaCenterSlot}</div>}
+    </div>
     {/* TBC sofa exchange — the only error surface in swap mode (the floor
         rule + server rejects land here, above the canvas). */}
     {isSwapMode && swapError && (
@@ -2415,7 +2462,11 @@ export const Configurator = () => {
       </div>
     )}
     <main
-      className={isSofa && mode === 'quick' ? styles.sofaShell : (isSize || isBedframe) ? styles.shellWide : styles.shell}
+      onPointerDownCapture={captureDraftBaseline}
+      onKeyDownCapture={captureDraftBaseline}
+      onClickCapture={captureDraftBaseline}
+      onChangeCapture={captureDraftBaseline}
+      className={(isSofa && mode === 'quick' ? styles.sofaShell : (isSize || isBedframe) ? styles.shellWide : styles.shell) + (isSofa && mode === 'custom' ? ' ' + styles.customShell : '')}
       // Custom-build mode runs on a slightly warmer cream (#FAF6EC vs the app
       // default #FFF9EB) so the "build space" feels distinct from Quick Pick's
       // catalogue browse. The palette sits on top as an elevated white panel
@@ -2454,6 +2505,9 @@ export const Configurator = () => {
             {pickedSize
               ? `Footprint ${pickedSize.widthCm} × ${pickedSize.lengthCm} cm`
               : 'Pick a size to set footprint'}
+          </span>
+          <span className={styles.mobilePreviewPrice}>
+            {pickedSize ? fmtRM((isBedframe ? bedframeTotal : sizeTotal) * qtyEffective) : 'Select a size for price'}
           </span>
         </header>
       )}
@@ -2530,13 +2584,14 @@ export const Configurator = () => {
             productId={p.id}
             productName={p.name}
             pricing={effectiveSofaPricing}
+            onFabricChange={setFabricSel}
             pwpCode={sofaPwpCode}
             pwpComboIds={sofaPwpComboIds}
             depth={activeDepth}
             cells={sofaCells}
             setCells={setSofaCells}
             editingKey={isEditing && editKey ? editKey : undefined}
-            initialFabric={isEditing ? fabricSel : null}
+            initialFabric={fabricSel}
             modelCustomizer={modelCustomizerForDepth}
             baseModel={p.base_model ?? undefined}
             modelId={(p as { model_id?: string | null }).model_id ?? null}
@@ -2554,7 +2609,7 @@ export const Configurator = () => {
             remark={lineRemark}
             extraAddonNote={lineExtraNote}
             extraAmountRm={effectiveExtraRm}
-            onAdded={() => navigate(isEditing ? '/cart' : '/catalog')}
+            onAdded={() => navigateAfterSave(isEditing ? '/cart' : '/catalog')}
             {...(isSwapMode ? { onSwapConfirm: (snap) => { void confirmSwap(snap); }, swapPending } : {})}
             {...(isAddToOrderMode ? { onAddToOrderConfirm: (snap) => { void confirmAddToOrder(snap); }, addToOrderPending, addEligible: soHeader?.addEligible ?? true } : {})}
           />
@@ -2572,7 +2627,7 @@ export const Configurator = () => {
               />
             ) : (
               <div className={styles.previewEmpty}>
-                <span>Pick a size on the right to preview the footprint.</span>
+                <span>Pick a size to preview the footprint.</span>
               </div>
             )}
           </div>
@@ -2669,7 +2724,7 @@ export const Configurator = () => {
               />
             ) : (
               <div className={styles.previewEmpty}>
-                <span>Pick a size on the right to preview the footprint.</span>
+                <span>Pick a size to preview the footprint.</span>
               </div>
             )}
           </div>
@@ -2729,7 +2784,8 @@ export const Configurator = () => {
             productName={p.name}
             flatPrice={p.flat_price}
             category={p.category_id ? p.category_id.toUpperCase() : undefined}
-            onAdded={backToCatalog}
+            onDraftChange={markNestedDraftDirty}
+            onAdded={() => { savedNavigation.current = true; backToCatalog(); }}
             {...(isAddToOrderMode ? {
               onAddToOrder: (snapshot: FlatConfigSnapshot, qty: number) => {
                 void confirmAddToOrder(snapshot, qty);
@@ -2748,14 +2804,13 @@ export const Configurator = () => {
         </p>
       )}
 
-      {!(isSofa && mode === 'quick') && (
-        <footer className={styles.footer}>
-          <span className="t-caption">
-            Realtime subscription on this product's pricing. Backend edits land here in ~300ms.
-          </span>
-        </footer>
-      )}
     </main>
+    {(sofaTopbarSlot ?? sizeTopbarSlot ?? bedframeTopbarSlot) && (
+      <div className={styles.mobileActionBar} aria-label="Configuration total and action">
+        {sofaTopbarSlot ?? sizeTopbarSlot ?? bedframeTopbarSlot}
+      </div>
+    )}
+    <UnsavedConfigurationGuard when={hasUnsavedDraft} savedNavigation={savedNavigation} />
     </>
   );
 };
@@ -2991,6 +3046,43 @@ const SizeGrid = ({ rows, pickedId, onPick }: SizeGridProps) => (
   </div>
 );
 
+function UnsavedConfigurationGuard({ when, savedNavigation }: { when: boolean; savedNavigation: { current: boolean } }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const blocker = useBlocker(({ currentLocation, nextLocation }) =>
+    when && !savedNavigation.current &&
+    (currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search),
+  );
+  useBeforeUnload(useCallback((event) => {
+    if (!when || savedNavigation.current) return;
+    event.preventDefault();
+    event.returnValue = '';
+  }, [when, savedNavigation]));
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (blocker.state === 'blocked' && when) {
+      if (!dialog.open) dialog.showModal();
+    } else if (dialog.open) dialog.close();
+    if (blocker.state === 'blocked' && !when) blocker.reset();
+  }, [blocker, when]);
+  return (
+    <dialog
+      ref={dialogRef}
+      className={styles.draftDialog}
+      aria-labelledby="unsaved-configuration-title"
+      aria-describedby="unsaved-configuration-description"
+      onCancel={(event) => { event.preventDefault(); if (blocker.state === 'blocked') blocker.reset(); }}
+    >
+      <h2 id="unsaved-configuration-title">Leave this configuration?</h2>
+      <p id="unsaved-configuration-description">Your changes have not been added to the cart or saved. Leaving will discard this configuration.</p>
+      <div className={styles.draftDialogActions}>
+        <Button variant="secondary" autoFocus onClick={() => { if (blocker.state === 'blocked') blocker.reset(); }}>Keep configuring</Button>
+        <Button variant="primary" onClick={() => { if (blocker.state === 'blocked') blocker.proceed(); }}>Discard and leave</Button>
+      </div>
+    </dialog>
+  );
+}
+
 interface FlatAddToCartProps {
   productId: string;
   productName: string;
@@ -2998,6 +3090,7 @@ interface FlatAddToCartProps {
   /** UPPERCASE mfg category, stamped onto the cart snapshot for SO bucketing. */
   category?: string;
   onAdded: () => void;
+  onDraftChange?: () => void;
   /** Add-to-placed-SO mode: when set, the button submits to the placed SO
    *  instead of the cart. */
   onAddToOrder?: (snapshot: FlatConfigSnapshot, qty: number) => void;
@@ -3006,7 +3099,7 @@ interface FlatAddToCartProps {
   addEligible?: boolean;
 }
 
-const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded, onAddToOrder, addToOrderPending = false, addEligible = true }: FlatAddToCartProps) => {
+const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded, onDraftChange, onAddToOrder, addToOrderPending = false, addEligible = true }: FlatAddToCartProps) => {
   const addConfigured = useCart((s) => s.addConfigured);
   const [qty, setQty] = useState(1);
   const handleAdd = () => {
@@ -3031,7 +3124,7 @@ const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded, o
           <button
             type="button"
             className={styles.stepperBtn}
-            onClick={() => setQty((q) => Math.max(1, q - 1))}
+            onClick={() => { setQty((q) => Math.max(1, q - 1)); onDraftChange?.(); }}
             disabled={qty <= 1}
             aria-label="Decrease quantity"
           >
@@ -3041,7 +3134,7 @@ const FlatAddToCart = ({ productId, productName, flatPrice, category, onAdded, o
           <button
             type="button"
             className={styles.stepperBtn}
-            onClick={() => setQty((q) => q + 1)}
+            onClick={() => { setQty((q) => q + 1); onDraftChange?.(); }}
             aria-label="Increase quantity"
           >
             <Plus size={12} strokeWidth={2} />
@@ -3220,7 +3313,7 @@ const heroAnchorStyle = (
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
-const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, pwpBlock, specialAddonsBlock, legBlock, remarkBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
+export const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, pwpBlock, specialAddonsBlock, legBlock, remarkBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
   // Hide bundles not activated for this Model. The productSchema refine
   // guarantees ≥1 active+priced bundle exists for every sofa SKU.
   const activeRows = useMemo(
@@ -3292,12 +3385,17 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
             const meta = QUICK_PRESET_META[bundle.id];
             const presetCells = buildPresetCells(bundle.id, depth);
             return (
-              <button
+              <div
                 key={bundle.id}
-                type="button"
                 className={`${styles.qpCard} ${isPicked ? styles.qpCardPicked : ''}`}
-                onClick={() => onPick(bundle.id)}
               >
+                <button
+                  type="button"
+                  className={styles.qpCardSelect}
+                  aria-label={'Select ' + bundle.label}
+                  aria-pressed={isPicked}
+                  onClick={() => onPick(bundle.id)}
+                >
                 <div className={styles.qpCardArt}>
                   {presetCells ? (
                     <SofaCellsPreview cells={presetCells} depth={depth} />
@@ -3316,6 +3414,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
                   {meta?.sub && <span className={styles.qpCardSub}>{meta.sub}</span>}
                   <span className={styles.qpCardPrice}>RM{(price ?? 0).toLocaleString('en-MY')}</span>
                 </div>
+                </button>
                 {lShape && isPicked && (
                   <span
                     className={styles.qpFlip}
@@ -3336,7 +3435,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
                     ))}
                   </span>
                 )}
-              </button>
+              </div>
             );
           })}
         </div>
@@ -3368,13 +3467,18 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
                 const isPicked = item.id === pickedQuickPickId;
                 const canDelete = item.source === 'personal' || canDeleteGlobal;
                 return (
-                  <button
+                  <div
                     key={item.id}
-                    type="button"
                     className={`${styles.qpCard} ${isPicked ? styles.qpCardPicked : ''}`}
-                    onClick={() => onQuickPickSelect?.(item)}
-                    title={qpWalkLabel(item.modules, depth) ?? item.modules.map((s) => s[0] ?? '').join(' + ')}
                   >
+                    <button
+                      type="button"
+                      className={styles.qpCardSelect}
+                      aria-label={'Select ' + label}
+                      aria-pressed={isPicked}
+                      onClick={() => onQuickPickSelect?.(item)}
+                      title={qpWalkLabel(item.modules, depth) ?? item.modules.map((s) => s[0] ?? '').join(' + ')}
+                    >
                     <div className={styles.qpCardArt}>
                       <SofaCellsPreview cells={cellsFromComboModules(item.modules, depth)} depth={depth} />
                     </div>
@@ -3387,18 +3491,17 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
                         {priceRm == null ? '— (no price)' : `RM${priceRm.toLocaleString('en-MY')}`}
                       </span>
                     </div>
+                    </button>
                     {canDelete && (
-                      <span
-                        role="button"
-                        tabIndex={0}
+                      <button
+                        type="button"
                         className={styles.qpDeleteQuickPick}
                         onClick={(e) => { e.stopPropagation(); onQuickPickDelete?.(item); }}
-                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onQuickPickDelete?.(item); } }}
                         title={item.source === 'personal' ? 'Remove from this tablet' : 'Remove shared Quick Pick'}
                         aria-label="Remove Quick Pick"
                       >
                         <Trash2 size={14} strokeWidth={1.75} />
-                      </span>
+                      </button>
                     )}
                     {isPicked && canMirror(item.modules) && (
                       <button
@@ -3422,7 +3525,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
                         Edit in Customize →
                       </button>
                     )}
-                  </button>
+                  </div>
                 );
               })}
             </div>

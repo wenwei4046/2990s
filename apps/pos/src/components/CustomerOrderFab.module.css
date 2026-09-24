@@ -95,3 +95,7 @@
     height: 32px;
   }
 }
+
+@media (max-width: 767px) {
+  .fab { bottom: calc(16px + env(safe-area-inset-bottom, 0px)); right: 16px; min-height: 56px; }
+}

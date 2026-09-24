@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import {
   ArrowLeft,
@@ -59,6 +59,7 @@ import {
 } from '../lib/so-maintenance/so-dropdown-options-queries';
 import { useStaff, useSalesStaff } from '../lib/staff';
 import { useCanViewAllSales } from '../lib/houzs-perms';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 import { launchHouzsSso, canLaunchHouzs } from '../lib/houzs-sso';
 import styles from './OrderStatus.module.css';
 
@@ -735,22 +736,39 @@ const laneIdFor = (o: MyOrderRow): LaneDef['id'] => {
   return 'proceed';
 };
 
-/* ─── Toolbar: search (left) + period picker (right) ─── */
+/* ─── Toolbar: salesperson + period filters ─── */
+
+const OrderSearch = ({ query, setQuery }: { query: string; setQuery: (query: string) => void }) => (
+  <div className={styles.searchBox}>
+    <Search size={18} strokeWidth={1.75} aria-hidden="true" />
+    <input
+      type="search"
+      className={styles.searchInput}
+      value={query}
+      onChange={(event) => setQuery(event.target.value)}
+      placeholder="Search SO no., customer or phone"
+      aria-label="Search orders"
+    />
+    {query && (
+      <button type="button" className={styles.searchClear} onClick={() => setQuery('')} aria-label="Clear search">
+        <X size={16} strokeWidth={1.75} />
+      </button>
+    )}
+  </div>
+);
 
 const OrderToolbar = ({
+  search,
   period,
   setPeriod,
-  query,
-  setQuery,
   canSeeAll,
   salesStaff,
   salesperson,
   setSalesperson,
 }: {
+  search?: ReactNode;
   period: Period;
   setPeriod: (p: Period) => void;
-  query: string;
-  setQuery: (q: string) => void;
   canSeeAll: boolean;
   salesStaff: { id: string; name: string }[];
   salesperson: string;
@@ -781,29 +799,8 @@ const OrderToolbar = ({
   };
 
   return (
-    <section className={styles.toolbar} aria-label="Search and period filter">
-      <div className={styles.searchBox}>
-        <Search size={18} strokeWidth={1.75} />
-        <input
-          type="search"
-          className={styles.searchInput}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search SO no., customer or phone"
-          aria-label="Search orders"
-        />
-        {query && (
-          <button
-            type="button"
-            className={styles.searchClear}
-            onClick={() => setQuery('')}
-            aria-label="Clear search"
-          >
-            <X size={16} strokeWidth={1.75} />
-          </button>
-        )}
-      </div>
-
+    <section className={styles.toolbar} aria-label="Order filters">
+      {search}
       {canSeeAll && (
         <label className={styles.spPicker}>
           <Users size={16} strokeWidth={1.75} />
@@ -903,6 +900,9 @@ const OrderToolbar = ({
 };
 
 const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
+  const isPhone = useMediaQuery('(max-width: 767px)');
+  const [selectedLane, setSelectedLane] = useState<LaneDef['id']>('place');
+  const statusTabRefs = useRef<Partial<Record<LaneDef['id'], HTMLButtonElement | null>>>({});
   const [period, setPeriod] = useState<Period>(currentMonthPeriod);
   const [query, setQuery] = useState('');
   // Debounce the search box so we don't refetch on every keystroke.
@@ -928,6 +928,7 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
   useMyOrdersRealtime();
   const list = orders.data ?? [];
   const [active, setActive] = useState<MyOrderRow | null>(null);
+  const closeOrder = useCallback(() => setActive(null), []);
 
   // Who is VIEWING the board. Always the logged-in user.
   const viewerName = staff.data?.name ?? 'Sales';
@@ -982,7 +983,10 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
 
   return (
     <>
-    <Topbar />
+    <Topbar
+      centerBelowOnMobile={isPhone}
+      centerSlot={isPhone ? <OrderSearch query={query} setQuery={setQuery} /> : undefined}
+    />
     <main className={styles.shell}>
       <header className={styles.header}>
         <Link to="/catalog">
@@ -999,12 +1003,13 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
           <button
             type="button"
             className={styles.lockBtn}
+            aria-label="Lock again"
             onClick={() => {
               if (sessionKey) sessionStorage.removeItem(sessionKey);
               window.location.reload();
             }}
           >
-            <ShieldCheck size={14} strokeWidth={1.75} /> Lock again
+            <ShieldCheck size={14} strokeWidth={1.75} /><span className={styles.lockLabel}>Lock again</span>
           </button>
         </div>
       </header>
@@ -1012,15 +1017,51 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
       <SalesKpis stats={stats} personalName={personalName} />
 
       <OrderToolbar
+        search={isPhone ? undefined : <OrderSearch query={query} setQuery={setQuery} />}
         period={period}
         setPeriod={setPeriod}
-        query={query}
-        setQuery={setQuery}
         canSeeAll={canSeeAll}
         salesStaff={salesStaff.data ?? []}
         salesperson={salesperson}
         setSalesperson={setSalesperson}
       />
+
+      {isPhone && (
+        <div className={styles.statusTabs} role="tablist" aria-label="Order status">
+          {LANES.map((lane, index) => (
+            <button
+              key={lane.id}
+              ref={(element) => { statusTabRefs.current[lane.id] = element; }}
+              type="button"
+              role="tab"
+              id={`order-status-${lane.id}`}
+              aria-controls="order-status-panel"
+              aria-selected={selectedLane === lane.id}
+              tabIndex={selectedLane === lane.id ? 0 : -1}
+              className={styles.statusTab}
+              onClick={() => setSelectedLane(lane.id)}
+              onKeyDown={(event) => {
+                const nextIndex = event.key === 'ArrowRight' ? (index + 1) % LANES.length
+                  : event.key === 'ArrowLeft' ? (index + LANES.length - 1) % LANES.length
+                  : event.key === 'Home' ? 0
+                  : event.key === 'End' ? LANES.length - 1 : null;
+                if (nextIndex === null) return;
+                event.preventDefault();
+                const next = LANES[nextIndex];
+                if (next) {
+                  setSelectedLane(next.id);
+                  statusTabRefs.current[next.id]?.focus();
+                }
+              }}
+            >
+              <span>{lane.title}</span>
+              <span className={styles.statusTabCount}>
+                {orders.isLoading || orders.error ? '—' : grouped[lane.id].length}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {searching && (
         <p className={styles.searchHint}>
@@ -1036,6 +1077,12 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
         </p>
       )}
 
+      <div
+        id={isPhone ? 'order-status-panel' : undefined}
+        role={isPhone ? 'tabpanel' : undefined}
+        aria-labelledby={isPhone ? `order-status-${selectedLane}` : undefined}
+        tabIndex={isPhone ? 0 : undefined}
+      >
       {orders.isLoading ? (
         <p className={styles.empty}>Loading…</p>
       ) : orders.error ? (
@@ -1065,12 +1112,18 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
           )}
         </div>
       ) : (
-        <div className={styles.lanes}>
-          {LANES.map((lane) => {
+        <div className={isPhone ? styles.phoneOrders : styles.lanes}>
+          {LANES.filter((lane) => !isPhone || lane.id === selectedLane).map((lane) => {
             const items = grouped[lane.id];
             const Icon = lane.Icon;
             return (
-              <section key={lane.id} className={styles.lane}>
+              <section key={lane.id} className={isPhone ? styles.phoneLane : styles.lane}>
+                {isPhone ? (
+                  <div className={styles.phoneLaneMeta}>
+                    <span>{lane.sub}</span>
+                    <span>{items.length} {items.length === 1 ? 'order' : 'orders'}</span>
+                  </div>
+                ) : (
                 <header className={styles.laneHead}>
                   <div className={styles.laneNum}>{lane.num}</div>
                   <div className={styles.laneInfo}>
@@ -1080,10 +1133,28 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
                   </div>
                   <div className={styles.laneCount}>{items.length}</div>
                 </header>
-                <div className={styles.laneBody}>
+                )}
+                <div className={isPhone ? styles.phoneLaneBody : styles.laneBody}>
                   {items.length === 0 ? (
                     <div className={styles.laneEmpty}>
-                      Nothing here yet
+                      {isPhone ? (
+                        <>
+                          <p>{searching ? `No matches in ${lane.title}.` : `No ${lane.title.toLowerCase()} orders in ${periodLabel}.`}</p>
+                          {searching && LANES.filter((other) => other.id !== lane.id && grouped[other.id].length > 0).map((other) => (
+                            <button
+                              key={other.id}
+                              type="button"
+                              className={styles.statusMatchLink}
+                              onClick={() => {
+                                setSelectedLane(other.id);
+                                statusTabRefs.current[other.id]?.focus();
+                              }}
+                            >
+                              View {grouped[other.id].length} in {other.title}
+                            </button>
+                          ))}
+                        </>
+                      ) : 'Nothing here yet'}
                     </div>
                   ) : (
                     items.map((o) => (
@@ -1096,8 +1167,9 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
           })}
         </div>
       )}
+      </div>
       {active && (
-        <OrderDetail order={active} onClose={() => setActive(null)} />
+        <OrderDetail order={active} onClose={closeOrder} />
       )}
     </main>
     </>
@@ -1116,8 +1188,62 @@ const SalesKpis = ({
   personalName: string;
 }) => {
   const monthLabel = stats.data?.monthLabel ?? '';
+  const loading = stats.isLoading && !stats.data;
+  const mobileRows = [
+    {
+      id: 'personal',
+      label: 'Personal',
+      note: personalName,
+      Icon: ShieldCheck,
+      total: stats.data?.personalTotal ?? 0,
+      count: stats.data?.personalCount ?? 0,
+      products: stats.data?.personalProducts ?? 0,
+      service: stats.data?.personalService ?? 0,
+      kpi: stats.data?.personalKpi ?? 0,
+    },
+    {
+      id: 'showroom',
+      label: stats.data?.showroomScope === 'company' ? 'Company' : 'Showroom',
+      note: 'All salespeople',
+      Icon: Store,
+      total: stats.data?.showroomTotal ?? 0,
+      count: stats.data?.showroomCount ?? 0,
+      products: stats.data?.showroomProducts ?? 0,
+      service: stats.data?.showroomService ?? 0,
+      kpi: stats.data?.showroomKpi ?? 0,
+    },
+  ];
   return (
     <section className={styles.kpis} aria-label={`Sales · ${monthLabel}`}>
+      <div className={styles.kpiMobile}>
+        <div className={styles.kpiMobilePeriod}>
+          <strong>{monthLabel || '—'}</strong>
+          <span>Sales summary</span>
+        </div>
+        <div className={styles.kpiMobileCard}>
+          {mobileRows.map(({ id, label, note, Icon, total, count, products, service, kpi }) => (
+            <details key={id} className={styles.kpiMobileRow}>
+              <summary className={styles.kpiMobileSummary}>
+                <span className={styles.kpiMobileScope}>
+                  <span className={styles.kpiMobileLabel}><Icon size={18} strokeWidth={1.75} aria-hidden="true" />{label}</span>
+                  <span className={styles.kpiMobileNote}>{note}</span>
+                </span>
+                <span className={styles.kpiMobileTotal}>
+                  {loading ? (
+                    <span className={styles.kpiMobileLoading} role="status"><Loader2 size={16} strokeWidth={1.75} className={styles.kpiSpin} aria-hidden="true" />Loading…</span>
+                  ) : stats.error ? (
+                    <span className={styles.kpiError}>Couldn’t load</span>
+                  ) : (
+                    <><strong>RM {fmtMoney(total)}</strong><small>{count} {count === 1 ? 'order' : 'orders'}</small></>
+                  )}
+                </span>
+                <ChevronRight className={styles.kpiMobileChevron} size={16} strokeWidth={1.75} aria-hidden="true" />
+              </summary>
+              {!loading && !stats.error && <KpiBreakdown products={products} service={service} kpi={kpi} />}
+            </details>
+          ))}
+        </div>
+      </div>
       <div className={styles.kpiCard}>
         <div className={styles.kpiHead}>
           <Store size={13} strokeWidth={1.75} />
@@ -1310,6 +1436,10 @@ const OrderDetail = ({ order, onClose }: {
   order: MyOrderRow;
   onClose: () => void;
 }) => {
+  const detailRef = useRef<HTMLElement>(null);
+  const jumpToSection = (section: string) => {
+    detailRef.current?.querySelector<HTMLElement>(`[data-order-section="${section}"]`)?.scrollIntoView({ block: 'start' });
+  };
   const queryClient = useQueryClient();
   const { user } = useAuth();
   /* Edit scope by lane (Loo 2026-06-13). editablePlaced = Order placed
@@ -1663,12 +1793,30 @@ const OrderDetail = ({ order, onClose }: {
   const onUnproceed = () => unproceedMutation.mutate();
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    detailRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key !== 'Tab') return;
+      const controls = Array.from(detailRef.current?.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
+      ) ?? []).filter((el) => el.getClientRects().length > 0);
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (!first || !last) { e.preventDefault(); return; }
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === detailRef.current)) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault(); first.focus();
+      }
+    };
     window.addEventListener('keydown', onKey);
     document.body.style.overflow = 'hidden';
     return () => {
       window.removeEventListener('keydown', onKey);
-      document.body.style.overflow = '';
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
     };
   }, [onClose]);
 
@@ -1703,7 +1851,7 @@ const OrderDetail = ({ order, onClose }: {
 
   return (
     <div className={styles.detailOverlay} onClick={onClose}>
-      <aside className={styles.detail} onClick={(e) => e.stopPropagation()}>
+      <aside ref={detailRef} className={styles.detail} role="dialog" aria-modal="true" aria-label={`Order ${order.id}`} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <header className={styles.detailHead}>
           <div>
             <div className={styles.detailEyebrow}>Order · {order.status === 'CONFIRMED' && order.proceededAt ? 'Proceed' : LANE_LABEL[order.status]}</div>
@@ -1712,7 +1860,7 @@ const OrderDetail = ({ order, onClose }: {
               {order.customerName} · placed {fmtTimeAgo(order.placedAt)} by {order.staffName ?? '—'}
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className={styles.detailHeadActions}>
             {canOpenInHouzs && (
               <button
                 type="button"
@@ -1734,7 +1882,12 @@ const OrderDetail = ({ order, onClose }: {
         </header>
 
         <div className={styles.detailBody}>
-          <section className={styles.detailSection}>
+          <nav className={styles.detailSectionNav} aria-label="Order sections">
+            {['Items', 'Customer', 'Delivery', 'Payment'].map((section) => (
+              <button key={section} type="button" onClick={() => jumpToSection(section.toLowerCase())}>{section}</button>
+            ))}
+          </nav>
+          <section className={styles.detailSection} data-order-section="items">
             <h4 className={styles.detailSectionTitle}>
               Items <span className={styles.detailSectionMeta}>{order.pieces} {order.pieces === 1 ? 'piece' : 'pieces'}</span>
             </h4>
@@ -1811,7 +1964,7 @@ const OrderDetail = ({ order, onClose }: {
             </div>
           </section>
 
-          <section className={styles.detailSection}>
+          <section className={styles.detailSection} data-order-section="customer">
             <h4 className={styles.detailSectionTitle}>
               Customer
               <span className={`${styles.detailTick} ${customerInfoOk ? styles.detailTickOk : ''}`}>
@@ -1847,7 +2000,7 @@ const OrderDetail = ({ order, onClose }: {
             </div>
           </section>
 
-          <section className={styles.detailSection}>
+          <section className={styles.detailSection} data-order-section="delivery">
             <h4 className={styles.detailSectionTitle}>
               Delivery
               <span className={`${styles.detailTick} ${addressOk ? styles.detailTickOk : ''}`}>
@@ -1957,7 +2110,7 @@ const OrderDetail = ({ order, onClose }: {
             </div>
           </section>
 
-          <section className={styles.detailSection}>
+          <section className={styles.detailSection} data-order-section="payment">
             <h4 className={styles.detailSectionTitle}>
               Payment
               <span className={`${styles.detailTick} ${paidOk ? styles.detailTickOk : ''}`}>

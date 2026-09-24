@@ -27,6 +27,7 @@ import { authedFetchRaw, IS_HOUZS } from '../lib/apiClient';
 import { useCart, cartHasSofa, cartHasMainNonSofa, type FlatConfigSnapshot } from '../state/cart';
 import { Topbar } from '../components/Topbar';
 import { CustomerOrderFab } from '../components/CustomerOrderFab';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 import styles from './Catalog.module.css';
 
 /* TEMPORARY (goes with the Backend emergency hatch) — Backend portal origin
@@ -52,6 +53,48 @@ const CAT_ICON: Record<string, LucideIcon> = {
   kids: Baby,
   accessory: Star,
 };
+
+const MOBILE_CATEGORIES = [
+  { id: 'all', label: 'All' },
+  { id: 'mattress', label: 'Mattress' },
+  { id: 'bedframe', label: 'Bedframe' },
+  { id: 'sofa', label: 'Sofa' },
+  { id: 'accessory', label: 'Accessories' },
+] as const;
+
+function CategoryArtwork({ category }: { category: typeof MOBILE_CATEGORIES[number]['id'] }) {
+  return (
+    <svg width="42" height="42" viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {category === 'all' && <>
+        <rect x="8" y="8" width="13" height="13" rx="3" fill="currentColor" fillOpacity=".12" />
+        <rect x="27" y="8" width="13" height="13" rx="3" />
+        <rect x="8" y="27" width="13" height="13" rx="3" />
+        <rect x="27" y="27" width="13" height="13" rx="3" fill="currentColor" fillOpacity=".12" />
+      </>}
+      {category === 'mattress' && <>
+        <path d="M7 20 25 10 41 19 23 30Z" fill="currentColor" fillOpacity=".08" />
+        <path d="M7 20v9l16 9 18-11v-8M23 30v8M7 25l16 9 18-11" />
+        <path d="m18 19 3 2m6-6 3 2m-5 7 3 2m6-6 3 2" />
+      </>}
+      {category === 'bedframe' && <>
+        <rect x="8" y="8" width="32" height="14" rx="3" fill="currentColor" fillOpacity=".12" />
+        <path d="M8 20 4 34h40l-4-14M4 34v6m40-6v6M8 34v5m32-5v5M11 25h26M9 30h30M17 22l-2 10m16-10 2 10M24 22v10" />
+        <path d="M4 34v3h40v-3" />
+      </>}
+      {category === 'sofa' && <>
+        <rect x="10" y="11" width="28" height="19" rx="5" fill="currentColor" fillOpacity=".08" />
+        <path d="M24 12v15M11 27h26" />
+        <path d="M9 23a4 4 0 0 0-4 4v9h38v-9a4 4 0 0 0-8 0v4H13v-4a4 4 0 0 0-4-4Z" fill="currentColor" fillOpacity=".12" />
+        <path d="M10 36v4m28-4v4" />
+      </>}
+      {category === 'accessory' && <>
+        <path d="M16 9c6 2 14 2 20 0-2 6-2 14 0 20-6-2-14-2-20 0 2-6 2-14 0-20Z" fill="currentColor" fillOpacity=".08" />
+        <path d="M8 20c7 2 14 2 21 0-2 6-2 13 0 19-7-2-14-2-21 0 2-6 2-13 0-19Z" fill="var(--c-cream)" />
+        <path d="M13 25c3 1 8 1 11 0m-11 9c3-1 8-1 11 0" />
+      </>}
+    </svg>
+  );
+}
 
 const productInitial = (name: string): string =>
   name?.trim()?.charAt(0)?.toUpperCase() ?? '?';
@@ -160,6 +203,7 @@ function buildCards(rows: MfgCatalogRow[]): CatalogCard[] {
 }
 
 export const Catalog = () => {
+  const isPhone = useMediaQuery('(max-width: 767px)');
   const catalog = useMfgCatalog();
   const { data: staff } = useStaff();
   /* The OPEX section's own gate — the Houzs `scm.hr.read` key, not the POS role.
@@ -289,16 +333,145 @@ export const Catalog = () => {
   }, [cards, activeCat, activeBranding, query, liveCats]);
 
   const resetFilters = () => {
-    setSearchParams({}, { replace: true });
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('cat');
+      next.delete('brand');
+      return next;
+    }, { replace: true });
     setQuery('');
   };
+
+  const catalogActions = (
+    <>
+    <div className={styles.sideHeading}>Quick</div>
+    <button
+      type="button"
+      className={styles.sideItem}
+      onClick={resetFilters}
+    >
+      <RotateCcw size={16} strokeWidth={1.75} />
+      <span className={styles.sideLabel}>Reset filters</span>
+    </button>
+    <button
+      type="button"
+      className={styles.sideItem}
+      onClick={() => setActiveCat('mattress')}
+    >
+      <Sparkles size={16} strokeWidth={1.75} />
+      <span className={styles.sideLabel}>Bestsellers</span>
+    </button>
+
+    {/* PR — Commander 2026-05-28: moved Products + SO Maintenance
+        out of the top-right toolbar into the bottom-left sidebar.
+        They sit under a "Maintain" heading just above the Honest
+        Pricing footer so they're the last thing in the rail —
+        away from the per-session category browsing flow above. */}
+    {/* MAINTAIN is master-admin tooling (New Order / Products / SO
+        Maintenance / Sales analysis). Shown to the POS curator roles OR
+        to anyone Houzs itself calls an SCM config writer —
+        useMaintainAccess. Sales etc. don't see the section, and the four
+        routes are guarded in router.tsx (MaintainGate) with the SAME
+        predicate so a hand-typed URL can't bypass the hide. */}
+    {/* TEMPORARY (Loo 2026-06-10) — emergency hatch while the new POS
+        order flow stabilises: sales-side roles get a button that opens
+        the Backend's raw SO create form ALREADY SIGNED IN (salespeople
+        have no Backend password). POST /pos/backend-sso mints a
+        one-time magic-link token for the signed-in salesperson; the
+        Backend's /sso page exchanges it for its own session. The
+        Backend's POS-only block carves out the Sales Order module to
+        match (apps/backend/src/lib/auth.tsx posOnlyAllowedPath).
+        Delete this block + openBackendSo + isPosSalesRole + the
+        Backend carve-out together once everyone creates orders from
+        POS again. */}
+    {/* 2990-only emergency hatch: on the Houzs target the POS IS the order
+        flow and /pos/backend-sso does not exist (404), so hide it. */}
+    {!IS_HOUZS && isPosSalesRole(staff?.role) && (
+      <>
+        <div className={styles.sideHeading}>Backend</div>
+        <button
+          type="button"
+          className={styles.sideItem}
+          onClick={() => void openBackendSo()}
+          disabled={ssoBusy}
+        >
+          <ExternalLink size={16} strokeWidth={1.75} />
+          <span className={styles.sideLabel}>
+            {ssoBusy ? 'Opening…' : 'Create Sales Order'}
+          </span>
+        </button>
+      </>
+    )}
+
+    {canMaintain && (
+      <>
+        <div className={styles.sideHeading}>Maintain</div>
+        {/* Commander 2026-05-28 ("就直接添加一个 New Order 的 button…
+            不要跳 Backend, 永远在 POS 系统里"): customer-first SO creation
+            path. Click → POS-native customer form → POSTs empty SO,
+            lands on the existing handover-confirmed thank-you screen. */}
+        <Link to="/new-order" className={styles.sideItem}>
+          <Plus size={16} strokeWidth={1.75} />
+          <span className={styles.sideLabel}>New Order</span>
+        </Link>
+        <Link to="/products" className={styles.sideItem}>
+          <Package size={16} strokeWidth={1.75} />
+          <span className={styles.sideLabel}>Products</span>
+        </Link>
+        <Link to="/sales-order-maintenance" className={styles.sideItem}>
+          <Settings size={16} strokeWidth={1.75} />
+          <span className={styles.sideLabel}>SO Maintenance</span>
+        </Link>
+        <Link to="/sales-analysis" className={styles.sideItem}>
+          <BarChart3 size={16} strokeWidth={1.75} />
+          <span className={styles.sideLabel}>Sales analysis</span>
+        </Link>
+      </>
+    )}
+
+    {/* OPEX — operating-expense tooling (Loo 2026-08-31). Its own
+        heading, NOT under Maintain, because it is gated differently:
+        Maintain keys off the POS role, this keys off the Houzs
+        permission `scm.hr.read`, which is what the /hr API actually
+        enforces. A super_admin without that key does not see it, and
+        someone who holds it does — which is the point. */}
+    {canReadHr && (
+      <>
+        <div className={styles.sideHeading}>OPEX</div>
+        <Link to="/opex/commission" className={styles.sideItem}>
+          <Coins size={16} strokeWidth={1.75} />
+          <span className={styles.sideLabel}>Commission</span>
+        </Link>
+      </>
+    )}
+    </>
+  );
 
   const iconFor = (catId?: string | null): LucideIcon =>
     catId ? CAT_ICON[catId] ?? Package : Package;
 
+  const searchControl = (
+    <div className={styles.search}>
+      <Search size={isPhone ? 18 : 14} strokeWidth={1.75} aria-hidden="true" />
+      <input
+        type="search"
+        aria-label="Search products"
+        placeholder={isPhone ? 'Search products, SKU or brand' : 'Name, SKU, brand…'}
+        title="Search product name, SKU or brand"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+    </div>
+  );
+
   return (
     <>
-      <Topbar step="cart" />
+      <Topbar
+        step="cart"
+        centerBelowOnMobile
+        centerSlot={isPhone ? searchControl : undefined}
+        mobileMenuSlot={catalogActions}
+      />
       <main className={styles.app}>
       {catalog.isLoading ? (
         <p className={styles.empty}>Loading catalog…</p>
@@ -310,8 +483,46 @@ export const Catalog = () => {
         </p>
       ) : (
         <div className={styles.layout}>
+          <div className={styles.toolbar}>
+            {!isPhone && searchControl}
+            <div className={styles.mobileCategories} role="group" aria-label="Product categories">
+              {MOBILE_CATEGORIES.map((category) => {
+                const available = category.id === 'all' || liveCats.some((item) => item.id === category.id);
+                const selected = activeCat === category.id;
+                return (
+                  <button
+                    key={category.id}
+                    type="button"
+                    className={styles.categoryTile}
+                    aria-pressed={selected}
+                    disabled={!available}
+                    onClick={() => setActiveCat(category.id)}
+                  >
+                    <span className={styles.categoryArtwork}><CategoryArtwork category={category.id} /></span>
+                    <span>{category.label}</span>
+                    {!available && <span className={styles.categoryUnavailable}>{tbcCats.some((item) => item.id === category.id) ? 'Soon' : 'Unavailable'}</span>}
+                  </button>
+                );
+              })}
+            </div>
+            <select
+              aria-label="Product series"
+              className={styles.select}
+              value={activeBranding}
+              onChange={(e) => setActiveBranding(e.target.value)}
+            >
+              <option value="all">All series</option>
+              {brandingList.map((b) => (
+                <option key={b} value={b}>{b}</option>
+              ))}
+            </select>
+            <span className={styles.toolbarCount}>
+              {filtered.length} {filtered.length === 1 ? 'piece' : 'pieces'}
+            </span>
+          </div>
+
           {/* ─── Left rail ─── */}
-          <aside className={styles.sidebar}>
+          <aside id="catalog-categories" className={styles.sidebar}>
             <div className={styles.sideHeading}>Categories</div>
             <button
               type="button"
@@ -360,106 +571,7 @@ export const Catalog = () => {
               </>
             )}
 
-            <div className={styles.sideHeading}>Quick</div>
-            <button
-              type="button"
-              className={styles.sideItem}
-              onClick={resetFilters}
-            >
-              <RotateCcw size={16} strokeWidth={1.75} />
-              <span className={styles.sideLabel}>Reset filters</span>
-            </button>
-            <button
-              type="button"
-              className={styles.sideItem}
-              onClick={() => setActiveCat('mattress')}
-            >
-              <Sparkles size={16} strokeWidth={1.75} />
-              <span className={styles.sideLabel}>Bestsellers</span>
-            </button>
-
-            {/* PR — Commander 2026-05-28: moved Products + SO Maintenance
-                out of the top-right toolbar into the bottom-left sidebar.
-                They sit under a "Maintain" heading just above the Honest
-                Pricing footer so they're the last thing in the rail —
-                away from the per-session category browsing flow above. */}
-            {/* MAINTAIN is master-admin tooling (New Order / Products / SO
-                Maintenance / Sales analysis). Shown to the POS curator roles OR
-                to anyone Houzs itself calls an SCM config writer —
-                useMaintainAccess. Sales etc. don't see the section, and the four
-                routes are guarded in router.tsx (MaintainGate) with the SAME
-                predicate so a hand-typed URL can't bypass the hide. */}
-            {/* TEMPORARY (Loo 2026-06-10) — emergency hatch while the new POS
-                order flow stabilises: sales-side roles get a button that opens
-                the Backend's raw SO create form ALREADY SIGNED IN (salespeople
-                have no Backend password). POST /pos/backend-sso mints a
-                one-time magic-link token for the signed-in salesperson; the
-                Backend's /sso page exchanges it for its own session. The
-                Backend's POS-only block carves out the Sales Order module to
-                match (apps/backend/src/lib/auth.tsx posOnlyAllowedPath).
-                Delete this block + openBackendSo + isPosSalesRole + the
-                Backend carve-out together once everyone creates orders from
-                POS again. */}
-            {/* 2990-only emergency hatch: on the Houzs target the POS IS the order
-                flow and /pos/backend-sso does not exist (404), so hide it. */}
-            {!IS_HOUZS && isPosSalesRole(staff?.role) && (
-              <>
-                <div className={styles.sideHeading}>Backend</div>
-                <button
-                  type="button"
-                  className={styles.sideItem}
-                  onClick={() => void openBackendSo()}
-                  disabled={ssoBusy}
-                >
-                  <ExternalLink size={16} strokeWidth={1.75} />
-                  <span className={styles.sideLabel}>
-                    {ssoBusy ? 'Opening…' : 'Create Sales Order'}
-                  </span>
-                </button>
-              </>
-            )}
-
-            {canMaintain && (
-              <>
-                <div className={styles.sideHeading}>Maintain</div>
-                {/* Commander 2026-05-28 ("就直接添加一个 New Order 的 button…
-                    不要跳 Backend, 永远在 POS 系统里"): customer-first SO creation
-                    path. Click → POS-native customer form → POSTs empty SO,
-                    lands on the existing handover-confirmed thank-you screen. */}
-                <Link to="/new-order" className={styles.sideItem}>
-                  <Plus size={16} strokeWidth={1.75} />
-                  <span className={styles.sideLabel}>New Order</span>
-                </Link>
-                <Link to="/products" className={styles.sideItem}>
-                  <Package size={16} strokeWidth={1.75} />
-                  <span className={styles.sideLabel}>Products</span>
-                </Link>
-                <Link to="/sales-order-maintenance" className={styles.sideItem}>
-                  <Settings size={16} strokeWidth={1.75} />
-                  <span className={styles.sideLabel}>SO Maintenance</span>
-                </Link>
-                <Link to="/sales-analysis" className={styles.sideItem}>
-                  <BarChart3 size={16} strokeWidth={1.75} />
-                  <span className={styles.sideLabel}>Sales analysis</span>
-                </Link>
-              </>
-            )}
-
-            {/* OPEX — operating-expense tooling (Loo 2026-08-31). Its own
-                heading, NOT under Maintain, because it is gated differently:
-                Maintain keys off the POS role, this keys off the Houzs
-                permission `scm.hr.read`, which is what the /hr API actually
-                enforces. A super_admin without that key does not see it, and
-                someone who holds it does — which is the point. */}
-            {canReadHr && (
-              <>
-                <div className={styles.sideHeading}>OPEX</div>
-                <Link to="/opex/commission" className={styles.sideItem}>
-                  <Coins size={16} strokeWidth={1.75} />
-                  <span className={styles.sideLabel}>Commission</span>
-                </Link>
-              </>
-            )}
+            {catalogActions}
 
             <div className={styles.sideFooter}>
               <div className={styles.sideBrand}>Honest pricing</div>
@@ -471,31 +583,6 @@ export const Catalog = () => {
 
           {/* ─── Main grid ─── */}
           <section className={styles.main}>
-            <div className={styles.toolbar}>
-              <div className={styles.search}>
-                <Search size={14} strokeWidth={1.75} />
-                <input
-                  type="search"
-                  placeholder="Name, SKU, brand…"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-              </div>
-              <select
-                className={styles.select}
-                value={activeBranding}
-                onChange={(e) => setActiveBranding(e.target.value)}
-              >
-                <option value="all">All series</option>
-                {brandingList.map((b) => (
-                  <option key={b} value={b}>{b}</option>
-                ))}
-              </select>
-              <span className={styles.toolbarCount}>
-                {filtered.length} {filtered.length === 1 ? 'piece' : 'pieces'}
-              </span>
-            </div>
-
             {(hasSofa || hasMainNonSofa) && (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 8,
@@ -530,7 +617,7 @@ export const Catalog = () => {
                  existing .grid CSS class so spacing/columns stay identical. */
               groupByBranding(filtered).map(({ branding, items }) => (
                 <section key={branding} style={{ marginBottom: 24 }}>
-                  <header style={{
+                  <header className={styles.brandGroupHeader} style={{
                     display: 'flex', alignItems: 'baseline', gap: 8,
                     padding: '4px 0 8px',
                   }}>
@@ -575,12 +662,6 @@ export const Catalog = () => {
         </div>
       )}
 
-      <footer className={styles.footer}>
-        <span className="t-caption">
-          Reads <code>mfg_products</code> × <code>product_models</code> via Supabase Realtime.
-          Edits in Backend → Products & Maintenance land here within ~300ms.
-        </span>
-      </footer>
     </main>
     <CustomerOrderFab />
     </>
@@ -649,6 +730,11 @@ const ProductCard = ({ p, blocked = false, addToOrder }: { p: CatalogCard; block
       <div className={styles.body}>
         <div className={styles.name}>{p.name}</div>
         {p.description && <div className={styles.detail}>{p.description}</div>}
+        <div className={styles.heroPrice}>
+          {p.minPriceSen != null
+            ? `${p.category === 'SOFA' ? 'Modules from ' : p.variantCount > 1 ? 'From ' : ''}${fmtRM(p.minPriceSen / 100)}`
+            : 'Select a configuration to see price'}
+        </div>
         <div className={styles.priceRow}>
           <code className={styles.sku}>{p.leadSku}</code>
           <span className={styles.fromLabel}>

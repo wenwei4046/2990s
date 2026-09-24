@@ -68,3 +68,10 @@
   color: var(--fg-muted, #8A8378);
   font-variant-numeric: tabular-nums;
 }
+
+@media (max-width: 640px) {
+  .list { max-height: min(280px, 40dvh); overscroll-behavior: contain; }
+  .item { min-height: 56px; display: grid; grid-template-columns: auto minmax(0, 1fr); }
+  .name { white-space: normal; overflow-wrap: anywhere; }
+  .meta { grid-column: 2; margin-left: 0; }
+}

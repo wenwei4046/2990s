@@ -72,6 +72,17 @@
 }
 
 /* ───── Header ───── */
+.simulationBadge {
+  margin-bottom: 18px;
+  border: 2px solid #221F20;
+  padding: 12px;
+  color: #221F20;
+  font-size: 12pt;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-align: center;
+  break-inside: avoid;
+}
 .header {
   display: grid;
   grid-template-columns: 1.4fr 1fr;
@@ -466,6 +477,21 @@
 }
 
 /* ───── Print overrides ───── */
+.itemsViewport { min-width: 0; }
+@media screen and (max-width: 640px) {
+  .shell { padding: var(--space-4) var(--space-3) calc(var(--space-4) + env(safe-area-inset-bottom)); }
+  .toolbar { gap: var(--space-2); }
+  .toolbarBack, .toolbarPrint { min-height: 48px; }
+  .toolbarPrint { padding-inline: var(--space-3); font-size: var(--fs-13); }
+  .page { padding: var(--space-4); min-height: 0; overflow-wrap: anywhere; }
+  .header, .metaRow, .partiesRow, .afterItems { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+  .headerRight { align-items: flex-start; text-align: left; }
+  .itemsViewport { width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+  .items { min-width: 560px; }
+  .docFooter { flex-wrap: wrap; gap: var(--space-2); }
+  .metaPayRow { flex-wrap: wrap; }
+}
+
 @media print {
   .toolbar {
     display: none;

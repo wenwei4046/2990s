@@ -4,20 +4,56 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { assertViteApiUrl } from '../../scripts/check-vite-api-url.mjs';
 
-// POS = tablet-first PWA per PORT_DESIGN.md §2.4. Manifest locks orientation
-// to landscape (best-effort on iOS Safari — needs CSS fallback per Codex P2.8,
-// deferred). 22 sofa-module PNGs pre-cached on install per §11.4 Issue 10.
+// Phone portrait + tablet/desktop POS. Existing sofa art remains precached.
 export default defineConfig(({ command, mode }) => {
   // Build-time safety net (incident 2026-06-13): never bake a localhost API URL
   // into a deployed bundle. Reads the SAME value Vite will inline (process.env
   // wins over the root .env). No-op for `vite dev` (command === 'serve').
   const env = loadEnv(mode, fileURLToPath(new URL('../../', import.meta.url)));
-  assertViteApiUrl({ value: env.VITE_API_URL, command, app: 'pos' });
+  const simulation = mode === 'simulation';
+  if (!simulation) assertViteApiUrl({ value: env.VITE_API_URL, command, app: 'pos' });
 
   return {
+    // Never inherit a real URL or key from root .env in the simulation build.
+    define: simulation ? Object.fromEntries(Object.entries({
+      VITE_BACKEND_TARGET: 'houzs',
+      VITE_API_URL: '/api',
+      VITE_HOUZS_API_URL: '/api/scm',
+      VITE_HOUZS_POS_URL: '/api',
+      VITE_HOUZS_COMPANY_ID: '2',
+      VITE_BACKEND_PORTAL_URL: '/catalog',
+      VITE_SUPABASE_URL: 'http://127.0.0.1:6288',
+      VITE_SUPABASE_PUBLISHABLE_KEY: 'simulation-placeholder-not-a-key',
+    }).map(([key, value]) => [`import.meta.env.${key}`, JSON.stringify(value)])) : undefined,
     plugins: [
       react(),
+      ...(simulation ? [{
+        name: 'simulation-network-isolation',
+        enforce: 'pre' as const,
+        transform(code: string, id: string) {
+          if (!/\.css(?:\?|$)/i.test(id)) return null;
+          // Remote font @imports fail under this demo's self-only CSP. A
+          // compiled, lazy-loaded stylesheet then emits an error and Vite's
+          // CSS preloader refuses to mount the app. Keep simulation entirely
+          // local, using the design tokens' existing system-font fallbacks.
+          // Production does not register this plugin and retains its fonts.
+          const localOnly = code.replace(
+            /@import\s+(?:url\(\s*(['"]?)(?:https?:)?\/\/[\s\S]*?\1\s*\)|(['"])(?:https?:)?\/\/[\s\S]*?\2)[^;]*;/gi,
+            '',
+          );
+          return localOnly === code ? null : { code: localOnly, map: null };
+        },
+        transformIndexHtml: () => [{
+          tag: 'meta',
+          attrs: {
+            'http-equiv': 'Content-Security-Policy',
+            content: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; object-src 'none'; form-action 'none'; base-uri 'self'",
+          },
+          injectTo: 'head-prepend' as const,
+        }],
+      }] : []),
       VitePWA({
+        disable: simulation,
         // 'prompt' (not 'autoUpdate'): a new deploy waits behind a "A new version
         // is ready · Refresh" toast (src/components/UpdatePrompt.tsx) instead of
         // silently reloading. Sales staff stay in control mid-order, and they no
@@ -26,11 +62,11 @@ export default defineConfig(({ command, mode }) => {
         manifest: {
           name: "2990's POS",
           short_name: '2990 POS',
-          description: "Sales tablet for 2990's Home — POS portal",
+          description: "Sales POS for 2990's Home — phone, tablet and desktop",
           theme_color: '#221F20',
           background_color: '#FFF9EB',
           display: 'standalone',
-          orientation: 'landscape',
+          orientation: 'any',
           start_url: '/',
           icons: [
             { src: 'pwa-192.png', sizes: '192x192', type: 'image/png' },
@@ -66,6 +102,8 @@ export default defineConfig(({ command, mode }) => {
     ],
     envDir: '../../',
     build: {
+      // Demo output must never replace the directory used by production deploys.
+      outDir: simulation ? 'dist-simulation' : 'dist',
       // Code-splitting (perf, 2026-06-13): without this the POS bundled into a
       // single ~1.2 MB chunk. Route components are lazy() in router.tsx; this
       // additionally carves the big node_modules vendors into their own chunks
@@ -89,7 +127,9 @@ export default defineConfig(({ command, mode }) => {
         },
       },
     },
-    server: { port: 6273, host: true, strictPort: false },
+    server: simulation
+      ? { port: 6288, host: '127.0.0.1', strictPort: true, hmr: false }
+      : { port: 6273, host: true, strictPort: false },
     preview: { port: 4273 },
   };
 });

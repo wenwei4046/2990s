@@ -7,7 +7,7 @@
 }
 .canvas {
   width: 100%;
-  aspect-ratio: 4 / 1;
+  height: auto;
   background: #fff;
   border: 1px dashed var(--line);
   border-radius: var(--radius-sm);
@@ -43,3 +43,8 @@
 }
 .clearBtn:hover:not(:disabled) { border-color: var(--c-burnt); color: var(--c-burnt); }
 .clearBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+@media (max-width: 640px) {
+  .clearBtn { min-height: 44px; padding-inline: var(--space-3); }
+  .guide { letter-spacing: 0.02em; }
+}

@@ -173,16 +173,7 @@ export const ConfirmPaymentStep = ({
       {extras.map((p, i) => (
         <div
           key={p.uid}
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'minmax(120px, 1fr) minmax(100px, 0.8fr) minmax(140px, 1fr) auto',
-            gap: 8,
-            alignItems: 'end',
-            padding: '10px 12px',
-            border: '1px solid var(--border, #E6DFD5)',
-            borderRadius: 10,
-            marginBottom: 8,
-          }}
+          className={styles.splitPayment}
         >
           <Field label={`Payment ${i + 2} method *`}>
             <select
@@ -220,7 +211,8 @@ export const ConfirmPaymentStep = ({
             type="button"
             onClick={() => setExtras(extras.filter((_, idx) => idx !== i))}
             title="Remove this payment"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 6, color: 'var(--fg-muted, #8A8378)' }}
+            aria-label={`Remove payment ${i + 2}`}
+            className={styles.removePayment}
           >
             <Trash2 size={16} strokeWidth={1.75} />
           </button>

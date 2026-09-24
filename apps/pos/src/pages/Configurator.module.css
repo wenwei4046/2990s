@@ -823,17 +823,32 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  padding: 12px;
+  padding: 0;
   background: var(--c-paper);
   border: 1.5px solid transparent;
   border-radius: 14px;
-  cursor: pointer;
   transition: 140ms ease;
   text-align: left;
   font-family: inherit;
   color: var(--fg);
 }
 .qpCard:hover { border-color: var(--line-strong); }
+.qpCardSelect {
+  appearance: none;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  padding: 12px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
 .qpCardPicked {
   background: #fff;
   border-color: var(--c-orange);
@@ -920,7 +935,8 @@
    Quick Pick card is selected. Small, secondary, doesn't fight Add to Cart. */
 .qpEditCombo {
   display: block;
-  width: 100%;
+  width: calc(100% - 24px);
+  margin: 0 12px 12px;
   padding: 5px 8px;
   background: none;
   border: none;
@@ -1254,4 +1270,181 @@
   color: var(--fg);
   box-shadow: var(--shadow-1);
 }
+
+/* Phone layouts use the same configuration state, options and add callbacks.
+   Larger surfaces retain their established two-column composition. */
+.mobileProductHeader,
+.mobileActionBar,
+.mobilePreviewPrice { display: none; }
+
+@media (max-width: 767px) {
+  .shell,
+  .shellWide,
+  .sofaShell {
+    min-height: 0;
+    height: auto;
+    width: 100%;
+    padding: var(--space-3) var(--space-3) calc(112px + env(safe-area-inset-bottom, 0px));
+    animation: phoneConfigEnter 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .sofaShell { display: flex; flex-direction: column; gap: var(--space-3); }
+  /* The custom builder owns a fixed action bar. Animate its content instead,
+     because a transformed ancestor temporarily captures fixed descendants. */
+  .customShell { animation: none; }
+  .mobileProductHeader {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg);
+  }
+  .mobileProductHeader h1 {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    font-family: var(--font-title);
+    font-size: var(--fs-16);
+    overflow-wrap: anywhere;
+  }
+  .mobilePreviewPrice { display: block; color: var(--c-burnt); font-size: 18px; font-weight: 700; }
+  .mobileBack {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-height: 44px;
+    border: none;
+    padding: var(--space-2);
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+  }
+  .mobileControls {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  .mobileControls .topbarBack { display: none; }
+  .depthTabs,
+  .modeTabs { max-width: 100%; }
+  .depthTabs { flex-wrap: wrap; }
+  .depthTab,
+  .modeTab { min-height: 44px; padding: var(--space-2) var(--space-3); }
+  .header,
+  .headerWide { margin-bottom: var(--space-3); gap: var(--space-2); }
+  .headerWide { align-items: flex-start; flex-direction: column; }
+  .heading { font-size: var(--fs-20); overflow-wrap: anywhere; }
+  .title,
+  .headerWide > div { min-width: 0; }
+  .footprintLbl { font-size: var(--fs-11); }
+  .twoCol { display: flex; flex-direction: column; gap: var(--space-3); }
+  .previewArea {
+    width: 100%;
+    height: 164px;
+    min-height: 0;
+    padding: var(--space-2);
+    border-radius: var(--radius-md);
+  }
+  .previewEmpty { padding: var(--space-3); font-size: var(--fs-13); }
+  .fpWrap { width: 100%; height: 100%; gap: var(--space-1); }
+  .fpSvg { max-width: 100%; width: auto; height: 100%; min-height: 0; }
+  .fpFootprint { display: none; }
+  .rail { position: static; width: 100%; gap: var(--space-3); min-width: 0; }
+  .railSection { padding: var(--space-3); }
+  .railHead { flex-wrap: wrap; gap: var(--space-1); }
+  .sizeGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+  .sizeCard { min-width: 0; min-height: 96px; padding: var(--space-3); }
+  .sizeCardName { font-size: var(--fs-14); overflow-wrap: anywhere; }
+  .sizeCardDim { font-size: var(--fs-11); }
+  .sizeCardPrice { font-size: var(--fs-16); }
+  .pwpRailRow { flex-wrap: wrap; gap: var(--space-2); }
+  .pwpInput { width: 100%; flex: 1 1 160px; min-width: 0; min-height: 44px; font-size: var(--fs-16); }
+  .pwpRailRow button,
+  .pwpRemove,
+  .stepperBtn { min-height: 44px; min-width: 44px; }
+  .pwpApplied { flex-wrap: wrap; overflow-wrap: anywhere; }
+  .pillowRow { flex-wrap: wrap; gap: var(--space-2); }
+  .pillowMeta { flex: 1; min-width: 100px; }
+  .pillowName { overflow-wrap: anywhere; }
+  .sizeOtherInput { min-height: 44px; max-width: 100%; font-size: var(--fs-16); }
+  .qpRail {
+    width: 100%;
+    overflow: visible;
+    max-height: none;
+    padding: var(--space-3);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+  }
+  .qpRailHead { flex-wrap: wrap; gap: var(--space-1); }
+  .qpGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+  .qpCard { min-width: 0; }
+  .qpCardBody { min-width: 0; }
+  .qpCardLabel,
+  .qpCardSub { overflow-wrap: anywhere; }
+  .qpFlipBtn,
+  .qpMirrorBtn,
+  .qpEditCombo,
+  .qpDeleteQuickPick { min-width: 44px; min-height: 44px; }
+  .qpMirrorBtn { left: auto; right: 8px; }
+  .qpHero { order: -1; min-height: 230px; height: 230px; border-radius: var(--radius-md); }
+  .qpHeroFrame { padding: var(--space-4) var(--space-5); min-height: 0; }
+  .qpHeroFoot { padding: var(--space-2) var(--space-3); }
+  .qpHero .tv { transform: translateX(-50%) scale(.65); transform-origin: center bottom; }
+  .qpHero .tvBeam { display: none; }
+  .footer { margin-top: var(--space-4); }
+  .notice {
+    width: calc(100% - 24px);
+    max-width: calc(100% - 24px) !important;
+    overflow-wrap: anywhere;
+  }
+  .mobileActionBar {
+    display: block;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 35;
+    padding: var(--space-3) var(--space-3) calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+    background: var(--c-paper);
+    border-top: 1px solid var(--line);
+    box-shadow: var(--shadow-2);
+  }
+  .mobileActionBar .topbarActions { display: flex; width: 100%; gap: var(--space-3); }
+  .mobileActionBar .topbarChip,
+  .mobileActionBar .topbarBtnGhost,
+  .mobileActionBar .topbarTotalNote { display: none; }
+  .mobileActionBar .topbarTotal { flex: 1; min-width: 0; align-items: flex-start; padding: 0; border: 0; }
+  .mobileActionBar .topbarTotalAmt { font-size: var(--fs-24); white-space: nowrap; }
+  .mobileActionBar .topbarBtnPrimary { min-height: 48px; max-width: 58%; white-space: normal; justify-content: center; }
+}
+
+@keyframes phoneConfigEnter {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shell, .shellWide, .sofaShell { animation: none; }
+}
+
+.draftDialog {
+  width: min(420px, calc(100% - 24px));
+  max-height: calc(100dvh - 32px);
+  padding: 24px;
+  color: var(--fg);
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  overflow-y: auto;
+}
+.draftDialog[open] { animation: phoneConfigEnter 280ms cubic-bezier(.22, 1, .36, 1) both; }
+.draftDialog::backdrop { background: rgba(34, 31, 32, .38); }
+.draftDialog h2 { margin: 0; font-size: 20px; }
+.draftDialog p { margin: 12px 0 20px; font-size: 14px; line-height: 1.5; color: var(--fg-muted); }
+.draftDialogActions { display: flex; flex-direction: column; gap: 8px; }
+.draftDialogActions > button { min-height: 44px; }
+@media (prefers-reduced-motion: reduce) { .draftDialog[open] { animation: none; } }
 

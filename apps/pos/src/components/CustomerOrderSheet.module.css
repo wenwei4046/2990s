@@ -515,7 +515,7 @@
 }
 
 .quotePanel {
-  margin: 12px 18px 0;
+  margin: 12px 0;
   background: var(--c-cream);
   border: 1px solid var(--c-burnt);
   border-radius: var(--radius-md);
@@ -620,4 +620,20 @@
     max-height: 100vh;
     border-radius: 0;
   }
+}
+
+@media (max-width: 767px) {
+  .backdrop { padding: 0; }
+  .sheet { width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; animation-duration: 280ms; }
+  .head { padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 12px; }
+  .close { width: 44px; height: 44px; }
+  .body { padding: 0 14px; overscroll-behavior: contain; }
+  .foot { padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .item { grid-template-columns: 44px minmax(0, 1fr); gap: 10px; }
+  .itemPhoto { width: 44px; height: 44px; }
+  .itemRight { grid-column: 2; flex-direction: row; align-items: center; justify-content: space-between; }
+  .itemQty button, .itemRemove, .itemEdit, .itemMakeFree { width: 44px; height: 44px; }
+  .itemDetail { overflow-wrap: anywhere; }
+  .cta .ghost, .cta .primary { min-height: 44px; }
+  .quotePanel { margin: 12px 0; padding: 12px; }
 }

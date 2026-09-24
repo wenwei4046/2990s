@@ -73,6 +73,7 @@
 
 .center {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 12px;
 }
@@ -220,6 +221,16 @@
 }
 .iconBtn:hover { background: rgba(34, 31, 32, 0.06); }
 
+.mobileNav { display: none; }
+.simulationBanner {
+  padding: 6px 12px;
+  text-align: center;
+  font-size: var(--fs-12);
+  color: var(--c-burnt);
+  background: var(--c-cream);
+  border-bottom: 1px solid var(--line);
+}
+
 /* ─── Tablet density (≤1279px) — tighter chrome so pills stop wrapping.
    The "POS · SHOWROOM KL" crumb stays hidden here: the 2990 wordmark already
    carries the brand, and the Catalog row has no room for it once the cart
@@ -270,3 +281,44 @@
     font-size: 10px;
   }
 }
+
+@media (max-width: 767px) {
+  .topbar { grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; padding: 6px 12px; padding-top: calc(6px + env(safe-area-inset-top, 0px)); }
+  .left { gap: 4px; }
+  .wordmark { font-size: 22px; }
+  .right { display: none; }
+  .center { justify-content: center; gap: 0; min-width: 0; }
+  .step { display: none; }
+  .stepActive { display: inline-flex; padding: 6px 8px; font-size: 10px; letter-spacing: .05em; }
+  .mobileHidden { display: none; }
+  .mobileNav { grid-column: 3; display: flex; align-items: center; gap: 4px; }
+  .centerBelowOnMobile { row-gap: 4px; padding-bottom: 12px; }
+  .centerBelowOnMobile .left, .centerBelowOnMobile .mobileNav { grid-row: 1; }
+  .centerBelowOnMobile .center { grid-column: 1 / -1; grid-row: 2; }
+  .centerBelowOnMobile .mobileMenu nav { max-height: calc(100dvh - 170px - env(safe-area-inset-top, 0px)); }
+  .mobileCart, .mobileMenu summary { min-width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: var(--fg); border-radius: var(--radius-pill); cursor: pointer; }
+  .mobileCart { gap: 4px; text-decoration: none; font-size: var(--fs-12); }
+  .mobileMenu summary { list-style: none; }
+  .mobileMenu summary::-webkit-details-marker { display: none; }
+  .mobileMenu[open] summary { background: var(--c-cream); color: var(--c-burnt); }
+  .mobileMenu nav { position: absolute; top: 100%; right: 12px; width: min(300px, calc(100vw - 24px)); max-height: calc(100dvh - 100px); overflow-y: auto; padding: 12px; background: var(--c-paper); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-3); animation: menuEnter 160ms cubic-bezier(.22, 1, .36, 1); }
+  .mobileMenu nav > a, .mobileMenu nav > button,
+  .mobileMenuExtras a, .mobileMenuExtras button { display: flex; align-items: center; gap: 12px; min-height: 48px; width: 100%; padding: 10px 12px; color: var(--fg); text-decoration: none; border: 0; background: transparent; font: inherit; text-align: left; border-radius: var(--radius-sm); }
+  .mobileMenu nav > a:hover, .mobileMenu nav > button:hover,
+  .mobileMenuExtras a:hover, .mobileMenuExtras button:hover { background: var(--c-cream); }
+  .mobileMenuExtras { margin: 8px 0; padding: 8px 0; border-block: 1px solid var(--line); min-width: 0; }
+  .mobileMenuExtras label { display: block; min-width: 0; }
+  .mobileMenuExtras select {
+    display: block; width: 100%; min-width: 0; max-width: 100%; min-height: 44px;
+    margin: 6px 0; padding: 10px 12px; font: inherit; font-size: 16px;
+    color: var(--fg); background: #fff; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  }
+  .mobileServiceMenu > div { display: flex; flex-direction: column; width: 100%; }
+  .mobileServiceMenu > div > button { min-height: 48px; padding: 10px 12px; justify-content: space-between; }
+  .mobileServiceMenu [role='menu'] { position: static; width: 100%; min-width: 0; margin-top: 6px; box-shadow: none; }
+  .mobileServiceMenu [role='menuitem'] { min-height: 44px; }
+  .mobileStaff { padding: 8px 12px 14px; border-bottom: 1px solid var(--line); font-weight: var(--w-semibold); }
+  .mobileStaff small { display: block; color: var(--fg-muted); text-transform: capitalize; font-weight: var(--w-medium); }
+  .iconBtn { width: 44px; height: 44px; }
+}
+@keyframes menuEnter { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
