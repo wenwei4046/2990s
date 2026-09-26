@@ -2181,7 +2181,8 @@ export const useCreateSofaCombo = () => {
       effectiveFrom: string;   // 'YYYY-MM-DD'
       notes?: string | null;
     }): Promise<SofaComboRow> => {
-      const res = await authedFetchRaw('/sofa-combos', {
+      // Houzs: the POS's own combo table (see sofa-combos-queries.ts COMBOS_PATH).
+      const res = await authedFetchRaw(IS_HOUZS ? '/pos-pools/sofa-combos' : '/sofa-combos', {
         method: 'POST',
         body: JSON.stringify({
           baseModel: body.baseModel,
@@ -2200,7 +2201,7 @@ export const useCreateSofaCombo = () => {
       if (!res.ok) {
         let detail = '';
         try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
-        throw new Error(`POST /sofa-combos failed (${res.status}): ${detail}`);
+        throw new Error(`POST combo failed (${res.status}): ${detail}`);
       }
       return (await res.json()) as SofaComboRow;
     },

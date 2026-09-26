@@ -6,7 +6,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SofaPriceTier } from '@2990s/shared';
 
-import { authedFetch } from '../apiClient';
+import { authedFetch, IS_HOUZS } from '../apiClient';
+
+/* On Houzs the POS's combos live in their own table (scm.pos_sofa_combos) behind
+   /pos-pools/sofa-combos, which only this POS writes. Owner 2026-09-26: Houzs's
+   /sofa-combos is Houzs's cost combos; the two sets may differ and Houzs must not
+   change these. 2990's own API (local dev) keeps the flat /sofa-combos. */
+const COMBOS_PATH = IS_HOUZS ? '/pos-pools/sofa-combos' : '/sofa-combos';
 
 export type SofaComboRule = {
   id: string;
@@ -68,7 +74,7 @@ export function useSofaCombos(filters: ComboFilters = {}) {
       else if (filters.customerId) params.set('customerId', filters.customerId);
       const qs = params.toString();
       return authedFetch<{ rules: SofaComboRule[] }>(
-        `/sofa-combos${qs ? `?${qs}` : ''}`,
+        `${COMBOS_PATH}${qs ? `?${qs}` : ''}`,
       ).then((r) => r.rules);
     },
     staleTime: 30_000,
@@ -93,7 +99,7 @@ export function useSofaComboHistory(args: {
       if (args.tier) params.set('tier', args.tier);
       if (args.customerId) params.set('customerId', args.customerId);
       return authedFetch<{ rules: SofaComboRule[] }>(
-        `/sofa-combos/history?${params.toString()}`,
+        `${COMBOS_PATH}/history?${params.toString()}`,
       ).then((r) => r.rules);
     },
     staleTime: 5_000,
@@ -104,7 +110,7 @@ export function useCreateSofaCombo() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: NewSofaCombo) =>
-      authedFetch<SofaComboRule>('/sofa-combos', {
+      authedFetch<SofaComboRule>(COMBOS_PATH, {
         method: 'POST',
         body: JSON.stringify(body),
       }),
@@ -132,7 +138,7 @@ export function useUpdateSofaCombo() {
       effectiveFrom: string;
       notes?: string | null;
     }) =>
-      authedFetch<SofaComboRule>(`/sofa-combos/${id}`, {
+      authedFetch<SofaComboRule>(`${COMBOS_PATH}/${id}`, {
         method: 'PUT',
         body: JSON.stringify({
           pricesByHeight, label, effectiveFrom, notes,
@@ -152,7 +158,7 @@ export function useDeleteSofaCombo() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
-      authedFetch<void>(`/sofa-combos/${id}`, { method: 'DELETE' }),
+      authedFetch<void>(`${COMBOS_PATH}/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sofa-combos'] });
       qc.invalidateQueries({ queryKey: ['sofa-combos-history'] });
