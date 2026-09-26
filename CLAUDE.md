@@ -383,6 +383,39 @@ not litter — don't "tidy" it, and don't add a delete button to make it possibl
 
 ---
 
+## Sofa combos — the POS's own table inside Houzs (since 2026-09-26)
+
+**Owner ruling 2026-09-26: Houzs's combos are Houzs's COST; ours are the POS's
+SELLING price; the two sets may differ; Houzs has no right to change ours.**
+
+Why it had to be split: both used to be the company-2 master rows of Houzs's
+`scm.sofa_combo_pricing`. On 2026-09-25 a Houzs cleanup script
+(`delete-unbound-sofa-combos.mjs`, their #4279) retired 96 of our combos as
+"unbound" — we author at `PRICE_1`, their supplier combos sat at `PRICE_2`. On
+2026-09-26 cost rows keyed in Houzs's ERP Products > Combos (it sends cost only,
+so selling = cost) overrode ours on the tablet, because the newest
+`effective_from` wins the match and a matched combo always applies.
+
+**Now:**
+- Our combos live in Houzs's `scm.pos_sofa_combos` (no cost column), served by
+  `/pos-pools/sofa-combos` — GET list, GET `/history`, POST, PUT `/:id`,
+  DELETE `/:id` (retire). In houzs mode every POS combo call goes there
+  (`COMBOS_PATH` in `apps/pos/src/lib/products/sofa-combos-queries.ts`, and
+  `useCreateSofaCombo` in `lib/queries.ts`). **Never call Houzs's `/sofa-combos`
+  from the POS** — it still serves company-2 rows, and they are Houzs's.
+- Only the DB functions `scm.pos_sofa_combo_insert` / `_retire` can write that
+  table; a trigger refuses every other writer and every delete, and
+  `scm.pos_sofa_combo_audit` records the real person for each create / retire.
+- It has to live in Houzs's database, not ours: the Houzs server re-prices every
+  POS order against these combos (drift gate, PWP, special delivery).
+- ⚠️ `created_by` on any Houzs combo row is the pinned system staff
+  `00000000-0000-4000-8000-000000000001` ("Houzs ERP") for EVERY writer since
+  late July, POS included. It cannot answer "who did it" — use the audit table.
+- The POS authors combos at `PRICE_1` only, and both the tablet and the server
+  match at `PRICE_1`.
+
+---
+
 ## Unpriced sofa modules — why some Models quote low or quote RM 0
 
 **The problem.** Verified 2026-08-13: **62 sofa module SKUs** come back from
