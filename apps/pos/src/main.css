@@ -31,7 +31,11 @@ canvas { max-width: 100%; }
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
 }
-@media (max-width: 767px) {
+/* `screen` is load-bearing: an A4 print page is ~718px wide, so without it
+   this block matches while printing, the entrance animation restarts on the
+   print layout, and the browser captures its opacity-0 first frame — the
+   printed Sales Order comes out blank. */
+@media screen and (max-width: 767px) {
   main { min-width: 0; animation: posPageEnter 320ms cubic-bezier(.22, 1, .36, 1); }
   input:not([type="checkbox"]):not([type="radio"]), select, textarea { font-size: 16px !important; }
   input, select, textarea { scroll-margin-block: 100px; }
