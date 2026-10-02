@@ -3,17 +3,17 @@
 // The same 4-step dance HouzsSsoMenu uses inline:
 //   1. Exchange the POS session for a short-lived Houzs desktop-session token
 //      via POST /api/pos/exchange-web-session (backend/src/routes/pos.ts).
-//   2. Compose the Houzs web app URL as `${origin}/#sso=<token>&next=<path>`.
-//      Houzs's main.tsx consumes the fragment on load, stores the token
-//      session-only, and routes to <next>.
+//   2. Compose the Houzs web app URL as
+//      `${origin}/?company=<id>#sso=<token>&next=<path>`. Houzs's main.tsx
+//      reads `?company` first (consumeCompanyUrlSeed, lib/activeCompany.ts),
+//      then the fragment: stores the token session-only and routes to <next>.
 //   3. Open in a new tab (noopener) so the POS keeps its own session intact.
 //   4. Bail cleanly on the 2990-target build — IS_HOUZS gates every caller.
 //
-// Extracted so callers besides the topbar dropdown (e.g. the OrderStatus
-// drawer's "Open in Houzs" button on a specific SO) don't duplicate the
-// exchange + URL composition, which is exactly where the two would drift.
+// Shared by the topbar Houzs menu and the OrderStatus drawer's "Open in Houzs"
+// button, so the exchange + URL composition lives in exactly one place.
 
-import { authedFetch, IS_HOUZS, houzsApiRoot, posApiBase } from './apiClient';
+import { authedFetch, HOUZS_COMPANY_ID, IS_HOUZS, houzsApiRoot, posApiBase } from './apiClient';
 
 /** Houzs web app origin derived from the API URL (drops the /api/scm suffix).
  *  Returns undefined when we're not on the Houzs build or the API URL is not
@@ -48,6 +48,14 @@ export async function launchHouzsSso(path: string): Promise<void> {
     { method: 'POST' },
     posApiBase(),
   );
-  const url = `${origin}/#sso=${encodeURIComponent(token)}&next=${encodeURIComponent(path)}`;
+  /* `?company=` pins the new tab to 2990 before Houzs boots. A new Houzs tab
+     otherwise takes the user's last company pick, so a login holding both
+     companies (the owner's) opened a 2990 SO under Houzs Century and got
+     "Sales order not found" — and Manual Sales Order opened under the wrong
+     company. 2990-only logins were never affected: Houzs only resolves a
+     company the user holds. It must ride in the query: Houzs never looks for
+     it inside the fragment or inside <next>. */
+  const url = `${origin}/?company=${encodeURIComponent(HOUZS_COMPANY_ID)}`
+    + `#sso=${encodeURIComponent(token)}&next=${encodeURIComponent(path)}`;
   window.open(url, '_blank', 'noopener,noreferrer');
 }
