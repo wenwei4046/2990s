@@ -34,10 +34,13 @@ flows through. Verified 2026-08-03:
   Consequences to keep in mind while it stays off (these are accepted, not
   outstanding bugs):
   - The two databases keep diverging — but **asymmetrically**, see the corrected
-    sync bullet below. Sales Orders, SO amendments and customers written HERE are
-    mirrored into Houzs; everything else, and everything born in Houzs, is not.
-    Whoever eventually reconciles them will need a rule for which side is
-    authoritative per record, and that rule differs by table.
+    sync bullets below. Customers written HERE are mirrored into Houzs live; a
+    Sales Order reaches Houzs only on its FIRST delivery, and in practice no longer
+    even that; an SO amendment arrives as a record that changes nothing.
+    Everything else, and everything born in Houzs, is not mirrored. Whoever
+    eventually reconciles them will need a rule for which side is authoritative
+    per record, and that rule differs by table — for Sales Orders Houzs already
+    applies one: what it holds wins (import-once since 2026-08-20, below).
   - Flipping the freeze would affect **only `erp.2990shome.com` (office staff)**.
     It cannot affect the POS: the deployed POS bundle does not contain the string
     `api.2990shome.com` at all (verified 2026-08-03 by reading the live JS on
@@ -51,10 +54,12 @@ flows through. Verified 2026-08-03:
     - **What runs:** a trigger on this database captures every Sales Order
       (header / items / payments), **SO amendment** and **customer** into
       `public.sync_outbox` in the same transaction, and `pg_cron` + `pg_net`
-      workers (`so_outbox_drain` / `_confirm` / `_reconcile`) POST each one to a
-      Houzs receiver, which idempotently upserts it as `scm.mfg_sales_orders`
-      under `company_id = 2`. Retries forever until Houzs acks, so a Houzs outage
-      delays but never drops.
+      workers (`so_outbox_drain` / `_confirm` / `_reconcile`, with `amendment_*`
+      and `customer_*` twins) POST each one to a Houzs receiver under
+      `company_id = 2`. Retries forever until Houzs acks, so a Houzs outage
+      delays but never drops. ⚠️ **What the receiver then DOES differs by
+      entity, and for Sales Orders "delivered" no longer means "applied"** — see
+      the 2026-10-02 correction below.
     - **Why no grep here finds it.** None of it is in this repo. The SQL lives in
       **Houzs's** repo at `docs/2990-live-sync/` (`01_outbox_2990.sql`,
       `04_amendment_outbox_2990.sql`, `05_customer_outbox_2990.sql`) and was
@@ -62,16 +67,58 @@ flows through. Verified 2026-08-03:
       absent from `packages/db/migrations`, absent from `apps/api`, and invisible
       to every search anyone would think to run from this side. Deliberate: the
       owner's first non-negotiable was "the POS ↔ 2990 link must not break —
-      capture at the DB, touch neither app."
+      capture at the DB, touch neither app." (`06_masters_outbox_2990.sql`, for
+      staff + warehouses, sits in the same folder and has a receiver in Houzs,
+      but was **never applied here** — no `staff_*` / `warehouse_*` cron jobs
+      exist in `cron.job`, verified 2026-10-02.)
     - **Still true:** nothing writes Houzs data back into this Supabase. The
       mirror is strictly one-way.
-    - 🔑 **So `erp.2990shome.com` is NOT an isolated dead-end.** An office user
-      creating or amending an SO in the 2990 Backend is writing, within seconds,
-      into Houzs production under `company_id = 2`. Two earlier bullets read as
-      though this repo were a museum piece whose writes go nowhere; for SOs,
-      amendments and customers they go straight into the live merged system. This
-      is a statement of fact, not an argument to revisit the freeze decision above
-      — that decision stands until the owner says otherwise.
+    - ⚠️ **CORRECTED 2026-10-02 — for Sales Orders the mirror is IMPORT-ONCE, so
+      an SO written in the 2990 Backend effectively no longer reaches Houzs.**
+      This bullet used to say an office user creating or amending an SO here "is
+      writing, within seconds, into Houzs production". That stopped being true
+      on 2026-08-20, when Houzs #2515 (`b697f435`) made the SO receiver
+      (`backend/src/scm/routes/so-mirror.ts` over there) import-once. Reason:
+      since the cutover Houzs owns company-2 SOs and staff edit them there, and
+      every replay of this DB's older copy was overwriting those edits — its
+      delete-then-insert of the item set also blanked the DO lines pointing at
+      them through `ON DELETE SET NULL`. What a write HERE does in Houzs now:
+      - **Sales Order — import-once.** A doc_no Houzs already holds is never
+        written again: an edit here is answered 200 `skipped_existing`, a delete
+        `refused_delete`. A NEW doc_no is imported once — but this DB mints
+        `SO-YYMM-NNN` as max+1 over its OWN rows (`nextDocNo` →
+        `nextMonthlyDocNo`, `apps/api/src/lib/doc-no.ts`) and cannot see the
+        `2990-SO-…` numbers Houzs mints for the POS, so a new SO almost always
+        lands on a number Houzs already holds and is skipped too —
+        `skipped_conflict` when the customer differs. (On 2026-10-02 the next
+        one would have been `SO-2610-001`; Houzs minted `2990-SO-2610-001` the
+        day before.)
+      - **SO amendment — upsert.** The amendment *record* appears in Houzs. But
+        approving it here (`applySoAmendment`) rewrites this DB's SO items, and
+        that SO edit is then skipped — **the Houzs order does not change.**
+      - **Customer — upsert by id.** Still live: an edit here overwrites the
+        matching company-2 customer in Houzs.
+
+      Proven, not assumed, on 2026-10-02: two SO item descriptions repaired in
+      this DB were delivered within a minute, Houzs logged both as
+      `skipped_existing`, and its rows stayed as Houzs had them
+      (`2990-SO-2607-012` still `DELIVERED` there while this copy reads
+      `CONFIRMED`). The one SO created here since the cutover, `SO-2607-019`
+      (2026-07-26), is the `skipped_conflict` case: Houzs's `2990-SO-2607-019`
+      is a different customer's order, and this one reached Houzs only by being
+      re-keyed as `2990-SO-2607-030` (same customer, same `created_at` to the
+      millisecond). Nothing resolves a collision automatically — the next one
+      needs the same human call.
+
+      **Consequences.** A data repair on a pre-cutover SO must be made in BOTH
+      databases (the doc_no is `SO-…` here, `2990-SO-…` in Houzs); fixing it
+      here alone changes nothing the POS or Houzs ERP shows. And **a skip is a
+      200**: the outbox drains and the sentinel below stays green whether or not
+      anything was applied. The only proof a delivery was refused is
+      `scm.so_mirror_skips.last_seen` moving in Houzs (their mig 0311; read it
+      with their `backend/scripts/check-so-mirror-skips.mjs`). This is a
+      statement of fact, not an argument to revisit the freeze decision above —
+      that decision stands until the owner says otherwise.
     - **Verified live 2026-08-19**, not merely present: Houzs runs
       `.github/workflows/mirror-sentinel.yml` hourly against both databases and
       it alarms when the last successful delivery is over **1 hour** old
