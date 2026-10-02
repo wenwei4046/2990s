@@ -32,4 +32,5 @@ export const RECEIPT_TERMS: readonly string[] = [
   'Delivery date is best-effort and may shift ±3 working days subject to operation confirmation.',
   'Stair-carry surcharges (if any) are billed on this sales order and are not invoiced separately on the DO.',
   'Once the delivery date has been confirmed, any subsequent request to change or extend the date will incur a rescheduling surcharge.',
+  'All deposits paid are not refundable.',
 ] as const;
