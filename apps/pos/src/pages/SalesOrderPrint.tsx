@@ -1,13 +1,23 @@
+import type { ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import { ArrowLeft, Printer } from 'lucide-react';
-import { useSalesOrderDoc, type PrintableSO } from '../lib/so-doc';
+import { useSalesOrderDoc, type PrintableLine, type PrintableSO } from '../lib/so-doc';
 import { COMPANY_LEGAL, RECEIPT_TERMS } from '../lib/legal';
 import { usePaymentMethodLabels } from '../lib/so-maintenance/so-dropdown-options-queries';
 import { IS_SIMULATION } from '../lib/simulation-mode';
 import styles from './SalesOrderPrint.module.css';
 
-const fmtMoney = (n: number) =>
-  `MYR ${n.toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmtAmount = (n: number) =>
+  n.toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const fmtMoney = (n: number) => `MYR ${fmtAmount(n)}`;
+
+/* A hyphenated code (ARRUS-FIRM, PWP-9714DTRM) wraps as one unit instead of
+   splitting at its hyphen; .code only breaks inside when wider than the column. */
+const keepCodes = (text: string): ReactNode[] =>
+  text.split(/(\s+)/).map((part, i) =>
+    /\w-\w/.test(part) ? <span key={i} className={styles.code}>{part}</span> : part,
+  );
 
 const fmtIsoDate = (iso: string | null | undefined): string => {
   if (!iso) return '—';
@@ -60,8 +70,12 @@ export const SalesOrderPrint = () => {
           <SignatureBlock order={data} />
           <TotalsBlock order={data} />
         </div>
-        <TermsBlock />
-        <Footer order={data} />
+        {/* Terms and footer print as one block, so the footer never lands
+            alone on a page of its own. */}
+        <div className={styles.closing}>
+          <TermsBlock />
+          <Footer order={data} />
+        </div>
       </article>
     </main>
   );
@@ -108,19 +122,18 @@ const MetaRow = ({ order }: { order: PrintableSO }) => {
           {order.deliveryDate ? fmtIsoDate(order.deliveryDate) : 'To be confirmed'}
         </div>
         {/* Per-tender breakdown folded into this box (Loo 2026-06-09): method +
-            amount, one compact row each, no date. min-width:0 lets a long
-            method/approval code wrap instead of widening the box. Falls back to
-            the single declared method when no payments are recorded yet. */}
+            amount, one compact row each, no date. The approval code sits on its
+            own line underneath, so a long reference never wraps mid-number.
+            Falls back to the single declared method when no payments are
+            recorded yet. */}
         {order.payments.length > 0 ? (
           <div className={styles.metaPayments}>
             <div className={styles.metaPayCaption}>Payments received</div>
             {order.payments.map((p) => (
               <div key={p.id} className={styles.metaPayRow}>
-                <span className={styles.metaPayMethod}>
-                  {p.methodLabel}
-                  {p.approvalCode && <span className={styles.metaPayCode}> · {p.approvalCode}</span>}
-                </span>
+                <span className={styles.metaPayMethod}>{p.methodLabel}</span>
                 <span className={styles.metaPayAmount}>{fmtMoney(p.amount)}</span>
+                {p.approvalCode && <span className={styles.metaPayCode}>Ref {p.approvalCode}</span>}
               </div>
             ))}
           </div>
@@ -156,44 +169,58 @@ const PartiesRow = ({ order }: { order: PrintableSO }) => (
   </div>
 );
 
-const ItemsTable = ({ order }: { order: PrintableSO }) => (
-  <table className={styles.items}>
-    <thead>
-      <tr>
-        <th className={styles.colSku}>SKU</th>
-        <th className={styles.colDesc}>Description</th>
-        <th className={styles.colQty}>Qty</th>
-        <th className={styles.colMoney}>Unit Price</th>
-        <th className={styles.colMoney}>Line Total</th>
-      </tr>
-    </thead>
-    <tbody>
-      {order.lines.map((l, i) => (
-        <tr key={i}>
-          <td className={styles.colSku}>{l.sku}</td>
-          <td className={styles.colDesc}>
-            {l.description}
-            {l.sub && <span className={styles.lineDesc}>{l.sub}</span>}
-            {/* Spec D3 (2026-06-06) — the per-line remark the salesperson keyed
-                on the product page prints for the customer, same as the
-                backend SO PDF. */}
-            {l.remark && <span className={styles.lineDesc}>Remark: {l.remark}</span>}
-            {l.notes.map((n, j) => (
-              <span
-                key={j}
-                className={n.tone === 'used' ? styles.pwpUsed : styles.pwpUnused}
-              >
-                {n.text}
-              </span>
-            ))}
-          </td>
-          <td className={styles.colQty}>{l.qty}</td>
-          <td className={styles.colMoney}>{fmtMoney(l.unitPrice)}</td>
-          <td className={styles.colMoney}>{fmtMoney(l.lineTotal)}</td>
-        </tr>
+/* Block-level grid rows, not a <table>: the iPad prints with WebKit, which
+   ignores break-inside on <tr>, so a table row could print cut in half across
+   a page break. A block row with break-inside: avoid moves to the next page
+   whole. ARIA roles keep the table semantics. */
+const ItemsTable = ({ order }: { order: PrintableSO }) => {
+  const rows = order.lines.map((l, i) => <ItemRow key={i} line={l} />);
+  return (
+    <div className={styles.items} role="table">
+      {/* The heading and the first line share one unbreakable block, so the
+          heading can never be left alone at the foot of a page. */}
+      <div className={styles.itemsLead} role="rowgroup">
+        <div className={styles.itemsHead} role="row">
+          <div role="columnheader">SKU</div>
+          <div role="columnheader">Description</div>
+          <div className={styles.colQty} role="columnheader">Qty</div>
+          <div className={styles.colMoney} role="columnheader">
+            Unit Price<span className={styles.headCurrency}>MYR</span>
+          </div>
+          <div className={styles.colMoney} role="columnheader">
+            Line Total<span className={styles.headCurrency}>MYR</span>
+          </div>
+        </div>
+        {rows[0]}
+      </div>
+      {rows.slice(1)}
+    </div>
+  );
+};
+
+const ItemRow = ({ line: l }: { line: PrintableLine }) => (
+  <div className={styles.itemRow} role="row">
+    <div className={styles.colSku} role="cell">{keepCodes(l.sku)}</div>
+    <div className={styles.colDesc} role="cell">
+      {l.description}
+      {l.sub && <span className={styles.lineDesc}>{l.sub}</span>}
+      {/* Spec D3 (2026-06-06) — the per-line remark the salesperson keyed
+          on the product page prints for the customer, same as the
+          backend SO PDF. */}
+      {l.remark && <span className={styles.lineDesc}>Remark: {l.remark}</span>}
+      {l.notes.map((n, j) => (
+        <span
+          key={j}
+          className={n.tone === 'used' ? styles.pwpUsed : styles.pwpUnused}
+        >
+          {keepCodes(n.text)}
+        </span>
       ))}
-    </tbody>
-  </table>
+    </div>
+    <div className={styles.colQty} role="cell">{l.qty}</div>
+    <div className={styles.colMoney} role="cell">{fmtAmount(l.unitPrice)}</div>
+    <div className={styles.colMoney} role="cell">{fmtAmount(l.lineTotal)}</div>
+  </div>
 );
 
 const TotalsBlock = ({ order }: { order: PrintableSO }) => (
@@ -239,11 +266,14 @@ const SignatureBlock = ({ order }: { order: PrintableSO }) => (
 );
 
 const TermsBlock = () => (
-  <ol className={styles.terms}>
-    {RECEIPT_TERMS.map((t, i) => (
-      <li key={i}>{t}</li>
-    ))}
-  </ol>
+  <section className={styles.termsWrap}>
+    <div className={styles.termsHead}>Terms &amp; conditions</div>
+    <ol className={styles.terms}>
+      {RECEIPT_TERMS.map((t, i) => (
+        <li key={i}>{t}</li>
+      ))}
+    </ol>
+  </section>
 );
 
 const Footer = ({ order }: { order: PrintableSO }) => (

@@ -229,43 +229,85 @@
   line-height: 1.45;
 }
 
-/* ───── Items table ───── */
+/* ───── Items ─────
+   Grid rows, not table rows (see ItemsTable): each row avoids a page break
+   inside it, so it moves to the next page whole. No outer frame — a frame
+   that runs across a page break prints cut open at the seam. */
 .items {
-  width: 100%;
   margin-top: 18px;
-  border-collapse: collapse;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  overflow: hidden;
 }
 
-.items thead th {
+/* Heading + first row: one unbreakable block (see ItemsTable). */
+.itemsLead {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.itemsHead,
+.itemRow {
+  display: grid;
+  grid-template-columns: 17% minmax(0, 1fr) 6.5% 16.5% 16.5%;
+}
+
+.itemsHead {
+  align-items: end;
   background: #F4ECDD;        /* soft peach matches template */
+  border-radius: 6px;
   font-family: var(--font-button);
   font-weight: 600;
   font-size: 10pt;
+  line-height: 1.25;
   color: #221F20;
-  text-align: left;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
 }
 
-.items tbody td {
-  padding: 10px 12px;
+.itemsHead > div {
+  padding: 8px 10px;
+}
+
+/* Currency rides under the money headings so the cells carry bare numbers —
+   "MYR 1,990.00" does not fit an iPad-printed column without wrapping. */
+.headCurrency {
+  display: block;
+  font-weight: 500;
+  font-size: 8.5pt;
+  color: #6b6260;
+}
+
+.itemRow {
+  border-bottom: 1px solid rgba(34, 31, 32, 0.08);
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.itemRow > div {
+  padding: 10px;
   font-size: 10pt;
   color: #221F20;
-  vertical-align: top;
-  border-bottom: 1px solid rgba(34, 31, 32, 0.06);
 }
 
-.items tbody tr:last-child td {
-  border-bottom: none;
+/* The code is set smaller than the description, so it drops 1.5px to share
+   the description's first baseline. */
+.itemRow > .colSku {
+  padding-top: 11.5px;
+  font-family: var(--font-mono);
+  font-size: 8.5pt;
+  color: #404040;
+  overflow-wrap: anywhere;
 }
 
-.colSku   { width: 16%; font-family: var(--font-mono); font-size: 9pt; word-break: break-all; }
-.colDesc  { width: 40%; }
-.colQty   { width: 8%;  text-align: center; }
-.colMoney { width: 18%; text-align: right; font-variant-numeric: tabular-nums; }
+.colDesc  { overflow-wrap: anywhere; }
+.colQty   { text-align: center; }
+.colMoney { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* keepCodes() wraps each hyphenated code in this: it moves to the next line
+   as one unit, and only breaks inside when it is wider than the column. */
+.code {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
 
 /* Config-derived sub-line under the product name (sofa bundle / decomposition). */
 .lineDesc {
@@ -297,9 +339,10 @@
 }
 
 /* ───── Per-tender payments, folded into the Delivery meta box ─────
-   Compact method + amount rows (no date). The method/approval-code span is
-   flex:1 with min-width:0 so a long label wraps INSIDE the box rather than
-   stretching it — the box keeps its grid width. */
+   Compact method + amount rows (no date); the approval code takes the full
+   width of a second line, so a long reference never splits mid-number. The
+   minmax(0, 1fr) track lets a long method label wrap INSIDE the box rather
+   than stretching it — the box keeps its grid width. */
 .metaPayments {
   margin-top: 6px;
   padding-top: 5px;
@@ -317,30 +360,29 @@
 }
 
 .metaPayRow {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: baseline;
-  gap: 8px;
-  margin-top: 2px;
+  column-gap: 8px;
+  margin-top: 3px;
 }
 
 .metaPayMethod {
-  flex: 1;
-  min-width: 0;          /* allow the label to wrap instead of widening the box */
   font-size: 9pt;
   color: #221F20;
   line-height: 1.3;
 }
 
 .metaPayCode {
+  grid-column: 1 / -1;
   color: #6b6260;
   font-family: var(--font-mono);
   font-size: 7.5pt;
-  word-break: break-all;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 .metaPayAmount {
-  flex: none;
   white-space: nowrap;
   font-family: var(--font-button);
   font-weight: 700;
@@ -356,6 +398,8 @@
   gap: 24px;
   align-items: end;       /* signature line aligns to totals bottom */
   margin-top: 18px;
+  break-inside: avoid;    /* signature + totals never split across pages */
+  page-break-inside: avoid;
 }
 
 .totalsWrap {
@@ -401,6 +445,8 @@
 
 .balanceRow {
   background: rgba(232, 107, 58, 0.12);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
 }
 
 .balanceRow .totalLabel,
@@ -451,18 +497,44 @@
   margin-top: 2px;
 }
 
-/* ───── T&C ───── */
-.terms {
-  margin-top: 26px;
-  padding-left: 20px;
-  color: var(--c-burnt);
-  font-size: 8.5pt;
-  line-height: 1.5;
+/* ───── T&C ─────
+   Dark text under a brand heading; only the numbers carry the burnt accent
+   (a whole block of orange text read as a warning, not a term). */
+/* Terms + footer move between pages as one block. */
+.closing {
+  break-inside: avoid;
   page-break-inside: avoid;
 }
 
+.termsWrap {
+  margin-top: 24px;
+}
+
+.termsHead {
+  font-family: var(--font-button);
+  font-size: 9pt;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--c-burnt);
+}
+
+.terms {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: #404040;
+  font-size: 8.5pt;
+  line-height: 1.5;
+}
+
 .terms li {
-  margin-bottom: 4px;
+  margin-bottom: 3px;
+  padding-left: 2px;
+}
+
+.terms li::marker {
+  color: var(--c-burnt);
+  font-weight: 600;
 }
 
 /* ───── Footer ───── */
@@ -489,10 +561,16 @@
   .itemsViewport { width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
   .items { min-width: 560px; }
   .docFooter { flex-wrap: wrap; gap: var(--space-2); }
-  .metaPayRow { flex-wrap: wrap; }
 }
 
 @media print {
+  /* The app's body is brand cream (--bg). Wherever the white page did not
+     cover the sheet, that cream printed — a hard colour seam partway down
+     page 2. Paper is white, everywhere. */
+  :global(html),
+  :global(body) {
+    background: #fff !important;
+  }
   .toolbar {
     display: none;
   }
@@ -520,8 +598,12 @@
   :global(.sales-order-page) * {
     visibility: visible;
   }
+  /* No bottom edge: with inset:0 the box was exactly one viewport tall, so
+     its white background stopped there while the content ran on below it. */
   :global(.sales-order-page) {
     position: absolute;
-    inset: 0;
+    top: 0;
+    left: 0;
+    right: 0;
   }
 }
