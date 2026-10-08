@@ -3215,17 +3215,39 @@ export const hrItemKpi = pgTable('hr_item_kpi', {
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// POS Marketing (migration 0217, owner 2026-10-08) — what is on display in each
-// showroom, each showroom's floor plan, and the Management → Marketing
+// POS Marketing (migrations 0217 + 0218, owner 2026-10-08) — what is on display
+// in each showroom, each showroom's floor plan, and the Management → Marketing
 // hand-off for new products. POS-owned, reached only through
 // apps/api/src/routes/marketing.ts on the service-role client (RLS on, no
-// policies). venue_id / model_id / *_by are Houzs ids in ANOTHER database —
-// opaque text, no FK, names snapshotted beside them. Nothing is hard-deleted.
+// policies). venue_id is a marketing_showrooms id — the POS's own showroom list
+// since 0218 — while model_id / *_by are Houzs ids in ANOTHER database: opaque
+// text, no FK, names snapshotted beside them. Nothing is hard-deleted.
 // ════════════════════════════════════════════════════════════════════════════
+
+/** The showrooms the Marketing section keeps a display record for — added,
+ *  renamed and removed in the POS (0218), not Houzs's venue master. */
+export const marketingShowrooms = pgTable('marketing_showrooms', {
+  id:             text('id').primaryKey().default(sql`gen_random_uuid()::text`),
+  name:           text('name').notNull(),
+  area:           text('area').notNull().default(''),
+  createdBy:      text('created_by'),
+  createdByName:  text('created_by_name'),
+  createdAt:      timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:      text('updated_by'),
+  updatedByName:  text('updated_by_name'),
+  updatedAt:      timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  archivedAt:     timestamp('archived_at', { withTimezone: true }),   // Remove — never a DELETE
+  archivedBy:     text('archived_by'),
+  archivedByName: text('archived_by_name'),
+}, (t) => ({
+  nameChk:  check('marketing_showrooms_name_chk', sql`btrim(${t.name}) <> '' AND length(${t.name}) <= 80`),
+  areaChk:  check('marketing_showrooms_area_chk', sql`length(${t.area}) <= 120`),
+  liveName: uniqueIndex('uq_marketing_showrooms_live_name').on(sql`lower(btrim(${t.name}))`).where(sql`${t.archivedAt} IS NULL`),
+}));
 
 export const marketingDisplays = pgTable('marketing_displays', {
   id:              uuid('id').primaryKey().defaultRandom(),
-  venueId:         text('venue_id').notNull(),          // Houzs project_venues id
+  venueId:         text('venue_id').notNull().references(() => marketingShowrooms.id),
   type:            text('type').notNull(),              // sofa | mattress | bedframe | accessory
   modelId:         text('model_id'),                    // Houzs product_models id; null when created by Arrive
   name:            text('name').notNull().default(''),
@@ -3256,7 +3278,7 @@ export const marketingDisplays = pgTable('marketing_displays', {
 }));
 
 export const marketingFloorplans = pgTable('marketing_floorplans', {
-  venueId:        text('venue_id').primaryKey(),
+  venueId:        text('venue_id').primaryKey().references(() => marketingShowrooms.id),
   contentType:    text('content_type').notNull(),       // image/png | image/jpeg | image/webp
   imageB64:       text('image_b64').notNull(),
   byteSize:       integer('byte_size').notNull(),
@@ -3287,7 +3309,7 @@ export const marketingLaunchRequests = pgTable('marketing_launch_requests', {
   // [{ modules: string[], price: number | null }] — whole RM, REFERENCE only;
   // never carried to a display row or the SKU Master.
   comboRows:        jsonb('combo_rows').notNull().default(sql`'[]'::jsonb`),
-  venueId:          text('venue_id').notNull(),
+  venueId:          text('venue_id').notNull().references(() => marketingShowrooms.id),
   action:           text('action').notNull(),           // add | replace
   replaceDisplayId: uuid('replace_display_id').references(() => marketingDisplays.id),
   requestedBy:      text('requested_by'),

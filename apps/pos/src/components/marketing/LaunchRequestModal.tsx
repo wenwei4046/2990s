@@ -10,7 +10,7 @@ import {
   type DisplayItem, type LaunchRequest, type RequestStatus, type RequestType,
 } from './marketing-model';
 import { coloursOf, withValue, type MarketingOptions } from './marketing-options';
-import { useSaveRequest } from '../../lib/marketing-api';
+import { useSaveRequest, type ShowroomOption } from '../../lib/marketing-api';
 import { ComponentBuilder } from './ComponentBuilder';
 import { SofaBlueprint } from './SofaBlueprint';
 import s from './marketing.module.css';
@@ -20,10 +20,11 @@ type BuilderTarget = { target: 'draft' } | { target: 'combo'; idx: number };
 const ToFill = ({ on }: { on: boolean }) => (on ? <span className={s.toFillTag}>TO FILL</span> : null);
 const empty = (v: unknown) => !String(v ?? '').trim();
 
-export const LaunchRequestModal = ({ draft: d, setDraft, opts, displays, onSaved }: {
+export const LaunchRequestModal = ({ draft: d, setDraft, opts, showrooms, displays, onSaved }: {
   draft: LaunchRequest;
   setDraft: (d: LaunchRequest | null) => void;
   opts: MarketingOptions;
+  showrooms: ShowroomOption[];
   displays: DisplayItem[];
   onSaved: (status: RequestStatus) => void;
 }) => {
@@ -135,8 +136,11 @@ export const LaunchRequestModal = ({ draft: d, setDraft, opts, displays, onSaved
                     <span className={s.fieldLabel}>Showroom</span>
                     <select className={s.select} value={d.showroomId} onChange={(e) => patch({ showroomId: e.target.value })}>
                       <option value="">Choose showroom…</option>
-                      {opts.showrooms.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                      {showrooms.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
                     </select>
+                    {showrooms.length === 0 && (
+                      <span className={s.replaceHint}>No showrooms yet — add one on the Showroom display tab.</span>
+                    )}
                   </label>
                   <div className={s.field}>
                     <span className={s.fieldLabel}>Action</span>

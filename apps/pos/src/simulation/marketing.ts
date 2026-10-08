@@ -1,13 +1,14 @@
 // Local-simulation stand-ins for 2990's /marketing API and the persona that
 // can see it. Fictional data only — seeded with the design prototype's own
-// sample displays and requests so the Marketing screens can be checked against
-// the design without touching a live system. Never calls fetch.
+// showrooms, sample displays and requests so the Marketing screens can be
+// checked against the design without touching a live system. Never calls fetch.
 
-const KEY = '2990:mobile-simulation:marketing:v1';
+// v2: the showroom list moved into the store (0218).
+const KEY = '2990:mobile-simulation:marketing:v2';
 const PERSONA_KEY = '2990:simulation:persona';
 
 type Row = Record<string, any>;
-interface MarketingStore { displays: Row[]; floorplans: Record<string, Row>; requests: Row[]; serial: number }
+interface MarketingStore { showrooms: Row[]; displays: Row[]; floorplans: Record<string, Row>; requests: Row[]; serial: number }
 
 const now = () => new Date().toISOString();
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
@@ -30,10 +31,19 @@ const display = (id: string, venueId: string, type: string, name: string, code: 
   modules: [], size: '', height: '', divan: '', gap: '', qty: 1, created_at: '2026-10-01T02:00:00.000Z', created_by_name: 'Demo', removed_at: null, ...extra,
 });
 
+const showroom = (id: string, name: string, area: string): Row => ({ id, name, area, archived_at: null });
+
 function seed(): MarketingStore {
   const kl = 'demo-venue-kl';
   return {
     serial: 100,
+    // The prototype's four, under the ids the seeded displays use.
+    showrooms: [
+      showroom(kl, 'Showroom KL', 'Kuala Lumpur'),
+      showroom('demo-venue', 'Showroom PJ', 'Petaling Jaya'),
+      showroom('demo-venue-pg', 'Showroom Penang', 'Penang'),
+      showroom('demo-venue-jb', 'Showroom JB', 'Johor Bahru'),
+    ],
     floorplans: {},
     displays: [
       display('sim-d1', kl, 'sofa', 'AM9036', 'SOFA AM9036', null, { fabric: 'Velvet VL', colour: 'Teal', leg: '4"', seat: '28"', modules: ['2A(LHF)', '1NA', 'L(RHF)'] }),
@@ -74,6 +84,7 @@ function store(): MarketingStore {
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(store())); } catch { /* in-memory still works */ } }
 
+const showroomWire = (r: Row) => ({ id: r.id, name: r.name, area: r.area });
 const displayWire = (r: Row) => ({
   id: r.id, venueId: r.venue_id, type: r.type, modelId: r.model_id, name: r.name, code: r.code, photoUrl: r.photo_url, isNew: r.is_new,
   fabric: r.fabric, colour: r.colour, leg: r.leg, seat: r.seat, modules: r.modules, size: r.size, height: r.height, divan: r.divan,
@@ -100,16 +111,54 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
     : persona === 'director' ? { name: 'Director', role: 'Sales Director' }
     : { name: 'Demo Sales', role: 'Sales' };
   const live = st.displays.filter((d) => !d.removed_at);
+  const listed = st.showrooms.filter((x) => !x.archived_at);
+  const unlisted = (id: unknown) => (listed.some((x) => x.id === id)
+    ? null : json({ error: 'unknown_showroom', reason: 'This showroom is no longer on the list.' }, 409));
+  const nameTaken = (name: string, except?: string) =>
+    listed.some((x) => x.id !== except && String(x.name).trim().toLowerCase() === name.toLowerCase());
 
   if (path === '/marketing/state' && method === 'GET') {
     return json({
+      showrooms: [...listed].sort((a, b) => String(a.name).localeCompare(String(b.name))).map(showroomWire),
       displays: live.map(displayWire),
       requests: st.requests.filter((r) => r.status === 'pending' || r.status === 'completed').sort((a, b) => b.created_at.localeCompare(a.created_at)).map(requestWire),
       floorplans: Object.values(st.floorplans).map((f) => ({ venueId: f.venue_id, updatedAt: f.updated_at, fileName: f.file_name })),
     });
   }
+  if (path === '/marketing/showrooms' && method === 'POST') {
+    const name = String(body.name ?? '').trim();
+    if (!name) return json({ error: 'validation_failed' }, 400);
+    if (nameTaken(name)) return json({ error: 'duplicate_name', reason: `There is already a showroom called ${name}.` }, 409);
+    const row = showroom(`sim-s${st.serial++}`, name, String(body.area ?? '').trim());
+    st.showrooms.push(row); save();
+    return json({ showroom: showroomWire(row) }, 201);
+  }
+  let m = /^\/marketing\/showrooms\/([^/]+)$/.exec(path);
+  if (m) {
+    const row = listed.find((x) => x.id === decodeURIComponent(m![1]!));
+    if (!row) return json({ error: 'not_found', reason: 'This showroom is no longer on the list.' }, 404);
+    if (method === 'PATCH') {
+      const name = String(body.name ?? '').trim();
+      if (!name) return json({ error: 'validation_failed' }, 400);
+      if (nameTaken(name, row.id)) return json({ error: 'duplicate_name', reason: `There is already a showroom called ${name}.` }, 409);
+      Object.assign(row, { name, area: String(body.area ?? '').trim() }); save();
+      return json({ showroom: showroomWire(row) });
+    }
+    if (method === 'DELETE') {
+      const pieces = live.filter((d) => d.venue_id === row.id).length;
+      const open = st.requests.filter((r) => r.venue_id === row.id && (r.status === 'pending' || r.status === 'completed')).length;
+      if (pieces || open) {
+        const what = [pieces ? `${pieces} piece${pieces === 1 ? '' : 's'} on display` : '', open ? `${open} open launch request${open === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
+        return json({ error: 'showroom_in_use', reason: `This showroom still has ${what}. Clear ${pieces + open === 1 ? 'it' : 'them'} first.` }, 409);
+      }
+      row.archived_at = now(); save();
+      return json({ ok: true });
+    }
+  }
   if (path === '/marketing/displays' && method === 'POST') {
     if (!body.venueId || !body.name) return json({ error: 'validation_failed' }, 400);
+    const gone = unlisted(body.venueId);
+    if (gone) return gone;
     if (body.type === 'sofa' && !(body.modules ?? []).length) return json({ error: 'validation_failed', reason: 'A sofa needs its components.' }, 400);
     const row = display(`sim-d${st.serial++}`, body.venueId, body.type, body.name, body.code ?? '', body.photoUrl ?? null, {
       model_id: body.modelId ?? null, fabric: body.fabric ?? '', colour: body.colour ?? '', leg: body.leg ?? '', seat: body.seat ?? '',
@@ -119,7 +168,7 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
     st.displays.push(row); save();
     return json({ display: displayWire(row) }, 201);
   }
-  let m = /^\/marketing\/displays\/([^/]+)$/.exec(path);
+  m = /^\/marketing\/displays\/([^/]+)$/.exec(path);
   if (m && method === 'DELETE') {
     const row = live.find((d) => d.id === m![1]);
     if (!row) return json({ error: 'not_found' }, 404);
@@ -134,6 +183,8 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
       return f ? json({ floorplan: { venueId: vid, dataUrl: `data:${f.content_type};base64,${f.image_b64}`, fileName: f.file_name, updatedAt: f.updated_at } }) : json({ error: 'not_found' }, 404);
     }
     if (method === 'PUT') {
+      const gone = unlisted(vid);
+      if (gone) return gone;
       st.floorplans[vid] = { venue_id: vid, content_type: body.contentType, image_b64: body.dataB64, file_name: body.fileName ?? '', updated_at: now() };
       save();
       return json({ floorplan: { venueId: vid, updatedAt: st.floorplans[vid]!.updated_at, fileName: body.fileName ?? '' } });
@@ -142,6 +193,8 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
   }
   if (path === '/marketing/requests' && method === 'POST') {
     if (!body.venueId || !body.action) return json({ error: 'validation_failed' }, 400);
+    const gone = unlisted(body.venueId);
+    if (gone) return gone;
     const row = { id: `sim-r${st.serial++}`, ...requestCols(body), requested_by_name: me.name, requested_by_role: me.role, created_at: now() };
     st.requests.push(row); save();
     return json({ request: requestWire(row) }, 201);
@@ -166,7 +219,12 @@ export function marketingDispatch(path: string, method: string, body: Row): Resp
       save();
       return json({ displayId: created.id, removedName });
     }
-    if (method === 'PUT') { Object.assign(row, requestCols(body)); save(); return json({ request: requestWire(row) }); }
+    if (method === 'PUT') {
+      const gone = unlisted(body.venueId);
+      if (gone) return gone;
+      Object.assign(row, requestCols(body)); save();
+      return json({ request: requestWire(row) });
+    }
     if (method === 'DELETE') { row.status = 'deleted'; save(); return json({ ok: true }); }
   }
   return json({ error: 'simulation_route_missing', reason: `${method} ${path} has not been implemented.` }, 501);

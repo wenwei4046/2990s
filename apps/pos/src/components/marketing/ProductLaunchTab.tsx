@@ -29,7 +29,7 @@ export const ProductLaunchTab = ({ state, draft, setDraft, toast }: {
   const del = useDeleteRequest();
   const arrive = useArriveRequest();
 
-  const showroomName = (id: string) => opts.showrooms.find((x) => x.id === id)?.name ?? null;
+  const showroomName = (id: string) => state.showrooms.find((x) => x.id === id)?.name ?? null;
   const displayOf = (id: string | null) => (id ? state.displays.find((d) => d.id === id) ?? null : null);
 
   /** Open a saved request in the form. A Replace whose piece is unset (or no
@@ -186,6 +186,7 @@ export const ProductLaunchTab = ({ state, draft, setDraft, toast }: {
           draft={draft}
           setDraft={setDraft}
           opts={opts}
+          showrooms={state.showrooms}
           displays={state.displays}
           onSaved={(status) => { setDraft(null); toast(status === 'completed' ? 'Moved to Completed Info' : 'Saved to Pending Info'); }}
         />

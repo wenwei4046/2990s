@@ -1,6 +1,8 @@
 // ----------------------------------------------------------------------------
 // The Marketing section's data, read and written against 2990's own API
-// (apps/api/src/routes/marketing.ts, tables in migration 0217).
+// (apps/api/src/routes/marketing.ts, tables in migrations 0217 + 0218) —
+// including the showroom list itself, which the section keeps (owner
+// 2026-10-09: a record, not Houzs's venue master).
 //
 // ── WHY A BARE fetch AND NOT authedFetch ────────────────────────────────────
 // Same wall commission-api.ts documents: `authedFetch` resolves to the HOUZS
@@ -46,6 +48,10 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 
 /* ── wire shapes ──────────────────────────────────────────────────────────── */
 
+/** A showroom on the Marketing list. `area` is free text ('Petaling Jaya,
+ *  Selangor'), printed under the name; '' when not given. */
+export interface ShowroomOption { id: string; name: string; area: string }
+
 interface WireDisplay {
   id: string; venueId: string; type: string; modelId: string | null; name: string; code: string;
   photoUrl: string | null; isNew: boolean; fabric: string; colour: string; leg: string; seat: string;
@@ -62,6 +68,8 @@ interface WireRequest {
 export interface FloorplanMeta { venueId: string; updatedAt: string; fileName: string }
 
 export interface MarketingState {
+  /** Sorted by name, as the rail and the request form list them. */
+  showrooms: ShowroomOption[];
   displays: DisplayItem[];
   requests: LaunchRequest[];
   floorplans: FloorplanMeta[];
@@ -110,8 +118,13 @@ export function useMarketingState(enabled = true) {
     // see each other's edits on the next poll.
     refetchInterval: 30_000,
     queryFn: async () => {
-      const body = await call<{ displays: WireDisplay[]; requests: WireRequest[]; floorplans: FloorplanMeta[] }>('/state');
+      const body = await call<{
+        showrooms: ShowroomOption[]; displays: WireDisplay[]; requests: WireRequest[]; floorplans: FloorplanMeta[];
+      }>('/state');
       return {
+        showrooms: (body.showrooms ?? [])
+          .map((x) => ({ id: String(x.id), name: String(x.name ?? ''), area: String(x.area ?? '') }))
+          .sort((a, b) => a.name.localeCompare(b.name)),
         displays: (body.displays ?? []).map(toDisplay),
         requests: (body.requests ?? []).map(toRequest),
         floorplans: body.floorplans ?? [],
@@ -137,6 +150,29 @@ export function useFloorplan(venueId: string | null, version: string | null) {
 function useInvalidate() {
   const qc = useQueryClient();
   return () => qc.invalidateQueries({ queryKey: ['marketing'] });
+}
+
+/** Add a showroom (no `id`) or rename one. Resolves to the saved row. */
+export function useSaveShowroom() {
+  const done = useInvalidate();
+  return useMutation({
+    mutationFn: ({ id, name, area }: { id?: string; name: string; area: string }) =>
+      (id
+        ? call<{ showroom: ShowroomOption }>(`/showrooms/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name, area }) })
+        : call<{ showroom: ShowroomOption }>('/showrooms', { method: 'POST', body: JSON.stringify({ name, area }) })
+      ).then((r) => r.showroom),
+    onSuccess: done,
+  });
+}
+
+/** Take a showroom off the list. The server refuses while it still has a
+ *  piece on display or an open launch request. */
+export function useRemoveShowroom() {
+  const done = useInvalidate();
+  return useMutation({
+    mutationFn: (id: string) => call<{ ok: true }>(`/showrooms/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    onSuccess: done,
+  });
 }
 
 export interface NewDisplay {

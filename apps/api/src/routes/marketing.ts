@@ -1,9 +1,13 @@
 // ----------------------------------------------------------------------------
-// /marketing — storage behind the POS Marketing section: what is on display in
-// each showroom, each showroom's floor plan, and the new-product launch board.
+// /marketing — storage behind the POS Marketing section: the showroom list,
+// what is on display in each showroom, each showroom's floor plan, and the
+// new-product launch board.
 //
 // Owner 2026-10-08 ("Marketing 展厅陈列系统"). The POS screens are
-// apps/pos/src/pages/Marketing.tsx; the tables are migration 0217.
+// apps/pos/src/pages/Marketing.tsx; the tables are migrations 0217 + 0218.
+// The showroom list is the POS's own since 0218 (owner 2026-10-09: a record,
+// not Houzs's venue master), so every write that files something under a
+// showroom first checks that showroom is still listed.
 //
 // ── AUTHORIZATION ───────────────────────────────────────────────────────────
 // The caller is a POS tablet holding a HOUZS session, so — exactly like
@@ -78,6 +82,40 @@ const moduleCode = z.string().trim().min(1).max(40);
 const modules = z.array(moduleCode).max(30);
 const venueId = z.string().trim().min(1).max(64);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Postgres unique_violation. */
+const isDuplicate = (e: { code?: string } | null): boolean => e?.code === '23505';
+
+/* ── showrooms (0218) ─────────────────────────────────────────────────────── */
+
+const SHOWROOM_SELECT = 'id, name, area';
+
+const showroomToWire = (r: Record<string, unknown>) => ({
+  id: String(r.id),
+  name: String(r.name ?? ''),
+  area: String(r.area ?? ''),
+});
+
+const showroomSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  // Where it is, as the rail prints it under the name ('Petaling Jaya, Selangor').
+  area: z.string().trim().max(120).optional().default(''),
+});
+
+/** A display, floor plan or request may only be filed under a showroom that
+ *  is still listed. The foreign keys stop an id that never existed; this stops
+ *  one that was removed, and says so plainly instead of failing an insert. */
+async function listedShowroom(c: Ctx, sb: SupabaseClient, id: string): Promise<Response | null> {
+  const { data, error } = await sb
+    .from('marketing_showrooms')
+    .select('id')
+    .eq('id', id)
+    .is('archived_at', null)
+    .maybeSingle();
+  if (error) return c.json({ error: 'fetch_failed', reason: error.message }, 500);
+  if (!data) return c.json({ error: 'unknown_showroom', reason: 'This showroom is no longer on the list.' }, 409);
+  return null;
+}
 
 /* ── displays ─────────────────────────────────────────────────────────────── */
 
@@ -265,21 +303,23 @@ const b64Bytes = (b64: string): number => {
    Routes
    ════════════════════════════════════════════════════════════════════════════ */
 
-/** Everything the Marketing page draws, in one read: the live displays of
- *  every showroom, the open launch requests, and which showrooms have a floor
- *  plan (the image itself is fetched per showroom). */
+/** Everything the Marketing page draws, in one read: the showroom list, the
+ *  live displays of every showroom, the open launch requests, and which
+ *  showrooms have a floor plan (the image itself is fetched per showroom). */
 marketing.get('/state', async (c) => {
   const g = await gate(c);
   if (!g.ok) return g.res;
   const sb = admin(c);
-  const [displays, requests, plans] = await Promise.all([
+  const [showrooms, displays, requests, plans] = await Promise.all([
+    sb.from('marketing_showrooms').select(SHOWROOM_SELECT).is('archived_at', null).order('name', { ascending: true }),
     sb.from('marketing_displays').select(DISPLAY_SELECT).is('removed_at', null).order('created_at', { ascending: true }),
     sb.from('marketing_launch_requests').select(REQUEST_SELECT).in('status', ['pending', 'completed']).order('created_at', { ascending: false }),
     sb.from('marketing_floorplans').select('venue_id, updated_at, file_name'),
   ]);
-  const failed = displays.error ?? requests.error ?? plans.error;
+  const failed = showrooms.error ?? displays.error ?? requests.error ?? plans.error;
   if (failed) return c.json({ error: 'fetch_failed', reason: failed.message }, 500);
   return c.json({
+    showrooms: ((showrooms.data ?? []) as unknown as Record<string, unknown>[]).map(showroomToWire),
     displays: ((displays.data ?? []) as unknown as Record<string, unknown>[]).map(displayToWire),
     requests: ((requests.data ?? []) as unknown as Record<string, unknown>[]).map(requestToWire),
     floorplans: ((plans.data ?? []) as unknown as Record<string, unknown>[]).map((r) => ({
@@ -290,6 +330,103 @@ marketing.get('/state', async (c) => {
   });
 });
 
+/** Add a showroom to the list. */
+marketing.post('/showrooms', async (c) => {
+  const g = await gate(c);
+  if (!g.ok) return g.res;
+  const b = await readBody(c);
+  if (!b.ok) return b.res;
+  const parsed = showroomSchema.safeParse(b.body);
+  if (!parsed.success) return c.json({ error: 'validation_failed', issues: issues(parsed.error) }, 400);
+  const { data, error } = await admin(c)
+    .from('marketing_showrooms')
+    .insert({
+      name: parsed.data.name,
+      area: parsed.data.area,
+      created_by: String(g.caller.userId),
+      created_by_name: g.caller.name,
+      updated_by: String(g.caller.userId),
+      updated_by_name: g.caller.name,
+    })
+    .select(SHOWROOM_SELECT)
+    .single();
+  if (isDuplicate(error)) {
+    return c.json({ error: 'duplicate_name', reason: `There is already a showroom called ${parsed.data.name}.` }, 409);
+  }
+  if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  return c.json({ showroom: showroomToWire(data as unknown as Record<string, unknown>) }, 201);
+});
+
+/** Rename a showroom, or change where it says it is. */
+marketing.patch('/showrooms/:id', async (c) => {
+  const g = await gate(c);
+  if (!g.ok) return g.res;
+  const id = venueId.safeParse(c.req.param('id'));
+  if (!id.success) return c.json({ error: 'not_found' }, 404);
+  const b = await readBody(c);
+  if (!b.ok) return b.res;
+  const parsed = showroomSchema.safeParse(b.body);
+  if (!parsed.success) return c.json({ error: 'validation_failed', issues: issues(parsed.error) }, 400);
+  const { data, error } = await admin(c)
+    .from('marketing_showrooms')
+    .update({
+      name: parsed.data.name,
+      area: parsed.data.area,
+      updated_at: new Date().toISOString(),
+      updated_by: String(g.caller.userId),
+      updated_by_name: g.caller.name,
+    })
+    .eq('id', id.data)
+    .is('archived_at', null)
+    .select(SHOWROOM_SELECT)
+    .maybeSingle();
+  if (isDuplicate(error)) {
+    return c.json({ error: 'duplicate_name', reason: `There is already a showroom called ${parsed.data.name}.` }, 409);
+  }
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  if (!data) return c.json({ error: 'not_found', reason: 'This showroom is no longer on the list.' }, 404);
+  return c.json({ showroom: showroomToWire(data as unknown as Record<string, unknown>) });
+});
+
+/** Remove a showroom from the list: stamps archived_at, the row stays. Refused
+ *  while it still has a piece on display or an open launch request, so nothing
+ *  live is left under a showroom the screen no longer shows. */
+marketing.delete('/showrooms/:id', async (c) => {
+  const g = await gate(c);
+  if (!g.ok) return g.res;
+  const id = venueId.safeParse(c.req.param('id'));
+  if (!id.success) return c.json({ error: 'not_found' }, 404);
+  const sb = admin(c);
+  const [displays, requests] = await Promise.all([
+    sb.from('marketing_displays').select('id', { count: 'exact', head: true }).eq('venue_id', id.data).is('removed_at', null),
+    sb.from('marketing_launch_requests').select('id', { count: 'exact', head: true }).eq('venue_id', id.data).in('status', ['pending', 'completed']),
+  ]);
+  const failed = displays.error ?? requests.error;
+  if (failed) return c.json({ error: 'fetch_failed', reason: failed.message }, 500);
+  const pieces = displays.count ?? 0;
+  const open = requests.count ?? 0;
+  if (pieces || open) {
+    const what = [
+      pieces ? `${pieces} piece${pieces === 1 ? '' : 's'} on display` : '',
+      open ? `${open} open launch request${open === 1 ? '' : 's'}` : '',
+    ].filter(Boolean).join(' and ');
+    return c.json({
+      error: 'showroom_in_use',
+      reason: `This showroom still has ${what}. Clear ${pieces + open === 1 ? 'it' : 'them'} first.`,
+    }, 409);
+  }
+  const { data, error } = await sb
+    .from('marketing_showrooms')
+    .update({ archived_at: new Date().toISOString(), archived_by: String(g.caller.userId), archived_by_name: g.caller.name })
+    .eq('id', id.data)
+    .is('archived_at', null)
+    .select('id')
+    .maybeSingle();
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  if (!data) return c.json({ error: 'not_found', reason: 'This showroom is no longer on the list.' }, 404);
+  return c.json({ ok: true });
+});
+
 marketing.post('/displays', async (c) => {
   const g = await gate(c);
   if (!g.ok) return g.res;
@@ -298,7 +435,10 @@ marketing.post('/displays', async (c) => {
   const parsed = displayCreateSchema.safeParse(b.body);
   if (!parsed.success) return c.json({ error: 'validation_failed', issues: issues(parsed.error) }, 400);
   const v = parsed.data;
-  const { data, error } = await admin(c)
+  const sb = admin(c);
+  const unlisted = await listedShowroom(c, sb, v.venueId);
+  if (unlisted) return unlisted;
+  const { data, error } = await sb
     .from('marketing_displays')
     .insert({
       venue_id: v.venueId,
@@ -380,7 +520,10 @@ marketing.put('/floorplans/:venueId', async (c) => {
   if (bytes <= 0 || bytes > FLOORPLAN_MAX_BYTES) {
     return c.json({ error: 'too_large', reason: 'The floor plan image is larger than 3 MB.' }, 413);
   }
-  const { data, error } = await admin(c)
+  const sb = admin(c);
+  const unlisted = await listedShowroom(c, sb, vid.data);
+  if (unlisted) return unlisted;
+  const { data, error } = await sb
     .from('marketing_floorplans')
     .upsert({
       venue_id: vid.data,
@@ -415,6 +558,8 @@ marketing.post('/requests', async (c) => {
   const parsed = requestBodySchema.safeParse(b.body);
   if (!parsed.success) return c.json({ error: 'validation_failed', issues: issues(parsed.error) }, 400);
   const sb = admin(c);
+  const unlisted = await listedShowroom(c, sb, parsed.data.venueId);
+  if (unlisted) return unlisted;
   const bad = await checkReplaceTarget(sb, parsed.data);
   if (bad) return c.json({ error: 'invalid_replace', reason: bad }, 409);
   const nowIso = new Date().toISOString();
@@ -446,6 +591,8 @@ marketing.put('/requests/:id', async (c) => {
   const parsed = requestBodySchema.safeParse(b.body);
   if (!parsed.success) return c.json({ error: 'validation_failed', issues: issues(parsed.error) }, 400);
   const sb = admin(c);
+  const unlisted = await listedShowroom(c, sb, parsed.data.venueId);
+  if (unlisted) return unlisted;
   const bad = await checkReplaceTarget(sb, parsed.data);
   if (bad) return c.json({ error: 'invalid_replace', reason: bad }, 409);
   const nowIso = new Date().toISOString();

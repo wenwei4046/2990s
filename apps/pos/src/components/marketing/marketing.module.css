@@ -103,6 +103,16 @@
 .srPlan { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--c-warn); }
 .srPlanOk { color: var(--c-success); }
 .srPlanDot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
+/* The showroom list is the POS's own (0218): add from the rail, edit from the
+   header. Not in the design handoff; built from the section's own pieces. */
+.srAdd {
+  flex: none; display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px;
+  padding: 10px 12px; border-radius: 12px; border: 1.5px dashed rgba(34, 31, 32, 0.22); background: #fff;
+  color: var(--fg-muted); font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.srAdd:hover { border-color: var(--c-orange); color: var(--c-burnt); }
+.srHeaderActions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.srEditBtn { display: inline-flex; align-items: center; gap: 8px; }
 
 .displayMain { min-width: 0; display: flex; flex-direction: column; gap: 24px; }
 .srHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
@@ -170,6 +180,7 @@
 }
 .emptyCardTitle { font-size: 18px; font-weight: 700; color: var(--c-ink); margin-bottom: 6px; }
 .emptyCardBody { font-size: 13px; }
+.emptyCardAction { margin-top: 18px; }
 
 .group { display: flex; flex-direction: column; gap: 12px; }
 .groupHead { display: flex; align-items: baseline; gap: 10px; }
@@ -289,7 +300,15 @@
   min-height: 44px; padding: 0 18px; border-radius: 999px; border: 0; background: var(--c-error);
   color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
 }
-.dangerBtn:disabled, .ghostBtn:disabled { opacity: 0.6; cursor: progress; }
+.dangerBtn:disabled, .ghostBtn:disabled, .primaryPill:disabled { opacity: 0.6; cursor: progress; }
+.dialogNote { font-size: 12px; color: var(--fg-muted); }
+.dialogActionsSplit { justify-content: space-between; align-items: center; }
+.dialogActionsEnd { display: inline-flex; gap: 8px; margin-left: auto; }
+.textDanger {
+  min-height: 44px; padding: 0; border: 0; background: none; color: var(--c-error);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.textDanger:disabled { color: var(--fg-soft); cursor: not-allowed; }
 
 /* ════════════════════════ modals (add on display, launch form) ════════════════════════ */
 .modalScrim {

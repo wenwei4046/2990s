@@ -1,8 +1,10 @@
 // Showroom display — what is physically on the floor in each showroom.
-// Design screens 02 (page), 03 (detail drawer), 04–06 (Add on display).
+// Design screens 02 (page), 03 (detail drawer), 04–06 (Add on display). The
+// showroom list itself is kept here too (Add showroom / Edit showroom — owner
+// 2026-10-09, migration 0218), which the design did not have.
 
 import { useMemo, useState, type ChangeEvent } from 'react';
-import { ImageUp, Plus, Store, Trash2, Upload, X } from 'lucide-react';
+import { ImageUp, Pencil, Plus, Store, Trash2, Upload, X } from 'lucide-react';
 import {
   detailRows, moduleInfo, shapeName, specOf, tagsOf, typeOf, TYPES,
   type DisplayItem, type DisplayType,
@@ -13,6 +15,7 @@ import {
 } from '../../lib/marketing-api';
 import { SofaBlueprint } from './SofaBlueprint';
 import { AddDisplayModal } from './AddDisplayModal';
+import { ShowroomDialog } from './ShowroomDialog';
 import s from './marketing.module.css';
 
 type CatFilter = 'all' | DisplayType;
@@ -29,13 +32,15 @@ const bg = (url: string | null) => (url ? { backgroundImage: `url("${url}")` } :
 
 export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; toast: (t: string) => void }) => {
   const opts = useMarketingOptions();
-  const showrooms = opts.showrooms;
+  const showrooms = state.showrooms;
   const [pickedId, setPickedId] = useState<string | null>(null);
   const showroom = showrooms.find((x) => x.id === pickedId) ?? showrooms[0] ?? null;
   const [catFilter, setCatFilter] = useState<CatFilter>('all');
   const [drawerId, setDrawerId] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  /** The showroom dialog: 'add', or the id of the showroom being edited. */
+  const [srDialog, setSrDialog] = useState<'add' | string | null>(null);
 
   const byShowroom = useMemo(() => {
     const m = new Map<string, DisplayItem[]>();
@@ -82,15 +87,38 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
     }
   };
 
-  if (!opts.isLoading && !showroom) {
+  const editing = srDialog && srDialog !== 'add' ? showrooms.find((x) => x.id === srDialog) ?? null : null;
+  const showroomDialog = srDialog && (
+    <ShowroomDialog
+      showroom={editing ?? undefined}
+      inUse={editing ? {
+        pieces: byShowroom.get(editing.id)?.length ?? 0,
+        open: state.requests.filter((r) => r.showroomId === editing.id).length,
+      } : undefined}
+      onClose={() => setSrDialog(null)}
+      onSaved={(saved, added) => {
+        setSrDialog(null);
+        if (added) { setPickedId(saved.id); setCatFilter('all'); }
+        toast(added ? `${saved.name} added` : `${saved.name} saved`);
+      }}
+      onRemoved={(name) => { setSrDialog(null); setPickedId(null); toast(`${name} removed from the list`); }}
+    />
+  );
+
+  if (!showroom) {
     return (
-      <div className={s.emptyCard}>
-        <div className={s.emptyCardTitle}>No showrooms yet.</div>
-        <div className={s.emptyCardBody}>Showrooms come from the Venue list in SO Maintenance.</div>
-      </div>
+      <>
+        <div className={s.emptyCard}>
+          <div className={s.emptyCardTitle}>No showrooms yet.</div>
+          <div className={s.emptyCardBody}>Add the showrooms you keep a display record for.</div>
+          <button type="button" className={`${s.addDisplayBtn} ${s.emptyCardAction}`} onClick={() => setSrDialog('add')}>
+            <Plus size={16} strokeWidth={1.75} className={s.icon} />Add showroom
+          </button>
+        </div>
+        {showroomDialog}
+      </>
     );
   }
-  if (!showroom) return <p className={s.loading}>Loading…</p>;
 
   const cnt = (t: DisplayType) => items.filter((x) => x.type === t).length;
   const catTabs: Array<{ id: CatFilter; label: string; count: number }> = [
@@ -144,6 +172,9 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
               </button>
             );
           })}
+          <button type="button" className={s.srAdd} onClick={() => setSrDialog('add')}>
+            <Plus size={16} strokeWidth={1.75} className={s.icon} />Add showroom
+          </button>
         </aside>
 
         <section className={s.displayMain}>
@@ -155,9 +186,14 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
                 {items.length ? `${items.length} piece${items.length === 1 ? '' : 's'} on display` : 'No pieces on display'}
               </span>
             </div>
-            <button type="button" className={s.addDisplayBtn} onClick={() => setAddOpen(true)}>
-              <Plus size={16} strokeWidth={1.75} className={s.icon} />Add on display
-            </button>
+            <div className={s.srHeaderActions}>
+              <button type="button" className={`${s.ghostBtn} ${s.srEditBtn}`} onClick={() => setSrDialog(showroom.id)}>
+                <Pencil size={15} strokeWidth={1.75} className={s.icon} />Edit showroom
+              </button>
+              <button type="button" className={s.addDisplayBtn} onClick={() => setAddOpen(true)}>
+                <Plus size={16} strokeWidth={1.75} className={s.icon} />Add on display
+              </button>
+            </div>
           </div>
 
           {!planMeta ? (
@@ -343,6 +379,8 @@ export const ShowroomDisplayTab = ({ state, toast }: { state: MarketingState; to
           onAdded={(name) => { setAddOpen(false); toast(`${name} added to ${showroom.name}`); }}
         />
       )}
+
+      {showroomDialog}
     </>
   );
 };

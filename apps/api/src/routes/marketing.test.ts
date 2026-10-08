@@ -6,11 +6,21 @@ import type { Env, Variables } from '../env';
    service-role client, so a request that passes the gate can write anything
    the schemas allow. Pin who gets through first, then the shapes. */
 
+type Answer = {
+  single?: Record<string, unknown> | null;
+  maybe?: Record<string, unknown> | null;
+  list?: Record<string, unknown>[];
+  count?: number;
+  error?: { message: string; code?: string } | null;
+};
+
 const state = vi.hoisted(() => ({
   single: null as Record<string, unknown> | null,
   maybe: null as Record<string, unknown> | null,
   list: [] as Record<string, unknown>[],
-  error: null as { message: string } | null,
+  error: null as { message: string; code?: string } | null,
+  /** Per-table answers; a table not named here gets the shared ones above. */
+  tables: {} as Record<string, Answer>,
   rpcResult: null as unknown,
   rpcError: null as { message: string } | null,
   inserted: null as Record<string, unknown> | null,
@@ -20,15 +30,17 @@ const state = vi.hoisted(() => ({
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
-    from: () => {
+    from: (table: string) => {
+      const own = () => state.tables[table] ?? {};
+      const pick = <K extends keyof Answer>(k: K, shared: unknown) => (k in own() ? own()[k] : shared);
       const obj: any = {};
       for (const m of ['select', 'order', 'eq', 'is', 'in', 'delete']) obj[m] = () => obj;
       obj.insert = (p: Record<string, unknown>) => { state.inserted = p; return obj; };
       obj.update = (p: Record<string, unknown>) => { state.updated = p; return obj; };
       obj.upsert = (p: Record<string, unknown>) => { state.inserted = p; return obj; };
-      obj.single = async () => ({ data: state.single, error: state.error });
-      obj.maybeSingle = async () => ({ data: state.maybe, error: state.error });
-      obj.then = (resolve: any) => resolve({ data: state.list, error: state.error });
+      obj.single = async () => ({ data: pick('single', state.single), error: pick('error', state.error) });
+      obj.maybeSingle = async () => ({ data: pick('maybe', state.maybe), error: pick('error', state.error) });
+      obj.then = (resolve: any) => resolve({ data: pick('list', state.list), error: pick('error', state.error), count: pick('count', 0) });
       return obj;
     },
     rpc: async (fn: string, args: Record<string, unknown>) => {
@@ -70,6 +82,8 @@ const json = (method: string, body: unknown) => ({
 
 beforeEach(() => {
   state.single = null; state.maybe = null; state.list = []; state.error = null;
+  // Every write files under a showroom; by default it is a listed one.
+  state.tables = { marketing_showrooms: { maybe: { id: '107' } } };
   state.rpcResult = null; state.rpcError = null; state.inserted = null; state.updated = null; state.lastRpc = null;
 });
 afterEach(() => { vi.unstubAllGlobals(); });
@@ -125,7 +139,84 @@ describe('gate', () => {
     state.list = [];
     const res = await app().request('/marketing/state', { headers: auth }, env);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ displays: [], requests: [], floorplans: [] });
+    expect(await res.json()).toEqual({ showrooms: [], displays: [], requests: [], floorplans: [] });
+  });
+});
+
+describe('showrooms', () => {
+  it('lists the showrooms that are still listed, first in the read', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_showrooms = { list: [{ id: 's1', name: 'Showroom KL', area: 'Kuala Lumpur', created_by: '41' }] };
+    const res = await app().request('/marketing/state', { headers: auth }, env);
+    const body = await res.json() as { showrooms: unknown[] };
+    // Whitelisted: who added it is not on the wire.
+    expect(body.showrooms).toEqual([{ id: 's1', name: 'Showroom KL', area: 'Kuala Lumpur' }]);
+  });
+
+  it('adds one and stamps who did', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_showrooms = { single: { id: 's9', name: 'Showroom Ipoh', area: 'Ipoh, Perak' } };
+    const res = await app().request('/marketing/showrooms', json('POST', { name: '  Showroom Ipoh ', area: 'Ipoh, Perak' }), env);
+    expect(res.status).toBe(201);
+    expect(state.inserted).toMatchObject({ name: 'Showroom Ipoh', area: 'Ipoh, Perak', created_by: '41', created_by_name: 'Marketing' });
+    expect(await res.json()).toEqual({ showroom: { id: 's9', name: 'Showroom Ipoh', area: 'Ipoh, Perak' } });
+  });
+
+  it('needs a name', async () => {
+    meAnswers(MARKETING);
+    const res = await app().request('/marketing/showrooms', json('POST', { name: '   ' }), env);
+    expect(res.status).toBe(400);
+    expect(state.inserted).toBeNull();
+  });
+
+  it('says so when the name is taken, rather than failing', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_showrooms = { single: null, error: { message: 'duplicate key value', code: '23505' } };
+    const res = await app().request('/marketing/showrooms', json('POST', { name: 'Showroom KL' }), env);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'duplicate_name', reason: 'There is already a showroom called Showroom KL.' });
+  });
+
+  it('renames one that is still listed', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_showrooms = { maybe: { id: 's1', name: 'Showroom Kuala Lumpur', area: '' } };
+    const res = await app().request('/marketing/showrooms/s1', json('PATCH', { name: 'Showroom Kuala Lumpur' }), env);
+    expect(res.status).toBe(200);
+    expect(state.updated).toMatchObject({ name: 'Showroom Kuala Lumpur', area: '', updated_by: '41' });
+  });
+
+  it('will not remove one that still has pieces on display or open requests', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_displays = { count: 3 };
+    state.tables.marketing_launch_requests = { count: 1 };
+    const res = await app().request('/marketing/showrooms/s1', { method: 'DELETE', headers: auth }, env);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: 'showroom_in_use',
+      reason: 'This showroom still has 3 pieces on display and 1 open launch request. Clear them first.',
+    });
+    expect(state.updated).toBeNull();
+  });
+
+  it('removes an empty one by stamping, not deleting', async () => {
+    meAnswers(MARKETING);
+    const res = await app().request('/marketing/showrooms/s1', { method: 'DELETE', headers: auth }, env);
+    expect(res.status).toBe(200);
+    expect(state.updated).toMatchObject({ archived_by: '41', archived_by_name: 'Marketing' });
+    expect(typeof state.updated?.archived_at).toBe('string');
+  });
+
+  it('files nothing under a showroom that is no longer listed', async () => {
+    meAnswers(MARKETING);
+    state.tables.marketing_showrooms = { maybe: null };
+    const display = await app().request('/marketing/displays', json('POST', { venueId: 'gone', type: 'mattress', name: 'AKKA-FIRM' }), env);
+    expect(display.status).toBe(409);
+    expect(await display.json()).toEqual({ error: 'unknown_showroom', reason: 'This showroom is no longer on the list.' });
+    const request = await app().request('/marketing/requests', json('POST', { type: 'sofa', status: 'pending', venueId: 'gone', action: 'add' }), env);
+    expect(request.status).toBe(409);
+    const plan = await app().request('/marketing/floorplans/gone', json('PUT', { contentType: 'image/png', dataB64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB' }), env);
+    expect(plan.status).toBe(409);
+    expect(state.inserted).toBeNull();
   });
 });
 

@@ -83,11 +83,6 @@ const dropdowns: Record<string, string[]> = { customer_type: ['NEW', 'EXISTING']
 export const dropdownOptions = Object.fromEntries(Object.entries(dropdowns).map(([category, values]) => [category, values.map((value, sortOrder) => ({ id: `demo-${category}-${sortOrder}`, category, value, label: value === 'Online' ? 'Bank transfer' : value, active: true, sortOrder }))]));
 export const venues = [
   { id: 'demo-venue', name: 'Demo Showroom', address: '1 Demo Lane, 47300 Petaling Jaya, Selangor', city: 'Petaling Jaya', state: 'Selangor', active: true, created_at: timestamp },
-  // Extra fictional branches so the Marketing showroom rail can be exercised
-  // with several showrooms, as in the design.
-  { id: 'demo-venue-kl', name: 'Showroom KL', address: null, city: 'Kuala Lumpur', state: null, active: true, created_at: timestamp },
-  { id: 'demo-venue-pg', name: 'Showroom Penang', address: null, city: 'Penang', state: null, active: true, created_at: timestamp },
-  { id: 'demo-venue-jb', name: 'Showroom JB', address: null, city: 'Johor Bahru', state: null, active: true, created_at: timestamp },
 ];
 export const localities = [{ state: 'Selangor', city: 'Petaling Jaya', postcode: '47300' }, { state: 'Selangor', city: 'Shah Alam', postcode: '40000' }, { state: 'Kuala Lumpur', city: 'Kuala Lumpur', postcode: '50000' }, { state: 'Johor', city: 'Johor Bahru', postcode: '80000' }, { state: 'Pulau Pinang', city: 'George Town', postcode: '10000' }];
 export const demoCustomer = { debtorName: 'Demo Customer', phone: '+60120000000', email: 'demo@example.test', customerType: 'NEW', address1: '1 Demo Lane', address2: '', city: 'Petaling Jaya', postcode: '47300', customerState: 'Selangor', buildingType: 'Landed', emergencyContactName: 'Demo Contact', emergencyContactPhone: '+60120000001', emergencyContactRelationship: 'Spouse', customerId: 'demo-customer', race: 'Chinese', birthday: '1990-01-01', gender: 'Male', lastDocNo: 'DEMO-SO-0000', lastOrderAt: timestamp };
