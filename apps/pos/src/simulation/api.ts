@@ -9,6 +9,7 @@ import { planVoucher } from '../lib/voucher-apply';
 // performs no I/O and keeps inclusive MY-local date ranges consistent.
 import { monthBoundsMy, rangeBoundsMy } from '../../../api/src/lib/my-time';
 import * as fixtures from './fixtures';
+import { marketingDispatch, resetMarketingSimulation, simulationPersona } from './marketing';
 
 // This module never calls fetch. Every response, including failures, is local.
 // The bootstrap intercepts API traffic before importing the actual POS app.
@@ -151,9 +152,21 @@ function catalogPhotos(rows: typeof fixtures.products) {
 async function dispatch(path: string, params: URLSearchParams, method: string, body: Row, headers: Headers, rawBody: string): Promise<Response> {
   const store = getStore();
   if (path === '/simulation/audit') return json(getSimulationAudit());
-  if (path === '/simulation/reset' && method === 'POST') { resetSimulation(); return json({ ok: true }); }
-  if (path === '/auth/me') return json({ user: { id: 'demo-sales', name: 'Demo Sales', permissions: [], capabilities: { 'org.sales.staff': true, 'scm.sales.viewAll': false }, scmConfigWriter: false } });
-  if (path === '/staff' || path === '/staff/pickable' || path === '/pos/sales-staff') return json({ staff: [fixtures.SIMULATION_STAFF] });
+  if (path === '/simulation/reset' && method === 'POST') { resetSimulation(); resetMarketingSimulation(); return json({ ok: true }); }
+  const marketingPersona = simulationPersona() === 'marketing';
+  if (path === '/auth/me') {
+    return json({ user: marketingPersona
+      ? { id: 'demo-sales', name: 'Marketing', position_name: 'Sales Marketing', permissions: [], capabilities: { 'org.sales.staff': true, 'scm.sales.viewAll': false, 'pos.marketing': true }, scm_config_writer: false }
+      : { id: 'demo-sales', name: 'Demo Sales', permissions: [], capabilities: { 'org.sales.staff': true, 'scm.sales.viewAll': false }, scmConfigWriter: false } });
+  }
+  if (path === '/staff' || path === '/staff/pickable' || path === '/pos/sales-staff') {
+    return json({ staff: [marketingPersona ? { ...fixtures.SIMULATION_STAFF, name: 'Marketing', initials: 'MA', staffCode: 'MKT', staff_code: 'MKT' } : fixtures.SIMULATION_STAFF] });
+  }
+  const marketing = marketingDispatch(path, method, body);
+  if (marketing) return marketing;
+  // GET /sales-analysis/lines is new in Houzs; until it ships the POS shows the
+  // design's sample data. The simulation stands in for "not deployed yet".
+  if (path === '/sales-analysis/lines') return failure('not_found', 'Sales lines are not available in the local simulation.', 404);
   if (path === '/pos/verify-pin' || path === '/pos/set-pin' || path === '/pos/my-pin') return json({ ok: true, valid: true });
   if (path === '/categories') return json({ categories: fixtures.categories });
   if (path === '/products') return json({ products: [] }); // Actual mfg catalogue is authoritative.
