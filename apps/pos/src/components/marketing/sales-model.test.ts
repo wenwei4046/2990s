@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { sampleDataset } from './sample-sales';
 import {
-  ageBand, dnum, NO_CRITERIA, overviewView, presets, productView, rangeLabel, stateKeys,
+  ageBand, customersView, dnum, NO_CRITERIA, overviewView, presets, productView, rangeLabel, ROSTER_PAGE, stateKeys,
   type SaleLine, type SalesDataset,
 } from './sales-model';
 
@@ -52,7 +52,8 @@ describe('sample data reproduces the design prototype', () => {
 
 const line = (over: Partial<SaleLine>): SaleLine => ({
   order: 'SO-1', day: dnum(2026, 9, 1), showroom: '107', cat: 'Mattress', model: 'AKKA', variant: 'Queen',
-  modules: [], qty: 1, amount: 1000, cust: 'c1', race: 'Chinese', age: '25–34', gender: 'Male', state: 'Selangor', ...over,
+  modules: [], qty: 1, amount: 1000, cust: 'c1', custName: 'Tan Mei Ling', city: 'Petaling Jaya',
+  race: 'Chinese', age: '25–34', gender: 'Male', state: 'Selangor', ...over,
 });
 
 describe('real-data rules', () => {
@@ -151,5 +152,68 @@ describe('margin', () => {
     const withM = sampleDataset(true);
     expect(withM.margins).toBe(true);
     expect(withM.lines.map(({ margin: _m, ...rest }) => rest)).toEqual(plain.lines);
+  });
+});
+
+/* The old page's customer list and spend by segment, as a third view. */
+describe('customers', () => {
+  const base = { showrooms: [{ id: '107', label: '2990s PJ' }], states: ['Selangor', 'Johor'], d0: dnum(2026, 8, 1), d1: dnum(2026, 9, 30), margins: false, sample: false };
+  const sept = { d0: dnum(2026, 9, 1), d1: dnum(2026, 9, 30), showroom: 'all' };
+  const lines = [
+    line({ order: 'SO-1', day: dnum(2026, 9, 5), custName: 'Tan M L', city: null }),
+    line({ order: 'SO-2', day: dnum(2026, 9, 20), amount: 500, custName: 'Tan Mei Ling', city: 'Puchong' }),
+    line({ order: 'SO-3', day: dnum(2026, 9, 10), cust: 'c2', custName: 'Aminah', amount: 3000, race: 'Malay', gender: 'Female', state: 'Johor', city: 'Skudai' }),
+    line({ order: 'SO-0', day: dnum(2026, 8, 15), cust: 'c3', custName: 'Ravi' }),
+    line({ order: 'SO-4', day: dnum(2026, 9, 12), cust: 'c3', custName: 'Ravi', race: 'Indian' }),
+  ];
+  const ds: SalesDataset = { ...base, lines };
+
+  it('lists each customer once — their latest order\'s name and place — most recent first', () => {
+    const v = customersView(ds, sept, NO_CRITERIA, 'race', 'recent');
+    expect(v.total).toBe(3);
+    expect(v.rows.map((r) => r.name)).toEqual(['Tan Mei Ling', 'Ravi', 'Aminah']);
+    expect(v.rows[0]).toMatchObject({ orders: 2, spent: 'RM 1,500', place: 'Puchong, Selangor', last: '20 Sep 2026', returning: true });
+    expect(v.rows[2]).toMatchObject({ race: 'Malay', gender: 'Female', place: 'Skudai, Johor', returning: false });
+    const kl = customersView({ ...ds, lines: [line({ day: dnum(2026, 9, 3), city: 'Kuala Lumpur', state: 'Kuala Lumpur' })] }, sept, NO_CRITERIA, 'race', 'recent');
+    expect(kl.rows[0]!.place).toBe('Kuala Lumpur');
+  });
+
+  it('calls a customer returning who bought before the period, even once in it', () => {
+    const ravi = customersView(ds, sept, NO_CRITERIA, 'race', 'recent').rows.find((r) => r.name === 'Ravi')!;
+    expect(ravi).toMatchObject({ orders: 1, returning: true, race: 'Indian' });
+  });
+
+  it('sorts by spend when asked', () => {
+    expect(customersView(ds, sept, NO_CRITERIA, 'race', 'spend').rows.map((r) => r.name)).toEqual(['Aminah', 'Tan Mei Ling', 'Ravi']);
+  });
+
+  it('keeps to the criteria', () => {
+    const v = customersView(ds, sept, { ...NO_CRITERIA, state: 'Johor' }, 'race', 'recent');
+    expect(v.rows.map((r) => r.name)).toEqual(['Aminah']);
+    expect(v.cfCount).toBe(1);
+  });
+
+  it('spends by segment: customers, revenue and average order per group, Unknown only when it occurs', () => {
+    const v = customersView(ds, sept, NO_CRITERIA, 'race', 'recent');
+    expect(v.segments.map((r) => [r.label, r.customers, r.rev, r.aov])).toEqual([
+      ['Malay', 1, 'RM 3,000', 'RM 3,000'], ['Chinese', 1, 'RM 1,500', 'RM 750'], ['Indian', 1, 'RM 1,000', 'RM 1,000'], ['Others', 0, 'RM 0', '—'],
+    ]);
+    expect(v.segTotal).toMatchObject({ customers: 3, rev: 'RM 5,500' });
+    const gappy = customersView({ ...ds, lines: [...lines, line({ order: 'SO-5', day: dnum(2026, 9, 25), cust: 'c4', race: null })] }, sept, NO_CRITERIA, 'race', 'recent');
+    expect(gappy.segments.at(-1)).toMatchObject({ label: 'Unknown', customers: 1 });
+  });
+
+  it('shows margin in the segments to the finance tier only', () => {
+    expect(customersView(ds, sept, NO_CRITERIA, 'race', 'recent').segTotal.margin).toBe('');
+    const fin = customersView({ ...ds, margins: true, lines: lines.map((o) => ({ ...o, margin: o.amount * 0.4 })) }, sept, NO_CRITERIA, 'race', 'recent');
+    expect(fin.margins).toBe(true);
+    expect(fin.segTotal.margin).toBe('40.0%');
+  });
+
+  it(`cuts the list at ${ROSTER_PAGE} unless asked for all`, () => {
+    const many = Array.from({ length: ROSTER_PAGE + 5 }, (_, i) => line({ order: `SO-${i}`, day: dnum(2026, 9, 1 + (i % 28)), cust: `k${i}` }));
+    const big: SalesDataset = { ...base, lines: many };
+    expect(customersView(big, sept, NO_CRITERIA, 'race', 'recent').rows).toHaveLength(ROSTER_PAGE);
+    expect(customersView(big, sept, NO_CRITERIA, 'race', 'recent', true).rows).toHaveLength(ROSTER_PAGE + 5);
   });
 });

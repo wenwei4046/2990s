@@ -456,7 +456,7 @@ piece on display or an open launch request** (the dialog says so before the
 server does). Sales analysis does not use this list: its showroom filter is the
 venue each Houzs order was placed at.
 
-**Six things that will bite you:**
+**Seven things that will bite you:**
 - 🔑 **`/marketing` is authenticated, not Origin-gated** — unlike campaign-promos.
   The Houzs bearer is replayed to Houzs `/auth/me` (`lib/houzs-identity.ts`, the
   `/commission` pattern) and Houzs's answer decides. It runs on the service-role
@@ -491,6 +491,14 @@ venue each Houzs order was placed at.
   cost, and says how much revenue that leaves out. The simulation shows it under
   `localStorage['2990:simulation:persona'] = 'director'` (`'marketing'` is the
   marketing account).
+- 🔑 **The marketing account sees customer NAMES — on purpose** (owner
+  2026-10-09). Sales analysis has a third view, **Customers**: the old page's
+  customer list and spend by segment (without its Targets), filtered by the same
+  date range, showroom and criteria. `/lines` carries the name on each order
+  (`debtor_name`) and its city for it (Houzs #4543) — never the phone or the
+  address; margin in it stays the directors'. A customer's name and place are
+  their latest order's in the period; "Returning" = bought before the period, or
+  more than once in it.
 - 🔑 **Who may open it:** the marketing account + the Maintain tier. The API gate
   (`canUseMarketing`) cannot see POS roles, so it asks the Houzs facts that cover
   the same people (`*`, `scm_config_writer`, `scm.sales.viewAll`) — slightly

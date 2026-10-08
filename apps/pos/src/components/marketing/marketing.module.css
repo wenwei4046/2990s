@@ -881,6 +881,23 @@
 .idxPill { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 999px; }
 .prodEmpty { padding: 24px 0; text-align: center; font-size: 13px; color: var(--fg-soft); }
 .prodNote { font-size: 11px; color: var(--fg-soft); margin-top: 6px; }
+/* Customers view — the old page's customer list and spend by segment, which
+   the design did not have; built from the products table's pieces. */
+.segGrid { display: grid; grid-template-columns: 10px minmax(0, 1fr) 84px 110px 96px; gap: 10px; align-items: center; }
+.segGridMargin { grid-template-columns: 10px minmax(0, 1fr) 84px 110px 96px 64px; }
+.segHeader { margin-top: 10px; }
+.segTotalRow { padding: 10px 0 2px; border-top: 1px solid var(--line); font-size: 13px; font-weight: 700; }
+.rosterGrid {
+  display: grid; grid-template-columns: minmax(0, 1.5fr) 72px 56px 64px minmax(0, 1.3fr) 56px 100px 100px;
+  gap: 10px; align-items: center;
+}
+.rosterName { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 600; }
+.rosterCell { min-width: 0; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.returningPill {
+  flex: none; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+  background: rgba(47, 93, 79, 0.12); color: #2F5D4F;
+}
+.rosterMore { display: flex; justify-content: center; padding-top: 12px; }
 .heatHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .heatHeadText { display: flex; flex-direction: column; gap: 2px; }
 .heatSub { font-size: 12px; color: var(--fg-muted); }

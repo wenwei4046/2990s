@@ -13,11 +13,15 @@
 //     still count in every total, and each breakdown that has any gets a final
 //     grey "Unknown" row so its shares add up instead of silently falling short.
 //
-// And one addition: MARGIN. The design was drawn for the marketing account,
-// which never sees cost. Houzs sends margin to its finance tier only (the
-// directors — owner 2026-07-16); for them a Gross margin KPI, a Margin column
-// and a By-product figure join the views. It is measured over the lines whose
-// cost is known, and the revenue that leaves out is said, not hidden.
+// And two additions the design did not have:
+//   · MARGIN. The design was drawn for the marketing account, which never sees
+//     cost. Houzs sends margin to its finance tier only (the directors — owner
+//     2026-07-16); for them a Gross margin KPI, a Margin column and a
+//     By-product figure join the views. It is measured over the lines whose
+//     cost is known, and the revenue that leaves out is said, not hidden.
+//   · CUSTOMERS. The old Sales Analysis page's customer list and spend by
+//     segment, restored as a third view (owner 2026-10-09: the marketing
+//     account may see it too; only the margin in it stays the directors').
 // ----------------------------------------------------------------------------
 
 export type SaCat = 'Sofa' | 'Mattress' | 'Bed frame' | 'Accessory';
@@ -84,7 +88,11 @@ export interface SaleLine {
    *  cost yet; absent unless the caller is Houzs's finance tier, which is the
    *  only caller it sends margin to. */
   margin?: number | null;
+  /** Customer key: Houzs's customer id, or `walk-in:<order>` without one. */
   cust: string;
+  /** The name on the order, and its city — for the customer list only. */
+  custName: string | null;
+  city: string | null;
   race: string | null;
   age: string | null;
   gender: string | null;
@@ -207,6 +215,24 @@ function scope(ds: SalesDataset, f: SalesFilter): Scoped {
   };
 }
 
+const CRIT_KEYS = ['age', 'race', 'state', 'gender'] as const;
+
+/** Does a line's customer meet every criterion set? */
+const matchesCriteria = (ds: SalesDataset, crit: Criteria) => (o: SaleLine): boolean =>
+  CRIT_KEYS.every((k) => crit[k] === 'all' || dimOf(ds, o, k) === crit[k]);
+
+/** The criteria card's sentence and how many criteria are set. */
+function criteriaText(crit: Criteria, label: string): { cfLine: string; cfCount: number } {
+  const cfCount = CRIT_KEYS.filter((k) => crit[k] !== 'all').length;
+  const crLine = [
+    crit.race !== 'all' ? crit.race : '',
+    crit.gender !== 'all' ? crit.gender.toLowerCase() : '',
+    crit.age !== 'all' ? 'aged ' + crit.age : '',
+    crit.state !== 'all' ? 'in ' + crit.state : '',
+  ].filter(Boolean).join(', ');
+  return { cfCount, cfLine: cfCount ? `Customers ${crLine} · ${label}` : `All customers · ${label}` };
+}
+
 export interface ProfileRow { label: string; n: number; share: string; pct: string; color: string; d: string; dFg: string }
 export interface ProfileCard { title: string; note: string; countLabel: string; rows: ProfileRow[] }
 
@@ -227,11 +253,9 @@ export interface OverviewView {
 
 export function overviewView(ds: SalesDataset, f: SalesFilter, crit: Criteria, heatDim: 'race' | 'age' | 'gender' | 'state'): OverviewView {
   const s = scope(ds, f);
-  const cfOk = (o: SaleLine) => (['age', 'race', 'state', 'gender'] as const)
-    .every((k) => crit[k] === 'all' || dimOf(ds, o, k) === crit[k]);
-  const cfCount = (['age', 'race', 'state', 'gender'] as const).filter((k) => crit[k] !== 'all').length;
-  const pOrds = s.ords.filter(cfOk);
-  const pPrev = s.prevOrds.filter(cfOk);
+  const { cfLine, cfCount } = criteriaText(crit, s.label);
+  const pOrds = s.ords.filter(matchesCriteria(ds, crit));
+  const pPrev = s.prevOrds.filter(matchesCriteria(ds, crit));
   const allRev = sum(s.ords) || 1;
   const allOrders = orderCount(s.ords) || 1;
   const pOrders = orderCount(pOrds);
@@ -296,13 +320,6 @@ export function overviewView(ds: SalesDataset, f: SalesFilter, crit: Criteria, h
     };
   });
 
-  const crLine = [
-    crit.race !== 'all' ? crit.race : '',
-    crit.gender !== 'all' ? crit.gender.toLowerCase() : '',
-    crit.age !== 'all' ? 'aged ' + crit.age : '',
-    crit.state !== 'all' ? 'in ' + crit.state : '',
-  ].filter(Boolean).join(', ');
-
   /* Gross margin, for the finance tier only (Houzs sends it to no one else).
      Compared like the other KPIs — with the previous period, or with all
      customers while criteria are set — but in points, not percent. */
@@ -323,7 +340,7 @@ export function overviewView(ds: SalesDataset, f: SalesFilter, crit: Criteria, h
 
   return {
     cfCount,
-    cfLine: cfCount ? `Customers ${crLine} · ${s.label}` : `All customers · ${s.label}`,
+    cfLine,
     margins: ds.margins,
     marginNote: ds.margins && mg.unknown > 0
       ? `Gross margin leaves out ${RMk(mg.unknown)} of sales that have no cost recorded yet.`
@@ -485,6 +502,114 @@ export function productView(ds: SalesDataset, f: SalesFilter, saCat: SaCat, saMo
       profile: mProfile,
       whoLine: tR && tA && tL ? `Mostly ${tR.label} (${tR.share}), aged ${tA.label} (${tA.share}), in ${tL.label} (${tL.share}).` : '',
     },
+  };
+}
+
+/* ── customers (the third view) ──────────────────────────────────────────── */
+
+export type SegDim = 'race' | 'age' | 'gender' | 'state';
+export type CustomerSort = 'recent' | 'spend';
+export const ROSTER_PAGE = 50;
+
+export interface CustomerRow {
+  key: string;
+  name: string;
+  /** Bought from us before this period, or more than once in it. */
+  returning: boolean;
+  race: string;
+  age: string;
+  gender: string;
+  place: string;
+  orders: number;
+  spent: string;
+  last: string;
+}
+
+export interface SegmentRow { label: string; color: string; customers: number; rev: string; pct: string; aov: string; margin: string }
+
+export interface CustomersView {
+  cfLine: string;
+  cfCount: number;
+  margins: boolean;
+  segments: SegmentRow[];
+  segTotal: { customers: number; rev: string; aov: string; margin: string };
+  rows: CustomerRow[];
+  /** Customers in scope, before ROSTER_PAGE cuts the list. */
+  total: number;
+}
+
+/** Who bought in the period (and matches the criteria): spend by segment, and
+ *  the customer list itself. A customer's name, profile and place are their
+ *  latest order's in the period. Walk-ins without a customer record are each
+ *  their own customer, as everywhere else in these views. */
+export function customersView(
+  ds: SalesDataset, f: SalesFilter, crit: Criteria, segDim: SegDim, sort: CustomerSort, all = false,
+): CustomersView {
+  const s = scope(ds, f);
+  const ords = s.ords.filter(matchesCriteria(ds, crit));
+  const aov = (l: SaleLine[]) => { const n = orderCount(l); return n ? RMk(sum(l) / n) : '—'; };
+  const mPct = (l: SaleLine[]) => (ds.margins ? P1(marginPct(marginSum(l))) : '');
+
+  const keys: Record<SegDim, readonly string[]> = { race: SA_RACES, age: SA_AGES, gender: SA_GENDERS, state: ds.states };
+  const segRows = (keys[segDim] as readonly (string | null)[]).concat([null]).map((k, i) => {
+    const l = ords.filter((o) => dimOf(ds, o, segDim) === k);
+    return { k, i, l };
+  }).filter((x) => x.k != null || x.l.length > 0);
+  const maxRev = Math.max(1, ...segRows.map((x) => sum(x.l)));
+
+  // First purchase per customer across the whole feed, whatever the filter.
+  const firstDay = new Map<string, number>();
+  for (const o of ds.lines) firstDay.set(o.cust, Math.min(firstDay.get(o.cust) ?? o.day, o.day));
+
+  const byCust = new Map<string, SaleLine[]>();
+  for (const o of ords) byCust.set(o.cust, [...(byCust.get(o.cust) ?? []), o]);
+  const latest = <T,>(l: SaleLine[], pick: (o: SaleLine) => T | null): T | null => {
+    for (const o of [...l].sort((a, b) => b.day - a.day || b.order.localeCompare(a.order))) {
+      const v = pick(o);
+      if (v != null && v !== '') return v;
+    }
+    return null;
+  };
+  const roster = [...byCust.entries()].map(([key, l]) => {
+    const lastDay = Math.max(...l.map((o) => o.day));
+    const orders = orderCount(l);
+    const spentRm = sum(l);
+    return {
+      lastDay, spentRm,
+      row: {
+        key,
+        name: latest(l, (o) => o.custName) ?? '—',
+        returning: (firstDay.get(key) ?? lastDay) < s.d0 || orders > 1,
+        race: latest(l, (o) => o.race) ?? '—',
+        age: latest(l, (o) => o.age) ?? '—',
+        gender: latest(l, (o) => o.gender) ?? '—',
+        // 'Kuala Lumpur, Kuala Lumpur' reads as a stutter; say it once.
+        place: [...new Set([latest(l, (o) => o.city), latest(l, (o) => o.state)].filter(Boolean))].join(', ') || '—',
+        orders,
+        spent: RMk(spentRm),
+        last: dfmt(lastDay),
+      },
+    };
+  });
+  roster.sort((a, b) => (sort === 'spend'
+    ? b.spentRm - a.spentRm || b.lastDay - a.lastDay
+    : b.lastDay - a.lastDay || b.spentRm - a.spentRm));
+
+  return {
+    ...criteriaText(crit, s.label),
+    margins: ds.margins,
+    segments: segRows.map(({ k, i, l }) => ({
+      label: k ?? UNKNOWN,
+      color: k == null ? UNKNOWN_COLOR : PAL[i % PAL.length]!,
+      customers: custs(l),
+      rev: RMk(sum(l)),
+      pct: (sum(l) / maxRev) * 100 + '%',
+      aov: aov(l),
+      margin: mPct(l),
+    })),
+    segTotal: { customers: custs(ords), rev: RMk(sum(ords)), aov: aov(ords), margin: mPct(ords) },
+    rows: (all ? roster : roster.slice(0, ROSTER_PAGE)).map((r) => r.row),
+    total: roster.length,
   };
 }
 

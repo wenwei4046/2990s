@@ -9,7 +9,7 @@ type Wire = Parameters<typeof datasetFromWire>[0][number];
 const wire = (over: Partial<Wire>): Wire => ({
   docNo: '2990-SO-2610-006', soDate: '2026-10-04', venue: '2990s PJ', category: 'SOFA', model: 'KABBIN',
   modules: ['2A(LHF)', 'L(RHF)'], sizeCode: null, sizeLabel: null, qty: 1, totalSen: 311500,
-  customerId: 'cust-1', race: 'Chinese', age: 35, gender: 'Female', state: 'Selangor', ...over,
+  customerId: 'cust-1', customerName: 'Tan Mei Ling', city: 'Petaling Jaya', race: 'Chinese', age: 35, gender: 'Female', state: 'Selangor', ...over,
 });
 
 const one = (over: Partial<Wire>) => datasetFromWire([wire(over)]).lines[0];
@@ -37,6 +37,12 @@ describe('datasetFromWire — Houzs lines into the views\' lines', () => {
   it('names an accessory by its size label, else Standard', () => {
     expect(one({ category: 'ACCESSORY', modules: [], sizeLabel: '16" X 16"' })).toMatchObject({ cat: 'Accessory', variant: '16" X 16"' });
     expect(one({ category: 'ACCESSORY', modules: [] })).toMatchObject({ variant: 'Standard' });
+  });
+
+  it('keeps the name on the order and its city for the customer list, trimmed', () => {
+    expect(one({ customerName: ' Tan Mei Ling ', city: ' Puchong ' })).toMatchObject({ custName: 'Tan Mei Ling', city: 'Puchong' });
+    // An older Houzs build sends neither: the list shows a dash, nothing breaks.
+    expect(one({ customerName: undefined, city: undefined })).toMatchObject({ custName: null, city: null });
   });
 
   it('bands the age, keys the showroom by venue, and keeps a walk-in apart', () => {
