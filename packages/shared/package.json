@@ -23,7 +23,8 @@
     "./format": "./src/format.ts",
     "./phone": "./src/phone.ts",
     "./schemas": "./src/schemas/index.ts",
-    "./maintenance-pools": "./src/maintenance-pools.ts"
+    "./maintenance-pools": "./src/maintenance-pools.ts",
+    "./marketing-access": "./src/marketing-access.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
