@@ -3213,3 +3213,102 @@ export const hrItemKpi = pgTable('hr_item_kpi', {
   createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// POS Marketing (migration 0217, owner 2026-10-08) — what is on display in each
+// showroom, each showroom's floor plan, and the Management → Marketing
+// hand-off for new products. POS-owned, reached only through
+// apps/api/src/routes/marketing.ts on the service-role client (RLS on, no
+// policies). venue_id / model_id / *_by are Houzs ids in ANOTHER database —
+// opaque text, no FK, names snapshotted beside them. Nothing is hard-deleted.
+// ════════════════════════════════════════════════════════════════════════════
+
+export const marketingDisplays = pgTable('marketing_displays', {
+  id:              uuid('id').primaryKey().defaultRandom(),
+  venueId:         text('venue_id').notNull(),          // Houzs project_venues id
+  type:            text('type').notNull(),              // sofa | mattress | bedframe | accessory
+  modelId:         text('model_id'),                    // Houzs product_models id; null when created by Arrive
+  name:            text('name').notNull().default(''),
+  code:            text('code').notNull().default(''),
+  photoUrl:        text('photo_url'),
+  isNew:           boolean('is_new').notNull().default(false),
+  fabric:          text('fabric').notNull().default(''),
+  colour:          text('colour').notNull().default(''),
+  leg:             text('leg').notNull().default(''),
+  seat:            text('seat').notNull().default(''),
+  modules:         text('modules').array().notNull().default(sql`'{}'::text[]`),
+  size:            text('size').notNull().default(''),
+  height:          text('height').notNull().default(''),
+  divan:           text('divan').notNull().default(''),
+  gap:             text('gap').notNull().default(''),
+  qty:             integer('qty').notNull().default(1),
+  sourceRequestId: uuid('source_request_id'),           // FK → marketing_launch_requests (0217)
+  createdBy:       text('created_by'),
+  createdByName:   text('created_by_name'),
+  createdAt:       timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  removedAt:       timestamp('removed_at', { withTimezone: true }),
+  removedBy:       text('removed_by'),
+  removedByName:   text('removed_by_name'),
+}, (t) => ({
+  typeChk: check('marketing_displays_type_chk', sql`${t.type} IN ('sofa', 'mattress', 'bedframe', 'accessory')`),
+  qtyChk:  check('marketing_displays_qty_chk', sql`${t.qty} >= 1`),
+  idxLive: index('idx_marketing_displays_live').on(t.venueId, t.createdAt).where(sql`${t.removedAt} IS NULL`),
+}));
+
+export const marketingFloorplans = pgTable('marketing_floorplans', {
+  venueId:        text('venue_id').primaryKey(),
+  contentType:    text('content_type').notNull(),       // image/png | image/jpeg | image/webp
+  imageB64:       text('image_b64').notNull(),
+  byteSize:       integer('byte_size').notNull(),
+  fileName:       text('file_name').notNull().default(''),
+  uploadedBy:     text('uploaded_by'),
+  uploadedByName: text('uploaded_by_name'),
+  updatedAt:      timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  typeChk: check('marketing_floorplans_type_chk', sql`${t.contentType} IN ('image/png', 'image/jpeg', 'image/webp')`),
+  sizeChk: check('marketing_floorplans_size_chk', sql`${t.byteSize} > 0 AND ${t.byteSize} <= 3145728`),
+}));
+
+export const marketingLaunchRequests = pgTable('marketing_launch_requests', {
+  id:               uuid('id').primaryKey().defaultRandom(),
+  type:             text('type').notNull(),             // sofa | mattress | bedframe
+  status:           text('status').notNull().default('pending'), // pending | completed | arrived | deleted
+  supplierCode:     text('supplier_code').notNull().default(''),
+  model:            text('model').notNull().default(''),
+  fabric:           text('fabric').notNull().default(''),
+  colour:           text('colour').notNull().default(''),
+  leg:              text('leg').notNull().default(''),
+  seat:             text('seat').notNull().default(''),
+  size:             text('size').notNull().default(''),
+  height:           text('height').notNull().default(''),
+  divan:            text('divan').notNull().default(''),
+  gap:              text('gap').notNull().default(''),
+  modules:          text('modules').array().notNull().default(sql`'{}'::text[]`),
+  // [{ modules: string[], price: number | null }] — whole RM, REFERENCE only;
+  // never carried to a display row or the SKU Master.
+  comboRows:        jsonb('combo_rows').notNull().default(sql`'[]'::jsonb`),
+  venueId:          text('venue_id').notNull(),
+  action:           text('action').notNull(),           // add | replace
+  replaceDisplayId: uuid('replace_display_id').references(() => marketingDisplays.id),
+  requestedBy:      text('requested_by'),
+  requestedByName:  text('requested_by_name'),
+  requestedByRole:  text('requested_by_role'),
+  createdAt:        timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:        timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:        text('updated_by'),
+  updatedByName:    text('updated_by_name'),
+  completedAt:      timestamp('completed_at', { withTimezone: true }),
+  arrivedAt:        timestamp('arrived_at', { withTimezone: true }),
+  arrivedBy:        text('arrived_by'),
+  arrivedByName:    text('arrived_by_name'),
+  arrivedDisplayId: uuid('arrived_display_id').references(() => marketingDisplays.id),
+  deletedAt:        timestamp('deleted_at', { withTimezone: true }),
+  deletedBy:        text('deleted_by'),
+  deletedByName:    text('deleted_by_name'),
+}, (t) => ({
+  typeChk:   check('marketing_launch_requests_type_chk', sql`${t.type} IN ('sofa', 'mattress', 'bedframe')`),
+  statusChk: check('marketing_launch_requests_status_chk', sql`${t.status} IN ('pending', 'completed', 'arrived', 'deleted')`),
+  actionChk: check('marketing_launch_requests_action_chk', sql`${t.action} IN ('add', 'replace')`),
+  rowsChk:   check('marketing_launch_requests_rows_chk', sql`jsonb_typeof(${t.comboRows}) = 'array'`),
+  idxOpen:   index('idx_marketing_launch_requests_open').on(t.status, t.createdAt).where(sql`${t.status} IN ('pending', 'completed')`),
+}));

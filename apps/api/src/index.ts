@@ -17,6 +17,7 @@ import { modelFreeGifts } from './routes/model-free-gifts';
 import { freeItemCampaigns } from './routes/free-item-campaigns';
 import { campaignPromos } from './routes/campaign-promos';
 import { commission } from './routes/commission';
+import { marketing } from './routes/marketing';
 import { pwpRules } from './routes/pwp-rules';
 import { pwpCodes } from './routes/pwp-codes';
 import { specialAddons } from './routes/special-addons';
@@ -187,6 +188,10 @@ app.route('/hr', hr);
    /auth/me — see lib/houzs-identity.ts for why it is NOT the Origin gate
    campaign-promos uses. */
 app.route('/commission', commission);
+/* /marketing — the POS Marketing section's storage (owner 2026-10-08): showroom
+   displays, floor plans, the new-product launch board. Same Houzs-bearer gate
+   as /commission (lib/houzs-identity.ts); see routes/marketing.ts. */
+app.route('/marketing', marketing);
 app.route('/sales-analysis', salesAnalysis);
 
 // Slip routes need auth; applied at mount because slipRoutes itself has no
