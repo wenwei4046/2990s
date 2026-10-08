@@ -449,9 +449,14 @@ its Targets editor**, was removed with it (`/sales-analysis` redirects).
 |---|---|---|
 | Displays, floor plans, launch requests | **2990's Supabase** (migration `0217`), via `apps/api/src/routes/marketing.ts` | Houzs has no such tables and we can't add them |
 | Sales lines | **Houzs** `GET /api/scm/sales-analysis/lines` (their `scm/lib/sales-lines.ts`) | the orders live there |
-| Showroom list | Houzs venue master (`/venues`) | the one branch list the order form already uses |
+| Showroom list | **2990's Supabase** `marketing_showrooms` (migration `0218`) — added, renamed and removed in the Showroom display tab | owner 2026-10-09: it is a record of what is on each floor, not the order form's branch list. Until 0218 it was Houzs `/venues`; `venue_id` kept its name but is now a FK to this table |
 
-**Five things that will bite you:**
+Removing a showroom stamps `archived_at` and is **refused while it still has a
+piece on display or an open launch request** (the dialog says so before the
+server does). Sales analysis does not use this list: its showroom filter is the
+venue each Houzs order was placed at.
+
+**Six things that will bite you:**
 - 🔑 **`/marketing` is authenticated, not Origin-gated** — unlike campaign-promos.
   The Houzs bearer is replayed to Houzs `/auth/me` (`lib/houzs-identity.ts`, the
   `/commission` pattern) and Houzs's answer decides. It runs on the service-role
@@ -467,12 +472,25 @@ its Targets editor**, was removed with it (`/sales-analysis` redirects).
 - 🔑 **"Complete order" is refused on the TABLET only** (`StepFooter`
   `orderBlocked` + a guard in `Handover.goNext`). Houzs does not refuse that
   account's orders; the account walks the whole handover otherwise.
-- 🔑 **Until Houzs serves `/lines`, Sales analysis shows the design's sample data**
-  under a "Sample data" label. Only a **404** falls back (`sales-lines-queries.ts`);
-  any other failure is shown as one. The variant labels (sofa layout from its
-  compartments, mattress size from its code) are named on the POS side by the
-  same rules the display cards use — Houzs sends facts, not labels, and sends the
-  customer's age on the order date, never the birthday.
+- 🔑 **A live build never shows sample data — a 404 included.** `/lines` is live
+  since Houzs #4541 (2026-10-08); a 404 now means Houzs stopped serving it (they
+  have deleted POS routes as "dead code" before — see the table at the top), and
+  invented numbers would hide exactly that. Only the **local simulation** shows
+  the design's sample, labelled "Sample data" (`sales-lines-queries.ts`). The
+  variant labels (sofa layout from its compartments, mattress size from its code)
+  are named on the POS side by the same rules the display cards use — Houzs sends
+  facts, not labels, and the customer's age on the order date, never the birthday.
+- 🔑 **Margin is Houzs's call, per caller.** `/lines` adds `marginSen` (Houzs
+  #4542) only for `canViewScmFinance` (the directors — owner 2026-07-16 — and only while
+  `COSTING_DISPLAY_ENABLED` is on); for anyone else the key is ABSENT, never 0, so
+  the marketing account never sees cost. It is `total_sen − line_cost_sen` per
+  line, **not** the stored `line_margin_sen`, which on many lines still equals the
+  price; null where a priced line has no cost, and a sofa build with one such line
+  is null as a whole. The POS adds a Gross margin KPI, a Margin column and a
+  By-product figure only when the key is there, measures them over lines WITH a
+  cost, and says how much revenue that leaves out. The simulation shows it under
+  `localStorage['2990:simulation:persona'] = 'director'` (`'marketing'` is the
+  marketing account).
 - 🔑 **Who may open it:** the marketing account + the Maintain tier. The API gate
   (`canUseMarketing`) cannot see POS roles, so it asks the Houzs facts that cover
   the same people (`*`, `scm_config_writer`, `scm.sales.viewAll`) — slightly
