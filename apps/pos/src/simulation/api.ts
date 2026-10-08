@@ -153,20 +153,24 @@ async function dispatch(path: string, params: URLSearchParams, method: string, b
   const store = getStore();
   if (path === '/simulation/audit') return json(getSimulationAudit());
   if (path === '/simulation/reset' && method === 'POST') { resetSimulation(); resetMarketingSimulation(); return json({ ok: true }); }
-  const marketingPersona = simulationPersona() === 'marketing';
+  const persona = simulationPersona();
   if (path === '/auth/me') {
-    return json({ user: marketingPersona
+    return json({ user: persona === 'marketing'
       ? { id: 'demo-sales', name: 'Marketing', position_name: 'Sales Marketing', permissions: [], capabilities: { 'org.sales.staff': true, 'scm.sales.viewAll': false, 'pos.marketing': true }, scm_config_writer: false }
-      : { id: 'demo-sales', name: 'Demo Sales', permissions: [], capabilities: { 'org.sales.staff': true, 'scm.sales.viewAll': false }, scmConfigWriter: false } });
+      : persona === 'director'
+        ? { id: 'demo-sales', name: 'Director', position_name: 'Sales Director', permissions: [], capabilities: { 'org.sales.staff': true, 'org.director': true, 'scm.sales.viewAll': true }, scm_config_writer: true }
+        : { id: 'demo-sales', name: 'Demo Sales', permissions: [], capabilities: { 'org.sales.staff': true, 'scm.sales.viewAll': false }, scmConfigWriter: false } });
   }
   if (path === '/staff' || path === '/staff/pickable' || path === '/pos/sales-staff') {
-    return json({ staff: [marketingPersona ? { ...fixtures.SIMULATION_STAFF, name: 'Marketing', initials: 'MA', staffCode: 'MKT', staff_code: 'MKT' } : fixtures.SIMULATION_STAFF] });
+    const who = persona === 'marketing' ? { name: 'Marketing', initials: 'MA', staffCode: 'MKT', staff_code: 'MKT' }
+      : persona === 'director' ? { name: 'Director', initials: 'DR', staffCode: 'DIR', staff_code: 'DIR' }
+      : null;
+    return json({ staff: [who ? { ...fixtures.SIMULATION_STAFF, ...who } : fixtures.SIMULATION_STAFF] });
   }
   const marketing = marketingDispatch(path, method, body);
   if (marketing) return marketing;
-  // GET /sales-analysis/lines is new in Houzs; until it ships the POS shows the
-  // design's sample data. The simulation stands in for "not deployed yet".
-  if (path === '/sales-analysis/lines') return failure('not_found', 'Sales lines are not available in the local simulation.', 404);
+  // GET /sales-analysis/lines is never asked of the simulation: the POS shows
+  // the design's sample data there instead (lib/sales-lines-queries.ts).
   if (path === '/pos/verify-pin' || path === '/pos/set-pin' || path === '/pos/my-pin') return json({ ok: true, valid: true });
   if (path === '/categories') return json({ categories: fixtures.categories });
   if (path === '/products') return json({ products: [] }); // Actual mfg catalogue is authoritative.

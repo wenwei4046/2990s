@@ -7,9 +7,9 @@ import { X } from 'lucide-react';
 import { compLine, shapeName, sizeName, specOf, TYPES, type DisplayType } from './marketing-model';
 import {
   allowedOr, coloursOf, fabricsFor, preferred,
-  type MarketingOptions, type ModelOption, type ShowroomOption,
+  type MarketingOptions, type ModelOption,
 } from './marketing-options';
-import { useAddDisplay } from '../../lib/marketing-api';
+import { useAddDisplay, type ShowroomOption } from '../../lib/marketing-api';
 import { ComponentBuilder } from './ComponentBuilder';
 import { SofaBlueprint } from './SofaBlueprint';
 import s from './marketing.module.css';

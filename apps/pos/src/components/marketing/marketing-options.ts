@@ -2,10 +2,11 @@
 // Every option list the Marketing forms offer, from the SAME sources a Sales
 // Order line reads — the design's rule ("same options as a Sales Order line").
 // The prototype hard-coded sample lists (four showrooms, three fabric series,
-// 2"/4"/6" legs…); each one is replaced here by its live source:
+// 2"/4"/6" legs…); each one is replaced by its live source:
 //
-//   showrooms          → the venue master (/venues) — the one branch list the
-//                        order form and commission already share
+//   showrooms          → NOT here: the Marketing section keeps its own list
+//                        (owner 2026-10-09, migration 0218) and it arrives
+//                        with the rest of its state (lib/marketing-api.ts)
 //   models + photos    → the POS catalogue (/pos-pools/mfg-catalog)
 //   fabric / colour    → the fabric library + colours
 //   legs, seat, divan,
@@ -25,10 +26,7 @@ import {
   type MfgAllowedOptions, type MfgCatalogApiRow,
 } from '../../lib/queries';
 import { useMaintenanceConfig } from '../../lib/products/mfg-products-queries';
-import { useVenues, type VenueRow } from '../../lib/so-maintenance/venues-queries';
 import { moduleInfo, sizeName, type DisplayType } from './marketing-model';
-
-export interface ShowroomOption { id: string; name: string; area: string }
 
 export interface ModelOption {
   id: string;
@@ -118,7 +116,6 @@ function modelsFromCatalog(rows: MfgCatalogApiRow[]): Record<DisplayType, ModelO
 
 export interface MarketingOptions {
   isLoading: boolean;
-  showrooms: ShowroomOption[];
   models: Record<DisplayType, ModelOption[]>;
   fabricSeries: FabricSeriesOption[];
   colours: ColourOption[];
@@ -133,7 +130,6 @@ export interface MarketingOptions {
 }
 
 export function useMarketingOptions(): MarketingOptions {
-  const venues = useVenues();
   const catalog = useQuery({
     queryKey: ['marketing', 'catalog'],
     staleTime: 60_000,
@@ -152,14 +148,6 @@ export function useMarketingOptions(): MarketingOptions {
         .map((o) => o.value);
     const meta = (cfg.sofaCompartmentMeta ?? {}) as Record<string, { description?: string }>;
 
-    const showrooms = (venues.data ?? [])
-      .filter((v) => v.active !== false)
-      .map((v) => {
-        const x = v as VenueRow & { city?: string | null; state?: string | null };
-        return { id: v.id, name: v.name, area: [x.city, x.state].filter((s): s is string => !!s && !!s.trim()).join(', ') };
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
-
     const modules: ModuleOption[] = values('sofaCompartments').map((code) => {
       const info = moduleInfo(code, meta[code]?.description);
       return {
@@ -170,8 +158,7 @@ export function useMarketingOptions(): MarketingOptions {
     });
 
     return {
-      isLoading: venues.isLoading || catalog.isLoading || fabrics.isLoading || colours.isLoading || maint.isLoading,
-      showrooms,
+      isLoading: catalog.isLoading || fabrics.isLoading || colours.isLoading || maint.isLoading,
       models: modelsFromCatalog(catalog.data ?? []),
       fabricSeries: (fabrics.data ?? []).map((f) => ({ id: f.id, label: f.label })),
       colours: (colours.data ?? []).map((c) => ({ code: c.colourId, label: c.label || c.colourId, seriesId: c.fabricId })),
@@ -184,7 +171,7 @@ export function useMarketingOptions(): MarketingOptions {
       modules,
       moduleLabel: (code: string) => meta[code]?.description ?? null,
     };
-  }, [venues.data, venues.isLoading, catalog.data, catalog.isLoading, fabrics.data, fabrics.isLoading, colours.data, colours.isLoading, maint.data, maint.isLoading]);
+  }, [catalog.data, catalog.isLoading, fabrics.data, fabrics.isLoading, colours.data, colours.isLoading, maint.data, maint.isLoading]);
 }
 
 /* ── per-Model narrowing (the Sales Order line's allowed-options rule) ──── */

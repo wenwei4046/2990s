@@ -65,7 +65,7 @@ export const Marketing = () => {
   const lines = useSalesLines(includeTest, tab === 'sales');
   const dataset = lines.data ?? null;
   const [range, setRange] = useState<{ d0: number; d1: number } | null>(null);
-  // A new dataset (first load, or real data replacing the sample) opens on All time.
+  // A new dataset (first load, or Include test orders toggled) opens on All time.
   useEffect(() => {
     if (dataset) setRange({ d0: dataset.d0, d1: dataset.d1 });
   }, [dataset]);
