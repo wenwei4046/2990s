@@ -3,7 +3,7 @@ import { Navigate } from 'react-router';
 import { useMaintainAccess } from '../lib/houzs-perms';
 
 // Guard for the MAINTAIN tooling routes (/products, /sales-order-maintenance,
-// /new-order, /sales-analysis). Everyone else is bounced to /catalog so a
+// /new-order). Everyone else is bounced to /catalog so a
 // hand-typed URL can't bypass the hidden links. Sits INSIDE <AuthGate>, so a
 // session already exists.
 //

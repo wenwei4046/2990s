@@ -41,11 +41,15 @@ flows through. Verified 2026-08-03:
     eventually reconciles them will need a rule for which side is authoritative
     per record, and that rule differs by table — for Sales Orders Houzs already
     applies one: what it holds wins (import-once since 2026-08-20, below).
-  - Flipping the freeze would affect **only `erp.2990shome.com` (office staff)**.
-    It cannot affect the POS: the deployed POS bundle does not contain the string
-    `api.2990shome.com` at all (verified 2026-08-03 by reading the live JS on
-    `pos.2990shome.com` — only `erp.houzscentury.com` is present). So sales staff
-    are unaffected either way.
+  - ⚠️ **CORRECTED 2026-10-08 — flipping the freeze now DOES reach the POS.**
+    This bullet used to say it affected only `erp.2990shome.com`, because on
+    2026-08-03 the POS bundle did not contain `api.2990shome.com` at all. Two POS
+    features have written to this API since: **Campaign Promos** (2026-08-12,
+    claim / confirm / release) and the **Marketing section** (2026-10, every
+    showroom-display / floor-plan / launch-request save — see its section below).
+    `READ_ONLY_MODE` refuses every POST / PUT / PATCH / DELETE except the three
+    login endpoints (`middleware/read-only.ts`), so with it on those POS saves
+    answer 403 `read_only`. Selling itself (Houzs) is unaffected.
   - ⚠️ **CORRECTED 2026-08-19 — there IS a live sync, 2990 → Houzs.** This bullet
     used to say "no sync in either direction". Half of that is still true and half
     was never true; the wrong half survived because the evidence cited for it
@@ -266,6 +270,7 @@ suspect the diagnostic first.
   - The POS **used to** run 6 `postgres_changes` channels (`catalog-products`, `mfg-catalog`, `sofa-customizer-${leadSkuId}`, `product-pricing-${productId}`, `sofa-quick-picks`, `my-orders-so`) that invalidated TanStack queries. The 2026-07-21 cutover pointed the POS at HouzsERP, **which has no realtime**, so every channel was replaced by `refetchInterval: 30_000` — see `apps/pos/src/lib/queries.ts:122`, `:145`, `:417`, `:436`, `:556`, `:597` and the no-op invalidator kept as a seam at `:128-132`. So catalog and pricing edits land in the POS within ~30s, not instantly.
   - The **Backend** has never subscribed to a Supabase channel. Its only channel is a browser `BroadcastChannel` (`apps/backend/src/lib/cross-tab-sync.ts`) syncing *tabs of the same browser*. A POS write does NOT live-refresh a Backend screen — and since the cutover it doesn't even reach the same database.
 - **Styling**: CSS Modules + brand tokens from `packages/design-system` (originating in `prototype/assets/colors_and_type.css`).
+  - ⚠️ **`--fs-11` / `--fs-10` are not defined in `tokens.css`** — only the Backend's `main.css` defines `--fs-11`. In the POS every `var(--fs-11)` falls back to the inherited size (63 uses, counted 2026-10-08: the Catalog sidebar headings render at 16px where the design has 11px). Adding the token resizes all of them at once; look at each screen before doing it.
 - **Icons**: Lucide React (rounded, stroke 1.75).
 - **State**: Zustand 5 (app) + TanStack Query 5 (server).
 - **Forms**: React Hook Form 7 + Zod 3 (schemas live in `packages/shared/src/schemas/`).
@@ -427,6 +432,58 @@ not litter — don't "tidy" it, and don't add a delete button to make it possibl
 - 🔑 **`VITE_API_URL` is no longer unused on the houzs path.** It was a placeholder (`https://unused-on-houzs.invalid`) until this landed. Local dev points it at `http://localhost:8787`; production needs the real base or the tab ships broken.
 
 **Cross-database consequences, all deliberate:** `so_doc_no` has **no FK** (that row is in Houzs), `redeemed_by` is **text not a uuid FK** (Houzs `scm.staff` ids don't exist in 2990's `auth.users`), and customer/staff names are **snapshotted** because there is nothing to join to. `claim_campaign_promo()` is atomic *within Postgres* — two salespeople can't both take the last voucher — but that atomicity cannot span the Houzs order insert, which is why claims go `RESERVED → APPLIED → RELEASED`. **A row stuck at `RESERVED` is a claim whose order never landed; sweep those, don't assume they were spent.**
+
+---
+
+## POS Marketing section — stored here, sales read from Houzs (2026-10)
+
+The owner's "Marketing 展厅陈列系统" design: a MARKETING group in the POS Catalog
+sidebar, one page `/marketing?tab=display|launch|sales` (`pages/Marketing.tsx`,
+`components/marketing/*`). **Showroom display** — what is on each showroom's
+floor, plus its floor plan; **Product launching** — the Management → Marketing
+new-product board (Pending Info → Completed Info → Arrive); **Sales analysis** —
+moved here from Maintain and redesigned. The old Sales Analysis page, **including
+its Targets editor**, was removed with it (`/sales-analysis` redirects).
+
+| Piece | Home | Why |
+|---|---|---|
+| Displays, floor plans, launch requests | **2990's Supabase** (migration `0217`), via `apps/api/src/routes/marketing.ts` | Houzs has no such tables and we can't add them |
+| Sales lines | **Houzs** `GET /api/scm/sales-analysis/lines` (their `scm/lib/sales-lines.ts`) | the orders live there |
+| Showroom list | Houzs venue master (`/venues`) | the one branch list the order form already uses |
+
+**Five things that will bite you:**
+- 🔑 **`/marketing` is authenticated, not Origin-gated** — unlike campaign-promos.
+  The Houzs bearer is replayed to Houzs `/auth/me` (`lib/houzs-identity.ts`, the
+  `/commission` pattern) and Houzs's answer decides. It runs on the service-role
+  client, so the zod schemas + `*ToWire` mappers are the only boundary.
+- 🔑 **The marketing account is a Houzs member whose Title is EXACTLY "Sales
+  Marketing"** (normalised case/spacing; sales cohort; not a director). Houzs
+  answers the `pos.marketing` capability (`pmsAccess.isPosMarketingAccount`); the
+  POS and this API read it through `@2990s/shared/marketing-access`, which runs
+  the same rule itself only while Houzs has not answered. Exact name on purpose —
+  it admits a company's whole sales history, so a Title merely CONTAINING the word
+  must not inherit it. The slug (`sales_marketing`, derived at creation and never
+  changed) is what lets it through the PIN door, which wants `sales%`.
+- 🔑 **"Complete order" is refused on the TABLET only** (`StepFooter`
+  `orderBlocked` + a guard in `Handover.goNext`). Houzs does not refuse that
+  account's orders; the account walks the whole handover otherwise.
+- 🔑 **Until Houzs serves `/lines`, Sales analysis shows the design's sample data**
+  under a "Sample data" label. Only a **404** falls back (`sales-lines-queries.ts`);
+  any other failure is shown as one. The variant labels (sofa layout from its
+  compartments, mattress size from its code) are named on the POS side by the
+  same rules the display cards use — Houzs sends facts, not labels, and sends the
+  customer's age on the order date, never the birthday.
+- 🔑 **Who may open it:** the marketing account + the Maintain tier. The API gate
+  (`canUseMarketing`) cannot see POS roles, so it asks the Houzs facts that cover
+  the same people (`*`, `scm_config_writer`, `scm.sales.viewAll`) — slightly
+  wider, never narrower. Houzs's `/lines` admits `canViewAllSales` + the marketing
+  account; a config writer without view-all is refused there (403 shown), exactly
+  as the old page's `GET /sales-analysis` refused them.
+
+Deliberate departures from the prototype (prototype bugs, or real data it never
+met) are listed in the PR; the sofa-naming one is `shapeName` reading real
+modules the way the repo's bundle detection does (whole-piece 1S/2S/3S, 1B/2B as
+1A/2A, accessories ignored, the chaise at either end).
 
 ---
 

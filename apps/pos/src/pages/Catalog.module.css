@@ -175,6 +175,18 @@
   border-radius: var(--radius-pill);
   text-transform: uppercase;
 }
+/* Count pill on Marketing › Product launching — requests still in Pending
+   Info (design: 10/700, orange, 2px 7px). */
+.sideBadge {
+  font-family: var(--font-button);
+  font-size: 10px;
+  font-weight: var(--w-bold);
+  background: var(--c-orange);
+  color: var(--c-cream);
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  line-height: 1.6;
+}
 
 .sideFooter {
   margin-top: var(--space-4);

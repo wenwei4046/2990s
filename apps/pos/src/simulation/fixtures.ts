@@ -42,7 +42,11 @@ const colours = ['#e5dfd1', '#c5b9a8', '#8c9291', '#5e6565', '#a39883', '#e6ddd0
 export const fabricColours = Object.entries(fabricCodes).flatMap(([fabricId, codes]) => codes.map((colourId, sortOrder) => ({ fabricId, colourId, label: ['Pearl', 'Sand', 'Stone', 'Grey'][sortOrder % 4], swatchHex: colours[sortOrder % colours.length], active: true, sortOrder })));
 const option = (value: string, sellingPriceSen = 0) => ({ value, sellingPriceSen, priceSen: 0, active: true });
 export const maintenance = {
-  gaps, legHeights: legs.map((v) => option(v)), divanHeights: divans.map((v) => option(v, Math.max(0, Number(v) - 8) / 2 * 12500)), totalHeights: [], specials: [], sofaSpecials: [], sofaLegHeights: [option('6')], sofaSizes: ['24', '28'], sofaCompartments: moduleCodes, mattressSizes: ['Q', 'K'], bedframeSizes: ['Q', 'K'], brandings: ['2990'], supplierCategories: [],
+  gaps, legHeights: legs.map((v) => option(v)), divanHeights: divans.map((v) => option(v, Math.max(0, Number(v) - 8) / 2 * 12500)), totalHeights: [], specials: [], sofaSpecials: [], sofaLegHeights: [option('6')], sofaSizes: ['24', '28'],
+  // The master pool also carries the chaise ends, so the Marketing component
+  // builder shows its 1-Seater / 2-Seater / Chaise groups. No fixture Model
+  // ticks them, so the configurator's own palette is unchanged.
+  sofaCompartments: [...moduleCodes, 'L(LHF)', 'L(RHF)'], mattressSizes: ['Q', 'K'], bedframeSizes: ['Q', 'K'], brandings: ['2990'], supplierCategories: [],
   sofaCompartmentMeta: Object.fromEntries(moduleCodes.map((code) => [code, { description: code === 'CNR' ? 'Corner' : code === 'STOOL' ? 'Ottoman' : code }])),
 };
 export const sizeLibrary = [{ id: 'queen', label: 'Queen', widthCm: 152, lengthCm: 190, sortOrder: 0 }, { id: 'king', label: 'King', widthCm: 183, lengthCm: 190, sortOrder: 1 }];
@@ -77,7 +81,14 @@ export const demoRewardCodes = [demoPwp,
 export const freeItemCampaigns = [{ id: 'demo-free-pillow', name: 'Demo complimentary sleep accessory', active: true, maxFreeQty: 2, eligible: models.filter((m) => m.category === 'ACCESSORY').map((m) => ({ scope: 'model' as const, modelId: m.id })) }];
 const dropdowns: Record<string, string[]> = { customer_type: ['NEW', 'EXISTING'], building_type: ['Condo', 'Landed', 'Apartment'], relationship: ['Spouse', 'Parent', 'Sibling', 'Friend'], payment_method: ['Cash', 'Merchant', 'Online', 'Installment'], payment_merchant: ['GHL', 'MBB', 'PBB', 'HLB'], online_type: ['Bank Transfer', 'TNG', 'Cheque'], installment_plan: ['One-off', '3 months', '6 months', '12 months'], venue: ['Demo Showroom'] };
 export const dropdownOptions = Object.fromEntries(Object.entries(dropdowns).map(([category, values]) => [category, values.map((value, sortOrder) => ({ id: `demo-${category}-${sortOrder}`, category, value, label: value === 'Online' ? 'Bank transfer' : value, active: true, sortOrder }))]));
-export const venues = [{ id: 'demo-venue', name: 'Demo Showroom', address: '1 Demo Lane, 47300 Petaling Jaya, Selangor', active: true, created_at: timestamp }];
+export const venues = [
+  { id: 'demo-venue', name: 'Demo Showroom', address: '1 Demo Lane, 47300 Petaling Jaya, Selangor', city: 'Petaling Jaya', state: 'Selangor', active: true, created_at: timestamp },
+  // Extra fictional branches so the Marketing showroom rail can be exercised
+  // with several showrooms, as in the design.
+  { id: 'demo-venue-kl', name: 'Showroom KL', address: null, city: 'Kuala Lumpur', state: null, active: true, created_at: timestamp },
+  { id: 'demo-venue-pg', name: 'Showroom Penang', address: null, city: 'Penang', state: null, active: true, created_at: timestamp },
+  { id: 'demo-venue-jb', name: 'Showroom JB', address: null, city: 'Johor Bahru', state: null, active: true, created_at: timestamp },
+];
 export const localities = [{ state: 'Selangor', city: 'Petaling Jaya', postcode: '47300' }, { state: 'Selangor', city: 'Shah Alam', postcode: '40000' }, { state: 'Kuala Lumpur', city: 'Kuala Lumpur', postcode: '50000' }, { state: 'Johor', city: 'Johor Bahru', postcode: '80000' }, { state: 'Pulau Pinang', city: 'George Town', postcode: '10000' }];
 export const demoCustomer = { debtorName: 'Demo Customer', phone: '+60120000000', email: 'demo@example.test', customerType: 'NEW', address1: '1 Demo Lane', address2: '', city: 'Petaling Jaya', postcode: '47300', customerState: 'Selangor', buildingType: 'Landed', emergencyContactName: 'Demo Contact', emergencyContactPhone: '+60120000001', emergencyContactRelationship: 'Spouse', customerId: 'demo-customer', race: 'Chinese', birthday: '1990-01-01', gender: 'Male', lastDocNo: 'DEMO-SO-0000', lastOrderAt: timestamp };
 export const campaigns = [{ id: 'demo-home-100', name: 'DEMO HOME RM100', valueCenti: 10000, stockTotal: 100, stockUsed: 0, remaining: 100, minPurchaseQty: 1, maxPerOrder: 1, terms: 'Local demonstration voucher. RM100 off eligible products.', active: true, createdAt: timestamp, updatedAt: timestamp }];

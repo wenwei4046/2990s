@@ -17,8 +17,7 @@
 /** Fill every `*Sen` key that is missing from its `*Centi` twin, recursively.
  *
  *  An existing `*Sen` always wins, so a transitional response carrying both is
- *  never clobbered. Mirrors `senKeysToCenti` in sales-analysis-queries.ts,
- *  pointed the other way: this page canonicalises on the Houzs spelling because
+ *  never clobbered. This page canonicalises on the Houzs spelling because
  *  Houzs is the live backend and 2990's API is the one being retired. */
 export const centiKeysToSen = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(centiKeysToSen);

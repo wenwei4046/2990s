@@ -6,6 +6,7 @@ import { Catalog } from './pages/Catalog';
 import { AuthGate } from './components/AuthGate';
 import { MaintainGate } from './components/MaintainGate';
 import { HrGate } from './components/HrGate';
+import { MarketingGate } from './components/MarketingGate';
 
 /* Code-splitting (perf, 2026-06-13) — the POS shipped as ONE ~1.2 MB JS chunk
    because every page was imported eagerly here, so the Configurator (sofa snap
@@ -26,7 +27,7 @@ const SalesOrderPrint = lazy(() => import('./pages/SalesOrderPrint').then((m) =>
 const Products = lazy(() => import('./pages/Products').then((m) => ({ default: m.Products })));
 const SalesOrderMaintenance = lazy(() => import('./pages/SalesOrderMaintenance').then((m) => ({ default: m.SalesOrderMaintenance })));
 const NewOrder = lazy(() => import('./pages/NewOrder').then((m) => ({ default: m.NewOrder })));
-const SalesAnalysis = lazy(() => import('./pages/SalesAnalysis').then((m) => ({ default: m.SalesAnalysis })));
+const Marketing = lazy(() => import('./pages/Marketing').then((m) => ({ default: m.Marketing })));
 const OpexCommission = lazy(() => import('./pages/OpexCommission').then((m) => ({ default: m.OpexCommission })));
 
 /* Root layout — hosts <ScrollRestoration> for the whole app. It restores window
@@ -105,7 +106,12 @@ export const router = createBrowserRouter([
      SO header to /mfg-sales-orders, lands on the existing POS-native
      /handover-confirmed thank-you screen. */
   { path: '/new-order', element: <AuthGate><MaintainGate><NewOrder /></MaintainGate></AuthGate> },
-  { path: '/sales-analysis', element: <AuthGate><MaintainGate><SalesAnalysis /></MaintainGate></AuthGate> },
+  /* Sales analysis moved under Marketing (owner 2026-10-08) — the old path
+     still lands there, so a bookmark keeps working. */
+  { path: '/sales-analysis', element: <Navigate to="/marketing?tab=sales" replace /> },
+  /* MARKETING (owner 2026-10-08): Showroom display · Product launching · Sales
+     analysis. The marketing account OR the Maintain tier — MarketingGate. */
+  { path: '/marketing', element: <AuthGate><MarketingGate><Marketing /></MarketingGate></AuthGate> },
   /* OPEX ▸ Commission (Loo 2026-08-31). Guarded by HrGate, NOT MaintainGate:
      the page's API is Houzs /hr/*, which gates on the flat permission key
      `scm.hr.read` and ignores the POS role. Gating on the role instead would

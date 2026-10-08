@@ -46,6 +46,14 @@ export interface HouzsCaller {
   email: string;
   /** Flat permission keys, including the `*` wildcard held by Owner / IT Admin. */
   permissions: string[];
+  /** Houzs's RESOLVED answers (`user.capabilities`). A missing key means "not
+   *  answered" (an older Houzs build), never "denied" — read it tri-state. */
+  capabilities: Record<string, boolean>;
+  /** `user.scm_config_writer` — Houzs's own answer to "may this person write SCM
+   *  master data", strictly `=== true` (an older build answers undefined). */
+  scmConfigWriter: boolean;
+  /** `user.position_name` — the member's Title as Houzs shows it, or null. */
+  positionName: string | null;
 }
 
 /** GET / read config, profiles, item-KPI, override levels, payout periods. */
@@ -116,7 +124,12 @@ export async function resolveHouzsCaller(
     return { ok: false, status: 503, reason: `Houzs /auth/me answered ${res.status}` };
   }
 
-  let body: { user?: { id?: unknown; name?: unknown; email?: unknown; permissions?: unknown } };
+  let body: {
+    user?: {
+      id?: unknown; name?: unknown; email?: unknown; permissions?: unknown;
+      capabilities?: unknown; scm_config_writer?: unknown; position_name?: unknown;
+    };
+  };
   try {
     body = (await res.json()) as typeof body;
   } catch {
@@ -136,6 +149,15 @@ export async function resolveHouzsCaller(
     return { ok: false, status: 503, reason: 'Houzs returned no permission list for this session' };
   }
 
+  /* Keep only real booleans — anything else reads as "not answered", the same
+     direction as a missing key (mirrors the POS's lib/houzs-perms.ts). */
+  const capabilities: Record<string, boolean> = {};
+  if (u.capabilities && typeof u.capabilities === 'object') {
+    for (const [k, v] of Object.entries(u.capabilities as Record<string, unknown>)) {
+      if (typeof v === 'boolean') capabilities[k] = v;
+    }
+  }
+
   return {
     ok: true,
     caller: {
@@ -143,6 +165,9 @@ export async function resolveHouzsCaller(
       name: typeof u.name === 'string' ? u.name : '',
       email: typeof u.email === 'string' ? u.email : '',
       permissions: u.permissions.filter((p): p is string => typeof p === 'string'),
+      capabilities,
+      scmConfigWriter: u.scm_config_writer === true,
+      positionName: typeof u.position_name === 'string' ? u.position_name : null,
     },
   };
 }

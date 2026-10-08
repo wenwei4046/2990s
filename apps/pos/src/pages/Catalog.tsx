@@ -17,12 +17,15 @@ import {
   BarChart3,
   Coins,
   ExternalLink,
+  Store,
+  Rocket,
   type LucideIcon,
 } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow, type MfgCatalogCategory } from '../lib/queries';
 import { useStaff, isPosSalesRole } from '../lib/staff';
-import { useHrAccess, useMaintainAccess } from '../lib/houzs-perms';
+import { useHrAccess, useMaintainAccess, useMarketingAccess } from '../lib/houzs-perms';
+import { useMarketingState } from '../lib/marketing-api';
 import { authedFetchRaw, IS_HOUZS } from '../lib/apiClient';
 import { useCart, cartHasSofa, cartHasMainNonSofa, type FlatConfigSnapshot } from '../state/cart';
 import { Topbar } from '../components/Topbar';
@@ -214,6 +217,12 @@ export const Catalog = () => {
      a Houzs Title rename turned that off for the owner on 2026-09-07; see
      useMaintainAccess's header. */
   const { canMaintain } = useMaintainAccess();
+  /* MARKETING section (owner 2026-10-08) — the marketing account, plus the
+     Maintain tier who already had Sales analysis. The pill on Product
+     launching counts requests still in Pending Info. */
+  const { canUseMarketing } = useMarketingAccess();
+  const marketing = useMarketingState(canUseMarketing);
+  const pendingLaunches = (marketing.data?.requests ?? []).filter((r) => r.status === 'pending').length;
   useMfgCatalogRealtime();
   const allCategories = useCategoriesAll();
 
@@ -368,11 +377,11 @@ export const Catalog = () => {
         Pricing footer so they're the last thing in the rail —
         away from the per-session category browsing flow above. */}
     {/* MAINTAIN is master-admin tooling (New Order / Products / SO
-        Maintenance / Sales analysis). Shown to the POS curator roles OR
-        to anyone Houzs itself calls an SCM config writer —
-        useMaintainAccess. Sales etc. don't see the section, and the four
-        routes are guarded in router.tsx (MaintainGate) with the SAME
-        predicate so a hand-typed URL can't bypass the hide. */}
+        Maintenance; Sales analysis moved to MARKETING below). Shown to the
+        POS curator roles OR to anyone Houzs itself calls an SCM config
+        writer — useMaintainAccess. Sales etc. don't see the section, and
+        the three routes are guarded in router.tsx (MaintainGate) with the
+        SAME predicate so a hand-typed URL can't bypass the hide. */}
     {/* TEMPORARY (Loo 2026-06-10) — emergency hatch while the new POS
         order flow stabilises: sales-side roles get a button that opens
         the Backend's raw SO create form ALREADY SIGNED IN (salespeople
@@ -422,10 +431,6 @@ export const Catalog = () => {
           <Settings size={16} strokeWidth={1.75} />
           <span className={styles.sideLabel}>SO Maintenance</span>
         </Link>
-        <Link to="/sales-analysis" className={styles.sideItem}>
-          <BarChart3 size={16} strokeWidth={1.75} />
-          <span className={styles.sideLabel}>Sales analysis</span>
-        </Link>
       </>
     )}
 
@@ -441,6 +446,28 @@ export const Catalog = () => {
         <Link to="/opex/commission" className={styles.sideItem}>
           <Coins size={16} strokeWidth={1.75} />
           <span className={styles.sideLabel}>Commission</span>
+        </Link>
+      </>
+    )}
+
+    {/* MARKETING (owner 2026-10-08) — after OPEX, above the Honest pricing
+        footer. Sales analysis moved here from Maintain. Same predicate as the
+        /marketing route guard and 2990's /marketing API (useMarketingAccess). */}
+    {canUseMarketing && (
+      <>
+        <div className={styles.sideHeading}>Marketing</div>
+        <Link to="/marketing?tab=display" className={styles.sideItem}>
+          <Store size={16} strokeWidth={1.75} />
+          <span className={styles.sideLabel}>Showroom display</span>
+        </Link>
+        <Link to="/marketing?tab=launch" className={styles.sideItem}>
+          <Rocket size={16} strokeWidth={1.75} />
+          <span className={styles.sideLabel}>Product launching</span>
+          {pendingLaunches > 0 && <span className={styles.sideBadge}>{pendingLaunches}</span>}
+        </Link>
+        <Link to="/marketing?tab=sales" className={styles.sideItem}>
+          <BarChart3 size={16} strokeWidth={1.75} />
+          <span className={styles.sideLabel}>Sales analysis</span>
         </Link>
       </>
     )}

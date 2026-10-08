@@ -46,6 +46,7 @@ import { leadModuleValueCenti } from '@2990s/shared/voucher-sofa-cap';
 import { useSofaModulePrices } from '../lib/sofa-module-prices';
 import { submitWithVoucher } from '../lib/voucher-submit';
 import { useStaff } from '../lib/staff';
+import { useMarketingAccess } from '../lib/houzs-perms';
 import { useVenues, useActiveVenue } from '../lib/so-maintenance/venues-queries';
 import { SignConfirmStep } from '../components/handover/SignConfirmStep';
 import type { SignaturePadHandle } from '../components/handover/SignaturePad';
@@ -96,6 +97,7 @@ export const Handover = () => {
   const auth = useAuth();
   // Name for the voucher redemption ledger — AuthUser carries only an id.
   const staff = useStaff();
+  const { isMarketing } = useMarketingAccess();
   const lines = useCart((s) => s.lines);
   const clear = useCart((s) => s.clear);
   const adoptServerPrice = useCart((s) => s.adoptServerPrice);
@@ -386,6 +388,9 @@ export const Handover = () => {
       return;
     }
     if (isLast) {
+      // The marketing account walks the handover but never places the order
+      // (owner 2026-10-08). The button is disabled too; this is the backstop.
+      if (isMarketing) return;
       await submitHandoffToSo();
       return;
     }
@@ -726,6 +731,7 @@ export const Handover = () => {
               onPrev={goPrev}
               onNext={goNext}
               onRecordPayment={() => update('paymentRecorded', true)}
+              orderBlocked={isMarketing}
             />
           </div>
 
