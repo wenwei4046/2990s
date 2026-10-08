@@ -26,6 +26,7 @@ import { HOUZS_COMPANY_ID, IS_HOUZS, houzsApiRoot } from './apiClient';
 import { getHouzsToken } from './houzsSession';
 import { useAuth } from './auth';
 import { useStaff, isGlobalCurator, canViewAllSales, isPasscodeLoginRole } from './staff';
+import { isMarketingMember } from '@2990s/shared/marketing-access';
 
 /** GET config / profiles / item-KPI / pickers / commission. */
 export const HR_READ = 'scm.hr.read';
@@ -88,6 +89,10 @@ export interface HouzsMe {
    *  An empty map means "not answered" (old build, blip, 2990 target), never
    *  "denied" — every consumer below falls back to its role rule in that case. */
   capabilities: Readonly<Record<string, boolean>>;
+  /** `user.position_name` — the member's Houzs Title, or null. Read ONLY as the
+   *  fallback for the marketing account while Houzs does not yet answer the
+   *  `pos.marketing` capability (@2990s/shared/marketing-access). */
+  positionName: string | null;
 }
 
 /** One capability, as a tri-state: true / false / undefined = not answered. */
@@ -130,7 +135,7 @@ export function useHouzsPerms() {
     staleTime: 5 * 60_000,
     retry: false,
     queryFn: async () => {
-      const EMPTY: HouzsMe = { permissions: [], scmConfigWriter: false, capabilities: {} };
+      const EMPTY: HouzsMe = { permissions: [], scmConfigWriter: false, capabilities: {}, positionName: null };
       const root = houzsApiRoot();
       const token = getHouzsToken();
       if (!root || !token) return EMPTY;
@@ -152,7 +157,7 @@ export function useHouzsPerms() {
       }
       if (!res.ok) return EMPTY;
       const body = (await res.json().catch(() => ({}))) as {
-        user?: { permissions?: unknown; scm_config_writer?: unknown; capabilities?: unknown };
+        user?: { permissions?: unknown; scm_config_writer?: unknown; capabilities?: unknown; position_name?: unknown };
       };
       const raw = body.user?.permissions;
       const rawCaps = body.user?.capabilities;
@@ -172,6 +177,7 @@ export function useHouzsPerms() {
            grant. The role half of useMaintainAccess still covers those callers. */
         scmConfigWriter: body.user?.scm_config_writer === true,
         capabilities,
+        positionName: typeof body.user?.position_name === 'string' ? body.user.position_name : null,
       };
     },
   });
@@ -205,7 +211,7 @@ export function useHrAccess(): { canRead: boolean; canManage: boolean; isLoading
 
 /**
  * May this person use the MAINTAIN tooling — the Catalog sidebar section and
- * the /products, /sales-order-maintenance, /new-order, /sales-analysis routes
+ * the /products, /sales-order-maintenance, /new-order routes
  * behind it — and edit rather than just read Products / SO Maintenance?
  *
  * ── WHY THIS EXISTS (2026-09-15) ────────────────────────────────────────────
@@ -303,4 +309,36 @@ export function useCanChangePin(): boolean {
   const staff = useStaff();
   if (cap(houzs.data, CAP_ORG_SALES_STAFF) === false) return false;
   return isPasscodeLoginRole(staff.data?.role);
+}
+
+/**
+ * The MARKETING account, and who may open the Marketing section.
+ *
+ * Owner 2026-10-08: one special account — same permissions as a salesperson,
+ * plus the Marketing section, minus Maintain and OPEX, and it may not place an
+ * order. `isMarketing` is that account (Houzs's `pos.marketing` capability, or
+ * its "Sales Marketing" Title while that capability is unanswered — see
+ * @2990s/shared/marketing-access). `canUseMarketing` adds the Maintain tier,
+ * who could already open Sales analysis before it moved under Marketing.
+ *
+ * The SAME rule gates 2990's /marketing API (apps/api/src/routes/marketing.ts),
+ * so a person shown the section is never refused its saves.
+ *
+ * Like every predicate here, this is a HIDE. The order block it drives is a
+ * POS control, not a server gate: Houzs would still accept an order from this
+ * session, at the server's own price (its tablet sessions are drift-checked by
+ * session origin, not by role).
+ */
+export function useMarketingAccess(): { isMarketing: boolean; canUseMarketing: boolean; isLoading: boolean } {
+  const houzs = useHouzsPerms();
+  const { canMaintain, isLoading: maintainLoading } = useMaintainAccess();
+  const isMarketing = IS_HOUZS && isMarketingMember({
+    capabilities: houzs.data?.capabilities,
+    positionName: houzs.data?.positionName,
+  });
+  return {
+    isMarketing,
+    canUseMarketing: isMarketing || canMaintain,
+    isLoading: maintainLoading || (IS_HOUZS && houzs.isLoading),
+  };
 }

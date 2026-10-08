@@ -7,7 +7,7 @@ type StepKey = 'customer'|'address'|'emergency'|'target'|'addons'|'confirm'|'sig
 
 export const StepFooter = ({
   isFirst, currentKey, valid, submitting, paymentRecorded, blockers, attempted,
-  onPrev, onNext, onRecordPayment,
+  onPrev, onNext, onRecordPayment, orderBlocked = false,
 }: {
   isFirst: boolean;
   currentKey: StepKey;
@@ -19,9 +19,14 @@ export const StepFooter = ({
   onPrev: () => void;
   onNext: () => void | Promise<void>;
   onRecordPayment: () => void;
+  /** The marketing account (owner 2026-10-08): it may walk the whole handover
+   *  — cart, customer, payment, signature — but not place the order, so
+   *  "Complete order" is disabled on the last step. */
+  orderBlocked?: boolean;
 }) => {
   const isConfirmStep = currentKey === 'confirm';
   const isSignStep = currentKey === 'sign';
+  const blockedHere = orderBlocked && isSignStep;
 
   // P2.2 button label flips after payment is recorded.
   const primaryLabel = isSignStep
@@ -50,17 +55,25 @@ export const StepFooter = ({
   //   out WHY it's not advancing (banner appears via attempted state).
   // - muted (visual only) → invalid form. Button looks dimmed but click
   //   still fires handlePrimary → goNext → setAttempted(true).
-  const hardDisabled = submitting;
+  const hardDisabled = submitting || blockedHere;
   const muted =
     (!isConfirmStep && !valid) ||
     (isConfirmStep && paymentRecorded && !valid);
 
   // Banner only surfaces AFTER user clicks Continue on an invalid step.
   // Stays visible while they fix things, vanishes once everything passes.
-  const showBlockers = attempted && (muted || (isConfirmStep && !paymentRecorded && !valid)) && blockers.length > 0;
+  const showBlockers = !blockedHere && attempted && (muted || (isConfirmStep && !paymentRecorded && !valid)) && blockers.length > 0;
 
   return (
     <div className={styles.wrap}>
+      {blockedHere && (
+        <div className={styles.blockers} role="note">
+          <AlertCircle size={14} strokeWidth={1.75} />
+          <div className={styles.blockerList}>
+            <span className={styles.blockerHead}>This account cannot place orders.</span>
+          </div>
+        </div>
+      )}
       {showBlockers && (
         <div className={styles.blockers}>
           <AlertCircle size={14} strokeWidth={1.75} />
@@ -83,8 +96,8 @@ export const StepFooter = ({
           type="submit"
           variant="primary"
           disabled={hardDisabled}
-          aria-disabled={muted}
-          className={muted ? styles.muted : undefined}
+          aria-disabled={muted || blockedHere}
+          className={muted || blockedHere ? styles.muted : undefined}
           onClick={handlePrimary}
         >
           {submitting ? 'Placing order…' : primaryLabel}

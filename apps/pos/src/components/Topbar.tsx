@@ -4,7 +4,7 @@ import { ArrowLeft, Bookmark, KeyRound, ListOrdered, LogOut, ShoppingBag, Menu }
 import { fmtRM } from '@2990s/shared';
 import { useAuth } from '../lib/auth';
 import { useStaff } from '../lib/staff';
-import { useCanChangePin } from '../lib/houzs-perms';
+import { useCanChangePin, useMarketingAccess } from '../lib/houzs-perms';
 import { useCart, cartItemCount, cartSubtotal } from '../state/cart';
 import { HouzsSsoMenu } from './HouzsSsoMenu';
 import { IS_SIMULATION } from '../lib/simulation-mode';
@@ -49,6 +49,9 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileA
   const { user, signOut } = useAuth();
   const { data: staff } = useStaff();
   const canChangePin = useCanChangePin();
+  // The marketing account derives the plain `sales` POS role from Houzs; show
+  // it as what it is (owner 2026-10-08).
+  const { isMarketing } = useMarketingAccess();
   const lines = useCart((s) => s.lines);
   const count = cartItemCount(lines);
   const subtotal = cartSubtotal(lines);
@@ -56,7 +59,7 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel, mobileA
   // Display name fallbacks: staff → email local part → "Staff".
   const initials = staff?.initials ?? user?.email?.slice(0, 2).toUpperCase() ?? '··';
   const name = staff?.name ?? user?.email?.split('@')[0] ?? 'Staff';
-  const role = staff?.role ?? 'Staff';
+  const role = isMarketing ? 'marketing' : staff?.role ?? 'Staff';
   const avatarColor = staff?.color ?? '#A6471E';
 
   return (

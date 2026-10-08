@@ -5,7 +5,7 @@ import '@testing-library/jest-dom/vitest';
 
 vi.mock('../lib/auth', () => ({ useAuth: () => ({ user: { id: 'test-sales' }, signOut: vi.fn() }) }));
 vi.mock('../lib/staff', () => ({ useStaff: () => ({ data: { name: 'Test salesperson', role: 'sales' } }) }));
-vi.mock('../lib/houzs-perms', () => ({ useCanChangePin: () => true }));
+vi.mock('../lib/houzs-perms', () => ({ useCanChangePin: () => true, useMarketingAccess: () => ({ isMarketing: false, canUseMarketing: false, isLoading: false }) }));
 vi.mock('../state/cart', () => ({
   useCart: (select: (state: { lines: never[] }) => unknown) => select({ lines: [] }),
   cartItemCount: () => 0,

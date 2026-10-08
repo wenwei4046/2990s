@@ -12,7 +12,7 @@ import { useMaintenanceConfig, type MaintenanceResolved } from './products/mfg-p
  *   GET /product-models → { models:[{ id, allowed_options }] } (model → gate)
  * allowed_options is a pure GATE (which options may be offered), never a
  * price, so this resolution touches no pricing math. */
-type MfgAllowedOptions = {
+export type MfgAllowedOptions = {
   fabrics?:       string[];
   specials?:      string[];
   sizes?:         string[];
@@ -52,7 +52,7 @@ async function fetchModelAllowedOptions(productId: string): Promise<MfgAllowedOp
  * pwp_price_sen). It never sends base_price_sen / cost_price_sen, and
  * seat_height_prices arrives with its per-height cost (priceSen) already
  * removed — so nothing here can fall back to, or leak, a cost. */
-interface MfgCatalogApiRow {
+export interface MfgCatalogApiRow {
   id:                 string;
   code:               string;
   name:               string;
@@ -80,7 +80,7 @@ interface MfgCatalogApiRow {
   } | null;
 }
 
-async function fetchMfgCatalog(params?: Record<string, string>): Promise<MfgCatalogApiRow[]> {
+export async function fetchMfgCatalog(params?: Record<string, string>): Promise<MfgCatalogApiRow[]> {
   const qs = params && Object.keys(params).length > 0 ? `?${new URLSearchParams(params).toString()}` : '';
   const { products } = await authedFetch<{ products: MfgCatalogApiRow[] }>(`/pos-pools/mfg-catalog${qs}`);
   return products ?? [];
@@ -1034,7 +1034,7 @@ export interface MfgCatalogRow {
  *  rendered <img> works from the POS origin. Absolute URLs (legacy /
  *  externally-hosted photos) pass through untouched. Returns null when
  *  there's no photo. */
-function resolvePhotoUrl(raw: string | null): string | null {
+export function resolvePhotoUrl(raw: string | null): string | null {
   if (!raw) return null;
   if (/^https?:\/\//i.test(raw)) return raw;
   if (!API_URL) return raw; // best effort during local dev — let it break visibly
