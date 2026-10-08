@@ -72,11 +72,14 @@ function generate(): SaleLine[] {
     const race = pick(SA_RACES, RACE_W[m[1]]);
     const age = pick(SA_AGES, AGE_W[m[1]]);
     const gender = pick(SA_GENDERS, m[1] === 'Sofa' ? [55, 45] : [42, 58]);
-    void st[1][Math.floor(r() * st[1].length)]; // city — drawn to keep the sequence
+    const city = st[1][Math.floor(r() * st[1].length)]!;
     const month = SA_MONTH_KEYS[Math.min(10, Math.floor(r() * 11.6))]!;
     const cust = 'c' + Math.floor(r() * 520);
     const variant = pick(SA_VARIANTS[m[1]].map((v) => v[0]), SA_VARIANT_W[m[1]]);
-    raw.push({ model: m[0], cat: m[1], amount, qty, race, age, gender, state: st[0], showroom: st[2], month, cust, variant });
+    raw.push({
+      model: m[0], cat: m[1], amount, qty, race, age, gender, state: st[0], showroom: st[2], month, cust, variant,
+      custName: `Customer ${cust.slice(1)}`, city,
+    });
   }
   let s2 = 777;
   const r2 = () => { s2 = (s2 * 1664525 + 1013904223) % 4294967296; return s2 / 4294967296; };

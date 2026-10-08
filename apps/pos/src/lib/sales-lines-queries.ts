@@ -51,6 +51,9 @@ export interface WireLine {
    *  null where a priced line has no cost yet. */
   marginSen?: number | null;
   customerId: string | null;
+  /** The name on the order, and its city — the customer list's columns. */
+  customerName?: string | null;
+  city?: string | null;
   race: string | null;
   age: number | null;
   gender: string | null;
@@ -112,6 +115,8 @@ export function datasetFromWire(lines: WireLine[]): SalesDataset {
         ? { margin: typeof w.marginSen === 'number' && Number.isFinite(w.marginSen) ? w.marginSen / 100 / w.qty : null }
         : {}),
       cust: w.customerId ?? `walk-in:${w.docNo}`,
+      custName: w.customerName?.trim() || null,
+      city: w.city?.trim() || null,
       race: w.race || null,
       age: ageBand(w.age),
       gender: w.gender || null,
